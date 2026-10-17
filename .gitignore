@@ -1,3 +1,6 @@
 # Antigravity is installed inside the persistent workspace, but keep its large
 # executable out of Git history. Recreate it with install-antigravity.sh.
 .tools/antigravity/
+
+# Private local Antigravity settings and conversation index; never commit.
+.antigravity-recovery/
