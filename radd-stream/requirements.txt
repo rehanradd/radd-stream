@@ -1,0 +1,7 @@
+# radd-stream — ZERO external dependencies
+# All functionality uses Python 3.11+ standard library only:
+#   urllib, sqlite3, re, json, ssl, base64, pathlib,
+#   concurrent.futures, argparse, html, time, os, sys
+#
+# No pip install needed. Just run:
+#   python Fast_Fetch/fast_fetch.py stats

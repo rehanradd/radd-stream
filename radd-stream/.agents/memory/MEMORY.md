@@ -1,0 +1,1 @@
+- [Radd Stream context](radd-stream-project-context.md) — prior account chat records product scope and the user's expectation that the agent handles backend setup and verification.
