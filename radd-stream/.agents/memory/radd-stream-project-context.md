@@ -36,3 +36,14 @@ The user says `.replit` contains sensitive configuration and must never be pushe
 **Why:** The user explicitly asked for this as a permanent project rule.
 
 **How to apply:** Exclude `.replit` from all commits and uploads. Do not rewrite existing history unless the user explicitly changes their decision.
+
+The project uses dedicated per-site staging databases (`multimovies.db`, `hdtvb.db`, `vegamovies.db`, `rogmovies.db`, `ssrmovies.db`) merged into unified `fast_fetch.db` with `merge_catalogs.py`.
+
+**Why:** Isolated staging databases eliminate SQLite lock contention and database corruption risks during high-throughput concurrent scraping.
+
+**How to apply:** Always build dedicated importers (`import_<site>.py`) with isolated SQLite databases, comprehensive unit tests (`test_<site>_import.py`), and remote live progress monitors (`check_<site>.py`). Current status:
+- MultiMovies: 100% completed (10,498 titles, 595,218 direct sources).
+- HDTVB (HDHub4u): 100% completed (5,692 titles, 17,293 sources with direct 10Gbps Cloudflare R2).
+- Vegamovies: Actively running on Oracle VM (PID 76635, 14,316 titles).
+- Rogmovies: Actively running on Oracle VM (PID 77286, 7,868 titles).
+- SSRMovies: Active domain `https://ssrmovies.surf` (27,362 posts across 274 pages on `/wp-json/wp/v2/posts?per_page=100`), LinksZilla resolver for Google CDN, Cloudflare R2, PixelDrain, and web streaming. Importer `import_ssrmovies.py`, tests `test_ssrmovies_import.py`, and monitor `check_ssrmovies.py` established.

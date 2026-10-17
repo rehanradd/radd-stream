@@ -264,6 +264,32 @@ def extract_post_data_hdtvb(
         if src_m:
             poster_url = urllib.parse.urljoin("https://hdtvb.net/", src_m.group(1))
 
+    # 4b. Genres, Synopsis, and Language
+    genres = None
+    genre_m = re.search(r'class=["\']info-genre["\'][^>]*>(.*?)</span>', page_html, re.I | re.S)
+    if genre_m:
+        g_text = re.sub(r'<[^>]+>', '', genre_m.group(1)).strip()
+        g_list = [g.strip() for g in g_text.split(',') if g.strip()]
+        if g_list:
+            genres = json.dumps(g_list)
+
+    synopsis = None
+    desc_m = re.search(r'class=["\']hdh-text["\'][^>]*>(.*?)</div>', page_html, re.I | re.S)
+    if desc_m:
+        synopsis = re.sub(r'<[^>]+>', '', desc_m.group(1)).strip()
+        synopsis = html.unescape(synopsis)
+    elif '<meta name="description"' in page_html:
+        m = re.search(r'<meta name="description" content="([^"]+)"', page_html)
+        if m:
+            synopsis = html.unescape(m.group(1).strip())
+
+    language = "Hindi"
+    lang_m = re.search(r'class=["\']info-language["\'][^>]*>(.*?)</span>', page_html, re.I | re.S)
+    if lang_m:
+        language = re.sub(r'<[^>]+>', '', lang_m.group(1)).strip()
+    elif "dual audio" in raw_title.lower():
+        language = "Hindi + English"
+
     # 5. Extract Releases & HubCDN Links
     releases = []
     hubcdn_matches = re.findall(
@@ -348,6 +374,9 @@ def extract_post_data_hdtvb(
         "year": year,
         "content_type": content_type,
         "poster_url": poster_url,
+        "genres": genres,
+        "synopsis": synopsis,
+        "language": language,
         "source_site": "hdhub4u",
         "canonical_key": canonical_key,
         "releases": releases,

@@ -1,1 +1,1 @@
-- [Radd Stream context](radd-stream-project-context.md) — prior account chat records product scope and the user's expectation that the agent handles backend setup and verification.
+- [Radd Stream context](radd-stream-project-context.md) — product scope, credential rules (.replit, Configurations), dedicated multi-site crawler pipeline (MultiMovies, HDTVB, Vegamovies, Rogmovies, SSRMovies), and staging database isolation.

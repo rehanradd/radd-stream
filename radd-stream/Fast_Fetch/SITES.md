@@ -123,27 +123,40 @@ Sub-sitemaps:
 
 ---
 
-## 3. SSRMovies (`ssrmovies.gripe`)
+## 3. SSRMovies (`ssrmovies.surf`)
 
 ### Identity
-- **Primary domain:** `https://ssrmovies.gripe`
-- **Old domain:** `ssrmovies.games` (HTTP 301 → gripe)
+- **Active 2026 Production Domain:** `https://ssrmovies.surf`
+- **Legacy/Rotated Domains:** `ssrmovies.gripe` (HTTP 301 → surf), `ssrmovies.games` (HTTP 301 → gripe)
 - **CMS:** WordPress
+- **Dedicated Importer:** `Fast_Fetch/import_ssrmovies.py` (staging DB: `ssrmovies.db`)
+- **Monitor:** `python check_ssrmovies.py`
 
 ### Data Endpoints
 ```
 WP REST API (sitemap redirects to homepage — use API instead):
-  GET https://ssrmovies.gripe/wp-json/wp/v2/posts?per_page=100
-  GET https://ssrmovies.gripe/wp-json/wp/v2/posts?per_page=100&page=2
-  ...paginate until empty array
+  GET https://ssrmovies.surf/wp-json/wp/v2/posts?per_page=100&page=1
+  Total posts: 27,362 across 274 pages (headers: X-WP-Total: 27362, X-WP-TotalPages: 274)
 
 Response: JSON array of post objects
 Fields used:
   post["link"]              → canonical post URL
   post["slug"]              → URL slug
-  post["date"]              → publish date
+  post["date"] / modified   → publish/update date
   post["title"]["rendered"] → post title
-  post["content"]["rendered"] → HTML body with download buttons
+  post["content"]["rendered"] → HTML body with release download buttons
+```
+
+### Post Structure & Release Buttons
+```
+Download buttons format:
+  <a href="https://secure.linkszilla.top/view/<ID>" ...>Watch & Download in 1080p - 2.8GB</a>
+  <a href="https://secure.linkszilla.top/view/<ID>" ...>Watch & Download in 720p - 1.2GB</a>
+  <a href="https://secure.linkszilla.top/view/<ID>" ...>Watch & Download in 480p - 434MB</a>
+
+Poster Image:
+  <p class="poster" align="center"><img src="..." />
+  Fallback: TMDB CDN / OpenGraph
 ```
 
 ### Bridge Chain: LinksZilla
@@ -151,19 +164,21 @@ Fields used:
 Post page
   └─ LinksZilla link: https://secure.linkszilla.top/view/<ID>
       └─ Page contains mirror buttons:
-          ├─ HubCloud Drive: hubcloud.ist/drive/<ID>
-          ├─ GDFlix: new5.gdflix.io/file/<ID>
-          ├─ Direct-Cloud: dl.direct-cloud.top/d/<ID> → storage.direct-cloud.org
-          ├─ Watch-Online: watch-online.mom/e/<ID>
-          ├─ VikingFile, Gofile, 1fichier, MegaUp, UploadFlix, HexLoad
+          ├─ Direct-Cloud: dl.direct-cloud.top/d/<ID> → Google CDN (lh3.googleusercontent.com)
+          ├─ HubCloud Drive: hubcloud.ist/drive/<ID> → 10Gbps Cloudflare R2 (r2.cloudflarestorage.com)
+          ├─ Watch-Online: watch-online.mom/e/<ID> (instant web stream player)
+          ├─ GDFlix: new5.gdflix.io/file/<ID> (Google Drive)
+          ├─ PixelDrain: pixeldrain.com/api/file/<ID> (Direct CDN)
+          ├─ VikingFile, Gofile, 1fichier, MegaUp, HexLoad
           └─ ClicknUpload
 ```
 
 ### Key Regex
 ```python
-linkszilla_links = re.findall(r"""href=["'](https?://secure\.linkszilla\.top/view/[^"'<>\s]+)["']""", html)
-hubcloud_links = re.findall(r"""href=["'](https?://hubcloud\.ist/drive/[^"'<>\s]+)["']""", lz_html)
-gdflix_links = re.findall(r"""href=["'](https?://new\d+\.gdflix\.[a-z]+/file/[^"'<>\s]+)["']""", lz_html)
+linkszilla_button = re.compile(r'href=["\'](https?://secure\.linkszilla\.top/view/[^"\']+)["\'][^>]*>(.*?)</a>', re.I | re.S)
+quality_re = re.compile(r'\b(2160p|4k|1080p|720p|480p)\b', re.I)
+size_re = re.compile(r'(\d+(?:\.\d+)?\s*(?:GB|MB))', re.I)
+poster_re = re.compile(r'<p\s+class=["\']poster["\'][^>]*>.*?<img[^>]+src=["\']([^"\']+)["\']', re.I | re.S)
 ```
 
 ---

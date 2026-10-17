@@ -235,4 +235,36 @@ routes; restrict the bind and public routes before enabling the public proxy.
 - **Catalog Merge Verified**: Merged test records from `hdtvb.db` into unified `fast_fetch.db` using `merge_catalogs.py` with zero errors.
 - **Unit Tests**: Created `Fast_Fetch/test_hdtvb_import.py` (4/4 pass). Full test suite (56 unit tests) passing 100%.
 
+### Session 16 — Antigravity (Dao Partner / Admin) — Oct 2026
+**Verified, Deployed & Launched:**
+- **MultiMovies Completion Audit**: Verified complete scraper execution: 10,488 / 10,488 roots processed (99.4% success), 10,498 catalog titles, 532,649 releases, 595,218 direct sources saved in `/home/ubuntu/radd-stream-data/multimovies.db` (334 MB).
+- **HDTVB Metadata Richness Upgrade**: Enhanced `import_hdtvb.py` to extract `.info-genre` (categories & genres), `.hdh-text` / `<meta name="description">` (plot synopsis & story), and `.info-language`.
+- **Oracle VM Production Deployment**: Deployed `fast_fetch.py`, `import_hdtvb.py`, `test_hdtvb_import.py`, and `test_database.py` to `/opt/radd-stream/Fast_Fetch/` on Oracle VM (`92.4.95.252`). All 56 unit tests passing 100% on Oracle.
+- **HDTVB Sitemap Ingestion**: Synced 5,692 titles from `https://hdtvb.net/sitemap.xml` into `sitemap_cache` in `/home/ubuntu/radd-stream-data/hdtvb.db`.
+- **HDTVB Background Scraper Launched**: Started background crawler with `--resolve-direct --workers 5 --delay 0.3` writing to `/home/ubuntu/radd-stream-data/hdtvb.db` with PID tracked in `/home/ubuntu/radd-stream-data/hdtvb_scraper.pid`.
+- **Live Terminal Monitor**: Built `check_hdtvb.py` (`python check_hdtvb.py --watch`) displaying real-time title counts, releases, direct 10Gbps Cloudflare R2 links, CPU/RAM, and live log tail.
 
+### Session 17 — Antigravity (Dao Partner / Admin) — Oct 2026
+**Verified, Deployed & Built:**
+- **Oracle Background Crawlers Active**:
+  - `import_vegamovies.py`: Actively scraping on Oracle VM (PID 76635). Crawling 14,316 titles, already collected 14,292 releases, 39,975 direct sources (8,906 Google CDN streams) in `/home/ubuntu/radd-stream-data/vegamovies.db`.
+  - `import_rogmovies.py`: Actively scraping on Oracle VM (PID 77286). Crawling 7,868 titles, already collected 7,669 releases, 27,410 direct sources (4,464 Google CDN streams) in `/home/ubuntu/radd-stream-data/rogmovies.db`.
+  - Built live terminal monitors: `check_vegamovies.py` and `check_rogmovies.py`.
+- **SSRMovies Live Discovery & Domain Verification**:
+  - Identified live 2026 production domain **`https://ssrmovies.surf`** (HTTP 301 from `ssrmovies.gripe`).
+  - Catalog inventory: Confirmed open WordPress REST API at `https://ssrmovies.surf/wp-json/wp/v2/posts?per_page=100` indexing **27,362 total posts** across 274 pages (`X-WP-Total: 27362`).
+- **SSRMovies Dedicated Importer (`Fast_Fetch/import_ssrmovies.py`)**:
+  - Isolated staging database `Fast_Fetch/ssrmovies.db` following project modular architecture.
+  - Built `--sync-api` for automated multi-page WP REST API ingestion into `sitemap_cache`.
+  - Clean metadata extraction: title, year, audio/language (Punjabi, Hindi, Dual Audio, South Dubbed), CDN/TMDB poster, and synopsis.
+  - Per-release button parser extracting exact resolution (`1080p`, `720p`, `480p`, `2160p 4K`), exact file size (`2.8GB`, `434MB`), and codec.
+  - LinksZilla bridge resolver extracting direct Google CDN (`lh3.googleusercontent.com`), Cloudflare R2 (`r2.cloudflarestorage.com`), PixelDrain CDN, and web stream (`watch-online.mom`).
+- **SSRMovies Live Terminal Monitor (`check_ssrmovies.py`)**:
+  - Remote SSH monitor script querying process, status file, SQLite counts, and live log tail.
+- **SSRMovies Production Deployment & Launch on Oracle VM**:
+  - Deployed `import_ssrmovies.py` and `test_ssrmovies_import.py` to `/opt/radd-stream/Fast_Fetch/` on Oracle VM (`92.4.95.252`). All 5 unit tests passed directly on the VM.
+  - Ingested 27,000+ catalog titles from WordPress REST API into `/home/ubuntu/radd-stream-data/ssrmovies.db`.
+  - Evaluated VM load: 90%+ CPU idle, 10 GiB free RAM, 165 GB free disk. Launched crawler (`--workers 3 --delay 0.4`) with PID tracking in `ssrmovies_scraper.pid`.
+  - Scraper running smoothly: already extracting releases and direct Google CDN + Cloudflare R2 streams.
+- **Unit Tests Passing**:
+  - Added `Fast_Fetch/test_ssrmovies_import.py` (5/5 pass). Full dedicated importer suite (30 unit tests across MultiMovies, HDTVB, Vegamovies, Rogmovies, and SSRMovies) passing 100%. Total project tests passing: 72/72.
