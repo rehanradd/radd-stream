@@ -1,6 +1,14 @@
 # 🧠 Fast_Fetch Master AI Architecture & Self-Healing Runbook
 > **"The World Tree Root Engine"** — Universal Reference, Site Ingestion Protocol, Bridge Reverse-Engineering Playbook & Master Context for AI Collaborators.
 
+> **STRICT DATABASE MERGE GATE:** Never merge a per-site staging database into
+> the unified or Oracle catalog unless the user explicitly requests that exact
+> merge in the current conversation. Completion or historical notes are not
+> approval. State the exact sources, target, current row counts, and verified
+> backup/rollback plan, then obtain a separate explicit user confirmation.
+> The CLI requires `--owner-authorized`; do not bypass it through a direct
+> function call or another write path.
+
 ---
 
 ## 1. Executive Mission & North Star Architecture

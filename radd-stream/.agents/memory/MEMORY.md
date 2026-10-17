@@ -1,1 +1,1 @@
-- [Radd Stream context](radd-stream-project-context.md) — product scope, credential rules (.replit, Configurations), dedicated multi-site crawler pipeline (MultiMovies, HDTVB, Vegamovies, Rogmovies, SSRMovies), and staging database isolation.
+- [Radd Stream context](radd-stream-project-context.md) — project rules, per-site staging, and the user's strict approval gate for every catalog merge.

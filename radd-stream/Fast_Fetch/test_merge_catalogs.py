@@ -51,7 +51,11 @@ class MergeCatalogsTests(unittest.TestCase):
             )
 
             # Now merge into target DB
-            stats = merge_catalogs.merge_site_db(src_db, tgt_db, verbose=False)
+            # This fixture uses isolated temporary databases; no project or
+            # production catalog is involved.
+            stats = merge_catalogs.merge_site_db(
+                src_db, tgt_db, verbose=False, owner_authorized=True
+            )
             self.assertEqual(stats["posts_merged"], 1)
             self.assertEqual(stats["releases_merged"], 1)
             self.assertEqual(stats["sources_merged"], 1)
@@ -73,6 +77,20 @@ class MergeCatalogsTests(unittest.TestCase):
                 self.assertEqual(row["clean_title"], "Pushpa 2")
                 self.assertEqual(row["playback_type"], "iframe")
                 self.assertEqual(row["source_url"], "https://embed.example/movie/pushpa2")
+
+    def test_merge_site_db_fails_closed_without_owner_authorization(self):
+        with tempfile.TemporaryDirectory() as td:
+            source_db = Path(td) / "source.db"
+            target_db = Path(td) / "target.db"
+
+            with self.assertRaisesRegex(PermissionError, "owner authorization"):
+                merge_catalogs.merge_site_db(source_db, target_db, verbose=False)
+
+            self.assertFalse(target_db.exists())
+
+    def test_merge_cli_requires_explicit_owner_authorization(self):
+        with self.assertRaisesRegex(SystemExit, "explicit instruction"):
+            merge_catalogs.main(["source.db"])
 
 
 if __name__ == "__main__":

@@ -37,13 +37,14 @@ The user says `.replit` contains sensitive configuration and must never be pushe
 
 **How to apply:** Exclude `.replit` from all commits and uploads. Do not rewrite existing history unless the user explicitly changes their decision.
 
-The project uses dedicated per-site staging databases (`multimovies.db`, `hdtvb.db`, `vegamovies.db`, `rogmovies.db`, `ssrmovies.db`) merged into unified `fast_fetch.db` with `merge_catalogs.py`.
+The project uses dedicated per-site staging databases (`multimovies.db`, `hdtvb.db`, `vegamovies.db`, `rogmovies.db`, `ssrmovies.db`). Keep each database isolated while its site is scraped.
 
 **Why:** Isolated staging databases eliminate SQLite lock contention and database corruption risks during high-throughput concurrent scraping.
 
-**How to apply:** Always build dedicated importers (`import_<site>.py`) with isolated SQLite databases, comprehensive unit tests (`test_<site>_import.py`), and remote live progress monitors (`check_<site>.py`). Current status:
-- MultiMovies: 100% completed (10,498 titles, 595,218 direct sources).
-- HDTVB (HDHub4u): 100% completed (5,692 titles, 17,293 sources with direct 10Gbps Cloudflare R2).
-- Vegamovies: Actively running on Oracle VM (PID 76635, 14,316 titles).
-- Rogmovies: Actively running on Oracle VM (PID 77286, 7,868 titles).
-- SSRMovies: Active domain `https://ssrmovies.surf` (27,362 posts across 274 pages on `/wp-json/wp/v2/posts?per_page=100`), LinksZilla resolver for Google CDN, Cloudflare R2, PixelDrain, and web streaming. Importer `import_ssrmovies.py`, tests `test_ssrmovies_import.py`, and monitor `check_ssrmovies.py` established.
+**How to apply:** Keep a dedicated importer (`import_<site>.py`), isolated staging database, unit tests, and progress monitor for each site. Put changing operational status in the session checkpoint, not project memory.
+
+Never merge a staging database into the unified or Oracle catalog unless the user explicitly requests that specific merge in the current conversation. Crawler completion, old checkpoint wording, passing tests, or previous approval are not permission. Before any merge, state the exact source database(s), target, current row counts, and verified backup/rollback plan, then obtain a separate explicit confirmation. If anything is unclear, leave the databases isolated.
+
+**Why:** The user explicitly asked for this strict approval gate and asked that it be saved for future agents.
+
+**How to apply:** Before using `merge_catalogs.py`, `merge_site_db()`, SQL, file copy, or any equivalent write path, check for the user's current instruction and obtain the separate confirmation for the exact plan. The CLI also requires `--owner-authorized`; never use that flag without both approvals.

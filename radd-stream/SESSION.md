@@ -5,6 +5,17 @@
 
 ---
 
+## Non-negotiable owner approval gate
+
+Never merge any per-site staging database into the unified catalog, locally or
+on Oracle, unless the user explicitly requests that specific merge in the
+current conversation. Scraper completion and old checkpoint wording do not
+authorize a merge. Before acting, list the exact source database(s), target,
+row counts, and verified backup/rollback plan, then get a separate explicit
+confirmation from the user. If anything is unclear, stop. Do not bypass the
+guard by calling `merge_site_db()` directly; the guarded CLI requires
+`--owner-authorized` after the user has confirmed the plan.
+
 ## 🔴 Before You Write a Single Line of Code
 
 Read these files **in order**:

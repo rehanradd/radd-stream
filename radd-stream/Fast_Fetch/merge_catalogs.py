@@ -3,6 +3,10 @@
 merge_catalogs.py — Merges a dedicated per-site staging database into the unified catalog.
 
 Standard Library only. Zero external pip packages.
+
+Safety: database merges are owner-authorized operations. A caller must opt in
+with owner_authorized=True; the CLI requires --owner-authorized. This guard is
+not a substitute for the user's explicit instruction and separate confirmation.
 """
 
 from __future__ import annotations
@@ -21,11 +25,22 @@ if str(BASE_DIR) not in sys.path:
 import fast_fetch
 
 
-def merge_site_db(source_db_path: Path, target_db_path: Path, verbose: bool = True) -> dict[str, int]:
+def merge_site_db(
+    source_db_path: Path,
+    target_db_path: Path,
+    verbose: bool = True,
+    *,
+    owner_authorized: bool = False,
+) -> dict[str, int]:
     """
     Merges all posts, post_sources, releases, and download_sources from source_db into target_db.
     Maintains canonical identity matching across sites.
     """
+    if not owner_authorized:
+        raise PermissionError(
+            "Refusing to merge without explicit owner authorization and a separate "
+            "confirmation of the exact source, target, counts, and backup plan."
+        )
     if not source_db_path.exists():
         raise FileNotFoundError(f"Source database not found: {source_db_path}")
 
@@ -169,15 +184,25 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=None,
         help="Path to unified catalog target database (defaults to Fast_Fetch/fast_fetch.db)",
     )
+    parser.add_argument(
+        "--owner-authorized",
+        action="store_true",
+        help="Required only after the owner explicitly authorizes this specific merge and confirms its plan.",
+    )
     return parser.parse_args(argv)
 
 
-def main():
-    args = parse_args()
+def main(argv: list[str] | None = None):
+    args = parse_args(argv)
+    if not args.owner_authorized:
+        raise SystemExit(
+            "Refusing to merge: obtain the user's explicit instruction and separate "
+            "confirmation for this exact merge before using --owner-authorized."
+        )
     source_path = Path(args.source_db).resolve()
     target_path = Path(args.target_db or os.environ.get("RADD_DB_PATH") or (BASE_DIR / "fast_fetch.db")).resolve()
     print(f"[*] Merging {source_path} -> {target_path}", flush=True)
-    stats = merge_site_db(source_path, target_path, verbose=True)
+    stats = merge_site_db(source_path, target_path, verbose=True, owner_authorized=True)
     print(f"[✓] Merge complete! Summary: {stats}", flush=True)
 
 

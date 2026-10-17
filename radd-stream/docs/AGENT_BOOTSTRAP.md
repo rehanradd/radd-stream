@@ -4,6 +4,13 @@ Use this once in a new workspace/account before taking on a task. Do not make fe
 
 Repository: `https://github.com/radddao/radd-stream`. Authenticated GitHub API metadata verified that the repository is public on 2026-10-16. Unauthenticated GitHub API and raw-file requests from this Replit workspace returned 404, while authenticated reads and a Git clone succeeded. For Git operations, use the temporary askpass flow in `ORACLE_DEPLOYMENT.md`; do not treat an unauthenticated 404 as proof that the repository or file is missing.
 
+**Strict owner-approval gate:** Never merge a staging database into the unified
+or Oracle catalog unless the user explicitly requests that exact merge in the
+current conversation. Completion or old notes are not approval. Before any
+merge, state the source database(s), target, current counts, and verified
+backup/rollback plan, then obtain the user's separate explicit confirmation.
+If not confirmed, stop. The CLI also requires `--owner-authorized`.
+
 ## 1. Check the configured variables
 
 The user's permanent project choice is to configure `GITHUB_TOKEN` and `ORACLE_SSH_KEY` as environment variables in Replit **Configurations**, not **Secrets**. Verify whether each name is present in the current workspace; report presence only. Never read, print, copy, or expose either value, and do not ask to move them. If either is missing, report which name is absent and stop.

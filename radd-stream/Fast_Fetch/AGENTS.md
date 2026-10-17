@@ -16,6 +16,16 @@
 > **Project constraints:** Python standard library only, no adult content, and
 > tests for code changes.
 
+> **STRICT OWNER-APPROVAL GATE FOR STAGING DATABASES**
+> Never merge a site staging database into `fast_fetch.db` or any other unified
+> or production catalog unless the user explicitly requests that exact merge
+> in the current conversation. Completion, old notes, passing tests, or prior
+> approval do not count. First state the exact source DB(s), target, current
+> row counts, and verified backup/rollback plan; then get the user's separate,
+> explicit confirmation. Do not call `merge_site_db()` directly or use another
+> write path to bypass this gate. The CLI additionally requires
+> `--owner-authorized`. This applies to local and Oracle databases.
+
 ---
 
 ## 0. Project Summary

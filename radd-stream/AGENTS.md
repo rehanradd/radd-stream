@@ -4,6 +4,17 @@
 > This is the single top-level source of truth for the `radd-stream` monorepo.
 > Every AI agent (Antigravity, Replit Agent, Copilot, Cursor, Claude, GPT, Gemini — all of you) must follow this.
 > For current cross-account state, also read `docs/PROJECT_MAP.md` and `docs/SESSION_CHECKPOINT.md`.
+>
+> **STRICT STAGING-DATABASE MERGE GATE — OWNER APPROVAL REQUIRED**
+> Never merge a per-site staging database into `fast_fetch.db` or any other
+> unified/production catalog unless the user explicitly instructs that specific
+> merge in the current conversation. Completion, a checkpoint, passing tests,
+> or prior approval is not authorization. Before a merge, state the exact
+> source database(s), target, current row counts, and verified backup/rollback
+> plan; get the user's separate, explicit confirmation of that plan. If either
+> approval is missing or ambiguous, do not invoke `merge_catalogs.py`, its
+> merge function, or an equivalent write path. This applies to every agent,
+> script, local database, and Oracle VM.
 
 ---
 
@@ -214,5 +225,5 @@ git push origin v1.0.0
 6. **Log every session** in `CONTINUITY.md` (backend) or `App/AGENTS.md` (app)
 7. **Push securely** — use Git over HTTPS with the temporary askpass helper; never embed or log a token
 8. **Read CONTINUITY.md first** — it has the latest state, last commit SHA, and next tasks
-9. **Per-Site Dedicated Staging Database Rule** — Scrape each streaming site into its own isolated staging database (e.g. `multimovies.db`, `vegamovies.db`). Never run mass scraper ingestion directly into the production catalog (`fast_fetch.db`). Once fully scraped and verified, merge into the unified catalog using `Fast_Fetch/merge_catalogs.py`.
+9. **Per-Site Dedicated Staging Database Rule** — Scrape each site into its own isolated staging database (e.g. `multimovies.db`, `vegamovies.db`). Never run mass ingestion directly into `fast_fetch.db`. `Fast_Fetch/merge_catalogs.py` is an opt-in data-writing tool, not an automatic completion step; use it only after satisfying the strict owner-approval gate above and passing `--owner-authorized`.
 10. **Zero Data Loss & Clone-Ready Fidelity Rule** — Extract 100% of available metadata (clean titles, TMDB posters & backdrops, year, synopsis, genres, ratings, audio languages, all seasons/episodes). Capture both embed/HLS watch servers and all download mirrors across all quality tiers. Never discard dead or failing links; record their status (`active`, `dead`, etc.) so link health is fully auditable and can be healed via JIT.

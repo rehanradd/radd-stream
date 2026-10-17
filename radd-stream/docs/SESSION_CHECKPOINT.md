@@ -2,13 +2,23 @@
 
 Update this file after each independently verified milestone so work can resume across accounts, tools, and usage limits.
 
-## Current checkpoint — 2026-10-17
+## Current checkpoint — 2026-10-18
 
-- **Goal:** Verify Vegamovies & Rogmovies live background crawlers on Oracle VM, establish dedicated staging importer and LinksZilla resolver for SSRMovies (`https://ssrmovies.surf`), and verify unit tests.
+### Mandatory staging-database merge gate
+
+Never merge a staging database into the unified or Oracle catalog unless the
+user explicitly requests that specific merge in the current conversation.
+Crawler completion, successful tests, and earlier checkpoint text are not
+authorization. Before any merge, give the user the exact source database(s),
+target, current row counts, and verified backup/rollback plan and obtain a
+separate explicit confirmation. The guarded CLI also requires
+`--owner-authorized`. If confirmation is absent or unclear, stop.
+
+- **Goal:** Continue read-only monitoring of the three Oracle staging crawlers and preserve the project state without merging any databases.
 - **Milestones & Breakthroughs:**
   1. **Oracle Background Crawlers Active**:
-     - Vegamovies (`import_vegamovies.py`, PID 76635) actively scraping 14,316 titles; over 14,292 releases, 39,975 direct sources (8,906 Google CDN streams) in `/home/ubuntu/radd-stream-data/vegamovies.db`.
-     - Rogmovies (`import_rogmovies.py`, PID 77286) actively scraping 7,868 titles; over 7,669 releases, 27,410 direct sources (4,464 Google CDN streams) in `/home/ubuntu/radd-stream-data/rogmovies.db`.
+     - Vegamovies (`import_vegamovies.py`, PID 76635) is running. Read-only DB check: 4,297 / 14,316 roots scraped, 9,807 pending. Its run-status file reports 3,890 / 13,726 completed and 5 failures; counters are per-run and can differ from cumulative DB counts.
+     - Rogmovies (`import_rogmovies.py`, PID 77286) is running. Read-only DB check: 3,651 / 7,868 roots scraped, 4,204 pending; run status reports 3,650 completed and 0 failures.
      - HDTVB (`import_hdtvb.py`) and MultiMovies full scrapes both 100% completed.
   2. **SSRMovies Live Domain & WP REST API Discovery**:
      - Identified active 2026 production domain **`https://ssrmovies.surf`** (HTTP 301 from `ssrmovies.gripe`).
@@ -25,13 +35,14 @@ Update this file after each independently verified milestone so work can resume 
      - Deployed `import_ssrmovies.py` and `test_ssrmovies_import.py` to `/opt/radd-stream/Fast_Fetch/` on Oracle VM (`92.4.95.252`). All unit tests passed 100% on the VM.
      - Completed full catalog ingestion of 27,000+ titles into `/home/ubuntu/radd-stream-data/ssrmovies.db`.
      - Verified system resource capacity: CPU load at 0.37 (plenty of idle capacity), 10 GiB available RAM, 165 GB available disk space.
-     - Started background scraper crawler (`PID 80318`, `--workers 3 --delay 0.4`) with PID tracking in `/home/ubuntu/radd-stream-data/ssrmovies_scraper.pid`.
+     - SSRMovies (`import_ssrmovies.py`, PID 80318) is running. Read-only DB check: 936 / 27,000 roots scraped, 26,064 pending; run status reports 930 completed and 0 failures.
      - Already resolving live direct Google CDN (`lh3`) and Cloudflare R2 streams.
-  6. **Unit Test Verification**:
-     - Built `Fast_Fetch/test_ssrmovies_import.py` (5/5 pass).
-     - Full test suite passes 100% (72 total tests: 36 DB, 6 VIDOUT, 30 scraper tests across all 5 engines).
-- **Verification:** Live scraping verified on Oracle VM via `check_ssrmovies.py`. System load remains very low with all 3 scrapers (Vegamovies, Rogmovies, and SSRMovies) running concurrently.
-- **Next action:** Monitor scraper progress across all 3 active jobs (`python check_vegamovies.py`, `python check_rogmovies.py`, `python check_ssrmovies.py`) and merge staging databases upon completion into `fast_fetch.db` using `merge_catalogs.py`.
+  6. **Test Verification**:
+     - Targeted suite passed 75 tests: database 36, VIDOUT 6, merge guard 3, HDTVB 4, MultiMovies 9, Rogmovies 6, SSRMovies 5, and Vegamovies 6.
+- **Verification:** Targeted tests and Python compilation passed. `setup_check.py` passed in the previous verification. Broad unittest discovery also runs `test_all_sites.py`, a live external-site audit; it timed out while some sites were unavailable, so it is not an offline unit-test result. A read-only SSH query matched the recorded host fingerprints and confirmed all three crawlers are running. No staging database was merged.
+- **GitHub:** The reviewed policy, merge guard, HDTVB metadata update, and continuity/domain docs were pushed to `agent/staging-merge-approval-gate-20261018` at commit `d6e8d18`. The branch is not merged into `main`.
+- **Oracle:** No files or services were changed. The deployment runbook requires independent host-key verification before production file changes; the saved fingerprints are only a TOFU consistency check. No database was merged or modified.
+- **Next action:** Continue read-only monitoring of the three crawlers. Even after they finish, do not merge anything automatically. Only consider a specific merge after the user explicitly requests it, the source/target/counts/backup plan are presented, and the user separately confirms.
 
 ### 2026-10-16 — Android App MVP & CI pipeline implementation
 - **Goal:** Implement full Android app flow (navigation, details, player, local favorites, settings) and establish root GitHub Actions CI.

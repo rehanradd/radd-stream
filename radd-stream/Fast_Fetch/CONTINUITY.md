@@ -3,6 +3,15 @@
 > **Notice to All Incoming AI Agents (Replit, Cursor, Copilot, Antigravity, etc.):**
 > Read this ledger first before starting your turn. When your session finishes or your quota runs low, log your work at the bottom so the next agent can seamlessly continue.
 
+> **NON-NEGOTIABLE MERGE RULE:** Never merge a staging DB into the unified or
+> Oracle catalog unless the user explicitly requests that specific merge in
+> the current conversation. Crawler completion, historical merge records, and
+> old checkpoint instructions are not authorization. Before any merge, state
+> the exact source DB(s), target, current counts, and verified backup/rollback
+> plan; obtain a separate explicit confirmation. The CLI requires
+> `--owner-authorized`. Historical entries below do not authorize a future
+> merge. If permission is missing or unclear, do not merge.
+
 ---
 
 ## 🏛️ Project Quick Summary
@@ -268,3 +277,14 @@ routes; restrict the bind and public routes before enabling the public proxy.
   - Scraper running smoothly: already extracting releases and direct Google CDN + Cloudflare R2 streams.
 - **Unit Tests Passing**:
   - Added `Fast_Fetch/test_ssrmovies_import.py` (5/5 pass). Full dedicated importer suite (30 unit tests across MultiMovies, HDTVB, Vegamovies, Rogmovies, and SSRMovies) passing 100%. Total project tests passing: 72/72.
+
+### Session 18 — Replit Agent — 2026-10-18
+**Recovered, Verified, and Safeguarded:**
+- Re-read the repository bootstrap and current handoff/checkpoint instructions.
+- Added a strict owner-approval gate across agent instructions, bootstrap/runbook docs, continuity notes, project memory, and the current checkpoint.
+- Made the catalog merge CLI and library fail closed unless `owner_authorized=True` is explicitly supplied; the CLI requires `--owner-authorized`. This technical guard supplements, but does not replace, the required user instruction and separate confirmation.
+- Verified active crawler state read-only on Oracle. Vegamovies: 4,297 / 14,316 scraped, 9,807 pending; Rogmovies: 3,651 / 7,868 scraped, 4,204 pending; SSRMovies: 936 / 27,000 scraped, 26,064 pending. All three processes were running at the check.
+- No staging database was merged, copied, or otherwise combined. No Oracle files or services were changed.
+- Replit tests: 75 targeted tests passed. `test_all_sites.py` is network-dependent and its broad-discovery run timed out while some sites were unavailable.
+- Pushed the verified changes to GitHub branch `agent/staging-merge-approval-gate-20261018` at commit `d6e8d18`; it is not merged into `main`.
+- No Oracle files or services were changed. Deployment was withheld because the runbook requires independent host-key verification; no staging database was merged or modified.

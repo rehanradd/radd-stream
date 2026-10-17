@@ -4,6 +4,21 @@ This is the operational reference for the existing Radd Stream Oracle VM and
 GitHub repository. Recheck the host before each deployment; IP addresses,
 firewall rules, and installed services can change.
 
+## Mandatory staging-database merge approval
+
+Do not merge any per-site staging database into the unified Oracle catalog
+because a crawler finished, a checkpoint says to, or a test passed. A specific
+merge requires the user's explicit instruction in the current conversation.
+Before executing it, report the exact source database(s), target path, current
+row counts, and verified backup/rollback plan, then obtain a separate explicit
+confirmation. Use the guarded merge CLI only with `--owner-authorized`; never
+bypass it through a direct function call, SQL, file copy, or alternate script.
+If approval is missing or unclear, leave every database isolated.
+Do not assume an existing Oracle copy of `merge_catalogs.py` has this guard:
+verify the deployed file before any use, and stop if it is unguarded. Do not
+replace a production copy until the host identity and backup/deployment
+procedure in this runbook are independently verified.
+
 ## Cost and host
 
 The deployment target is the existing Oracle VM. The operating preference is
