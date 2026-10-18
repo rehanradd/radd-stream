@@ -75495,3 +75495,90 @@ OK
 
 ---
 
+## 🤖 AI (Antigravity)  `2026-10-18T17:47:21Z`
+
+Created At: 2026-10-18T17:47:21Z
+Completed At: 2026-10-18T17:47:22Z
+File Path: `file:///home/runner/workspace/push.py`
+Total Lines: 249
+Total Bytes: 9086
+Showing lines 64 to 85
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+64: def run_tests() -> bool:
+65:     print("[*] Running pre-push unit tests...", flush=True)
+66:     fast_fetch_dir = ROOT_DIR / "radd-stream" / "Fast_Fetch"
+67:     unit_test_modules = [
+68:         "test_database",
+69:         "test_vidout",
+70:         "test_vegamovies_import",
+71:         "test_rogmovies_import",
+72:         "test_ssrmovies_import",
+73:         "test_7starhd_import",
+74:         "test_hdhub4u_import",
+75:         "test_rareanimes_import",
+76:         "test_katmoviehd_import",
+77:     ]
+78:     res = subprocess.run(
+79:         [sys.executable, "-m", "unittest"] + unit_test_modules,
+80:         cwd=fast_fetch_dir,
+81:         capture_output=True,
+82:         text=True,
+83:     )
+84:     if res.returncode == 0:
+85:         print("[✓] Pre-push unit tests passed successfully.", flush=True)
+The above content does NOT show the entire file contents. If you need to view any lines of the file which were not shown to complete your task, call this tool again to view those lines.
+
+---
+
+## 🤖 AI (Antigravity)  `2026-10-18T17:47:24Z`
+
+Created At: 2026-10-18T17:47:24Z
+Completed At: 2026-10-18T17:47:24Z
+File Path: `file:///home/runner/workspace/push.py`
+Total Lines: 249
+Total Bytes: 9086
+Showing lines 170 to 188
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+170: 
+171:     print(f"[*] Syncing updated scraper files and CHAT_HISTORY.md to Oracle VM ({ORACLE_IP})...", flush=True)
+172:     files_to_sync = [
+173:         ROOT_DIR / "radd-stream" / "Fast_Fetch" / "import_vegamovies.py",
+174:         ROOT_DIR / "radd-stream" / "Fast_Fetch" / "import_7starhd.py",
+175:         ROOT_DIR / "radd-stream" / "Fast_Fetch" / "import_hdhub4u.py",
+176:         ROOT_DIR / "radd-stream" / "Fast_Fetch" / "import_rareanimes.py",
+177:         ROOT_DIR / "radd-stream" / "Fast_Fetch" / "import_katmoviehd.py",
+178:         ROOT_DIR / "radd-stream" / "Fast_Fetch" / "fast_fetch.py",
+179:         ROOT_DIR / "radd-stream" / "Fast_Fetch" / "CHAT_HISTORY.md",
+180:     ]
+181: 
+182:     existing = [str(f) for f in files_to_sync if f.exists()]
+183:     if not existing:
+184:         return True
+185: 
+186:     cmd = [
+187:         "scp", "-i", key_path,
+188:         "-o", "StrictHostKeyChecking=no",
+The above content does NOT show the entire file contents. If you need to view any lines of the file which were not shown to complete your task, call this tool again to view those lines.
+
+---
+
+## 🤖 AI (Antigravity)  `2026-10-18T17:47:27Z`
+
+Created At: 2026-10-18T17:47:27Z
+Completed At: 2026-10-18T17:47:27Z
+The following changes were made by the replace_file_content tool to: /home/runner/workspace/push.py. If relevant, proactively run terminal commands to execute this code for the USER. Don't ask for permission.
+[diff_block_start]
+@@ -74,6 +74,7 @@
+         "test_hdhub4u_import",
+         "test_rareanimes_import",
+         "test_katmoviehd_import",
++        "test_backup_manager",
+     ]
+     res = subprocess.run(
+         [sys.executable, "-m", "unittest"] + unit_test_modules,
+[diff_block_end]
+
+Please note that the above snippet only shows the MODIFIED lines from the last change. It shows up to 3 lines of unchanged lines before and after the modified lines. The actual file contents may have many more lines not shown.
+
+---
+
