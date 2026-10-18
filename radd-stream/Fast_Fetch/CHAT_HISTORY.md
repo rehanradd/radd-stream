@@ -76259,3 +76259,9 @@ flowchart TD
 
 ---
 
+## 👤 USER  `2026-10-18T17:54:59Z`
+
+Cloudflare R2 anwhat do we need i have already created account on it
+
+---
+
