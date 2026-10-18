@@ -72792,3 +72792,139 @@ The above content does NOT show the entire file contents. If you need to view an
 
 ---
 
+## 🤖 AI (Antigravity)  `2026-10-18T17:06:50Z`
+
+Created At: 2026-10-18T17:06:50Z
+Completed At: 2026-10-18T17:06:50Z
+File Path: `file:///home/runner/workspace/WORKSPACE_PERSISTENCE.md`
+Total Lines: 50
+Total Bytes: 2352
+Showing lines 1 to 50
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+1: # Workspace persistence
+2: 
+3: Replit stores project files and chat history with the project, including across
+4: closing the browser tab, idle periods, and Repl restarts. Shell commands and
+5: one-off `export` statements are different: their environment changes last only
+6: for that shell session.
+7: 
+8: ## Antigravity CLI
+9: 
+10: The CLI is installed at `.tools/antigravity/bin/agy` inside the workspace, not
+11: under the runtime home directory or a temporary cache. `.replit` adds that
+12: directory to `PATH` for Shell sessions. After the project configuration reloads,
+13: run `agy --version` or `agy` in Shell.
+14: 
+15: Use `./antigravity-workspace.sh` from any shell location in this project to
+16: resume the last conversation while always launching from the workspace root.
+17: Pass CLI flags to the script to use them instead, for example
+18: `./antigravity-workspace.sh --help`. To check other available conversations,
+19: open the CLI and use `/resume`.
+20: 
+21: The launcher backs up only Antigravity's `settings.json`, `keybindings.json`,
+22: and `cache/last_conversations.json` to `.antigravity-recovery/`. It restores
+23: missing settings and merges the saved conversation index with the current one.
+24: The backup directory is excluded from Git and deployment bundles, and files are
+25: created with private permissions. It does not copy login credentials or chat
+26: transcripts; reauthentication may be needed if the CLI's local login session is
+27: lost, and resuming chats still depends on the same Antigravity account and
+28: service-side conversation history. Use `ANTIGRAVITY_HANDOFF.md` for a concise
+29: portable summary of project context; it is not a transcript backup. Anyone
+30: with access to this Replit workspace can still access its files, so treat the
+31: workspace as private.
+32: 
+33: The 211 MB executable is excluded from Git and deployment bundles. If it is ever
+34: missing (for example, after cloning the project elsewhere), restore it with:
+35: 
+36: ```sh
+37: bash install-antigravity.sh
+38: ```
+39: 
+40: The installer verifies the downloaded binary against the release manifest's
+41: SHA-512 checksum.
+42: 
+43: ## Project data and notes
+44: 
+45: Keep durable project data under the workspace, not `/tmp` or `$HOME/.cache`.
+46: The MultiMovies SQLite database and its existing `Fast_Fetch/CHAT_HISTORY.md`
+47: are already under `radd-stream/` in this workspace. Replit also retains this
+48: Agent conversation with the project; the history file is the portable project
+49: handoff record.
+50: 
+The above content shows the entire, complete file contents of the requested file.
+
+---
+
+## 🤖 AI (Antigravity)  `2026-10-18T17:06:55Z`
+
+Created At: 2026-10-18T17:06:55Z
+Completed At: 2026-10-18T17:06:56Z
+File Path: `file:///home/runner/workspace/REPLIT_ANTIGRAVITY_SETUP_GUIDE.md`
+Total Lines: 151
+Total Bytes: 4612
+Showing lines 1 to 60
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+1: # Replit Antigravity CLI Persistent Setup Guide
+2: 
+3: This guide explains how to install and permanently maintain Google Antigravity CLI (`agy`) in any Replit workspace (across different Replit accounts or projects) so that it survives container restarts, idle timeouts, and browser reloads.
+4: 
+5: ---
+6: 
+7: ## 💡 Why Normal Installations Disappear in Replit
+8: 
+9: Replit executes inside a containerized Nix environment:
+10: - **Ephemeral Storage**: Directories outside your workspace (like `/tmp`, `/home/runner/.cache`, or `/usr/local/bin`) can be cleared when the Repl goes to sleep, restarts, or updates its Nix environment.
+11: - **Persistent Storage**: Only files located inside **`/home/runner/workspace`** (the root of your project) are guaranteed to persist across Repl restarts and session disconnects.
+12: 
+13: By placing the binary inside `.tools/antigravity/bin/` within the workspace and linking it in `.replit`, your installation stays **permanent**.
+14: 
+15: ---
+16: 
+17: ## 🚀 Quick Setup (1-Minute Method)
+18: 
+19: If you already have a terminal open in your new Replit project, run these 3 quick steps:
+20: 
+21: ### Step 1: Create the installer script
+22: 
+23: Create a file named `install-antigravity.sh` in your workspace root:
+24: 
+25: ```bash
+26: cat << 'EOF' > install-antigravity.sh
+27: #!/usr/bin/env bash
+28: set -euo pipefail
+29: 
+30: ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+31: TARGET_DIR="$ROOT/.tools/antigravity/bin"
+32: BINARY="$TARGET_DIR/agy"
+33: 
+34: if [[ -x "$BINARY" ]]; then
+35:   echo "Antigravity CLI is already installed in this workspace:"
+36:   "$BINARY" --version
+37:   exit 0
+38: fi
+39: 
+40: installer="$(mktemp)"
+41: trap 'rm -f "$installer"' EXIT
+42: 
+43: echo "Downloading Antigravity installer..."
+44: curl -fsSL https://antigravity.google/cli/install.sh -o "$installer"
+45: bash "$installer" --dir "$TARGET_DIR"
+46: 
+47: if [[ ! -x "$BINARY" ]]; then
+48:   echo "Installation did not create $BINARY" >&2
+49:   exit 1
+50: fi
+51: 
+52: echo "Successfully installed Antigravity CLI:"
+53: "$BINARY" --version
+54: EOF
+55: chmod +x install-antigravity.sh
+56: ```
+57: 
+58: ### Step 2: Run the installer
+59: 
+60: Execute the script:
+The above content does NOT show the entire file contents. If you need to view any lines of the file which were not shown to complete your task, call this tool again to view those lines.
+
+---
+
