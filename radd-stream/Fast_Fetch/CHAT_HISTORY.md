@@ -76893,3 +76893,9 @@ python3 radd-stream/Fast_Fetch/backup_manager.py --r2
 
 ---
 
+## 👤 USER  `2026-10-18T17:58:44Z`
+
+does not it free it asking me for to add paayment method
+
+---
+
