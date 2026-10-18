@@ -72029,3 +72029,67 @@ The above content does NOT show the entire file contents. If you need to view an
 
 ---
 
+## 🤖 AI (Antigravity)  `2026-10-18T16:55:23Z`
+
+Created At: 2026-10-18T16:55:23Z
+Completed At: 2026-10-18T16:55:23Z
+File Path: `file:///home/runner/workspace/radd-stream/Fast_Fetch/export_chat.py`
+Total Lines: 244
+Total Bytes: 8722
+Showing lines 170 to 220
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+170:             text = msg["content"]
+171:             if len(text) > 12000:
+172:                 text = text[:12000] + "\n\n... [truncated for readability] ..."
+173:             new_lines.append(f"## 🤖 AI (Antigravity)  `{msg['created_at']}`\n\n{text}\n\n---\n\n")
+174:             added_count += 1
+175: 
+176:     if new_lines:
+177:         with open(output_file, "a", encoding="utf-8") as f:
+178:             f.writelines(new_lines)
+179: 
+180:     return added_count
+181: 
+182: 
+183: def run_export(
+184:     conversation_id: str | None = None,
+185:     all_convs: bool = False,
+186:     output_path: Path = DEFAULT_OUTPUT,
+187:     brain_dir: Path | None = None,
+188: ) -> int:
+189:     """Execute conversation export."""
+190:     brain_dirs = [brain_dir] if brain_dir else find_brain_directories()
+191:     if not brain_dirs:
+192:         print("[!] No Antigravity brain directories found on this system.", file=sys.stderr)
+193:         return 0
+194: 
+195:     target_brain = brain_dirs[0]
+196:     conv_dirs = get_conversation_dirs(target_brain)
+197:     if not conv_dirs:
+198:         print(f"[!] No conversation transcripts found in {target_brain}", file=sys.stderr)
+199:         return 0
+200: 
+201:     if conversation_id:
+202:         selected = [d for d in conv_dirs if d.name == conversation_id]
+203:         if not selected:
+204:             print(f"[!] Conversation ID {conversation_id} not found in {target_brain}", file=sys.stderr)
+205:             return 0
+206:     elif all_convs:
+207:         selected = conv_dirs
+208:     else:
+209:         # Default: latest conversation
+210:         selected = [conv_dirs[0]]
+211: 
+212:     total_added = 0
+213:     for c_dir in selected:
+214:         count = export_conversation(c_dir, output_path)
+215:         print(f"[✓] Conversation {c_dir.name}: exported {count} new messages to {output_path.name}")
+216:         total_added += count
+217: 
+218:     return total_added
+219: 
+220: 
+The above content does NOT show the entire file contents. If you need to view any lines of the file which were not shown to complete your task, call this tool again to view those lines.
+
+---
+
