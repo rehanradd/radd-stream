@@ -76576,3 +76576,172 @@ The above content does NOT show the entire file contents. If you need to view an
 
 ---
 
+## 🤖 AI (Antigravity)  `2026-10-18T17:56:17Z`
+
+Created At: 2026-10-18T17:56:17Z
+Completed At: 2026-10-18T17:56:18Z
+The following changes were made by the replace_file_content tool to: /home/runner/workspace/radd-stream/Fast_Fetch/backup_manager.py. If relevant, proactively run terminal commands to execute this code for the USER. Don't ask for permission.
+[diff_block_start]
+@@ -245,6 +245,85 @@
+         return False
+ 
+ 
++def _sign_aws4(key: bytes, msg: str) -> bytes:
++    return hmac.new(key, msg.encode("utf-8"), hashlib.sha256).digest()
++
++
++def _get_aws4_signing_key(secret_key: str, date_stamp: str, region_name: str, service_name: str) -> bytes:
++    k_date = _sign_aws4(("AWS4" + secret_key).encode("utf-8"), date_stamp)
++    k_region = hmac.new(k_date, region_name.encode("utf-8"), hashlib.sha256).digest()
++    k_service = hmac.new(k_region, service_name.encode("utf-8"), hashlib.sha256).digest()
++    return hmac.new(k_service, "aws4_request".encode("utf-8"), hashlib.sha256).digest()
++
++
++def upload_to_cloudflare_r2(
++    archive_path: Path,
++    account_id: str | None = None,
++    access_key: str | None = None,
++    secret_key: str | None = None,
++    bucket_name: str | None = None,
++    object_name: str | None = None,
++) -> bool:
++    """
++    Uploads backup archive directly to Cloudflare R2 using AWS SigV4.
++    100% Python standard library (no pip packages or boto3 required).
++    """
++    account_id = account_id or os.environ.get("R2_ACCOUNT_ID", "")
++    access_key = access_key or os.environ.get("R2_ACCESS_KEY_ID", "")
++    secret_key = secret_key or os.environ.get("R2_SECRET_ACCESS_KEY", "")
++    bucket_name = bucket_name or os.environ.get("R2_BUCKET_NAME", "radd-stream-backups")
++    object_name = object_name or archive_path.name
++
++    if not account_id or not access_key or not secret_key:
++        print("[*] R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, or R2_SECRET_ACCESS_KEY not configured. Skipping R2 upload.", file=sys.stderr)
++        return False
++
++    with open(archive_path, "rb") as f:
++        payload_bytes = f.read()
++
++    host = f"{account_id}.r2.cloudflarestorage.com"
++    endpoint_url = f"https://{host}/{bucket_name}/{object_name}"
++    now = datetime.datetime.now(datetime.timezone.utc)
++    amz_date = now.strftime("%Y%m%dT%H%M%SZ")
++    date_stamp = now.strftime("%Y%m%d")
++    payload_hash = hashlib.sha256(payload_bytes).hexdigest()
++
++    canonical_uri = f"/{bucket_name}/{object_name}"
++    canonical_headers = f"host:{host}\nx-amz-content-sha256:{payload_hash}\nx-amz-date:{amz_date}\n"
++    signed_headers = "host;x-amz-content-sha256;x-amz-date"
++    canonical_request = f"PUT\n{canonical_uri}\n\n{canonical_headers}\n{signed_headers}\n{payload_hash}"
++
++    credential_scope = f"{date_stamp}/auto/s3/aws4_request"
++    string_to_sign = f"AWS4-HMAC-SHA256\n{amz_date}\n{credential_scope}\n{hashlib.sha256(canonical_request.encode('utf-8')).hexdigest()}"
++
++    signing_key = _get_aws4_signing_key(secret_key, date_stamp, "auto", "s3")
++    signature = hmac.new(signing_key, string_to_sign.encode("utf-8"), hashlib.sha256).hexdigest()
++    auth_header = f"AWS4-HMAC-SHA256 Credential={access_key}/{credential_scope}, SignedHeaders={signed_headers}, Signature={signature}"
++
++    headers = {
++        "Host": host,
++        "x-amz-date": amz_date,
++        "x-amz-content-sha256": payload_hash,
++        "Authorization": auth_header,
++        "Content-Type": "application/gzip",
++        "Content-Length": str(len(payload_bytes)),
++        "User-Agent": "Radd-Stream-Backup/1.0",
++    }
++
++    req = urllib.request.Request(endpoint_url, data=payload_bytes, headers=headers, method="PUT")
++    try:
++        with urllib.request.urlopen(req, timeout=180) as resp:
++            if resp.status in (200, 201):
++                print(f"[✓] Uploaded backup to Cloudflare R2: s3://{bucket_name}/{object_name}", flush=True)
++                return True
++            else:
++                print(f"[!] R2 returned status {resp.status}", file=sys.stderr)
++                return False
++    except Exception as e:
++        print(f"[!] Cloudflare R2 upload error: {e}", file=sys.stderr)
++        return False
++
++
+ def main():
+     parser = argparse.ArgumentParser(description="radd-stream Cloud Backup Manager")
+     parser.add_argument("--dir", default="/home/ubuntu/radd-stream-data", help="Directory containing SQLite DBs")
+@@ -251,5 +251,6 @@
+     parser.add_argument("--github", action="store_true", help="Upload to GitHub Releases")
+     parser.add_argument("--telegram", action="store_true", help="Upload to Telegram channel")
++    parser.add_argument("--r2", action="store_true", help="Upload to Cloudflare R2 bucket")
+     parser.add_argument("--dry-run", action="store_true", help="Snapshot & compress only, do not upload")
+     args = parser.parse_args()
+ 
+@@ -272,7 +272,7 @@
+         print("[*] Dry run complete. No off-site uploads requested.", flush=True)
+         return
+ 
+-    if args.github or (not args.telegram and os.environ.get("GITHUB_TOKEN")):
++    if args.github or (not args.telegram and not args.r2 and os.environ.get("GITHUB_TOKEN")):
+         upload_to_github_release(archive)
+ 
+     if args.telegram:
+@@ -279,5 +279,9 @@
+         upload_to_telegram(archive, caption=caption)
+ 
++    if args.r2 or os.environ.get("R2_ACCOUNT_ID"):
++        upload_to_cloudflare_r2(archive)
++
++
+ 
+ if __name__ == "__main__":
+     main()
+[diff_block_end]
+
+Please note that the above snippet only shows the MODIFIED lines from the last change. It shows up to 3 lines of unchanged lines before and after the modified lines. The actual file contents may have many more lines not shown.
+
+---
+
+## 🤖 AI (Antigravity)  `2026-10-18T17:56:21Z`
+
+Created At: 2026-10-18T17:56:21Z
+Completed At: 2026-10-18T17:56:21Z
+File Path: `file:///home/runner/workspace/radd-stream/Fast_Fetch/test_backup_manager.py`
+Total Lines: 61
+Total Bytes: 1921
+Showing lines 30 to 61
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+30:     def test_safe_vacuum_sqlite(self):
+31:         target = self.test_dir / "test1_backup.db"
+32:         res = safe_vacuum_sqlite(self.db1, target)
+33:         self.assertTrue(res)
+34:         self.assertTrue(target.exists())
+35: 
+36:         # Verify data integrity in backup
+37:         conn = sqlite3.connect(str(target))
+38:         c = conn.cursor()
+39:         c.execute("SELECT count(*) FROM items;")
+40:         count = c.fetchone()[0]
+41:         conn.close()
+42:         self.assertEqual(count, 2)
+43: 
+44:     def test_calculate_sha256(self):
+45:         sha = calculate_sha256(self.db1)
+46:         self.assertIsInstance(sha, str)
+47:         self.assertEqual(len(sha), 64)
+48: 
+49:     def test_create_backup_archive(self):
+50:         out_dir = self.test_dir / "out"
+51:         archive_path, manifest = create_backup_archive([self.db1], out_dir, prefix="unit-test")
+52:         self.assertTrue(archive_path.exists())
+53:         self.assertIn("databases", manifest)
+54:         self.assertIn("test1.db", manifest["databases"])
+55:         self.assertIn("archive", manifest)
+56:         self.assertGreater(archive_path.stat().st_size, 0)
+57: 
+58: 
+59: if __name__ == "__main__":
+60:     unittest.main()
+61: 
+The above content does NOT show the entire file contents. If you need to view any lines of the file which were not shown to complete your task, call this tool again to view those lines.
+
+---
+
