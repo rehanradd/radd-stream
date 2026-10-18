@@ -55,6 +55,13 @@ class TestBackupManager(unittest.TestCase):
         self.assertIn("archive", manifest)
         self.assertGreater(archive_path.stat().st_size, 0)
 
+    def test_r2_sigv4_signing(self):
+        from backup_manager import _get_aws4_signing_key, _sign_aws4
+        key = _get_aws4_signing_key("testsecret", "20261018", "auto", "s3")
+        self.assertIsInstance(key, bytes)
+        self.assertEqual(len(key), 32)
+
 
 if __name__ == "__main__":
     unittest.main()
+
