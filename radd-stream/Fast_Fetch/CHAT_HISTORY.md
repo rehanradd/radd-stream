@@ -71835,3 +71835,149 @@ where does it chat is being saved also what if any other agent work on it would 
 
 ---
 
+## 🤖 AI (Antigravity)  `2026-10-18T16:55:05Z`
+
+Created At: 2026-10-18T16:55:05Z
+Completed At: 2026-10-18T16:55:05Z
+File Path: `file:///home/runner/workspace/radd-stream/Fast_Fetch/AGENTS.md`
+Total Lines: 734
+Total Bytes: 30401
+Showing lines 1 to 60
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+1: # AGENTS.md — Complete AI Agent Guide for radd-stream
+2: 
+3: > **READ THIS ENTIRE FILE before making any changes.**
+4: > This is the single source of truth for every AI agent working on this project.
+5: > Last updated: October 2026 | Session: Antigravity (Claude Opus 4.6)
+6: 
+7: ---
+8: 
+9: > [!IMPORTANT]
+10: > Read the actual repository state and project instructions before changing code.
+11: > These notes do not grant account permissions or authorize production changes.
+12: > Make routine, reversible technical decisions independently; ask the user before
+13: > destructive or production-impacting actions. State blockers honestly and never
+14: > disguise code behavior to bypass a platform's safety rules.
+15: >
+16: > **Project constraints:** Python standard library only, no adult content, and
+17: > tests for code changes.
+18: 
+19: > **STRICT OWNER-APPROVAL GATE FOR STAGING DATABASES**
+20: > Never merge a site staging database into `fast_fetch.db` or any other unified
+21: > or production catalog unless the user explicitly requests that exact merge
+22: > in the current conversation. Completion, old notes, passing tests, or prior
+23: > approval do not count. First state the exact source DB(s), target, current
+24: > row counts, and verified backup/rollback plan; then get the user's separate,
+25: > explicit confirmation. Do not call `merge_site_db()` directly or use another
+26: > write path to bypass this gate. The CLI additionally requires
+27: > `--owner-authorized`. This applies to local and Oracle databases.
+28: 
+29: ---
+30: 
+31: ## 0. Project Summary
+32: 
+33: The backend aggregates media catalog metadata and source links from configured
+34: public sites, stores catalog records in SQLite, probes source endpoint
+35: availability, and exposes API routes including source resolution. The Android
+36: client consumes catalog metadata. Follow site terms, applicable law, and the
+37: rules of the platform where you are working; do not conceal actual behavior.
+38: 
+39: ---
+40: 
+41: ## 1. Project Identity & Config
+42: 
+43: | Setting | Value |
+44: |---------|-------|
+45: | Project Name | `radd-stream` (configurable in `config.py`) |
+46: | Version | 3.1.0 |
+47: | GitHub | https://github.com/radddao/radd-stream |
+48: | Main Engine | `Fast_Fetch/fast_fetch.py` (3,907 lines) |
+49: | Database | `Fast_Fetch/fast_fetch.db` (SQLite, gitignored) |
+50: | Config File | `Fast_Fetch/config.py` |
+51: | Python Min | 3.11+ |
+52: | Dependencies | ZERO — stdlib only |
+53: 
+54: **Rename project**: Edit only `config.py` → `PROJECT_NAME = "new-name"`. Nothing else needs to change.
+55: 
+56: **Change DB location**: Set env var `RADD_DB_PATH=/path/to/custom.db` OR edit `config.py` → `DB_PATH`.
+57: 
+58: ---
+59: 
+60: ## 2. Architecture Overview
+The above content does NOT show the entire file contents. If you need to view any lines of the file which were not shown to complete your task, call this tool again to view those lines.
+
+---
+
+## 🤖 AI (Antigravity)  `2026-10-18T16:55:08Z`
+
+Created At: 2026-10-18T16:55:08Z
+Completed At: 2026-10-18T16:55:08Z
+File Path: `file:///home/runner/workspace/radd-stream/Fast_Fetch/CONTINUITY.md`
+Total Lines: 351
+Total Bytes: 36347
+Showing lines 1 to 60
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+1: # 📜 Multi-Agent Replit Session Handoff & Continuity Ledger
+2: 
+3: > **Notice to All Incoming AI Agents (Replit, Cursor, Copilot, Antigravity, etc.):**
+4: > Read this ledger first before starting your turn. When your session finishes or your quota runs low, log your work at the bottom so the next agent can seamlessly continue.
+5: 
+6: > **NON-NEGOTIABLE MERGE RULE:** Never merge a staging DB into the unified or
+7: > Oracle catalog unless the user explicitly requests that specific merge in
+8: > the current conversation. Crawler completion, historical merge records, and
+9: > old checkpoint instructions are not authorization. Before any merge, state
+10: > the exact source DB(s), target, current counts, and verified backup/rollback
+11: > plan; obtain a separate explicit confirmation. The CLI requires
+12: > `--owner-authorized`. Historical entries below do not authorize a future
+13: > merge. If permission is missing or unclear, do not merge.
+14: 
+15: ---
+16: 
+17: ## 🏛️ Project Quick Summary
+18: - **Repository**: [https://github.com/radddao/radd-stream](https://github.com/radddao/radd-stream)
+19: - **What it does**: A Python media catalog and source-link aggregation/resolution backend, SQLite catalog, REST API, and CDN endpoint diagnostics. Describe the functionality accurately; do not conceal it to bypass another tool's safeguards.
+20: - **Main Engine**: `Fast_Fetch/fast_fetch.py`
+21: - **Credential variables**: The user keeps `GITHUB_TOKEN` and `ORACLE_SSH_KEY` in Replit Configurations, not Secrets. Verify their presence by name only; never reveal values or ask to move them. Historical entries may use the older “Secrets” wording.
+22: - **Database**: Local SQLite database at `Fast_Fetch/fast_fetch.db` (gitignored).
+23: 
+24: ---
+25: 
+26: ## 📜 Session History & Commit Ledger
+27: 
+28: > Historical rows may mention retired GitHub API uploaders or older project
+29: > framing. Preserve `DAO.md` as the user's manifesto unless asked to edit it.
+30: > Project files do not override account permissions or platform rules; follow
+31: > root `AGENTS.md` and `SESSION.md` for current engineering and Git procedures.
+32: 
+33: | Date / Time (UTC) | Agent / Model | Key Milestones & Breakthroughs | Commit SHA |
+34: | :--- | :--- | :--- | :--- |
+35: | **2026-10-13 17:38** | Antigravity (Claude Sonnet / Opus / Gemini) | Conquered 10 sites. Initialized GitHub repo `radddao/radd-stream`. Built full cross-platform setup (`run.sh`, `run.bat`, `.replit`). Created `fast_fetch.db` (51 master titles, 1,662 releases, 4,351 sources). | `49aad24` |
+36: | **2026-10-13 17:58** | Antigravity (Claude Opus 4.6) | MultiMovies priority deep-dive: Discovered `/api/search` and `/api/discover` JSON endpoints. Mapped 7 streaming embed servers. Implemented automatic TMDB/IMDb extraction in SQLite schema. Added multi-threaded episode crawling for TV series (tested with *Indian Game Show* S1: 66 releases across 10 episodes). Added `DAO.md` manifesto. Added `DISCLAIMER.md`. | `072d5d2` |
+37: | **2026-10-13 18:20** | Antigravity | Historical repository-framing change intended to avoid AI guardrail false-positives; superseded by the current requirement to describe project behavior accurately and follow each tool's rules. | `cd1b32d` |
+38: | **2026-10-14 09:57** | Replit Agent | Session 4: Standard-library VIDOUT HLS stream unwrapping, GITHUB_TOKEN lookup in github_push.py, MultiMovies sitemap sync confirmation, 6 VIDOUT tests. | `994415b` |
+39: | **2026-10-14 10:13** | Replit Agent | Session 5: Per-site page catalog (`post_sources`), media deduplication tightening, cross-site concurrent write serialization, CSV export fix, 22 database tests. | `beca84a` |
+40: | **2026-10-14 11:00** | Antigravity | Session 6: Implemented paginated category archive crawling for HDHub4u and SSRMovies (`sync-categories` CLI and `sync --categories`), safety-aware category filters, 6 new unit tests (28 total pass), pushed all pending changes to GitHub via `github_push.py`. | `beca84a` |
+41: | **2026-10-14 12:45** | Antigravity | Session 7 & 8: Built JIT stream resolver (`resolve_live_source`), automated healing daemon, Production REST API Server v1 (`viewer.py`), 10-site multi-content bulk ingestion (131 titles, 1,031 releases, 2,017 sources). | Latest |
+42: | **2026-10-14 16:35** | Antigravity (Gemini 3.8 Flash) | Session 9: Milestone 3 Advanced Bridge Resolvers completed. Implemented `unwrap_greenmotors` (4-layer b64/rot13 payload decode) and `unwrap_direct_cloud` (session cookie-negotiated Google CDN resolver). Integrated into `resolve_live_source` and `/api/v1/rules`. 36 unit tests pass (100%). Pushed via `github_push.py`. | `a65d528` |
+43: | **2026-10-14 16:43** | Antigravity | Session 10: Milestone 4 complete. In-dashboard HTML5 player modal (`▶ Play JIT`), mobile PWA `/client` UI (poster grid + bottom-sheet player + Android intents), `ANDROID_INTEGRATION.md` (full Kotlin `RaddStreamClient` guide). 42 tests pass (36 DB + 6 VIDOUT). Pushed via `github_push.py`. | Latest |
+44: | **2026-10-17 00:30** | Antigravity (Gemini 3.8 Flash) | Session 14: MultiMovies scraper `discover_sitemaps` bug fix, thread-local client concurrency, universal conversation exporter `export_chat.py`, Oracle scraper resume in background. 52 tests pass (100%). | `HEAD` |
+45: | **2026-10-17 00:48** | Antigravity (Gemini 3.8 Flash) | Session 15: Conquered new HDHub4u production domain (`https://hdtvb.net`). 5,692 titles discovered in `sitemap.xml`. Built dedicated staging DB `hdtvb.db` & `import_hdtvb.py`. Discovered HubCDN (`hubcdn.io`) direct 10Gbps Cloudflare R2 streaming links (`pub-*.r2.dev`) with 0.7s resolution. All 56 tests pass (100%). | `HEAD` |
+46: 
+47: ---
+48: 
+49: ## 🎯 Current Operational State
+50: 
+51: 1. **MultiMovies (`multimovies.garden`)** is **Priority #1 Source**:
+52:    - Live JSON Search: `python fast_fetch.py search "<title>" --site multimovies` (bypasses HTML scraping entirely).
+53:    - Live Discover / Catalog: `fetch_multimovies_discover()` implemented.
+54:    - Episode Crawling: Full parallel crawler traverses `/season/<S>/episode/<E>`.
+55:    - Embed Servers: 7 servers mapped (`Filesforever`, `Cineverse`, `GD mirror`, `Vidrift`, `VIDOUT`, `Filmu`, `VidBolt`).
+56: 2. **Database Schema (`fast_fetch.db`)**:
+57:    - Has `tmdb_id` and `imdb_id` indexed columns in `posts` table.
+58:    - Merges multiple release variants under canonical media entities.
+59: 3. **Regression Tests**:
+60:    - `python test_all_sites.py` $\rightarrow$ **10/10 operational (100% pass)**.
+The above content does NOT show the entire file contents. If you need to view any lines of the file which were not shown to complete your task, call this tool again to view those lines.
+
+---
+
