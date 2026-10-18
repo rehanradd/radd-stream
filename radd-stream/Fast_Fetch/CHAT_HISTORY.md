@@ -73076,3 +73076,52 @@ Please note that the above snippet only shows the MODIFIED lines from the last c
 
 ---
 
+## 🤖 AI (Antigravity)  `2026-10-18T17:07:42Z`
+
+Created At: 2026-10-18T17:07:42Z
+Completed At: 2026-10-18T17:07:42Z
+File Path: `file:///home/runner/workspace/radd-stream/Fast_Fetch/CONTINUITY.md`
+Total Lines: 351
+Total Bytes: 36347
+Showing lines 40 to 75
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+40: | **2026-10-14 11:00** | Antigravity | Session 6: Implemented paginated category archive crawling for HDHub4u and SSRMovies (`sync-categories` CLI and `sync --categories`), safety-aware category filters, 6 new unit tests (28 total pass), pushed all pending changes to GitHub via `github_push.py`. | `beca84a` |
+41: | **2026-10-14 12:45** | Antigravity | Session 7 & 8: Built JIT stream resolver (`resolve_live_source`), automated healing daemon, Production REST API Server v1 (`viewer.py`), 10-site multi-content bulk ingestion (131 titles, 1,031 releases, 2,017 sources). | Latest |
+42: | **2026-10-14 16:35** | Antigravity (Gemini 3.8 Flash) | Session 9: Milestone 3 Advanced Bridge Resolvers completed. Implemented `unwrap_greenmotors` (4-layer b64/rot13 payload decode) and `unwrap_direct_cloud` (session cookie-negotiated Google CDN resolver). Integrated into `resolve_live_source` and `/api/v1/rules`. 36 unit tests pass (100%). Pushed via `github_push.py`. | `a65d528` |
+43: | **2026-10-14 16:43** | Antigravity | Session 10: Milestone 4 complete. In-dashboard HTML5 player modal (`▶ Play JIT`), mobile PWA `/client` UI (poster grid + bottom-sheet player + Android intents), `ANDROID_INTEGRATION.md` (full Kotlin `RaddStreamClient` guide). 42 tests pass (36 DB + 6 VIDOUT). Pushed via `github_push.py`. | Latest |
+44: | **2026-10-17 00:30** | Antigravity (Gemini 3.8 Flash) | Session 14: MultiMovies scraper `discover_sitemaps` bug fix, thread-local client concurrency, universal conversation exporter `export_chat.py`, Oracle scraper resume in background. 52 tests pass (100%). | `HEAD` |
+45: | **2026-10-17 00:48** | Antigravity (Gemini 3.8 Flash) | Session 15: Conquered new HDHub4u production domain (`https://hdtvb.net`). 5,692 titles discovered in `sitemap.xml`. Built dedicated staging DB `hdtvb.db` & `import_hdtvb.py`. Discovered HubCDN (`hubcdn.io`) direct 10Gbps Cloudflare R2 streaming links (`pub-*.r2.dev`) with 0.7s resolution. All 56 tests pass (100%). | `HEAD` |
+46: 
+47: ---
+48: 
+49: ## 🎯 Current Operational State
+50: 
+51: 1. **MultiMovies (`multimovies.garden`)** is **Priority #1 Source**:
+52:    - Live JSON Search: `python fast_fetch.py search "<title>" --site multimovies` (bypasses HTML scraping entirely).
+53:    - Live Discover / Catalog: `fetch_multimovies_discover()` implemented.
+54:    - Episode Crawling: Full parallel crawler traverses `/season/<S>/episode/<E>`.
+55:    - Embed Servers: 7 servers mapped (`Filesforever`, `Cineverse`, `GD mirror`, `Vidrift`, `VIDOUT`, `Filmu`, `VidBolt`).
+56: 2. **Database Schema (`fast_fetch.db`)**:
+57:    - Has `tmdb_id` and `imdb_id` indexed columns in `posts` table.
+58:    - Merges multiple release variants under canonical media entities.
+59: 3. **Regression Tests**:
+60:    - `python test_all_sites.py` $\rightarrow$ **10/10 operational (100% pass)**.
+61: 
+62: ---
+63: 
+64: ## 📌 Next Action Items (Production & App Layer Roadmap)
+65: 
+66: - [x] **VIDOUT HLS Stream Unwrapping**: VIDOUT (`vidout.pages.dev`) embed pages parsed for HLS `.m3u8` playlist references.
+67: - [x] **Category-Level Crawling for HDHub4u / SSRMovies**: Paginated category ingestion (`sync-categories` and `sync --categories`).
+68: - [x] **10-Site Mass Ingestion**: 131 catalog titles, 1,031 releases, and 2,017 direct sources across 65+ services mapped into `fast_fetch.db`.
+69: - [x] **Milestone 1: Automated Link-Healing & JIT Engine**:
+70:   - Implemented `resolve_live_source(source_id)` for on-demand token refresh.
+71:   - Implemented proactive sweep `heal_expiring_sources()` and automated background healing daemon (`fast_fetch.py heal --daemon --interval <hours>`) with `fast_fetch.py resolve <id>`.
+72: - [x] **Milestone 2: Production REST API Server v1**:
+73:   - Zero-dependency HTTP server delivering:
+74:     - `GET /api/v1/posts` (search, filter by type: movie/series/anime, pagination)
+75:     - `GET /api/v1/posts/{id}` (full detail with seasons, episodes, and releases ordered by priority tier)
+The above content does NOT show the entire file contents. If you need to view any lines of the file which were not shown to complete your task, call this tool again to view those lines.
+
+---
+
