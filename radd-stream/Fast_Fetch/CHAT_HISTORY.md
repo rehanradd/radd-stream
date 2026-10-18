@@ -72638,3 +72638,24 @@ Output:
 
 ---
 
+## 🤖 AI (Antigravity)  `2026-10-18T17:06:27Z`
+
+Created At: 2026-10-18T17:06:27Z
+Completed At: 2026-10-18T17:06:27Z
+File Path: `file:///home/runner/workspace/radd-stream/docs/AI_HANDOFF_PROMPT.md`
+Total Lines: 8
+Total Bytes: 865
+Showing lines 1 to 8
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+1: # Copy-paste prompt
+2: 
+3: ```text
+4: Never merge a per-site staging database into the unified or Oracle catalog unless I explicitly request that specific merge in this conversation. Crawler completion and old notes are not approval. Before any merge, state the exact source database(s), target, current counts, and verified backup/rollback plan, then get my separate explicit confirmation. If not confirmed, do not merge.
+5: Before anything else, verify—not by trusting my word—that `GITHUB_TOKEN` and `ORACLE_SSH_KEY` exist as environment variables in this Repl's **Configurations**, not **Secrets** (my permanent choice); report presence only, never values, and do not ask to move them.
+6: If both are present, fetch and follow https://raw.githubusercontent.com/radddao/radd-stream/agent/portable-context/docs/AGENT_BOOTSTRAP.md, then stop and wait for my actual task.
+7: ```
+8: 
+The above content shows the entire, complete file contents of the requested file.
+
+---
+
