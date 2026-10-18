@@ -2357,11 +2357,42 @@ def fetch_kmhd_bridge(file_id: str, token: str = "") -> list[dict]:
 
 def unwrap_mobilejsr(jsr_url: str) -> list[dict]:
     """
-    Unwraps 7StarHD MobileJSR bridge URL.
+    Unwraps 7StarHD / 10xflix MobileJSR bridge URL.
+    Uses session cookie and CSRF token negotiation to unlock all direct streaming mirrors.
     """
     results = []
-    code, fin_u, html = http_get(jsr_url, timeout=10)
-    if code != 200 or not html:
+    html = ""
+    try:
+        cj = http.cookiejar.CookieJar()
+        opener = urllib.request.build_opener(
+            urllib.request.HTTPCookieProcessor(cj),
+            urllib.request.HTTPSHandler(context=SSL_CONTEXT),
+        )
+        headers = {
+            "User-Agent": USER_AGENT,
+            "Referer": jsr_url,
+            "Origin": "https://mobilejsr.com",
+        }
+        # 1. GET initial landing page
+        req = urllib.request.Request(jsr_url, headers=headers)
+        res = opener.open(req, timeout=12)
+        html = res.read().decode("utf-8", errors="ignore")
+
+        # 2. Check for CSRF unlock form
+        csrf_m = re.search(r'name=["\']_csrf["\']\s+value=["\']([^"\']+)["\']', html)
+        if csrf_m:
+            csrf_token = csrf_m.group(1)
+            post_data = urllib.parse.urlencode({"_csrf": csrf_token}).encode("utf-8")
+            req_post = urllib.request.Request(jsr_url, data=post_data, headers=headers)
+            res_post = opener.open(req_post, timeout=12)
+            html = res_post.read().decode("utf-8", errors="ignore")
+    except Exception:
+        # Fall back to simple HTTP GET if session negotiation fails
+        code, fin_u, get_html = http_get(jsr_url, timeout=10)
+        if code == 200 and get_html:
+            html = get_html
+
+    if not html:
         return [{
             "source_name": "MobileJSR Bridge",
             "service": "mobilejsr",
@@ -2371,14 +2402,36 @@ def unwrap_mobilejsr(jsr_url: str) -> list[dict]:
             "is_temporary": 0,
         }]
 
-    anchors = re.findall(r'<a[^>]+href=["\']([^"\']+)["\'][^>]*>(.*?)</a>', html, re.S)
+    anchors = re.findall(r'<a[^>]+href=["\']([^"\']+)["\'][^>]*>(.*?)</a>', html, re.I | re.S)
     for href, text in anchors:
         clean_t = re.sub(r'<[^>]+>', '', text).strip()
         h_lower = href.lower()
-        if any(bad in h_lower for bad in ["javascript", "#", "/register", "/login", "/money", "/faqs", "/contact", "/page/"]):
+        if any(bad in h_lower for bad in [
+            "javascript", "#", "/register", "/login", "/money", "/faqs", "/contact",
+            "/page/", "/save/", "is.gd", "antiblock.org", "favicon"
+        ]):
             continue
         if "hubcloud" in h_lower:
             results.extend(unwrap_hubcloud_drive(href))
+        elif "hubdrive" in h_lower:
+            results.append({
+                "source_name": "⚡ HubDrive [Cloud]",
+                "service": "hubdrive",
+                "resource_id": href.rstrip("/").split("/")[-1],
+                "source_url": href,
+                "final_url": href,
+                "is_temporary": 0,
+            })
+        elif "filepress" in h_lower or "filebee" in h_lower:
+            u_fp, fp_id, is_tmp = unwrap_filepress(href)
+            results.append({
+                "source_name": "⚡ FilePress [Google Drive]",
+                "service": "filepress",
+                "resource_id": fp_id,
+                "source_url": href,
+                "final_url": u_fp,
+                "is_temporary": is_tmp,
+            })
         elif "pixeldrain" in h_lower:
             u_pd, pd_id, _ = unwrap_pixeldrain(href)
             results.append({
@@ -2387,6 +2440,42 @@ def unwrap_mobilejsr(jsr_url: str) -> list[dict]:
                 "resource_id": pd_id,
                 "source_url": href,
                 "final_url": u_pd,
+                "is_temporary": 0,
+            })
+        elif "1fichier" in h_lower:
+            results.append({
+                "source_name": "⚡ 1fichier [High-Speed]",
+                "service": "1fichier",
+                "resource_id": href.rstrip("/").split("/")[-1].split("?")[0],
+                "source_url": href,
+                "final_url": href,
+                "is_temporary": 0,
+            })
+        elif "gofile" in h_lower:
+            results.append({
+                "source_name": "⚡ GoFile [Cloud]",
+                "service": "gofile",
+                "resource_id": href.rstrip("/").split("/")[-1],
+                "source_url": href,
+                "final_url": href,
+                "is_temporary": 0,
+            })
+        elif "streamtape" in h_lower:
+            results.append({
+                "source_name": "▶ Streamtape [Web Player]",
+                "service": "streamtape",
+                "resource_id": href.rstrip("/").split("/")[-1],
+                "source_url": href,
+                "final_url": href,
+                "is_temporary": 0,
+            })
+        elif "voe.sx" in h_lower or "/v/" in h_lower:
+            results.append({
+                "source_name": "▶ Voe [Stream Player]",
+                "service": "voe",
+                "resource_id": href.rstrip("/").split("/")[-1],
+                "source_url": href,
+                "final_url": href,
                 "is_temporary": 0,
             })
         elif href.startswith("http"):
@@ -2410,6 +2499,7 @@ def unwrap_mobilejsr(jsr_url: str) -> list[dict]:
             "is_temporary": 0,
         })
     return results
+
 
 
 def extract_post_data_ssrmovies(post_url: str, html: str, verbose: bool = True) -> dict | None:

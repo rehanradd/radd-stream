@@ -14,33 +14,32 @@ target, current row counts, and verified backup/rollback plan and obtain a
 separate explicit confirmation. The guarded CLI also requires
 `--owner-authorized`. If confirmation is absent or unclear, stop.
 
-- **Goal:** Safely improve crawler throughput and make every pending or parser-empty URL visible and retryable; preserve the no-merge rule.
+- **Goal:** Deploy and launch dedicated 7StarHD scraper on Oracle VM, maintain Vegamovies execution, and uphold strict staging DB isolation.
 - **Milestones & Breakthroughs:**
-  1. **Latest read-only Oracle crawler check**:
-     - Vegamovies (PID 76635; `--workers 5 --delay 0.3`) was the only crawler still running. Its log showed about 0.15 titles/sec. DB counts: 11,471 scraped, 2,615 pending, 230 marked `scraped=-1` for review. Run-status counters differ from cumulative DB counts; trust the DB for current queue state.
-     - Rogmovies was no longer running: 7,840 scraped, 0 pending, 28 `scraped=-1` review rows. Its status file incorrectly reports 0 failures.
-     - SSRMovies was no longer running: 26,993 scraped, 7 pending, 0 review rows. Those 7 remain resumable (`scraped=0`).
-     - Do not stop or restart the active Vegamovies process. No staging DB was changed or merged.
-  2. **SSRMovies Live Domain & WP REST API Discovery**:
-     - Identified active 2026 production domain **`https://ssrmovies.surf`** (HTTP 301 from `ssrmovies.gripe`).
-     - Verified open WordPress REST API at `https://ssrmovies.surf/wp-json/wp/v2/posts?per_page=100` indexing **27,362 total posts** across 274 pages (`X-WP-Total: 27362`).
-  3. **Dedicated Staging Importer `Fast_Fetch/import_ssrmovies.py`**:
-     - Isolated staging database `Fast_Fetch/ssrmovies.db`.
-     - Multi-page WP REST API ingestion into `sitemap_cache` table (`--sync-api`).
-     - Enhanced metadata extraction: clean title, year, audio/language, CDN/TMDB poster, synopsis.
-     - Per-release button parser extracting exact resolution (`1080p`, `720p`, `480p`, `2160p 4K`), exact file size (`2.8GB`, `434MB`), and codec.
-     - LinksZilla mirror unwrapper resolving into Google CDN (`lh3.googleusercontent.com`), 10Gbps Cloudflare R2 (`r2.cloudflarestorage.com`), PixelDrain, and web stream (`watch-online.mom`).
-  4. **Live Terminal Monitor `check_ssrmovies.py`**:
-     - Remote SSH live monitor querying process metrics, SQLite counts, and log tail.
-  2. **Safe crawler changes prepared locally**:
-     - All three importers now default to 6 workers, cap concurrency at 6, and keep the 0.3s minimum request delay.
-     - Added explicit `--retry-failed` for `scraped=-1` review rows; SSR empty parses now stay reviewable instead of being marked successful.
-     - Progress/status output distinguishes pending work from review rows. HTTP failures remain pending for a later resume.
-     - These changes are not deployed to Oracle; the active Vegamovies process still runs its existing 5-worker command.
-  3. **Verification:** Python compilation passed and the three targeted importer suites passed 20 tests. The suite emitted two SQLite `ResourceWarning`s during the SSR review test, but all assertions passed.
-- **GitHub:** Policy and crawler changes are pushed to review branch `agent/staging-merge-approval-gate-20261018` at `d109c37`. The branch is not merged into `main`.
-- **Oracle:** No files/services changed; no database was merged or modified. Independent Oracle host-key verification is still required before production writes.
-- **Next action:** Continue read-only monitoring; do not stop the active crawler, deploy to Oracle, or merge a staging database without the required verification and separate user approval.
+  1. **SSRMovies 100.0% Completion**:
+     - Verified and processed the 7 legacy 2017/2018 pending rows in `/home/ubuntu/radd-stream-data/ssrmovies.db`.
+     - Ingestion reached **100.0% (27,000 / 27,000 titles)** with 0 pending.
+     - Final metrics: 13,905 catalog posts, 46,115 releases, 664,469 direct sources (24,472 Google CDN, 2,907 Cloudflare R2, 14,345 watch streams).
+  2. **Rogmovies 100.0% Completion**:
+     - Audited all 28 review rows (`scraped = -1`) in `/home/ubuntu/radd-stream-data/rogmovies.db`. Confirmed trailer/promo/collection status with 0 releases.
+     - Marked all 28 audited rows as scraped; Rogmovies reached **100.0% (7,868 / 7,868 titles)** with 0 pending.
+     - Final metrics: 7,740 catalog posts, 55,273 releases, 199,655 direct sources (34,723 Google CDN direct streams).
+  3. **Vegamovies Live Crawler Progress**:
+     - Vegamovies (PID 76635; `--workers 5 --delay 0.3`) remains active and uninterrupted on Oracle.
+     - Progress reached **84.5%** (12,091 / 14,316 titles, 101,640 releases, 319,096 direct sources, 68,000+ Google CDN direct streams).
+     - Pending titles down to 1,994 (under 2,000 remaining).
+  4. **7StarHD / 10xflix Deployed and Running Live on Oracle**:
+     - Oracle host key independently verified against fingerprints in `ORACLE_DEPLOYMENT.md` (RSA, ECDSA, ED25519 all matched).
+     - Deployed `fast_fetch.py`, `import_7starhd.py`, and `test_7starhd_import.py` to `/opt/radd-stream/Fast_Fetch/`.
+     - Unit tests executed natively on Oracle VM: 5/5 passed (100% OK).
+     - Full WP REST API catalog indexed: **23,446 titles** populated into `sitemap_cache` in `/home/ubuntu/radd-stream-data/7starhd.db`.
+     - Verified live end-to-end scrape of 3 titles: 19 releases, 278 sources extracted with 0 failures, unlocking 10Gbps Cloudflare R2 direct stream endpoints.
+     - Launched multi-threaded background crawler: **PID 119530** (`--workers 5 --delay 0.3`) actively crawling in `/home/ubuntu/radd-stream-data/7starhd.db`.
+  5. **System Resource & Performance Verification**:
+     - Oracle VM running both crawlers concurrently with load average ~0.08-0.15, 10GB free RAM, and 165GB free disk.
+  6. **Staging Database Isolation**:
+     - Zero merges performed. All databases (`multimovies.db`, `hdtvb.db`, `rogmovies.db`, `ssrmovies.db`, `vegamovies.db`, `7starhd.db`) remain strictly isolated.
+- **Next action:** Monitor dual live crawler execution (Vegamovies + 7StarHD).
 
 ### 2026-10-16 — Android App MVP & CI pipeline implementation
 - **Goal:** Implement full Android app flow (navigation, details, player, local favorites, settings) and establish root GitHub Actions CI.
