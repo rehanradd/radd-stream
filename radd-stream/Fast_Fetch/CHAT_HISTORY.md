@@ -74175,3 +74175,46 @@ The above content does NOT show the entire file contents. If you need to view an
 
 ---
 
+## 🤖 AI (Antigravity)  `2026-10-18T17:34:45Z`
+
+Created At: 2026-10-18T17:34:45Z
+Completed At: 2026-10-18T17:34:46Z
+
+The command exited with code 1.
+Output:
+test_movie_releases_parsing (test_katmoviehd_import.TestContentParsing.test_movie_releases_parsing) ... ok
+test_series_episode_releases_parsing (test_katmoviehd_import.TestContentParsing.test_series_episode_releases_parsing) ... ok
+test_empty_or_non_chunk (test_katmoviehd_import.TestDevalueChunkParsing.test_empty_or_non_chunk) ... ok
+test_valid_chunk_parsing (test_katmoviehd_import.TestDevalueChunkParsing.test_valid_chunk_parsing) ... ok
+test_save_and_retrieve_post (test_katmoviehd_import.TestStagingDatabase.test_save_and_retrieve_post) ... /nix/store/qzc04a3npl70cyyy6flnnrb2ig3kayxm-python3-3.13.11/lib/python3.13/ast.py:50: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x7f34a34c1b70>
+  return compile(source, filename, mode, flags,
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/nix/store/qzc04a3npl70cyyy6flnnrb2ig3kayxm-python3-3.13.11/lib/python3.13/ast.py:50: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x7f34a34c1c60>
+  return compile(source, filename, mode, flags,
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+ERROR
+test_schema_created (test_katmoviehd_import.TestStagingDatabase.test_schema_created) ... ok
+test_movie_with_year (test_katmoviehd_import.TestTitleCleaning.test_movie_with_year) ... ok
+test_multi_audio_and_4k (test_katmoviehd_import.TestTitleCleaning.test_multi_audio_and_4k) ... ok
+test_series_with_season (test_katmoviehd_import.TestTitleCleaning.test_series_with_season) ... ok
+
+======================================================================
+ERROR: test_save_and_retrieve_post (test_katmoviehd_import.TestStagingDatabase.test_save_and_retrieve_post)
+----------------------------------------------------------------------
+sqlite3.ProgrammingError: Cannot operate on a closed database.
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/home/runner/workspace/radd-stream/Fast_Fetch/test_katmoviehd_import.py", line 188, in test_save_and_retrieve_post
+    with sqlite3.connect(str(self.db_path)) as conn:
+         ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^
+sqlite3.ProgrammingError: Cannot operate on a closed database.
+
+----------------------------------------------------------------------
+Ran 9 tests in 0.262s
+
+FAILED (errors=1)
+
+---
+
