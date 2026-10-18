@@ -76147,3 +76147,115 @@ Output:
 
 ---
 
+## 🤖 AI (Antigravity)  `2026-10-18T17:50:08Z`
+
+### Database Size & Backup Assessment
+
+We inspected the live databases on the Oracle VM:
+
+| Database | Live Raw Size | Est. Gzip Compressed | Contents |
+| :--- | :--- | :--- | :--- |
+| [`vegamovies.db`](file:///home/ubuntu/radd-stream-data/vegamovies.db) | 279 MB | ~65 MB | 12,542 titles, 113,867 releases, 351,079 direct sources |
+| [`multimovies.db`](file:///home/ubuntu/radd-stream-data/multimovies.db) | 334 MB | ~75 MB | 14,000+ catalog titles & streams |
+| [`ssrmovies.db`](file:///home/ubuntu/radd-stream-data/ssrmovies.db) | 272 MB | ~60 MB | 27,000 titles (100% completed) |
+| [`rogmovies.db`](file:///home/ubuntu/radd-stream-data/rogmovies.db) | 150 MB | ~35 MB | 7,868 titles (100% completed) |
+| [`rareanimes.db`](file:///home/ubuntu/radd-stream-data/rareanimes.db) | 119 MB | ~25 MB | 13,500+ anime direct sources |
+| [`7starhd.db`](file:///home/ubuntu/radd-stream-data/7starhd.db) | 70 MB | ~18 MB | 23,446 titles catalog (actively crawling) |
+| [`hdhub4u.db`](file:///home/ubuntu/radd-stream-data/hdhub4u.db) | 29 MB | ~8 MB | Actively crawling |
+| [`hdtvb.db`](file:///home/ubuntu/radd-stream-data/hdtvb.db) | 24 MB | ~6 MB | Archive catalog |
+| [`fast_fetch.db`](file:///home/ubuntu/radd-stream-data/fast_fetch.db) | 7 MB | ~2 MB | Master production database |
+| **Total** | **~1.28 GB** | **~294 MB** | **All Scraped Link Intelligence** |
+
+> [!IMPORTANT]
+> Raw SQLite files exceed GitHub's **100 MB per-file limit** and cannot be pushed to git commits. When gzipped, the entire 1.28 GB database shrinks to **under 300 MB**, making it easy to back up to free cloud storage.
+
+---
+
+### Best Free Cloud Storage & Backup Providers (With API)
+
+| Provider | Free Tier Storage | Egress / Download Bandwidth | API Type | Credit Card? | Verdict & Best Use Case |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **Telegram Cloud Bot API** | **Unlimited** (Up to 2 GB per file) | **Unlimited & Free** | Simple HTTP POST (`urllib.request`) | **No** | ⭐ **Best immediate failsafe**: Creates a private channel, sends `.tar.gz` directly to your phone/laptop with 0 setup cost. |
+| **Cloudflare R2** | **10 GB** free / mo | **$0.00 (Zero Egress Fees)** | S3-Compatible REST API | Yes (for account setup) | ⭐ **Best enterprise off-site**: 100% free downloads, fast global CDN, standard S3 compatibility. |
+| **Backblaze B2** | **10 GB** free forever | 1 GB / day free | Simple REST API & S3 API | **No** (for free tier) | ⭐ **Easiest standard cloud storage**: 2-step REST upload, native file lifecycle retention. |
+| **Hugging Face Datasets** | **50 GB+** per private repo | **Unlimited & Free** | Git LFS / REST API | **No** | ⭐ **Largest free storage**: SQLite movie metadata databases are structured datasets. Up to 50 GB private storage for free. |
+| **GitHub Releases API** | Up to **2 GB** per asset file | Included in GitHub | GitHub REST API | **No** (Already configured!) | ⭐ **Ready right now**: We already have `GITHUB_TOKEN`. Can upload `.tar.gz` snapshots to tagged releases with no new signups. |
+
+---
+
+### The 3-2-1 Redundancy Architecture ("Golden Triangle")
+
+```mermaid
+flowchart TD
+    VM["Oracle VM (92.4.95.252)<br/>9 Live SQLite DBs (~1.28 GB)"]
+    Safe["Atomic VACUUM INTO + GZIP (~294 MB)"]
+    
+    VM --> Safe
+    
+    Safe --> Tier1["Tier 1: GitHub Releases API<br/>(Immediate / No New Accounts)"]
+    Safe --> Tier2["Tier 2: Telegram Bot API<br/>(Unlimited Free / Mobile Notification)"]
+    Safe --> Tier3["Tier 3: Cloudflare R2 / Backblaze B2<br/>(10 GB Independent S3 Storage)"]
+    
+    Tier1 --> Recovered["Zero Data Loss Guarantee"]
+    Tier2 --> Recovered
+    Tier3 --> Recovered
+```
+
+1. **Tier 1 (Instant / No Account Setup Needed)**:
+   - Uses the existing `GITHUB_TOKEN`.
+   - Attaches `radd-stream-backup-YYYYMMDD.tar.gz` to versioned GitHub Releases.
+2. **Tier 2 (Zero-Cost Failsafe with Mobile Alerts)**:
+   - Create a private Telegram channel (e.g., `Radd Stream Backups`) and a free bot with `@BotFather`.
+   - The backup script posts the `.tar.gz` file directly into the channel via Telegram API. You get an instant ping on your phone with the backup file.
+3. **Tier 3 (Cold Archive S3 Storage)**:
+   - Cloudflare R2 (10 GB free forever, zero egress fee) or Backblaze B2 (10 GB free forever).
+
+---
+
+### Safe SQLite Online Backup (Zero Crawler Disruption)
+
+> [!CAUTION]
+> Copying `.db` files directly while crawlers are running can corrupt backups if the `-wal` (Write-Ahead Log) is mid-transaction.
+>
+> We implemented SQLite's atomic online snapshot command:
+> ```python
+> conn.execute(f"VACUUM INTO '{clean_backup_path}'")
+> ```
+> This creates a 100% consistent, self-contained, compacted database snapshot without interrupting running scrapers (Vegamovies, 7StarHD, HDHub4u, RareAnimes).
+
+---
+
+### Tools Created & Deployed
+
+1. **[`backup_manager.py`](file:///home/runner/workspace/radd-stream/Fast_Fetch/backup_manager.py)**:
+   - Pure Python standard library (zero pip packages).
+   - Performs atomic `VACUUM INTO` snapshots, gzip compression, and SHA-256 verification.
+   - Built-in uploaders for **GitHub Releases** and **Telegram Bot API**.
+2. **[`test_backup_manager.py`](file:///home/runner/workspace/radd-stream/Fast_Fetch/test_backup_manager.py)**:
+   - Verified unit tests (100% pass).
+3. **[`radd-stream/docs/BACKUP_STRATEGY.md`](file:///home/runner/workspace/radd-stream/docs/BACKUP_STRATEGY.md)**:
+   - Permanent documentation saved in repo and artifact directory: [`BACKUP_STRATEGY_AND_FREE_PROVIDERS.md`](file:///home/runner/.gemini/antigravity-cli/brain/9505bd96-d978-42e3-b35e-00ee5203addf/BACKUP_STRATEGY_AND_FREE_PROVIDERS.md).
+4. **Deployed via [`push.py`](file:///home/runner/workspace/push.py)**:
+   - All 118 unit tests passed.
+   - GitSafe: ✅ Pushed
+   - GitHub (`origin/main`): ✅ Pushed
+   - Oracle VM: ✅ Synced to `/opt/radd-stream/Fast_Fetch/`
+
+---
+
+### How to Activate Multi-Location Backups
+
+- **To run a GitHub Releases backup immediately**:
+  ```bash
+  ssh ubuntu@92.4.95.252 "GITHUB_TOKEN=... python3 /opt/radd-stream/Fast_Fetch/backup_manager.py --github"
+  ```
+- **To add Telegram alerts & unlimited backup**:
+  1. Open Telegram, message `@BotFather`, create a bot, and get the `TELEGRAM_BOT_TOKEN`.
+  2. Create a private channel, add your bot as an admin, and get the `TELEGRAM_CHAT_ID`.
+  3. Run:
+     ```bash
+     python3 backup_manager.py --telegram
+     ```
+
+---
+
