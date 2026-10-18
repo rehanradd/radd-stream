@@ -74807,3 +74807,150 @@ Please note that the above snippet only shows the MODIFIED lines from the last c
 
 ---
 
+## 🤖 AI (Antigravity)  `2026-10-18T17:38:12Z`
+
+Created At: 2026-10-18T17:38:12Z
+Completed At: 2026-10-18T17:38:13Z
+File Path: `file:///home/runner/workspace/push.py`
+Total Lines: 249
+Total Bytes: 9086
+Showing lines 195 to 236
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+195:             print(f"[✓] Synced {len(existing)} files to Oracle VM /opt/radd-stream/Fast_Fetch/.", flush=True)
+196:             return True
+197:         else:
+198:             print(f"[!] Oracle SCP note: {res.stderr.strip()}", file=sys.stderr)
+199:             return False
+200:     except Exception as e:
+201:         print(f"[!] Oracle SCP error: {e}", file=sys.stderr)
+202:         return False
+203:     finally:
+204:         if os.path.exists(key_path):
+205:             os.remove(key_path)
+206: 
+207: 
+208: def main():
+209:     parser = argparse.ArgumentParser(description="Unified Push & Deployment Tool for radd-stream")
+210:     parser.add_argument("message", nargs="?", default=None, help="Commit message")
+211:     parser.add_argument("--no-test", action="store_true", help="Skip running pre-push tests")
+212:     parser.add_argument("--no-oracle", action="store_true", help="Skip syncing to Oracle VM")
+213:     args = parser.parse_args()
+214: 
+215:     # Pre-push test gate
+216:     if not args.no_test:
+217:         if not run_tests():
+218:             print("\n[!] Aborting push due to test failure. Use --no-test to override if intentional.\n", file=sys.stderr)
+219:             sys.exit(1)
+220: 
+221:     # Sync chat history
+222:     sync_chat_history()
+223: 
+224:     # Commit message
+225:     msg = args.message or f"chore(sync): automated multi-tier update {time.strftime('%Y-%m-%d %H:%M UTC', time.gmtime())}"
+226:     git_commit(msg)
+227: 
+228:     # Multi-tier push
+229:     print("\n" + "=" * 50)
+230:     print(" 🚀 EXECUTING MULTI-TIER PUSH & DEPLOYMENT")
+231:     print("=" * 50)
+232: 
+233:     gitsafe_ok = push_gitsafe()
+234:     github_ok = push_github()
+235: 
+236:     oracle_ok = True
+The above content does NOT show the entire file contents. If you need to view any lines of the file which were not shown to complete your task, call this tool again to view those lines.
+
+---
+
+## 🤖 AI (Antigravity)  `2026-10-18T17:38:16Z`
+
+Created At: 2026-10-18T17:38:16Z
+Completed At: 2026-10-18T17:38:16Z
+
+The command exited with code 0.
+Output:
+usage: push.py [-h] [--no-test] [--no-oracle] [message]
+
+Unified Push & Deployment Tool for radd-stream
+
+positional arguments:
+  message      Commit message
+
+options:
+  -h, --help   show this help message and exit
+  --no-test    Skip running pre-push tests
+  --no-oracle  Skip syncing to Oracle VM
+
+---
+
+## 🤖 AI (Antigravity)  `2026-10-18T17:38:18Z`
+
+Created At: 2026-10-18T17:38:18Z
+Completed At: 2026-10-18T17:38:19Z
+File Path: `file:///home/runner/workspace/push.py`
+Total Lines: 249
+Total Bytes: 9086
+Showing lines 150 to 207
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+150:             subprocess.run(["git", "remote", "add", "origin", GITHUB_REPO_URL], cwd=ROOT_DIR, capture_output=True)
+151: 
+152:         res = subprocess.run(["git", "push", "origin", "main"], cwd=ROOT_DIR, env=env, capture_output=True, text=True)
+153:         if res.returncode == 0:
+154:             print("[✓] Pushed to GitHub repository (origin/main).", flush=True)
+155:             return True
+156:         else:
+157:             # If rejected because of divergence, note it
+158:             print(f"[!] GitHub push note: {res.stderr.strip()}", file=sys.stderr)
+159:             return False
+160:     finally:
+161:         if os.path.exists(askpass):
+162:             os.remove(askpass)
+163: 
+164: 
+165: def sync_oracle() -> bool:
+166:     key_path = get_oracle_key_file()
+167:     if not key_path:
+168:         print("[!] ORACLE_SSH_KEY not found in environment. Skipping Oracle sync.", file=sys.stderr)
+169:         return False
+170: 
+171:     print(f"[*] Syncing updated scraper files and CHAT_HISTORY.md to Oracle VM ({ORACLE_IP})...", flush=True)
+172:     files_to_sync = [
+173:         ROOT_DIR / "radd-stream" / "Fast_Fetch" / "import_vegamovies.py",
+174:         ROOT_DIR / "radd-stream" / "Fast_Fetch" / "import_7starhd.py",
+175:         ROOT_DIR / "radd-stream" / "Fast_Fetch" / "import_hdhub4u.py",
+176:         ROOT_DIR / "radd-stream" / "Fast_Fetch" / "import_rareanimes.py",
+177:         ROOT_DIR / "radd-stream" / "Fast_Fetch" / "import_katmoviehd.py",
+178:         ROOT_DIR / "radd-stream" / "Fast_Fetch" / "fast_fetch.py",
+179:         ROOT_DIR / "radd-stream" / "Fast_Fetch" / "CHAT_HISTORY.md",
+180:     ]
+181: 
+182:     existing = [str(f) for f in files_to_sync if f.exists()]
+183:     if not existing:
+184:         return True
+185: 
+186:     cmd = [
+187:         "scp", "-i", key_path,
+188:         "-o", "StrictHostKeyChecking=no",
+189:         "-o", "ConnectTimeout=10",
+190:     ] + existing + [f"{ORACLE_USER}@{ORACLE_IP}:/opt/radd-stream/Fast_Fetch/"]
+191: 
+192:     try:
+193:         res = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+194:         if res.returncode == 0:
+195:             print(f"[✓] Synced {len(existing)} files to Oracle VM /opt/radd-stream/Fast_Fetch/.", flush=True)
+196:             return True
+197:         else:
+198:             print(f"[!] Oracle SCP note: {res.stderr.strip()}", file=sys.stderr)
+199:             return False
+200:     except Exception as e:
+201:         print(f"[!] Oracle SCP error: {e}", file=sys.stderr)
+202:         return False
+203:     finally:
+204:         if os.path.exists(key_path):
+205:             os.remove(key_path)
+206: 
+207: 
+The above content does NOT show the entire file contents. If you need to view any lines of the file which were not shown to complete your task, call this tool again to view those lines.
+
+---
+
