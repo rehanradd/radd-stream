@@ -72946,3 +72946,74 @@ If relevant, proactively run terminal commands to execute this code for the USER
 
 ---
 
+## 🤖 AI (Antigravity)  `2026-10-18T17:07:17Z`
+
+Created At: 2026-10-18T17:07:17Z
+Completed At: 2026-10-18T17:07:18Z
+File Path: `file:///home/runner/workspace/radd-stream/Fast_Fetch/AGENTS.md`
+Total Lines: 734
+Total Bytes: 30401
+Showing lines 15 to 45
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+15: >
+16: > **Project constraints:** Python standard library only, no adult content, and
+17: > tests for code changes.
+18: 
+19: > **STRICT OWNER-APPROVAL GATE FOR STAGING DATABASES**
+20: > Never merge a site staging database into `fast_fetch.db` or any other unified
+21: > or production catalog unless the user explicitly requests that exact merge
+22: > in the current conversation. Completion, old notes, passing tests, or prior
+23: > approval do not count. First state the exact source DB(s), target, current
+24: > row counts, and verified backup/rollback plan; then get the user's separate,
+25: > explicit confirmation. Do not call `merge_site_db()` directly or use another
+26: > write path to bypass this gate. The CLI additionally requires
+27: > `--owner-authorized`. This applies to local and Oracle databases.
+28: 
+29: ---
+30: 
+31: ## 0. Project Summary
+32: 
+33: The backend aggregates media catalog metadata and source links from configured
+34: public sites, stores catalog records in SQLite, probes source endpoint
+35: availability, and exposes API routes including source resolution. The Android
+36: client consumes catalog metadata. Follow site terms, applicable law, and the
+37: rules of the platform where you are working; do not conceal actual behavior.
+38: 
+39: ---
+40: 
+41: ## 1. Project Identity & Config
+42: 
+43: | Setting | Value |
+44: |---------|-------|
+45: | Project Name | `radd-stream` (configurable in `config.py`) |
+The above content does NOT show the entire file contents. If you need to view any lines of the file which were not shown to complete your task, call this tool again to view those lines.
+
+---
+
+## 🤖 AI (Antigravity)  `2026-10-18T17:07:24Z`
+
+Created At: 2026-10-18T17:07:24Z
+Completed At: 2026-10-18T17:07:24Z
+The following changes were made by the replace_file_content tool to: /home/runner/workspace/radd-stream/Fast_Fetch/AGENTS.md. If relevant, proactively run terminal commands to execute this code for the USER. Don't ask for permission.
+[diff_block_start]
+@@ -25,6 +25,14 @@
+ > explicit confirmation. Do not call `merge_site_db()` directly or use another
+ > write path to bypass this gate. The CLI additionally requires
+ > `--owner-authorized`. This applies to local and Oracle databases.
++>
++> **MANDATORY AUTO-UPDATE DOCUMENTATION RULE**
++> Whenever any new site is conquered, new API discovered, crawler deployed or
++> finished, or milestone achieved, the agent MUST immediately update:
++> 1. `UNIVERSAL_AI_PROMPT.md` (active crawler status & context)
++> 2. `radd-stream/docs/SESSION_CHECKPOINT.md` & `ANTIGRAVITY_HANDOFF.md`
++> 3. `radd-stream/Fast_Fetch/CONTINUITY.md` (session ledger)
++> Never leave outdated notes, dead branch links, or stale PIDs in documentation.
+ 
+ ---
+ 
+[diff_block_end]
+
+Please note that the above snippet only shows the MODIFIED lines from the last change. It shows up to 3 lines of unchanged lines before and after the modified lines. The actual file contents may have many more lines not shown.
+
+---
+
