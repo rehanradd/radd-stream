@@ -77217,3 +77217,113 @@ The above content does NOT show the entire file contents. If you need to view an
 
 ---
 
+## 🤖 AI (Antigravity)  `2026-10-18T18:02:20Z`
+
+Created At: 2026-10-18T18:02:20Z
+Completed At: 2026-10-18T18:02:20Z
+The following changes were made by the replace_file_content tool to: /home/runner/workspace/radd-stream/Fast_Fetch/backup_manager.py. If relevant, proactively run terminal commands to execute this code for the USER. Don't ask for permission.
+[diff_block_start]
+@@ -324,6 +324,58 @@
+         return False
+ 
+ 
++def upload_to_huggingface(
++    archive_path: Path,
++    repo_id: str | None = None,
++    token: str | None = None,
++) -> bool:
++    """
++    Uploads backup archive to a private Hugging Face dataset repository using Git LFS.
++    100% Python standard library (no pip packages or huggingface_hub required).
++    """
++    repo_id = repo_id or os.environ.get("HF_DATASET_REPO", "")
++    token = token or os.environ.get("HF_TOKEN", "")
++    if not repo_id or not token:
++        print("[*] HF_DATASET_REPO or HF_TOKEN not configured. Skipping Hugging Face upload.", file=sys.stderr)
++        return False
++
++    print(f"[*] Uploading {archive_path.name} to Hugging Face dataset {repo_id}...", flush=True)
++    with tempfile.TemporaryDirectory() as tmp_dir:
++        clone_url = f"https://user:{token}@huggingface.co/datasets/{repo_id}"
++        repo_dir = Path(tmp_dir) / "hf_repo"
++
++        # Clone repository or initialize if empty
++        res = subprocess.run(["git", "clone", "--depth", "1", clone_url, str(repo_dir)], capture_output=True, text=True)
++        if res.returncode != 0:
++            repo_dir.mkdir(parents=True, exist_ok=True)
++            subprocess.run(["git", "init"], cwd=repo_dir, capture_output=True)
++            subprocess.run(["git", "remote", "add", "origin", clone_url], cwd=repo_dir, capture_output=True)
++            subprocess.run(["git", "checkout", "-b", "main"], cwd=repo_dir, capture_output=True)
++
++        # Setup git-lfs tracking for large archives and databases
++        subprocess.run(["git", "lfs", "install"], cwd=repo_dir, capture_output=True)
++        subprocess.run(["git", "lfs", "track", "*.tar.gz", "*.db"], cwd=repo_dir, capture_output=True)
++
++        # Copy archive into repo
++        dest = repo_dir / archive_path.name
++        shutil.copy2(archive_path, dest)
++
++        # Git commit and push
++        subprocess.run(["git", "add", ".gitattributes", archive_path.name], cwd=repo_dir, capture_output=True)
++        subprocess.run(
++            ["git", "commit", "-m", f"chore(backup): snapshot {time.strftime('%Y-%m-%d %H:%M UTC', time.gmtime())}"],
++            cwd=repo_dir,
++            capture_output=True,
++        )
++        push_res = subprocess.run(["git", "push", "origin", "main"], cwd=repo_dir, capture_output=True, text=True)
++        if push_res.returncode == 0:
++            print(f"[✓] Uploaded backup to Hugging Face dataset: https://huggingface.co/datasets/{repo_id}", flush=True)
++            return True
++        else:
++            print(f"[!] Hugging Face push failed: {push_res.stderr.strip()}", file=sys.stderr)
++            return False
++
++
+ def main():
+     parser = argparse.ArgumentParser(description="radd-stream Cloud Backup Manager")
+     parser.add_argument("--dir", default="/home/ubuntu/radd-stream-data", help="Directory containing SQLite DBs")
+@@ -330,6 +330,8 @@
+     parser.add_argument("--github", action="store_true", help="Upload to GitHub Releases")
+     parser.add_argument("--telegram", action="store_true", help="Upload to Telegram channel")
+     parser.add_argument("--r2", action="store_true", help="Upload to Cloudflare R2 bucket")
++    parser.add_argument("--hf", action="store_true", help="Upload to Hugging Face dataset")
++    parser.add_argument("--all", action="store_true", help="Upload to all configured services (GitHub + HF + Telegram + R2)")
+     parser.add_argument("--dry-run", action="store_true", help="Snapshot & compress only, do not upload")
+     args = parser.parse_args()
+ 
+@@ -352,18 +352,25 @@
+         print("[*] Dry run complete. No off-site uploads requested.", flush=True)
+         return
+ 
+-    if args.github or (not args.telegram and not args.r2 and os.environ.get("GITHUB_TOKEN")):
++    # 1. GitHub Releases
++    if args.github or args.all or (not args.telegram and not args.r2 and not args.hf and os.environ.get("GITHUB_TOKEN")):
+         upload_to_github_release(archive)
+ 
+-    if args.telegram:
++    # 2. Hugging Face Datasets
++    if args.hf or args.all or os.environ.get("HF_TOKEN"):
++        upload_to_huggingface(archive)
++
++    # 3. Telegram
++    if args.telegram or args.all:
+         caption = f"🚀 Radd-Stream DB Backup ({manifest['archive']['size_mb']} MB)\nDatabases: {', '.join(manifest['databases'].keys())}"
+         upload_to_telegram(archive, caption=caption)
+ 
+-    if args.r2 or os.environ.get("R2_ACCOUNT_ID"):
++    # 4. Cloudflare R2
++    if args.r2 or args.all or os.environ.get("R2_ACCOUNT_ID"):
+         upload_to_cloudflare_r2(archive)
+ 
+ 
+-
+ if __name__ == "__main__":
+     main()
++
+ 
+[diff_block_end]
+
+Please note that the above snippet only shows the MODIFIED lines from the last change. It shows up to 3 lines of unchanged lines before and after the modified lines. The actual file contents may have many more lines not shown.
+
+---
+
