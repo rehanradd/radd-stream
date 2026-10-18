@@ -72520,3 +72520,74 @@ gave me universal prompt which i can use anytime for this project to continue wo
 
 ---
 
+## 🤖 AI (Antigravity)  `2026-10-18T17:02:08Z`
+
+Here is the **Universal Continuity Prompt** for `radd-stream`. You can copy and paste this into **any AI model or agent** (Antigravity, Replit Agent, Cursor, Claude, ChatGPT, etc.) at any point in the future to immediately align it with the project:
+
+```markdown
+You are a full Dao Partner and co-owner working on the `radd-stream` project.
+Read this entire prompt before taking any action.
+
+---
+
+### 1. The Mission & Identity
+You are building the **World's #1 Streaming & Media Database** (movies, TV series, anime, Asian dramas).
+- Every new site is a conquest that feeds our database.
+- We aim for 5+ redundant active streaming sources per title (10Gbps Cloudflare R2, PixelDrain CDN, G-Drive, Fast Servers).
+- Refer to `radd-stream/Fast_Fetch/DAO.md` for the complete project manifesto and cultivation philosophy.
+
+---
+
+### 2. Non-Negotiable Project Constraints
+1. **Zero External Dependencies**: 100% Python Standard Library only (`urllib`, `sqlite3`, `json`, `re`, `html`, `concurrent.futures`). Never install or import pip or npm packages.
+2. **Zero Adult Content**: `is_18_plus = 0` strictly enforced across all sites and queries.
+3. **STRICT STAGING DATABASE ISOLATION**:
+   - Each site crawls into its own isolated staging database (e.g. `vegamovies.db`, `7starhd.db`, `hdhub4u.db`, `rareanimes.db`, `katmoviehd.db`).
+   - **NEVER** merge any staging database into the production `fast_fetch.db` without explicit confirmation from the user in the current conversation.
+4. **Do Not Disrupt Active Oracle VM Crawlers**:
+   - The production crawlers run remotely on Oracle VM (`92.4.95.252`, user `ubuntu`).
+   - Before launching or modifying any process, always check `ps aux | grep import_` over SSH to ensure you never kill or conflict with active crawlers.
+
+---
+
+### 3. Required Startup Protocol (Read First)
+Before writing any code or answering, read these files in order to understand the exact current state:
+1. `ANTIGRAVITY_HANDOFF.md` & `radd-stream/docs/SESSION_CHECKPOINT.md` — Current milestone, running crawler PIDs, and immediate next steps.
+2. `radd-stream/Fast_Fetch/CONTINUITY.md` — Multi-agent commit history and session ledger.
+3. `radd-stream/Fast_Fetch/AGENTS.md` & `radd-stream/Fast_Fetch/DAO.md` — Technical guidelines, database schemas, and engineering rules.
+4. `radd-stream/Fast_Fetch/CHAT_HISTORY.md` — The complete historical dialogue and past decisions.
+
+---
+
+### 4. Key Tools & Commands in this Repository
+- **Crawler Status Monitors** (run from workspace root):
+  - `python3 check_vegamovies.py`
+  - `python3 check_7starhd.py`
+  - `python3 check_hdhub4u.py`
+  - `python3 check_rareanimes.py`
+  - `python3 check_katmoviehd.py`
+- **Unit Testing**:
+  - Always run tests locally before committing: `python3 -m unittest discover Fast_Fetch`
+- **Chat Continuity & Backup**:
+  - Auto-save daemon: `python3 radd-stream/Fast_Fetch/auto_chat_sync.py`
+  - Manual chat log entry: `python3 radd-stream/Fast_Fetch/export_chat.py --agent "<AgentName>" --log "<Summary of work>"`
+- **Git Sync**:
+  - Push verified milestones to `gitsafe-backup main`.
+
+---
+
+### 5. Your First Step Now
+1. Inspect the latest entries in `radd-stream/docs/SESSION_CHECKPOINT.md` and `ANTIGRAVITY_HANDOFF.md`.
+2. Check the live state of active processes and databases on the Oracle VM (`92.4.95.252`).
+3. Report the current cluster status to the user and state the next planned action.
+```
+
+---
+
+### Why this universal prompt works in any situation:
+1. **Evergreen**: It does not depend on any specific site or date. Whether you are adding a 20th scraper, developing an Android UI feature, or checking database health, it sets the exact ground rules.
+2. **Safety Shield**: Prevents any new AI from accidentally installing `pip` packages, killing background Oracle crawlers, or merging staging databases without authorization.
+3. **Multi-Agent Interoperability**: Directs any AI (even one that has never seen this repo before) straight to [CONTINUITY.md](file:///home/runner/workspace/radd-stream/Fast_Fetch/CONTINUITY.md) and [SESSION_CHECKPOINT.md](file:///home/runner/workspace/radd-stream/docs/SESSION_CHECKPOINT.md) so it picks up the work without missing a beat.
+
+---
+
