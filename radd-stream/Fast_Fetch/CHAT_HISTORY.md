@@ -74450,3 +74450,86 @@ Please note that the above snippet only shows the MODIFIED lines from the last c
 
 ---
 
+## 🤖 AI (Antigravity)  `2026-10-18T17:35:33Z`
+
+Created At: 2026-10-18T17:35:33Z
+Completed At: 2026-10-18T17:35:34Z
+
+The command exited with code 0.
+Output:
+test_movie_releases_parsing (test_katmoviehd_import.TestContentParsing.test_movie_releases_parsing) ... ok
+test_series_episode_releases_parsing (test_katmoviehd_import.TestContentParsing.test_series_episode_releases_parsing) ... ok
+test_empty_or_non_chunk (test_katmoviehd_import.TestDevalueChunkParsing.test_empty_or_non_chunk) ... ok
+test_valid_chunk_parsing (test_katmoviehd_import.TestDevalueChunkParsing.test_valid_chunk_parsing) ... ok
+test_save_and_retrieve_post (test_katmoviehd_import.TestStagingDatabase.test_save_and_retrieve_post) ... ok
+test_schema_created (test_katmoviehd_import.TestStagingDatabase.test_schema_created) ... ok
+test_movie_with_year (test_katmoviehd_import.TestTitleCleaning.test_movie_with_year) ... /nix/store/qzc04a3npl70cyyy6flnnrb2ig3kayxm-python3-3.13.11/lib/python3.13/re/_parser.py:112: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x7ff12f1697b0>
+  def __init__(self, state, data=None):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/nix/store/qzc04a3npl70cyyy6flnnrb2ig3kayxm-python3-3.13.11/lib/python3.13/re/_parser.py:112: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x7ff12f169990>
+  def __init__(self, state, data=None):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/nix/store/qzc04a3npl70cyyy6flnnrb2ig3kayxm-python3-3.13.11/lib/python3.13/re/_parser.py:112: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x7ff12f169a80>
+  def __init__(self, state, data=None):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/nix/store/qzc04a3npl70cyyy6flnnrb2ig3kayxm-python3-3.13.11/lib/python3.13/re/_parser.py:112: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x7ff12e35ab60>
+  def __init__(self, state, data=None):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/nix/store/qzc04a3npl70cyyy6flnnrb2ig3kayxm-python3-3.13.11/lib/python3.13/re/_parser.py:112: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x7ff12e35aa70>
+  def __init__(self, state, data=None):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+ok
+test_multi_audio_and_4k (test_katmoviehd_import.TestTitleCleaning.test_multi_audio_and_4k) ... ok
+test_series_with_season (test_katmoviehd_import.TestTitleCleaning.test_series_with_season) ... ok
+
+----------------------------------------------------------------------
+Ran 9 tests in 0.145s
+
+OK
+
+---
+
+## 🤖 AI (Antigravity)  `2026-10-18T17:35:39Z`
+
+Created At: 2026-10-18T17:35:39Z
+Completed At: 2026-10-18T17:35:40Z
+File Path: `file:///home/runner/workspace/radd-stream/Fast_Fetch/test_all_sites.py`
+Total Lines: 332
+Total Bytes: 15273
+Showing lines 15 to 45
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+15: 
+16: sys.stdout.reconfigure(line_buffering=True, encoding="utf-8", errors="replace")
+17: sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+18: 
+19: import fast_fetch
+20: 
+21: # Exercise the real save path without touching a developer's persistent catalog.
+22: LIVE_DB_DIR = tempfile.TemporaryDirectory(prefix="radd-stream-live-db-")
+23: fast_fetch.DB_PATH = Path(LIVE_DB_DIR.name) / "live-audit.db"
+24: fast_fetch.fetch_cinemeta_metadata = lambda *args, **kwargs: None
+25: fast_fetch.init_db()
+26: 
+27: def p(msg):
+28:     print(msg, flush=True)
+29: 
+30: p("=" * 75)
+31: p("🔍 10-SITE LIVE REAL-WORLD VERIFICATION AUDIT")
+32: p("=" * 75)
+33: 
+34: SITE_TEST_CONFIGS = [
+35:     {
+36:         "name": "vegamovies",
+37:         "domain": fast_fetch.DOMAINS.get("vegamovies", "https://vegamovies.gallery"),
+38:         "catalog_type": "sitemap",
+39:         "catalog_url": "https://vegamovies.gallery/sitemap.xml",
+40:         "post_url": "https://vegamovies.gallery/download-the-corrupted-2019-dual-audio-hin-eng/"
+41:     },
+42:     {
+43:         "name": "rogmovies",
+44:         "domain": fast_fetch.DOMAINS.get("rogmovies", "https://rogmovies.one"),
+45:         "catalog_type": "sitemap",
+The above content does NOT show the entire file contents. If you need to view any lines of the file which were not shown to complete your task, call this tool again to view those lines.
+
+---
+
