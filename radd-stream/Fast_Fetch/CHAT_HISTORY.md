@@ -71981,3 +71981,51 @@ The above content does NOT show the entire file contents. If you need to view an
 
 ---
 
+## 🤖 AI (Antigravity)  `2026-10-18T16:55:18Z`
+
+Created At: 2026-10-18T16:55:18Z
+Completed At: 2026-10-18T16:55:19Z
+File Path: `file:///home/runner/workspace/radd-stream/Fast_Fetch/export_chat.py`
+Total Lines: 244
+Total Bytes: 8722
+Showing lines 210 to 244
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+210:         selected = [conv_dirs[0]]
+211: 
+212:     total_added = 0
+213:     for c_dir in selected:
+214:         count = export_conversation(c_dir, output_path)
+215:         print(f"[✓] Conversation {c_dir.name}: exported {count} new messages to {output_path.name}")
+216:         total_added += count
+217: 
+218:     return total_added
+219: 
+220: 
+221: def parse_args():
+222:     parser = argparse.ArgumentParser(description="Export Antigravity conversations to CHAT_HISTORY.md")
+223:     parser.add_argument("--id", dest="conversation_id", help="Specific conversation ID to export")
+224:     parser.add_argument("--all", action="store_true", help="Export all discovered conversations")
+225:     parser.add_argument("--output", default=str(DEFAULT_OUTPUT), help="Output markdown file path")
+226:     parser.add_argument("--brain-dir", help="Explicit path to brain directory")
+227:     return parser.parse_args()
+228: 
+229: 
+230: def main():
+231:     args = parse_args()
+232:     b_dir = Path(args.brain_dir).resolve() if args.brain_dir else None
+233:     out = Path(args.output).resolve()
+234:     run_export(
+235:         conversation_id=args.conversation_id,
+236:         all_convs=args.all,
+237:         output_path=out,
+238:         brain_dir=b_dir,
+239:     )
+240: 
+241: 
+242: if __name__ == "__main__":
+243:     main()
+244: 
+The above content does NOT show the entire file contents. If you need to view any lines of the file which were not shown to complete your task, call this tool again to view those lines.
+
+---
+
