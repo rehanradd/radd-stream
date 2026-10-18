@@ -14,32 +14,28 @@ target, current row counts, and verified backup/rollback plan and obtain a
 separate explicit confirmation. The guarded CLI also requires
 `--owner-authorized`. If confirmation is absent or unclear, stop.
 
-- **Goal:** Deploy and launch dedicated 7StarHD scraper on Oracle VM, maintain Vegamovies execution, and uphold strict staging DB isolation.
+- **Goal:** Deploy and launch dedicated RareAnimes scraper on Oracle VM, maintain Vegamovies, 7StarHD, and HDHub4u execution, and uphold strict staging DB isolation.
 - **Milestones & Breakthroughs:**
-  1. **SSRMovies 100.0% Completion**:
-     - Verified and processed the 7 legacy 2017/2018 pending rows in `/home/ubuntu/radd-stream-data/ssrmovies.db`.
-     - Ingestion reached **100.0% (27,000 / 27,000 titles)** with 0 pending.
-     - Final metrics: 13,905 catalog posts, 46,115 releases, 664,469 direct sources (24,472 Google CDN, 2,907 Cloudflare R2, 14,345 watch streams).
-  2. **Rogmovies 100.0% Completion**:
-     - Audited all 28 review rows (`scraped = -1`) in `/home/ubuntu/radd-stream-data/rogmovies.db`. Confirmed trailer/promo/collection status with 0 releases.
-     - Marked all 28 audited rows as scraped; Rogmovies reached **100.0% (7,868 / 7,868 titles)** with 0 pending.
-     - Final metrics: 7,740 catalog posts, 55,273 releases, 199,655 direct sources (34,723 Google CDN direct streams).
-  3. **Vegamovies Live Crawler Progress**:
-     - Vegamovies (PID 76635; `--workers 5 --delay 0.3`) remains active and uninterrupted on Oracle.
-     - Progress reached **84.5%** (12,091 / 14,316 titles, 101,640 releases, 319,096 direct sources, 68,000+ Google CDN direct streams).
-     - Pending titles down to 1,994 (under 2,000 remaining).
-  4. **7StarHD / 10xflix Deployed and Running Live on Oracle**:
-     - Oracle host key independently verified against fingerprints in `ORACLE_DEPLOYMENT.md` (RSA, ECDSA, ED25519 all matched).
-     - Deployed `fast_fetch.py`, `import_7starhd.py`, and `test_7starhd_import.py` to `/opt/radd-stream/Fast_Fetch/`.
-     - Unit tests executed natively on Oracle VM: 5/5 passed (100% OK).
-     - Full WP REST API catalog indexed: **23,446 titles** populated into `sitemap_cache` in `/home/ubuntu/radd-stream-data/7starhd.db`.
-     - Verified live end-to-end scrape of 3 titles: 19 releases, 278 sources extracted with 0 failures, unlocking 10Gbps Cloudflare R2 direct stream endpoints.
-     - Launched multi-threaded background crawler: **PID 119530** (`--workers 5 --delay 0.3`) actively crawling in `/home/ubuntu/radd-stream-data/7starhd.db`.
-  5. **System Resource & Performance Verification**:
-     - Oracle VM running both crawlers concurrently with load average ~0.08-0.15, 10GB free RAM, and 165GB free disk.
-  6. **Staging Database Isolation**:
-     - Zero merges performed. All databases (`multimovies.db`, `hdtvb.db`, `rogmovies.db`, `ssrmovies.db`, `vegamovies.db`, `7starhd.db`) remain strictly isolated.
-- **Next action:** Monitor dual live crawler execution (Vegamovies + 7StarHD).
+  1. **RareAnimes API Discovery & Catalog Indexing**:
+     - Discovered open WordPress REST API (`https://www.rareanimes.mov/wp-json/wp/v2/posts?_embed=1`).
+     - Ingested entire catalog of **1,926 titles** across 20 pages with rich embedded metadata (featured high-res posters, anime categories, and episode descriptions).
+     - Augmented with master movies index (`/all-anime-cartoon-movies-list/`), bringing total catalog to **2,624 anime titles**.
+     - Identified direct underlying download links in the REST API payload bypassing web redirect shorteners (`codedew.com/zipper`).
+  2. **Dedicated Importer & Test Suite**:
+     - Built `Fast_Fetch/import_rareanimes.py` and `Fast_Fetch/test_rareanimes_import.py`.
+     - 14/14 unit tests passed natively on Oracle VM in 0.08s.
+     - Live stream unwrapping verified: PixelDrain CDN direct video streams (`https://pixeldrain.com/api/file/<ID>`) and HubCloud 10Gbps Cloudflare R2 direct streams (`r2.cloudflarestorage.com`).
+  3. **Launched 4th Background Crawler on Oracle VM**:
+     - Background crawler **PID 123020** (`--workers 5 --delay 0.3`) actively crawling in `/home/ubuntu/radd-stream-data/rareanimes.db`.
+     - Created local monitor utility `check_rareanimes.py`.
+  4. **Active Concurrent Crawler Status**:
+     - Vegamovies: PID 76635 (~88% scraped, 106,991+ releases, 332,762+ direct sources).
+     - 7StarHD: PID 120570 (~20% scraped, 10,395+ releases, 39,791+ direct sources).
+     - HDHub4u: PID 121847 (14,504 titles indexed, actively crawling).
+     - RareAnimes: PID 123020 (2,624 titles indexed, actively crawling PixelDrain and HubCloud R2 streams).
+  5. **Staging Database Isolation**:
+     - Zero merges performed. All staging databases remain strictly isolated.
+- **Next action:** Monitor all four live crawlers (Vegamovies + 7StarHD + HDHub4u + RareAnimes).
 
 ### 2026-10-16 — Android App MVP & CI pipeline implementation
 - **Goal:** Implement full Android app flow (navigation, details, player, local favorites, settings) and establish root GitHub Actions CI.
