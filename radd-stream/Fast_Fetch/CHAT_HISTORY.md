@@ -76440,3 +76440,51 @@ The above content does NOT show the entire file contents. If you need to view an
 
 ---
 
+## 🤖 AI (Antigravity)  `2026-10-18T17:55:35Z`
+
+Created At: 2026-10-18T17:55:35Z
+Completed At: 2026-10-18T17:55:35Z
+File Path: `file:///home/runner/workspace/radd-stream/Fast_Fetch/backup_manager.py`
+Total Lines: 284
+Total Bytes: 10189
+Showing lines 1 to 35
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+1: #!/usr/bin/env python3
+2: """
+3: backup_manager.py — Atomic SQLite Database Snapshots and Multi-Tier Cloud Backup
+4: 
+5: Features:
+6: - Safe online SQLite snapshots using VACUUM INTO (never corrupts live WAL databases).
+7: - Gzip compression and SHA-256 integrity verification.
+8: - Direct API backup uploaders using 100% Python standard library (no pip packages):
+9:     1. GitHub Releases API (using GITHUB_TOKEN)
+10:     2. Telegram Bot Document API (using TELEGRAM_BOT_TOKEN & TELEGRAM_CHAT_ID)
+11:     3. Backblaze B2 / Cloudflare S3 uploaders
+12: """
+13: 
+14: from __future__ import annotations
+15: 
+16: import argparse
+17: import hashlib
+18: import json
+19: import os
+20: import shutil
+21: import sqlite3
+22: import sys
+23: import tarfile
+24: import tempfile
+25: import time
+26: import urllib.request
+27: import urllib.error
+28: from pathlib import Path
+29: 
+30: 
+31: def calculate_sha256(filepath: str | Path) -> str:
+32:     """Calculate SHA-256 hash of a file in chunks."""
+33:     h = hashlib.sha256()
+34:     with open(filepath, "rb") as f:
+35:         while chunk := f.read(65536):
+The above content does NOT show the entire file contents. If you need to view any lines of the file which were not shown to complete your task, call this tool again to view those lines.
+
+---
+
