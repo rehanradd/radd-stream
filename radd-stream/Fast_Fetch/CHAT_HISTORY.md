@@ -75800,3 +75800,53 @@ The above content does NOT show the entire file contents. If you need to view an
 
 ---
 
+## 🤖 AI (Antigravity)  `2026-10-18T17:48:13Z`
+
+Created At: 2026-10-18T17:48:13Z
+Completed At: 2026-10-18T17:48:13Z
+The following changes were made by the replace_file_content tool to: /home/runner/workspace/push.py. If relevant, proactively run terminal commands to execute this code for the USER. Don't ask for permission.
+[diff_block_start]
+@@ -132,7 +132,7 @@
+         return False
+ 
+ 
+-def push_github() -> bool:
++def push_github(force: bool = False) -> bool:
+     token = os.environ.get("GITHUB_TOKEN", "")
+     if not token:
+         print("[!] GITHUB_TOKEN not found in environment. Skipping GitHub push.", file=sys.stderr)
+@@ -139,5 +139,5 @@
+ 
+-    print("[*] Pushing to GitHub (origin/main)...", flush=True)
++    print(f"[*] Pushing to GitHub (origin/main){' [FORCE]' if force else ''}...", flush=True)
+     askpass = create_github_askpass(token)
+     env = os.environ.copy()
+     env["GIT_ASKPASS"] = askpass
+@@ -148,7 +148,12 @@
+         if "origin" not in remotes_out.split():
+             subprocess.run(["git", "remote", "add", "origin", GITHUB_REPO_URL], cwd=ROOT_DIR, capture_output=True)
+ 
+-        res = subprocess.run(["git", "push", "origin", "main"], cwd=ROOT_DIR, env=env, capture_output=True, text=True)
++        cmd = ["git", "push"]
++        if force:
++            cmd.append("--force")
++        cmd.extend(["origin", "main"])
++
++        res = subprocess.run(cmd, cwd=ROOT_DIR, env=env, capture_output=True, text=True)
+         if res.returncode == 0:
+             print("[✓] Pushed to GitHub repository (origin/main).", flush=True)
+             return True
+@@ -160,6 +160,7 @@
+             os.remove(askpass)
+ 
+ 
++
+ def sync_oracle() -> bool:
+     key_path = get_oracle_key_file()
+     if not key_path:
+[diff_block_end]
+
+Please note that the above snippet only shows the MODIFIED lines from the last change. It shows up to 3 lines of unchanged lines before and after the modified lines. The actual file contents may have many more lines not shown.
+
+---
+
