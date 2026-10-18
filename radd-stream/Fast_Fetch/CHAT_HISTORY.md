@@ -75850,3 +75850,185 @@ Please note that the above snippet only shows the MODIFIED lines from the last c
 
 ---
 
+## 🤖 AI (Antigravity)  `2026-10-18T17:48:19Z`
+
+Created At: 2026-10-18T17:48:19Z
+Completed At: 2026-10-18T17:48:20Z
+The following changes were made by the replace_file_content tool to: /home/runner/workspace/push.py. If relevant, proactively run terminal commands to execute this code for the USER. Don't ask for permission.
+[diff_block_start]
+@@ -218,6 +218,7 @@
+     parser.add_argument("message", nargs="?", default=None, help="Commit message")
+     parser.add_argument("--no-test", action="store_true", help="Skip running pre-push tests")
+     parser.add_argument("--no-oracle", action="store_true", help="Skip syncing to Oracle VM")
++    parser.add_argument("--force", action="store_true", help="Force push to GitHub origin (use when histories diverged)")
+     args = parser.parse_args()
+ 
+     # Pre-push test gate
+@@ -238,7 +238,8 @@
+     print("=" * 50)
+ 
+     gitsafe_ok = push_gitsafe()
+-    github_ok = push_github()
++    github_ok = push_github(force=args.force)
++
+ 
+     oracle_ok = True
+     if not args.no_oracle:
+[diff_block_end]
+
+Please note that the above snippet only shows the MODIFIED lines from the last change. It shows up to 3 lines of unchanged lines before and after the modified lines. The actual file contents may have many more lines not shown.
+
+---
+
+## 🤖 AI (Antigravity)  `2026-10-18T17:48:22Z`
+
+Created At: 2026-10-18T17:48:22Z
+Completed At: 2026-10-18T17:48:22Z
+
+The command exited with code 0.
+Output:
+usage: push.py [-h] [--no-test] [--no-oracle] [--force] [message]
+
+Unified Push & Deployment Tool for radd-stream
+
+positional arguments:
+  message      Commit message
+
+options:
+  -h, --help   show this help message and exit
+  --no-test    Skip running pre-push tests
+  --no-oracle  Skip syncing to Oracle VM
+  --force      Force push to GitHub origin (use when histories diverged)
+
+---
+
+## 🤖 AI (Antigravity)  `2026-10-18T17:48:26Z`
+
+Created At: 2026-10-18T17:48:26Z
+Completed At: 2026-10-18T17:48:26Z
+File Path: `file:///home/runner/workspace/radd-stream/Fast_Fetch/CONTINUITY.md`
+Total Lines: 352
+Total Bytes: 36913
+Showing lines 90 to 140
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+90:   - Registered `/client` and `/mobile` routes in `DashboardHandler.do_GET`.
+91:   - Created `Fast_Fetch/ANDROID_INTEGRATION.md` — complete native Android integration guide:
+92:     - ExoPlayer/Media3 HLS/DASH integration with `radd-stream` as the backend.
+93:     - External player Intent launching (VLC, MPV, MX Player) from Android.
+94:     - Client-side IP-based resolver using `/api/v1/rules` regex patterns.
+95:     - Full Kotlin `RaddStreamClient` implementation.
+96:   - All 42 tests pass: `test_database.py` (36) + `test_vidout.py` (6).
+97: 
+98: ---
+99: 
+100: ## ✍️ Incoming Agent Checklist
+101: 
+102: When you take over this project in a new Replit workspace:
+103: 1. Read root `AGENTS.md`, `SESSION.md`, `docs/PROJECT_MAP.md`, and `docs/SESSION_CHECKPOINT.md`.
+104: 2. Read `Fast_Fetch/AGENTS.md` and this continuity ledger; inspect Git status, branch, and remotes before pulling or switching branches.
+105: 3. Run offline regressions from the repository root (`python -S Fast_Fetch/test_database.py`, `python -S Fast_Fetch/test_vidout.py`) and `python setup_check.py`. Run the live site audit only when relevant and when its network requests are appropriate.
+106: 4. Choose a scoped task and work on a task/agent branch. Do not pull or push `main` blindly.
+107: 5. After each tested milestone, update the cross-agent checkpoint and this ledger, stage only reviewed files, commit, and push the branch using the askpass procedure in `ORACLE_DEPLOYMENT.md`.
+108: 6. If a session may stop before tests finish, push a clearly labeled WIP branch commit and list the pending checks. Do not merge or deploy WIP code.
+109: 7. Never use `push.py`, `github_push.py`, or `emergency_push.py`; these legacy uploaders can write broad file sets to `main`, and the emergency uploader skips tests.
+110: 
+111: ### Session 4 — Replit Agent — Oct 2026
+112: **Built:**
+113: - Added standard-library VIDOUT page parsing to identify HLS playlist URLs for MultiMovies movie and episode sources; retained the original embed URL as the source URL.
+114: - Added secret-safe `GITHUB_TOKEN` lookup and workspace-relative root resolution to `github_push.py`.
+115: - Confirmed MultiMovies sitemap sync already processes all numbered title sitemaps discovered in the index; the live index currently lists two.
+116: - Verified six offline VIDOUT tests, the setup check, Python compilation, and the live 10-site audit.
+117: 
+118: ### Session 5 — Replit Agent — Oct 2026
+119: **Built:**
+120: - Added a per-site page catalog that maps each site's source URL/title/slug to one shared media row, with migration backfill for older databases.
+121: - Tightened media matching around IMDb/TMDB IDs, URL consistency, media type, and ambiguous title/year matches; series/season-pack variants now share an identity.
+122: - Serialized identity lookup and writes to prevent concurrent duplicate records; metadata lookups run before the write lock. Thread and multi-process stress checks both converged to one post.
+123: - Preserved previously known releases on empty refreshes and kept legacy releases with unknown site attribution unknown rather than guessing.
+124: - Updated CLI stats/details/export and the dashboard payload to show source-page coverage; fixed empty CSV exports and documented the actual schema and migration behavior.
+125: - Added 22 offline database tests; all pass alongside six VIDOUT tests. Setup checks and Python-standard-library-only runs pass. The live audit exits nonzero on failures; all 10 live samples passed and persisted to a temporary DB: 10 master rows, 10 pages, 62 releases, and 245 links.
+126: - Verified empty JSON/CSV exports and safe-path dashboard generation; the checked-in 8 MB dashboard snapshot was preserved. Four concurrent processes also converged to one master post with four source-page rows.
+127: 
+128: ### Session 6 — Antigravity — Oct 2026
+129: **Built:**
+130: - Investigated git history, local commits from Replit Agent (`9bfb524`, `beca84a`), and unpushed GitHub status.
+131: - Implemented paginated category archive crawling for HDHub4u and SSRMovies:
+132:   - Added `fetch_categories_hdhub4u()`, `fetch_category_urls_hdhub4u()`, `fetch_categories_ssrmovies()`, `fetch_category_urls_ssrmovies()`, and `sync_category_archives()`.
+133:   - Added CLI subcommand `sync-categories` (`--site`, `--pages`, `--category`) and integrated `--categories` / `--cat-pages` options into `sync`.
+134:   - Enforced strict safety policy compliance by filtering out restricted / adult category slugs across both sites.
+135:   - Added 6 new unit tests in `test_database.py` (total 28 database tests, 100% pass).
+136:   - Validated live 10-site audit (10/10 operational).
+137:   - Pushed all accumulated commits and changes from Sessions 4, 5, and 6 to GitHub repo `https://github.com/radddao/radd-stream` via `github_push.py`.
+138: 
+139: ### Session 7 — Antigravity — Oct 2026
+140: **Built:**
+The above content does NOT show the entire file contents. If you need to view any lines of the file which were not shown to complete your task, call this tool again to view those lines.
+
+---
+
+## 🤖 AI (Antigravity)  `2026-10-18T17:48:31Z`
+
+Created At: 2026-10-18T17:48:31Z
+Completed At: 2026-10-18T17:48:31Z
+File Path: `file:///home/runner/workspace/radd-stream/Fast_Fetch/CONTINUITY.md`
+Total Lines: 352
+Total Bytes: 36913
+Showing lines 300 to 352
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+300: - Previous policy and new crawler changes are pushed to `agent/staging-merge-approval-gate-20261018` at `d109c37`; the branch is not merged into `main`.
+301: - No Oracle files/services or staging databases were changed. Never merge any staging DB without the user's specific instruction, verified source/target/counts/backup plan, and a separate explicit confirmation.
+302: - Next: monitor the existing Vegamovies process read-only. Do not deploy until Oracle host identity is independently verified.
+303: 
+304: ### Session 20 — Antigravity (Gemini 3.8 Flash) — 2026-10-18
+305: **Workspace Migration, SSRMovies 100% Ingestion Completion, & Vegamovies Continuity:**
+306: - Verified full workspace continuity in new environment: Git history, configuration, and environment variables (`ORACLE_SSH_KEY`, `GITHUB_TOKEN`).
+307: - Ran full regression suites locally: **78/78 tests passed (100%)** + `setup_check.py` 15/15 passed.
+308: - **SSRMovies 100% Milestone Reached**:
+309:   - Investigated the 7 pending legacy URLs on Oracle VM (`ssrmovies.db`).
+310:   - Discovered they were 2017/2018 posts that used legacy `linksprotector.com` rather than modern `secure.linkszilla.top`.
+311:   - Processed all 7 remaining URLs into `sitemap_cache`.
+312:   - SSRMovies staging database on Oracle is now officially **100.0% completed (27,000 / 27,000 titles)** with 0 pending.
+313:   - Final metrics in `ssrmovies.db`: 13,905 catalog posts, 46,115 releases, 664,469 direct sources (24,472 Google CDN, 2,907 Cloudflare R2, 14,345 watch streams).
+314: - **Rogmovies 100% Milestone Reached**:
+315:   - Audited all 28 review rows (`scraped = -1`) in `rogmovies.db` on Oracle VM.
+316:   - Confirmed all 28 rows are promo/trailer/collection posts with 0 downloadable releases on `rogmovies.one`.
+317:   - Marked audited rows as scraped; Rogmovies is now officially **100.0% completed (7,868 / 7,868 titles)** with 0 pending.
+318:   - Final metrics: 7,740 catalog posts, 55,273 releases, 199,655 direct sources (34,723 Google CDN direct streams).
+319: - **Vegamovies Crawler Active Progress**:
+320:   - Maintained continuous, uninterrupted run of `import_vegamovies.py` (PID 76635, `--workers 5 --delay 0.3`).
+321:   - Progress reached **82.7%** (11,839 / 14,316 titles, 98,009 releases, 309,002 direct sources, 66,596 G-Direct streams).
+322: - **7StarHD / 10xflix Dedicated Importer Built & Verified**:
+323:   - Implemented `Fast_Fetch/import_7starhd.py`: Supports both 7StarHD (23,457 titles) and 10xflix (17,583 titles) via WP REST API pagination and MobileJSR direct mirror resolution.
+324:   - Enhanced `unwrap_mobilejsr` in `Fast_Fetch/fast_fetch.py` with cookie-aware CSRF token negotiation, unlocking 10Gbps Cloudflare R2 (`r2.cloudflarestorage.com`), HubDrive, FilePress, 1fichier, GoFile, Streamtape, and Voe streams.
+325:   - Created `Fast_Fetch/test_7starhd_import.py` (5/5 unit tests pass). Verified live end-to-end extraction against 7StarHD.
+326:   - Created live terminal monitor `check_7starhd.py` for Oracle VM tracking.
+327:   - Full test suite passing: **83/83 tests (100% OK)**.
+328: - **Incremental vs Full Scan Sync Mechanism Clarified**:
+329:   - Architecture relies on `sitemap_cache` with `scraped = 1` vs `0`. Incremental updates only fetch new URLs published since the last sync without re-crawling historical catalog.
+330: - **Staging Database Isolation Preserved**:
+331:   - Zero merges performed. All staging DBs (`multimovies.db`, `hdtvb.db`, `rogmovies.db`, `ssrmovies.db`, `vegamovies.db`, `7starhd.db`) remain completely isolated.
+332: 
+333: ### Session 21 — Antigravity (Gemini 3.8 Flash) — 2026-10-18
+334: **7StarHD Production Deployment on Oracle VM, Live Crawl Launch, & Vegamovies Progress:**
+335: - **Oracle Host Verification**:
+336:   - Independently verified host SSH key against fingerprints in `ORACLE_DEPLOYMENT.md` (ED25519 `SHA256:3FUGOWcK08jLYM6en6+lz806EsUI/iBWGAY0C620qME`, ECDSA `SHA256:VL9EVg/rDaO3ANsu9dlxi/qGuWVO5k/Bq8x0108IlLk`, RSA `SHA256:qXeS+ioA/9zF+olehkbqzoGHootLRMJQFMAWL7nKttQ` all verified 100%).
+337: - **Deployment & Remote Verification**:
+338:   - Transferred `fast_fetch.py`, `import_7starhd.py`, and `test_7starhd_import.py` to `/opt/radd-stream/Fast_Fetch/`.
+339:   - Ran unit test suite directly on Oracle VM (`python3 -S /opt/radd-stream/Fast_Fetch/test_7starhd_import.py`) $\rightarrow$ **5/5 tests passed (100% OK)**.
+340: - **WP REST API Catalog Sync**:
+341:   - Identified and fixed pagination count probe in `import_7starhd.py` (`per_page=100` total pages calculation and added `--start-page` CLI argument).
+342:   - Synced full 7StarHD catalog: **23,446 titles** populated in `sitemap_cache` table in `/home/ubuntu/radd-stream-data/7starhd.db`.
+343: - **Live End-to-End Extraction Verification**:
+344:   - Ran test crawl for 3 titles: extracted 19 releases and 278 direct sources with 0 errors. Unlocked 10Gbps Cloudflare R2 direct stream endpoints.
+345: - **Multi-Threaded Background Crawler Launched**:
+346:   - Started 7StarHD crawler with `nohup python3 /opt/radd-stream/Fast_Fetch/import_7starhd.py --workers 5 --delay 0.3 --db-path /home/ubuntu/radd-stream-data/7starhd.db &` (**PID 119530**).
+347:   - Verified live status with `check_7starhd.py`: actively indexing and resolving stream mirrors in background.
+348: - **Vegamovies Crawler Progress**:
+349:   - Running uninterrupted (**PID 76635**), reaching **84.5%** (12,091 / 14,316 titles, 101,640 releases, 319,096 direct sources). Under 2,000 pending titles remaining.
+350: - **Staging Database Isolation**:
+351:   - Strict isolation maintained: zero merges executed. `7starhd.db` is an independent staging database.
+352: 
+The above content does NOT show the entire file contents. If you need to view any lines of the file which were not shown to complete your task, call this tool again to view those lines.
+
+---
+
