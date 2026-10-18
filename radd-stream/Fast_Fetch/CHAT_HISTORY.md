@@ -74127,3 +74127,51 @@ The above content does NOT show the entire file contents. If you need to view an
 
 ---
 
+## 🤖 AI (Antigravity)  `2026-10-18T17:34:38Z`
+
+Created At: 2026-10-18T17:34:38Z
+Completed At: 2026-10-18T17:34:38Z
+File Path: `file:///home/runner/workspace/radd-stream/Fast_Fetch/test_katmoviehd_import.py`
+Total Lines: 209
+Total Bytes: 9064
+Showing lines 175 to 209
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+175:                             "source_url": "https://pixeldrain.com/u/negn6f",
+176:                             "final_url": "https://pixeldrain.com/api/file/negn6f",
+177:                             "is_temporary": 0,
+178:                             "quality": "720p",
+179:                         },
+180:                     ],
+181:                 }
+182:             ],
+183:         }
+184: 
+185:         ok = import_katmoviehd.save_post_to_staging_db(self.db_path, post_data)
+186:         self.assertTrue(ok)
+187: 
+188:         with sqlite3.connect(str(self.db_path)) as conn:
+189:             cur = conn.cursor()
+190:             p_row = cur.execute("SELECT id, title, imdb_id, rating FROM posts WHERE canonical_key = 'the-campaign_2012'").fetchone()
+191:             self.assertIsNotNone(p_row)
+192:             self.assertEqual(p_row[1], "The Campaign")
+193:             self.assertEqual(p_row[2], "tt1790886")
+194:             self.assertEqual(p_row[3], 6.1)
+195: 
+196:             rel_row = cur.execute("SELECT id, label, quality, size_bytes FROM releases WHERE post_id = ?", (p_row[0],)).fetchone()
+197:             self.assertIsNotNone(rel_row)
+198:             self.assertEqual(rel_row[3], 861150158)
+199: 
+200:             src_rows = cur.execute("SELECT source_name, service, final_url FROM sources WHERE release_id = ?", (rel_row[0],)).fetchall()
+201:             self.assertEqual(len(src_rows), 2)
+202:             self.assertEqual(src_rows[0][1], "fsl_r2")
+203:             self.assertEqual(src_rows[1][1], "pixeldrain")
+204:             conn.close()
+205: 
+206: 
+207: if __name__ == "__main__":
+208:     unittest.main()
+209: 
+The above content does NOT show the entire file contents. If you need to view any lines of the file which were not shown to complete your task, call this tool again to view those lines.
+
+---
+
