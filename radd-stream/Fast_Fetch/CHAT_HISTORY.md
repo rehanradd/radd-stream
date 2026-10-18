@@ -73256,3 +73256,58 @@ Output:
 
 ---
 
+## 🤖 AI (Antigravity)  `2026-10-18T17:08:11Z`
+
+### ✅ Universal Prompt, One-Liner & Auto-Update Rules Established
+
+All requested updates have been implemented and committed:
+
+---
+
+### 1. The Short One-Line Prompt
+
+You can copy and paste this single line into **any AI agent** (Antigravity, Replit Agent, Cursor, Claude, GPT, etc.) at any time to resume work:
+
+```text
+Read and follow UNIVERSAL_AI_PROMPT.md before taking any action. Never merge staging DBs into fast_fetch.db without explicit confirmation. Report active Oracle crawlers and current progress.
+```
+
+---
+
+### 2. Files Created & Cleaned Up
+
+1. **[`UNIVERSAL_AI_PROMPT.md`](file:///home/runner/workspace/UNIVERSAL_AI_PROMPT.md)**:
+   - Created at project root as the single source of truth for all incoming AI models.
+   - Sets the constraints (100% Python stdlib, zero adult content, strict staging isolation, Oracle crawler protection).
+   - Directs the agent to check the live monitors (`check_vegamovies.py`, etc.).
+2. **[`radd-stream/docs/AI_HANDOFF_PROMPT.md`](file:///home/runner/workspace/radd-stream/docs/AI_HANDOFF_PROMPT.md)**:
+   - Cleaned up and pruned. Removed the broken dead-branch link (`agent/portable-context/docs/AGENT_BOOTSTRAP.md`) and pointed directly to [`UNIVERSAL_AI_PROMPT.md`](file:///home/runner/workspace/UNIVERSAL_AI_PROMPT.md).
+3. **[`radd-stream/Fast_Fetch/CONTINUITY.md`](file:///home/runner/workspace/radd-stream/Fast_Fetch/CONTINUITY.md)**:
+   - Updated session commit ledger with Session 16 (HDHub4u & RareAnimes deployment, KatMovieHD readiness, and multi-tier chat auto-sync).
+
+---
+
+### 3. Added the Mandatory Auto-Update Rule
+
+We embedded the **Auto-Update Documentation Rule** directly into [AGENTS.md](file:///home/runner/workspace/radd-stream/Fast_Fetch/AGENTS.md) and [DAO.md](file:///home/runner/workspace/radd-stream/Fast_Fetch/DAO.md) (Principle 8: *Eternal Ledger & Auto-Updating Memory*):
+
+> **Principle 8: Eternal Ledger & Auto-Updating Memory**
+> Whenever any new site is conquered, new API discovered, crawler deployed or finished, or milestone achieved, the Dao Partner **MUST immediately update**:
+> 1. `UNIVERSAL_AI_PROMPT.md` (active crawler status & context)
+> 2. `radd-stream/docs/SESSION_CHECKPOINT.md` & `ANTIGRAVITY_HANDOFF.md`
+> 3. `radd-stream/Fast_Fetch/CONTINUITY.md` (commit ledger and session milestones)
+> 
+> *Never leave outdated notes, dead branch links, or stale PIDs in documentation so future Dao Partners never hesitate or stray from the path.*
+
+---
+
+### 4. Oracle VM Crawler Progress
+
+- **Vegamovies** (PID 76635): **90.3%** (12,927 / 14,316 scraped — **only 1,156 pending left**)
+- **7StarHD** (PID 120570): **32.1%** active
+- **HDHub4u** (PID 121847): **11.8%** active
+- **RareAnimes** (PID 123020): **6.1%** active
+- **KatMovieHD**: 100% prepared (`import_katmoviehd.py` + tests pass), standing by for Vegamovies to finish.
+
+---
+
