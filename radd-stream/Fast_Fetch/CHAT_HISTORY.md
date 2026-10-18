@@ -72719,3 +72719,76 @@ The above content shows the entire, complete file contents of the requested file
 
 ---
 
+## 🤖 AI (Antigravity)  `2026-10-18T17:06:46Z`
+
+Created At: 2026-10-18T17:06:46Z
+Completed At: 2026-10-18T17:06:46Z
+File Path: `file:///home/runner/workspace/radd-stream/SESSION.md`
+Total Lines: 196
+Total Bytes: 8461
+Showing lines 1 to 60
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+1: # 🎭 SESSION.md — Agent Session Protocol
+2: 
+3: > **Every AI agent** (Antigravity, Replit Agent, Copilot, Cursor, Claude, GPT, Gemini)
+4: > MUST follow this protocol. No exceptions.
+5: 
+6: ---
+7: 
+8: ## Non-negotiable owner approval gate
+9: 
+10: Never merge any per-site staging database into the unified catalog, locally or
+11: on Oracle, unless the user explicitly requests that specific merge in the
+12: current conversation. Scraper completion and old checkpoint wording do not
+13: authorize a merge. Before acting, list the exact source database(s), target,
+14: row counts, and verified backup/rollback plan, then get a separate explicit
+15: confirmation from the user. If anything is unclear, stop. Do not bypass the
+16: guard by calling `merge_site_db()` directly; the guarded CLI requires
+17: `--owner-authorized` after the user has confirmed the plan.
+18: 
+19: ## 🔴 Before You Write a Single Line of Code
+20: 
+21: Read these files **in order**:
+22: 
+23: ```
+24: 1. AGENTS.md              ← repo map, what exists, current status
+25: 2. docs/PROJECT_MAP.md and docs/SESSION_CHECKPOINT.md ← portable current state
+26: 3. CHANGELOG.md           ← history + known mistakes
+27: 4. Fast_Fetch/CONTINUITY.md   ← backend session log + next task
+28:    AND/OR App/AGENTS.md       ← app session log + next task
+29: ```
+30: 
+31: Then run the health check:
+32: 
+33: ```bash
+34: python setup_check.py
+35: python -S Fast_Fetch/test_database.py    # expected: 36+ tests, all OK
+36: python -S Fast_Fetch/test_vidout.py      # expected: 6 tests, all OK
+37: ```
+38: 
+39: **If any test fails at session START — do NOT proceed. Fix the issue first, then continue.**
+40: 
+41: ---
+42: 
+43: ## ✅ Session Start Block (Fill In)
+44: 
+45: Copy this block into your working notes at the start of each session:
+46: 
+47: ```
+48: ╔══════════════════════════════════════════════════════════╗
+49: ║  SESSION START                                           ║
+50: ╠══════════════════════════════════════════════════════════╣
+51: ║  Date (UTC)  :                                           ║
+52: ║  Agent       :  [e.g. Antigravity / Replit Agent / GPT]  ║
+53: ║  Branch      :  [task/agent branch — never main]         ║
+54: ║  Working on  :  [Backend / App / Both]                   ║
+55: ║  Task        :  [one-sentence description of what you'll do] ║
+56: ║  Last SHA    :  [from Git history / checkpoint]          ║
+57: ║  Tests start :  [e.g.  36/36 DB  +  6/6 VIDOUT  = OK]   ║
+58: ╚══════════════════════════════════════════════════════════╝
+59: ```
+60: 
+The above content does NOT show the entire file contents. If you need to view any lines of the file which were not shown to complete your task, call this tool again to view those lines.
+
+---
+
