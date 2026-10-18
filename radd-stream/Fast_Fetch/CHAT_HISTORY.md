@@ -73311,3 +73311,9 @@ We embedded the **Auto-Update Documentation Rule** directly into [AGENTS.md](fil
 
 ---
 
+## 👤 USER  `2026-10-18T17:10:47Z`
+
+what is prompt
+
+---
+
