@@ -76340,3 +76340,103 @@ HMAC SigV4 helper test OK
 
 ---
 
+## 🤖 AI (Antigravity)  `2026-10-18T17:55:29Z`
+
+Created At: 2026-10-18T17:55:29Z
+Completed At: 2026-10-18T17:55:30Z
+
+The command exited with code 0.
+Output:
+Signature: 3ca6d9ac8c3b5b638f16711fc2e8a6fd3fa85503c1c38050a47af6d1ba08761c
+Auth header length: 192
+
+---
+
+## 🤖 AI (Antigravity)  `2026-10-18T17:55:32Z`
+
+Created At: 2026-10-18T17:55:32Z
+Completed At: 2026-10-18T17:55:33Z
+File Path: `file:///home/runner/workspace/radd-stream/Fast_Fetch/backup_manager.py`
+Total Lines: 284
+Total Bytes: 10189
+Showing lines 210 to 284
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+210:     # document field
+211:     filename = archive_path.name
+212:     header = f"--{boundary}\r\nContent-Disposition: form-data; name=\"document\"; filename=\"{filename}\"\r\nContent-Type: application/gzip\r\n\r\n".encode("utf-8")
+213:     body_parts.append(header)
+214: 
+215:     with open(archive_path, "rb") as f:
+216:         file_bytes = f.read()
+217:     body_parts.append(file_bytes)
+218:     body_parts.append(f"\r\n--{boundary}--\r\n".encode("utf-8"))
+219: 
+220:     full_body = b"".join(body_parts)
+221:     req = urllib.request.Request(
+222:         url,
+223:         data=full_body,
+224:         headers={
+225:             "Content-Type": f"multipart/form-data; boundary={boundary}",
+226:             "Content-Length": str(len(full_body)),
+227:         },
+228:         method="POST",
+229:     )
+230: 
+231:     try:
+232:         with urllib.request.urlopen(req, timeout=120) as resp:
+233:             res_json = json.loads(resp.read().decode("utf-8"))
+234:             if res_json.get("ok"):
+235:                 print(f"[✓] Uploaded backup document to Telegram chat {chat_id}!", flush=True)
+236:                 return True
+237:             else:
+238:                 print(f"[!] Telegram API returned error: {res_json}", file=sys.stderr)
+239:                 return False
+240:     except Exception as e:
+241:         print(f"[!] Telegram upload error: {e}", file=sys.stderr)
+242:         return False
+243: 
+244: 
+245: def main():
+246:     parser = argparse.ArgumentParser(description="radd-stream Cloud Backup Manager")
+247:     parser.add_argument("--dir", default="/home/ubuntu/radd-stream-data", help="Directory containing SQLite DBs")
+248:     parser.add_argument("--out", default="/tmp/radd-stream-backups", help="Directory to save backup archives")
+249:     parser.add_argument("--github", action="store_true", help="Upload to GitHub Releases")
+250:     parser.add_argument("--telegram", action="store_true", help="Upload to Telegram channel")
+251:     parser.add_argument("--dry-run", action="store_true", help="Snapshot & compress only, do not upload")
+252:     args = parser.parse_args()
+253: 
+254:     data_dir = Path(args.dir)
+255:     if not data_dir.exists():
+256:         # Fallback to local workspace if running locally
+257:         data_dir = Path("/home/runner/workspace/radd-stream/Fast_Fetch")
+258: 
+259:     dbs = sorted(data_dir.glob("*.db"))
+260:     if not dbs:
+261:         print(f"[!] No .db files found in {data_dir}", file=sys.stderr)
+262:         return
+263: 
+264:     print(f"[*] Found {len(dbs)} databases: {[d.name for d in dbs]}", flush=True)
+265:     out_dir = Path(args.out)
+266:     archive, manifest = create_backup_archive(dbs, out_dir)
+267:     print(f"[✓] Created backup archive: {archive} ({manifest['archive']['size_mb']} MB)", flush=True)
+268:     print(f"[*] Archive SHA-256: {manifest['archive']['sha256']}", flush=True)
+269: 
+270:     if args.dry_run:
+271:         print("[*] Dry run complete. No off-site uploads requested.", flush=True)
+272:         return
+273: 
+274:     if args.github or (not args.telegram and os.environ.get("GITHUB_TOKEN")):
+275:         upload_to_github_release(archive)
+276: 
+277:     if args.telegram:
+278:         caption = f"🚀 Radd-Stream DB Backup ({manifest['archive']['size_mb']} MB)\nDatabases: {', '.join(manifest['databases'].keys())}"
+279:         upload_to_telegram(archive, caption=caption)
+280: 
+281: 
+282: if __name__ == "__main__":
+283:     main()
+284: 
+The above content does NOT show the entire file contents. If you need to view any lines of the file which were not shown to complete your task, call this tool again to view those lines.
+
+---
+
