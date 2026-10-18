@@ -76518,3 +76518,61 @@ Please note that the above snippet only shows the MODIFIED lines from the last c
 
 ---
 
+## 🤖 AI (Antigravity)  `2026-10-18T17:56:02Z`
+
+Created At: 2026-10-18T17:56:02Z
+Completed At: 2026-10-18T17:56:03Z
+File Path: `file:///home/runner/workspace/radd-stream/Fast_Fetch/backup_manager.py`
+Total Lines: 287
+Total Bytes: 10218
+Showing lines 240 to 284
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+240:             else:
+241:                 print(f"[!] Telegram API returned error: {res_json}", file=sys.stderr)
+242:                 return False
+243:     except Exception as e:
+244:         print(f"[!] Telegram upload error: {e}", file=sys.stderr)
+245:         return False
+246: 
+247: 
+248: def main():
+249:     parser = argparse.ArgumentParser(description="radd-stream Cloud Backup Manager")
+250:     parser.add_argument("--dir", default="/home/ubuntu/radd-stream-data", help="Directory containing SQLite DBs")
+251:     parser.add_argument("--out", default="/tmp/radd-stream-backups", help="Directory to save backup archives")
+252:     parser.add_argument("--github", action="store_true", help="Upload to GitHub Releases")
+253:     parser.add_argument("--telegram", action="store_true", help="Upload to Telegram channel")
+254:     parser.add_argument("--dry-run", action="store_true", help="Snapshot & compress only, do not upload")
+255:     args = parser.parse_args()
+256: 
+257:     data_dir = Path(args.dir)
+258:     if not data_dir.exists():
+259:         # Fallback to local workspace if running locally
+260:         data_dir = Path("/home/runner/workspace/radd-stream/Fast_Fetch")
+261: 
+262:     dbs = sorted(data_dir.glob("*.db"))
+263:     if not dbs:
+264:         print(f"[!] No .db files found in {data_dir}", file=sys.stderr)
+265:         return
+266: 
+267:     print(f"[*] Found {len(dbs)} databases: {[d.name for d in dbs]}", flush=True)
+268:     out_dir = Path(args.out)
+269:     archive, manifest = create_backup_archive(dbs, out_dir)
+270:     print(f"[✓] Created backup archive: {archive} ({manifest['archive']['size_mb']} MB)", flush=True)
+271:     print(f"[*] Archive SHA-256: {manifest['archive']['sha256']}", flush=True)
+272: 
+273:     if args.dry_run:
+274:         print("[*] Dry run complete. No off-site uploads requested.", flush=True)
+275:         return
+276: 
+277:     if args.github or (not args.telegram and os.environ.get("GITHUB_TOKEN")):
+278:         upload_to_github_release(archive)
+279: 
+280:     if args.telegram:
+281:         caption = f"🚀 Radd-Stream DB Backup ({manifest['archive']['size_mb']} MB)\nDatabases: {', '.join(manifest['databases'].keys())}"
+282:         upload_to_telegram(archive, caption=caption)
+283: 
+284: 
+The above content does NOT show the entire file contents. If you need to view any lines of the file which were not shown to complete your task, call this tool again to view those lines.
+
+---
+
