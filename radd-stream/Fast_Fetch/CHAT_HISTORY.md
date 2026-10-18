@@ -74054,3 +74054,76 @@ The above content does NOT show the entire file contents. If you need to view an
 
 ---
 
+## 🤖 AI (Antigravity)  `2026-10-18T17:34:33Z`
+
+Created At: 2026-10-18T17:34:33Z
+Completed At: 2026-10-18T17:34:34Z
+File Path: `file:///home/runner/workspace/radd-stream/Fast_Fetch/test_all_sites.py`
+Total Lines: 332
+Total Bytes: 15273
+Showing lines 1 to 60
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+1: # -*- coding: utf-8 -*-
+2: """
+3: test_all_sites.py — Real-world live verification of all 10 supported streaming sites.
+4: Runs fast, unbuffered tests verifying:
+5:   1. Base domain HTTP status & redirect target
+6:   2. Catalog Ingestion (sitemap / REST API / SvelteKit / HTML cards)
+7:   3. Live Post HTML & Extract Metadata Verification
+8: """
+9: import sys
+10: import os
+11: import json
+12: import time
+13: import tempfile
+14: from pathlib import Path
+15: 
+16: sys.stdout.reconfigure(line_buffering=True, encoding="utf-8", errors="replace")
+17: sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+18: 
+19: import fast_fetch
+20: 
+21: # Exercise the real save path without touching a developer's persistent catalog.
+22: LIVE_DB_DIR = tempfile.TemporaryDirectory(prefix="radd-stream-live-db-")
+23: fast_fetch.DB_PATH = Path(LIVE_DB_DIR.name) / "live-audit.db"
+24: fast_fetch.fetch_cinemeta_metadata = lambda *args, **kwargs: None
+25: fast_fetch.init_db()
+26: 
+27: def p(msg):
+28:     print(msg, flush=True)
+29: 
+30: p("=" * 75)
+31: p("🔍 10-SITE LIVE REAL-WORLD VERIFICATION AUDIT")
+32: p("=" * 75)
+33: 
+34: SITE_TEST_CONFIGS = [
+35:     {
+36:         "name": "vegamovies",
+37:         "domain": fast_fetch.DOMAINS.get("vegamovies", "https://vegamovies.gallery"),
+38:         "catalog_type": "sitemap",
+39:         "catalog_url": "https://vegamovies.gallery/sitemap.xml",
+40:         "post_url": "https://vegamovies.gallery/download-the-corrupted-2019-dual-audio-hin-eng/"
+41:     },
+42:     {
+43:         "name": "rogmovies",
+44:         "domain": fast_fetch.DOMAINS.get("rogmovies", "https://rogmovies.one"),
+45:         "catalog_type": "sitemap",
+46:         "catalog_url": "https://rogmovies.one/sitemap.xml",
+47:         "post_url": "https://rogmovies.one/download-bypass-road-2019-hindi-480p-720p/"
+48:     },
+49:     {
+50:         "name": "ssrmovies",
+51:         "domain": fast_fetch.DOMAINS.get("ssrmovies", "https://ssrmovies.gripe"),
+52:         "catalog_type": "wp_api",
+53:         "catalog_url": "https://ssrmovies.gripe/wp-json/wp/v2/posts?per_page=3",
+54:         "post_url": "https://ssrmovies.gripe/wwe-monday-night-raw-2026/"
+55:     },
+56:     {
+57:         "name": "katmoviehd",
+58:         "domain": fast_fetch.DOMAINS.get("katmoviehd", "https://katmoviehd.fans"),
+59:         "catalog_type": "sveltekit",
+60:         "catalog_url": "https://new.katmoviehd.top/",
+The above content does NOT show the entire file contents. If you need to view any lines of the file which were not shown to complete your task, call this tool again to view those lines.
+
+---
+
