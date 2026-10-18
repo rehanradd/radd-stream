@@ -73529,3 +73529,76 @@ gitsafe-backup	git://gitsafe:5418/backup.git (push)
 
 ---
 
+## 🤖 AI (Antigravity)  `2026-10-18T17:29:04Z`
+
+Created At: 2026-10-18T17:29:04Z
+Completed At: 2026-10-18T17:29:04Z
+File Path: `file:///home/runner/workspace/radd-stream/ORACLE_DEPLOYMENT.md`
+Total Lines: 458
+Total Bytes: 19741
+Showing lines 1 to 60
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+1: # Oracle and GitHub Operations Runbook
+2: 
+3: This is the operational reference for the existing Radd Stream Oracle VM and
+4: GitHub repository. Recheck the host before each deployment; IP addresses,
+5: firewall rules, and installed services can change.
+6: 
+7: ## Mandatory staging-database merge approval
+8: 
+9: Do not merge any per-site staging database into the unified Oracle catalog
+10: because a crawler finished, a checkpoint says to, or a test passed. A specific
+11: merge requires the user's explicit instruction in the current conversation.
+12: Before executing it, report the exact source database(s), target path, current
+13: row counts, and verified backup/rollback plan, then obtain a separate explicit
+14: confirmation. Use the guarded merge CLI only with `--owner-authorized`; never
+15: bypass it through a direct function call, SQL, file copy, or alternate script.
+16: If approval is missing or unclear, leave every database isolated.
+17: Do not assume an existing Oracle copy of `merge_catalogs.py` has this guard:
+18: verify the deployed file before any use, and stop if it is unguarded. Do not
+19: replace a production copy until the host identity and backup/deployment
+20: procedure in this runbook are independently verified.
+21: 
+22: ## Cost and host
+23: 
+24: The deployment target is the existing Oracle VM. The operating preference is
+25: to use the current VM and free tools only: do not provision paid compute,
+26: storage, a paid domain, or another paid service without explicit approval.
+27: Oracle account charges and free-tier eligibility are controlled outside this
+28: repository and are not guaranteed by this guide.
+29: 
+30: | Item | Last verified value |
+31: |---|---|
+32: | Repository | `https://github.com/radddao/radd-stream` |
+33: | Default GitHub branch | `main` |
+34: | Oracle public IP | `92.4.95.252` |
+35: | Intended HTTP base URL | `http://92.4.95.252/` |
+36: | SSH account and port | `ubuntu@92.4.95.252`, TCP 22 |
+37: | Hostname | `instance-20260424-0405` |
+38: | Operating system | Ubuntu 24.04.4 LTS |
+39: | Python | Python 3.12.3; the backend uses only the standard library |
+40: | Privileges | `sudo -n` worked for the `ubuntu` account |
+41: | Installed services | Nginx, Supervisor, and `radd-stream.service` are active; backend listens on `127.0.0.1:8080` |
+42: 
+43: The 2026-10-15 check below is historical and was superseded by a read-only
+44: inspection on 2026-10-17. The latest check found SSH on port 22, Nginx on port
+45: 80, and the Python backend on loopback port 8080. The `/opt` directory also
+46: contains `unified-monitoring-agent` and `warp-watchdog`; leave these unrelated
+47: directories alone.
+48: 
+49: The old RaddFlix project, its database backup, its site/service configuration,
+50: the GitHub Actions runner, Flutter, and JADX were removed at the user's
+51: request. Do not expect the old project, database, runner, or SDKs to be present.
+52: Supervisor and Nginx themselves were preserved.
+53: 
+54: ## Replit environment variables and credential handling
+55: 
+56: The user's permanent project choice is to configure these as environment
+57: variables in Replit Configurations, not Replit Secrets:
+58: 
+59: | Variable | Use |
+60: |---|---|
+The above content does NOT show the entire file contents. If you need to view any lines of the file which were not shown to complete your task, call this tool again to view those lines.
+
+---
+
