@@ -74642,3 +74642,67 @@ Last progress: 3s ago
 
 ---
 
+## 🤖 AI (Antigravity)  `2026-10-18T17:37:33Z`
+
+Created At: 2026-10-18T17:37:33Z
+Completed At: 2026-10-18T17:37:34Z
+File Path: `file:///home/runner/workspace/push.py`
+Total Lines: 236
+Total Bytes: 8785
+Showing lines 50 to 100
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+50:         key_path = f.name
+51:         f.write(header + "\n" + "\n".join(body[i:i + 64] for i in range(0, len(body), 64)) + "\n" + footer + "\n")
+52:     os.chmod(key_path, 0o600)
+53:     return key_path
+54: 
+55: 
+56: def create_github_askpass(token: str) -> str:
+57:     with tempfile.NamedTemporaryFile("w", delete=False) as f:
+58:         f.write(f'#!/bin/sh\necho "{token}"\n')
+59:         askpass_path = f.name
+60:     os.chmod(askpass_path, 0o700)
+61:     return askpass_path
+62: 
+63: 
+64: def run_tests() -> bool:
+65:     print("[*] Running pre-push unit tests...", flush=True)
+66:     fast_fetch_dir = ROOT_DIR / "radd-stream" / "Fast_Fetch"
+67:     res = subprocess.run(
+68:         [sys.executable, "-m", "unittest", "discover", "-s", str(fast_fetch_dir), "-p", "test_*.py"],
+69:         capture_output=True,
+70:         text=True,
+71:     )
+72:     if res.returncode == 0:
+73:         print("[✓] Pre-push unit tests passed successfully.", flush=True)
+74:         return True
+75:     else:
+76:         print("[!] Unit tests failed! Review output below:\n", file=sys.stderr)
+77:         print(res.stderr or res.stdout, file=sys.stderr)
+78:         return False
+79: 
+80: 
+81: def sync_chat_history():
+82:     export_script = ROOT_DIR / "radd-stream" / "Fast_Fetch" / "export_chat.py"
+83:     if export_script.exists():
+84:         try:
+85:             subprocess.run([sys.executable, str(export_script)], capture_output=True, timeout=15)
+86:         except Exception:
+87:             pass
+88: 
+89: 
+90: def git_commit(message: str) -> bool:
+91:     print(f"[*] Staging and committing changes with message: '{message}'...", flush=True)
+92:     # Stage relevant tracking files
+93:     subprocess.run(["git", "add", "."], cwd=ROOT_DIR, capture_output=True)
+94: 
+95:     # Check if anything to commit
+96:     diff_check = subprocess.run(["git", "diff", "--cached", "--quiet"], cwd=ROOT_DIR)
+97:     if diff_check.returncode == 0:
+98:         print("[*] No working tree changes to commit. Proceeding to push existing commits.", flush=True)
+99:         return True
+100: 
+The above content does NOT show the entire file contents. If you need to view any lines of the file which were not shown to complete your task, call this tool again to view those lines.
+
+---
+
