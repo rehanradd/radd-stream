@@ -77497,3 +77497,9 @@ Whenever you have your `HF_TOKEN` and repository name ready, share them here (or
 
 ---
 
+## 👤 USER  `2026-10-18T18:11:35Z`
+
+i have added both in secrects now can check it
+
+---
+
