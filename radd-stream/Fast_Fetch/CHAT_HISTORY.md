@@ -72591,3 +72591,9 @@ Before writing any code or answering, read these files in order to understand th
 
 ---
 
+## 👤 USER  `2026-10-18T17:06:15Z`
+
+make sure that you add this prompt in our porject so i can use it link and make one line short prompt and also remove our any other old unuesd prompts or .md files which might confuse agenst and also add this rules make sure when needed auto update our prompt etc and .md files whenever new get new info our new conetcs etc.
+
+---
+
