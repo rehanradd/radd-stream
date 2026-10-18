@@ -74,6 +74,7 @@ def run_tests() -> bool:
         "test_hdhub4u_import",
         "test_rareanimes_import",
         "test_katmoviehd_import",
+        "test_backup_manager",
     ]
     res = subprocess.run(
         [sys.executable, "-m", "unittest"] + unit_test_modules,
@@ -131,13 +132,13 @@ def push_gitsafe() -> bool:
         return False
 
 
-def push_github() -> bool:
+def push_github(force: bool = False) -> bool:
     token = os.environ.get("GITHUB_TOKEN", "")
     if not token:
         print("[!] GITHUB_TOKEN not found in environment. Skipping GitHub push.", file=sys.stderr)
         return False
 
-    print("[*] Pushing to GitHub (origin/main)...", flush=True)
+    print(f"[*] Pushing to GitHub (origin/main){' [FORCE]' if force else ''}...", flush=True)
     askpass = create_github_askpass(token)
     env = os.environ.copy()
     env["GIT_ASKPASS"] = askpass
@@ -149,7 +150,12 @@ def push_github() -> bool:
         if "origin" not in remotes_out.split():
             subprocess.run(["git", "remote", "add", "origin", GITHUB_REPO_URL], cwd=ROOT_DIR, capture_output=True)
 
-        res = subprocess.run(["git", "push", "origin", "main"], cwd=ROOT_DIR, env=env, capture_output=True, text=True)
+        cmd = ["git", "push"]
+        if force:
+            cmd.append("--force")
+        cmd.extend(["origin", "main"])
+
+        res = subprocess.run(cmd, cwd=ROOT_DIR, env=env, capture_output=True, text=True)
         if res.returncode == 0:
             print("[✓] Pushed to GitHub repository (origin/main).", flush=True)
             return True
@@ -160,6 +166,7 @@ def push_github() -> bool:
     finally:
         if os.path.exists(askpass):
             os.remove(askpass)
+
 
 
 def sync_oracle() -> bool:
@@ -175,6 +182,7 @@ def sync_oracle() -> bool:
         ROOT_DIR / "radd-stream" / "Fast_Fetch" / "import_hdhub4u.py",
         ROOT_DIR / "radd-stream" / "Fast_Fetch" / "import_rareanimes.py",
         ROOT_DIR / "radd-stream" / "Fast_Fetch" / "import_katmoviehd.py",
+        ROOT_DIR / "radd-stream" / "Fast_Fetch" / "backup_manager.py",
         ROOT_DIR / "radd-stream" / "Fast_Fetch" / "fast_fetch.py",
         ROOT_DIR / "radd-stream" / "Fast_Fetch" / "CHAT_HISTORY.md",
     ]
@@ -210,6 +218,7 @@ def main():
     parser.add_argument("message", nargs="?", default=None, help="Commit message")
     parser.add_argument("--no-test", action="store_true", help="Skip running pre-push tests")
     parser.add_argument("--no-oracle", action="store_true", help="Skip syncing to Oracle VM")
+    parser.add_argument("--force", action="store_true", help="Force push to GitHub origin (use when histories diverged)")
     args = parser.parse_args()
 
     # Pre-push test gate
@@ -231,7 +240,8 @@ def main():
     print("=" * 50)
 
     gitsafe_ok = push_gitsafe()
-    github_ok = push_github()
+    github_ok = push_github(force=args.force)
+
 
     oracle_ok = True
     if not args.no_oracle:
