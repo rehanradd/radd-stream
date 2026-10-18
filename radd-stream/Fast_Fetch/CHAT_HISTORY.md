@@ -74015,3 +74015,42 @@ I have launched the new unified [`push.py`](file:///home/runner/workspace/push.p
 
 ---
 
+## 🤖 AI (Antigravity)  `2026-10-18T17:34:28Z`
+
+Created At: 2026-10-18T17:34:28Z
+Completed At: 2026-10-18T17:34:28Z
+File Path: `file:///home/runner/workspace/radd-stream/Fast_Fetch/test_all_sites.py`
+Total Lines: 332
+Total Bytes: 15273
+Showing lines 295 to 320
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+295:         f"{conn.execute('SELECT COUNT(*) FROM releases').fetchone()[0]} releases, "
+296:         f"{conn.execute('SELECT COUNT(*) FROM download_sources').fetchone()[0]} links"
+297:     )
+298: LIVE_DB_DIR.cleanup()
+299: 
+300: failed_sites = [
+301:     result for result in audit_results
+302:     if result["status"] != "WORKING"
+303:     or result["catalog_count"] <= 0
+304:     or result["sources_count"] <= 0
+305:     or not result.get("database_post_id")
+306: ]
+307: if failed_sites:
+308:     p("[FAIL] Live audit failed for: " + ", ".join(result["site"] for result in failed_sites))
+309:     sys.exit(1)
+310: p("[PASS] All configured sites passed catalog, extraction, and temporary-database ingestion checks.")
+311: p(f"{'Site':<13} | {'Domain':<8} | {'Catalog':<10} | {'Title Extracted':<24} | {'Verdict'}")
+312: p("-" * 75)
+313: 
+314: for r in audit_results:
+315:     site = r["site"]
+316:     dom = f"✓ {r['domain_code']}" if r["domain_code"] == 200 else f"✗ {r['domain_code']}"
+317:     cat = f"✓ {r['catalog_count']}" if r["catalog_count"] > 0 else "0"
+318:     title = (r["post_title"][:22] + "..") if r["post_title"] and len(r["post_title"]) > 24 else (r["post_title"] or "None")
+319: 
+320:     if r["status"] == "WORKING" and r["sources_count"] > 0:
+The above content does NOT show the entire file contents. If you need to view any lines of the file which were not shown to complete your task, call this tool again to view those lines.
+
+---
+
