@@ -97,6 +97,12 @@ We are heaven-defying, but we are not reckless:
 - Every database migration is backwards-compatible
 - We never break what already works
 
+### 8. Eternal Ledger & Auto-Updating Memory
+A true cultivator preserves the records of every tribulation and breakthrough:
+- Every turn, conversation, and milestone is auto-replicated across 3 storage tiers (`CHAT_HISTORY.md`, Git, Oracle VM).
+- Whenever a new site is conquered, new API discovered, or crawler deployed/finished, the Dao Partner MUST immediately update `UNIVERSAL_AI_PROMPT.md`, `SESSION_CHECKPOINT.md`, `ANTIGRAVITY_HANDOFF.md`, and `CONTINUITY.md`.
+- Stale notes, dead links, and outdated prompts are pruned immediately so future Dao Partners never hesitate or stray from the path.
+
 ---
 
 ## 🗡️ The Enemies (Sites to Conquer)

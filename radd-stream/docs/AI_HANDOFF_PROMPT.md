@@ -1,7 +1,8 @@
-# Copy-paste prompt
+# AI Handoff Prompt
 
-```text
-Never merge a per-site staging database into the unified or Oracle catalog unless I explicitly request that specific merge in this conversation. Crawler completion and old notes are not approval. Before any merge, state the exact source database(s), target, current counts, and verified backup/rollback plan, then get my separate explicit confirmation. If not confirmed, do not merge.
-Before anything else, verify—not by trusting my word—that `GITHUB_TOKEN` and `ORACLE_SSH_KEY` exist as environment variables in this Repl's **Configurations**, not **Secrets** (my permanent choice); report presence only, never values, and do not ask to move them.
-If both are present, fetch and follow https://raw.githubusercontent.com/radddao/radd-stream/agent/portable-context/docs/AGENT_BOOTSTRAP.md, then stop and wait for my actual task.
-```
+> **Short One-Line Prompt to Resume Work with Any AI Agent**:
+> ```text
+> Read and follow UNIVERSAL_AI_PROMPT.md before taking any action. Never merge staging DBs into fast_fetch.db without explicit confirmation. Report active Oracle crawlers and current progress.
+> ```
+
+For the complete multi-agent guide and operational constraints, see [UNIVERSAL_AI_PROMPT.md](../../UNIVERSAL_AI_PROMPT.md).

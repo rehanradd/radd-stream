@@ -19,6 +19,7 @@ import json
 import os
 import re
 import sys
+import time
 from pathlib import Path
 
 BASE_DIR = Path(__file__).parent.resolve()
@@ -218,19 +219,49 @@ def run_export(
     return total_added
 
 
+def log_external_message(
+    message: str,
+    agent_name: str = "External Agent",
+    role: str = "AI",
+    output_file: Path = DEFAULT_OUTPUT,
+) -> bool:
+    """Logs an explicit message from any agent (Replit Agent, Cursor, bash script) into CHAT_HISTORY.md."""
+    now_iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    header_role = f"🤖 AI ({agent_name})" if role == "AI" else f"👤 USER ({agent_name})"
+    formatted = f"## {header_role}  `{now_iso}`\n\n{message.strip()}\n\n---\n\n"
+
+    try:
+        with open(output_file, "a", encoding="utf-8") as f:
+            f.write(formatted)
+        print(f"[✓] Logged message from {agent_name} to {output_file.name}")
+        return True
+    except Exception as e:
+        print(f"[!] Failed to log external message: {e}", file=sys.stderr)
+        return False
+
+
 def parse_args():
     parser = argparse.ArgumentParser(description="Export Antigravity conversations to CHAT_HISTORY.md")
     parser.add_argument("--id", dest="conversation_id", help="Specific conversation ID to export")
     parser.add_argument("--all", action="store_true", help="Export all discovered conversations")
     parser.add_argument("--output", default=str(DEFAULT_OUTPUT), help="Output markdown file path")
     parser.add_argument("--brain-dir", help="Explicit path to brain directory")
+    parser.add_argument("--log", help="Log an external message or summary directly to CHAT_HISTORY.md")
+    parser.add_argument("--agent", default="External Agent", help="Agent name for --log (e.g. 'Replit Agent')")
+    parser.add_argument("--user", action="store_true", help="Log as USER role instead of AI")
     return parser.parse_args()
 
 
 def main():
     args = parse_args()
-    b_dir = Path(args.brain_dir).resolve() if args.brain_dir else None
     out = Path(args.output).resolve()
+
+    if args.log:
+        role = "USER" if args.user else "AI"
+        log_external_message(args.log, agent_name=args.agent, role=role, output_file=out)
+        return
+
+    b_dir = Path(args.brain_dir).resolve() if args.brain_dir else None
     run_export(
         conversation_id=args.conversation_id,
         all_convs=args.all,

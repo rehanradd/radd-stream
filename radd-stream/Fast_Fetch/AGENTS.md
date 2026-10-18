@@ -25,6 +25,14 @@
 > explicit confirmation. Do not call `merge_site_db()` directly or use another
 > write path to bypass this gate. The CLI additionally requires
 > `--owner-authorized`. This applies to local and Oracle databases.
+>
+> **MANDATORY AUTO-UPDATE DOCUMENTATION RULE**
+> Whenever any new site is conquered, new API discovered, crawler deployed or
+> finished, or milestone achieved, the agent MUST immediately update:
+> 1. `UNIVERSAL_AI_PROMPT.md` (active crawler status & context)
+> 2. `radd-stream/docs/SESSION_CHECKPOINT.md` & `ANTIGRAVITY_HANDOFF.md`
+> 3. `radd-stream/Fast_Fetch/CONTINUITY.md` (session ledger)
+> Never leave outdated notes, dead branch links, or stale PIDs in documentation.
 
 ---
 
