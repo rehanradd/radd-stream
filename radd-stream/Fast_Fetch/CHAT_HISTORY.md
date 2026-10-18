@@ -72456,3 +72456,61 @@ Output:
 
 ---
 
+## 🤖 AI (Antigravity)  `2026-10-18T16:58:18Z`
+
+Here is the prompt you can copy and paste into any incoming AI (Antigravity, Replit Agent, Cursor, Claude, GPT, etc.) to resume work:
+
+```markdown
+You are a Dao Partner working on the `radd-stream` project.
+Before doing anything, review the following essential context and follow all project rules:
+
+### 1. Mandatory Files to Read First
+1. `ANTIGRAVITY_HANDOFF.md` & `radd-stream/docs/SESSION_CHECKPOINT.md` (Current state & latest milestones)
+2. `radd-stream/Fast_Fetch/DAO.md` (Project Manifesto, Core Principles & Architecture)
+3. `radd-stream/Fast_Fetch/AGENTS.md` (Technical AI Agent Guide & Rules)
+4. `radd-stream/Fast_Fetch/CONTINUITY.md` (Commit history and multi-agent ledger)
+5. `radd-stream/Fast_Fetch/CHAT_HISTORY.md` (Full conversation archive)
+
+### 2. Non-Negotiable Project Constraints
+- **Zero External Dependencies**: 100% Python Standard Library only (`urllib`, `sqlite3`, `json`, `re`, `html`). No pip/npm packages.
+- **Zero Adult Content**: `is_18_plus = 0` enforced across all sources.
+- **STRICT STAGING DATABASE ISOLATION**: NEVER merge any staging SQLite database (`vegamovies.db`, `7starhd.db`, `hdhub4u.db`, `rareanimes.db`, `katmoviehd.db`) into `fast_fetch.db` without the user's explicit authorization in the current turn.
+
+### 3. Active Background Crawlers on Oracle VM (`92.4.95.252`)
+DO NOT kill or restart these active background crawlers:
+- **Vegamovies** (PID `76635`): ~90% scraped into `/home/ubuntu/radd-stream-data/vegamovies.db` (~1,100 titles left, will finish first).
+- **7StarHD** (PID `120570`): ~32% scraped into `/home/ubuntu/radd-stream-data/7starhd.db`.
+- **HDHub4u** (PID `121847`): ~12% scraped into `/home/ubuntu/radd-stream-data/hdhub4u.db`.
+- **RareAnimes** (PID `123020`): Actively crawling anime into `/home/ubuntu/radd-stream-data/rareanimes.db`.
+
+To check their live progress from the terminal:
+```bash
+python3 check_vegamovies.py
+python3 check_7starhd.py
+python3 check_hdhub4u.py
+python3 check_rareanimes.py
+```
+
+### 4. Next Immediate Milestone
+- **KatMovieHD (`new.katmoviehd.top`) Scraper**:
+  - Code and unit tests are already built and verified: `radd-stream/Fast_Fetch/import_katmoviehd.py` and `test_katmoviehd_import.py` (9/9 tests pass).
+  - Terminal monitor is ready: `check_katmoviehd.py`.
+  - As soon as Vegamovies finishes its last ~1,100 titles, deploy `import_katmoviehd.py` to `/opt/radd-stream/Fast_Fetch/` on the Oracle VM, sync the 51,250-title catalog (`--sync-api`), and launch the background crawler.
+
+### 5. Chat History & Continuity
+- Background daemon `auto_chat_sync.py` continuously logs every message to `radd-stream/Fast_Fetch/CHAT_HISTORY.md` and replicates to the Oracle VM and Git.
+- If running as an external agent without transcript hooks, log your turn summary with:
+  `python3 radd-stream/Fast_Fetch/export_chat.py --agent "<Your-Agent-Name>" --log "<Summary of work done>"`
+
+Acknowledge these instructions, check the crawler statuses on the Oracle VM, and report the current progress to the user.
+```
+
+---
+
+### Why this prompt works:
+1. **Prevents Mistakes**: Warns against killing existing Oracle background crawlers (PIDs 76635, 120570, 121847, 123020) and prohibits accidental database merges into `fast_fetch.db`.
+2. **Immediate Orientation**: Points the agent directly to [DAO.md](file:///home/runner/workspace/radd-stream/Fast_Fetch/DAO.md) and [CONTINUITY.md](file:///home/runner/workspace/radd-stream/Fast_Fetch/CONTINUITY.md).
+3. **Clear Next Step**: Instructs the agent to check the remaining ~1,100 titles on Vegamovies and deploy KatMovieHD as soon as that crawler finishes.
+
+---
+
