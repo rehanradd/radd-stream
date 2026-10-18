@@ -77429,3 +77429,71 @@ Output:
 
 ---
 
+## 🤖 AI (Antigravity)  `2026-10-18T18:03:37Z`
+
+Here is the step-by-step guide to set up **Hugging Face Datasets** (100% free forever, **no credit card / no payment method** required, 50 GB storage) alongside **GitHub Releases**:
+
+---
+
+### Step 1: Create a Free Hugging Face Account (~1 Minute)
+1. Go to [huggingface.co/join](https://huggingface.co/join).
+2. Enter your **Email**, **Username**, and **Password** (never asks for credit card or payment).
+3. Confirm your email via the link they send you.
+
+---
+
+### Step 2: Create a Private Dataset Repository (~30 Seconds)
+1. Once logged in, go directly to: [huggingface.co/new-dataset](https://huggingface.co/new-dataset).
+2. **Owner**: Your username.
+3. **Dataset name**: Enter `radd-stream-backups`.
+4. **License**: Choose `mit` (or leave default).
+5. **Visibility**: Select **🔒 Private** (this ensures only you can see and download your databases).
+6. Click **Create dataset**.
+
+---
+
+### Step 3: Generate an Access Token (~30 Seconds)
+1. Go to [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens).
+2. Click **Create new token** (or **New token**).
+3. Configure the token:
+   - **Token name**: `radd-backup-bot`
+   - **Type**: Select **Write** (or check *Repositories $\rightarrow$ Write* permissions).
+4. Click **Create token**.
+5. Copy the generated token string (starts with `hf_...`).
+
+---
+
+### The 2 Details Needed
+
+Once done, you only have two values:
+1. **`HF_DATASET_REPO`**: `your-username/radd-stream-backups`
+2. **`HF_TOKEN`**: `hf_...`
+
+---
+
+### How Dual Backups Work (GitHub Releases + Hugging Face)
+
+We have already integrated Hugging Face support into [`backup_manager.py`](file:///home/runner/workspace/radd-stream/Fast_Fetch/backup_manager.py) and synced it to both GitHub and the Oracle VM (`/opt/radd-stream/Fast_Fetch/`).
+
+When you provide or set these two environment variables:
+```bash
+export HF_DATASET_REPO="your-username/radd-stream-backups"
+export HF_TOKEN="hf_..."
+```
+
+Running the backup manager with:
+```bash
+python3 radd-stream/Fast_Fetch/backup_manager.py --all
+```
+will automatically:
+1. **Safely snapshot** all 9 live SQLite databases using atomic `VACUUM INTO` (without disturbing active scrapers).
+2. **Compress** into `radd-stream-backup-YYYYMMDD_HHMMSS.tar.gz` with SHA-256 manifest.
+3. **Tier 1 (GitHub Releases)**: Upload the archive to GitHub Releases as a versioned snapshot (via `GITHUB_TOKEN`).
+4. **Tier 2 (Hugging Face Datasets)**: Upload the archive to your private Hugging Face dataset via Git LFS (up to 50 GB free, off-site from GitHub and Oracle).
+
+Both backups happen together automatically, giving you zero data loss redundancy with zero costs and zero credit cards!
+
+Whenever you have your `HF_TOKEN` and repository name ready, share them here (or set them in your environment) and we can run our first live dual backup!
+
+---
+
