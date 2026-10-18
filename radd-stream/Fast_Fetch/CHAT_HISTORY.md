@@ -77768,3 +77768,21 @@ Output:
 
 ---
 
+## 🤖 AI (Antigravity)  `2026-10-18T18:12:33Z`
+
+We checked the environment, and because this workspace shell was already running when you saved them, the container hasn't refreshed newly added secrets into our active session yet.
+
+To test and run the backup right away, could you tell us:
+
+1. **What exact names did you give to the secrets?**
+   - Did you name them `HF_TOKEN` and `HF_DATASET_REPO`?
+2. **If you'd like to run the backup immediately**:
+   - You can paste the **repository name** (e.g. `your-username/radd-stream-backups`) and the **`hf_...` token** right here in chat, or
+   - Share just the secret key names you used so we can reload them.
+
+---
+
+*(Meanwhile, the **Vegamovies** crawler on the Oracle VM has crossed **92.0%** — 115,152 releases and 354,418 direct sources extracted, with only **906 titles** remaining!)*
+
+---
+
