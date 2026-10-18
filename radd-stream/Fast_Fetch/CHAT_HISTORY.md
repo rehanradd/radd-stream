@@ -76945,3 +76945,59 @@ Output:
 
 ---
 
+## 🤖 AI (Antigravity)  `2026-10-18T17:59:01Z`
+
+Yes, you are completely right — **Cloudflare R2 requires a credit card / payment method on file to activate the account**, even though the first 10 GB is free. They do that to verify identity and stop bots from abusing free accounts.
+
+If you don't want to enter payment details, **do NOT add a card**. We have **100% free alternatives that NEVER ask for a credit card or payment method**:
+
+---
+
+### Alternative 1: GitHub Releases (⭐ Ready Right Now — 0 New Signups)
+
+- **Credit Card / Payment Method**: **NONE! Never asks for one.**
+- **Cost**: **$0.00 forever.**
+- **File Limit**: Up to **2 GB per file** (our full compressed database collection is only **~294 MB**!).
+- **Status**: **Already configured!** We verified your `GITHUB_TOKEN` — it has full admin permissions.
+- **How to use**:
+  We can upload a full atomic backup right now to a private GitHub release using:
+  ```bash
+  python3 push.py
+  # or directly on the Oracle VM:
+  python3 /opt/radd-stream/Fast_Fetch/backup_manager.py --github
+  ```
+
+---
+
+### Alternative 2: Telegram Bot API (⭐ Unlimited Free Storage & Mobile Alerts)
+
+- **Credit Card / Payment Method**: **NONE! Completely free forever.**
+- **Storage Limit**: **UNLIMITED!** You can upload as many files as you want, up to **2 GB per file**.
+- **Bonus**: Every time a backup runs, you get a ping on your phone with the `.tar.gz` database file attached. You can download and restore it from anywhere (phone, PC, or another server).
+- **Setup Time**: **60 seconds (No email verification or credit card)**:
+  1. Open Telegram, search for `@BotFather`, and send `/newbot`.
+  2. Choose a name and username (e.g. `RaddBackupBot`). BotFather will give you a **Bot Token**.
+  3. Create a **Private Channel** in Telegram (e.g. `Radd Stream DB Backups`).
+  4. Add your bot as an **Administrator** in that channel.
+  5. Provide the Bot Token and Channel Name/ID, and our script will automatically deliver backups there.
+
+---
+
+### Alternative 3: Hugging Face Datasets (⭐ 50 GB Free)
+
+- **Credit Card / Payment Method**: **NONE! Just sign up with an email.**
+- **Storage Limit**: **50 GB** per private dataset repository.
+- **Cost**: **$0.00 forever.**
+- SQLite databases of movie metadata are literally structured datasets. You can create a private dataset repo on Hugging Face, generate an API token, and push automated backups there.
+
+---
+
+### Recommendation
+
+1. **Right Now**: We can use **GitHub Releases** immediately with zero setup, because we already have the token with full release permissions.
+2. **For True Off-Site Redundancy (outside of GitHub)**: Use **Telegram Private Channel** — it takes 60 seconds, requires **zero credit cards**, provides **unlimited storage**, and keeps your database backups safe on your own Telegram account!
+
+Would you like to run the GitHub Releases backup now, or grab a 60-second Telegram Bot Token so we have backups completely outside of GitHub as well?
+
+---
+
