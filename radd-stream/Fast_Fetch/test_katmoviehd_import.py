@@ -201,7 +201,6 @@ class TestStagingDatabase(unittest.TestCase):
             self.assertEqual(len(src_rows), 2)
             self.assertEqual(src_rows[0][1], "fsl_r2")
             self.assertEqual(src_rows[1][1], "pixeldrain")
-            conn.close()
 
 
 if __name__ == "__main__":
