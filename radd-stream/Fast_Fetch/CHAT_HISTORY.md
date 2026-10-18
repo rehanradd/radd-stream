@@ -76265,3 +76265,67 @@ Cloudflare R2 anwhat do we need i have already created account on it
 
 ---
 
+## 🤖 AI (Antigravity)  `2026-10-18T17:55:12Z`
+
+Created At: 2026-10-18T17:55:12Z
+Completed At: 2026-10-18T17:55:12Z
+File Path: `file:///home/runner/workspace/radd-stream/Fast_Fetch/backup_manager.py`
+Total Lines: 284
+Total Bytes: 10189
+Showing lines 90 to 140
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+90:                 continue
+91:             snap_path = tmp_path / db.name
+92:             print(f"[*] Safely vacuuming {db.name}...", flush=True)
+93:             if safe_vacuum_sqlite(db, snap_path):
+94:                 sha = calculate_sha256(snap_path)
+95:                 size_mb = snap_path.stat().st_size / (1024 * 1024)
+96:                 manifest["databases"][db.name] = {
+97:                     "sha256": sha,
+98:                     "size_mb": round(size_mb, 2),
+99:                 }
+100:                 valid_files.append(snap_path)
+101: 
+102:         manifest_file = tmp_path / "manifest.json"
+103:         manifest_file.write_text(json.dumps(manifest, indent=2))
+104:         valid_files.append(manifest_file)
+105: 
+106:         print(f"[*] Creating compressed archive {archive_name}...", flush=True)
+107:         with tarfile.open(archive_path, "w:gz") as tar:
+108:             for f in valid_files:
+109:                 tar.add(f, arcname=f.name)
+110: 
+111:     manifest["archive"] = {
+112:         "filename": archive_name,
+113:         "size_mb": round(archive_path.stat().st_size / (1024 * 1024), 2),
+114:         "sha256": calculate_sha256(archive_path),
+115:     }
+116: 
+117:     return archive_path, manifest
+118: 
+119: 
+120: def upload_to_github_release(
+121:     archive_path: Path,
+122:     repo: str = "radddao/radd-stream",
+123:     tag_prefix: str = "backup",
+124:     token: str | None = None,
+125: ) -> str | None:
+126:     """
+127:     Uploads backup archive to GitHub Releases via REST API.
+128:     Returns the release HTML URL on success.
+129:     """
+130:     token = token or os.environ.get("GITHUB_TOKEN", "")
+131:     if not token:
+132:         print("[!] GITHUB_TOKEN not set. Skipping GitHub release upload.", file=sys.stderr)
+133:         return None
+134: 
+135:     tag_name = f"{tag_prefix}-{time.strftime('%Y%m%d-%H%M%S', time.gmtime())}"
+136:     release_name = f"Database Backup {time.strftime('%Y-%m-%d %H:%M UTC', time.gmtime())}"
+137: 
+138:     headers = {
+139:         "Authorization": f"token {token}",
+140:         "Accept": "application/vnd.github.v3+json",
+The above content does NOT show the entire file contents. If you need to view any lines of the file which were not shown to complete your task, call this tool again to view those lines.
+
+---
+
