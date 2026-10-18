@@ -75701,3 +75701,102 @@ Date:   Sat Oct 17 00:48:16 2026 +0000
 
 ---
 
+## 🤖 AI (Antigravity)  `2026-10-18T17:48:04Z`
+
+Created At: 2026-10-18T17:48:04Z
+Completed At: 2026-10-18T17:48:04Z
+File Path: `file:///home/runner/workspace/push.py`
+Total Lines: 251
+Total Bytes: 9188
+Showing lines 134 to 165
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+134: 
+135: def push_github() -> bool:
+136:     token = os.environ.get("GITHUB_TOKEN", "")
+137:     if not token:
+138:         print("[!] GITHUB_TOKEN not found in environment. Skipping GitHub push.", file=sys.stderr)
+139:         return False
+140: 
+141:     print("[*] Pushing to GitHub (origin/main)...", flush=True)
+142:     askpass = create_github_askpass(token)
+143:     env = os.environ.copy()
+144:     env["GIT_ASKPASS"] = askpass
+145:     env["GIT_TERMINAL_PROMPT"] = "0"
+146: 
+147:     try:
+148:         # Check if origin remote is set
+149:         remotes_out = subprocess.run(["git", "remote"], cwd=ROOT_DIR, capture_output=True, text=True).stdout
+150:         if "origin" not in remotes_out.split():
+151:             subprocess.run(["git", "remote", "add", "origin", GITHUB_REPO_URL], cwd=ROOT_DIR, capture_output=True)
+152: 
+153:         res = subprocess.run(["git", "push", "origin", "main"], cwd=ROOT_DIR, env=env, capture_output=True, text=True)
+154:         if res.returncode == 0:
+155:             print("[✓] Pushed to GitHub repository (origin/main).", flush=True)
+156:             return True
+157:         else:
+158:             # If rejected because of divergence, note it
+159:             print(f"[!] GitHub push note: {res.stderr.strip()}", file=sys.stderr)
+160:             return False
+161:     finally:
+162:         if os.path.exists(askpass):
+163:             os.remove(askpass)
+164: 
+165: 
+The above content does NOT show the entire file contents. If you need to view any lines of the file which were not shown to complete your task, call this tool again to view those lines.
+
+---
+
+## 🤖 AI (Antigravity)  `2026-10-18T17:48:06Z`
+
+Created At: 2026-10-18T17:48:06Z
+Completed At: 2026-10-18T17:48:06Z
+File Path: `file:///home/runner/workspace/push.py`
+Total Lines: 251
+Total Bytes: 9188
+Showing lines 210 to 250
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+210: def main():
+211:     parser = argparse.ArgumentParser(description="Unified Push & Deployment Tool for radd-stream")
+212:     parser.add_argument("message", nargs="?", default=None, help="Commit message")
+213:     parser.add_argument("--no-test", action="store_true", help="Skip running pre-push tests")
+214:     parser.add_argument("--no-oracle", action="store_true", help="Skip syncing to Oracle VM")
+215:     args = parser.parse_args()
+216: 
+217:     # Pre-push test gate
+218:     if not args.no_test:
+219:         if not run_tests():
+220:             print("\n[!] Aborting push due to test failure. Use --no-test to override if intentional.\n", file=sys.stderr)
+221:             sys.exit(1)
+222: 
+223:     # Sync chat history
+224:     sync_chat_history()
+225: 
+226:     # Commit message
+227:     msg = args.message or f"chore(sync): automated multi-tier update {time.strftime('%Y-%m-%d %H:%M UTC', time.gmtime())}"
+228:     git_commit(msg)
+229: 
+230:     # Multi-tier push
+231:     print("\n" + "=" * 50)
+232:     print(" 🚀 EXECUTING MULTI-TIER PUSH & DEPLOYMENT")
+233:     print("=" * 50)
+234: 
+235:     gitsafe_ok = push_gitsafe()
+236:     github_ok = push_github()
+237: 
+238:     oracle_ok = True
+239:     if not args.no_oracle:
+240:         oracle_ok = sync_oracle()
+241: 
+242:     print("=" * 50)
+243:     print(f" gitsafe-backup : {'✅ Pushed' if gitsafe_ok else '❌ Failed'}")
+244:     print(f" GitHub (origin): {'✅ Pushed' if github_ok else '⚠️ Notice'}")
+245:     print(f" Oracle Cloud VM: {'✅ Synced' if oracle_ok else '⚠️ Notice'}")
+246:     print("=" * 50 + "\n")
+247: 
+248: 
+249: if __name__ == "__main__":
+250:     main()
+The above content does NOT show the entire file contents. If you need to view any lines of the file which were not shown to complete your task, call this tool again to view those lines.
+
+---
+
