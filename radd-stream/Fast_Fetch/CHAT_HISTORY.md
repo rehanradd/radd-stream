@@ -72514,3 +72514,9 @@ Acknowledge these instructions, check the crawler statuses on the Oracle VM, and
 
 ---
 
+## 👤 USER  `2026-10-18T17:02:07Z`
+
+gave me universal prompt which i can use anytime for this project to continue work not just only for this task
+
+---
+
