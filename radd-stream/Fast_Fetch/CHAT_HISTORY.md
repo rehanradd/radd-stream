@@ -76823,3 +76823,73 @@ Output:
 
 ---
 
+## 🤖 AI (Antigravity)  `2026-10-18T17:56:34Z`
+
+To use **Cloudflare R2** for off-site backups, here are the 4 exact items needed from your Cloudflare dashboard:
+
+---
+
+### The 4 Details Needed
+
+1. **`R2_ACCOUNT_ID`**
+2. **`R2_BUCKET_NAME`** (e.g. `radd-stream-backups`)
+3. **`R2_ACCESS_KEY_ID`**
+4. **`R2_SECRET_ACCESS_KEY`**
+
+---
+
+### Step-by-Step: How to Get Them (Takes ~2 Minutes)
+
+#### Step 1: Create the R2 Bucket
+1. Log in to [Cloudflare Dashboard](https://dash.cloudflare.com/).
+2. On the left navigation sidebar, click **R2 Object Storage** (or **R2**).
+3. Click the blue **Create bucket** button.
+4. Bucket Name: Enter **`radd-stream-backups`** (or whatever name you prefer).
+5. Location: Leave as **Automatic** (or select Western Europe / WNAM).
+6. Click **Create bucket**.
+
+---
+
+#### Step 2: Find Your Account ID
+- Look at your browser URL bar: `https://dash.cloudflare.com/<ACCOUNT_ID>/r2/...`
+- Or on the R2 Overview page on the right sidebar, under **Account Details**, copy your **Account ID** (a 32-character hex string like `a1b2c3d4e5f6...`).
+
+---
+
+#### Step 3: Create the R2 API Token
+1. In the R2 page, look on the right sidebar and click **Manage R2 API Tokens**.
+2. Click **Create API token**.
+3. Configure the token:
+   - **Token name**: `radd-stream-backup-bot`
+   - **Permissions**: Select **Object Read & Write**
+   - **Bucket**: Select **Apply to specific bucket** $\rightarrow$ choose `radd-stream-backups` (or Apply to all buckets)
+   - **TTL / Expiry**: Set to *Forever* (no expiration)
+4. Click **Create API Token**.
+5. Cloudflare will display:
+   - **Access Key ID**: (copy this string)
+   - **Secret Access Key**: (copy this string)
+
+---
+
+### How the Backup Works
+
+We have added Cloudflare R2 support to [`backup_manager.py`](file:///home/runner/workspace/radd-stream/Fast_Fetch/backup_manager.py) using pure Python standard library:
+- **No extra packages**: Uses standard AWS SigV4 signing without requiring `boto3` or `aws-cli`.
+- **Atomic Online Snapshot**: Uses `VACUUM INTO` so active scrapers (Vegamovies, 7StarHD, HDHub4u, RareAnimes) are never interrupted or locked.
+- **Compressed & Verified**: Compresses databases by ~75% (~294 MB total) and verifies SHA-256 integrity before uploading.
+
+Once you have these details, you can provide them or set them in the environment:
+```bash
+export R2_ACCOUNT_ID="your_account_id"
+export R2_ACCESS_KEY_ID="your_access_key_id"
+export R2_SECRET_ACCESS_KEY="your_secret_access_key"
+export R2_BUCKET_NAME="radd-stream-backups"
+```
+
+Then a single command will upload the live database archive to your Cloudflare R2 bucket:
+```bash
+python3 radd-stream/Fast_Fetch/backup_manager.py --r2
+```
+
+---
+
