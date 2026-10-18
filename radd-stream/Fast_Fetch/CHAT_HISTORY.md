@@ -75185,3 +75185,67 @@ The above content does NOT show the entire file contents. If you need to view an
 
 ---
 
+## 🤖 AI (Antigravity)  `2026-10-18T17:44:32Z`
+
+Created At: 2026-10-18T17:44:32Z
+Completed At: 2026-10-18T17:44:33Z
+File Path: `file:///home/runner/workspace/check_vegamovies.py`
+Total Lines: 215
+Total Bytes: 7135
+Showing lines 60 to 110
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+60:     except Exception:
+61:         pass
+62: 
+63: # 3. Database counts
+64: db_file = "/home/ubuntu/radd-stream-data/vegamovies.db"
+65: db_stats = {{}}
+66: if os.path.exists(db_file):
+67:     try:
+68:         conn = sqlite3.connect(db_file)
+69:         c = conn.cursor()
+70:         c.execute("SELECT count(*) FROM posts")
+71:         db_stats["posts"] = c.fetchone()[0]
+72:         c.execute("SELECT count(*) FROM releases")
+73:         db_stats["releases"] = c.fetchone()[0]
+74:         c.execute("SELECT count(*) FROM download_sources")
+75:         db_stats["sources"] = c.fetchone()[0]
+76:         c.execute("SELECT count(*) FROM download_sources WHERE service = 'fastdl'")
+77:         db_stats["direct_gdl"] = c.fetchone()[0]
+78:         c.execute("SELECT count(*) FROM sitemap_cache WHERE site = 'vegamovies' AND scraped = 1")
+79:         db_stats["scraped_roots"] = c.fetchone()[0]
+80:         c.execute("SELECT count(*) FROM sitemap_cache WHERE site = 'vegamovies' AND scraped = 0")
+81:         db_stats["pending_roots"] = c.fetchone()[0]
+82:         c.execute("SELECT count(*) FROM sitemap_cache WHERE site = 'vegamovies'")
+83:         db_stats["total_roots"] = c.fetchone()[0]
+84:         conn.close()
+85:     except Exception as e:
+86:         db_stats["error"] = str(e)
+87: 
+88: # 4. Log tail
+89: log_lines = []
+90: log_path = "/home/ubuntu/radd-stream-data/vegamovies_scraper.log"
+91: if os.path.exists(log_path):
+92:     try:
+93:         tail = subprocess.run(["tail", "-n", "{tail_lines}", log_path], capture_output=True, text=True)
+94:         log_lines = tail.stdout.strip().splitlines()
+95:     except Exception:
+96:         pass
+97: 
+98: result = {{
+99:     "process": scraper_proc,
+100:     "status": status_data,
+101:     "db": db_stats,
+102:     "logs": log_lines,
+103: }}
+104: print(json.dumps(result))
+105: INNER
+106: """
+107: 
+108:     cmd = [
+109:         "ssh", "-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=5",
+110:         "-i", key_path, f"{ORACLE_USER}@{ORACLE_IP}",
+The above content does NOT show the entire file contents. If you need to view any lines of the file which were not shown to complete your task, call this tool again to view those lines.
+
+---
+
