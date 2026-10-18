@@ -73740,3 +73740,77 @@ The above content does NOT show the entire file contents. If you need to view an
 
 ---
 
+## 🤖 AI (Antigravity)  `2026-10-18T17:29:16Z`
+
+Created At: 2026-10-18T17:29:16Z
+Completed At: 2026-10-18T17:29:16Z
+File Path: `file:///home/runner/workspace/radd-stream/ORACLE_DEPLOYMENT.md`
+Total Lines: 458
+Total Bytes: 19741
+Showing lines 350 to 410
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+350: 
+351: [Service]
+352: Type=simple
+353: User=ubuntu
+354: Group=ubuntu
+355: WorkingDirectory=/opt/radd-stream
+356: Environment=PYTHONUNBUFFERED=1
+357: Environment=RADD_DB_PATH=/home/ubuntu/radd-stream-data/fast_fetch.db
+358: ExecStart=/usr/bin/python3 -S /opt/radd-stream/Fast_Fetch/fast_fetch.py serve --host 127.0.0.1 --port 8080
+359: Restart=on-failure
+360: RestartSec=5
+361: KillSignal=SIGINT
+362: UMask=0077
+363: NoNewPrivileges=true
+364: PrivateTmp=true
+365: ProtectSystem=full
+366: 
+367: [Install]
+368: WantedBy=multi-user.target
+369: ```
+370: 
+371: Create `/etc/nginx/conf.d/radd-stream-rate-limit.conf` (Nginx includes
+372: `conf.d/*.conf` inside its `http` context on the verified host):
+373: 
+374: ```nginx
+375: limit_req_zone $binary_remote_addr zone=radd_stream:10m rate=10r/s;
+376: ```
+377: 
+378: Create `/etc/nginx/sites-available/radd-stream` and enable it. This exposes the
+379: PWA and only the list/statistics metadata endpoints: `/client`,
+380: `/api/v1/posts`, and `/api/v1/stats`. Every other `/api/` route is denied:
+381: 
+382: ```nginx
+383: server {
+384:     listen 80 default_server;
+385:     server_name _;
+386:     client_max_body_size 1m;
+387:     limit_req zone=radd_stream burst=30 nodelay;
+388:     limit_req_status 429;
+389:     add_header X-Content-Type-Options nosniff always;
+390:     add_header Referrer-Policy strict-origin-when-cross-origin always;
+391: 
+392:     proxy_http_version 1.1;
+393:     proxy_set_header Host $host;
+394:     proxy_set_header X-Real-IP $remote_addr;
+395:     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+396:     proxy_set_header X-Forwarded-Proto $scheme;
+397:     proxy_hide_header Access-Control-Allow-Origin;
+398:     proxy_read_timeout 30s;
+399: 
+400:     location = / {
+401:         limit_except GET HEAD { deny all; }
+402:         return 302 /client;
+403:     }
+404:     location = /client {
+405:         limit_except GET HEAD { deny all; }
+406:         proxy_pass http://127.0.0.1:8080;
+407:     }
+408:     location = /api/v1/posts {
+409:         limit_except GET HEAD { deny all; }
+410:         proxy_pass http://127.0.0.1:8080;
+The above content does NOT show the entire file contents. If you need to view any lines of the file which were not shown to complete your task, call this tool again to view those lines.
+
+---
+
