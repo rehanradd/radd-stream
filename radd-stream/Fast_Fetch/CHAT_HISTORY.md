@@ -77153,3 +77153,67 @@ Output:
 
 ---
 
+## 🤖 AI (Antigravity)  `2026-10-18T18:02:05Z`
+
+Created At: 2026-10-18T18:02:05Z
+Completed At: 2026-10-18T18:02:06Z
+File Path: `file:///home/runner/workspace/radd-stream/Fast_Fetch/backup_manager.py`
+Total Lines: 371
+Total Bytes: 14077
+Showing lines 320 to 370
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+320:                 print(f"[!] R2 returned status {resp.status}", file=sys.stderr)
+321:                 return False
+322:     except Exception as e:
+323:         print(f"[!] Cloudflare R2 upload error: {e}", file=sys.stderr)
+324:         return False
+325: 
+326: 
+327: def main():
+328:     parser = argparse.ArgumentParser(description="radd-stream Cloud Backup Manager")
+329:     parser.add_argument("--dir", default="/home/ubuntu/radd-stream-data", help="Directory containing SQLite DBs")
+330:     parser.add_argument("--out", default="/tmp/radd-stream-backups", help="Directory to save backup archives")
+331:     parser.add_argument("--github", action="store_true", help="Upload to GitHub Releases")
+332:     parser.add_argument("--telegram", action="store_true", help="Upload to Telegram channel")
+333:     parser.add_argument("--r2", action="store_true", help="Upload to Cloudflare R2 bucket")
+334:     parser.add_argument("--dry-run", action="store_true", help="Snapshot & compress only, do not upload")
+335:     args = parser.parse_args()
+336: 
+337:     data_dir = Path(args.dir)
+338:     if not data_dir.exists():
+339:         # Fallback to local workspace if running locally
+340:         data_dir = Path("/home/runner/workspace/radd-stream/Fast_Fetch")
+341: 
+342:     dbs = sorted(data_dir.glob("*.db"))
+343:     if not dbs:
+344:         print(f"[!] No .db files found in {data_dir}", file=sys.stderr)
+345:         return
+346: 
+347:     print(f"[*] Found {len(dbs)} databases: {[d.name for d in dbs]}", flush=True)
+348:     out_dir = Path(args.out)
+349:     archive, manifest = create_backup_archive(dbs, out_dir)
+350:     print(f"[✓] Created backup archive: {archive} ({manifest['archive']['size_mb']} MB)", flush=True)
+351:     print(f"[*] Archive SHA-256: {manifest['archive']['sha256']}", flush=True)
+352: 
+353:     if args.dry_run:
+354:         print("[*] Dry run complete. No off-site uploads requested.", flush=True)
+355:         return
+356: 
+357:     if args.github or (not args.telegram and not args.r2 and os.environ.get("GITHUB_TOKEN")):
+358:         upload_to_github_release(archive)
+359: 
+360:     if args.telegram:
+361:         caption = f"🚀 Radd-Stream DB Backup ({manifest['archive']['size_mb']} MB)\nDatabases: {', '.join(manifest['databases'].keys())}"
+362:         upload_to_telegram(archive, caption=caption)
+363: 
+364:     if args.r2 or os.environ.get("R2_ACCOUNT_ID"):
+365:         upload_to_cloudflare_r2(archive)
+366: 
+367: 
+368: 
+369: if __name__ == "__main__":
+370:     main()
+The above content does NOT show the entire file contents. If you need to view any lines of the file which were not shown to complete your task, call this tool again to view those lines.
+
+---
+
