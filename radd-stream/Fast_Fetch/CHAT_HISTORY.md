@@ -72416,3 +72416,9 @@ Every response and question in our dialogue is written to disk, committed, and r
 
 ---
 
+## 👤 USER  `2026-10-18T16:57:51Z`
+
+what prompt i should gave any other ai if i want to continue work on this projects
+
+---
+
