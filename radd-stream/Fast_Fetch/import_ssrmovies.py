@@ -79,6 +79,10 @@ def get_ssl_context():
     return ctx
 
 
+MAX_SAFE_WORKERS = 6
+MIN_REQUEST_DELAY = 0.3
+
+
 class SSRMoviesClient:
     """HTTP Client with rate limiting and retry handling for SSRMovies & LinksZilla."""
 
@@ -452,6 +456,18 @@ def write_status(data: dict):
         pass
 
 
+def requeue_failed_urls(db_path: Path) -> int:
+    """Requeue only SSRMovies rows previously marked for no-release review."""
+    fast_fetch.DB_PATH = db_path
+    with fast_fetch._DB_WRITE_LOCK:
+        with fast_fetch.get_db() as conn:
+            cursor = conn.execute(
+                "UPDATE sitemap_cache SET scraped = 0 "
+                "WHERE site = 'ssrmovies' AND scraped = -1"
+            )
+            return cursor.rowcount
+
+
 def get_db_stats(db_path: Path) -> dict:
     """Returns database summary counts."""
     if not db_path.exists():
@@ -462,6 +478,8 @@ def get_db_stats(db_path: Path) -> dict:
         sources = conn.execute("SELECT count(*) FROM download_sources").fetchone()[0]
         sitemap_total = conn.execute("SELECT count(*) FROM sitemap_cache WHERE site = 'ssrmovies'").fetchone()[0]
         sitemap_scraped = conn.execute("SELECT count(*) FROM sitemap_cache WHERE site = 'ssrmovies' AND scraped = 1").fetchone()[0]
+        sitemap_pending = conn.execute("SELECT count(*) FROM sitemap_cache WHERE site = 'ssrmovies' AND scraped = 0").fetchone()[0]
+        sitemap_review = conn.execute("SELECT count(*) FROM sitemap_cache WHERE site = 'ssrmovies' AND scraped = -1").fetchone()[0]
         direct_r2 = conn.execute("SELECT count(*) FROM download_sources WHERE final_url LIKE '%.r2.%'").fetchone()[0]
         gdirect = conn.execute("SELECT count(*) FROM download_sources WHERE service = 'google_cdn' OR final_url LIKE '%googleusercontent%'").fetchone()[0]
         stream_count = conn.execute("SELECT count(*) FROM download_sources WHERE service = 'stream' OR final_url LIKE '%watch-online%'").fetchone()[0]
@@ -473,7 +491,8 @@ def get_db_stats(db_path: Path) -> dict:
         "sources": sources,
         "sitemap_total": sitemap_total,
         "sitemap_scraped": sitemap_scraped,
-        "sitemap_pending": sitemap_total - sitemap_scraped,
+        "sitemap_pending": sitemap_pending,
+        "sitemap_review": sitemap_review,
         "direct_r2": direct_r2,
         "gdirect": gdirect,
         "streams": stream_count,
@@ -497,7 +516,9 @@ def print_status(db_path: Path):
     print(f" ⚡ Cloudflare R2 Streams: {stats['direct_r2']:,}")
     print(f" ▶  Watch-Online Streams : {stats['streams']:,}")
     print("-" * 60)
-    print(f" Sitemap / API Cache    : {stats['sitemap_scraped']:,} / {stats['sitemap_total']:,} scraped ({stats['sitemap_pending']:,} pending)")
+    print(f" Sitemap / API Cache    : {stats['sitemap_scraped']:,} / {stats['sitemap_total']:,} scraped")
+    print(f" Pending / Review       : {stats['sitemap_pending']:,} pending, {stats['sitemap_review']:,} no-release rows")
+    print(" Review rows can be retried with --retry-failed after the current process stops.")
     print("=" * 60)
 
 
@@ -518,12 +539,12 @@ def scrape_ssrmovies_worker(
         resolve_direct=resolve_direct,
     )
     if not data or not data["releases"]:
-        # Mark as scraped to avoid infinite loops on empty/removed posts
+        # Keep parser-empty pages visible and retryable instead of treating them as success.
         with fast_fetch._DB_WRITE_LOCK:
             with fast_fetch.get_db() as conn:
-                conn.execute("UPDATE sitemap_cache SET scraped = 1 WHERE loc = ? AND site = 'ssrmovies'", (post_url,))
+                conn.execute("UPDATE sitemap_cache SET scraped = -1 WHERE loc = ? AND site = 'ssrmovies'", (post_url,))
                 conn.commit()
-        return True, 0, 0
+        return False, 0, 0
 
     rel_count = len(data["releases"])
     src_count = sum(len(r.get("sources", [])) for r in data["releases"])
@@ -535,6 +556,9 @@ def scrape_ssrmovies_worker(
                 conn.execute("UPDATE sitemap_cache SET scraped = 1 WHERE loc = ? AND site = 'ssrmovies'", (post_url,))
                 conn.commit()
 
+    if not post_id:
+        return False, 0, 0
+
     return True, rel_count, src_count
 
 
@@ -542,17 +566,27 @@ def run_ssrmovies_scraper(
     client: SSRMoviesClient,
     db_path: Path,
     limit: int | None = None,
-    workers: int = 5,
+    workers: int = 6,
     delay: float = 0.3,
     resolve_direct: bool = True,
+    retry_failed: bool = False,
 ):
     """Runs concurrent multi-worker scraping of pending SSRMovies post URLs."""
+    if not 1 <= workers <= MAX_SAFE_WORKERS:
+        raise ValueError(f"workers must be between 1 and {MAX_SAFE_WORKERS}")
+    if delay < MIN_REQUEST_DELAY:
+        raise ValueError(f"delay must be at least {MIN_REQUEST_DELAY}s")
+
     fast_fetch.DB_PATH = db_path
     fast_fetch.init_db()
 
+    if retry_failed:
+        requeued = requeue_failed_urls(db_path)
+        print(f"[*] Requeued {requeued:,} no-release rows for review/retry.", flush=True)
+
     with fast_fetch.get_db() as conn:
         q = "SELECT loc FROM sitemap_cache WHERE scraped = 0 AND site = 'ssrmovies' ORDER BY rowid ASC"
-        if limit:
+        if limit is not None:
             q += f" LIMIT {int(limit)}"
         rows = conn.execute(q).fetchall()
         pending_urls = [r[0] for r in rows]
@@ -574,6 +608,8 @@ def run_ssrmovies_scraper(
         "total": total_pending,
         "completed": 0,
         "pending": total_pending,
+        "processed": 0,
+        "review": 0,
         "releases": 0,
         "sources": 0,
         "failed": 0,
@@ -612,21 +648,25 @@ def run_ssrmovies_scraper(
             except Exception:
                 failed += 1
 
-            if (completed + failed) % 10 == 0 or (completed + failed) == total_pending:
+            processed = completed + failed
+            if processed % 10 == 0 or processed == total_pending:
                 elapsed = max(0.1, time.time() - start_time)
-                speed = (completed + failed) / elapsed
-                rem = max(0, total_pending - (completed + failed))
+                speed = processed / elapsed
+                rem = max(0, total_pending - processed)
                 eta_s = rem / speed if speed > 0 else 0
                 eta_str = time.strftime("%H:%M:%S", time.gmtime(eta_s))
+                queue_stats = get_db_stats(db_path)
                 print(
-                    f"    [{completed + failed}/{total_pending}] releases={total_rel:,} sources={total_src:,} failed={failed} "
+                    f"    [{processed}/{total_pending}] releases={total_rel:,} sources={total_src:,} failed={failed} "
                     f"speed={speed:.2f} titles/sec ETA: {eta_str}",
                     flush=True,
                 )
 
                 status_data.update({
                     "completed": completed,
-                    "pending": rem,
+                    "processed": processed,
+                    "pending": queue_stats["sitemap_pending"],
+                    "review": queue_stats["sitemap_review"],
                     "releases": total_rel,
                     "sources": total_src,
                     "failed": failed,
@@ -634,6 +674,19 @@ def run_ssrmovies_scraper(
                     "eta": eta_str,
                 })
                 write_status(status_data)
+
+    queue_stats = get_db_stats(db_path)
+    status_data.update({
+        "completed": completed,
+        "processed": completed + failed,
+        "pending": queue_stats["sitemap_pending"],
+        "review": queue_stats["sitemap_review"],
+        "releases": total_rel,
+        "sources": total_src,
+        "failed": failed,
+        "speed": round((completed + failed) / max(0.1, time.time() - start_time), 2),
+    })
+    write_status(status_data)
 
     print(f"\n[✓] SSRMovies scrape finished in {time.time() - start_time:.1f}s: {completed:,} completed, {total_rel:,} releases, {total_src:,} sources, {failed} failed.", flush=True)
     print_status(db_path)
@@ -644,8 +697,9 @@ def main():
     parser.add_argument("--sync-api", action="store_true", help="Ingest all post URLs from SSRMovies WP REST API")
     parser.add_argument("--max-pages", type=int, default=None, help="Maximum WP REST API pages to ingest")
     parser.add_argument("--limit", type=int, default=None, help="Limit number of posts to scrape")
-    parser.add_argument("--workers", type=int, default=5, help="Number of concurrent scraper workers")
-    parser.add_argument("--delay", type=float, default=0.3, help="Request rate-limit delay in seconds")
+    parser.add_argument("--workers", type=int, default=6, help="Worker threads (safe range: 1-6; default: 6)")
+    parser.add_argument("--delay", type=float, default=0.3, help="Request rate-limit delay in seconds (minimum: 0.3)")
+    parser.add_argument("--retry-failed", action="store_true", help="Requeue previously reviewed no-release URLs")
     parser.add_argument("--base-url", type=str, default=DEFAULT_BASE_URL, help="Base domain for SSRMovies")
     parser.add_argument("--db-path", type=Path, default=DEFAULT_DB_PATH, help="Path to staging SQLite database")
     parser.add_argument("--status", action="store_true", help="Print staging database stats and exit")
@@ -671,6 +725,7 @@ def main():
         workers=args.workers,
         delay=args.delay,
         resolve_direct=not args.no_resolve_direct,
+        retry_failed=args.retry_failed,
     )
 
 

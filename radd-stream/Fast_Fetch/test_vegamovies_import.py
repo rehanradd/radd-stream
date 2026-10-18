@@ -323,5 +323,35 @@ class TestVegamoviesImport(unittest.TestCase):
                 temp_db.unlink()
 
 
+class TestVegamoviesRetryQueue(unittest.TestCase):
+    def test_requeue_failed_urls_only_resets_vegamovies_review_rows(self):
+        original_db_path = fast_fetch.DB_PATH
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = Path(temp_dir) / "retry-test.db"
+            try:
+                fast_fetch.DB_PATH = db_path
+                fast_fetch.init_db()
+                with fast_fetch.get_db() as conn:
+                    conn.executemany(
+                        "INSERT INTO sitemap_cache (loc, slug, scraped, site) VALUES (?, ?, ?, ?)",
+                        [
+                            ("https://vega.test/needs-review/", "needs-review", -1, "vegamovies"),
+                            ("https://vega.test/pending/", "pending", 0, "vegamovies"),
+                            ("https://rog.test/needs-review/", "needs-review", -1, "rogmovies"),
+                            ("https://vega.test/done/", "done", 1, "vegamovies"),
+                        ],
+                    )
+
+                self.assertEqual(import_vegamovies.requeue_failed_urls(db_path), 1)
+                with sqlite3.connect(db_path) as conn:
+                    rows = dict(conn.execute("SELECT loc, scraped FROM sitemap_cache"))
+                self.assertEqual(rows["https://vega.test/needs-review/"], 0)
+                self.assertEqual(rows["https://vega.test/pending/"], 0)
+                self.assertEqual(rows["https://rog.test/needs-review/"], -1)
+                self.assertEqual(rows["https://vega.test/done/"], 1)
+            finally:
+                fast_fetch.DB_PATH = original_db_path
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -288,3 +288,14 @@ routes; restrict the bind and public routes before enabling the public proxy.
 - Replit tests: 75 targeted tests passed. `test_all_sites.py` is network-dependent and its broad-discovery run timed out while some sites were unavailable.
 - Pushed the verified changes to GitHub branch `agent/staging-merge-approval-gate-20261018` at commit `d6e8d18`; it is not merged into `main`.
 - No Oracle files or services were changed. Deployment was withheld because the runbook requires independent host-key verification; no staging database was merged or modified.
+
+### Session 19 — Replit Agent — 2026-10-18
+**Crawler speed and completeness handoff:**
+- Latest read-only Oracle snapshot: only Vegamovies (PID 76635, 5 workers, 0.3s delay) was still running at about 0.15 titles/sec; its DB had 11,471 scraped, 2,615 pending, and 230 `scraped=-1` review rows. Do not interrupt it.
+- Rogmovies had stopped with 7,840 scraped and 28 review rows; its status file did not count those rows as failures. SSRMovies had stopped with 26,993 scraped and 7 pending rows, which remain resumable.
+- Likely bottleneck is network/bridge resolution rather than CPU: a title can trigger multiple sequential fetches and retries. The current run was not tuned or restarted.
+- Local code now defaults to six workers (hard cap six; minimum 0.3s per-worker delay), reports review rows, and supports explicit `--retry-failed`. SSR empty parses are now marked for review rather than successful. This is not deployed to Oracle.
+- Python compilation and the three importer test suites passed (20 tests); two SQLite `ResourceWarning`s appeared during the new SSR test.
+- Previous policy and new crawler changes are pushed to `agent/staging-merge-approval-gate-20261018` at `d109c37`; the branch is not merged into `main`.
+- No Oracle files/services or staging databases were changed. Never merge any staging DB without the user's specific instruction, verified source/target/counts/backup plan, and a separate explicit confirmation.
+- Next: monitor the existing Vegamovies process read-only. Do not deploy until Oracle host identity is independently verified.

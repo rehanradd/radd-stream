@@ -216,5 +216,55 @@ class TestSSRMoviesImport(unittest.TestCase):
             self.assertEqual(scraped_flag, 1)
 
 
+class TestSSRMoviesFailureReview(unittest.TestCase):
+    def setUp(self):
+        self.original_db_path = fast_fetch.DB_PATH
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.db_path = Path(self.temp_dir.name) / "retry-test.db"
+        fast_fetch.DB_PATH = self.db_path
+        fast_fetch.init_db()
+
+    def tearDown(self):
+        fast_fetch.DB_PATH = self.original_db_path
+        self.temp_dir.cleanup()
+
+    def test_empty_parse_is_reviewable_and_can_be_requeued(self):
+        test_url = "https://ssrmovies.surf/no-release-page/"
+        with fast_fetch.get_db() as conn:
+            conn.execute(
+                "INSERT INTO sitemap_cache (loc, slug, scraped, site) VALUES (?, ?, 0, 'ssrmovies')",
+                (test_url, "no-release-page"),
+            )
+
+        client = import_ssrmovies.SSRMoviesClient(base_url="https://ssrmovies.surf")
+        with patch.object(client, "get_text", return_value=(200, test_url, "<html></html>")):
+            with patch.object(
+                import_ssrmovies,
+                "extract_post_data_ssrmovies_enhanced",
+                return_value={"releases": []},
+            ):
+                result = import_ssrmovies.scrape_ssrmovies_worker(
+                    test_url,
+                    client,
+                    resolve_direct=False,
+                )
+
+        self.assertEqual(result, (False, 0, 0))
+        with sqlite3.connect(self.db_path) as conn:
+            scraped = conn.execute(
+                "SELECT scraped FROM sitemap_cache WHERE loc = ?",
+                (test_url,),
+            ).fetchone()[0]
+        self.assertEqual(scraped, -1)
+
+        self.assertEqual(import_ssrmovies.requeue_failed_urls(self.db_path), 1)
+        with sqlite3.connect(self.db_path) as conn:
+            scraped = conn.execute(
+                "SELECT scraped FROM sitemap_cache WHERE loc = ?",
+                (test_url,),
+            ).fetchone()[0]
+        self.assertEqual(scraped, 0)
+
+
 if __name__ == "__main__":
     unittest.main()

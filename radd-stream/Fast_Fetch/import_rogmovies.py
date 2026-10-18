@@ -77,6 +77,10 @@ def get_ssl_context():
     return ctx
 
 
+MAX_SAFE_WORKERS = 6
+MIN_REQUEST_DELAY = 0.3
+
+
 class RogmoviesClient:
     """HTTP Client with rate limiting and retry handling for Rogmovies & Nexdrive."""
 
@@ -493,16 +497,38 @@ def save_post_record(data: dict, db_path: Path) -> int:
     return post_id
 
 
+def requeue_failed_urls(db_path: Path) -> int:
+    """Requeue only Rogmovies rows previously marked for no-release review."""
+    fast_fetch.DB_PATH = db_path
+    with fast_fetch._DB_WRITE_LOCK:
+        with fast_fetch.get_db() as conn:
+            cursor = conn.execute(
+                "UPDATE sitemap_cache SET scraped = 0 "
+                "WHERE site = 'rogmovies' AND scraped = -1"
+            )
+            return cursor.rowcount
+
+
 def run_rogmovies_scraper(
     base_url: str = DEFAULT_BASE_URL,
     db_path: Path = DEFAULT_DB_PATH,
     limit: int | None = None,
-    workers: int = 5,
+    workers: int = 6,
     delay: float = 0.3,
+    retry_failed: bool = False,
 ):
     """Worker pool orchestrator for scraping Rogmovies titles into staging DB."""
+    if not 1 <= workers <= MAX_SAFE_WORKERS:
+        raise ValueError(f"workers must be between 1 and {MAX_SAFE_WORKERS}")
+    if delay < MIN_REQUEST_DELAY:
+        raise ValueError(f"delay must be at least {MIN_REQUEST_DELAY}s")
+
     fast_fetch.DB_PATH = db_path
     fast_fetch.init_db()
+
+    if retry_failed:
+        requeued = requeue_failed_urls(db_path)
+        print(f"[*] Requeued {requeued:,} no-release rows for review/retry.", flush=True)
 
     client = RogmoviesClient(base_url, request_interval=delay)
 
@@ -538,6 +564,7 @@ def run_rogmovies_scraper(
         "releases": 0,
         "sources": 0,
         "failed": 0,
+        "skipped": 0,
         "start_time": time.time(),
     }
 
@@ -560,7 +587,11 @@ def run_rogmovies_scraper(
         if not data or not data.get("releases"):
             with fast_fetch._DB_WRITE_LOCK:
                 with fast_fetch.get_db() as conn:
-                    conn.execute("UPDATE sitemap_cache SET scraped = -1 WHERE loc = ?", (url,))
+                    conn.execute(
+                        "UPDATE sitemap_cache SET scraped = -1 "
+                        "WHERE loc = ? AND site = 'rogmovies'",
+                        (url,),
+                    )
             return {"skipped": True, "reason": "no_releases"}
 
         save_post_record(data, db_path)
@@ -587,14 +618,18 @@ def run_rogmovies_scraper(
                 counters["sources"] += res.get("sources", 0)
             elif res.get("failed"):
                 counters["failed"] += 1
+            elif res.get("skipped"):
+                counters["skipped"] += 1
 
-            if counters["completed"] % 10 == 0 or counters["completed"] == total_tasks:
+            processed = counters["completed"] + counters["failed"] + counters["skipped"]
+            if processed % 10 == 0 or processed == total_tasks:
                 elapsed = time.time() - counters["start_time"]
-                speed = counters["completed"] / max(1, elapsed)
+                speed = processed / max(1, elapsed)
                 print(
-                    f"[{counters['completed']}/{total_tasks}] "
+                    f"[{processed}/{total_tasks}] "
                     f"releases={counters['releases']} sources={counters['sources']} "
-                    f"failed={counters['failed']} speed={speed:.2f} titles/sec",
+                    f"failed={counters['failed']} review={counters['skipped']} "
+                    f"speed={speed:.2f} titles/sec",
                     flush=True,
                 )
                 try:
@@ -605,6 +640,9 @@ def run_rogmovies_scraper(
                             "releases": counters["releases"],
                             "sources": counters["sources"],
                             "failed": counters["failed"],
+                            "skipped": counters["skipped"],
+                            "processed": processed,
+                            "pending": max(0, total_tasks - counters["completed"] - counters["skipped"]),
                             "updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                         }, sf, indent=2)
                 except Exception:
@@ -630,6 +668,10 @@ def get_status_summary(db_path: Path):
     scraped = c.fetchone()[0]
     c.execute("SELECT count(*) FROM sitemap_cache WHERE site = 'rogmovies' AND scraped = 0")
     pending = c.fetchone()[0]
+    c.execute("SELECT count(*) FROM sitemap_cache WHERE site = 'rogmovies' AND scraped = -1")
+    review = c.fetchone()[0]
+    c.execute("SELECT count(*) FROM sitemap_cache WHERE site = 'rogmovies'")
+    total = c.fetchone()[0]
     conn.close()
 
     print("\n" + "=" * 55)
@@ -640,6 +682,8 @@ def get_status_summary(db_path: Path):
     print(f" Sources Mapped  : {sources:,}")
     print(f" Scraped Titles  : {scraped:,}")
     print(f" Pending Titles  : {pending:,}")
+    print(f" Needs Review    : {review:,} (scraped=-1; retry with --retry-failed)")
+    print(f" Discovered URLs : {total:,}")
     print("=" * 55 + "\n")
 
 
@@ -649,8 +693,9 @@ def parse_args():
     parser.add_argument("--db-path", default=str(DEFAULT_DB_PATH), help="Target SQLite staging database")
     parser.add_argument("--sync-sitemap", action="store_true", help="Download and sync sitemap XML to database")
     parser.add_argument("--limit", type=int, default=None, help="Limit number of titles to scrape")
-    parser.add_argument("--workers", type=int, default=5, help="Worker threads (default: 5)")
+    parser.add_argument("--workers", type=int, default=6, help="Worker threads (safe range: 1-6; default: 6)")
     parser.add_argument("--delay", type=float, default=0.3, help="Delay between requests per worker (s)")
+    parser.add_argument("--retry-failed", action="store_true", help="Requeue previously reviewed no-release URLs")
     parser.add_argument("--status", action="store_true", help="Print database counts and exit")
     return parser.parse_args()
 
@@ -675,6 +720,7 @@ def main():
         limit=args.limit,
         workers=args.workers,
         delay=args.delay,
+        retry_failed=args.retry_failed,
     )
 
 

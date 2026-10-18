@@ -14,12 +14,13 @@ target, current row counts, and verified backup/rollback plan and obtain a
 separate explicit confirmation. The guarded CLI also requires
 `--owner-authorized`. If confirmation is absent or unclear, stop.
 
-- **Goal:** Continue read-only monitoring of the three Oracle staging crawlers and preserve the project state without merging any databases.
+- **Goal:** Safely improve crawler throughput and make every pending or parser-empty URL visible and retryable; preserve the no-merge rule.
 - **Milestones & Breakthroughs:**
-  1. **Oracle Background Crawlers Active**:
-     - Vegamovies (`import_vegamovies.py`, PID 76635) is running. Read-only DB check: 4,297 / 14,316 roots scraped, 9,807 pending. Its run-status file reports 3,890 / 13,726 completed and 5 failures; counters are per-run and can differ from cumulative DB counts.
-     - Rogmovies (`import_rogmovies.py`, PID 77286) is running. Read-only DB check: 3,651 / 7,868 roots scraped, 4,204 pending; run status reports 3,650 completed and 0 failures.
-     - HDTVB (`import_hdtvb.py`) and MultiMovies full scrapes both 100% completed.
+  1. **Latest read-only Oracle crawler check**:
+     - Vegamovies (PID 76635; `--workers 5 --delay 0.3`) was the only crawler still running. Its log showed about 0.15 titles/sec. DB counts: 11,471 scraped, 2,615 pending, 230 marked `scraped=-1` for review. Run-status counters differ from cumulative DB counts; trust the DB for current queue state.
+     - Rogmovies was no longer running: 7,840 scraped, 0 pending, 28 `scraped=-1` review rows. Its status file incorrectly reports 0 failures.
+     - SSRMovies was no longer running: 26,993 scraped, 7 pending, 0 review rows. Those 7 remain resumable (`scraped=0`).
+     - Do not stop or restart the active Vegamovies process. No staging DB was changed or merged.
   2. **SSRMovies Live Domain & WP REST API Discovery**:
      - Identified active 2026 production domain **`https://ssrmovies.surf`** (HTTP 301 from `ssrmovies.gripe`).
      - Verified open WordPress REST API at `https://ssrmovies.surf/wp-json/wp/v2/posts?per_page=100` indexing **27,362 total posts** across 274 pages (`X-WP-Total: 27362`).
@@ -31,18 +32,15 @@ separate explicit confirmation. The guarded CLI also requires
      - LinksZilla mirror unwrapper resolving into Google CDN (`lh3.googleusercontent.com`), 10Gbps Cloudflare R2 (`r2.cloudflarestorage.com`), PixelDrain, and web stream (`watch-online.mom`).
   4. **Live Terminal Monitor `check_ssrmovies.py`**:
      - Remote SSH live monitor querying process metrics, SQLite counts, and log tail.
-  5. **Oracle VM Production Deployment & Launch**:
-     - Deployed `import_ssrmovies.py` and `test_ssrmovies_import.py` to `/opt/radd-stream/Fast_Fetch/` on Oracle VM (`92.4.95.252`). All unit tests passed 100% on the VM.
-     - Completed full catalog ingestion of 27,000+ titles into `/home/ubuntu/radd-stream-data/ssrmovies.db`.
-     - Verified system resource capacity: CPU load at 0.37 (plenty of idle capacity), 10 GiB available RAM, 165 GB available disk space.
-     - SSRMovies (`import_ssrmovies.py`, PID 80318) is running. Read-only DB check: 936 / 27,000 roots scraped, 26,064 pending; run status reports 930 completed and 0 failures.
-     - Already resolving live direct Google CDN (`lh3`) and Cloudflare R2 streams.
-  6. **Test Verification**:
-     - Targeted suite passed 75 tests: database 36, VIDOUT 6, merge guard 3, HDTVB 4, MultiMovies 9, Rogmovies 6, SSRMovies 5, and Vegamovies 6.
-- **Verification:** Targeted tests and Python compilation passed. `setup_check.py` passed in the previous verification. Broad unittest discovery also runs `test_all_sites.py`, a live external-site audit; it timed out while some sites were unavailable, so it is not an offline unit-test result. A read-only SSH query matched the recorded host fingerprints and confirmed all three crawlers are running. No staging database was merged.
-- **GitHub:** The reviewed policy, merge guard, HDTVB metadata update, and continuity/domain docs were pushed to `agent/staging-merge-approval-gate-20261018` at commit `d6e8d18`. The branch is not merged into `main`.
-- **Oracle:** No files or services were changed. The deployment runbook requires independent host-key verification before production file changes; the saved fingerprints are only a TOFU consistency check. No database was merged or modified.
-- **Next action:** Continue read-only monitoring of the three crawlers. Even after they finish, do not merge anything automatically. Only consider a specific merge after the user explicitly requests it, the source/target/counts/backup plan are presented, and the user separately confirms.
+  2. **Safe crawler changes prepared locally**:
+     - All three importers now default to 6 workers, cap concurrency at 6, and keep the 0.3s minimum request delay.
+     - Added explicit `--retry-failed` for `scraped=-1` review rows; SSR empty parses now stay reviewable instead of being marked successful.
+     - Progress/status output distinguishes pending work from review rows. HTTP failures remain pending for a later resume.
+     - These changes are not deployed to Oracle; the active Vegamovies process still runs its existing 5-worker command.
+  3. **Verification:** Python compilation passed and the three targeted importer suites passed 20 tests. The suite emitted two SQLite `ResourceWarning`s during the SSR review test, but all assertions passed.
+- **GitHub:** Policy and crawler changes are pushed to review branch `agent/staging-merge-approval-gate-20261018` at `d109c37`. The branch is not merged into `main`.
+- **Oracle:** No files/services changed; no database was merged or modified. Independent Oracle host-key verification is still required before production writes.
+- **Next action:** Continue read-only monitoring; do not stop the active crawler, deploy to Oracle, or merge a staging database without the required verification and separate user approval.
 
 ### 2026-10-16 — Android App MVP & CI pipeline implementation
 - **Goal:** Implement full Android app flow (navigation, details, player, local favorites, settings) and establish root GitHub Actions CI.
