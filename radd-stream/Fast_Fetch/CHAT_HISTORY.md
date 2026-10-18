@@ -76745,3 +76745,47 @@ The above content does NOT show the entire file contents. If you need to view an
 
 ---
 
+## 🤖 AI (Antigravity)  `2026-10-18T17:56:25Z`
+
+Created At: 2026-10-18T17:56:25Z
+Completed At: 2026-10-18T17:56:25Z
+The following changes were made by the replace_file_content tool to: /home/runner/workspace/radd-stream/Fast_Fetch/test_backup_manager.py. If relevant, proactively run terminal commands to execute this code for the USER. Don't ask for permission.
+[diff_block_start]
+@@ -55,7 +55,14 @@
+         self.assertIn("archive", manifest)
+         self.assertGreater(archive_path.stat().st_size, 0)
+ 
++    def test_r2_sigv4_signing(self):
++        from backup_manager import _get_aws4_signing_key, _sign_aws4
++        key = _get_aws4_signing_key("testsecret", "20261018", "auto", "s3")
++        self.assertIsInstance(key, bytes)
++        self.assertEqual(len(key), 32)
++
+ 
+ if __name__ == "__main__":
+     unittest.main()
++
+ 
+[diff_block_end]
+
+Please note that the above snippet only shows the MODIFIED lines from the last change. It shows up to 3 lines of unchanged lines before and after the modified lines. The actual file contents may have many more lines not shown.
+
+---
+
+## 🤖 AI (Antigravity)  `2026-10-18T17:56:28Z`
+
+Created At: 2026-10-18T17:56:28Z
+Completed At: 2026-10-18T17:56:29Z
+
+The command exited with code 0.
+Output:
+.[*] Safely vacuuming test1.db...
+[*] Creating compressed archive unit-test_20261018_175629.tar.gz...
+...
+----------------------------------------------------------------------
+Ran 4 tests in 0.266s
+
+OK
+
+---
+
