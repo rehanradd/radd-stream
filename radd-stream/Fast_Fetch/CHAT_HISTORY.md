@@ -73602,3 +73602,141 @@ The above content does NOT show the entire file contents. If you need to view an
 
 ---
 
+## 🤖 AI (Antigravity)  `2026-10-18T17:29:08Z`
+
+Created At: 2026-10-18T17:29:08Z
+Completed At: 2026-10-18T17:29:08Z
+File Path: `file:///home/runner/workspace/radd-stream/ORACLE_DEPLOYMENT.md`
+Total Lines: 458
+Total Bytes: 19741
+Showing lines 60 to 120
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+60: |---|---|
+61: | `ORACLE_SSH_KEY` | SSH private key for the Oracle `ubuntu` account |
+62: | `GITHUB_TOKEN` | GitHub repository access from Replit |
+63: 
+64: Verify only whether the variable names exist; never read or print their values.
+65: Do not put values in this file, source code, Git URLs, command-line arguments,
+66: logs, GitHub Actions artifacts, or chat. Do not copy `GITHUB_TOKEN` to the
+67: Oracle VM. If a variable is missing, report its name and wait; do not ask the
+68: user to move it to Secrets or paste its value in chat.
+69: 
+70: ## SSH host-key fingerprint record
+71: 
+72: For production changes or deployment, compare the server fingerprint with
+73: Oracle Cloud Console before connecting, and record the independently confirmed
+74: key type, fingerprint, and verification date here. For a user-authorized
+75: read-only inspection when Console verification is unavailable, follow the
+76: limited TOFU procedure recorded below and label it as such. A fingerprint
+77: learned only through `ssh-keyscan` is not independent verification.
+78: 
+79: The following keys were observed from `92.4.95.252:22` on 2026-10-16 and
+80: re-observed during a read-only SSH session on 2026-10-17:
+81: 
+82: | Key type | Observed SHA256 fingerprint | Status |
+83: |---|---|---|
+84: | ED25519 | `SHA256:3FUGOWcK08jLYM6en6+lz806EsUI/iBWGAY0C620qME` | Matched guest key file in the same session; not Console-verified |
+85: | ECDSA | `SHA256:VL9EVg/rDaO3ANsu9dlxi/qGuWVO5k/Bq8x0108IlLk` | Matched guest key file in the same session; not Console-verified |
+86: | RSA | `SHA256:qXeS+ioA/9zF+olehkbqzoGHootLRMJQFMAWL7nKttQ` | Matched guest key file in the same session; not Console-verified |
+87: 
+88: The owner asked for the read-only inspection to proceed without requiring them
+89: to obtain a fingerprint. The first connection therefore used temporary
+90: `StrictHostKeyChecking=accept-new`. The fingerprints presented by SSH matched
+91: the corresponding `/etc/ssh/ssh_host_*_key.pub` fingerprints read through that
+92: same connection. This is a TOFU consistency check, not independent
+93: authentication and not confirmation from Oracle Cloud Console. Use the saved
+94: fingerprints to detect changes on later read-only checks; stop if a key changes.
+95: This record does not authorize production changes or deployment.
+96: 
+97: ## Latest read-only Oracle check — 2026-10-17
+98: 
+99: - Host: `instance-20260424-0405`, Ubuntu 24.04.4 LTS; `sudo -n` works for
+100:   `ubuntu`.
+101: - `radd-stream.service`, Nginx, and Supervisor were active. The service runs
+102:   `/opt/radd-stream/Fast_Fetch/fast_fetch.py serve --host 127.0.0.1 --port 8080`.
+103: - No application `.git` metadata was found in `/opt/radd-stream` or the
+104:   alternate application locations searched. The only `.git` directory found
+105:   was the unrelated `/home/ubuntu/.nvm/.git`.
+106: - `/opt/radd-stream/Fast_Fetch/import_multimovies.py` and
+107:   `test_multimovies_import.py` are absent. The deployed
+108:   `/opt/radd-stream/Fast_Fetch/fast_fetch.py` SHA-256 is
+109:   `2c2b41143dbd57c3735ff396abb0270a7961cfa67d9b214cb34eebb879d07161`.
+110: - That source hash matched none of the 11 `fast_fetch.py` revisions compared
+111:   from the fetched Git refs. The deployed file's exact commit cannot be
+112:   established from the Oracle filesystem.
+113: - This inspection was read-only. No app files, database, service, or Nginx
+114:   settings were changed.
+115: 
+116: ## Connect from Replit to Oracle
+117: 
+118: Run this from the Replit Shell. The key is normalized into a temporary
+119: permission-restricted file because the configured PEM body may need line
+120: wrapping. The script does not print the key and removes its temporary file on
+The above content does NOT show the entire file contents. If you need to view any lines of the file which were not shown to complete your task, call this tool again to view those lines.
+
+---
+
+## 🤖 AI (Antigravity)  `2026-10-18T17:29:11Z`
+
+Created At: 2026-10-18T17:29:11Z
+Completed At: 2026-10-18T17:29:12Z
+File Path: `file:///home/runner/workspace/radd-stream/ORACLE_DEPLOYMENT.md`
+Total Lines: 458
+Total Bytes: 19741
+Showing lines 120 to 170
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+120: wrapping. The script does not print the key and removes its temporary file on
+121: exit.
+122: 
+123: ```bash
+124: set +x
+125: umask 077
+126: key_file="$(mktemp)"
+127: trap 'rm -f "$key_file"' EXIT
+128: 
+129: python3 - "$key_file" <<'PY'
+130: import os
+131: import re
+132: import sys
+133: 
+134: raw = os.environ.get("ORACLE_SSH_KEY", "")
+135: match = re.fullmatch(
+136:     r"(-----BEGIN ([A-Z0-9 ]+)-----)(.*?)(-----END \2-----)",
+137:     raw,
+138:     re.S,
+139: )
+140: if not match:
+141:     raise SystemExit("ORACLE_SSH_KEY is not a supported PEM private key.")
+142: 
+143: header, _, body, footer = match.groups()
+144: body = "".join(body.split())
+145: if not re.fullmatch(r"[A-Za-z0-9+/=]+", body):
+146:     raise SystemExit("The PEM body is invalid.")
+147: 
+148: with open(sys.argv[1], "w", encoding="ascii") as key_file:
+149:     key_file.write(
+150:         header + "\n"
+151:         + "\n".join(body[i:i + 64] for i in range(0, len(body), 64))
+152:         + "\n" + footer + "\n"
+153:     )
+154: PY
+155: chmod 600 "$key_file"
+156: 
+157: ssh -i "$key_file" -p 22 \
+158:   -o IdentitiesOnly=yes \
+159:   -o BatchMode=yes \
+160:   -o StrictHostKeyChecking=accept-new \
+161:   ubuntu@92.4.95.252 \
+162:   'hostname; id -un; sudo -n true'
+163: ```
+164: 
+165: `accept-new` records a new key; it does not independently verify the server
+166: identity. On a later read-only connection, compare the presented key type and
+167: fingerprint to the saved record before proceeding. Stop if it changes. Do not
+168: use `StrictHostKeyChecking=no` or disable host-key checks. The saved record is
+169: TOFU, not OCI Console verification.
+170: 
+The above content does NOT show the entire file contents. If you need to view any lines of the file which were not shown to complete your task, call this tool again to view those lines.
+
+---
+
