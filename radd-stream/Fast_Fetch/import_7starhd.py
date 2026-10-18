@@ -314,17 +314,34 @@ def extract_post_data_7starhd(
     slug = post_url.rstrip("/").split("/")[-1]
 
     # 1. Post title & metadata
-    title_m = re.search(r"<title>(.*?)</title>", page_html, re.I)
-    raw_title = (
-        title_m.group(1)
-        .split(" – 7StarHD")[0]
-        .split(" - 7StarHD")[0]
-        .split(" | ")[0]
-        .strip()
-        if title_m
-        else slug
-    )
-    raw_title = html.unescape(raw_title)
+    # 7StarHD and 10xflix put the full post title in the first <h2> heading (e.g. <h2>The Punisher (2026)...</h2>)
+    # The <title> tag is static generic site branding ("7StarHD" or "10xflix").
+    raw_title = None
+    h2_matches = re.findall(r"<h2[^>]*>(.*?)</h2>", page_html, re.I | re.S)
+    for h2_candidate in h2_matches:
+        cand = re.sub(r"<[^>]+>", "", h2_candidate).strip()
+        cand_lower = cand.lower()
+        if cand and cand_lower not in ("7starhd", "10xflix", "screenshots", "download links", "trailer"):
+            raw_title = html.unescape(cand)
+            break
+
+    if not raw_title:
+        title_m = re.search(r"<title>(.*?)</title>", page_html, re.I)
+        if title_m:
+            cand = (
+                title_m.group(1)
+                .split(" – 7StarHD")[0]
+                .split(" - 7StarHD")[0]
+                .split(" – 10xflix")[0]
+                .split(" - 10xflix")[0]
+                .split(" | ")[0]
+                .strip()
+            )
+            if cand.lower() not in ("7starhd", "10xflix", ""):
+                raw_title = html.unescape(cand)
+
+    if not raw_title:
+        raw_title = slug.replace("-", " ").title()
 
     year_m = re.search(r"\b(19\d{2}|20\d{2})\b", raw_title)
     year = int(year_m.group(1)) if year_m else None
