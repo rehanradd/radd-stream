@@ -89756,3 +89756,76 @@ Output:
 
 ---
 
+## 🤖 AI (Antigravity)  `2026-10-19T12:56:56Z`
+
+Created At: 2026-10-19T12:56:56Z
+Completed At: 2026-10-19T12:56:57Z
+File Path: `file:///home/runner/workspace/radd-stream/Fast_Fetch/import_10xflix.py`
+Total Lines: 789
+Total Bytes: 29521
+Showing lines 1 to 60
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+1: #!/usr/bin/env python3
+2: """
+3: import_10xflix.py — Dedicated staging importer and scraper for 10xflix (https://10xflix.bond).
+4: 
+5: Key Features:
+6:   1. Dedicated staging SQLite database: 10xflix.db (strictly isolated from fast_fetch.db).
+7:   2. Full WP REST API Synchronization:
+8:      - Ingests all ~17,604 titles across 177 pages via /wp-json/wp/v2/posts?per_page=100&_embed=1.
+9:      - Captures featured media posters, categories, slugs, and timestamps.
+10:   3. Clean Title & Media Metadata Normalization:
+11:      - Detects season (S01..S99) and episode (E01..E99) from title/slug.
+12:      - Generates clean canonical keys for deduplication.
+13:   4. MobileJSR Multi-Mirror Link Resolution:
+14:      - Extracts resolution tiers (4K 2160p, 1080p, 720p, 480p) and exact file sizes (e.g. 2.02GB, 997MB).
+15:      - Unwraps MobileJSR gateway links into direct streaming sources:
+16:        * HubCloud 10Gbps Fast Server (gpdl*.hubcloud.ist)
+17:        * HubDrive Cloud mirrors
+18:        * FilePress Google Drive direct CDN
+19:        * 1fichier High-Speed mirrors
+20:        * GoFile Cloud storage
+21:        * Stream Player streams (Voe, Streamtape)
+22:   5. Resumable via sitemap_cache table in staging SQLite database.
+23:   6. 100% Python Standard Library. Zero external pip packages.
+24: 
+25: Usage:
+26:     python Fast_Fetch/import_10xflix.py --sync-api --max-pages 5       # Ingest first 5 pages (500 titles)
+27:     python Fast_Fetch/import_10xflix.py --sync-api                     # Ingest entire catalog (~17,604 titles)
+28:     python Fast_Fetch/import_10xflix.py --limit 10                     # Scrape 10 pending titles
+29:     python Fast_Fetch/import_10xflix.py --workers 5 --delay 0.3        # Full background crawler
+30:     python Fast_Fetch/import_10xflix.py --status                       # Show staging DB metrics
+31: """
+32: 
+33: from __future__ import annotations
+34: 
+35: import argparse
+36: import concurrent.futures
+37: import html
+38: import json
+39: import os
+40: import re
+41: import signal
+42: import sqlite3
+43: import ssl
+44: import sys
+45: import threading
+46: import time
+47: import urllib.error
+48: import urllib.parse
+49: import urllib.request
+50: from pathlib import Path
+51: 
+52: # Add Fast_Fetch to sys.path
+53: BASE_DIR = Path(__file__).parent.resolve()
+54: if str(BASE_DIR) not in sys.path:
+55:     sys.path.insert(0, str(BASE_DIR))
+56: 
+57: import fast_fetch
+58: 
+59: DEFAULT_BASE_URL = "https://10xflix.bond"
+60: WP_API_URL = f"{DEFAULT_BASE_URL}/wp-json/wp/v2/posts"
+The above content does NOT show the entire file contents. If you need to view any lines of the file which were not shown to complete your task, call this tool again to view those lines.
+
+---
+
