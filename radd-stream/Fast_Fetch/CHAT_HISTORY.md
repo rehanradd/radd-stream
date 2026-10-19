@@ -86991,3 +86991,171 @@ The above content does NOT show the entire file contents. If you need to view an
 
 ---
 
+## 🤖 AI (Antigravity)  `2026-10-19T12:17:18Z`
+
+Created At: 2026-10-19T12:17:18Z
+Completed At: 2026-10-19T12:17:18Z
+File Path: `file:///home/runner/workspace/radd-stream/Fast_Fetch/import_katmoviehd.py`
+Total Lines: 980
+Total Bytes: 37600
+Showing lines 690 to 760
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+690:                 continue
+691: 
+692:             for s in r.get("sources", []):
+693:                 cur.execute(
+694:                     """
+695:                     INSERT INTO sources (
+696:                         release_id, source_name, service, resource_id,
+697:                         source_url, final_url, is_temporary, quality
+698:                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+699:                     """,
+700:                     (
+701:                         release_id,
+702:                         s["source_name"],
+703:                         s["service"],
+704:                         s["resource_id"],
+705:                         s["source_url"],
+706:                         s["final_url"],
+707:                         s["is_temporary"],
+708:                         s["quality"],
+709:                     ),
+710:                 )
+711: 
+712:         conn.commit()
+713:     return True
+714: 
+715: 
+716: def sync_sveltekit_api_to_db(db_path: Path, max_pages: int | None = None) -> int:
+717:     """Syncs the entire KatMovieHD catalog via SvelteKit __data.json pagination into sitemap_cache."""
+718:     init_staging_db(db_path)
+719:     client = KatMovieHDClient(request_interval=0.2)
+720: 
+721:     print(f"[*] Starting KatMovieHD catalog sync from {DEFAULT_BASE_URL}/__data.json...", flush=True)
+722:     page = 1
+723:     total_synced = 0
+724:     empty_pages_streak = 0
+725: 
+726:     while not STOP_REQUESTED:
+727:         if max_pages and page > max_pages:
+728:             print(f"[*] Reached requested max_pages limit ({max_pages}). Stopping sync.", flush=True)
+729:             break
+730: 
+731:         query_url = f"{DEFAULT_BASE_URL}/__data.json?page={page}"
+732:         t0 = time.time()
+733:         code, _, resp_text = client.get_text(query_url, timeout=15)
+734:         dt = time.time() - t0
+735: 
+736:         if code != 200 or not resp_text:
+737:             print(f"[!] Page {page} returned status {code}. Stopping sync.", flush=True)
+738:             break
+739: 
+740:         items = parse_sveltekit_chunk(resp_text)
+741:         if not items:
+742:             empty_pages_streak += 1
+743:             if empty_pages_streak >= 3:
+744:                 print(f"[*] 3 consecutive empty pages reached at page {page}. Catalog sync complete.", flush=True)
+745:                 break
+746:             page += 1
+747:             continue
+748: 
+749:         empty_pages_streak = 0
+750:         records = []
+751:         for it in items:
+752:             slug = it.get("slug")
+753:             if not slug:
+754:                 continue
+755:             permalink = f"{DEFAULT_BASE_URL}/{slug}"
+756:             lastmod = it.get("created")
+757:             raw_json_str = json.dumps(it)
+758:             records.append((permalink, lastmod, slug, 0, "katmoviehd", raw_json_str))
+759: 
+760:         if records:
+The above content does NOT show the entire file contents. If you need to view any lines of the file which were not shown to complete your task, call this tool again to view those lines.
+
+---
+
+## 🤖 AI (Antigravity)  `2026-10-19T12:17:21Z`
+
+Created At: 2026-10-19T12:17:21Z
+Completed At: 2026-10-19T12:17:21Z
+File Path: `file:///home/runner/workspace/radd-stream/Fast_Fetch/import_katmoviehd.py`
+Total Lines: 980
+Total Bytes: 37600
+Showing lines 790 to 860
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+790:     limit: int | None = None,
+791:     resolve_direct: bool = True,
+792: ):
+793:     """Multi-threaded background crawler for KatMovieHD with rate limiting and progress updates."""
+794:     init_staging_db(db_path)
+795:     client = KatMovieHDClient(request_interval=delay)
+796: 
+797:     with sqlite3.connect(str(db_path)) as conn:
+798:         cur = conn.cursor()
+799:         query = "SELECT loc, slug, raw_json FROM sitemap_cache WHERE scraped = 0 ORDER BY rowid ASC"
+800:         if limit:
+801:             query += f" LIMIT {limit}"
+802:         cur.execute(query)
+803:         pending_rows = cur.fetchall()
+804: 
+805:     if not pending_rows:
+806:         print("[*] No pending titles found in sitemap_cache. Run --sync-api first.", flush=True)
+807:         return
+808: 
+809:     total_pending = len(pending_rows)
+810:     print(f"[*] Starting KatMovieHD crawler: {total_pending:,} titles queued | {workers} workers | delay {delay}s\n", flush=True)
+811: 
+812:     completed = 0
+813:     failed = 0
+814:     total_releases = 0
+815:     total_sources = 0
+816:     total_r2 = 0
+817:     total_pd = 0
+818:     start_time = time.time()
+819: 
+820:     def process_item(item):
+821:         loc, slug, raw_json_str = item
+822:         cached_item = json.loads(raw_json_str) if raw_json_str else None
+823: 
+824:         post_data = extract_post_data_katmoviehd(
+825:             client=client,
+826:             post_url=loc,
+827:             slug=slug,
+828:             cached_item=cached_item,
+829:             resolve_direct=resolve_direct,
+830:         )
+831:         if not post_data or not post_data.get("releases"):
+832:             return loc, False, 0, 0, 0, 0
+833: 
+834:         ok = save_post_to_staging_db(db_path, post_data)
+835:         num_rels = len(post_data["releases"])
+836:         num_srcs = sum(len(r.get("sources", [])) for r in post_data["releases"])
+837:         r2_cnt = sum(1 for r in post_data["releases"] for s in r.get("sources", []) if s.get("service") == "fsl_r2")
+838:         pd_cnt = sum(1 for r in post_data["releases"] for s in r.get("sources", []) if s.get("service") == "pixeldrain")
+839:         return loc, ok, num_rels, num_srcs, r2_cnt, pd_cnt
+840: 
+841:     with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
+842:         futures = {executor.submit(process_item, row): row for row in pending_rows}
+843: 
+844:         for future in concurrent.futures.as_completed(futures):
+845:             if STOP_REQUESTED:
+846:                 break
+847:             loc, ok, rel_cnt, src_cnt, r2_cnt, pd_cnt = future.result()
+848: 
+849:             with sqlite3.connect(str(db_path)) as conn:
+850:                 conn.execute(
+851:                     "UPDATE sitemap_cache SET scraped = ? WHERE loc = ?",
+852:                     (1 if ok else -1, loc),
+853:                 )
+854:                 conn.commit()
+855: 
+856:             if ok:
+857:                 completed += 1
+858:                 total_releases += rel_cnt
+859:                 total_sources += src_cnt
+860:                 total_r2 += r2_cnt
+The above content does NOT show the entire file contents. If you need to view any lines of the file which were not shown to complete your task, call this tool again to view those lines.
+
+---
+
