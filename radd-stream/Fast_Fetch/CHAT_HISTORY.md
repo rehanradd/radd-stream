@@ -83772,3 +83772,37 @@ Item sample: {'categories': ['chinese-drama-in-hindi', 'japanese-drama-in-hindi'
 
 ---
 
+## 🤖 AI (Antigravity)  `2026-10-19T11:27:21Z`
+
+Created At: 2026-10-19T11:27:21Z
+Tool is running as a background task with task id: 70a9d3e6-6fd2-4a30-8299-451ef82b8270/task-179
+Task Description: python3 -c "
+import sys
+sys.path.insert(0, 'radd-stream/Fast_Fetch')
+import import_katmoviehd
+
+client = import_katmoviehd.KatMovieHDClient()
+slug = 'bad-apples-2026-hindi'
+url = f'https://new.katmoviehd.top/{slug}'
+
+post_data = import_katmoviehd.extract_post_data_katmoviehd(
+    client=client,
+    post_url=url,
+    slug=slug,
+    cached_item={'id': '282891'},
+    resolve_direct=True,
+)
+print('Result post_data:', post_data is not None)
+if post_data:
+    print('Releases count:', len(post_data.get('releases', [])))
+else:
+    print('Returned None! Inspecting fetch_post_data_from_html or sveltekit data...')
+    status, final_url, html_text = client.get_text(url)
+    print('HTML status:', status, 'len:', len(html_text))
+"
+Task logs are available at: file:///home/runner/.gemini/antigravity-cli/brain/70a9d3e6-6fd2-4a30-8299-451ef82b8270/.system_generated/tasks/task-179.log
+YOU MUST TAKE ONE OF THE FOLLOWING TWO ACTIONS: A) either proceed to other relevant work (if any) or, B) simply update the user with a short message (that you have launched the command and will wait for it to finish) and end the turn.
+ DO NOTHING ELSE.
+
+---
+
