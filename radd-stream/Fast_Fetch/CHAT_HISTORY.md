@@ -25111,3 +25111,42 @@ drwxrwxr-x  8 ubuntu ubuntu 4096 Apr 29 19:57 tmp
 
 ---
 
+## 🤖 AI (Antigravity)  `2026-10-19T17:50:33Z`
+
+Created At: 2026-10-19T17:50:33Z
+Completed At: 2026-10-19T17:50:34Z
+File Path: `file:///home/runner/workspace/install-antigravity.sh`
+Total Lines: 26
+Total Bytes: 568
+Showing lines 1 to 26
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+1: #!/usr/bin/env bash
+2: set -euo pipefail
+3: 
+4: ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+5: TARGET_DIR="$ROOT/.tools/antigravity/bin"
+6: BINARY="$TARGET_DIR/agy"
+7: 
+8: if [[ -x "$BINARY" ]]; then
+9:   echo "Antigravity CLI is already installed in this workspace:"
+10:   "$BINARY" --version
+11:   exit 0
+12: fi
+13: 
+14: installer="$(mktemp)"
+15: trap 'rm -f "$installer"' EXIT
+16: 
+17: curl -fsSL https://antigravity.google/cli/install.sh -o "$installer"
+18: bash "$installer" --dir "$TARGET_DIR"
+19: 
+20: if [[ ! -x "$BINARY" ]]; then
+21:   echo "Installation did not create $BINARY" >&2
+22:   exit 1
+23: fi
+24: 
+25: "$BINARY" --version
+26: 
+The above content shows the entire, complete file contents of the requested file.
+
+---
+
