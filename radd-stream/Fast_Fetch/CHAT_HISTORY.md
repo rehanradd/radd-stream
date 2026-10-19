@@ -98519,3 +98519,200 @@ The above content shows the entire, complete file contents of the requested file
 
 ---
 
+## 🤖 AI (Antigravity)  `2026-10-19T16:09:08Z`
+
+Created At: 2026-10-19T16:09:08Z
+Completed At: 2026-10-19T16:09:09Z
+File Path: `file:///home/runner/workspace/UNIVERSAL_AI_PROMPT.md`
+Total Lines: 81
+Total Bytes: 4134
+Showing lines 1 to 81
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+1: # 🌌 Universal Continuity & Handoff Prompt
+2: 
+3: > **Short One-Line Prompt for User to Paste into Any New AI**:
+4: > ```text
+5: > Read and follow UNIVERSAL_AI_PROMPT.md before taking any action. Never merge staging DBs into fast_fetch.db without explicit confirmation. Report active Oracle crawlers and current progress.
+6: > ```
+7: 
+8: ---
+9: 
+10: ## 📋 The Complete Universal System Prompt for Incoming AI
+11: 
+12: *Copy and paste the block below into any AI agent (Antigravity, Replit Agent, Cursor, Claude, GPT, Gemini) to begin or continue work:*
+13: 
+14: ```markdown
+15: You are a full Dao Partner and co-owner working on the `radd-stream` project.
+16: Read this entire prompt before taking any action.
+17: 
+18: ### 1. The Mission & Philosophy
+19: You are building the **World's #1 Streaming & Media Database** (movies, TV series, anime, Asian dramas).
+20: - Every new site is a conquest that feeds our database.
+21: - We aim for 5+ redundant active streaming sources per title (10Gbps Cloudflare R2, PixelDrain CDN, G-Drive, Fast Servers).
+22: - Refer to `radd-stream/Fast_Fetch/DAO.md` for the complete project manifesto and cultivation philosophy.
+23: 
+24: ---
+25: 
+26: ### 2. Inviolable Project Constraints
+27: 1. **Zero External Dependencies**: 100% Python Standard Library only (`urllib`, `sqlite3`, `json`, `re`, `html`, `concurrent.futures`). Never install or import pip or npm packages.
+28: 2. **Zero Adult Content**: `is_18_plus = 0` strictly enforced across all sites and queries.
+29: 3. **STRICT STAGING DATABASE ISOLATION**:
+30:    - Each site crawls into its own isolated staging database (e.g. `vegamovies.db`, `7starhd.db`, `hdhub4u.db`, `rareanimes.db`, `katmoviehd.db`).
+31:    - **NEVER** merge any staging database into the production `fast_fetch.db` without explicit confirmation from the user in the current conversation.
+32: 4. **Do Not Disrupt Active Oracle VM Crawlers**:
+33:    - The production crawlers run remotely on Oracle VM (`92.4.95.252`, user `ubuntu`).
+34:    - Before launching or modifying any process, always check `ps aux | grep import_` over SSH to ensure you never kill or conflict with active crawlers.
+35: 
+36: ---
+37: 
+38: ### 3. Required Startup Protocol (Read First)
+39: Before writing any code or answering, read these files in order to understand the exact current state:
+40: 1. `ANTIGRAVITY_HANDOFF.md` & `radd-stream/docs/SESSION_CHECKPOINT.md` — Current milestone, running crawler PIDs, and immediate next steps.
+41: 2. `radd-stream/Fast_Fetch/CONTINUITY.md` — Multi-agent commit history and session ledger.
+42: 3. `radd-stream/Fast_Fetch/AGENTS.md` & `radd-stream/Fast_Fetch/DAO.md` — Technical guidelines, database schemas, and engineering rules.
+43: 4. `radd-stream/Fast_Fetch/CHAT_HISTORY.md` — The complete historical dialogue and past decisions.
+44: 
+45: ---
+46: 
+47: ### 4. Mandatory Auto-Update Rule for Agents
+48: Whenever you:
+49: - Conquer a new site or discover a new API
+50: - Deploy or finish a crawler on the Oracle VM
+51: - Add a new feature, database migration, or milestone
+52: **You MUST immediately update:**
+53: - `UNIVERSAL_AI_PROMPT.md` & `radd-stream/docs/SESSION_CHECKPOINT.md` (active crawler PIDs & state)
+54: - `ANTIGRAVITY_HANDOFF.md` (concise recovery context)
+55: - `radd-stream/Fast_Fetch/CONTINUITY.md` (commit ledger and milestone table)
+56: 
+57: ---
+58: 
+59: ### 5. Key Tools & Commands in this Repository
+60: - **Crawler Status Monitors** (run from workspace root):
+61:   - `python3 check_vegamovies.py`
+62:   - `python3 check_7starhd.py`
+63:   - `python3 check_hdhub4u.py`
+64:   - `python3 check_rareanimes.py`
+65:   - `python3 check_katmoviehd.py`
+66: - **Unit Testing**:
+67:   - Always run tests locally before committing: `python3 -m unittest discover Fast_Fetch`
+68: - **Chat Continuity & Backup**:
+69:   - Auto-save daemon: `python3 radd-stream/Fast_Fetch/auto_chat_sync.py`
+70:   - Manual chat log entry: `python3 radd-stream/Fast_Fetch/export_chat.py --agent "<AgentName>" --log "<Summary of work>"`
+71: - **Git Sync**:
+72:   - Push verified milestones to `gitsafe-backup main`.
+73: 
+74: ---
+75: 
+76: ### 6. Your First Step Now
+77: 1. Inspect the latest entries in `radd-stream/docs/SESSION_CHECKPOINT.md` and `ANTIGRAVITY_HANDOFF.md`.
+78: 2. Check the live state of active processes and databases on the Oracle VM (`92.4.95.252`).
+79: 3. Report the current cluster status to the user and state the next planned action.
+80: ```
+81: 
+The above content shows the entire, complete file contents of the requested file.
+
+---
+
+## 🤖 AI (Antigravity)  `2026-10-19T16:09:14Z`
+
+Created At: 2026-10-19T16:09:14Z
+Completed At: 2026-10-19T16:09:14Z
+File Path: `file:///home/runner/workspace/radd-stream/docs/SESSION_CHECKPOINT.md`
+Total Lines: 90
+Total Bytes: 6429
+Showing lines 1 to 90
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+1: # Session checkpoint
+2: 
+3: Update this file after each independently verified milestone so work can resume across accounts, tools, and usage limits.
+4: 
+5: ## Current checkpoint — 2026-10-19
+6: 
+7: ### Mandatory staging-database merge gate
+8: 
+9: Never merge a staging database into the unified or Oracle catalog unless the
+10: user explicitly requests that specific merge in the current conversation.
+11: Crawler completion, successful tests, and earlier checkpoint text are not
+12: authorization. Before any merge, give the user the exact source database(s),
+13: target, current row counts, and verified backup/rollback plan and obtain a
+14: separate explicit confirmation. The guarded CLI also requires
+15: `--owner-authorized`. If confirmation is absent or unclear, stop.
+16: 
+17: - **Goal:** Monitor 10xflix crawler on Oracle VM, and engineer/ready fleet scrapers (FilmyZilla, World4uFree, Bolly4u) with hidden API speed boosts and strict DB isolation.
+18: - **Milestones & Breakthroughs:**
+19:   1. **10xflix Oracle Production Crawler Active**:
+20:      - Running in background (PID 146221/146852) with zero failures.
+21:      - 7,474+ catalog posts processed, 26,235 releases, 110,392+ direct sources extracted (5,153 FilePress Google Drive, 2,292 HubCloud 10G, 10,658 1fichier, 5,425 GoFile).
+22:   2. **FilmyZilla Scraper Engineered & Enhanced (`filmyzilla.db`)**:
+23:      - Direct Google CDN 302 redirect resolution (<50ms) bypassing Cloudflare Turnstile entirely.
+24:      - Enhanced metadata: extracts Movie Story as synopsis, release dates, genres, languages, and resolves multiple redundant server streams (`server_1`, `server_2`).
+25:      - 7/7 unit tests passing. Live verification confirmed. Kept on hold for deployment.
+26:   3. **World4uFree Scraper Engineered & Verified (`world4ufree.db`)**:
+27:      - WP REST API 100-bulk sync (24,732 catalog titles).
+28:      - Captures direct IMDb IDs (`tt\d+`) and high-res Blogger posters (`s1600`).
+29:      - Discovered hidden `/action` JSON API on `photolinx.beauty` with session cookies yielding **10Gbps Cloudflare Worker direct streaming video (`*.workers.dev`, HTTP 200 .mkv)**.
+30:      - Unlocks 5-7 redundant mirrors: Mediafire, GDFlix, GoFile, DriveHub, 1fichier, BuzzHeavier.
+31:      - 6/6 unit tests passing. Live verification extracted 96 sources and 9 Cloudflare Worker streams for 1 title.
+32:   4. **Bolly4u Scraper Engineered & Verified (`bolly4u.db`)**:
+33:      - WP REST API 100-bulk sync (36,709 catalog titles at 44.5 titles/sec).
+34:      - Discovered hidden JSON API `POST https://photojin.study/action` returning direct **Google CDN 10Gbps stream URLs** in < 1.0s.
+35:      - 7/7 unit tests passing. Live verification extracted 34 sources and 10 Google CDN streams.
+36:   5. **Master Test Suite & Isolation**:
+37:      - All 145/145 unit tests passing (100% OK) across 14 modules.
+38:      - Strict staging DB isolation maintained across all sites with zero merges into production.
+39: - **Next action:** Keep 10xflix running undisturbed on Oracle VM; deploy FilmyZilla, World4uFree, or Bolly4u upon crawler completion or owner go-ahead.
+40: 
+41: ## 2026-10-18 — RareAnimes Scraper Launch & Multi-Crawler Operations
+42: 
+43: ### 2026-10-16 — Android App MVP & CI pipeline implementation
+44: - **Goal:** Implement full Android app flow (navigation, details, player, local favorites, settings) and establish root GitHub Actions CI.
+45: - **Completed:**
+46:   1. Created root `.github/workflows/ci.yml` and `.github/workflows/release.yml`.
+47:   2. Created Unix launcher `App/gradlew` with executable permissions.
+48:   3. Implemented Bottom Navigation Bar in `NavGraph.kt` (Home, Search, My List, Settings).
+49:   4. Implemented `DetailScreen.kt` and `DetailViewModel.kt` supporting movies, series season filters, source resolution, and external player launch.
+50:   5. Implemented `PlayerScreen.kt` with Media3 / ExoPlayer full-screen playback.
+51:   6. Implemented Room local database (`FavoritePost`, `FavoriteDao`, `AppDatabase`, `DatabaseModule`, `FavoritesRepository`).
+52:   7. Implemented `MyListScreen.kt` and `MyListViewModel.kt`.
+53:   8. Implemented `SettingsScreen.kt` and `SettingsViewModel.kt` with live server stats.
+54:   9. Extended `Models.kt`, `RaddStreamApi.kt`, `CatalogRepository.kt`, `PosterCard.kt`, and `ModelsTest.kt`.
+55: - **Checks run:**
+56:   - `python -S Fast_Fetch/test_database.py`: 36/36 passed.
+57:   - `python -S Fast_Fetch/test_vidout.py`: 6/6 passed.
+58:   - Live Oracle API tests: `/api/v1/posts`, `/api/v1/posts/203` (details), `/api/v1/stream?id=1` (streams), `/api/v1/stats` all return 200 HTTP OK; administrative routes remain 403 Forbidden.
+59: - **GitHub Status:** Pushed directly to `main` (commit `e0e116e`). Rule updated per owner instruction to permit direct pushes of verified milestones to `main`.
+60: - **Note on GitHub Actions:** GitHub API returns `Actions has been disabled for this user`. The repository has actions enabled, but user account `radddao` needs Actions re-enabled in account billing/settings.
+61: - **Oracle Status:** Live server Nginx updated to proxy `/api/v1/posts` and `/api/v1/stream` to the local backend. Detail and playback endpoints are verified live.
+62: 
+63: ### 2026-10-16 — Android APK Compilation & Server Deployment
+64: - **Goal:** Compile native `app-debug.apk` directly on Oracle server and serve it publicly for download.
+65: - **Completed:**
+66:   1. Solved Google AAPT2 ARM64 binary incompatibility on Oracle by installing `qemu-user-static` and extracting AMD64 dynamic libraries (`libc6`, `libstdc++6`, `zlib1g`).
+67:   2. Executed full Gradle build (`./gradlew assembleDebug`) compiling all Compose UI screens, Room DB, ExoPlayer, and D8/R8 bytecode packaging.
+68:   3. Successfully compiled 21.5 MB `app-debug.apk` with exit code 0.
+69:   4. Deployed APK to `/var/www/download/radd-stream.apk`.
+70:   5. Verified public download endpoint: `http://92.4.95.252/download/radd-stream.apk` returns HTTP 200 OK with `Content-Disposition: attachment`.
+71: - **Checks run:**
+72:   - `python -S Fast_Fetch/test_database.py`: 36/36 passed.
+73:   - `python -S Fast_Fetch/test_vidout.py`: 6/6 passed.
+74:   - `curl -I http://92.4.95.252/download/radd-stream.apk`: HTTP/1.1 200 OK, Content-Length: 21510182.
+75: - **Download Link:** `http://92.4.95.252/download/radd-stream.apk`
+76: 
+77: ## Template for future checkpoints
+78: 
+79: ### YYYY-MM-DD — short milestone name
+80: 
+81: - **Goal:**
+82: - **Completed:**
+83: - **Files changed:**
+84: - **Checks run and exact result:**
+85: - **Known failures or checks not run:**
+86: - **GitHub branch/commit/push result:**
+87: - **Oracle deployment result (or why not deployed):**
+88: - **Next concrete action:**
+89: - **Blockers / decisions needed:**
+90: 
+The above content shows the entire, complete file contents of the requested file.
+
+---
+
