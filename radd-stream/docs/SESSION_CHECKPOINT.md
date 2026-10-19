@@ -2,7 +2,7 @@
 
 Update this file after each independently verified milestone so work can resume across accounts, tools, and usage limits.
 
-## Current checkpoint — 2026-10-18
+## Current checkpoint — 2026-10-19
 
 ### Mandatory staging-database merge gate
 
@@ -14,28 +14,25 @@ target, current row counts, and verified backup/rollback plan and obtain a
 separate explicit confirmation. The guarded CLI also requires
 `--owner-authorized`. If confirmation is absent or unclear, stop.
 
-- **Goal:** Deploy and launch dedicated RareAnimes scraper on Oracle VM, maintain Vegamovies, 7StarHD, and HDHub4u execution, and uphold strict staging DB isolation.
+- **Goal:** Launch KatMovieHD scraper on Oracle VM in background, diagnose RareAnimes failures, and preserve strict staging database isolation.
 - **Milestones & Breakthroughs:**
-  1. **RareAnimes API Discovery & Catalog Indexing**:
-     - Discovered open WordPress REST API (`https://www.rareanimes.mov/wp-json/wp/v2/posts?_embed=1`).
-     - Ingested entire catalog of **1,926 titles** across 20 pages with rich embedded metadata (featured high-res posters, anime categories, and episode descriptions).
-     - Augmented with master movies index (`/all-anime-cartoon-movies-list/`), bringing total catalog to **2,624 anime titles**.
-     - Identified direct underlying download links in the REST API payload bypassing web redirect shorteners (`codedew.com/zipper`).
-  2. **Dedicated Importer & Test Suite**:
-     - Built `Fast_Fetch/import_rareanimes.py` and `Fast_Fetch/test_rareanimes_import.py`.
-     - 14/14 unit tests passed natively on Oracle VM in 0.08s.
-     - Live stream unwrapping verified: PixelDrain CDN direct video streams (`https://pixeldrain.com/api/file/<ID>`) and HubCloud 10Gbps Cloudflare R2 direct streams (`r2.cloudflarestorage.com`).
-  3. **Launched 4th Background Crawler on Oracle VM**:
-     - Background crawler **PID 123020** (`--workers 5 --delay 0.3`) actively crawling in `/home/ubuntu/radd-stream-data/rareanimes.db`.
-     - Created local monitor utility `check_rareanimes.py`.
-  4. **Active Concurrent Crawler Status**:
-     - Vegamovies: PID 76635 (~88% scraped, 106,991+ releases, 332,762+ direct sources).
-     - 7StarHD: PID 120570 (~20% scraped, 10,395+ releases, 39,791+ direct sources).
-     - HDHub4u: PID 121847 (14,504 titles indexed, actively crawling).
-     - RareAnimes: PID 123020 (2,624 titles indexed, actively crawling PixelDrain and HubCloud R2 streams).
-  5. **Staging Database Isolation**:
-     - Zero merges performed. All staging databases remain strictly isolated.
-- **Next action:** Monitor all four live crawlers (Vegamovies + 7StarHD + HDHub4u + RareAnimes).
+  1. **Previous Crawler Completions Verified**:
+     - Vegamovies: Completed 100% of available valid items (13,978 / 14,316 scraped, 131,654 releases, 397,888 direct sources, 85,138 Google CDN direct streams).
+     - 7StarHD: Completed current batch (15,508 / 23,446 scraped, 33,197 releases, 98,199 direct sources).
+     - HDHub4u: Completed current batch (10,893 scraped, 47,361 releases, 103,964 direct sources).
+     - RareAnimes: Completed initial pass (1,329 scraped, 17,419 releases, 53,767 direct sources, 20,283 PixelDrain direct CDN, 4,219 Cloudflare R2).
+  2. **KatMovieHD Background Deployment on Oracle VM**:
+     - Pre-tested SvelteKit deserializer and crawler locally on test database (100% pass).
+     - Initiated background deployment on Oracle VM (PID 139975 / 139977) streaming unbuffered logs to `/home/ubuntu/radd-stream-data/katmoviehd.log`.
+     - Automatically running `--sync-api` followed by multi-threaded crawler (`--workers 5 --delay 0.3`) into isolated staging DB `/home/ubuntu/radd-stream-data/katmoviehd.db`.
+     - Live progress monitor verified functional via `python3 check_katmoviehd.py`.
+  3. **RareAnimes Failure Diagnosis (1,295 Failed Titles)**:
+     - 698 failures caused by master index regex: `sync_master_movies_index` parsed global HTML links from `/all-anime-cartoon-movies-list/` without scoping to `#rai-movies-index`, ingesting non-post URLs (.css, .png, feeds, xmlrpc.php).
+     - 597 failures caused by intermediate link bridge types: posts containing `store.animetoonhindi.com/archives/...` and `codedew.com/zipcloud/...` as well as `<h3>` heading tags for episode blocks were not resolved by the initial pattern matcher.
+  4. **Strict DB Isolation Maintained**: Zero merges executed into production `fast_fetch.db`.
+- **Next action:** Monitor KatMovieHD crawler (`python3 check_katmoviehd.py`) and patch RareAnimes scraper regex & bridge resolution.
+
+## 2026-10-18 — RareAnimes Scraper Launch & Multi-Crawler Operations
 
 ### 2026-10-16 — Android App MVP & CI pipeline implementation
 - **Goal:** Implement full Android app flow (navigation, details, player, local favorites, settings) and establish root GitHub Actions CI.

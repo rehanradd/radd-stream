@@ -4,15 +4,17 @@ Use this file for a short, durable summary when you want to continue work in a
 new conversation or after signing in again. It supplements Antigravity's
 `/resume` history; it is not a full transcript.
 
-- **Current goal:** Monitor concurrent live crawling for Vegamovies, 7StarHD, HDHub4u, and RareAnimes on Oracle VM, uphold staging database isolation, and track completion progress.
-- **Current state:** Four active Oracle crawlers running concurrently in background:
-  1. Vegamovies (PID 76635, 5 workers, 0.3s delay; ~88%, 12,555+ / 14,316 scraped, 106,991+ releases, 332,762+ direct sources, 71k+ Google CDN direct streams).
-  2. 7StarHD (PID 120570, 6 workers, 0.3s delay; ~20%, 4,635+ / 23,446 scraped, 10,395+ releases, 39,791+ direct sources).
-  3. HDHub4u (PID 121847, 5 workers, 0.3s delay; 14,504 titles indexed via Typesense API into hdhub4u.db, actively unwrapping releases and 10Gbps R2 streams).
-  4. RareAnimes (PID 123020, 5 workers, 0.3s delay; 2,624 titles indexed via WP REST API + Master Index into rareanimes.db, unwrapping PixelDrain CDN direct streams and Cloudflare R2).
+- **Current goal:** Monitor KatMovieHD background scraper on Oracle VM, troubleshoot and repair RareAnimes scraper, uphold staging database isolation, and track crawler progress.
+- **Current state:** KatMovieHD background crawler actively running on Oracle VM:
+  1. KatMovieHD (PID 139975 / 139977, syncing SvelteKit API into katmoviehd.db, auto-transitioning to 5 workers, 0.3s delay).
+  - Previous crawler milestones:
+    * Vegamovies: Complete run finished (13,978 / 14,316 scraped, 131,654 releases, 397,888 direct sources, 85,138 Google CDN direct streams).
+    * 7StarHD: Phase completed (15,508 / 23,446 scraped, 33,197 releases, 98,199 direct sources).
+    * HDHub4u: Phase completed (10,893 scraped, 47,361 releases, 103,964 direct sources).
+    * RareAnimes: Completed initial pass (1,329 scraped, 17,419 releases, 53,767 sources, 20,283 PixelDrain direct, 4,219 Cloudflare R2). 1,295 failed items diagnosed: ~698 non-movie URLs from master index regex (CSS/PNG/feeds) and missing intermediate link resolvers (`store.animetoonhindi.com`, `codedew.com/zipcloud`).
   - Finished 100% staging catalogs: SSRMovies (27,000 / 27,000), Rogmovies (7,868 / 7,868), HDTVB (5,692 / 5,692), and MultiMovies (10,488 / 10,488).
-  - All 122 unit tests passing (36 database, 6 vidout, 20 vegamovies/rogmovies, 16 ssrmovies, 5 7starhd, 25 hdhub4u, 14 rareanimes). Strict staging DB isolation maintained with zero merges.
-- **Next step:** Monitor all four crawlers (`python3 check_vegamovies.py`, `python3 check_7starhd.py`, `python3 check_hdhub4u.py`, `python3 check_rareanimes.py`).
+  - Full test suite passing (119/119 unit tests). Strict staging DB isolation maintained with zero merges.
+- **Next step:** Monitor KatMovieHD crawler (`python3 check_katmoviehd.py`) and patch RareAnimes scraper regex & resolver.
 
 The Antigravity CLI's local recovery files preserve only selected settings and the last-conversation index, not full transcripts or login credentials. Replit project files and this handoff preserve project context, but cannot restore lost Antigravity account history or authentication.
 

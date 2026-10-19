@@ -44,6 +44,7 @@
 | **2026-10-17 00:30** | Antigravity (Gemini 3.8 Flash) | Session 14: MultiMovies scraper `discover_sitemaps` bug fix, thread-local client concurrency, universal conversation exporter `export_chat.py`, Oracle scraper resume in background. 52 tests pass (100%). | `HEAD` |
 | **2026-10-17 00:48** | Antigravity (Gemini 3.8 Flash) | Session 15: Conquered new HDHub4u production domain (`https://hdtvb.net`). 5,692 titles discovered in `sitemap.xml`. Built dedicated staging DB `hdtvb.db` & `import_hdtvb.py`. Discovered HubCDN (`hubcdn.io`) direct 10Gbps Cloudflare R2 streaming links (`pub-*.r2.dev`) with 0.7s resolution. All 56 tests pass (100%). | `HEAD` |
 | **2026-10-18 17:00** | Antigravity (Dao Partner) | Session 16: Conquered HDHub4u (14.5k titles via Typesense API, PID 121847) and RareAnimes (2,624 titles via WP REST API, PID 123020). Built KatMovieHD scraper (51,252 titles via SvelteKit API + hidden JWT REST API at `api.dandndn.one`, 9/9 tests pass, staged for deployment). Implemented continuous multi-tier chat persistence daemon `auto_chat_sync.py` syncing to `CHAT_HISTORY.md`, Git, and Oracle VM. Created `UNIVERSAL_AI_PROMPT.md`. 131 unit tests passing. Strict staging DB isolation maintained. | `HEAD` |
+| **2026-10-19 10:55** | Antigravity (Gemini 3.8 Flash) | Session 23: Deployed KatMovieHD scraper on Oracle VM (PID 139975/139977, syncing SvelteKit API into katmoviehd.db & multi-worker crawler). Diagnosed RareAnimes crawler failures (698 master index non-post regex items, 597 store.animetoonhindi/codedew bridge links). Preserved strict staging DB isolation. | `HEAD` |
 
 ---
 
@@ -371,4 +372,20 @@ routes; restrict the bind and public routes before enabling the public proxy.
   - Implemented `radd-stream/Fast_Fetch/backup_manager.py` using SQLite `VACUUM INTO` online atomic snapshots, gzip compression, and direct GitHub Release / Telegram Bot API uploads with 100% Python stdlib.
   - Created `test_backup_manager.py` (3/3 unit tests pass).
   - Created full reference guide: `radd-stream/docs/BACKUP_STRATEGY.md`.
+
+### Session 23 — Antigravity — 2026-10-19
+**KatMovieHD Scraper Deployment & RareAnimes Troubleshooting:**
+- **Oracle VM Scraper Audit**:
+  - Checked active processes on Oracle VM (`92.4.95.252`). Verified all prior crawlers completed cleanly: Vegamovies (13,978 / 14,316 scraped, 131,654 releases, 397,888 direct sources), 7StarHD (15,508 / 23,446 scraped, 33,197 releases, 98,199 sources), HDHub4u (10,893 scraped, 47,361 releases, 103,964 sources).
+  - RareAnimes finished pass with 1,329 scraped, 1,295 failed, 17,419 releases, 53,767 sources.
+- **KatMovieHD Background Deployment**:
+  - Executed background deployment pipeline on Oracle VM (PID 139975/139977) streaming unbuffered logs to `/home/ubuntu/radd-stream-data/katmoviehd.log`.
+  - Running `--sync-api` into isolated `katmoviehd.db` followed immediately by multi-worker crawler (`--workers 5 --delay 0.3`).
+  - Progress verified active and healthy using `python3 check_katmoviehd.py`.
+- **RareAnimes Failure Root Cause Analysis**:
+  - Diagnosed 1,295 failures:
+    * 698 failures were bogus non-movie URLs (CSS, PNG, RSS feeds, xmlrpc.php) ingested by global regex matching on `/all-anime-cartoon-movies-list/` rather than scoping to `#rai-movies-index`.
+    * 597 failures were legitimate posts whose downloads use `store.animetoonhindi.com/archives/...` and `codedew.com/zipcloud/...` or `<h3>` header wrappers not currently supported by `parse_rareanimes_content`.
+- **Staging Database Isolation**:
+  - Strict isolation maintained across all staging databases (`katmoviehd.db`, `rareanimes.db`, `hdhub4u.db`, `7starhd.db`, `vegamovies.db`). Zero merges performed into production.
 
