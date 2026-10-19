@@ -97477,3 +97477,92 @@ Last progress: 28s ago
 
 ---
 
+## 🤖 AI (Antigravity)  `2026-10-19T16:01:13Z`
+
+Created At: 2026-10-19T16:01:13Z
+Completed At: 2026-10-19T16:01:16Z
+
+The command exited with code 0.
+Output:
+
+=================================================================
+ 🎬 ORACLE VM FILMYZILLA SCRAPER MONITOR — 🟢 RUNNING
+=================================================================
+ Process  : PID 152527 | CPU: 0.0% | RAM: 0.0% | Time: 00:00:00
+ Progress : [██████████░░░░░░░░░░░░░░░░░░░░░░░░░░] 29.4% (1,470/5,000 titles)
+-----------------------------------------------------------------
+ 📦 Catalog Posts       : 1,428
+ 🎬 Releases Found       : 5,563
+ 🔗 Direct Sources       : 5,965
+ ⚡ Google CDN Streams   : 402 (High-Speed Direct)
+ ⏳ Pending Titles       : 3,527
+ ⚠️  Failed Titles        : 3
+-----------------------------------------------------------------
+ 📜 Recent Live Logs:
+         [1,400/5,000] releases=5,315 sources=5,717 google_cdn=402 failed=3 speed=1.88 t/s ETA: 00:31:54
+         [1,410/5,000] releases=5,346 sources=5,748 google_cdn=402 failed=3 speed=1.89 t/s ETA: 00:31:43
+         [1,420/5,000] releases=5,375 sources=5,777 google_cdn=402 failed=3 speed=1.89 t/s ETA: 00:31:32
+         [1,430/5,000] releases=5,406 sources=5,808 google_cdn=402 failed=3 speed=1.90 t/s ETA: 00:31:21
+         [1,440/5,000] releases=5,439 sources=5,841 google_cdn=402 failed=3 speed=1.90 t/s ETA: 00:31:14
+         [1,450/5,000] releases=5,488 sources=5,890 google_cdn=402 failed=3 speed=1.90 t/s ETA: 00:31:05
+         [1,460/5,000] releases=5,520 sources=5,922 google_cdn=402 failed=3 speed=1.91 t/s ETA: 00:30:54
+         [1,470/5,000] releases=5,553 sources=5,955 google_cdn=402 failed=3 speed=1.91 t/s ETA: 00:30:47
+=================================================================
+
+
+=================================================================
+ 🚀 ORACLE VM WORLD4UFREE SCRAPER MONITOR — 🟢 RUNNING
+=================================================================
+ Process  : PID 152560 | CPU: 0.0% | RAM: 0.0% | Time: 00:00:00
+ Process  : PID 152561 | CPU: 1.4% | RAM: 0.7% | Time: 00:00:11
+ Progress : [░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░] 0.0% (0/10,948 titles)
+-----------------------------------------------------------------
+ 📦 Catalog Posts       : 0
+ 🎬 Verified IMDb IDs   : 0
+ 🎬 Releases Found       : 0
+ 🔗 Direct Sources       : 0
+ ⚡ 10Gbps CF Direct     : 0 (Cloudflare Worker .mkv)
+ ⏳ Pending Titles       : 10,948
+ ⚠️  Failed Titles        : 0
+-----------------------------------------------------------------
+ 📜 Recent Live Logs:
+         [Page 104] Ingested 95 items (total: 10,268/24,733)
+         [Page 105] Ingested 97 items (total: 10,365/24,733)
+         [Page 106] Ingested 96 items (total: 10,461/24,733)
+         [Page 107] Ingested 97 items (total: 10,558/24,733)
+         [Page 108] Ingested 98 items (total: 10,656/24,733)
+         [Page 109] Ingested 99 items (total: 10,755/24,733)
+         [Page 110] Ingested 97 items (total: 10,852/24,733)
+         [Page 111] Ingested 97 items (total: 10,949/24,733)
+=================================================================
+
+
+=================================================================
+ 🚀 ORACLE VM 10XFLIX SCRAPER MONITOR — 🟢 RUNNING
+=================================================================
+ Process  : PID 146221 | CPU: 0.0% | RAM: 0.0% | Time: 00:00:00
+ Progress : [█████████████░░░░░░░░░░░░░░░░░░░░░░░] 37.6% (6,620/17,606 titles)
+-----------------------------------------------------------------
+ 📦 Catalog Posts       : 8,674
+ 🎬 Releases Found       : 31,126
+ 🔗 Direct Sources       : 134,791
+ ⚡ HubCloud 10G         : 2,391 (Fast Server Direct)
+ ⚡ FilePress GDrive     : 6,466 (Google Drive High-Speed)
+ ⚡ 1fichier Mirror      : 13,532
+ ⚡ GoFile Cloud         : 6,845
+ ⏳ Pending Titles       : 10,986
+ ⚠️  Failed Titles        : 0
+-----------------------------------------------------------------
+ 📜 Recent Live Logs:
+       [6,450/17,506] releases=20,833 sources=85,943 failed=0 speed=0.72 t/s ETA: 04:14:32
+         [6,460/17,506] releases=20,862 sources=86,005 failed=0 speed=0.72 t/s ETA: 04:14:12
+         [6,470/17,506] releases=20,888 sources=86,236 failed=0 speed=0.72 t/s ETA: 04:13:59
+         [6,480/17,506] releases=20,915 sources=86,353 failed=0 speed=0.72 t/s ETA: 04:13:38
+         [6,490/17,506] releases=20,944 sources=86,513 failed=0 speed=0.72 t/s ETA: 04:13:23
+         [6,500/17,506] releases=20,972 sources=86,627 failed=0 speed=0.72 t/s ETA: 04:13:08
+         [6,510/17,506] releases=21,002 sources=86,921 failed=0 speed=0.72 t/s ETA: 04:12:54
+         [6,520/17,506] releases=21,031 sources=87,243 failed=0 speed=0.72 t/s ETA: 04:12:43
+=================================================================
+
+---
+
