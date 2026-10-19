@@ -25481,3 +25481,65 @@ while [ "$#" -gt 0 ]; do
 
 ---
 
+## 🤖 AI (Antigravity)  `2026-10-19T17:53:23Z`
+
+Created At: 2026-10-19T17:53:23Z
+Completed At: 2026-10-19T17:53:24Z
+
+The command exited with code 0.
+Output:
+INSTALLER SCRIPT 40-90:
+        *)
+            echo "[ERROR] Unknown parameter: $1" >&2
+            show_usage
+            exit 1
+            ;;
+    esac
+    shift
+done
+
+# Resolve dynamic installation target directory
+if [ -n "$CUSTOM_DIR" ]; then
+    TARGET_DIR="$CUSTOM_DIR"
+fi
+
+BINARY_PATH="$TARGET_DIR/agy"
+
+# 2. STEP 1: Pre-existence & Dynamic Path Check
+if [ -f "$BINARY_PATH" ]; then
+    echo "Notice: 'agy' is already installed at $BINARY_PATH."
+    echo "The Antigravity CLI automatically self-updates in the background during regular runs."
+    echo ""
+    echo "If you want to perform a fresh installation, delete the binary first:"
+    echo "  rm \"$BINARY_PATH\""
+    exit 0
+fi
+
+echo "⠋ Detecting system environment..."
+
+# 3. Detect Platform
+case "$(uname -s)" in
+    Darwin) os="darwin" ;;
+    # Termux needs the Bionic build: Android's linker rejects glibc/musl ones.
+    # uname -o names the userland, so a proot distro inside Termux (e.g. Ubuntu,
+    # "GNU/Linux") still gets the regular Linux build.
+    Linux) if [ "$(uname -o 2>/dev/null)" = "Android" ]; then os="android"; else os="linux"; fi ;;
+    *) echo "Fatal: Unsupported operating system: $(uname -s). Antigravity CLI currently supports 64-bit Windows, macOS, and Linux." >&2; exit 1 ;;
+esac
+
+case "$(uname -m)" in
+    x86_64|amd64) arch="amd64" ;;
+    arm64|aarch64) arch="arm64" ;;
+    *) echo "Fatal: Unsupported architecture: $(uname -m). Antigravity CLI currently supports 64-bit Windows, macOS, and Linux." >&2; exit 1 ;;
+esac
+
+# musl libc detection on Linux
+platform=""
+if [ "$os" = "linux" ]; then
+    if [ -f /lib/libc.musl-x86_64.so.1 ] || [ -f /lib/libc.musl-aarch64.so.1 ] || ldd /bin/ls 2>&1 | grep -q musl; then
+        platform="linux_${arch}_musl"
+    else
+        platform="linux_${arch}"
+
+---
+
