@@ -29829,3 +29829,9 @@ We have installed and configured the **Continue AI extension** directly inside y
 
 ---
 
+## 👤 USER  `2026-10-19T19:04:24Z`
+
+how good coder-server agent is compare to yours
+
+---
+
