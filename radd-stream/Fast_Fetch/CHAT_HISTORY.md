@@ -83813,3 +83813,67 @@ If the problem persists, please check our <a href="https://status.cloud.google.c
 
 ---
 
+## 🤖 AI (Antigravity)  `2026-10-19T11:27:51Z`
+
+Created At: 2026-10-19T11:27:51Z
+Completed At: 2026-10-19T11:27:51Z
+File Path: `file:///home/runner/workspace/radd-stream/Fast_Fetch/import_katmoviehd.py`
+Total Lines: 980
+Total Bytes: 37600
+Showing lines 810 to 860
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+810:     print(f"[*] Starting KatMovieHD crawler: {total_pending:,} titles queued | {workers} workers | delay {delay}s\n", flush=True)
+811: 
+812:     completed = 0
+813:     failed = 0
+814:     total_releases = 0
+815:     total_sources = 0
+816:     total_r2 = 0
+817:     total_pd = 0
+818:     start_time = time.time()
+819: 
+820:     def process_item(item):
+821:         loc, slug, raw_json_str = item
+822:         cached_item = json.loads(raw_json_str) if raw_json_str else None
+823: 
+824:         post_data = extract_post_data_katmoviehd(
+825:             client=client,
+826:             post_url=loc,
+827:             slug=slug,
+828:             cached_item=cached_item,
+829:             resolve_direct=resolve_direct,
+830:         )
+831:         if not post_data or not post_data.get("releases"):
+832:             return loc, False, 0, 0, 0, 0
+833: 
+834:         ok = save_post_to_staging_db(db_path, post_data)
+835:         num_rels = len(post_data["releases"])
+836:         num_srcs = sum(len(r.get("sources", [])) for r in post_data["releases"])
+837:         r2_cnt = sum(1 for r in post_data["releases"] for s in r.get("sources", []) if s.get("service") == "fsl_r2")
+838:         pd_cnt = sum(1 for r in post_data["releases"] for s in r.get("sources", []) if s.get("service") == "pixeldrain")
+839:         return loc, ok, num_rels, num_srcs, r2_cnt, pd_cnt
+840: 
+841:     with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
+842:         futures = {executor.submit(process_item, row): row for row in pending_rows}
+843: 
+844:         for future in concurrent.futures.as_completed(futures):
+845:             if STOP_REQUESTED:
+846:                 break
+847:             loc, ok, rel_cnt, src_cnt, r2_cnt, pd_cnt = future.result()
+848: 
+849:             with sqlite3.connect(str(db_path)) as conn:
+850:                 conn.execute(
+851:                     "UPDATE sitemap_cache SET scraped = ? WHERE loc = ?",
+852:                     (1 if ok else -1, loc),
+853:                 )
+854:                 conn.commit()
+855: 
+856:             if ok:
+857:                 completed += 1
+858:                 total_releases += rel_cnt
+859:                 total_sources += src_cnt
+860:                 total_r2 += r2_cnt
+The above content does NOT show the entire file contents. If you need to view any lines of the file which were not shown to complete your task, call this tool again to view those lines.
+
+---
+
