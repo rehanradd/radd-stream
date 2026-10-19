@@ -23196,3 +23196,188 @@ sources 1315
 
 ---
 
+## 🤖 AI (Antigravity)  `2026-10-19T17:41:45Z`
+
+Created At: 2026-10-19T17:41:45Z
+Completed At: 2026-10-19T17:41:46Z
+File Path: `file:///home/runner/workspace/radd-stream/Fast_Fetch/import_katmoviehd.py`
+Total Lines: 980
+Total Bytes: 37600
+Showing lines 60 to 120
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+60: DEFAULT_BASE_URL = "https://new.katmoviehd.top"
+61: KMHD_API_BASE = "https://api.dandndn.one/api/v1"
+62: KMHD_JWT_TOKEN = (
+63:     "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9."
+64:     "eyJzdWIiOiJhZG1pbiIsImV4cCI6MTgwNzQ4NDIzMywiaWF0IjoxNzA3NDg0MjMzfQ."
+65:     "7u5bF9PcMhvClSDZgsd6EU-CQnp1Ec--wsezkDEgiZo"
+66: )
+67: DEFAULT_DB_PATH = BASE_DIR / "katmoviehd.db"
+68: STATUS_FILE = BASE_DIR / "katmoviehd_status.json"
+69: 
+70: STOP_REQUESTED = False
+71: 
+72: 
+73: def _sigint_handler(signum, frame):
+74:     global STOP_REQUESTED
+75:     print("\n[!] Graceful shutdown requested... Finishing active requests.", flush=True)
+76:     STOP_REQUESTED = True
+77: 
+78: 
+79: def get_ssl_context() -> ssl.SSLContext:
+80:     ctx = ssl.create_default_context()
+81:     ctx.check_hostname = False
+82:     ctx.verify_mode = ssl.CERT_NONE
+83:     return ctx
+84: 
+85: 
+86: class KatMovieHDClient:
+87:     """Thread-safe HTTP client with rate-limiting, retries, and browser headers."""
+88: 
+89:     def __init__(self, request_interval: float = 0.3):
+90:         self.request_interval = request_interval
+91:         self._last_req_time = 0.0
+92:         self._lock = threading.Lock()
+93:         self.ssl_ctx = get_ssl_context()
+94: 
+95:     def _rate_limit(self):
+96:         with self._lock:
+97:             now = time.time()
+98:             elapsed = now - self._last_req_time
+99:             if elapsed < self.request_interval:
+100:                 time.sleep(self.request_interval - elapsed)
+101:             self._last_req_time = time.time()
+102: 
+103:     def get_text(self, url: str, headers: dict | None = None, timeout: int = 15) -> tuple[int, dict, str | None]:
+104:         self._rate_limit()
+105:         req_headers = {
+106:             "User-Agent": fast_fetch.USER_AGENT,
+107:             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+108:             "Accept-Language": "en-US,en;q=0.9",
+109:         }
+110:         if headers:
+111:             req_headers.update(headers)
+112: 
+113:         req = urllib.request.Request(url, headers=req_headers)
+114:         for attempt in range(3):
+115:             if STOP_REQUESTED:
+116:                 return 0, {}, None
+117:             try:
+118:                 with urllib.request.urlopen(req, context=self.ssl_ctx, timeout=timeout) as resp:
+119:                     code = resp.status
+120:                     resp_headers = dict(resp.headers)
+The above content does NOT show the entire file contents. If you need to view any lines of the file which were not shown to complete your task, call this tool again to view those lines.
+
+---
+
+## 🤖 AI (Antigravity)  `2026-10-19T17:41:48Z`
+
+Created At: 2026-10-19T17:41:48Z
+Completed At: 2026-10-19T17:41:49Z
+
+The command exited with code 0.
+Output:
+18-     - Direct REST lookup via https://api.dandndn.one/api/v1/file/{file_id} with JWT authorization.
+19-     - Extracts exact file size in bytes, original clean file name, and all mirror IDs.
+20-     - Unwraps HubCloud mirrors to 10Gbps Cloudflare R2 direct streams (r2.cloudflarestorage.com),
+21-       Fast Server 10G direct streams, and PixelDrain CDN.
+22-     - Captures GDFlix, KatDrive, FastDL, Send.cm, and 1Fichier mirrors.
+23:  6. Resumable via sitemap_cache table in staging SQLite database.
+24-  7. 100% Python Standard Library. Zero external pip packages.
+25-
+26-Usage:
+27-    python Fast_Fetch/import_katmoviehd.py --sync-api --max-pages 50   # Ingest first 50 pages (600 titles)
+28-    python Fast_Fetch/import_katmoviehd.py --sync-api                 # Ingest entire catalog (~51,250 titles)
+--
+153-    db_path.parent.mkdir(parents=True, exist_ok=True)
+154-    with sqlite3.connect(str(db_path)) as conn:
+155-        conn.execute("PRAGMA journal_mode=WAL")
+156-        conn.execute("PRAGMA synchronous=NORMAL")
+157-        conn.executescript("""
+158:            CREATE TABLE IF NOT EXISTS sitemap_cache (
+159-                loc TEXT PRIMARY KEY,
+160-                lastmod TEXT,
+161-                slug TEXT,
+162-                scraped INTEGER DEFAULT 0,
+163-                site TEXT DEFAULT 'katmoviehd',
+164-                raw_json TEXT
+165-            );
+166:            CREATE INDEX IF NOT EXISTS idx_sm_scraped ON sitemap_cache(scraped);
+167-
+168-            CREATE TABLE IF NOT EXISTS posts (
+169-                id INTEGER PRIMARY KEY AUTOINCREMENT,
+170-                canonical_key TEXT UNIQUE,
+171-                title TEXT,
+--
+712-        conn.commit()
+713-    return True
+714-
+715-
+716-def sync_sveltekit_api_to_db(db_path: Path, max_pages: int | None = None) -> int:
+717:    """Syncs the entire KatMovieHD catalog via SvelteKit __data.json pagination into sitemap_cache."""
+718-    init_staging_db(db_path)
+719-    client = KatMovieHDClient(request_interval=0.2)
+720-
+721-    print(f"[*] Starting KatMovieHD catalog sync from {DEFAULT_BASE_URL}/__data.json...", flush=True)
+722-    page = 1
+--
+759-
+760-        if records:
+761-            with sqlite3.connect(str(db_path)) as conn:
+762-                conn.executemany(
+763-                    """
+764:                    INSERT INTO sitemap_cache (loc, lastmod, slug, scraped, site, raw_json)
+765-                    VALUES (?, ?, ?, ?, ?, ?)
+766-                    ON CONFLICT(loc) DO UPDATE SET
+767-                        lastmod = excluded.lastmod,
+768-                        raw_json = excluded.raw_json;
+769-                    """,
+--
+794-    init_staging_db(db_path)
+795-    client = KatMovieHDClient(request_interval=delay)
+796-
+797-    with sqlite3.connect(str(db_path)) as conn:
+798-        cur = conn.cursor()
+799:        query = "SELECT loc, slug, raw_json FROM sitemap_cache WHERE scraped = 0 ORDER BY rowid ASC"
+800-        if limit:
+801-            query += f" LIMIT {limit}"
+802-        cur.execute(query)
+803-        pending_rows = cur.fetchall()
+804-
+805-    if not pending_rows:
+806:        print("[*] No pending titles found in sitemap_cache. Run --sync-api first.", flush=True)
+807-        return
+808-
+809-    total_pending = len(pending_rows)
+810-    print(f"[*] Starting KatMovieHD crawler: {total_pending:,} titles queued | {workers} workers | delay {delay}s\n", flush=True)
+811-
+--
+846-                break
+847-            loc, ok, rel_cnt, src_cnt, r2_cnt, pd_cnt = future.result()
+848-
+849-            with sqlite3.connect(str(db_path)) as conn:
+850-                conn.execute(
+851:                    "UPDATE sitemap_cache SET scraped = ? WHERE loc = ?",
+852-                    (1 if ok else -1, loc),
+853-                )
+854-                conn.commit()
+855-
+856-            if ok:
+--
+904-        print(f"[!] Database {db_path} does not exist yet. Run --sync-api first.")
+905-        return
+906-
+907-    with sqlite3.connect(str(db_path)) as conn:
+908-        cur = conn.cursor()
+909:        total_cache = cur.execute("SELECT COUNT(*) FROM sitemap_cache").fetchone()[0]
+910:        scraped = cur.execute("SELECT COUNT(*) FROM sitemap_cache WHERE scraped = 1").fetchone()[0]
+911:        pending = cur.execute("SELECT COUNT(*) FROM sitemap_cache WHERE scraped = 0").fetchone()[0]
+912:        failed = cur.execute("SELECT COUNT(*) FROM sitemap_cache WHERE scraped = -1").fetchone()[0]
+913-
+914-        posts = cur.execute("SELECT COUNT(*) FROM posts").fetchone()[0]
+915-        releases = cur.execute("SELECT COUNT(*) FROM releases").fetchone()[0]
+916-        sources = cur.execute("SELECT COUNT(*) FROM sources").fetchone()[0]
+917-        r2_cnt = cur.execute("SELECT COUNT(*) FROM sources WHERE service = 'fsl_r2'").fetchone()[0]
+
+---
+
