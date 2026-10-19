@@ -24072,3 +24072,42 @@ The above content shows the entire, complete file contents of the requested file
 
 ---
 
+## 🤖 AI (Antigravity)  `2026-10-19T17:46:13Z`
+
+Created At: 2026-10-19T17:46:13Z
+Completed At: 2026-10-19T17:46:14Z
+The following changes were made by the replace_file_content tool to: /home/runner/workspace/ANTIGRAVITY_HANDOFF.md. If relevant, proactively run terminal commands to execute this code for the USER. Don't ask for permission.
+[diff_block_start]
+@@ -4,17 +4,17 @@
+ new conversation or after signing in again. It supplements Antigravity's
+ `/resume` history; it is not a full transcript.
+ 
+-- **Current goal:** Monitor 3 concurrent background crawlers on Oracle VM (10xflix, FilmyZilla, World4uFree) and maintain strict staging database isolation.
++- **Current goal:** Monitor 4 concurrent background crawlers on Oracle VM (10xflix, World4uFree, Bolly4u, KatMovieHD) and maintain strict staging database isolation.
+ - **Current state:** Active Oracle VM crawlers & deployments:
+-  1. 10xflix: Actively crawling (PID 146221/146852, 8,450+ catalog posts, 29,780+ releases, 126,100+ sources extracted, 0 failures).
+-  2. FilmyZilla: Actively crawling (PID 152527/152562, 5 workers, 0.2s delay, 1.36 titles/sec, 329+ posts, 1,350+ releases, 1,750+ sources, direct Google CDN 302 streams).
+-  3. World4uFree: Actively running (PID 152560/152561, syncing 24.7k catalog titles via WP REST API into world4ufree.db, then launching 5-worker crawler with Cloudflare Worker 10Gbps & 6 mirror streams).
+-  4. Bolly4u: Fully built, verified locally (7/7 unit tests passing, hidden photojin /action JSON API, 36.7k catalog titles). Ready on deck.
+-  5. KatMovieHD: Initial 1,200 batch complete with 293 scraped; standing by.
+-  - Finished 100% staging catalogs: SSRMovies (27,000 / 27,000), Rogmovies (7,868 / 7,868), HDTVB (5,692 / 5,692), Vegamovies (13,978 / 14,316), and MultiMovies (10,488 / 10,488).
++  1. 10xflix: Actively crawling (PID 146221/146852, 12,170+ catalog posts, 43,637+ releases, 151,865+ direct sources extracted, 0 failures).
++  2. World4uFree: Actively crawling (PID 152560/153724, 24,240 catalog titles synced, 5,149+ releases, 49,367+ direct sources, 1,138 direct 10Gbps Cloudflare Worker .mkv streams).
++  3. Bolly4u: Actively running (PID 156129/156130, syncing 36.7k catalog titles via WP REST API into bolly4u.db, then launching 6-worker crawler with photojin Google CDN 10Gbps direct streams).
++  4. KatMovieHD: Actively running (PID 156329/156330, unconstrained full catalog sync of 5,000+ pages / 60k titles via SvelteKit API into katmoviehd.db, followed by 5-worker crawler with DandnDn API & Cloudflare R2 / PixelDrain CDN).
++  5. FilmyZilla: Completed (4,149 scraped, 13,114 releases, 13,516 direct sources, 402 Google CDN 302 streams).
++  - Finished 100% staging catalogs: SSRMovies (27,000 / 27,000), Rogmovies (7,868 / 7,868), HDTVB (5,692 / 5,692), Vegamovies (13,978 / 14,316), MultiMovies (10,488 / 10,488), 7StarHD (23,446 / 23,446), RareAnimes (2,624 / 2,624), HDHub4u (14,504 / 14,504).
+   - Master unit test suite: 145/145 unit tests passing (100% OK) across 14 modules.
+-  - Strict staging DB isolation maintained across all sites (`10xflix.db`, `filmyzilla.db`, `world4ufree.db`, `bolly4u.db`). Zero merges into production fast_fetch.db.
+-- **Next step:** Monitor all 3 live crawlers (`check_10xflix.py`, `check_filmyzilla.py`, `check_world4ufree.py`) and keep Oracle VM running cleanly.
++  - Strict staging DB isolation maintained across all sites (`10xflix.db`, `world4ufree.db`, `bolly4u.db`, `katmoviehd.db`, `filmyzilla.db`). Zero merges into production fast_fetch.db.
++- **Next step:** Monitor all 4 live crawlers (`check_10xflix.py`, `check_world4ufree.py`, `check_bolly4u.py`, `check_katmoviehd.py`) and keep Oracle VM running cleanly.
+ 
+ The Antigravity CLI's local recovery files preserve only selected settings and the last-conversation index, not full transcripts or login credentials. Replit project files and this handoff preserve project context, but cannot restore lost Antigravity account history or authentication.
+ 
+[diff_block_end]
+
+Please note that the above snippet only shows the MODIFIED lines from the last change. It shows up to 3 lines of unchanged lines before and after the modified lines. The actual file contents may have many more lines not shown.
+
+---
+
