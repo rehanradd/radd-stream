@@ -87260,3 +87260,23 @@ parsed releases count: 4
 
 ---
 
+## 🤖 AI (Antigravity)  `2026-10-19T12:17:49Z`
+
+Created At: 2026-10-19T12:17:49Z
+Completed At: 2026-10-19T12:17:53Z
+
+The command exited with code 0.
+Output:
+size: 510252315
+sources: 8
+  {'source_name': '⚡ HubCloud [FSL Cloudflare R2]', 'service': 'fsl_r2', 'resource_id': 'ddmtk1sg4vgrg8z', 'source_url': 'https://hubcloud.ist/drive/ddmtk1sg4vgrg8z', 'final_url': 'https://8330eb239b8516a8e389893f23dcdc32.r2.cloudflarestorage.com/hub/6626fb9e370148f09db3a17571e253a4?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=0d96666b83063f3509c1a15116e8d406%2F20261019%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20261019T121752Z&X-Amz-Expires=28800&X-Amz-SignedHeaders=host&response-content-disposition=attachment%3B%20filename%3D%22Bad.Apples.2025.480p.WEB-DL.HIN-ENG.x264.ESub-KatmovieHD.mkv%22&X-Amz-Signature=70d650d407f99c3585456228c5946153f02d0822b93e2b3aaf070ab13b39b89e', 'is_temporary': 1, 'quality': '720p'}
+  {'source_name': '⚡ HubCloud [10Gbps Fast Server]', 'service': 'hubcloud_10g', 'resource_id': 'ddmtk1sg4vgrg8z', 'source_url': 'https://hubcloud.ist/drive/ddmtk1sg4vgrg8z', 'final_url': 'https://pixel.hubcloud.ist/?id=843342f5925d76ef487b28b7f91f3359b7578a954907377609daba8660bcd3edafa1ba27d3adf5f88f9c814916a1a09d073e01547c18a4cc14307a876c2651c4bef885c449330d6cfadc3244be2e88552792e7297208120eab8e2b2e0f546e21::b8628f66c291131b36cb2769b1b5ec27', 'is_temporary': 0, 'quality': '720p'}
+  {'source_name': '⚡ PixelDrain [Direct CDN]', 'service': 'pixeldrain', 'resource_id': 'negn6f', 'source_url': 'https://hubcloud.ist/drive/ddmtk1sg4vgrg8z', 'final_url': 'https://pixeldrain.com/api/file/negn6f', 'is_temporary': 0, 'quality': '720p'}
+  {'source_name': '⚡ GDFlix Mirror', 'service': 'gdflix', 'resource_id': 'BiW7nkgz9ya5k7O', 'source_url': 'https://gd.kmhd.me/file/BiW7nkgz9ya5k7O', 'final_url': 'https://gd.kmhd.me/file/BiW7nkgz9ya5k7O', 'is_temporary': 0, 'quality': '720p'}
+  {'source_name': '⚡ KatDrive Mirror', 'service': 'katdrive', 'resource_id': '1792386563', 'source_url': 'https://katdrive.click/file/1792386563', 'final_url': 'https://katdrive.click/file/1792386563', 'is_temporary': 0, 'quality': '720p'}
+  {'source_name': '⚡ FastDL', 'service': 'fastdl', 'resource_id': 'ajrqnzvcf2mv', 'source_url': 'https://fastdl.icu/ajrqnzvcf2mv', 'final_url': 'https://fastdl.icu/ajrqnzvcf2mv', 'is_temporary': 0, 'quality': '720p'}
+  {'source_name': '⚡ Send.cm', 'service': 'sendcm', 'resource_id': 'fvs29ffbbt0k', 'source_url': 'https://send.cm/fvs29ffbbt0k', 'final_url': 'https://send.cm/fvs29ffbbt0k', 'is_temporary': 0, 'quality': '720p'}
+  {'source_name': '⚡ 1Fichier', 'service': '1fichier', 'resource_id': 'puhnkzf7lam6vxvqx4x5', 'source_url': 'https://1fichier.com/?puhnkzf7lam6vxvqx4x5', 'final_url': 'https://1fichier.com/?puhnkzf7lam6vxvqx4x5', 'is_temporary': 0, 'quality': '720p'}
+
+---
+
