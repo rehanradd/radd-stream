@@ -97751,3 +97751,279 @@ drwxr-xr-x 1 runner runner     2404 Oct 19 15:08 __pycache__
 
 ---
 
+## 🤖 AI (Antigravity)  `2026-10-19T16:08:08Z`
+
+Created At: 2026-10-19T16:08:08Z
+Completed At: 2026-10-19T16:08:09Z
+File Path: `file:///home/runner/workspace/radd-stream/Fast_Fetch/SITES.md`
+Total Lines: 627
+Total Bytes: 22022
+Showing lines 1 to 100
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+1: # SITES.md — Deep-Dive Site Reference
+2: 
+3: > Complete technical reference for every supported site: domains, API/data endpoints, bridge chains, regex patterns, and known issues.
+4: 
+5: ---
+6: 
+7: ## Quick Reference Table
+8: 
+9: | Site | Domain | Data Source | Bridge | Known TLD Rotations |
+10: |------|---------|------------|--------|---------------------|
+11: | Vegamovies | vegamovies.gallery | WP XML Sitemap | Nexdrive | `.gallery → .yt → .one → .vip` |
+12: | RogMovies | rogmovies.one | WP XML Sitemap | Nexdrive | `.wtf → .one → .vip` |
+13: | SSRMovies | ssrmovies.gripe | WP REST API | LinksZilla | `.games → .gripe → .monster` |
+14: | KatMovieHD | katmoviehd.fans | SvelteKit JS | KatDrive/DandnDn | `.fans → .rodeo → .top` |
+15: | 7StarHD | 7starhd.rich | Homepage scrape | MobileJSR | `.rich → .run → .com` |
+16: | 10xflix | 10xflix.help | WP REST API | MobileJSR | `.help → .wiki → .me` |
+17: | MultiMovies ⭐ | multimovies.garden | JSON APIs + XML Sitemap | watchConfig initialServers (7 embeds) | `.garden → .com → .net → .org` |
+18: | HDHub4u | new3.hdhub4u.free | WP post-sitemap.xml | greenmotors.cc | `new3 → new4 → new5` |
+19: | BollyShares | bollyshares.xyz | WP post-sitemap.xml | 10moviesz.mom | `bollywood1.xyz → bollyshares.xyz` |
+20: | FilmyZilla | filmyzilla74.com | XML Sitemap | /server/ pages | `71 → 73 → 74 → 75` |
+21: 
+22: ---
+23: 
+24: ## 1. Vegamovies (`vegamovies.gallery`)
+25: 
+26: ### Identity
+27: - **Primary domain:** `https://vegamovies.gallery`
+28: - **CMS:** WordPress
+29: - **Target content:** Hollywood, International, Western Series, Anime, Dual Audio
+30: 
+31: ### Data Endpoints
+32: ```
+33: Sitemap index:
+34:   GET https://vegamovies.gallery/sitemap.xml
+35:   Response: XML with <loc> entries for sub-sitemaps
+36: 
+37: Sub-sitemaps (one per ~500-1000 posts):
+38:   GET https://vegamovies.gallery/post-sitemap1.xml
+39:   GET https://vegamovies.gallery/post-sitemap2.xml
+40:   ...
+41:   Each: <url><loc>POST_URL</loc><lastmod>DATE</lastmod></url>
+42: 
+43: Optional — WP REST API (may be enabled):
+44:   GET https://vegamovies.gallery/wp-json/wp/v2/posts?per_page=100
+45: ```
+46: 
+47: ### Post Structure
+48: ```
+49: URL pattern:  /movie-title-year-quality-format/
+50: Post HTML:
+51:   - <title>: "Movie Title (Year) | Vegamovies Official"
+52:   - og:image: poster URL (may be base64 encoded u= param)
+53:   - Nexdrive links: href="https://nexdrive.fit/genxfm/..."
+54:   - Multiple Nexdrive links per post = multiple qualities (480p, 720p, 1080p)
+55:   - Each Nexdrive page = one quality, multiple CDN servers
+56: ```
+57: 
+58: ### Bridge Chain: Nexdrive
+59: ```
+60: Post page
+61:   └─ Nexdrive link: https://nexdrive.fit/genxfm/<TOKEN>
+62:       └─ Nexdrive page contains buttons:
+63:           ├─ FastDL: https://fastdl.beer/embed.php?download=<ID>
+64:           │    └─ JS: var reurl="https://fastdl.beer/dl.php?link=<GOOGLE_CDN_URL>"
+65:           │    └─ Final: https://video-downloads.googleusercontent.com/...
+66:           ├─ VCloud: https://vcloud.beer/<ID>
+67:           │    └─ JS: var url = atob(atob('...'))
+68:           │    └─ Fetch token URL → FSL (Cloudflare R2) or HubCloud
+69:           │    └─ Final R2: https://pub-XXXX.r2.dev/<hash>?token=...
+70:           ├─ HubCloud: https://hubcloud.ist/drive/<ID>
+71:           │    └─ Redirect → gamerxyt.com/hubcloud.php
+72:           │    └─ Final: video-downloads.googleusercontent.com/...
+73:           ├─ VegaDrive: https://one.vegadrive.me/s/<ID>
+74:           │    └─ Maps to: /d/<ID>/skyd (10Gbps)
+75:           ├─ PixelDrain: https://pixeldrain.com/u/<ID>
+76:           │    └─ API: pixeldrain.com/api/file/<ID>
+77:           └─ FilePress: https://new1.filepress.lat/file/<ID>
+78: ```
+79: 
+80: ### Key Regex Patterns
+81: ```python
+82: # Nexdrive links on post page
+83: nex_links = re.findall(r"""href=["'](https?://nexdrive\.[a-z]+/[^"'<>\s]+)["']""", html)
+84: 
+85: # FastDL CDN extract
+86: cdn_m = re.search(r'var\s+reurl\s*=\s*["\']([^"\']+)["\']', fastdl_html)
+87: 
+88: # VCloud base64
+89: b64_m = re.search(r'atob\(atob\(["\']([^"\']+)["\']\)\)', vcloud_html)
+90: url = base64.b64decode(base64.b64decode(b64_m.group(1))).decode()
+91: 
+92: # VegaDrive
+93: vd_id = re.search(r'/s/([A-Za-z0-9]+)', vegadrive_url).group(1)
+94: final = f"https://one.vegadrive.me/d/{vd_id}/skyd"
+95: 
+96: # PixelDrain
+97: pd_id = re.search(r'/(?:u|d|api/file)/([A-Za-z0-9_-]+)', pd_url).group(1)
+98: final = f"https://pixeldrain.com/api/file/{pd_id}"
+99: ```
+100: 
+The above content does NOT show the entire file contents. If you need to view any lines of the file which were not shown to complete your task, call this tool again to view those lines.
+
+---
+
+## 🤖 AI (Antigravity)  `2026-10-19T16:08:13Z`
+
+Created At: 2026-10-19T16:08:13Z
+Completed At: 2026-10-19T16:08:13Z
+File Path: `file:///home/runner/workspace/radd-stream/Fast_Fetch/SITES.md`
+Total Lines: 627
+Total Bytes: 22022
+Showing lines 101 to 250
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+101: ---
+102: 
+103: ## 2. RogMovies (`rogmovies.one`)
+104: 
+105: ### Identity
+106: - **Primary domain:** `https://rogmovies.one`
+107: - **CMS:** WordPress
+108: - **Target content:** Bollywood, Tollywood, Pollywood, South Dubbed, Indian Web Series
+109: 
+110: ### Data Endpoints
+111: ```
+112: Sitemap index:
+113:   GET https://rogmovies.one/sitemap.xml
+114: Sub-sitemaps:
+115:   GET https://rogmovies.one/post-sitemap1.xml
+116:   GET https://rogmovies.one/post-sitemap2.xml
+117: ```
+118: 
+119: ### Notes
+120: - Identical architecture to Vegamovies (same Nexdrive bridge chain)
+121: - Cross-links with Vegamovies in nav — harvest_sister_domains() catches domain updates
+122: - Extractor: uses same `parse_post_metadata()` + `unwrap_nexdrive()` flow (default extractor)
+123: 
+124: ---
+125: 
+126: ## 3. SSRMovies (`ssrmovies.surf`)
+127: 
+128: ### Identity
+129: - **Active 2026 Production Domain:** `https://ssrmovies.surf`
+130: - **Legacy/Rotated Domains:** `ssrmovies.gripe` (HTTP 301 → surf), `ssrmovies.games` (HTTP 301 → gripe)
+131: - **CMS:** WordPress
+132: - **Dedicated Importer:** `Fast_Fetch/import_ssrmovies.py` (staging DB: `ssrmovies.db`)
+133: - **Monitor:** `python check_ssrmovies.py`
+134: 
+135: ### Data Endpoints
+136: ```
+137: WP REST API (sitemap redirects to homepage — use API instead):
+138:   GET https://ssrmovies.surf/wp-json/wp/v2/posts?per_page=100&page=1
+139:   Total posts: 27,362 across 274 pages (headers: X-WP-Total: 27362, X-WP-TotalPages: 274)
+140: 
+141: Response: JSON array of post objects
+142: Fields used:
+143:   post["link"]              → canonical post URL
+144:   post["slug"]              → URL slug
+145:   post["date"] / modified   → publish/update date
+146:   post["title"]["rendered"] → post title
+147:   post["content"]["rendered"] → HTML body with release download buttons
+148: ```
+149: 
+150: ### Post Structure & Release Buttons
+151: ```
+152: Download buttons format:
+153:   <a href="https://secure.linkszilla.top/view/<ID>" ...>Watch & Download in 1080p - 2.8GB</a>
+154:   <a href="https://secure.linkszilla.top/view/<ID>" ...>Watch & Download in 720p - 1.2GB</a>
+155:   <a href="https://secure.linkszilla.top/view/<ID>" ...>Watch & Download in 480p - 434MB</a>
+156: 
+157: Poster Image:
+158:   <p class="poster" align="center"><img src="..." />
+159:   Fallback: TMDB CDN / OpenGraph
+160: ```
+161: 
+162: ### Bridge Chain: LinksZilla
+163: ```
+164: Post page
+165:   └─ LinksZilla link: https://secure.linkszilla.top/view/<ID>
+166:       └─ Page contains mirror buttons:
+167:           ├─ Direct-Cloud: dl.direct-cloud.top/d/<ID> → Google CDN (lh3.googleusercontent.com)
+168:           ├─ HubCloud Drive: hubcloud.ist/drive/<ID> → 10Gbps Cloudflare R2 (r2.cloudflarestorage.com)
+169:           ├─ Watch-Online: watch-online.mom/e/<ID> (instant web stream player)
+170:           ├─ GDFlix: new5.gdflix.io/file/<ID> (Google Drive)
+171:           ├─ PixelDrain: pixeldrain.com/api/file/<ID> (Direct CDN)
+172:           ├─ VikingFile, Gofile, 1fichier, MegaUp, HexLoad
+173:           └─ ClicknUpload
+174: ```
+175: 
+176: ### Key Regex
+177: ```python
+178: linkszilla_button = re.compile(r'href=["\'](https?://secure\.linkszilla\.top/view/[^"\']+)["\'][^>]*>(.*?)</a>', re.I | re.S)
+179: quality_re = re.compile(r'\b(2160p|4k|1080p|720p|480p)\b', re.I)
+180: size_re = re.compile(r'(\d+(?:\.\d+)?\s*(?:GB|MB))', re.I)
+181: poster_re = re.compile(r'<p\s+class=["\']poster["\'][^>]*>.*?<img[^>]+src=["\']([^"\']+)["\']', re.I | re.S)
+182: ```
+183: 
+184: ---
+185: 
+186: ## 4. KatMovieHD (`katmoviehd.fans`)
+187: 
+188: ### Identity
+189: - **Primary domain:** `https://katmoviehd.fans`
+190: - **Landing/mirror:** `https://katmovieshd.net` (302 → fans)
+191: - **CMS:** SvelteKit (Next.js-style SSR)
+192: 
+193: ### Data Endpoints
+194: ```
+195: Catalog data (embedded in HTML, not a separate API):
+196:   GET https://katmoviehd.fans/
+197:   Response HTML contains:
+198:     items:[{slug:"post-slug",title:"Movie (2024)",...},{...}]
+199:   Regex: r'items:\[(.*?)\]' → extract slugs
+200: 
+201: Post URL: https://katmoviehd.fans/<slug>
+202: Post API (if available): https://katmoviehd.fans/api/post/<slug>
+203: 
+204: KatDrive/DandnDn CDN API:
+205:   GET https://api.dandndn.one/api/v1/file/<FILE_ID>
+206:   Returns: {"url": "https://hubcloud.ist/drive/...", ...}
+207: ```
+208: 
+209: ### Bridge Chain: KatDrive
+210: ```
+211: Post page
+212:   └─ KatDrive link: https://katdrive.net/<ID> or dandndn API
+213:       └─ API: api.dandndn.one/api/v1/file/<ID>
+214:           └─ Returns direct links:
+215:               ├─ HubCloud Drive
+216:               ├─ 1fichier.com
+217:               └─ Send.cm
+218: ```
+219: 
+220: ---
+221: 
+222: ## 5. 7StarHD (`7starhd.rich`)
+223: 
+224: ### Identity
+225: - **Primary domain:** `https://7starhd.rich`
+226: - **CMS:** WordPress
+227: 
+228: ### Data Endpoints
+229: ```
+230: Homepage scrape (no sitemap/API):
+231:   GET https://7starhd.rich/
+232:   Response HTML: <li class="thumb"><a href="/post-slug/">
+233:   Filter out: /page/, /category/, /tag/, /genre/, /how-to, /disclaimer, /dmca
+234: 
+235: Category pages (bonus — more posts):
+236:   GET https://7starhd.rich/category/bollywood/page/2/
+237:   GET https://7starhd.rich/category/hollywood/page/2/
+238: ```
+239: 
+240: ### Bridge Chain: MobileJSR
+241: ```
+242: Post page
+243:   └─ MobileJSR link: https://mobilejsr.com/view/<ID>
+244:       └─ Page HTML: <iframe src="https://mobilejsr.com/embed/<ID>">
+245:           └─ Embed HTML contains:
+246:               ├─ Direct video <source src="..."> or
+247:               ├─ Cloud mirror links (GDrive, HubCloud, etc.)
+248:               └─ Stored as-is (stable persistent URL)
+249: ```
+250: 
+The above content does NOT show the entire file contents. If you need to view any lines of the file which were not shown to complete your task, call this tool again to view those lines.
+
+---
+
