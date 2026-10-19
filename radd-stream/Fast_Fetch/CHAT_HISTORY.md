@@ -86175,3 +86175,56 @@ The above content does NOT show the entire file contents. If you need to view an
 
 ---
 
+## 🤖 AI (Antigravity)  `2026-10-19T12:13:47Z`
+
+Created At: 2026-10-19T12:13:47Z
+Completed At: 2026-10-19T12:13:48Z
+File Path: `file:///home/runner/workspace/push.py`
+Total Lines: 261
+Total Bytes: 9571
+Showing lines 181 to 220
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+181:         ROOT_DIR / "radd-stream" / "Fast_Fetch" / "import_vegamovies.py",
+182:         ROOT_DIR / "radd-stream" / "Fast_Fetch" / "import_7starhd.py",
+183:         ROOT_DIR / "radd-stream" / "Fast_Fetch" / "import_hdhub4u.py",
+184:         ROOT_DIR / "radd-stream" / "Fast_Fetch" / "import_rareanimes.py",
+185:         ROOT_DIR / "radd-stream" / "Fast_Fetch" / "import_katmoviehd.py",
+186:         ROOT_DIR / "radd-stream" / "Fast_Fetch" / "import_10xflix.py",
+187:         ROOT_DIR / "radd-stream" / "Fast_Fetch" / "backup_manager.py",
+188:         ROOT_DIR / "radd-stream" / "Fast_Fetch" / "fast_fetch.py",
+189:         ROOT_DIR / "radd-stream" / "Fast_Fetch" / "CHAT_HISTORY.md",
+190:     ]
+191: 
+192:     existing = [str(f) for f in files_to_sync if f.exists()]
+193:     if not existing:
+194:         return True
+195: 
+196:     cmd = [
+197:         "scp", "-i", key_path,
+198:         "-o", "StrictHostKeyChecking=no",
+199:         "-o", "ConnectTimeout=10",
+200:     ] + existing + [f"{ORACLE_USER}@{ORACLE_IP}:/opt/radd-stream/Fast_Fetch/"]
+201: 
+202:     try:
+203:         res = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+204:         if res.returncode == 0:
+205:             print(f"[✓] Synced {len(existing)} files to Oracle VM /opt/radd-stream/Fast_Fetch/.", flush=True)
+206:             return True
+207:         else:
+208:             print(f"[!] Oracle SCP note: {res.stderr.strip()}", file=sys.stderr)
+209:             return False
+210:     except Exception as e:
+211:         print(f"[!] Oracle SCP error: {e}", file=sys.stderr)
+212:         return False
+213:     finally:
+214:         if os.path.exists(key_path):
+215:             os.remove(key_path)
+216: 
+217: 
+218: def main():
+219:     parser = argparse.ArgumentParser(description="Unified Push & Deployment Tool for radd-stream")
+220:     parser.add_argument("message", nargs="?", default=None, help="Commit message")
+The above content does NOT show the entire file contents. If you need to view any lines of the file which were not shown to complete your task, call this tool again to view those lines.
+
+---
+
