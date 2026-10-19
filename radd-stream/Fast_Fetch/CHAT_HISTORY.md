@@ -85136,3 +85136,67 @@ The above content does NOT show the entire file contents. If you need to view an
 
 ---
 
+## 🤖 AI (Antigravity)  `2026-10-19T11:49:27Z`
+
+Created At: 2026-10-19T11:49:27Z
+Completed At: 2026-10-19T11:49:27Z
+File Path: `file:///home/runner/workspace/radd-stream/Fast_Fetch/import_10xflix.py`
+Total Lines: 783
+Total Bytes: 29125
+Showing lines 520 to 570
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+520:                 cur.execute(
+521:                     """
+522:                     INSERT INTO sources (
+523:                         release_id, source_name, service, resource_id,
+524:                         source_url, final_url, is_temporary, quality
+525:                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+526:                     """,
+527:                     (
+528:                         release_id,
+529:                         s["source_name"],
+530:                         s["service"],
+531:                         s["resource_id"],
+532:                         s["source_url"],
+533:                         s["final_url"],
+534:                         s["is_temporary"],
+535:                         s["quality"],
+536:                     ),
+537:                 )
+538: 
+539:         conn.commit()
+540:     return True
+541: 
+542: 
+543: def sync_wp_api_to_db(db_path: Path, max_pages: int | None = None, per_page: int = 100) -> int:
+544:     """Syncs the entire 10xflix catalog via WP REST API (/wp/v2/posts) into sitemap_cache."""
+545:     init_staging_db(db_path)
+546:     client = TenXFlixClient()
+547: 
+548:     print(f"[*] Starting 10xflix WP REST API sync from {WP_API_URL}...", flush=True)
+549:     page = 1
+550:     total_synced = 0
+551:     total_found = None
+552: 
+553:     while not STOP_REQUESTED:
+554:         query_url = f"{WP_API_URL}?per_page={per_page}&page={page}&_embed=1"
+555:         t0 = time.time()
+556:         code, posts, headers = client.get_json(query_url, timeout=15)
+557:         dt = time.time() - t0
+558: 
+559:         if code != 200 or not posts or not isinstance(posts, list):
+560:             print(f"[!] API page {page} returned status {code}. Stopping sync.", flush=True)
+561:             break
+562: 
+563:         if total_found is None:
+564:             total_found = int(headers.get("x-wp-total", 0)) if "x-wp-total" in headers else len(posts)
+565:             print(f"[*] Total catalog size reported: {total_found:,} titles.", flush=True)
+566: 
+567:         records = []
+568:         for post in posts:
+569:             permalink = post.get("link")
+570:             if not permalink:
+The above content does NOT show the entire file contents. If you need to view any lines of the file which were not shown to complete your task, call this tool again to view those lines.
+
+---
+
