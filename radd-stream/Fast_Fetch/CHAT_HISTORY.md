@@ -83164,3 +83164,330 @@ The above content does NOT show the entire file contents. If you need to view an
 
 ---
 
+## 🤖 AI (Antigravity)  `2026-10-19T11:26:09Z`
+
+Created At: 2026-10-19T11:26:09Z
+Completed At: 2026-10-19T11:26:09Z
+File Path: `file:///home/runner/workspace/radd-stream/Fast_Fetch/SITES.md`
+Total Lines: 627
+Total Bytes: 22022
+Showing lines 1 to 100
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+1: # SITES.md — Deep-Dive Site Reference
+2: 
+3: > Complete technical reference for every supported site: domains, API/data endpoints, bridge chains, regex patterns, and known issues.
+4: 
+5: ---
+6: 
+7: ## Quick Reference Table
+8: 
+9: | Site | Domain | Data Source | Bridge | Known TLD Rotations |
+10: |------|---------|------------|--------|---------------------|
+11: | Vegamovies | vegamovies.gallery | WP XML Sitemap | Nexdrive | `.gallery → .yt → .one → .vip` |
+12: | RogMovies | rogmovies.one | WP XML Sitemap | Nexdrive | `.wtf → .one → .vip` |
+13: | SSRMovies | ssrmovies.gripe | WP REST API | LinksZilla | `.games → .gripe → .monster` |
+14: | KatMovieHD | katmoviehd.fans | SvelteKit JS | KatDrive/DandnDn | `.fans → .rodeo → .top` |
+15: | 7StarHD | 7starhd.rich | Homepage scrape | MobileJSR | `.rich → .run → .com` |
+16: | 10xflix | 10xflix.help | WP REST API | MobileJSR | `.help → .wiki → .me` |
+17: | MultiMovies ⭐ | multimovies.garden | JSON APIs + XML Sitemap | watchConfig initialServers (7 embeds) | `.garden → .com → .net → .org` |
+18: | HDHub4u | new3.hdhub4u.free | WP post-sitemap.xml | greenmotors.cc | `new3 → new4 → new5` |
+19: | BollyShares | bollyshares.xyz | WP post-sitemap.xml | 10moviesz.mom | `bollywood1.xyz → bollyshares.xyz` |
+20: | FilmyZilla | filmyzilla74.com | XML Sitemap | /server/ pages | `71 → 73 → 74 → 75` |
+21: 
+22: ---
+23: 
+24: ## 1. Vegamovies (`vegamovies.gallery`)
+25: 
+26: ### Identity
+27: - **Primary domain:** `https://vegamovies.gallery`
+28: - **CMS:** WordPress
+29: - **Target content:** Hollywood, International, Western Series, Anime, Dual Audio
+30: 
+31: ### Data Endpoints
+32: ```
+33: Sitemap index:
+34:   GET https://vegamovies.gallery/sitemap.xml
+35:   Response: XML with <loc> entries for sub-sitemaps
+36: 
+37: Sub-sitemaps (one per ~500-1000 posts):
+38:   GET https://vegamovies.gallery/post-sitemap1.xml
+39:   GET https://vegamovies.gallery/post-sitemap2.xml
+40:   ...
+41:   Each: <url><loc>POST_URL</loc><lastmod>DATE</lastmod></url>
+42: 
+43: Optional — WP REST API (may be enabled):
+44:   GET https://vegamovies.gallery/wp-json/wp/v2/posts?per_page=100
+45: ```
+46: 
+47: ### Post Structure
+48: ```
+49: URL pattern:  /movie-title-year-quality-format/
+50: Post HTML:
+51:   - <title>: "Movie Title (Year) | Vegamovies Official"
+52:   - og:image: poster URL (may be base64 encoded u= param)
+53:   - Nexdrive links: href="https://nexdrive.fit/genxfm/..."
+54:   - Multiple Nexdrive links per post = multiple qualities (480p, 720p, 1080p)
+55:   - Each Nexdrive page = one quality, multiple CDN servers
+56: ```
+57: 
+58: ### Bridge Chain: Nexdrive
+59: ```
+60: Post page
+61:   └─ Nexdrive link: https://nexdrive.fit/genxfm/<TOKEN>
+62:       └─ Nexdrive page contains buttons:
+63:           ├─ FastDL: https://fastdl.beer/embed.php?download=<ID>
+64:           │    └─ JS: var reurl="https://fastdl.beer/dl.php?link=<GOOGLE_CDN_URL>"
+65:           │    └─ Final: https://video-downloads.googleusercontent.com/...
+66:           ├─ VCloud: https://vcloud.beer/<ID>
+67:           │    └─ JS: var url = atob(atob('...'))
+68:           │    └─ Fetch token URL → FSL (Cloudflare R2) or HubCloud
+69:           │    └─ Final R2: https://pub-XXXX.r2.dev/<hash>?token=...
+70:           ├─ HubCloud: https://hubcloud.ist/drive/<ID>
+71:           │    └─ Redirect → gamerxyt.com/hubcloud.php
+72:           │    └─ Final: video-downloads.googleusercontent.com/...
+73:           ├─ VegaDrive: https://one.vegadrive.me/s/<ID>
+74:           │    └─ Maps to: /d/<ID>/skyd (10Gbps)
+75:           ├─ PixelDrain: https://pixeldrain.com/u/<ID>
+76:           │    └─ API: pixeldrain.com/api/file/<ID>
+77:           └─ FilePress: https://new1.filepress.lat/file/<ID>
+78: ```
+79: 
+80: ### Key Regex Patterns
+81: ```python
+82: # Nexdrive links on post page
+83: nex_links = re.findall(r"""href=["'](https?://nexdrive\.[a-z]+/[^"'<>\s]+)["']""", html)
+84: 
+85: # FastDL CDN extract
+86: cdn_m = re.search(r'var\s+reurl\s*=\s*["\']([^"\']+)["\']', fastdl_html)
+87: 
+88: # VCloud base64
+89: b64_m = re.search(r'atob\(atob\(["\']([^"\']+)["\']\)\)', vcloud_html)
+90: url = base64.b64decode(base64.b64decode(b64_m.group(1))).decode()
+91: 
+92: # VegaDrive
+93: vd_id = re.search(r'/s/([A-Za-z0-9]+)', vegadrive_url).group(1)
+94: final = f"https://one.vegadrive.me/d/{vd_id}/skyd"
+95: 
+96: # PixelDrain
+97: pd_id = re.search(r'/(?:u|d|api/file)/([A-Za-z0-9_-]+)', pd_url).group(1)
+98: final = f"https://pixeldrain.com/api/file/{pd_id}"
+99: ```
+100: 
+The above content does NOT show the entire file contents. If you need to view any lines of the file which were not shown to complete your task, call this tool again to view those lines.
+
+---
+
+## 🤖 AI (Antigravity)  `2026-10-19T11:26:13Z`
+
+Created At: 2026-10-19T11:26:13Z
+Completed At: 2026-10-19T11:26:13Z
+File Path: `file:///home/runner/workspace/radd-stream/Fast_Fetch/SITES.md`
+Total Lines: 627
+Total Bytes: 22022
+Showing lines 250 to 450
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+250: 
+251: ### Key Regex
+252: ```python
+253: # Homepage post links
+254: post_links = re.findall(r"""href=["'](https?://7starhd\.rich/[a-zA-Z0-9\-_]+/)["']""", html)
+255: # MobileJSR bridges
+256: mj_links = re.findall(r"""href=["'](https?://mobilejsr\.com/view/[^"'<>\s]+)["']""", html)
+257: ```
+258: 
+259: ---
+260: 
+261: ## 6. 10xflix (`10xflix.help`)
+262: 
+263: ### Identity
+264: - **Primary domain:** `https://10xflix.help`
+265: - **Old domain:** `10xflix.wiki` (normalize → .help)
+266: - **CMS:** WordPress
+267: 
+268: ### Data Endpoints
+269: ```
+270: WP REST API:
+271:   GET https://10xflix.help/wp-json/wp/v2/posts?per_page=100
+272:   GET https://10xflix.help/wp-json/wp/v2/posts?per_page=100&page=2
+273:   Same structure as SSRMovies REST API response
+274: ```
+275: 
+276: ### Bridge
+277: - Same as 7StarHD: MobileJSR links in post content
+278: 
+279: ---
+280: 
+281: ## 7. MultiMovies (`multimovies.garden`) — ⭐ PRIORITY #1
+282: 
+283: > **Best quality, most sources, most accurate metadata. This is our crown jewel.**
+284: 
+285: ### Identity
+286: - **Primary domain:** `https://multimovies.garden`
+287: - **CMS:** Custom (NOT WordPress) — SPA-like with server-rendered HTML + embedded JSON
+288: - **Content:** Movies, TV Series, Anime — Hindi, English, Dual Audio, Multi-language
+289: - **TLD rotations:** `.garden → .com → .net → .org → .live`
+290: 
+291: ### JSON API Endpoints (Discovered 2026-10-13)
+292: 
+293: ```
+294: 🔍 SEARCH API (returns structured JSON, no scraping needed):
+295:   GET https://multimovies.garden/api/search?q=<query>
+296:   Response: {
+297:     "movies": [{id, title, type, year, rating, quality, poster, url}, ...],
+298:     "tv_shows": [{id, title, type, year, rating, quality, poster, url}, ...],
+299:     "people": [...],
+300:     "results": [{id, title, type, year, ...}, ...],
+301:     "total": N
+302:   }
+303:   - poster URLs are TMDB: https://image.tmdb.org/t/p/w185/<hash>.jpg
+304:   - url format: /movie/<slug>-<id> or /series/<slug>-<id>
+305: 
+306: 📊 DISCOVER API (trending/popular catalog):
+307:   GET https://multimovies.garden/api/discover
+308:   Response: {
+309:     "items": [{id, type, slug, url, title, year, rating, quality, audio, kind, poster, backdrop, views}, ...],
+310:     "sections": [...],
+311:     "reason": "...",
+312:     "personalized": bool,
+313:     "signal_count": N
+314:   }
+315:   - Returns most popular/trending titles
+316:   - Includes view counts, backdrop URLs, quality info
+317: ```
+318: 
+319: ### XML Sitemap (Bulk Catalog)
+320: ```
+321: Sitemap index:
+322:   GET https://multimovies.garden/sitemap.xml
+323:   Lists: sitemap-titles-1.xml, sitemap-titles-2.xml, ...
+324:          sitemap-episodes-*.xml (skip these — episodes are fetched per-series)
+325: 
+326: Title sitemaps (10,000 entries each):
+327:   GET https://multimovies.garden/sitemap-titles-1.xml
+328:   Filter: only URLs containing /movie/ or /series/
+329: ```
+330: 
+331: ### URL Structure
+332: ```
+333: Movies:   /movie/<slug>-<numeric_id>     (e.g. /movie/kalki-2898-ad-55025)
+334: Series:   /series/<slug>-<id>            (e.g. /series/mirzapur-2571)
+335: Episodes: /series/<slug>-<id>/season/<N>/episode/<N>
+336: 
+337: ⚠️ The numeric ID suffix is REQUIRED — slug-only URLs return 404
+338: ```
+339: 
+340: ### watchConfig (Verified Structure — NOT what was documented before)
+341: 
+342: The old documentation was WRONG. Here is the actual verified structure:
+343: 
+344: ```javascript
+345: // Found in EVERY movie page and EVERY episode page (NOT series root)
+346: const watchItem = {
+347:   "titleId": 55025,
+348:   "title": "Kalki 2898 - AD",
+349:   "poster": "https://image.tmdb.org/t/p/w342/<hash>.jpg",
+350:   "backdrop": "https://image.tmdb.org/t/p/w780/<hash>.jpg",
+351:   "type": "movie",      // or "tv"
+352:   "url": "/movie/kalki-2898-ad-55025"
+353: };
+354: 
+355: const watchConfig = {
+356:   "titleId": 55025,
+357:   "season": null,        // or season number for episodes
+358:   "episode": null,       // or episode number
+359:   "initialServers": [    // ← NOT "sources" — this was wrong in old docs
+360:     {
+361:       "id": "mirror_15031",
+362:       "name": "Filesforever Mirror",
+363:       "type": "iframe",
+364:       "url": "https://filesforever.link/embed/pumu7an",
+365:       "quality": "1080p",
+366:       "is_custom": true   // Custom uploaded = highest quality
+367:     },
+368:     {
+369:       "id": "autoembed_1",
+370:       "name": "Cineverse",
+371:       "type": "iframe",
+372:       "url": "https://rozgarlelo.modiplay.xyz/embed/tmdb/movie?id=801688",
+373:       "quality": "HD",
+374:       "is_custom": false
+375:     },
+376:     // ... more servers
+377:   ],
+378:   "directEpisode": true,
+379:   "playRequested": true
+380: };
+381: ```
+382: 
+383: **Regex to extract:**
+384: ```python
+385: re.search(r'watchConfig\s*=\s*(\{.*?\});', html, re.DOTALL)
+386: # Then: json.loads(match)[\"initialServers\"]
+387: ```
+388: 
+389: ### Embed Servers (7 Verified)
+390: 
+391: | # | Server Name | Domain | ID Type | URL Pattern (Movie) | URL Pattern (TV) | Stream Resolution |
+392: |---|------------|--------|---------|---------------------|------------------|-------------------|
+393: | 1 | **Filesforever** | `filesforever.link` | Custom hash | `/embed/<hash>` | N/A | ✅ 1080p custom upload |
+394: | 2 | **Cineverse** | `rozgarlelo.modiplay.xyz` | TMDB ID | `/embed/tmdb/movie?id=<tmdb>` | `/embed/tmdb/tv?id=<tmdb>&s=N&e=N` | iframe (slow/timeout) |
+395: | 3 | **GD Mirror** | `streams.iqsmartgames.com` | IMDB ID | `/embed/movie/<imdb>?key=<apikey>` | `/embed/tv/<tmdb>/S/E?key=<apikey>` | iframe (JS-rendered) |
+396: | 4 | **Vidrift** | `embed.vidrift.net` | TMDB ID | `/embed/movie/<tmdb>` | `/embed/tv/<tmdb>/S/E` | HLS via JS |
+397: | 5 | **VIDOUT** | `vidout.pages.dev` | IMDB ID | `/movie/<imdb>` | `/tv/<tmdb>/sN/eN` | ✅ Direct m3u8 HLS |
+398: | 6 | **Filmu** | `embed.filmu.in` | TMDB ID | `/movie/<tmdb>` | `/tv/<tmdb>/S/E` | Vite JS player |
+399: | 7 | **VidBolt** | `vidbolt.xyz` | TMDB ID | `/movie/<tmdb>` | `/tv/<tmdb>/S/E` | JS player |
+400: 
+401: ### TMDB & IMDB ID Extraction
+402: 
+403: The embed URLs expose both TMDB and IMDB IDs for free metadata enrichment:
+404: ```python
+405: # TMDB ID from embed URLs (numeric, 4+ digits)
+406: tmdb_id = re.search(r'/(?:movie|tv)/(\d{4,})', embed_url)
+407: # Also: /embed/tmdb/movie?id=<tmdb_id>
+408: 
+409: # IMDB ID from embed URLs (tt followed by 7+ digits)
+410: imdb_id = re.search(r'/(tt\d{7,})', embed_url)
+411: 
+412: # API key for GD Mirror (static, shared):
+413: # ?key=e11a7debaaa4f5d25b671706ffe4d2acb56efbd4
+414: ```
+415: 
+416: ### Series Episode Architecture
+417: 
+418: ```
+419: Series root page (/series/<slug>-<id>):
+420:   → Lists all seasons and episodes as HTML links
+421:   → Does NOT contain watchConfig (no streams on root page)
+422:   → Has Schema.org BreadcrumbList JSON-LD
+423: 
+424: Episode page (/series/<slug>-<id>/season/N/episode/N):
+425:   → HAS its own watchConfig with initialServers (6 servers per episode)
+426:   → Has Schema.org TVEpisode JSON-LD with name, description, season, episode number
+427:   → Has const seasonEpisodeNumbers = [1,2,3,...] (episode count per season)
+428:   → Each episode streams via all 6 autoembed servers with /tv/<tmdb>/S/E URLs
+429: ```
+430: 
+431: ### Schema.org Structured Data
+432: ```json
+433: // On search results page (SearchAction):
+434: {"@type": "SearchAction", "target": {"urlTemplate": "https://multimovies.garden/search?q={search_term_string}"}}
+435: 
+436: // On episode pages (TVEpisode):
+437: {"@type": "TVEpisode", "name": "Episode Title", "episodeNumber": 1, "partOfSeason": {"seasonNumber": 1}}
+438: ```
+439: 
+440: ### JS Files
+441: ```
+442: /assets/js/main.js      → Contains fetch('/api/search?q=') autocomplete logic
+443: /assets/js/discovery.js  → Contains fetch('/api/discover') trending/catalog logic
+444: ```
+445: 
+446: ---
+447: 
+448: ## 8. HDHub4u (`new3.hdhub4u.free`)
+449: 
+450: ### Identity
+The above content does NOT show the entire file contents. If you need to view any lines of the file which were not shown to complete your task, call this tool again to view those lines.
+
+---
+
