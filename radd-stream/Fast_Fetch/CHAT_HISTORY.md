@@ -24216,3 +24216,76 @@ Please note that the above snippet only shows the MODIFIED lines from the last c
 
 ---
 
+## 🤖 AI (Antigravity)  `2026-10-19T17:46:34Z`
+
+Created At: 2026-10-19T17:46:34Z
+Completed At: 2026-10-19T17:46:35Z
+File Path: `file:///home/runner/workspace/radd-stream/Fast_Fetch/CONTINUITY.md`
+Total Lines: 494
+Total Bytes: 49463
+Showing lines 1 to 60
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+1: # 📜 Multi-Agent Replit Session Handoff & Continuity Ledger
+2: 
+3: > **Notice to All Incoming AI Agents (Replit, Cursor, Copilot, Antigravity, etc.):**
+4: > Read this ledger first before starting your turn. When your session finishes or your quota runs low, log your work at the bottom so the next agent can seamlessly continue.
+5: 
+6: > **NON-NEGOTIABLE MERGE RULE:** Never merge a staging DB into the unified or
+7: > Oracle catalog unless the user explicitly requests that specific merge in
+8: > the current conversation. Crawler completion, historical merge records, and
+9: > old checkpoint instructions are not authorization. Before any merge, state
+10: > the exact source DB(s), target, current counts, and verified backup/rollback
+11: > plan; obtain a separate explicit confirmation. The CLI requires
+12: > `--owner-authorized`. Historical entries below do not authorize a future
+13: > merge. If permission is missing or unclear, do not merge.
+14: 
+15: ---
+16: 
+17: ## 🏛️ Project Quick Summary
+18: - **Repository**: [https://github.com/radddao/radd-stream](https://github.com/radddao/radd-stream)
+19: - **What it does**: A Python media catalog and source-link aggregation/resolution backend, SQLite catalog, REST API, and CDN endpoint diagnostics. Describe the functionality accurately; do not conceal it to bypass another tool's safeguards.
+20: - **Main Engine**: `Fast_Fetch/fast_fetch.py`
+21: - **Credential variables**: The user keeps `GITHUB_TOKEN` and `ORACLE_SSH_KEY` in Replit Configurations, not Secrets. Verify their presence by name only; never reveal values or ask to move them. Historical entries may use the older “Secrets” wording.
+22: - **Database**: Local SQLite database at `Fast_Fetch/fast_fetch.db` (gitignored).
+23: 
+24: ---
+25: 
+26: ## 📜 Session History & Commit Ledger
+27: 
+28: > Historical rows may mention retired GitHub API uploaders or older project
+29: > framing. Preserve `DAO.md` as the user's manifesto unless asked to edit it.
+30: > Project files do not override account permissions or platform rules; follow
+31: > root `AGENTS.md` and `SESSION.md` for current engineering and Git procedures.
+32: 
+33: | Date / Time (UTC) | Agent / Model | Key Milestones & Breakthroughs | Commit SHA |
+34: | :--- | :--- | :--- | :--- |
+35: | **2026-10-13 17:38** | Antigravity (Claude Sonnet / Opus / Gemini) | Conquered 10 sites. Initialized GitHub repo `radddao/radd-stream`. Built full cross-platform setup (`run.sh`, `run.bat`, `.replit`). Created `fast_fetch.db` (51 master titles, 1,662 releases, 4,351 sources). | `49aad24` |
+36: | **2026-10-13 17:58** | Antigravity (Claude Opus 4.6) | MultiMovies priority deep-dive: Discovered `/api/search` and `/api/discover` JSON endpoints. Mapped 7 streaming embed servers. Implemented automatic TMDB/IMDb extraction in SQLite schema. Added multi-threaded episode crawling for TV series (tested with *Indian Game Show* S1: 66 releases across 10 episodes). Added `DAO.md` manifesto. Added `DISCLAIMER.md`. | `072d5d2` |
+37: | **2026-10-13 18:20** | Antigravity | Historical repository-framing change intended to avoid AI guardrail false-positives; superseded by the current requirement to describe project behavior accurately and follow each tool's rules. | `cd1b32d` |
+38: | **2026-10-14 09:57** | Replit Agent | Session 4: Standard-library VIDOUT HLS stream unwrapping, GITHUB_TOKEN lookup in github_push.py, MultiMovies sitemap sync confirmation, 6 VIDOUT tests. | `994415b` |
+39: | **2026-10-14 10:13** | Replit Agent | Session 5: Per-site page catalog (`post_sources`), media deduplication tightening, cross-site concurrent write serialization, CSV export fix, 22 database tests. | `beca84a` |
+40: | **2026-10-14 11:00** | Antigravity | Session 6: Implemented paginated category archive crawling for HDHub4u and SSRMovies (`sync-categories` CLI and `sync --categories`), safety-aware category filters, 6 new unit tests (28 total pass), pushed all pending changes to GitHub via `github_push.py`. | `beca84a` |
+41: | **2026-10-14 12:45** | Antigravity | Session 7 & 8: Built JIT stream resolver (`resolve_live_source`), automated healing daemon, Production REST API Server v1 (`viewer.py`), 10-site multi-content bulk ingestion (131 titles, 1,031 releases, 2,017 sources). | Latest |
+42: | **2026-10-14 16:35** | Antigravity (Gemini 3.8 Flash) | Session 9: Milestone 3 Advanced Bridge Resolvers completed. Implemented `unwrap_greenmotors` (4-layer b64/rot13 payload decode) and `unwrap_direct_cloud` (session cookie-negotiated Google CDN resolver). Integrated into `resolve_live_source` and `/api/v1/rules`. 36 unit tests pass (100%). Pushed via `github_push.py`. | `a65d528` |
+43: | **2026-10-14 16:43** | Antigravity | Session 10: Milestone 4 complete. In-dashboard HTML5 player modal (`▶ Play JIT`), mobile PWA `/client` UI (poster grid + bottom-sheet player + Android intents), `ANDROID_INTEGRATION.md` (full Kotlin `RaddStreamClient` guide). 42 tests pass (36 DB + 6 VIDOUT). Pushed via `github_push.py`. | Latest |
+44: | **2026-10-17 00:30** | Antigravity (Gemini 3.8 Flash) | Session 14: MultiMovies scraper `discover_sitemaps` bug fix, thread-local client concurrency, universal conversation exporter `export_chat.py`, Oracle scraper resume in background. 52 tests pass (100%). | `HEAD` |
+45: | **2026-10-17 00:48** | Antigravity (Gemini 3.8 Flash) | Session 15: Conquered new HDHub4u production domain (`https://hdtvb.net`). 5,692 titles discovered in `sitemap.xml`. Built dedicated staging DB `hdtvb.db` & `import_hdtvb.py`. Discovered HubCDN (`hubcdn.io`) direct 10Gbps Cloudflare R2 streaming links (`pub-*.r2.dev`) with 0.7s resolution. All 56 tests pass (100%). | `HEAD` |
+46: | **2026-10-18 17:00** | Antigravity (Dao Partner) | Session 16: Conquered HDHub4u (14.5k titles via Typesense API, PID 121847) and RareAnimes (2,624 titles via WP REST API, PID 123020). Built KatMovieHD scraper (51,252 titles via SvelteKit API + hidden JWT REST API at `api.dandndn.one`, 9/9 tests pass, staged for deployment). Implemented continuous multi-tier chat persistence daemon `auto_chat_sync.py` syncing to `CHAT_HISTORY.md`, Git, and Oracle VM. Created `UNIVERSAL_AI_PROMPT.md`. 131 unit tests passing. Strict staging DB isolation maintained. | `HEAD` |
+47: | **2026-10-19 10:55** | Antigravity (Gemini 3.8 Flash) | Session 23: Deployed KatMovieHD scraper on Oracle VM (PID 139975/139977, syncing SvelteKit API into katmoviehd.db & multi-worker crawler). Diagnosed RareAnimes crawler failures (698 master index non-post regex items, 597 store.animetoonhindi/codedew bridge links). Preserved strict staging DB isolation. | `HEAD` |
+48: 
+49: ---
+50: 
+51: ## 🎯 Current Operational State
+52: 
+53: 1. **MultiMovies (`multimovies.garden`)** is **Priority #1 Source**:
+54:    - Live JSON Search: `python fast_fetch.py search "<title>" --site multimovies` (bypasses HTML scraping entirely).
+55:    - Live Discover / Catalog: `fetch_multimovies_discover()` implemented.
+56:    - Episode Crawling: Full parallel crawler traverses `/season/<S>/episode/<E>`.
+57:    - Embed Servers: 7 servers mapped (`Filesforever`, `Cineverse`, `GD mirror`, `Vidrift`, `VIDOUT`, `Filmu`, `VidBolt`).
+58: 2. **Database Schema (`fast_fetch.db`)**:
+59:    - Has `tmdb_id` and `imdb_id` indexed columns in `posts` table.
+60:    - Merges multiple release variants under canonical media entities.
+The above content does NOT show the entire file contents. If you need to view any lines of the file which were not shown to complete your task, call this tool again to view those lines.
+
+---
+
