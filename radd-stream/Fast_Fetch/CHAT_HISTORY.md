@@ -86857,3 +86857,16 @@ Output:
 
 ---
 
+## 🤖 AI (Antigravity)  `2026-10-19T12:16:36Z`
+
+Created At: 2026-10-19T12:16:36Z
+Completed At: 2026-10-19T12:16:37Z
+
+The command exited with code 0.
+Output:
+https://new.katmoviehd.top/bad-apples-2026-hindi|{"categories": ["comedy", "dual-audio", "dubbed-movie", "mystery", "thriller"], "created": "2026-10-19 10:40:11.000Z", "id": "282891", "post_status": "publish", "post_title": "Bad Apples (2026) Hindi Dubbed (DD 5.1) &amp; English [Dual Audio] WEB-DL 1080p 720p 480p HD [Full Movie]", "slug": "bad-app
+https://new.katmoviehd.top/a-kid-like-jake-2018-hindi|{"categories": ["drama", "dual-audio", "dubbed-movie"], "created": "2026-10-19 01:10:37.000Z", "id": "282883", "post_status": "publish", "post_title": "A Kid Like Jake (2018) Hindi Dubbed (ORG) &amp; English [Dual Audio] BluRay 1080p 720p 480p HD [Full Movie]", "slug": "a-kid-like-jake-2018-hindi", 
+https://new.katmoviehd.top/the-punisher-s2-hindi|{"categories": ["action", "crime", "drama", "dual-audio", "tv-series-dubbed"], "created": "2026-10-18 18:20:33.000Z", "id": "282272", "post_status": "publish", "post_title": "The Punisher (Season 2) Hindi Dubbed (DD 5.1) &amp; English [Dual Audio] | WEB-DL 1080p 720p 480p HD [2017\u20132019 Marvel S
+
+---
+
