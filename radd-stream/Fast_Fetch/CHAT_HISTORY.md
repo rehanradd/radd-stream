@@ -83491,3 +83491,116 @@ The above content does NOT show the entire file contents. If you need to view an
 
 ---
 
+## 🤖 AI (Antigravity)  `2026-10-19T11:26:17Z`
+
+Created At: 2026-10-19T11:26:17Z
+Completed At: 2026-10-19T11:26:17Z
+File Path: `file:///home/runner/workspace/radd-stream/Fast_Fetch/test_all_sites.py`
+Total Lines: 332
+Total Bytes: 15273
+Showing lines 1 to 100
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+1: # -*- coding: utf-8 -*-
+2: """
+3: test_all_sites.py — Real-world live verification of all 10 supported streaming sites.
+4: Runs fast, unbuffered tests verifying:
+5:   1. Base domain HTTP status & redirect target
+6:   2. Catalog Ingestion (sitemap / REST API / SvelteKit / HTML cards)
+7:   3. Live Post HTML & Extract Metadata Verification
+8: """
+9: import sys
+10: import os
+11: import json
+12: import time
+13: import tempfile
+14: from pathlib import Path
+15: 
+16: sys.stdout.reconfigure(line_buffering=True, encoding="utf-8", errors="replace")
+17: sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+18: 
+19: import fast_fetch
+20: 
+21: # Exercise the real save path without touching a developer's persistent catalog.
+22: LIVE_DB_DIR = tempfile.TemporaryDirectory(prefix="radd-stream-live-db-")
+23: fast_fetch.DB_PATH = Path(LIVE_DB_DIR.name) / "live-audit.db"
+24: fast_fetch.fetch_cinemeta_metadata = lambda *args, **kwargs: None
+25: fast_fetch.init_db()
+26: 
+27: def p(msg):
+28:     print(msg, flush=True)
+29: 
+30: p("=" * 75)
+31: p("🔍 10-SITE LIVE REAL-WORLD VERIFICATION AUDIT")
+32: p("=" * 75)
+33: 
+34: SITE_TEST_CONFIGS = [
+35:     {
+36:         "name": "vegamovies",
+37:         "domain": fast_fetch.DOMAINS.get("vegamovies", "https://vegamovies.gallery"),
+38:         "catalog_type": "sitemap",
+39:         "catalog_url": "https://vegamovies.gallery/sitemap.xml",
+40:         "post_url": "https://vegamovies.gallery/download-the-corrupted-2019-dual-audio-hin-eng/"
+41:     },
+42:     {
+43:         "name": "rogmovies",
+44:         "domain": fast_fetch.DOMAINS.get("rogmovies", "https://rogmovies.one"),
+45:         "catalog_type": "sitemap",
+46:         "catalog_url": "https://rogmovies.one/sitemap.xml",
+47:         "post_url": "https://rogmovies.one/download-bypass-road-2019-hindi-480p-720p/"
+48:     },
+49:     {
+50:         "name": "ssrmovies",
+51:         "domain": fast_fetch.DOMAINS.get("ssrmovies", "https://ssrmovies.gripe"),
+52:         "catalog_type": "wp_api",
+53:         "catalog_url": "https://ssrmovies.gripe/wp-json/wp/v2/posts?per_page=3",
+54:         "post_url": "https://ssrmovies.gripe/wwe-monday-night-raw-2026/"
+55:     },
+56:     {
+57:         "name": "katmoviehd",
+58:         "domain": fast_fetch.DOMAINS.get("katmoviehd", "https://katmoviehd.fans"),
+59:         "catalog_type": "sveltekit",
+60:         "catalog_url": "https://new.katmoviehd.top/",
+61:         "post_url": "https://new.katmoviehd.top/the-trap-s1-hindi"
+62:     },
+63:     {
+64:         "name": "7starhd",
+65:         "domain": fast_fetch.DOMAINS.get("7starhd", "https://7starhd.rich"),
+66:         "catalog_type": "homepage_html",
+67:         "catalog_url": "https://7starhd.rich/",
+68:         "post_url": "https://7starhd.rich/a-love-other-than-yours-2026-hindi-org-s01e01-08-dual-audio-series-hdrip-1080p-720p-480p-esubs/"
+69:     },
+70:     {
+71:         "name": "10xflix",
+72:         "domain": fast_fetch.DOMAINS.get("10xflix", "https://10xflix.help"),
+73:         "catalog_type": "wp_api",
+74:         "catalog_url": "https://10xflix.help/wp-json/wp/v2/posts?per_page=3",
+75:         "post_url": "https://10xflix.help/weapons-2025-hindi-studio-dub-dual-audio-bluray-1080p-720p-480p-esubs/"
+76:     },
+77:     {
+78:         "name": "multimovies",
+79:         "domain": fast_fetch.DOMAINS.get("multimovies", "https://multimovies.garden"),
+80:         "catalog_type": "sitemap",
+81:         "catalog_url": "https://multimovies.garden/sitemap.xml",
+82:         "post_url": "https://multimovies.garden/movie/mirzapur-the-movie-174212"
+83:     },
+84:     {
+85:         "name": "hdhub4u",
+86:         "domain": fast_fetch.DOMAINS.get("hdhub4u", "https://new7.hdhub4u.cl"),
+87:         "catalog_type": "sitemap",
+88:         "catalog_url": "https://new7.hdhub4u.cl/post-sitemap.xml",
+89:         "post_url": "https://new7.hdhub4u.cl/the-fate-of-the-furious-2017-dual-audio-hindi-org-720p-bluray/"
+90:     },
+91:     {
+92:         "name": "bollyshares",
+93:         "domain": fast_fetch.DOMAINS.get("bollyshares", "https://bollyshares.xyz"),
+94:         "catalog_type": "sitemap",
+95:         "catalog_url": "https://bollyshares.xyz/post-sitemap.xml",
+96:         "post_url": "https://bollyshares.xyz/free-bhairadevi-2024-south-hindi-dubbed-movie-hd-esub/"
+97:     },
+98:     {
+99:         "name": "filmyzilla",
+100:         "domain": fast_fetch.DOMAINS.get("filmyzilla", "https://www.filmyzilla74.com"),
+The above content does NOT show the entire file contents. If you need to view any lines of the file which were not shown to complete your task, call this tool again to view those lines.
+
+---
+
