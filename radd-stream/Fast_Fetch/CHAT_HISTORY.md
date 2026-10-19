@@ -88277,3 +88277,35 @@ Last progress: 18s ago
 
 ---
 
+## 🤖 AI (Antigravity)  `2026-10-19T12:22:45Z`
+
+### 🚀 Operational Progress & Scraper Deployment Update
+
+---
+
+### 1. 10xflix Full Production Deployment (Oracle VM)
+* **API Sync & Crawler Pipeline Launched:** Started the full catalog ingestion pipeline in the background on the Oracle VM (`ubuntu@92.4.95.252` as **PID 146221**) streaming unbuffered logs to `/home/ubuntu/radd-stream-data/10xflix.log`.
+* **Dynamic Pagination Ingestion:** The script is paginating through all **17,606 catalog titles** across 177 pages via WP REST API (`https://10xflix.bond/wp-json/wp/v2/posts?_embed=1`) into the isolated staging database [10xflix.db](file:///home/runner/workspace/check_10xflix.py).
+* **Automatic Crawler Transition:** As soon as `--sync-api` completes, the 5-worker concurrent crawler (`--workers 5 --delay 0.3`) will immediately begin resolving all MobileJSR bridge URLs into direct CDN mirrors (HubCloud 10G, FilePress Google Drive, 1fichier, and GoFile).
+* **Live Monitor:** You can track real-time crawler progress anytime using:
+  ```bash
+  python3 check_10xflix.py
+  ```
+
+---
+
+### 2. KatMovieHD Root Cause Diagnosis
+* **Audit Findings:** The initial KatMovieHD batch of 1,200 titles finished with 293 scraped and 907 marked as `-1`. 
+* **Failure Cause:** We tested failed titles (e.g. `bad-apples-2026-hindi` and `the-punisher-s2-hindi`) directly on the VM:
+  * The SvelteKit `/__data.json` pages and KMHD REST API resolved and saved cleanly (`extracted data: True`, `saved ok: True`).
+  * The failures during the crawl were caused by high concurrency hitting HubCloud drive unwrapping simultaneously across multi-episode TV series (e.g. 16 releases $\times$ ~3 requests per series = 48 requests/title), causing HubCloud request timeouts under 5 parallel workers.
+* **KatMovieHD Plan:** Once 10xflix is well underway, we can resume KatMovieHD with a gentler concurrency profile (`--workers 2` or `--delay 0.8`) and increase page sync depth beyond page 101.
+
+---
+
+### 3. GitSafe, GitHub, & Continuity Sync
+* **Pre-push Gate:** All **125/125 unit tests** passed cleanly in [push.py](file:///home/runner/workspace/push.py).
+* **Persistence:** Committing reviewed files (`import_10xflix.py`, `test_10xflix_import.py`, `check_10xflix.py`, [CONTINUITY.md](file:///home/runner/workspace/radd-stream/Fast_Fetch/CONTINUITY.md), and [ANTIGRAVITY_HANDOFF.md](file:///home/runner/workspace/ANTIGRAVITY_HANDOFF.md)) and syncing to GitSafe, GitHub, and the Oracle VM.
+
+---
+
