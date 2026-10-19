@@ -87338,3 +87338,77 @@ Last progress: 3s ago
 
 ---
 
+## 🤖 AI (Antigravity)  `2026-10-19T12:18:20Z`
+
+Created At: 2026-10-19T12:18:20Z
+Completed At: 2026-10-19T12:18:20Z
+File Path: `file:///home/runner/workspace/radd-stream/Fast_Fetch/import_katmoviehd.py`
+Total Lines: 980
+Total Bytes: 37600
+Showing lines 620 to 680
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+620:         cur = conn.cursor()
+621: 
+622:         # 1. Upsert Post
+623:         cur.execute(
+624:             """
+625:             INSERT INTO posts (
+626:                 canonical_key, title, original_title, year, media_type,
+627:                 imdb_id, poster_url, synopsis, genres, rating, site, post_url,
+628:                 created_at, updated_at
+629:             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+630:             ON CONFLICT(canonical_key) DO UPDATE SET
+631:                 title = excluded.title,
+632:                 original_title = excluded.original_title,
+633:                 year = COALESCE(excluded.year, posts.year),
+634:                 media_type = excluded.media_type,
+635:                 imdb_id = COALESCE(excluded.imdb_id, posts.imdb_id),
+636:                 poster_url = COALESCE(excluded.poster_url, posts.poster_url),
+637:                 genres = COALESCE(excluded.genres, posts.genres),
+638:                 rating = COALESCE(excluded.rating, posts.rating),
+639:                 post_url = excluded.post_url,
+640:                 updated_at = CURRENT_TIMESTAMP
+641:             RETURNING id;
+642:             """,
+643:             (
+644:                 post_data["canonical_key"],
+645:                 post_data["title"],
+646:                 post_data["original_title"],
+647:                 post_data["year"],
+648:                 post_data["media_type"],
+649:                 post_data.get("imdb_id"),
+650:                 post_data.get("poster_url"),
+651:                 post_data.get("synopsis"),
+652:                 post_data.get("genres"),
+653:                 post_data.get("rating"),
+654:                 post_data["site"],
+655:                 post_data["post_url"],
+656:             ),
+657:         )
+658:         row = cur.fetchone()
+659:         post_id = row[0] if row else None
+660:         if not post_id:
+661:             cur.execute("SELECT id FROM posts WHERE canonical_key = ?", (post_data["canonical_key"],))
+662:             post_id = cur.fetchone()[0]
+663: 
+664:         # 2. Insert Releases & Sources
+665:         for r in post_data["releases"]:
+666:             cur.execute(
+667:                 """
+668:                 INSERT INTO releases (
+669:                     post_id, label, quality, resolution, size_bytes,
+670:                     season_number, episode_number, audio_languages, codec, bridge_url
+671:                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+672:                 RETURNING id;
+673:                 """,
+674:                 (
+675:                     post_id,
+676:                     r.get("label"),
+677:                     r.get("quality", "720p"),
+678:                     r.get("resolution", "720p"),
+679:                     r.get("size_bytes"),
+680:                     r.get("season_number"),
+The above content does NOT show the entire file contents. If you need to view any lines of the file which were not shown to complete your task, call this tool again to view those lines.
+
+---
+
