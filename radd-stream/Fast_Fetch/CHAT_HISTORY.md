@@ -24445,3 +24445,15 @@ The above content does NOT show the entire file contents. If you need to view an
 
 ---
 
+## 🤖 AI (Antigravity)  `2026-10-19T17:47:13Z`
+
+Created At: 2026-10-19T17:47:13Z
+Completed At: 2026-10-19T17:47:14Z
+
+The command exited with code 0.
+Output:
+FAILED ITEM SAMPLE:
+('https://new.katmoviehd.top/bad-apples-2026-hindi', 'bad-apples-2026-hindi', '{"categories": ["comedy", "dual-audio", "dubbed-movie", "mystery", "thriller"], "created": "2026-10-19 10:40:11.000Z", "id": "282891", "post_status": "publish", "post_title": "Bad Apples (2026) Hindi Dubbed (DD 5.1) &amp; English [Dual Audio] WEB-DL 1080p 720p 480p HD [Full Movie]", "slug": "bad-apples-2026-hindi", "thumbnail_image": "https://image.tmdb.org/t/p/w500/8EbTMbcQP8z8mCbC96rxTBemIPT.jpg"}')
+
+---
+
