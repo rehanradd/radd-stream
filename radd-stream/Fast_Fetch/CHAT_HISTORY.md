@@ -84984,3 +84984,52 @@ Output:
 
 ---
 
+## 🤖 AI (Antigravity)  `2026-10-19T11:49:09Z`
+
+Created At: 2026-10-19T11:49:09Z
+Completed At: 2026-10-19T11:49:10Z
+File Path: `file:///home/runner/workspace/radd-stream/Fast_Fetch/import_10xflix.py`
+Total Lines: 783
+Total Bytes: 29125
+Showing lines 95 to 130
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+95:         self.ssl_ctx = get_ssl_context()
+96:         self._next_request_at = 0.0
+97:         self._lock = threading.Lock()
+98: 
+99:     def _wait(self):
+100:         with self._lock:
+101:             now = time.monotonic()
+102:             if now < self._next_request_at:
+103:                 time.sleep(self._next_request_at - now)
+104:             self._next_request_at = time.monotonic() + self.request_interval
+105: 
+106:     def get_text(self, url: str, referer: str | None = None, timeout: int = 15) -> tuple[int, str, str]:
+107:         headers = {
+108:             "User-Agent": fast_fetch.USER_AGENT,
+109:             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,application/json;q=0.9,*/*;q=0.8",
+110:             "Accept-Language": "en-US,en;q=0.9",
+111:         }
+112:         if referer:
+113:             headers["Referer"] = referer
+114:         elif url.startswith(self.base_url):
+115:             headers["Referer"] = self.base_url + "/"
+116: 
+117:         for attempt in range(self.retries):
+118:             if STOP_REQUESTED:
+119:                 return 0, url, ""
+120:             self._wait()
+121:             try:
+122:                 req = urllib.request.Request(url, headers=headers)
+123:                 with urllib.request.urlopen(req, timeout=timeout, context=self.ssl_ctx) as resp:
+124:                     code = resp.status
+125:                     final_url = resp.geturl()
+126:                     text = resp.read().decode("utf-8", errors="replace")
+127:                     return code, final_url, text
+128:             except urllib.error.HTTPError as e:
+129:                 if attempt == self.retries - 1:
+130:                     return e.code, url, ""
+The above content does NOT show the entire file contents. If you need to view any lines of the file which were not shown to complete your task, call this tool again to view those lines.
+
+---
+
