@@ -28338,3 +28338,97 @@ No sub-radd-stream
 
 ---
 
+## 🤖 AI (Antigravity)  `2026-10-19T18:34:30Z`
+
+Created At: 2026-10-19T18:34:30Z
+Completed At: 2026-10-19T18:34:30Z
+File Path: `file:///home/runner/workspace/push.py`
+Total Lines: 267
+Total Bytes: 9891
+Showing lines 180 to 260
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+180:         return False
+181: 
+182:     print(f"[*] Syncing updated scraper files and CHAT_HISTORY.md to Oracle VM ({ORACLE_IP})...", flush=True)
+183:     files_to_sync = [
+184:         ROOT_DIR / "radd-stream" / "Fast_Fetch" / "import_vegamovies.py",
+185:         ROOT_DIR / "radd-stream" / "Fast_Fetch" / "import_7starhd.py",
+186:         ROOT_DIR / "radd-stream" / "Fast_Fetch" / "import_hdhub4u.py",
+187:         ROOT_DIR / "radd-stream" / "Fast_Fetch" / "import_rareanimes.py",
+188:         ROOT_DIR / "radd-stream" / "Fast_Fetch" / "import_katmoviehd.py",
+189:         ROOT_DIR / "radd-stream" / "Fast_Fetch" / "import_10xflix.py",
+190:         ROOT_DIR / "radd-stream" / "Fast_Fetch" / "import_filmyzilla.py",
+191:         ROOT_DIR / "radd-stream" / "Fast_Fetch" / "import_bolly4u.py",
+192:         ROOT_DIR / "radd-stream" / "Fast_Fetch" / "import_world4ufree.py",
+193:         ROOT_DIR / "radd-stream" / "Fast_Fetch" / "backup_manager.py",
+194:         ROOT_DIR / "radd-stream" / "Fast_Fetch" / "fast_fetch.py",
+195:         ROOT_DIR / "radd-stream" / "Fast_Fetch" / "CHAT_HISTORY.md",
+196:     ]
+197: 
+198:     existing = [str(f) for f in files_to_sync if f.exists()]
+199:     if not existing:
+200:         return True
+201: 
+202:     cmd = [
+203:         "scp", "-i", key_path,
+204:         "-o", "StrictHostKeyChecking=no",
+205:         "-o", "ConnectTimeout=10",
+206:     ] + existing + [f"{ORACLE_USER}@{ORACLE_IP}:/opt/radd-stream/Fast_Fetch/"]
+207: 
+208:     try:
+209:         res = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+210:         if res.returncode == 0:
+211:             print(f"[✓] Synced {len(existing)} files to Oracle VM /opt/radd-stream/Fast_Fetch/.", flush=True)
+212:             return True
+213:         else:
+214:             print(f"[!] Oracle SCP note: {res.stderr.strip()}", file=sys.stderr)
+215:             return False
+216:     except Exception as e:
+217:         print(f"[!] Oracle SCP error: {e}", file=sys.stderr)
+218:         return False
+219:     finally:
+220:         if os.path.exists(key_path):
+221:             os.remove(key_path)
+222: 
+223: 
+224: def main():
+225:     parser = argparse.ArgumentParser(description="Unified Push & Deployment Tool for radd-stream")
+226:     parser.add_argument("message", nargs="?", default=None, help="Commit message")
+227:     parser.add_argument("--no-test", action="store_true", help="Skip running pre-push tests")
+228:     parser.add_argument("--no-oracle", action="store_true", help="Skip syncing to Oracle VM")
+229:     parser.add_argument("--force", action="store_true", help="Force push to GitHub origin (use when histories diverged)")
+230:     args = parser.parse_args()
+231: 
+232:     # Pre-push test gate
+233:     if not args.no_test:
+234:         if not run_tests():
+235:             print("\n[!] Aborting push due to test failure. Use --no-test to override if intentional.\n", file=sys.stderr)
+236:             sys.exit(1)
+237: 
+238:     # Sync chat history
+239:     sync_chat_history()
+240: 
+241:     # Commit message
+242:     msg = args.message or f"chore(sync): automated multi-tier update {time.strftime('%Y-%m-%d %H:%M UTC', time.gmtime())}"
+243:     git_commit(msg)
+244: 
+245:     # Multi-tier push
+246:     print("\n" + "=" * 50)
+247:     print(" 🚀 EXECUTING MULTI-TIER PUSH & DEPLOYMENT")
+248:     print("=" * 50)
+249: 
+250:     gitsafe_ok = push_gitsafe()
+251:     github_ok = push_github(force=args.force)
+252: 
+253: 
+254:     oracle_ok = True
+255:     if not args.no_oracle:
+256:         oracle_ok = sync_oracle()
+257: 
+258:     print("=" * 50)
+259:     print(f" gitsafe-backup : {'✅ Pushed' if gitsafe_ok else '❌ Failed'}")
+260:     print(f" GitHub (origin): {'✅ Pushed' if github_ok else '⚠️ Notice'}")
+The above content does NOT show the entire file contents. If you need to view any lines of the file which were not shown to complete your task, call this tool again to view those lines.
+
+---
+
