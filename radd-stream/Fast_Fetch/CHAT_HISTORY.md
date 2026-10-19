@@ -90658,3 +90658,9 @@ Whenever you give the green light, we will:
 
 ---
 
+## 👤 USER  `2026-10-19T13:14:21Z`
+
+we would deploy it after one of them  odne meanwhile also ready on emore scraper
+
+---
+
