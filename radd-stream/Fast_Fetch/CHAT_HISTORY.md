@@ -24977,3 +24977,114 @@ lrwxrwxrwx 1 root root   38 Oct 15 22:18 radd-stream -> /etc/nginx/sites-availab
 
 ---
 
+## 🤖 AI (Antigravity)  `2026-10-19T17:50:22Z`
+
+Created At: 2026-10-19T17:50:22Z
+Completed At: 2026-10-19T17:50:23Z
+
+The command exited with code 0.
+Output:
+OUTPUT:
+server {
+    listen 80 default_server;
+    server_name _;
+    server_tokens off;
+
+    add_header X-Content-Type-Options nosniff always;
+    add_header X-Frame-Options DENY always;
+    add_header Referrer-Policy no-referrer always;
+
+    location = / {
+        return 302 /api/v1/stats;
+    }
+
+    location /download/ {
+        alias /var/www/download/;
+        autoindex off;
+        add_header Content-Disposition "attachment";
+        add_header Access-Control-Allow-Origin *;
+    }
+
+    location /api/v1/posts {
+        limit_req zone=radd_stream_api burst=30 nodelay;
+        limit_except GET HEAD { deny all; }
+        include /etc/nginx/proxy_params;
+        proxy_pass http://127.0.0.1:8080;
+        proxy_hide_header Access-Control-Allow-Origin;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_connect_timeout 5s;
+        proxy_read_timeout 15s;
+    }
+
+    location = /api/v1/stats {
+        limit_req zone=radd_stream_api burst=30 nodelay;
+        limit_except GET HEAD { deny all; }
+        include /etc/nginx/proxy_params;
+        proxy_pass http://127.0.0.1:8080;
+        proxy_hide_header Access-Control-Allow-Origin;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_connect_timeout 5s;
+        proxy_read_timeout 15s;
+    }
+
+    location /api/v1/stream {
+        limit_req zone=radd_stream_api burst=30 nodelay;
+        limit_except GET HEAD { deny all; }
+        include /etc/nginx/proxy_params;
+        proxy_pass http://127.0.0.1:8080;
+        proxy_hide_header Access-Control-Allow-Origin;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_connect_timeout 5s;
+        proxy_read_timeout 15s;
+    }
+
+    location ^~ /api/ {
+        return 403;
+    }
+
+    location / {
+        return 404;
+    }
+}
+
+--- PORTS ---
+Netid State  Recv-Q Send-Q    Local Address:Port  Peer Address:PortProcess                                                     
+udp   UNCONN 0      0               0.0.0.0:46263      0.0.0.0:*                                                               
+udp   UNCONN 0      0            172.16.0.2:5353       0.0.0.0:*    users:(("nxserver.bin",pid=1109,fd=61))                    
+udp   UNCONN 0      0             10.0.0.84:5353       0.0.0.0:*    users:(("nxserver.bin",pid=1109,fd=60))                    
+udp   UNCONN 0      0               0.0.0.0:5353       0.0.0.0:*    users:(("nxserver.bin",pid=1109,fd=59))                    
+udp   UNCONN 0      0               0.0.0.0:5353       0.0.0.0:*    users:(("avahi-daemon",pid=928,fd=12))                     
+udp   UNCONN 0      0               0.0.0.0:46748      0.0.0.0:*    users:(("avahi-daemon",pid=928,fd=14))                     
+udp   UNCONN 0      0            127.0.0.54:53         0.0.0.0:*    users:(("systemd-resolve",pid=37307,fd=16))                
+udp   UNCONN 0      0         127.0.0.53%lo:53         0.0.0.0:*    users:(("systemd-resolve",pid=37307,fd=14))                
+udp   UNCONN 0      0      10.0.0.84%enp0s6:68         0.0.0.0:*    users:(("systemd-network",pid=36993,fd=23))                
+udp   UNCONN 0      0               0.0.0.0:111        0.0.0.0:*    users:(("rpcbind",pid=688,fd=5),("systemd",pid=1,fd=132))  
+udp   UNCONN 0      0               0.0.0.0:4000       0.0.0.0:*    users:(("nxd",pid=1856,fd=13))                             
+udp   UNCONN 0      0                  [::]:46263         [::]:*                                                               
+udp   UNCONN 0      0                  [::]:5353          [::]:*    users:(("avahi-daemon",pid=928,fd=13))                     
+udp   UNCONN 0      0                  [::]:56815         [::]:*    users:(("avahi-daemon",pid=928,fd=15))                     
+udp   UNCONN 0      0                  [::]:111           [::]:*    users:(("rpcbind",pid=688,fd=7),("systemd",pid=1,fd=134))  
+udp   UNCONN 0      0                  [::]:4000          [::]:*    users:(("nxd",pid=1856,fd=16))                             
+tcp   LISTEN 0      128           127.0.0.1:7001       0.0.0.0:*    users:(("nxnode.bin",pid=1930,fd=33))                      
+tcp   LISTEN 0      5             127.0.0.1:8080       0.0.0.0:*    users:(("python3",pid=63790,fd=3))                         
+tcp   LISTEN 0      4096          127.0.0.1:631        0.0.0.0:*    users:(("cupsd",pid=437468,fd=7))                          
+tcp   LISTEN 0      100             0.0.0.0:4000       0.0.0.0:*    users:(("nxd",pid=1856,fd=7))                              
+tcp   LISTEN 0      4096         127.0.0.54:53         0.0.0.0:*    users:(("systemd-resolve",pid=37307,fd=17))                
+tcp   LISTEN 0      4096            0.0.0.0:111        0.0.0.0:*    users:(("rpcbind",pid=688,fd=4),("systemd",pid=1,fd=131))  
+tcp   LISTEN 0      511             0.0.0.0:80         0.0.0.0:*    users:(("nginx",pid=3306006,fd=7),("nginx",pid=55332,fd=7))
+tcp   LISTEN 0      4096            0.0.0.0:22         0.0.0.0:*    users:(("sshd",pid=42739,fd=3),("systemd",pid=1,fd=367))   
+tcp   LISTEN 0      4096      127.0.0.53%lo:53         0.0.0.0:*    users:(("systemd-resolve",pid=37307,fd=15))                
+tcp   LISTEN 0      64            127.0.0.1:27886      0.0.0.0:*    users:(("nxserver.bin",pid=1109,fd=37))                    
+tcp   LISTEN 0      4096          127.0.0.1:11434      0.0.0.0:*    users:(("ollama",pid=1110,fd=3))                           
+tcp   LISTEN 0      100           127.0.0.1:20417      0.0.0.0:*    users:(("nxserver.bin",pid=1109,fd=26))                    
+tcp   LISTEN 0      100           127.0.0.1:12001      0.0.0.0:*    users:(("nxnode.bin",pid=1930,fd=23))                      
+tcp   LISTEN 0      4096              [::1]:631           [::]:*    users:(("cupsd",pid=437468,fd=6))                          
+tcp   LISTEN 0      100                [::]:4000          [::]:*    users:(("nxd",pid=1856,fd=10))                             
+tcp   LISTEN 0      128               [::1]:7001          [::]:*    users:(("nxnode.bin",pid=1930,fd=32))                      
+tcp   LISTEN 0      4096               [::]:111           [::]:*    users:(("rpcbind",pid=688,fd=6),("systemd",pid=1,fd=133))  
+tcp   LISTEN 0      4096               [::]:22            [::]:*    users:(("sshd",pid=42739,fd=4),("systemd",pid=1,fd=368))   
+--- AGY CHECK ---
+/home/ubuntu/.gemini
+
+---
+
