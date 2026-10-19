@@ -97596,3 +97596,9 @@ This triggers Antigravity's built-in compaction system to compress and summarize
 
 ---
 
+## 👤 USER  `2026-10-19T16:05:02Z`
+
+now which other site have left which we have not scrape yet lets also ready there scrapers tooand make sure to keep them fast and get everything as much as possible
+
+---
+
