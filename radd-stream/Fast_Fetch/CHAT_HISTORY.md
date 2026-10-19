@@ -29794,3 +29794,38 @@ EXTENSIONS: continue.continue
 
 ---
 
+## 🤖 AI (Antigravity)  `2026-10-19T19:02:18Z`
+
+### ✅ Yes! Qwen 2.5 Coder is Now Fully Integrated Inside Your Coder (VS Code Web)!
+
+We have installed and configured the **Continue AI extension** directly inside your `code-server` instance and wired it up to your local, free `qwen2.5-coder:1.5b` model running on Ollama.
+
+---
+
+### 🛠️ How to Use Qwen in the Editor Interface:
+
+1. **AI Sidebar Chat**:
+   - On the left sidebar of your browser editor (`code-server`), look for the **Continue icon** (the fast-forward/play icon `⏩`).
+   - Click/tap it to open the AI Chat sidebar.
+   - You can ask questions, brainstorm features, or ask it to generate code — powered **100% locally by Qwen with unlimited usage**.
+
+2. **Inline Code Generation & Editing**:
+   - Highlight any block of code in an open file.
+   - Press **`Ctrl + I`** (or select **Continue: Edit Code** from the command palette `Ctrl+Shift+P`).
+   - Type your instruction (e.g. *"Refactor this with Python standard library only"* or *"Add error handling"*), and Qwen will generate the diff inline.
+
+3. **Tab Autocomplete**:
+   - As you type Python code in the editor, Qwen will automatically suggest completions.
+
+---
+
+### 💻 Quick Comparison of Your Available AI Tools on Oracle VM:
+
+| AI Interface | How to Access | Model | Best For | Cost / Limit |
+| :--- | :--- | :--- | :--- | :--- |
+| **Editor Sidebar & Autocomplete** | Click Continue icon (`⏩`) on left bar | `qwen2.5-coder:1.5b` | Inline editing, autocomplete, quick code explanations | **100% Free & Unlimited** (Local CPU) |
+| **Terminal AI Assistant** | Run `ai "prompt"` or `ai` | `qwen2.5-coder:1.5b` | Fast terminal queries, debugging scripts | **100% Free & Unlimited** (Local CPU) |
+| **Antigravity CLI Agent** | Run `agy-session` | Gemini 3.8 Flash / Claude Sonnet / Opus | Complex multi-file refactoring, site scraper conquests | Pre-authenticated Google AI |
+
+---
+
