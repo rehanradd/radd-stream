@@ -86326,3 +86326,97 @@ The above content does NOT show the entire file contents. If you need to view an
 
 ---
 
+## 🤖 AI (Antigravity)  `2026-10-19T12:14:17Z`
+
+Created At: 2026-10-19T12:14:17Z
+Completed At: 2026-10-19T12:14:17Z
+File Path: `file:///home/runner/workspace/radd-stream/Fast_Fetch/import_10xflix.py`
+Total Lines: 789
+Total Bytes: 29521
+Showing lines 370 to 450
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+370:                 if t.get("name"):
+371:                     categories.append(t["name"])
+372: 
+373:     clean_title, year, season, episode, canonical_key = clean_10xflix_title(raw_title)
+374: 
+375:     # Detect media type
+376:     is_series = bool(season is not None or "series" in raw_title.lower() or "web series" in str(categories).lower())
+377:     media_type = "series" if is_series else "movie"
+378: 
+379:     # Extract releases
+380:     parsed_releases = parse_10xflix_releases(content_html, raw_title)
+381:     if not parsed_releases:
+382:         return None
+383: 
+384:     releases_data = []
+385:     for r in parsed_releases:
+386:         bridge_url = r["bridge_url"]
+387:         sources = []
+388: 
+389:         if resolve_direct:
+390:             try:
+391:                 unwrapped = fast_fetch.unwrap_mobilejsr(bridge_url)
+392:                 for s in unwrapped:
+393:                     sources.append({
+394:                         "source_name": s.get("source_name", "⚡ Mirror Link"),
+395:                         "service": s.get("service", "mobilejsr"),
+396:                         "resource_id": s.get("resource_id", ""),
+397:                         "source_url": s.get("source_url", bridge_url),
+398:                         "final_url": s.get("final_url", bridge_url),
+399:                         "is_temporary": s.get("is_temporary", 0),
+400:                         "quality": r["quality"],
+401:                     })
+402:             except Exception:
+403:                 pass
+404: 
+405:         if not sources:
+406:             sources.append({
+407:                 "source_name": "⚡ MobileJSR Gateway",
+408:                 "service": "mobilejsr",
+409:                 "resource_id": bridge_url.rstrip("/").split("/")[-1],
+410:                 "source_url": bridge_url,
+411:                 "final_url": bridge_url,
+412:                 "is_temporary": 0,
+413:                 "quality": r["quality"],
+414:             })
+415: 
+416:         releases_data.append({
+417:             "label": r["label"],
+418:             "quality": r["quality"],
+419:             "resolution": r["resolution"],
+420:             "size_bytes": r["size_bytes"],
+421:             "season_number": season,
+422:             "episode_number": episode,
+423:             "audio_languages": json.dumps(["Hindi"]),
+424:             "codec": "x264",
+425:             "bridge_url": bridge_url,
+426:             "sources": sources,
+427:         })
+428: 
+429:     return {
+430:         "canonical_key": canonical_key,
+431:         "title": clean_title,
+432:         "original_title": html.unescape(raw_title).strip(),
+433:         "year": year,
+434:         "media_type": media_type,
+435:         "imdb_id": None,
+436:         "poster_url": poster_url,
+437:         "genres": json.dumps(categories) if categories else None,
+438:         "synopsis": None,
+439:         "site": "10xflix",
+440:         "post_url": post_url,
+441:         "releases": releases_data,
+442:     }
+443: 
+444: 
+445: def save_post_to_staging_db(db_path: Path, post_data: dict) -> bool:
+446:     """Persists post metadata, releases, and direct sources into isolated staging database."""
+447:     if not post_data or not post_data.get("releases"):
+448:         return False
+449: 
+450:     with sqlite3.connect(str(db_path)) as conn:
+The above content does NOT show the entire file contents. If you need to view any lines of the file which were not shown to complete your task, call this tool again to view those lines.
+
+---
+
