@@ -23396,3 +23396,76 @@ sources 13516
 
 ---
 
+## 🤖 AI (Antigravity)  `2026-10-19T17:42:17Z`
+
+Created At: 2026-10-19T17:42:17Z
+Completed At: 2026-10-19T17:42:17Z
+File Path: `file:///home/runner/workspace/radd-stream/Fast_Fetch/import_filmyzilla.py`
+Total Lines: 811
+Total Bytes: 30636
+Showing lines 1 to 60
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+1: #!/usr/bin/env python3
+2: """
+3: import_filmyzilla.py — Dedicated staging importer and scraper for FilmyZilla (https://www.filmyzilla75.com).
+4: 
+5: Key Features:
+6:   1. Dedicated staging SQLite database: filmyzilla.db (strictly isolated from fast_fetch.db).
+7:   2. Full XML Sitemap Synchronization:
+8:      - Ingests all 5,000+ movie URLs from /sitemap.xml into sitemap_cache table.
+9:      - Supports category archive discovery for deeper historical catalog indexing.
+10:   3. Clean Title & Media Metadata Normalization:
+11:      - Strips promotional tags ("Free Download Filmyzilla", "Hindi Dubbed Movie", etc.).
+12:      - Extracts release year, genres, release date, and language.
+13:      - Generates clean canonical keys for cross-catalog deduplication.
+14:   4. Ultra-Fast Direct Google CDN Stream Resolution:
+15:      - Extracts resolution tiers (1080p HD, 1080p, 720p HEVC, 720p, 480p).
+16:      - Resolves download endpoints (/download/{server_id}/server_1) using NoRedirectHandler:
+17:        Captures HTTP 302/303 Location headers pointing directly to Google CDN
+18:        (video-downloads.googleusercontent.com / lh3.googleusercontent.com)
+19:        in <50ms with ZERO video payload download.
+20:   5. 100% Python Standard Library. Zero external pip packages.
+21:   6. Resumable via sitemap_cache table in staging SQLite database.
+22: 
+23: Usage:
+24:     python Fast_Fetch/import_filmyzilla.py --sync-sitemap             # Ingest all movie URLs from sitemap
+25:     python Fast_Fetch/import_filmyzilla.py --limit 10                 # Scrape 10 pending titles
+26:     python Fast_Fetch/import_filmyzilla.py --workers 5 --delay 0.3    # Full background crawler
+27:     python Fast_Fetch/import_filmyzilla.py --status                   # Show staging DB metrics
+28: """
+29: 
+30: from __future__ import annotations
+31: 
+32: import argparse
+33: import concurrent.futures
+34: import html
+35: import json
+36: import os
+37: import re
+38: import signal
+39: import sqlite3
+40: import ssl
+41: import sys
+42: import threading
+43: import time
+44: import urllib.error
+45: import urllib.parse
+46: import urllib.request
+47: from pathlib import Path
+48: 
+49: # Add Fast_Fetch to sys.path
+50: BASE_DIR = Path(__file__).parent.resolve()
+51: if str(BASE_DIR) not in sys.path:
+52:     sys.path.insert(0, str(BASE_DIR))
+53: 
+54: DEFAULT_BASE_URL = "https://www.filmyzilla75.com"
+55: DEFAULT_DB_PATH = Path("/home/ubuntu/radd-stream-data/filmyzilla.db") if Path("/home/ubuntu/radd-stream-data").exists() else BASE_DIR / "filmyzilla.db"
+56: 
+57: USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+58: 
+59: STOP_REQUESTED = False
+60: 
+The above content does NOT show the entire file contents. If you need to view any lines of the file which were not shown to complete your task, call this tool again to view those lines.
+
+---
+
