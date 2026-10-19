@@ -27147,3 +27147,127 @@ grep: /home/runner/workspace/radd-stream/Fast_Fetch/CHAT_HISTORY.md: binary file
 
 ---
 
+## 🤖 AI (Antigravity)  `2026-10-19T18:25:29Z`
+
+Created At: 2026-10-19T18:25:29Z
+Completed At: 2026-10-19T18:25:29Z
+File Path: `file:///home/runner/workspace/radd-stream/Fast_Fetch/backup_manager.py`
+Total Lines: 432
+Total Bytes: 17109
+Showing lines 320 to 430
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+320:                 print(f"[!] R2 returned status {resp.status}", file=sys.stderr)
+321:                 return False
+322:     except Exception as e:
+323:         print(f"[!] Cloudflare R2 upload error: {e}", file=sys.stderr)
+324:         return False
+325: 
+326: 
+327: def upload_to_huggingface(
+328:     archive_path: Path,
+329:     repo_id: str | None = None,
+330:     token: str | None = None,
+331: ) -> bool:
+332:     """
+333:     Uploads backup archive to a private Hugging Face dataset repository using Git LFS.
+334:     100% Python standard library (no pip packages or huggingface_hub required).
+335:     """
+336:     repo_id = repo_id or os.environ.get("HF_DATASET_REPO", "")
+337:     token = token or os.environ.get("HF_TOKEN", "")
+338:     if not repo_id or not token:
+339:         print("[*] HF_DATASET_REPO or HF_TOKEN not configured. Skipping Hugging Face upload.", file=sys.stderr)
+340:         return False
+341: 
+342:     print(f"[*] Uploading {archive_path.name} to Hugging Face dataset {repo_id}...", flush=True)
+343:     with tempfile.TemporaryDirectory() as tmp_dir:
+344:         clone_url = f"https://user:{token}@huggingface.co/datasets/{repo_id}"
+345:         repo_dir = Path(tmp_dir) / "hf_repo"
+346: 
+347:         # Clone repository or initialize if empty
+348:         res = subprocess.run(["git", "clone", "--depth", "1", clone_url, str(repo_dir)], capture_output=True, text=True)
+349:         if res.returncode != 0:
+350:             repo_dir.mkdir(parents=True, exist_ok=True)
+351:             subprocess.run(["git", "init"], cwd=repo_dir, capture_output=True)
+352:             subprocess.run(["git", "remote", "add", "origin", clone_url], cwd=repo_dir, capture_output=True)
+353:             subprocess.run(["git", "checkout", "-b", "main"], cwd=repo_dir, capture_output=True)
+354: 
+355:         # Setup git-lfs tracking for large archives and databases
+356:         subprocess.run(["git", "lfs", "install"], cwd=repo_dir, capture_output=True)
+357:         subprocess.run(["git", "lfs", "track", "*.tar.gz", "*.db"], cwd=repo_dir, capture_output=True)
+358: 
+359:         # Copy archive into repo
+360:         dest = repo_dir / archive_path.name
+361:         shutil.copy2(archive_path, dest)
+362: 
+363:         # Git commit and push
+364:         subprocess.run(["git", "add", ".gitattributes", archive_path.name], cwd=repo_dir, capture_output=True)
+365:         subprocess.run(
+366:             ["git", "commit", "-m", f"chore(backup): snapshot {time.strftime('%Y-%m-%d %H:%M UTC', time.gmtime())}"],
+367:             cwd=repo_dir,
+368:             capture_output=True,
+369:         )
+370:         push_res = subprocess.run(["git", "push", "origin", "main"], cwd=repo_dir, capture_output=True, text=True)
+371:         if push_res.returncode == 0:
+372:             print(f"[✓] Uploaded backup to Hugging Face dataset: https://huggingface.co/datasets/{repo_id}", flush=True)
+373:             return True
+374:         else:
+375:             print(f"[!] Hugging Face push failed: {push_res.stderr.strip()}", file=sys.stderr)
+376:             return False
+377: 
+378: 
+379: def main():
+380:     parser = argparse.ArgumentParser(description="radd-stream Cloud Backup Manager")
+381:     parser.add_argument("--dir", default="/home/ubuntu/radd-stream-data", help="Directory containing SQLite DBs")
+382:     parser.add_argument("--out", default="/tmp/radd-stream-backups", help="Directory to save backup archives")
+383:     parser.add_argument("--github", action="store_true", help="Upload to GitHub Releases")
+384:     parser.add_argument("--telegram", action="store_true", help="Upload to Telegram channel")
+385:     parser.add_argument("--r2", action="store_true", help="Upload to Cloudflare R2 bucket")
+386:     parser.add_argument("--hf", action="store_true", help="Upload to Hugging Face dataset")
+387:     parser.add_argument("--all", action="store_true", help="Upload to all configured services (GitHub + HF + Telegram + R2)")
+388:     parser.add_argument("--dry-run", action="store_true", help="Snapshot & compress only, do not upload")
+389:     args = parser.parse_args()
+390: 
+391:     data_dir = Path(args.dir)
+392:     if not data_dir.exists():
+393:         # Fallback to local workspace if running locally
+394:         data_dir = Path("/home/runner/workspace/radd-stream/Fast_Fetch")
+395: 
+396:     dbs = sorted(data_dir.glob("*.db"))
+397:     if not dbs:
+398:         print(f"[!] No .db files found in {data_dir}", file=sys.stderr)
+399:         return
+400: 
+401:     print(f"[*] Found {len(dbs)} databases: {[d.name for d in dbs]}", flush=True)
+402:     out_dir = Path(args.out)
+403:     archive, manifest = create_backup_archive(dbs, out_dir)
+404:     print(f"[✓] Created backup archive: {archive} ({manifest['archive']['size_mb']} MB)", flush=True)
+405:     print(f"[*] Archive SHA-256: {manifest['archive']['sha256']}", flush=True)
+406: 
+407:     if args.dry_run:
+408:         print("[*] Dry run complete. No off-site uploads requested.", flush=True)
+409:         return
+410: 
+411:     # 1. GitHub Releases
+412:     if args.github or args.all or (not args.telegram and not args.r2 and not args.hf and os.environ.get("GITHUB_TOKEN")):
+413:         upload_to_github_release(archive)
+414: 
+415:     # 2. Hugging Face Datasets
+416:     if args.hf or args.all or os.environ.get("HF_TOKEN"):
+417:         upload_to_huggingface(archive)
+418: 
+419:     # 3. Telegram
+420:     if args.telegram or args.all:
+421:         caption = f"🚀 Radd-Stream DB Backup ({manifest['archive']['size_mb']} MB)\nDatabases: {', '.join(manifest['databases'].keys())}"
+422:         upload_to_telegram(archive, caption=caption)
+423: 
+424:     # 4. Cloudflare R2
+425:     if args.r2 or args.all or os.environ.get("R2_ACCOUNT_ID"):
+426:         upload_to_cloudflare_r2(archive)
+427: 
+428: 
+429: if __name__ == "__main__":
+430:     main()
+The above content does NOT show the entire file contents. If you need to view any lines of the file which were not shown to complete your task, call this tool again to view those lines.
+
+---
+
