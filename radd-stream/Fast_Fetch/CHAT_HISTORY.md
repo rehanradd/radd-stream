@@ -24471,3 +24471,26 @@ ImportError: cannot import name 'scrape_katmoviehd_post' from 'import_katmoviehd
 
 ---
 
+## 🤖 AI (Antigravity)  `2026-10-19T17:47:22Z`
+
+Created At: 2026-10-19T17:47:22Z
+Completed At: 2026-10-19T17:47:22Z
+
+The command exited with code 0.
+Output:
+73:def _sigint_handler(signum, frame):
+79:def get_ssl_context() -> ssl.SSLContext:
+151:def init_staging_db(db_path: Path):
+222:def parse_sveltekit_chunk(data_str: str) -> list[dict]:
+266:def clean_katmoviehd_title(raw_title: str) -> tuple[str, int | None, int | None, str]:
+315:def parse_katmoviehd_releases(content_html: str, default_season: int | None = None) -> list[dict]:
+393:def resolve_file_sources(
+511:def extract_post_data_katmoviehd(
+614:def save_post_to_staging_db(db_path: Path, post_data: dict) -> bool:
+716:def sync_sveltekit_api_to_db(db_path: Path, max_pages: int | None = None) -> int:
+786:def run_crawler(
+901:def print_status(db_path: Path):
+945:def main():
+
+---
+
