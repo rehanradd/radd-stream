@@ -85975,3 +85975,76 @@ You have 1 background task(s) currently running:
 
 ---
 
+## 🤖 AI (Antigravity)  `2026-10-19T12:13:31Z`
+
+Created At: 2026-10-19T12:13:31Z
+Completed At: 2026-10-19T12:13:31Z
+File Path: `file:///home/runner/workspace/push.py`
+Total Lines: 261
+Total Bytes: 9571
+Showing lines 1 to 60
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+1: #!/usr/bin/env python3
+2: """
+3: push.py — Single Unified Multi-Tier Push & Deployment Tool.
+4: 
+5: Replaces the retired legacy scripts (push.py, github_push.py, emergency_push.py).
+6: Located at project root for easy access.
+7: 
+8: Does EVERYTHING in one command:
+9:   1. Runs local unit tests to ensure zero regressions before push.
+10:   2. Syncs latest chat history to CHAT_HISTORY.md.
+11:   3. Git stages and commits reviewed files with a clean message.
+12:   4. Pushes to persistent local Git remote (gitsafe-backup main).
+13:   5. Pushes to GitHub repository (github.com/radddao/radd-stream) via GITHUB_TOKEN.
+14:   6. Syncs scraper files and CHAT_HISTORY.md to Oracle VM via ORACLE_SSH_KEY.
+15: 
+16: Usage:
+17:     python3 push.py "feat: add new feature and tests"
+18:     python3 push.py                   # Auto-generates clean timestamped message
+19:     python3 push.py --no-test         # Skip test execution
+20:     python3 push.py --no-oracle       # Push to Git/GitHub only without Oracle sync
+21: """
+22: 
+23: from __future__ import annotations
+24: 
+25: import argparse
+26: import os
+27: import re
+28: import subprocess
+29: import sys
+30: import tempfile
+31: import time
+32: from pathlib import Path
+33: 
+34: ROOT_DIR = Path(__file__).parent.resolve()
+35: ORACLE_IP = "92.4.95.252"
+36: ORACLE_USER = "ubuntu"
+37: GITHUB_REPO_URL = "https://x-access-token@github.com/radddao/radd-stream.git"
+38: 
+39: 
+40: def get_oracle_key_file() -> str | None:
+41:     raw = os.environ.get("ORACLE_SSH_KEY", "")
+42:     if not raw:
+43:         return None
+44:     match = re.fullmatch(r"(-----BEGIN ([A-Z0-9 ]+)-----)(.*?)(-----END \2-----)", raw, re.S)
+45:     if not match:
+46:         return None
+47:     header, _, body, footer = match.groups()
+48:     body = "".join(body.split())
+49:     with tempfile.NamedTemporaryFile("w", encoding="ascii", delete=False) as f:
+50:         key_path = f.name
+51:         f.write(header + "\n" + "\n".join(body[i:i + 64] for i in range(0, len(body), 64)) + "\n" + footer + "\n")
+52:     os.chmod(key_path, 0o600)
+53:     return key_path
+54: 
+55: 
+56: def create_github_askpass(token: str) -> str:
+57:     with tempfile.NamedTemporaryFile("w", delete=False) as f:
+58:         f.write(f'#!/bin/sh\necho "{token}"\n')
+59:         askpass_path = f.name
+60:     os.chmod(askpass_path, 0o700)
+The above content does NOT show the entire file contents. If you need to view any lines of the file which were not shown to complete your task, call this tool again to view those lines.
+
+---
+
