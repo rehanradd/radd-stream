@@ -88722,3 +88722,24 @@ sqlite3.OperationalError: no such column: id
 
 ---
 
+## 🤖 AI (Antigravity)  `2026-10-19T12:41:20Z`
+
+Created At: 2026-10-19T12:41:20Z
+Completed At: 2026-10-19T12:41:20Z
+The following changes were made by the replace_file_content tool to: /home/runner/workspace/inspect_scrapers.py. If relevant, proactively run terminal commands to execute this code for the USER. Don't ask for permission.
+[diff_block_start]
+@@ -28,7 +28,7 @@
+ 
+ print("=== VEGAMOVIES PENDING ===")
+ conn = sqlite3.connect("/home/ubuntu/radd-stream-data/vegamovies.db")
+-rows = conn.execute("SELECT id, loc FROM sitemap_cache WHERE scraped = 0").fetchall()
++rows = conn.execute("SELECT rowid, loc FROM sitemap_cache WHERE scraped = 0").fetchall()
+ print(f"Total pending: {len(rows)}")
+ for r in rows:
+     print(r[0], r[1])
+[diff_block_end]
+
+Please note that the above snippet only shows the MODIFIED lines from the last change. It shows up to 3 lines of unchanged lines before and after the modified lines. The actual file contents may have many more lines not shown.
+
+---
+
