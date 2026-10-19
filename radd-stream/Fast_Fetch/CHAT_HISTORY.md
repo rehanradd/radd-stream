@@ -87699,3 +87699,47 @@ The above content does NOT show the entire file contents. If you need to view an
 
 ---
 
+## 🤖 AI (Antigravity)  `2026-10-19T12:19:48Z`
+
+Created At: 2026-10-19T12:19:48Z
+Completed At: 2026-10-19T12:19:49Z
+File Path: `file:///home/runner/workspace/radd-stream/Fast_Fetch/import_katmoviehd.py`
+Total Lines: 980
+Total Bytes: 37600
+Showing lines 380 to 410
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+380:             releases.append({
+381:                 "label": txt,
+382:                 "episode_number": None,
+383:                 "season_number": None,
+384:                 "quality": q,
+385:                 "resolution": res,
+386:                 "file_id": file_id,
+387:                 "bridge_url": full_url,
+388:             })
+389: 
+390:     return releases
+391: 
+392: 
+393: def resolve_file_sources(
+394:     client: KatMovieHDClient,
+395:     file_id: str,
+396:     bridge_url: str,
+397:     resolve_direct: bool = True,
+398:     timeout: int = 12,
+399: ) -> tuple[int | None, list[dict]]:
+400:     """Resolves file ID via KMHD REST API into direct mirror sources."""
+401:     sources = []
+402:     size_bytes = None
+403: 
+404:     api_url = f"{KMHD_API_BASE}/file/{file_id}"
+405:     data = client.get_api_json(api_url, timeout=timeout)
+406:     if not data or not isinstance(data, dict):
+407:         return None, sources
+408: 
+409:     size_bytes = data.get("size")
+410:     upload_links = data.get("upload_links", {})
+The above content does NOT show the entire file contents. If you need to view any lines of the file which were not shown to complete your task, call this tool again to view those lines.
+
+---
+
