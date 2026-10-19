@@ -86101,3 +86101,77 @@ The above content does NOT show the entire file contents. If you need to view an
 
 ---
 
+## 🤖 AI (Antigravity)  `2026-10-19T12:13:44Z`
+
+Created At: 2026-10-19T12:13:44Z
+Completed At: 2026-10-19T12:13:44Z
+File Path: `file:///home/runner/workspace/push.py`
+Total Lines: 261
+Total Bytes: 9571
+Showing lines 120 to 180
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+120:     else:
+121:         print(f"[!] Commit failed: {res.stderr}", file=sys.stderr)
+122:         return False
+123: 
+124: 
+125: def push_gitsafe() -> bool:
+126:     print("[*] Pushing to local persistent git remote (gitsafe-backup)...", flush=True)
+127:     res = subprocess.run(["git", "push", "gitsafe-backup", "main"], cwd=ROOT_DIR, capture_output=True, text=True)
+128:     if res.returncode == 0:
+129:         print("[✓] Pushed to gitsafe-backup (main).", flush=True)
+130:         return True
+131:     else:
+132:         print(f"[!] gitsafe-backup push failed: {res.stderr.strip()}", file=sys.stderr)
+133:         return False
+134: 
+135: 
+136: def push_github(force: bool = False) -> bool:
+137:     token = os.environ.get("GITHUB_TOKEN", "")
+138:     if not token:
+139:         print("[!] GITHUB_TOKEN not found in environment. Skipping GitHub push.", file=sys.stderr)
+140:         return False
+141: 
+142:     print(f"[*] Pushing to GitHub (origin/main){' [FORCE]' if force else ''}...", flush=True)
+143:     askpass = create_github_askpass(token)
+144:     env = os.environ.copy()
+145:     env["GIT_ASKPASS"] = askpass
+146:     env["GIT_TERMINAL_PROMPT"] = "0"
+147: 
+148:     try:
+149:         # Check if origin remote is set
+150:         remotes_out = subprocess.run(["git", "remote"], cwd=ROOT_DIR, capture_output=True, text=True).stdout
+151:         if "origin" not in remotes_out.split():
+152:             subprocess.run(["git", "remote", "add", "origin", GITHUB_REPO_URL], cwd=ROOT_DIR, capture_output=True)
+153: 
+154:         cmd = ["git", "push"]
+155:         if force:
+156:             cmd.append("--force")
+157:         cmd.extend(["origin", "main"])
+158: 
+159:         res = subprocess.run(cmd, cwd=ROOT_DIR, env=env, capture_output=True, text=True)
+160:         if res.returncode == 0:
+161:             print("[✓] Pushed to GitHub repository (origin/main).", flush=True)
+162:             return True
+163:         else:
+164:             # If rejected because of divergence, note it
+165:             print(f"[!] GitHub push note: {res.stderr.strip()}", file=sys.stderr)
+166:             return False
+167:     finally:
+168:         if os.path.exists(askpass):
+169:             os.remove(askpass)
+170: 
+171: 
+172: 
+173: def sync_oracle() -> bool:
+174:     key_path = get_oracle_key_file()
+175:     if not key_path:
+176:         print("[!] ORACLE_SSH_KEY not found in environment. Skipping Oracle sync.", file=sys.stderr)
+177:         return False
+178: 
+179:     print(f"[*] Syncing updated scraper files and CHAT_HISTORY.md to Oracle VM ({ORACLE_IP})...", flush=True)
+180:     files_to_sync = [
+The above content does NOT show the entire file contents. If you need to view any lines of the file which were not shown to complete your task, call this tool again to view those lines.
+
+---
+
