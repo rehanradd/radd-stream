@@ -83705,3 +83705,39 @@ Last progress: 2s ago
 
 ---
 
+## 🤖 AI (Antigravity)  `2026-10-19T11:27:08Z`
+
+Created At: 2026-10-19T11:27:08Z
+Completed At: 2026-10-19T11:27:08Z
+
+The command exited with code 0.
+Output:
+
+=================================================================
+ 🚀 ORACLE VM KATMOVIEHD SCRAPER MONITOR — 🔴 STOPPED / READY
+=================================================================
+ Process  : N/A | CPU: N/A | RAM: N/A | Time: N/A
+ Progress : [████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░] 24.4% (293/1,200 titles)
+-----------------------------------------------------------------
+ 📦 Catalog Posts       : 293
+ 🎬 Releases Found       : 1,135
+ 🔗 Direct Sources       : 1,131
+ ⚡ Cloudflare R2        : 148 (10Gbps Direct Stream)
+ ⚡ PixelDrain Direct    : 149 (Instant Video/Matroska)
+ ⚡ GDFlix Mirrors       : 157
+ ⚡ KatDrive Mirrors     : 152
+ ⏳ Pending Titles       : 0
+ ⚠️  Failed Titles        : 907
+-----------------------------------------------------------------
+ 📜 Recent Live Logs:
+       [1160/1200] releases=1,131 sources=1,131 r2=148 pd=149 failed=868 speed=0.95 t/s ETA: 00:00:42
+         [1170/1200] releases=1,131 sources=1,131 r2=148 pd=149 failed=878 speed=0.95 t/s ETA: 00:00:31
+         [1180/1200] releases=1,135 sources=1,131 r2=148 pd=149 failed=887 speed=0.95 t/s ETA: 00:00:21
+         [1190/1200] releases=1,135 sources=1,131 r2=148 pd=149 failed=897 speed=0.95 t/s ETA: 00:00:10
+         [1200/1200] releases=1,135 sources=1,131 r2=148 pd=149 failed=907 speed=0.96 t/s ETA: 00:00:00
+       
+       [✓] Crawler finished: 293 scraped, 907 failed in 1255.5s
+=================================================================
+
+---
+
