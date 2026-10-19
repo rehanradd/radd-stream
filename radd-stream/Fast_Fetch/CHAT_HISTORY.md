@@ -88346,3 +88346,9 @@ Output:
 
 ---
 
+## 👤 USER  `2026-10-19T12:32:09Z`
+
+now check all other our scrapers what they did where did they failed stop or anything else make sure they are 100% completed or still running etc. verify and once find one is compelete then check it as completed
+
+---
+
