@@ -84893,3 +84893,30 @@ Sync result: True
 
 ---
 
+## 🤖 AI (Antigravity)  `2026-10-19T11:48:36Z`
+
+Created At: 2026-10-19T11:48:36Z
+Completed At: 2026-10-19T11:48:37Z
+
+The command exited with code 0.
+Output:
+usage: import_10xflix.py [-h] [--sync-api] [--max-pages MAX_PAGES] [--status]
+                         [--workers WORKERS] [--delay DELAY] [--limit LIMIT]
+                         [--no-resolve-direct] [--db-path DB_PATH]
+
+10xflix Staging Importer & Crawler
+
+options:
+  -h, --help            show this help message and exit
+  --sync-api            Sync posts via WP REST API
+  --max-pages MAX_PAGES
+                        Max catalog pages to sync
+  --status              Print staging DB statistics
+  --workers WORKERS     Crawler concurrent threads
+  --delay DELAY         Request interval delay in seconds
+  --limit LIMIT         Scrape up to N pending titles
+  --no-resolve-direct   Skip unwrapping MobileJSR to final direct streams
+  --db-path DB_PATH     Path to staging SQLite database
+
+---
+
