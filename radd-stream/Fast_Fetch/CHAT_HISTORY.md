@@ -87991,3 +87991,26 @@ The above content shows the entire, complete file contents of the requested file
 
 ---
 
+## 🤖 AI (Antigravity)  `2026-10-19T12:21:27Z`
+
+Created At: 2026-10-19T12:21:27Z
+Completed At: 2026-10-19T12:21:27Z
+The following changes were made by the replace_file_content tool to: /home/runner/workspace/ANTIGRAVITY_HANDOFF.md. If relevant, proactively run terminal commands to execute this code for the USER. Don't ask for permission.
+[diff_block_start]
+@@ -6,8 +6,8 @@
+ 
+ - **Current goal:** Monitor active background scrapers (10xflix & KatMovieHD) on Oracle VM, uphold staging database isolation, and track crawler progress.
+ - **Current state:** Active Oracle crawlers running concurrently in background:
+-  1. 10xflix (PID 142703, syncing all 17,605 titles via WP REST API into 10xflix.db, unwrapping MobileJSR to HubCloud 10G & FilePress Google Drive).
+-  2. KatMovieHD (PID 139975, syncing SvelteKit catalog into katmoviehd.db, unwrapping Cloudflare R2 and PixelDrain CDN).
++  1. 10xflix (PID 146221, syncing all 17,606 titles via WP REST API into 10xflix.db, unwrapping MobileJSR to HubCloud 10G & FilePress Google Drive).
++  2. KatMovieHD (completed initial 1,200 batch with 293 scraped; HubCloud concurrency diagnosed; standing by).
+   - Previous crawler milestones:
+     * Vegamovies: Complete run finished (13,978 / 14,316 scraped, 131,654 releases, 397,888 direct sources, 85,138 Google CDN direct streams).
+     * 7StarHD: Phase completed (15,508 / 23,446 scraped, 33,197 releases, 98,199 direct sources).
+[diff_block_end]
+
+Please note that the above snippet only shows the MODIFIED lines from the last change. It shows up to 3 lines of unchanged lines before and after the modified lines. The actual file contents may have many more lines not shown.
+
+---
+
