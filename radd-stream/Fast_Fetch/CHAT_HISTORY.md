@@ -86420,3 +86420,117 @@ The above content does NOT show the entire file contents. If you need to view an
 
 ---
 
+## 🤖 AI (Antigravity)  `2026-10-19T12:14:19Z`
+
+Created At: 2026-10-19T12:14:19Z
+Completed At: 2026-10-19T12:14:20Z
+File Path: `file:///home/runner/workspace/radd-stream/Fast_Fetch/import_10xflix.py`
+Total Lines: 789
+Total Bytes: 29521
+Showing lines 520 to 620
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+520:             for s in r.get("sources", []):
+521:                 cur.execute(
+522:                     """
+523:                     INSERT INTO sources (
+524:                         release_id, source_name, service, resource_id,
+525:                         source_url, final_url, is_temporary, quality
+526:                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+527:                     """,
+528:                     (
+529:                         release_id,
+530:                         s["source_name"],
+531:                         s["service"],
+532:                         s["resource_id"],
+533:                         s["source_url"],
+534:                         s["final_url"],
+535:                         s["is_temporary"],
+536:                         s["quality"],
+537:                     ),
+538:                 )
+539: 
+540:         conn.commit()
+541:     return True
+542: 
+543: 
+544: def sync_wp_api_to_db(db_path: Path, max_pages: int | None = None, per_page: int = 100) -> int:
+545:     """Syncs the entire 10xflix catalog via WP REST API (/wp/v2/posts) into sitemap_cache."""
+546:     init_staging_db(db_path)
+547:     client = TenXFlixClient()
+548: 
+549:     print(f"[*] Starting 10xflix WP REST API sync from {WP_API_URL}...", flush=True)
+550:     page = 1
+551:     total_synced = 0
+552:     total_found = None
+553: 
+554:     while not STOP_REQUESTED:
+555:         query_url = f"{WP_API_URL}?per_page={per_page}&page={page}&_embed=1"
+556:         t0 = time.time()
+557:         code, posts, headers = client.get_json(query_url, timeout=15)
+558:         dt = time.time() - t0
+559: 
+560:         if code != 200 or not posts or not isinstance(posts, list):
+561:             print(f"[!] API page {page} returned status {code}. Stopping sync.", flush=True)
+562:             break
+563: 
+564:         if total_found is None:
+565:             if "x-wp-total" in headers:
+566:                 total_found = int(headers["x-wp-total"])
+567:                 print(f"[*] Total catalog size reported: {total_found:,} titles.", flush=True)
+568:             else:
+569:                 total_found = None
+570:                 print("[*] Total catalog size header not present; paginating dynamically...", flush=True)
+571: 
+572:         records = []
+573:         for post in posts:
+574:             permalink = post.get("link")
+575:             if not permalink:
+576:                 continue
+577:             slug = post.get("slug")
+578:             lastmod = post.get("modified") or post.get("date")
+579:             raw_json_str = json.dumps(post)
+580:             records.append((permalink, lastmod, slug, 0, "10xflix", raw_json_str))
+581: 
+582:         if records:
+583:             with sqlite3.connect(str(db_path)) as conn:
+584:                 conn.executemany(
+585:                     """
+586:                     INSERT INTO sitemap_cache (loc, lastmod, slug, scraped, site, raw_json)
+587:                     VALUES (?, ?, ?, ?, ?, ?)
+588:                     ON CONFLICT(loc) DO UPDATE SET
+589:                         lastmod = excluded.lastmod,
+590:                         slug = excluded.slug,
+591:                         raw_json = excluded.raw_json;
+592:                     """,
+593:                     records,
+594:                 )
+595:                 conn.commit()
+596: 
+597:             total_synced += len(records)
+598:             found_str = f"{total_found:,}" if total_found else "..."
+599:             print(
+600:                 f"  [Page {page:3d}] Synced {len(records)} titles in {dt:.2f}s "
+601:                 f"({total_synced:,} / {found_str} total)",
+602:                 flush=True,
+603:             )
+604: 
+605:         if max_pages and page >= max_pages:
+606:             print(f"[*] Reached requested max_pages limit ({max_pages}). Stopping sync.", flush=True)
+607:             break
+608: 
+609:         if len(posts) < per_page or (total_found and total_synced >= total_found):
+610:             break
+611: 
+612:         page += 1
+613: 
+614:     print(f"\n[✓] 10xflix catalog sync finished: {total_synced:,} titles stored in {db_path.name}\n", flush=True)
+615:     return total_synced
+616: 
+617: 
+618: def run_crawler(
+619:     db_path: Path,
+620:     workers: int = 5,
+The above content does NOT show the entire file contents. If you need to view any lines of the file which were not shown to complete your task, call this tool again to view those lines.
+
+---
+
