@@ -98027,3 +98027,166 @@ The above content does NOT show the entire file contents. If you need to view an
 
 ---
 
+## 🤖 AI (Antigravity)  `2026-10-19T16:08:18Z`
+
+Created At: 2026-10-19T16:08:18Z
+Completed At: 2026-10-19T16:08:18Z
+File Path: `file:///home/runner/workspace/radd-stream/Fast_Fetch/SITES.md`
+Total Lines: 627
+Total Bytes: 22022
+Showing lines 251 to 400
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+251: ### Key Regex
+252: ```python
+253: # Homepage post links
+254: post_links = re.findall(r"""href=["'](https?://7starhd\.rich/[a-zA-Z0-9\-_]+/)["']""", html)
+255: # MobileJSR bridges
+256: mj_links = re.findall(r"""href=["'](https?://mobilejsr\.com/view/[^"'<>\s]+)["']""", html)
+257: ```
+258: 
+259: ---
+260: 
+261: ## 6. 10xflix (`10xflix.help`)
+262: 
+263: ### Identity
+264: - **Primary domain:** `https://10xflix.help`
+265: - **Old domain:** `10xflix.wiki` (normalize → .help)
+266: - **CMS:** WordPress
+267: 
+268: ### Data Endpoints
+269: ```
+270: WP REST API:
+271:   GET https://10xflix.help/wp-json/wp/v2/posts?per_page=100
+272:   GET https://10xflix.help/wp-json/wp/v2/posts?per_page=100&page=2
+273:   Same structure as SSRMovies REST API response
+274: ```
+275: 
+276: ### Bridge
+277: - Same as 7StarHD: MobileJSR links in post content
+278: 
+279: ---
+280: 
+281: ## 7. MultiMovies (`multimovies.garden`) — ⭐ PRIORITY #1
+282: 
+283: > **Best quality, most sources, most accurate metadata. This is our crown jewel.**
+284: 
+285: ### Identity
+286: - **Primary domain:** `https://multimovies.garden`
+287: - **CMS:** Custom (NOT WordPress) — SPA-like with server-rendered HTML + embedded JSON
+288: - **Content:** Movies, TV Series, Anime — Hindi, English, Dual Audio, Multi-language
+289: - **TLD rotations:** `.garden → .com → .net → .org → .live`
+290: 
+291: ### JSON API Endpoints (Discovered 2026-10-13)
+292: 
+293: ```
+294: 🔍 SEARCH API (returns structured JSON, no scraping needed):
+295:   GET https://multimovies.garden/api/search?q=<query>
+296:   Response: {
+297:     "movies": [{id, title, type, year, rating, quality, poster, url}, ...],
+298:     "tv_shows": [{id, title, type, year, rating, quality, poster, url}, ...],
+299:     "people": [...],
+300:     "results": [{id, title, type, year, ...}, ...],
+301:     "total": N
+302:   }
+303:   - poster URLs are TMDB: https://image.tmdb.org/t/p/w185/<hash>.jpg
+304:   - url format: /movie/<slug>-<id> or /series/<slug>-<id>
+305: 
+306: 📊 DISCOVER API (trending/popular catalog):
+307:   GET https://multimovies.garden/api/discover
+308:   Response: {
+309:     "items": [{id, type, slug, url, title, year, rating, quality, audio, kind, poster, backdrop, views}, ...],
+310:     "sections": [...],
+311:     "reason": "...",
+312:     "personalized": bool,
+313:     "signal_count": N
+314:   }
+315:   - Returns most popular/trending titles
+316:   - Includes view counts, backdrop URLs, quality info
+317: ```
+318: 
+319: ### XML Sitemap (Bulk Catalog)
+320: ```
+321: Sitemap index:
+322:   GET https://multimovies.garden/sitemap.xml
+323:   Lists: sitemap-titles-1.xml, sitemap-titles-2.xml, ...
+324:          sitemap-episodes-*.xml (skip these — episodes are fetched per-series)
+325: 
+326: Title sitemaps (10,000 entries each):
+327:   GET https://multimovies.garden/sitemap-titles-1.xml
+328:   Filter: only URLs containing /movie/ or /series/
+329: ```
+330: 
+331: ### URL Structure
+332: ```
+333: Movies:   /movie/<slug>-<numeric_id>     (e.g. /movie/kalki-2898-ad-55025)
+334: Series:   /series/<slug>-<id>            (e.g. /series/mirzapur-2571)
+335: Episodes: /series/<slug>-<id>/season/<N>/episode/<N>
+336: 
+337: ⚠️ The numeric ID suffix is REQUIRED — slug-only URLs return 404
+338: ```
+339: 
+340: ### watchConfig (Verified Structure — NOT what was documented before)
+341: 
+342: The old documentation was WRONG. Here is the actual verified structure:
+343: 
+344: ```javascript
+345: // Found in EVERY movie page and EVERY episode page (NOT series root)
+346: const watchItem = {
+347:   "titleId": 55025,
+348:   "title": "Kalki 2898 - AD",
+349:   "poster": "https://image.tmdb.org/t/p/w342/<hash>.jpg",
+350:   "backdrop": "https://image.tmdb.org/t/p/w780/<hash>.jpg",
+351:   "type": "movie",      // or "tv"
+352:   "url": "/movie/kalki-2898-ad-55025"
+353: };
+354: 
+355: const watchConfig = {
+356:   "titleId": 55025,
+357:   "season": null,        // or season number for episodes
+358:   "episode": null,       // or episode number
+359:   "initialServers": [    // ← NOT "sources" — this was wrong in old docs
+360:     {
+361:       "id": "mirror_15031",
+362:       "name": "Filesforever Mirror",
+363:       "type": "iframe",
+364:       "url": "https://filesforever.link/embed/pumu7an",
+365:       "quality": "1080p",
+366:       "is_custom": true   // Custom uploaded = highest quality
+367:     },
+368:     {
+369:       "id": "autoembed_1",
+370:       "name": "Cineverse",
+371:       "type": "iframe",
+372:       "url": "https://rozgarlelo.modiplay.xyz/embed/tmdb/movie?id=801688",
+373:       "quality": "HD",
+374:       "is_custom": false
+375:     },
+376:     // ... more servers
+377:   ],
+378:   "directEpisode": true,
+379:   "playRequested": true
+380: };
+381: ```
+382: 
+383: **Regex to extract:**
+384: ```python
+385: re.search(r'watchConfig\s*=\s*(\{.*?\});', html, re.DOTALL)
+386: # Then: json.loads(match)[\"initialServers\"]
+387: ```
+388: 
+389: ### Embed Servers (7 Verified)
+390: 
+391: | # | Server Name | Domain | ID Type | URL Pattern (Movie) | URL Pattern (TV) | Stream Resolution |
+392: |---|------------|--------|---------|---------------------|------------------|-------------------|
+393: | 1 | **Filesforever** | `filesforever.link` | Custom hash | `/embed/<hash>` | N/A | ✅ 1080p custom upload |
+394: | 2 | **Cineverse** | `rozgarlelo.modiplay.xyz` | TMDB ID | `/embed/tmdb/movie?id=<tmdb>` | `/embed/tmdb/tv?id=<tmdb>&s=N&e=N` | iframe (slow/timeout) |
+395: | 3 | **GD Mirror** | `streams.iqsmartgames.com` | IMDB ID | `/embed/movie/<imdb>?key=<apikey>` | `/embed/tv/<tmdb>/S/E?key=<apikey>` | iframe (JS-rendered) |
+396: | 4 | **Vidrift** | `embed.vidrift.net` | TMDB ID | `/embed/movie/<tmdb>` | `/embed/tv/<tmdb>/S/E` | HLS via JS |
+397: | 5 | **VIDOUT** | `vidout.pages.dev` | IMDB ID | `/movie/<imdb>` | `/tv/<tmdb>/sN/eN` | ✅ Direct m3u8 HLS |
+398: | 6 | **Filmu** | `embed.filmu.in` | TMDB ID | `/movie/<tmdb>` | `/tv/<tmdb>/S/E` | Vite JS player |
+399: | 7 | **VidBolt** | `vidbolt.xyz` | TMDB ID | `/movie/<tmdb>` | `/tv/<tmdb>/S/E` | JS player |
+400: 
+The above content does NOT show the entire file contents. If you need to view any lines of the file which were not shown to complete your task, call this tool again to view those lines.
+
+---
+
