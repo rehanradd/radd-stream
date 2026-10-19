@@ -85239,3 +85239,72 @@ The above content does NOT show the entire file contents. If you need to view an
 
 ---
 
+## 🤖 AI (Antigravity)  `2026-10-19T11:49:47Z`
+
+Created At: 2026-10-19T11:49:47Z
+Completed At: 2026-10-19T11:49:48Z
+The following changes were made by the replace_file_content tool to: /home/runner/workspace/radd-stream/Fast_Fetch/import_10xflix.py. If relevant, proactively run terminal commands to execute this code for the USER. Don't ask for permission.
+[diff_block_start]
+@@ -103,7 +103,7 @@
+                 time.sleep(self._next_request_at - now)
+             self._next_request_at = time.monotonic() + self.request_interval
+ 
+-    def get_text(self, url: str, referer: str | None = None, timeout: int = 15) -> tuple[int, str, str]:
++    def get_text(self, url: str, referer: str | None = None, timeout: int = 15) -> tuple[int, str, str, dict]:
+         headers = {
+             "User-Agent": fast_fetch.USER_AGENT,
+             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,application/json;q=0.9,*/*;q=0.8",
+@@ -115,7 +115,7 @@
+ 
+         for attempt in range(self.retries):
+             if STOP_REQUESTED:
+-                return 0, url, ""
++                return 0, url, "", {}
+             self._wait()
+             try:
+                 req = urllib.request.Request(url, headers=headers)
+@@ -122,25 +122,26 @@
+                     code = resp.status
+                     final_url = resp.geturl()
++                    resp_headers = {k.lower(): v for k, v in resp.headers.items()}
+                     text = resp.read().decode("utf-8", errors="replace")
+-                    return code, final_url, text
++                    return code, final_url, text, resp_headers
+             except urllib.error.HTTPError as e:
+                 if attempt == self.retries - 1:
+-                    return e.code, url, ""
+-                time.sleep(1.0)
+-            except Exception:
+-                if attempt == self.retries - 1:
+-                    return 0, url, ""
+-                time.sleep(1.0)
+-        return 0, url, ""
++                    return e.code, url, "", {}
++                time.sleep(1.0)
++            except Exception:
++                if attempt == self.retries - 1:
++                    return 0, url, "", {}
++                time.sleep(1.0)
++        return 0, url, "", {}
+ 
+     def get_json(self, url: str, referer: str | None = None, timeout: int = 15) -> tuple[int, any, dict]:
+-        code, final_url, text = self.get_text(url, referer=referer, timeout=timeout)
++        code, final_url, text, resp_headers = self.get_text(url, referer=referer, timeout=timeout)
+         if code != 200 or not text:
+-            return code, None, {}
++            return code, None, resp_headers
+         try:
+-            return code, json.loads(text), {}
++            return code, json.loads(text), resp_headers
+         except Exception:
+-            return code, None, {}
++            return code, None, resp_headers
+ 
+ 
+ def init_staging_db(db_path: Path):
+[diff_block_end]
+
+Please note that the above snippet only shows the MODIFIED lines from the last change. It shows up to 3 lines of unchanged lines before and after the modified lines. The actual file contents may have many more lines not shown.
+
+---
+
