@@ -84380,3 +84380,26 @@ MobileJSR links: ['https://mobilejsr.com/view/W3Pq15KDAN', 'https://mobilejsr.co
 
 ---
 
+## 🤖 AI (Antigravity)  `2026-10-19T11:30:01Z`
+
+Created At: 2026-10-19T11:30:01Z
+Completed At: 2026-10-19T11:30:04Z
+
+The command exited with code 0.
+Output:
+Unwrapped sources count: 12
+{'source_name': '⚡ HubCloud [10Gbps Fast Server]', 'service': 'hubcloud_10g', 'resource_id': 'c3fxsjzrysc1o1z', 'source_url': 'https://hubcloud.ist/video/c3fxsjzrysc1o1z', 'final_url': 'https://gpdl2.hubcloud.ist/?id=72d3cfcd9bcc76a42e55f65904127cf7e9df38661d491dd95d4d04e46090e185b46aa260e0a2335d0a1fcf34502d79bf287cdafdc1743876bef3763fc1cf83836c85cbfa9e327fb2489e33c174f61643cf793812e2efcee57bf8632e2dd62fed158e47a754f458242565c3121c4972e8::82de33bea92a3b8671e6f61719711ce7', 'is_temporary': 0}
+{'source_name': '⚡ HubDrive [Cloud]', 'service': 'hubdrive', 'resource_id': '2532022577', 'source_url': 'https://hubdrive.pics/file/2532022577', 'final_url': 'https://hubdrive.pics/file/2532022577', 'is_temporary': 0}
+{'source_name': '⚡ FilePress [Google Drive]', 'service': 'filepress', 'resource_id': '6ad5fb2169b577b115dc2d2b', 'source_url': 'https://new2.filepress.lat/file/6ad5fb2169b577b115dc2d2b', 'final_url': 'https://new2.filepress.lat/file/6ad5fb2169b577b115dc2d2b', 'is_temporary': 0}
+{'source_name': '⚡ 1fichier [High-Speed]', 'service': '1fichier', 'resource_id': '', 'source_url': 'https://1fichier.com/?1qtgqpg4j3ie1fmayuhm', 'final_url': 'https://1fichier.com/?1qtgqpg4j3ie1fmayuhm', 'is_temporary': 0}
+{'source_name': '⚡ 1fichier [High-Speed]', 'service': '1fichier', 'resource_id': '', 'source_url': 'https://1fichier.com/?gi8rwi3s65772wzunfua', 'final_url': 'https://1fichier.com/?gi8rwi3s65772wzunfua', 'is_temporary': 0}
+{'source_name': '⚡ https://dl.uploadflix.com/m5lcpttmwtr2', 'service': 'dl', 'resource_id': 'm5lcpttmwtr2', 'source_url': 'https://dl.uploadflix.com/m5lcpttmwtr2', 'final_url': 'https://dl.uploadflix.com/m5lcpttmwtr2', 'is_temporary': 0}
+{'source_name': '⚡ GoFile [Cloud]', 'service': 'gofile', 'resource_id': '2EG8sfpf', 'source_url': 'https://gofile.io/d/2EG8sfpf', 'final_url': 'https://gofile.io/d/2EG8sfpf', 'is_temporary': 0}
+{'source_name': '⚡ https://megaup.net/ef47584b6bf43945d56ac1a72619e359/Street_Fighter_(2026)_www.10xflix.com_Hindi_(Cleaned)_Movie_HQ_1080p_HDTC_x264.mkv', 'service': 'megaup', 'resource_id': 'Street_Fighter_(2026)_www.10xflix.com_Hindi_(Cleaned)_Movie_HQ_1080p_HDTC_x264.mkv', 'source_url': 'https://megaup.net/ef47584b6bf43945d56ac1a72619e359/Street_Fighter_(2026)_www.10xflix.com_Hindi_(Cleaned)_Movie_HQ_1080p_HDTC_x264.mkv', 'final_url': 'https://megaup.net/ef47584b6bf43945d56ac1a72619e359/Street_Fighter_(2026)_www.10xflix.com_Hindi_(Cleaned)_Movie_HQ_1080p_HDTC_x264.mkv', 'is_temporary': 0}
+{'source_name': '⚡ https://multiup.io/download/d293bd7d84f7d7ab32c3bcfbe1ccf70c/Street%20Fighter%20%282026%29%20www.10xflix.com%20Hindi%20%28Cleaned%29%20Movie%20HQ%201080p%20HDTC%20x264.mkv', 'service': 'multiup', 'resource_id': 'Street%20Fighter%20%282026%29%20www.10xflix.com%20Hindi%20%28Cleaned%29%20Movie%20HQ%201080p%20HDTC%20x264.mkv', 'source_url': 'https://multiup.io/download/d293bd7d84f7d7ab32c3bcfbe1ccf70c/Street%20Fighter%20%282026%29%20www.10xflix.com%20Hindi%20%28Cleaned%29%20Movie%20HQ%201080p%20HDTC%20x264.mkv', 'final_url': 'https://multiup.io/download/d293bd7d84f7d7ab32c3bcfbe1ccf70c/Street%20Fighter%20%282026%29%20www.10xflix.com%20Hindi%20%28Cleaned%29%20Movie%20HQ%201080p%20HDTC%20x264.mkv', 'is_temporary': 0}
+{'source_name': '▶ Streamtape [Web Player]', 'service': 'streamtape', 'resource_id': 'g3kqK11QmjC94b', 'source_url': 'https://streamtape.to/v/g3kqK11QmjC94b', 'final_url': 'https://streamtape.to/v/g3kqK11QmjC94b', 'is_temporary': 0}
+{'source_name': '⚡ https://vikingfile.com/f/EqU3babSC9', 'service': 'vikingfile', 'resource_id': 'EqU3babSC9', 'source_url': 'https://vikingfile.com/f/EqU3babSC9', 'final_url': 'https://vikingfile.com/f/EqU3babSC9', 'is_temporary': 0}
+{'source_name': '▶ Voe [Stream Player]', 'service': 'voe', 'resource_id': 'axej90egwcfc', 'source_url': 'https://voe.sx/axej90egwcfc', 'final_url': 'https://voe.sx/axej90egwcfc', 'is_temporary': 0}
+
+---
+
