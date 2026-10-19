@@ -27522,3 +27522,15 @@ Output:
 
 ---
 
+## 🤖 AI (Antigravity)  `2026-10-19T18:26:58Z`
+
+Created At: 2026-10-19T18:26:58Z
+Completed At: 2026-10-19T18:26:58Z
+
+The command exited with code 0.
+Output:
+Keys in token: ['token', 'auth_method', 'id_token']
+Expiry: None
+
+---
+
