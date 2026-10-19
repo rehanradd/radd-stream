@@ -90457,3 +90457,39 @@ Please note that the above snippet only shows the MODIFIED lines from the last c
 
 ---
 
+## 🤖 AI (Antigravity)  `2026-10-19T13:02:55Z`
+
+Created At: 2026-10-19T13:02:55Z
+Completed At: 2026-10-19T13:02:55Z
+File Path: `file:///home/runner/workspace/ANTIGRAVITY_HANDOFF.md`
+Total Lines: 23
+Total Bytes: 1957
+Showing lines 1 to 23
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+1: # Antigravity project handoff
+2: 
+3: Use this file for a short, durable summary when you want to continue work in a
+4: new conversation or after signing in again. It supplements Antigravity's
+5: `/resume` history; it is not a full transcript.
+6: 
+7: - **Current goal:** Monitor active background scrapers (10xflix & KatMovieHD) on Oracle VM, uphold staging database isolation, and track crawler progress.
+8: - **Current state:** Active Oracle crawlers running concurrently in background:
+9:   1. 10xflix (PID 146221, syncing all 17,606 titles via WP REST API into 10xflix.db, unwrapping MobileJSR to HubCloud 10G & FilePress Google Drive).
+10:   2. KatMovieHD (completed initial 1,200 batch with 293 scraped; HubCloud concurrency diagnosed; standing by).
+11:   - Previous crawler milestones:
+12:     * Vegamovies: Complete run finished (13,978 / 14,316 scraped, 131,654 releases, 397,888 direct sources, 85,138 Google CDN direct streams).
+13:     * 7StarHD: Phase completed (15,508 / 23,446 scraped, 33,197 releases, 98,199 direct sources).
+14:     * HDHub4u: Phase completed (10,893 scraped, 47,361 releases, 103,964 direct sources).
+15:     * RareAnimes: Completed initial pass (1,329 scraped, 17,419 releases, 53,767 sources, 20,283 PixelDrain direct, 4,219 Cloudflare R2).
+16:   - Finished 100% staging catalogs: SSRMovies (27,000 / 27,000), Rogmovies (7,868 / 7,868), HDTVB (5,692 / 5,692), and MultiMovies (10,488 / 10,488).
+17:   - Full test suite passing (125/125 unit tests). Strict staging DB isolation maintained with zero merges.
+18: - **Next step:** Monitor 10xflix (`python3 check_10xflix.py`) and KatMovieHD (`python3 check_katmoviehd.py`).
+19: 
+20: The Antigravity CLI's local recovery files preserve only selected settings and the last-conversation index, not full transcripts or login credentials. Replit project files and this handoff preserve project context, but cannot restore lost Antigravity account history or authentication.
+21: 
+22: Do not put passwords, API keys, login tokens, or other credentials here.
+23: 
+The above content shows the entire, complete file contents of the requested file.
+
+---
+
