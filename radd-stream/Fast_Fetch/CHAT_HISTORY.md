@@ -23077,3 +23077,74 @@ YOU MUST TAKE ONE OF THE FOLLOWING TWO ACTIONS: A) either proceed to other relev
 
 ---
 
+## 🤖 AI (Antigravity)  `2026-10-19T17:38:31Z`
+
+I have thoroughly reviewed [UNIVERSAL_AI_PROMPT.md](file:///home/runner/workspace/UNIVERSAL_AI_PROMPT.md), [CHAT_HISTORY.md](file:///home/runner/workspace/radd-stream/Fast_Fetch/CHAT_HISTORY.md), [ANTIGRAVITY_HANDOFF.md](file:///home/runner/workspace/ANTIGRAVITY_HANDOFF.md), and [SESSION_CHECKPOINT.md](file:///home/runner/workspace/radd-stream/docs/SESSION_CHECKPOINT.md). 
+
+Here is an executive summary of the project state, active cluster operations on the Oracle VM, and our exact continuation plan.
+
+---
+
+### 🛡️ 1. Inviolable Governance & Principles
+1. **Zero External Dependencies**: 100% Python Standard Library only (`urllib`, `sqlite3`, `json`, `re`, `html`, `concurrent.futures`).
+2. **Zero Adult Content**: `is_18_plus = 0` strictly enforced across all sites, queries, and parsers.
+3. **Strict Staging DB Isolation**: Every scraper outputs exclusively to its own staging database. **Never** merge any staging database into `fast_fetch.db` without explicit confirmation.
+4. **Oracle Crawler Safety**: Never disrupt or kill active background crawlers on the Oracle VM (`92.4.95.252`).
+
+---
+
+### 🚀 2. Live Cluster & Crawler Status (Oracle VM `92.4.95.252`)
+
+| Site | Status | PID | Catalog Posts | Releases | Direct Sources | High-Speed CDN Highlights | Staging DB |
+|---|---|---|---|---|---|---|---|
+| **10xflix** | 🟢 **RUNNING** | 146852 | **12,170+** | **43,637** | **151,865** | 2,414 HubCloud 10G, 6,761 FilePress GDrive, 14k+ 1fichier, 7k+ GoFile | `10xflix.db` (175MB) |
+| **World4uFree** | 🟢 **RUNNING** | 153724 | **24,240** *(Synced)* | **5,149+** | **49,367+** | 1,138 direct Cloudflare Worker 10Gbps `.mkv` streams | `world4ufree.db` (744MB) |
+| **FilmyZilla** | 🏁 **COMPLETED** | — | **4,149** | **13,114** | **13,516** | 402 direct Google CDN 302 streams | `filmyzilla.db` (9.0MB) |
+| **Vegamovies** | 🏁 **COMPLETED** | — | 13,978 | 120,684+ | 369,338+ | 76,802 Google CDN direct streams | `vegamovies.db` (316MB) |
+| **MultiMovies** | 🏁 **COMPLETED** | — | 10,488 | — | — | 7 embed servers (Filesforever, Vidout, Cineverse) | `multimovies.db` (334MB) |
+| **SSRMovies** | 🏁 **COMPLETED** | — | 27,000 | 79,200+ | 316,800+ | Direct-Cloud Google CDN, HubCloud R2 | `ssrmovies.db` (272MB) |
+| **Rogmovies** | 🏁 **COMPLETED** | — | 7,868 | 23,604+ | 94,416+ | FastDL, VCloud R2, PixelDrain | `rogmovies.db` (150MB) |
+| **RareAnimes** | 🏁 **COMPLETED** | — | 2,624 | 8,500+ | 25,000+ | PixelDrain CDN API, HubCloud R2 | `rareanimes.db` (119MB) |
+| **7StarHD** | 🏁 **COMPLETED** | — | 23,446 | 10,395+ | 39,791+ | MobileJSR persistent bridges | `7starhd.db` (79MB) |
+| **HDHub4u** | 🏁 **COMPLETED** | — | 14,504 | — | — | Typesense JSON + greenmotors b64 unwrapper | `hdhub4u.db` (57MB) |
+| **HDTVB** | 🏁 **COMPLETED** | — | 5,692 | 17,076+ | 68,304+ | Fast servers | `hdtvb.db` (24MB) |
+| **Bolly4u** | 🟡 **READY ON DECK** | — | 36,709 | Built & tested | Built & tested | Hidden `photojin` JSON API + Google CDN 10Gbps | `bolly4u.db` |
+| **KatMovieHD** | 🟡 **STANDBY** | — | 1,200 | Built & tested | Built & tested | SvelteKit embedded JSON + DandnDn API | `katmoviehd.db` (1.5MB) |
+
+- **Local Test Suite**: Verified **145/145 unit tests passing** (100% OK) across all 14 test modules in `radd-stream/Fast_Fetch`.
+- **Chat Continuity**: Background daemon [`auto_chat_sync.py`](file:///home/runner/workspace/radd-stream/Fast_Fetch/auto_chat_sync.py) is active in the workspace shell.
+
+---
+
+### 📍 3. Where We Last Stopped in [CHAT_HISTORY.md](file:///home/runner/workspace/radd-stream/Fast_Fetch/CHAT_HISTORY.md)
+
+Right before this session began, your last request was:
+> *"now which other site have left which we have not scrape yet lets also ready there scrapers tooand make sure to keep them fast and get everything as much as possible"*
+
+We had identified the following key target candidates for our next expansion:
+1. **BollyFlix** (`bollyflix.nz` / `bollyflix.live`)
+2. **9xmovies** (`9kmoviies.xyz` / `9xmovies.click`)
+3. **MoviesMod** (`moviesmod.net` / `moviesmod.wiki` / `moviesmod.day`)
+4. **MkvCinemas** (`mkvcinemas.lat` / `mkvcinemas.cz`)
+5. **ExtraMovies** (`extramovies.ph`)
+6. **DesireMovies** (`desiremovies.run`)
+7. **TopMovies** (`topmovies.tv`)
+8. **CineVood** (`cinevood.run`)
+
+---
+
+### 🎯 4. Proposed Next Action
+
+I recommend we proceed immediately with:
+
+1. **Candidate Probe & Fast Discovery**:
+   - Run a rapid live probe against these candidate sites to identify their active 2026 production domains, bypass redirect shorteners, check for bulk endpoints (WordPress REST API `wp-json/wp/v2/posts`, Typesense/Algolia, XML sitemaps), and verify bridge links (FastDL, HubCloud, GDFlix, PixelDrain, Cloudflare Workers).
+2. **Conquer & Build the Next Scraper**:
+   - Select the top candidate (e.g. **BollyFlix** or **MoviesMod** or **9xmovies**), engineer its dedicated importer (`import_<site>.py`), write its unit tests (`test_<site>_import.py`), and verify live unwrapping into its isolated staging database.
+3. *(Optional)* **Deploy Bolly4u to Oracle VM**:
+   - [`import_bolly4u.py`](file:///home/runner/workspace/radd-stream/Fast_Fetch/import_bolly4u.py) is completely finished, tested, and verified with its hidden `photojin` API for 36.7k titles. If you would like it deployed concurrently with 10xflix and World4uFree, we can launch it right away.
+
+Shall I begin probing the candidate sites now to see which has the fastest hidden bulk API?
+
+---
+
