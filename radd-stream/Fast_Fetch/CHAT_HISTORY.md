@@ -23148,3 +23148,9 @@ Shall I begin probing the candidate sites now to see which has the fastest hidde
 
 ---
 
+## 👤 USER  `2026-10-19T17:41:15Z`
+
+deploy all in parllale which we have alread made and verifed once it done then tell me also one little quetion why do katmovies hd database size so small comapred to others why
+
+---
+
