@@ -89001,3 +89001,257 @@ The above content does NOT show the entire file contents. If you need to view an
 
 ---
 
+## 🤖 AI (Antigravity)  `2026-10-19T12:50:34Z`
+
+Created At: 2026-10-19T12:50:34Z
+Completed At: 2026-10-19T12:50:35Z
+File Path: `file:///home/runner/workspace/radd-stream/Fast_Fetch/SITES.md`
+Total Lines: 627
+Total Bytes: 22022
+Showing lines 400 to 550
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+400: 
+401: ### TMDB & IMDB ID Extraction
+402: 
+403: The embed URLs expose both TMDB and IMDB IDs for free metadata enrichment:
+404: ```python
+405: # TMDB ID from embed URLs (numeric, 4+ digits)
+406: tmdb_id = re.search(r'/(?:movie|tv)/(\d{4,})', embed_url)
+407: # Also: /embed/tmdb/movie?id=<tmdb_id>
+408: 
+409: # IMDB ID from embed URLs (tt followed by 7+ digits)
+410: imdb_id = re.search(r'/(tt\d{7,})', embed_url)
+411: 
+412: # API key for GD Mirror (static, shared):
+413: # ?key=e11a7debaaa4f5d25b671706ffe4d2acb56efbd4
+414: ```
+415: 
+416: ### Series Episode Architecture
+417: 
+418: ```
+419: Series root page (/series/<slug>-<id>):
+420:   → Lists all seasons and episodes as HTML links
+421:   → Does NOT contain watchConfig (no streams on root page)
+422:   → Has Schema.org BreadcrumbList JSON-LD
+423: 
+424: Episode page (/series/<slug>-<id>/season/N/episode/N):
+425:   → HAS its own watchConfig with initialServers (6 servers per episode)
+426:   → Has Schema.org TVEpisode JSON-LD with name, description, season, episode number
+427:   → Has const seasonEpisodeNumbers = [1,2,3,...] (episode count per season)
+428:   → Each episode streams via all 6 autoembed servers with /tv/<tmdb>/S/E URLs
+429: ```
+430: 
+431: ### Schema.org Structured Data
+432: ```json
+433: // On search results page (SearchAction):
+434: {"@type": "SearchAction", "target": {"urlTemplate": "https://multimovies.garden/search?q={search_term_string}"}}
+435: 
+436: // On episode pages (TVEpisode):
+437: {"@type": "TVEpisode", "name": "Episode Title", "episodeNumber": 1, "partOfSeason": {"seasonNumber": 1}}
+438: ```
+439: 
+440: ### JS Files
+441: ```
+442: /assets/js/main.js      → Contains fetch('/api/search?q=') autocomplete logic
+443: /assets/js/discovery.js  → Contains fetch('/api/discover') trending/catalog logic
+444: ```
+445: 
+446: ---
+447: 
+448: ## 8. HDHub4u (`new3.hdhub4u.free`)
+449: 
+450: ### Identity
+451: - **Primary domain:** `https://new3.hdhub4u.free`
+452: - **Domain pattern:** `newN.hdhub4u.free` where N increments
+453: - **CMS:** WordPress
+454: 
+455: ### Data Endpoints
+456: ```
+457: WP post sitemap (most reliable):
+458:   GET https://new3.hdhub4u.free/post-sitemap.xml
+459:   Contains 1,000 most recent post URLs
+460: 
+461: Category pages (thousands more):
+462:   GET https://new3.hdhub4u.free/bollywood/page/2/
+463:   GET https://new3.hdhub4u.free/hollywood/page/2/
+464:   GET https://new3.hdhub4u.free/web-series/page/2/
+465:   HTML: <li class="thumb"><a href="POST_URL">
+466: ```
+467: 
+468: ### Bridge Chain: greenmotors.cc
+469: ```
+470: Post page
+471:   └─ greenmotors link: https://greenmotors.club/?id=<BASE64_PAYLOAD>
+472:       └─ Multi-layer decode: b64 -> b64 -> rot_13 -> b64 -> JSON {'o': b64_dest} -> b64 -> hblinks archive URL
+473:       └─ Follows hblinks archive page to extract HubCloud, PixelDrain, and Direct-Cloud mirrors
+474:       └─ Unwraps to final direct streaming links (Cloudflare R2, PixelDrain API, Google CDN)
+475: ```
+476: 
+477: ### Key Regex
+478: ```python
+479: bridge_links = re.findall(
+480:     r"""href=["'](https?://greenmotors\.[a-z]+/\?id=[A-Za-z0-9+/=_\-]+)["']""",
+481:     html
+482: )
+483: ```
+484: 
+485: ### Quality Detection
+486: ```python
+487: # Find quality from surrounding HTML context
+488: idx_pos = html.find(bridge_url)
+489: nearby = html[max(0, idx_pos-300):idx_pos+200]
+490: qual_m = re.search(r'\b(480p|720p|1080p|2160p|4k)\b', nearby, re.I)
+491: ```
+492: 
+493: ---
+494: 
+495: ## 9. BollyShares (`bollyshares.xyz`)
+496: 
+497: ### Identity
+498: - **Primary domain:** `https://bollyshares.xyz`
+499: - **Old domain:** `bollywood1.xyz` (normalize → bollyshares.xyz)
+500: 
+501: ### Data Endpoints
+502: ```
+503: WP post sitemap:
+504:   GET https://bollyshares.xyz/post-sitemap.xml
+505:   Contains ~200 recent posts
+506: 
+507: Homepage (fallback):
+508:   GET https://bollyshares.xyz/
+509:   Links: href="https://bollyshares.xyz/free-<title>/"
+510: ```
+511: 
+512: ### Bridge Chain: 10moviesz.mom
+513: ```
+514: Post page
+515:   └─ 10moviesz link: https://10moviesz.mom/?id=<SHORT_ID>
+516:       └─ HTTP redirect → HubCloud / PixelDrain / direct CDN
+517:       └─ Stored as-is for now
+518:       └─ [TODO] Follow redirect chain to resolve final URL
+519: ```
+520: 
+521: ### Key Regex
+522: ```python
+523: bridge_links = re.findall(
+524:     r"""href=["'](https?://10moviesz?\.[a-z]+/\?id=[^"'\s<>]+)["']""",
+525:     html
+526: )
+527: ```
+528: 
+529: ---
+530: 
+531: ## 10. FilmyZilla (`filmyzilla74.com`)
+532: 
+533: ### Identity
+534: - **Primary domain:** `https://www.filmyzilla74.com`
+535: - **Domain pattern:** `filmyzilla<N>.com` — numeric increment
+536: - **Known history:** 71 → 73 → 74 (check when 74 stops working)
+537: 
+538: ### Data Endpoints
+539: ```
+540: XML Sitemap:
+541:   GET https://www.filmyzilla74.com/sitemap.xml
+542:   May contain sub-sitemaps or direct URL list
+543: 
+544: Post URL pattern:
+545:   https://www.filmyzilla74.com/movie/<numeric-id>/<Title-Year-hindi-movie>.html
+546: 
+547: Quality pages (per-quality download):
+548:   https://www.filmyzilla74.com/server/<numeric-id>/<filename-quality>.html
+549:   Example: /server/8247/Ae-Dil-Hai-Mushkil-2016-Hindi-Movie-720p-HDRip.html
+550: ```
+The above content does NOT show the entire file contents. If you need to view any lines of the file which were not shown to complete your task, call this tool again to view those lines.
+
+---
+
+## 🤖 AI (Antigravity)  `2026-10-19T12:50:39Z`
+
+Created At: 2026-10-19T12:50:39Z
+Completed At: 2026-10-19T12:50:39Z
+File Path: `file:///home/runner/workspace/radd-stream/Fast_Fetch/SITES.md`
+Total Lines: 627
+Total Bytes: 22022
+Showing lines 551 to 627
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+551: 
+552: ### Key Regex
+553: ```python
+554: # Absolute quality page links
+555: server_links = re.findall(
+556:     r'href=["\'](https?://www\.filmyzilla\d+\.com/server/\d+/[^"\'<>\s]+\.html)["\']',
+557:     html
+558: )
+559: # Relative quality page links (fallback)
+560: rel_links = re.findall(r'href=["\'](/server/\d+/[^"\'<>\s]+\.html)["\']', html)
+561: # Build absolute: base_domain + rel_link
+562: ```
+563: 
+564: ---
+565: 
+566: ## 11. CDN Services — Complete Bridge Reference
+567: 
+568: ### Direct-Resolve Services (automatic in fast_fetch.py)
+569: 
+570: | Service | URL Pattern | Final CDN | Resumable |
+571: |---------|------------|-----------|-----------|
+572: | FastDL | `fastdl.beer/embed.php?download=<ID>` | `video-downloads.googleusercontent.com` | No |
+573: | VCloud (FSL) | `vcloud.beer/<ID>` → FSL | `pub-*.r2.dev` | ✅ HTTP 206 |
+574: | VCloud (Hub) | `vcloud.beer/<ID>` → Hub | `googleusercontent.com` | No |
+575: | HubCloud | `hubcloud.ist/drive/<ID>` | `googleusercontent.com` or R2 | No |
+576: | PixelDrain | `pixeldrain.com/u/<ID>` | `pixeldrain.com/api/file/<ID>` | ✅ HTTP 206 |
+577: | VegaDrive | `one.vegadrive.me/s/<ID>` | `/d/<ID>/skyd` | ✅ |
+578: | FilePress | `new1.filepress.lat/file/<ID>` | Google Drive proxy | No |
+579: | Firebase | `firebasestorage.googleapis.com/...` | Direct GCS | ✅ |
+580: 
+581: ### Store-As-Is Services (JS-rendered or redirect-only)
+582: 
+583: | Service | URL Pattern | Note |
+584: |---------|------------|------|
+585: | MobileJSR | `mobilejsr.com/view/<ID>` | Stable persistent embed |
+586: | greenmotors | `greenmotors.club/?id=<B64>` | JS renders link |
+587: | 10moviesz | `10moviesz.mom/?id=<ID>` | Redirect chain |
+588: | LinksZilla | `secure.linkszilla.top/view/<ID>` | Page with mirror buttons |
+589: | GDFlix | `new5.gdflix.io/file/<ID>` | Google Drive proxy |
+590: | Direct-Cloud | `dl.direct-cloud.top/d/<ID>` | 302 → storage node |
+591: | Watch-Online | `watch-online.mom/e/<ID>` | Embedded player |
+592: 
+593: ---
+594: 
+595: ## 12. Domain Management Commands
+596: 
+597: ```bash
+598: # Override a domain when site moves
+599: python Fast_Fetch/fast_fetch.py set-domain vegamovies https://vegamovies.newdomain.com
+600: 
+601: # Migrate all DB records from old to new domain  
+602: python Fast_Fetch/fast_fetch.py domain migrate vegamovies.gallery vegamovies.newdomain.com
+603: 
+604: # Probe candidate TLDs for a dead site
+605: python Fast_Fetch/fast_fetch.py probe-domain vegamovies
+606: 
+607: # Check which domains are currently configured
+608: python Fast_Fetch/fast_fetch.py stats  # shows domain_config entries
+609: ```
+610: 
+611: ---
+612: 
+613: ## 13. Sites To Add Next
+614: 
+615: | Site | Likely Domain | Method | Notes |
+616: |------|--------------|--------|-------|
+617: | Filmywap | filmywap.com (rotates) | XML sitemap | Large catalog |
+618: | Filmyhit | filmyhit.link | XML sitemap | Punjab + Bollywood |
+619: | MP4Moviez | mp4moviez.cloud | XML sitemap | 480p/720p focus |
+620: | World4uFree | world4ufree.biz | XML sitemap | Dual audio |
+621: | Bolly4u | bolly4u.trade | XML sitemap | Bollywood |
+622: | watch-movies.com.pk | watch-movies.com.pk | CF challenge | Needs special headers |
+623: | hdmoviesbd.xyz | NXDOMAIN | Find mirror | Domain dead |
+624: | Movierulz | movierulz.plz | Cloudflare | Complex JS |
+625: | 9xmovies | 9xmovies.care | XML sitemap | South + Bolly |
+626: | Kuttymovies | kuttymovies.cool | XML sitemap | Tamil focus |
+627: 
+The above content does NOT show the entire file contents. If you need to view any lines of the file which were not shown to complete your task, call this tool again to view those lines.
+
+---
+
