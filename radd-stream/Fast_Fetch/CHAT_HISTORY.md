@@ -88743,3 +88743,93 @@ Please note that the above snippet only shows the MODIFIED lines from the last c
 
 ---
 
+## 🤖 AI (Antigravity)  `2026-10-19T12:41:49Z`
+
+Created At: 2026-10-19T12:41:49Z
+Completed At: 2026-10-19T12:41:50Z
+
+The command exited with code 0.
+Output:
+=== VEGAMOVIES PENDING ===
+Total pending: 15
+1350 https://new1.vegamovies.lease/download-pappu-passport-2020-hindi-dubbed-movie/
+1380 https://new1.vegamovies.lease/the-tournament-2009-hindi-dubbed-english-full-movie/
+1432 https://new1.vegamovies.lease/shockwave-countdown-to-disaster-2017-dual-audio-hindi-english/
+1598 https://new1.vegamovies.lease/download-twin-betrayal-2018-dual-audio-hindi-movie-480p-720p-bluray/
+3461 https://new1.vegamovies.lease/download-three-christs-2017-hindi-dubbed-480p-720p-1080p/
+5659 https://new1.vegamovies.lease/download-7-women-and-a-murder-2022-dual-audio-hindi-web-dl-480p-720p-1080p/
+5660 https://new1.vegamovies.lease/download-outsource-2022-dual-audio-hindi-web-dl-480p-720p/
+5661 https://new1.vegamovies.lease/download-the-wasteland-2022-dual-audio-hindi-480p-720p-1080p/
+5663 https://new1.vegamovies.lease/download-curtain-call-2022-season-1-korean-with-english-subtitles/
+5664 https://new1.vegamovies.lease/download-stealth-2005-dual-audio-hindi-bluray-480p-720p-1080p/
+6902 https://new1.vegamovies.lease/download-unknown-the-lost-pyramid-2023-dual-audio-hindi-web-dl-480p-720p-1080p/
+6947 https://new1.vegamovies.lease/download-unknown-killer-robots-2023-dual-audio-hindi-web-dl-480p-720p-1080p/
+6978 https://new1.vegamovies.lease/download-unknown-cave-of-bones-2023-dual-audio-hindi-web-dl-480p-720p-1080p/
+7021 https://new1.vegamovies.lease/download-unknown-cosmic-time-machine-2023-dual-audio-hindi-web-dl-480p-720p-1080p/
+14316 https://new1.vegamovies.lease/2019/12/
+
+=== MULTIMOVIES PENDING ===
+Total pending: 719
+https://m1.multimovies.courses/series/reply-1988
+https://m1.multimovies.courses/series/degrassi-176329
+https://m1.multimovies.courses/series/family-full-house-with-rohit-sharma-176191
+https://m1.multimovies.courses/series/you-are-my-glory-173483
+https://m1.multimovies.courses/movie/dial-1975-170404
+
+=== KATMOVIEHD STATUS ===
+KatMovieHD distribution: [(-1, 907), (1, 293)]
+
+=== LAST 15 LINES OF VEGAMOVIES LOG ===
+[13450/13726] releases=132551 sources=401291 failed=14 speed=0.12 titles/sec
+[13460/13726] releases=132631 sources=401537 failed=14 speed=0.12 titles/sec
+[13470/13726] releases=133269 sources=403231 failed=14 speed=0.12 titles/sec
+[13480/13726] releases=133532 sources=403958 failed=14 speed=0.12 titles/sec
+[13490/13726] releases=133596 sources=404182 failed=14 speed=0.12 titles/sec
+[13500/13726] releases=133818 sources=404740 failed=14 speed=0.12 titles/sec
+[13510/13726] releases=134186 sources=405656 failed=14 speed=0.12 titles/sec
+[13520/13726] releases=134869 sources=407297 failed=14 speed=0.12 titles/sec
+[13530/13726] releases=135371 sources=408493 failed=14 speed=0.12 titles/sec
+[13540/13726] releases=136266 sources=410959 failed=14 speed=0.12 titles/sec
+[13550/13726] releases=136425 sources=411430 failed=14 speed=0.12 titles/sec
+[13560/13726] releases=136735 sources=412212 failed=14 speed=0.12 titles/sec
+[13570/13726] releases=137400 sources=413760 failed=14 speed=0.12 titles/sec
+
+[✓] Vegamovies scraping finished: {'completed': 13575, 'releases': 137826, 'sources': 414863, 'failed': 15, 'start_time': 1792247192.7295892}
+
+
+=== LAST 15 LINES OF MULTIMOVIES LOG ===
+[10370/10488] releases=525070 sources=583650 failed=57 speed=1.22 roots/sec
+[10380/10488] releases=525674 sources=584828 failed=57 speed=1.22 roots/sec
+[10390/10488] releases=525843 sources=585176 failed=57 speed=1.22 roots/sec
+[10400/10488] releases=526225 sources=586058 failed=57 speed=1.22 roots/sec
+[10410/10488] releases=526408 sources=586466 failed=57 speed=1.22 roots/sec
+[10420/10488] releases=526883 sources=587402 failed=58 speed=1.22 roots/sec
+[10430/10488] releases=527866 sources=589782 failed=58 speed=1.21 roots/sec
+[10440/10488] releases=529873 sources=591956 failed=58 speed=1.22 roots/sec
+[10450/10488] releases=530035 sources=592316 failed=58 speed=1.22 roots/sec
+[10460/10488] releases=530257 sources=592586 failed=58 speed=1.22 roots/sec
+[10470/10488] releases=530913 sources=593322 failed=58 speed=1.21 roots/sec
+[10480/10488] releases=531905 sources=594474 failed=58 speed=1.21 roots/sec
+[10488/10488] releases=532649 sources=595218 failed=61 speed=1.21 roots/sec
+
+[✓] MultiMovies full scrape finished: {'total_roots': 10488, 'completed_roots': 10488, 'pending_roots': 10488, 'releases': 532649, 'sources': 595218, 'failed': 61, 'start_time': 1792197064.6322615}
+
+
+=== LAST 15 LINES OF KATMOVIEHD LOG ===
+  [1090/1200] releases=1,128 sources=1,131 r2=148 pd=149 failed=799 speed=0.91 t/s ETA: 00:02:00
+  [1100/1200] releases=1,128 sources=1,131 r2=148 pd=149 failed=809 speed=0.92 t/s ETA: 00:01:49
+  [1110/1200] releases=1,128 sources=1,131 r2=148 pd=149 failed=819 speed=0.92 t/s ETA: 00:01:37
+  [1120/1200] releases=1,128 sources=1,131 r2=148 pd=149 failed=829 speed=0.93 t/s ETA: 00:01:26
+  [1130/1200] releases=1,128 sources=1,131 r2=148 pd=149 failed=839 speed=0.93 t/s ETA: 00:01:14
+  [1140/1200] releases=1,128 sources=1,131 r2=148 pd=149 failed=849 speed=0.94 t/s ETA: 00:01:03
+  [1150/1200] releases=1,128 sources=1,131 r2=148 pd=149 failed=859 speed=0.95 t/s ETA: 00:00:52
+  [1160/1200] releases=1,131 sources=1,131 r2=148 pd=149 failed=868 speed=0.95 t/s ETA: 00:00:42
+  [1170/1200] releases=1,131 sources=1,131 r2=148 pd=149 failed=878 speed=0.95 t/s ETA: 00:00:31
+  [1180/1200] releases=1,135 sources=1,131 r2=148 pd=149 failed=887 speed=0.95 t/s ETA: 00:00:21
+  [1190/1200] releases=1,135 sources=1,131 r2=148 pd=149 failed=897 speed=0.95 t/s ETA: 00:00:10
+  [1200/1200] releases=1,135 sources=1,131 r2=148 pd=149 failed=907 speed=0.96 t/s ETA: 00:00:00
+
+[✓] Crawler finished: 293 scraped, 907 failed in 1255.5s
+
+---
+
