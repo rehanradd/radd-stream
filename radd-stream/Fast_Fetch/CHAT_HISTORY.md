@@ -85377,3 +85377,51 @@ The above content does NOT show the entire file contents. If you need to view an
 
 ---
 
+## 🤖 AI (Antigravity)  `2026-10-19T11:50:04Z`
+
+Created At: 2026-10-19T11:50:04Z
+Completed At: 2026-10-19T11:50:04Z
+The following changes were made by the replace_file_content tool to: /home/runner/workspace/radd-stream/Fast_Fetch/import_10xflix.py. If relevant, proactively run terminal commands to execute this code for the USER. Don't ask for permission.
+[diff_block_start]
+@@ -562,8 +562,12 @@
+             break
+ 
+         if total_found is None:
+-            total_found = int(headers.get("x-wp-total", 0)) if "x-wp-total" in headers else len(posts)
+-            print(f"[*] Total catalog size reported: {total_found:,} titles.", flush=True)
++            if "x-wp-total" in headers:
++                total_found = int(headers["x-wp-total"])
++                print(f"[*] Total catalog size reported: {total_found:,} titles.", flush=True)
++            else:
++                total_found = None
++                print("[*] Total catalog size header not present; paginating dynamically...", flush=True)
+ 
+         records = []
+         for post in posts:
+@@ -590,9 +590,10 @@
+                 conn.commit()
+ 
+             total_synced += len(records)
++            found_str = f"{total_found:,}" if total_found else "..."
+             print(
+                 f"  [Page {page:3d}] Synced {len(records)} titles in {dt:.2f}s "
+-                f"({total_synced:,} / {total_found:,} total)",
++                f"({total_synced:,} / {found_str} total)",
+                 flush=True,
+             )
+ 
+@@ -599,7 +599,7 @@
+             print(f"[*] Reached requested max_pages limit ({max_pages}). Stopping sync.", flush=True)
+             break
+ 
+-        if len(posts) < per_page or total_synced >= (total_found or 0):
++        if len(posts) < per_page or (total_found and total_synced >= total_found):
+             break
+ 
+         page += 1
+[diff_block_end]
+
+Please note that the above snippet only shows the MODIFIED lines from the last change. It shows up to 3 lines of unchanged lines before and after the modified lines. The actual file contents may have many more lines not shown.
+
+---
+
