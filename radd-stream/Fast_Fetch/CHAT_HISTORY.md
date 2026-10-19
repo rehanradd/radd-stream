@@ -89624,3 +89624,30 @@ movies_sitemap.xml -> 200 (933598 bytes)
 
 ---
 
+## 🤖 AI (Antigravity)  `2026-10-19T12:55:48Z`
+
+Created At: 2026-10-19T12:55:48Z
+Completed At: 2026-10-19T12:55:51Z
+
+The command exited with code 0.
+Output:
+Title: Street Fighter (2026) Hindi Dubbed Movie Free Download Filmyzilla
+Poster: N/A
+Servers found: 5
+
+[Server 39913]: Street-Fighter-(2026)-Hindi-Dubbed-Movie-480p-HDTS.mkv.html
+   -> 302 Direct CDN: https://lh3.googleusercontent.com/pw/AP1GczOmiXnjwC-Ghld4nlEp3ik1D-SJ3zdmQgHMioKCs0eP-jaZg4BBR70DbWa...
+
+[Server 39912]: Street-Fighter-(2026)-Hindi-Dubbed-Movie-HEVC-720p-HDTS.mkv.html
+   -> 302 Direct CDN: https://lh3.googleusercontent.com/pw/AP1GczMoZihq2cTdQUo7FsLHctxSlhVzydH20qZmAKqRLD2WwfViiLwnW-_2m-e...
+
+[Server 39911]: Street-Fighter-(2026)-Hindi-Dubbed-Movie-720p-HDTS.mkv.html
+   -> 302 Direct CDN: https://lh3.googleusercontent.com/pw/AP1GczNLKAQq9HgBMKw7VI2u5iuOfTYEhblGYpwKSnvs458LeOOPP89CLo8kZJM...
+
+[Server 39910]: Street-Fighter-(2026)-Hindi-Dubbed-Movie-1080p-HDTS.mkv.html
+   -> 302 Direct CDN: https://lh3.googleusercontent.com/pw/AP1GczNEF5KI2LzDQZbtmrDBXsMQR-_KCXQ143x7YWDvuycWOVxpHrjxB3b8K0m...
+
+[Server 39909]: Street-Fighter-(2026)-Hindi-Dubbed-Movie-1080p-HD-HDTS.mkv.html
+
+---
+
