@@ -87645,3 +87645,57 @@ The above content does NOT show the entire file contents. If you need to view an
 
 ---
 
+## 🤖 AI (Antigravity)  `2026-10-19T12:19:45Z`
+
+Created At: 2026-10-19T12:19:45Z
+Completed At: 2026-10-19T12:19:45Z
+File Path: `file:///home/runner/workspace/radd-stream/Fast_Fetch/import_katmoviehd.py`
+Total Lines: 980
+Total Bytes: 37600
+Showing lines 410 to 450
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+410:     upload_links = data.get("upload_links", {})
+411: 
+412:     # 1. HubCloud / HubDrive (Unwrapped to Cloudflare R2 & PixelDrain)
+413:     hub_res = upload_links.get("hubdrive_res")
+414:     if hub_res and hub_res != "None":
+415:         hub_url = f"https://hubcloud.ist/drive/{hub_res}"
+416:         if resolve_direct:
+417:             try:
+418:                 unwrapped = fast_fetch.unwrap_hubcloud_drive(hub_url)
+419:                 for src in unwrapped:
+420:                     sources.append({
+421:                         "source_name": src.get("source_name", "⚡ HubCloud Stream"),
+422:                         "service": src.get("service", "hubcloud"),
+423:                         "resource_id": src.get("resource_id", hub_res),
+424:                         "source_url": hub_url,
+425:                         "final_url": src.get("final_url", hub_url),
+426:                         "is_temporary": src.get("is_temporary", 0),
+427:                         "quality": "720p",
+428:                     })
+429:             except Exception:
+430:                 pass
+431:         if not sources:
+432:             sources.append({
+433:                 "source_name": "⚡ HubCloud Drive",
+434:                 "service": "hubcloud",
+435:                 "resource_id": hub_res,
+436:                 "source_url": hub_url,
+437:                 "final_url": hub_url,
+438:                 "is_temporary": 0,
+439:                 "quality": "720p",
+440:             })
+441: 
+442:     # 2. GDFlix
+443:     gd_res = upload_links.get("gdflix_res")
+444:     if gd_res and gd_res != "None":
+445:         sources.append({
+446:             "source_name": "⚡ GDFlix Mirror",
+447:             "service": "gdflix",
+448:             "resource_id": gd_res,
+449:             "source_url": f"https://gd.kmhd.me/file/{gd_res}",
+450:             "final_url": f"https://gd.kmhd.me/file/{gd_res}",
+The above content does NOT show the entire file contents. If you need to view any lines of the file which were not shown to complete your task, call this tool again to view those lines.
+
+---
+
