@@ -89853,3 +89853,76 @@ Blue (2026) Hindi Dubbed Movie
 
 ---
 
+## 🤖 AI (Antigravity)  `2026-10-19T12:57:35Z`
+
+Created At: 2026-10-19T12:57:35Z
+Completed At: 2026-10-19T12:57:35Z
+File Path: `file:///home/runner/workspace/radd-stream/Fast_Fetch/test_10xflix_import.py`
+Total Lines: 160
+Total Bytes: 6922
+Showing lines 1 to 60
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+1: #!/usr/bin/env python3
+2: """
+3: test_10xflix_import.py — Comprehensive unit tests for 10xflix dedicated scraper.
+4: Tests cover:
+5:   1. Title cleaning and canonical key generation (movies & series).
+6:   2. Byte size string parser.
+7:   3. Release button & resolution parser from HTML.
+8:   4. Post data extraction and MobileJSR mirror extraction.
+9:   5. Isolated SQLite staging database initialization & foreign key cascade.
+10:   6. Atomic post, release, and source persistence.
+11: """
+12: 
+13: import json
+14: import sqlite3
+15: import tempfile
+16: import unittest
+17: from pathlib import Path
+18: 
+19: import import_10xflix
+20: 
+21: 
+22: class TestTenXFlixImport(unittest.TestCase):
+23: 
+24:     def setUp(self):
+25:         self.temp_dir = tempfile.TemporaryDirectory()
+26:         self.db_path = Path(self.temp_dir.name) / "test_10xflix.db"
+27:         import_10xflix.init_staging_db(self.db_path)
+28: 
+29:     def tearDown(self):
+30:         self.temp_dir.cleanup()
+31: 
+32:     def test_clean_10xflix_title_movie(self):
+33:         raw = "Street Fighter (2026) Hindi (Cleaned) Movie HQ HDTC | 1080p | 720p | 480p"
+34:         title, year, season, episode, canon = import_10xflix.clean_10xflix_title(raw)
+35:         self.assertEqual(title, "Street Fighter")
+36:         self.assertEqual(year, 2026)
+37:         self.assertIsNone(season)
+38:         self.assertIsNone(episode)
+39:         self.assertEqual(canon, "street-fighter_2026")
+40: 
+41:     def test_clean_10xflix_title_series(self):
+42:         raw = "Sa Re Ga Ma Pa (2026) Hindi ORG S01E10 Series HDRip | 1080p | 720p | 480p"
+43:         title, year, season, episode, canon = import_10xflix.clean_10xflix_title(raw)
+44:         self.assertEqual(title, "Sa Re Ga Ma Pa")
+45:         self.assertEqual(year, 2026)
+46:         self.assertEqual(season, 1)
+47:         self.assertEqual(episode, 10)
+48:         self.assertEqual(canon, "sa-re-ga-ma-pa_2026_s1_e10")
+49: 
+50:     def test_parse_size_string(self):
+51:         self.assertEqual(import_10xflix.parse_size_string("2.02GB"), int(2.02 * 1024 * 1024 * 1024))
+52:         self.assertEqual(import_10xflix.parse_size_string("997MB"), int(997 * 1024 * 1024))
+53:         self.assertEqual(import_10xflix.parse_size_string("500KB"), int(500 * 1024))
+54:         self.assertIsNone(import_10xflix.parse_size_string("Unknown"))
+55: 
+56:     def test_parse_10xflix_releases(self):
+57:         sample_html = """
+58:         <p><strong>Download Links:</strong></p>
+59:         <p><a href="https://mobilejsr.com/view/heZxR9W5aL">1080p [2.02GB]</a></p>
+60:         <p><a href="https://mobilejsr.com/view/wDs1bdMrff">720p [997MB]</a></p>
+The above content does NOT show the entire file contents. If you need to view any lines of the file which were not shown to complete your task, call this tool again to view those lines.
+
+---
+
