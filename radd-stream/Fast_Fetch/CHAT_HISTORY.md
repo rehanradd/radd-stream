@@ -26866,3 +26866,83 @@ Oct 19 22:58:58 instance-20260424-0405 systemd[1]: Started code-server-tunnel.se
 
 ---
 
+## 🤖 AI (Antigravity)  `2026-10-19T18:14:08Z`
+
+Created At: 2026-10-19T18:14:08Z
+Completed At: 2026-10-19T18:14:09Z
+
+The command exited with code 0.
+Output:
+server {
+    listen 80 default_server;
+    server_name _;
+    server_tokens off;
+
+    add_header X-Content-Type-Options nosniff always;
+    add_header Referrer-Policy no-referrer-when-downgrade always;
+
+    # Public APK Download Endpoint
+    location /download/ {
+        alias /var/www/download/;
+        autoindex off;
+        add_header Content-Disposition "attachment";
+        add_header Access-Control-Allow-Origin *;
+    }
+
+    # Public Streaming API Endpoints
+    location /api/v1/posts {
+        limit_req zone=radd_stream_api burst=30 nodelay;
+        limit_except GET HEAD { deny all; }
+        include /etc/nginx/proxy_params;
+        proxy_pass http://127.0.0.1:8080;
+        proxy_hide_header Access-Control-Allow-Origin;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_connect_timeout 5s;
+        proxy_read_timeout 15s;
+    }
+
+    location = /api/v1/stats {
+        limit_req zone=radd_stream_api burst=30 nodelay;
+        limit_except GET HEAD { deny all; }
+        include /etc/nginx/proxy_params;
+        proxy_pass http://127.0.0.1:8080;
+        proxy_hide_header Access-Control-Allow-Origin;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_connect_timeout 5s;
+        proxy_read_timeout 15s;
+    }
+
+    location /api/v1/stream {
+        limit_req zone=radd_stream_api burst=30 nodelay;
+        limit_except GET HEAD { deny all; }
+        include /etc/nginx/proxy_params;
+        proxy_pass http://127.0.0.1:8080;
+        proxy_hide_header Access-Control-Allow-Origin;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_connect_timeout 5s;
+        proxy_read_timeout 15s;
+    }
+
+    # Protect administrative internal API endpoints
+    location ^~ /api/ {
+        return 403;
+    }
+
+    # Persistent Web IDE (code-server) for mobile browser access
+    location / {
+        proxy_pass http://127.0.0.1:8443/;
+        proxy_set_header Host $http_host;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection upgrade;
+        proxy_set_header Accept-Encoding gzip;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 86400s;
+        proxy_send_timeout 86400s;
+        proxy_buffering off;
+    }
+}
+
+---
+
