@@ -86927,3 +86927,67 @@ post_content: None
 
 ---
 
+## 🤖 AI (Antigravity)  `2026-10-19T12:17:14Z`
+
+Created At: 2026-10-19T12:17:14Z
+Completed At: 2026-10-19T12:17:14Z
+File Path: `file:///home/runner/workspace/radd-stream/Fast_Fetch/import_katmoviehd.py`
+Total Lines: 980
+Total Bytes: 37600
+Showing lines 590 to 640
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+590:             "episode_number": r["episode_number"],
+591:             "audio_languages": json.dumps(["Hindi", "English"]),
+592:             "codec": "x264",
+593:             "bridge_url": bridge_url,
+594:             "sources": sources,
+595:         })
+596: 
+597:     return {
+598:         "canonical_key": canonical_key,
+599:         "title": clean_title,
+600:         "original_title": raw_title,
+601:         "year": year,
+602:         "media_type": media_type,
+603:         "imdb_id": imdb_id,
+604:         "poster_url": poster_url,
+605:         "synopsis": None,
+606:         "genres": json.dumps(genres_list) if genres_list else None,
+607:         "rating": rating,
+608:         "site": "katmoviehd",
+609:         "post_url": post_url,
+610:         "releases": releases_data,
+611:     }
+612: 
+613: 
+614: def save_post_to_staging_db(db_path: Path, post_data: dict) -> bool:
+615:     """Saves post, releases, and sources into isolated katmoviehd.db staging database."""
+616:     if not post_data or not post_data.get("releases"):
+617:         return False
+618: 
+619:     with sqlite3.connect(str(db_path)) as conn:
+620:         cur = conn.cursor()
+621: 
+622:         # 1. Upsert Post
+623:         cur.execute(
+624:             """
+625:             INSERT INTO posts (
+626:                 canonical_key, title, original_title, year, media_type,
+627:                 imdb_id, poster_url, synopsis, genres, rating, site, post_url,
+628:                 created_at, updated_at
+629:             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+630:             ON CONFLICT(canonical_key) DO UPDATE SET
+631:                 title = excluded.title,
+632:                 original_title = excluded.original_title,
+633:                 year = COALESCE(excluded.year, posts.year),
+634:                 media_type = excluded.media_type,
+635:                 imdb_id = COALESCE(excluded.imdb_id, posts.imdb_id),
+636:                 poster_url = COALESCE(excluded.poster_url, posts.poster_url),
+637:                 genres = COALESCE(excluded.genres, posts.genres),
+638:                 rating = COALESCE(excluded.rating, posts.rating),
+639:                 post_url = excluded.post_url,
+640:                 updated_at = CURRENT_TIMESTAMP
+The above content does NOT show the entire file contents. If you need to view any lines of the file which were not shown to complete your task, call this tool again to view those lines.
+
+---
+
