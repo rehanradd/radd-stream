@@ -24037,3 +24037,38 @@ Swap:          2.0Gi       296Mi       1.7Gi
 
 ---
 
+## 🤖 AI (Antigravity)  `2026-10-19T17:46:01Z`
+
+Created At: 2026-10-19T17:46:01Z
+Completed At: 2026-10-19T17:46:01Z
+File Path: `file:///home/runner/workspace/ANTIGRAVITY_HANDOFF.md`
+Total Lines: 22
+Total Bytes: 2120
+Showing lines 1 to 22
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+1: # Antigravity project handoff
+2: 
+3: Use this file for a short, durable summary when you want to continue work in a
+4: new conversation or after signing in again. It supplements Antigravity's
+5: `/resume` history; it is not a full transcript.
+6: 
+7: - **Current goal:** Monitor 3 concurrent background crawlers on Oracle VM (10xflix, FilmyZilla, World4uFree) and maintain strict staging database isolation.
+8: - **Current state:** Active Oracle VM crawlers & deployments:
+9:   1. 10xflix: Actively crawling (PID 146221/146852, 8,450+ catalog posts, 29,780+ releases, 126,100+ sources extracted, 0 failures).
+10:   2. FilmyZilla: Actively crawling (PID 152527/152562, 5 workers, 0.2s delay, 1.36 titles/sec, 329+ posts, 1,350+ releases, 1,750+ sources, direct Google CDN 302 streams).
+11:   3. World4uFree: Actively running (PID 152560/152561, syncing 24.7k catalog titles via WP REST API into world4ufree.db, then launching 5-worker crawler with Cloudflare Worker 10Gbps & 6 mirror streams).
+12:   4. Bolly4u: Fully built, verified locally (7/7 unit tests passing, hidden photojin /action JSON API, 36.7k catalog titles). Ready on deck.
+13:   5. KatMovieHD: Initial 1,200 batch complete with 293 scraped; standing by.
+14:   - Finished 100% staging catalogs: SSRMovies (27,000 / 27,000), Rogmovies (7,868 / 7,868), HDTVB (5,692 / 5,692), Vegamovies (13,978 / 14,316), and MultiMovies (10,488 / 10,488).
+15:   - Master unit test suite: 145/145 unit tests passing (100% OK) across 14 modules.
+16:   - Strict staging DB isolation maintained across all sites (`10xflix.db`, `filmyzilla.db`, `world4ufree.db`, `bolly4u.db`). Zero merges into production fast_fetch.db.
+17: - **Next step:** Monitor all 3 live crawlers (`check_10xflix.py`, `check_filmyzilla.py`, `check_world4ufree.py`) and keep Oracle VM running cleanly.
+18: 
+19: The Antigravity CLI's local recovery files preserve only selected settings and the last-conversation index, not full transcripts or login credentials. Replit project files and this handoff preserve project context, but cannot restore lost Antigravity account history or authentication.
+20: 
+21: Do not put passwords, API keys, login tokens, or other credentials here.
+22: 
+The above content shows the entire, complete file contents of the requested file.
+
+---
+
