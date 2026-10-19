@@ -87159,3 +87159,77 @@ The above content does NOT show the entire file contents. If you need to view an
 
 ---
 
+## 🤖 AI (Antigravity)  `2026-10-19T12:17:25Z`
+
+Created At: 2026-10-19T12:17:25Z
+Completed At: 2026-10-19T12:17:25Z
+File Path: `file:///home/runner/workspace/radd-stream/Fast_Fetch/import_katmoviehd.py`
+Total Lines: 980
+Total Bytes: 37600
+Showing lines 520 to 580
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+520:     raw_title = cached_item.get("post_title", "") if cached_item else ""
+521:     poster_url = cached_item.get("thumbnail_image") if cached_item else None
+522:     genres_list = cached_item.get("categories", []) if cached_item else []
+523: 
+524:     # Fetch post detail chunk
+525:     detail_url = f"{DEFAULT_BASE_URL}/{slug}/__data.json"
+526:     code, _, resp_text = client.get_text(detail_url, timeout=timeout)
+527:     if code != 200 or not resp_text:
+528:         return None
+529: 
+530:     post_content = ""
+531:     for line in resp_text.splitlines():
+532:         line = line.strip()
+533:         if not line:
+534:             continue
+535:         try:
+536:             j = json.loads(line)
+537:         except Exception:
+538:             continue
+539:         if j.get("type") == "chunk" and j.get("id") == 1:
+540:             raw_data = j.get("data", [])
+541:             if len(raw_data) > 3 and isinstance(raw_data[3], str):
+542:                 post_content = raw_data[3]
+543:                 break
+544: 
+545:     if not post_content:
+546:         return None
+547: 
+548:     clean_title, year, season, canonical_key = clean_katmoviehd_title(raw_title or slug)
+549: 
+550:     # IMDB ID & Rating extraction
+551:     imdb_id = None
+552:     imdb_m = re.search(r"imdb\.com/title/(tt\d+)", post_content, re.I)
+553:     if imdb_m:
+554:         imdb_id = imdb_m.group(1)
+555: 
+556:     rating = None
+557:     rat_m = re.search(r"IMDb\s*Rating\s*[:\-–]?\s*([0-9\.]+)\s*/\s*10", post_content, re.I)
+558:     if rat_m:
+559:         try:
+560:             rating = float(rat_m.group(1))
+561:         except ValueError:
+562:             pass
+563: 
+564:     # Media type detection
+565:     is_series = bool(season or "episode" in post_content.lower() or "tv-series" in str(genres_list).lower())
+566:     media_type = "series" if is_series else "movie"
+567: 
+568:     parsed_releases = parse_katmoviehd_releases(post_content, default_season=season)
+569:     if not parsed_releases:
+570:         return None
+571: 
+572:     releases_data = []
+573:     for r in parsed_releases:
+574:         file_id = r["file_id"]
+575:         bridge_url = r["bridge_url"]
+576:         size_bytes, sources = resolve_file_sources(
+577:             client=client,
+578:             file_id=file_id,
+579:             bridge_url=bridge_url,
+580:             resolve_direct=resolve_direct,
+The above content does NOT show the entire file contents. If you need to view any lines of the file which were not shown to complete your task, call this tool again to view those lines.
+
+---
+
