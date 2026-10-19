@@ -84554,3 +84554,71 @@ If relevant, proactively run terminal commands to execute this code for the USER
 
 ---
 
+## 🤖 AI (Antigravity)  `2026-10-19T11:32:34Z`
+
+Created At: 2026-10-19T11:32:34Z
+Completed At: 2026-10-19T11:32:35Z
+File Path: `file:///home/runner/workspace/push.py`
+Total Lines: 259
+Total Bytes: 9469
+Showing lines 65 to 85
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+65:     print("[*] Running pre-push unit tests...", flush=True)
+66:     fast_fetch_dir = ROOT_DIR / "radd-stream" / "Fast_Fetch"
+67:     unit_test_modules = [
+68:         "test_database",
+69:         "test_vidout",
+70:         "test_vegamovies_import",
+71:         "test_rogmovies_import",
+72:         "test_ssrmovies_import",
+73:         "test_7starhd_import",
+74:         "test_hdhub4u_import",
+75:         "test_rareanimes_import",
+76:         "test_katmoviehd_import",
+77:         "test_backup_manager",
+78:     ]
+79:     res = subprocess.run(
+80:         [sys.executable, "-m", "unittest"] + unit_test_modules,
+81:         cwd=fast_fetch_dir,
+82:         capture_output=True,
+83:         text=True,
+84:     )
+85:     if res.returncode == 0:
+The above content does NOT show the entire file contents. If you need to view any lines of the file which were not shown to complete your task, call this tool again to view those lines.
+
+---
+
+## 🤖 AI (Antigravity)  `2026-10-19T11:32:39Z`
+
+Created At: 2026-10-19T11:32:39Z
+Completed At: 2026-10-19T11:32:39Z
+File Path: `file:///home/runner/workspace/push.py`
+Total Lines: 259
+Total Bytes: 9469
+Showing lines 175 to 195
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+175:         print("[!] ORACLE_SSH_KEY not found in environment. Skipping Oracle sync.", file=sys.stderr)
+176:         return False
+177: 
+178:     print(f"[*] Syncing updated scraper files and CHAT_HISTORY.md to Oracle VM ({ORACLE_IP})...", flush=True)
+179:     files_to_sync = [
+180:         ROOT_DIR / "radd-stream" / "Fast_Fetch" / "import_vegamovies.py",
+181:         ROOT_DIR / "radd-stream" / "Fast_Fetch" / "import_7starhd.py",
+182:         ROOT_DIR / "radd-stream" / "Fast_Fetch" / "import_hdhub4u.py",
+183:         ROOT_DIR / "radd-stream" / "Fast_Fetch" / "import_rareanimes.py",
+184:         ROOT_DIR / "radd-stream" / "Fast_Fetch" / "import_katmoviehd.py",
+185:         ROOT_DIR / "radd-stream" / "Fast_Fetch" / "backup_manager.py",
+186:         ROOT_DIR / "radd-stream" / "Fast_Fetch" / "fast_fetch.py",
+187:         ROOT_DIR / "radd-stream" / "Fast_Fetch" / "CHAT_HISTORY.md",
+188:     ]
+189: 
+190:     existing = [str(f) for f in files_to_sync if f.exists()]
+191:     if not existing:
+192:         return True
+193: 
+194:     cmd = [
+195:         "scp", "-i", key_path,
+The above content does NOT show the entire file contents. If you need to view any lines of the file which were not shown to complete your task, call this tool again to view those lines.
+
+---
+
