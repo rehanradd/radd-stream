@@ -83941,3 +83941,137 @@ Body: {"status":"error"}
 
 ---
 
+## 🤖 AI (Antigravity)  `2026-10-19T11:28:27Z`
+
+Created At: 2026-10-19T11:28:27Z
+Completed At: 2026-10-19T11:28:28Z
+File Path: `file:///home/runner/workspace/radd-stream/Fast_Fetch/import_katmoviehd.py`
+Total Lines: 980
+Total Bytes: 37600
+Showing lines 400 to 520
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+400:     """Resolves file ID via KMHD REST API into direct mirror sources."""
+401:     sources = []
+402:     size_bytes = None
+403: 
+404:     api_url = f"{KMHD_API_BASE}/file/{file_id}"
+405:     data = client.get_api_json(api_url, timeout=timeout)
+406:     if not data or not isinstance(data, dict):
+407:         return None, sources
+408: 
+409:     size_bytes = data.get("size")
+410:     upload_links = data.get("upload_links", {})
+411: 
+412:     # 1. HubCloud / HubDrive (Unwrapped to Cloudflare R2 & PixelDrain)
+413:     hub_res = upload_links.get("hubdrive_res")
+414:     if hub_res and hub_res != "None":
+415:         hub_url = f"https://hubcloud.ist/drive/{hub_res}"
+416:         if resolve_direct:
+417:             try:
+418:                 unwrapped = fast_fetch.unwrap_hubcloud_drive(hub_url)
+419:                 for src in unwrapped:
+420:                     sources.append({
+421:                         "source_name": src.get("source_name", "⚡ HubCloud Stream"),
+422:                         "service": src.get("service", "hubcloud"),
+423:                         "resource_id": src.get("resource_id", hub_res),
+424:                         "source_url": hub_url,
+425:                         "final_url": src.get("final_url", hub_url),
+426:                         "is_temporary": src.get("is_temporary", 0),
+427:                         "quality": "720p",
+428:                     })
+429:             except Exception:
+430:                 pass
+431:         if not sources:
+432:             sources.append({
+433:                 "source_name": "⚡ HubCloud Drive",
+434:                 "service": "hubcloud",
+435:                 "resource_id": hub_res,
+436:                 "source_url": hub_url,
+437:                 "final_url": hub_url,
+438:                 "is_temporary": 0,
+439:                 "quality": "720p",
+440:             })
+441: 
+442:     # 2. GDFlix
+443:     gd_res = upload_links.get("gdflix_res")
+444:     if gd_res and gd_res != "None":
+445:         sources.append({
+446:             "source_name": "⚡ GDFlix Mirror",
+447:             "service": "gdflix",
+448:             "resource_id": gd_res,
+449:             "source_url": f"https://gd.kmhd.me/file/{gd_res}",
+450:             "final_url": f"https://gd.kmhd.me/file/{gd_res}",
+451:             "is_temporary": 0,
+452:             "quality": "720p",
+453:         })
+454: 
+455:     # 3. KatDrive
+456:     kd_res = upload_links.get("katdrive_res")
+457:     if kd_res and kd_res != "None":
+458:         sources.append({
+459:             "source_name": "⚡ KatDrive Mirror",
+460:             "service": "katdrive",
+461:             "resource_id": kd_res,
+462:             "source_url": f"https://katdrive.click/file/{kd_res}",
+463:             "final_url": f"https://katdrive.click/file/{kd_res}",
+464:             "is_temporary": 0,
+465:             "quality": "720p",
+466:         })
+467: 
+468:     # 4. FastDL
+469:     ff_res = upload_links.get("ffast_res")
+470:     if ff_res and ff_res != "None":
+471:         sources.append({
+472:             "source_name": "⚡ FastDL",
+473:             "service": "fastdl",
+474:             "resource_id": ff_res,
+475:             "source_url": f"https://fastdl.icu/{ff_res}",
+476:             "final_url": f"https://fastdl.icu/{ff_res}",
+477:             "is_temporary": 0,
+478:             "quality": "720p",
+479:         })
+480: 
+481:     # 5. Send.cm
+482:     scm_res = upload_links.get("sendcm_res")
+483:     if scm_res and scm_res != "None":
+484:         sources.append({
+485:             "source_name": "⚡ Send.cm",
+486:             "service": "sendcm",
+487:             "resource_id": scm_res,
+488:             "source_url": f"https://send.cm/{scm_res}",
+489:             "final_url": f"https://send.cm/{scm_res}",
+490:             "is_temporary": 0,
+491:             "quality": "720p",
+492:         })
+493: 
+494:     # 6. 1Fichier
+495:     fic_res = upload_links.get("fichier_res")
+496:     if fic_res and fic_res != "None":
+497:         fic_id = fic_res.lstrip("?")
+498:         sources.append({
+499:             "source_name": "⚡ 1Fichier",
+500:             "service": "1fichier",
+501:             "resource_id": fic_id,
+502:             "source_url": f"https://1fichier.com/{fic_res}",
+503:             "final_url": f"https://1fichier.com/{fic_res}",
+504:             "is_temporary": 0,
+505:             "quality": "720p",
+506:         })
+507: 
+508:     return size_bytes, sources
+509: 
+510: 
+511: def extract_post_data_katmoviehd(
+512:     client: KatMovieHDClient,
+513:     post_url: str,
+514:     slug: str,
+515:     cached_item: dict | None = None,
+516:     resolve_direct: bool = True,
+517:     timeout: int = 15,
+518: ) -> dict | None:
+519:     """Extracts post metadata, releases, and unwrapped direct sources from KatMovieHD."""
+520:     raw_title = cached_item.get("post_title", "") if cached_item else ""
+The above content does NOT show the entire file contents. If you need to view any lines of the file which were not shown to complete your task, call this tool again to view those lines.
+
+---
+
