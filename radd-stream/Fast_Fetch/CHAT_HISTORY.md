@@ -29293,3 +29293,127 @@ The above content shows the entire, complete file contents of the requested file
 
 ---
 
+## 🤖 AI (Antigravity)  `2026-10-19T18:43:46Z`
+
+### 🌟 Everything is Configured, Verified, and Live on Your Oracle VM!
+
+Your Oracle VM (`92.4.95.252`) is now a **fully independent, persistent AI & media workspace**. You can do all your coding, run Antigravity CLI, query an unlimited local AI, commit to GitHub, and back up databases directly from your phone.
+
+---
+
+### 📱 1. How to Access from Your Phone
+
+Open Google Chrome on Android and access your workspace:
+
+| Access Method | Address | Capabilities |
+| :--- | :--- | :--- |
+| **🔒 Secure Mobile HTTPS** | `https://season-cheapest-nuke-kde.trycloudflare.com` | Direct clipboard copy/paste, full screen PWA installation |
+| **🌐 Static Fallback IP** | `http://92.4.95.252/` | Always static, never changes |
+
+- **Password**: `RaddDao@2026`
+- **Default Workspace**: `/opt/radd-stream`
+- **PWA App**: In Chrome, tap **⋮ (Menu)** > **Add to Home screen** / **Install app** for a full-screen native app experience.
+
+---
+
+### 🤖 2. Unlimited Free Local AI Model (`qwen2.5-coder:1.5b`)
+
+Installed locally via Ollama directly on the Oracle VM CPU. It runs **100% offline, zero tokens charged, zero external API calls, unlimited usage forever**.
+
+We created a custom CLI command: `/usr/local/bin/ai`:
+
+```bash
+# Ask a quick question with live token streaming:
+ai "How do I check the katmoviehd crawler status?"
+
+# Or start an interactive unlimited chat session:
+ai
+```
+*(Pre-loaded with `radd-stream` project rules: zero external pip dependencies, SQLite staging DB isolation, and crawler safety).*
+
+---
+
+### 🌌 3. Antigravity CLI (`agy`) Fully Configured & Embedded
+
+Google DeepMind's Antigravity CLI v1.4.2 is installed and pre-authenticated on the Oracle VM.
+
+1. **Pre-Authenticated Models Available**:
+   - `gemini-3.8-flash-high`
+   - `claude-sonnet-4-6`
+   - `claude-opus-4-6-thinking`
+   - `gpt-oss-120b-medium`
+
+2. **Project Memory & Rules Pre-Loaded**:
+   - Deployed [GEMINI.md](file:///home/runner/workspace/GEMINI.md), [UNIVERSAL_AI_PROMPT.md](file:///home/runner/workspace/UNIVERSAL_AI_PROMPT.md), and [ANTIGRAVITY_HANDOFF.md](file:///home/runner/workspace/ANTIGRAVITY_HANDOFF.md) directly into `/opt/radd-stream/` and `~/.gemini/config/`.
+   - Whenever you launch `agy`, it automatically knows the mission, the inviolable constraints (zero pip packages, never merge staging DBs without confirmation, never disrupt active crawlers), and testing protocols.
+
+3. **Persistent Re-Attachable Sessions**:
+   Run this in the terminal:
+   ```bash
+   agy-session
+   ```
+   This launches `agy` inside an auto-persisting `tmux` session. If your phone battery dies or Chrome disconnects, **your conversation and tasks keep running on the server** and resume the moment you run `agy-session` again.
+
+---
+
+### 🐙 4. Push Changes to GitHub from the Oracle VM
+
+We configured the workspace with your GitHub credentials and created a simple one-line sync tool `/usr/local/bin/sync-github`:
+
+```bash
+# Push with a custom commit message:
+sync-github "feat: improve scraper speed"
+
+# Or run without arguments for auto-timestamped sync:
+sync-github
+```
+
+**What it does automatically:**
+1. Runs the full 14-module pre-push unit test suite to guarantee zero regressions.
+2. Stages and commits all modified code in `/opt/radd-stream`.
+3. Pushes directly to the GitHub repository: `https://github.com/radddao/radd-stream`.
+
+---
+
+### 📦 5. Back Up Databases to Hugging Face (`radd-stream-backups`)
+
+We linked your `HF_TOKEN` and dataset repository (`radddao/radd-stream-backups`) and created `/usr/local/bin/backup-hf`:
+
+```bash
+backup-hf
+```
+
+**What it does automatically:**
+1. Safely vacuums all 14 SQLite staging databases without interrupting the running crawlers.
+2. Compresses them into a timestamped `.tar.gz` archive with SHA-256 verification.
+3. Uses Git LFS to upload the archive directly to your dataset:
+   👉 **`https://huggingface.co/datasets/radddao/radd-stream-backups`**
+
+---
+
+### 🕷️ 6. Live Crawler Progress Check
+
+All 4 crawlers are actively gathering content in parallel:
+
+| Scraper | Target Domain | DB Path | Size | Status |
+| :--- | :--- | :--- | :--- | :--- |
+| **KatMovieHD** | `katmoviehd.contact` | `katmoviehd.db` | **35 MB** *(was 1.5MB)* | 🚀 SvelteKit sync complete; 5 workers actively parsing DandnDn/Cloudflare R2 streams |
+| **Bolly4u** | `bolly4u.day` | `bolly4u.db` | **190 MB** | 🚀 6 workers actively extracting 10Gbps Google CDN streams |
+| **10xflix** | `10xflix.day` | `10xflix.db` | **177 MB** | 🚀 5 workers actively parsing releases and direct links |
+| **World4uFree** | `world4ufree.day` | `world4ufree.db` | **749 MB** | 🚀 5 workers actively extracting direct Cloudflare Worker streams |
+| **FilmyZilla** | `filmyzilla1.art` | `filmyzilla.db` | **9.0 MB** | ✅ Completed (13,516 sources) |
+
+---
+
+### 📋 Quick Reference: Commands on Oracle VM Terminal
+
+| Command | Action |
+| :--- | :--- |
+| `ai [prompt]` | Unlimited, free, offline local coding AI |
+| `agy-session` | Launch or resume persistent Antigravity CLI session |
+| `sync-github` | Run unit tests, commit, and push to GitHub |
+| `backup-hf` | Snapshot all 14 SQLite DBs and push to Hugging Face |
+| `workspace-url` | Display active HTTPS Cloudflare tunnel URL & static IP |
+
+---
+
