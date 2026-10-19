@@ -25430,3 +25430,54 @@ x-frame-options: DENY
 
 ---
 
+## 🤖 AI (Antigravity)  `2026-10-19T17:53:18Z`
+
+Created At: 2026-10-19T17:53:18Z
+Completed At: 2026-10-19T17:53:19Z
+
+The command exited with code 0.
+Output:
+INSTALLER SCRIPT HEAD:
+#!/bin/bash
+#
+# Antigravity CLI - Unix Bootstrapper Script (Bash/Zsh/Fish)
+#
+# Downloads, staging-verifies, and installs the Antigravity CLI flat native build.
+#
+
+set -euo pipefail
+
+# 1. Default Setup & Constants
+DOWNLOAD_BASE_URL="https://antigravity-cli-auto-updater-974169037036.us-central1.run.app"
+TARGET_DIR="$HOME/.local/bin"
+CUSTOM_DIR=""
+
+# Helper: Display usage instructions
+show_usage() {
+    echo "Usage: install.sh [options]"
+    echo ""
+    echo "Options:"
+    echo "  -d, --dir <path>    Specify a custom directory to install the binary"
+    echo "  -h, --help          Display this help menu"
+    echo ""
+}
+
+# Parse Arguments
+while [ "$#" -gt 0 ]; do
+    case $1 in
+        -d|--dir)
+            if [ -z "${2:-}" ]; then
+                echo "[ERROR] Missing path for --dir parameter" >&2
+                exit 1
+            fi
+            CUSTOM_DIR="$2"
+            shift
+            ;;
+        -h|--help)
+            show_usage
+            exit 0
+            ;;
+        *)
+
+---
+
