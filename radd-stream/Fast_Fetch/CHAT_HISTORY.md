@@ -23697,3 +23697,79 @@ KATMOVIEHD DATA:
 
 ---
 
+## 🤖 AI (Antigravity)  `2026-10-19T17:43:29Z`
+
+Created At: 2026-10-19T17:43:29Z
+Completed At: 2026-10-19T17:43:29Z
+File Path: `file:///home/runner/workspace/radd-stream/Fast_Fetch/import_katmoviehd.py`
+Total Lines: 980
+Total Bytes: 37600
+Showing lines 720 to 770
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+720: 
+721:     print(f"[*] Starting KatMovieHD catalog sync from {DEFAULT_BASE_URL}/__data.json...", flush=True)
+722:     page = 1
+723:     total_synced = 0
+724:     empty_pages_streak = 0
+725: 
+726:     while not STOP_REQUESTED:
+727:         if max_pages and page > max_pages:
+728:             print(f"[*] Reached requested max_pages limit ({max_pages}). Stopping sync.", flush=True)
+729:             break
+730: 
+731:         query_url = f"{DEFAULT_BASE_URL}/__data.json?page={page}"
+732:         t0 = time.time()
+733:         code, _, resp_text = client.get_text(query_url, timeout=15)
+734:         dt = time.time() - t0
+735: 
+736:         if code != 200 or not resp_text:
+737:             print(f"[!] Page {page} returned status {code}. Stopping sync.", flush=True)
+738:             break
+739: 
+740:         items = parse_sveltekit_chunk(resp_text)
+741:         if not items:
+742:             empty_pages_streak += 1
+743:             if empty_pages_streak >= 3:
+744:                 print(f"[*] 3 consecutive empty pages reached at page {page}. Catalog sync complete.", flush=True)
+745:                 break
+746:             page += 1
+747:             continue
+748: 
+749:         empty_pages_streak = 0
+750:         records = []
+751:         for it in items:
+752:             slug = it.get("slug")
+753:             if not slug:
+754:                 continue
+755:             permalink = f"{DEFAULT_BASE_URL}/{slug}"
+756:             lastmod = it.get("created")
+757:             raw_json_str = json.dumps(it)
+758:             records.append((permalink, lastmod, slug, 0, "katmoviehd", raw_json_str))
+759: 
+760:         if records:
+761:             with sqlite3.connect(str(db_path)) as conn:
+762:                 conn.executemany(
+763:                     """
+764:                     INSERT INTO sitemap_cache (loc, lastmod, slug, scraped, site, raw_json)
+765:                     VALUES (?, ?, ?, ?, ?, ?)
+766:                     ON CONFLICT(loc) DO UPDATE SET
+767:                         lastmod = excluded.lastmod,
+768:                         raw_json = excluded.raw_json;
+769:                     """,
+770:                     records,
+The above content does NOT show the entire file contents. If you need to view any lines of the file which were not shown to complete your task, call this tool again to view those lines.
+
+---
+
+## 🤖 AI (Antigravity)  `2026-10-19T17:43:33Z`
+
+Created At: 2026-10-19T17:43:33Z
+Completed At: 2026-10-19T17:43:34Z
+
+The command exited with code 0.
+Output:
+Status: 200 Length: 17576
+Preview: {"type":"data","nodes":[{"type":"data","data":[{"adCode":1,"site":5},[2,3,4],"\u003Cscript data-cfasync=\"false\" async type=\"text/javascript\" src=\"//ly.moraeirrupt.com/rNNIfZ7L9DNPN/114364\">\u003C/script>","\u003Cscript async src=\"https://cvt-s2.agl002.online/o/s/a941312e99999aac85c8d55346033a
+
+---
+
