@@ -24665,3 +24665,45 @@ The above content does NOT show the entire file contents. If you need to view an
 
 ---
 
+## 🤖 AI (Antigravity)  `2026-10-19T17:48:06Z`
+
+Created At: 2026-10-19T17:48:06Z
+Completed At: 2026-10-19T17:48:07Z
+The following changes were made by the replace_file_content tool to: /home/runner/workspace/radd-stream/Fast_Fetch/import_katmoviehd.py. If relevant, proactively run terminal commands to execute this code for the USER. Don't ask for permission.
+[diff_block_start]
+@@ -733,9 +733,19 @@
+         code, _, resp_text = client.get_text(query_url, timeout=15)
+         dt = time.time() - t0
+ 
++        retries = 3
++        while (code != 200 or not resp_text) and retries > 0 and not STOP_REQUESTED:
++            time.sleep(1.0)
++            code, _, resp_text = client.get_text(query_url, timeout=15)
++            retries -= 1
++
+         if code != 200 or not resp_text:
+-            print(f"[!] Page {page} returned status {code}. Stopping sync.", flush=True)
+-            break
++            empty_pages_streak += 1
++            if empty_pages_streak >= 5:
++                print(f"[*] 5 consecutive empty/failed pages reached at page {page}. Catalog sync complete.", flush=True)
++                break
++            page += 1
++            continue
+ 
+         items = parse_sveltekit_chunk(resp_text)
+         if not items:
+@@ -742,5 +742,5 @@
+-            if empty_pages_streak >= 3:
+-                print(f"[*] 3 consecutive empty pages reached at page {page}. Catalog sync complete.", flush=True)
++            if empty_pages_streak >= 5:
++                print(f"[*] 5 consecutive empty pages reached at page {page}. Catalog sync complete.", flush=True)
+                 break
+             page += 1
+             continue
+[diff_block_end]
+
+Please note that the above snippet only shows the MODIFIED lines from the last change. It shows up to 3 lines of unchanged lines before and after the modified lines. The actual file contents may have many more lines not shown.
+
+---
+
