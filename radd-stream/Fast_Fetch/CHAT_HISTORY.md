@@ -85308,3 +85308,72 @@ Please note that the above snippet only shows the MODIFIED lines from the last c
 
 ---
 
+## 🤖 AI (Antigravity)  `2026-10-19T11:49:52Z`
+
+Created At: 2026-10-19T11:49:52Z
+Completed At: 2026-10-19T11:49:52Z
+File Path: `file:///home/runner/workspace/radd-stream/Fast_Fetch/import_10xflix.py`
+Total Lines: 784
+Total Bytes: 29288
+Showing lines 560 to 615
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+560:         if code != 200 or not posts or not isinstance(posts, list):
+561:             print(f"[!] API page {page} returned status {code}. Stopping sync.", flush=True)
+562:             break
+563: 
+564:         if total_found is None:
+565:             total_found = int(headers.get("x-wp-total", 0)) if "x-wp-total" in headers else len(posts)
+566:             print(f"[*] Total catalog size reported: {total_found:,} titles.", flush=True)
+567: 
+568:         records = []
+569:         for post in posts:
+570:             permalink = post.get("link")
+571:             if not permalink:
+572:                 continue
+573:             slug = post.get("slug")
+574:             lastmod = post.get("modified") or post.get("date")
+575:             raw_json_str = json.dumps(post)
+576:             records.append((permalink, lastmod, slug, 0, "10xflix", raw_json_str))
+577: 
+578:         if records:
+579:             with sqlite3.connect(str(db_path)) as conn:
+580:                 conn.executemany(
+581:                     """
+582:                     INSERT INTO sitemap_cache (loc, lastmod, slug, scraped, site, raw_json)
+583:                     VALUES (?, ?, ?, ?, ?, ?)
+584:                     ON CONFLICT(loc) DO UPDATE SET
+585:                         lastmod = excluded.lastmod,
+586:                         slug = excluded.slug,
+587:                         raw_json = excluded.raw_json;
+588:                     """,
+589:                     records,
+590:                 )
+591:                 conn.commit()
+592: 
+593:             total_synced += len(records)
+594:             print(
+595:                 f"  [Page {page:3d}] Synced {len(records)} titles in {dt:.2f}s "
+596:                 f"({total_synced:,} / {total_found:,} total)",
+597:                 flush=True,
+598:             )
+599: 
+600:         if max_pages and page >= max_pages:
+601:             print(f"[*] Reached requested max_pages limit ({max_pages}). Stopping sync.", flush=True)
+602:             break
+603: 
+604:         if len(posts) < per_page or total_synced >= (total_found or 0):
+605:             break
+606: 
+607:         page += 1
+608: 
+609:     print(f"\n[✓] 10xflix catalog sync finished: {total_synced:,} titles stored in {db_path.name}\n", flush=True)
+610:     return total_synced
+611: 
+612: 
+613: def run_crawler(
+614:     db_path: Path,
+615:     workers: int = 5,
+The above content does NOT show the entire file contents. If you need to view any lines of the file which were not shown to complete your task, call this tool again to view those lines.
+
+---
+
