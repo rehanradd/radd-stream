@@ -26946,3 +26946,50 @@ server {
 
 ---
 
+## 🤖 AI (Antigravity)  `2026-10-19T18:14:09Z`
+
+### Short Answer:
+**It is active and running 24/7 right now** as a background system service (`systemd`). It will **not turn off on its own**, even if you close your phone, close Chrome, or leave it for days.
+
+---
+
+### Detailed Breakdown:
+
+#### 1. Why it stays ON:
+The tunnel is managed by a Linux daemon (`code-server-tunnel.service`) configured with `Restart=always`. If network packets drop or it encounters a glitch, Linux automatically restarts it immediately.
+
+#### 2. When does this specific URL change?
+The URL `season-cheapest-nuke-kde.trycloudflare.com` is a **Cloudflare Quick Tunnel** (a free anonymous tunnel).
+The URL will only change if:
+1. **The Oracle VM is rebooted**.
+2. **The `code-server-tunnel` service is restarted**.
+3. **Cloudflare edge resets the connection** (Cloudflare occasionally recycles anonymous quick tunnels after several days or weeks of continuous uptime).
+
+When any of those happen, the tunnel stays **ON**, but Cloudflare assigns a **new random subdomain** (e.g., `word-word-word.trycloudflare.com`).
+
+---
+
+### 🌐 What is 100% Static & NEVER changes?
+Your **Direct IP** address:
+👉 **`http://92.4.95.252/`**
+
+This is bound directly to your Oracle VM's static public IP. It will **never change** and will **never turn off**.
+
+---
+
+### 💡 Want a Permanent HTTPS URL That Never Changes?
+
+If you want a fixed, memorable HTTPS address (e.g. `https://my-workspace.duckdns.org` or your own custom domain) that **never changes even after reboots**:
+
+1. **Option A (100% Free Forever - DuckDNS + Let's Encrypt SSL)**:
+   - We can register a free subdomain on [DuckDNS](https://www.duckdns.org) (e.g. `radd-stream.duckdns.org`) pointing to `92.4.95.252`.
+   - We install `certbot` on your Oracle VM to generate an official HTTPS certificate directly in Nginx.
+   - **Result**: A permanent, secure `https://...` link that never rotates.
+
+2. **Option B (Your Own Domain via Cloudflare Named Tunnel)**:
+   - If you own any domain on Cloudflare, we can link a permanent named tunnel (e.g. `code.yourdomain.com`).
+
+Would you like to keep the current setup, or should we set up a permanent free DuckDNS domain with direct SSL so the link never changes?
+
+---
+
