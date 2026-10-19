@@ -88538,3 +88538,109 @@ Stderr:
 
 ---
 
+## 🤖 AI (Antigravity)  `2026-10-19T12:34:43Z`
+
+### 📊 Oracle VM Master Scraper & Database Audit
+
+A complete audit of all **10 scraper staging databases**, running background processes, and logs on the Oracle VM (`92.4.95.252`) has been executed.
+
+---
+
+### 📋 Master Scraper Status Table
+
+| Scraper / Staging DB | Size | Total Ingested | Scraped (OK) | Pending | Failed / Review | Releases | Direct Sources | Status |
+|---|---|---|---|---|---|---|---|---|
+| **SSRMovies** (`ssrmovies.db`) | 271 MB | 27,000 | **27,000 (100%)** | **0** | **0** | 46,115 | 664,469 | [x] **100% COMPLETED** |
+| **Rogmovies** (`rogmovies.db`) | 150 MB | 7,868 | **7,868 (100%)** | **0** | **0** | 52,931 | 192,831 | [x] **100% COMPLETED** |
+| **MultiMovies** (`multimovies.db`) | 334 MB | 72,499 | **71,730 (98.9%)** | 719 | 50 | 532,649 | 595,218 | [ ] **Finished Pass** (719 pending) |
+| **Vegamovies** (`vegamovies.db`) | 316 MB | 14,316 | **13,978 (97.6%)** | 15 | 323 | 131,654 | 397,888 | [ ] **Finished Pass** (15 pending) |
+| **HDHub4u** (`hdhub4u.db`) | 56 MB | 14,504 | **10,893 (75.1%)** | **0** | 3,611 | 47,361 | 103,964 | [ ] **Queue Finished** (0 pending) |
+| **HDTVB** (`hdtvb.db`) | 24 MB | 5,692 | **3,850 (67.6%)** | **0** | 1,842 | 16,772 | 17,293 | [ ] **Queue Finished** (0 pending) |
+| **7StarHD** (`7starhd.db`) | 79 MB | 23,446 | **15,508 (66.1%)** | **0** | 7,938 | 33,197 | 98,199 | [ ] **Queue Finished** (0 pending) |
+| **RareAnimes** (`rareanimes.db`) | 119 MB | 2,624 | **1,329 (50.6%)** | **0** | 1,295 | 17,419 | 53,767 | [ ] **Queue Finished** (0 pending) |
+| **KatMovieHD** (`katmoviehd.db`) | 1.5 MB | 1,200 | **293 (24.4%)** | **0** | 907 | 1,158 | 1,315 | [ ] **Batch 1 Finished** (0 pending) |
+| **10xflix** (`10xflix.db`) | 126 MB | 17,606 | **430 (2.4%)** | **17,176** | **0** | 1,480 | 5,225 | [ ] 🟢 **ACTIVELY RUNNING** (PID 146852) |
+
+---
+
+### 🔍 Detailed Audit Breakdown by Scraper
+
+#### 1. [x] SSRMovies (`ssrmovies.db`) — **100% COMPLETED**
+* **Catalog Coverage:** 27,000 / 27,000 titles processed.
+* **Pending:** 0 titles remaining.
+* **Failures:** 0 errors.
+* **Yield:** 13,905 unique posts, 46,115 releases, 664,469 direct links.
+* **State:** Fully scraped, verified, and locked in staging.
+
+#### 2. [x] Rogmovies (`rogmovies.db`) — **100% COMPLETED**
+* **Catalog Coverage:** 7,868 / 7,868 titles processed.
+* **Pending:** 0 titles remaining.
+* **Failures:** 0 errors (audited 28 trailer-only posts).
+* **Yield:** 7,740 unique posts, 52,931 releases, 192,831 direct links.
+* **State:** Fully scraped, verified, and locked in staging.
+
+#### 3. MultiMovies (`multimovies.db`) — **98.9% (Finished Initial Pass)**
+* **Catalog Coverage:** 71,730 / 72,499 titles processed.
+* **Pending:** 719 URLs (mostly newly added Asian drama series entries).
+* **Failures:** 50 items.
+* **Yield:** 10,498 root posts, 532,649 releases, 595,218 direct sources.
+* **State:** Massive catalog completed; 719 series root URLs can be swept in a quick incremental pass.
+
+#### 4. Vegamovies (`vegamovies.db`) — **97.6% (Finished Main Run)**
+* **Catalog Coverage:** 13,978 / 14,316 titles processed.
+* **Pending:** Only 15 titles left in queue.
+* **Failures:** 323 items (older 2016-2018 posts with expired dead V-Cloud links).
+* **Yield:** 13,344 unique posts, 131,654 releases, 397,888 direct sources (85,138 Google CDN direct streams).
+* **State:** 32-hour deep unwrapping completed cleanly.
+
+#### 5. HDHub4u (`hdhub4u.db`) — **Queue Exhausted (0 Pending)**
+* **Catalog Coverage:** 10,893 scraped.
+* **Pending:** 0 titles left in queue.
+* **Failures:** 3,611 titles.
+* **Root Cause:** Audited sample failed URLs (`weapons-2025-hindi-dubbed-trailer/`, `hacksaw-ridge-2016-hindi-dubbed-trailer/`, `the-punisher-season-1-hindi-dubbed-trailer/`). Over 85% of the "failures" are **trailer announcements** that have no movie downloads on the site, so the parser correctly filtered them out.
+
+#### 6. 7StarHD (`7starhd.db`) — **Queue Exhausted (0 Pending)**
+* **Catalog Coverage:** 15,508 scraped.
+* **Pending:** 0 titles left in queue.
+* **Failures / Review:** 7,938 items.
+* **Root Cause:** Ingested via WP REST API. The failed items are either:
+  * 18+/Unrated content strictly filtered out by the DAO safety protocol (`hasratein-2025-unrated...`).
+  * Older pre-2020 posts where MobileJSR redirect IDs have expired upstream.
+
+#### 7. HDTVB (`hdtvb.db`) — **Queue Exhausted (0 Pending)**
+* **Catalog Coverage:** 3,850 scraped.
+* **Pending:** 0 titles left in queue.
+* **Failures:** 1,842 items (dead/404 links on old upstream posts).
+
+#### 8. RareAnimes (`rareanimes.db`) — **Queue Exhausted (0 Pending)**
+* **Catalog Coverage:** 1,329 scraped.
+* **Pending:** 0 titles left in queue.
+* **Failures:** 1,295 items.
+* **Root Cause Diagnosed:**
+  * 698 failures were bogus non-movie asset URLs (CSS/PNG/xmlrpc.php) ingested by loose regex.
+  * 597 failures are real anime movies that use `store.animetoonhindi.com` or `codedew.com/zipcloud` bridge formats not yet in `parse_rareanimes_content()`.
+
+#### 9. KatMovieHD (`katmoviehd.db`) — **Batch 1 Complete (0 Pending)**
+* **Catalog Coverage:** 293 scraped out of 1,200 initial batch.
+* **Pending:** 0 titles left in queue.
+* **Failures:** 907 items.
+* **Root Cause Diagnosed:** High concurrency (5 workers) overwhelmed HubCloud drive unwrapping when multiple 16-release TV series were being resolved simultaneously. Tested standalone on Oracle VM and confirmed single-item extraction succeeds 100%.
+
+#### 10. 10xflix (`10xflix.db`) — 🟢 **ACTIVELY RUNNING IN BACKGROUND**
+* **Process:** PID 146852 (parent PID 146221).
+* **Catalog Ingested:** 17,606 / 17,606 titles in `sitemap_cache` (100% of API catalog synced).
+* **Progress:** **430+ titles scraped, 0 failures (100% success rate)**.
+* **Current Yield:** 1,480 releases, 5,225 direct sources (HubCloud 10G, FilePress Google Drive, 1fichier, GoFile).
+* **Speed:** ~0.70 titles/sec (~6.5 hours estimated for full crawl).
+
+---
+
+### 🎯 Summary of Completed Targets
+
+* [x] **SSRMovies** — **100% Verified Complete**
+* [x] **Rogmovies** — **100% Verified Complete**
+
+Both are fully scraped, have 0 pending items, 0 failures, and all releases and direct mirrors extracted into their staging databases.
+
+---
+
