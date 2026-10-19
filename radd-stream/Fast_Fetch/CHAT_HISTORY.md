@@ -84229,3 +84229,15 @@ Release: 1080p HEVC Links [1.35GB] file_id: A_a27f1602
 
 ---
 
+## 🤖 AI (Antigravity)  `2026-10-19T11:28:58Z`
+
+Created At: 2026-10-19T11:28:58Z
+Completed At: 2026-10-19T11:28:59Z
+
+The command exited with code 0.
+Output:
+Status: 200
+Body: {"_id":"A_1a740949","name":"A Kid Like Jake 2018 480p BluRay HIN-ENG x264 ESub-KatmovieHD mkv","size":330822238,"upload_links":{"clicknupload_res":"None","ffast_res":"eo990vqct6q0","fichier_res":"?2ite0gro52dmzwqfm8vh","gdflix_res":"2tseOBCsZqBIPdq","hubdrive_res":"j1inbaq3bxz1nvv","katdrive_res":"1792352440","sendcm_res":"j6wbjmeib0tr","streamtape_res":"None","streamwish_res":"None"},"status":{"clicknupload_res":"Error","ffast_res":"Uploaded","fichier_res":"Uploaded","gdflix_res":"Uploaded","hubdrive_res":"Uploaded","katdrive_res":"Uploaded","sendcm_res":"Uploaded","streamtape_res":"None","streamwish_res":"None"},"time":1792352391634,"is_remote_file":false,"page_content":"","playlist_id":"","is_zip":false,"zip_files":[],"page_views":33,"admins":["kat_26921e15"],"activity":{"clicknupload_res":{"redirect_count":0,"redirected_success":0,"redirected_error":0,"failed_upload":1},"ffast_res":{"redirect_count":0,"redirected_success":0,"redirected_error":0,"failed_upload":0},"fichier_res":{"redirect_count":0,"redirected_success":0,"redirected_error":0,"failed_upload":0},"gdflix_res":{"redirect_count":15,"redirected_success":13,"redirected_error":0,"failed_upload":0},"hubdrive_res":{"redirect_count":28,"redirected_success":24,"redirected_error":0,"failed_upload":0},"katdrive_res":{"redirect_count":0,"redirected_success":0,"redirected_error":0,"failed_upload":0},"sendcm_res":{"redirect_count":1,"redirected_success":1,"redirected_error":0,"failed_upload":0},"streamtape_res":{"redirect_count":1,"redirected_success":0,"redirected_error":1,"failed_upload":0},"streamwish_res":{"redirect_count":0,"redirected_success":0,"redirected_error":0,"failed_upload":0}},"gdriveClaimedAt":1792352434919,"katdriveClaimedAt":1792352439581,"reupload_count":1,"has_error":false}
+
+---
+
