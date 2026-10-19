@@ -84739,3 +84739,107 @@ did not you say before that 10xflix and 7starhd are same sister sites
 
 ---
 
+## 🤖 AI (Antigravity)  `2026-10-19T11:45:08Z`
+
+Created At: 2026-10-19T11:45:08Z
+Completed At: 2026-10-19T11:45:08Z
+
+The command exited with code 0.
+Output:
+<truncated 121 lines>
+radd-stream/Fast_Fetch/CHAT_HISTORY.md-1. **Silent 301/302 Redirection**: `http_get()` inspects `resp.geturl()`. When any request redirects to a new domain, `domains_config` updates automatically in SQLite without interrupting crawls.
+radd-stream/Fast_Fetch/CHAT_HISTORY.md-2. **Pre-Fetch Normalization (`normalize_url`)**: Whenever you request an old link (e.g. `https://rogmovies.wtf/...`), Fast_Fetch rewrites the host to the active domain (`https://rogmovies.one/...`) before making the connection.
+radd-stream/Fast_Fetch/CHAT_HISTORY.md:3. **Sister-Site Cross-Link Harvesting**: `python fast_fetch.py domain harvest` reads website header navigation bars where sister sites cross-link each other's live domains in real time.
+radd-stream/Fast_Fetch/CHAT_HISTORY.md-4. **Candidate TLD Probing**: If a site goes offline without a redirect, Fast_Fetch tests candidate TLDs (`.one`, `.gallery`, `.gripe`, `.vip`, `.im`, `.site`, `.beer`).
+radd-stream/Fast_Fetch/CHAT_HISTORY.md-5. **Database Migration CLI**: If a domain permanently moves, run:
+radd-stream/Fast_Fetch/CHAT_HISTORY.md-   ```powershell
+--
+radd-stream/Fast_Fetch/CHAT_HISTORY.md-515:                 charset = resp.headers.get_content_charset() or "utf-8"
+radd-stream/Fast_Fetch/CHAT_HISTORY.md-516:                 content = resp.read().decode(charset, errors="replace")
+radd-stream/Fast_Fetch/CHAT_HISTORY.md-517: 
+radd-stream/Fast_Fetch/CHAT_HISTORY.md:518:                 # Check for sister links in content to keep domains updated
+radd-stream/Fast_Fetch/CHAT_HISTORY.md:519:                 harvest_sister_domains(content)
+radd-stream/Fast_Fetch/CHAT_HISTORY.md-520: 
+radd-stream/Fast_Fetch/CHAT_HISTORY.md-521:                 return resp.status, final_url, content
+radd-stream/Fast_Fetch/CHAT_HISTORY.md-522:         except Exception as e:
+--
+radd-stream/Fast_Fetch/CHAT_HISTORY.md-235: 
+radd-stream/Fast_Fetch/CHAT_HISTORY.md-236: Pirate streaming ecosystems frequently shift top-level domains (e.g. `.gallery` $\rightarrow$ `.yt` $\rightarrow$ `.vip`; or RogMovies `.wtf` $\rightarrow$ 
+radd-stream/Fast_Fetch/CHAT_HISTORY.md-<truncated 1077 bytes>
+radd-stream/Fast_Fetch/CHAT_HISTORY.md:oint to a new live domain for a sister site, `harvest_sister_domains()` captures the new domain immediately:
+radd-stream/Fast_Fetch/CHAT_HISTORY.md-250:   * `Vegamovies` $\longleftrightarrow$ `RogMovies` $\longleftrightarrow$ `GokuHD` $\longleftrightarrow$ `PrimeHub`
+radd-stream/Fast_Fetch/CHAT_HISTORY.md-251: 
+radd-stream/Fast_Fetch/CHAT_HISTORY.md-252: ### 6.4 Candidate TLD Fallback Prober (`probe_candidate_domains`)
+--
+radd-stream/Fast_Fetch/CHAT_HISTORY.md-244: ### 6.2 Pre-Fetch URL Normalizer (`normalize_url`)
+radd-stream/Fast_Fetch/CHAT_HISTORY.md-245: Historical URLs stored with deprecated domains (e.g. `https://rogmovies.wtf/...`) are rewritten on the fly to the latest active mirror (`https://rogmovies.one/...`) before making network requests.
+radd-stream/Fast_Fetch/CHAT_HISTORY.md-246: 
+radd-stream/Fast_Fetch/CHAT_HISTORY.md:247: ### 6.3 Sister-Site Cross-Link Harvester (`harvest_sister_domains`)
+radd-stream/Fast_Fetch/CHAT_HISTORY.md:248: Vegamovies and RogMovies maintain real-time navigation links to each other and sister network properties (GokuHD, PrimeHub) directly in their website headers:
+radd-stream/Fast_Fetch/CHAT_HISTORY.md:249: * When one site updates its header link to point to a new live domain for a sister site, `harvest_sister_domains()` captures the new domain immediately:
+radd-stream/Fast_Fetch/CHAT_HISTORY.md-250:   * `Vegamovies` $\longleftrightarrow$ `RogMovies` $\longleftrightarrow$ `GokuHD` $\longleftrightarrow$ `PrimeHub`
+radd-stream/Fast_Fetch/CHAT_HISTORY.md-The above content does NOT show the entire file contents. If you need to view any lines of the file which were not shown to complete your task, call this tool again to view those lines.
+radd-stream/Fast_Fetch/CHAT_HISTORY.md-
+--
+radd-stream/Fast_Fetch/CHAT_HISTORY.md-171:     return url
+radd-stream/Fast_Fetch/CHAT_HISTORY.md-172: 
+radd-stream/Fast_Fetch/CHAT_HISTORY.md-173: 
+radd-stream/Fast_Fetch/CHAT_HISTORY.md:174: def harvest_sister_domains(html: str) -> dict[str, str]:
+radd-stream/Fast_Fetch/CHAT_HISTORY.md-175:     """
+radd-stream/Fast_Fetch/CHAT_HISTORY.md:176:     Harvests current sister-site URLs linked in navigation bars and banners.
+radd-stream/Fast_Fetch/CHAT_HISTORY.md:177:     Sister sites cross-link to each other's live domains!
+radd-stream/Fast_Fetch/CHAT_HISTORY.md-178:     """
+radd-stream/Fast_Fetch/CHAT_HISTORY.md-179:     harvested = {}
+radd-stream/Fast_Fetch/CHAT_HISTORY.md-180:     if not html or "<" not in html:
+--
+radd-stream/Fast_Fetch/CHAT_HISTORY.md-178:     return url
+radd-stream/Fast_Fetch/CHAT_HISTORY.md-179: 
+radd-stream/Fast_Fetch/CHAT_HISTORY.md-180: 
+radd-stream/Fast_Fetch/CHAT_HISTORY.md:181: def harvest_sister_domains(html: str) -> dict[str, str]:
+radd-stream/Fast_Fetch/CHAT_HISTORY.md-182:     """
+radd-stream/Fast_Fetch/CHAT_HISTORY.md:183:     Harvests current sister-site URLs linked in navigation bars and banners.
+radd-stream/Fast_Fetch/CHAT_HISTORY.md:184:     Sister sites cross-link to each other's live domains!
+radd-stream/Fast_Fetch/CHAT_HISTORY.md-185:     """
+radd-stream/Fast_Fetch/CHAT_HISTORY.md-The above content does NOT show the entire file contents. If you need to view any lines of the file which were not shown to complete your task, call this tool again to view those lines.
+radd-stream/Fast_Fetch/CHAT_HISTORY.md-
+--
+radd-stream/Fast_Fetch/CHAT_HISTORY.md-199:     return url
+radd-stream/Fast_Fetch/CHAT_HISTORY.md-200: 
+radd-stream/Fast_Fetch/CHAT_HISTORY.md-201: 
+radd-stream/Fast_Fetch/CHAT_HISTORY.md:202: def harvest_sister_domains(html: str) -> dict[str, str]:
+radd-stream/Fast_Fetch/CHAT_HISTORY.md-203:     """
+radd-stream/Fast_Fetch/CHAT_HISTORY.md:204:     Harvests current sister-site URLs linked in navigation bars and banners.
+radd-stream/Fast_Fetch/CHAT_HISTORY.md:205:     Sister sites cross-link to each other's live domains!
+radd-stream/Fast_Fetch/CHAT_HISTORY.md-206:     """
+radd-stream/Fast_Fetch/CHAT_HISTORY.md-207:     harvested = {}
+radd-stream/Fast_Fetch/CHAT_HISTORY.md-208:     if not html or "<" not in html:
+--
+radd-stream/Fast_Fetch/CHAT_HISTORY.md-205:     return url
+radd-stream/Fast_Fetch/CHAT_HISTORY.md-206: 
+radd-stream/Fast_Fetch/CHAT_HISTORY.md-207: 
+radd-stream/Fast_Fetch/CHAT_HISTORY.md:208: def harvest_sister_domains(html: str) -> dict[str, str]:
+radd-stream/Fast_Fetch/CHAT_HISTORY.md-209:     """
+radd-stream/Fast_Fetch/CHAT_HISTORY.md:210:     Harvests current sister-site URLs linked in navigation bars and banners.
+radd-stream/Fast_Fetch/CHAT_HISTORY.md:211:     Sister sites cross-link to each other's live domains!
+radd-stream/Fast_Fetch/CHAT_HISTORY.md-212:     """
+radd-stream/Fast_Fetch/CHAT_HISTORY.md-213:     harvested = {}
+radd-stream/Fast_Fetch/CHAT_HISTORY.md-214:     if not html or "<" not in html:
+--
+radd-stream/Fast_Fetch/CHAT_HISTORY.md-118: 
+radd-stream/Fast_Fetch/CHAT_HISTORY.md-119: ### Notes
+radd-stream/Fast_Fetch/CHAT_HISTORY.md-120: - Identical architecture to Vegamovies (same Nexdrive bridge chain)
+radd-stream/Fast_Fetch/CHAT_HISTORY.md:121: - Cross-links with Vegamovies in nav — harvest_sister_domains() catches domain updates
+radd-stream/Fast_Fetch/CHAT_HISTORY.md-122: - Extractor: uses same `parse_post_metadata()` + `unwrap_nexdrive()` flow (default extractor)
+radd-stream/Fast_Fetch/CHAT_HISTORY.md-123: 
+radd-stream/Fast_Fetch/CHAT_HISTORY.md-124: ---
+--
+radd-stream/Fast_Fetch/CHAT_HISTORY.md-
+radd-stream/Fast_Fetch/CHAT_HISTORY.md-## 👤 USER  `2026-10-19T11:44:56Z`
+radd-stream/Fast_Fetch/CHAT_HISTORY.md-
+radd-stream/Fast_Fetch/CHAT_HISTORY.md:did not you say before that 10xflix and 7starhd are same sister sites
+radd-stream/Fast_Fetch/CHAT_HISTORY.md-
+radd-stream/Fast_Fetch/CHAT_HISTORY.md----
+radd-stream/Fast_Fetch/CHAT_HISTORY.md-
+
+---
+
