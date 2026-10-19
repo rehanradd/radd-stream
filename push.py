@@ -74,6 +74,7 @@ def run_tests() -> bool:
         "test_hdhub4u_import",
         "test_rareanimes_import",
         "test_katmoviehd_import",
+        "test_10xflix_import",
         "test_backup_manager",
     ]
     res = subprocess.run(
@@ -182,6 +183,7 @@ def sync_oracle() -> bool:
         ROOT_DIR / "radd-stream" / "Fast_Fetch" / "import_hdhub4u.py",
         ROOT_DIR / "radd-stream" / "Fast_Fetch" / "import_rareanimes.py",
         ROOT_DIR / "radd-stream" / "Fast_Fetch" / "import_katmoviehd.py",
+        ROOT_DIR / "radd-stream" / "Fast_Fetch" / "import_10xflix.py",
         ROOT_DIR / "radd-stream" / "Fast_Fetch" / "backup_manager.py",
         ROOT_DIR / "radd-stream" / "Fast_Fetch" / "fast_fetch.py",
         ROOT_DIR / "radd-stream" / "Fast_Fetch" / "CHAT_HISTORY.md",

@@ -389,3 +389,28 @@ routes; restrict the bind and public routes before enabling the public proxy.
 - **Staging Database Isolation**:
   - Strict isolation maintained across all staging databases (`katmoviehd.db`, `rareanimes.db`, `hdhub4u.db`, `7starhd.db`, `vegamovies.db`). Zero merges performed into production.
 
+### Session 24 — Antigravity — 2026-10-19
+**10xflix Dedicated Scraper Engineering, Unit Testing, and Full Production Deployment on Oracle VM:**
+- **Target Selection & Architecture**:
+  - Selected 10xflix (`https://10xflix.bond/`) as our next high-yield target with an open WP REST API and MobileJSR mirror backend.
+  - Implemented `radd-stream/Fast_Fetch/import_10xflix.py` featuring:
+    * Standard WP REST API pagination via `/wp-json/wp/v2/posts?_embed=1` utilizing `x-wp-total` header extraction for 17,606 titles.
+    * Robust title cleaning, dual audio detection, season/episode regex extraction.
+    * Multi-tier MobileJSR unwrapping resolving direct streams into HubCloud 10G, FilePress GDrive, 1fichier, and GoFile mirrors.
+    * Isolated staging database management (`10xflix.db`).
+- **Comprehensive Unit Testing**:
+  - Implemented `radd-stream/Fast_Fetch/test_10xflix_import.py` with 6 dedicated unit test cases:
+    * Title and release parsing accuracy.
+    * Database schema initialization and atomic upserts.
+    * MobileJSR source resolution fallbacks.
+    * Master unit test suite now at **125/125 passing (100% OK)**.
+- **Oracle VM Initial Batch & Full Catalog Deployment**:
+  - Verified initial 100-title batch run with **100% success rate (0 failures)**: 95 posts, 366 releases, 1,526 direct sources.
+  - Deployed full production pipeline on Oracle VM (PID 146221) running `--sync-api` for all 17,606 catalog titles followed immediately by 5-worker concurrent crawler (`--workers 5 --delay 0.3`).
+  - Created live monitoring utility `check_10xflix.py`.
+- **KatMovieHD Root Cause Diagnosis**:
+  - Identified that KatMovieHD failures were caused by concurrency load on HubCloud drive unwrapping during series scraping rather than missing post content. Verified standalone single-item extraction and database storage succeed cleanly.
+- **Staging Database Isolation**:
+  - Strict DAO isolation preserved: `10xflix.db` is an independent staging database. Zero merges executed into production.
+
+
