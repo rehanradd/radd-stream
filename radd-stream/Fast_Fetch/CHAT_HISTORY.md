@@ -83656,3 +83656,27 @@ Found links: ['https://mobilejsr.com/view/P9zHOLZAgK', 'https://mobilejsr.com/vi
 
 ---
 
+## 🤖 AI (Antigravity)  `2026-10-19T11:26:55Z`
+
+Created At: 2026-10-19T11:26:55Z
+Completed At: 2026-10-19T11:26:55Z
+
+The command exited with code 0.
+Output:
+radd-stream/Fast_Fetch/fast_fetch.py:83:    "mobilejsr": "https://mobilejsr.com",
+radd-stream/Fast_Fetch/fast_fetch.py:2358:def unwrap_mobilejsr(jsr_url: str) -> list[dict]:
+radd-stream/Fast_Fetch/fast_fetch.py:2374:            "Origin": "https://mobilejsr.com",
+radd-stream/Fast_Fetch/fast_fetch.py:2398:            "service": "mobilejsr",
+radd-stream/Fast_Fetch/fast_fetch.py:2495:            "service": "mobilejsr",
+radd-stream/Fast_Fetch/fast_fetch.py:2714:    jsr_links = list(dict.fromkeys(re.findall(r'href=["\'](https?://mobilejsr\.com/view/[a-zA-Z0-9_\-]+)["\']', html)))
+radd-stream/Fast_Fetch/fast_fetch.py:2724:        sources = unwrap_mobilejsr(jsr_u)
+radd-stream/Fast_Fetch/fast_fetch.py:2801:    jsr_links = list(dict.fromkeys(re.findall(r'href=["\'](https?://mobilejsr\.com/view/[a-zA-Z0-9_\-]+)["\']', html)))
+radd-stream/Fast_Fetch/fast_fetch.py:2818:        sources = unwrap_mobilejsr(jsr_u)
+radd-stream/Fast_Fetch/import_7starhd.py:263:      <a href="https://mobilejsr.com/view/..." ...>1080p [2.48GB]</a>
+radd-stream/Fast_Fetch/import_7starhd.py:264:      <a href="https://mobilejsr.com/view/..." ...>720p [1.40GB]</a>
+radd-stream/Fast_Fetch/import_7starhd.py:267:        r'href=["\'](https?://mobilejsr\.com/view/[a-zA-Z0-9_\-]+)["\'][^>]*>(.*?)</a>',
+radd-stream/Fast_Fetch/import_7starhd.py:413:            sources = fast_fetch.unwrap_mobilejsr(jsr_url)
+radd-stream/Fast_Fetch/import_7starhd.py:417:                "service": "mobilejsr",
+
+---
+
