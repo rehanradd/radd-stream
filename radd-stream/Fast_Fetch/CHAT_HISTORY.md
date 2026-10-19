@@ -24386,3 +24386,62 @@ Page 101 status: 200 len: 17802
 
 ---
 
+## 🤖 AI (Antigravity)  `2026-10-19T17:47:06Z`
+
+Created At: 2026-10-19T17:47:06Z
+Completed At: 2026-10-19T17:47:06Z
+File Path: `file:///home/runner/workspace/radd-stream/Fast_Fetch/import_katmoviehd.py`
+Total Lines: 980
+Total Bytes: 37600
+Showing lines 100 to 145
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+100:                 time.sleep(self.request_interval - elapsed)
+101:             self._last_req_time = time.time()
+102: 
+103:     def get_text(self, url: str, headers: dict | None = None, timeout: int = 15) -> tuple[int, dict, str | None]:
+104:         self._rate_limit()
+105:         req_headers = {
+106:             "User-Agent": fast_fetch.USER_AGENT,
+107:             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+108:             "Accept-Language": "en-US,en;q=0.9",
+109:         }
+110:         if headers:
+111:             req_headers.update(headers)
+112: 
+113:         req = urllib.request.Request(url, headers=req_headers)
+114:         for attempt in range(3):
+115:             if STOP_REQUESTED:
+116:                 return 0, {}, None
+117:             try:
+118:                 with urllib.request.urlopen(req, context=self.ssl_ctx, timeout=timeout) as resp:
+119:                     code = resp.status
+120:                     resp_headers = dict(resp.headers)
+121:                     body = resp.read().decode("utf-8", errors="ignore")
+122:                     return code, resp_headers, body
+123:             except urllib.error.HTTPError as e:
+124:                 if e.code in (404, 410):
+125:                     return e.code, dict(e.headers), None
+126:                 time.sleep(1.0 * (attempt + 1))
+127:             except Exception:
+128:                 time.sleep(1.0 * (attempt + 1))
+129:         return 0, {}, None
+130: 
+131:     def get_api_json(self, url: str, timeout: int = 12) -> dict | None:
+132:         self._rate_limit()
+133:         req_headers = {
+134:             "User-Agent": fast_fetch.USER_AGENT,
+135:             "Authorization": f"Bearer {KMHD_JWT_TOKEN}",
+136:             "Accept": "application/json",
+137:         }
+138:         req = urllib.request.Request(url, headers=req_headers)
+139:         for attempt in range(3):
+140:             if STOP_REQUESTED:
+141:                 return None
+142:             try:
+143:                 with urllib.request.urlopen(req, context=self.ssl_ctx, timeout=timeout) as resp:
+144:                     if resp.status == 200:
+145:                         return json.loads(resp.read().decode("utf-8"))
+The above content does NOT show the entire file contents. If you need to view any lines of the file which were not shown to complete your task, call this tool again to view those lines.
+
+---
+
