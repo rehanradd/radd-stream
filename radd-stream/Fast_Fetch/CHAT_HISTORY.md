@@ -29040,3 +29040,33 @@ Cleaned up dry run archive
 
 ---
 
+## 🤖 AI (Antigravity)  `2026-10-19T18:41:52Z`
+
+Created At: 2026-10-19T18:41:52Z
+Completed At: 2026-10-19T18:41:52Z
+
+The command exited with code 0.
+Output:
+ubuntu    152560  0.0  0.0   4472  3036 ?        S    20:48   0:00 bash -c python3 -u /opt/radd-stream/Fast_Fetch/import_world4ufree.py --sync-api --db-path /home/ubuntu/radd-stream-data/world4ufree.db >> /home/ubuntu/radd-stream-data/world4ufree.log 2>&1 && python3 -u /opt/radd-stream/Fast_Fetch/import_world4ufree.py --db-path /home/ubuntu/radd-stream-data/world4ufree.db --workers 5 --delay 0.2 >> /home/ubuntu/radd-stream-data/world4ufree.log 2>&1
+ubuntu    153724  4.8  7.1 1246952 874864 ?      Sl   21:14   7:07 python3 -u /opt/radd-stream/Fast_Fetch/import_world4ufree.py --db-path /home/ubuntu/radd-stream-data/world4ufree.db --workers 5 --delay 0.2
+ubuntu    156129  0.0  0.0   4472  3024 ?        S    22:45   0:00 bash -c python3 -u /opt/radd-stream/Fast_Fetch/import_bolly4u.py --sync-api --db-path /home/ubuntu/radd-stream-data/bolly4u.db >> /home/ubuntu/radd-stream-data/bolly4u.log 2>&1 && python3 -u /opt/radd-stream/Fast_Fetch/import_bolly4u.py --db-path /home/ubuntu/radd-stream-data/bolly4u.db --workers 6 --delay 0.2 >> /home/ubuntu/radd-stream-data/bolly4u.log 2>&1
+ubuntu    157374  0.0  0.0   4472  2780 ?        S    22:48   0:00 bash -c python3 -u /opt/radd-stream/Fast_Fetch/import_katmoviehd.py --sync-api --db-path /home/ubuntu/radd-stream-data/katmoviehd.db >> /home/ubuntu/radd-stream-data/katmoviehd.log 2>&1 && python3 -u /opt/radd-stream/Fast_Fetch/import_katmoviehd.py --db-path /home/ubuntu/radd-stream-data/katmoviehd.db --workers 5 --delay 0.3 >> /home/ubuntu/radd-stream-data/katmoviehd.log 2>&1
+ubuntu    161377  4.2  2.4 749520 303456 ?       Sl   22:59   1:47 python3 -u /opt/radd-stream/Fast_Fetch/import_bolly4u.py --db-path /home/ubuntu/radd-stream-data/bolly4u.db --workers 6 --delay 0.2
+ubuntu    173352  2.6  1.0 552664 129308 ?       Sl   23:32   0:14 python3 -u /opt/radd-stream/Fast_Fetch/import_katmoviehd.py --db-path /home/ubuntu/radd-stream-data/katmoviehd.db --workers 5 --delay 0.3
+-rw-r--r-- 1 ubuntu ubuntu 177M Oct 19 23:17 /home/ubuntu/radd-stream-data/10xflix.db
+-rw-r--r-- 1 ubuntu ubuntu  79M Oct 19 00:19 /home/ubuntu/radd-stream-data/7starhd.db
+-rw-r--r-- 1 ubuntu ubuntu 190M Oct 19 23:38 /home/ubuntu/radd-stream-data/bolly4u.db
+-rw------- 1 ubuntu ubuntu 7.0M Oct 17 01:51 /home/ubuntu/radd-stream-data/fast_fetch.db
+-rw-r--r-- 1 ubuntu ubuntu 9.0M Oct 19 21:17 /home/ubuntu/radd-stream-data/filmyzilla.db
+-rw-r--r-- 1 ubuntu ubuntu  57M Oct 19 03:29 /home/ubuntu/radd-stream-data/hdhub4u.db
+-rw-r--r-- 1 ubuntu ubuntu  24M Oct 17 19:15 /home/ubuntu/radd-stream-data/hdtvb.db
+-rw-r--r-- 1 ubuntu ubuntu  35M Oct 19 23:40 /home/ubuntu/radd-stream-data/katmoviehd.db
+-rw-r--r-- 1 ubuntu ubuntu 334M Oct 17 07:55 /home/ubuntu/radd-stream-data/multimovies.db
+-rw-r--r-- 1 ubuntu ubuntu 119M Oct 18 22:08 /home/ubuntu/radd-stream-data/rareanimes.db
+-rw-r--r-- 1 ubuntu ubuntu 150M Oct 18 17:41 /home/ubuntu/radd-stream-data/rogmovies.db
+-rw-r--r-- 1 ubuntu ubuntu 272M Oct 18 17:37 /home/ubuntu/radd-stream-data/ssrmovies.db
+-rw-r--r-- 1 ubuntu ubuntu 316M Oct 19 03:07 /home/ubuntu/radd-stream-data/vegamovies.db
+-rw-r--r-- 1 ubuntu ubuntu 749M Oct 19 23:39 /home/ubuntu/radd-stream-data/world4ufree.db
+
+---
+
