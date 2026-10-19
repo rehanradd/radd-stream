@@ -733,15 +733,25 @@ def sync_sveltekit_api_to_db(db_path: Path, max_pages: int | None = None) -> int
         code, _, resp_text = client.get_text(query_url, timeout=15)
         dt = time.time() - t0
 
+        retries = 3
+        while (code != 200 or not resp_text) and retries > 0 and not STOP_REQUESTED:
+            time.sleep(1.0)
+            code, _, resp_text = client.get_text(query_url, timeout=15)
+            retries -= 1
+
         if code != 200 or not resp_text:
-            print(f"[!] Page {page} returned status {code}. Stopping sync.", flush=True)
-            break
+            empty_pages_streak += 1
+            if empty_pages_streak >= 5:
+                print(f"[*] 5 consecutive empty/failed pages reached at page {page}. Catalog sync complete.", flush=True)
+                break
+            page += 1
+            continue
 
         items = parse_sveltekit_chunk(resp_text)
         if not items:
             empty_pages_streak += 1
-            if empty_pages_streak >= 3:
-                print(f"[*] 3 consecutive empty pages reached at page {page}. Catalog sync complete.", flush=True)
+            if empty_pages_streak >= 5:
+                print(f"[*] 5 consecutive empty pages reached at page {page}. Catalog sync complete.", flush=True)
                 break
             page += 1
             continue

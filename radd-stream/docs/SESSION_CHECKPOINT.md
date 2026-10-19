@@ -14,23 +14,29 @@ target, current row counts, and verified backup/rollback plan and obtain a
 separate explicit confirmation. The guarded CLI also requires
 `--owner-authorized`. If confirmation is absent or unclear, stop.
 
-- **Goal:** Launch KatMovieHD scraper on Oracle VM in background, diagnose RareAnimes failures, and preserve strict staging database isolation.
+- **Goal:** Concurrently crawl 4 major production scrapers on Oracle VM (10xflix, World4uFree, Bolly4u, KatMovieHD), and maintain strict staging database isolation.
 - **Milestones & Breakthroughs:**
-  1. **Previous Crawler Completions Verified**:
-     - Vegamovies: Completed 100% of available valid items (13,978 / 14,316 scraped, 131,654 releases, 397,888 direct sources, 85,138 Google CDN direct streams).
-     - 7StarHD: Completed current batch (15,508 / 23,446 scraped, 33,197 releases, 98,199 direct sources).
-     - HDHub4u: Completed current batch (10,893 scraped, 47,361 releases, 103,964 direct sources).
-     - RareAnimes: Completed initial pass (1,329 scraped, 17,419 releases, 53,767 direct sources, 20,283 PixelDrain direct CDN, 4,219 Cloudflare R2).
-  2. **KatMovieHD Background Deployment on Oracle VM**:
-     - Pre-tested SvelteKit deserializer and crawler locally on test database (100% pass).
-     - Initiated background deployment on Oracle VM (PID 139975 / 139977) streaming unbuffered logs to `/home/ubuntu/radd-stream-data/katmoviehd.log`.
-     - Automatically running `--sync-api` followed by multi-threaded crawler (`--workers 5 --delay 0.3`) into isolated staging DB `/home/ubuntu/radd-stream-data/katmoviehd.db`.
-     - Live progress monitor verified functional via `python3 check_katmoviehd.py`.
-  3. **RareAnimes Failure Diagnosis (1,295 Failed Titles)**:
-     - 698 failures caused by master index regex: `sync_master_movies_index` parsed global HTML links from `/all-anime-cartoon-movies-list/` without scoping to `#rai-movies-index`, ingesting non-post URLs (.css, .png, feeds, xmlrpc.php).
-     - 597 failures caused by intermediate link bridge types: posts containing `store.animetoonhindi.com/archives/...` and `codedew.com/zipcloud/...` as well as `<h3>` heading tags for episode blocks were not resolved by the initial pattern matcher.
-  4. **Strict DB Isolation Maintained**: Zero merges executed into production `fast_fetch.db`.
-- **Next action:** Monitor KatMovieHD crawler (`python3 check_katmoviehd.py`) and patch RareAnimes scraper regex & bridge resolution.
+  1. **10xflix Oracle Production Crawler Active**:
+     - Running in background (PID 146221/146852) with zero failures.
+     - 12,170+ catalog posts processed, 43,637+ releases, 151,865+ direct sources extracted (2,414 HubCloud 10G, 6,761 FilePress Google Drive, 14,156 1fichier, 7,156 GoFile).
+  2. **World4uFree Oracle Production Crawler Active**:
+     - Running in background (PID 152560/153724).
+     - 24,240 catalog titles synced into world4ufree.db.
+     - Actively unwrapping 5,149+ releases, 49,367+ direct sources, and 1,138 direct 10Gbps Cloudflare Worker streams.
+  3. **Bolly4u Deployed Concurrently on Oracle VM**:
+     - Running in background (PID 156129/156130).
+     - Automated WP REST API bulk synchronization of 36,709 titles into bolly4u.db.
+     - Multi-worker crawler with hidden photojin JSON API yielding 10Gbps Google CDN streams.
+  4. **KatMovieHD Full Scale Deployed on Oracle VM**:
+     - Running in background (PID 156329/156330).
+     - Unconstrained full catalog sync traversing 5,000+ pages (~60k titles) via SvelteKit API.
+     - Multi-worker crawler extracting DandnDn API mirrors (Cloudflare R2, PixelDrain CDN).
+  5. **FilmyZilla Staging Batch Finished**:
+     - 4,149 titles scraped, 13,114 releases, 13,516 direct sources, 402 Google CDN 302 streams.
+  6. **Master Test Suite & Isolation**:
+     - All 145/145 unit tests passing (100% OK) across 14 modules.
+     - Strict staging DB isolation maintained across all sites with zero merges into production fast_fetch.db.
+- **Next action:** Monitor all 4 live concurrent crawlers (`check_10xflix.py`, `check_world4ufree.py`, `check_bolly4u.py`, `check_katmoviehd.py`) and probe next candidate streaming sites.
 
 ## 2026-10-18 — RareAnimes Scraper Launch & Multi-Crawler Operations
 
