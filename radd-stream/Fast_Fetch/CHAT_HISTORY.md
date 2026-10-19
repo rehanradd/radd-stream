@@ -85062,3 +85062,77 @@ The above content does NOT show the entire file contents. If you need to view an
 
 ---
 
+## 🤖 AI (Antigravity)  `2026-10-19T11:49:22Z`
+
+Created At: 2026-10-19T11:49:22Z
+Completed At: 2026-10-19T11:49:23Z
+File Path: `file:///home/runner/workspace/radd-stream/Fast_Fetch/import_10xflix.py`
+Total Lines: 783
+Total Bytes: 29125
+Showing lines 420 to 480
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+420:             "season_number": season,
+421:             "episode_number": episode,
+422:             "audio_languages": json.dumps(["Hindi"]),
+423:             "codec": "x264",
+424:             "bridge_url": bridge_url,
+425:             "sources": sources,
+426:         })
+427: 
+428:     return {
+429:         "canonical_key": canonical_key,
+430:         "title": clean_title,
+431:         "original_title": html.unescape(raw_title).strip(),
+432:         "year": year,
+433:         "media_type": media_type,
+434:         "imdb_id": None,
+435:         "poster_url": poster_url,
+436:         "genres": json.dumps(categories) if categories else None,
+437:         "synopsis": None,
+438:         "site": "10xflix",
+439:         "post_url": post_url,
+440:         "releases": releases_data,
+441:     }
+442: 
+443: 
+444: def save_post_to_staging_db(db_path: Path, post_data: dict) -> bool:
+445:     """Persists post metadata, releases, and direct sources into isolated staging database."""
+446:     if not post_data or not post_data.get("releases"):
+447:         return False
+448: 
+449:     with sqlite3.connect(str(db_path)) as conn:
+450:         conn.execute("PRAGMA foreign_keys = ON")
+451:         cur = conn.cursor()
+452: 
+453:         # 1. Upsert Post
+454:         cur.execute(
+455:             """
+456:             INSERT INTO posts (
+457:                 canonical_key, title, original_title, year, media_type,
+458:                 imdb_id, poster_url, synopsis, genres, site, post_url, updated_at
+459:             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+460:             ON CONFLICT(canonical_key) DO UPDATE SET
+461:                 title = excluded.title,
+462:                 original_title = excluded.original_title,
+463:                 year = COALESCE(excluded.year, posts.year),
+464:                 media_type = excluded.media_type,
+465:                 poster_url = COALESCE(excluded.poster_url, posts.poster_url),
+466:                 genres = COALESCE(excluded.genres, posts.genres),
+467:                 post_url = excluded.post_url,
+468:                 updated_at = CURRENT_TIMESTAMP
+469:             RETURNING id;
+470:             """,
+471:             (
+472:                 post_data["canonical_key"],
+473:                 post_data["title"],
+474:                 post_data["original_title"],
+475:                 post_data["year"],
+476:                 post_data["media_type"],
+477:                 post_data.get("imdb_id"),
+478:                 post_data.get("poster_url"),
+479:                 post_data.get("synopsis"),
+480:                 post_data.get("genres"),
+The above content does NOT show the entire file contents. If you need to view any lines of the file which were not shown to complete your task, call this tool again to view those lines.
+
+---
+
