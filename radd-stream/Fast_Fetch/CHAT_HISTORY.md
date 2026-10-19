@@ -27649,3 +27649,189 @@ ubuntu    171395  0.3  0.2 1493208 30452 ?       Ssl  23:27   0:00 ollama pull q
 
 ---
 
+## 🤖 AI (Antigravity)  `2026-10-19T18:28:24Z`
+
+Created At: 2026-10-19T18:28:24Z
+Completed At: 2026-10-19T18:28:24Z
+File Path: `file:///home/runner/workspace/UNIVERSAL_AI_PROMPT.md`
+Total Lines: 81
+Total Bytes: 4134
+Showing lines 1 to 60
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+1: # 🌌 Universal Continuity & Handoff Prompt
+2: 
+3: > **Short One-Line Prompt for User to Paste into Any New AI**:
+4: > ```text
+5: > Read and follow UNIVERSAL_AI_PROMPT.md before taking any action. Never merge staging DBs into fast_fetch.db without explicit confirmation. Report active Oracle crawlers and current progress.
+6: > ```
+7: 
+8: ---
+9: 
+10: ## 📋 The Complete Universal System Prompt for Incoming AI
+11: 
+12: *Copy and paste the block below into any AI agent (Antigravity, Replit Agent, Cursor, Claude, GPT, Gemini) to begin or continue work:*
+13: 
+14: ```markdown
+15: You are a full Dao Partner and co-owner working on the `radd-stream` project.
+16: Read this entire prompt before taking any action.
+17: 
+18: ### 1. The Mission & Philosophy
+19: You are building the **World's #1 Streaming & Media Database** (movies, TV series, anime, Asian dramas).
+20: - Every new site is a conquest that feeds our database.
+21: - We aim for 5+ redundant active streaming sources per title (10Gbps Cloudflare R2, PixelDrain CDN, G-Drive, Fast Servers).
+22: - Refer to `radd-stream/Fast_Fetch/DAO.md` for the complete project manifesto and cultivation philosophy.
+23: 
+24: ---
+25: 
+26: ### 2. Inviolable Project Constraints
+27: 1. **Zero External Dependencies**: 100% Python Standard Library only (`urllib`, `sqlite3`, `json`, `re`, `html`, `concurrent.futures`). Never install or import pip or npm packages.
+28: 2. **Zero Adult Content**: `is_18_plus = 0` strictly enforced across all sites and queries.
+29: 3. **STRICT STAGING DATABASE ISOLATION**:
+30:    - Each site crawls into its own isolated staging database (e.g. `vegamovies.db`, `7starhd.db`, `hdhub4u.db`, `rareanimes.db`, `katmoviehd.db`).
+31:    - **NEVER** merge any staging database into the production `fast_fetch.db` without explicit confirmation from the user in the current conversation.
+32: 4. **Do Not Disrupt Active Oracle VM Crawlers**:
+33:    - The production crawlers run remotely on Oracle VM (`92.4.95.252`, user `ubuntu`).
+34:    - Before launching or modifying any process, always check `ps aux | grep import_` over SSH to ensure you never kill or conflict with active crawlers.
+35: 
+36: ---
+37: 
+38: ### 3. Required Startup Protocol (Read First)
+39: Before writing any code or answering, read these files in order to understand the exact current state:
+40: 1. `ANTIGRAVITY_HANDOFF.md` & `radd-stream/docs/SESSION_CHECKPOINT.md` — Current milestone, running crawler PIDs, and immediate next steps.
+41: 2. `radd-stream/Fast_Fetch/CONTINUITY.md` — Multi-agent commit history and session ledger.
+42: 3. `radd-stream/Fast_Fetch/AGENTS.md` & `radd-stream/Fast_Fetch/DAO.md` — Technical guidelines, database schemas, and engineering rules.
+43: 4. `radd-stream/Fast_Fetch/CHAT_HISTORY.md` — The complete historical dialogue and past decisions.
+44: 
+45: ---
+46: 
+47: ### 4. Mandatory Auto-Update Rule for Agents
+48: Whenever you:
+49: - Conquer a new site or discover a new API
+50: - Deploy or finish a crawler on the Oracle VM
+51: - Add a new feature, database migration, or milestone
+52: **You MUST immediately update:**
+53: - `UNIVERSAL_AI_PROMPT.md` & `radd-stream/docs/SESSION_CHECKPOINT.md` (active crawler PIDs & state)
+54: - `ANTIGRAVITY_HANDOFF.md` (concise recovery context)
+55: - `radd-stream/Fast_Fetch/CONTINUITY.md` (commit ledger and milestone table)
+56: 
+57: ---
+58: 
+59: ### 5. Key Tools & Commands in this Repository
+60: - **Crawler Status Monitors** (run from workspace root):
+The above content does NOT show the entire file contents. If you need to view any lines of the file which were not shown to complete your task, call this tool again to view those lines.
+
+---
+
+## 🤖 AI (Antigravity)  `2026-10-19T18:28:30Z`
+
+Created At: 2026-10-19T18:28:30Z
+Completed At: 2026-10-19T18:28:30Z
+File Path: `file:///home/runner/.gemini/antigravity-cli/builtin/skills/agy-customizations/SKILL.md`
+Total Lines: 107
+Total Bytes: 5465
+Showing lines 1 to 100
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+1: ---
+2: name: agy-customizations
+3: description: >-
+4:   Comprehensive guide and reference for the Antigravity Customization System.
+5:   Use to explain how customizations work, their loading priority, discovery mechanisms,
+6:   and to guide the creation of skills, rules, plugins, hooks, and MCP servers.
+7: ---
+8: 
+9: # Antigravity Customization System Guide
+10: 
+11: The Antigravity Customization System allows you to tailor the agent's behavior,
+12: teach it new workflows, enforce guidelines, and integrate it with external
+13: tools. By customizing the agent, you can transition it from a general-purpose
+14: assistant to an expert pair programmer specialized in your project's codebase
+15: and processes.
+16: 
+17: --------------------------------------------------------------------------------
+18: 
+19: ## Customization Types: Quick Reference
+20: 
+21: Choose the right customization type based on your goal:
+22: 
+23: Type            | Config File/Folder           | Scope                     | Best For                                                                                | Learn More
+24: :-------------- | :--------------------------- | :------------------------ | :-------------------------------------------------------------------------------------- | :---------
+25: **Rules**       | `GEMINI.md`, `AGENTS.md`     | Contextual / Hierarchical | Enforcing coding styles, API restrictions, and local guidelines.                        | [Rules Guide](./docs/rules.md)
+26: **Skills**      | `skills/<name>/SKILL.md`     | On-Demand (Progressive)   | Teaching the agent multi-step procedures, runbooks, and tool workflows.                 | [Skills Guide](./docs/skills.md)
+27: **Plugins**     | `plugins/<name>/plugin.json` | Bundle                    | Packaging related skills, rules, and MCP configs into a single unit.                    | [Plugins Guide](./docs/plugins.md)
+28: **Hooks**       | `hooks.json`                 | Lifecycle Event           | Running scripts/commands at specific agent lifecycle points (e.g., pre-tool execution). | [Hooks Guide](./docs/hooks.md)
+29: **MCP Servers** | `mcp_config.json`            | Tool Integration          | Connecting the agent to external services and custom tool providers.                    | [MCP Guide](./docs/mcp_servers.md)
+30: 
+31: --------------------------------------------------------------------------------
+32: 
+33: ## Customization Discovery and Locations
+34: 
+35: Antigravity automatically discovers your own customizations by traversing
+36: specific directories. Built-in customizations are not found this way: the agent
+37: config names the ones it mounts.
+38: 
+39: ### Discovery Locations
+40: 
+41: 1.  **Workspace Customizations** (Project-Specific):
+42:     *   Path: `.agents/` (or `.agent/`, `_agents/`, `_agent/`) at the root of
+43:         your project.
+44:     *   Use this to share customizations with your team by checking them into
+45:         version control (VCS).
+46:     *   The agent walks from your current working directory up to the repository
+47:         root (e.g., the folder containing `.git`) to find these directories.
+48: 2.  **Directory & Project Rules** (Hierarchical):
+49:     *   Paths: `GEMINI.md`, `AGENTS.md`, `.agents/rules/*.md`
+50:     *   As you open or edit files, the agent walks up from the file's directory
+51:         to the repository root, loading all rules it finds.
+52: 3.  **Global Configuration** (Machine-Local):
+53:     *   Path: `~/.gemini/config/`
+54:     *   Applies to all projects and workspaces run on your machine.
+55: 
+56: --------------------------------------------------------------------------------
+57: 
+58: ## Loading Priority and Precedence
+59: 
+60: When multiple customizations are discovered, they are loaded and applied in a
+61: specific order. If there are naming conflicts (e.g., two skills with the same
+62: name), the higher-priority customization overrides the lower-priority one.
+63: 
+64: The priority order (from highest to lowest) is:
+65: 
+66: 1.  **Workspace Project**: Hierarchical discovery walking up from the CWD to the
+67:     repository root.
+68: 2.  **Declared Configurations**: Customizations explicitly listed in
+69:     `skills.json` or `plugins.json` in your workspace.
+70: 3.  **Global Discovery**: `~/.gemini/config/`
+71: 4.  **Built-in Customizations**: Default skills bundled with the application,
+72:     mounted by name rather than discovered.
+73: 5.  **Global Declared Configurations**: Explicitly listed in global JSON
+74:     configs.
+75: 
+76: --------------------------------------------------------------------------------
+77: 
+78: ## How Customizations are Applied
+79: 
+80: ### Progressive Disclosure (Skills and Rules)
+81: 
+82: To prevent overwhelming the model's context window, Antigravity uses
+83: **progressive disclosure**:
+84: 
+85: *   **Skills** are not loaded into the context window by default. Only their
+86:     names and descriptions are injected. The full content of a skill is only
+87:     loaded if the model (or the user) explicitly decides to activate it.
+88: *   **Rules** with `trigger: model_decision` behave similarly. Only `always_on`
+89:     rules are loaded unconditionally.
+90: 
+91: ### Deduplication
+92: 
+93: All customizations (especially rules) are deduplicated by their resolved file
+94: paths. A rule file will never be injected more than once in a single
+95: conversation turn, even if it matches multiple trigger conditions.
+96: 
+97: --------------------------------------------------------------------------------
+98: 
+99: ## Advanced Management: JSON Configs
+100: 
+The above content does NOT show the entire file contents. If you need to view any lines of the file which were not shown to complete your task, call this tool again to view those lines.
+
+---
+
