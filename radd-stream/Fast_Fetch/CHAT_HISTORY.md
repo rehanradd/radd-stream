@@ -24494,3 +24494,59 @@ Output:
 
 ---
 
+## 🤖 AI (Antigravity)  `2026-10-19T17:47:27Z`
+
+Created At: 2026-10-19T17:47:27Z
+Completed At: 2026-10-19T17:47:27Z
+
+The command exited with code 1.
+Output:
+Traceback (most recent call last):
+  File "<string>", line 4, in <module>
+    post_data = extract_post_data_katmoviehd("https://new.katmoviehd.top/bad-apples-2026-hindi", "bad-apples-2026-hindi", client)
+  File "/home/runner/workspace/radd-stream/Fast_Fetch/import_katmoviehd.py", line 526, in extract_post_data_katmoviehd
+    code, _, resp_text = client.get_text(detail_url, timeout=timeout)
+                         ^^^^^^^^^^^^^^^
+AttributeError: 'str' object has no attribute 'get_text'
+
+---
+
+## 🤖 AI (Antigravity)  `2026-10-19T17:47:31Z`
+
+Created At: 2026-10-19T17:47:31Z
+Completed At: 2026-10-19T17:47:31Z
+File Path: `file:///home/runner/workspace/radd-stream/Fast_Fetch/import_katmoviehd.py`
+Total Lines: 980
+Total Bytes: 37600
+Showing lines 510 to 535
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+510: 
+511: def extract_post_data_katmoviehd(
+512:     client: KatMovieHDClient,
+513:     post_url: str,
+514:     slug: str,
+515:     cached_item: dict | None = None,
+516:     resolve_direct: bool = True,
+517:     timeout: int = 15,
+518: ) -> dict | None:
+519:     """Extracts post metadata, releases, and unwrapped direct sources from KatMovieHD."""
+520:     raw_title = cached_item.get("post_title", "") if cached_item else ""
+521:     poster_url = cached_item.get("thumbnail_image") if cached_item else None
+522:     genres_list = cached_item.get("categories", []) if cached_item else []
+523: 
+524:     # Fetch post detail chunk
+525:     detail_url = f"{DEFAULT_BASE_URL}/{slug}/__data.json"
+526:     code, _, resp_text = client.get_text(detail_url, timeout=timeout)
+527:     if code != 200 or not resp_text:
+528:         return None
+529: 
+530:     post_content = ""
+531:     for line in resp_text.splitlines():
+532:         line = line.strip()
+533:         if not line:
+534:             continue
+535:         try:
+The above content does NOT show the entire file contents. If you need to view any lines of the file which were not shown to complete your task, call this tool again to view those lines.
+
+---
+
