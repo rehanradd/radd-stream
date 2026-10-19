@@ -24003,3 +24003,22 @@ Output:
 
 ---
 
+## 🤖 AI (Antigravity)  `2026-10-19T17:45:44Z`
+
+Created At: 2026-10-19T17:45:44Z
+Completed At: 2026-10-19T17:45:45Z
+
+The command exited with code 0.
+Output:
+ALL RUNNING PROCESSES ON ORACLE:
+ubuntu    146221  0.0  0.0   4472  3036 ?        S    17:20   0:00 bash -c python3 -u /opt/radd-stream/Fast_Fetch/import_10xflix.py --sync-api --db-path /home/ubuntu/radd-stream-data/10xflix.db >> /home/ubuntu/radd-stream-data/10xflix.log 2>&1 && python3 -u /opt/radd-stream/Fast_Fetch/import_10xflix.py --db-path /home/ubuntu/radd-stream-data/10xflix.db --workers 5 --delay 0.3 >> /home/ubuntu/radd-stream-data/10xflix.log 2>&1
+ubuntu    146852  5.7  1.5 561736 190380 ?       Sl   17:26  18:28 python3 -u /opt/radd-stream/Fast_Fetch/import_10xflix.py --db-path /home/ubuntu/radd-stream-data/10xflix.db --workers 5 --delay 0.3
+ubuntu    152560  0.0  0.0   4472  3040 ?        S    20:48   0:00 bash -c python3 -u /opt/radd-stream/Fast_Fetch/import_world4ufree.py --sync-api --db-path /home/ubuntu/radd-stream-data/world4ufree.db >> /home/ubuntu/radd-stream-data/world4ufree.log 2>&1 && python3 -u /opt/radd-stream/Fast_Fetch/import_world4ufree.py --db-path /home/ubuntu/radd-stream-data/world4ufree.db --workers 5 --delay 0.2 >> /home/ubuntu/radd-stream-data/world4ufree.log 2>&1
+ubuntu    153724  5.0  7.0 1232712 860152 ?      Sl   21:14   4:35 python3 -u /opt/radd-stream/Fast_Fetch/import_world4ufree.py --db-path /home/ubuntu/radd-stream-data/world4ufree.db --workers 5 --delay 0.2
+ubuntu    156129  0.0  0.0   4472  3028 ?        S    22:45   0:00 bash -c python3 -u /opt/radd-stream/Fast_Fetch/import_bolly4u.py --sync-api --db-path /home/ubuntu/radd-stream-data/bolly4u.db >> /home/ubuntu/radd-stream-data/bolly4u.log 2>&1 && python3 -u /opt/radd-stream/Fast_Fetch/import_bolly4u.py --db-path /home/ubuntu/radd-stream-data/bolly4u.db --workers 6 --delay 0.2 >> /home/ubuntu/radd-stream-data/bolly4u.log 2>&1
+ubuntu    156130  1.8  0.3  51576 44256 ?        S    22:45   0:00 python3 -u /opt/radd-stream/Fast_Fetch/import_bolly4u.py --sync-api --db-path /home/ubuntu/radd-stream-data/bolly4u.db
+ubuntu    156329  0.0  0.0   4472  3036 ?        S    22:45   0:00 bash -c python3 -u /opt/radd-stream/Fast_Fetch/import_katmoviehd.py --sync-api --db-path /home/ubuntu/radd-stream-data/katmoviehd.db >> /home/ubuntu/radd-stream-data/katmoviehd.log 2>&1 && python3 -u /opt/radd-stream/Fast_Fetch/import_katmoviehd.py --db-path /home/ubuntu/radd-stream-data/katmoviehd.db --workers 5 --delay 0.3 >> /home/ubuntu/radd-stream-data/katmoviehd.log 2>&1
+ubuntu    156330  3.2  0.2  36804 30016 ?        S    22:45   0:00 python3 -u /opt/radd-stream/Fast_Fetch/import_katmoviehd.py --sync-api --db-path /home/ubuntu/radd-stream-data/katmoviehd.db
+
+---
+
