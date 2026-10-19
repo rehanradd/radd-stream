@@ -87566,3 +87566,82 @@ Last progress: 16s ago
 
 ---
 
+## 🤖 AI (Antigravity)  `2026-10-19T12:19:34Z`
+
+Created At: 2026-10-19T12:19:34Z
+Completed At: 2026-10-19T12:19:34Z
+File Path: `file:///home/runner/workspace/radd-stream/Fast_Fetch/import_katmoviehd.py`
+Total Lines: 980
+Total Bytes: 37600
+Showing lines 450 to 515
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+450:             "final_url": f"https://gd.kmhd.me/file/{gd_res}",
+451:             "is_temporary": 0,
+452:             "quality": "720p",
+453:         })
+454: 
+455:     # 3. KatDrive
+456:     kd_res = upload_links.get("katdrive_res")
+457:     if kd_res and kd_res != "None":
+458:         sources.append({
+459:             "source_name": "⚡ KatDrive Mirror",
+460:             "service": "katdrive",
+461:             "resource_id": kd_res,
+462:             "source_url": f"https://katdrive.click/file/{kd_res}",
+463:             "final_url": f"https://katdrive.click/file/{kd_res}",
+464:             "is_temporary": 0,
+465:             "quality": "720p",
+466:         })
+467: 
+468:     # 4. FastDL
+469:     ff_res = upload_links.get("ffast_res")
+470:     if ff_res and ff_res != "None":
+471:         sources.append({
+472:             "source_name": "⚡ FastDL",
+473:             "service": "fastdl",
+474:             "resource_id": ff_res,
+475:             "source_url": f"https://fastdl.icu/{ff_res}",
+476:             "final_url": f"https://fastdl.icu/{ff_res}",
+477:             "is_temporary": 0,
+478:             "quality": "720p",
+479:         })
+480: 
+481:     # 5. Send.cm
+482:     scm_res = upload_links.get("sendcm_res")
+483:     if scm_res and scm_res != "None":
+484:         sources.append({
+485:             "source_name": "⚡ Send.cm",
+486:             "service": "sendcm",
+487:             "resource_id": scm_res,
+488:             "source_url": f"https://send.cm/{scm_res}",
+489:             "final_url": f"https://send.cm/{scm_res}",
+490:             "is_temporary": 0,
+491:             "quality": "720p",
+492:         })
+493: 
+494:     # 6. 1Fichier
+495:     fic_res = upload_links.get("fichier_res")
+496:     if fic_res and fic_res != "None":
+497:         fic_id = fic_res.lstrip("?")
+498:         sources.append({
+499:             "source_name": "⚡ 1Fichier",
+500:             "service": "1fichier",
+501:             "resource_id": fic_id,
+502:             "source_url": f"https://1fichier.com/{fic_res}",
+503:             "final_url": f"https://1fichier.com/{fic_res}",
+504:             "is_temporary": 0,
+505:             "quality": "720p",
+506:         })
+507: 
+508:     return size_bytes, sources
+509: 
+510: 
+511: def extract_post_data_katmoviehd(
+512:     client: KatMovieHDClient,
+513:     post_url: str,
+514:     slug: str,
+515:     cached_item: dict | None = None,
+The above content does NOT show the entire file contents. If you need to view any lines of the file which were not shown to complete your task, call this tool again to view those lines.
+
+---
+
