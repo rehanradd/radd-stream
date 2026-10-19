@@ -90952,3 +90952,98 @@ Unwrapped sources: 1
 
 ---
 
+## 🤖 AI (Antigravity)  `2026-10-19T13:17:32Z`
+
+Created At: 2026-10-19T13:17:32Z
+Completed At: 2026-10-19T13:17:32Z
+File Path: `file:///home/runner/workspace/radd-stream/Fast_Fetch/fast_fetch.py`
+Total Lines: 5434
+Total Bytes: 240825
+Showing lines 400 to 470
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+400:     raw_lang = lang_m.group(1).strip() if lang_m else ""
+401: 
+402:     if not raw_lang:
+403:         found_langs = []
+404:         for l_kw in ["Hindi", "English", "Telugu", "Tamil", "Punjabi", "Malayalam", "Kannada", "Bengali", "Marathi", "Gujarati", "Japanese", "Korean", "Mandarin"]:
+405:             if re.search(rf"\b{l_kw}\b", title or "", re.IGNORECASE):
+406:                 found_langs.append(l_kw)
+407:         if len(found_langs) > 1:
+408:             raw_lang = " + ".join(found_langs)
+409:         elif len(found_langs) == 1:
+410:             raw_lang = found_langs[0]
+411: 
+412:     if not raw_lang:
+413:         if source_site == "rogmovies" or is_indian:
+414:             language = "Hindi"
+415:         elif is_anime:
+416:             language = "Japanese / English"
+417:         elif is_kdrama:
+418:             language = "Korean"
+419:         else:
+420:             language = "English"
+421:     else:
+422:         cleaned = raw_lang.replace("-", " + ").replace("–", " + ").replace("/", " + ")
+423:         cleaned = re.sub(r"\s*\+\s*", " + ", cleaned).strip()
+424:         language = cleaned
+425: 
+426:     return {
+427:         "source_site": source_site,
+428:         "industry": industry,
+429:         "country": country,
+430:         "language": language,
+431:     }
+432: 
+433: 
+434: def generate_canonical_key(title: str, year: int | None = None) -> str:
+435:     """
+436:     Produces a normalized canonical key for cross-site media deduplication.
+437:     e.g. 'Dune: Part Two (2024)' -> 'dune-part-two_2024'
+438:     'The Royal Cat aka Jin Ling Yu Mao (2024)' -> 'the-royal-cat_2024'
+439:     'The Silent Planet 2024' -> 'the-silent-planet_2024'
+440:     """
+441:     if not title:
+442:         return "unknown"
+443:     t = title.lower()
+444:     t = re.sub(r"\baka\b.*$", "", t)
+445:     t = re.sub(r"\[.*?\]|\(.*?\)", "", t)
+446:     t = re.sub(
+447:         r"\b(480p|720p|1080p|2160p|4k|bluray|web-dl|hdrip|esubs|dual audio|multi audio|hindi|org|full movie|season\s*\d+|s\d+|complete|download|watch|series)\b",
+448:         "",
+449:         t,
+450:         flags=re.IGNORECASE,
+451:     )
+452:     t = re.sub(r"[^a-z0-9]+", "-", t).strip("-")
+453:     if year:
+454:         return f"{t}_{year}"
+455:     return t or "unknown"
+456: 
+457: 
+458: def get_poster_quality_rank(url: str | None) -> int:
+459:     """
+460:     Returns an artwork quality score to prevent high-res TMDB artwork from
+461:     being overwritten by low-res blog/thumbnail uploads.
+462:     """
+463:     if not url:
+464:         return 0
+465:     u = url.lower()
+466:     if "image.tmdb.org/t/p/original" in u:
+467:         return 10
+468:     if "image.tmdb.org/t/p/w500" in u or "media-amazon.com" in u:
+469:         return 8
+470:     if "image.tmdb.org" in u or "imdb" in u:
+The above content does NOT show the entire file contents. If you need to view any lines of the file which were not shown to complete your task, call this tool again to view those lines.
+
+---
+
+## 🤖 AI (Antigravity)  `2026-10-19T13:17:37Z`
+
+Created At: 2026-10-19T13:17:37Z
+Completed At: 2026-10-19T13:17:37Z
+
+The command exited with code 0.
+Output:
+2358:def unwrap_mobilejsr(jsr_url: str) -> list[dict]:
+
+---
+
