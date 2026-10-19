@@ -90106,3 +90106,42 @@ If relevant, proactively run terminal commands to execute this code for the USER
 
 ---
 
+## 🤖 AI (Antigravity)  `2026-10-19T13:00:51Z`
+
+Created At: 2026-10-19T13:00:51Z
+Completed At: 2026-10-19T13:00:52Z
+File Path: `file:///home/runner/workspace/push.py`
+Total Lines: 261
+Total Bytes: 9571
+Showing lines 65 to 90
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+65:     print("[*] Running pre-push unit tests...", flush=True)
+66:     fast_fetch_dir = ROOT_DIR / "radd-stream" / "Fast_Fetch"
+67:     unit_test_modules = [
+68:         "test_database",
+69:         "test_vidout",
+70:         "test_vegamovies_import",
+71:         "test_rogmovies_import",
+72:         "test_ssrmovies_import",
+73:         "test_7starhd_import",
+74:         "test_hdhub4u_import",
+75:         "test_rareanimes_import",
+76:         "test_katmoviehd_import",
+77:         "test_10xflix_import",
+78:         "test_backup_manager",
+79:     ]
+80:     res = subprocess.run(
+81:         [sys.executable, "-m", "unittest"] + unit_test_modules,
+82:         cwd=fast_fetch_dir,
+83:         capture_output=True,
+84:         text=True,
+85:     )
+86:     if res.returncode == 0:
+87:         print("[✓] Pre-push unit tests passed successfully.", flush=True)
+88:         return True
+89:     else:
+90:         print("[!] Unit tests failed! Review output below:\n", file=sys.stderr)
+The above content does NOT show the entire file contents. If you need to view any lines of the file which were not shown to complete your task, call this tool again to view those lines.
+
+---
+
