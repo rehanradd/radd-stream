@@ -27339,3 +27339,116 @@ origin	https://x-access-token@github.com/radddao/radd-stream.git (push)
 
 ---
 
+## 🤖 AI (Antigravity)  `2026-10-19T18:26:30Z`
+
+Created At: 2026-10-19T18:26:30Z
+Completed At: 2026-10-19T18:26:30Z
+File Path: `file:///home/runner/workspace/push.py`
+Total Lines: 267
+Total Bytes: 9891
+Showing lines 1 to 100
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+1: #!/usr/bin/env python3
+2: """
+3: push.py — Single Unified Multi-Tier Push & Deployment Tool.
+4: 
+5: Replaces the retired legacy scripts (push.py, github_push.py, emergency_push.py).
+6: Located at project root for easy access.
+7: 
+8: Does EVERYTHING in one command:
+9:   1. Runs local unit tests to ensure zero regressions before push.
+10:   2. Syncs latest chat history to CHAT_HISTORY.md.
+11:   3. Git stages and commits reviewed files with a clean message.
+12:   4. Pushes to persistent local Git remote (gitsafe-backup main).
+13:   5. Pushes to GitHub repository (github.com/radddao/radd-stream) via GITHUB_TOKEN.
+14:   6. Syncs scraper files and CHAT_HISTORY.md to Oracle VM via ORACLE_SSH_KEY.
+15: 
+16: Usage:
+17:     python3 push.py "feat: add new feature and tests"
+18:     python3 push.py                   # Auto-generates clean timestamped message
+19:     python3 push.py --no-test         # Skip test execution
+20:     python3 push.py --no-oracle       # Push to Git/GitHub only without Oracle sync
+21: """
+22: 
+23: from __future__ import annotations
+24: 
+25: import argparse
+26: import os
+27: import re
+28: import subprocess
+29: import sys
+30: import tempfile
+31: import time
+32: from pathlib import Path
+33: 
+34: ROOT_DIR = Path(__file__).parent.resolve()
+35: ORACLE_IP = "92.4.95.252"
+36: ORACLE_USER = "ubuntu"
+37: GITHUB_REPO_URL = "https://x-access-token@github.com/radddao/radd-stream.git"
+38: 
+39: 
+40: def get_oracle_key_file() -> str | None:
+41:     raw = os.environ.get("ORACLE_SSH_KEY", "")
+42:     if not raw:
+43:         return None
+44:     match = re.fullmatch(r"(-----BEGIN ([A-Z0-9 ]+)-----)(.*?)(-----END \2-----)", raw, re.S)
+45:     if not match:
+46:         return None
+47:     header, _, body, footer = match.groups()
+48:     body = "".join(body.split())
+49:     with tempfile.NamedTemporaryFile("w", encoding="ascii", delete=False) as f:
+50:         key_path = f.name
+51:         f.write(header + "\n" + "\n".join(body[i:i + 64] for i in range(0, len(body), 64)) + "\n" + footer + "\n")
+52:     os.chmod(key_path, 0o600)
+53:     return key_path
+54: 
+55: 
+56: def create_github_askpass(token: str) -> str:
+57:     with tempfile.NamedTemporaryFile("w", delete=False) as f:
+58:         f.write(f'#!/bin/sh\necho "{token}"\n')
+59:         askpass_path = f.name
+60:     os.chmod(askpass_path, 0o700)
+61:     return askpass_path
+62: 
+63: 
+64: def run_tests() -> bool:
+65:     print("[*] Running pre-push unit tests...", flush=True)
+66:     fast_fetch_dir = ROOT_DIR / "radd-stream" / "Fast_Fetch"
+67:     unit_test_modules = [
+68:         "test_database",
+69:         "test_vidout",
+70:         "test_vegamovies_import",
+71:         "test_rogmovies_import",
+72:         "test_ssrmovies_import",
+73:         "test_7starhd_import",
+74:         "test_hdhub4u_import",
+75:         "test_rareanimes_import",
+76:         "test_katmoviehd_import",
+77:         "test_10xflix_import",
+78:         "test_filmyzilla_import",
+79:         "test_bolly4u_import",
+80:         "test_world4ufree_import",
+81:         "test_backup_manager",
+82:     ]
+83:     res = subprocess.run(
+84:         [sys.executable, "-m", "unittest"] + unit_test_modules,
+85:         cwd=fast_fetch_dir,
+86:         capture_output=True,
+87:         text=True,
+88:     )
+89:     if res.returncode == 0:
+90:         print("[✓] Pre-push unit tests passed successfully.", flush=True)
+91:         return True
+92:     else:
+93:         print("[!] Unit tests failed! Review output below:\n", file=sys.stderr)
+94:         print(res.stderr or res.stdout, file=sys.stderr)
+95:         return False
+96: 
+97: 
+98: 
+99: def sync_chat_history():
+100:     export_script = ROOT_DIR / "radd-stream" / "Fast_Fetch" / "export_chat.py"
+The above content does NOT show the entire file contents. If you need to view any lines of the file which were not shown to complete your task, call this tool again to view those lines.
+
+---
+
