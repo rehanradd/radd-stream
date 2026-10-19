@@ -86698,3 +86698,89 @@ The above content does NOT show the entire file contents. If you need to view an
 
 ---
 
+## 🤖 AI (Antigravity)  `2026-10-19T12:15:41Z`
+
+Created At: 2026-10-19T12:15:41Z
+Completed At: 2026-10-19T12:15:41Z
+File Path: `file:///home/runner/workspace/radd-stream/Fast_Fetch/CONTINUITY.md`
+Total Lines: 392
+Total Bytes: 41073
+Showing lines 320 to 392
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+320: - **Vegamovies Crawler Active Progress**:
+321:   - Maintained continuous, uninterrupted run of `import_vegamovies.py` (PID 76635, `--workers 5 --delay 0.3`).
+322:   - Progress reached **82.7%** (11,839 / 14,316 titles, 98,009 releases, 309,002 direct sources, 66,596 G-Direct streams).
+323: - **7StarHD / 10xflix Dedicated Importer Built & Verified**:
+324:   - Implemented `Fast_Fetch/import_7starhd.py`: Supports both 7StarHD (23,457 titles) and 10xflix (17,583 titles) via WP REST API pagination and MobileJSR direct mirror resolution.
+325:   - Enhanced `unwrap_mobilejsr` in `Fast_Fetch/fast_fetch.py` with cookie-aware CSRF token negotiation, unlocking 10Gbps Cloudflare R2 (`r2.cloudflarestorage.com`), HubDrive, FilePress, 1fichier, GoFile, Streamtape, and Voe streams.
+326:   - Created `Fast_Fetch/test_7starhd_import.py` (5/5 unit tests pass). Verified live end-to-end extraction against 7StarHD.
+327:   - Created live terminal monitor `check_7starhd.py` for Oracle VM tracking.
+328:   - Full test suite passing: **83/83 tests (100% OK)**.
+329: - **Incremental vs Full Scan Sync Mechanism Clarified**:
+330:   - Architecture relies on `sitemap_cache` with `scraped = 1` vs `0`. Incremental updates only fetch new URLs published since the last sync without re-crawling historical catalog.
+331: - **Staging Database Isolation Preserved**:
+332:   - Zero merges performed. All staging DBs (`multimovies.db`, `hdtvb.db`, `rogmovies.db`, `ssrmovies.db`, `vegamovies.db`, `7starhd.db`) remain completely isolated.
+333: 
+334: ### Session 21 — Antigravity (Gemini 3.8 Flash) — 2026-10-18
+335: **7StarHD Production Deployment on Oracle VM, Live Crawl Launch, & Vegamovies Progress:**
+336: - **Oracle Host Verification**:
+337:   - Independently verified host SSH key against fingerprints in `ORACLE_DEPLOYMENT.md` (ED25519 `SHA256:3FUGOWcK08jLYM6en6+lz806EsUI/iBWGAY0C620qME`, ECDSA `SHA256:VL9EVg/rDaO3ANsu9dlxi/qGuWVO5k/Bq8x0108IlLk`, RSA `SHA256:qXeS+ioA/9zF+olehkbqzoGHootLRMJQFMAWL7nKttQ` all verified 100%).
+338: - **Deployment & Remote Verification**:
+339:   - Transferred `fast_fetch.py`, `import_7starhd.py`, and `test_7starhd_import.py` to `/opt/radd-stream/Fast_Fetch/`.
+340:   - Ran unit test suite directly on Oracle VM (`python3 -S /opt/radd-stream/Fast_Fetch/test_7starhd_import.py`) $\rightarrow$ **5/5 tests passed (100% OK)**.
+341: - **WP REST API Catalog Sync**:
+342:   - Identified and fixed pagination count probe in `import_7starhd.py` (`per_page=100` total pages calculation and added `--start-page` CLI argument).
+343:   - Synced full 7StarHD catalog: **23,446 titles** populated in `sitemap_cache` table in `/home/ubuntu/radd-stream-data/7starhd.db`.
+344: - **Live End-to-End Extraction Verification**:
+345:   - Ran test crawl for 3 titles: extracted 19 releases and 278 direct sources with 0 errors. Unlocked 10Gbps Cloudflare R2 direct stream endpoints.
+346: - **Multi-Threaded Background Crawler Launched**:
+347:   - Started 7StarHD crawler with `nohup python3 /opt/radd-stream/Fast_Fetch/import_7starhd.py --workers 5 --delay 0.3 --db-path /home/ubuntu/radd-stream-data/7starhd.db &` (**PID 119530**).
+348:   - Verified live status with `check_7starhd.py`: actively indexing and resolving stream mirrors in background.
+349: - **Vegamovies Crawler Progress**:
+350:   - Running uninterrupted (**PID 76635**), reaching **84.5%** (12,091 / 14,316 titles, 101,640 releases, 319,096 direct sources). Under 2,000 pending titles remaining.
+351: - **Staging Database Isolation**:
+352:   - Strict isolation maintained: zero merges executed. `7starhd.db` is an independent staging database.
+353: 
+354: ### Session 22 — Antigravity — 2026-10-18
+355: **KatMovieHD Scraper, Unified Push Architecture, and Multi-Cloud Database Backup System:**
+356: - **KatMovieHD Reverse-Engineering & Scraper**:
+357:   - Reverse-engineered KatMovieHD (`https://new.katmoviehd.top/`) architecture: discovered SvelteKit data API (`/__data.json?page={n}`) spanning 4,271 pages (~51,252 titles).
+358:   - Reverse-engineered backend REST API at `https://api.dandndn.one/api/v1/file/{file_id}` with valid JWT auth.
+359:   - Implemented `radd-stream/Fast_Fetch/import_katmoviehd.py` and unit tests `test_katmoviehd_import.py` (9/9 pass).
+360:   - Built live monitor `check_katmoviehd.py`.
+361: - **Root Push Consolidation (`push.py`)**:
+362:   - Deprecated and removed legacy stubs (`radd-stream/push.py`, `radd-stream/github_push.py`, `radd-stream/emergency_push.py`).
+363:   - Created unified master CLI `push.py` at workspace root with pre-push unit test gates (118/118 tests), chat auto-sync, Git commit, GitSafe push, GitHub push (`--force` support), and Oracle VM sync.
+364: - **Continuous Chat History Daemon**:
+365:   - Built and deployed background sync daemon `auto_chat_sync.py` (PID task-702) monitoring transcripts and syncing `CHAT_HISTORY.md` to GitSafe and Oracle VM.
+366: - **Universal AI Agent Prompt & Documentation**:
+367:   - Created `UNIVERSAL_AI_PROMPT.md` at workspace root. Established 1-line handoff prompt.
+368:   - Updated `AGENTS.md` and `DAO.md` with mandatory auto-update ledger rules.
+369: - **Multi-Cloud Database Backup Architecture**:
+370:   - Audited live databases on Oracle VM: 9 databases total ~1.28 GB raw (~294 MB compressed).
+371:   - Designed 3-2-1 backup strategy leveraging free cloud providers: Cloudflare R2 (10 GB free forever, zero egress), Backblaze B2 (10 GB free), Telegram Bot API (unlimited free storage, 2GB/file), and GitHub Releases (2GB/file).
+372:   - Implemented `radd-stream/Fast_Fetch/backup_manager.py` using SQLite `VACUUM INTO` online atomic snapshots, gzip compression, and direct GitHub Release / Telegram Bot API uploads with 100% Python stdlib.
+373:   - Created `test_backup_manager.py` (3/3 unit tests pass).
+374:   - Created full reference guide: `radd-stream/docs/BACKUP_STRATEGY.md`.
+375: 
+376: ### Session 23 — Antigravity — 2026-10-19
+377: **KatMovieHD Scraper Deployment & RareAnimes Troubleshooting:**
+378: - **Oracle VM Scraper Audit**:
+379:   - Checked active processes on Oracle VM (`92.4.95.252`). Verified all prior crawlers completed cleanly: Vegamovies (13,978 / 14,316 scraped, 131,654 releases, 397,888 direct sources), 7StarHD (15,508 / 23,446 scraped, 33,197 releases, 98,199 sources), HDHub4u (10,893 scraped, 47,361 releases, 103,964 sources).
+380:   - RareAnimes finished pass with 1,329 scraped, 1,295 failed, 17,419 releases, 53,767 sources.
+381: - **KatMovieHD Background Deployment**:
+382:   - Executed background deployment pipeline on Oracle VM (PID 139975/139977) streaming unbuffered logs to `/home/ubuntu/radd-stream-data/katmoviehd.log`.
+383:   - Running `--sync-api` into isolated `katmoviehd.db` followed immediately by multi-worker crawler (`--workers 5 --delay 0.3`).
+384:   - Progress verified active and healthy using `python3 check_katmoviehd.py`.
+385: - **RareAnimes Failure Root Cause Analysis**:
+386:   - Diagnosed 1,295 failures:
+387:     * 698 failures were bogus non-movie URLs (CSS, PNG, RSS feeds, xmlrpc.php) ingested by global regex matching on `/all-anime-cartoon-movies-list/` rather than scoping to `#rai-movies-index`.
+388:     * 597 failures were legitimate posts whose downloads use `store.animetoonhindi.com/archives/...` and `codedew.com/zipcloud/...` or `<h3>` header wrappers not currently supported by `parse_rareanimes_content`.
+389: - **Staging Database Isolation**:
+390:   - Strict isolation maintained across all staging databases (`katmoviehd.db`, `rareanimes.db`, `hdhub4u.db`, `7starhd.db`, `vegamovies.db`). Zero merges performed into production.
+391: 
+392: 
+The above content does NOT show the entire file contents. If you need to view any lines of the file which were not shown to complete your task, call this tool again to view those lines.
+
+---
+
