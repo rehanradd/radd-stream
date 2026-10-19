@@ -87887,3 +87887,29 @@ Output:
 
 ---
 
+## 🤖 AI (Antigravity)  `2026-10-19T12:21:10Z`
+
+Created At: 2026-10-19T12:21:10Z
+Completed At: 2026-10-19T12:21:10Z
+File Path: `file:///home/runner/workspace/radd-stream/Fast_Fetch/CONTINUITY.md`
+Total Lines: 392
+Total Bytes: 41073
+Showing lines 380 to 392
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+380:   - RareAnimes finished pass with 1,329 scraped, 1,295 failed, 17,419 releases, 53,767 sources.
+381: - **KatMovieHD Background Deployment**:
+382:   - Executed background deployment pipeline on Oracle VM (PID 139975/139977) streaming unbuffered logs to `/home/ubuntu/radd-stream-data/katmoviehd.log`.
+383:   - Running `--sync-api` into isolated `katmoviehd.db` followed immediately by multi-worker crawler (`--workers 5 --delay 0.3`).
+384:   - Progress verified active and healthy using `python3 check_katmoviehd.py`.
+385: - **RareAnimes Failure Root Cause Analysis**:
+386:   - Diagnosed 1,295 failures:
+387:     * 698 failures were bogus non-movie URLs (CSS, PNG, RSS feeds, xmlrpc.php) ingested by global regex matching on `/all-anime-cartoon-movies-list/` rather than scoping to `#rai-movies-index`.
+388:     * 597 failures were legitimate posts whose downloads use `store.animetoonhindi.com/archives/...` and `codedew.com/zipcloud/...` or `<h3>` header wrappers not currently supported by `parse_rareanimes_content`.
+389: - **Staging Database Isolation**:
+390:   - Strict isolation maintained across all staging databases (`katmoviehd.db`, `rareanimes.db`, `hdhub4u.db`, `7starhd.db`, `vegamovies.db`). Zero merges performed into production.
+391: 
+392: 
+The above content does NOT show the entire file contents. If you need to view any lines of the file which were not shown to complete your task, call this tool again to view those lines.
+
+---
+
