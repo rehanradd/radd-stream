@@ -88389,3 +88389,47 @@ If relevant, proactively run terminal commands to execute this code for the USER
 
 ---
 
+## 🤖 AI (Antigravity)  `2026-10-19T12:33:23Z`
+
+Created At: 2026-10-19T12:33:23Z
+Completed At: 2026-10-19T12:33:23Z
+
+The command exited with code 0.
+Output:
+=== 1. RUNNING PYTHON PROCESSES ===
+root        1087  0.0  0.2  36012 25256 ?        Ss   May24  46:34 /usr/bin/python3 /usr/bin/supervisord -n -c /etc/supervisor/supervisord.conf
+root        1089  0.0  0.0 107896  9556 ?        Ssl  May24   0:00 /usr/bin/python3 /usr/share/unattended-upgrades/unattended-upgrade-shutdown --wait-for-signal
+ubuntu     63790  0.0  0.4 280916 53460 ?        Ss   Oct17   0:19 /usr/bin/python3 -S /opt/radd-stream/Fast_Fetch/fast_fetch.py serve --host 127.0.0.1 --port 8080
+ubuntu    146221  0.0  0.0   4472  3036 ?        S    17:20   0:00 bash -c python3 -u /opt/radd-stream/Fast_Fetch/import_10xflix.py --sync-api --db-path /home/ubuntu/radd-stream-data/10xflix.db >> /home/ubuntu/radd-stream-data/10xflix.log 2>&1 && python3 -u /opt/radd-stream/Fast_Fetch/import_10xflix.py --db-path /home/ubuntu/radd-stream-data/10xflix.db --workers 5 --delay 0.3 >> /home/ubuntu/radd-stream-data/10xflix.log 2>&1
+ubuntu    146852  6.0  1.4 555176 182600 ?       Sl   17:26   0:24 python3 -u /opt/radd-stream/Fast_Fetch/import_10xflix.py --db-path /home/ubuntu/radd-stream-data/10xflix.db --workers 5 --delay 0.3
+ubuntu    147184 66.6  0.0  18252 12092 ?        Ss   17:33   0:00 python3 -
+root      208302  0.0  1.3 2238972 162212 ?      Ssl  May25 164:11 /usr/bin/python3 /usr/bin/fail2ban-server -xf start
+root      445812  0.0  0.0 109056 10820 ?        Sl   May31   2:10 /usr/bin/python3 /usr/bin/supervisorctl fg raddflix_radd
+
+=== 2. DATABASE AUDIT (/home/ubuntu/radd-stream-data/*.db) ===
+{"db": "10xflix.db", "size_mb": 126.27, "sitemap_total": 17606, "scraped_ok": 385, "pending": 17221, "failed": 0, "other_scraped": {}, "posts": 364, "releases": 1287, "sources": 4612, "tables": ["sitemap_cache", "posts", "sqlite_sequence", "releases", "sources"]}
+{"db": "7starhd.db", "size_mb": 78.62, "sitemap_total": 23446, "scraped_ok": 15508, "pending": 0, "failed": 7938, "other_scraped": {}, "posts": 11745, "releases": 33197, "sources": 0, "tables": ["sitemap_cache", "domains_config", "posts", "sqlite_sequence", "releases", "download_sources", "post_sources"]}
+{"db": "fast_fetch.db", "size_mb": 6.91, "sitemap_total": 10302, "scraped_ok": 245, "pending": 9997, "failed": 60, "other_scraped": {}, "posts": 203, "releases": 1214, "sources": 0, "tables": ["domains_config", "sitemap_cache", "posts", "sqlite_sequence", "releases", "download_sources", "post_sources"]}
+{"db": "hdhub4u.db", "size_mb": 56.46, "sitemap_total": 14504, "scraped_ok": 10893, "pending": 0, "failed": 3611, "other_scraped": {}, "posts": 9288, "releases": 47361, "sources": 103964, "tables": ["sitemap_cache", "posts", "sqlite_sequence", "releases", "sources"]}
+{"db": "hdtvb.db", "size_mb": 23.56, "sitemap_total": 5692, "scraped_ok": 3850, "pending": 0, "failed": 1842, "other_scraped": {}, "posts": 3758, "releases": 16772, "sources": 0, "tables": ["domains_config", "sitemap_cache", "posts", "sqlite_sequence", "releases", "download_sources", "post_sources"]}
+{"db": "katmoviehd.db", "size_mb": 1.46, "sitemap_total": 1200, "scraped_ok": 293, "pending": 0, "failed": 907, "other_scraped": {}, "posts": 296, "releases": 1158, "sources": 1315, "tables": ["sitemap_cache", "posts", "sqlite_sequence", "releases", "sources"]}
+{"db": "multimovies.db", "size_mb": 333.54, "sitemap_total": 72499, "scraped_ok": 71730, "pending": 719, "failed": 50, "other_scraped": {}, "posts": 10498, "releases": 532649, "sources": 0, "tables": ["domains_config", "sitemap_cache", "posts", "sqlite_sequence", "releases", "download_sources", "post_sources"]}
+{"db": "rareanimes.db", "size_mb": 118.91, "sitemap_total": 2624, "scraped_ok": 1329, "pending": 0, "failed": 1295, "other_scraped": {}, "posts": 1328, "releases": 17419, "sources": 53767, "tables": ["sitemap_cache", "posts", "sqlite_sequence", "releases", "sources"]}
+{"db": "rogmovies.db", "size_mb": 149.93, "sitemap_total": 7868, "scraped_ok": 7868, "pending": 0, "failed": 0, "other_scraped": {}, "posts": 7740, "releases": 52931, "sources": 0, "tables": ["domains_config", "sitemap_cache", "posts", "sqlite_sequence", "releases", "download_sources", "post_sources"]}
+{"db": "ssrmovies.db", "size_mb": 271.44, "sitemap_total": 27000, "scraped_ok": 27000, "pending": 0, "failed": 0, "other_scraped": {}, "posts": 13905, "releases": 46115, "sources": 0, "tables": ["domains_config", "sitemap_cache", "posts", "sqlite_sequence", "releases", "download_sources", "post_sources"]}
+{"db": "vegamovies.db", "size_mb": 316.0, "sitemap_total": 14316, "scraped_ok": 13978, "pending": 15, "failed": 323, "other_scraped": {}, "posts": 13344, "releases": 131654, "sources": 0, "tables": ["domains_config", "sitemap_cache", "posts", "sqlite_sequence", "releases", "download_sources", "post_sources"]}
+
+=== 3. LOG FILES (/home/ubuntu/radd-stream-data/*.log) ===
+10xflix.log (14845 bytes): [270/17,506] releases=876 sources=2,945 failed=0 speed=0.73 t/s ETA: 06:31:17 ||   [280/17,506] releases=906 sources=3,038 failed=0 speed=0.73 t/s ETA: 06:35:00
+7starhd.log (221496 bytes): Pending / Review       : 0 pending, 7,938 review rows || ============================================================
+hdhub4u_crawler.log (127818 bytes): [✓] Crawler finished: 10,893 scraped, 3611 failed in 24826.3s
+hdtvb_scraper.log (40908 bytes): [✓] HDHub4u scraping finished: {'completed': 5692, 'releases': 17299, 'sources': 17820, 'failed': 0, 'start_time': 1792237966.8538055}
+katmoviehd.log (18083 bytes): [✓] Crawler finished: 293 scraped, 907 failed in 1255.5s
+multimovies_scraper.log (78743 bytes): [✓] MultiMovies full scrape finished: {'total_roots': 10488, 'completed_roots': 10488, 'pending_roots': 10488, 'releases': 532649, 'sources': 595218, 'failed': 61, 'start_time': 1792197064.6322615}
+rareanimes.log (22574 bytes): [✓] Crawler finished: 1,324 scraped, 1295 failed in 3060.0s
+rogmovies_scraper.log (57034 bytes): [✓] Rogmovies 100% complete: 7868 / 7868 titles scraped (0 pending, 28 empty/trailers audited).
+ssrmovies_scraper.log (255796 bytes): [✓] SSRMovies full ingestion complete: 27,000 / 27,000 titles processed (0 pending).
+vegamovies_scraper.log (115635 bytes): [✓] Vegamovies scraping finished: {'completed': 13575, 'releases': 137826, 'sources': 414863, 'failed': 15, 'start_time': 1792247192.7295892}
+
+---
+
