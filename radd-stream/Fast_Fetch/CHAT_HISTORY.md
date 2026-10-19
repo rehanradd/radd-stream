@@ -98716,3 +98716,56 @@ The above content shows the entire, complete file contents of the requested file
 
 ---
 
+## 🤖 AI (Antigravity)  `2026-10-19T16:09:19Z`
+
+Created At: 2026-10-19T16:09:19Z
+Completed At: 2026-10-19T16:09:19Z
+File Path: `file:///home/runner/workspace/check_10xflix.py`
+Total Lines: 214
+Total Bytes: 7807
+Showing lines 1 to 40
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+1: #!/usr/bin/env python3
+2: """
+3: check_10xflix.py — Live progress monitor for 10xflix scraper on Oracle VM.
+4: 
+5: Run from this shell:
+6:     python check_10xflix.py          # Show current progress snapshot
+7:     python check_10xflix.py --watch  # Live auto-refreshing monitor (every 3s)
+8:     python check_10xflix.py -n 25    # Show last 25 log lines
+9: """
+10: 
+11: from __future__ import annotations
+12: 
+13: import argparse
+14: import json
+15: import os
+16: import re
+17: import subprocess
+18: import sys
+19: import tempfile
+20: import time
+21: 
+22: ORACLE_IP = "92.4.95.252"
+23: ORACLE_USER = "ubuntu"
+24: 
+25: 
+26: def get_ssh_key_file() -> str:
+27:     raw = os.environ.get("ORACLE_SSH_KEY", "")
+28:     if not raw:
+29:         print("[!] Error: ORACLE_SSH_KEY is not set in environment.", file=sys.stderr)
+30:         sys.exit(1)
+31:     match = re.fullmatch(r"(-----BEGIN ([A-Z0-9 ]+)-----)(.*?)(-----END \2-----)", raw, re.S)
+32:     if not match:
+33:         print("[!] Error: ORACLE_SSH_KEY is not a valid PEM private key.", file=sys.stderr)
+34:         sys.exit(1)
+35:     header, _, body, footer = match.groups()
+36:     body = "".join(body.split())
+37:     with tempfile.NamedTemporaryFile("w", encoding="ascii", delete=False) as f:
+38:         key_path = f.name
+39:         f.write(header + "\n" + "\n".join(body[i:i + 64] for i in range(0, len(body), 64)) + "\n" + footer + "\n")
+40:     os.chmod(key_path, 0o600)
+The above content does NOT show the entire file contents. If you need to view any lines of the file which were not shown to complete your task, call this tool again to view those lines.
+
+---
+
