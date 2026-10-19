@@ -91047,3 +91047,89 @@ Output:
 
 ---
 
+## 🤖 AI (Antigravity)  `2026-10-19T13:17:41Z`
+
+Created At: 2026-10-19T13:17:41Z
+Completed At: 2026-10-19T13:17:42Z
+File Path: `file:///home/runner/workspace/radd-stream/Fast_Fetch/fast_fetch.py`
+Total Lines: 5434
+Total Bytes: 240825
+Showing lines 2358 to 2430
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+2358: def unwrap_mobilejsr(jsr_url: str) -> list[dict]:
+2359:     """
+2360:     Unwraps 7StarHD / 10xflix MobileJSR bridge URL.
+2361:     Uses session cookie and CSRF token negotiation to unlock all direct streaming mirrors.
+2362:     """
+2363:     results = []
+2364:     html = ""
+2365:     try:
+2366:         cj = http.cookiejar.CookieJar()
+2367:         opener = urllib.request.build_opener(
+2368:             urllib.request.HTTPCookieProcessor(cj),
+2369:             urllib.request.HTTPSHandler(context=SSL_CONTEXT),
+2370:         )
+2371:         headers = {
+2372:             "User-Agent": USER_AGENT,
+2373:             "Referer": jsr_url,
+2374:             "Origin": "https://mobilejsr.com",
+2375:         }
+2376:         # 1. GET initial landing page
+2377:         req = urllib.request.Request(jsr_url, headers=headers)
+2378:         res = opener.open(req, timeout=12)
+2379:         html = res.read().decode("utf-8", errors="ignore")
+2380: 
+2381:         # 2. Check for CSRF unlock form
+2382:         csrf_m = re.search(r'name=["\']_csrf["\']\s+value=["\']([^"\']+)["\']', html)
+2383:         if csrf_m:
+2384:             csrf_token = csrf_m.group(1)
+2385:             post_data = urllib.parse.urlencode({"_csrf": csrf_token}).encode("utf-8")
+2386:             req_post = urllib.request.Request(jsr_url, data=post_data, headers=headers)
+2387:             res_post = opener.open(req_post, timeout=12)
+2388:             html = res_post.read().decode("utf-8", errors="ignore")
+2389:     except Exception:
+2390:         # Fall back to simple HTTP GET if session negotiation fails
+2391:         code, fin_u, get_html = http_get(jsr_url, timeout=10)
+2392:         if code == 200 and get_html:
+2393:             html = get_html
+2394: 
+2395:     if not html:
+2396:         return [{
+2397:             "source_name": "MobileJSR Bridge",
+2398:             "service": "mobilejsr",
+2399:             "resource_id": jsr_url.rstrip("/").split("/")[-1],
+2400:             "source_url": jsr_url,
+2401:             "final_url": jsr_url,
+2402:             "is_temporary": 0,
+2403:         }]
+2404: 
+2405:     anchors = re.findall(r'<a[^>]+href=["\']([^"\']+)["\'][^>]*>(.*?)</a>', html, re.I | re.S)
+2406:     for href, text in anchors:
+2407:         clean_t = re.sub(r'<[^>]+>', '', text).strip()
+2408:         h_lower = href.lower()
+2409:         if any(bad in h_lower for bad in [
+2410:             "javascript", "#", "/register", "/login", "/money", "/faqs", "/contact",
+2411:             "/page/", "/save/", "is.gd", "antiblock.org", "favicon"
+2412:         ]):
+2413:             continue
+2414:         if "hubcloud" in h_lower:
+2415:             results.extend(unwrap_hubcloud_drive(href))
+2416:         elif "hubdrive" in h_lower:
+2417:             results.append({
+2418:                 "source_name": "⚡ HubDrive [Cloud]",
+2419:                 "service": "hubdrive",
+2420:                 "resource_id": href.rstrip("/").split("/")[-1],
+2421:                 "source_url": href,
+2422:                 "final_url": href,
+2423:                 "is_temporary": 0,
+2424:             })
+2425:         elif "filepress" in h_lower or "filebee" in h_lower:
+2426:             u_fp, fp_id, is_tmp = unwrap_filepress(href)
+2427:             results.append({
+2428:                 "source_name": "⚡ FilePress [Google Drive]",
+2429:                 "service": "filepress",
+2430:                 "resource_id": fp_id,
+The above content does NOT show the entire file contents. If you need to view any lines of the file which were not shown to complete your task, call this tool again to view those lines.
+
+---
+
