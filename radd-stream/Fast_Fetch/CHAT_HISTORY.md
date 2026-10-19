@@ -24111,3 +24111,47 @@ Please note that the above snippet only shows the MODIFIED lines from the last c
 
 ---
 
+## 🤖 AI (Antigravity)  `2026-10-19T17:46:17Z`
+
+Created At: 2026-10-19T17:46:17Z
+Completed At: 2026-10-19T17:46:17Z
+File Path: `file:///home/runner/workspace/radd-stream/docs/SESSION_CHECKPOINT.md`
+Total Lines: 90
+Total Bytes: 6429
+Showing lines 15 to 45
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+15: `--owner-authorized`. If confirmation is absent or unclear, stop.
+16: 
+17: - **Goal:** Monitor 10xflix crawler on Oracle VM, and engineer/ready fleet scrapers (FilmyZilla, World4uFree, Bolly4u) with hidden API speed boosts and strict DB isolation.
+18: - **Milestones & Breakthroughs:**
+19:   1. **10xflix Oracle Production Crawler Active**:
+20:      - Running in background (PID 146221/146852) with zero failures.
+21:      - 7,474+ catalog posts processed, 26,235 releases, 110,392+ direct sources extracted (5,153 FilePress Google Drive, 2,292 HubCloud 10G, 10,658 1fichier, 5,425 GoFile).
+22:   2. **FilmyZilla Scraper Engineered & Enhanced (`filmyzilla.db`)**:
+23:      - Direct Google CDN 302 redirect resolution (<50ms) bypassing Cloudflare Turnstile entirely.
+24:      - Enhanced metadata: extracts Movie Story as synopsis, release dates, genres, languages, and resolves multiple redundant server streams (`server_1`, `server_2`).
+25:      - 7/7 unit tests passing. Live verification confirmed. Kept on hold for deployment.
+26:   3. **World4uFree Scraper Engineered & Verified (`world4ufree.db`)**:
+27:      - WP REST API 100-bulk sync (24,732 catalog titles).
+28:      - Captures direct IMDb IDs (`tt\d+`) and high-res Blogger posters (`s1600`).
+29:      - Discovered hidden `/action` JSON API on `photolinx.beauty` with session cookies yielding **10Gbps Cloudflare Worker direct streaming video (`*.workers.dev`, HTTP 200 .mkv)**.
+30:      - Unlocks 5-7 redundant mirrors: Mediafire, GDFlix, GoFile, DriveHub, 1fichier, BuzzHeavier.
+31:      - 6/6 unit tests passing. Live verification extracted 96 sources and 9 Cloudflare Worker streams for 1 title.
+32:   4. **Bolly4u Scraper Engineered & Verified (`bolly4u.db`)**:
+33:      - WP REST API 100-bulk sync (36,709 catalog titles at 44.5 titles/sec).
+34:      - Discovered hidden JSON API `POST https://photojin.study/action` returning direct **Google CDN 10Gbps stream URLs** in < 1.0s.
+35:      - 7/7 unit tests passing. Live verification extracted 34 sources and 10 Google CDN streams.
+36:   5. **Master Test Suite & Isolation**:
+37:      - All 145/145 unit tests passing (100% OK) across 14 modules.
+38:      - Strict staging DB isolation maintained across all sites with zero merges into production.
+39: - **Next action:** Keep 10xflix running undisturbed on Oracle VM; deploy FilmyZilla, World4uFree, or Bolly4u upon crawler completion or owner go-ahead.
+40: 
+41: ## 2026-10-18 — RareAnimes Scraper Launch & Multi-Crawler Operations
+42: 
+43: ### 2026-10-16 — Android App MVP & CI pipeline implementation
+44: - **Goal:** Implement full Android app flow (navigation, details, player, local favorites, settings) and establish root GitHub Actions CI.
+45: - **Completed:**
+The above content does NOT show the entire file contents. If you need to view any lines of the file which were not shown to complete your task, call this tool again to view those lines.
+
+---
+
