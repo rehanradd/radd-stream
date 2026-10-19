@@ -87913,3 +87913,81 @@ The above content does NOT show the entire file contents. If you need to view an
 
 ---
 
+## 🤖 AI (Antigravity)  `2026-10-19T12:21:18Z`
+
+Created At: 2026-10-19T12:21:18Z
+Completed At: 2026-10-19T12:21:19Z
+The following changes were made by the replace_file_content tool to: /home/runner/workspace/radd-stream/Fast_Fetch/CONTINUITY.md. If relevant, proactively run terminal commands to execute this code for the USER. Don't ask for permission.
+[diff_block_start]
+@@ -389,4 +389,29 @@
+ - **Staging Database Isolation**:
+   - Strict isolation maintained across all staging databases (`katmoviehd.db`, `rareanimes.db`, `hdhub4u.db`, `7starhd.db`, `vegamovies.db`). Zero merges performed into production.
+ 
++### Session 24 — Antigravity — 2026-10-19
++**10xflix Dedicated Scraper Engineering, Unit Testing, and Full Production Deployment on Oracle VM:**
++- **Target Selection & Architecture**:
++  - Selected 10xflix (`https://10xflix.bond/`) as our next high-yield target with an open WP REST API and MobileJSR mirror backend.
++  - Implemented `radd-stream/Fast_Fetch/import_10xflix.py` featuring:
++    * Standard WP REST API pagination via `/wp-json/wp/v2/posts?_embed=1` utilizing `x-wp-total` header extraction for 17,606 titles.
++    * Robust title cleaning, dual audio detection, season/episode regex extraction.
++    * Multi-tier MobileJSR unwrapping resolving direct streams into HubCloud 10G, FilePress GDrive, 1fichier, and GoFile mirrors.
++    * Isolated staging database management (`10xflix.db`).
++- **Comprehensive Unit Testing**:
++  - Implemented `radd-stream/Fast_Fetch/test_10xflix_import.py` with 6 dedicated unit test cases:
++    * Title and release parsing accuracy.
++    * Database schema initialization and atomic upserts.
++    * MobileJSR source resolution fallbacks.
++    * Master unit test suite now at **125/125 passing (100% OK)**.
++- **Oracle VM Initial Batch & Full Catalog Deployment**:
++  - Verified initial 100-title batch run with **100% success rate (0 failures)**: 95 posts, 366 releases, 1,526 direct sources.
++  - Deployed full production pipeline on Oracle VM (PID 146221) running `--sync-api` for all 17,606 catalog titles followed immediately by 5-worker concurrent crawler (`--workers 5 --delay 0.3`).
++  - Created live monitoring utility `check_10xflix.py`.
++- **KatMovieHD Root Cause Diagnosis**:
++  - Identified that KatMovieHD failures were caused by concurrency load on HubCloud drive unwrapping during series scraping rather than missing post content. Verified standalone single-item extraction and database storage succeed cleanly.
++- **Staging Database Isolation**:
++  - Strict DAO isolation preserved: `10xflix.db` is an independent staging database. Zero merges executed into production.
++
++
+ 
+[diff_block_end]
+
+Please note that the above snippet only shows the MODIFIED lines from the last change. It shows up to 3 lines of unchanged lines before and after the modified lines. The actual file contents may have many more lines not shown.
+
+---
+
+## 🤖 AI (Antigravity)  `2026-10-19T12:21:22Z`
+
+Created At: 2026-10-19T12:21:22Z
+Completed At: 2026-10-19T12:21:22Z
+File Path: `file:///home/runner/workspace/ANTIGRAVITY_HANDOFF.md`
+Total Lines: 23
+Total Bytes: 1967
+Showing lines 1 to 23
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+1: # Antigravity project handoff
+2: 
+3: Use this file for a short, durable summary when you want to continue work in a
+4: new conversation or after signing in again. It supplements Antigravity's
+5: `/resume` history; it is not a full transcript.
+6: 
+7: - **Current goal:** Monitor active background scrapers (10xflix & KatMovieHD) on Oracle VM, uphold staging database isolation, and track crawler progress.
+8: - **Current state:** Active Oracle crawlers running concurrently in background:
+9:   1. 10xflix (PID 142703, syncing all 17,605 titles via WP REST API into 10xflix.db, unwrapping MobileJSR to HubCloud 10G & FilePress Google Drive).
+10:   2. KatMovieHD (PID 139975, syncing SvelteKit catalog into katmoviehd.db, unwrapping Cloudflare R2 and PixelDrain CDN).
+11:   - Previous crawler milestones:
+12:     * Vegamovies: Complete run finished (13,978 / 14,316 scraped, 131,654 releases, 397,888 direct sources, 85,138 Google CDN direct streams).
+13:     * 7StarHD: Phase completed (15,508 / 23,446 scraped, 33,197 releases, 98,199 direct sources).
+14:     * HDHub4u: Phase completed (10,893 scraped, 47,361 releases, 103,964 direct sources).
+15:     * RareAnimes: Completed initial pass (1,329 scraped, 17,419 releases, 53,767 sources, 20,283 PixelDrain direct, 4,219 Cloudflare R2).
+16:   - Finished 100% staging catalogs: SSRMovies (27,000 / 27,000), Rogmovies (7,868 / 7,868), HDTVB (5,692 / 5,692), and MultiMovies (10,488 / 10,488).
+17:   - Full test suite passing (125/125 unit tests). Strict staging DB isolation maintained with zero merges.
+18: - **Next step:** Monitor 10xflix (`python3 check_10xflix.py`) and KatMovieHD (`python3 check_katmoviehd.py`).
+19: 
+20: The Antigravity CLI's local recovery files preserve only selected settings and the last-conversation index, not full transcripts or login credentials. Replit project files and this handoff preserve project context, but cannot restore lost Antigravity account history or authentication.
+21: 
+22: Do not put passwords, API keys, login tokens, or other credentials here.
+23: 
+The above content shows the entire, complete file contents of the requested file.
+
+---
+
