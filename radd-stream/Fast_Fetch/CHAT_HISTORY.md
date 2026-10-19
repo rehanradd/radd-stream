@@ -89987,3 +89987,28 @@ Output:
 
 ---
 
+## 🤖 AI (Antigravity)  `2026-10-19T12:59:58Z`
+
+Created At: 2026-10-19T12:59:58Z
+Completed At: 2026-10-19T12:59:59Z
+
+The command exited with code 0.
+Output:
+
+=================================================================
+ 🎬 FILMYZILLA STAGING DATABASE METRICS
+=================================================================
+ Database Path         : /tmp/test_filmyzilla_live.db
+ Total Ingested URLs   : 5
+ Successfully Scraped  : 3
+ Pending Titles        : 2
+ Failed Titles         : 0
+-----------------------------------------------------------------
+ Staged Catalog Posts  : 3
+ Extracted Releases    : 11
+ Direct Sources        : 21
+ ⚡ Google CDN Streams : 10
+=================================================================
+
+---
+
