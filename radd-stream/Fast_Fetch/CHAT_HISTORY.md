@@ -97602,3 +97602,60 @@ now which other site have left which we have not scrape yet lets also ready ther
 
 ---
 
+## 🤖 AI (Antigravity)  `2026-10-19T16:05:27Z`
+
+Created At: 2026-10-19T16:05:27Z
+Tool is running as a background task with task id: 8f4596c5-1aa0-4d2d-9ba1-c55169da8abc/task-380
+Task Description: python3 -c "
+import urllib.request, ssl, re, json
+
+ctx = ssl.create_default_context()
+ctx.check_hostname = False
+ctx.verify_mode = ssl.CERT_NONE
+
+headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+
+candidates = [
+    ('bollyflix', 'https://bollyflix.nz'),
+    ('9xmovies', 'https://9kmoviies.xyz'),
+    ('moviesmod_net', 'https://moviesmod.net'),
+    ('moviesmod_wiki', 'https://moviesmod.wiki'),
+    ('moviesmod_day', 'https://moviesmod.day'),
+    ('mkvcinemas', 'https://mkvcinemas.lat'),
+    ('extramovies', 'https://extramovies.ph'),
+    ('desiremovies', 'https://desiremovies.run'),
+    ('topmovies', 'https://topmovies.tv'),
+    ('cinevood', 'https://cinevood.run'),
+]
+
+for name, base_url in candidates:
+    req = urllib.request.Request(base_url, headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=5, context=ctx) as r:
+            fin = r.geturl()
+            html = r.read().decode('utf-8', errors='ignore')
+            print(f'[✓] {name:15}: {r.status} -> {fin} (len: {len(html)})')
+            # Check sitemap
+            sm_req = urllib.request.Request(f'{fin.rstrip(\"/\")}/sitemap.xml', headers=headers)
+            try:
+                with urllib.request.urlopen(sm_req, timeout=3, context=ctx) as sm_r:
+                    print(f'     Sitemap: HTTP {sm_r.status}')
+            except Exception:
+                pass
+            # Check WP REST API
+            wp_req = urllib.request.Request(f'{fin.rstrip(\"/\")}/wp-json/wp/v2/posts?per_page=1', headers=headers)
+            try:
+                with urllib.request.urlopen(wp_req, timeout=3, context=ctx) as wp_r:
+                    total = wp_r.headers.get('x-wp-total', '?')
+                    print(f'     WP API: HTTP {wp_r.status} (total: {total})')
+            except Exception as e:
+                pass
+    except Exception as e:
+        print(f'[-] {name:15}: Error: {e}')
+"
+Task logs are available at: file:///home/runner/.gemini/antigravity-cli/brain/8f4596c5-1aa0-4d2d-9ba1-c55169da8abc/.system_generated/tasks/task-380.log
+YOU MUST TAKE ONE OF THE FOLLOWING TWO ACTIONS: A) either proceed to other relevant work (if any) or, B) simply update the user with a short message (that you have launched the command and will wait for it to finish) and end the turn.
+ DO NOTHING ELSE.
+
+---
+
