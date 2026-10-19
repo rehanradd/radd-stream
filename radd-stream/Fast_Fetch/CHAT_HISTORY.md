@@ -84256,3 +84256,72 @@ Saved: True
 
 ---
 
+## 🤖 AI (Antigravity)  `2026-10-19T11:29:21Z`
+
+Created At: 2026-10-19T11:29:21Z
+Completed At: 2026-10-19T11:29:22Z
+File Path: `file:///home/runner/workspace/radd-stream/Fast_Fetch/import_katmoviehd.py`
+Total Lines: 980
+Total Bytes: 37600
+Showing lines 730 to 785
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+730: 
+731:         query_url = f"{DEFAULT_BASE_URL}/__data.json?page={page}"
+732:         t0 = time.time()
+733:         code, _, resp_text = client.get_text(query_url, timeout=15)
+734:         dt = time.time() - t0
+735: 
+736:         if code != 200 or not resp_text:
+737:             print(f"[!] Page {page} returned status {code}. Stopping sync.", flush=True)
+738:             break
+739: 
+740:         items = parse_sveltekit_chunk(resp_text)
+741:         if not items:
+742:             empty_pages_streak += 1
+743:             if empty_pages_streak >= 3:
+744:                 print(f"[*] 3 consecutive empty pages reached at page {page}. Catalog sync complete.", flush=True)
+745:                 break
+746:             page += 1
+747:             continue
+748: 
+749:         empty_pages_streak = 0
+750:         records = []
+751:         for it in items:
+752:             slug = it.get("slug")
+753:             if not slug:
+754:                 continue
+755:             permalink = f"{DEFAULT_BASE_URL}/{slug}"
+756:             lastmod = it.get("created")
+757:             raw_json_str = json.dumps(it)
+758:             records.append((permalink, lastmod, slug, 0, "katmoviehd", raw_json_str))
+759: 
+760:         if records:
+761:             with sqlite3.connect(str(db_path)) as conn:
+762:                 conn.executemany(
+763:                     """
+764:                     INSERT INTO sitemap_cache (loc, lastmod, slug, scraped, site, raw_json)
+765:                     VALUES (?, ?, ?, ?, ?, ?)
+766:                     ON CONFLICT(loc) DO UPDATE SET
+767:                         lastmod = excluded.lastmod,
+768:                         raw_json = excluded.raw_json;
+769:                     """,
+770:                     records,
+771:                 )
+772:                 conn.commit()
+773:             total_synced += len(records)
+774: 
+775:         print(
+776:             f"  [Page {page:4d}] Synced {len(records):2d} titles in {dt:.2f}s "
+777:             f"({total_synced:,} total catalog items)",
+778:             flush=True,
+779:         )
+780:         page += 1
+781: 
+782:     print(f"\n[✓] KatMovieHD catalog sync finished: {total_synced:,} titles stored in {db_path.name}\n", flush=True)
+783:     return total_synced
+784: 
+785: 
+The above content does NOT show the entire file contents. If you need to view any lines of the file which were not shown to complete your task, call this tool again to view those lines.
+
+---
+
