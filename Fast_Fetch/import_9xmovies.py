@@ -238,6 +238,25 @@ class NineXMoviesClient:
         return sources
 
 
+# --- Adult Content Filter ---
+ADULT_KEYWORDS = {
+    "18+", "erotic", "hotshots", "ullu", "kooku", "primeplay", "rabbit",
+    "flizmovies", "hunters", "boommovies", "neonx", "besharams", "gupchup",
+    "sex", "sexy", "porn", "adult", "unrated", "sensual", "lust"
+}
+
+
+def is_adult_content(text: str) -> bool:
+    """Strictly checks if title, slug, or tags indicate adult / 18+ content."""
+    if not text:
+        return False
+    t = text.lower()
+    for kw in ADULT_KEYWORDS:
+        if re.search(rf"\b{re.escape(kw)}\b", t):
+            return True
+    return False
+
+
 # --- Parsing Helpers ---
 def parse_size_string(size_str: str) -> int | None:
     """Parses human readable size like '2.6GB' or '650MB' into bytes."""
@@ -361,13 +380,15 @@ def parse_9xmovies_content(
 
     seen_bridges = set()
     for i, b in enumerate(blocks):
-        if "linksddr.com/view/" in b:
+        if "linksddr." in b and "/view/" in b:
             bridge_m = re.search(
-                r'href=[\'"](https?://linksddr\.com/view/[A-Za-z0-9_-]+)[\'"]', b
+                r'href=[\'"](https?://linksddr\.[a-z]+/view/[A-Za-z0-9_-]+)[\'"]', b
             )
             if not bridge_m:
                 continue
-            bridge_url = bridge_m.group(1)
+            raw_bridge_url = bridge_m.group(1)
+            # Canonicalize to linksddr.com
+            bridge_url = re.sub(r'https?://linksddr\.[a-z]+/', 'https://linksddr.com/', raw_bridge_url)
             if bridge_url in seen_bridges:
                 continue
             seen_bridges.add(bridge_url)
@@ -614,6 +635,9 @@ def scrape_post_item(
 
         if not raw_title or not content_html:
             return None
+
+        if is_adult_content(raw_title) or is_adult_content(slug):
+            return {"loc": loc, "skipped": True}
 
         # Clean title & detect year
         clean_title, year, season_num, media_type, canonical_key = clean_9xmovies_title(
