@@ -4,18 +4,17 @@ Use this file for a short, durable summary when you want to continue work in a
 new conversation or after signing in again. It supplements Antigravity's
 `/resume` history; it is not a full transcript.
 
-- **Current goal:** Monitor 4 concurrent background crawlers on Oracle VM (10xflix, World4uFree, Bolly4u, KatMovieHD) and maintain strict staging database isolation.
-- **Current state:** Active Oracle VM crawlers & deployments:
-  1. 10xflix: Actively crawling (PID 146221/146852, 12,170+ catalog posts, 43,637+ releases, 151,865+ direct sources extracted, 0 failures).
-  2. World4uFree: Actively crawling (PID 152560/153724, 24,240 catalog titles synced, 5,149+ releases, 49,367+ direct sources, 1,138 direct 10Gbps Cloudflare Worker .mkv streams).
-  3. Bolly4u: Actively running (PID 156129/156130, syncing 36.7k catalog titles via WP REST API into bolly4u.db, then launching 6-worker crawler with photojin Google CDN 10Gbps direct streams).
-  4. KatMovieHD: Actively running (PID 156329/156330, unconstrained full catalog sync of 5,000+ pages / 60k titles via SvelteKit API into katmoviehd.db, followed by 5-worker crawler with DandnDn API & Cloudflare R2 / PixelDrain CDN).
-  5. FilmyZilla: Completed (4,149 scraped, 13,114 releases, 13,516 direct sources, 402 Google CDN 302 streams).
-  - Finished 100% staging catalogs: SSRMovies (27,000 / 27,000), Rogmovies (7,868 / 7,868), HDTVB (5,692 / 5,692), Vegamovies (13,978 / 14,316), MultiMovies (10,488 / 10,488), 7StarHD (23,446 / 23,446), RareAnimes (2,624 / 2,624), HDHub4u (14,504 / 14,504).
-  - Master unit test suite: 145/145 unit tests passing (100% OK) across 14 modules.
-  - Strict staging DB isolation maintained across all sites (`10xflix.db`, `world4ufree.db`, `bolly4u.db`, `katmoviehd.db`, `filmyzilla.db`). Zero merges into production fast_fetch.db.
-- **Next step:** Monitor all 4 live crawlers (`check_10xflix.py`, `check_world4ufree.py`, `check_bolly4u.py`, `check_katmoviehd.py`) and keep Oracle VM running cleanly.
-
-The Antigravity CLI's local recovery files preserve only selected settings and the last-conversation index, not full transcripts or login credentials. Replit project files and this handoff preserve project context, but cannot restore lost Antigravity account history or authentication.
+- **Current goal:** Monitor active background crawlers on Oracle VM (Bolly4u, World4uFree, 9xmovies), run the Master-Disciple dual-tier local AI workflow (Ollama Qwen 2.5 Coder 1.5B via `/usr/local/bin/disciple`), and maintain persistent real-time chat sync.
+- **Current state:** Active Oracle VM crawlers & tools:
+  1. 10xflix: Completed 100% (13,738 posts, 76,716 releases, 227,000 direct sources in `/home/ubuntu/radd-stream-data/10xflix.db`).
+  2. Bolly4u: Actively crawling (PID 161377, 6 workers, 0.2s delay, 20,880+ titles processed, 30,000+ releases, Google CDN 10Gbps direct streams).
+  3. World4uFree: Repaired & actively re-crawling (PID 249172, 6 workers, 0.2s delay, multi-domain parser for `fastilinks.beauty`, `wlinksi.site`, `cloud.mail.ru`, and fallback gateways; 16,758 posts re-queued).
+  4. 9xmovies: CONQUERED & actively crawling (PID 250953, 5 workers, 0.2s delay, 20,347 titles synced, session-cookie CSRF unwrapping for `linksddr.com` yielding direct 10Gbps Google CDN, HubCloud, HubDrive, FilePress, GoFile, StreamTape, 1Fichier, MultiUp, MegaUp; dedicated DB `/home/ubuntu/radd-stream-data/9xmovies.db`).
+  - Finished 100% staging catalogs: 10xflix (13.7k), SSRMovies (27k), Rogmovies (7.8k), HDTVB (5.6k), Vegamovies (14k), MultiMovies (10.4k), 7StarHD (23.4k), RareAnimes (2.6k), HDHub4u (14.5k), FilmyZilla (4.1k).
+  - Local AI Disciple: `disciple` CLI tool (`/usr/local/bin/disciple` -> `Fast_Fetch/disciple.py`) wired to local Ollama (`qwen2.5-coder:1.5b`) on CPU (0 cloud tokens) for boilerplate code, regex, and unit test generation.
+  - Real-Time Chat Sync: `auto_chat_sync.py` running in background daemon (PID 210724), continuously saving message turns into `Fast_Fetch/CHAT_HISTORY.md`.
+  - Master unit test suite: 47/47 offline unit tests passing (`test_database.py`, `test_vidout.py`, `test_9xmovies.py`).
+  - Strict staging DB isolation maintained across all sites. Zero merges into production `fast_fetch.db`.
+- **Next step:** Monitor active crawlers, resolve next batch of sites, and review Qwen-generated modules.
 
 Do not put passwords, API keys, login tokens, or other credentials here.

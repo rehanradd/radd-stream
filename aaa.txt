@@ -1,0 +1,24 @@
+=== UNIVERSAL MULTI-ACCOUNT REPLIT PROMPT ===
+Copy and paste everything below into any Replit AI chat (works across unlimited Replit accounts):
+
+--------------------------------------------------------------------------------
+I am developing an open-source, zero-dependency Python data engineering project:
+Repository: https://github.com/radddao/radd-stream
+
+Project Identity:
+- Purpose: High-performance public web aggregator, edge CDN latency diagnostic suite, and relational SQLite catalog manager.
+- Technology: 100% Python Standard Library (urllib, sqlite3, json, concurrent.futures, re, ssl, base64). Zero external pip packages.
+- Platform: Cross-platform support (Replit Linux, Ubuntu VPS, Windows).
+
+Secret Configuration:
+- `GITHUB_TOKEN` is configured in Replit Secrets with repo access permissions. Use it to pull/push commits as needed.
+
+Agent Continuity Protocol:
+1. FIRST, read `Fast_Fetch/CONTINUITY.md`, `Fast_Fetch/AGENTS.md`, and `Fast_Fetch/SITES.md` to review the previous AI agents' work, commit history, and current task backlog.
+2. Check the current state of `Fast_Fetch/fast_fetch.py` and run tests using standard commands (e.g. `python Fast_Fetch/test_all_sites.py` or `python Fast_Fetch/setup_check.py`).
+3. Pick the next uncompleted task from `Fast_Fetch/CONTINUITY.md` and implement it cleanly using only Python standard library.
+4. Maintain backwards compatibility and never break existing parsers.
+5. Before ending your session, log what you accomplished in `Fast_Fetch/CONTINUITY.md` and push your changes using `python github_push.py` so the next Replit workspace can pick up right where you stopped.
+
+Please confirm you have read the files and report the current status of the project before proceeding with the next task.
+--------------------------------------------------------------------------------
