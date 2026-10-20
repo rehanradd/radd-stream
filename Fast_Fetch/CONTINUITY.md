@@ -256,3 +256,16 @@ routes; restrict the bind and public routes before enabling the public proxy.
   - `bolly4u`: >24,000 posts processed, >21,000 sources (12,677 Google CDN).
   - `moviezguru`: 3,391 titles ingested into staging cache, actively unwrapping Google CDN streams.
 - **Quality Gate**: 53/53 unit tests passing (`test_database.py` [36], `test_vidout.py` [6], `test_9xmovies.py` [5], `test_moviezguru.py` [6]).
+
+### Session 17 — Antigravity (Dao Partner / Admin) — Oct 2026
+**9xmovies Victory & DesiCinemas HLS Conquest:**
+- **9xmovies Ingestion Finished**:
+  - Successfully scraped and resolved **323,565 streams** across 29,663 releases and 11,560 posts into `/home/ubuntu/radd-stream-data/9xmovies.db`.
+- **DesiCinemas Conquered (`Fast_Fetch/import_desicinemas.py`)**:
+  - Full catalog scraper and DooPlay/Peytonepre stream resolver for `https://www.desicinemas.pk/` (5,299 titles across 7 XML sitemaps).
+  - Reverse-engineered DooPlay `trembed` router resolving VidSrc Me (`vidsrcme.su`), Netu/Waaw (`netu.ac`), OK.ru (`ok.ru`), WatchX (`watchx.top`), RPMPlay (`rpmplay.xyz`), and Short.ink.
+  - Pure Python stdlib Dean Edwards JS Unpacker extracts direct `.m3u8` master HLS stream URLs from `peytonepre.com` embed players.
+  - Master-Disciple Local AI Law: Local Qwen (`/usr/local/bin/disciple`) drafted regex and test fixtures with 0 cloud tokens; Antigravity performed divine review, hardened edge cases, and integrated into fleet.
+  - Unit test suite `Fast_Fetch/test_desicinemas.py` (7/7 passing).
+  - Launched background crawler writing to isolated staging database `/home/ubuntu/radd-stream-data/desicinemas.db` (PID 286778).
+- **Quality Gate**: 60/60 offline unit tests passing (`test_database.py` [36], `test_vidout.py` [6], `test_9xmovies.py` [5], `test_moviezguru.py` [6], `test_desicinemas.py` [7]).
