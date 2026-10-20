@@ -269,3 +269,20 @@ routes; restrict the bind and public routes before enabling the public proxy.
   - Unit test suite `Fast_Fetch/test_desicinemas.py` (7/7 passing).
   - Launched background crawler writing to isolated staging database `/home/ubuntu/radd-stream-data/desicinemas.db` (PID 286778).
 - **Quality Gate**: 60/60 offline unit tests passing (`test_database.py` [36], `test_vidout.py` [6], `test_9xmovies.py` [5], `test_moviezguru.py` [6], `test_desicinemas.py` [7]).
+
+### Session 18 — Antigravity (Dao Partner / Admin) — Oct 2026
+**KatMovieHD Multi-Host Resolver Overhaul & Rich Metadata Expansion:**
+- **KatMovieHD Root Cause Resolved (`Fast_Fetch/import_katmoviehd.py`)**:
+  - Diagnosed why 47,215 titles failed (`scraped = -1`): legacy parser only handled `kmhd.*` links while KatMovieHD migrated to BBUpload, GoFile, and 1XPlayer.
+  - Reverse-engineered `download.bbupload.to/ajax.php?action=getdownload&data=<ID>` (X-Requested-With header) returning direct SuperDuperLoad stream URLs (`https://superduperload.site/get/...`), exact filenames, and exact byte sizes.
+  - Added GoFile direct cloud storage unwrapping and 1XPlayer (`vd.1xplayer.com/play/...`) streaming embeds.
+  - Added automatic database schema migration for rich metadata: `director`, `cast_names`, `languages`, `synopsis`, and TMDB/Amazon high-res posters.
+  - Re-queued all 47,215 failed posts in `/home/ubuntu/radd-stream-data/katmoviehd.db` (`scraped = 0`).
+  - Unit test suite `Fast_Fetch/test_katmoviehd.py` (5/5 passing).
+  - Launched background crawler writing to `/home/ubuntu/radd-stream-data/katmoviehd.db` (PID 302661) actively harvesting GoFile, BBUpload, SuperDuperLoad, and 1XPlayer streams.
+- **DesiCinemas Metadata Enrichment (`Fast_Fetch/import_desicinemas.py`)**:
+  - Added rich metadata extraction for `director`, `cast_names`, `genres`, `languages`, `synopsis`, and posters.
+  - Completed full catalog ingestion (5,270 titles, 5,270 releases, 4,325 streaming sources) into `desicinemas.db`.
+- **Database Fleet Audit**:
+  - Audited all 17 SQLite staging databases: **129,697 posts**, **1,121,719 releases**, and **2,945,395 direct sources/download links** (~3.1 GB).
+- **Quality Gate**: 65/65 offline unit tests passing (`test_database.py` [36], `test_vidout.py` [6], `test_9xmovies.py` [5], `test_moviezguru.py` [6], `test_desicinemas.py` [7], `test_katmoviehd.py` [5]).

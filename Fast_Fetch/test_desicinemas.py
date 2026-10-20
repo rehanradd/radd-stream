@@ -74,18 +74,24 @@ class TestDesiCinemasImporter(unittest.TestCase):
         sample_html = """
         <header><h1 class="Title">Auron Mein Kahan Dum Tha (HD)</h1></header>
         <div class="Description"><p>Two lovers are separated by fate.</p></div>
+        <p class="Director"><span>Director:</span> <tt class="tt-at"><a href="https://example.com/dir">Neeraj Pandey</a></tt></p>
+        <p class="Cast"><span>Cast:</span> <a href="https://example.com/c1">Ajay Devgn</a>, <a href="https://example.com/c2">Tabu</a></p>
+        <p class="Genre"><span>Genre:</span> <a href="https://example.com/g1">Drama</a>, <a href="https://example.com/g2">Romance</a></p>
         <img data-src="//image.tmdb.org/t/p/original/jlnnwItfF1DsItXvAFJGRF6d985.jpg" />
         <img data-src="//image.tmdb.org/t/p/w1280/backdrop123.jpg" />
         <a href="https://www.imdb.com/title/tt1234567/">IMDb</a>
         <iframe src="https://www.desicinemas.pk/?trembed=0&#038;trid=1387&trtype=1"></iframe>
         """
-        imdb_id, tmdb_id, poster, backdrop, synopsis, trembed_urls, direct_iframes = parse_desicinemas_content(
+        imdb_id, tmdb_id, poster, backdrop, synopsis, director, cast_names, genres, trembed_urls, direct_iframes = parse_desicinemas_content(
             sample_html, "https://www.desicinemas.pk/movies/auron-mein-kahan-dum-tha/"
         )
         self.assertEqual(imdb_id, "tt1234567")
         self.assertIn("jlnnwItfF1DsItXvAFJGRF6d985.jpg", poster)
         self.assertIn("backdrop123.jpg", backdrop)
         self.assertEqual(synopsis, "Two lovers are separated by fate.")
+        self.assertEqual(director, "Neeraj Pandey")
+        self.assertIn("Ajay Devgn", cast_names)
+        self.assertIn("Drama", genres)
         self.assertEqual(len(trembed_urls), 1)
         self.assertIn("trembed=0", trembed_urls[0])
         self.assertEqual(len(direct_iframes), 0)

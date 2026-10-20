@@ -409,6 +409,24 @@ def parse_desicinemas_content(content_html: str, url: str) -> tuple[str | None, 
     if desc_m:
         synopsis = re.sub(r"<[^>]*>", "", desc_m.group(1)).strip()
 
+    # Director
+    director = None
+    dir_m = re.search(r'<p class="Director"><span>Director:</span>\s*(.*?)</p>', content_html, re.DOTALL | re.I)
+    if dir_m:
+        director = re.sub(r"<[^>]*>", "", dir_m.group(1)).strip()
+
+    # Cast
+    cast_names = None
+    cast_m = re.search(r'<p class="Cast"><span>Cast:</span>\s*(.*?)</p>', content_html, re.DOTALL | re.I)
+    if cast_m:
+        cast_names = re.sub(r"<[^>]*>", "", cast_m.group(1)).strip()
+
+    # Genres
+    genres = None
+    genre_m = re.search(r'<p class="Genre"><span>Genre:</span>\s*(.*?)</p>', content_html, re.DOTALL | re.I)
+    if genre_m:
+        genres = re.sub(r"<[^>]*>", "", genre_m.group(1)).strip()
+
     # Find DooPlay trembed iframes
     all_iframes = re.findall(r'<iframe[^>]+src=["\']([^"\']+)["\']', content_html, re.IGNORECASE)
     trembed_urls = []
@@ -421,7 +439,7 @@ def parse_desicinemas_content(content_html: str, url: str) -> tuple[str | None, 
         elif not clean_ifr.startswith("javascript:") and not clean_ifr.startswith("about:"):
             direct_iframes.append(clean_ifr)
 
-    return imdb_id, tmdb_id, poster_url, backdrop_url, synopsis, trembed_urls, direct_iframes
+    return imdb_id, tmdb_id, poster_url, backdrop_url, synopsis, director, cast_names, genres, trembed_urls, direct_iframes
 
 
 # --- Database Layer ---
@@ -458,12 +476,24 @@ def init_staging_db(db_path: Path):
                 imdb_id TEXT,
                 tmdb_id TEXT,
                 synopsis TEXT,
+                genres TEXT,
+                director TEXT,
+                cast_names TEXT,
+                languages TEXT,
                 is_18_plus INTEGER DEFAULT 0,
                 scraped_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 raw_meta TEXT
             );
             """
         )
+        # Migration check for existing databases
+        existing_cols = [c[1] for c in conn.execute("PRAGMA table_info(posts);").fetchall()]
+        for col in ["director", "cast_names", "genres", "languages"]:
+            if col not in existing_cols:
+                try:
+                    conn.execute(f"ALTER TABLE posts ADD COLUMN {col} TEXT;")
+                except Exception:
+                    pass
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS releases (
@@ -524,8 +554,8 @@ def save_post_to_staging(db_path: Path, item_res: dict):
         p = item_res["post"]
         cur.execute(
             """
-            INSERT INTO posts (canonical_key, title, clean_title, year, media_type, poster_url, backdrop_url, imdb_id, tmdb_id, synopsis, is_18_plus, raw_meta)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
+            INSERT INTO posts (canonical_key, title, clean_title, year, media_type, poster_url, backdrop_url, imdb_id, tmdb_id, synopsis, genres, director, cast_names, languages, is_18_plus, raw_meta)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
             ON CONFLICT(canonical_key) DO UPDATE SET
                 title = excluded.title,
                 clean_title = excluded.clean_title,
@@ -536,6 +566,10 @@ def save_post_to_staging(db_path: Path, item_res: dict):
                 imdb_id = COALESCE(excluded.imdb_id, posts.imdb_id),
                 tmdb_id = COALESCE(excluded.tmdb_id, posts.tmdb_id),
                 synopsis = COALESCE(excluded.synopsis, posts.synopsis),
+                genres = COALESCE(excluded.genres, posts.genres),
+                director = COALESCE(excluded.director, posts.director),
+                cast_names = COALESCE(excluded.cast_names, posts.cast_names),
+                languages = COALESCE(excluded.languages, posts.languages),
                 scraped_at = CURRENT_TIMESTAMP;
             """,
             (
@@ -549,6 +583,10 @@ def save_post_to_staging(db_path: Path, item_res: dict):
                 p.get("imdb_id"),
                 p.get("tmdb_id"),
                 p.get("synopsis"),
+                p.get("genres"),
+                p.get("director"),
+                p.get("cast_names"),
+                p.get("languages"),
                 json.dumps({"loc": loc}),
             ),
         )
@@ -621,7 +659,7 @@ def scrape_post_item(item: tuple, client: DesiCinemasClient, unwrap_bridges: boo
         clean_title, year, season_num, episode_num, quality, languages, media_type, canonical_key = clean_desicinemas_title(raw_title, loc)
 
         # Parse content
-        imdb_id, tmdb_id, poster_url, backdrop_url, synopsis, trembed_urls, direct_iframes = parse_desicinemas_content(html_text, loc)
+        imdb_id, tmdb_id, poster_url, backdrop_url, synopsis, director, cast_names, genres, trembed_urls, direct_iframes = parse_desicinemas_content(html_text, loc)
 
         # Resolve streams
         sources = []
@@ -673,6 +711,10 @@ def scrape_post_item(item: tuple, client: DesiCinemasClient, unwrap_bridges: boo
                 "imdb_id": imdb_id,
                 "tmdb_id": tmdb_id,
                 "synopsis": synopsis,
+                "director": director,
+                "cast_names": cast_names,
+                "genres": genres,
+                "languages": languages,
             },
             "releases": releases,
         }

@@ -178,6 +178,9 @@ def init_staging_db(db_path: Path):
                 backdrop_url TEXT,
                 synopsis TEXT,
                 genres TEXT,
+                cast_names TEXT,
+                director TEXT,
+                languages TEXT,
                 rating REAL,
                 site TEXT DEFAULT 'katmoviehd',
                 post_url TEXT,
@@ -216,6 +219,14 @@ def init_staging_db(db_path: Path):
             );
             CREATE INDEX IF NOT EXISTS idx_sources_release_id ON sources(release_id);
         """)
+        # Schema migration check
+        existing_cols = [c[1] for c in conn.execute("PRAGMA table_info(posts);").fetchall()]
+        for col in ["cast_names", "director", "languages"]:
+            if col not in existing_cols:
+                try:
+                    conn.execute(f"ALTER TABLE posts ADD COLUMN {col} TEXT;")
+                except Exception:
+                    pass
         conn.commit()
 
 
@@ -295,7 +306,7 @@ def clean_katmoviehd_title(raw_title: str) -> tuple[str, int | None, int | None,
     noise_patterns = [
         r"\b(?:Hindi|English|Tamil|Telugu|Korean|Japanese|Chinese|Dual Audio|Multi Audio)\b",
         r"\b(?:Dubbed|Dub|ORG|DD\s*5\.1|DD\s*2\.0|Atmos|ESub|Full Movie|Series|Download)\b",
-        r"\b(?:4K|2160p|1080p|720p|480p|360p|UHD|SDR|HDR|HDR10\+?|HEVC|10bit|BluRay|WEB-DL|HDRip|HD|EXTENDED)\b",
+        r"\b(?:4K|2160p|1080p|720p|480p|360p|UHD|SDR|HDR|HDR10\+?|HEVC|10bit|BluRay|WEB-DL|WEBRip|HDRip|CAMRip|CAM|HD|EXTENDED)\b",
         r"\b(?:Episode\s*\d+\s*Added|Complete|Episodes?)\b",
         r"\bSeason\s*\d+\b",
     ]
@@ -315,77 +326,87 @@ def clean_katmoviehd_title(raw_title: str) -> tuple[str, int | None, int | None,
 def parse_katmoviehd_releases(content_html: str, default_season: int | None = None) -> list[dict]:
     """Parses releases from KatMovieHD post HTML, distinguishing series episodes from movie links."""
     releases = []
+
+    # 1. Online watch stream (1xplayer)
+    p_ifrs = re.findall(r'<iframe[^>]+src=["\'](https?://vd\.1xplayer\.com/play/[^"\']+)["\']', content_html, re.I)
+    for ifr in p_ifrs:
+        play_id = ifr.split("/")[-1].split("?")[0]
+        releases.append({
+            "label": "Online Stream (1XPlayer)",
+            "episode_number": None,
+            "season_number": None,
+            "quality": "HD",
+            "resolution": "720p",
+            "file_id": play_id,
+            "source_type": "1xplayer",
+            "bridge_url": ifr,
+        })
+
+    # 2. Match all anchor download links
     has_episodes = bool(re.search(r"\bEpisode\s*\d+\b", content_html, re.I))
 
-    if has_episodes:
-        # Split into episode blocks
-        ep_blocks = re.split(
-            r"(?:<p[^>]*>|<h\d[^>]*>)?\s*(?:<b>|<strong>)?\s*(?:<span[^>]*>)?\s*Episode\s*(\d+)\s*(?:</span>)?\s*(?:</b>|</strong>)?\s*[-–:]?",
-            content_html,
-            flags=re.I,
-        )
-        i = 1
-        while i < len(ep_blocks) - 1:
-            ep_num = int(ep_blocks[i])
-            block_html = ep_blocks[i + 1]
-            i += 2
+    # Helper to classify link
+    def classify_link(href: str) -> tuple[str, str]:
+        if "bbupload.to" in href:
+            m = re.search(r"[?&]v=([A-Za-z0-9_-]+)", href)
+            return "bbupload", (m.group(1) if m else "")
+        elif "gofile.io" in href:
+            fid = href.rstrip("/").split("/")[-1]
+            return "gofile", fid
+        elif "kmhd." in href:
+            fid = href.rstrip("/").split("/")[-1]
+            return "kmhd", fid
+        elif "hubcloud" in href:
+            fid = href.rstrip("/").split("/")[-1]
+            return "hubcloud", fid
+        return "unknown", ""
 
-            links = re.findall(
-                r'<a\s+[^>]*href=["\'](https?://(?:links\.)?kmhd\.(?:me|net|top|eu)/file/([A-Za-z0-9_-]+))["\'][^>]*>(.*?)</a>',
-                block_html,
-                re.DOTALL | re.I,
-            )
-            for full_url, file_id, anchor_text in links:
-                txt = re.sub(r"<[^>]+>", "", anchor_text).strip()
-                q = "720p"
-                res = "720p"
-                if "1080p" in txt:
-                    q, res = "1080p", "1080p"
-                elif "2160p" in txt or "4k" in txt.lower():
-                    q, res = "4K", "2160p"
-                elif "480p" in txt:
-                    q, res = "480p", "480p"
-                elif "720p" in txt:
-                    q, res = "720p", "720p"
+    for m in re.finditer(r'<a\b[^>]*href=["\']([^"\']+)["\'][^>]*>(.*?)</a>', content_html, re.DOTALL | re.I):
+        h = m.group(1)
+        txt = m.group(2)
+        clean_txt = re.sub(r'<[^>]+>', '', txt).strip()
+        stype, fid = classify_link(h)
+        if stype == "unknown":
+            continue
 
-                releases.append({
-                    "label": f"Episode {ep_num:02d} - {txt}",
-                    "episode_number": ep_num,
-                    "season_number": default_season or 1,
-                    "quality": q,
-                    "resolution": res,
-                    "file_id": file_id,
-                    "bridge_url": full_url,
-                })
-    else:
-        # Movie releases
-        links = re.findall(
-            r'<a\s+[^>]*href=["\'](https?://(?:links\.)?kmhd\.(?:me|net|top|eu)/file/([A-Za-z0-9_-]+))["\'][^>]*>(.*?)</a>',
-            content_html,
-            re.DOTALL | re.I,
-        )
-        for full_url, file_id, anchor_text in links:
-            txt = re.sub(r"<[^>]+>", "", anchor_text).strip()
-            q = "720p"
-            res = "720p"
-            if "1080p" in txt:
-                q, res = "1080p", "1080p"
-            elif "2160p" in txt or "4k" in txt.lower():
-                q, res = "4K", "2160p"
-            elif "480p" in txt:
-                q, res = "480p", "480p"
-            elif "720p" in txt:
-                q, res = "720p", "720p"
+        # 1. Episode in anchor text
+        ep_m = re.search(r'(?:Episode|Ep)\s*0?(\d+)', clean_txt, re.I)
+        ep_num = int(ep_m.group(1)) if ep_m else None
 
-            releases.append({
-                "label": txt,
-                "episode_number": None,
-                "season_number": None,
-                "quality": q,
-                "resolution": res,
-                "file_id": file_id,
-                "bridge_url": full_url,
-            })
+        # 2. Episode in preceding text block (up to 500 chars before)
+        if ep_num is None and has_episodes:
+            pre_start = max(0, m.start() - 500)
+            pre_html = content_html[pre_start:m.start()]
+            pre_ep_m = list(re.finditer(r'(?:Episode|Ep)\s*0?(\d+)', pre_html, re.I))
+            if pre_ep_m:
+                ep_num = int(pre_ep_m[-1].group(1))
+
+        # Detect quality
+        q = "720p"
+        res = "720p"
+        if "1080p" in clean_txt:
+            q, res = "1080p", "1080p"
+        elif "2160p" in clean_txt or "4k" in clean_txt.lower():
+            q, res = "4K", "2160p"
+        elif "480p" in clean_txt:
+            q, res = "480p", "480p"
+        elif "720p" in clean_txt:
+            q, res = "720p", "720p"
+
+        label = clean_txt or f"Download [{q}]"
+        if ep_num and "Episode" not in label:
+            label = f"Episode {ep_num:02d} - {label}"
+
+        releases.append({
+            "label": label,
+            "episode_number": ep_num,
+            "season_number": (default_season or 1) if (ep_num is not None) else None,
+            "quality": q,
+            "resolution": res,
+            "file_id": fid,
+            "source_type": stype,
+            "bridge_url": h,
+        })
 
     return releases
 
@@ -394,16 +415,128 @@ def resolve_file_sources(
     client: KatMovieHDClient,
     file_id: str,
     bridge_url: str,
+    source_type: str = "kmhd",
     resolve_direct: bool = True,
     timeout: int = 12,
 ) -> tuple[int | None, list[dict]]:
-    """Resolves file ID via KMHD REST API into direct mirror sources."""
+    """Resolves file ID into direct mirror sources based on source type."""
     sources = []
     size_bytes = None
 
+    if source_type == "bbupload":
+        # BBUpload AJAX direct stream resolver
+        api_url = f"https://download.bbupload.to/ajax.php?action=getdownload&data={file_id}"
+        try:
+            code, _, resp_text = client.get_text(
+                api_url,
+                headers={
+                    "Referer": bridge_url,
+                    "X-Requested-With": "XMLHttpRequest",
+                    "Accept": "application/json",
+                },
+                timeout=timeout,
+            )
+            if code == 200 and resp_text:
+                res_json = json.loads(resp_text)
+                if res_json.get("status") == "ok" and res_json.get("data"):
+                    d = res_json["data"]
+                    dl_url = d.get("downloadUrl")
+                    if d.get("filesize"):
+                        try:
+                            size_bytes = int(d["filesize"])
+                        except Exception:
+                            pass
+
+                    if dl_url:
+                        sources.append({
+                            "source_name": "⚡ SuperDuperLoad Direct Stream",
+                            "service": "superduperload",
+                            "resource_id": file_id,
+                            "source_url": bridge_url,
+                            "final_url": dl_url,
+                            "is_temporary": 1,
+                            "quality": "HD",
+                        })
+        except Exception:
+            pass
+
+        # Preserve fallback BBUpload gateway
+        sources.append({
+            "source_name": "🔗 BBUpload Gateway",
+            "service": "bbupload",
+            "resource_id": file_id,
+            "source_url": bridge_url,
+            "final_url": bridge_url,
+            "is_temporary": 0,
+            "quality": "HD",
+        })
+        return size_bytes, sources
+
+    elif source_type == "gofile":
+        sources.append({
+            "source_name": "⚡ GoFile Direct Cloud",
+            "service": "gofile",
+            "resource_id": file_id,
+            "source_url": bridge_url,
+            "final_url": bridge_url,
+            "is_temporary": 0,
+            "quality": "HD",
+        })
+        return None, sources
+
+    elif source_type == "1xplayer":
+        sources.append({
+            "source_name": "▶ 1XPlayer Online Stream",
+            "service": "1xplayer",
+            "resource_id": file_id,
+            "source_url": bridge_url,
+            "final_url": bridge_url,
+            "is_temporary": 0,
+            "quality": "HD",
+        })
+        return None, sources
+
+    elif source_type == "hubcloud":
+        if resolve_direct:
+            try:
+                unwrapped = fast_fetch.unwrap_hubcloud_drive(bridge_url)
+                for src in unwrapped:
+                    sources.append({
+                        "source_name": src.get("source_name", "⚡ HubCloud Stream"),
+                        "service": src.get("service", "hubcloud"),
+                        "resource_id": src.get("resource_id", file_id),
+                        "source_url": bridge_url,
+                        "final_url": src.get("final_url", bridge_url),
+                        "is_temporary": src.get("is_temporary", 0),
+                        "quality": "720p",
+                    })
+            except Exception:
+                pass
+        if not sources:
+            sources.append({
+                "source_name": "⚡ HubCloud Drive",
+                "service": "hubcloud",
+                "resource_id": file_id,
+                "source_url": bridge_url,
+                "final_url": bridge_url,
+                "is_temporary": 0,
+                "quality": "720p",
+            })
+        return None, sources
+
+    # Legacy KMHD REST API lookup
     api_url = f"{KMHD_API_BASE}/file/{file_id}"
     data = client.get_api_json(api_url, timeout=timeout)
     if not data or not isinstance(data, dict):
+        sources.append({
+            "source_name": "🔗 KatMovieHD Gateway",
+            "service": "kmhd",
+            "resource_id": file_id,
+            "source_url": bridge_url,
+            "final_url": bridge_url,
+            "is_temporary": 0,
+            "quality": "720p",
+        })
         return None, sources
 
     size_bytes = data.get("size")
@@ -543,7 +676,7 @@ def extract_post_data_katmoviehd(
                 break
 
     if not post_content:
-        return None
+        return {"loc": post_url, "skipped": True}
 
     clean_title, year, season, canonical_key = clean_katmoviehd_title(raw_title or slug)
 
@@ -561,6 +694,48 @@ def extract_post_data_katmoviehd(
         except ValueError:
             pass
 
+    # Rich metadata: Director, Cast, Genres, Languages, Plot
+    director = None
+    dir_m = re.search(r"<strong>Director:\s*</strong>\s*([^<]+)", post_content, re.I)
+    if dir_m:
+        director = html.unescape(dir_m.group(1)).strip()
+
+    cast_names = None
+    cast_m = re.search(r"<strong>(?:Star\s*Cast|Cast|Stars):\s*</strong>\s*([^<]+)", post_content, re.I)
+    if cast_m:
+        cast_names = html.unescape(cast_m.group(1)).strip()
+
+    extracted_genres = []
+    gen_m = re.search(r"<strong>(?:Genere|Genre|Genres):\s*</strong>\s*([^<]+)", post_content, re.I)
+    if gen_m:
+        extracted_genres = [
+            g.strip() for g in html.unescape(gen_m.group(1)).split(",")
+            if g.strip() and g.strip().upper() not in ("4RABET", "1XBET", "MELBET", "N/A")
+        ]
+
+    combined_genres = list(genres_list) if genres_list else []
+    for eg in extracted_genres:
+        if eg not in combined_genres:
+            combined_genres.append(eg)
+
+    languages = None
+    lang_m = re.search(r"<strong>(?:Language|Languages|lang\d*):\s*</strong>\s*([^<]+)", post_content, re.I)
+    if lang_m:
+        languages = html.unescape(lang_m.group(1)).strip()
+
+    # Poster & Backdrop
+    p_img_m = re.search(r'<img[^>]+src=["\'](https?://[^"\']+(?:amazon\.com|tmdb\.org)[^"\']+)["\']', post_content)
+    if p_img_m:
+        poster_url = p_img_m.group(1)
+
+    # Synopsis / Storyline
+    synopsis = None
+    plot_m = re.search(r"(?:<h\d[^>]*>|\b)(?:Plot|Storyline|Story|DESCRIPTION)[^<:]*[:\-–]?(?:</h\d>)?\s*(?:<p[^>]*>)?\s*(.*?)(?:</p>|<h\d|$)", post_content, re.I | re.DOTALL)
+    if plot_m:
+        clean_p = re.sub(r"<[^>]*>", "", plot_m.group(1)).strip()
+        if len(clean_p) > 20 and not clean_p.lower().startswith("full movie"):
+            synopsis = clean_p
+
     # Media type detection
     is_series = bool(season or "episode" in post_content.lower() or "tv-series" in str(genres_list).lower())
     media_type = "series" if is_series else "movie"
@@ -573,10 +748,12 @@ def extract_post_data_katmoviehd(
     for r in parsed_releases:
         file_id = r["file_id"]
         bridge_url = r["bridge_url"]
+        stype = r.get("source_type", "kmhd")
         size_bytes, sources = resolve_file_sources(
             client=client,
             file_id=file_id,
             bridge_url=bridge_url,
+            source_type=stype,
             resolve_direct=resolve_direct,
             timeout=timeout,
         )
@@ -588,7 +765,7 @@ def extract_post_data_katmoviehd(
             "size_bytes": size_bytes,
             "season_number": r["season_number"],
             "episode_number": r["episode_number"],
-            "audio_languages": json.dumps(["Hindi", "English"]),
+            "audio_languages": languages or json.dumps(["Hindi", "English"]),
             "codec": "x264",
             "bridge_url": bridge_url,
             "sources": sources,
@@ -602,8 +779,11 @@ def extract_post_data_katmoviehd(
         "media_type": media_type,
         "imdb_id": imdb_id,
         "poster_url": poster_url,
-        "synopsis": None,
-        "genres": json.dumps(genres_list) if genres_list else None,
+        "synopsis": synopsis,
+        "genres": json.dumps(combined_genres) if combined_genres else None,
+        "cast_names": cast_names,
+        "director": director,
+        "languages": languages,
         "rating": rating,
         "site": "katmoviehd",
         "post_url": post_url,
@@ -624,9 +804,9 @@ def save_post_to_staging_db(db_path: Path, post_data: dict) -> bool:
             """
             INSERT INTO posts (
                 canonical_key, title, original_title, year, media_type,
-                imdb_id, poster_url, synopsis, genres, rating, site, post_url,
+                imdb_id, poster_url, synopsis, genres, cast_names, director, languages, rating, site, post_url,
                 created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
             ON CONFLICT(canonical_key) DO UPDATE SET
                 title = excluded.title,
                 original_title = excluded.original_title,
@@ -634,7 +814,11 @@ def save_post_to_staging_db(db_path: Path, post_data: dict) -> bool:
                 media_type = excluded.media_type,
                 imdb_id = COALESCE(excluded.imdb_id, posts.imdb_id),
                 poster_url = COALESCE(excluded.poster_url, posts.poster_url),
+                synopsis = COALESCE(excluded.synopsis, posts.synopsis),
                 genres = COALESCE(excluded.genres, posts.genres),
+                cast_names = COALESCE(excluded.cast_names, posts.cast_names),
+                director = COALESCE(excluded.director, posts.director),
+                languages = COALESCE(excluded.languages, posts.languages),
                 rating = COALESCE(excluded.rating, posts.rating),
                 post_url = excluded.post_url,
                 updated_at = CURRENT_TIMESTAMP
@@ -650,6 +834,9 @@ def save_post_to_staging_db(db_path: Path, post_data: dict) -> bool:
                 post_data.get("poster_url"),
                 post_data.get("synopsis"),
                 post_data.get("genres"),
+                post_data.get("cast_names"),
+                post_data.get("director"),
+                post_data.get("languages"),
                 post_data.get("rating"),
                 post_data["site"],
                 post_data["post_url"],
@@ -838,6 +1025,9 @@ def run_crawler(
             cached_item=cached_item,
             resolve_direct=resolve_direct,
         )
+        if post_data and post_data.get("skipped"):
+            return loc, True, 0, 0, 0, 0
+
         if not post_data or not post_data.get("releases"):
             return loc, False, 0, 0, 0, 0
 

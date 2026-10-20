@@ -514,15 +514,16 @@ def parse_world4ufree_content(content_html: str, post_title: str) -> tuple[str |
     for pattern in link_patterns:
         anchors = re.findall(pattern, content_html, re.I | re.S)
         for href, text in anchors:
-            if href in seen_urls:
-                continue
-            seen_urls.add(href)
-
             clean_t = re.sub(r"<[^>]+>", "", text).strip()
             q_m = re.search(r"\b(4K|2160p|1080p|720p|480p)\b", clean_t, re.I)
             quality = q_m.group(1).upper() if q_m else "720P"
 
             codec = "hevc" if "hevc" in clean_t.lower() or "x265" in clean_t.lower() else "x264"
+
+            key = (href, quality, codec)
+            if key in seen_urls:
+                continue
+            seen_urls.add(key)
 
             releases.append({
                 "label": f"{clean_t or quality}",
