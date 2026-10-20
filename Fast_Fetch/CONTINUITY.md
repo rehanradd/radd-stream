@@ -241,3 +241,18 @@ routes; restrict the bind and public routes before enabling the public proxy.
   - Added unit test suite `Fast_Fetch/test_9xmovies.py` (5/5 passing).
   - Dedicated staging DB `/home/ubuntu/radd-stream-data/9xmovies.db` initiated and background crawler launched.
 - **Quality Gate**: 47/47 offline unit tests passing (`test_database.py`, `test_vidout.py`, `test_9xmovies.py`).
+
+### Session 16 — Antigravity (Dao Partner / Admin) — Oct 2026
+**MoviezGuru Conquest & Active Fleet Expansion:**
+- **MoviezGuru Conquered (`Fast_Fetch/import_moviezguru.py`)**:
+  - Full WP REST API crawler and resolver for `https://moviezguru.guru` (3,391 catalog titles).
+  - Reverse-engineered `mzgserver.shop/file/<ID>` bridge unwrapping: resolves through `/dl/<MD5>` directly to high-throughput 10Gbps Google CDN streams (`drive.usercontent.google.com`).
+  - Full quality/resolution/codec/audio extraction, clean title normalization, and adult content filtering.
+  - Unit test suite `Fast_Fetch/test_moviezguru.py` (6/6 passing).
+  - Launched dedicated background crawler writing to `/home/ubuntu/radd-stream-data/moviezguru.db` (PID 277265).
+- **Active Crawler Fleet Monitoring**:
+  - `9xmovies`: >11,000 posts processed, >247,000 sources resolved, 0 failures.
+  - `world4ufree`: >7,600 posts processed, >40,000 sources resolved with multi-domain parser.
+  - `bolly4u`: >24,000 posts processed, >21,000 sources (12,677 Google CDN).
+  - `moviezguru`: 3,391 titles ingested into staging cache, actively unwrapping Google CDN streams.
+- **Quality Gate**: 53/53 unit tests passing (`test_database.py` [36], `test_vidout.py` [6], `test_9xmovies.py` [5], `test_moviezguru.py` [6]).
