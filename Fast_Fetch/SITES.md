@@ -15,9 +15,11 @@
 | 7StarHD | 7starhd.rich | Homepage scrape | MobileJSR | `.rich → .run → .com` |
 | 10xflix | 10xflix.help | WP REST API | MobileJSR | `.help → .wiki → .me` |
 | MultiMovies ⭐ | multimovies.garden | JSON APIs + XML Sitemap | watchConfig initialServers (7 embeds) | `.garden → .com → .net → .org` |
-| HDHub4u | new3.hdhub4u.free | WP post-sitemap.xml | greenmotors.cc | `new3 → new4 → new5` |
+| HDHub4u | new8.hdhub4u.cl | WP post-sitemap.xml | linkrit.com bridges + hubcloud.ist direct | `new2/new3.hdhub4u.free → new8.hdhub4u.cl` |
 | BollyShares | bollyshares.xyz | WP post-sitemap.xml | 10moviesz.mom | `bollywood1.xyz → bollyshares.xyz` |
-| FilmyZilla | filmyzilla74.com | XML Sitemap | /server/ pages | `71 → 73 → 74 → 75` |
+| FilmyZilla | thefilmyzilla.in | XML Sitemap | /server/ pages → /download/<id>/server_N + fzcdn.store | `71 → 73 → 74 → 75 → thefilmyzilla.in` |
+| HindiLinks4u | www.hindilinks4u.zip | XML post-sitemap | video_tabs embed servers (playmogo/mixdrop/…) | `.pink (Cloudflare JS challenge) → .zip (plain HTML)` |
+| ToonWorld4All | toonworld4all.me | WP REST API + archive.toonworld4all.me/episode SSR | `window.__PROPS__` encodes[] → /redirect/<hex> → hubcloud.ist | `.me / www .me` |
 
 ---
 
@@ -513,7 +515,7 @@ bridge_links = re.findall(
 
 ---
 
-## 10. FilmyZilla (`filmyzilla74.com`)
+## 10. FilmyZilla (`thefilmyzilla.in`)
 
 ### Identity
 - **Primary domain:** `https://www.filmyzilla74.com`
@@ -548,7 +550,43 @@ rel_links = re.findall(r'href=["\'](/server/\d+/[^"\'<>\s]+\.html)["\']', html)
 
 ---
 
-## 11. CDN Services — Complete Bridge Reference
+## 11. HindiLinks4u (`www.hindilinks4u.zip`)
+
+**Staging DB:** `/home/ubuntu/radd-stream-data/hindilinks4u.db` · **Importer:** `Fast_Fetch/import_hindilinks4u.py`
+
+- `hindilinks4u.pink` is behind a Cloudflare JS challenge — do NOT bypass it.
+  `www.hindilinks4u.zip` serves the same catalog as plain HTML (registered in
+  `domain_registry.json` as the active base URL).
+- **Discovery:** `sitemap_index.xml` → `post-sitemap*.xml`, excluding
+  `/category/`, `/tag/`, `/author/`, `/feed/` URLs (~32k posts).
+- **Extraction:** `<title>` (cleaned of trailing separators/dangling parens),
+  `og:image` poster, meta-description synopsis, `imdb.com/title/tt…` id,
+  series detection via `season|episode|complete|series` keywords.
+- **Servers:** `<ul id="video_tabs">` tab anchors (`Server N`) plus generic
+  external anchors matched against known embed hosts (playmogo, mixdrop,
+  streamtape, upcloud, …) and `.mkv`/`.mp4` filenames.
+- **Adult:** flagged, never skipped — `is_18_plus = MAX(existing, new)` on upsert.
+
+## 12. ToonWorld4All (`toonworld4all.me`) — Hindi anime
+
+**Staging DB:** `/home/ubuntu/radd-stream-data/toonworld4all.db` · **Importer:** `Fast_Fetch/import_toonworld4all.py`
+
+- **Discovery:** open WP REST API `/wp-json/wp/v2/posts?per_page=100&page=N&_fields=…`
+  (paginated, raw JSON cached in `sitemap_cache.raw_json`).
+- **Episode pages:** `archive.toonworld4all.me/episode/<slug>` embed a
+  `window.__PROPS__` JSON blob with show/season/episode/air/poster/overview
+  metadata and `encodes[]` (resolution, codec, size) each holding `files[]`
+  mirrors of a `/redirect/<hex>` link; `streams[]` for watch pages.
+- **Redirect unwrap:** the `/redirect/<hex>` page embeds
+  `window.__PROPS__ = {"destination":…, "link":{"domain":"https://hubcloud.ist/video/","hidden":"…"}}`
+  → final URL = `domain + hidden`. If unwrap fails the bridge is still stored
+  (zero-data-loss).
+- **Canonical keys:** season-scoped — `generate_canonical_key(title, year) + "_sNN"`
+  for series, because `generate_canonical_key` strips `season \d+` and would
+  otherwise collide all seasons into one post.
+- **Legacy bridges:** `*.tw4all.workers.dev/redirect?data=<b64>` also decoded.
+
+## 13. CDN Services — Complete Bridge Reference
 
 ### Direct-Resolve Services (automatic in fast_fetch.py)
 
@@ -577,7 +615,7 @@ rel_links = re.findall(r'href=["\'](/server/\d+/[^"\'<>\s]+\.html)["\']', html)
 
 ---
 
-## 12. Domain Management Commands
+## 14. Domain Management Commands
 
 ```bash
 # Override a domain when site moves
@@ -595,7 +633,7 @@ python Fast_Fetch/fast_fetch.py stats  # shows domain_config entries
 
 ---
 
-## 13. Sites To Add Next
+## 15. Sites To Add Next
 
 | Site | Likely Domain | Method | Notes |
 |------|--------------|--------|-------|

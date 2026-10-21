@@ -324,3 +324,45 @@ routes; restrict the bind and public routes before enabling the public proxy.
   delay=0.2, sync-then-crawl) targeting 100% ingestion.
 - **Quality Gate**: 21/21 offline test modules pass; helper smoke tests pass; synthetic adult-save
   verified `is_18_plus=1` storage in bolly4u staging.
+
+### Session 21 — Qoder (Oracle VM) — 2026-10-21
+**HDHub4u Link Topology Recovery + HindiLinks4u & ToonWorld4All Added + Adult Flag Safety Net:**
+- `import_hdhub4u.py`: bridge matcher widened to `linkrit.` / `hubcloud.` hosts (greenmotors is
+  retired), hubcloud `/drive/<id>` links unwrapped through `fast_fetch.unwrap_hubcloud_drive()`,
+  linkrit challenge bridges stored as permanent bridge sources (never dropped), and
+  `normalize_hdhub4u_loc()` repoints stale `new2/new3.hdhub4u.free` rows at `new8.hdhub4u.cl`
+  while status writes keep the original stored `loc` (no more infinite reprocessing).
+  Crawler healthy: 17,868 queued, ~0.85 t/s, failures down to isolated no-release posts.
+- FilmyZilla verified against the redesigned `thefilmyzilla.in` (post → `/server/<slug>.html` →
+  `/download/<id>/server_N` → `fzcdn.store/file/<base64>`); 17,204 scraped, 3,462 recorded `-1`
+  (620 absent from the new site, ~2,842 stub pages that advertise qualities but publish no links).
+- New site **HindiLinks4u** (`import_hindilinks4u.py`, `www.hindilinks4u.zip`): `.pink` mirror is a
+  Cloudflare JS challenge and was deliberately NOT bypassed. 32,271 titles queued, `video_tabs`
+  embed servers + external mirrors captured. `clean_hl4u_title()` rewritten after finding mid-word
+  truncation (`Bigg Boss` → `Bigg Bo`) and dangling parens (`MobLand (2025`); staging DB wiped and
+  re-crawled with the correct cleaner.
+- New site **ToonWorld4All** (`import_toonworld4all.py`, Hindi anime): WP REST API discovery +
+  `archive.toonworld4all.me/episode/…` `window.__PROPS__` payloads → one release per encode with
+  per-quality mirrors; new `--resolve` flag unwraps `/redirect/<hex>` into `hubcloud.ist` final
+  URLs; season-scoped canonical keys (`_sNN`) prevent TMDB-colliding seasons; legacy
+  `tw4all.workers.dev?data=` tokens decoded. Fixed a shared-list bug that attached every encode's
+  sources to every release (inflating counts ~2x and mislabelling quality) and added a stream-only
+  release fallback so episodes without encodes still keep their watch links.
+- Adult flag safety net: `fast_fetch.save_scraped_data()` now derives `is_18_plus` via
+  `is_adult_title()` whenever an importer leaves it unset — this was silently zero for
+  vegamovies/rogmovies/hdtvb/7starhd/ssrmovies. `import_multimovies.py` switched from skip to
+  flag-and-store. `ADULT_TITLE_PATTERNS` extended with studio names (RealityKings, Tushy, Vixen,
+  Blacked, Wankz, Lustery, Moodyz, iuliian, Uncut, Naughty).
+- Historical back-flag pass across all 19 staging DBs: 10xflix 2,665 · 9xmovies 2,726 ·
+  7starhd 2,296 · hdtvb 1,161 · katmoviehd 974 · bolly4u 972 · ssrmovies 924 · rogmovies 879 ·
+  hdhub4u 817 · filmyzilla 423 · world4ufree 425 · vegamovies 445 · hindilinks4u 165 ·
+  moviezguru 97 · multimovies 30 · desicinemas 7 · rareanimes 7 · toonworld4all 1.
+- New offline test suites: `test_hindilinks4u.py` (8) and `test_toonworld4all.py` (12);
+  `SITES.md` documents both sites and refreshes HDHub4u/FilmyZilla domains;
+  `domain_registry.json` registers `hindilinks4u` (`.zip` active, `.pink` noted as CF-walled)
+  and `toonworld4all`.
+- **Quality Gate**: `test_database.py` 36/36 OK · `test_vidout.py` 6/6 OK · `test_hdhub4u_import.py`
+  25/25 · `test_multimovies_import.py` 9/9 · `test_filmyzilla_import.py` 8/8 · plus all 19 other
+  offline modules re-run green (147 tests total).
+- **Next**: finish the three running crawlers, then merge every staging DB into `fast_fetch.db`,
+  re-verify API/dashboard/M3U 18+ filtering against the new totals, and snapshot the merged catalog.

@@ -90,6 +90,18 @@ MAX_SAFE_WORKERS = 6
 MIN_REQUEST_DELAY = 0.3
 
 
+def normalize_hdhub4u_loc(loc: str, base_url: str) -> str:
+    """Repoints stored sitemap locs from retired HDHub4u domains to the live base URL."""
+    try:
+        p = urllib.parse.urlparse(loc)
+        b = urllib.parse.urlparse(base_url)
+        if p.netloc and b.netloc and p.netloc != b.netloc:
+            return urllib.parse.urlunparse(p._replace(scheme=b.scheme, netloc=b.netloc))
+    except ValueError:
+        pass
+    return loc
+
+
 class HDHub4uClient:
     """HTTP Client with rate limiting, retry handling, and dynamic host detection for HDHub4u."""
 
@@ -358,7 +370,7 @@ def parse_hdhub4u_release_links(page_html: str) -> list[dict]:
         body_html = sm.group(2)
 
         gm_links = re.findall(
-            r'href=["\'](https?://[^\s"\'<>]*greenmotors[^\s"\'<>]*)["\']',
+            r'href=["\'](https?://[^\s"\'<>]*(?:greenmotors|linkrit|hubcloud\.)[^\s"\'<>]*)["\']',
             body_html,
             re.IGNORECASE,
         )
@@ -383,7 +395,7 @@ def parse_hdhub4u_release_links(page_html: str) -> list[dict]:
 
         # Check if this section has individual episode buttons
         ep_buttons = re.findall(
-            r'<a[^>]+href=["\'](https?://[^\s"\'<>]*greenmotors[^\s"\'<>]*)["\'][^>]*>(.*?)</a>',
+            r'<a[^>]+href=["\'](https?://[^\s"\'<>]*(?:greenmotors|linkrit|hubcloud\.)[^\s"\'<>]*)["\'][^>]*>(.*?)</a>',
             body_html,
             re.DOTALL | re.IGNORECASE,
         )
@@ -429,7 +441,7 @@ def parse_hdhub4u_release_links(page_html: str) -> list[dict]:
     # 2. Direct button scan fallback (if no headings matched)
     if not releases:
         all_gm_buttons = re.findall(
-            r'<a[^>]+href=["\'](https?://[^\s"\'<>]*greenmotors[^\s"\'<>]*)["\'][^>]*>(.*?)</a>',
+            r'<a[^>]+href=["\'](https?://[^\s"\'<>]*(?:greenmotors|linkrit|hubcloud\.)[^\s"\'<>]*)["\'][^>]*>(.*?)</a>',
             page_html,
             re.DOTALL | re.IGNORECASE,
         )
@@ -530,7 +542,25 @@ def extract_post_data_hdhub4u(
     for r in parsed_releases:
         sources = []
         bridge_url = r.get("bridge_url", "")
-        if resolve_direct and bridge_url:
+        is_linkrit = "linkrit." in bridge_url
+        is_hubcloud = "hubcloud." in bridge_url
+        if "?id=" in bridge_url:
+            resource_id = bridge_url.split("?id=")[-1][:24]
+        else:
+            resource_id = bridge_url.rstrip("/").split("/")[-1][:24]
+        if resolve_direct and is_hubcloud:
+            unwrapped = fast_fetch.unwrap_hubcloud_drive(bridge_url)
+            for u in unwrapped:
+                sources.append({
+                    "source_name": u.get("source_name", "⚡ HDHub4u HubCloud"),
+                    "service": u.get("service", "hubcloud"),
+                    "resource_id": u.get("resource_id", resource_id),
+                    "source_url": u.get("source_url", bridge_url),
+                    "final_url": u.get("final_url", bridge_url),
+                    "is_temporary": u.get("is_temporary", 0),
+                    "quality": r.get("quality", "720p"),
+                })
+        elif resolve_direct and bridge_url and not is_linkrit:
             unwrapped = fast_fetch.unwrap_greenmotors(bridge_url, timeout=timeout)
             for u in unwrapped:
                 sources.append({
@@ -542,11 +572,11 @@ def extract_post_data_hdhub4u(
                     "is_temporary": u.get("is_temporary", 0),
                     "quality": r.get("quality", "720p"),
                 })
-        else:
+        if not sources:
             sources.append({
-                "source_name": "⚡ HDHub4u Bridge",
-                "service": "greenmotors",
-                "resource_id": bridge_url.split("?id=")[-1][:24] if "?id=" in bridge_url else "",
+                "source_name": "🔗 HDHub4u Linkrit Bridge" if is_linkrit else "⚡ HDHub4u Bridge",
+                "service": "linkrit" if is_linkrit else "greenmotors",
+                "resource_id": resource_id,
                 "source_url": bridge_url,
                 "final_url": bridge_url,
                 "is_temporary": 0,
@@ -856,12 +886,13 @@ def run_crawler(
     start_time = time.time()
 
     def process_item(item):
-        loc, raw_json_str = item
+        db_loc, raw_json_str = item
+        loc = normalize_hdhub4u_loc(db_loc, client.base_url)
         api_doc = json.loads(raw_json_str) if raw_json_str else None
 
         code, _, page_html = client.get_text(loc, timeout=12)
         if code != 200 or not page_html:
-            return loc, False, 0, 0
+            return db_loc, False, 0, 0
 
         post_data = extract_post_data_hdhub4u(
             post_url=loc,
@@ -870,12 +901,12 @@ def run_crawler(
             resolve_direct=resolve_direct,
         )
         if not post_data or not post_data.get("releases"):
-            return loc, False, 0, 0
+            return db_loc, False, 0, 0
 
         ok = save_post_to_staging_db(db_path, post_data)
         num_rels = len(post_data["releases"])
         num_srcs = sum(len(r.get("sources", [])) for r in post_data["releases"])
-        return loc, ok, num_rels, num_srcs
+        return db_loc, ok, num_rels, num_srcs
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=min(workers, MAX_SAFE_WORKERS)) as executor:
         futures = {executor.submit(process_item, row): row for row in pending_rows}

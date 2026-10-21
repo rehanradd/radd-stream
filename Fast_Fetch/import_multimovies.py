@@ -595,10 +595,8 @@ def _process_movie(client: SiteClient, page_url: str, base_host: str, dry_run: b
     )
     if not data:
         raise FetchError("The movie page did not produce a catalog record.")
-    if data.get("is_18_plus") or _is_restricted(data.get("title", ""), data.get("slug", "")):
-        if not dry_run:
-            _mark_cache([page_url], -1)
-        return {"restricted": True, "releases": 0, "sources": 0, "pages": 1}
+    if _is_restricted(data.get("title", ""), data.get("slug", "")):
+        data["is_18_plus"] = 1
 
     extra_releases, download_pages = _add_download_releases(
         client, final_url, page_html, data, base_host,
@@ -643,10 +641,8 @@ def _process_series(
     )
     if not data:
         raise FetchError("The series page did not produce a catalog record.")
-    if data.get("is_18_plus") or _is_restricted(data.get("title", ""), data.get("slug", "")):
-        if not dry_run:
-            _mark_cache([root_url, *episode_urls], -1)
-        return {"restricted": True, "releases": 0, "sources": 0, "pages": 1}
+    if _is_restricted(data.get("title", ""), data.get("slug", "")):
+        data["is_18_plus"] = 1
 
     base_releases = list(data.get("releases") or [])
     source_records = [_source_record(final_root, root_html)]

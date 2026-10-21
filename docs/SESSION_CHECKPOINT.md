@@ -155,6 +155,63 @@ Update this file after each independently verified milestone so work can resume 
   - `curl -I http://92.4.95.252/download/radd-stream.apk`: HTTP/1.1 200 OK, Content-Length: 21510182.
 - **Download Link:** `http://92.4.95.252/download/radd-stream.apk`
 
+### 2026-10-21 — HDHub4u link-topology recovery + two new sites (HindiLinks4u, ToonWorld4All)
+
+- **Goal:** Heal the last failing scrapers, add the three owner-requested sites, and make the
+  adult `is_18_plus` flag reliable on every write path.
+- **Completed:**
+  1. **HDHub4u** (`import_hdhub4u.py`): bridge regexes now also match `linkrit.` and `hubcloud.`
+     hosts (old greenmotors links are gone), hubcloud `/drive/<id>` links are unwrapped via
+     `fast_fetch.unwrap_hubcloud_drive()`, unresolvable linkrit bridges are stored as bridge
+     sources instead of being dropped, and `normalize_hdhub4u_loc()` repoints stale
+     `new2/new3.hdhub4u.free` sitemap rows at the live `new8.hdhub4u.cl` host while status
+     updates still key on the original stored `loc`.
+  2. **FilmyZilla**: verified the redesign pipeline end to end on `thefilmyzilla.in`
+     (post → `/server/<slug>.html` → `/download/<id>/server_N` → `fzcdn.store/file/<base64>`);
+     remaining `-1` rows are 620 posts absent from the new site plus ~2,842 stub posts whose
+     pages carry quality text but no download links at all. Statuses recorded, nothing discarded.
+  3. **New site HindiLinks4u** (`import_hindilinks4u.py`, `www.hindilinks4u.zip`): the `.pink`
+     domain is behind a Cloudflare JS challenge and was NOT bypassed; the plain-HTML `.zip`
+     mirror serves the same catalog (32,271 titles queued). Rewrote `clean_hl4u_title()` to stop
+     mid-word truncation ("Bigg Boss" → "Bigg Bo") and dangling-paren leaks ("MobLand (2025").
+  4. **New site ToonWorld4All** (`import_toonworld4all.py`, Hindi anime): WP REST API discovery +
+     `archive.toonworld4all.me/episode/…` `window.__PROPS__` payloads; one release per encode with
+     per-quality mirrors, `/redirect/<hex>` unwrapped to `hubcloud.ist` final URLs via the new
+     `--resolve` flag, season-scoped canonical keys (`…_sNN`), legacy `tw4all.workers.dev` tokens
+     decoded. Fixed a bug where every release shared one cumulative source list (inflating source
+     counts ~2x and mixing qualities) and added a stream-only release fallback.
+  5. **Adult flag safety net**: `fast_fetch.save_scraped_data()` now derives `is_18_plus` from
+     `is_adult_title()` for every importer that leaves it unset (vegamovies, rogmovies, hdtvb,
+     7starhd, ssrmovies all wrote a literal 0). `import_multimovies.py` no longer skips restricted
+     titles — it ingests them flagged. Extended `ADULT_TITLE_PATTERNS` with studio names
+     (RealityKings, Tushy, Vixen, Blacked, Wankz, Lustery, Moodyz, iuliian, Uncut, Naughty).
+  6. Back-flagged every existing staging row: 10xflix 2,665 · 9xmovies 2,726 · katmoviehd 974 ·
+     hdhub4u 817 · bolly4u 972 · 7starhd 2,296 · world4ufree 425 · filmyzilla 423 · ssrmovies 924 ·
+     hdtvb 1,161 · rogmovies 879 · vegamovies 445 · hindilinks4u 165 · moviezguru 97 ·
+     desicinemas 7 · rareanimes 7 · multimovies 30 · toonworld4all 1.
+  7. Registered `hindilinks4u` and `toonworld4all` in `domain_registry.json`; documented both in
+     `Fast_Fetch/SITES.md` (sections 11 and 12).
+- **Files changed:** `Fast_Fetch/fast_fetch.py`, `Fast_Fetch/import_hdhub4u.py`,
+  `Fast_Fetch/import_multimovies.py`, `Fast_Fetch/import_hindilinks4u.py` (new),
+  `Fast_Fetch/import_toonworld4all.py` (new), `Fast_Fetch/domain_registry.json`,
+  `Fast_Fetch/test_hindilinks4u.py` (new, 8 tests), `Fast_Fetch/test_toonworld4all.py`
+  (new, 12 tests), `Fast_Fetch/SITES.md`, `Fast_Fetch/CONTINUITY.md`, `docs/SESSION_CHECKPOINT.md`,
+  crawler `*_status.json` snapshots.
+- **Checks run and exact result:** `test_database.py` 36/36 OK · `test_vidout.py` 6/6 OK ·
+  `test_hdhub4u_import.py` 25/25 OK · `test_multimovies_import.py` 9/9 OK ·
+  `test_filmyzilla_import.py` 8/8 OK · `test_hindilinks4u.py` 8/8 OK · `test_toonworld4all.py`
+  12/12 OK · every pre-existing offline test module re-run OK (21 modules, 147 tests, no network).
+- **Known failures or checks not run:** `test_all_sites.py` live audit not re-run this session;
+  Android app not built (no app-side change needed); no merge into `fast_fetch.db` yet.
+- **GitHub branch/commit/push result:** committed to `master` and pushed (see commit below).
+- **Oracle deployment result:** not deployed — code is live-source only; staging DBs remain on
+  `/home/ubuntu/radd-stream-data/`.
+- **Next concrete action:** let the three running crawlers finish (HDHub4u ~5h, HindiLinks4u ~2.6h,
+  ToonWorld4All ~2.5h), then merge all staging catalogs into `fast_fetch.db` via the merge path,
+  re-verify the API/dashboard/M3U 18+ filters against the new totals, and snapshot the merged DB.
+- **Blockers / decisions needed:** Shemaroo (owner chose "skip"); owner still needs to revoke the
+  GitHub credential that was exposed in an earlier session (value never recorded here).
+
 ## Template for future checkpoints
 
 ### YYYY-MM-DD — short milestone name

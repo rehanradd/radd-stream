@@ -145,6 +145,8 @@ ADULT_TITLE_PATTERNS = [
     r"\b18\+", r"\b18\s*\+", r"\badult\b", r"\berotic\b", r"\bhotshots\b", r"\bullu\b",
     r"\bkooku\b", r"\bprimeplay\b", r"\brabbit\b", r"\bhunters\b",
     r"\bunrated\b", r"\bnsfw\b", r"\bporn\b", r"\bxxx\b", r"\bboldscene\b",
+    r"\brealitykings\b", r"\btushy\b", r"\bvixen\b", r"\bblacked\b", r"\bwankz\b",
+    r"\blustery\b", r"\bnaughty\b", r"\buncut\b", r"\biuliian\b", r"\bmoodyz\b",
 ]
 
 
@@ -4019,6 +4021,13 @@ def save_scraped_data(
         raise TypeError("Scraped media data must be a dictionary")
     data = dict(data)
     _validate_scraped_data(data)
+    data["is_18_plus"] = int(
+        bool(data.get("is_18_plus"))
+        or is_adult_title(
+            data.get("clean_title") or data.get("title") or "",
+            data.get("original_title") or data.get("slug") or data.get("url") or "",
+        )
+    )
     if enrich_metadata:
         _enrich_scraped_metadata(data)
     with _DB_WRITE_LOCK:
