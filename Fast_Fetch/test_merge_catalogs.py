@@ -207,5 +207,108 @@ class StagingFamilyMergeTests(unittest.TestCase):
                 self.assertIn("https://other.example/shivaay-2016/", recorded)
 
 
+    def test_conflicting_post_is_recorded_and_merge_continues(self):
+        """One impossible identity must not abandon the remaining thousand posts of a site."""
+        with tempfile.TemporaryDirectory() as td:
+            src_db = Path(td) / "hdtvb.db"
+            tgt_db = Path(td) / "unified.db"
+            self._make_staging_db(src_db)
+            conn = sqlite3.connect(src_db)
+            conn.execute(
+                "UPDATE posts SET media_type = 'complete_season' WHERE id = 1")
+            conn.execute(
+                "UPDATE releases SET season_number = 4 WHERE post_id = 1")
+            conn.execute(
+                "INSERT INTO posts (canonical_key, title, year, media_type, site, post_url)"
+                " VALUES ('other_2021', 'Other', 2021, 'movie', 'hdtvb',"
+                " 'https://new8.hdhub4u.cl/other-2021.html')")
+            other_pid = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+            conn.execute(
+                "INSERT INTO releases (post_id, label, quality, size_bytes, codec)"
+                " VALUES (?, 'Other 720p', '720p', 1073741824, 'x264')", (other_pid,))
+            conn.commit()
+            conn.close()
+
+            # First pass: the season page lands in the catalog as a series.
+            merge_catalogs.merge_site_db(src_db, tgt_db, verbose=False)
+
+            # Second pass: the same page now claims to be a movie — unmergeable,
+            # but it must be logged rather than crash the run.
+            conn = sqlite3.connect(src_db)
+            conn.execute("UPDATE posts SET media_type = 'movie' WHERE id = 1")
+            conn.execute("UPDATE releases SET season_number = NULL WHERE post_id = 1")
+            conn.commit()
+            conn.close()
+
+            stats = merge_catalogs.merge_site_db(src_db, tgt_db, verbose=False)
+            self.assertEqual(stats["posts_conflicted"], 1)
+            self.assertEqual(stats["posts_merged"], 1)
+
+            with sqlite3.connect(tgt_db) as db:
+                db.row_factory = sqlite3.Row
+                conflict = db.execute(
+                    "SELECT url, error, source_db FROM merge_conflicts").fetchone()
+                self.assertIsNotNone(conflict)
+                self.assertIn("shivaay-2016", conflict["url"])
+                self.assertIn("media type", conflict["error"])
+                self.assertEqual(conflict["source_db"], str(src_db))
+                # The clean post still merged alongside the conflict.
+                titles = {r[0] for r in db.execute("SELECT clean_title FROM posts")}
+                self.assertIn("Other", titles)
+
+
+    def test_season_pack_and_episode_pack_pages_share_one_series(self):
+        """The real 7starhd case: an 'S07 complete' page and an 'S07EP(01-06)' page
+        are two prints of one season, and must not collapse into a movie or fight."""
+        with tempfile.TemporaryDirectory() as td:
+            src_db = Path(td) / "7starhd.db"
+            tgt_db = Path(td) / "unified.db"
+            self._make_staging_db(src_db)
+            conn = sqlite3.connect(src_db)
+            conn.execute(
+                "UPDATE posts SET canonical_key='campus-beats_2026', title='Campus Beats',"
+                " original_title='Campus Beats (2026) Hindi ORG S07 Complete Web Series',"
+                " year=2026, media_type='series', site='7starhd',"
+                " post_url='https://7starhd.rich/campus-beats-2026-s07-complete/' WHERE id = 1")
+            conn.execute(
+                "UPDATE releases SET season_number = 7, episode_number = NULL WHERE post_id = 1")
+            conn.execute(
+                "INSERT INTO posts (canonical_key, title, original_title, year, media_type,"
+                " site, post_url) VALUES ('campus-beats_2026', 'Campus Beats',"
+                " 'Campus Beats (2026) Hindi ORG S07EP(01-06) Web Series HDRip', 2026,"
+                " 'movie', '7starhd', 'https://7starhd.rich/campus-beats-2026-s07ep01-06/')")
+            ep_pid = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+            conn.execute(
+                "INSERT INTO releases (post_id, label, quality, size_bytes, codec,"
+                " season_number, episode_number) VALUES (?, 'Campus Beats 1080p', '1080p',"
+                " 3221225472, 'x264', 7, 3)", (ep_pid,))
+            ep_rel = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+            conn.execute(
+                "INSERT INTO sources (release_id, source_name, service, resource_id,"
+                " source_url, final_url, is_temporary, quality) VALUES"
+                " (?, 'BunnyDrive', 'bunny', '55', 'https://bunny.example/55',"
+                " 'https://bunny.example/55/direct', 0, '1080p')", (ep_rel,))
+            conn.commit()
+            conn.close()
+
+            stats = merge_catalogs.merge_site_db(src_db, tgt_db, verbose=False)
+            self.assertEqual(stats["posts_conflicted"], 0)
+            self.assertEqual(stats["posts_merged"], 2)
+
+            with sqlite3.connect(tgt_db) as db:
+                db.row_factory = sqlite3.Row
+                posts = db.execute("SELECT id, content_type, url FROM posts").fetchall()
+                self.assertEqual(len(posts), 1)
+                self.assertEqual(posts[0]["content_type"], "series")
+                self.assertEqual(
+                    {r[0] for r in db.execute(
+                        "SELECT url FROM post_sources WHERE post_id = ?", (posts[0]["id"],))},
+                    {"https://7starhd.rich/campus-beats-2026-s07-complete/",
+                     "https://7starhd.rich/campus-beats-2026-s07ep01-06/"},
+                )
+                rels = {r[0] for r in db.execute("SELECT release_title FROM releases")}
+                self.assertEqual(rels, {"Shivaay 1080p", "Campus Beats 1080p"})
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -204,6 +204,40 @@ def _collect_unified_post(src_conn: sqlite3.Connection, post: sqlite3.Row) -> di
     }
 
 
+_SERIES_TYPES = {"series", "complete_season", "ongoing_season"}
+
+
+def _media_family(content_type) -> str:
+    return "series" if str(content_type or "").strip().casefold() in _SERIES_TYPES else "movie"
+
+
+def _same_media_type(anchor: dict, post_data: dict) -> bool:
+    return _media_family(anchor["content_type"]) == _media_family(post_data.get("content_type"))
+
+
+def _has_episode_evidence(post_data: dict) -> bool:
+    """True when the scraped releases carry season/episode structure, whatever the scraper labelled the page."""
+    return any(
+        str(rel.get("season") or "").strip() or str(rel.get("episode") or "").strip()
+        for rel in post_data.get("releases", [])
+    )
+
+
+def _ensure_conflict_table(conn) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS merge_conflicts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            source_db TEXT,
+            url TEXT,
+            canonical_key TEXT,
+            error TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+
+
 def merge_site_db(source_db_path: Path, target_db_path: Path, verbose: bool = True) -> dict[str, int]:
     """
     Merges all posts, post_sources, releases, and download_sources from source_db into target_db.
@@ -217,6 +251,7 @@ def merge_site_db(source_db_path: Path, target_db_path: Path, verbose: bool = Tr
         "posts_created": 0,
         "releases_merged": 0,
         "sources_merged": 0,
+        "posts_conflicted": 0,
     }
 
     # Ensure target DB is initialized
@@ -242,7 +277,8 @@ def merge_site_db(source_db_path: Path, target_db_path: Path, verbose: bool = Tr
                 flush=True,
             )
 
-        key_to_url: dict[str, str] = {}
+        key_to_post: dict[str, dict] = {}
+        conflicts: list[tuple[str, str, str]] = []
         for idx, post in enumerate(src_posts, 1):
             if family == "staging":
                 post_data = _collect_staging_post(src_conn, post)
@@ -259,27 +295,51 @@ def merge_site_db(source_db_path: Path, target_db_path: Path, verbose: bool = Tr
             # otherwise the identity lookup would create siblings and then refuse to merge.
             key = post_data.get("canonical_key")
             original_url = post_data.get("url", "")
-            if key and key in key_to_url:
-                anchor_url = key_to_url[key]
-                if original_url and anchor_url != original_url:
-                    post_data["url"] = anchor_url
+            # Provenance stays with the page that was scraped even when the row is
+            # retargeted onto an existing catalog record below.
+            post_data["origin_url"] = original_url
+            anchor = key_to_post.get(key) if key else None
+            if anchor is not None and original_url and anchor["url"] != original_url:
+                # The same title reached us from several pages (one page per season,
+                # one page per episode pack, ...). Retarget onto the URL that already
+                # owns the catalog record so the pages collapse into one work and the
+                # displaced page is kept as a source page. Never collapse when the two
+                # rows disagree about whether this is a movie or a series unless one of
+                # them carries real season/episode evidence — guessing wrong here would
+                # mis-file a whole film as a season.
+                if _same_media_type(anchor, post_data):
+                    post_data["url"] = anchor["url"]
+                elif anchor["episode_evidence"] or _has_episode_evidence(post_data):
+                    post_data["content_type"] = anchor["content_type"]
+                    post_data["url"] = anchor["url"]
+                if post_data["url"] == anchor["url"]:
                     sources_pages.append({
                         "source_site": post_data["source_site"],
                         "url": original_url,
                         "source_title": post_data["title"],
                         "source_slug": post_data["slug"],
                     })
-            elif key:
-                key_to_url[key] = original_url
+            elif anchor is None and key:
+                key_to_post[key] = {
+                    "url": original_url,
+                    "content_type": post_data.get("content_type") or "movie",
+                    "episode_evidence": _has_episode_evidence(post_data),
+                }
 
             releases = post_data["releases"]
 
-            # Save into target DB using canonical deduplication
-            target_post_id = fast_fetch.save_scraped_data(
-                post_data,
-                enrich_metadata=False,
-                ensure_db=False,
-            )
+            try:
+                target_post_id = fast_fetch.save_scraped_data(
+                    post_data,
+                    enrich_metadata=False,
+                    ensure_db=False,
+                )
+            except (ValueError, sqlite3.Error) as exc:
+                # One bad identity must not abandon the rest of the site.
+                conflicts.append((post_data.get("url", ""), key or "", str(exc)[:300]))
+                if verbose:
+                    print(f"[!] conflict @ {idx}: {post_data.get('url', '')} — {exc}", flush=True)
+                continue
 
             # Record post sources
             with fast_fetch.get_db() as conn:
@@ -304,6 +364,19 @@ def merge_site_db(source_db_path: Path, target_db_path: Path, verbose: bool = Tr
 
             if verbose and (idx % 100 == 0 or idx == total):
                 print(f"[{idx}/{total}] Merged: posts={stats['posts_merged']}, releases={stats['releases_merged']}, sources={stats['sources_merged']}", flush=True)
+
+        if conflicts:
+            with fast_fetch.get_db() as conn:
+                _ensure_conflict_table(conn)
+                for url, key, err in conflicts:
+                    conn.execute(
+                        "INSERT INTO merge_conflicts (source_db, url, canonical_key, error) VALUES (?, ?, ?, ?)",
+                        (str(source_db_path), url, key, err),
+                    )
+                conn.commit()
+        stats["posts_conflicted"] = len(conflicts)
+        if verbose and conflicts:
+            print(f"[!] {len(conflicts)} identity conflict(s) recorded in merge_conflicts", flush=True)
 
     finally:
         src_conn.close()

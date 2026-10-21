@@ -636,6 +636,16 @@ def _init_db(db_path: Path | None = None) -> None:
         existing_r_cols = {r[1] for r in cursor.fetchall()}
         if "source_site" not in existing_r_cols:
             cursor.execute("ALTER TABLE releases ADD COLUMN source_site TEXT DEFAULT NULL")
+        if "origin_url" not in existing_r_cols:
+            # A site can publish one title across several pages (a season page, an
+            # episode-pack page, ...). Releases are replaced per page, so each row has
+            # to remember which page produced it or a later page would wipe the earlier one.
+            cursor.execute("ALTER TABLE releases ADD COLUMN origin_url TEXT DEFAULT NULL")
+            cursor.execute(
+                "UPDATE releases SET origin_url = ("
+                "  SELECT url FROM posts WHERE posts.id = releases.post_id"
+                ") WHERE origin_url IS NULL"
+            )
 
         cursor.execute("PRAGMA table_info(sitemap_cache)")
         existing_sm_cols = {r[1] for r in cursor.fetchall()}
@@ -4249,18 +4259,20 @@ def _save_scraped_data(data: dict, *, ensure_db: bool = True) -> int:
             raise ValueError(f"Source URL is already linked to another media record: {url}")
 
         # Insert releases with source_site
+        origin_url = str(data.get("origin_url") or url)
         if existing and valid_releases:
-            # Keep legacy rows with no source-site attribution; only refresh this site's data.
+            # Refresh only the releases this page owns; other pages of the same site
+            # contribute the rest of the title and must survive untouched.
             conn.execute(
-                "DELETE FROM releases WHERE post_id = ? AND source_site = ?",
-                (post_id, source_site),
+                "DELETE FROM releases WHERE post_id = ? AND source_site = ? AND origin_url IS ?",
+                (post_id, source_site, origin_url),
             )
 
         for rel in valid_releases:
             rel_cur = conn.execute(
                 """
-                INSERT INTO releases (post_id, release_title, season, episode, quality, codec, size, languages, intermediate_url, source_site)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO releases (post_id, release_title, season, episode, quality, codec, size, languages, intermediate_url, source_site, origin_url)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 RETURNING id;
                 """,
                 (
@@ -4274,6 +4286,7 @@ def _save_scraped_data(data: dict, *, ensure_db: bool = True) -> int:
                     rel.get("languages"),
                     rel.get("intermediate_url"),
                     source_site,
+                    origin_url,
                 ),
             )
             rel_id = rel_cur.fetchone()[0]

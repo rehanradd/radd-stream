@@ -30,6 +30,8 @@ import urllib.request
 import urllib.error
 from pathlib import Path
 
+BASE_DIR = Path(__file__).parent.resolve()
+
 
 
 def calculate_sha256(filepath: str | Path) -> str:
@@ -39,6 +41,38 @@ def calculate_sha256(filepath: str | Path) -> str:
         while chunk := f.read(65536):
             h.update(chunk)
     return h.hexdigest()
+
+
+def _db_row_counts(db_path: Path) -> dict:
+    """Row counts for a catalog database, tolerant of the per-site schema families."""
+    counts: dict[str, int] = {}
+    try:
+        conn = sqlite3.connect(str(db_path))
+    except sqlite3.Error:
+        return counts
+    try:
+        tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        for table in ("posts", "releases", "download_sources", "sources", "post_sources", "sitemap_cache"):
+            if table in tables:
+                counts[table] = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+        if "posts" in tables and any(
+            r[1] == "is_18_plus" for r in conn.execute("PRAGMA table_info(posts)")
+        ):
+            counts["posts_adult"] = conn.execute(
+                "SELECT COUNT(*) FROM posts WHERE is_18_plus = 1"
+            ).fetchone()[0]
+        if "sitemap_cache" in tables:
+            counts["sitemap_pending"] = conn.execute(
+                "SELECT COUNT(*) FROM sitemap_cache WHERE scraped = 0"
+            ).fetchone()[0]
+            counts["sitemap_failed"] = conn.execute(
+                "SELECT COUNT(*) FROM sitemap_cache WHERE scraped = -1"
+            ).fetchone()[0]
+    except sqlite3.Error:
+        pass
+    finally:
+        conn.close()
+    return counts
 
 
 def safe_vacuum_sqlite(source_db: str | Path, target_db: str | Path) -> bool:
@@ -66,6 +100,18 @@ def safe_vacuum_sqlite(source_db: str | Path, target_db: str | Path) -> bool:
         return False
 
 
+def _git_head_sha() -> str:
+    """Short HEAD SHA of the checkout that produced this backup, empty if unavailable."""
+    try:
+        res = subprocess.run(
+            ["git", "-C", str(BASE_DIR.parent), "rev-parse", "--short", "HEAD"],
+            capture_output=True, text=True, timeout=10,
+        )
+        return res.stdout.strip() if res.returncode == 0 else ""
+    except (OSError, subprocess.SubprocessError):
+        return ""
+
+
 def create_backup_archive(
     db_paths: list[Path],
     output_dir: Path,
@@ -82,6 +128,7 @@ def create_backup_archive(
     manifest = {
         "timestamp": timestamp,
         "created_utc": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
+        "source_commit": _git_head_sha(),
         "databases": {},
     }
 
@@ -100,6 +147,7 @@ def create_backup_archive(
                 manifest["databases"][db.name] = {
                     "sha256": sha,
                     "size_mb": round(size_mb, 2),
+                    "counts": _db_row_counts(db),
                 }
                 valid_files.append(snap_path)
 
@@ -325,56 +373,133 @@ def upload_to_cloudflare_r2(
         return False
 
 
+def _run_git(args: list[str], cwd: Path, env: dict) -> subprocess.CompletedProcess:
+    """Git with no credential helper and no token on the command line."""
+    return subprocess.run(
+        ["git", "-c", "credential.helper=", *args],
+        cwd=str(cwd), capture_output=True, text=True, env=env,
+    )
+
+
+def _hf_git_env(tmp_dir: Path) -> dict:
+    """Git environment that authenticates to Hugging Face through an askpass helper.
+
+    The token stays in the environment: it never enters a remote URL, a process
+    argument, .git/config, or any log.
+    """
+    helper = tmp_dir / "askpass.sh"
+    helper.write_text(
+        "#!/bin/sh\n"
+        'case "$1" in\n'
+        "  *Username*) printf '%s\\n' 'oauth' ;;\n"
+        '  *) printf \'%s\\n\' "${HF_TOKEN:?HF_TOKEN is missing}" ;;\n'
+        "esac\n"
+    )
+    helper.chmod(0o700)
+    home = tmp_dir / "home"
+    home.mkdir(exist_ok=True)
+    env = dict(os.environ)
+    env.update(
+        GIT_ASKPASS=str(helper),
+        GIT_TERMINAL_PROMPT="0",
+        GIT_CONFIG_NOSYSTEM="1",
+        HOME=str(home),
+        XDG_CONFIG_HOME=str(home),
+    )
+    return env
+
+
 def upload_to_huggingface(
     archive_path: Path,
+    manifest: dict | None = None,
     repo_id: str | None = None,
-    token: str | None = None,
+    extra_files: list[Path] | None = None,
 ) -> bool:
     """
-    Uploads backup archive to a private Hugging Face dataset repository using Git LFS.
+    Uploads a backup archive plus its manifest to a Hugging Face dataset via Git LFS.
     100% Python standard library (no pip packages or huggingface_hub required).
     """
     repo_id = repo_id or os.environ.get("HF_DATASET_REPO", "")
-    token = token or os.environ.get("HF_TOKEN", "")
-    if not repo_id or not token:
+    if not repo_id or not os.environ.get("HF_TOKEN"):
         print("[*] HF_DATASET_REPO or HF_TOKEN not configured. Skipping Hugging Face upload.", file=sys.stderr)
         return False
 
+    remote_url = f"https://huggingface.co/datasets/{repo_id}"
     print(f"[*] Uploading {archive_path.name} to Hugging Face dataset {repo_id}...", flush=True)
+
     with tempfile.TemporaryDirectory() as tmp_dir:
-        clone_url = f"https://user:{token}@huggingface.co/datasets/{repo_id}"
-        repo_dir = Path(tmp_dir) / "hf_repo"
+        tmp_path = Path(tmp_dir)
+        env = _hf_git_env(tmp_path)
+        repo_dir = tmp_path / "hf_repo"
 
-        # Clone repository or initialize if empty
-        res = subprocess.run(["git", "clone", "--depth", "1", clone_url, str(repo_dir)], capture_output=True, text=True)
-        if res.returncode != 0:
-            repo_dir.mkdir(parents=True, exist_ok=True)
-            subprocess.run(["git", "init"], cwd=repo_dir, capture_output=True)
-            subprocess.run(["git", "remote", "add", "origin", clone_url], cwd=repo_dir, capture_output=True)
-            subprocess.run(["git", "checkout", "-b", "main"], cwd=repo_dir, capture_output=True)
-
-        # Setup git-lfs tracking for large archives and databases
-        subprocess.run(["git", "lfs", "install"], cwd=repo_dir, capture_output=True)
-        subprocess.run(["git", "lfs", "track", "*.tar.gz", "*.db"], cwd=repo_dir, capture_output=True)
-
-        # Copy archive into repo
-        dest = repo_dir / archive_path.name
-        shutil.copy2(archive_path, dest)
-
-        # Git commit and push
-        subprocess.run(["git", "add", ".gitattributes", archive_path.name], cwd=repo_dir, capture_output=True)
-        subprocess.run(
-            ["git", "commit", "-m", f"chore(backup): snapshot {time.strftime('%Y-%m-%d %H:%M UTC', time.gmtime())}"],
-            cwd=repo_dir,
-            capture_output=True,
-        )
-        push_res = subprocess.run(["git", "push", "origin", "main"], cwd=repo_dir, capture_output=True, text=True)
-        if push_res.returncode == 0:
-            print(f"[✓] Uploaded backup to Hugging Face dataset: https://huggingface.co/datasets/{repo_id}", flush=True)
-            return True
+        clone = _run_git(["clone", "--depth", "1", remote_url, str(repo_dir)], tmp_path, env)
+        if clone.returncode != 0:
+            head = _run_git(["-c", "init.defaultBranch=main", "init", str(repo_dir)], tmp_path, env)
+            if head.returncode != 0:
+                print(f"[!] Hugging Face clone and init both failed: {head.stderr.strip()}", file=sys.stderr)
+                return False
+            _run_git(["remote", "add", "origin", remote_url], repo_dir, env)
+            _run_git(["checkout", "-b", "main"], repo_dir, env)
+            branch = "main"
         else:
-            print(f"[!] Hugging Face push failed: {push_res.stderr.strip()}", file=sys.stderr)
+            shown = _run_git(["symbolic-ref", "--short", "HEAD"], repo_dir, env)
+            branch = shown.stdout.strip() or "main"
+
+        repo_dir.mkdir(parents=True, exist_ok=True)
+
+        _run_git(["lfs", "install"], repo_dir, env)
+        for pattern in ("*.tar.gz", "*.db", "*.zip"):
+            _run_git(["lfs", "track", pattern], repo_dir, env)
+
+        shutil.copy2(archive_path, repo_dir / archive_path.name)
+        for extra in extra_files or []:
+            shutil.copy2(extra, repo_dir / extra.name)
+        if manifest:
+            (repo_dir / "LATEST.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+
+        added = _run_git(["add", "-A"], repo_dir, env)
+        if added.returncode != 0:
+            print(f"[!] git add failed: {added.stderr.strip()}", file=sys.stderr)
             return False
+
+        stamp = time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime())
+        committed = _run_git(
+            [
+                "-c", "user.name=radd-stream-backup",
+                "-c", "user.email=backup@radd-stream.local",
+                "commit",
+                "-m", f"chore(backup): snapshot {stamp} ({archive_path.name})",
+            ],
+            repo_dir, env,
+        )
+        if committed.returncode != 0 and "nothing to commit" not in committed.stdout + committed.stderr:
+            print(f"[!] git commit failed: {(committed.stderr or committed.stdout).strip()}", file=sys.stderr)
+            return False
+
+        pushed = _run_git(["push", "origin", branch], repo_dir, env)
+        if pushed.returncode != 0:
+            print(f"[!] Hugging Face push failed: {(pushed.stderr or pushed.stdout).strip()}", file=sys.stderr)
+            return False
+
+        print(f"[✓] Uploaded backup to Hugging Face dataset: https://huggingface.co/datasets/{repo_id}", flush=True)
+        return True
+
+
+def snapshot_code(output_dir: Path) -> Path | None:
+    """Packs the tracked source tree at HEAD so the code rides along with the data."""
+    output_dir.mkdir(parents=True, exist_ok=True)
+    sha = _git_head_sha() or "unknown"
+    target = output_dir / f"radd-stream-code_{sha}.tar.gz"
+    if target.exists():
+        return target
+    res = subprocess.run(
+        ["git", "-C", str(BASE_DIR.parent), "archive", "--format=tar.gz", "-o", str(target), "HEAD"],
+        capture_output=True, text=True, timeout=300,
+    )
+    if res.returncode != 0 or not target.exists():
+        print(f"[!] Code snapshot failed: {res.stderr.strip()}", file=sys.stderr)
+        return None
+    return target
 
 
 def main():
@@ -387,6 +512,7 @@ def main():
     parser.add_argument("--hf", action="store_true", help="Upload to Hugging Face dataset")
     parser.add_argument("--all", action="store_true", help="Upload to all configured services (GitHub + HF + Telegram + R2)")
     parser.add_argument("--dry-run", action="store_true", help="Snapshot & compress only, do not upload")
+    parser.add_argument("--no-code", action="store_true", help="Do not pack the tracked source tree alongside the databases")
     args = parser.parse_args()
 
     data_dir = Path(args.dir)
@@ -415,7 +541,12 @@ def main():
 
     # 2. Hugging Face Datasets
     if args.hf or args.all or os.environ.get("HF_TOKEN"):
-        upload_to_huggingface(archive)
+        extras = []
+        if not args.no_code:
+            code = snapshot_code(out_dir)
+            if code:
+                extras.append(code)
+        upload_to_huggingface(archive, manifest=manifest, extra_files=extras)
 
     # 3. Telegram
     if args.telegram or args.all:
