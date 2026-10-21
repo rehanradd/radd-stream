@@ -797,5 +797,90 @@ class DatabaseSaveTests(unittest.TestCase):
         self.assertTrue(res_gm["refreshed"])
 
 
+class AdultContentFilterTests(unittest.TestCase):
+    """18+ rows stay in the catalog but must never surface through any presentation surface."""
+
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.db_path = Path(self.temp_dir.name) / "test.db"
+        self.db_path_patch = patch.object(fast_fetch, "DB_PATH", self.db_path)
+        self.db_path_patch.start()
+        self.viewer_db_patch = patch.object(viewer, "DB_PATH", self.db_path)
+        self.viewer_db_patch.start()
+        self.cinemeta_patch = patch.object(fast_fetch, "fetch_cinemeta_metadata", return_value=None)
+        self.cinemeta_patch.start()
+        fast_fetch.init_db()
+
+    def tearDown(self):
+        self.cinemeta_patch.stop()
+        self.viewer_db_patch.stop()
+        self.db_path_patch.stop()
+        self.temp_dir.cleanup()
+
+    def save(self, **overrides):
+        data = DatabaseSaveTests.media(
+            "site_a",
+            overrides.pop("url", "https://site-a.example/example-film/"),
+            **overrides,
+        )
+        data.update(overrides)
+        return fast_fetch.save_scraped_data(data)
+
+    def flag(self, post_id):
+        with fast_fetch.get_db() as conn:
+            return conn.execute("SELECT is_18_plus FROM posts WHERE id = ?", (post_id,)).fetchone()[0]
+
+    def test_adult_studio_in_clean_title_is_flagged(self):
+        post_id = self.save(
+            title="Tushy What The Wife Saw (2024)",
+            clean_title="Tushy What The Wife Saw",
+            url="https://site-a.example/tushy-what-the-wife-saw/",
+        )
+        self.assertEqual(self.flag(post_id), 1)
+
+    def test_adult_marker_only_in_slug_is_flagged(self):
+        post_id = self.save(
+            title="Example Film",
+            clean_title="Example Film",
+            url="https://site-a.example/realitykings-example-film-2024/",
+        )
+        self.assertEqual(self.flag(post_id), 1)
+
+    def test_safe_title_is_left_unflagged(self):
+        post_id = self.save()
+        self.assertEqual(self.flag(post_id), 0)
+
+    def test_adult_posts_hidden_from_api_detail_m3u_and_resolver(self):
+        adult_id = self.save(
+            title="Vixen Desires (2024)",
+            clean_title="Vixen Desires",
+            url="https://site-a.example/vixen-desires/",
+        )
+        safe_id = self.save(
+            url="https://site-a.example/example-film-2/",
+            clean_title="Example Film Two",
+            title="Example Film Two (2024)",
+        )
+
+        resp = viewer.api_v1_get_posts(limit=10)
+        self.assertEqual(resp["total"], 1)
+        self.assertEqual([r["id"] for r in resp["results"]], [safe_id])
+
+        self.assertIsNone(viewer.api_v1_get_post_detail(adult_id))
+        self.assertEqual(viewer.generate_m3u_playlist(adult_id), "")
+
+        with fast_fetch.get_db() as conn:
+            adult_source = conn.execute(
+                "SELECT s.id FROM download_sources s "
+                "JOIN releases r ON r.id = s.release_id "
+                "WHERE r.post_id = ?",
+                (adult_id,),
+            ).fetchone()
+            self.assertIsNotNone(adult_source)
+        resolution = fast_fetch.resolve_live_source(adult_source["id"])
+        self.assertFalse(resolution["success"])
+        self.assertIn("18+", resolution["error"])
+
+
 if __name__ == "__main__":
     unittest.main()
