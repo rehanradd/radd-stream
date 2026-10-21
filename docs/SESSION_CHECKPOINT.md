@@ -206,8 +206,9 @@ Update this file after each independently verified milestone so work can resume 
 - **GitHub branch/commit/push result:** committed to `master` and pushed (see commit below).
 - **Oracle deployment result:** not deployed — code is live-source only; staging DBs remain on
   `/home/ubuntu/radd-stream-data/`.
-- **Next concrete action:** let the three running crawlers finish (HDHub4u ~5h, HindiLinks4u ~2.6h,
-  ToonWorld4All ~2.5h), then merge all staging catalogs into `fast_fetch.db` via the merge path,
+- **Next concrete action:** let the three running crawlers finish (HDHub4u ~4.7h, HindiLinks4u ~2.6h,
+  ToonWorld4All ~2.8h), then run `python3 Fast_Fetch/import_toonworld4all.py --resolve-bridges`
+  to back-fill Toon CDN URLs, merge all staging catalogs into `fast_fetch.db` via the merge path,
   re-verify the API/dashboard/M3U 18+ filters against the new totals, and snapshot the merged DB.
 - **Blockers / decisions needed:** Shemaroo (owner chose "skip"); owner still needs to revoke the
   GitHub credential that was exposed in an earlier session (value never recorded here).

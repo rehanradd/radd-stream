@@ -674,6 +674,54 @@ def run_crawler(db_path: Path, base_url: str, workers: int = 3, delay: float = 0
     print(f"\n[✓] Crawler finished: {done - failed:,} scraped, {failed:,} failed in {time.monotonic()-started:.1f}s", flush=True)
 
 
+def resolve_stored_bridges(db_path: Path, base_url: str, workers: int = 4, delay: float = 0.3) -> tuple[int, int]:
+    """Second pass that fills final_url for /redirect/ bridges captured without --resolve."""
+    client = ToonClient(base_url=base_url, request_interval=delay)
+    with sqlite3.connect(str(db_path)) as conn:
+        pending = conn.execute(
+            "SELECT id, source_url, quality FROM sources "
+            "WHERE final_url = source_url AND source_url LIKE '%/redirect/%' ORDER BY rowid ASC"
+        ).fetchall()
+    if not pending:
+        print("[*] No unresolved ToonWorld4All bridges to resolve.", flush=True)
+        return 0, 0
+
+    print(f"[*] Resolving {len(pending):,} stored bridges...", flush=True)
+    started = time.monotonic()
+    resolved = failed = done = 0
+
+    def work(row):
+        sid, url, _q = row
+        code, _, page = client.get_text(url, referer=base_url + "/")
+        props = _page_props(page) if code == 200 else None
+        real = None
+        if props:
+            lnk = props.get("link") or {}
+            if lnk.get("domain") and lnk.get("hidden"):
+                real = lnk["domain"].rstrip("/") + "/" + lnk["hidden"]
+            elif props.get("destination"):
+                real = props["destination"]
+        return sid, url, real
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
+        for sid, url, real in pool.map(work, pending):
+            done += 1
+            if real:
+                resolved += 1
+                with sqlite3.connect(str(db_path)) as conn:
+                    conn.execute("UPDATE sources SET final_url=? WHERE id=?", (real, sid))
+                    conn.commit()
+            else:
+                failed += 1
+            if done % 200 == 0 or done == len(pending):
+                print(
+                    f"  [{done:,}/{len(pending):,}] resolved={resolved:,} unresolved={failed:,} "
+                    f"ETA: {((len(pending)-done)/max(0.01, done/(time.monotonic()-started)))/60:.1f}m",
+                    flush=True,
+                )
+    return resolved, failed
+
+
 def print_status(db_path: Path):
     with sqlite3.connect(str(db_path)) as conn:
         posts = conn.execute("SELECT COUNT(*) FROM posts").fetchone()[0]
@@ -694,6 +742,8 @@ def main():
     parser.add_argument("--limit", type=int, default=None, help="Limit crawled posts this run")
     parser.add_argument("--status", action="store_true", help="Print staging DB metrics")
     parser.add_argument("--resolve", action="store_true", help="Unwrap /redirect/ bridges into final CDN URLs")
+    parser.add_argument("--resolve-bridges", action="store_true",
+                        help="Back-fill final_url for already-stored /redirect/ bridges")
     parser.add_argument("--db-path", type=Path, default=DB_PATH, help="Staging DB path")
     args = parser.parse_args()
 
@@ -702,6 +752,9 @@ def main():
 
     if args.status:
         print_status(db_path)
+        return
+    if args.resolve_bridges:
+        resolve_stored_bridges(db_path, base_url, workers=args.workers, delay=args.delay)
         return
     if args.sync_api:
         sync_api_to_db(db_path, base_url, args.max_items)

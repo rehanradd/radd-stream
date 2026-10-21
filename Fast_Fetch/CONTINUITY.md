@@ -366,3 +366,7 @@ routes; restrict the bind and public routes before enabling the public proxy.
   offline modules re-run green (147 tests total).
 - **Next**: finish the three running crawlers, then merge every staging DB into `fast_fetch.db`,
   re-verify API/dashboard/M3U 18+ filtering against the new totals, and snapshot the merged catalog.
+- **Follow-up (same session)**: ToonWorld4All `--resolve` inline unwrap proved ~10x slower
+  (7 posts in 10 min), so the crawler stores `/redirect/<hex>` bridges and a new
+  `import_toonworld4all.py --resolve-bridges` pass back-fills `sources.final_url`
+  concurrently afterwards. `SITES.md` documents the two-pass strategy.

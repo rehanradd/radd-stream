@@ -579,8 +579,11 @@ rel_links = re.findall(r'href=["\'](/server/\d+/[^"\'<>\s]+\.html)["\']', html)
   mirrors of a `/redirect/<hex>` link; `streams[]` for watch pages.
 - **Redirect unwrap:** the `/redirect/<hex>` page embeds
   `window.__PROPS__ = {"destination":…, "link":{"domain":"https://hubcloud.ist/video/","hidden":"…"}}`
-  → final URL = `domain + hidden`. If unwrap fails the bridge is still stored
-  (zero-data-loss).
+  → final URL = `domain + hidden`. Unwrapping is a per-file request, so the fleet runs a
+  two-pass strategy: crawl with bridges stored (fast), then
+  `import_toonworld4all.py --resolve-bridges` back-fills `final_url` for every
+  `sources.row WHERE final_url = source_url AND source_url LIKE '%/redirect/%'`.
+  `--resolve` does it inline instead (≈10x slower). Nothing is ever discarded if unwrap fails.
 - **Canonical keys:** season-scoped — `generate_canonical_key(title, year) + "_sNN"`
   for series, because `generate_canonical_key` strips `season \d+` and would
   otherwise collide all seasons into one post.
