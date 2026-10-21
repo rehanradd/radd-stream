@@ -370,3 +370,12 @@ routes; restrict the bind and public routes before enabling the public proxy.
   (7 posts in 10 min), so the crawler stores `/redirect/<hex>` bridges and a new
   `import_toonworld4all.py --resolve-bridges` pass back-fills `sources.final_url`
   concurrently afterwards. `SITES.md` documents the two-pass strategy.
+- **Merge path extended (`merge_catalogs.py`)**: it now accepts both staging schema families.
+  `_source_family()` detects `sources` vs `download_sources`, `_collect_staging_post()` maps
+  `label/size_bytes/season_number/bridge_url/site/post_url` onto the unified columns (with
+  `_pick()` tolerance for per-site drift and `raw_meta.loc` as the URL fallback for desicinemas),
+  and repeated `canonical_key` rows in one staging DB are retargeted onto the anchor URL so the
+  identity lookup merges instead of raising "matches multiple records" — the displaced page URL is
+  still recorded in `post_sources` (zero data loss). Byte sizes render as human-readable text.
+  Verified by merging 300 posts from each of 7 databases plus 30 from all 12 staging-family DBs:
+  0 errors. New tests: `test_merge_catalogs.py` 3/3 (staging family + duplicate-key dedup).

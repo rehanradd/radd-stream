@@ -191,25 +191,34 @@ Update this file after each independently verified milestone so work can resume 
      desicinemas 7 · rareanimes 7 · multimovies 30 · toonworld4all 1.
   7. Registered `hindilinks4u` and `toonworld4all` in `domain_registry.json`; documented both in
      `Fast_Fetch/SITES.md` (sections 11 and 12).
+  8. **Merge tool handles both staging families** (`merge_catalogs.py`): detects
+     `sources` vs `download_sources` schemas, maps staging release columns onto the unified
+     shape, tolerates per-site column drift, and deduplicates repeated `canonical_key` rows onto
+     one catalog record while keeping the displaced page URL in `post_sources`. Verified by
+     merging 300 posts from each of 7 databases and 30 from each of the other 11 — zero errors.
 - **Files changed:** `Fast_Fetch/fast_fetch.py`, `Fast_Fetch/import_hdhub4u.py`,
-  `Fast_Fetch/import_multimovies.py`, `Fast_Fetch/import_hindilinks4u.py` (new),
-  `Fast_Fetch/import_toonworld4all.py` (new), `Fast_Fetch/domain_registry.json`,
-  `Fast_Fetch/test_hindilinks4u.py` (new, 8 tests), `Fast_Fetch/test_toonworld4all.py`
-  (new, 12 tests), `Fast_Fetch/SITES.md`, `Fast_Fetch/CONTINUITY.md`, `docs/SESSION_CHECKPOINT.md`,
+  `Fast_Fetch/import_multimovies.py`, `Fast_Fetch/merge_catalogs.py`,
+  `Fast_Fetch/import_hindilinks4u.py` (new), `Fast_Fetch/import_toonworld4all.py` (new),
+  `Fast_Fetch/domain_registry.json`, `Fast_Fetch/test_hindilinks4u.py` (new, 8 tests),
+  `Fast_Fetch/test_toonworld4all.py` (new, 12 tests), `Fast_Fetch/test_merge_catalogs.py`
+  (3 tests), `Fast_Fetch/SITES.md`, `Fast_Fetch/CONTINUITY.md`, `docs/SESSION_CHECKPOINT.md`,
   crawler `*_status.json` snapshots.
 - **Checks run and exact result:** `test_database.py` 36/36 OK · `test_vidout.py` 6/6 OK ·
   `test_hdhub4u_import.py` 25/25 OK · `test_multimovies_import.py` 9/9 OK ·
   `test_filmyzilla_import.py` 8/8 OK · `test_hindilinks4u.py` 8/8 OK · `test_toonworld4all.py`
-  12/12 OK · every pre-existing offline test module re-run OK (21 modules, 147 tests, no network).
+  12/12 OK · `test_merge_catalogs.py` 3/3 OK (new staging-family + dedup cases) · every
+  pre-existing offline test module re-run OK (23 modules, 160 tests, no network).
 - **Known failures or checks not run:** `test_all_sites.py` live audit not re-run this session;
   Android app not built (no app-side change needed); no merge into `fast_fetch.db` yet.
 - **GitHub branch/commit/push result:** committed to `master` and pushed (see commit below).
 - **Oracle deployment result:** not deployed — code is live-source only; staging DBs remain on
   `/home/ubuntu/radd-stream-data/`.
-- **Next concrete action:** let the three running crawlers finish (HDHub4u ~4.7h, HindiLinks4u ~2.6h,
-  ToonWorld4All ~2.8h), then run `python3 Fast_Fetch/import_toonworld4all.py --resolve-bridges`
-  to back-fill Toon CDN URLs, merge all staging catalogs into `fast_fetch.db` via the merge path,
-  re-verify the API/dashboard/M3U 18+ filters against the new totals, and snapshot the merged DB.
+- **Next concrete action:** let the three running crawlers finish (HDHub4u ~4.4h, HindiLinks4u ~2.3h,
+  ToonWorld4All ~2.4h), then run `python3 Fast_Fetch/import_toonworld4all.py --resolve-bridges`
+  to back-fill Toon CDN URLs and merge every staging DB into `fast_fetch.db` with
+  `python3 Fast_Fetch/merge_catalogs.py <site>.db --target-db /home/ubuntu/radd-stream-data/fast_fetch.db`
+  (the merge tool now handles both staging schema families), re-verify the API/dashboard/M3U
+  18+ filters against the merged totals, and snapshot the merged DB.
 - **Blockers / decisions needed:** Shemaroo (owner chose "skip"); owner still needs to revoke the
   GitHub credential that was exposed in an earlier session (value never recorded here).
 
