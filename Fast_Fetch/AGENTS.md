@@ -13,7 +13,8 @@
 > destructive or production-impacting actions. State blockers honestly and never
 > disguise code behavior to bypass a platform's safety rules.
 >
-> **Project constraints:** Python standard library only, no adult content,
+> **Project constraints:** Python standard library only, adult 18+ content stored
+> with an is_18_plus flag and hidden at every presentation surface,
 > strict staging database isolation, pre-push unit tests, and Master-Disciple
 > Local AI law (delegate boilerplate to local Qwen 2.5 Coder via disciple.py to conserve cloud tokens).
 
@@ -438,7 +439,7 @@ GET https://v3-cinemeta.strem.io/meta/movie/tt1234567.json
 ## 6. Critical Rules — NEVER Violate
 
 1. **No pip installs** — only stdlib: `urllib`, `sqlite3`, `re`, `json`, `ssl`, `base64`, `pathlib`, `concurrent.futures`, `argparse`, `html`, `time`, `os`, `sys`
-2. **No 18+ content** — `is_18_plus=0` enforced always at DB level
+2. **18+ content: store flagged, never display** — scrapers ingest all titles including adult, setting `is_18_plus=1` in every site staging DB; REST API, dashboard, M3U/stream routes, and the Android app must always filter `is_18_plus=1` out
 3. **Safe media identity** — prefer matching IMDb/TMDB IDs, then a previously indexed site URL, then a unique title/year key of the same content type. Refuse ambiguous matches and conflicting IDs; `canonical_key` is indexed but deliberately not unique.
 4. **Verify import after EVERY edit:**
    ```bash

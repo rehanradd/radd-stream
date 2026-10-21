@@ -141,6 +141,19 @@ USER_AGENT = (
 )
 
 
+ADULT_TITLE_PATTERNS = [
+    r"\b18\+", r"\b18\s*\+", r"\badult\b", r"\berotic\b", r"\bhotshots\b", r"\bullu\b",
+    r"\bkooku\b", r"\bprimeplay\b", r"\brabbit\b", r"\bhunters\b",
+    r"\bunrated\b", r"\bnsfw\b", r"\bporn\b", r"\bxxx\b", r"\bboldscene\b",
+]
+
+
+def is_adult_title(*texts) -> int:
+    """Returns 1 when any title/slug/tag text matches adult patterns."""
+    joined = " ".join(t for t in texts if t)
+    return 1 if any(re.search(p, joined, re.IGNORECASE) for p in ADULT_TITLE_PATTERNS) else 0
+
+
 def normalize_url(url: str) -> str:
     """
     Normalizes a URL to point to current live domains if it uses an older/alternate domain.
@@ -1671,9 +1684,8 @@ def parse_post_metadata(page_url: str, html: str) -> dict:
         synopsis = re.sub(r'<[^>]+>', '', synopsis).strip()
 
     # 6. 18+ Content Flag (precise word boundaries on title and slug)
-    adult_patterns = [r"\b18\+\b", r"\badult\b", r"\berotic\b", r"\bhotshots\b", r"\bullu\b", r"\bkooku\b", r"\bprimeplay\b", r"\brabbit\b", r"\bhunters\b", r"\bunrated\b", r"\bnsfw\b"]
     title_slug_text = f"{raw_title} {slug}"
-    is_18_plus = 1 if any(re.search(p, title_slug_text, re.IGNORECASE) for p in adult_patterns) else 0
+    is_18_plus = is_adult_title(raw_title, slug)
 
     # 7. Animation / Anime Flag
     anim_patterns = [r"\banime\b", r"\banimation\b", r"\banimated\b", r"\bcartoon\b", r"\bdonghua\b", r"\bcrunchyroll\b", r"\bgokuhd\b"]
@@ -4518,6 +4530,15 @@ def resolve_live_source(source_id: int) -> dict:
     init_db()
     with get_db() as conn:
         row = conn.execute("SELECT * FROM download_sources WHERE id = ?", (source_id,)).fetchone()
+        if row:
+            adult = conn.execute(
+                "SELECT p.is_18_plus FROM download_sources s "
+                "JOIN releases r ON r.id = s.release_id "
+                "JOIN posts p ON p.id = r.post_id WHERE s.id = ?",
+                (source_id,),
+            ).fetchone()
+            if adult and adult[0]:
+                return {"success": False, "error": "Source restricted (18+ content)"}
     if not row:
         return {"success": False, "error": f"Source #{source_id} not found"}
 

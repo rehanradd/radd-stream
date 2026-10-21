@@ -422,6 +422,7 @@ def init_staging_db(db_path: Path):
                 poster_url TEXT,
                 synopsis TEXT,
                 genres TEXT,
+                is_18_plus INTEGER DEFAULT 0,
                 site TEXT DEFAULT 'moviezguru',
                 post_url TEXT,
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -429,6 +430,12 @@ def init_staging_db(db_path: Path):
             );
             """
         )
+        _mp = {c[1] for c in cur.execute("PRAGMA table_info(posts);").fetchall()}
+        if "is_18_plus" not in _mp:
+            try:
+                cur.execute("ALTER TABLE posts ADD COLUMN is_18_plus INTEGER DEFAULT 0;")
+            except Exception:
+                pass
         cur.execute(
             """
             CREATE TABLE IF NOT EXISTS releases (
@@ -490,8 +497,8 @@ def save_post_to_staging(db_path: Path, result: dict):
 
         cur.execute(
             """
-            INSERT INTO posts (canonical_key, title, original_title, year, media_type, imdb_id, poster_url, synopsis, genres, site, post_url)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO posts (canonical_key, title, original_title, year, media_type, imdb_id, poster_url, synopsis, genres, is_18_plus, site, post_url)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(canonical_key) DO UPDATE SET
                 title=excluded.title,
                 original_title=excluded.original_title,
@@ -499,6 +506,7 @@ def save_post_to_staging(db_path: Path, result: dict):
                 media_type=excluded.media_type,
                 imdb_id=COALESCE(excluded.imdb_id, posts.imdb_id),
                 poster_url=COALESCE(excluded.poster_url, posts.poster_url),
+                is_18_plus=MAX(posts.is_18_plus, excluded.is_18_plus),
                 post_url=excluded.post_url,
                 updated_at=CURRENT_TIMESTAMP;
             """,
@@ -512,6 +520,7 @@ def save_post_to_staging(db_path: Path, result: dict):
                 p["poster_url"],
                 p["synopsis"],
                 p["genres"],
+                p.get("is_18_plus", 0),
                 p["site"],
                 p["post_url"],
             ),
@@ -576,8 +585,8 @@ def scrape_post_item(
         if not raw_title or not content_html:
             return None
 
-        if is_adult_content(raw_title) or is_adult_content(slug):
-            return {"loc": loc, "skipped": True}
+        # Adult content retained with is_18_plus flag; hidden only at presentation layer
+        is_adult = 1 if (is_adult_content(raw_title) or is_adult_content(slug)) else 0
 
         # Clean title & detect year
         clean_title, year, season_num, media_type, canonical_key = clean_moviezguru_title(
@@ -630,6 +639,7 @@ def scrape_post_item(
                 "genres": None,
                 "site": "moviezguru",
                 "post_url": loc,
+                "is_18_plus": is_adult,
             },
             "releases": resolved_releases,
         }

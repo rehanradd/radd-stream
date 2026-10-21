@@ -6,7 +6,7 @@ Follows the Radd-Stream Manifesto:
 - Dedicated Staging Database: /home/ubuntu/radd-stream-data/desicinemas.db
 - Strict isolation: NEVER merges into production fast_fetch.db without explicit user confirmation.
 - Zero external pip or npm packages (100% Python standard library only).
-- Zero 18+ content: is_18_plus = 0 enforced.
+- Adult 18+ titles are stored with is_18_plus = 1 flag; hidden at presentation layer only.
 - Zero Data Loss rule: All streams, embeds, and fallback gateways preserved.
 """
 
@@ -555,7 +555,7 @@ def save_post_to_staging(db_path: Path, item_res: dict):
         cur.execute(
             """
             INSERT INTO posts (canonical_key, title, clean_title, year, media_type, poster_url, backdrop_url, imdb_id, tmdb_id, synopsis, genres, director, cast_names, languages, is_18_plus, raw_meta)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(canonical_key) DO UPDATE SET
                 title = excluded.title,
                 clean_title = excluded.clean_title,
@@ -587,6 +587,7 @@ def save_post_to_staging(db_path: Path, item_res: dict):
                 p.get("director"),
                 p.get("cast_names"),
                 p.get("languages"),
+                p.get("is_18_plus", 0),
                 json.dumps({"loc": loc}),
             ),
         )
@@ -639,8 +640,8 @@ def scrape_post_item(item: tuple, client: DesiCinemasClient, unwrap_bridges: boo
     """Processes a single DesiCinemas item URL."""
     loc, lastmod, slug = item
     try:
-        if is_adult_content(slug):
-            return {"loc": loc, "skipped": True}
+        # Adult titles retained with is_18_plus flag; hidden only at presentation layer
+        is_adult = 1 if is_adult_content(slug) else 0
 
         status, _, html_text, _ = client.get_text(loc, referer=BASE_URL, timeout=12.0)
         if status != 200 or not html_text:
@@ -653,7 +654,7 @@ def scrape_post_item(item: tuple, client: DesiCinemasClient, unwrap_bridges: boo
             return {"loc": loc, "success": False, "reason": "no_title"}
 
         if is_adult_content(raw_title):
-            return {"loc": loc, "skipped": True}
+            is_adult = 1
 
         # Normalize title
         clean_title, year, season_num, episode_num, quality, languages, media_type, canonical_key = clean_desicinemas_title(raw_title, loc)
@@ -715,6 +716,7 @@ def scrape_post_item(item: tuple, client: DesiCinemasClient, unwrap_bridges: boo
                 "cast_names": cast_names,
                 "genres": genres,
                 "languages": languages,
+                "is_18_plus": is_adult,
             },
             "releases": releases,
         }

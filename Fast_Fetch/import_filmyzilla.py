@@ -59,6 +59,18 @@ USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTM
 
 STOP_REQUESTED = False
 
+_ADULT_TITLE_PATTERNS = [
+    r"\b18\+", r"\b18\s*\+", r"\badult\b", r"\berotic\b", r"\bhotshots\b", r"\bullu\b",
+    r"\bkooku\b", r"\bprimeplay\b", r"\brabbit\b", r"\bhunters\b",
+    r"\bunrated\b", r"\bnsfw\b", r"\bporn\b", r"\bxxx\b", r"\bboldscene\b",
+]
+
+
+def _is_adult_title(*texts) -> int:
+    """Returns 1 when any title text matches adult patterns."""
+    joined = " ".join(t for t in texts if t)
+    return 1 if any(re.search(p, joined, re.IGNORECASE) for p in _ADULT_TITLE_PATTERNS) else 0
+
 
 def sig_handler(signum, frame):
     global STOP_REQUESTED
@@ -201,6 +213,7 @@ def init_staging_db(db_path: Path):
                 director TEXT,
                 languages TEXT,
                 rating REAL,
+                is_18_plus INTEGER DEFAULT 0,
                 site TEXT DEFAULT 'filmyzilla',
                 post_url TEXT,
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -254,6 +267,12 @@ def init_staging_db(db_path: Path):
             """
         )
         conn.execute("CREATE INDEX IF NOT EXISTS idx_sources_release ON sources(release_id);")
+        _fcols = {c[1] for c in conn.execute("PRAGMA table_info(posts);").fetchall()}
+        if "is_18_plus" not in _fcols:
+            try:
+                conn.execute("ALTER TABLE posts ADD COLUMN is_18_plus INTEGER DEFAULT 0;")
+            except Exception:
+                pass
         conn.commit()
 
 
@@ -621,9 +640,9 @@ def save_post_to_staging_db(db_path: Path, post_data: dict) -> bool:
             """
             INSERT INTO posts (
                 canonical_key, title, original_title, year, media_type,
-                imdb_id, poster_url, synopsis, genres, cast_names, director, languages, rating, site, post_url,
+                imdb_id, poster_url, synopsis, genres, cast_names, director, languages, rating, is_18_plus, site, post_url,
                 created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
             ON CONFLICT(canonical_key) DO UPDATE SET
                 title = excluded.title,
                 original_title = excluded.original_title,
@@ -637,6 +656,7 @@ def save_post_to_staging_db(db_path: Path, post_data: dict) -> bool:
                 director = COALESCE(excluded.director, posts.director),
                 languages = COALESCE(excluded.languages, posts.languages),
                 rating = COALESCE(excluded.rating, posts.rating),
+                is_18_plus = MAX(posts.is_18_plus, excluded.is_18_plus),
                 post_url = excluded.post_url,
                 updated_at = CURRENT_TIMESTAMP
             RETURNING id;
@@ -655,6 +675,7 @@ def save_post_to_staging_db(db_path: Path, post_data: dict) -> bool:
                 post_data.get("director"),
                 post_data.get("languages"),
                 post_data.get("rating"),
+                _is_adult_title(post_data["title"], post_data.get("original_title")),
                 post_data["site"],
                 post_data["post_url"],
             ),

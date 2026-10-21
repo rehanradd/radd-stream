@@ -188,12 +188,19 @@ def init_staging_db(db_path: Path):
                 cast_names TEXT,
                 director TEXT,
                 languages TEXT,
+                is_18_plus INTEGER DEFAULT 0,
                 site TEXT DEFAULT '10xflix',
                 post_url TEXT,
                 updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
             );
             """
         )
+        _xcols = {c[1] for c in cur.execute("PRAGMA table_info(posts);").fetchall()}
+        if "is_18_plus" not in _xcols:
+            try:
+                cur.execute("ALTER TABLE posts ADD COLUMN is_18_plus INTEGER DEFAULT 0;")
+            except Exception:
+                pass
         cur.execute("CREATE INDEX IF NOT EXISTS idx_10xflix_canonical ON posts(canonical_key);")
 
         # Auto-migration for schema changes
@@ -571,8 +578,8 @@ def save_post_to_staging_db(db_path: Path, post_data: dict) -> bool:
             """
             INSERT INTO posts (
                 canonical_key, title, original_title, year, media_type,
-                imdb_id, poster_url, synopsis, genres, cast_names, director, languages, site, post_url, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                imdb_id, poster_url, synopsis, genres, cast_names, director, languages, is_18_plus, site, post_url, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
             ON CONFLICT(canonical_key) DO UPDATE SET
                 title = excluded.title,
                 original_title = excluded.original_title,
@@ -585,6 +592,7 @@ def save_post_to_staging_db(db_path: Path, post_data: dict) -> bool:
                 cast_names = COALESCE(excluded.cast_names, posts.cast_names),
                 director = COALESCE(excluded.director, posts.director),
                 languages = COALESCE(excluded.languages, posts.languages),
+                is_18_plus = MAX(posts.is_18_plus, excluded.is_18_plus),
                 post_url = excluded.post_url,
                 updated_at = CURRENT_TIMESTAMP
             RETURNING id;
@@ -602,6 +610,7 @@ def save_post_to_staging_db(db_path: Path, post_data: dict) -> bool:
                 post_data.get("cast_names"),
                 post_data.get("director"),
                 post_data.get("languages"),
+                fast_fetch.is_adult_title(post_data["title"], post_data.get("original_title")),
                 post_data["site"],
                 post_data["post_url"],
             ),

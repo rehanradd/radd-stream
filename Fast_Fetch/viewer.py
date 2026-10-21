@@ -115,10 +115,10 @@ def fetch_database_payload(search_query: str = "") -> dict:
             "dead_sources": dead_count,
         }
 
-        sql = "SELECT * FROM posts"
+        sql = "SELECT * FROM posts WHERE (is_18_plus IS NULL OR is_18_plus = 0)"
         params = []
         if search_query:
-            sql += " WHERE clean_title LIKE ? OR title LIKE ? OR slug LIKE ? OR industry LIKE ? OR country LIKE ? OR language LIKE ?"
+            sql += " AND (clean_title LIKE ? OR title LIKE ? OR slug LIKE ? OR industry LIKE ? OR country LIKE ? OR language LIKE ?)"
             p = f"%{search_query}%"
             params = [p, p, p, p, p, p]
         sql += " ORDER BY id DESC"
@@ -185,7 +185,7 @@ def search_sitemap_api(query: str, site: str = "", limit: int = 50) -> list[dict
 def generate_m3u_playlist(post_id: int) -> str:
     with get_db() as conn:
         post = conn.execute("SELECT * FROM posts WHERE id = ?", (post_id,)).fetchone()
-        if not post:
+        if not post or post["is_18_plus"]:
             return ""
 
         releases = conn.execute("SELECT * FROM releases WHERE post_id = ? ORDER BY season ASC, episode ASC, quality DESC, id ASC", (post_id,)).fetchall()
@@ -1887,7 +1887,8 @@ def api_v1_get_posts(query: str = "", content_type: str = "", page: int = 1, lim
     _ensure_schema()
     offset = max(0, (page - 1) * limit)
     with get_db() as conn:
-        where_clauses = ["1=1"]
+        # Adult-flagged posts are stored in the DB but never exposed via the API
+        where_clauses = ["(p.is_18_plus IS NULL OR p.is_18_plus = 0)"]
         params = []
         if query:
             where_clauses.append("(p.clean_title LIKE ? OR p.title LIKE ? OR p.slug LIKE ?)")
@@ -1930,7 +1931,7 @@ def api_v1_get_post_detail(post_id: int) -> dict | None:
     _ensure_schema()
     with get_db() as conn:
         post = conn.execute("SELECT * FROM posts WHERE id = ?", (post_id,)).fetchone()
-        if not post:
+        if not post or post["is_18_plus"]:
             return None
         p_dict = dict(post)
 

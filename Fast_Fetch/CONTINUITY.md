@@ -302,3 +302,25 @@ routes; restrict the bind and public routes before enabling the public proxy.
 - `auto_chat_sync.py` daemon (PID 210724) confirmed still running; chat history preserved.
 - **Quality Gate**: all 21 offline test modules passing; all 15 modified importers verified
   `import OK`; live `probe_site()` smoke test returned 200 for filmyzilla and hdhub4u.
+
+### Session 20 — Qoder (Oracle VM) — 2026-10-21
+**MILESTONE 7 — Rule Change: Adult Content Stored With is_18_plus Flag (Never Displayed) + Full Fleet Relaunch:**
+- Owner directive: scrape each site 100% completely; adult titles are no longer skipped but
+  stored with full metadata/links behind an `is_18_plus` column; all presentation surfaces filter it.
+- Root `AGENTS.md` + `Fast_Fetch/AGENTS.md` rules rewritten (store flagged, never display).
+- `fast_fetch.py`: new shared `ADULT_TITLE_PATTERNS` + `is_adult_title()` helper; fixed latent
+  `\b18\+\b` boundary bug ("18+" never matched); `resolve_live_source()` now refuses 18+ sources.
+- Flag-not-skip conversions in `import_9xmovies.py`, `import_bolly4u.py`, `import_world4ufree.py`,
+  `import_moviezguru.py`, `import_desicinemas.py`; `is_18_plus` wired into inserts with
+  `MAX()` merge in all 10 custom-schema scrapers (+`import_10xflix`, `import_hdhub4u`,
+  `import_katmoviehd`, `import_rareanimes`, `import_filmyzilla`).
+- Schema migration: `is_18_plus INTEGER DEFAULT 0` added to `posts` in all staging DBs missing it
+  (9 DBs) + CREATE/migration blocks in scrapers; 795 previously skipped (scraped=2) posts re-queued.
+- API/dashboard filters in `viewer.py`: post list, post detail, M3U, dashboard export all exclude
+  `is_18_plus=1`.
+- Heal findings: KatMovieHD heal running; bolly4u/world4ufree mass failures were `no_releases`
+  (linkless trailer posts) — genuinely empty, status recorded, retried by fleet.
+- Reset 36,848 failed posts fleet-wide to pending; launched full 15-crawler fleet (workers=4,
+  delay=0.2, sync-then-crawl) targeting 100% ingestion.
+- **Quality Gate**: 21/21 offline test modules pass; helper smoke tests pass; synthetic adult-save
+  verified `is_18_plus=1` storage in bolly4u staging.

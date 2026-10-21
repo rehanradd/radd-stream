@@ -665,6 +665,11 @@ def init_staging_db(db_path: Path):
                     cur.execute(f"ALTER TABLE posts ADD COLUMN {col} TEXT;")
                 except Exception:
                     pass
+        if "is_18_plus" not in existing_cols:
+            try:
+                cur.execute("ALTER TABLE posts ADD COLUMN is_18_plus INTEGER DEFAULT 0;")
+            except Exception:
+                pass
 
 
 def save_post_to_staging(db_path: Path, result: dict):
@@ -688,8 +693,8 @@ def save_post_to_staging(db_path: Path, result: dict):
 
         cur.execute(
             """
-            INSERT INTO posts (canonical_key, title, original_title, year, media_type, imdb_id, poster_url, synopsis, genres, cast_names, director, languages, site, post_url)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO posts (canonical_key, title, original_title, year, media_type, imdb_id, poster_url, synopsis, genres, cast_names, director, languages, is_18_plus, site, post_url)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(canonical_key) DO UPDATE SET
                 title=excluded.title,
                 original_title=excluded.original_title,
@@ -702,6 +707,7 @@ def save_post_to_staging(db_path: Path, result: dict):
                 cast_names=COALESCE(excluded.cast_names, posts.cast_names),
                 director=COALESCE(excluded.director, posts.director),
                 languages=COALESCE(excluded.languages, posts.languages),
+                is_18_plus=MAX(posts.is_18_plus, excluded.is_18_plus),
                 post_url=excluded.post_url,
                 updated_at=CURRENT_TIMESTAMP;
             """,
@@ -718,6 +724,7 @@ def save_post_to_staging(db_path: Path, result: dict):
                 p.get("cast_names"),
                 p.get("director"),
                 p.get("languages"),
+                p.get("is_18_plus", 0),
                 p["site"],
                 p["post_url"],
             ),
@@ -782,8 +789,7 @@ def scrape_post_item(
         if not raw_title or not content_html:
             return None
 
-        if is_adult_content(raw_title) or is_adult_content(slug):
-            return {"loc": loc, "skipped": True}
+        is_adult = 1 if (is_adult_content(raw_title) or is_adult_content(slug)) else 0
 
         # Clean title & detect year
         clean_title, year, season_num, media_type, canonical_key = clean_9xmovies_title(
@@ -841,6 +847,7 @@ def scrape_post_item(
                 "languages": meta.get("languages"),
                 "site": "9xmovies",
                 "post_url": loc,
+                "is_18_plus": is_adult,
             },
             "releases": resolved_releases,
         }
@@ -922,12 +929,11 @@ def sync_api_catalog(
                 continue
 
             is_adult = is_adult_content(raw_title) or is_adult_content(slug or "")
-            scraped_val = 2 if is_adult else 0
+            scraped_val = 0
             if is_adult:
                 total_adult += 1
-            else:
-                page_new += 1
-                total_new += 1
+            page_new += 1
+            total_new += 1
 
             batch_records.append((loc, lastmod, slug, scraped_val, "9xmovies", raw_json_str))
             if slug:

@@ -210,6 +210,7 @@ def init_staging_db(db_path: Path):
                 director TEXT,
                 languages TEXT,
                 rating REAL,
+                is_18_plus INTEGER DEFAULT 0,
                 site TEXT DEFAULT 'hdhub4u',
                 post_url TEXT,
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP,
@@ -256,6 +257,11 @@ def init_staging_db(db_path: Path):
                     conn.execute(f"ALTER TABLE posts ADD COLUMN {col} TEXT;")
                 except Exception:
                     pass
+        if "is_18_plus" not in existing_cols:
+            try:
+                conn.execute("ALTER TABLE posts ADD COLUMN is_18_plus INTEGER DEFAULT 0;")
+            except Exception:
+                pass
         conn.commit()
 
 
@@ -590,8 +596,8 @@ def save_post_to_staging_db(db_path: Path, post_data: dict) -> bool:
             """
             INSERT INTO posts (
                 canonical_key, title, original_title, year, media_type,
-                imdb_id, poster_url, synopsis, genres, cast_names, director, site, post_url, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                imdb_id, poster_url, synopsis, genres, cast_names, director, is_18_plus, site, post_url, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
             ON CONFLICT(canonical_key) DO UPDATE SET
                 title = excluded.title,
                 original_title = excluded.original_title,
@@ -603,6 +609,7 @@ def save_post_to_staging_db(db_path: Path, post_data: dict) -> bool:
                 genres = COALESCE(excluded.genres, posts.genres),
                 cast_names = COALESCE(excluded.cast_names, posts.cast_names),
                 director = COALESCE(excluded.director, posts.director),
+                is_18_plus = MAX(posts.is_18_plus, excluded.is_18_plus),
                 post_url = excluded.post_url,
                 updated_at = CURRENT_TIMESTAMP
             RETURNING id;
@@ -619,6 +626,7 @@ def save_post_to_staging_db(db_path: Path, post_data: dict) -> bool:
                 post_data.get("genres"),
                 post_data.get("cast_names"),
                 post_data.get("director"),
+                fast_fetch.is_adult_title(post_data["title"], post_data.get("original_title")),
                 post_data["site"],
                 post_data["post_url"],
             ),

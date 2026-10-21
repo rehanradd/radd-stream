@@ -18,7 +18,7 @@ Key Architectural Advantages & Speed Boosts:
        Sharedrive, MultiCloud, DriveHub.
   4. Dedicated Staging Database: bolly4u.db (strictly isolated from production fast_fetch.db).
   5. Zero External Dependencies: 100% Python Standard Library only.
-  6. Strict Zero Adult Content Enforcement: Filters out 18+ content (is_18_plus = 0).
+  6. Adult Content Flagging: 18+ titles are scraped in full and stored with is_18_plus = 1; hidden only at the presentation layer.
 
 Usage:
     python Fast_Fetch/import_bolly4u.py --sync-api --max-pages 5       # Ingest first 5 pages (500 titles)
@@ -87,7 +87,7 @@ def get_ssl_context():
 MAX_SAFE_WORKERS = 6
 MIN_REQUEST_DELAY = 0.3
 
-# Adult keywords filter to strictly enforce is_18_plus = 0
+# Adult keywords filter to flag 18+ posts (is_18_plus = 1)
 ADULT_KEYWORDS = {
     "18+", "erotic", "hotshots", "ullu", "kooku", "primeplay", "rabbit",
     "flizmovies", "hunters", "boommovies", "neonx", "besharams", "gupchup",
@@ -358,6 +358,7 @@ def init_staging_db(db_path: Path):
                 poster_url TEXT,
                 synopsis TEXT,
                 genres TEXT,
+                is_18_plus INTEGER DEFAULT 0,
                 site TEXT DEFAULT 'bolly4u',
                 post_url TEXT,
                 updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
@@ -365,6 +366,12 @@ def init_staging_db(db_path: Path):
             """
         )
         cur.execute("CREATE INDEX IF NOT EXISTS idx_bolly4u_canonical ON posts(canonical_key);")
+        _bp = {c[1] for c in cur.execute("PRAGMA table_info(posts);").fetchall()}
+        if "is_18_plus" not in _bp:
+            try:
+                cur.execute("ALTER TABLE posts ADD COLUMN is_18_plus INTEGER DEFAULT 0;")
+            except Exception:
+                pass
 
         cur.execute(
             """
@@ -553,7 +560,7 @@ def sync_api_catalog(client: Bolly4uClient, db_path: Path, max_pages: int | None
     page = 1
     total_new = 0
     total_existing = 0
-    total_adult_skipped = 0
+    total_adult_flagged = 0
     consecutive_empty_new = 0
     total_posts = 0
 
@@ -601,10 +608,9 @@ def sync_api_catalog(client: Bolly4uClient, db_path: Path, max_pages: int | None
             modified = p.get("modified", "")
             title_text = p.get("title", {}).get("rendered", "")
 
-            # Strictly enforce zero adult content
+            # Adult titles are kept and flagged (is_18_plus=1); filtered only at display layer
             if is_adult_content(title_text) or is_adult_content(slug):
-                total_adult_skipped += 1
-                continue
+                total_adult_flagged += 1
 
             if (slug and slug in existing_slugs) or (link in existing_locs):
                 total_existing += 1
@@ -644,7 +650,7 @@ def sync_api_catalog(client: Bolly4uClient, db_path: Path, max_pages: int | None
 
         page += 1
 
-    print(f"[✓] Bolly4u API sync finished: {total_new:,} brand new titles added to {db_path.name} ({total_existing:,} existing skipped, {total_adult_skipped:,} adult skipped).", flush=True)
+    print(f"[✓] Bolly4u API sync finished: {total_new:,} brand new titles added to {db_path.name} ({total_existing:,} existing skipped, {total_adult_flagged:,} adult flagged & queued).", flush=True)
     return total_new
 
 
@@ -663,9 +669,8 @@ def scrape_post_item(item: tuple, client: Bolly4uClient) -> dict | None:
         if not raw_title or not content_html:
             return None
 
-        # Strictly enforce zero adult content
-        if is_adult_content(raw_title) or is_adult_content(slug):
-            return {"loc": loc, "skipped": True}
+        # Adult content retained with is_18_plus flag; hidden only at presentation layer
+        is_adult = 1 if (is_adult_content(raw_title) or is_adult_content(slug)) else 0
 
         clean_title, year, media_type = clean_bolly4u_title(raw_title)
         canonical_key = fast_fetch.generate_canonical_key(clean_title, year)
@@ -715,6 +720,7 @@ def scrape_post_item(item: tuple, client: Bolly4uClient) -> dict | None:
                 "genres": None,
                 "site": "bolly4u",
                 "post_url": loc,
+                "is_18_plus": is_adult,
             },
             "releases": resolved_releases,
         }
@@ -746,20 +752,21 @@ def save_post_to_staging(db_path: Path, result: dict):
 
         cur.execute(
             """
-            INSERT INTO posts (canonical_key, title, original_title, year, media_type, imdb_id, poster_url, synopsis, genres, site, post_url)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO posts (canonical_key, title, original_title, year, media_type, imdb_id, poster_url, synopsis, genres, is_18_plus, site, post_url)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(canonical_key) DO UPDATE SET
                 title=excluded.title,
                 original_title=excluded.original_title,
                 year=excluded.year,
                 media_type=excluded.media_type,
+                is_18_plus=MAX(posts.is_18_plus, excluded.is_18_plus),
                 post_url=excluded.post_url,
                 updated_at=CURRENT_TIMESTAMP;
             """,
             (
                 p["canonical_key"], p["title"], p["original_title"], p["year"],
                 p["media_type"], p["imdb_id"], p["poster_url"], p["synopsis"],
-                p["genres"], p["site"], p["post_url"]
+                p["genres"], p.get("is_18_plus", 0), p["site"], p["post_url"]
             ),
         )
 

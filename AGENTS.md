@@ -79,7 +79,11 @@ Describe the code's behavior accurately to users and tools. Do not disguise its 
 - Not a hosting service
 - Not a download manager
 - Not a DRM circumventer
-- Not an 18+ platform (`is_18_plus=0` enforced at DB level)
+- Adult (18+) content is **stored but never displayed**: scrapers ingest 100% of each
+  site's catalog including 18+ titles, flagging them via the `is_18_plus` column
+  (`is_18_plus=1`) present in every site staging database. Every presentation surface
+  (REST API, Android app, dashboard, M3U/stream routes) must filter out rows where
+  `is_18_plus=1`. The flag is set at storage time; filtering is enforced at display time.
 
 ---
 
