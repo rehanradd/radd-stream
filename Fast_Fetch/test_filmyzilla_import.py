@@ -111,6 +111,39 @@ class TestFilmyZillaImport(unittest.TestCase):
         self.assertEqual(parsed["servers"][1]["server_id"], "39911")
         self.assertEqual(parsed["servers"][1]["quality"], "720p HDTS")
 
+    def test_modern_thefilmyzilla_page_parsing(self):
+        sample_modern_html = """
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>Uunchai (2022) Hindi HD FilmyZilla</title>
+            <meta property="og:image" content="https://thefilmyzilla.in/upload/uunchai-2022-hindi-hd-4215.webp">
+        </head>
+        <body>
+            <div class="info-row"><div class="info-label">Release Year</div><div class="info-value">2022</div></div>
+            <div class="info-row"><div class="info-label">Genres</div><div class="info-value">Bollywood,Comedy,Drama</div></div>
+            <div class="info-row"><div class="info-label">Language</div><div class="info-value language">Hindi</div></div>
+            <div class="info-row"><div class="info-label">Director</div><div class="info-value">Sooraj Barjatya</div></div>
+            <div class="info-row"><div class="info-label">Cast</div><div class="info-value">Amitabh Bachchan, Anupam Kher, Boman Irani</div></div>
+            <a href="/server/uunchai-2022-hindi-hd-4215.html" class="file-button">Download Now</a>
+        </body>
+        </html>
+        """
+        parsed = import_filmyzilla.parse_filmyzilla_movie_page(
+            sample_modern_html,
+            "https://thefilmyzilla.in/uunchai-2022-hindi-hd-4215.html"
+        )
+        self.assertIsNotNone(parsed)
+        self.assertEqual(parsed["title"], "Uunchai")
+        self.assertEqual(parsed["year"], 2022)
+        self.assertEqual(parsed["canonical_key"], "uunchai__2022")
+        self.assertEqual(parsed["director"], "Sooraj Barjatya")
+        self.assertEqual(parsed["cast_names"], "Amitabh Bachchan, Anupam Kher, Boman Irani")
+        self.assertEqual(parsed["poster_url"], "https://thefilmyzilla.in/upload/uunchai-2022-hindi-hd-4215.webp")
+        self.assertIn("Bollywood", parsed["genres"])
+        self.assertIn("Hindi", parsed["languages"])
+        self.assertIn("/server/uunchai-2022-hindi-hd-4215.html", parsed["modern_server_page"])
+
     def test_staging_db_init_and_foreign_keys(self):
         with sqlite3.connect(str(self.db_path)) as conn:
             cur = conn.cursor()

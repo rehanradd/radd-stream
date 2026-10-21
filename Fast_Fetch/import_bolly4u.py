@@ -55,9 +55,13 @@ if str(BASE_DIR) not in sys.path:
 
 import fast_fetch
 
-DEFAULT_BASE_URL = "https://bolly4uz.click"
+DEFAULT_BASE_URL = "https://bolly4uv.com"
 WP_API_URL = f"{DEFAULT_BASE_URL}/wp-json/wp/v2/posts"
-DEFAULT_DB_PATH = BASE_DIR / "bolly4u.db"
+DEFAULT_DB_PATH = (
+    Path("/home/ubuntu/radd-stream-data/bolly4u.db")
+    if Path("/home/ubuntu/radd-stream-data").exists()
+    else BASE_DIR / "bolly4u.db"
+)
 STATUS_FILE = BASE_DIR / "bolly4u_status.json"
 
 STOP_REQUESTED = False
@@ -547,8 +551,24 @@ def sync_api_catalog(client: Bolly4uClient, db_path: Path, max_pages: int | None
     print(f"[*] Starting Bolly4u API sync (per_page=100) -> {db_path}...", flush=True)
 
     page = 1
-    total_synced = 0
+    total_new = 0
+    total_existing = 0
+    total_adult_skipped = 0
+    consecutive_empty_new = 0
     total_posts = 0
+
+    with sqlite3.connect(str(db_path)) as conn:
+        existing_slugs = set(
+            row[0] for row in conn.execute(
+                "SELECT slug FROM sitemap_cache WHERE slug IS NOT NULL"
+            ).fetchall()
+        )
+        existing_locs = set(
+            row[0] for row in conn.execute(
+                "SELECT loc FROM sitemap_cache WHERE loc IS NOT NULL"
+            ).fetchall()
+        )
+    print(f"[*] Pre-loaded {len(existing_slugs):,} existing slugs and {len(existing_locs):,} existing locs from {db_path.name}.", flush=True)
 
     while True:
         if STOP_REQUESTED:
@@ -574,6 +594,7 @@ def sync_api_catalog(client: Bolly4uClient, db_path: Path, max_pages: int | None
             print(f"[+] Total catalog items: {total_posts:,} across {total_pages:,} pages.", flush=True)
 
         batch_records = []
+        page_new = 0
         for p in posts:
             link = p.get("link", "")
             slug = p.get("slug", "")
@@ -582,10 +603,20 @@ def sync_api_catalog(client: Bolly4uClient, db_path: Path, max_pages: int | None
 
             # Strictly enforce zero adult content
             if is_adult_content(title_text) or is_adult_content(slug):
+                total_adult_skipped += 1
+                continue
+
+            if (slug and slug in existing_slugs) or (link in existing_locs):
+                total_existing += 1
                 continue
 
             raw_str = json.dumps(p)
             batch_records.append((link, modified, slug, 0, "bolly4u", raw_str))
+            if slug:
+                existing_slugs.add(slug)
+            existing_locs.add(link)
+            page_new += 1
+            total_new += 1
 
         if batch_records:
             with sqlite3.connect(str(db_path)) as conn:
@@ -601,12 +632,20 @@ def sync_api_catalog(client: Bolly4uClient, db_path: Path, max_pages: int | None
                 )
                 conn.commit()
 
-        total_synced += len(batch_records)
-        print(f"  [Page {page}] Ingested {len(batch_records)} items (total: {total_synced:,}/{total_posts:,})", flush=True)
+        print(f"  [Page {page:3d}] Found {page_new} brand new, {len(posts) - page_new} existing/skipped (Cumulative New: {total_new:,})", flush=True)
+
+        if page_new == 0:
+            consecutive_empty_new += 1
+            if max_pages is None and consecutive_empty_new >= 3:
+                print(f"[*] 3 consecutive pages with 0 new titles reached. Database is fully up-to-date with live catalog. Stopping sync.", flush=True)
+                break
+        else:
+            consecutive_empty_new = 0
+
         page += 1
 
-    print(f"[✓] Bolly4u API sync finished: {total_synced:,} titles ready for crawler.", flush=True)
-    return total_synced
+    print(f"[✓] Bolly4u API sync finished: {total_new:,} brand new titles added to {db_path.name} ({total_existing:,} existing skipped, {total_adult_skipped:,} adult skipped).", flush=True)
+    return total_new
 
 
 def scrape_post_item(item: tuple, client: Bolly4uClient) -> dict | None:

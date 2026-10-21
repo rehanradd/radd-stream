@@ -56,7 +56,11 @@ import fast_fetch
 
 DEFAULT_BASE_URL = "https://www.rareanimes.mov"
 WP_API_URL = f"{DEFAULT_BASE_URL}/wp-json/wp/v2/posts"
-DEFAULT_DB_PATH = BASE_DIR / "rareanimes.db"
+DEFAULT_DB_PATH = (
+    Path("/home/ubuntu/radd-stream-data/rareanimes.db")
+    if Path("/home/ubuntu/radd-stream-data").exists()
+    else BASE_DIR / "rareanimes.db"
+)
 STATUS_FILE = BASE_DIR / "rareanimes_status.json"
 
 STOP_REQUESTED = False

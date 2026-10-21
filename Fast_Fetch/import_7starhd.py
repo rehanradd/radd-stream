@@ -52,8 +52,12 @@ if str(BASE_DIR) not in sys.path:
 
 import fast_fetch
 
-DEFAULT_BASE_URL = "https://7starhd.rich"
-DEFAULT_DB_PATH = BASE_DIR / "7starhd.db"
+DEFAULT_BASE_URL = "https://7starhd.dentist"
+DEFAULT_DB_PATH = (
+    Path("/home/ubuntu/radd-stream-data/7starhd.db")
+    if Path("/home/ubuntu/radd-stream-data").exists()
+    else BASE_DIR / "7starhd.db"
+)
 STATUS_FILE = BASE_DIR / "7starhd_status.json"
 
 STOP_REQUESTED = False
@@ -195,8 +199,23 @@ def sync_api_to_db(client: SevenStarHDClient, db_path: Path, max_pages: int | No
     print(f"[✓] {site_name.upper()} API reports {total_posts:,} total posts across {total_pages} pages.")
     print(f"[*] Ingesting pages {start_page} to {pages_to_fetch} (100 posts/page)...", flush=True)
 
+    with sqlite3.connect(str(db_path)) as conn:
+        existing_slugs = set(
+            row[0] for row in conn.execute(
+                "SELECT slug FROM sitemap_cache WHERE site = ? AND slug IS NOT NULL", (site_name,)
+            ).fetchall()
+        )
+        existing_locs = set(
+            row[0] for row in conn.execute(
+                "SELECT loc FROM sitemap_cache WHERE site = ? AND loc IS NOT NULL", (site_name,)
+            ).fetchall()
+        )
+    print(f"[*] Pre-loaded {len(existing_slugs):,} existing slugs and {len(existing_locs):,} existing locs from {db_path.name}.", flush=True)
+
     records = []
-    total_synced = 0
+    total_new = 0
+    total_existing = 0
+    consecutive_empty_new = 0
 
     for page in range(start_page, pages_to_fetch + 1):
         if STOP_REQUESTED:
@@ -210,15 +229,27 @@ def sync_api_to_db(client: SevenStarHDClient, db_path: Path, max_pages: int | No
             print(f"    [!] Error fetching page {page} (HTTP {p_code})", flush=True)
             continue
 
+        page_new = 0
         for item in p_data:
             post_url = item.get("link")
             if not post_url:
                 continue
             slug = item.get("slug") or post_url.rstrip("/").split("/")[-1]
             modified = item.get("modified")
-            records.append((post_url, modified, slug, 0, site_name))
+            
+            if (slug and slug in existing_slugs) or (post_url in existing_locs):
+                total_existing += 1
+            else:
+                records.append((post_url, modified, slug, 0, site_name))
+                if slug:
+                    existing_slugs.add(slug)
+                existing_locs.add(post_url)
+                page_new += 1
+                total_new += 1
 
-        if len(records) >= 1000:
+        print(f"    [Page {page:3d}] Found {page_new} brand new, {len(p_data) - page_new} existing (Cumulative New: {total_new:,})", flush=True)
+
+        if len(records) >= 500:
             with fast_fetch._DB_WRITE_LOCK:
                 with fast_fetch.get_db() as conn:
                     conn.executemany(
@@ -232,9 +263,15 @@ def sync_api_to_db(client: SevenStarHDClient, db_path: Path, max_pages: int | No
                         records,
                     )
                     conn.commit()
-            total_synced += len(records)
-            print(f"    [{page}/{pages_to_fetch}] Ingested {total_synced:,} URLs...", flush=True)
             records.clear()
+
+        if page_new == 0:
+            consecutive_empty_new += 1
+            if max_pages is None and consecutive_empty_new >= 3:
+                print(f"[*] 3 consecutive pages with 0 new titles reached. Stopping sync early.", flush=True)
+                break
+        else:
+            consecutive_empty_new = 0
 
     if records:
         with fast_fetch._DB_WRITE_LOCK:
@@ -250,10 +287,9 @@ def sync_api_to_db(client: SevenStarHDClient, db_path: Path, max_pages: int | No
                     records,
                 )
                 conn.commit()
-        total_synced += len(records)
 
-    print(f"[✓] Successfully ingested {total_synced:,} post URLs into sitemap_cache.\n", flush=True)
-    return total_synced
+    print(f"[✓] Successfully ingested {total_new:,} brand new titles into sitemap_cache ({total_existing:,} skipped/already known).\n", flush=True)
+    return total_new
 
 
 def parse_7starhd_release_links(html_content: str) -> list[dict]:

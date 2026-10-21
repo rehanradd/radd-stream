@@ -286,3 +286,19 @@ routes; restrict the bind and public routes before enabling the public proxy.
 - **Database Fleet Audit**:
   - Audited all 17 SQLite staging databases: **129,697 posts**, **1,121,719 releases**, and **2,945,395 direct sources/download links** (~3.1 GB).
 - **Quality Gate**: 65/65 offline unit tests passing (`test_database.py` [36], `test_vidout.py` [6], `test_9xmovies.py` [5], `test_moviezguru.py` [6], `test_desicinemas.py` [7], `test_katmoviehd.py` [5]).
+
+### Session 19 — Qoder (Oracle VM) — 2026-10-21
+**Resumed Milestone 5 WIP, Crawler Fleet Victory, Domain Resolver Commit:**
+- Session resumed directly on the Oracle VM after the previous agent hit its token limit mid-milestone.
+- Confirmed all four active crawlers **finished cleanly** (no crashes):
+  - `katmoviehd.db`: 39,277 scraped / 7,938 failed of 47,215 (108,730 releases, 130,113 sources).
+  - `bolly4u.db`: 28,280 scraped / 7,735 failed of 36,016 (40,970 releases, 21,875 sources).
+  - `world4ufree.db`: 13,837 scraped / 2,921 failed of 16,758 (77,856 releases, 85,654 sources).
+  - `moviezguru.db`: 3,372 scraped / 4 failed of 3,391 (8,850+ sources).
+- Completed and verified the uncommitted WIP: **Domain Resolver & Auto-Discovery Engine**
+  (`Fast_Fetch/domain_resolver.py` + `Fast_Fetch/domain_registry.json`) with live mirror
+  failover across 16 sites; integrated into all 15 `import_*.py` scrapers with registry-driven
+  base URLs, staging-DB path resolution, and FilmyZilla migration to `thefilmyzilla.in`.
+- `auto_chat_sync.py` daemon (PID 210724) confirmed still running; chat history preserved.
+- **Quality Gate**: all 21 offline test modules passing; all 15 modified importers verified
+  `import OK`; live `probe_site()` smoke test returned 200 for filmyzilla and hdhub4u.

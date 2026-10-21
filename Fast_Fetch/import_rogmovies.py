@@ -54,7 +54,11 @@ if str(BASE_DIR) not in sys.path:
 import fast_fetch
 
 DEFAULT_BASE_URL = "https://rogmovies.one"
-DEFAULT_DB_PATH = BASE_DIR / "rogmovies.db"
+DEFAULT_DB_PATH = (
+    Path("/home/ubuntu/radd-stream-data/rogmovies.db")
+    if Path("/home/ubuntu/radd-stream-data").exists()
+    else BASE_DIR / "rogmovies.db"
+)
 STATUS_FILE = BASE_DIR / "rogmovies_status.json"
 
 STOP_REQUESTED = False

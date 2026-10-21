@@ -44,8 +44,12 @@ if str(BASE_DIR) not in sys.path:
 
 import fast_fetch
 
-DEFAULT_BASE_URL = "https://hdtvb.net"
-DEFAULT_DB_PATH = BASE_DIR / "hdtvb.db"
+DEFAULT_BASE_URL = "https://hdutv.com"
+DEFAULT_DB_PATH = (
+    Path("/home/ubuntu/radd-stream-data/hdtvb.db")
+    if Path("/home/ubuntu/radd-stream-data").exists()
+    else BASE_DIR / "hdtvb.db"
+)
 STATUS_FILE = BASE_DIR / "hdtvb_status.json"
 
 STOP_REQUESTED = False

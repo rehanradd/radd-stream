@@ -56,10 +56,14 @@ if str(BASE_DIR) not in sys.path:
 
 import fast_fetch
 
-DEFAULT_BASE_URL = "https://new8.hdhub4u.cl"
+DEFAULT_BASE_URL = "https://hdhub4u.fans"
 HOST_RESOLVER_URL = "https://h4.suncdn.org/host/"
 TYPESENSE_SEARCH_URL = "https://search.pingora.fyi/collections/post/documents/search"
-DEFAULT_DB_PATH = BASE_DIR / "hdhub4u.db"
+DEFAULT_DB_PATH = (
+    Path("/home/ubuntu/radd-stream-data/hdhub4u.db")
+    if Path("/home/ubuntu/radd-stream-data").exists()
+    else BASE_DIR / "hdhub4u.db"
+)
 STATUS_FILE = BASE_DIR / "hdhub4u_status.json"
 
 STOP_REQUESTED = False
@@ -202,6 +206,9 @@ def init_staging_db(db_path: Path):
                 backdrop_url TEXT,
                 synopsis TEXT,
                 genres TEXT,
+                cast_names TEXT,
+                director TEXT,
+                languages TEXT,
                 rating REAL,
                 site TEXT DEFAULT 'hdhub4u',
                 post_url TEXT,
@@ -240,6 +247,15 @@ def init_staging_db(db_path: Path):
             );
             CREATE INDEX IF NOT EXISTS idx_sources_release_id ON sources(release_id);
         """)
+
+        # Auto-migration for schema changes
+        existing_cols = [c[1] for c in conn.execute("PRAGMA table_info(posts);").fetchall()]
+        for col in ["cast_names", "director", "languages"]:
+            if col not in existing_cols:
+                try:
+                    conn.execute(f"ALTER TABLE posts ADD COLUMN {col} TEXT;")
+                except Exception:
+                    pass
         conn.commit()
 
 
@@ -553,7 +569,7 @@ def extract_post_data_hdhub4u(
         "poster_url": poster_url,
         "genres": json.dumps(categories) if categories else None,
         "director": director,
-        "stars": json.dumps(stars) if stars else None,
+        "cast_names": ", ".join(stars) if isinstance(stars, list) else (str(stars) if stars else None),
         "site": "hdhub4u",
         "post_url": post_url,
         "releases": releases_data,
@@ -574,8 +590,8 @@ def save_post_to_staging_db(db_path: Path, post_data: dict) -> bool:
             """
             INSERT INTO posts (
                 canonical_key, title, original_title, year, media_type,
-                imdb_id, poster_url, genres, site, post_url, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                imdb_id, poster_url, synopsis, genres, cast_names, director, site, post_url, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
             ON CONFLICT(canonical_key) DO UPDATE SET
                 title = excluded.title,
                 original_title = excluded.original_title,
@@ -583,7 +599,10 @@ def save_post_to_staging_db(db_path: Path, post_data: dict) -> bool:
                 media_type = excluded.media_type,
                 imdb_id = COALESCE(excluded.imdb_id, posts.imdb_id),
                 poster_url = COALESCE(excluded.poster_url, posts.poster_url),
+                synopsis = COALESCE(excluded.synopsis, posts.synopsis),
                 genres = COALESCE(excluded.genres, posts.genres),
+                cast_names = COALESCE(excluded.cast_names, posts.cast_names),
+                director = COALESCE(excluded.director, posts.director),
                 post_url = excluded.post_url,
                 updated_at = CURRENT_TIMESTAMP
             RETURNING id;
@@ -596,7 +615,10 @@ def save_post_to_staging_db(db_path: Path, post_data: dict) -> bool:
                 post_data["media_type"],
                 post_data.get("imdb_id"),
                 post_data.get("poster_url"),
+                post_data.get("synopsis"),
                 post_data.get("genres"),
+                post_data.get("cast_names"),
+                post_data.get("director"),
                 post_data["site"],
                 post_data["post_url"],
             ),
@@ -937,10 +959,70 @@ def print_status(db_path: Path):
     print(f"=======================================================\n")
 
 
+def enrich_existing_metadata(db_path: Path):
+    """
+    Backfills/enriches metadata (director, cast_names, genres, imdb_id, poster_url)
+    for all existing posts in HDHub4u staging database from cached raw_json.
+    Runs 100% offline.
+    """
+    init_staging_db(db_path)
+    print(f"[*] Starting offline metadata enrichment for {db_path}...", flush=True)
+    with sqlite3.connect(str(db_path)) as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT loc, raw_json FROM sitemap_cache WHERE raw_json IS NOT NULL;")
+        rows = cur.fetchall()
+        print(f"[*] Found {len(rows):,} cached post entries to process.", flush=True)
+
+        updated = 0
+        for loc, raw_json_str in rows:
+            try:
+                api_doc = json.loads(raw_json_str)
+                post_title = api_doc.get("post_title", "")
+                if not post_title:
+                    continue
+
+                clean_title, year, canonical_key = clean_hdhub4u_title(post_title)
+                imdb_id = api_doc.get("imdb_id")
+                poster_url = api_doc.get("post_thumbnail")
+                categories = api_doc.get("category", [])
+                stars = api_doc.get("stars", [])
+                dir_list = api_doc.get("director", [])
+                director = dir_list[0] if dir_list else None
+                cast_names = ", ".join(stars) if isinstance(stars, list) else (str(stars) if stars else None)
+                genres = json.dumps(categories) if categories else None
+
+                cur.execute(
+                    """
+                    UPDATE posts SET
+                        genres = COALESCE(?, genres),
+                        cast_names = COALESCE(?, cast_names),
+                        director = COALESCE(?, director),
+                        imdb_id = COALESCE(?, imdb_id),
+                        poster_url = COALESCE(?, poster_url)
+                    WHERE canonical_key = ?;
+                    """,
+                    (
+                        genres,
+                        cast_names,
+                        director,
+                        imdb_id,
+                        poster_url,
+                        canonical_key,
+                    ),
+                )
+                if cur.rowcount > 0:
+                    updated += 1
+            except Exception:
+                continue
+
+        print(f"[✓] Metadata enrichment complete: {updated:,} posts updated.", flush=True)
+
+
 def main():
     parser = argparse.ArgumentParser(description="HDHub4u Dedicated Staging Importer & Crawler")
     parser.add_argument("--sync-api", action="store_true", help="Sync all titles via Typesense search API")
     parser.add_argument("--sync-sitemap", action="store_true", help="Sync all XML sitemaps")
+    parser.add_argument("--enrich-metadata", action="store_true", help="Enrich existing posts table with cast/director/genres from cached raw_json")
     parser.add_argument("--limit", type=int, help="Limit number of titles to scrape")
     parser.add_argument("--workers", type=int, default=5, help="Number of concurrent workers (default 5)")
     parser.add_argument("--delay", type=float, default=0.3, help="Delay between requests in seconds (default 0.3)")
@@ -953,6 +1035,10 @@ def main():
 
     if args.status:
         print_status(db_path)
+        return
+
+    if args.enrich_metadata:
+        enrich_existing_metadata(db_path)
         return
 
     if args.sync_api:

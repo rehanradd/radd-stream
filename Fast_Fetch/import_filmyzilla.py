@@ -30,6 +30,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import base64
 import concurrent.futures
 import html
 import json
@@ -51,7 +52,7 @@ BASE_DIR = Path(__file__).parent.resolve()
 if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
 
-DEFAULT_BASE_URL = "https://www.filmyzilla75.com"
+DEFAULT_BASE_URL = "https://thefilmyzilla.in"
 DEFAULT_DB_PATH = Path("/home/ubuntu/radd-stream-data/filmyzilla.db") if Path("/home/ubuntu/radd-stream-data").exists() else BASE_DIR / "filmyzilla.db"
 
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
@@ -196,6 +197,9 @@ def init_staging_db(db_path: Path):
                 poster_url TEXT,
                 synopsis TEXT,
                 genres TEXT,
+                cast_names TEXT,
+                director TEXT,
+                languages TEXT,
                 rating REAL,
                 site TEXT DEFAULT 'filmyzilla',
                 post_url TEXT,
@@ -205,6 +209,15 @@ def init_staging_db(db_path: Path):
             """
         )
         conn.execute("CREATE INDEX IF NOT EXISTS idx_posts_canonical ON posts(canonical_key);")
+
+        # Auto-migration for schema changes
+        existing_cols = [c[1] for c in conn.execute("PRAGMA table_info(posts);").fetchall()]
+        for col in ["cast_names", "director", "languages"]:
+            if col not in existing_cols:
+                try:
+                    conn.execute(f"ALTER TABLE posts ADD COLUMN {col} TEXT;")
+                except Exception:
+                    pass
 
         conn.execute(
             """
@@ -250,7 +263,7 @@ def clean_filmyzilla_title(raw_title: str) -> tuple[str, int | None, str]:
     clean = re.sub(r"\s*Free\s+Download\s+Filmyzilla.*$", "", clean, flags=re.I)
     clean = re.sub(r"\s*Filmyzilla.*$", "", clean, flags=re.I)
     clean = re.sub(r"\s*(?:Full\s+Movie|Full\s+Movie\s+Download).*$", "", clean, flags=re.I)
-    clean = re.sub(r"\s*(?:Hindi\s+Dubbed|Hindi\s+Movie|Dual\s+Audio|South\s+Movie).*$", "", clean, flags=re.I)
+    clean = re.sub(r"\s*(?:Hindi\s+Dubbed|Hindi\s+Movie|Hindi\s+HD|Dual\s+Audio|South\s+Movie).*$", "", clean, flags=re.I)
     clean = re.sub(r"\s*Movie.*$", "", clean, flags=re.I)
 
     year = None
@@ -338,29 +351,56 @@ def parse_filmyzilla_movie_page(html_text: str, page_url: str) -> dict | None:
 
     # Poster
     poster_url = None
-    p_m = re.search(r'<img[^>]+src=["\']([^"\'>]+files/images/[^"\'>]+)["\']', html_text, re.I)
-    if p_m:
-        p_src = p_m.group(1)
-        if p_src.startswith("//"):
-            poster_url = "https:" + p_src
-        elif p_src.startswith("/"):
-            poster_url = DEFAULT_BASE_URL + p_src
-        elif p_src.startswith("http"):
-            poster_url = p_src
-        # Strip query params like ?t=...
-        if poster_url:
-            poster_url = poster_url.split("?")[0]
+    p_og = re.search(r'<meta\s+property=["\']og:image["\']\s+content=["\']([^"\']+)["\']', html_text, re.I)
+    if p_og:
+        poster_url = p_og.group(1).split("?")[0]
+    else:
+        p_m = re.search(r'<img[^>]+src=["\']([^"\'>]+(?:files/images/|upload/)[^"\'>]+)["\']', html_text, re.I)
+        if p_m:
+            p_src = p_m.group(1)
+            if p_src.startswith("//"):
+                poster_url = "https:" + p_src
+            elif p_src.startswith("/"):
+                poster_url = DEFAULT_BASE_URL + p_src
+            elif p_src.startswith("http"):
+                poster_url = p_src
+            if poster_url:
+                poster_url = poster_url.split("?")[0]
+
+    # Cast
+    cast_names = None
+    c_m = re.search(r'(?:Cast|Starring)\s*</div>\s*<div[^>]*>\s*([^<]+)', html_text, re.I)
+    if not c_m:
+        c_m = re.search(r'(?:Cast|Starring)\s*:\s*([^<\n\r]+)', html_text, re.I)
+    if c_m:
+        clean_c = re.sub(r'<[^>]+>', '', c_m.group(1)).strip()
+        if clean_c and len(clean_c) < 300:
+            cast_names = clean_c
+
+    # Director
+    director = None
+    d_m = re.search(r'Director\s*</div>\s*<div[^>]*>\s*([^<]+)', html_text, re.I)
+    if not d_m:
+        d_m = re.search(r'Director\s*:\s*([^<\n\r]+)', html_text, re.I)
+    if d_m:
+        clean_d = re.sub(r'<[^>]+>', '', d_m.group(1)).strip()
+        if clean_d and len(clean_d) < 150:
+            director = clean_d
 
     # Genres
     genres = []
-    g_m = re.search(r"Genres\s*:\s*([^<\n\r]+)", html_text, re.I)
+    g_m = re.search(r'Genres\s*</div>\s*<div[^>]*>\s*([^<]+)', html_text, re.I)
+    if not g_m:
+        g_m = re.search(r"Genres\s*:\s*([^<\n\r]+)", html_text, re.I)
     if g_m:
         g_raw = re.sub(r"<[^>]+>", "", g_m.group(1)).strip()
         genres = [g.strip() for g in re.split(r"[,/|]+", g_raw) if g.strip()]
 
     # Language
     languages = ["Hindi"]
-    l_m = re.search(r"Language\s*:\s*([^<\n\r]+)", html_text, re.I)
+    l_m = re.search(r'Language\s*</div>\s*<div[^>]*>\s*([^<]+)', html_text, re.I)
+    if not l_m:
+        l_m = re.search(r"Language\s*:\s*([^<\n\r]+)", html_text, re.I)
     if l_m:
         l_raw = re.sub(r"<[^>]+>", "", l_m.group(1)).strip()
         langs = [l.strip() for l in re.split(r"[,/|&+\-]+", l_raw) if l.strip()]
@@ -381,7 +421,13 @@ def parse_filmyzilla_movie_page(html_text: str, page_url: str) -> dict | None:
     if rd_m:
         release_date = re.sub(r"<[^>]+>", "", rd_m.group(1)).strip()
 
-    # Server links: find all /server/<id>/<slug>.html
+    # Server links: modern /server/<slug>.html vs legacy /server/<id>/<slug>.html
+    modern_server_page = None
+    srv_m = re.search(r'href=["\'](/server/[^"\'>]+\.html)["\']', html_text, re.I)
+    if srv_m:
+        s_path = srv_m.group(1)
+        modern_server_page = f"{DEFAULT_BASE_URL}{s_path}" if s_path.startswith("/") else s_path
+
     server_matches = re.finditer(
         r'<a[^>]+href=["\'](https?://www\.filmyzilla\d+\.com/server/(\d+)/([^"\'<>\s]+\.html)|/server/(\d+)/([^"\'<>\s]+\.html))["\'][^>]*>(.*?)</a>',
         html_text,
@@ -414,7 +460,7 @@ def parse_filmyzilla_movie_page(html_text: str, page_url: str) -> dict | None:
             "codec": codec,
         })
 
-    if not servers:
+    if not servers and not modern_server_page:
         return None
 
     synopsis_text = story if story else (f"Released: {release_date}" if release_date else None)
@@ -428,11 +474,14 @@ def parse_filmyzilla_movie_page(html_text: str, page_url: str) -> dict | None:
         "imdb_id": None,
         "poster_url": poster_url,
         "genres": json.dumps(genres) if genres else None,
+        "cast_names": cast_names,
+        "director": director,
         "synopsis": synopsis_text,
         "site": "filmyzilla",
         "post_url": page_url,
         "languages": json.dumps(languages),
         "servers": servers,
+        "modern_server_page": modern_server_page,
     }
 
 
@@ -449,61 +498,111 @@ def extract_post_data_filmyzilla(client: FilmyZillaClient, movie_url: str, resol
     releases_data = []
     base_url = client.base_url
 
-    for s in parsed["servers"]:
-        server_id = s["server_id"]
-        server_url = s["server_url"]
-        download_gateway = f"{base_url}/download/{server_id}/server_1"
-        sources = []
+    # Check for modern server page (/server/...html)
+    if parsed.get("modern_server_page"):
+        s_code, _, s_html = client.get_text(parsed["modern_server_page"])
+        if s_code == 200 and s_html:
+            dl_links = re.findall(r'href=["\'](/download/(\d+)/server_\d+)["\'][^>]*>(.*?)</a>', s_html, re.S)
+            for dl_path, sid, txt in dl_links:
+                clean_t = re.sub(r'<[^>]+>', '', txt).strip()
+                clean_t = re.sub(r'\s+', ' ', clean_t).strip(" ↓\n\r")
+                qual, res, codec = parse_quality_and_codec(clean_t)
+                size_m = re.search(r'([\d\.]+\s*(?:GB|MB|KB))', clean_t, re.I)
+                size_bytes = parse_size_string(size_m.group(1)) if size_m else None
+                b64 = base64.b64encode(sid.encode()).decode()
+                cdn_url = f"https://fzcdn.store/file/{b64}"
+                download_gw = f"{base_url}{dl_path}"
 
-        if resolve_direct:
-            cdn_url = client.resolve_direct_cdn(download_gateway, referer=server_url)
-            if cdn_url:
-                sources.append({
-                    "source_name": "⚡ Google CDN Direct [Server 1]",
-                    "service": "google_cdn",
-                    "resource_id": server_id,
-                    "source_url": download_gateway,
-                    "final_url": cdn_url,
-                    "is_temporary": 1,
-                    "quality": s["quality"],
+                sources = [
+                    {
+                        "source_name": "⚡ FZCDN Direct Cloud",
+                        "service": "fzcdn",
+                        "resource_id": b64,
+                        "source_url": download_gw,
+                        "final_url": cdn_url,
+                        "is_temporary": 0,
+                        "quality": qual,
+                    },
+                    {
+                        "source_name": "⚡ FilmyZilla Direct Gateway",
+                        "service": "filmyzilla_server",
+                        "resource_id": sid,
+                        "source_url": parsed["modern_server_page"],
+                        "final_url": download_gw,
+                        "is_temporary": 0,
+                        "quality": qual,
+                    }
+                ]
+                releases_data.append({
+                    "label": clean_t or f"{parsed['title']} {qual}",
+                    "quality": qual,
+                    "resolution": res,
+                    "size_bytes": size_bytes,
+                    "season_number": None,
+                    "episode_number": None,
+                    "audio_languages": parsed["languages"],
+                    "codec": codec,
+                    "bridge_url": download_gw,
+                    "sources": sources,
                 })
-            # Also resolve server_2 for backup redundant Google CDN stream
-            gw_url_2 = f"{base_url}/download/{server_id}/server_2"
-            cdn_url_2 = client.resolve_direct_cdn(gw_url_2, referer=server_url)
-            if cdn_url_2:
-                sources.append({
-                    "source_name": "⚡ Google CDN Direct [Server 2]",
-                    "service": "google_cdn",
-                    "resource_id": f"{server_id}_2",
-                    "source_url": gw_url_2,
-                    "final_url": cdn_url_2,
-                    "is_temporary": 1,
-                    "quality": s["quality"],
-                })
 
-        # Add permanent gateway fallback
-        sources.append({
-            "source_name": "⚡ FilmyZilla Direct Gateway",
-            "service": "filmyzilla_server",
-            "resource_id": server_id,
-            "source_url": server_url,
-            "final_url": download_gateway,
-            "is_temporary": 0,
-            "quality": s["quality"],
-        })
+    # Fallback to legacy server list
+    if not releases_data and parsed.get("servers"):
+        for s in parsed["servers"]:
+            server_id = s["server_id"]
+            server_url = s["server_url"]
+            download_gateway = f"{base_url}/download/{server_id}/server_1"
+            sources = []
 
-        releases_data.append({
-            "label": s["label"],
-            "quality": s["quality"],
-            "resolution": s["resolution"],
-            "size_bytes": None,
-            "season_number": None,
-            "episode_number": None,
-            "audio_languages": parsed["languages"],
-            "codec": s["codec"],
-            "bridge_url": download_gateway,
-            "sources": sources,
-        })
+            if resolve_direct:
+                cdn_url = client.resolve_direct_cdn(download_gateway, referer=server_url)
+                if cdn_url:
+                    sources.append({
+                        "source_name": "⚡ Google CDN Direct [Server 1]",
+                        "service": "google_cdn",
+                        "resource_id": server_id,
+                        "source_url": download_gateway,
+                        "final_url": cdn_url,
+                        "is_temporary": 1,
+                        "quality": s["quality"],
+                    })
+                # Also resolve server_2 for backup redundant Google CDN stream
+                gw_url_2 = f"{base_url}/download/{server_id}/server_2"
+                cdn_url_2 = client.resolve_direct_cdn(gw_url_2, referer=server_url)
+                if cdn_url_2:
+                    sources.append({
+                        "source_name": "⚡ Google CDN Direct [Server 2]",
+                        "service": "google_cdn",
+                        "resource_id": f"{server_id}_2",
+                        "source_url": gw_url_2,
+                        "final_url": cdn_url_2,
+                        "is_temporary": 1,
+                        "quality": s["quality"],
+                    })
+
+            # Add permanent gateway fallback
+            sources.append({
+                "source_name": "⚡ FilmyZilla Direct Gateway",
+                "service": "filmyzilla_server",
+                "resource_id": server_id,
+                "source_url": server_url,
+                "final_url": download_gateway,
+                "is_temporary": 0,
+                "quality": s["quality"],
+            })
+
+            releases_data.append({
+                "label": s["label"],
+                "quality": s["quality"],
+                "resolution": s["resolution"],
+                "size_bytes": None,
+                "season_number": None,
+                "episode_number": None,
+                "audio_languages": parsed["languages"],
+                "codec": s["codec"],
+                "bridge_url": download_gateway,
+                "sources": sources,
+            })
 
     parsed["releases"] = releases_data
     return parsed
@@ -522,9 +621,9 @@ def save_post_to_staging_db(db_path: Path, post_data: dict) -> bool:
             """
             INSERT INTO posts (
                 canonical_key, title, original_title, year, media_type,
-                imdb_id, poster_url, synopsis, genres, rating, site, post_url,
+                imdb_id, poster_url, synopsis, genres, cast_names, director, languages, rating, site, post_url,
                 created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
             ON CONFLICT(canonical_key) DO UPDATE SET
                 title = excluded.title,
                 original_title = excluded.original_title,
@@ -532,7 +631,11 @@ def save_post_to_staging_db(db_path: Path, post_data: dict) -> bool:
                 media_type = excluded.media_type,
                 imdb_id = COALESCE(excluded.imdb_id, posts.imdb_id),
                 poster_url = COALESCE(excluded.poster_url, posts.poster_url),
+                synopsis = COALESCE(excluded.synopsis, posts.synopsis),
                 genres = COALESCE(excluded.genres, posts.genres),
+                cast_names = COALESCE(excluded.cast_names, posts.cast_names),
+                director = COALESCE(excluded.director, posts.director),
+                languages = COALESCE(excluded.languages, posts.languages),
                 rating = COALESCE(excluded.rating, posts.rating),
                 post_url = excluded.post_url,
                 updated_at = CURRENT_TIMESTAMP
@@ -548,6 +651,9 @@ def save_post_to_staging_db(db_path: Path, post_data: dict) -> bool:
                 post_data.get("poster_url"),
                 post_data.get("synopsis"),
                 post_data.get("genres"),
+                post_data.get("cast_names"),
+                post_data.get("director"),
+                post_data.get("languages"),
                 post_data.get("rating"),
                 post_data["site"],
                 post_data["post_url"],
@@ -625,7 +731,7 @@ def sync_sitemap_to_db(db_path: Path, base_url: str = DEFAULT_BASE_URL, max_item
         return 0
 
     urls = re.findall(r"<loc>(https?://[^\s<>\"']+)</loc>", xml_text)
-    movie_urls = [u for u in urls if "/movie/" in u]
+    movie_urls = [u for u in urls if re.search(r"-\d+\.html$", u) or "/movie/" in u]
     print(f"[✓] Sitemap parsed: found {len(movie_urls):,} movie URLs (from {len(urls):,} total entries).", flush=True)
 
     if max_items:
@@ -633,7 +739,7 @@ def sync_sitemap_to_db(db_path: Path, base_url: str = DEFAULT_BASE_URL, max_item
 
     records = []
     for u in movie_urls:
-        slug_m = re.search(r"/movie/\d+/([^/]+)\.html", u)
+        slug_m = re.search(r"/(?:movie/\d+/)?([^/]+)\.html", u)
         slug = slug_m.group(1) if slug_m else u.rstrip("/").split("/")[-1]
         records.append((u, None, slug, 0, "filmyzilla", None))
 

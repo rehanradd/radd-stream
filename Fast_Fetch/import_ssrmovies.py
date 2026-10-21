@@ -56,7 +56,11 @@ if str(BASE_DIR) not in sys.path:
 import fast_fetch
 
 DEFAULT_BASE_URL = "https://ssrmovies.surf"
-DEFAULT_DB_PATH = BASE_DIR / "ssrmovies.db"
+DEFAULT_DB_PATH = (
+    Path("/home/ubuntu/radd-stream-data/ssrmovies.db")
+    if Path("/home/ubuntu/radd-stream-data").exists()
+    else BASE_DIR / "ssrmovies.db"
+)
 STATUS_FILE = BASE_DIR / "ssrmovies_status.json"
 
 STOP_REQUESTED = False
@@ -177,32 +181,58 @@ def sync_api_to_db(client: SSRMoviesClient, db_path: Path, max_pages: int | None
 
     print(f"[✓] SSRMovies API reports {total_posts:,} total posts across {total_pages:,} pages.", flush=True)
 
+    with sqlite3.connect(str(db_path)) as conn:
+        existing_slugs = set(
+            row[0] for row in conn.execute(
+                "SELECT slug FROM sitemap_cache WHERE slug IS NOT NULL"
+            ).fetchall()
+        )
+        existing_locs = set(
+            row[0] for row in conn.execute(
+                "SELECT loc FROM sitemap_cache WHERE loc IS NOT NULL"
+            ).fetchall()
+        )
+    print(f"[*] Pre-loaded {len(existing_slugs):,} existing slugs and {len(existing_locs):,} existing locs from {db_path.name}.", flush=True)
+
     pages_to_fetch = total_pages
     if max_pages and max_pages < pages_to_fetch:
         pages_to_fetch = max_pages
 
-    total_synced = 0
+    total_new = 0
+    total_existing = 0
+    consecutive_empty_new = 0
     records = []
 
     for page in range(1, pages_to_fetch + 1):
         if STOP_REQUESTED:
             break
         page_url = f"{client.base_url}/wp-json/wp/v2/posts?per_page=100&page={page}"
-        print(f"    [{page}/{pages_to_fetch}] Fetching page {page}...", flush=True)
         p_code, p_data, _ = client.get_json(page_url)
         if p_code != 200 or not isinstance(p_data, list):
             print(f"    [!] Error fetching page {page} (HTTP {p_code})", flush=True)
             continue
 
+        page_new = 0
         for item in p_data:
             post_url = item.get("link")
             if not post_url:
                 continue
             slug = item.get("slug") or post_url.rstrip("/").split("/")[-1]
             modified = item.get("modified")
-            records.append((post_url, modified, slug, 0, "ssrmovies"))
+            
+            if (slug and slug in existing_slugs) or (post_url in existing_locs):
+                total_existing += 1
+            else:
+                records.append((post_url, modified, slug, 0, "ssrmovies"))
+                if slug:
+                    existing_slugs.add(slug)
+                existing_locs.add(post_url)
+                page_new += 1
+                total_new += 1
 
-        if len(records) >= 1000:
+        print(f"    [Page {page:3d}] Found {page_new} brand new, {len(p_data) - page_new} existing (Cumulative New: {total_new:,})", flush=True)
+
+        if len(records) >= 500:
             with fast_fetch._DB_WRITE_LOCK:
                 with fast_fetch.get_db() as conn:
                     conn.executemany(
@@ -216,8 +246,15 @@ def sync_api_to_db(client: SSRMoviesClient, db_path: Path, max_pages: int | None
                         records,
                     )
                     conn.commit()
-            total_synced += len(records)
             records.clear()
+
+        if page_new == 0:
+            consecutive_empty_new += 1
+            if max_pages is None and consecutive_empty_new >= 3:
+                print(f"[*] 3 consecutive pages with 0 new titles reached. Stopping sync early.", flush=True)
+                break
+        else:
+            consecutive_empty_new = 0
 
     if records:
         with fast_fetch._DB_WRITE_LOCK:
@@ -233,10 +270,9 @@ def sync_api_to_db(client: SSRMoviesClient, db_path: Path, max_pages: int | None
                     records,
                 )
                 conn.commit()
-        total_synced += len(records)
 
-    print(f"[✓] Successfully ingested {total_synced:,} post URLs into sitemap_cache.", flush=True)
-    return total_synced
+    print(f"[✓] Successfully ingested {total_new:,} brand new titles into sitemap_cache ({total_existing:,} skipped/already known).\n", flush=True)
+    return total_new
 
 
 def parse_ssrmovies_release_button(btn_html: str, full_html: str = "") -> dict | None:

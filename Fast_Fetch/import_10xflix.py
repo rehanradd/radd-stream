@@ -58,7 +58,11 @@ import fast_fetch
 
 DEFAULT_BASE_URL = "https://10xflix.bond"
 WP_API_URL = f"{DEFAULT_BASE_URL}/wp-json/wp/v2/posts"
-DEFAULT_DB_PATH = BASE_DIR / "10xflix.db"
+DEFAULT_DB_PATH = (
+    Path("/home/ubuntu/radd-stream-data/10xflix.db")
+    if Path("/home/ubuntu/radd-stream-data").exists()
+    else BASE_DIR / "10xflix.db"
+)
 STATUS_FILE = BASE_DIR / "10xflix_status.json"
 
 STOP_REQUESTED = False
@@ -181,6 +185,9 @@ def init_staging_db(db_path: Path):
                 poster_url TEXT,
                 synopsis TEXT,
                 genres TEXT,
+                cast_names TEXT,
+                director TEXT,
+                languages TEXT,
                 site TEXT DEFAULT '10xflix',
                 post_url TEXT,
                 updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
@@ -188,6 +195,15 @@ def init_staging_db(db_path: Path):
             """
         )
         cur.execute("CREATE INDEX IF NOT EXISTS idx_10xflix_canonical ON posts(canonical_key);")
+
+        # Auto-migration for schema changes
+        existing_cols = [c[1] for c in cur.execute("PRAGMA table_info(posts);").fetchall()]
+        for col in ["cast_names", "director", "languages"]:
+            if col not in existing_cols:
+                try:
+                    cur.execute(f"ALTER TABLE posts ADD COLUMN {col} TEXT;")
+                except Exception:
+                    pass
 
         cur.execute(
             """
@@ -249,6 +265,96 @@ def parse_size_string(size_str: str) -> int | None:
     elif unit == "KB":
         return int(val * 1024)
     return None
+
+
+def extract_wp_post_metadata(content_html: str) -> dict:
+    """
+    Extracts rich metadata (director, cast_names, genres, languages, synopsis, rating)
+    from standard WordPress movie post HTML. Zero external dependencies. Stdlib only.
+    """
+    if not content_html:
+        return {}
+
+    text = html.unescape(content_html)
+
+    # 1. Director
+    director = None
+    d_m = re.search(r'(?:Director|Directed\s*by)[s]?\s*:\s*([^<\n]+)', text, re.I)
+    if d_m:
+        clean_d = re.sub(r'<[^>]+>', '', d_m.group(1)).strip()
+        if clean_d and len(clean_d) < 150:
+            director = clean_d
+
+    # 2. Cast / Stars
+    cast_names = None
+    c_m = re.search(r'(?:Stars?|Star\s*Cast|Cast|Starring)\s*:\s*([^<\n]+)', text, re.I)
+    if c_m:
+        clean_c = re.sub(r'<[^>]+>', '', c_m.group(1)).strip()
+        if clean_c and len(clean_c) < 300:
+            cast_names = clean_c
+
+    # 3. Genres
+    genres = None
+    g_m = re.search(r'Genre[s]?\s*:\s*([^<\n]+)', text, re.I)
+    if g_m:
+        clean_g = re.sub(r'<[^>]+>', '', g_m.group(1)).strip()
+        if clean_g:
+            raw_genres = [re.sub(r'[^a-zA-Z0-9\s-]', '', g).strip() for g in re.split(r'[,\|/]', clean_g)]
+            clean_list = [g for g in raw_genres if g and len(g) > 1 and len(g) < 40]
+            if clean_list:
+                genres = json.dumps(clean_list)
+
+    # 4. Languages
+    languages = None
+    l_m = re.search(r'Language[s]?\s*:\s*([^<\n]+)', text, re.I)
+    if l_m:
+        clean_l = re.sub(r'<[^>]+>', '', l_m.group(1)).strip()
+        if clean_l and len(clean_l) < 100:
+            languages = clean_l
+
+    # 5. Synopsis / Storyline
+    synopsis = None
+    s_m = re.search(
+        r'<(?:strong|b|span|h\d)[^>]*>\s*(?:Film\s*Story|Story|Synopsis|Plot|Storyline)[^<]*</(?:strong|b|span|h\d)>\s*[:\-–]?\s*([^<\n]+)',
+        text,
+        re.I,
+    )
+    if not s_m:
+        s_m = re.search(
+            r'(?:^|>)\s*(?:Film\s*Story|Story|Synopsis|Plot|Storyline)\s*[:\-–]\s*([^<\n]+)',
+            text,
+            re.I,
+        )
+    if s_m:
+        clean_s = re.sub(r'<[^>]+>', '', s_m.group(1)).strip()
+        clean_s = re.sub(r'^[:\-–\s]+', '', clean_s)
+        if len(clean_s) > 15:
+            synopsis = clean_s
+
+    # 6. IMDb Rating
+    rating = None
+    r_m = re.search(r'IMDb\s*(?:Ratings?|Rating)?\s*:\s*([0-9\.]+)(?:/10)?', text, re.I)
+    if r_m:
+        try:
+            rating = float(r_m.group(1))
+        except ValueError:
+            rating = None
+
+    # 7. IMDb ID
+    imdb_id = None
+    imdb_m = re.search(r'\b(tt\d{7,10})\b', text)
+    if imdb_m:
+        imdb_id = imdb_m.group(1)
+
+    return {
+        "director": director,
+        "cast_names": cast_names,
+        "genres": genres,
+        "languages": languages,
+        "synopsis": synopsis,
+        "rating": rating,
+        "imdb_id": imdb_id,
+    }
 
 
 def clean_10xflix_title(raw_title: str) -> tuple[str, int | None, int | None, int | None, str]:
@@ -430,16 +536,21 @@ def extract_post_data_10xflix(
             "sources": sources,
         })
 
+    meta = extract_wp_post_metadata(content_html)
+
     return {
         "canonical_key": canonical_key,
         "title": clean_title,
         "original_title": html.unescape(raw_title).strip(),
         "year": year,
         "media_type": media_type,
-        "imdb_id": None,
+        "imdb_id": meta.get("imdb_id"),
         "poster_url": poster_url,
-        "genres": json.dumps(categories) if categories else None,
-        "synopsis": None,
+        "genres": meta.get("genres") or (json.dumps(categories) if categories else None),
+        "synopsis": meta.get("synopsis"),
+        "director": meta.get("director"),
+        "cast_names": meta.get("cast_names"),
+        "languages": meta.get("languages"),
         "site": "10xflix",
         "post_url": post_url,
         "releases": releases_data,
@@ -460,15 +571,20 @@ def save_post_to_staging_db(db_path: Path, post_data: dict) -> bool:
             """
             INSERT INTO posts (
                 canonical_key, title, original_title, year, media_type,
-                imdb_id, poster_url, synopsis, genres, site, post_url, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                imdb_id, poster_url, synopsis, genres, cast_names, director, languages, site, post_url, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
             ON CONFLICT(canonical_key) DO UPDATE SET
                 title = excluded.title,
                 original_title = excluded.original_title,
                 year = COALESCE(excluded.year, posts.year),
                 media_type = excluded.media_type,
+                imdb_id = COALESCE(excluded.imdb_id, posts.imdb_id),
                 poster_url = COALESCE(excluded.poster_url, posts.poster_url),
+                synopsis = COALESCE(excluded.synopsis, posts.synopsis),
                 genres = COALESCE(excluded.genres, posts.genres),
+                cast_names = COALESCE(excluded.cast_names, posts.cast_names),
+                director = COALESCE(excluded.director, posts.director),
+                languages = COALESCE(excluded.languages, posts.languages),
                 post_url = excluded.post_url,
                 updated_at = CURRENT_TIMESTAMP
             RETURNING id;
@@ -483,6 +599,9 @@ def save_post_to_staging_db(db_path: Path, post_data: dict) -> bool:
                 post_data.get("poster_url"),
                 post_data.get("synopsis"),
                 post_data.get("genres"),
+                post_data.get("cast_names"),
+                post_data.get("director"),
+                post_data.get("languages"),
                 post_data["site"],
                 post_data["post_url"],
             ),
@@ -552,8 +671,24 @@ def sync_wp_api_to_db(db_path: Path, max_pages: int | None = None, per_page: int
 
     print(f"[*] Starting 10xflix WP REST API sync from {WP_API_URL}...", flush=True)
     page = 1
-    total_synced = 0
+    total_new = 0
+    total_existing = 0
+    consecutive_empty_new = 0
     total_found = None
+
+    with sqlite3.connect(str(db_path)) as conn:
+        existing_slugs = set(
+            row[0] for row in conn.execute(
+                "SELECT slug FROM sitemap_cache WHERE slug IS NOT NULL"
+            ).fetchall()
+        )
+        existing_locs = set(
+            row[0] for row in conn.execute(
+                "SELECT loc FROM sitemap_cache WHERE loc IS NOT NULL"
+            ).fetchall()
+        )
+
+    print(f"[*] Pre-loaded {len(existing_slugs):,} existing slugs and {len(existing_locs):,} existing locs from {db_path.name}.", flush=True)
 
     while not STOP_REQUESTED:
         query_url = f"{WP_API_URL}?per_page={per_page}&page={page}&_embed=1"
@@ -573,7 +708,8 @@ def sync_wp_api_to_db(db_path: Path, max_pages: int | None = None, per_page: int
                 total_found = None
                 print("[*] Total catalog size header not present; paginating dynamically...", flush=True)
 
-        records = []
+        new_records = []
+        updated_records = []
         for post in posts:
             permalink = post.get("link")
             if not permalink:
@@ -581,42 +717,65 @@ def sync_wp_api_to_db(db_path: Path, max_pages: int | None = None, per_page: int
             slug = post.get("slug")
             lastmod = post.get("modified") or post.get("date")
             raw_json_str = json.dumps(post)
-            records.append((permalink, lastmod, slug, 0, "10xflix", raw_json_str))
 
-        if records:
-            with sqlite3.connect(str(db_path)) as conn:
+            is_known = (slug and slug in existing_slugs) or (permalink in existing_locs)
+            if is_known:
+                updated_records.append((lastmod, raw_json_str, slug or permalink))
+                total_existing += 1
+            else:
+                new_records.append((permalink, lastmod, slug, 0, "10xflix", raw_json_str))
+                if slug:
+                    existing_slugs.add(slug)
+                existing_locs.add(permalink)
+                total_new += 1
+
+        with sqlite3.connect(str(db_path)) as conn:
+            if new_records:
                 conn.executemany(
                     """
                     INSERT INTO sitemap_cache (loc, lastmod, slug, scraped, site, raw_json)
                     VALUES (?, ?, ?, ?, ?, ?)
-                    ON CONFLICT(loc) DO UPDATE SET
-                        lastmod = excluded.lastmod,
-                        slug = excluded.slug,
-                        raw_json = excluded.raw_json;
+                    ON CONFLICT(loc) DO NOTHING;
                     """,
-                    records,
+                    new_records,
                 )
-                conn.commit()
+            if updated_records:
+                conn.executemany(
+                    """
+                    UPDATE sitemap_cache
+                    SET lastmod = ?, raw_json = ?
+                    WHERE slug = ? OR loc = ?;
+                    """,
+                    [(r[0], r[1], r[2], r[2]) for r in updated_records],
+                )
+            conn.commit()
 
-            total_synced += len(records)
-            found_str = f"{total_found:,}" if total_found else "..."
-            print(
-                f"  [Page {page:3d}] Synced {len(records)} titles in {dt:.2f}s "
-                f"({total_synced:,} / {found_str} total)",
-                flush=True,
-            )
+        found_str = f"{total_found:,}" if total_found else "..."
+        print(
+            f"  [Page {page:3d}] Found {len(new_records)} brand new, {len(updated_records)} existing titles in {dt:.2f}s "
+            f"(Cumulative New: {total_new:,} | Total API: {found_str})",
+            flush=True,
+        )
+
+        if not new_records:
+            consecutive_empty_new += 1
+            if max_pages is None and consecutive_empty_new >= 3:
+                print(f"[*] 3 consecutive pages with 0 new titles reached. Database is fully up-to-date with live catalog. Stopping sync.", flush=True)
+                break
+        else:
+            consecutive_empty_new = 0
 
         if max_pages and page >= max_pages:
             print(f"[*] Reached requested max_pages limit ({max_pages}). Stopping sync.", flush=True)
             break
 
-        if len(posts) < per_page or (total_found and total_synced >= total_found):
+        if len(posts) < per_page:
             break
 
         page += 1
 
-    print(f"\n[✓] 10xflix catalog sync finished: {total_synced:,} titles stored in {db_path.name}\n", flush=True)
-    return total_synced
+    print(f"\n[✓] 10xflix catalog sync finished: {total_new:,} brand new titles added to {db_path.name} (already had {total_existing:,})\n", flush=True)
+    return total_new
 
 
 def run_crawler(
@@ -767,9 +926,65 @@ def print_status(db_path: Path):
     print("=" * 55 + "\n")
 
 
+def enrich_existing_metadata(db_path: Path):
+    """
+    Backfills/enriches metadata (director, cast_names, genres, languages, synopsis, imdb_id)
+    for all existing posts in 10xflix staging database from cached raw_json.
+    Runs 100% offline.
+    """
+    init_staging_db(db_path)
+    print(f"[*] Starting offline metadata enrichment for {db_path}...", flush=True)
+    with sqlite3.connect(str(db_path)) as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT loc, raw_json FROM sitemap_cache WHERE raw_json IS NOT NULL;")
+        rows = cur.fetchall()
+        print(f"[*] Found {len(rows):,} cached post entries to process.", flush=True)
+
+        updated = 0
+        for loc, raw_json_str in rows:
+            try:
+                p_data = json.loads(raw_json_str)
+                raw_title = p_data.get("title", {}).get("rendered", "")
+                content_html = p_data.get("content", {}).get("rendered", "")
+                if not content_html or not raw_title:
+                    continue
+
+                clean_title, year, season, episode, canonical_key = clean_10xflix_title(raw_title)
+                meta = extract_wp_post_metadata(content_html)
+
+                cur.execute(
+                    """
+                    UPDATE posts SET
+                        synopsis = COALESCE(?, synopsis),
+                        genres = COALESCE(?, genres),
+                        cast_names = COALESCE(?, cast_names),
+                        director = COALESCE(?, director),
+                        languages = COALESCE(?, languages),
+                        imdb_id = COALESCE(?, imdb_id)
+                    WHERE canonical_key = ?;
+                    """,
+                    (
+                        meta.get("synopsis"),
+                        meta.get("genres"),
+                        meta.get("cast_names"),
+                        meta.get("director"),
+                        meta.get("languages"),
+                        meta.get("imdb_id"),
+                        canonical_key,
+                    ),
+                )
+                if cur.rowcount > 0:
+                    updated += 1
+            except Exception:
+                continue
+
+        print(f"[✓] Metadata enrichment complete: {updated:,} posts updated.", flush=True)
+
+
 def main():
     parser = argparse.ArgumentParser(description="10xflix Staging Importer & Crawler")
     parser.add_argument("--sync-api", action="store_true", help="Sync posts via WP REST API")
+    parser.add_argument("--enrich-metadata", action="store_true", help="Enrich existing posts table with cast/director/genres/synopsis from cached raw_json")
     parser.add_argument("--max-pages", type=int, default=None, help="Max catalog pages to sync")
     parser.add_argument("--status", action="store_true", help="Print staging DB statistics")
     parser.add_argument("--workers", type=int, default=5, help="Crawler concurrent threads")
@@ -782,6 +997,10 @@ def main():
 
     if args.status:
         print_status(args.db_path)
+        return
+
+    if args.enrich_metadata:
+        enrich_existing_metadata(args.db_path)
         return
 
     if args.sync_api:
