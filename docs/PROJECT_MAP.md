@@ -1,11 +1,11 @@
 # Radd Stream project map
 
-Last updated: 2026-10-17. Authenticated GitHub API metadata verified that `radddao/radd-stream` is public. Unauthenticated GitHub API/raw-file requests from this Replit workspace returned 404, while authenticated API reads and a Git clone succeeded. Use the documented temporary askpass flow for Git operations; unauthenticated 404s here do not establish that a public repository or file is missing.
+Last updated: 2026-10-22 for the REST-surface and test-suite sections below (verified by reading `Fast_Fetch/viewer.py`, `Fast_Fetch/fast_fetch.py`, `App/app/src`, and listing `Fast_Fetch/test_*.py`). The repository/CI/server paragraphs are from 2026-10-17 and still need re-verification. Authenticated GitHub API metadata verified that `radddao/radd-stream` is public. Unauthenticated GitHub API/raw-file requests from this Replit workspace returned 404, while authenticated API reads and a Git clone succeeded. Use the documented temporary askpass flow for Git operations; unauthenticated 404s here do not establish that a public repository or file is missing.
 
 ## What lives where
 
 - **Repository:** `https://github.com/radddao/radd-stream` (public visibility verified through authenticated GitHub API metadata on 2026-10-16). GitHub `main` is the canonical current source. The Replit `gitsafe-backup` remote is a separate internal backup, not the GitHub remote. In this workspace, use authenticated Git operations through the temporary askpass flow in `ORACLE_DEPLOYMENT.md`.
-- **Python backend:** `Fast_Fetch/`. `fast_fetch.py` is the core engine/CLI; `viewer.py` provides the local API/dashboard; `config.py` configures paths; tests are `test_database.py` and `test_vidout.py`. The backend uses Python's standard library only.
+- **Python backend:** `Fast_Fetch/`. `fast_fetch.py` is the core engine/CLI; `viewer.py` provides the local API/dashboard; `config.py` configures paths. Tests are **not** just `test_database.py` and `test_vidout.py` — as of 2026-10-22 there are 26 `Fast_Fetch/test_*.py` modules, including per-site importer tests, `test_merge_catalogs.py`, `test_backup_manager.py`, `test_release_descriptor.py`, and `test_link_health.py`. `test_all_sites.py` is the live network audit; the others run offline. The older "36 tests / 6 tests" figures in root `AGENTS.md` describe only those two files and are not the suite total. The backend uses Python's standard library only.
 - **Catalog database:** SQLite, normally `Fast_Fetch/fast_fetch.db` for the unified catalog. Per project rule, scraping is performed into isolated per-site staging databases (e.g. `multimovies.db`, `vegamovies.db`) and merged into the unified catalog with `Fast_Fetch/merge_catalogs.py`. For Oracle, the runbook specifies persistent data outside the code checkout (`/home/ubuntu/radd-stream-data/fast_fetch.db`). Always maintain a verified backup before replacing or merging.
 - **Android app:** `App/`, a Kotlin/Jetpack Compose Gradle app. App code/tests are under `App/app/`; the Gradle project is rooted at `App/`.
 - **Replit entrypoint:** `.replit` is local-only configuration and may contain sensitive values. Keep it ignored and untracked; do not inspect its values or commit it. Historical commits still contain prior versions; the user chose to leave them intact. Its settings do not prove an API server is running.
@@ -17,6 +17,34 @@ Last updated: 2026-10-17. Authenticated GitHub API metadata verified that `raddd
 - The separate `radddao-work` branch contains additional Android MVP work and is divergent from `main`; review differences before merging and do not merge it wholesale.
 - The latest Actions run was not checked in this session. Verify the current run status before relying on CI.
 - Expected Android output: GitHub Actions builds a debug APK as a downloadable artifact; version-tag release builds require signing secrets configured in GitHub Actions.
+
+## Verified REST surface (2026-10-22, re-read against `Fast_Fetch/viewer.py`)
+
+Routes that exist in `do_GET()` (viewer.py:2039-2190): `/api/data`,
+`/api/sitemap`, `/api/fetch`, `/api/m3u`, `/api/health-check`, `/api/heal`,
+`/api/v1/posts`, `/api/v1/posts/{id}`, `/api/v1/stream`, `/api/v1/rules`,
+`/api/v1/stats`, `/favicon.ico`, `/client`, `/mobile`, `/`. There is **no
+`/api/v1/sync`** and no `do_POST` handler at all — any doc or roadmap item that
+reads like a sync/heal-over-HTTP capability is a proposal, not an endpoint.
+
+Three facts worth carrying across accounts because they have repeatedly misled
+agents and app developers:
+
+- **`?type=anime` returns zero rows.** `content_type` is matched by exact SQL
+  equality (viewer.py:1898) and the writers only produce `movie`, `series`,
+  `complete_season`, `ongoing_season` (`classify_media()`,
+  fast_fetch.py:1613-1622). Anime is expressed by `posts.is_animated` /
+  `posts.industry`, neither of which the API filters on yet.
+- **`/api/heal` is routed but broken.** The handler builds a payload and never
+  writes it to the socket (viewer.py:2100-2108); `protocol_version` is `HTTP/1.1`,
+  so clients hang. Use the `fast_fetch.py heal` CLI.
+- **The API is entirely unauthenticated and unencrypted.** No API key, token,
+  session, or rate limiting exists anywhere in `viewer.py`; `send_json()` emits
+  `Access-Control-Allow-Origin: *` (viewer.py:2037), `start_server()` defaults to
+  `0.0.0.0` (viewer.py:2211), and the Oracle host serves plain HTTP with no TLS.
+  Nothing behind this API should be described as private or secured. `/api/v1/stats`
+  additionally counts `is_18_plus = 1` rows that `/api/v1/posts` hides, so stats
+  totals will always exceed the browsable catalog.
 
 ## Oracle Ubuntu backend
 

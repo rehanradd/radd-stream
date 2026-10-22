@@ -44,7 +44,12 @@
 
 - Type-safe HTTP client for the `radd-stream` REST API
 - Gson / Moshi for JSON deserialization
-- OkHttp interceptor for server URL configuration + auth token injection
+- OkHttp interceptor for server URL configuration. There is **no auth token
+  injection to configure** — `viewer.py` implements no authentication, no API key,
+  and no bearer token, and answers every response with
+  `Access-Control-Allow-Origin: *`. The deployed Oracle host is plain HTTP with no
+  TLS. ⚠️ Reality (verified against viewer.py 2026-10-22); add real auth to the
+  backend before writing any token-handling interceptor.
 - Automatic retry on network errors
 
 ---

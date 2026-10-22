@@ -126,30 +126,73 @@ Query parameters:
 | Name | Optional | Meaning |
 |---|---:|---|
 | `q` | yes | Search title, clean title, or slug |
-| `type` | yes | Filter by `movie`, `series`, or `anime` |
+| `type` | yes | Filter by `movie`, `series`, `complete_season`, or `ongoing_season` |
 | `page` | yes | 1-based page number (default `1`) |
 | `limit` | yes | Results per page (default `20`, capped at `100`) |
 
+> ⚠️ **Reality (verified against viewer.py 2026-10-22):** `type` is compared to
+> `posts.content_type` with exact SQL equality (`p.content_type = ?`,
+> viewer.py:1898), and the writers only ever emit the four values listed above
+> (`classify_media()`, fast_fetch.py:1613-1622). **`?type=anime` returns zero
+> rows** — it is not an error, just an empty result. Anime lives in the separate
+> `is_animated` / `industry` columns, and neither is exposed as a query parameter
+> by this API yet, so anime filtering needs a new `animated` flag before clients
+> can offer it.
+
 The response contains `page`, `limit`, `total`, `total_pages`, and a `results`
-array. Each result includes the catalog metadata fields such as `id`, `title`,
-`clean_title`, `year`, `content_type`, `poster_url`, and `imdb_rating`.
+array. Each result carries exactly these keys (viewer.py:1905-1909): `id`,
+`clean_title`, `title`, `year`, `content_type`, `seasons`, `poster_url`,
+`imdb_rating`, `imdb_id`, `tmdb_id`, `genres`, `source_site`, `industry`,
+`country`, `language`, `release_count`, and `source_count`. `slug` is **not**
+part of the list payload; it appears only on the detail response.
+
+### `GET /api/v1/posts/{id}`
+
+Returns `{"success": true, "data": {...}}` — the `posts` row plus
+`source_pages[]` and `releases[]`, each release embedding its own `sources[]`.
+Releases are ordered `id ASC` only; there is no quality sorting and no
+season/episode grouping (viewer.py:1942). The priority ordering applies only to
+`sources` within a release (viewer.py:1946-1961). Unknown or adult-flagged ids
+return `404`.
 
 ### `GET /api/v1/stats`
 
 Returns catalog and diagnostic counts: `posts`, `releases`, `sources`,
-`active_sources`, `resumable_sources`, and `temporary_sources`.
+`active_sources`, `resumable_sources`, and `temporary_sources`. Counts are live
+and grow with every scraper run — older docs quoted `131 / 1031 / 2017`, which
+was a 2026-10-13 snapshot and should be read only as an illustrative example, not
+a current total. Note also that these counts include `is_18_plus = 1` rows that
+`/api/v1/posts` hides, so the browsable catalog is smaller than `posts` suggests.
 
-The Android app currently uses the paginated metadata and statistics endpoints.
-It does not implement stream resolution or playback.
+### Authentication and transport
+
+There is **none**. `viewer.py` implements no API key, token, session, or rate
+limiting; `send_json()` sets `Access-Control-Allow-Origin: *` on every response
+(viewer.py:2037) and `start_server()` binds `0.0.0.0` by default (viewer.py:2211).
+There is no TLS anywhere in the backend, and the Oracle deployment is plain HTTP.
+Treat every route, the whole catalog, and every resolved stream URL as public to
+anyone who can reach the port.
+
+The `resolve_live_source()` JIT resolver at `/api/v1/stream` is implemented and is
+used by the Android detail/player screens; the older claim that the app "does not
+implement stream resolution or playback" no longer matches `App/app/src`.
+
+> `/api/heal?id=…` is routed but **broken and unusable**: its handler builds a
+> response payload and never writes it to the socket (viewer.py:2100-2108), so
+> HTTP/1.1 clients hang until they time out. Use the `fast_fetch.py heal` CLI
+> instead.
 
 ---
 
 ## Android App
 
-The native Kotlin/Jetpack Compose client lives in `App/`. It is being built as a
-catalog browser for media catalogs and backends the operator is authorized to
-access. The current implementation includes first-run server setup, a catalog
-grid, and title search.
+The native Kotlin/Jetpack Compose client lives in `App/`. It is built for media
+catalogs and backends the operator is authorized to access. As verified in
+`App/app/src` on 2026-10-22, the current implementation includes first-run server
+setup, a catalog grid, title search, Room-backed favorites, a detail screen, and
+Media3 playback through `/api/v1/stream`. That build has **not** been verified on
+a physical device, and the season/episode release model does not match the API
+(see [`App/AGENTS.md`](App/AGENTS.md) §6).
 
 GitHub Actions runs Android tests, lint, and the debug build from the repository
 root. Download the debug APK from the workflow run's **Artifacts** section.
@@ -165,7 +208,7 @@ Tagged release builds require the signing secrets listed in
 radd-stream/
 ├── Fast_Fetch/
 │   ├── fast_fetch.py       ← Main engine (3900+ lines: scraper + DB + CLI + API)
-│   ├── viewer.py           ← HTML dashboard generator
+│   ├── viewer.py           ← REST API + dashboard HTTP server (all /api/* routes)
 │   ├── config.py           ← Project config (name, paths, settings)
 │   ├── database_view.html  ← Offline DB browser (auto-generated, open in browser)
 │   ├── AGENTS.md           ← REQUIRED READING for any AI agent

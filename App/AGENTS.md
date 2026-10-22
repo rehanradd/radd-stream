@@ -8,7 +8,7 @@
 
 ## 0. One-Line Summary
 
-> A native Kotlin/Compose Android metadata client for an authorized `radd-stream` server. The current MVP covers server setup, catalog browsing, and search; playback is deferred.
+> A native Kotlin/Compose Android client for a `radd-stream` server. As verified in `App/app/src`, the implemented surface covers server setup, catalog browsing, search, favorites, a detail screen, and Media3 playback via the stream resolver. Device/CI verification of that build is still pending — see §5 and §6 for the exact API contract and the known broken spots.
 
 ---
 
@@ -57,7 +57,7 @@ APK available at:
 |---|---|---|
 | Language | **Kotlin** | Maximum Android power, coroutines, type safety, Google's #1 language |
 | UI | **Jetpack Compose** | Declarative, modern, Material 3, hot-reload in Codespaces |
-| Future media playback | **ExoPlayer / Media3** | Native Android playback; not part of the current metadata MVP |
+| Media playback | **ExoPlayer / Media3** | `PlayerScreen.kt` + `PlaybackService.kt` exist and are wired into `NavGraph.kt`; never yet run on a device |
 | Architecture | **MVVM + Repository + Hilt** | Testable, scalable, industry standard |
 | Networking | **Retrofit 2 + OkHttp** | Type-safe API calls to radd-stream backend |
 | Local DB | **Room** | Watchlist, continue watching, cached catalog |
@@ -86,10 +86,11 @@ Repository root/
     │   ├── repository/                          ← catalog data access
     │   ├── ui/
     │   │   ├── components/PosterCard.kt
-    │   │   ├── navigation/
-    │   │   ├── screens/                        ← Setup, Home, Search
+    │   │   ├── navigation/               ← Screen.kt, NavGraph.kt (4-tab bottom nav)
+    │   │   ├── screens/                  ← Setup, Home, Search, Detail, Player, MyList, Settings
     │   │   └── theme/
-    │   ├── viewmodel/                           ← setup, catalog, search state
+    │   ├── viewmodel/                     ← setup, catalog, search, detail, favorites, settings
+    │   ├── player/PlaybackService.kt      ← Media3 MediaSessionService
     │   └── MainActivity.kt
     ├── app/src/test/                            ← JVM unit tests
     ├── gradle/wrapper/
@@ -99,66 +100,173 @@ Repository root/
 
 ---
 
-## 5. REST API Contract (Current Metadata Client)
+## 5. REST API Contract (Verified Against viewer.py)
 
-The Android MVP talks to the Python API for catalog metadata only. These are
-the endpoints currently consumed by the app:
+⚠️ **Reality (verified against viewer.py 2026-10-22):** this section previously
+described a metadata-only MVP that called two endpoints, and it listed `anime` as
+a valid `type` value. Both were wrong. The app in `App/app/src` today calls
+**four** endpoints, and `?type=anime` returns zero rows. The verified state is
+below.
+
+The backend is `Fast_Fetch/viewer.py`. The app currently consumes:
+
+| Call site | Endpoint |
+|---|---|
+| `SetupViewModel` / `SettingsViewModel` → `CatalogRepository.testConnection()` / `getStats()` | `GET /api/v1/stats` |
+| `HomeViewModel` / `SearchViewModel` → `CatalogRepository.getPosts()` | `GET /api/v1/posts` |
+| `DetailViewModel.kt:69` → `CatalogRepository.getPostDetail()` | `GET /api/v1/posts/{id}` |
+| `DetailViewModel.kt:130` → `CatalogRepository.resolveStream()` | `GET /api/v1/stream?id=…&redirect=0` |
+
+`GET /api/v1/rules` is **not** called by the app. `App/.github/workflows/` and
+the deferred roadmap items are separate concerns; see §6 and §8.
+
+There is **no authentication, no API key, no bearer token, and no rate limiting**
+anywhere in `viewer.py`. `send_json()` adds `Access-Control-Allow-Origin: *` to
+every response (viewer.py:2037) and the server defaults to binding `0.0.0.0`
+(viewer.py:2211). The deployed Oracle host is plain HTTP with no TLS. This API is
+public to anyone who can reach the port — never treat it as a private or secured
+surface.
 
 ### `GET /api/v1/posts`
-**Query params:** `q` (optional title search), `type` (`movie`, `series`, or
-`anime`), `page` (1-based, default 1), and `limit` (default 20, maximum 100).
+**Query params** (viewer.py:2110-2117 → `api_v1_get_posts()` viewer.py:1886):
 
-**Response:**
+| Name | Behaviour |
+|---|---|
+| `q` | `LIKE '%q%'` against `clean_title`, `title`, or `slug`. Omit for no search. |
+| `type` | Exact-equality match on `posts.content_type` (`p.content_type = ?`, viewer.py:1898). **Accepted values are only `movie`, `series`, `complete_season`, `ongoing_season`** — the four values `classify_media()` ever writes (fast_fetch.py:1613-1622). |
+| `page` | 1-based, default `1`. |
+| `limit` | Default `20`, clamped to `1..100` (viewer.py:2115). |
+
+> 🚨 **There is no `?type=anime`.** `content_type` is filtered by exact string
+> equality and no writer in the codebase ever stores `'anime'` there.
+> `?type=anime` returns `{"total": 0, "results": []}` — an empty grid, not an
+> error. Anime is carried by the separate `posts.is_animated` and
+> `posts.industry` columns, and **the REST API exposes neither as a filter yet**,
+> so anime filtering needs a new `animated` flag parameter plus backend support
+> before any client chip can offer it. Note also that only
+> `import_ssrmovies.py:470` currently populates `is_animated` at all.
+> `HomeScreen.kt:48` and `SearchScreen.kt:49` still map the "Anime" chip to
+> `type=anime`, so that chip is broken today — that is a Kotlin bug to fix in the
+> app or in the backend, not something to work around in docs.
+
+**Response** — `api_v1_get_posts()` selects exactly these keys per result
+(viewer.py:1905-1909). The example below is a real row sampled from
+`Fast_Fetch/multimovies.db` on 2026-10-22 (poster URL elided); the totals are that
+staging database's counts, **not** the unified catalog's:
+
 ```json
 {
   "page": 1,
   "limit": 20,
-  "total": 131,
-  "total_pages": 7,
+  "total": 10512,
+  "total_pages": 526,
   "results": [
     {
-      "id": 42,
-      "title": "Inception",
-      "clean_title": "Inception",
-      "year": 2010,
+      "id": 10512,
+      "clean_title": "Sorcerer Heavenly Master · Dark Hades",
+      "title": "Sorcerer Heavenly Master · Dark Hades",
+      "year": null,
       "content_type": "movie",
+      "seasons": null,
       "poster_url": "https://...",
-      "imdb_rating": "8.8",
-      "source_site": "vegamovies"
+      "imdb_rating": null,
+      "imdb_id": "tt35786199",
+      "tmdb_id": 1673401,
+      "genres": "Action, Adventure, Drama, Fantasy",
+      "source_site": "multimovies",
+      "industry": "Hollywood",
+      "country": "USA",
+      "language": "English",
+      "release_count": 8,
+      "source_count": 8
     }
   ]
 }
 ```
 
+`slug` is **not** in the list payload — it is only on the detail response. `year`,
+`imdb_rating`, and `seasons` are nullable; `year` and `tmdb_id` arrive as JSON
+**numbers** when present. Results are ordered `p.id DESC` (newest first), and rows
+with `is_18_plus = 1` are excluded by the SQL `WHERE` (viewer.py:1891).
+
+### `GET /api/v1/posts/{id}`
+Returns `{"success": true, "data": {...}}`, where `data` is the raw `posts` row
+plus `source_pages[]` and `releases[]`, each release carrying `sources[]`.
+Releases are ordered **`id ASC`** only (viewer.py:1942) — no quality sorting and no
+season/episode grouping; group them client-side. The tier ordering applies only
+to `sources` inside a release (viewer.py:1946-1961). An unknown id or an
+adult-flagged post returns `404 {"success": false, "error": "Post not found"}`.
+
+### `GET /api/v1/stream`
+`redirect=1` (default) → bare `302` with `Location`. `redirect=0` → JSON with
+`success`, `id`, `url`, `cached`, `refreshed`, `service`, `is_temporary`,
+`is_resumable`, `source_name`, `mime_type` — `is_temporary` and `is_resumable` are
+JSON **booleans**, which `StreamResponse` must not model as integers. Failure →
+`404 {"success": false, "error": ...}`.
+
 ### `GET /api/v1/stats`
+Field names are snake_case exactly as below (viewer.py:2156-2174). **The values
+are illustrative only** — they were read live from the `multimovies.db` staging
+catalog on 2026-10-22, the old `131 / 1031 / 2017` figures were a 2026-10-13
+milestone snapshot, and the unified catalog grows with every scraper run. Call the
+endpoint on the server you are pointed at to get real numbers.
+
 ```json
 {
-  "posts": 131,
-  "releases": 1031,
-  "sources": 2017,
-  "active_sources": 1840,
-  "resumable_sources": 250,
-  "temporary_sources": 90
+  "posts": 10512,
+  "releases": 612180,
+  "sources": 675000,
+  "active_sources": 675000,
+  "resumable_sources": 0,
+  "temporary_sources": 0
 }
 ```
 
-The app checks the stats endpoint before saving the server URL. It does not
-currently call post-detail, resolver, or rules endpoints.
+> ⚠️ `/api/v1/stats` counts **every** post, including `is_18_plus = 1` rows that
+> `/api/v1/posts` hides (viewer.py:2157-2162 has no adult filter). The stats
+> counts will therefore exceed what the browsable catalog can actually show.
 
 ---
 
 ## 6. Screens Reference
 
-See [`design/SCREENS.md`](../design/SCREENS.md) for full wireframes. Summary:
+See [`design/SCREENS.md`](../design/SCREENS.md) for full wireframes. Verified
+against `App/app/src/main/kotlin/com/raddstream/app/ui/`:
+
+**Implemented and navigable** (`NavGraph.kt:105-165`, four-tab bottom nav):
 
 | Screen | Route | Key Components |
 |---|---|---|
-| Setup | `setup` | Server URL, connection check |
+| Setup | `setup` | Server URL, `/api/v1/stats` connection check |
 | Home | `home` | Type filter chips, catalog poster grid, refresh |
 | Search | `search` | Debounced title search, type chips, poster grid |
+| My List | `my_list` | Room-backed favorites |
+| Settings | `settings` | Server config + live server diagnostics |
+| Detail | `detail/{postId}` | `getPostDetail`, release/source lists, play action |
+| Player | `player/{url}/{title}` | Media3 ExoPlayer, `resolveStream` |
 
-Detail, player, watchlist, and settings screens are deferred and not navigable
-in the current MVP.
+The §5 note above supersedes the "app calls only `/api/v1/stats` and
+`/api/v1/posts`" statement, and the earlier Phase 1 task lists in §8 and the
+Session 2/3 logs, which described a metadata-only MVP that no longer matches
+`App/app/src`. Treat those as historical plan, not current state.
+
+> ⚠️ The "Anime" chip on Home and Search is **known broken** — see the
+> `?type=anime` warning in §5. The type chips should offer only Movie / Series
+> (and, if the backend adds them, Complete Season / Ongoing Season).
+
+> 🚨 **`ReleaseDetail` does not match the backend release rows.** The `releases`
+> table columns returned by `/api/v1/posts/{id}` are `id, post_id, release_title,
+> season, episode, quality, codec, size, languages, intermediate_url, created_at,
+> source_site, origin_url` (verified via `PRAGMA table_info`). `Models.kt:68-84`
+> asks instead for `season_number`, `episode_number`, `episode_title`,
+> `resolution`, and `audio` — **none of those keys exist in the response**, so all
+> five are always `null`. `DetailScreen.kt:206-220` builds its whole season filter
+> on `seasonNumber`, and `DetailScreen.kt:426-428` on `episodeNumber`, so series
+> season/episode grouping silently does nothing today. Map `season` / `episode` /
+> `release_title` instead. Likewise `StreamResponse.isTemporary: Int?` cannot hold
+> the JSON **boolean** the resolver returns (`is_temporary` is
+> `bool(...)` in `resolve_live_source()`), so Gson will reject that field.
+
 
 ---
 
@@ -188,11 +296,16 @@ Label:    12.sp Medium (muted metadata)
 
 ## 8. Phase Roadmap
 
+⚠️ **Reality (verified against `App/app/src` 2026-10-22):** the "Deferred" labels
+on Phase 2 detail/playback/watchlist/settings no longer match the source. Those
+screens, the Room favorites DB, and `PlaybackService` all exist and are wired into
+`NavGraph.kt`. What is actually missing is verification, not implementation.
+
 | Phase | What to build | Status |
 |---|---|---|
 | **Phase 0** | Gradle project skeleton + CI | ✅ Complete |
 | **Phase 1** | Server setup → metadata catalog → search | 🚧 Implemented; needs CI/device verification |
-| **Phase 2** | Detail pages, playback, watchlist, settings | ⏳ Deferred |
+| **Phase 2** | Detail pages, playback, watchlist, settings | 🚧 Code implemented; unverified, and the season/episode + `is_temporary` model mismatches in §6 block correct series playback |
 | **Phase 3** | Chromecast, multi-server, Android TV | ⏳ Future |
 
 ---
@@ -337,11 +450,16 @@ the repository.
 - The configured backend host is `http://92.4.95.252/` over plain HTTP; the
   SSH account is `ubuntu@92.4.95.252` on port 22. Use the secret-safe process
   in [`../ORACLE_DEPLOYMENT.md`](../ORACLE_DEPLOYMENT.md).
-- The Android MVP currently calls only `/api/v1/stats` and `/api/v1/posts`.
-  It does not use playback or resolver endpoints.
+- The app calls `/api/v1/stats`, `/api/v1/posts`, `/api/v1/posts/{id}`, and
+  `/api/v1/stream` (see §5). It does not call `/api/v1/rules`.
 - Cleartext HTTP is permitted only in the debug build. The release build must
   use HTTPS; do not relax Android network security globally to make a release
   work over HTTP.
+  ⚠️ **Reality (verified against viewer.py 2026-10-22):** the backend has no TLS
+  support at all and the Oracle host is plain HTTP, so a release build cannot
+  legally point at `http://92.4.95.252/`. That is a deployment gap, not something
+  to paper over by loosening network security. The API is also unauthenticated
+  with wildcard CORS — nothing behind it is private.
 - The user's permanent choice is to configure `ORACLE_SSH_KEY` and
   `GITHUB_TOKEN` as Replit Configurations environment variables, not Secrets.
   Verify presence by name only; never reveal values, ask to move them, or place
@@ -512,5 +630,45 @@ Repository.kt (single source of truth)
 - Successfully compiled `assembleDebug` with full Jetpack Compose UI, Room SQLite database, Media3 ExoPlayer, and D8/R8 DEX packaging (`BUILD SUCCESSFUL in 6m 41s`).
 - Deployed resulting 21.5 MB `app-debug.apk` to `/var/www/download/radd-stream.apk`.
 - Configured and verified public download endpoint at `http://92.4.95.252/download/radd-stream.apk` returning HTTP 200 OK.
+
+---
+
+### Session 6 — Documentation truth-audit against viewer.py (2026-10-22)
+
+**Status:** ✅ Docs corrected. No `.kt`, `.kts`, or `.py` file was touched, and nothing was committed or pushed.
+
+**What changed in this guide:** §0, §3, §4, §5, §6, §8, and §11 were rewritten to
+the state actually present in `App/app/src` and `Fast_Fetch/viewer.py`. The prior
+§5 claimed `?type=anime` was a supported filter and that the app called only
+`/api/v1/stats` and `/api/v1/posts`; §6 claimed Detail/Player/MyList/Settings were
+"not navigable". All three statements were false.
+
+**Verified against code:**
+- `viewer.py:1898` filters `content_type` with `p.content_type = ?` (exact
+  equality) and `classify_media()` (`fast_fetch.py:1613-1622`) only emits
+  `movie` / `series` / `complete_season` / `ongoing_season` — a live
+  `api_v1_get_posts(content_type='anime')` call returned `total: 0`.
+- `viewer.py:1905-1909` is the exact list-route `SELECT` (17 keys; `slug` absent).
+- `viewer.py:1942` orders releases `id ASC` with no grouping; `viewer.py:1946-1961`
+  applies the tier `CASE` to `sources` inside a release only.
+- `viewer.py:2037` wildcard CORS, `viewer.py:2211` binds `0.0.0.0`, and grepping
+  `viewer.py` for `Authorization` / `api_key` / `Bearer` / `rate_limit` returned
+  zero hits — there is no auth, no key, no rate limiting, and no TLS.
+- `RaddStreamApi.kt` + `CatalogRepository.kt:38,46` + `DetailViewModel.kt:69,130` +
+  `NavGraph.kt:139-165` prove the app calls four endpoints.
+
+**Known-broken items recorded but NOT fixed (out of scope, code):**
+1. `HomeScreen.kt:48` / `SearchScreen.kt:49` still send `type=anime` → empty grid.
+2. `Models.kt:68-84` `ReleaseDetail` maps `season_number` / `episode_number` /
+   `episode_title` / `resolution` / `audio`, none of which the API returns;
+   `DetailScreen.kt:206-220,426-428` season/episode grouping is therefore dead.
+3. `StreamResponse.isTemporary: Int?` vs the JSON boolean `resolve_live_source()`
+   returns.
+4. `AndroidManifest.xml:43-48` registers a `radd://` filter but `NavGraph.kt` has
+   no `navDeepLink` entries.
+5. `viewer.py:2100-2108` — `/api/heal` never writes a response, so clients hang.
+
+**Next agent should:** pick one of (1)/(2)/(3) as real work, then re-verify these
+sections against the code again rather than trusting prose.
 
 

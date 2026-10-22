@@ -32,6 +32,7 @@ radd-stream/                        ← repo root
 ├── Fast_Fetch/                     ← 🐍 PYTHON BACKEND (data engine + REST API)
 │   ├── AGENTS.md                   ← deep backend-specific agent guide (read this for backend work)
 │   ├── CONTINUITY.md               ← session log + milestone tracker (update every session)
+│   ├── API_V2.md                   ← catalog v2 data model + REST contract (read before designing any endpoint)
 │   ├── SITES.md                    ← per-site scraping reference
 │   ├── SETUP.md                    ← setup instructions for backend
 │   ├── ANDROID_INTEGRATION.md      ← how Android app consumes the backend
