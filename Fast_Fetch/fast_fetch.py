@@ -571,11 +571,14 @@ def _init_db(db_path: Path | None = None) -> None:
             size TEXT,
             languages TEXT,
             intermediate_url TEXT,
+            source_site TEXT DEFAULT NULL,
+            origin_url TEXT DEFAULT NULL,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (post_id) REFERENCES posts(id) ON DELETE CASCADE
         );
 
         CREATE INDEX IF NOT EXISTS idx_releases_post ON releases(post_id);
+        CREATE INDEX IF NOT EXISTS idx_releases_origin ON releases(post_id, source_site, origin_url);
 
         CREATE TABLE IF NOT EXISTS download_sources (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -646,6 +649,10 @@ def _init_db(db_path: Path | None = None) -> None:
                 "  SELECT url FROM posts WHERE posts.id = releases.post_id"
                 ") WHERE origin_url IS NULL"
             )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_releases_origin"
+            " ON releases(post_id, source_site, origin_url)"
+        )
 
         cursor.execute("PRAGMA table_info(sitemap_cache)")
         existing_sm_cols = {r[1] for r in cursor.fetchall()}

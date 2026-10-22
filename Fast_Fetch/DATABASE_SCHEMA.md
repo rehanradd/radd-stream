@@ -223,6 +223,26 @@ Stores individual download mirrors and raw CDN streaming endpoints.
 | `updated_at` | `TIMESTAMP`| `DEFAULT CURRENT_TIMESTAMP` | Record update timestamp |
 
 #### Supported Service Identifiers (`download_sources.service`):
+
+> ⚠️ **Reality (verified against viewer.py + the live staging databases
+> 2026-10-22).** The list below is the *intended* canonical vocabulary, and two
+> things about it will surprise you:
+>
+> 1. `/api/v1/posts/{id}` sorts each release's `sources` with a
+>    `CASE service WHEN 'pixeldrain' ... WHEN 'vegadrive' ... WHEN 'hubcloud_10g'
+>    ... WHEN 'fsl_r2' ... WHEN 'fastdl' ... WHEN 'google_cdn' ... ELSE 99 END`
+>    (viewer.py:1946-1961). That `CASE` matches **exact literal strings only**, so
+>    `hubcloud` (written by `fast_fetch.py:1929, 1951, 1963, 2006`),
+>    `vcloud`, `filepress`, `gofile`, and every other name listed below all fall
+>    through to `99` — so this schema list is *not* a tier ranking.
+> 2. Real rows frequently carry **host-derived** names outside this vocabulary
+>    entirely. `Fast_Fetch/multimovies.db` currently holds values such as
+>    `fastdl-beer`, `vcloud-beer`, `filebee-xyz`, `hubcloud-ist`,
+>    `one-vegadrive-app`, and `new1-filepress-lat`, none of which match any `CASE`
+>    branch — every source in that catalog orders as `99`. Check
+>    `SELECT DISTINCT service FROM download_sources` on the database you are
+>    actually serving before trusting tier ordering or this list.
+
 * `google_cdn`: Direct Google UserContent CDN stream (`video-downloads.googleusercontent.com`).
 * `fsl_r2`: Cloudflare R2 object storage direct stream (`pub-....r2.dev`).
 * `pixeldrain`: PixelDrain direct high-speed CDN API stream (`pixeldrain.com/api/file/<id>`).

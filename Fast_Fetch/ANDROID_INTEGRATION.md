@@ -41,12 +41,106 @@
 
 | Endpoint | Method | Query Parameters | Description |
 | :--- | :--- | :--- | :--- |
-| `/api/v1/posts` | `GET` | `q` (search query), `type` (movie/series/anime), `page`, `limit` | Paginated catalog search and discovery. Returns clean metadata, posters, IMDb ratings, and counts. |
-| `/api/v1/posts/{id}` | `GET` | None | Full detail for a single media title: all release variants (480p, 720p, 1080p, 4K), seasons, episodes, and direct sources ordered by priority tier. |
+| `/api/v1/posts` | `GET` | `q` (search query), `type` (`movie` / `series` / `complete_season` / `ongoing_season`), `page`, `limit` | Paginated catalog search and discovery. Returns clean metadata, posters, IMDb ratings, and counts. |
+| `/api/v1/posts/{id}` | `GET` | None | Full detail for a single media title, wrapped as `{"success": true, "data": {...}}`. Releases come back in plain `id ASC` order — they are **not** sorted by quality tier and there is **no** season/episode grouping. The tier ordering applies only to the `sources` array inside each release. |
 | `/api/v1/stream` | `GET` | `id` (source ID, required), `redirect` (`1` or `0`) | Just-in-Time (JIT) stream resolver. When `redirect=1` (default), returns **HTTP 302 Found** directly to the live, unexpired video stream for native player playback. When `redirect=0`, returns JSON with refreshed token metadata. |
 | `/api/v1/rules` | `GET` | None | Remote regex and extraction rules for client-side IP unwrapping (Android device IP). |
 | `/api/v1/stats` | `GET` | None | Live system metrics: total posts, releases, sources, active links, and resumable streams. |
+| `/api/m3u` | `GET` | `id` (post ID) | `audio/x-mpegurl` playlist download for the post's non-dead sources, ordered `is_resumable DESC, id ASC` (viewer.py:185-207) — a **different** ordering from the API detail route. Empty body for an adult-flagged or unknown id. |
 | `/client` | `GET` | None | Built-in touch-optimized mobile web client (PWA ready). |
+
+The remaining `GET` routes in `do_GET()` are dashboard/admin oriented, not client
+integration points: `/api/data`, `/api/sitemap`, `/api/fetch`,
+`/api/health-check`, `/`, `/index.html`, `/mobile`, `/favicon.ico`. There is **no
+`/api/v1/sync`** and no `POST` handler at all.
+
+> ⚠️ **Reality (verified against viewer.py 2026-10-22)** — three things in this
+> section used to be wrong, and they cost people afternoons:
+>
+> 1. **There is no `?type=anime`.** `api_v1_get_posts()` (viewer.py:1897-1899)
+>    filters with `p.content_type = ?` — exact string equality. No writer in the
+>    codebase ever stores `'anime'` in `content_type`: `classify_media()`
+>    (fast_fetch.py:1613-1622) only ever produces `movie`, `series`,
+>    `complete_season`, or `ongoing_season`. So `?type=anime` returns
+>    `{"total": 0, "results": []}` — an empty grid, not an error.
+>    Anime is expressed through the separate `posts.is_animated` and
+>    `posts.industry` columns, and **neither is exposed as a query parameter on
+>    this API yet**. The dashboard's "Anime" pill works only because it filters
+>    the already-downloaded payload in browser JS (viewer.py:1051-1052), not
+>    because the REST route supports it. Adding a real anime filter requires a
+>    backend change (an `animated=1` flag parameter) plus populating
+>    `is_animated` in every scraper — today only `import_ssrmovies.py:470` sets
+>    it. Until then, do not add an Anime chip to any client.
+> 2. **`/api/v1/posts/{id}` does not order or group releases.**
+>    `api_v1_get_post_detail()` (viewer.py:1942) runs
+>    `SELECT * FROM releases WHERE post_id = ? ORDER BY id ASC` — insertion order
+>    only, no quality sort, no season/episode grouping. Clients must group by
+>    `season` / `episode` themselves.
+> 3. **The priority tier ordering applies to sources within a release**
+>    (viewer.py:1946-1961), in this exact order: `status = 'active'` first, then
+>    `is_temporary ASC`, then a `CASE service` of `pixeldrain` (1), `vegadrive`
+>    (2), `hubcloud_10g` (3), `fsl_r2` (4), `fastdl` (5), `google_cdn` (6),
+>    everything else (99). Note the CASE matches those **exact literal strings**:
+>    staging rows commonly carry host-derived names such as `fastdl-beer`,
+>    `vcloud-beer`, or `hubcloud-ist`, which all fall through to `99` and so keep
+>    arbitrary relative order. Verify the `service` values your scraper writes
+>    before relying on tier ordering.
+
+### Detail-response shape actually returned by `/api/v1/posts/{id}`
+
+The `data` object is the raw `posts` row plus two injected arrays
+(viewer.py:1930-1965):
+
+```
+posts row: id, url, slug, title, clean_title, year, content_type, seasons,
+           poster_url, backdrop_urls, imdb_rating, genres, synopsis,
+           is_18_plus, is_animated, lastmod, created_at, updated_at,
+           source_site, industry, country, language, canonical_key,
+           tmdb_id, imdb_id
+       + source_pages: [{source_site, url, source_title}]
+       + releases:     [{id, post_id, release_title, season, episode, quality,
+                         codec, size, languages, intermediate_url, created_at,
+                         source_site, origin_url,
+                         sources: [{id, release_id, source_name, service,
+                                     resource_id, source_url, final_url,
+                                     playback_type, is_temporary, status,
+                                     is_resumable, http_status, file_size_bytes,
+                                     mime_type, last_checked_at, created_at,
+                                     updated_at}]}]
+```
+
+Adult-flagged titles return `404 {"success": false, "error": "Post not found"}`,
+never a body. The same filter applies to `/api/m3u`, where
+`generate_m3u_playlist()` returns an empty string for a flagged post
+(viewer.py:185-189), and to source resolution.
+
+`/api/heal?id={post_id}` is **routed but unusable**: the handler builds
+`resp_payload` and never writes it to the socket (viewer.py:2100-2108), so an
+HTTP/1.1 client waits for a response that never arrives. A missing or non-numeric
+`id` also raises before any response is sent. Do not wire any client to this
+route; call `fast_fetch.heal_post_links()` from Python instead.
+
+### Stream resolver response fields
+
+`/api/v1/stream` with `redirect=1` (the default) emits a bare `302` with
+`Location` plus `Access-Control-Allow-Origin: *` and `Connection: close`, and no
+body (viewer.py:2141-2147). With `redirect=0` it returns the
+`resolve_live_source()` dict directly; the keys actually produced are
+`success`, `id`, `url`, `cached`, `refreshed`, `service`, `is_temporary`,
+`is_resumable`, `source_name`, `mime_type` — note `is_temporary` and
+`is_resumable` are JSON **booleans**, and a failed resolution returns
+`{"success": false, "error": ...}` with HTTP `404`.
+
+### Security posture — there is none
+
+Every route is **completely unauthenticated**:
+there is no API key, no bearer token, no session, and no rate limiting anywhere
+in `viewer.py`. `send_json()` stamps `Access-Control-Allow-Origin: *` on every
+response (viewer.py:2037), and `start_server()` defaults to binding
+`0.0.0.0` (viewer.py:2211). The Oracle host serves plain HTTP with no TLS.
+Treat the catalog and every resolved stream URL as public to anyone who can
+reach the port, and never put credentials or personal data behind this API.
+
 
 ---
 
@@ -220,6 +314,9 @@ import java.net.URLEncoder
 class RaddStreamClient(private val baseUrl: String) {
 
     fun searchPosts(query: String = "", type: String = "", page: Int = 1, limit: Int = 20): JSONObject {
+        // `type` must be exactly one of: movie | series | complete_season | ongoing_season.
+        // Anything else (including "anime") matches zero rows — see section 2.
+        // Send `type` only when non-empty, or omit it entirely.
         val q = URLEncoder.encode(query, "UTF-8")
         val t = URLEncoder.encode(type, "UTF-8")
         val url = "$baseUrl/api/v1/posts?q=$q&type=$t&page=$page&limit=$limit"
@@ -227,6 +324,7 @@ class RaddStreamClient(private val baseUrl: String) {
     }
 
     fun getPostDetail(postId: Int): JSONObject {
+        // Response is nested: {"success": true, "data": {post..., source_pages[], releases[]}}
         val url = "$baseUrl/api/v1/posts/$postId"
         return httpGetJson(url)
     }

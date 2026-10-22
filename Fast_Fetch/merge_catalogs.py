@@ -69,7 +69,8 @@ def _post_release_rows(src_conn: sqlite3.Connection, post: sqlite3.Row) -> list[
     return []
 
 
-def _collect_staging_post(src_conn: sqlite3.Connection, post: sqlite3.Row) -> dict:
+def _collect_staging_post(src_conn: sqlite3.Connection, post: sqlite3.Row,
+                          default_site: str = "unknown") -> dict:
     """Maps a per-site staging database (posts/releases/sources) onto the unified shape."""
     url = _pick(post, "post_url", "url", default="")
     if not url:
@@ -79,7 +80,9 @@ def _collect_staging_post(src_conn: sqlite3.Connection, post: sqlite3.Row) -> di
                 url = (json.loads(raw_meta) or {}).get("loc", "")
             except (json.JSONDecodeError, TypeError):
                 url = ""
-    site = _pick(post, "site", "source_site", default="unknown")
+    # A staging database knows which site it holds even when its rows do not;
+    # leaving those as "unknown" loses the attribution the API ranks and filters by.
+    site = _pick(post, "site", "source_site", default=default_site) or default_site
     media_type = (_pick(post, "media_type", "content_type", default="movie") or "movie").lower()
     backdrops = _pick(post, "backdrop_url")
     language = _pick(post, "languages", "language", default="Unknown")
@@ -246,6 +249,8 @@ def merge_site_db(source_db_path: Path, target_db_path: Path, verbose: bool = Tr
     if not source_db_path.exists():
         raise FileNotFoundError(f"Source database not found: {source_db_path}")
 
+    default_site = "".join(c for c in source_db_path.stem.casefold() if c.isalnum()) or "unknown"
+
     stats = {
         "posts_merged": 0,
         "posts_created": 0,
@@ -281,7 +286,7 @@ def merge_site_db(source_db_path: Path, target_db_path: Path, verbose: bool = Tr
         conflicts: list[tuple[str, str, str]] = []
         for idx, post in enumerate(src_posts, 1):
             if family == "staging":
-                post_data = _collect_staging_post(src_conn, post)
+                post_data = _collect_staging_post(src_conn, post, default_site)
                 sources_pages = []
             else:
                 post_data = _collect_unified_post(src_conn, post)
