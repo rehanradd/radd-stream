@@ -1,0 +1,79 @@
+name: 🐍 Backend CI — Stdlib Python Tests
+
+# WHAT THIS DOES
+#   Protects the Fast_Fetch data layer with the same rigor as the app: runs the
+#   five core offline suites on a plain ubuntu runner using the system python3
+#   with -S and NO pip install whatsoever (stdlib-only is project law; if a
+#   suite ever needs pip, that is a regression of the law, not of the runner).
+#
+#   Suites run (verified passing offline on the Oracle VM, python 3.12, before
+#   this workflow was written):
+#     - Fast_Fetch/test_database.py          (36 catalog/DB tests)
+#     - Fast_Fetch/test_vidout.py            (6 VIDOUT extractor tests)
+#     - Fast_Fetch/test_catalog_v2.py        (v2 catalog projection)
+#     - Fast_Fetch/test_release_descriptor.py(release descriptor parsing)
+#     - Fast_Fetch/test_link_health.py       (link health prober; binds a
+#                                             throwaway HTTP server on 127.0.0.1
+#                                             only — NO external network)
+#
+#   Deliberately EXCLUDED:
+#     - Fast_Fetch/test_all_sites.py  — live 10-site network audit; needs the
+#       internet and would make CI flaky/non-deterministic.
+#     - test_*_import.py / test_9xmovies.py etc. per-site parser tests — many
+#       appear offline but are not in the mandated core set; adding them is a
+#       follow-up, one step per suite so failures stay attributable.
+#
+# KNOWN FAILURE MODES THIS FILE FIXES
+#   GitHub never ran any pipeline for this repo because the workflow files lived
+#   in App/.github/workflows/ and radd-stream/.github/workflows/ — discovery
+#   only happens at the true repository root. This file is at the root.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ["**"]
+    paths:
+      - "Fast_Fetch/**"
+      - ".github/workflows/backend-ci.yml"
+  pull_request:
+    paths:
+      - "Fast_Fetch/**"
+      - ".github/workflows/backend-ci.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: backend-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    name: python3 -S offline suites
+    runs-on: ubuntu-24.04   # system python 3.12 — same minor as the Oracle VM
+    timeout-minutes: 15
+
+    steps:
+      - name: 📥 Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - name: 🐍 Interpreter report (no pip, no installs)
+        run: |
+          python3 --version
+          echo "Runner system Python in use. This workflow must never pip-install."
+
+      # One step per suite: a red X names the exact failing suite.
+      - name: 🧪 test_database.py
+        run: python3 -S Fast_Fetch/test_database.py
+
+      - name: 🧪 test_vidout.py
+        run: python3 -S Fast_Fetch/test_vidout.py
+
+      - name: 🧪 test_catalog_v2.py
+        run: python3 -S Fast_Fetch/test_catalog_v2.py
+
+      - name: 🧪 test_release_descriptor.py
+        run: python3 -S Fast_Fetch/test_release_descriptor.py
+
+      - name: 🧪 test_link_health.py
+        run: python3 -S Fast_Fetch/test_link_health.py
