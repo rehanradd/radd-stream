@@ -4,6 +4,8 @@ import base64
 import json
 import io
 import os
+import sqlite3
+import time
 import sys
 import tempfile
 import threading
@@ -880,6 +882,117 @@ class AdultContentFilterTests(unittest.TestCase):
         resolution = fast_fetch.resolve_live_source(adult_source["id"])
         self.assertFalse(resolution["success"])
         self.assertIn("18+", resolution["error"])
+
+
+class CrawlRetryAccountingTests(unittest.TestCase):
+    """A failed page must be retried a bounded number of times, never abandoned."""
+
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.db_path = Path(self.temp_dir.name) / "retry.db"
+        self.patch = patch.object(fast_fetch, "DB_PATH", self.db_path)
+        self.patch.start()
+        fast_fetch.init_db()
+
+    def tearDown(self):
+        self.patch.stop()
+        self.temp_dir.cleanup()
+
+    def seed(self, rows):
+        with fast_fetch.get_db() as conn:
+            conn.executemany(
+                "INSERT INTO sitemap_cache (loc, lastmod, slug, scraped, attempts) VALUES (?, ?, ?, ?, ?)",
+                rows,
+            )
+
+    def test_fresh_schema_carries_retry_columns(self):
+        with fast_fetch.get_db() as conn:
+            cols = {r[1] for r in conn.execute("PRAGMA table_info(sitemap_cache)")}
+        self.assertIn("attempts", cols)
+        self.assertIn("last_attempt", cols)
+
+    def test_pre_existing_schema_is_migrated_without_losing_rows(self):
+        legacy = Path(self.temp_dir.name) / "legacy.db"
+        with sqlite3.connect(str(legacy)) as conn:
+            conn.execute(
+                "CREATE TABLE sitemap_cache (loc TEXT PRIMARY KEY, lastmod TEXT, slug TEXT, scraped INTEGER DEFAULT 0)"
+            )
+            conn.execute("INSERT INTO sitemap_cache (loc, slug, scraped) VALUES ('a', 'a', 1)")
+            conn.commit()
+        self.patch.stop()
+        self.patch = patch.object(fast_fetch, "DB_PATH", legacy)
+        self.patch.start()
+        fast_fetch.init_db()
+        with fast_fetch.get_db() as conn:
+            cols = {r[1] for r in conn.execute("PRAGMA table_info(sitemap_cache)")}
+            row = conn.execute("SELECT scraped, attempts FROM sitemap_cache WHERE loc = 'a'").fetchone()
+        self.assertIn("attempts", cols)
+        self.assertEqual(row[0], 1)
+        self.assertEqual(row[1], 0)
+
+    def test_pending_pages_outrank_retryable_failures(self):
+        self.seed([
+            ("fail-old", "2024-01-01", "fail-old", -1, 1),
+            ("pending-new", "2024-06-01", "pending-new", 0, 0),
+        ])
+        with fast_fetch.get_db() as conn:
+            rows = fast_fetch.select_crawl_candidates(conn, None, 10)
+        self.assertEqual([r["loc"] for r in rows], ["pending-new", "fail-old"])
+
+    def test_parked_pages_stop_being_selected(self):
+        self.seed([("dead", "2024-01-01", "dead", -1, fast_fetch.MAX_CRAWL_ATTEMPTS)])
+        with fast_fetch.get_db() as conn:
+            self.assertEqual(fast_fetch.select_crawl_candidates(conn, None, 10), [])
+
+    def test_indexed_pages_are_never_recrawled(self):
+        self.seed([("done", "2024-01-01", "done", 1, 1)])
+        with fast_fetch.get_db() as conn:
+            self.assertEqual(fast_fetch.select_crawl_candidates(conn, None, 10), [])
+
+    def test_site_filter_keeps_other_sites_out(self):
+        self.seed([
+            ("one/a", "2024-01-01", "a", 0, 0),
+            ("two/b", "2024-01-01", "b", 0, 0),
+        ])
+        with fast_fetch.get_db() as conn:
+            conn.execute("UPDATE sitemap_cache SET site = 'hdhub4u' WHERE loc = 'one/a'")
+            conn.execute("UPDATE sitemap_cache SET site = 'vegamovies' WHERE loc = 'two/b'")
+            rows = fast_fetch.select_crawl_candidates(conn, "vegamovies", 10)
+        self.assertEqual([r["loc"] for r in rows], ["two/b"])
+
+    def test_failure_records_an_attempt_and_stays_queued(self):
+        self.seed([("retry/me", "2024-01-01", "retry-me", 0, 0)])
+        before = time.time()
+        fast_fetch.record_crawl_attempt("retry/me", indexed=False)
+        with fast_fetch.get_db() as conn:
+            row = conn.execute(
+                "SELECT scraped, attempts, last_attempt FROM sitemap_cache WHERE loc = 'retry/me'"
+            ).fetchone()
+            queued = fast_fetch.select_crawl_candidates(conn, None, 10)
+        self.assertEqual(row[0], -1)
+        self.assertEqual(row[1], 1)
+        self.assertGreaterEqual(row[2], before)
+        self.assertEqual([r["loc"] for r in queued], ["retry/me"])
+
+    def test_retry_budget_is_exhausted_after_bounded_attempts(self):
+        self.seed([("doomed", "2024-01-01", "doomed", 0, 0)])
+        for _ in range(fast_fetch.MAX_CRAWL_ATTEMPTS):
+            fast_fetch.record_crawl_attempt("doomed", indexed=False)
+        with fast_fetch.get_db() as conn:
+            attempts = conn.execute("SELECT attempts FROM sitemap_cache WHERE loc = 'doomed'").fetchone()[0]
+            self.assertEqual(fast_fetch.select_crawl_candidates(conn, None, 10), [])
+        self.assertEqual(attempts, fast_fetch.MAX_CRAWL_ATTEMPTS)
+
+    def test_retry_budget_is_one_page_not_the_whole_queue(self):
+        self.seed([(f"p/{i}", "2024-01-01", f"p{i}", 0, 0) for i in range(6)])
+        with fast_fetch.get_db() as conn:
+            self.assertEqual(len(fast_fetch.select_crawl_candidates(conn, None, 4)), 4)
+
+    def test_retry_index_backs_the_candidate_query(self):
+        with fast_fetch.get_db() as conn:
+            # PRAGMA index_info(?) is not parameterizable; the name is a constant here.
+            indexed_cols = [r[2] for r in conn.execute("PRAGMA index_info(idx_sitemap_retry)")]
+        self.assertEqual(indexed_cols, ["scraped", "attempts"])
 
 
 if __name__ == "__main__":

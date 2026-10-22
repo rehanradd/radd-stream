@@ -532,7 +532,9 @@ def _init_db(db_path: Path | None = None) -> None:
             loc TEXT PRIMARY KEY,
             lastmod TEXT,
             slug TEXT,
-            scraped INTEGER DEFAULT 0
+            scraped INTEGER DEFAULT 0,
+            attempts INTEGER DEFAULT 0,
+            last_attempt REAL DEFAULT NULL
         );
 
         CREATE INDEX IF NOT EXISTS idx_sitemap_slug ON sitemap_cache(slug);
@@ -658,11 +660,16 @@ def _init_db(db_path: Path | None = None) -> None:
         existing_sm_cols = {r[1] for r in cursor.fetchall()}
         if "site" not in existing_sm_cols:
             cursor.execute("ALTER TABLE sitemap_cache ADD COLUMN site TEXT DEFAULT 'vegamovies'")
+        if "attempts" not in existing_sm_cols:
+            cursor.execute("ALTER TABLE sitemap_cache ADD COLUMN attempts INTEGER DEFAULT 0")
+        if "last_attempt" not in existing_sm_cols:
+            cursor.execute("ALTER TABLE sitemap_cache ADD COLUMN last_attempt REAL DEFAULT NULL")
 
         conn.execute("CREATE INDEX IF NOT EXISTS idx_posts_source_ind ON posts(source_site, industry)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_posts_canonical_key ON posts(canonical_key)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_releases_source_site ON releases(source_site)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_sitemap_site ON sitemap_cache(site, scraped)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_sitemap_retry ON sitemap_cache(scraped, attempts)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_posts_tmdb ON posts(tmdb_id)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_posts_imdb ON posts(imdb_id)")
         conn.executescript("""
@@ -4326,6 +4333,47 @@ def _save_scraped_data(data: dict, *, ensure_db: bool = True) -> int:
     return post_id
 
 
+# A page that fails once is usually transient (Cloudflare interstitial, host
+# rotate, timeout).  Before this, a failure set scraped = -1 forever and the
+# crawler only ever selected scraped = 0, so ~42k failed pages were silently
+# abandoned rather than queued.
+MAX_CRAWL_ATTEMPTS = 3
+
+
+def record_crawl_attempt(url: str, *, indexed: bool) -> None:
+    """Stamp the crawl outcome; a failed page stays eligible until MAX_CRAWL_ATTEMPTS."""
+    with get_db() as conn:
+        if indexed:
+            conn.execute(
+                "UPDATE sitemap_cache SET scraped = 1, attempts = attempts + 1, last_attempt = ?"
+                " WHERE loc = ?",
+                (time.time(), url),
+            )
+        else:
+            conn.execute(
+                "UPDATE sitemap_cache SET scraped = -1, attempts = attempts + 1, last_attempt = ?"
+                " WHERE loc = ?",
+                (time.time(), url),
+            )
+
+
+def select_crawl_candidates(conn, site_filter: str | None = None, limit: int = 5) -> list:
+    """Pages worth crawling now: never-tried first, then failures still inside the budget."""
+    retryable = MAX_CRAWL_ATTEMPTS
+    if site_filter:
+        return conn.execute(
+            "SELECT loc, site FROM sitemap_cache"
+            " WHERE site = ? AND (scraped = 0 OR (scraped = -1 AND attempts < ?))"
+            " ORDER BY scraped DESC, lastmod DESC LIMIT ?",
+            (site_filter, retryable, limit),
+        ).fetchall()
+    return conn.execute(
+        "SELECT loc, site FROM sitemap_cache"
+        " WHERE scraped = 0 OR (scraped = -1 AND attempts < ?)"
+        " ORDER BY scraped DESC, lastmod DESC LIMIT ?",
+        (retryable, limit),
+    ).fetchall()
+
 # ── Health Checker, Resumability & Self-Healing ───────────────────────────────
 
 def probe_single_source(src: dict, timeout: int = 8) -> dict:
@@ -5109,31 +5157,13 @@ def main():
         print(f"[i] Crawling latest {limit} posts from sitemap{site_desc}...")
 
         with get_db() as conn:
-            if site_filter:
-                rows = conn.execute(
-                    "SELECT loc, site FROM sitemap_cache WHERE scraped = 0 AND site = ? ORDER BY lastmod DESC LIMIT ?",
-                    (site_filter, limit),
-                ).fetchall()
-            else:
-                rows = conn.execute(
-                    "SELECT loc, site FROM sitemap_cache WHERE scraped = 0 ORDER BY lastmod DESC LIMIT ?",
-                    (limit,),
-                ).fetchall()
+            rows = select_crawl_candidates(conn, site_filter, limit)
 
         if not rows:
             print("[i] Cache empty or all crawled. Syncing sitemap first...")
             sync_sitemaps(site=site_filter or "all", max_sub_sitemaps=2)
             with get_db() as conn:
-                if site_filter:
-                    rows = conn.execute(
-                        "SELECT loc, site FROM sitemap_cache WHERE scraped = 0 AND site = ? ORDER BY lastmod DESC LIMIT ?",
-                        (site_filter, limit),
-                    ).fetchall()
-                else:
-                    rows = conn.execute(
-                        "SELECT loc, site FROM sitemap_cache WHERE scraped = 0 ORDER BY lastmod DESC LIMIT ?",
-                        (limit,),
-                    ).fetchall()
+                rows = select_crawl_candidates(conn, site_filter, limit)
 
         new_services_found = set()
         crawled_count = 0
@@ -5162,16 +5192,24 @@ def main():
                     ind_badge = f" [{data.get('industry', 'N/A')}]"
                     print(f"      ✓ Post #{pid}: {data['clean_title'][:30]}{ind_badge} | {rel_cnt} rel, {src_cnt} links{tag18}{anim_tag}", flush=True)
                 else:
-                    with get_db() as conn:
-                        conn.execute("UPDATE sitemap_cache SET scraped = -1 WHERE loc = ?", (url,))
+                    record_crawl_attempt(url, indexed=False)
                     print(f"      ⚠ Skipped (no releases found)", flush=True)
             except Exception as e:
-                with get_db() as conn:
-                    conn.execute("UPDATE sitemap_cache SET scraped = -1 WHERE loc = ?", (url,))
+                record_crawl_attempt(url, indexed=False)
                 print(f"      ✗ Error: {e}", flush=True)
 
         print("\n" + "=" * 70)
+        with get_db() as conn:
+            _parked = conn.execute(
+                "SELECT COUNT(*) FROM sitemap_cache WHERE scraped = -1 AND attempts >= ?",
+                (MAX_CRAWL_ATTEMPTS,),
+            ).fetchone()[0]
+            _queued = conn.execute(
+                "SELECT COUNT(*) FROM sitemap_cache WHERE scraped = 0 OR (scraped = -1 AND attempts < ?)",
+                (MAX_CRAWL_ATTEMPTS,),
+            ).fetchone()[0]
         print(f"🎉 Crawl Complete! Indexed {crawled_count}/{len(rows)} posts")
+        print(f"🔁 Still queued: {_queued:,} | 🛑 Parked after {MAX_CRAWL_ATTEMPTS} attempts: {_parked:,}")
         print(f"📦 Total releases added: {total_releases}")
         print(f"🔗 Total direct sources added: {total_sources}")
         print(f"🌐 Services detected: {', '.join(sorted(new_services_found))}")

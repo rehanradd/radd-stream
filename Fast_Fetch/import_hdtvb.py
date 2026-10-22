@@ -44,6 +44,10 @@ if str(BASE_DIR) not in sys.path:
 
 import fast_fetch
 
+# This staging database holds hdtvb.net only; the site key was copy-pasted from
+# the hdhub4u importer, which made every hdtvb post claim to be a hdhub4u page.
+SITE_KEY = "hdtvb"
+
 DEFAULT_BASE_URL = "https://hdutv.com"
 DEFAULT_DB_PATH = (
     Path("/home/ubuntu/radd-stream-data/hdtvb.db")
@@ -196,7 +200,7 @@ def sync_sitemap_to_db(client: HDTVBClient, db_path: Path) -> int:
     print(f"[*] Discovered {len(post_urls):,} post URLs in sitemap.", flush=True)
 
     records = [
-        (url, None, url.rstrip("/").split("/")[-1].replace(".html", ""), 0, "hdhub4u")
+        (url, None, url.rstrip("/").split("/")[-1].replace(".html", ""), 0, SITE_KEY)
         for url in post_urls
     ]
 
@@ -366,7 +370,7 @@ def extract_post_data_hdtvb(
             "season": seasons,
             "episode": None,
             "intermediate_url": cloud_url,
-            "source_site": "hdhub4u",
+            "source_site": SITE_KEY,
             "sources": sources,
         })
 
@@ -381,7 +385,7 @@ def extract_post_data_hdtvb(
         "genres": genres,
         "synopsis": synopsis,
         "language": language,
-        "source_site": "hdhub4u",
+        "source_site": SITE_KEY,
         "canonical_key": canonical_key,
         "releases": releases,
     }
@@ -398,8 +402,8 @@ def save_post_record(data: dict, db_path: Path) -> int:
     with fast_fetch._DB_WRITE_LOCK:
         with fast_fetch.get_db() as conn:
             conn.execute(
-                "UPDATE sitemap_cache SET scraped = 1 WHERE loc = ? AND site = 'hdhub4u'",
-                (data["url"],),
+                "UPDATE sitemap_cache SET scraped = 1 WHERE loc = ? AND site = ?",
+                (data["url"], SITE_KEY),
             )
     return post_id
 
@@ -421,7 +425,8 @@ def run_hdtvb_scraper(
     # Check pending URLs in sitemap_cache
     with fast_fetch.get_db() as conn:
         cursor = conn.execute(
-            "SELECT loc FROM sitemap_cache WHERE site = 'hdhub4u' AND scraped = 0 ORDER BY rowid ASC"
+            "SELECT loc FROM sitemap_cache WHERE site = ? AND scraped = 0 ORDER BY rowid ASC",
+            (SITE_KEY,),
         )
         pending_urls = [row["loc"] for row in cursor]
 
@@ -430,7 +435,8 @@ def run_hdtvb_scraper(
         sync_sitemap_to_db(client, db_path)
         with fast_fetch.get_db() as conn:
             cursor = conn.execute(
-                "SELECT loc FROM sitemap_cache WHERE site = 'hdhub4u' AND scraped = 0 ORDER BY rowid ASC"
+                "SELECT loc FROM sitemap_cache WHERE site = ? AND scraped = 0 ORDER BY rowid ASC",
+                (SITE_KEY,),
             )
             pending_urls = [row["loc"] for row in cursor]
 
@@ -534,14 +540,14 @@ def get_status_summary(db_path: Path):
     releases = c.fetchone()[0]
     c.execute("SELECT count(*) FROM download_sources")
     sources = c.fetchone()[0]
-    c.execute("SELECT count(*) FROM sitemap_cache WHERE site = 'hdhub4u' AND scraped = 1")
+    c.execute("SELECT count(*) FROM sitemap_cache WHERE site = ? AND scraped = 1", (SITE_KEY,))
     scraped = c.fetchone()[0]
-    c.execute("SELECT count(*) FROM sitemap_cache WHERE site = 'hdhub4u' AND scraped = 0")
+    c.execute("SELECT count(*) FROM sitemap_cache WHERE site = ? AND scraped = 0", (SITE_KEY,))
     pending = c.fetchone()[0]
     conn.close()
 
     print("\n" + "=" * 55)
-    print(f" 📊 HDHub4u Staging Database Status ({db_path.name})")
+    print(f" 📊 HDTVB Staging Database Status ({db_path.name})")
     print("=" * 55)
     print(f" Catalog Posts   : {posts:,}")
     print(f" Releases Found  : {releases:,}")
