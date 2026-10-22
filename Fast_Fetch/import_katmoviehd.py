@@ -48,6 +48,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from datetime import date
 from pathlib import Path
 
 # Add Fast_Fetch to sys.path
@@ -286,51 +287,640 @@ def parse_sveltekit_chunk(data_str: str) -> list[dict]:
 
 def clean_katmoviehd_title(raw_title: str) -> tuple[str, int | None, int | None, str]:
     """
-    Cleans raw title into (clean_title, year, season, canonical_key).
-    Examples:
-      'The Punisher (Season 2) Hindi Dubbed (DD 5.1) & English...' -> ('The Punisher', 2017, 2, 'the-punisher_s2')
-      'The Campaign (2012) Hindi Dubbed (ORG)...' -> ('The Campaign', 2012, None, 'the-campaign_2012')
+    Backwards-compatible title cleaner.
+
+    Returns (clean_title, year, season, canonical_key) exactly as the original
+    helper did, but every value now comes from `derive_katmoviehd_identity()`
+    (evidence-ranked extraction).  Callers that can supply more evidence — the
+    page's category path, the catalog API category list, the URL slug, or the
+    episode structure actually found in the release links — must call
+    `derive_katmoviehd_identity()` directly instead of this wrapper.
     """
-    t = html.unescape(raw_title).strip()
+    identity = derive_katmoviehd_identity(raw_title)
+    return (
+        identity["title"],
+        identity["year"],
+        identity["season"],
+        identity["canonical_key"],
+    )
 
-    # Season extraction
-    season = None
-    s_m = re.search(r"\b(?:Season|S)\s*0?(\d+)\b", t, re.I)
-    if s_m:
-        season = int(s_m.group(1))
 
-    # Year extraction
-    year = None
-    y_m = re.search(r"\b(19\d{2}|20\d{2})\b", t)
-    if y_m:
-        year = int(y_m.group(1))
+_PAGE_FIELD_MOVIE_RE = re.compile(r">\s*(?:Movie|Film)\s*Name\s*:", re.I)
+_PAGE_FIELD_SERIES_RE = re.compile(r">\s*(?:TV\s*)?Series\s*Name\s*:", re.I)
 
-    # Strip bracketed content [Dual Audio], etc.
-    clean = re.sub(r"\[.*?\]", "", t)
-    # Cut off at pipe symbol |
-    clean = re.split(r"\s*\|\s*", clean)[0]
 
-    # Remove tags inside parentheses
-    clean = re.sub(r"\((?:Season\s*\d+|19\d{2}|20\d{2}|ORG|DD\s*[\d\.]+|[^\)]*Audio[^\)]*|[^\)]*Dubbed[^\)]*)\)", "", clean, flags=re.I)
+def _page_field_type(post_content: str) -> str | None:
+    """The site's own structured label: 'Movie Name:' vs 'Series Name:' inside the page."""
+    text = post_content or ""
+    is_movie = bool(_PAGE_FIELD_MOVIE_RE.search(text))
+    is_series = bool(_PAGE_FIELD_SERIES_RE.search(text))
+    if is_movie and is_series:
+        return "conflict"
+    if is_movie:
+        return "movie"
+    if is_series:
+        return "series"
+    return None
 
-    noise_patterns = [
-        r"\b(?:Hindi|English|Tamil|Telugu|Korean|Japanese|Chinese|Dual Audio|Multi Audio)\b",
-        r"\b(?:Dubbed|Dub|ORG|DD\s*5\.1|DD\s*2\.0|Atmos|ESub|Full Movie|Series|Download)\b",
-        r"\b(?:4K|2160p|1080p|720p|480p|360p|UHD|SDR|HDR|HDR10\+?|HEVC|10bit|BluRay|WEB-DL|WEBRip|HDRip|CAMRip|CAM|HD|EXTENDED)\b",
-        r"\b(?:Episode\s*\d+\s*Added|Complete|Episodes?)\b",
-        r"\bSeason\s*\d+\b",
-    ]
-    for p in noise_patterns:
-        clean = re.sub(p, "", clean, flags=re.I)
 
-    clean = re.sub(r"[:–\-\(\)&]", " ", clean)
+def derive_katmoviehd_identity(
+    raw_title: str,
+    *,
+    slug: str = "",
+    categories=None,
+    page_categories=None,
+    page_field: str | None = None,
+    has_episode_releases: bool | None = None,
+) -> dict:
+    """
+    Evidence-ranked extraction of (title, year, season, media_type, canonical_key).
+
+    Media-type evidence is consulted strongest-first, and the first tier that
+    carries a clear winner decides:
+
+      T0 the page's own structured field label ("Movie Name:" / "Series Name:")
+      T1 the page's category path (`/category/dubbed-movie` links inside the
+         post HTML)  — what KatMovieHD itself files the page under
+      T2 the catalog API `categories` list for the same slug
+      T3 the published page title text ("… [Full Movie]", "… Season 2 …")
+      T4 episode structure actually present in the release links
+      T5 the URL slug (`-s2-`, `complete-season`, …)
+      -> nothing decisive: media_type is reported as None (UNKNOWN).
+
+    A tier that carries movie evidence *and* series evidence of equal strength is
+    a conflict, never a coin flip: T1/T2 conflicts stop the search and report
+    unknown, because an unknown type is recoverable by a later re-scrape while a
+    wrong type poisons identity merging (movies and series never cross-merge).
+
+    Year evidence, strongest first:
+
+      Y1 a parenthesised year in the title          "(2025)"
+      Y2 the year token embedded in the slug        "…-2025-hindi"
+      Y3 a single plausible year anywhere in the title
+      Y4 the first year of a "2017–2019" run
+      -> otherwise None (UNKNOWN), never the first digits that happen to look old
+
+    Season evidence: the word form "Season 2" (always trusted) and a standalone
+    capital "S01"-style token that is not the first token of the title, is not
+    preceded by a letter or apostrophe, and is <= 30.  A sequel number
+    ("Five Nights at Freddy's 2", "S86" as a title, "Ne Zha 2") is never a season.
+
+    The "[18+]" annotation is stripped from the display title but is not an
+    adult-content signal by itself; 18+ flagging stays with
+    `fast_fetch.is_adult_title()`, which the staging writer applies.
+    """
+    text = html.unescape(str(raw_title or "")).strip()
+    slug_text = str(slug or "").strip().lower()
+
+    season, season_evidence = _extract_season(text, slug_text)
+    if season_evidence in _UNCONFIRMABLE_SEASON_EVIDENCE and not _series_context(
+        text,
+        page_field=page_field,
+        page_categories=page_categories,
+        categories=categories,
+        has_episode_releases=has_episode_releases,
+    ):
+        # A bare "S3" that nothing else corroborates is part of the title
+        # ("Romeo S3", "Andhadhun 2 S3"), not a season: keeping it would both
+        # fake a series type and fork the identity key.
+        season, season_evidence = None, f"season-token-unconfirmed(S{season})"
+    year, year_evidence = _extract_year(text, slug_text)
+    clean_title = _clean_title_text(text, year=year, season=season, season_evidence=season_evidence)
+    if not clean_title:
+        # Zero data loss: a page whose title text held nothing usable still gets a
+        # readable identity from its slug instead of an empty ledger row.
+        clean_title = _title_from_slug(slug_text)
+    media_type, type_evidence = _derive_media_type(
+        text,
+        slug=slug_text,
+        categories=categories,
+        page_categories=page_categories,
+        page_field=page_field,
+        season=season,
+        season_evidence=season_evidence,
+        has_episode_releases=has_episode_releases,
+    )
+
+    # A season number only belongs in the identity key when the work really is a
+    # season.  A movie mis-keyed as "_s2" collides with nothing, but it splits the
+    # film away from its own record and is what produced the media-type conflicts.
+    key_season = season if media_type != "movie" else None
+    key_year = year if key_season is None else None
+    canonical_key = _build_canonical_key(clean_title, key_year, key_season, slug_text)
+
+    return {
+        "title": clean_title,
+        "original_title": text,
+        "year": year,
+        "season": season,
+        "media_type": media_type,
+        "canonical_key": canonical_key,
+        "evidence": {
+            "type": type_evidence,
+            "year": year_evidence,
+            "season": season_evidence,
+        },
+    }
+
+
+# ── Evidence helpers behind derive_katmoviehd_identity() ─────────────────────
+
+_CURRENT_YEAR = date.today().year
+_PLAUSIBLE_YEAR_MIN = 1900
+_PLAUSIBLE_YEAR_MAX = _CURRENT_YEAR + 3  # announced titles run a couple of years out
+
+_PAREN_YEAR_RE = re.compile(r"[\(\[{]\s*(19\d{2}|20\d{2})\b[^\)\]\}]*[\)\]\}]")
+_SLUG_YEAR_RE = re.compile(r"(?:^|[-_])(19\d{2}|20\d{2})(?=[-_.]|$)")
+_BARE_YEAR_RE = re.compile(r"\b(19\d{2}|20\d{2})\b")
+_YEAR_RUN_RE = re.compile(r"\b(19\d{2}|20\d{2})\s*[\u2013\u2014-]\s*(19\d{2}|20\d{2})\b")
+
+_SEASON_WORD_RE = re.compile(r"\bSeason\s*(?:No\.?\s*)?(\d{1,2})\b", re.I)
+# Capital S only, never preceded by a letter/digit/apostrophe, never a title's
+# own leading token, and never a four-digit year glued to it.
+_SEASON_ABBREV_RE = re.compile(r"(?<![A-Za-z0-9'\u2019\-\u2013])S(\d{1,2})(?![\w-])")
+
+
+def _plausible_years(text: str) -> list[int]:
+    """Every 1900…now+3 year token in `text`, in the order they appear."""
+    out: list[int] = []
+    for m in _BARE_YEAR_RE.finditer(text or ""):
+        value = int(m.group(1))
+        if _PLAUSIBLE_YEAR_MIN <= value <= _PLAUSIBLE_YEAR_MAX and value not in out:
+            out.append(value)
+    return out
+
+
+def _extract_year(title_text: str, slug_text: str) -> tuple[int | None, str]:
+    """Year by evidence strength: title parenthesis > slug > unique title year > year run."""
+    paren = _PAREN_YEAR_RE.search(title_text or "")
+    if paren:
+        return int(paren.group(1)), "title-parenthesis-year"
+
+    slug_years = sorted({int(m.group(1)) for m in _SLUG_YEAR_RE.finditer(slug_text or "")})
+    slug_years = [y for y in slug_years if _PLAUSIBLE_YEAR_MIN <= y <= _PLAUSIBLE_YEAR_MAX]
+    if len(slug_years) == 1:
+        return slug_years[0], "slug-year"
+
+    candidates = _plausible_years(title_text)
+    if len(slug_years) > 1:
+        # "bengal-1947-2022-tamil-dubbed": one of the two slug years is the year inside
+        # the title and the other is the release annotation.  Only one of them can be
+        # the release year when exactly one of them is absent from the title text.
+        extra = [y for y in slug_years if y not in set(candidates)]
+        if len(extra) == 1:
+            return extra[0], "slug-year-not-in-title"
+    if len(candidates) == 1:
+        return candidates[0], "title-single-year"
+
+    run = _YEAR_RUN_RE.search(title_text or "")
+    if run:
+        start = int(run.group(1))
+        if _PLAUSIBLE_YEAR_MIN <= start <= _PLAUSIBLE_YEAR_MAX:
+            return start, "title-year-run"
+
+    if slug_years:
+        # Two plausible years in one slug ("bengal-1947-2022") mean the page mixes a
+        # title year with a release year.  Picking one is a guess that splits or
+        # merges identities, so the year stays unknown and a re-scrape can recover it.
+        return None, "slug-year-ambiguous"
+    return None, "year-unknown"
+
+
+def _extract_season(title_text: str, slug_text: str) -> tuple[int | None, str]:
+    """Season number, or None when nothing in the title actually says 'season'."""
+    text = title_text or ""
+    word = _SEASON_WORD_RE.search(text)
+    if word:
+        value = int(word.group(1))
+        if 1 <= value <= 30:
+            return value, "title-season-word"
+
+    for abbrev in _SEASON_ABBREV_RE.finditer(text):
+        value = int(abbrev.group(1))
+        if not 1 <= value <= 30:
+            continue
+        # "S86 (2026) Full Movie" — a leading token is part of the title, not a season.
+        if abbrev.start() == 0:
+            continue
+        before = text[abbrev.start() - 1]
+        if not before.isspace() and before not in ")]>.,;:":
+            continue
+        return value, (
+            "title-season-abbrev-padded" if abbrev.group(1).startswith("0") or value >= 10
+            else "title-season-abbrev"
+        )
+
+    abbrev_in_slug = re.search(r"(?:^|[-_])s(\d{1,2})(?:[-_|]|$)", slug_text or "")
+    if abbrev_in_slug and 1 <= int(abbrev_in_slug.group(1)) <= 30:
+        return int(abbrev_in_slug.group(1)), "slug-season"
+    return None, "no-season"
+
+
+# Season readings that are only a bare "S3"-style token or a slug token: weak
+# enough that they must be corroborated before they shape the identity.
+_UNCONFIRMABLE_SEASON_EVIDENCE = ("title-season-abbrev", "slug-season")
+_EPISODE_WORD_RE = re.compile(
+    r"\b(?:all|complete|dual)?\s*(?:new\s+)?episodes\b|\b\d+\s+episodes?\b|\bepisode\s*\d+\b",
+    re.I,
+)
+
+
+def _as_token_list(value) -> list:
+    """
+    Accept the site's category evidence in whatever shape a caller has it.
+
+    `extract_post_data_katmoviehd()` passes the parsed API list; a re-derive that
+    reads the staging DB has the JSON text that was stored there.
+    """
+    if value is None:
+        return []
+    if isinstance(value, (list, tuple, set)):
+        return [str(v) for v in value if str(v or "").strip()]
+    text = str(value).strip()
+    if not text:
+        return []
+    if text.startswith("[") or text.startswith("{"):
+        try:
+            parsed = json.loads(text)
+        except (TypeError, ValueError):
+            parsed = None
+        if isinstance(parsed, (list, tuple)):
+            return [str(v) for v in parsed if str(v or "").strip()]
+        if isinstance(parsed, dict):
+            return [str(v) for v in parsed.values() if str(v or "").strip()]
+    return [t.strip() for t in re.split(r"[,;|]+", text) if t.strip()]
+
+
+
+def _series_context(
+    title_text: str,
+    *,
+    page_field: str | None,
+    page_categories,
+    categories,
+    has_episode_releases,
+) -> bool:
+    """True when evidence independent of a bare S-token says 'this is a season'."""
+    if page_field == "series":
+        return True
+    if has_episode_releases:
+        return True
+    for tokens in (page_categories, categories):
+        _, series, _ = _taxonomy_votes(tokens)
+        if series:
+            return True
+    if _EPISODE_WORD_RE.search(title_text or ""):
+        return True
+    return any(pattern.search(title_text or "") for pattern, _weight in _TITLE_SERIES_MARKERS)
+
+
+# The site's own taxonomy vocabulary.  A token that matches both families (e.g.
+# "movie-series-collection") is ambiguous by construction and casts no vote.
+_CATEGORY_MOVIE_RE = re.compile(r"(?:^|\s)(?:movies?|films?)(?:\s|$)")
+_CATEGORY_SERIES_RE = re.compile(
+    r"(?:^|\s)(?:tv\s*series|web\s*series|webseries|mini\s*series|series|seasons?|episodes?)"
+    r"(?:\s|$)"
+)
+
+
+def _normalize_category(token) -> str:
+    return re.sub(r"[-_]+", " ", str(token or "")).strip().lower()
+
+
+def _taxonomy_votes(tokens) -> tuple[int, int, list[str]]:
+    movie = series = 0
+    hits: list[str] = []
+    for raw in _as_token_list(tokens):
+        norm = _normalize_category(raw)
+        if not norm:
+            continue
+        is_movie = bool(_CATEGORY_MOVIE_RE.search(norm))
+        is_series = bool(_CATEGORY_SERIES_RE.search(norm))
+        if is_movie and is_series:
+            continue
+        if is_movie:
+            movie += 1
+            hits.append(f"category[{norm}]=movie")
+        elif is_series:
+            series += 1
+            hits.append(f"category[{norm}]=series")
+    return movie, series, hits
+
+
+_TITLE_MOVIE_MARKERS = (
+    (re.compile(r"\bfull\s+movie\b", re.I), 3),
+    (re.compile(r"\btv\s+movie\b", re.I), 3),
+    (re.compile(r"\bdubbed\s+movie\b", re.I), 2),
+    (re.compile(r"[\[(]\s*(?:\d{4}\s*)?movie\s*[\])]", re.I), 2),
+    (re.compile(r"\bmovie\s+download\b", re.I), 2),
+)
+_TITLE_SERIES_MARKERS = (
+    (re.compile(r"\bseason\s*\d{1,2}\b", re.I), 3),
+    (re.compile(r"\bcomplete\s+season\b", re.I), 3),
+    (re.compile(r"\ball\s+(?:new\s+)?episodes?\b", re.I), 3),
+    (re.compile(r"\b\d+\s+episodes?\b", re.I), 3),
+    (re.compile(r"\btv\s*series\b", re.I), 3),
+    (re.compile(r"\bweb\s*series\b", re.I), 3),
+    (re.compile(r"\bepisode\s*\d+\s+added\b", re.I), 3),
+    (re.compile(r"\bmini\s*series\b", re.I), 3),
+)
+_SLUG_SERIES_RE = re.compile(r"(?:^|[-_])(?:s\d{1,2}|season|complete-season|tv-series|web-series|episodes?)(?:[-_]|$)")
+_SLUG_MOVIE_RE = re.compile(r"(?:^|[-_])(?:full-movie|movie|watch-movie)(?:[-_]|$)")
+
+
+def _title_votes(text: str) -> tuple[int, int, list[str]]:
+    movie = series = 0
+    hits: list[str] = []
+    for pattern, weight in _TITLE_MOVIE_MARKERS:
+        if pattern.search(text or ""):
+            movie += weight
+            hits.append(f"title[{pattern.pattern}]=movie+{weight}")
+    for pattern, weight in _TITLE_SERIES_MARKERS:
+        if pattern.search(text or ""):
+            series += weight
+            hits.append(f"title[{pattern.pattern}]=series+{weight}")
+    return movie, series, hits
+
+
+def _season_token_vote(season: int | None, season_evidence: str) -> tuple[int, str]:
+    """A standalone S01-style token in the title is season evidence; weight by form."""
+    if season is None:
+        return 0, ""
+    if season_evidence == "title-season-abbrev-padded":
+        # Zero-padded "S01"/"S03" is this site's season-pack convention.
+        return 3, f"title[season-abbrev-S{season:02d}]=series+3"
+    if season_evidence == "title-season-abbrev":
+        # Bare "S3" is far more often part of the title (or a part number).
+        return 2, f"title[season-abbrev-S{season}]=series+2"
+    return 0, ""
+
+
+def _derive_media_type(
+    title_text: str,
+    *,
+    slug: str,
+    categories,
+    page_categories,
+    page_field: str | None = None,
+    season: int | None,
+    season_evidence: str,
+    has_episode_releases: bool | None,
+) -> tuple[str | None, str]:
+    """Media family from the strongest available evidence; None means 'unknown'."""
+    if page_field == "movie":
+        return "movie", "page-field-label:Movie Name"
+    if page_field == "series":
+        return "series", "page-field-label:Series Name"
+    # page_field == "conflict" carries no information: fall through to taxonomy.
+
+    for tokens, label in ((page_categories, "page-category-path"), (categories, "api-category-list")):
+        movie, series, hits = _taxonomy_votes(tokens)
+        if movie and series:
+            return None, f"conflicting-{label}-evidence({' + '.join(hits)})"
+        if movie:
+            return "movie", f"{label}:{' + '.join(hits)}"
+        if series:
+            return "series", f"{label}:{' + '.join(hits)}"
+
+    movie, series, hits = _title_votes(title_text)
+    abbrev_vote, abbrev_hit = _season_token_vote(season, season_evidence)
+    series += abbrev_vote
+    if abbrev_hit:
+        hits.append(abbrev_hit)
+    title_verdict = ""
+    if movie and not series:
+        title_verdict = "movie"
+    elif series and not movie:
+        title_verdict = "series"
+
+    if title_verdict:
+        return title_verdict, f"title-text:{' + '.join(hits)}"
+
+    if has_episode_releases:
+        return "series", "episode-structured-releases"
+
+    slug_series = len(_SLUG_SERIES_RE.findall(slug or ""))
+    slug_movie = len(_SLUG_MOVIE_RE.findall(slug or ""))
+    if slug_series and slug_movie:
+        return None, "conflicting-slug-evidence"
+    if slug_series:
+        return "series", "slug-marker"
+    if slug_movie:
+        return "movie", "slug-marker"
+
+    if movie or series:
+        # The title carried both families and nothing harder could break the tie.
+        return None, f"conflicting-title-evidence({' + '.join(hits)})"
+    return None, "no-type-evidence"
+
+
+_KEY_NOISE_RE = re.compile(r"[’‘`']+")
+
+
+def _key_safe_title(title: str) -> str:
+    """Apostrophes turn "Freddy's 2" into 'freddy-s-2' keys that no other site can match."""
+    return _KEY_NOISE_RE.sub("", str(title or ""))
+
+
+def _build_canonical_key(clean_title: str, year: int | None, season: int | None, slug: str) -> str:
+    """
+    Canonical key for a KatMovieHD page, never a degenerate one.
+
+    `fast_fetch.generate_canonical_key()` also strips `s\\d+` tokens, so a title
+    that IS such a token ("S86") collapses to the bare '_2026' suffix — a key that
+    would then match every other collapsed title of the same year.  When that
+    happens the key is rebuilt from the leading tokens of the page slug (unique per
+    work on this site) so the level-3 identity ladder can neither guess nor collide.
+    """
+    base = fast_fetch.generate_canonical_key(_key_safe_title(clean_title), year)
+    title_part = base[: base.rfind("_")] if (year is not None and "_" in base) else base
+    degenerate = base in ("unknown", "") or base == f"_{year}" or len(title_part or "") < 2
+
+    if degenerate:
+        tokens = [t for t in re.split(r"[^a-z0-9]+", str(slug or "").lower()) if t]
+        noise_tokens = (
+            "hindi", "english", "dubbed", "dub", "webrip", "web-dl", "bluray",
+            "full", "movie", "series", "hd", "x264", "hevc", "esubs", "1xbet", "4rabet",
+        )
+        core: list[str] = []
+        for token in tokens:
+            if re.fullmatch(r"(?:19|20)\d{2}", token) or token in noise_tokens:
+                break
+            core.append(token)
+            if len(core) >= 6:
+                break
+        if not core:
+            # Nothing but promo junk in the slug either: take whatever words it has.
+            core = [t for t in tokens if not re.fullmatch(r"(?:19|20)\d{2}", t)][:6]
+        if core:
+            base = "-".join(core)
+            if year is not None:
+                base = f"{base}_{year}"
+        else:
+            # A key no other record can share.  fast_fetch skips level-3 identity
+            # lookup for "unknown", which is exactly right for a page with no title.
+            base = "unknown"
+
+    if season is not None and base != "unknown":
+        base = f"{base}_s{season}"
+    return base or "unknown"
+
+
+def _title_from_slug(slug: str) -> str:
+    """Last-resort display title for a page whose scraped title text was empty."""
+    tokens = [t for t in re.split(r"[^A-Za-z0-9]+", str(slug or "").lower()) if t]
+    words: list[str] = []
+    for token in tokens:
+        if re.fullmatch(r"(?:19|20)\d{2}", token):
+            break
+        words.append(token)
+        if len(words) >= 6:
+            break
+    return " ".join(w.capitalize() if w.isalpha() else w for w in words).strip()
+
+
+# Promo/affiliate junk that KatMovieHD appends to page titles.  Removing it keeps
+# the clean title (and therefore the title+year identity tier) stable across the
+# several dubbed/quality pages that all describe the same work.
+#
+# Two vocabularies, deliberately different:
+#   _GROUP_NOISE_RE  — words that mark a *whole bracketed annotation* as metadata,
+#                      so the group is dropped ("(In English 5.1 DD)", "{TV Series}").
+#                      Bare language names belong here because inside parentheses
+#                      they are always track annotations.
+#   _TITLE_NOISE_PATTERNS — words removed from the running title itself.  A bare
+#                      language name is NOT here: "A French Football Mutiny" and
+#                      "The English Patient" are titles, so languages are only cut
+#                      in context ("Hindi Dubbed", "In Bengali", "& English").
+_LANG = (
+    r"Hindi|English|Tamil|Telugu|Korean|Japanese|Chinese|Malayalam|Kannada|Bengali"
+    r"|Punjabi|Marathi|Gujarati|Spanish|Portuguese|French|German|Italian|Russian|Turkish"
+    r"|Vietnamese|Indonesian|Thai|Mexican|Polish|Swedish|Serbian|Ukrainian|Colombian|Arabian"
+)
+_GROUP_NOISE_RE = re.compile(
+    rf"\b(?:{_LANG})\b"
+    r"|\b(?:Dual\s+Audio|Multi\s+Audio|Single\s+Audio|Dubbed|Dub|Sub(?:title)?s?|VO|ORG"
+    r"|Voice\s*Over|V\.O\.|Dubbing)\b"
+    r"|\b(?:Season|Episodes?|Complete\s+Season|Movie|Series|Anime|K-Drama|KDrama)\b"
+    r"|\b(?:4K|2160[pP]|1080[pP]|720[pP]|480[pP]|UHD|FHD|HD|SDR|HDR\d*\+?|HEVC|x264|x265"
+    r"|BluRay|WEB-DL|WEBDL|WEBRip|WEBRIP|WEB|HDRip|CAMRip|CAM|HDTC|HDTS|TS|DD\s*[\d.]+)\b",
+    re.I,
+)
+_TITLE_NOISE_PATTERNS = (
+    rf"\b(?:In|With|Via)\s+(?:{_LANG}\s+)?(?:{_LANG})\b",
+    rf"\b(?:{_LANG})\s+(?:Dubbed|Dub|Sub(?:titles?)?|VO|Audio|ORG|Only)\b",
+    rf"\b&&?\s*(?:{_LANG})\b",
+    r"\b(?:Dual\s+Audio|Multi\s+Audio|Single\s+Audio|Dual\s+Audio\s+Movies|Multi\s+Episode"
+    r"|Multi\s+Episodio|Dubbed|Dub|Sub(?:title)?s?|Hard\s+Sub(?:title)?s?|ESub(?:s)?|VO"
+    r"|AAC|AC3|DTS)\b",
+    r"\b(?:ORG|EXTENDED|Uncut|Directors?\s+Cut|Unofficial|Official)\b",
+    r"\b(?:DD\s*[\d.]+|[\d.]+\s*[Cc]h\b|Atmos|Dolby|5\s*1\s*DD)\b",
+    r"\b(?:4K|8K|2160[pP]|1080[pP]|720[pP]|480[pP]|360[pP]|UHD|FHD|HD|SDR|HDR10\+?|HDR"
+    r"|X264|X265|HEVC|AVC|10\s*BIT|10BIT|8BIT|BLURAY|BluRay|WEB-DL|WEBDL|WEBRip|WEBRIP"
+    r"|HDRip|HDTVRip|CAMRip|CAMRIP|TCRip|HDTC|HDTS|SCR|SCREENER|DVDRip|AVCRip|HDCAM|PDVD)\b",
+    r"\b(?:Full\s+Movie|Movie\s+Download|Watch\s+Movie|Watch\s+Online|Online\s+Stream(?:ing)?"
+    r"|Stream\s+Online|Download|Watch|Streaming|Series\s+Download|Season\s+Download|Online)\b",
+    r"\b(?:Complete|All\s+(?:New\s+)?Episodes?|\d+\s+Episodes?|Episode\s*\d+(?:\s+Added)?"
+    r"|Episodes|New\s+Episode(?:s)?|Completed)\b",
+    r"\b(?:Season\s*\d+|Season|TV\s*Series|Web\s*Series|Mini\s*Series|K-Drama|KDrama|CDrama"
+    r"|C-Drama|Anime)\b",
+    r"\b(?:1xbet|1xbit|4rabet|4rab3t|melbet|parimatch|1win|1winbet|mostbet)\b",
+    r"#\s*\w*(?:ads?|apks?|urls?|shorts?)\b",
+    r"\b(?:Ads|ADs)\s*(?:By|from)?\s*\w*",
+    r"\b(?:Captions|Subtitles)\b",
+)
+_ALL_TITLE_NOISE_RE = re.compile("|".join(_TITLE_NOISE_PATTERNS), re.I)
+
+# Trailing leftovers: a real title never ends on one of these once the noise is gone.
+_DANGLING_TAIL_RE = re.compile(
+    rf"(?:\s+(?:in|with|and|the|of|for|to|at|by|on|a|an|all|new|unofficial|official|dub|dubbed"
+    rf"|vo|sub|subs|subtitle|subtitles|hd|complete|episode|episodes|{re.sub(r'[^A-Za-z|]', '', _LANG)})\b"
+    rf"|[&+\-,])\s*$",
+    re.I,
+)
+# Leading leftovers.  Deliberately *not* "the"/"a"/"an"/"and": those open real titles.
+_LEADING_DANGLE_RE = re.compile(
+    r"^(?:\s*(?:in|with|of|for|to|at|by|on|and|&|\+|-|,)\b)+", re.I
+)
+_ANNOTATION_GROUPS_RE = re.compile(r"[\(\[\{]([^\(\[\]\{\}]*)[\)\]\}]")
+
+
+def _strip_annotation_groups(text: str) -> str:
+    """
+    Remove bracketed annotations that are pure metadata on this site.
+
+    Square brackets and braces are always annotations on KatMovieHD titles
+    ("[Full Movie]", "[Dual Audio]", "[2017–2019 Marvel Series]", "{TV Series}"),
+    so they go wholesale, exactly as the original cleaner did.  Parentheses are
+    only removed when their content is a year, a season, or contains a noise word,
+    so a real parenthetical part of a title ("Dr. Strangelove (Or: How I Learned…)")
+    survives.
+    """
+
+    def _drop(match: re.Match) -> str:
+        opener = match.group(0)[0]
+        inner = match.group(1)
+        if opener in "[{":
+            return " "
+        if not inner.strip():
+            return " "
+        if _GROUP_NOISE_RE.search(inner) or _ALL_TITLE_NOISE_RE.search(inner):
+            return " "
+        if re.match(r"^\s*(?:Season\s*\d+|(?:19|20)\d{2}\b|\d+\s*(?:Mb|GB)\b|[\d.]+)", inner, re.I):
+            return " "
+        return match.group(0)
+
+    previous = None
+    current = text
+    while previous != current:
+        previous = current
+        current = _ANNOTATION_GROUPS_RE.sub(_drop, current)
+    return current
+
+
+def _clean_title_text(text: str, *, year: int | None, season: int | None, season_evidence: str) -> str:
+    """Title text with year, season, taxonomy and promo noise removed (never empty)."""
+    clean = re.split(r"\s*\|\s*", text)[0]
+    fallback = re.sub(r"\s+", " ", _strip_annotation_groups(clean)).strip(" -&+,")
+    clean = _strip_annotation_groups(clean)
+
+    for pattern in _TITLE_NOISE_PATTERNS:
+        clean = re.sub(pattern, " ", clean, flags=re.I)
+
+    if year is not None:
+        clean = re.sub(rf"(?<![\w-]){year}(?![\w-])", " ", clean)
+    if season is not None and season_evidence.startswith("title-season"):
+        clean = re.sub(rf"(?<![A-Za-z0-9])S0?{season}(?![\w-])", " ", clean)
+
+    clean = re.sub(r"[:–\-\(\)\[\]{}&#/+,.!?*≈…]", " ", clean)
     clean = re.sub(r"\s+", " ", clean).strip()
 
-    canonical_key = fast_fetch.generate_canonical_key(clean, year if season is None else None)
-    if season is not None:
-        canonical_key = f"{canonical_key}_s{season}"
+    for _ in range(6):
+        stripped = _DANGLING_TAIL_RE.sub("", clean).strip()
+        stripped = _LEADING_DANGLE_RE.sub("", stripped).strip()
+        if stripped == clean:
+            break
+        clean = stripped
 
-    return clean, year, season, canonical_key
+    clean = clean.strip(" -&+,")
+    if not clean or not _title_survives(clean, year):
+        # Zero data loss: an over-stripped title falls back to the annotation-free
+        # original rather than to an empty string.  A numeric title ("1941", "1911",
+        # "300") is legitimate, so "no letters" is not by itself a failure — losing
+        # everything but the release year is.
+        return fallback or clean
+    return clean
+
+
+def _title_survives(clean: str, year: int | None) -> bool:
+    """False when nothing but punctuation, or nothing but the year, is left."""
+    if not re.search(r"[A-Za-z0-9]", clean or ""):
+        return False
+    if year is not None:
+        residue = re.sub(r"[^a-z0-9]", "", str(clean).casefold())
+        if residue == str(year):
+            return False
+    return True
 
 
 def parse_katmoviehd_releases(content_html: str, default_season: int | None = None) -> list[dict]:
@@ -688,7 +1278,20 @@ def extract_post_data_katmoviehd(
     if not post_content:
         return {"loc": post_url, "skipped": True}
 
-    clean_title, year, season, canonical_key = clean_katmoviehd_title(raw_title or slug)
+    # The page's own category path and its "Movie Name:" / "Series Name:" field
+    # label are the site's statement about what it filed — stronger than any
+    # wording inside the human-written title or synopsis.
+    page_categories = list(dict.fromkeys(
+        token.lower() for token in re.findall(r'/category/([A-Za-z0-9\-_]+)', post_content)
+    ))
+    page_field = _page_field_type(post_content)
+
+    # Releases need the season hint for episode numbering; the season itself comes
+    # from the title/slug only, so parsing before the full identity is consistent.
+    season_hint, _ = _extract_season(html.unescape(raw_title or str(slug or "")), str(slug or "").lower())
+    parsed_releases = parse_katmoviehd_releases(post_content, default_season=season_hint)
+    if not parsed_releases:
+        return None
 
     # IMDB ID & Rating extraction
     imdb_id = None
@@ -746,13 +1349,23 @@ def extract_post_data_katmoviehd(
         if len(clean_p) > 20 and not clean_p.lower().startswith("full movie"):
             synopsis = clean_p
 
-    # Media type detection
-    is_series = bool(season or "episode" in post_content.lower() or "tv-series" in str(genres_list).lower())
-    media_type = "series" if is_series else "movie"
-
-    parsed_releases = parse_katmoviehd_releases(post_content, default_season=season)
-    if not parsed_releases:
-        return None
+    # Media type detection — evidence-ranked, never guessed from prose.
+    # Episode structure is the only evidence the release block itself can give,
+    # and it sits below the site's own taxonomy in the precedence ladder.
+    has_episodes = any(r.get("episode_number") is not None for r in parsed_releases)
+    identity = derive_katmoviehd_identity(
+        raw_title or slug,
+        slug=slug,
+        categories=genres_list,
+        page_categories=page_categories,
+        page_field=page_field,
+        has_episode_releases=has_episodes,
+    )
+    clean_title = identity["title"]
+    year = identity["year"]
+    season = identity["season"]
+    canonical_key = identity["canonical_key"]
+    media_type = identity["media_type"]
 
     releases_data = []
     for r in parsed_releases:
