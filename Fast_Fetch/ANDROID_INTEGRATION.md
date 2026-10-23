@@ -316,6 +316,50 @@ Do **not** reintroduce a device-side rule fetch, and do not cache or persist an 
 in a public payload — the one place an upstream host may appear is the `Location` of the
 `302` the player follows.
 
+### 5.1 The quality ladder — one option per quality, never a link list
+
+`GET /api/v1/posts/{id}` answers, in addition to `releases`, an `option_groups` array: the
+whole title's links folded into **one winner per quality band, per season/episode scope**
+(`Fast_Fetch/tiers.py`). The ledger still holds every copy of every print — six mirrors of the
+same 1080p disc are six rows in SQLite and **one** row on screen.
+
+```json
+{"season": "1", "episode": "3",
+ "tiers": [{"band": "1080p", "quality": "1080p", "label": "Full HD · X264",
+            "mode": "play", "playable": true, "copies": 4,
+            "link": {"stream_id": "AftsgBBMlHvg0xriBg", "kind": "resolve",
+                     "playable": true, "play_url": "http://<us>/api/v1/stream?id=…",
+                     "expires_at": null, "file_size_bytes": 2013265920, "resumable": true}}],
+ "auto": {"band": "1080p", "reason": "best", "stream_id": "AftsgBBMlHvg0xriBg"},
+ "download_only_bands": ["2160p"]}
+```
+
+What the client does with it — the two screens the owner asked for:
+
+- **Player**: start at `auto.stream_id`. The quality switch lists `tiers[]` and shows only
+  `label` ("4K Ultra HD", "Full HD · X264"). Never render `copies`, never render a server name
+  (there is none to render), never sort or re-rank locally.
+- **Download card**: the same `tiers[]` in the same order, one row per quality, so 480p / 720p /
+  1080p / 4K is the whole UI. A tier with `mode: "download_only"` is labelled **"Download
+  only"** and is not offered to the player — that is the honest label for a print we can fetch
+  but not stream here.
+- `band` is the stable key for UI and for the user's stored preference
+  (`2160p|1080p|720p|480p|sd|unspecified`); `label` is display copy and may be reworded at any
+  time, so never key on it.
+
+Order and selection are the server's job: playability first, then live-vs-dead, then measured
+speed and latency, then resumability, then freshness, then a sanity check on file size, then the
+server preference the healers earned. That ranking is a *sort key* — the client gets the
+outcome, never the inputs, and cannot reconstruct which hoster won. Failover stays silent: if a
+`302` target refuses the device, ask for the next candidate for the same print and, if the band
+is exhausted, step one band down.
+
+Honest limit: a long-running series with per-episode prints produces one group per episode, and
+the biggest title in the catalog (1,174 scoped releases) serialises to ~6 MB, of which the
+ladder is ~1 MB and the pre-existing `releases` list is the rest. Episode lists for series that
+large should come from the paginated v2 routes (`API_V2.md §12`) once mounted; do not fetch that
+detail payload on a phone network as a habit.
+
 ---
 
 ## 6. Zero-Dependency API Client Implementation (Pure Kotlin)

@@ -57,6 +57,7 @@ import unicodedata
 
 import catalog_v2
 import redact
+import tiers
 
 DEFAULT_LIMIT = 24
 MAX_LIMIT = 100
@@ -682,6 +683,10 @@ def _link_view(row, evidence: dict | None, secret: str = "") -> dict:
         "label": "Fast direct" if resumable else "Standard",
         "kind": link.get("kind"),
         "playability": link.get("playability"),
+        # Honest behaviour, not provenance: can our one player start this copy
+        # itself. `tiers.py` reads it to pick the winner of a quality band, and
+        # the app reads it to decide between the player and the download card.
+        "playable": _link_group(row) <= _GROUP_RESOLVE and state != "dead",
         "group": _link_group(row),
         "state": state,
         "dead": state not in ("active", "unknown", "unchecked"),
@@ -2044,6 +2049,13 @@ def play_bundle(conn, *, release_id, episode_id=None, include_adult=False) -> di
     protocol = None
     if stream_candidates:
         protocol = stream_candidates[0]["protocol"]
+    # The quality switch and the download card: this print's copies collapsed to
+    # one winner. The full ranked `candidates` stay for silent failover, which is
+    # what makes showing the user a single option honest rather than fragile.
+    ladder = tiers.for_release(
+        {"quality": print_view.get("resolution") or print_view.get("quality_label"),
+         "codec": print_view.get("codec"), "size": print_view.get("size_bytes")},
+        candidates)
     return {
         "ok": True,
         "target": target,
@@ -2051,6 +2063,8 @@ def play_bundle(conn, *, release_id, episode_id=None, include_adult=False) -> di
         "release_id": print_view["release_id"],
         "print_label": print_view["print_label"],
         "print": print_view,
+        "tiers": ladder["tiers"],
+        "auto": ladder["auto"],
         "coverage": {**coverage, **offset_block},
         "candidates": candidates,
         "stream_candidates": stream_candidates,

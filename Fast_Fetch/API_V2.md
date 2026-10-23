@@ -1049,6 +1049,49 @@ that way in release notes and in any answer about "is this hidden".
 
 ---
 
+### 16.10 The public quality ladder — one option per band (`option_groups`)
+§3's `quality_options[]` / `best_release_id` is no longer only a v2 design item: the v1 detail
+route already answers it, because the product rule is a viewer rule before it is a version rule.
+`GET /api/v1/posts/{id}` returns, beside `releases`:
+
+```json
+"option_groups": [{"season": null, "episode": null,
+  "tiers": [{"band": "1080p", "quality": "1080p", "label": "Full HD · X264",
+             "mode": "play", "playable": true, "copies": 4,
+             "link": {"stream_id": "AftsgBBMlHvg0xriBg", "kind": "resolve",
+                      "playable": true, "play_url": "…/api/v1/stream?id=…",
+                      "expires_at": null, "resumable": true}}],
+  "auto": {"band": "1080p", "reason": "best", "stream_id": "AftsgBBMlHvg0xriBg"},
+  "download_only_bands": ["2160p"]}]
+```
+
+The rules this implements (owner's decision, `Fast_Fetch/tiers.py` is the code of record):
+
+1. **One winner per band per scope.** The ledger keeps all six mirrors of a print; the public
+   surface shows one row per quality. Nothing is discarded — `copies` says how many folded in,
+   and every candidate stays reachable for silent failover.
+2. **Bands are `2160p | 1080p | 720p | 480p | sd | unspecified`**, derived only from the
+   structured release columns (`quality`, `codec`, `size`, `size_bytes`, `resolution`,
+   `quality_label`). A release headline is a sentence and can contain "Camera" or "Sand"; it
+   never chooses a band.
+3. **Order and selection are server-side**: playability, then live-vs-dead, then measured speed
+   and latency, then resumability, then freshness, then file-size sanity, then the healer
+   server preference. Preference is a *sort key* and is never published as a field.
+4. **`auto` is what the player starts at**, and it is the best *playable* band, not the highest
+   one. A band whose only copies are embed pages is `mode: "download_only"` and is labelled
+   "Download only" — the honest surface, never a player that cannot start.
+5. **No provenance anywhere in it**: no site name, no hoster name, no upstream URL. `label` is
+   display copy ("Full HD · X264"); `band` is the stable key the client stores a preference
+   against.
+6. `?ladder=0` on the detail route drops `option_groups` for a client that only lists episodes.
+   Measured on the real catalog, the ladder is ~20% of the biggest title's payload (1,174
+   scoped releases → 6.0 MB total, 4.9 MB of it the pre-existing `releases` list).
+
+v2 keeps the same vocabulary (`quality_options[]` on a print, `best_release_id` per episode) so
+the two surfaces do not invent two names for one decision.
+
+---
+
 ## 17. Planned, not implemented (single honest checklist)
 
 Everything 📝/🛠 above, in one place. Nothing here may be described as live anywhere else.

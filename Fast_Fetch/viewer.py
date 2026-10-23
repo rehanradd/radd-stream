@@ -23,13 +23,17 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 from socketserver import ThreadingMixIn
 
 import redact
+import tiers
 
 if sys.platform.startswith("win"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 BASE_DIR = Path(__file__).parent.resolve()
-_env_db = os.environ.get("RADD_DB_PATH")
-DB_PATH = Path(_env_db) if _env_db else BASE_DIR / "fast_fetch.db"
+try:                    # single brand source: config.py derives these from brand.properties
+    from config import BASE_DIR, DB_PATH
+except ImportError:     # standalone fallback keeps the historical behaviour
+    _env_db = os.environ.get("RADD_DB_PATH")
+    DB_PATH = Path(_env_db) if _env_db else BASE_DIR / "fast_fetch.db"
 _SCHEMA_READY_FOR = None
 
 #: Where our own absolute URLs (stream/art handles, playlist entries) are
@@ -111,6 +115,16 @@ def link_view(row, base_url: str = "") -> dict:
     # from this plus the print's quality.
     resumable = bool(link.get("is_resumable"))
     link["label"] = "Fast direct" if resumable else "Standard"
+    # How the copy behaves, in our own words. The ledger's `playback_type` is a
+    # scraper's vocabulary ("url", "iframe"); a client only needs to know whether
+    # our player can start it, must resolve it first, or cannot play it here.
+    # "external" — not "embed", which is a real hoster name in this ledger and
+    # would trip the sentinel scan that protects every other response.
+    kind = {"direct": "direct", "url": "resolve", "download": "download",
+            "iframe": "external"}.get(str(row["playback_type"] or "").lower(),
+                                      "resolve")
+    link["kind"] = kind
+    link["playable"] = kind in ("direct", "resolve")
     if base_url:
         link["play_url"] = (f"{base_url.rstrip('/')}/api/v1/stream"
                             f"?id={link['stream_id']}")
@@ -2133,7 +2147,7 @@ def api_v1_get_posts(query: str = "", content_type: str = "", page: int = 1,
 
 
 def api_v1_get_post_detail(post_id: int, full: bool = False,
-                           base_url: str = "") -> dict | None:
+                           base_url: str = "", ladder: bool = True) -> dict | None:
     _ensure_schema()
     with get_db() as conn:
         post = conn.execute("SELECT * FROM posts WHERE id = ?", (post_id,)).fetchone()
@@ -2178,8 +2192,47 @@ def api_v1_get_post_detail(post_id: int, full: bool = False,
                 r_dict["label"] = redact.public_label(rel)
                 r_dict["sources"] = [link_view(s, base_url) for s in sources]
             rel_list.append(r_dict)
+        if not full:
+            p_dict["option_groups"] = (_option_groups(releases, rel_list)
+                                       if ladder else [])
         p_dict["releases"] = rel_list
         return p_dict
+
+
+def _option_groups(releases, rel_list) -> list:
+    """One best and fastest copy per quality band, for the player and the card.
+
+    The ledger holds up to six copies of the same print on six servers; a viewer
+    wants one row per quality (the owner's "Auto default + visible quality
+    switch"), and so does the download card. The candidates arrive already
+    ordered by the server preference the healers earned, which is a *sort key*
+    and never a field, so the winner is chosen without publishing who serves it.
+
+    Releases are grouped by their own season/episode scope: a series must not
+    offer S02E05's 1080p copy when the user is playing S01E01."""
+    scopes: dict = {}
+    for rel, r_dict in zip(releases, rel_list):
+        scopes.setdefault((rel["season"], rel["episode"]), []).append(r_dict)
+    groups = []
+    for (season, episode), prints in scopes.items():
+        ladders = []
+        for r_dict in prints:
+            ladder = tiers.for_release(r_dict, r_dict.get("sources") or [])
+            band = ladder["tiers"][0]["band"] if ladder["tiers"] else tiers.UNSPECIFIED
+            r_dict["band"] = band
+            r_dict["quality_label"] = (ladder["tiers"][0]["label"]
+                                       if ladder["tiers"] else "Available")
+            if ladder["tiers"]:
+                ladders.append(ladder)
+        merged = tiers.merge(ladders)
+        if merged["tiers"]:
+            for tier in merged["tiers"]:
+                if tier["link"] is not None:
+                    tier["link"] = redact.project(tier["link"], "ladder_link")
+            groups.append({"season": season, "episode": episode, **merged})
+    groups.sort(key=lambda group: tiers.scope_sort_key(group["season"],
+                                                       group["episode"]))
+    return groups
 
 
 def api_v1_rules() -> dict:
@@ -2415,8 +2468,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
         elif path.startswith("/api/v1/posts/"):
             parts = path.strip("/").split("/")
             if len(parts) == 4 and parts[3].isdigit():
-                detail = api_v1_get_post_detail(int(parts[3]), full=full,
-                                                base_url=base_url)
+                detail = api_v1_get_post_detail(
+                    int(parts[3]), full=full, base_url=base_url,
+                    ladder=query_params.get("ladder", ["1"])[0] not in ("0", "false"))
                 if detail:
                     self.send_json({"success": True, "data": detail})
                 else:

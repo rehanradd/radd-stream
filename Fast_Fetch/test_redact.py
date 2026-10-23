@@ -773,6 +773,21 @@ class ZeroDataLossTests(FixtureMixin):
         self.assertEqual(redact.is_clean(payload, redact.site_needles(self.db_path)),
                          [], f"{label} leaks a known site or hoster name")
 
+    def test_a_random_handle_that_spells_a_brand_is_not_a_leak(self):
+        # A stream_id is base64 noise, and noise collides: on the real catalog the
+        # only "site name" inside the quality ladder was a handle spelling `gmpg`.
+        # Masking handles stops the scan crying wolf without hiding a real one.
+        handle = redact.mint_token(4242, "test-secret")
+        self.assertFalse(redact.is_clean(
+            {"link": {"stream_id": handle,
+                      "play_url": f"http://our.box/api/v1/stream?id={handle}"}}),
+            "an opaque handle must not read as provenance")
+        spelled = redact.minted_values({"link": {"stream_id": handle}})
+        self.assertIn(handle, spelled)
+        # A brand that is actually in the text still trips it.
+        self.assertTrue(redact.is_clean({"label": "vegamovies Watch Online"},
+                                        needles=["vegamovies"]))
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

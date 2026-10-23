@@ -185,9 +185,19 @@ VIEWS: dict[str, frozenset[str]] = {
     # GET /api/v1/posts — one list row.
     "post_brief": frozenset(_IDENTITY | _TITLE | _COUNTS),
     # GET /api/v1/posts/{id} — the same row plus its releases.
-    "post_detail": frozenset(_IDENTITY | _TITLE | {"releases"}),
-    "release": frozenset(_RELEASE | {"sources", "links", "print_label"}),
+    # `option_groups` is the quality switch the player and the download card
+    # read: one winner per band, each holding a projected link. It is built from
+    # `project()`ed links only, and `test_redact` re-checks the finished shape.
+    "post_detail": frozenset(_IDENTITY | _TITLE | {"releases", "option_groups"}),
+    "release": frozenset(_RELEASE | {"sources", "links", "print_label",
+                                     "band", "quality_label"}),
     "link": frozenset(_LINK),
+    # The quality ladder's copy of a link: what a player or a download card needs
+    # to start it, and none of the link's diagnostic furniture.
+    "ladder_link": frozenset({
+        "stream_id", "play_url", "kind", "playable", "status", "expires_at",
+        "is_resumable", "is_temporary", "file_size_bytes", "label",
+    }),
     # GET /api/v1/stats — scale, no per-site breakdown.
     "stats": frozenset({
         "posts", "releases", "sources", "active_sources", "resumable_sources",
@@ -686,11 +696,49 @@ def provenance_keys(obj, found=None) -> list[str]:
     return seen
 
 
+#: Keys whose values are handles we minted (`mint_token`/`mint_text`): base64
+#: noise, not information about anyone. A sentinel scan masks these before reading
+#: text, because random noise collides with brand spellings.
+MINTED_KEYS = frozenset({"stream_id", "art", "play_url", "download_url",
+                         "link_ref", "id_ref"})
+
+
+def minted_values(obj, found=None) -> list[str]:
+    """Every opaque handle in `obj`, so a scan can mask it before reading text.
+
+    A `stream_id` is base64 noise, and noise collides: across a 560-post sample of
+    the real catalog, the only way our own sentinel found a "site name" inside the
+    quality ladder was a handle that happened to spell `gmpg` or `send`. Masking
+    the handles keeps a real brand in a label visible while stopping the scan from
+    crying wolf — and a handle is by construction not information about anyone.
+    """
+    seen = found if found is not None else []
+    if isinstance(obj, dict):
+        for key, value in obj.items():
+            if key in MINTED_KEYS:
+                if isinstance(value, str) and len(value) >= 4:
+                    seen.append(value)
+                elif isinstance(value, (list, tuple)):
+                    seen.extend(str(item) for item in value
+                                if isinstance(item, str) and len(item) >= 4)
+            else:
+                minted_values(value, seen)
+    elif isinstance(obj, (list, tuple)):
+        for value in obj:
+            minted_values(value, seen)
+    return seen
+
+
 def is_clean(obj, needles=None) -> list[str]:
     """Every provenance leak found in `obj`: forbidden key names, then known
-    site/brand tokens anywhere in the serialised text. Empty list means clean."""
+    site/brand tokens anywhere in the serialised text. Empty list means clean.
+
+    Opaque handles we minted are masked out first (see :func:`minted_values`);
+    everything else is scanned as written."""
     bad = list(dict.fromkeys(provenance_keys(obj)))
     text = json.dumps(obj, ensure_ascii=False, default=str).lower()
+    for value in dict.fromkeys(minted_values(obj)):
+        text = text.replace(value.lower(), "<id>")
     for n in (needles if needles is not None else _NEEDLES):
         token = str(n).lower()
         if len(token) >= 4 and token in text:
