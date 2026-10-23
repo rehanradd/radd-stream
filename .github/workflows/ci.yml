@@ -1,0 +1,148 @@
+name: 🔨 CI — Android Build & Test
+
+# WHAT THIS DOES
+#   On every push (any branch) touching App/** or this file, and on every PR
+#   touching App/**: compiles the Kotlin app, runs JVM unit tests, runs Android
+#   lint, builds the debug APK, and uploads it plus failure diagnostics.
+#
+# WHAT IT NEEDS
+#   Nothing secret. JDK 17 (AGP 8.5.2 requires 17+), Android SDK platform 35 +
+#   build-tools 35.0.0 (compileSdk=35 in App/app/build.gradle.kts).
+#
+# DESIGN DECISIONS (2026)
+#   * Android SDK: we install an EXPLICIT package list with
+#     android-actions/setup-android@v4 AFTER setup-java, instead of relying on
+#     AGP's `android.builder.sdkDownload` auto-provisioning. Reasons:
+#       - sdkmanager itself needs Java 17+; running it after setup-java makes
+#         any JDK problem fail in a named step, not inside Gradle.
+#       - AGP auto-download happens mid-build with a generic
+#         "Failed to install the following SDK components" error (often
+#         license-related) that is the classic way CI dies before Gradle ever
+#         touches the Kotlin. An explicit step either works fast or fails loud.
+#       - GitHub-hosted ubuntu-24.04 images ship an SDK, but which
+#         platforms/build-tools are preinstalled drifts with image updates;
+#         pinning the packages we need (android-35, 35.0.0) is deterministic.
+#   * Gradle is invoked ONCE with `--continue` so the fleet sees ALL of
+#     assembleDebug + testDebugUnitTest + lintDebug results in one log, not
+#     just the first failure. Task names are the AGP-generated per-variant
+#     tasks (`:app:assembleDebug`, `:app:testDebugUnitTest`, `:app:lintDebug`);
+#     `:app` is the only module in settings.gradle.kts.
+#   * Cache poisoning: we cache ONLY ~/.gradle (dependency modules, wrapper
+#     dists, transform + build caches — all content-addressed by Gradle).
+#     We deliberately DO NOT cache the project's App/.gradle directory, which
+#     holds configuration-cache/incremental state keyed to absolute paths and
+#     is the one location that can silently poison a rebuild. The cache key
+#     includes gradle-wrapper.properties, libs.versions.toml and all build
+#     scripts, so any dependency/JDK/Gradle version change starts a fresh bucket.
+#   * Action versions are pinned to full commit SHAs (no floating majors).
+#
+# KNOWN FAILURE MODES THIS FILE FIXES
+#   1. GitHub never discovered any workflow: on `main` the files sat at
+#      `radd-stream/.github/workflows/` and `App/.github/workflows/` — neither
+#      is the repository root, where GitHub looks. (API confirmed: 0 workflows,
+#      0 runs ever.) This file lives at <repo-root>/.github/workflows/ci.yml.
+#   2. Old runs died at "Android SDK setup" — sdkmanager licensing/Java issues
+#      (see DESIGN DECISIONS above; JDK now provably precedes SDK install).
+#   3. gradlew may lose the +x bit through some checkout paths — chmod anyway.
+#   4. If the first Kotlin errors were invisible: on failure we upload the
+#      test-result and lint-report XML trees so errors survive past the log.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ["**"]
+    paths:
+      - "App/**"
+      - ".github/workflows/ci.yml"
+  pull_request:
+    paths:
+      - "App/**"
+      - ".github/workflows/ci.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  # One active run per workflow+ref; newer pushes supersede older ones.
+  group: android-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: assembleDebug + testDebugUnitTest + lintDebug
+    runs-on: ubuntu-24.04   # pinned, not `ubuntu-latest`, so runner drift is visible
+    timeout-minutes: 45     # first cold-cache run downloads Gradle + SDK; be generous
+
+    steps:
+      - name: 📥 Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - name: ☕ Set up JDK 17 (temurin)
+        uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad  # v6.1.0
+        with:
+          distribution: temurin
+          java-version: "17"   # matches compileOptions VERSION_17 / jvmTarget 17
+
+      - name: 📦 Restore Gradle caches
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-java17-${{ hashFiles('App/gradle/wrapper/gradle-wrapper.properties', 'App/gradle/libs.versions.toml', 'App/**/*.gradle.kts', 'App/**/*.gradle', 'App/settings.gradle.kts') }}
+          restore-keys: |
+            gradle-${{ runner.os }}-java17-
+            gradle-${{ runner.os }}-
+
+      - name: 📱 Install Android SDK (platform-tools, android-35, build-tools 35.0.0)
+        uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd  # v4.0.4
+        with:
+          packages: "platform-tools platforms;android-35 build-tools;35.0.0"
+
+      - name: 🔧 Make gradlew executable
+        run: chmod +x App/gradlew
+
+      - name: "🏗️🧪🔍 Gradle: debug APK + unit tests + lint (single invocation)"
+        working-directory: App
+        # --continue: report every task's failures in one run.
+        # --no-daemon/--stacktrace per project standard.
+        # --console=plain: unadorned file:line Kotlin errors, no ANSI noise.
+        run: |
+          ./gradlew :app:assembleDebug :app:testDebugUnitTest :app:lintDebug \
+            --no-daemon --stacktrace --continue --console=plain
+
+      - name: 📤 Upload debug APK
+        if: always()   # assembleDebug may succeed while tests/lint fail — the APK is the most useful output
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: app-debug-${{ github.run_number }}
+          path: App/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: 📤 Upload test + lint reports (diagnostics)
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: ci-reports-${{ github.run_number }}
+          path: |
+            App/app/build/test-results
+            App/app/build/reports
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: 📊 Build summary
+        if: success()
+        run: |
+          APK="App/app/build/outputs/apk/debug/app-debug.apk"
+          {
+            echo "## ✅ Android CI"
+            echo ""
+            echo "| Item | Value |"
+            echo "|---|---|"
+            echo "| APK size | $(du -h "$APK" | cut -f1) |"
+            echo "| Commit | \`${GITHUB_SHA}\` |"
+            echo "| Branch | \`${GITHUB_REF_NAME}\` |"
+            echo ""
+            echo "Debug APK is in the Artifacts tab of this run."
+          } >> "$GITHUB_STEP_SUMMARY"

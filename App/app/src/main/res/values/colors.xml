@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  RADD STREAM — XML-side colour tokens are NO LONGER declared here.
+
+  Every @color/radd_* name that themes.xml, the launcher layers and any future
+  splash background reference is generated at build time from
+  <repo root>/brand.properties, section [resources.colors], by the
+  resValue("color", ...) loop in app/build.gradle.kts. That is why this file is
+  now empty: a hand-maintained mirror here would drift from the brand file and
+  collide with the generated resource names (duplicate resource error).
+
+  To re-skin a colour: edit brand.properties (colors.* for the Kotlin/Compose
+  ramps, resources.colors.* for the XML-side aliases) and rebuild.
+  BrandDriftTest fails the build if brand.properties and res/values/ stop
+  agreeing, or if a hex is added back here.
+-->
+<resources>
+    <!-- Intentionally empty: all colour resources come from brand.properties. -->
+</resources>

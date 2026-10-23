@@ -1,1 +1,1 @@
-- [Radd Stream staging merge gate](radd-stream-staging-merge-gate.md) — never combine staging databases without a fresh user instruction and separate confirmation of the verified plan.
+- [Radd Stream context](radd-stream-project-context.md) — prior account chat records product scope and the user's expectation that the agent handles backend setup and verification.

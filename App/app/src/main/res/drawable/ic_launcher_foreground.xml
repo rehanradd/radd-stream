@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  RADD STREAM launcher foreground — "The Source Ripple" (original mark).
+  Identity: a solid core dot (the SOURCE), two open arc rings facing forward
+  (the CURRENT — a subliminal play affordance without a literal triangle),
+  and a rider dot cresting the outer ring (the stream you ride).
+
+  Construction grid: 108x108dp viewport, mark centered at (54,54).
+    inner ring r=18, stroke 10, full alpha #2BC79A
+    outer ring r=32, stroke 8, alpha 0.62 (#9E2BC79A) — the ripple fading
+    core dot r=8, rider dot r=5.4 at 32 from center, bearing -79deg
+  All arcs are cubic-Bezier approximations (SVG-command-safe pathData).
+  Max extent from center: 37.4dp < 40dp — inside the adaptive safe zone, so
+  the full mark survives circle/squircle/rounded-square launcher masks and
+  remains legible at the 43dp on-screen minimum.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- Outer current ring (faded ripple), r=32, facing east, round caps -->
+    <path
+        android:strokeColor="#9E2BC79A"
+        android:strokeWidth="8"
+        android:strokeLineCap="round"
+        android:pathData="M 64.94,23.93 C 77.59,28.53 86.00,40.55 86.00,54.00 C 86.00,67.45 77.59,79.47 64.94,84.07"/>
+
+    <!-- Inner current ring, r=18 -->
+    <path
+        android:strokeColor="#FF2BC79A"
+        android:strokeWidth="10"
+        android:strokeLineCap="round"
+        android:pathData="M 60.16,37.09 C 67.27,39.67 72.00,46.43 72.00,54.00 C 72.00,61.57 67.27,68.33 60.16,70.91"/>
+
+    <!-- Core source dot, r=8 at center -->
+    <path
+        android:fillColor="#FF2BC79A"
+        android:pathData="M 46.00,54.00 C 46.00,49.58 49.58,46.00 54.00,46.00 C 58.42,46.00 62.00,49.58 62.00,54.00 C 62.00,58.42 58.42,62.00 54.00,62.00 C 49.58,62.00 46.00,58.42 46.00,54.00 Z"/>
+
+    <!-- Rider dot, r=5.4 riding the north-east crest of the outer ring -->
+    <path
+        android:fillColor="#FF2BC79A"
+        android:pathData="M 54.71,22.59 C 54.71,19.61 57.12,17.19 60.11,17.19 C 63.09,17.19 65.51,19.61 65.51,22.59 C 65.51,25.57 63.09,27.99 60.11,27.99 C 57.12,27.99 54.71,25.57 54.71,22.59 Z"/>
+</vector>

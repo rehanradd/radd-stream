@@ -1,0 +1,424 @@
+# 📐 Screen Design Spec — RADD Stream
+
+> ASCII wireframes + UX notes for every screen. Reference these during implementation.
+
+> ⚠️ **Reality (verified against `Fast_Fetch/viewer.py` and `App/app/src`
+> 2026-10-22).** This file is a *design* spec, so most of it is aspirational by
+> intent — but the following two claims in it are false:
+> 1. **`?type=anime` does not work.** `viewer.py:1898` matches `content_type` by
+>    exact equality and nothing ever writes `'anime'` there, so the Anime chip and
+>    the Anime home row return an empty grid. The only accepted `type` values are
+>    `movie`, `series`, `complete_season`, `ongoing_season`. Anime is expressed via
+>    `posts.is_animated` / `posts.industry`, and the API offers **no** filter for
+>    either yet — that flag has to be built before these wireframes' Anime
+>    surfaces can be implemented. See
+>    [`../AGENTS.md`](../AGENTS.md) §5.
+> 2. **Screens 4–7 are already built**, not future work. Detail, Player, My List,
+>    and Settings
+>    exist in `App/app/src/.../ui/screens/` and are routed in `NavGraph.kt`. The
+>    wireframes below describe intended polish that the shipped screens do not all
+>    reach (e.g. Detail's season filter cannot group — the release JSON carries
+>    `season`/`episode`, not `season_number`/`episode_number`).
+>
+> Also note the backend has no authentication, no rate limiting, and no TLS; the
+> Oracle host is plain HTTP. Nothing here is a private surface.
+
+---
+
+## Screen 1 — Splash / First Launch Setup
+
+**Shown**: Only on first app launch (or after server reset)
+
+```
+┌─────────────────────────────┐
+│                             │
+│                             │
+│                             │
+│        🎬 RADD Stream       │  ← App logo + name (center)
+│                             │
+│   Connect to your server    │  ← subtitle (on_surface_muted)
+│                             │
+│  ┌───────────────────────┐  │
+│  │ http://your-server... │  │  ← TextField (server URL)
+│  └───────────────────────┘  │
+│                             │
+│  ┌───────────────────────┐  │
+│  │   ✓ Test Connection   │  │  ← outlined button (shows spinner)
+│  └───────────────────────┘  │
+│        ● ✓ Connected        │  ← green dot + "Connected" on success
+│                             │
+│  ┌───────────────────────┐  │
+│  │  ▶  Let's Watch       │  │  ← primary button (disabled until connected)
+│  └───────────────────────┘  │
+│                             │
+└─────────────────────────────┘
+```
+
+**UX Notes:**
+- URL field auto-fills `http://` prefix
+- "Test Connection" calls `GET /api/v1/stats` — shows title count on success
+- "Let's Watch" navigates to Home and never shows this screen again
+- Keyboard auto-opens on this screen
+
+---
+
+## Screen 2 — Home
+
+**Bottom nav tab**: 🏠 Home
+
+```
+┌─────────────────────────────┐
+│ ░░░░░░░░░░░░░░░░░░░░░░░░░░░ │  ← Status bar (edge-to-edge)
+│                             │
+│  ┌─────────────────────┐    │
+│  │                     │    │
+│  │   [HERO POSTER]     │    │  ← 260dp tall hero banner
+│  │                     │    │
+│  │  ▓▓▓▓▓▓  MOVIE      │    │  ← title + type badge (bottom-left)
+│  │  ░ ░ ● ░ ░           │    │  ← dot indicators (center-bottom)
+│  └─────────────────────┘    │
+│                             │
+│  Continue Watching    →     │  ← section header + "See All"
+│  ┌────┐ ┌────┐ ┌────┐      │
+│  │    │ │    │ │    │      │  ← horizontal scroll row
+│  │ 🎬 │ │ 📺 │ │ 🎬 │      │  ← poster cards (120×180dp)
+│  │    │ │    │ │    │      │
+│  └────┘ └────┘ └────┘      │
+│                             │
+│  🎬 Movies             →    │
+│  ┌────┐ ┌────┐ ┌────┐      │
+│  │    │ │    │ │    │      │
+│  └────┘ └────┘ └────┘      │
+│                             │
+│  📺 Series             →    │
+│  ┌────┐ ┌────┐ ┌────┐      │
+│  └────┘ └────┘ └────┘      │
+│                             │
+│  🎌 Anime              →    │
+│  ┌────┐ ┌────┐ ┌────┐      │
+│  └────┘ └────┘ └────┘      │
+│                             │
+│ [🏠 Home][🔍][❤️][⚙️]        │  ← Bottom nav
+└─────────────────────────────┘
+```
+
+**UX Notes:**
+- Hero banner auto-scrolls every 5s, pauses on user swipe
+- Each horizontal row is independently scrollable
+- "→" / "See All" navigates to Search pre-filtered by that type
+- Skeleton shimmer shown while API loads
+- Pull-to-refresh reloads all rows
+- ⚠️ The **🎌 Anime row above cannot be built today**: `?type=anime` on
+  `/api/v1/posts` matches zero rows, and the list response carries no
+  `is_animated` field to filter on client-side either. Ship Movies/Series rows
+  only until the backend adds an `animated` filter.
+- ⚠️ No hero banner and no per-type horizontal rows are implemented in
+  `HomeScreen.kt` today — it renders a single filtered grid.
+
+---
+
+## Screen 3 — Search
+
+**Bottom nav tab**: 🔍 Search
+
+```
+┌─────────────────────────────┐
+│                             │
+│  ┌──────────────────────┐   │
+│  │ 🔍 Search titles...  │   │  ← Search bar (auto-focus)
+│  └──────────────────────┘   │
+│                             │
+│  [All] [Movies] [Series]    │  ← filter chips (horizontal scroll)
+│  [Anime]                    │
+│                             │
+│  ┌──────┐ ┌──────┐          │
+│  │      │ │      │          │  ← 2-column poster grid
+│  │      │ │      │          │
+│  │ Title│ │ Title│          │
+│  └──────┘ └──────┘          │
+│  ┌──────┐ ┌──────┐          │
+│  │      │ │      │          │
+│  └──────┘ └──────┘          │
+│                             │
+│          ...                │
+│                             │
+│ [🏠 Home][🔍][❤️][⚙️]        │
+└─────────────────────────────┘
+```
+
+**States:**
+- **Empty input**: shows "Recent Searches" list
+- **Typing**: shimmer grid → results grid (debounced 300ms)
+- **No results**: centered illustration + "Nothing found for '{query}'"
+- **Filter chip active**: re-queries with `?type=movie|series|complete_season|ongoing_season`.
+  The `[Anime]` chip drawn above is **not implementable against today's API** —
+  see the Reality note at the top of this file.
+
+---
+
+## Screen 4 — Detail Screen
+
+**Navigated to by**: tapping any poster card
+
+```
+┌─────────────────────────────┐
+│  ← Back                     │  ← top bar (transparent over hero)
+│  ┌─────────────────────┐    │
+│  │                     │    │
+│  │   [BACKDROP IMAGE]  │    │  ← full-width 200dp backdrop
+│  │                     │    │
+│  │  [poster]  Title    │    │  ← poster floats left, title right
+│  │  120×180   Year     │    │
+│  │            🎬 Movie │    │
+│  └─────────────────────┘    │
+│                             │
+│  ┌─────────────────────┐    │
+│  │  ▶  PLAY            │    │  ← PRIMARY play button (accent_primary)
+│  └─────────────────────┘    │
+│                             │
+│  Synopsis                   │  ← section header
+│  The story follows...       │  ← 3 lines collapsed, tap to expand
+│                             │
+│  ─── For Series Only ────── │
+│  Season 1 ▼                 │  ← season dropdown
+│  Ep1  Ep2  Ep3  Ep4  Ep5   │  ← episode grid chips
+│  ─────────────────────────  │
+│                             │
+│  Sources                    │  ← section header
+│  ┌────────────────────────┐ │
+│  │ 🔵 1080p · VegaDrive   │ │  ← source row
+│  │          ▶ Play  ↗     │ │
+│  └────────────────────────┘ │
+│  ┌────────────────────────┐ │
+│  │ 🟡 720p · HubCloud     │ │
+│  │          ▶ Play  ↗     │ │
+│  └────────────────────────┘ │
+│                             │
+└─────────────────────────────┘
+```
+
+**UX Notes:**
+- `▶ PLAY` button uses highest-quality available source automatically
+- `▶ Play` on each source row plays that specific source
+- `↗` icon → "Open in external player" (Intent to VLC/MPV/MX)
+- Series: tapping episode chip navigates to that episode's sources
+- ❤️ fab button (bottom-right) toggles watchlist
+- Share button in top app bar generates deep link
+
+---
+
+## Screen 5 — Player
+
+**Full screen, no navigation bar**
+
+```
+┌─────────────────────────────────────────────┐
+│  [      VIDEO CONTENT FILLS ENTIRE SCREEN   ]│
+│                                             │
+│  ← ⋮  Title (S01E03)       🔒  PiP  ⛶     │  ← top controls overlay (auto-hide)
+│                                             │
+│                                             │
+│                  ⏸                          │  ← center play/pause (large)
+│             ⟨10   ⏸   10⟩                  │
+│                                             │
+│                                             │
+│  0:13:22 ────────●─────────── 1:47:00       │  ← seek bar + time
+│                                             │
+│  ▶1× CC ⋮                                  │  ← bottom controls row
+└─────────────────────────────────────────────┘
+```
+
+**Gesture Zones:**
+```
+┌────────────┬──────────────┬────────────┐
+│            │              │            │
+│ Brightness │  Tap=pause   │  Volume    │
+│ swipe ↕    │  DblTap=-10  │  swipe ↕  │
+│            │  DblTap=+10  │            │
+│            │              │            │
+└────────────┴──────────────┴────────────┘
+  Left 1/4      Center 1/2    Right 1/4
+```
+
+**Controls (auto-hide after 3s of inactivity):**
+- **Top bar**: ← Back, title + episode, 🔒 lock, PiP, ⛶ fullscreen toggle
+- **Center**: double-tap left = -10s ripple, double-tap right = +10s ripple
+- **Seek bar**: draggable with thumbnail preview
+- **Bottom**: ▶1× speed selector, CC subtitles, ⋮ more (quality, download)
+
+---
+
+## Screen 6 — My List
+
+**Bottom nav tab**: ❤️
+
+```
+┌─────────────────────────────┐
+│  My List                    │  ← page title
+│                             │
+│  ┌──────┐ ┌──────┐          │
+│  │      │ │      │          │
+│  │ ❤️   │ │ ❤️   │          │  ← poster cards with favorite heart
+│  │ Title│ │ Title│          │
+│  └──────┘ └──────┘          │
+│                             │
+│  (empty state)              │
+│     ❤️                      │
+│  Nothing saved yet.         │
+│  Tap ❤️ on any title.       │
+│                             │
+│ [🏠 Home][🔍][❤️][⚙️]        │
+└─────────────────────────────┘
+```
+
+---
+
+## Screen 7 — Settings
+
+**Bottom nav tab**: ⚙️
+
+```
+┌─────────────────────────────┐
+│  Settings                   │
+│                             │
+│  SERVER                     │  ← section header (labelSmall muted)
+│  ┌────────────────────────┐ │
+│  │ 🌐 Server URL          │ │  ← tapping → edit URL dialog
+│  │ http://192.168.1.5:80  │ │
+│  └────────────────────────┘ │
+│  ┌────────────────────────┐ │
+│  │ ● Connected · 1,031    │ │  ← green dot + release count
+│  │   releases             │ │    (⚠️ 1,031 was a 2026-10-13 snapshot — an
+│  └────────────────────────┘ │     illustrative wireframe value only. The
+│                             │     shipped SettingsScreen shows Titles /
+│                             │     Releases / Streams from /api/v1/stats.)
+│                             │
+│  PLAYBACK                   │
+│  ┌────────────────────────┐ │
+│  │ Quality      Auto  ›   │ │
+│  └────────────────────────┘ │
+│  ┌────────────────────────┐ │
+│  │ Autoplay Next  ●  ON   │ │  ← toggle switch
+│  └────────────────────────┘ │
+│  ┌────────────────────────┐ │
+│  │ Remember Position  ON  │ │
+│  └────────────────────────┘ │
+│                             │
+│  DATA                       │
+│  ┌────────────────────────┐ │
+│  │ 🗑 Clear Cache         │ │
+│  └────────────────────────┘ │
+│  ┌────────────────────────┐ │
+│  │ 🗑 Clear Watch History │ │
+│  └────────────────────────┘ │
+│                             │
+│  ABOUT                      │
+│  ┌────────────────────────┐ │
+│  │ RADD Stream v1.0.0     │ │
+│  │ github.com/radddao     │ │
+│  └────────────────────────┘ │
+│                             │
+│ [🏠 Home][🔍][❤️][⚙️]        │
+└─────────────────────────────┘
+```
+
+---
+
+## Navigation Flow Map
+
+```
+SplashSetupScreen
+       │ (first launch only)
+       ▼
+HomeScreen ←──────────────────────────────┐
+  │  (tap card)                           │
+  ▼                                       │
+DetailScreen                              │
+  │  (tap ▶ Play)                         │
+  ▼                                       │
+PlayerScreen ─── (back) ──────────────────┘
+  │  (PiP button)
+  ▼
+PiP Window (floating, continues playback)
+
+SearchScreen ──(tap card)──► DetailScreen
+MyListScreen ──(tap card)──► DetailScreen
+SettingsScreen (no sub-navigation)
+```
+
+---
+
+## 🎨 Visual & Design Notes — Brand Pass v2.0 ("Current & Undertow")
+
+> Additive design layer only — navigation, routes, and wireframe structure
+> above are owned by the screens agent and are unchanged. Token references:
+> `design/DESIGN_SYSTEM.md`, code: `ui/theme/`.
+
+### Screen 1 — Splash / First Launch Setup
+- Cold-start window bg is `radd_ink_950` (themes.xml) so launch feels like one
+  continuous ink field; `RaddStreamMark` 72dp fades in (300ms alpha only) then
+  `RaddBrandLockup` settles under it.
+- Status line paints by meaning: connected → `RaddSuccess` + bolt icon; error →
+  `RaddDanger` (7.2:1). Never jade text for "server unreachable" prettiness.
+- Primary CTA = filled `primary` button, **ink label** (`RaddDeepCurrentInk`),
+  52dp min height, bottom thumb zone.
+
+### Screen 2 — Home
+- Background `colorScheme.background`; nav bar `surfaceContainerHigh`; rail
+  headers `headlineSmall` in `onSurface`, "see all" in `RaddCurrent500` (9.3:1).
+- Poster cards: 2:3, radius 12 (`shapes.medium`), gap 8. Year/site metadata in
+  `RaddWhisperOnInk` (≥6.4:1). Rating chip = Signal Gold star + `RaddNumeric`.
+- Type chips: unselected = `surfaceContainerHigh` fill + `onSurfaceVariant`;
+  selected = `primaryContainer` + `onPrimaryContainer` (10.3:1), indicator
+  animates 250ms `EmphasizedDecelerate`.
+- Skeletons shimmer `RaddPlaceholderLow↔High`, 1200ms linear; error state uses
+  lock/wave illustration slot with mark at 15% watermark alpha.
+
+### Screen 3 — Search
+- Search field: `surfaceContainerHigh`, radius 12, leading icon
+  `onSurfaceVariant`, hint `RaddWhisperOnInk`. Clear button ≥48dp touch.
+- Empty-with-query and no-results states get `RaddStreamMark` 48dp at
+  `current500` + one `bodyMedium` line — the brand IS the empty state.
+
+### Screen 4 — Detail
+- Hero backdrop 16:9 → scrim stack per DESIGN_SYSTEM §8: transparent →
+  `RaddHeroScrim` (85%) → solid ink band; title `displayMedium` white-family
+  `RaddPaperOnInk` (≥15:1 worst case over art).
+- Optional: hero band tail + section rules tinted with
+  `rememberArtworkAccent(backdrop)` (mood-only, guaranteed ≥4.5:1).
+- Favorite toggle = `RaddCoral400` heart (7.8:1); Play = jade filled 52dp with
+  ink label; Download = tide-blue outlined chip (never jade).
+- Release rows: print badges per §3.3 (solid ink chips, 4dp radius,
+  labelMedium caps); link-health pills per §3.1 — color + icon + text.
+  Dead sources: strikethrough title, 60% alpha, kept in list.
+  Ephemeral (`is_temporary`): dashed-outline expired-paint chip.
+- Season/episode chips: `surfaceContainerHigh` rest, `primaryContainer`
+  selected; `RaddNumeric` for episode counts.
+
+### Screen 5 — Player
+- Pure black letterbox (below `RaddInkVoid` intentionally: content-out-of-
+  water moment); controls on 60% vertical scrim, icons `RaddPaperOnInk`.
+- Progress: track `RaddInk700`, buffered `RaddInk600`, played `RaddCurrent400`;
+  Scrubber hit area 48dp tall though visually 4dp.
+- Resolution/bitrate readouts (when surfaced) use `RaddNumeric` to stop jitter.
+
+### Screen 6 — My List
+- Same grid rules as Home; remove action = coral outline icon button (48dp),
+  undo snackbar `inverseSurface` family.
+- Empty list: `RaddStreamMark` 96dp + headline + one ghost CTA to Home. No
+  text-only shrug.
+
+### Screen 7 — Settings
+- Stats card numbers: `RaddStatNumeric` + `tnum` so live server counts don't
+  shimmy as they refresh.
+- Connection status follows the semantic language: ok = `RaddSuccess`,
+  error = `RaddDanger` (7.2:1) — both with icons, never color-alone dots.
+- Future "Theme: Brand / Material You (beta)" switch wires
+  `RaddStreamTheme(dynamicColor = …)` per DESIGN_SYSTEM §10; default Brand.
+- Cleartext/HTTP warning banner (amber `RaddHealthSlow` on `RaddHealthSlowPill`,
+  9.8:1) while pointed at an http:// host — honest, visible, one tap to details.
+
+### Global
+- Every screen: 16dp gutter, content clears edge-to-edge bars (+24dp bottom),
+  all taps ≥48dp, all motion from `RaddMotion` tokens, no hex outside
+  Color.kt.

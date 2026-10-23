@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+      Base application theme — edge-to-edge, dark-first ("Undertow").
+      This XML theme only governs the window BEFORE Compose takes over:
+      windowBackground must match RaddInk950 so cold starts and the nav-drawer
+      flash are the same color the first frame paints. System bars stay
+      transparent (enableEdgeToEdge in MainActivity) and their icon contrast is
+      handled by the dark background.
+
+      BRAND: @color/radd_ink_950 is NOT declared in res/values/colors.xml any
+      more — it is generated at build time from [resources.colors] in
+      /brand.properties (see app/build.gradle.kts), and RaddInk950 itself reads
+      [colors.dark] background from the same file. The style NAME stays literal
+      because AndroidManifest.xml must reference a real resource name.
+    -->
+    <style name="Theme.RaddStream" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/radd_ink_950</item>
+        <item name="android:statusBarColor">#00000000</item>
+        <item name="android:navigationBarColor">#00000000</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowLayoutInDisplayCutoutMode">shortEdges</item>
+    </style>
+</resources>

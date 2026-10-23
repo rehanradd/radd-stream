@@ -1,5 +1,0 @@
-# Locally installed CLI (211 MB); not part of the app's deployment bundle.
-.tools/antigravity/
-
-# Private local Antigravity settings and conversation index.
-.antigravity-recovery/

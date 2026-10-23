@@ -1,6 +1,52 @@
-# Antigravity is installed inside the persistent workspace, but keep its large
-# executable out of Git history. Recreate it with install-antigravity.sh.
-.tools/antigravity/
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+.Python
+env/
+venv/
+.env
+*.egg-info/
+dist/
+build/
 
-# Private local Antigravity settings and conversation index; never commit.
-.antigravity-recovery/
+# Database — too large and constantly changing, don't commit
+Fast_Fetch/fast_fetch.db
+Fast_Fetch/fast_fetch.db-shm
+Fast_Fetch/fast_fetch.db-wal
+*.db
+*.db-shm
+*.db-wal
+
+# Generated catalog dumps. `fast_fetch.py export` and `export-html` write full
+# ledger rows — site names, hoster names, resource ids, final URLs — which is our
+# whole healing index. They belong on the operator's disk, not a public repo.
+Fast_Fetch/fast_fetch_export.*
+Fast_Fetch/database_view.html
+
+# Scratch/temp files
+Fast_Fetch/_fix_regex.py
+Fast_Fetch/_*.py
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Android / Gradle
+App/.gradle/
+App/local.properties
+*.jks
+
+# Logs
+*.log
+
+# Local Replit configuration; may contain sensitive values
+.replit

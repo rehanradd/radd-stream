@@ -1,4 +1,13 @@
-modules = ["python-base-3.13"]
+run = "python Fast_Fetch/fast_fetch.py stats"
+language = "python3"
+entrypoint = "Fast_Fetch/fast_fetch.py"
 
 [env]
-PATH = "/home/runner/workspace/.tools/antigravity/bin:$PATH"
+RADD_DB_PATH = "/home/runner/radd-stream/Fast_Fetch/fast_fetch.db"
+
+[[ports]]
+localPort = 8080
+externalPort = 80
+
+[interpreter]
+command = ["prybar-python3", "-q", "--ps1", "\u0001\u001b[33m\u0002\u0001\u001b[00m\u0002 ", "-i"]

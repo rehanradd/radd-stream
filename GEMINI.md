@@ -17,11 +17,20 @@ Building the world's most resilient, decentralized, and high-performance streami
    - Before launching, modifying, or killing any process, always check `ps aux | grep import_` to ensure active background crawlers remain running.
 3. **Pre-Push Quality Gate**:
    - Always run pre-push unit tests (`python3 -m unittest test_database test_vidout ...`) in `Fast_Fetch/` before pushing commits to GitHub.
+4. **MASTER-DISCIPLE LOCAL AI LAW (Celestial Qi / Token Conservation)**:
+   - You have accepted the local Inner Disciple: `qwen2.5-coder:1.5b` (running 100% offline and free via `/usr/local/bin/disciple` and `Fast_Fetch/disciple.py`).
+   - Whenever you need to draft code, write regexes, generate unit test fixtures, or build repetitive scraper helpers:
+     1. **Delegate first**: Call `disciple code "<task>"`, `disciple tests "<spec>"`, or `from disciple import draft_code, draft_tests`.
+     2. **Divine Review**: You (The Master) review the Disciple's draft for 100% Python stdlib compliance, security, and edge-case resilience.
+     3. **Test & Integrate**: Run the unit test suite before committing.
+   - **Never waste cloud tokens** generating boilerplate that local Qwen can write for free on the VM CPU.
 
 ## 3. Key Local Commands on Oracle VM
+- `disciple code [task]`: Draft Python code using local Qwen (0 cloud tokens).
+- `disciple tests [spec]`: Draft unit test cases using local Qwen (0 cloud tokens).
+- `ai [prompt]`: Unlimited, free, offline local coding AI running on Oracle VM CPU via Ollama (`qwen2.5-coder:1.5b`).
 - `sync-github [message]`: Runs unit tests, commits, and pushes directly to GitHub repository (`radddao/radd-stream`).
 - `backup-hf`: Snapshots all SQLite databases from `/home/ubuntu/radd-stream-data/` and uploads them to Hugging Face dataset `radddao/radd-stream-backups`.
-- `ai [prompt]`: Unlimited, free, offline local coding AI running on Oracle VM CPU via Ollama (`qwen2.5-coder:1.5b`).
 - `agy-session`: Reattaches to or starts a persistent Antigravity CLI session in tmux.
 - `workspace-url`: Displays the current active HTTPS Cloudflare tunnel URL and static IP.
 

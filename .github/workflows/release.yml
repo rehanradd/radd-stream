@@ -1,0 +1,186 @@
+name: 🚀 Release — Sign & Publish APK + AAB
+
+# WHAT THIS DOES
+#   On a version tag push (v1.2.3, v1.2.3-beta1, ...) it builds a SIGNED release
+#   APK and AAB, cryptographically VERIFIES the APK signature with apksigner,
+#   publishes SHA-256 checksums, and attaches everything to a GitHub Release.
+#   It can also be run manually (workflow_dispatch) against an existing tag.
+#
+# WHAT IT NEEDS
+#   All four repo secrets: KEYSTORE_BASE64, KEY_STORE_PASSWORD, KEY_ALIAS,
+#   KEY_PASSWORD. If ANY of them is missing the run FAILS LOUDLY at step 1 —
+#   it never silently produces an unsigned artifact (the old workflow's worst
+#   failure: App/app/build.gradle.kts only wires signingConfig when
+#   KEYSTORE_BASE64 is set, so a missing secret used to yield an "release" APK
+#   that was actually unsigned and got published as signed).
+#   As belt-and-braces, apksigner verify runs against the finished APK and the
+#   build fails if it is not signed.
+#
+# DESIGN DECISIONS (2026)
+#   * Secrets are injected into single steps via `env:` (the documented Gradle
+#     contract reads System.getenv). They are never echoed, never written to a
+#     command line, and never interpolated into URLs. Actions masks them in
+#     logs automatically; nothing is masked by hand.
+#   * Version comes from the tag via $GITHUB_REF (bash parameter expansion of
+#     an env var, not ${{ }} interpolation into shell). build.gradle.kts reads
+#     VERSION_NAME / VERSION_CODE ENV VARS — the previous workflow passed them
+#     as `-P` project properties, which the build script ignores; that dead
+#     flag is removed here.
+#   * Same explicit setup-java → setup-android ordering as ci.yml, and the same
+#     content-addressed ~/.gradle-only cache strategy (see ci.yml header).
+#   * Actions pinned to full commit SHAs.
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write   # required by softprops/action-gh-release to create the Release
+
+jobs:
+  release:
+    name: Build signed APK + AAB, verify, publish
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    # Intentionally NO cancel-in-progress: a release must not be killed mid-publish.
+
+    steps:
+      - name: 📥 Checkout tag
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - name: 🗝️ Verify signing secrets are present (fail loudly if not)
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEY_STORE_PASSWORD: ${{ secrets.KEY_STORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          missing=""
+          [ -n "$KEYSTORE_BASE64" ]     || missing="$missing KEYSTORE_BASE64"
+          [ -n "$KEY_STORE_PASSWORD" ]  || missing="$missing KEY_STORE_PASSWORD"
+          [ -n "$KEY_ALIAS" ]           || missing="$missing KEY_ALIAS"
+          [ -n "$KEY_PASSWORD" ]        || missing="$missing KEY_PASSWORD"
+          if [ -n "$missing" ]; then
+            echo "::error::Release signing secrets missing:$missing — refusing to publish an unsigned artifact. Add them under Settings → Secrets → Actions."
+            exit 1
+          fi
+          echo "All four keystore secrets present (values not printed)."
+
+      - name: 🏷️ Extract version from tag
+        id: tag_info
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          VERSION="${TAG#v}"
+          # Validate shape before arithmetic (tag glob already constrains it).
+          case "$VERSION" in
+            *[!0-9a-zA-Z.\-+]*) echo "::error::Unexpected tag name format"; exit 1;;
+          esac
+          BASE="${VERSION%%-*}"
+          MAJOR="${BASE%%.*}"; REST="${BASE#*.}"; MINOR="${REST%%.*}"; PATCH="${REST#*.}"
+          VERSION_CODE=$(( MAJOR * 100000 + MINOR * 1000 + PATCH ))
+          {
+            echo "tag=$TAG"
+            echo "version=$VERSION"
+            echo "version_code=$VERSION_CODE"
+          } >> "$GITHUB_OUTPUT"
+          echo "Building $TAG (versionCode $VERSION_CODE)"
+        # On workflow_dispatch the ref IS the selected tag, so $GITHUB_REF works there too.
+
+      - name: ☕ Set up JDK 17 (temurin)
+        uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad  # v6.1.0
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: 📦 Restore Gradle caches
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-java17-${{ hashFiles('App/gradle/wrapper/gradle-wrapper.properties', 'App/gradle/libs.versions.toml', 'App/**/*.gradle.kts', 'App/**/*.gradle', 'App/settings.gradle.kts') }}
+          restore-keys: |
+            gradle-${{ runner.os }}-java17-
+            gradle-${{ runner.os }}-
+
+      - name: 📱 Install Android SDK (platform-tools, android-35, build-tools 35.0.0)
+        uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd  # v4.0.4
+        with:
+          packages: "platform-tools platforms;android-35 build-tools;35.0.0"
+
+      - name: 🔧 Make gradlew executable
+        run: chmod +x App/gradlew
+
+      - name: 🧪 Unit tests gate the release
+        working-directory: App
+        run: ./gradlew :app:testDebugUnitTest :app:testReleaseUnitTest --no-daemon --stacktrace --console=plain
+
+      - name: 🏗️ Build signed release APK + AAB
+        working-directory: App
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEY_STORE_PASSWORD: ${{ secrets.KEY_STORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+          VERSION_NAME: ${{ steps.tag_info.outputs.version }}
+          VERSION_CODE: ${{ steps.tag_info.outputs.version_code }}
+        run: |
+          ./gradlew :app:assembleRelease :app:bundleRelease \
+            --no-daemon --stacktrace --console=plain
+
+      - name: ✅ Verify APK is really signed (apksigner)
+        run: |
+          APK="App/app/build/outputs/apk/release/app-release.apk"
+          test -f "$APK" || { echo "::error::$APK missing after assembleRelease"; exit 1; }
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --print-certs "$APK"
+          # AAB carries jar signatures; assert they exist (apksigner does not take .aab).
+          AAB="App/app/build/outputs/bundle/release/app-release.aab"
+          test -f "$AAB" || { echo "::error::$AAB missing after bundleRelease"; exit 1; }
+          unzip -l "$AAB" | grep -E 'META-INF/.*\.(RSA|DSA|EC)' >/dev/null \
+            || { echo "::error::AAB is not signed"; exit 1; }
+
+      - name: 🔢 Compute SHA-256 checksums
+        run: |
+          cd App/app/build/outputs
+          {
+            sha256sum apk/release/app-release.apk bundle/release/app-release.aab
+          } > /tmp/checksums.txt
+          cat /tmp/checksums.txt   # checksums are public data, safe to log
+
+      - name: 📂 Stage artifacts with versioned names
+        env:
+          VERSION: ${{ steps.tag_info.outputs.version }}
+        run: |
+          DIR=dist
+          mkdir -p "$DIR"
+          cp "App/app/build/outputs/apk/release/app-release.apk"  "$DIR/radd-stream-${VERSION}.apk"
+          cp "App/app/build/outputs/bundle/release/app-release.aab" "$DIR/radd-stream-${VERSION}.aab"
+          cp /tmp/checksums.txt "$DIR/radd-stream-${VERSION}-SHA256SUMS.txt"
+          ls -la "$DIR"
+
+      - name: 🎉 Publish GitHub Release
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64  # v3.0.3
+        with:
+          tag_name: ${{ steps.tag_info.outputs.tag }}
+          name: "RADD Stream ${{ steps.tag_info.outputs.tag }}"
+          generate_release_notes: true
+          prerelease: ${{ contains(steps.tag_info.outputs.version, '-') }}
+          files: |
+            dist/radd-stream-*.apk
+            dist/radd-stream-*.aab
+            dist/radd-stream-*-SHA256SUMS.txt
+          body: |
+            ## 📱 RADD Stream ${{ steps.tag_info.outputs.tag }}
+
+            Built by GitHub Actions from commit `${{ github.sha }}` and **verified
+            signed** with `apksigner verify`.
+
+            | Artifact | Purpose |
+            |---|---|
+            | `radd-stream-${{ steps.tag_info.outputs.version }}.apk` | Direct sideload on Android 5.0+ (API 21) |
+            | `radd-stream-${{ steps.tag_info.outputs.version }}.aab` | Play Store / split-APK tooling |
+            | `radd-stream-${{ steps.tag_info.outputs.version }}-SHA256SUMS.txt` | Verify download integrity: `sha256sum -c` |
+
+            Install: download the APK, open it on the phone, allow "unknown sources" if prompted.
