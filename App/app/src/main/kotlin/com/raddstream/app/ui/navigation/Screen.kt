@@ -11,21 +11,32 @@ sealed class Screen(val route: String) {
     object Search : Screen("search")
     object MyList : Screen("my_list")
     object Settings : Screen("settings")
+    object Downloads : Screen("downloads")
+    object Browse : Screen("browse/{type}") {
+        const val ARG_TYPE = "type"
+        fun createRoute(type: String?): String = "browse/${type ?: "all"}"
+    }
     object Detail : Screen("detail/{postId}") {
         const val ARG_POST_ID = "postId"
         fun createRoute(postId: Int): String = "detail/$postId"
     }
-    object Player : Screen("player/{url}/{title}") {
-        const val ARG_URL = "url"
+    /**
+     * The player is addressed by the server's OPAQUE STREAM HANDLE, never by a URL: a route
+     * argument lands in the back stack, in saved state and in a deep link, so an address in
+     * here is an address that leaves the app. The handle resolves against our own
+     * `/api/v1/stream?id=…` redirector at playback time.
+     */
+    object Player : Screen("player/{streamId}/{title}") {
+        const val ARG_STREAM_ID = "streamId"
         const val ARG_TITLE = "title"
 
-        fun createRoute(streamUrl: String, title: String): String {
-            val encodedUrl = URLEncoder.encode(streamUrl, StandardCharsets.UTF_8.name())
+        fun createRoute(streamId: String, title: String): String {
+            val encodedHandle = URLEncoder.encode(streamId, StandardCharsets.UTF_8.name())
             val encodedTitle = URLEncoder.encode(title, StandardCharsets.UTF_8.name())
-            return "player/$encodedUrl/$encodedTitle"
+            return "player/$encodedHandle/$encodedTitle"
         }
 
-        fun decodeUrl(encoded: String): String =
+        fun decodeStreamId(encoded: String): String =
             try {
                 URLDecoder.decode(encoded, StandardCharsets.UTF_8.name())
             } catch (_: Exception) {

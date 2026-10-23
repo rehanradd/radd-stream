@@ -1,5 +1,6 @@
 import java.io.File
 import java.util.Base64
+import java.util.Properties
 
 plugins {
     alias(libs.plugins.android.application)
@@ -9,13 +10,75 @@ plugins {
     alias(libs.plugins.kotlin.kapt)
 }
 
-// ── Version (overridable from CI env vars) ────────────────────────────────────
-val versionNameFromEnv  = System.getenv("VERSION_NAME") ?: "0.1.0"
-val versionCodeFromEnv  = System.getenv("VERSION_CODE")?.toIntOrNull() ?: 1
+// ═════════════════════════════════════════════════════════════════════════════
+//  BRAND — one file re-skins this app: <repo root>/brand.properties
+// ═════════════════════════════════════════════════════════════════════════════
+//  Read with java.util.Properties (no plugin, no dependency) and fanned out to:
+//    • BuildConfig.BRAND_<KEY with '.' -> '_'>  (String, every key)
+//    • resValue("color",  ...)  for every resources.colors.* key
+//    • resValue("string", ...)  for the launcher label / wordmark strings
+//    • manifestPlaceholders["brandScheme"] for the deep-link <data android:scheme>
+//    • applicationId / namespace / versionName / versionCode / debug suffix
+//    • build/generated/assets/brand/brand.json, merged into assets at build time
+//      (Brand.kt reads that JSON at startup; it is generated, never hand-edited,
+//       and lives under build/ so it can never be committed by accident)
+//  The same file is read by Fast_Fetch/config.py with configparser. `[section]`
+//  header lines load as empty-valued keys whose name starts with '[' — skipped.
+val brandPropsFile = File(rootDir.parentFile, "brand.properties")
+if (!brandPropsFile.exists()) {
+    throw GradleException("brand.properties missing at $brandPropsFile — the app cannot be branded.")
+}
+val brandProps = Properties().apply { brandPropsFile.inputStream().use { load(it) } }
+val brandKeys = brandProps.stringPropertyNames().filter { !it.startsWith("[") }.sorted()
+
+fun brand(key: String, fallback: String): String =
+    (brandProps.getProperty(key) ?: "").trim().ifEmpty { fallback }
+
+fun brandInt(key: String, fallback: Int): Int = brand(key, "").toIntOrNull() ?: fallback
+
+fun brandField(key: String): String = "BRAND_" + key.uppercase().replace('.', '_').replace('-', '_')
+
+fun brandJsonEscape(value: String): String = buildString {
+    for (ch in value) when (ch) {
+        '\\' -> append("\\\\")
+        '"' -> append("\\\"")
+        '\n' -> append("\\n")
+        '\r' -> append("\\r")
+        '\t' -> append("\\t")
+        else -> if (ch < ' ') append("\\u%04x".format(ch.code)) else append(ch)
+    }
+}
+
+// Fail fast: a typo'd hex must break the build, not silently ship the old brand.
+val brandHexPattern = Regex("^#([0-9A-Fa-f]{6}|[0-9A-Fa-f]{8})$")
+brandKeys.filter { it.startsWith("colors.") || it.startsWith("resources.colors.") }.forEach { key ->
+    val hex = brand(key, "")
+    if (!brandHexPattern.matches(hex)) {
+        throw GradleException("brand.properties $key='$hex' is not #RRGGBB or #AARRGGBB")
+    }
+}
+
+val brandAssetsDir = File(layout.buildDirectory.get().asFile, "generated/assets/brand")
+
+
+// ── Version (brand.properties wins; CI env vars can still override) ──────────
+val versionNameFromEnv = System.getenv("VERSION_NAME") ?: brand("identity.version.name", "0.1.0")
+val versionCodeFromEnv = System.getenv("VERSION_CODE")?.toIntOrNull()
+    ?: brandInt("identity.version.code", 1)
+
+val brandApplicationId = brand("identity.application.id", "com.raddstream.app")
+val brandDebugSuffix = brand("identity.application.id.debug.suffix", ".debug")
 
 android {
-    namespace   = "com.raddstream.app"
+    namespace   = brand("identity.namespace", brandApplicationId)
     compileSdk  = 35
+
+    sourceSets {
+        getByName("main") {
+            // brand.json is generated into build/ by generateBrandAssets below.
+            assets.srcDir(brandAssetsDir)
+        }
+    }
 
     signingConfigs {
         create("release") {
@@ -37,7 +100,7 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.raddstream.app"
+        applicationId = brandApplicationId
         minSdk        = 21
         targetSdk     = 35
         versionCode   = versionCodeFromEnv
@@ -45,11 +108,35 @@ android {
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
+
+        // Deep-link scheme, consumed by AndroidManifest.xml as ${brandScheme}.
+        manifestPlaceholders["brandScheme"] = brand("deeplink.scheme", "radd")
+
+        // Every brand key becomes BuildConfig.BRAND_<UPPER_SNAKE> (String).
+        // Brand.kt exposes typed accessors; Color.kt / Type.kt read the hexes
+        // and type scale from here, so no Kotlin file carries a brand literal.
+        brandKeys.forEach { key ->
+            buildConfigField("String", brandField(key), "\"${brandJsonEscape(brand(key, ""))}\"")
+        }
+
+        // XML-side colours (themes.xml, launcher layers, splash) reference
+        // @color/<name>; res/values/colors.xml no longer declares them.
+        brandKeys.filter { it.startsWith("resources.colors.") }.forEach { key ->
+            resValue("color", key.removePrefix("resources.colors."), brand(key, "#000000"))
+        }
+
+        // XML-side strings. @string/brand_app_name is the manifest label, so the
+        // launcher name comes from brand.properties, not res/values/strings.xml.
+        resValue("string", "brand_app_name", brand("identity.name", "RADD Stream"))
+        resValue("string", "brand_app_name_short", brand("identity.name.short", brand("identity.name", "RADD Stream")))
+        resValue("string", "brand_wordmark_first", brand("identity.name.wordmark.first", "Radd"))
+        resValue("string", "brand_wordmark_second", brand("identity.name.wordmark.second", "Stream"))
+        resValue("string", "brand_tagline", brand("identity.tagline", ""))
     }
 
     buildTypes {
         debug {
-            applicationIdSuffix = ".debug"
+            applicationIdSuffix = brandDebugSuffix
             isDebuggable        = true
             isMinifyEnabled     = false
         }
@@ -87,6 +174,40 @@ android {
         }
     }
 }
+
+// ── brand.json: generated asset, single runtime source for Brand.kt ──────────
+// Flat JSON object of every brand key. Regenerated on every build whenever
+// brand.properties changes, and merged into the APK assets via the sourceSets
+// entry above, so copy strings / TTLs / flags can be read at startup.
+val generateBrandAssets = tasks.register("generateBrandAssets") {
+    description = "Render brand.json into the merged assets from brand.properties"
+    group = "branding"
+    inputs.file(brandPropsFile)
+    outputs.dir(brandAssetsDir)
+    doLast {
+        brandAssetsDir.mkdirs()
+        val json = buildString {
+            appendLine("{")
+            appendLine("  \"_generated\": \"by :app:generateBrandAssets from /brand.properties — DO NOT HAND-EDIT\",")
+            appendLine("  \"_brandFile\": \"${brandJsonEscape(brandPropsFile.absolutePath)}\",")
+            brandKeys.forEachIndexed { index, key ->
+                val terminator = if (index == brandKeys.lastIndex) "" else ","
+                append("  \"")
+                append(brandJsonEscape(key))
+                append("\": \"")
+                append(brandJsonEscape(brand(key, "")))
+                appendLine("\"$terminator")
+            }
+            appendLine("}")
+        }
+        File(brandAssetsDir, "brand.json").writeText(json)
+        logger.lifecycle("[brand] ${brand("identity.name", "?")} v${brand("identity.version.name", "?")} " +
+            "appId=${brand("identity.application.id", "?")} scheme=${brand("deeplink.scheme", "radd")} " +
+            "primary=${brand("colors.dark.primary", "?")} keys=${brandKeys.size}")
+    }
+}
+
+tasks.named("preBuild") { dependsOn(generateBrandAssets) }
 
 dependencies {
     // ── Compose BOM (all Compose versions in sync) ────────────────────────────

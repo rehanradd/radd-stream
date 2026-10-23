@@ -1,20 +1,21 @@
 package com.raddstream.app.ui.screens
 
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.FavoriteBorder
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
@@ -23,17 +24,13 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.raddstream.app.ui.components.EmptyState
 import com.raddstream.app.ui.components.PosterCard
-import com.raddstream.app.ui.theme.AccentPrimary
-import com.raddstream.app.ui.theme.AccentSecondary
-import com.raddstream.app.ui.theme.BackgroundDark
-import com.raddstream.app.ui.theme.OnBackground
-import com.raddstream.app.ui.theme.OnSurfaceMuted
+import com.raddstream.app.ui.components.PosterGridSkeleton
+import com.raddstream.app.viewmodel.ListSort
 import com.raddstream.app.viewmodel.MyListViewModel
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -45,62 +42,48 @@ fun MyListScreen(
     val state by viewModel.uiState.collectAsState()
 
     Scaffold(
-        containerColor = BackgroundDark,
+        containerColor = MaterialTheme.colorScheme.background,
         topBar = {
             TopAppBar(
-                title = { Text("My List", color = OnBackground) },
+                title = { Text("My List") },
             )
         },
     ) { contentPadding ->
         when {
-            state.isLoading -> {
-                Box(
+            state.isLoading -> PosterGridSkeleton(modifier = Modifier.fillMaxSize().padding(contentPadding))
+            state.favorites.isEmpty() -> EmptyState(
+                title = "Your list is empty",
+                message = "Tap the heart on any movie or series to save it here for quick access.",
+                icon = {
+                    Icon(
+                        Icons.Default.FavoriteBorder,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.secondary,
+                        modifier = Modifier.size(40.dp),
+                    )
+                },
+                modifier = Modifier.padding(contentPadding),
+            )
+            else -> Column(Modifier.fillMaxSize().padding(contentPadding)) {
+                Row(
                     modifier = Modifier
-                        .fillMaxSize()
-                        .padding(contentPadding),
-                    contentAlignment = Alignment.Center,
+                        .fillMaxWidth()
+                        .heightIn(min = 48.dp)
+                        .padding(horizontal = 16.dp, vertical = 4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    CircularProgressIndicator(color = AccentPrimary)
-                }
-            }
-            state.favorites.isEmpty() -> {
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(contentPadding)
-                        .padding(32.dp),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Icon(
-                            imageVector = Icons.Default.FavoriteBorder,
-                            contentDescription = null,
-                            tint = AccentSecondary.copy(alpha = 0.6f),
-                            modifier = Modifier.padding(bottom = 12.dp),
-                        )
-                        Text(
-                            text = "Your list is empty",
-                            style = MaterialTheme.typography.titleMedium,
-                            color = OnBackground,
-                        )
-                        Spacer(Modifier.height(6.dp))
-                        Text(
-                            text = "Tap the heart icon on any movie or series to save it here for quick access.",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = OnSurfaceMuted,
-                            textAlign = TextAlign.Center,
+                    ListSort.entries.forEach { sort ->
+                        FilterChip(
+                            selected = state.sort == sort,
+                            onClick = { viewModel.setSort(sort) },
+                            label = { Text(sort.label) },
                         )
                     }
                 }
-            }
-            else -> {
                 LazyVerticalGrid(
-                    columns = GridCells.Fixed(2),
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(contentPadding)
-                        .padding(horizontal = 16.dp),
-                    contentPadding = PaddingValues(top = 8.dp, bottom = 24.dp),
+                    columns = GridCells.Adaptive(minSize = 120.dp),
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(top = 8.dp, bottom = 24.dp, start = 16.dp, end = 16.dp),
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
                     verticalArrangement = Arrangement.spacedBy(14.dp),
                 ) {
@@ -108,6 +91,7 @@ fun MyListScreen(
                         PosterCard(
                             post = post,
                             onClick = { onPostClick(post.id) },
+                            onLongClick = { viewModel.removeFavorite(post.id) },
                         )
                     }
                 }

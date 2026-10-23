@@ -1,6 +1,5 @@
 package com.raddstream.app.network
 
-import com.google.gson.Gson
 import com.raddstream.app.data.local.FavoritePost
 import com.raddstream.app.network.models.Post
 import com.raddstream.app.network.models.PostDetail
@@ -15,7 +14,9 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ModelsTest {
-    private val gson = Gson()
+    // Decode with the app's real Gson configuration (lenient Int/Boolean adapters); a bare
+    // Gson() does not match production and crashes on the 0/1-vs-boolean wire spellings.
+    private val gson = buildRaddGson()
 
     @Test
     fun `posts response maps backend pagination and result names`() {
@@ -44,7 +45,8 @@ class ModelsTest {
         assertEquals(31, response.total)
         assertEquals(2, response.totalPages)
         assertEquals(1, response.results.size)
-        assertEquals("2024", response.results.single().year)
+        // year is numeric on the wire (INTEGER affinity), so it decodes to Int.
+        assertEquals(2024, response.results.single().year)
         assertEquals("example title", response.results.single().cleanTitle)
     }
 
@@ -55,7 +57,9 @@ class ModelsTest {
             Post::class.java,
         )
 
-        assertEquals("2017–2019", post.year)
+        // A text year range must not crash decoding; LenientIntAdapter takes the first
+        // digit run ("2017–2019" → 2017) and everything unparseable would be null.
+        assertEquals(2017, post.year)
         assertNull(post.posterUrl)
         assertNull(post.imdbRating)
     }
@@ -81,8 +85,10 @@ class ModelsTest {
                       {
                         "id": 501,
                         "release_id": 1,
-                        "source_name": "⚡ Gofile",
-                        "service": "gofile",
+                        "stream_id": "s1.abcdef",
+                        "play_url": "http://127.0.0.1:8080/api/v1/stream?id=s1.abcdef",
+                        "label": "Fast direct",
+                        "kind": "direct",
                         "status": "active"
                       }
                     ]
@@ -103,26 +109,35 @@ class ModelsTest {
         val release = data.releases.first()
         assertEquals("1080p WEB-DL", release.quality)
         assertEquals(1, release.sources.size)
-        assertEquals("⚡ Gofile", release.sources.first().sourceName)
+        val source = release.sources.first()
+        assertEquals("s1.abcdef", source.streamId)
+        assertEquals("Fast direct", source.label)
+        assertEquals("direct", source.kind)
     }
 
     @Test
-    fun `stream response maps url and temporary status`() {
+    fun `stream response carries only our own handle and never a served address`() {
         val json = """
             {
               "success": true,
-              "url": "https://stream.example/video.mp4",
-              "service": "pixeldrain",
-              "is_temporary": 0
+              "stream_id": "s1.abcdef",
+              "kind": "direct",
+              "mime_type": "video/mp4",
+              "expires_in": 3600,
+              "url": "https://upstream.example/video.mp4",
+              "service": "pixeldrain"
             }
         """.trimIndent()
 
         val response = gson.fromJson(json, StreamResponse::class.java)
 
         assertTrue(response.success)
-        assertEquals("https://stream.example/video.mp4", response.url)
-        assertEquals("pixeldrain", response.service)
-        assertEquals(0, response.isTemporary)
+        assertEquals("s1.abcdef", response.streamId)
+        assertEquals(3600L, response.expiresIn)
+        // The model has no url/service field at all: a payload key the server no longer
+        // sends must not be reachable through the wire type either.
+        assertEquals(emptyList<String>(), StreamResponse::class.java.declaredFields
+            .map { it.name }.filter { it in setOf("url", "service", "sourceName") })
     }
 
     @Test
@@ -131,11 +146,10 @@ class ModelsTest {
             id = 77,
             title = "Sample Movie",
             cleanTitle = "Sample",
-            year = "2023",
+            year = 2023,
             contentType = "movie",
             posterUrl = "https://example.com/poster.jpg",
             imdbRating = "8.1",
-            sourceSite = "vegamovies",
         )
 
         val favorite = FavoritePost.fromPost(post)

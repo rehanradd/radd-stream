@@ -672,3 +672,107 @@ the state actually present in `App/app/src` and `Fast_Fetch/viewer.py`. The prio
 sections against the code again rather than trusting prose.
 
 
+
+---
+
+## 15. Re-Skinning The Product From ONE File (`/brand.properties`)
+
+`<repo root>/brand.properties` is the single brand source for **both** the
+Android build and the Python server. It is flat `key=value`, sectioned with
+`[group]` headers, and read natively by `java.util.Properties` (Gradle) and
+`configparser` (`Fast_Fetch/config.py`) — no new dependency on either side.
+
+Procedure (the whole job):
+
+1. Edit `/brand.properties` — identity, colour ramps, scheme behaviour, copy
+   strings, deep-link scheme, user-agent token, feature flags, cache TTLs,
+   storage limits.
+2. Rebuild the app (GitHub Actions, or `./gradlew :app:assembleDebug` on a
+   machine with the SDK — remember §1: CI is the normal path).
+   `:app:generateBrandAssets` renders `brand.json` into
+   `app/build/generated/assets/brand/` (merged into the APK assets, never
+   committed, never hand-edited), `app/build.gradle.kts` emits
+   `BuildConfig.BRAND_<KEY>`, `resValue` colours/strings and the
+   `${brandScheme}` manifest placeholder, and `settings.gradle.kts` renames the
+   Gradle project from `identity.name`.
+3. Restart the server: `Fast_Fetch/config.py` re-exports the `[server]` section
+   as `PROJECT_NAME` / `PROJECT_VERSION` / `PROJECT_DESCRIPTION` /
+   `PROJECT_GITHUB` (existing importers such as `fast_fetch.py:50` and
+   `viewer.py` are unchanged), plus `BRAND`, `BRAND_COPY`, `BRAND_FEATURES`,
+   `BRAND_TTL`, `BRAND_STORAGE`, `BRAND_COLORS_*`.
+4. Run `./gradlew :app:testDebugUnitTest --tests '*BrandDriftTest*'` (or let CI).
+
+Kotlin side of the brand:
+
+| Want | Use |
+|---|---|
+| app / short / wordmark name | `Brand.name`, `Brand.shortName`, `Brand.wordmarkFirst/Second` |
+| user-visible prose | `Brand.copy("offline_notice", fallback, "title" to t)` |
+| deep-link URI | `Brand.deepLinkUri("detail/$id")` |
+| player User-Agent | `Brand.userAgent` |
+| TTL / storage limits | `Brand.catalogTtlSeconds`, `Brand.offlineMaxBytes`, … |
+| colours | `MaterialTheme.colorScheme.<role>` → `Radd*` vals in `ui/theme/Color.kt`, which read `brandColor(BuildConfig.BRAND_COLORS_*)` |
+| text size | `brandSp(14)` in `ui/theme/Type.kt` (× `typography.scale`) |
+
+`Brand` falls back to the compiled `BuildConfig` constants, so it is correct
+before `RaddStreamApplication.onCreate()` calls `Brand.load(this)`; after that
+call the runtime `brand.json` snapshot wins. `BrandDriftTest`
+(`app/src/test/kotlin/com/raddstream/app/brand/`) is a plain JUnit4/JVM test —
+no Robolectric — that fails on hardcoded brand names, raw `Color(0x…)` literals
+outside `ui/theme/Color.kt`, hardcoded `radd://` schemes, brand hexes that are
+not valid, re-declared colours in `res/values/colors.xml`, a manifest that stops
+using the generated label/placeholder, copy strings that still name an old
+brand, and on any growth of its explicit "pending migration" lists.
+
+### What genuinely cannot come from one file (be honest about this)
+
+1. **Binary PNG launcher mipmaps.** `mipmap-{m,h,xh,xxh,xxxh}dpi/ic_launcher*.png`
+   (and the `_round` twins) are pixel bitmaps, not text; a re-skin must still
+   replace those 10 PNGs by hand. The adaptive vector pair
+   (`mipmap-anydpi-v26/ic_launcher.xml` + `drawable/ic_launcher_{background,foreground,monochrome}.xml`)
+   *is* brand-driven — it references `@color/radd_launcher_top`,
+   `@color/radd_launcher_bottom`, `@color/radd_current`, all generated from this
+   file. (Those drawables still carry literal hexes today; converting them to the
+   `@color/` references is a one-line-per-stop edit.)
+2. **Manifest-registered components.** Activities, services, providers,
+   permissions and the `Theme.RaddStream` style name must be literal in
+   `AndroidManifest.xml` (AGP requires it). Brand controls only their **label**
+   (`@string/brand_app_name`), **icon**, **theme colour** and **deep-link
+   scheme** through generated values.
+3. **The `.jks` signing key** and any resource name a re-brand would have to
+   rename (`RaddStreamApi`, `com.raddstream.app` package) stay as-is; brand
+   changes what users see, not internal identifiers.
+
+---
+
+### Session 7 — Phase 3: single-file branding (2026-10-23)
+
+**Status:** brand pipeline implemented on both sides; Android tree still does not
+compile because of other workstreams, so nothing was verified by Gradle here.
+
+**Created:** `/brand.properties` (135 keys), `App/app/src/main/kotlin/com/raddstream/app/brand/Brand.kt`,
+`App/app/src/test/kotlin/com/raddstream/app/brand/BrandDriftTest.kt`.
+**Changed:** `App/app/build.gradle.kts` (Properties read, BuildConfig/resValue/
+manifestPlaceholder/sourceSet assets/`generateBrandAssets`), `App/settings.gradle.kts`
+(`rootProject.name` from brand), `AndroidManifest.xml` (generated label +
+`${brandScheme}`), `res/values/colors.xml` (emptied — names are generated),
+`res/values/themes.xml` (doc), `ui/theme/Color.kt` (51 brand hexes now via
+`brandColor(BuildConfig.…)`), `ui/theme/Theme.kt` (no raw paints; defaults from
+`[scheme]`), `ui/theme/Type.kt` (`brandSp` × `typography.scale`, brand font
+roles), `ui/theme/RaddMark.kt`, `ui/screens/HomeScreen.kt`,
+`ui/screens/SettingsScreen.kt` (name/copy/version from `Brand`),
+`Fast_Fetch/config.py` (brand reader, all old constants intact),
+`Fast_Fetch/viewer.py:28-30` (imports `BASE_DIR`/`DB_PATH` from config).
+
+**Verified:** both parsers load the file with identical values (`java` +
+`python3` spot-checks); `python3 -S -c "import config, fast_fetch, viewer"` OK;
+every `BuildConfig.BRAND_*` referenced in Kotlin maps to a real key; the
+BrandDriftTest assertions were re-implemented in a throwaway script and pass.
+**Not verified:** no JDK/Android SDK build was run (`gradlew`), so
+`BrandDriftTest`, `Brand.kt`, and the Gradle script are unexecuted; Kotlin syntax
+was reviewed by hand only.
+**Next agent should:** call `Brand.load(this)` in `RaddStreamApplication.onCreate()`,
+migrate the 7 pending brand-name files + `NavGraph.kt` `radd://` literals +
+`PlayerScreen.kt` raw paints, delete the now-unused `res/values/strings.xml`
+`app_name`, point `ic_launcher_*.xml` at `@color/radd_launcher_*`, and add
+`-keep class com.raddstream.app.BuildConfig { *; }` to `proguard-rules.pro`.

@@ -15,11 +15,17 @@
     <!-- Keep screen on during playback -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
 
+    <!--
+      Brand: android:label and the deep-link scheme below are generated from
+      /brand.properties (resValue "brand_app_name" + manifestPlaceholder
+      "brandScheme"). Registered components themselves must stay literal here —
+      AGP requires that — but their name shown to users comes from the brand file.
+    -->
     <application
         android:name=".RaddStreamApplication"
         android:allowBackup="true"
         android:icon="@mipmap/ic_launcher"
-        android:label="@string/app_name"
+        android:label="@string/brand_app_name"
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:theme="@style/Theme.RaddStream"
@@ -39,12 +45,12 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
 
-            <!-- Deep link: radd://stream/12345 -->
+            <!-- Deep link: <brand.deeplink.scheme>://stream/12345 (brand.properties) -->
             <intent-filter android:autoVerify="true">
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
-                <data android:scheme="radd" />
+                <data android:scheme="${brandScheme}" />
             </intent-filter>
         </activity>
 

@@ -15,18 +15,16 @@ data class FavoritePost(
     val contentType: String? = null,
     val posterUrl: String? = null,
     val imdbRating: String? = null,
-    val sourceSite: String? = null,
     val addedAt: Long = System.currentTimeMillis(),
 ) {
     fun toPost(): Post = Post(
         id = id,
         title = title,
         cleanTitle = cleanTitle,
-        year = year,
+        year = year?.toIntOrNull(),
         contentType = contentType,
         posterUrl = posterUrl,
         imdbRating = imdbRating,
-        sourceSite = sourceSite,
     )
 
     companion object {
@@ -34,22 +32,20 @@ data class FavoritePost(
             id = post.id,
             title = post.title,
             cleanTitle = post.cleanTitle,
-            year = post.year,
+            year = post.year?.toString(),
             contentType = post.contentType,
             posterUrl = post.posterUrl,
             imdbRating = post.imdbRating,
-            sourceSite = post.sourceSite,
         )
 
         fun fromPostDetail(detail: PostDetail): FavoritePost = FavoritePost(
             id = detail.id,
             title = detail.title,
             cleanTitle = detail.cleanTitle,
-            year = detail.year,
+            year = detail.year?.toString(),
             contentType = detail.contentType,
             posterUrl = detail.posterUrl,
             imdbRating = detail.imdbRating,
-            sourceSite = detail.sourceSite,
         )
     }
 }

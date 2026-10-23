@@ -20,20 +20,20 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.OpenInNew
 import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
@@ -43,8 +43,8 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
@@ -68,25 +68,25 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import coil.compose.AsyncImage
 import com.raddstream.app.network.models.PostDetail
-import com.raddstream.app.network.models.ReleaseDetail
-import com.raddstream.app.network.models.SourceDetail
-import com.raddstream.app.ui.theme.AccentGold
-import com.raddstream.app.ui.theme.AccentPrimary
-import com.raddstream.app.ui.theme.AccentSecondary
-import com.raddstream.app.ui.theme.BackgroundDark
-import com.raddstream.app.ui.theme.OnBackground
-import com.raddstream.app.ui.theme.OnSurface
-import com.raddstream.app.ui.theme.OnSurfaceMuted
-import com.raddstream.app.ui.theme.SurfaceDark
-import com.raddstream.app.ui.theme.SurfaceVariantDark
+import com.raddstream.app.ui.components.CapabilityChip
+import com.raddstream.app.ui.components.CamBadge
+import com.raddstream.app.ui.components.ErrorState
+import com.raddstream.app.ui.components.LoadingState
+import com.raddstream.app.ui.components.Pill
+import com.raddstream.app.ui.components.PrintQualityBadge
+import com.raddstream.app.ui.components.SectionHeader
 import com.raddstream.app.viewmodel.DetailNavigationEvent
 import com.raddstream.app.viewmodel.DetailViewModel
+import com.raddstream.app.viewmodel.EpisodeGroup
+import com.raddstream.app.viewmodel.RankedPrint
+import com.raddstream.app.viewmodel.SeasonGroup
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun DetailScreen(
     onBackClick: () -> Unit,
-    onPlayStream: (streamUrl: String, title: String) -> Unit,
+    onPlayStream: (streamId: String, title: String) -> Unit,
+    onOpenDownloads: () -> Unit = {},
     viewModel: DetailViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsState()
@@ -96,12 +96,9 @@ fun DetailScreen(
     LaunchedEffect(viewModel.navEvents) {
         viewModel.navEvents.collect { event ->
             when (event) {
-                is DetailNavigationEvent.PlayStream -> {
-                    onPlayStream(event.streamUrl, event.title)
-                }
-                is DetailNavigationEvent.OpenExternal -> {
-                    openInExternalPlayer(context, event.streamUrl)
-                }
+                is DetailNavigationEvent.PlayStream -> onPlayStream(event.streamId, event.title)
+                is DetailNavigationEvent.OpenExternal -> openInExternalPlayer(context, event.playUrl)
+                is DetailNavigationEvent.KeepPrint -> onOpenDownloads()
             }
         }
     }
@@ -114,7 +111,7 @@ fun DetailScreen(
     }
 
     Scaffold(
-        containerColor = BackgroundDark,
+        containerColor = MaterialTheme.colorScheme.background,
         snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             TopAppBar(
@@ -135,318 +132,291 @@ fun DetailScreen(
                         Icon(
                             imageVector = if (state.isFavorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
                             contentDescription = if (state.isFavorite) "Remove from My List" else "Add to My List",
-                            tint = if (state.isFavorite) AccentSecondary else OnSurface,
+                            tint = if (state.isFavorite) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.onSurface,
                         )
                     }
+                    IconButton(
+                        onClick = {
+                            val post = state.post
+                            if (post != null) shareTitle(context, post)
+                        },
+                    ) {
+                        Icon(Icons.Default.Share, contentDescription = "Share this title")
+                    }
                 },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = Color.Transparent,
-                    titleContentColor = OnBackground,
-                ),
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.background),
             )
         },
     ) { paddingValues ->
+        val post = state.post
         when {
-            state.isLoading -> {
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(paddingValues),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    CircularProgressIndicator(color = AccentPrimary)
-                }
-            }
-            state.error != null && state.post == null -> {
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(paddingValues),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        modifier = Modifier.padding(24.dp),
-                    ) {
-                        Text(
-                            text = state.error ?: "Unable to load title.",
-                            color = OnSurfaceMuted,
-                            textAlign = TextAlign.Center,
-                            style = MaterialTheme.typography.bodyMedium,
-                        )
-                        Spacer(Modifier.height(16.dp))
-                        OutlinedButton(onClick = viewModel::loadDetail) {
-                            Icon(Icons.Default.Refresh, contentDescription = null)
-                            Spacer(Modifier.width(8.dp))
-                            Text("Retry")
-                        }
-                    }
-                }
-            }
-            state.post != null -> {
-                val post = state.post!!
-                PostDetailContent(
-                    post = post,
-                    resolvingSourceId = state.resolvingSourceId,
-                    onPlaySource = { source, external -> viewModel.playSource(source, external) },
-                    contentPadding = paddingValues,
-                )
-            }
+            state.isLoading -> LoadingState(Modifier.padding(paddingValues))
+            state.error != null && post == null -> ErrorState(
+                message = state.error ?: "Unable to load title.",
+                onRetry = viewModel::loadDetail,
+                modifier = Modifier.padding(paddingValues),
+            )
+            post != null -> DetailContent(
+                post = post,
+                seasons = state.layout?.seasons ?: emptyList(),
+                workPrints = state.layout?.workPrints ?: emptyList(),
+                capabilities = state.layout?.capabilities ?: emptyList(),
+                officialPrintCount = state.layout?.officialPrintCount ?: 0,
+                camPrintCount = state.layout?.camPrintCount ?: 0,
+                isSeries = state.layout?.isSeriesLike ?: false,
+                selectedSeason = state.selectedSeason,
+                onSelectSeason = viewModel::selectSeason,
+                onPlayPrint = { print -> viewModel.playPrint(print, external = false) },
+                onOpenExternal = { print -> viewModel.playPrint(print, external = true) },
+                onKeep = viewModel::keepPrint,
+                contentPadding = paddingValues,
+            )
         }
     }
 }
 
 @Composable
-private fun PostDetailContent(
+private fun DetailContent(
     post: PostDetail,
-    resolvingSourceId: Int?,
-    onPlaySource: (SourceDetail, Boolean) -> Unit,
+    seasons: List<SeasonGroup>,
+    workPrints: List<RankedPrint>,
+    capabilities: List<String>,
+    officialPrintCount: Int,
+    camPrintCount: Int,
+    isSeries: Boolean,
+    selectedSeason: Int?,
+    onSelectSeason: (Int) -> Unit,
+    onPlayPrint: (RankedPrint) -> Unit,
+    onOpenExternal: (RankedPrint) -> Unit,
+    onKeep: (RankedPrint) -> Unit,
     contentPadding: PaddingValues,
 ) {
-    // If series, handle season filtering
-    val isSeries = post.contentType?.contains("series", ignoreCase = true) == true ||
-            post.contentType?.contains("season", ignoreCase = true) == true ||
-            post.releases.any { it.seasonNumber != null }
-
-    val seasons = remember(post.releases) {
-        post.releases.mapNotNull { it.seasonNumber }.distinct().sorted()
-    }
-    var selectedSeason by remember(seasons) {
-        mutableStateOf(seasons.firstOrNull())
-    }
-
-    val displayedReleases = remember(post.releases, selectedSeason, isSeries) {
-        if (isSeries && selectedSeason != null) {
-            post.releases.filter { it.seasonNumber == selectedSeason }
-        } else {
-            post.releases
-        }
-    }
+    val allPrints = (workPrints + seasons.flatMap { it.episodes.flatMap { e -> e.prints } } + seasons.flatMap { it.packedPrints })
+    val bestPrint = allPrints.maxByOrNull { it.rankKey }
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(
             top = contentPadding.calculateTopPadding(),
-            bottom = 32.dp,
+            bottom = 40.dp,
             start = 16.dp,
             end = 16.dp,
         ),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
-        // ── Poster & Header Info ──────────────────────────────────────
+        item { PosterHeader(post = post, capabilities = capabilities) }
+
         item {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(16.dp),
-            ) {
-                // Poster
-                Box(
-                    modifier = Modifier
-                        .width(120.dp)
-                        .aspectRatio(0.68f)
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(SurfaceVariantDark),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    if (!post.posterUrl.isNullOrBlank()) {
-                        AsyncImage(
-                            model = post.posterUrl,
-                            contentDescription = "${post.title} poster",
-                            modifier = Modifier.fillMaxSize(),
-                            contentScale = ContentScale.Crop,
-                        )
-                    } else {
-                        Text("No Poster", color = OnSurfaceMuted, style = MaterialTheme.typography.labelSmall)
-                    }
-                }
-
-                // Metadata Column
-                Column(
-                    modifier = Modifier.weight(1f),
-                    verticalArrangement = Arrangement.spacedBy(6.dp),
-                ) {
-                    Text(
-                        text = post.cleanTitle?.takeIf(String::isNotBlank) ?: post.title,
-                        style = MaterialTheme.typography.titleLarge,
-                        fontWeight = FontWeight.Bold,
-                        color = OnBackground,
-                        maxLines = 3,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-
-                    val metaList = listOfNotNull(
-                        post.year?.takeIf(String::isNotBlank),
-                        post.contentType?.replaceFirstChar { it.uppercase() }?.takeIf(String::isNotBlank),
-                        post.language?.takeIf(String::isNotBlank),
-                    )
-                    if (metaList.isNotEmpty()) {
-                        Text(
-                            text = metaList.joinToString(" • "),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = OnSurfaceMuted,
-                        )
-                    }
-
-                    post.imdbRating?.takeIf(String::isNotBlank)?.let { rating ->
-                        Surface(
-                            color = SurfaceDark,
-                            shape = RoundedCornerShape(6.dp),
-                        ) {
-                            Text(
-                                text = "★ $rating IMDb",
-                                color = AccentGold,
-                                style = MaterialTheme.typography.labelMedium,
-                                fontWeight = FontWeight.Bold,
-                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-                            )
-                        }
-                    }
-
-                    post.sourceSite?.takeIf(String::isNotBlank)?.let { site ->
-                        Text(
-                            text = "Catalog: $site",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = OnSurfaceMuted,
-                        )
-                    }
-                }
-            }
-        }
-
-        // ── Synopsis / Description ────────────────────────────────────
-        if (!post.synopsis.isNullOrBlank()) {
-            item {
-                Text(
-                    text = post.synopsis,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = OnSurface,
-                )
-            }
-        }
-
-        // ── Season selector for Series ────────────────────────────────
-        if (isSeries && seasons.size > 1) {
-            item {
-                Text(
-                    text = "Seasons",
-                    style = MaterialTheme.typography.titleMedium,
-                    color = OnBackground,
-                    fontWeight = FontWeight.SemiBold,
-                )
-                Spacer(Modifier.height(8.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    seasons.forEach { seasonNum ->
-                        FilterChip(
-                            selected = selectedSeason == seasonNum,
-                            onClick = { selectedSeason = seasonNum },
-                            label = { Text("Season $seasonNum") },
-                        )
-                    }
-                }
-            }
-        }
-
-        // ── Available Streams & Releases Header ───────────────────────
-        item {
-            Text(
-                text = "Available Releases & Sources",
-                style = MaterialTheme.typography.titleMedium,
-                color = OnBackground,
-                fontWeight = FontWeight.SemiBold,
+            PrimaryActions(
+                bestPrint = bestPrint,
+                hasAnyPrint = allPrints.isNotEmpty(),
+                onPlay = { bestPrint?.let(onPlayPrint) },
+                onKeep = { bestPrint?.let(onKeep) },
             )
         }
 
-        if (displayedReleases.isEmpty()) {
-            item {
-                Text(
-                    text = "No direct stream releases parsed for this title.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = OnSurfaceMuted,
-                )
-            }
-        } else {
-            items(displayedReleases, key = { it.id }) { release ->
-                ReleaseCard(
-                    release = release,
-                    resolvingSourceId = resolvingSourceId,
-                    onPlaySource = onPlaySource,
-                )
-            }
+        val synopsis = post.synopsis?.takeIf { it.isNotBlank() }
+        if (synopsis != null) {
+            item { ExpandableSynopsis(text = synopsis) }
         }
-    }
-}
 
-@Composable
-private fun ReleaseCard(
-    release: ReleaseDetail,
-    resolvingSourceId: Int?,
-    onPlaySource: (SourceDetail, Boolean) -> Unit,
-) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(12.dp),
-        colors = CardDefaults.cardColors(containerColor = SurfaceDark),
-    ) {
-        Column(
-            modifier = Modifier.padding(14.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-            // Quality & specs row
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                val qualityTag = listOfNotNull(
-                    release.resolution?.takeIf(String::isNotBlank),
-                    release.quality?.takeIf(String::isNotBlank),
-                ).joinToString(" ").ifBlank { "Direct Stream" }
+        // Print-first summary line (owner brief: "4 official prints available").
+        item {
+            PrintSummary(officialPrintCount = officialPrintCount, camPrintCount = camPrintCount)
+        }
 
-                Text(
-                    text = qualityTag,
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold,
-                    color = AccentPrimary,
-                )
-
-                val extraInfo = listOfNotNull(
-                    release.size?.takeIf(String::isNotBlank),
-                    release.codec?.takeIf(String::isNotBlank),
-                ).joinToString(" • ")
-
-                if (extraInfo.isNotBlank()) {
-                    Text(
-                        text = extraInfo,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = OnSurfaceMuted,
+        if (isSeries) {
+            if (seasons.size > 1) {
+                item { SeasonChips(seasons = seasons, selectedSeason = selectedSeason, onSelect = onSelectSeason) }
+            }
+            val season = seasons.firstOrNull { it.number == selectedSeason } ?: seasons.firstOrNull()
+            if (season != null) {
+                if (season.packedPrints.isNotEmpty()) {
+                    item {
+                        PackedSeasonBanner(
+                            season = season,
+                            onPlay = onPlayPrint,
+                            onKeep = onKeep,
+                        )
+                    }
+                }
+                items(season.episodes, key = { "ep-${season.number}-${it.numberWithinSeason}" }) { episode ->
+                    EpisodeRow(
+                        episode = episode,
+                        onPlayPrint = onPlayPrint,
+                        onOpenExternal = onOpenExternal,
+                        onKeep = onKeep,
                     )
                 }
             }
-
-            if (release.episodeNumber != null) {
-                Text(
-                    text = "Episode ${release.episodeNumber}: ${release.episodeTitle ?: ""}".trimEnd(':', ' '),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = OnSurface,
-                )
-            }
-
-            // Sources list
-            if (release.sources.isNotEmpty()) {
-                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    release.sources.forEach { source ->
-                        SourceRow(
-                            source = source,
-                            isResolving = resolvingSourceId == source.id,
-                            onPlay = { external -> onPlaySource(source, external) },
-                        )
-                    }
+        } else {
+            if (workPrints.isEmpty()) {
+                item {
+                    Text(
+                        "No playable releases are attached to this title on the connected server yet.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
             } else {
-                Text(
-                    text = "No direct download mirrors currently attached.",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = OnSurfaceMuted,
+                items(workPrints, key = { "print-${it.releaseId}" }) { print ->
+                    PrintCard(
+                        print = print,
+                        onPlayPrint = onPlayPrint,
+                        onOpenExternal = onOpenExternal,
+                        onKeep = onKeep,
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun PosterHeader(post: PostDetail, capabilities: List<String>) {
+    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+        Box(
+            modifier = Modifier
+                .width(120.dp)
+                .aspectRatio(0.68f)
+                .clip(RoundedCornerShape(12.dp))
+                .background(MaterialTheme.colorScheme.surfaceVariant),
+            contentAlignment = Alignment.Center,
+        ) {
+            if (!post.posterUrl.isNullOrBlank()) {
+                AsyncImage(
+                    model = post.posterUrl,
+                    contentDescription = "${post.cleanTitle ?: post.title} poster",
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Crop,
+                )
+            } else {
+                Text("No poster", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.labelMedium)
+            }
+        }
+
+        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text(
+                text = post.cleanTitle?.takeIf(String::isNotBlank) ?: post.title,
+                style = MaterialTheme.typography.headlineMedium,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onBackground,
+                maxLines = 3,
+                overflow = TextOverflow.Ellipsis,
+            )
+            val meta = listOfNotNull(
+                post.year?.takeIf { it > 0 }?.toString(),
+                post.contentType?.replaceFirstChar { it.uppercase() }?.takeIf(String::isNotBlank),
+                post.language?.takeIf(String::isNotBlank),
+            )
+            if (meta.isNotEmpty()) {
+                Text(meta.joinToString(" · "), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            post.imdbRating?.takeIf(String::isNotBlank)?.let { rating ->
+                Pill(text = "★ $rating IMDb", backgroundColor = MaterialTheme.colorScheme.tertiaryContainer, contentColor = MaterialTheme.colorScheme.onTertiaryContainer)
+            }
+            val genres = post.genres?.split(",")?.map { it.trim() }?.filter { it.isNotBlank() }.orEmpty()
+            if (genres.isNotEmpty()) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    genres.forEach { CapabilityChip(it) }
+                }
+            }
+            if (capabilities.isNotEmpty()) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    capabilities.forEach { CapabilityChip(it) }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun PrimaryActions(
+    bestPrint: RankedPrint?,
+    hasAnyPrint: Boolean,
+    onPlay: () -> Unit,
+    onKeep: () -> Unit,
+) {
+    Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
+        Button(
+            onClick = onPlay,
+            enabled = bestPrint?.playableHere == true,
+            modifier = Modifier.weight(1f).height(52.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
+        ) {
+            Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(20.dp))
+            Spacer(Modifier.width(8.dp))
+            Text(if (bestPrint?.isCam == true) "Play (cam)" else "Play")
+        }
+        OutlinedButton(onClick = onKeep, enabled = hasAnyPrint, modifier = Modifier.height(52.dp)) {
+            Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(20.dp))
+        }
+    }
+}
+
+@Composable
+private fun ExpandableSynopsis(text: String) {
+    var expanded by remember { mutableStateOf(false) }
+    Column {
+        Text(
+            text = text,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurface,
+            maxLines = if (expanded) Int.MAX_VALUE else 4,
+            overflow = TextOverflow.Ellipsis,
+        )
+        if (text.length > 180) {
+            TextButton(onClick = { expanded = !expanded }) {
+                Text(if (expanded) "Show less" else "Read more")
+            }
+        }
+    }
+}
+
+@Composable
+private fun PrintSummary(officialPrintCount: Int, camPrintCount: Int) {
+    val total = officialPrintCount + camPrintCount
+    val officialText = when {
+        total == 0 -> "No prints available on the connected server"
+        officialPrintCount > 0 -> "$officialPrintCount official print${if (officialPrintCount == 1) "" else "s"} available"
+        else -> "No official prints"
+    }
+    Column {
+        Text(
+            text = officialText,
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.SemiBold,
+            color = if (officialPrintCount > 0) MaterialTheme.colorScheme.onBackground else MaterialTheme.colorScheme.error,
+        )
+        if (camPrintCount > 0) {
+            Text(
+                text = "$camPrintCount cam/bootleg print${if (camPrintCount == 1) "" else "s"} — low quality, shown last and labelled.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+            )
+        }
+    }
+}
+
+@Composable
+private fun SeasonChips(seasons: List<SeasonGroup>, selectedSeason: Int?, onSelect: (Int) -> Unit) {
+    Column {
+        SectionHeader(title = "Seasons", modifier = Modifier.padding(horizontal = 0.dp))
+        Row(
+            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            seasons.forEach { s ->
+                FilterChip(
+                    selected = selectedSeason == s.number,
+                    onClick = { onSelect(s.number) },
+                    label = { Text("Season ${s.number} · ${s.episodeCount}") },
                 )
             }
         }
@@ -454,73 +424,190 @@ private fun ReleaseCard(
 }
 
 @Composable
-private fun SourceRow(
-    source: SourceDetail,
-    isResolving: Boolean,
-    onPlay: (isExternal: Boolean) -> Unit,
-) {
-    Surface(
-        modifier = Modifier.fillMaxWidth(),
-        color = SurfaceVariantDark,
-        shape = RoundedCornerShape(8.dp),
+private fun PackedSeasonBanner(season: SeasonGroup, onPlay: (RankedPrint) -> Unit, onKeep: (RankedPrint) -> Unit) {
+    val pack = season.packedPrints.maxByOrNull { it.rankKey } ?: return
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant)
+            .padding(14.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 10.dp, vertical = 6.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column(modifier = Modifier.weight(1f)) {
+        Text(
+            "This season is offered as one file (${pack.qualityLabel}).",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurface,
+        )
+        Text(
+            "Playing a packed season starts the whole-season video — pick a specific episode below for per-episode files when available.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button(onClick = { onPlay(pack) }) {
+                Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(6.dp))
+                Text("Play season")
+            }
+            OutlinedButton(onClick = { onKeep(pack) }) {
+                Icon(Icons.Default.Download, contentDescription = null)
+            }
+        }
+    }
+}
+
+@Composable
+private fun EpisodeRow(
+    episode: EpisodeGroup,
+    onPlayPrint: (RankedPrint) -> Unit,
+    onOpenExternal: (RankedPrint) -> Unit,
+    onKeep: (RankedPrint) -> Unit,
+) {
+    var expanded by remember(episode.absoluteNumber) { mutableStateOf(false) }
+    val best = episode.bestPrint
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(MaterialTheme.colorScheme.surface)
+            .padding(12.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            Box(
+                modifier = Modifier
+                    .size(38.dp)
+                    .clip(CircleShape)
+                    .background(MaterialTheme.colorScheme.surfaceVariant),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text("${episode.absoluteNumber}", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurface)
+            }
+            Column(Modifier.weight(1f)) {
                 Text(
-                    text = source.sourceName?.takeIf(String::isNotBlank) ?: (source.service ?: "Stream Source"),
-                    style = MaterialTheme.typography.labelLarge,
-                    color = OnSurface,
-                    maxLines = 1,
+                    text = episode.title ?: "Episode ${episode.numberWithinSeason}",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                 )
-                val statusText = if (source.status == "active") "⚡ Fast Direct" else "Available"
+                val suffix = if (episode.onlyPacked) " · packed in season file" else
+                    if (episode.prints.size > 1) " · ${episode.prints.size} prints" else ""
                 Text(
-                    text = statusText,
+                    text = (best?.qualityLabel ?: "No quality info") + suffix,
                     style = MaterialTheme.typography.labelSmall,
-                    color = OnSurfaceMuted,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-
-            if (isResolving) {
-                CircularProgressIndicator(
-                    modifier = Modifier.size(24.dp),
-                    strokeWidth = 2.dp,
-                    color = AccentPrimary,
-                )
-            } else {
-                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                    // Play in built-in player
-                    IconButton(
-                        onClick = { onPlay(false) },
-                        modifier = Modifier.size(36.dp),
-                    ) {
-                        Icon(
-                            Icons.Default.PlayArrow,
-                            contentDescription = "Play in app",
-                            tint = AccentPrimary,
-                        )
-                    }
-
-                    // Open in external player (VLC / MX Player)
-                    IconButton(
-                        onClick = { onPlay(true) },
-                        modifier = Modifier.size(36.dp),
-                    ) {
-                        Icon(
-                            Icons.Default.OpenInNew,
-                            contentDescription = "Open in external player",
-                            tint = OnSurfaceMuted,
-                        )
-                    }
+            best?.let {
+                IconButton(
+                    onClick = { onPlayPrint(it) },
+                    modifier = Modifier.size(48.dp),
+                ) {
+                    Icon(Icons.Default.PlayArrow, contentDescription = "Play episode ${episode.numberWithinSeason}", tint = MaterialTheme.colorScheme.primary)
                 }
             }
         }
+
+        if (episode.onlyPacked) {
+            Pill(text = "Whole season in one file", backgroundColor = MaterialTheme.colorScheme.surfaceVariant, contentColor = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        if (episode.prints.isNotEmpty() && episode.prints.size > 1) {
+            TextButton(onClick = { expanded = !expanded }) {
+                Text(if (expanded) "Hide prints" else "Show ${episode.prints.size} prints")
+            }
+        }
+        if (expanded) {
+            episode.prints.forEach { print ->
+                PrintCard(
+                    print = print,
+                    onPlayPrint = onPlayPrint,
+                    onOpenExternal = onOpenExternal,
+                    onKeep = onKeep,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun PrintCard(
+    print: RankedPrint,
+    onPlayPrint: (RankedPrint) -> Unit,
+    onOpenExternal: (RankedPrint) -> Unit,
+    onKeep: (RankedPrint) -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(MaterialTheme.colorScheme.surface)
+            .padding(12.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            PrintQualityBadge(print = print)
+            if (print.isCam) CamBadge()
+            Spacer(Modifier.weight(1f))
+            print.bestOptionLabel?.let {
+                Text(
+                    text = it,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+
+        if (print.detailLine.isNotBlank()) {
+            Text(print.detailLine, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+
+        if (print.isCam) {
+            Text(
+                "This is a cam/bootleg recording. Pick an official print above when one exists.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+            )
+        }
+
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+            Button(
+                onClick = { onPlayPrint(print) },
+                enabled = print.playableHere,
+                modifier = Modifier.weight(1f),
+            ) {
+                Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(6.dp))
+                Text("Play")
+            }
+            OutlinedButton(onClick = { onKeep(print) }) {
+                Icon(Icons.Default.Download, contentDescription = "Keep offline")
+            }
+            if (print.playableHere) {
+                IconButton(onClick = { onOpenExternal(print) }, modifier = Modifier.size(40.dp)) {
+                    Icon(Icons.Default.OpenInNew, contentDescription = "Open in external player",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+        }
+    }
+}
+
+// ── Platform helpers (share keeps the app's own copy honest) ────────────────
+private fun shareTitle(context: Context, post: PostDetail) {
+    val title = post.cleanTitle?.takeIf { it.isNotBlank() } ?: post.title
+    val text = "Check out \"$title\" in Radd Stream."
+    val intent = Intent(Intent.ACTION_SEND).apply {
+        type = "text/plain"
+        putExtra(Intent.EXTRA_SUBJECT, title)
+        putExtra(Intent.EXTRA_TEXT, text)
+    }
+    try {
+        context.startActivity(Intent.createChooser(intent, "Share via").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+    } catch (_: Exception) {
+        Toast.makeText(context, "No share target available", Toast.LENGTH_SHORT).show()
     }
 }
 
@@ -530,15 +617,12 @@ private fun openInExternalPlayer(context: Context, url: String) {
             setDataAndType(Uri.parse(url), "video/*")
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }
-        context.startActivity(Intent.createChooser(intent, "Play stream with..."))
+        context.startActivity(Intent.createChooser(intent, "Play stream with…"))
     } catch (_: Exception) {
         try {
-            val webIntent = Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            }
-            context.startActivity(webIntent)
+            context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
         } catch (_: Exception) {
-            Toast.makeText(context, "No video player or browser installed", Toast.LENGTH_SHORT).show()
+            Toast.makeText(context, "No player or browser installed", Toast.LENGTH_SHORT).show()
         }
     }
 }

@@ -29,10 +29,17 @@ interface RaddStreamApi {
         @Path("id") id: Int,
     ): PostDetailResponse
 
-    /** GET /api/v1/stream — resolve live stream link for a given source ID. */
+    /**
+     * GET /api/v1/stream — our OWN redirector, asked about one opaque handle.
+     *
+     * `redirect=0` answers metadata only (`stream_id`, `kind`, `mime_type`, `file_size_bytes`,
+     * `resumable`, `expires_in`) and never a location; playback does not need this call at all,
+     * because Media3 follows the 302 of `redirect=1` itself. It exists to learn whether a handle
+     * is resumable/ephemeral before offering it for keeping.
+     */
     @GET("api/v1/stream")
     suspend fun resolveStream(
-        @Query("id") sourceId: Int,
+        @Query("id") streamId: String,
         @Query("redirect") redirect: String = "0",
     ): StreamResponse
 

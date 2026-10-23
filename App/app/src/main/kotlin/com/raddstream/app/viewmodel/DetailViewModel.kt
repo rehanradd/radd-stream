@@ -3,6 +3,7 @@ package com.raddstream.app.viewmodel
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.raddstream.app.network.models.LinkClassification
 import com.raddstream.app.network.models.PostDetail
 import com.raddstream.app.network.models.SourceDetail
 import com.raddstream.app.repository.CatalogRepository
@@ -20,16 +21,25 @@ import kotlinx.coroutines.launch
 
 data class DetailUiState(
     val post: PostDetail? = null,
+    val layout: ReleaseLayout? = null,
+    val selectedSeason: Int? = null,
     val isLoading: Boolean = true,
     val isFavorite: Boolean = false,
-    val resolvingSourceId: Int? = null,
     val error: String? = null,
     val actionMessage: String? = null,
 )
 
 sealed class DetailNavigationEvent {
-    data class PlayStream(val streamUrl: String, val title: String) : DetailNavigationEvent()
-    data class OpenExternal(val streamUrl: String) : DetailNavigationEvent()
+    /** Navigate by OPAQUE HANDLE only — a URL in a route would live in the back stack. */
+    data class PlayStream(val streamId: String, val title: String) : DetailNavigationEvent()
+
+    /** The one hand-off this app makes, and it carries OUR OWN address. */
+    data class OpenExternal(val streamId: String, val playUrl: String) : DetailNavigationEvent()
+
+    /** Request to persist a print for offline playback. Wired to the cache engine
+     *  (docs/CACHE_SPEC.md) once it exists — see HANDOFF request #6. For now the
+     *  screen routes this to the Downloads screen which states the honest status. */
+    data class KeepPrint(val releaseId: Int, val label: String) : DetailNavigationEvent()
 }
 
 @HiltViewModel
@@ -39,9 +49,9 @@ class DetailViewModel @Inject constructor(
     private val favoritesRepository: FavoritesRepository,
 ) : ViewModel() {
 
-    private val postId: Int = checkNotNull(savedStateHandle[Screen.Detail.ARG_POST_ID]) {
-        "postId navigation argument is required"
-    }.toString().toInt()
+    private val postId: Int = (savedStateHandle[Screen.Detail.ARG_POST_ID] as? String)?.toIntOrNull()
+        ?: (savedStateHandle[Screen.Detail.ARG_POST_ID] as? Int)
+        ?: -1
 
     private val _uiState = MutableStateFlow(DetailUiState())
     val uiState = _uiState.asStateFlow()
@@ -55,6 +65,7 @@ class DetailViewModel @Inject constructor(
     }
 
     private fun observeFavorite() {
+        if (postId < 0) return
         viewModelScope.launch {
             favoritesRepository.isFavorite(postId).collect { fav ->
                 _uiState.update { it.copy(isFavorite = fav) }
@@ -63,29 +74,39 @@ class DetailViewModel @Inject constructor(
     }
 
     fun loadDetail() {
+        if (postId < 0) {
+            _uiState.update { it.copy(isLoading = false, error = "This title could not be opened.") }
+            return
+        }
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true, error = null) }
             try {
                 val detail = catalogRepository.getPostDetail(postId)
                 if (detail != null) {
-                    _uiState.update { it.copy(post = detail, isLoading = false) }
-                } else {
+                    val layout = ReleaseParser.build(detail.contentType, detail.releases)
                     _uiState.update {
                         it.copy(
+                            post = detail,
+                            layout = layout,
+                            selectedSeason = layout.seasons.firstOrNull()?.number,
                             isLoading = false,
-                            error = "Could not load title details from the server.",
                         )
+                    }
+                } else {
+                    _uiState.update {
+                        it.copy(isLoading = false, error = "This title is not available on the connected server.")
                     }
                 }
             } catch (ex: Exception) {
                 _uiState.update {
-                    it.copy(
-                        isLoading = false,
-                        error = ex.message ?: "Failed to load details. Check connection.",
-                    )
+                    it.copy(isLoading = false, error = ex.message ?: "Failed to load details. Check connection.")
                 }
             }
         }
+    }
+
+    fun selectSeason(season: Int) {
+        _uiState.update { it.copy(selectedSeason = season) }
     }
 
     fun toggleFavorite() {
@@ -105,51 +126,54 @@ class DetailViewModel @Inject constructor(
         _uiState.update { it.copy(actionMessage = null) }
     }
 
-    fun playSource(source: SourceDetail, isExternal: Boolean = false) {
-        val currentPost = _uiState.value.post
-        val title = currentPost?.cleanTitle ?: currentPost?.title ?: "Stream"
-
-        // If source already has a direct final URL
-        val directUrl = source.finalUrl?.takeIf { it.startsWith("http") }
-
-        if (directUrl != null) {
-            viewModelScope.launch {
-                if (isExternal) {
-                    _navEvents.emit(DetailNavigationEvent.OpenExternal(directUrl))
-                } else {
-                    _navEvents.emit(DetailNavigationEvent.PlayStream(directUrl, title))
-                }
-            }
+    /** Play the best link this print offers. The server already ranked them. */
+    fun playPrint(print: RankedPrint, external: Boolean = false) {
+        val link = print.links.firstOrNull { it.playableHere } ?: print.links.firstOrNull { it.keepable }
+        if (link == null) {
+            _uiState.update { it.copy(actionMessage = "Nothing playable on this print yet.") }
             return
         }
+        playLink(link, external)
+    }
 
-        // Otherwise resolve live source URL via API
+    /**
+     * Nothing is resolved here: the server hands us an opaque handle plus OUR OWN redirector
+     * for it, and the 302 happens at playback time. A link without either is not a link.
+     */
+    fun playLink(link: RankedLink, external: Boolean = false) {
+        val title = _uiState.value.post?.let { it.cleanTitle ?: it.title } ?: "Stream"
+        val playUrl = link.playUrl
+        if (link.streamId.isBlank() || playUrl.isNullOrBlank()) {
+            _uiState.update { it.copy(actionMessage = "This option is download-only.") }
+            return
+        }
         viewModelScope.launch {
-            _uiState.update { it.copy(resolvingSourceId = source.id) }
-            try {
-                val res = catalogRepository.resolveStream(source.id)
-                val streamUrl = res.url
-                _uiState.update { it.copy(resolvingSourceId = null) }
-
-                if (res.success && !streamUrl.isNullOrBlank()) {
-                    if (isExternal) {
-                        _navEvents.emit(DetailNavigationEvent.OpenExternal(streamUrl))
-                    } else {
-                        _navEvents.emit(DetailNavigationEvent.PlayStream(streamUrl, title))
-                    }
-                } else {
-                    _uiState.update {
-                        it.copy(actionMessage = res.error ?: "Source link could not be resolved.")
-                    }
-                }
-            } catch (ex: Exception) {
-                _uiState.update {
-                    it.copy(
-                        resolvingSourceId = null,
-                        actionMessage = ex.message ?: "Error resolving source.",
-                    )
-                }
-            }
+            if (external) _navEvents.emit(DetailNavigationEvent.OpenExternal(link.streamId, playUrl))
+            else _navEvents.emit(DetailNavigationEvent.PlayStream(link.streamId, title))
         }
     }
+
+    /** Entry point for a bare link model handed over from another screen. */
+    fun playSource(source: SourceDetail, external: Boolean = false) {
+        playLink(linkFrom(source), external)
+    }
+
+    fun keepPrint(print: RankedPrint) {
+        viewModelScope.launch {
+            _navEvents.emit(DetailNavigationEvent.KeepPrint(print.releaseId, print.qualityLabel))
+        }
+    }
+
+    private fun linkFrom(source: SourceDetail): RankedLink = RankedLink(
+        streamId = source.streamId.orEmpty(),
+        linkId = source.linkId,
+        health = LinkHealth.ACTIVE,
+        ephemeral = source.isEphemeral,
+        resumable = source.isResumableLink,
+        playUrl = source.bestUrl,
+        label = source.label,
+        kind = source.kind,
+        playability = source.classification.playability,
+        score = LinkClassification.rankOf(source),
+    )
 }

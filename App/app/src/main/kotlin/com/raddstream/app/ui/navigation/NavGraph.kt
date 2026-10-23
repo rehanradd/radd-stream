@@ -24,7 +24,9 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
+import com.raddstream.app.ui.screens.BrowseScreen
 import com.raddstream.app.ui.screens.DetailScreen
+import com.raddstream.app.ui.screens.DownloadsScreen
 import com.raddstream.app.ui.screens.HomeScreen
 import com.raddstream.app.ui.screens.MyListScreen
 import com.raddstream.app.ui.screens.PlayerScreen
@@ -116,6 +118,25 @@ fun RaddStreamNavGraph(
                 HomeScreen(
                     onSearchClick = { navController.navigate(Screen.Search.route) },
                     onPostClick = { postId -> navController.navigate(Screen.Detail.createRoute(postId)) },
+                    onBrowseType = { type -> navController.navigate(Screen.Browse.createRoute(type)) },
+                )
+            }
+
+            composable(
+                route = Screen.Browse.route,
+                arguments = listOf(
+                    navArgument(Screen.Browse.ARG_TYPE) {
+                        type = NavType.StringType
+                        defaultValue = "all"
+                    },
+                ),
+                deepLinks = listOf(
+                    androidx.navigation.navDeepLink { uriPattern = "radd://browse/{type}" },
+                ),
+            ) {
+                BrowseScreen(
+                    onBackClick = { navController.popBackStack() },
+                    onPostClick = { postId -> navController.navigate(Screen.Detail.createRoute(postId)) },
                 )
             }
 
@@ -133,7 +154,13 @@ fun RaddStreamNavGraph(
             }
 
             composable(Screen.Settings.route) {
-                SettingsScreen()
+                SettingsScreen(
+                    onOpenDownloads = { navController.navigate(Screen.Downloads.route) },
+                )
+            }
+
+            composable(Screen.Downloads.route) {
+                DownloadsScreen(onBackClick = { navController.popBackStack() })
             }
 
             composable(
@@ -141,29 +168,33 @@ fun RaddStreamNavGraph(
                 arguments = listOf(
                     navArgument(Screen.Detail.ARG_POST_ID) { type = NavType.IntType },
                 ),
+                deepLinks = listOf(
+                    androidx.navigation.navDeepLink { uriPattern = "radd://detail/{postId}" },
+                ),
             ) {
                 DetailScreen(
                     onBackClick = { navController.popBackStack() },
-                    onPlayStream = { streamUrl, title ->
-                        navController.navigate(Screen.Player.createRoute(streamUrl, title))
+                    onPlayStream = { streamId, title ->
+                        navController.navigate(Screen.Player.createRoute(streamId, title))
                     },
+                    onOpenDownloads = { navController.navigate(Screen.Downloads.route) },
                 )
             }
 
             composable(
                 route = Screen.Player.route,
                 arguments = listOf(
-                    navArgument(Screen.Player.ARG_URL) { type = NavType.StringType },
+                    navArgument(Screen.Player.ARG_STREAM_ID) { type = NavType.StringType },
                     navArgument(Screen.Player.ARG_TITLE) { type = NavType.StringType },
                 ),
             ) { backStackEntry ->
-                val encodedUrl = backStackEntry.arguments?.getString(Screen.Player.ARG_URL) ?: ""
+                val encodedHandle = backStackEntry.arguments?.getString(Screen.Player.ARG_STREAM_ID) ?: ""
                 val encodedTitle = backStackEntry.arguments?.getString(Screen.Player.ARG_TITLE) ?: ""
-                val url = Screen.Player.decodeUrl(encodedUrl)
+                val streamId = Screen.Player.decodeStreamId(encodedHandle)
                 val title = Screen.Player.decodeTitle(encodedTitle)
 
                 PlayerScreen(
-                    streamUrl = url,
+                    streamId = streamId,
                     title = title,
                     onBackClick = { navController.popBackStack() },
                 )

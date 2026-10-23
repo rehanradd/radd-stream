@@ -43,6 +43,10 @@ class CatalogRepository @Inject constructor(
         return null
     }
 
-    suspend fun resolveStream(sourceId: Int): StreamResponse =
-        apiProvider.current().resolveStream(sourceId, redirect = "0")
+    /**
+     * Ask OUR OWN redirector about one opaque handle (`redirect=0`): metadata only, never a
+     * location. Not needed to play — Media3 follows the 302 — only to learn resumability.
+     */
+    suspend fun resolveStream(streamId: String): StreamResponse =
+        apiProvider.current().resolveStream(streamId, redirect = "0")
 }
