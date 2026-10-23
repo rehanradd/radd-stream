@@ -50,3 +50,6 @@ App/local.properties
 
 # Local Replit configuration; may contain sensitive values
 .replit
+
+# Local live database storage directory
+radd-stream-data/
