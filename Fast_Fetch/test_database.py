@@ -422,15 +422,17 @@ class DatabaseSaveTests(unittest.TestCase):
             "https://new.example/example-film/",
         )
 
-    def test_dashboard_payload_exposes_every_site_page(self):
+    def test_operator_dashboard_payload_exposes_every_site_page(self):
         post_id = fast_fetch.save_scraped_data(
             self.media("site_a", "https://site-a.example/example-film/")
         )
         fast_fetch.save_scraped_data(
             self.media("site_b", "https://site-b.example/example-film/")
         )
+        # Operator mode (loopback port) keeps full provenance; the public
+        # projection is asserted in test_redact.py.
         with patch.object(viewer, "DB_PATH", self.db_path):
-            payload = viewer.fetch_database_payload()
+            payload = viewer.fetch_database_payload(full=True)
 
         self.assertEqual(payload["stats"]["posts_count"], 1)
         self.assertEqual(len(payload["posts"]), 1)
@@ -440,7 +442,7 @@ class DatabaseSaveTests(unittest.TestCase):
         )
         self.assertEqual(payload["posts"][0]["id"], post_id)
 
-    def test_dashboard_site_counts_include_legacy_release_attribution(self):
+    def test_operator_site_counts_include_legacy_release_attribution(self):
         post_id = fast_fetch.save_scraped_data(
             self.media("site_a", "https://site-a.example/example-film/")
         )
@@ -451,7 +453,7 @@ class DatabaseSaveTests(unittest.TestCase):
             )
 
         with patch.object(viewer, "DB_PATH", self.db_path):
-            payload = viewer.fetch_database_payload()
+            payload = viewer.fetch_database_payload(full=True)
 
         self.assertEqual(payload["stats"]["rog_posts"], 1)
 

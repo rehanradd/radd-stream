@@ -22,6 +22,8 @@ from pathlib import Path
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from socketserver import ThreadingMixIn
 
+import redact
+
 if sys.platform.startswith("win"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
@@ -29,6 +31,38 @@ BASE_DIR = Path(__file__).parent.resolve()
 _env_db = os.environ.get("RADD_DB_PATH")
 DB_PATH = Path(_env_db) if _env_db else BASE_DIR / "fast_fetch.db"
 _SCHEMA_READY_FOR = None
+
+#: Where our own absolute URLs (stream/art handles, playlist entries) are
+#: rooted. Empty means "whatever the request came in on", which is correct
+#: behind the reverse proxy and wrong only for a bare `curl localhost`.
+PUBLIC_BASE_URL = os.environ.get("RADD_PUBLIC_BASE_URL", "").rstrip("/")
+#: The operator-only dashboard needs the full rows; the public port never has
+#: them. Set per server instance in start_server(), never from a request.
+OPERATOR_PORT = int(os.environ.get("RADD_INTERNAL_PORT", "8081"))
+
+#: The public port answers 404 for these; they name or drive upstreams.
+OPERATOR_ONLY_ROUTES = frozenset({
+    "/api/sitemap",      # upstream page URLs, by site
+    "/api/fetch",        # scrape any caller-supplied URL (also an SSRF)
+    "/api/heal",         # re-resolve a post's links against upstreams
+    "/api/health-check", # probe upstreams
+    "/api/v1/rules",     # client-side bridge-unwrapping recipes
+    # The whole catalog in one response, releases and links included. Even fully
+    # projected it is a bulk clone of our collection and, at 109k posts, a
+    # self-inflicted denial of service on this box. It is the dashboard's feed
+    # only — ANDROID_INTEGRATION.md lists it as "not a client integration point"
+    # — and clients use the paginated /api/v1/posts.
+    "/api/data",
+})
+
+_SIGNING_SECRET = None
+
+
+def signing_secret() -> str:
+    global _SIGNING_SECRET
+    if _SIGNING_SECRET is None:
+        _SIGNING_SECRET = redact.stream_secret(DB_PATH)
+    return _SIGNING_SECRET
 
 
 @contextmanager
@@ -51,10 +85,79 @@ def _ensure_schema():
         return
     import fast_fetch
     fast_fetch.init_db(DB_PATH)
+    redact.set_needles(redact.site_needles(DB_PATH), redact.site_text_needles(DB_PATH))
     _SCHEMA_READY_FOR = DB_PATH
 
 
-def fetch_database_payload(search_query: str = "") -> dict:
+def _public_base(handler=None) -> str:
+    """Absolute root for URLs we hand out. Our own Host header, never an
+    upstream's — this is the only host a client is ever told about."""
+    if PUBLIC_BASE_URL:
+        return PUBLIC_BASE_URL
+    if handler is not None:
+        host = str(handler.headers.get("Host") or "").strip()
+        if host:
+            return f"http://{host}"
+    return ""
+
+
+def link_view(row, base_url: str = "") -> dict:
+    """One `download_sources` row as the public may see it: our own opaque
+    handle, our own classification, and nothing that names a hoster."""
+    link = redact.project(row, "link")
+    link["stream_id"] = redact.mint_token(row["id"], signing_secret())
+    # The only honest thing a user may be told about *which* server plays: how it
+    # behaves, not who runs it. Phase 2 of the app builds "1080p · Fast server"
+    # from this plus the print's quality.
+    resumable = bool(link.get("is_resumable"))
+    link["label"] = "Fast direct" if resumable else "Standard"
+    if base_url:
+        link["play_url"] = (f"{base_url.rstrip('/')}/api/v1/stream"
+                            f"?id={link['stream_id']}")
+    return link
+
+
+def _art_pair(row, base_url: str) -> dict:
+    """Poster + backdrops as our own handles, unless the art already sits on a
+    public CDN (TMDB and friends name nothing about us).
+
+    The v1 wire keys stay, so the shipped app and the PWA render art exactly as
+    before — only the value changes. Empty when the row has no artwork at all."""
+    keys = set(row.keys())
+
+    def column(name, default=None):
+        return row[name] if name in keys else default
+
+    secret = signing_secret()
+    pid = row["id"]
+    poster = redact.public_art_value(column("poster_url"), pid, secret, base_url, "poster")
+    raw = column("backdrop_urls")
+    try:
+        items = json.loads(raw) if raw else []
+        if isinstance(items, str):
+            items = [items]
+    except Exception:
+        items = [u.strip() for u in str(raw or "").split(",") if u.strip()]
+    backdrops = [
+        redact.public_art_value(item, pid, secret, base_url, "backdrop", i)
+        for i, item in enumerate(items if isinstance(items, list) else [])
+        if str(item or "").strip()
+    ]
+    return {
+        "poster_url": poster,
+        # TEXT holding a JSON array of URL strings, exactly as stored — the
+        # client's parser is unchanged, only the hosts inside it are ours.
+        "backdrop_urls": json.dumps(backdrops) if backdrops else None,
+    }
+
+
+def fetch_database_payload(search_query: str = "", full: bool = False,
+                           base_url: str = "") -> dict:
+    """The dashboard/API catalog panel.
+
+    `full` is the operator-only mode (loopback port): raw ledger rows, exactly as
+    stored, for healing and audit. Public callers get `redact` views instead —
+    and the difference is one flag at the edge, never two copies of the query."""
     if not DB_PATH.exists():
         return {"stats": {}, "posts": []}
     _ensure_schema()
@@ -115,7 +218,7 @@ def fetch_database_payload(search_query: str = "") -> dict:
             "dead_sources": dead_count,
         }
 
-        sql = "SELECT * FROM posts WHERE (is_18_plus IS NULL OR is_18_plus = 0)"
+        sql = f"SELECT * FROM posts WHERE {redact.adult_clause('posts')}"
         params = []
         if search_query:
             sql += " AND (clean_title LIKE ? OR title LIKE ? OR slug LIKE ? OR industry LIKE ? OR country LIKE ? OR language LIKE ?)"
@@ -139,28 +242,43 @@ def fetch_database_payload(search_query: str = "") -> dict:
                     "SELECT * FROM download_sources WHERE release_id = ? ORDER BY id ASC",
                     (rid,),
                 ).fetchall()
-                sources = [dict(s) for s in src_rows]
+                sources = ([dict(s) for s in src_rows] if full else
+                           [link_view(s, base_url) for s in src_rows])
 
-                r_dict = dict(r)
+                if full:
+                    r_dict = dict(r)
+                else:
+                    r_dict = redact.project(r, "release")
+                    r_dict["label"] = redact.public_label(r)
                 r_dict["sources"] = sources
                 releases.append(r_dict)
 
-            p_dict = dict(p)
+            if full:
+                p_dict = dict(p)
+                p_dict["source_pages"] = [
+                    dict(row)
+                    for row in conn.execute(
+                        "SELECT source_site, url, source_title, source_slug, first_seen_at, last_seen_at "
+                        "FROM post_sources WHERE post_id = ? ORDER BY source_site, url",
+                        (pid,),
+                    ).fetchall()
+                ]
+            else:
+                p_dict = redact.project(p, "post_detail")
+                p_dict.update(_art_pair(p, base_url))
             p_dict["releases"] = releases
-            p_dict["source_pages"] = [
-                dict(row)
-                for row in conn.execute(
-                    "SELECT source_site, url, source_title, source_slug, first_seen_at, last_seen_at "
-                    "FROM post_sources WHERE post_id = ? ORDER BY source_site, url",
-                    (pid,),
-                ).fetchall()
-            ]
             posts.append(p_dict)
 
+        if not full:
+            stats = redact.project(stats, "dashboard_stats")
         return {"stats": stats, "posts": posts}
 
 
 def search_sitemap_api(query: str, site: str = "", limit: int = 50) -> list[dict]:
+    """Operator-only: the upstream sitemap index, with its page URLs and sites.
+
+    Served on the loopback port and nowhere else — there is no public reading of
+    it that would not be a list of upstream pages."""
     words = [w.strip().lower() for w in query.split() if w.strip()]
     with get_db() as conn:
         conditions = []
@@ -182,14 +300,22 @@ def search_sitemap_api(query: str, site: str = "", limit: int = 50) -> list[dict
         return [dict(r) for r in rows]
 
 
-def generate_m3u_playlist(post_id: int) -> str:
+def generate_m3u_playlist(post_id: int, full: bool = False,
+                          base_url: str = "") -> str:
+    """VLC / Kodi playlist for one work.
+
+    Public entries are our own ``/api/v1/stream`` handles, so a playlist file
+    handed to a friend names no site and no hoster; the player still follows the
+    redirect and gets bytes. `full` (loopback port only) keeps today's operator
+    listing: hoster name in the title and the raw upstream URL, which is what a
+    healer needs to see."""
     with get_db() as conn:
         post = conn.execute("SELECT * FROM posts WHERE id = ?", (post_id,)).fetchone()
         if not post or post["is_18_plus"]:
             return ""
 
         releases = conn.execute("SELECT * FROM releases WHERE post_id = ? ORDER BY season ASC, episode ASC, quality DESC, id ASC", (post_id,)).fetchall()
-        lines = ["#EXTM3U", f"#PLAYLIST:{post['clean_title']} ({post['year'] or ''})"]
+        lines = ["#EXTM3U", f"#PLAYLIST:{redact.scrub_text(post['clean_title'])} ({post['year'] or ''})"]
 
         for r in releases:
             sources = conn.execute("""
@@ -200,9 +326,17 @@ def generate_m3u_playlist(post_id: int) -> str:
             for s in sources:
                 dur = "-1"
                 res_tag = " [⚡Resumable]" if s["is_resumable"] else ""
-                title = f"{post['clean_title']} - {r['release_title']} [{s['source_name']}]{res_tag}"
+                if full:
+                    title = f"{post['clean_title']} - {r['release_title']} [{s['source_name']}]{res_tag}"
+                    target = s["final_url"]
+                else:
+                    label = redact.public_label(r) or ""
+                    title = f"{redact.scrub_text(post['clean_title'])} - {label}{res_tag}"
+                    handle = redact.mint_token(s["id"], signing_secret())
+                    root = (base_url or "").rstrip("/") or "http://localhost:8080"
+                    target = f"{root}/api/v1/stream?id={handle}"
                 lines.append(f"#EXTINF:{dur},{title}")
-                lines.append(s["final_url"])
+                lines.append(target)
 
         return "\n".join(lines)
 
@@ -1602,7 +1736,7 @@ MOBILE_CLIENT_HTML = """<!DOCTYPE html>
         <span class="brand-badge">CLIENT v1</span>
       </div>
       <div class="header-links">
-        <button class="icon-btn" onclick="openRulesModal()">⚙️ Rules</button>
+        __RULES_BUTTON__
         <a href="/" class="icon-btn">🖥️ DB Explorer</a>
       </div>
     </div>
@@ -1761,7 +1895,7 @@ MOBILE_CLIENT_HTML = """<!DOCTYPE html>
           html += `
             <div class="release-group">
               <div class="release-hdr">
-                <span>${r.release_title}</span>
+                <span>${escapeHtml(r.label || r.release_title)}</span>
                 <span class="pill pill-year">${(r.quality || 'HD').toUpperCase()}</span>
               </div>
               <div style="font-size:11px; color:var(--text-dim); margin-bottom:6px;">
@@ -1770,10 +1904,14 @@ MOBILE_CLIENT_HTML = """<!DOCTYPE html>
           `;
           for (const s of (r.sources || [])) {
             const isTemp = s.is_temporary ? '⏳' : '';
+            // `s.source_name` only ever exists on the operator port's response;
+            // the public projection replaces it with our own neutral label.
+            const name = escapeHtml(s.label || s.source_name || 'Streaming server');
+            const handle = s.stream_id || s.id;
             html += `
               <div class="stream-row">
-                <div class="stream-name">⚡ ${s.source_name} ${isTemp}</div>
-                <button class="btn-play-stream" onclick="playSource(${s.id}, '${escapeHtml(s.source_name)}', '${escapeHtml(p.clean_title)}')">▶ Play</button>
+                <div class="stream-name">⚡ ${name} ${isTemp}</div>
+                <button class="btn-play-stream" onclick="playSource('${handle}', '${name}', '${escapeHtml(p.clean_title)}')">▶ Play</button>
               </div>
             `;
           }
@@ -1883,12 +2021,67 @@ MOBILE_CLIENT_HTML = """<!DOCTYPE html>
 """
 
 
-def api_v1_get_posts(query: str = "", content_type: str = "", page: int = 1, limit: int = 20) -> dict:
+#: Operator-only affordance in the PWA header. A list of the bridge-unwrapping
+#: rules *is* a list of hosters, so on the public port the control is not merely
+#: disabled — it never appears in the served HTML at all.
+RULES_BUTTON_HTML = '<button class="icon-btn" onclick="openRulesModal()">⚙️ Rules</button>'
+
+
+def render_mobile_client(operator: bool) -> str:
+    return MOBILE_CLIENT_HTML.replace(
+        "__RULES_BUTTON__", RULES_BUTTON_HTML if operator else "")
+
+
+PUBLIC_LANDING_HTML = """<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>__PROJECT_NAME__ — catalog</title>
+  <style>
+    body { margin:0; padding:40px 20px; background:#0b0e14; color:#e6edf3;
+           font:15px/1.6 system-ui, sans-serif; }
+    .wrap { max-width:640px; margin:0 auto; }
+    h1 { font-size:22px; margin:0 0 4px; }
+    .sub { color:#8b98a5; margin-bottom:24px; }
+    code { background:#141a24; padding:2px 6px; border-radius:4px; font-size:13px; }
+    a { color:#79c0ff; }
+    ul { padding-left:18px; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>__PROJECT_NAME__</h1>
+    <div class="sub">Catalog API. The Android client is the product; this is the
+      interface it reads.</div>
+    <ul>
+      <li><a href="/client">__PROJECT_NAME__ Web client</a></li>
+      <li><code>GET /api/v1/posts?q=&amp;type=&amp;page=&amp;limit=</code></li>
+      <li><code>GET /api/v1/posts/{id}</code></li>
+      <li><code>GET /api/v1/stream?id=&amp;redirect=1</code></li>
+      <li><code>GET /api/v1/stats</code></li>
+    </ul>
+    <p class="sub">Responses carry this service's own identifiers. Server selection
+      happens here, not in the client.</p>
+  </div>
+</body>
+</html>
+"""
+
+
+def render_public_landing() -> str:
+    import config
+    return PUBLIC_LANDING_HTML.replace("__PROJECT_NAME__", config.PROJECT_NAME)
+
+
+def api_v1_get_posts(query: str = "", content_type: str = "", page: int = 1,
+                     limit: int = 20, full: bool = False,
+                     base_url: str = "") -> dict:
     _ensure_schema()
     offset = max(0, (page - 1) * limit)
     with get_db() as conn:
         # Adult-flagged posts are stored in the DB but never exposed via the API
-        where_clauses = ["(p.is_18_plus IS NULL OR p.is_18_plus = 0)"]
+        where_clauses = [redact.adult_clause("p")]
         params = []
         if query:
             where_clauses.append("(p.clean_title LIKE ? OR p.title LIKE ? OR p.slug LIKE ?)")
@@ -1901,10 +2094,15 @@ def api_v1_get_posts(query: str = "", content_type: str = "", page: int = 1, lim
         where_sql = " AND ".join(where_clauses)
         total = conn.execute(f"SELECT COUNT(*) FROM posts p WHERE {where_sql}", params).fetchone()[0]
 
+        # `p.source_site`, `p.url` and `p.slug` used to be selected here: the site
+        # it came from and the page we took it off. Both are our bookkeeping, so
+        # only the loopback port asks for them (`full`).
+        provenance_cols = ", p.source_site, p.url, p.slug" if full else ""
         sql = f"""
             SELECT p.id, p.clean_title, p.title, p.year, p.content_type, p.seasons,
-                   p.poster_url, p.imdb_rating, p.imdb_id, p.tmdb_id, p.genres,
-                   p.source_site, p.industry, p.country, p.language,
+                   p.poster_url, p.backdrop_urls, p.imdb_rating, p.imdb_id, p.tmdb_id,
+                   p.genres,
+                   p.industry, p.country, p.language{provenance_cols},
                    COUNT(DISTINCT r.id) as release_count,
                    COUNT(DISTINCT s.id) as source_count
             FROM posts p
@@ -1916,7 +2114,14 @@ def api_v1_get_posts(query: str = "", content_type: str = "", page: int = 1, lim
             LIMIT ? OFFSET ?
         """
         rows = conn.execute(sql, params + [limit, offset]).fetchall()
-        results = [dict(r) for r in rows]
+        results = []
+        for r in rows:
+            if full:
+                results.append(dict(r))
+                continue
+            item = redact.project(r, "post_brief")
+            item.update(_art_pair(r, base_url))
+            results.append(item)
         total_pages = max(1, (total + limit - 1) // limit)
         return {
             "page": page,
@@ -1927,22 +2132,26 @@ def api_v1_get_posts(query: str = "", content_type: str = "", page: int = 1, lim
         }
 
 
-def api_v1_get_post_detail(post_id: int) -> dict | None:
+def api_v1_get_post_detail(post_id: int, full: bool = False,
+                           base_url: str = "") -> dict | None:
     _ensure_schema()
     with get_db() as conn:
         post = conn.execute("SELECT * FROM posts WHERE id = ?", (post_id,)).fetchone()
         if not post or post["is_18_plus"]:
             return None
-        p_dict = dict(post)
-
-        p_dict["source_pages"] = [dict(r) for r in conn.execute(
-            "SELECT source_site, url, source_title FROM post_sources WHERE post_id = ?", (post_id,)
-        ).fetchall()]
+        if full:
+            p_dict = dict(post)
+            p_dict["source_pages"] = [dict(r) for r in conn.execute(
+                "SELECT source_site, url, source_title FROM post_sources WHERE post_id = ?",
+                (post_id,)
+            ).fetchall()]
+        else:
+            p_dict = redact.project(post, "post_detail")
+            p_dict.update(_art_pair(post, base_url))
 
         releases = conn.execute("SELECT * FROM releases WHERE post_id = ? ORDER BY id ASC", (post_id,)).fetchall()
         rel_list = []
         for rel in releases:
-            r_dict = dict(rel)
             sources = conn.execute("""
                 SELECT * FROM download_sources 
                 WHERE release_id = ? 
@@ -1959,13 +2168,31 @@ def api_v1_get_post_detail(post_id: int) -> dict | None:
                         ELSE 99
                     END ASC
             """, (rel["id"],)).fetchall()
-            r_dict["sources"] = [dict(s) for s in sources]
+            # The ordering above is our own preference between servers; it is a
+            # query, not a field. Nothing that names a hoster leaves this box.
+            if full:
+                r_dict = dict(rel)
+                r_dict["sources"] = [dict(s) for s in sources]
+            else:
+                r_dict = redact.project(rel, "release")
+                r_dict["label"] = redact.public_label(rel)
+                r_dict["sources"] = [link_view(s, base_url) for s in sources]
             rel_list.append(r_dict)
         p_dict["releases"] = rel_list
         return p_dict
 
 
 def api_v1_rules() -> dict:
+    """**Operator-only, loopback port.** Client-side bridge-unwrapping selectors.
+
+    This map is the recipe for turning a hoster's share page into a file URL.
+    While the public port served it, any app could copy the catalog *and* the
+    unwrapping with two requests, so unwrapping moved server-side
+    (`fast_fetch.resolve_live_source`, reached through `/api/v1/stream`): the
+    client asks to play, the server works out what to play. Nothing here is
+    deleted — an operator on this machine still needs the rules to diagnose a
+    bridge that broke — but it is no longer a public document.
+    """
     return {
         "version": "1.0",
         "name": "radd-stream-client-rules",
@@ -2024,30 +2251,96 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(len(data)))
             self.send_header("Connection", "close")
-            if extra_headers:
-                for k, v in extra_headers:
+            headers = list(extra_headers or [])
+            headers.extend(getattr(self, "rate_headers", []))
+            if headers:
+                for k, v in headers:
                     self.send_header(k, v)
             self.end_headers()
             self.wfile.write(data)
         except (ConnectionResetError, BrokenPipeError, ConnectionAbortedError):
             pass
 
-    def send_json(self, data: any, status: int = 200):
+    def send_json(self, data: any, status: int = 200,
+                  extra_headers: list[tuple[str, str]] | None = None):
         body = json.dumps(data, ensure_ascii=False).encode("utf-8")
-        self.send_bytes(body, content_type="application/json; charset=utf-8", status=status, extra_headers=[("Access-Control-Allow-Origin", "*")])
+        headers = [("Access-Control-Allow-Origin", "*")]
+        if extra_headers:
+            headers.extend(extra_headers)
+        self.send_bytes(body, content_type="application/json; charset=utf-8",
+                        status=status, extra_headers=headers)
+
+    def _bucket_for(self, path: str) -> str:
+        if path in ("/api/v1/stream", "/api/v1/art", "/api/m3u"):
+            return "play"
+        if path == "/api/v1/stats":
+            return "reports"
+        return "browse"
+
+    def _serve_art(self, query_params: dict, full: bool = False) -> None:
+        """302 to a work's own artwork, addressed by our handle.
+
+        Posters are the one piece of upstream content a user sees directly, and
+        a scraped site's own image URL prints that site's domain in the UI's
+        image inspector — so art is addressed the same way video is: our host,
+        our handle, a redirect, zero bytes through this box."""
+        post_id = redact.parse_token(query_params.get("id", [""])[0], signing_secret(),
+                                     signed_only=not full)
+        kind = (query_params.get("k", ["poster"])[0] or "poster").lower()
+        table = (query_params.get("t", ["posts"])[0] or "posts").lower()
+        if table not in redact.ART_TABLES:
+            table = "posts"
+        try:
+            index = max(0, int(query_params.get("n", ["0"])[0]))
+        except ValueError:
+            index = 0
+        if not post_id or kind not in ("poster", "backdrop"):
+            self.send_json({"error": "Invalid art reference"}, status=400)
+            return
+        if redact.art_is_adult(int(post_id), DB_PATH, table=table):
+            self.send_json({"success": False, "error": "not_found"}, status=404)
+            return
+        target = redact.art_url_for(int(post_id), kind, index, DB_PATH, table=table)
+        if not target:
+            self.send_bytes(b"Not Found", content_type="text/plain", status=404)
+            return
+        self.send_response(302)
+        self.send_header("Location", target)
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Cache-Control", "public, max-age=86400")
+        self.send_header("Connection", "close")
+        self.end_headers()
 
     def do_GET(self):
         parsed = urllib.parse.urlparse(self.path)
         path = parsed.path
+        query_params = urllib.parse.parse_qs(parsed.query)
+        # Whether this server may speak provenance at all. Set on the *instance*
+        # (see start_server), so it cannot be negotiated by a request header or a
+        # query parameter — the whole point of a separate loopback port.
+        full = bool(getattr(self.server, "operator", False))
+        base_url = "" if full else _public_base(self)
+        if not full:
+            if path in OPERATOR_ONLY_ROUTES:
+                self.send_json({"success": False, "error": "not_found"}, status=404)
+                return
+            verdict = redact.limiter.check(self._bucket_for(path),
+                                           redact.client_ip(self))
+            self.rate_headers = redact.limiter.headers(verdict)
+            if not verdict["allowed"]:
+                self.send_json({"success": False, "error": "rate_limited"}, status=429,
+                               extra_headers=[("Retry-After", str(verdict["retry_after"]))])
+                return
 
         if path == "/api/data":
-            query_params = urllib.parse.parse_qs(parsed.query)
             search_q = query_params.get("q", [""])[0]
-            data = fetch_database_payload(search_q)
+            data = fetch_database_payload(search_q, full=full, base_url=base_url)
             self.send_json(data)
 
         elif path == "/api/sitemap":
-            query_params = urllib.parse.parse_qs(parsed.query)
+            if not full:
+                self.send_json({"success": False, "error": "not_found"}, status=404)
+                return
             search_q = query_params.get("q", [""])[0]
             site = query_params.get("site", [""])[0]
             limit = int(query_params.get("limit", [50])[0])
@@ -2055,7 +2348,11 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self.send_json(rows)
 
         elif path == "/api/fetch":
-            query_params = urllib.parse.parse_qs(parsed.query)
+            if not full:
+                # Scraping an arbitrary caller-supplied URL is an operator tool,
+                # and an open one on the public port is an SSRF.
+                self.send_json({"success": False, "error": "not_found"}, status=404)
+                return
             target_url = query_params.get("url", [""])[0]
             if not target_url:
                 self.send_json({"error": "Missing url"}, status=400)
@@ -2075,9 +2372,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self.send_json(resp_payload)
 
         elif path == "/api/m3u":
-            query_params = urllib.parse.parse_qs(parsed.query)
             post_id = int(query_params.get("id", [0])[0])
-            playlist_content = generate_m3u_playlist(post_id)
+            playlist_content = generate_m3u_playlist(post_id, full=full, base_url=base_url)
             body = playlist_content.encode("utf-8")
             self.send_bytes(
                 body,
@@ -2108,47 +2404,78 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 resp_payload = {"success": False, "error": str(ex)}
 
         elif path == "/api/v1/posts":
-            query_params = urllib.parse.parse_qs(parsed.query)
             q = query_params.get("q", [""])[0]
             ctype = query_params.get("type", [""])[0]
             page = int(query_params.get("page", [1])[0])
             limit = min(100, max(1, int(query_params.get("limit", [20])[0])))
-            data = api_v1_get_posts(query=q, content_type=ctype, page=page, limit=limit)
+            data = api_v1_get_posts(query=q, content_type=ctype, page=page, limit=limit,
+                                    full=full, base_url=base_url)
             self.send_json(data)
 
         elif path.startswith("/api/v1/posts/"):
             parts = path.strip("/").split("/")
             if len(parts) == 4 and parts[3].isdigit():
-                detail = api_v1_get_post_detail(int(parts[3]))
+                detail = api_v1_get_post_detail(int(parts[3]), full=full,
+                                                base_url=base_url)
                 if detail:
                     self.send_json({"success": True, "data": detail})
                 else:
+                    # Identical to a row that never existed: an adult title must not
+                    # be distinguishable from an absent one (API_V2.md §13).
                     self.send_json({"success": False, "error": "Post not found"}, status=404)
             else:
                 self.send_json({"error": "Invalid post ID"}, status=400)
 
         elif path == "/api/v1/stream":
-            query_params = urllib.parse.parse_qs(parsed.query)
-            source_id_str = query_params.get("id", [""])[0]
-            if not source_id_str or not source_id_str.isdigit():
+            source_ref = query_params.get("id", [""])[0]
+            source_id = redact.parse_token(source_ref, signing_secret(),
+                                           signed_only=not full)
+            if not source_id:
                 self.send_json({"error": "Missing or invalid source id parameter 'id'"}, status=400)
                 return
 
+            if not full and redact.link_is_adult(int(source_id), DB_PATH):
+                # Same answer as a link that does not exist: hidden, not deleted,
+                # and never played by an address we did not hand out.
+                self.send_json({"success": False, "error": "not_found"}, status=404)
+                return
+
             import fast_fetch
-            res = fast_fetch.resolve_live_source(int(source_id_str))
+            res = fast_fetch.resolve_live_source(int(source_id))
             redirect_flag = query_params.get("redirect", ["1"])[0]
 
             if res.get("success") and res.get("url"):
                 if redirect_flag in ("1", "true", "yes"):
+                    # The player follows this and gets bytes; the VM moves none of
+                    # them. What the user sees is our own URL.
                     self.send_response(302)
                     self.send_header("Location", res["url"])
                     self.send_header("Access-Control-Allow-Origin", "*")
                     self.send_header("Connection", "close")
                     self.end_headers()
                 else:
-                    self.send_json(res)
+                    if not full:
+                        # Used to hand back url + service + source_name, i.e. the
+                        # upstream file URL and who hosts it. A caller who wants
+                        # bytes follows the 302; nobody needs the hoster's name to
+                        # play a video.
+                        self.send_json({
+                            "success": True,
+                            "stream_id": redact.mint_token(int(source_id), signing_secret()),
+                            "kind": res.get("playback_type") or "url",
+                            "mime_type": res.get("mime_type"),
+                            "file_size_bytes": res.get("file_size_bytes"),
+                            "resumable": bool(res.get("is_resumable")),
+                            "expires_in": 6 * 3600 if res.get("is_temporary") else None,
+                        })
+                    else:
+                        self.send_json(res)
             else:
-                self.send_json(res, status=404)
+                self.send_json(res if full else {
+                    "success": False, "error": "no_playable_source"}, status=404)
+
+        elif path == "/api/v1/art":
+            self._serve_art(query_params, full=full)
 
         elif path == "/api/v1/rules":
             self.send_json(api_v1_rules())
@@ -2162,14 +2489,14 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 active_c = conn.execute("SELECT COUNT(*) FROM download_sources WHERE status = 'active'").fetchone()[0]
                 resumable_c = conn.execute("SELECT COUNT(*) FROM download_sources WHERE is_resumable = 1").fetchone()[0]
                 temp_c = conn.execute("SELECT COUNT(*) FROM download_sources WHERE is_temporary = 1").fetchone()[0]
-            self.send_json({
+            self.send_json(redact.project({
                 "posts": posts_c,
                 "releases": rels_c,
                 "sources": srcs_c,
                 "active_sources": active_c,
                 "resumable_sources": resumable_c,
                 "temporary_sources": temp_c,
-            })
+            }, "stats"))
 
         elif path == "/favicon.ico":
             self.send_response(204)
@@ -2178,10 +2505,15 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self.end_headers()
 
         elif path == "/client" or path == "/mobile":
-            self.send_bytes(MOBILE_CLIENT_HTML.encode("utf-8"), content_type="text/html; charset=utf-8")
+            self.send_bytes(render_mobile_client(full).encode("utf-8"),
+                            content_type="text/html; charset=utf-8")
 
         elif path == "/" or path == "/index.html":
-            self.send_bytes(DASHBOARD_HTML.encode("utf-8"), content_type="text/html; charset=utf-8")
+            # The DB explorer names sites and upstream pages by design — that is
+            # what it is for — so it lives on the loopback port only. The public
+            # port gets a page that says what the service is.
+            page = (DASHBOARD_HTML if full else render_public_landing())
+            self.send_bytes(page.encode("utf-8"), content_type="text/html; charset=utf-8")
 
         else:
             self.send_bytes(b"Not Found", content_type="text/plain", status=404)
@@ -2191,7 +2523,12 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
 
 def export_standalone_html(output_file: str = "database_view.html") -> str:
-    payload = fetch_database_payload()
+    """A self-contained dashboard snapshot for the operator's own machine.
+
+    Always `full`: the badges and copy-the-upstream-URL buttons are the reason to
+    open this file, and it never leaves the box — the server has no static route
+    that could hand it to a client, and it is gitignored."""
+    payload = fetch_database_payload(full=True, base_url=PUBLIC_BASE_URL)
     json_str = json.dumps(payload, ensure_ascii=False).replace("</script>", "<\\/script>")
 
     standalone = DASHBOARD_HTML.replace(
@@ -2208,14 +2545,37 @@ def export_standalone_html(output_file: str = "database_view.html") -> str:
     return str(out_path)
 
 
-def start_server(port: int = 8080, host: str = "0.0.0.0"):
-    _ensure_schema()
+def make_server(host: str, port: int, operator: bool):
+    """One handler class, two policies. The policy lives on the *server object*,
+    because anything a request carries (header, query, path prefix) is something
+    a request can forge — a port it cannot."""
     server = ThreadedHTTPServer((host, port), DashboardHandler)
+    server.operator = operator
+    return server
+
+
+def start_server(port: int = 8080, host: str = "0.0.0.0",
+                 operator_port: int | None = None):
+    import threading
+    _ensure_schema()
+    server = make_server(host, port, operator=False)
     display_host = "127.0.0.1" if host == "0.0.0.0" else host
     url = f"http://{display_host}:{port}"
+
+    internal = None
+    internal_host = os.environ.get("RADD_INTERNAL_HOST", "127.0.0.1")
+    try:
+        internal = make_server(internal_host, operator_port or OPERATOR_PORT,
+                               operator=True)
+    except OSError as ex:
+        print(f"[i] operator dashboard unavailable: {ex}")
+
     print("\n" + "=" * 65)
-    print(f"🚀 Fast_Fetch Database Viewer & Site Explorer Running!")
-    print(f"👉 Access Dashboard: {url}")
+    print("🚀 Fast_Fetch Database Viewer & Site Explorer Running!")
+    print(f"👉 Public API + web client: {url}")
+    if internal:
+        print(f"🔧 Operator dashboard (full provenance, loopback only): "
+              f"http://{internal_host}:{internal.server_address[1]}")
     print(f"📁 Database: {DB_PATH}")
     print(f"⚡ Press Ctrl+C to stop the server")
     print("=" * 65 + "\n", flush=True)
@@ -2226,11 +2586,17 @@ def start_server(port: int = 8080, host: str = "0.0.0.0"):
     except Exception:
         pass
 
+    if internal:
+        threading.Thread(target=internal.serve_forever, daemon=True).start()
     try:
         server.serve_forever()
     except KeyboardInterrupt:
         print("\n[i] Server stopped.")
+    finally:
         server.server_close()
+        if internal:
+            internal.shutdown()
+            internal.server_close()
 
 
 if __name__ == "__main__":

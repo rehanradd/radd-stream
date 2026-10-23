@@ -257,6 +257,9 @@ cat_links(id, release_id, work_id, source_site, service, source_name, kind, url,
 cat_link_evidence(id, link_id, probed_at, ok, protocol, http_status, content_type, size_bytes,
           latency_ms, speed_mbps, accepts_ranges, error)
 ```
+`source_site`, `service`, `source_name`, `url`, `final_url`, `resource_id` are **ledger-side
+columns** — Layer 1 keeps them in full (zero data loss, §16.9) and no public response is
+allowed to repeat them. Everything a client is handed about a link is in §8.1.
 
 ### 6.1 `kind` and `playability` — exact outputs of `classify_link()` ✅
 
@@ -425,7 +428,8 @@ bundle time; *(derived)* = computable from the request/URL; *(planned)* = §17.
                  "size_bytes": 2405181686, "watermarked": false, "official_print": true,
                  "flags": [] },
       "playback": {
-        "url": "http://cdn…/1080p.m3u8?e=…",                       // cat: links.url/final_url
+        "stream_id": "kQ3qTz…",                                    // opaque handle (§16.9) — the client never learns the host
+        "label": "Fast direct",                                     // derived: the only server word a user is ever shown
         "scheme": "http",                                          // derived from url
         "requires_https": false,                                   // planned (§8.3)
         "protocol": "hls", "container": "m3u8",                    // cat: links.protocol ✅
@@ -447,13 +451,13 @@ bundle time; *(derived)* = computable from the request/URL; *(planned)* = §17.
     { "rank": 2,
       "print": {"resolution": "480p", "quality_score": 220, "…": "…"},
       "playback": {"protocol": "progressive", "container": "mp4", "requires_resolve": true,
-                   "url": null, "resolve_url": "/api/v2/resolve/778", // planned (§8.2)
+                   "stream_id": "b7Tz…", "resolve_url": "/api/v2/resolve/b7Tz…", // planned (§8.2) — a handle, never a row id (§16.9)
                    "playability": "resolve_required", "score": 120, "…": "…"},
       "coverage": {"type": "season_pack", "ordinal": 3, "offset_seconds": 4920,
                    "pack_warning": "This file contains all of Season 7"} // cat: offsets ✅ when learned
     }
   ],
-  "download_options": [ { "release_id": 555, "url": "…", "kind": "download_only",
+  "download_options": [ { "release_id": 555, "stream_id": "kQ3q…", "kind": "download_only",
       "resumable": true, "size_bytes": 2405181686, "score": 250, "expires_at": null } ],
   "entitlement": {"model": "free", "display_priority": 10},          // §11; model free always today ✅
   "failure_policy": {"retry_same": 1, "then_next_rank": true, "max_ranks": 3,
@@ -658,15 +662,24 @@ relative to the watermarked one and drops the `watermarked` flag ✅ — they re
 dedup never merges them (different labels ⇒ different `pkey`).
 
 ### S7 — One episode reachable from several sites
-Provenance is first-class ✅: `cat_work_sites` (which page/site contributed),
-`cat_releases.source_site`, `cat_links.source_site/service`. Two sites publishing the *same
-print* (identical `pkey` incl. site+origin_url ⇒ different rows because `rel_site` is part of
-the key; identical text from the *same* site/URL collapses — `release_dups` counter ✅).
-`/play` mixes sites freely in the ladder because ordering is by scores, not by site:
+Provenance is first-class **in the ledger and on the operator port** ✅: `cat_work_sites`
+(which page/site contributed), `cat_releases.source_site`, `cat_links.source_site/service`.
+Two sites publishing the *same print* (identical `pkey` incl. site+origin_url ⇒ different rows
+because `rel_site` is part of the key; identical text from the *same* site/URL collapses —
+`release_dups` counter ✅). `/play` mixes sites freely in the ladder because ordering is by
+scores, not by site — and the client cannot tell that it did, because the ladder it receives
+names nobody (§16.9):
 ```jsonc
-{"rank":1,"release_id":555,"playback":{"score":830,"source_site":"multimovies","service":"fsl_r2"}},
-{"rank":2,"release_id":611,"playback":{"score":760,"source_site":"hdhub4u","service":"hubcloud_10g"}}
-// detail payload: "sites":[{"site":"multimovies","page_url":"…"},{"site":"hdhub4u","page_url":"…"}]
+// what the operator port sees            // what every public client sees
+{"rank":1,"release_id":555,               {"rank":1,"release_id":555,
+ "playback":{"score":830,                  "playback":{"score":830,"label":"Fast direct",
+   "source_site":"multimovies",              "stream_id":"kQ3q…","kind":"cdn_direct",
+   "service":"fsl_r2"}},                     "protocol":"hls","latency_ms":140}},
+{"rank":2,"release_id":611,               {"rank":2,"release_id":611,
+ "playback":{"score":760,                  "playback":{"score":760,"label":"Standard",
+   "source_site":"hdhub4u",                  "stream_id":"b7Tz…","ephemeral":true}}}
+   "service":"hubcloud_10g"}}              // detail payload has no "sites" member at all
+// "sites":[{"site":"multimovies","page_url":"…"},…]  ← operator port only
 ```
 
 ### S8 — Link that needs a resolver round-trip — see §8.2 (worked flow there).
@@ -1006,6 +1019,33 @@ with the chosen rank, the rejected ranks and their axis scores (§7) so ranking 
 evidence; `/stats` exposes the link-health mix (`link_health.summarize()` ✅ shape:
 `{total, ok, failed, streamable, downloadable, resumable, cors_open, by_protocol, by_error,
 avg_latency_ms, avg_speed_mbps, ok_ratio}`).
+
+---
+
+### 16.9 Provenance is operator-only — the public edge is deny-by-default
+The product promise: an ordinary user of the app, the PWA or the dashboard never learns
+**which site** a title came from, **which server** carries it, or **what URL** to copy.
+The business reason is harder than the aesthetics: an API that names its sources is a
+catalog other people can rebuild inside their own app, so this is an exposure rule, not
+a style rule.
+
+Enforced in `Fast_Fetch/redact.py`, at serialization only:
+
+| Rule | Mechanism |
+|---|---|
+| A response contains only the keys its *view* allows — a new column is invisible until deliberately published | `VIEWS[view]` + `project(row, view)` |
+| Anything provenance-shaped is removed even from a nested payload | `PROVENANCE` deny-list + `scrub()` |
+| A display string may not name a site or a hoster | `scrub_text()` over the registry-derived needle vocabulary |
+| A genre/language/country list may not smuggle a scraped domain | `LIST_KEYS` + `_category_token()` (a category has no digits, no dots) |
+| Playables and artwork are addressed by **our** signed handle, never by a row id or an upstream URL | `mint_token()`/`parse_token(signed_only=True)` |
+| A hidden (18+) title answers exactly as a nonexistent one, on every surface including its links | `adult_clause()`, `art_is_adult()`, `link_is_adult()` |
+| Whole-catalog dumps and the hoster bridge table are not served to the public at all | `OPERATOR_ONLY_ROUTES` on the public port; provenance lives on a second loopback port |
+
+**This is metadata suppression, not access control.** The SQLite ledger keeps every site
+name, service name, page URL and final URL — healing, back-fill and diagnostics depend on
+them — and the server log does too. Anyone willing to decompile the client or read the
+server can still learn what a title is played from; nobody looking at the app can. Say it
+that way in release notes and in any answer about "is this hidden".
 
 ---
 

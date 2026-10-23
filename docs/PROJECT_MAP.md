@@ -20,12 +20,20 @@ Last updated: 2026-10-22 for the REST-surface and test-suite sections below (ver
 
 ## Verified REST surface (2026-10-22, re-read against `Fast_Fetch/viewer.py`)
 
-Routes that exist in `do_GET()` (viewer.py:2039-2190): `/api/data`,
+Routes that exist in `do_GET()` (viewer.py): `/api/data`,
 `/api/sitemap`, `/api/fetch`, `/api/m3u`, `/api/health-check`, `/api/heal`,
 `/api/v1/posts`, `/api/v1/posts/{id}`, `/api/v1/stream`, `/api/v1/rules`,
 `/api/v1/stats`, `/favicon.ico`, `/client`, `/mobile`, `/`. There is **no
 `/api/v1/sync`** and no `do_POST` handler at all — any doc or roadmap item that
 reads like a sync/heal-over-HTTP capability is a proposal, not an endpoint.
+
+**As of the Phase 1 redaction work (`Fast_Fetch/redact.py`), the route list splits by
+port.** `/api/data`, `/api/sitemap`, `/api/fetch`, `/api/health-check`, `/api/heal` and
+`/api/v1/rules` answer on the operator loopback port (`RADD_INTERNAL_PORT`, default 8081)
+and `404` on the public port; every other route answers on both, but the public one is a
+projected view with no `source_site`/`service`/`final_url` and signed opaque handles where
+a row id used to be. Provenance is suppressed at the HTTP edge only — the SQLite ledger is
+unchanged by design (API_V2.md §16.9).
 
 Three facts worth carrying across accounts because they have repeatedly misled
 agents and app developers:

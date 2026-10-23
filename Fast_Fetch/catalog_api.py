@@ -47,6 +47,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import functools
 import hashlib
 import json
 import re
@@ -55,6 +56,7 @@ import time
 import unicodedata
 
 import catalog_v2
+import redact
 
 DEFAULT_LIMIT = 24
 MAX_LIMIT = 100
@@ -106,6 +108,24 @@ _EDITION_LABEL = {
     "uncut": "Uncut", "remastered": "Remastered", "restored": "Restored",
     "imax": "IMAX", "theatrical": "", "unknown": "",
 }
+
+def public_edge(func):
+    """Every v2 response leaves this module through here, stripped.
+
+    The builders already refuse to emit provenance; this is the net underneath
+    them, so a field added to a view later is denied rather than published, and
+    so one decorator covers all twelve entry points instead of twelve reviews.
+    The only way to get provenance back is `include_provenance=True`, which an
+    operator port sets in code and a request can never ask for.
+    """
+    @functools.wraps(func)
+    def wrapped(*args, **kwargs):
+        payload = func(*args, **kwargs)
+        if kwargs.get("include_provenance"):
+            return payload
+        return redact.scrub(payload)
+    return wrapped
+
 
 # `content_type` accepts the v2 `work_type` values and, for compatibility with the
 # v1 app, the four legacy v1 `posts.content_type` strings.
@@ -424,14 +444,55 @@ def _iter_terms(values) -> list[str]:
 
 # ── item / link shaping ──────────────────────────────────────────────────────
 
-def _images(work: dict) -> dict:
+#: How the v2 read model rewrites artwork for whoever we are serving. Deny by
+#: default: unconfigured means root-relative handles, so an upstream art host can
+#: never escape even if a future mount forgets to configure the boundary.
+_PUBLIC_CONTEXT = {"base_url": "", "secret": ""}
+
+
+def configure_public(base_url: str = "", secret: str = "") -> None:
+    """Set the v2 public boundary (called by the HTTP layer, like `redact.set_needles`)."""
+    _PUBLIC_CONTEXT["base_url"] = base_url or ""
+    _PUBLIC_CONTEXT["secret"] = secret or ""
+
+
+def _text(value):
+    """Display text with known source brands removed, `None` staying `None`.
+
+    A missing title is not an empty title: the app renders one as absent and the
+    other as a blank row."""
+    return None if value is None else redact.scrub_text(value)
+
+
+def _images(work: dict, *, base_url: str | None = None, secret: str | None = None,
+            work_id=None) -> dict:
     poster = work.get("poster_url")
+    backdrops = _json_list(work.get("backdrop_urls"))
+    base = _PUBLIC_CONTEXT["base_url"] if base_url is None else base_url
+    key = _PUBLIC_CONTEXT["secret"] if secret is None else secret
+    target = work_id if work_id is not None else work.get("id")
+
+    def art(url, kind, index):
+        # A poster on a public CDN names nothing about us and passes straight
+        # through; a poster still sitting on the site we scraped it from becomes
+        # one of our own handles, so no host name ever reaches a client.
+        if not url:
+            return None
+        value = redact.public_art_value(url, target, key, base, kind, index,
+                                        table="works")
+        return {"src": value, "kind": kind, "index": index,
+                "width": None, "height": None, "locale": None}
+
     return {
-        "poster": ({"url": str(poster), "width": None, "height": None, "locale": None,
-                    "kind": "poster"} if poster else None),
+        "poster": art(poster, "poster", 0),
         # The projector stores no poster dimensions or locales: reported as null,
         # never guessed (API_V2.md §9 wants structured images with width).
-        "backdrops": [{"url": url, "kind": "backdrop"} for url in _json_list(work.get("backdrop_urls"))],
+        # The key is `src`, not `url`: `url` is on the public deny-list (every
+        # upstream page column is named `url` somewhere), and artwork is one of
+        # our own handles, so it gets a key the deny-list never claims.
+        "backdrops": [value for value in
+                      (art(url, "backdrop", index) for index, url in enumerate(backdrops))
+                      if value],
     }
 
 
@@ -483,7 +544,6 @@ def _browse_item(row) -> dict:
     seasons = work.get("season_count")
     return {
         "id": work["id"],
-        "work_key": work["work_key"],
         "title": work["title"],
         "year": work.get("year"),
         "work_type": work.get("work_type"),
@@ -496,7 +556,6 @@ def _browse_item(row) -> dict:
         "languages": _json_list(work.get("languages")),
         "country": work.get("country"),
         "industry": work.get("industry"),
-        "source_site": work.get("source_site"),
         "site_count": work.get("site_count"),
         "seasons": seasons if seasons is not None else None,
         "episodes": work.get("episode_count"),
@@ -549,6 +608,26 @@ def _latest_evidence(conn, link_ids: list[int]) -> dict[int, dict]:
     return out
 
 
+_SECRET_BY_PATH: dict[str, str] = {}
+
+
+def signing_secret(conn) -> str:
+    """The handle-signing secret for this database, read once per path.
+
+    Layer 1 and the ledger live in the same file, so the public edge and the v2
+    read model sign with one key and a handle minted here validates there too."""
+    try:
+        row = conn.execute("PRAGMA database_list").fetchone()
+        path = (row[2] or "") if row else ""
+    except sqlite3.Error:
+        path = ""
+    secret = _SECRET_BY_PATH.get(path)
+    if secret is None:
+        secret = redact.stream_secret(path or None)
+        _SECRET_BY_PATH[path] = secret
+    return secret
+
+
 def _link_group(row) -> int:
     """Candidate group from `playability` (what a client can do with the link).
 
@@ -571,7 +650,14 @@ def _is_static_file(url) -> bool:
     return path.endswith(_STATIC_EXTS)
 
 
-def _link_view(row, evidence: dict | None) -> dict:
+def _link_view(row, evidence: dict | None, secret: str = "") -> dict:
+    """One `cat_links` row as the public may see it.
+
+    The descriptor and the measurement stay; *who* hosts it goes: no site, no
+    service, no source name, no upstream URL, no third-party resource id. What a
+    client gets instead is our own opaque `stream_id`, and the one neutral word
+    a user may ever be told about a server — how fast it behaves, not who runs it.
+    """
     link = _as_dict(row)
     measured = evidence or {}
     speed = measured.get("speed_mbps")
@@ -587,19 +673,16 @@ def _link_view(row, evidence: dict | None) -> dict:
     if measured.get("accepts_ranges") is not None:
         ranges = measured["accepts_ranges"]
     state = link.get("state") or "unknown"
+    resumable = bool(link.get("resumable")) or bool(ranges)
     return {
         "link_id": link["id"],
         "release_id": link["release_id"],
         "work_id": link["work_id"],
-        "source_site": link.get("source_site"),
-        "service": link.get("service"),
-        "source_name": link.get("source_name"),
+        "stream_id": (redact.mint_token(link["id"], secret) if secret else str(link["id"])),
+        "label": "Fast direct" if resumable else "Standard",
         "kind": link.get("kind"),
         "playability": link.get("playability"),
         "group": _link_group(row),
-        "url": link.get("url"),
-        "final_url": link.get("final_url"),
-        "resource_id": link.get("resource_id"),
         "state": state,
         "dead": state not in ("active", "unknown", "unchecked"),
         "tier": link.get("tier"),
@@ -660,10 +743,11 @@ def _ordered_links(conn, release_ids: list[int]) -> dict[int, list[dict]]:
     rows = conn.execute(
         f"SELECT * FROM cat_links WHERE release_id IN ({marks}) ORDER BY id", tuple()).fetchall()
     evidence = _latest_evidence(conn, [row["id"] for row in rows])
+    secret = signing_secret(conn)
     views: dict[int, list[dict]] = {}
     for row in rows:
         views.setdefault(row["release_id"], []).append(
-            _link_view(row, evidence.get(row["id"])))
+            _link_view(row, evidence.get(row["id"]), secret))
     for items in views.values():
         items[:] = sorted(items, key=lambda link: (-(link["rank_score"] or 0), link["link_id"]))
     return views
@@ -739,8 +823,6 @@ def _print_view(conn, release_row, links_by_release: dict[int, list[dict]]) -> d
         "work_id": release["work_id"],
         "print_label": print_label(release),
         "label": release.get("label"),
-        "source_site": release.get("source_site"),
-        "origin_url": release.get("origin_url"),
         "coverage": {
             "type": release.get("coverage_type"),
             "season_number": release.get("season_number"),
@@ -939,7 +1021,6 @@ def _covering_prints(conn, *, work: dict, season_number: int, episode_number: in
         entry["season_number"] = release.get("season_number")
         entry["resolution"] = release.get("resolution")
         entry["quality_score"] = release.get("quality_score")
-        entry["source_site"] = release.get("source_site")
         entry["size_bytes"] = release.get("size_bytes")
         entry["needs_offset_calibration"] = coverage in ("season_pack", "parts") and (
             entry.get("offset_seconds") is None)
@@ -1025,10 +1106,7 @@ def _run_listing(conn, *, sort, order, limit, include_adult, cursor,
         w.*,
         (SELECT COUNT(*) FROM cat_seasons s WHERE s.work_id = w.id) AS season_count,
         (SELECT COUNT(*) FROM cat_review_queue q WHERE q.work_id = w.id
-          AND q.resolved_at IS NULL) AS open_reviews,
-        COALESCE((SELECT ws.source_site FROM cat_work_sites ws
-                   WHERE ws.work_id = w.id ORDER BY ws.post_id, ws.page_url),
-                  'unknown') AS source_site
+          AND q.resolved_at IS NULL) AS open_reviews
     """ + "," + _AVAIL_COLS
     sql = f"SELECT {select_cols}, {expr} AS __sk FROM cat_works w WHERE {where_sql}"
     if cursor is not None:
@@ -1114,6 +1192,7 @@ def _relevance(item: dict, query_norm: str, tokens: list[str]) -> int:
     return score
 
 
+@public_edge
 def browse(conn, *, content_type=None, genres=(), languages=(), qualities=(),
            sort="trending", order="desc", cursor=None, limit=DEFAULT_LIMIT,
            include_adult=False, q=None, available=None, year_from=None, year_to=None,
@@ -1149,6 +1228,7 @@ def browse(conn, *, content_type=None, genres=(), languages=(), qualities=(),
         query_tokens=tokens, query_norm=query_norm, use_fts_match=_has_table(conn, "cat_works_fts"))
 
 
+@public_edge
 def search(conn, *, q, limit=DEFAULT_LIMIT, include_adult=False, content_type=None,
            genres=(), languages=(), qualities=(), sort="relevance", order="desc",
            cursor=None, fields=None) -> dict:
@@ -1204,6 +1284,7 @@ def search(conn, *, q, limit=DEFAULT_LIMIT, include_adult=False, content_type=No
     return result
 
 
+@public_edge
 def suggest(conn, *, q, limit=10, include_adult=False) -> dict:
     """Cheap type-ahead: normalised title prefixes only, no aliases, no ranking maths."""
     _require_row_factory(conn)
@@ -1282,17 +1363,21 @@ def _resolve_work(conn, *, work_id=None, work_key=None, slug=None, url=None):
     return None
 
 
+@public_edge
 def work_detail(conn, *, work_id=None, work_key=None, slug=None, url=None,
-                include_adult=False, fields=None) -> dict:
+                include_adult=False, fields=None, include_provenance=False) -> dict:
     """The full nested catalog answer for one work.
 
-    Shape: identity (imdb/tmdb/tvdb + canonical key + aliases), seasons -> episodes
+    Shape: identity (imdb/tmdb/tvdb + aliases), seasons -> episodes
     (each with `absolute_number`, `best_release_id`, `quality_options`, covering
     prints), parts (from `cat_parts` when the projector fills it, otherwise inferred
     from print labels and explicitly marked `inferred`), `print_groups` with
-    `coverage_type` and every print's links ordered by `rank_score`, the site pages
-    it was seen on, entitlement, availability, and flags (`identity_suspect` is
-    surfaced, never silently merged).
+    `coverage_type` and every print's links ordered by `rank_score`, entitlement,
+    availability, and flags (`identity_suspect` is surfaced, never silently merged).
+
+    Which site a title came from, and the page it was scraped from, are not part of
+    this shape: `include_provenance=True` (operator port only) puts them back under
+    `provenance`. A public caller has no way to ask for that key.
     """
     _require_row_factory(conn)
     _register_udfs(conn)
@@ -1374,14 +1459,11 @@ def work_detail(conn, *, work_id=None, work_key=None, slug=None, url=None,
         })
 
     parts = _parts_for_work(conn, work, prints)
-    aliases = conn.execute(
+    alias_rows = conn.execute(
         "SELECT alias, locale, source_site, kind FROM cat_work_aliases WHERE work_id = ?"
         " ORDER BY alias", (wid,)).fetchall()
-    sites = conn.execute(
-        """
-        SELECT source_site, post_id, page_url, page_title, page_content_type, last_seen_at
-        FROM cat_work_sites WHERE work_id = ? ORDER BY source_site, page_url
-        """, (wid,)).fetchall()
+    aliases = [{"alias": redact.scrub_text(row["alias"]), "locale": row["locale"],
+                "kind": row["kind"]} for row in alias_rows]
     reviews = conn.execute(
         "SELECT id, kind, release_id, page_url, detail, raised_at FROM cat_review_queue"
         " WHERE work_id = ? AND resolved_at IS NULL ORDER BY id", (wid,)).fetchall()
@@ -1400,9 +1482,8 @@ def work_detail(conn, *, work_id=None, work_key=None, slug=None, url=None,
         "ok": True,
         "work": {
             "id": work["id"],
-            "work_key": work["work_key"],
-            "title": work["title"],
-            "original_title": work.get("original_title"),
+            "title": redact.scrub_text(work["title"]),
+            "original_title": _text(work.get("original_title")),
             "year": work.get("year"),
             "work_type": work.get("work_type"),
             "animated": bool(work.get("is_animated")),
@@ -1425,14 +1506,11 @@ def work_detail(conn, *, work_id=None, work_key=None, slug=None, url=None,
             "source_rev": work.get("source_rev"),
         },
         "identity": {
-            "canonical_key": work["work_key"],
             "imdb_id": work.get("imdb_id"),
             "tmdb_id": work.get("tmdb_id"),
             "tvdb_id": work.get("tvdb_id"),
             "work_type": work.get("work_type"),
-            "title_variants": [{"alias": row["alias"], "locale": row["locale"],
-                                "source_site": row["source_site"], "kind": row["kind"]}
-                               for row in aliases],
+            "title_variants": aliases,
         },
         "seasons": seasons,
         "parts": parts,
@@ -1450,14 +1528,15 @@ def work_detail(conn, *, work_id=None, work_key=None, slug=None, url=None,
             "dead_link_total": sum(1 for p in prints for link in p["links"] if link["dead"]),
         },
         "entitlements": [_entitlement_view(row) for row in entitlements],
-        "sites": [_as_dict(row) for row in sites],
         "flags": _detail_flags(work, prints, reviews, dead_only),
         "identity_suspect": bool(work.get("identity_suspect")),
-        "review_queue": [_as_dict(row) for row in reviews],
+        "review_queue": [{"id": row["id"], "kind": row["kind"], "release_id": row["release_id"],
+                          "detail": _text(row["detail"]), "raised_at": row["raised_at"]}
+                         for row in reviews],
         "scope_unresolved_prints": [
-            {"release_id": p["release_id"], "label": p["label"],
+            {"release_id": p["release_id"], "label": _text(p["label"]),
              "coverage_type": p["coverage"]["type"], "print_label": p["print_label"],
-             "quality_score": p["quality_score"], "source_site": p["source_site"],
+             "quality_score": p["quality_score"],
              "reason": ("unknown_coverage_type"
                         if p["coverage"]["type"] not in COVERAGE_TYPES
                         else "season_unresolved")}
@@ -1468,6 +1547,24 @@ def work_detail(conn, *, work_id=None, work_key=None, slug=None, url=None,
                 and p["coverage"]["season_number"] is None)
         ],
     }
+    if include_provenance:
+        # Operator surface only (loopback port): which site, which page, which title
+        # we scraped it from. Never reachable from a public response, because the
+        # public server does not set the operator flag.
+        sites = conn.execute(
+            """
+            SELECT source_site, post_id, page_url, page_title, page_content_type, last_seen_at
+            FROM cat_work_sites WHERE work_id = ? ORDER BY source_site, page_url
+            """, (wid,)).fetchall()
+        payload["provenance"] = {
+            "work_key": work["work_key"],
+            "canonical_key": work["work_key"],
+            "sites": [_as_dict(row) for row in sites],
+            "title_variant_sources": [{"alias": row["alias"], "source_site": row["source_site"]}
+                                       for row in alias_rows],
+            "review_page_urls": [{"id": row["id"], "page_url": row["page_url"]}
+                                 for row in reviews],
+        }
     if fields:
         payload = _project_fields(payload, fields)
     return payload
@@ -1580,6 +1677,7 @@ def _project_fields(payload: dict, fields) -> dict:
 
 # ── season / episode / release singletons ────────────────────────────────────
 
+@public_edge
 def season_detail(conn, *, work_id, season_number, include_adult=False) -> dict:
     """One season plus its episodes with the per-episode best print."""
     detail = work_detail(conn, work_id=work_id, include_adult=include_adult)
@@ -1594,6 +1692,7 @@ def season_detail(conn, *, work_id, season_number, include_adult=False) -> dict:
     return _not_found("Season not found")
 
 
+@public_edge
 def episode_detail(conn, *, episode_id, include_adult=False) -> dict:
     """One episode: prints, coverage, offsets, links (Layer-1 view)."""
     _require_row_factory(conn)
@@ -1631,7 +1730,7 @@ def episode_detail(conn, *, episode_id, include_adult=False) -> dict:
         "ok": True,
         "episode": {
             "id": episode["id"], "work_id": episode["work_id"],
-            "work_key": episode["work_key"], "work_title": episode["work_title"],
+            "work_title": episode["work_title"],
             "season_number": episode["season_number"], "number": episode["number"],
             "absolute_number": episode["absolute_number"], "title": episode.get("title"),
             "air_date": episode.get("air_date"), "runtime_minutes": episode.get("runtime_minutes"),
@@ -1653,6 +1752,7 @@ def _merge_print(coverage_entry: dict, print_view: dict) -> dict:
     return out
 
 
+@public_edge
 def release_detail(conn, *, release_id, include_adult=False) -> dict:
     """One print: descriptor, ranked links, coverage."""
     _require_row_factory(conn)
@@ -1682,7 +1782,7 @@ def release_detail(conn, *, release_id, include_adult=False) -> dict:
         "ok": True,
         "print": print_view,
         "print_label": print_view["print_label"],
-        "work": {"id": release["work_id"], "work_key": release["work_key"],
+        "work": {"id": release["work_id"],
                  "title": release["work_title"], "work_type": release["work_type"],
                  "year": release["year"]},
         "coverage": {
@@ -1714,6 +1814,7 @@ def _maybe_json(value):
 
 # ── episode manifest ─────────────────────────────────────────────────────────
 
+@public_edge
 def episode_manifest(conn, *, work_id=None, work_key=None, slug=None, season=None,
                      episode=None, absolute=None, include_adult=False) -> dict:
     """Every print that covers one episode, with the offset a client needs.
@@ -1825,7 +1926,6 @@ def episode_manifest(conn, *, work_id=None, work_key=None, slug=None, season=Non
     return {
         "ok": True,
         "work_id": work["id"],
-        "work_key": work["work_key"],
         "work_title": work["title"],
         "work_type": work.get("work_type"),
         "target": {
@@ -1849,6 +1949,7 @@ def episode_manifest(conn, *, work_id=None, work_key=None, slug=None, season=Non
 
 # ── play bundle ──────────────────────────────────────────────────────────────
 
+@public_edge
 def play_bundle(conn, *, release_id, episode_id=None, include_adult=False) -> dict:
     """Ordered failover candidates for one print (optionally for one episode of it).
 
@@ -1865,6 +1966,11 @@ def play_bundle(conn, *, release_id, episode_id=None, include_adult=False) -> di
         return detail
     print_view = detail["print"]
     work = detail["work"]
+    # The offset tables are keyed by our own work_key, which is deliberately not a
+    # public field any more, so the ladder reads it straight from the row.
+    key_row = conn.execute("SELECT work_key FROM cat_works WHERE id = ?",
+                           (int(work["id"]),)).fetchone()
+    work_key = str(key_row["work_key"]) if key_row else ""
     candidates = _sort_links(print_view["links"])
     for index, link in enumerate(candidates, start=1):
         link["rank"] = index
@@ -1893,7 +1999,7 @@ def play_bundle(conn, *, release_id, episode_id=None, include_adult=False) -> di
                 "source": "cat_release_episodes",
             })
         if offset_block["offset_seconds"] is None:
-            learned = _offset_lookup(conn, work_key=str(work["work_key"]),
+            learned = _offset_lookup(conn, work_key=work_key,
                                      season_number=episode["season_number"],
                                      episode_number=episode["number"],
                                      release_label=str(print_view["label"] or ""))
@@ -1993,6 +2099,7 @@ def _entitlement_view(row) -> dict:
 _PAID_MODELS = {"paid", "purchase", "rental", "subscription", "tvod", "ppv"}
 
 
+@public_edge
 def resolve_entitlement(conn, *, work_id=None, work_key=None, release_id=None,
                         principal=None, now=None, include_adult=False) -> dict:
     """Explicit licence decision from `cat_entitlements` — never allow-by-absence.
@@ -2120,6 +2227,7 @@ def _evaluate(entry: dict, who: dict, work: dict, moment: float, release_id) -> 
 
 # ── continue-watching target ─────────────────────────────────────────────────
 
+@public_edge
 def resolve_episode_target(conn, *, work_id=None, work_key=None, season=0, episode=None,
                            release_label="", include_adult=False) -> dict:
     """Where to seek when resuming episode N of the print used for episode N-1.
@@ -2187,7 +2295,6 @@ def resolve_episode_target(conn, *, work_id=None, work_key=None, season=0, episo
     return {
         "ok": True,
         "work_id": work["id"],
-        "work_key": work["work_key"],
         "target": {
             "season": season_number,
             "episode": episode_number,
@@ -2212,6 +2319,7 @@ def resolve_episode_target(conn, *, work_id=None, work_key=None, season=0, episo
 
 # ── catalog state / cache ────────────────────────────────────────────────────
 
+@public_edge
 def catalog_state(conn) -> dict:
     """Revision + counts + projector version for ETag / cache validation.
 

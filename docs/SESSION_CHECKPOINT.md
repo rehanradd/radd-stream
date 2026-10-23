@@ -2,7 +2,51 @@
 
 Update this file after each independently verified milestone so work can resume across accounts, tools, and usage limits.
 
-## Current checkpoint — 2026-10-22 (Docs truth-audit vs viewer.py)
+## Current checkpoint — 2026-10-23 (Phase 1: provenance stops at the HTTP edge)
+
+- **Goal:** no ordinary user, and no third party reading our public API, can
+  learn which source site or which server a title comes from — while the ledger
+  keeps recording all of it for healing (zero data loss).
+- **Completed:** `Fast_Fetch/redact.py` (deny-by-default `project()` by output
+  key, recursive `scrub()`, opaque signed `stream_id` handles, needle/`is_clean`
+  sentinel scan, sentence-level label cleaning); every v1 emitter rewired in
+  `viewer.py`; v2 views wrapped in `catalog_api.py`; `/api/v1/rules`, `/api/data`,
+  `/api/sitemap`, `/api/fetch`, `/api/heal`, `/api/health-check` are
+  operator-only on the loopback port `RADD_INTERNAL_PORT` (default 8081);
+  `/api/v1/stream` rejects raw row ids and adult handles exactly like absent ones.
+- **Files changed:** `Fast_Fetch/{redact.py,test_redact.py,viewer.py,catalog_api.py,
+  test_catalog_api.py,test_database.py,sweep_public_edge.py,API_V2.md,
+  ANDROID_INTEGRATION.md,AGENTS.md,CONTINUITY.md}`, `.gitignore`,
+  `docs/PROJECT_MAP.md`, `docs/SESSION_CHECKPOINT.md`;
+  `Fast_Fetch/fast_fetch_export.json` and `database_view.html` untracked
+  (`git rm --cached`, still on disk — generated dumps must not live in the repo).
+- **Checks run and exact result:** `test_redact` 46/46, `test_catalog_api`
+  113/113, `test_database` 50/50 (run per module: this runner ignores extra
+  module names); 29-module offline sweep green; `python3 -S
+  Fast_Fetch/sweep_public_edge.py --db <full-catalog snapshot> --probe` exits 0 —
+  the public port named no site, no hoster and no upstream host (only hosts
+  inside public bodies: `127.0.0.1`, `image.tmdb.org`, `m.media-amazon.com`);
+  all 96,707 public `clean_title`s re-scrubbed: 604 changed, 1 emptied and that
+  one row's entire title is a site name.
+- **Known failures or checks not run:** live `test_all_sites.py` still fails on
+  network (pre-existing, unrelated). Android build not verified in this milestone
+  (Phase 0 compile gate is still open, tree is mid-flight with other agents).
+- **GitHub:** commit + push to `main` via the askpass flow with the explicit
+  clean URL (never `origin`, whose stored remote still embeds a credential).
+- **Oracle deployment:** not deployed. This is a code-only milestone; the live DB
+  is still the old one (task #14).
+- **Next concrete action:** Phase 2 (app: one player, embed/WebView surfaces
+  deleted, provenance structurally absent from wire models and Room) and Phase 3
+  (`brand.properties` as the single re-skin file), then task #28 — one best and
+  fastest option per quality tier, driven by `Fast_Fetch/tiers.py`.
+- **Blockers / decisions needed:** the exposed GitHub credential in
+  `.git/config remote.origin.url` is still the owner's to revoke. Also still open
+  by design: the public repo itself documents hoster and site names
+  (`Fast_Fetch/AGENTS.md` bridge table, `domain_registry.json`, `API_V2.md`
+  examples) — the same content we just removed from the public API; whether the
+  repo should keep it is an owner decision, not mine.
+
+## Previous checkpoint — 2026-10-22 (Docs truth-audit vs viewer.py)
 
 - **Goal:** Remove documentation that asserted API behaviour the code does not
   implement, so future agents and app developers stop building against endpoints

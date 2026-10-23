@@ -452,13 +452,32 @@ GET https://v3-cinemeta.strem.io/meta/movie/tt1234567.json
    # WRONG (causes SyntaxError):
    links = re.findall(r'href=[\"\\'](https?://...)[\"\\']', html)
    ```
-6. **After viewer.py changes** — regenerate `database_view.html` from the intended populated database. If the local DB is empty or not the source for the checked-in snapshot, test with `python fast_fetch.py export-html --output /tmp/database_view.html` and preserve the existing snapshot.
+6. **Generated dumps stay off the repo** — `fast_fetch.py export` and `export-html` write **full ledger rows** (site names, hoster names, resource ids, final URLs). Both outputs are gitignored and belong on the operator's disk only; never re-add `database_view.html` or `fast_fetch_export.*` to git. To inspect one, generate it to `/tmp` from the populated DB:
+   ```bash
+   python3 -S fast_fetch.py export-html --output /tmp/database_view.html
+   ```
 7. **DB path is relative** — `BASE_DIR / "fast_fetch.db"` — never hardcode absolute Windows paths
 8. **Test database changes offline** — run `python -S test_database.py` and `python -S test_vidout.py` from `Fast_Fetch/`.
 9. **Test on live URL** after adding any new extractor:
    ```bash
    python fast_fetch.py fetch "https://newsite.com/post-slug/"
    ```
+10. **Provenance stops at the HTTP edge** — `Fast_Fetch/redact.py` is the only thing between
+    the ledger and a client. A new column is invisible until it is *deliberately published* in a
+    `VIEWS` allowlist; a display string goes through `scrub_text()`; a playable, an artwork and
+    a download are addressed by a signed `stream_id` handle, never a row id or an upstream URL.
+    The operator's own view (raw `source_site`, `service`, `final_url`, `/api/v1/rules`,
+    `/api/data`) is served on the loopback port `RADD_INTERNAL_PORT` (default `127.0.0.1:8081`)
+    and `404`s on the public port. Rules of the road:
+    - **Never** add a provenance key to a public emitter (`dict(row)`, `SELECT *` into JSON) —
+      project it, or add it to `VIEWS` with a comment saying why a client needs it;
+    - **Never** redact stored data — the ledger keeps everything (Zero Data Loss rule); redaction
+      is a serialization decision at the edge, and tests assert the row is still intact;
+    - after any API-shape change run `python3 -S -m unittest test_redact` **and** the real-data
+      sweep: `python3 -S Fast_Fetch/sweep_public_edge.py --db /path/to/catalog_snapshot.db --probe`
+      (it boots the server on a snapshot and asserts no site, no hoster, no upstream host and no
+      provenance key reaches the public port, while the operator port still answers with all of
+      it). `API_V2.md` §16.9 is the contract this enforces.
 
 ---
 

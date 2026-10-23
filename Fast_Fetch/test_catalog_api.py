@@ -540,14 +540,32 @@ class BrowseTests(CatalogApiTestCase):
         item = catalog_api.browse(self.conn, limit=1)["items"][0]
         self.assertEqual(
             set(item),
-            {"id", "work_key", "title", "year", "work_type", "animated", "poster",
-             "rating", "genres", "languages", "country", "industry", "source_site",
+            {"id", "title", "year", "work_type", "animated", "poster",
+             "rating", "genres", "languages", "country", "industry",
              "site_count", "seasons", "episodes", "prints", "quality_max",
              "best_quality_score", "available", "flags", "identity_suspect",
              "entitlement", "first_seen_at", "updated_at", "sort_value", "adult"})
-        self.assertTrue(item["poster"]["url"].startswith("https://"))
+        self.assertTrue(item["poster"]["src"].startswith("/api/v1/art?"),
+                        "art hosted by a site we scrape becomes our own handle")
+        self.assertNotIn("cdn", item["poster"]["src"])
         self.assertIsNone(item["poster"]["width"], "poster width is not in the DB -> null")
         self.assertEqual(item["entitlement"], {"model": "free"})
+
+    def test_public_shapes_carry_no_source_identity(self):
+        """The v2 grid is the app's home screen: nothing in it names a site."""
+        for item in catalog_api.browse(self.conn, limit=100)["items"]:
+            self.assertNotIn("source_site", item)
+            self.assertNotIn("work_key", item)
+            self.assertNotIn("url", item["poster"])
+
+    def test_public_art_passes_a_known_cdn_through_untouched(self):
+        row = self.work["Dune"]
+        self.conn.execute("UPDATE cat_works SET poster_url = ? WHERE id = ?",
+                          ("https://image.tmdb.org/t/p/w500/abc.jpg", row["id"]))
+        item = [i for i in catalog_api.browse(self.conn, limit=100)["items"]
+                if i["id"] == row["id"]][0]
+        self.assertEqual(item["poster"]["src"], "https://image.tmdb.org/t/p/w500/abc.jpg",
+                         "TMDB art names nothing about us, so it needs no handle")
 
     def test_browse_exposes_identity_suspect_instead_of_hiding_it(self):
         page = catalog_api.browse(self.conn, limit=100)
@@ -670,12 +688,16 @@ class WorkDetailTests(CatalogApiTestCase):
         self.assertTrue(result["ok"])
         self.assertEqual(result["work"]["title"], "Adult Diary")
 
-    def test_identity_block_carries_external_ids_and_canonical_key(self):
+    def test_identity_block_carries_external_ids_and_no_internal_key(self):
         identity = self.detail("Dune")["identity"]
         self.assertEqual(identity["imdb_id"], "tt15239674")
         self.assertEqual(identity["tmdb_id"], 693134)
-        self.assertEqual(identity["canonical_key"], "imdb:tt15239674")
         self.assertIsNone(identity["tvdb_id"], "tvdb is never written -> null, not guessed")
+        self.assertNotIn("canonical_key", identity,
+                        "our own primary identity key is not for the client to mirror")
+        for variant in identity["title_variants"]:
+            self.assertNotIn("source_site", variant,
+                             "an alias is not allowed to say which site wrote it")
 
     def test_detail_is_addressable_by_work_key_and_by_page_slug(self):
         by_key = catalog_api.work_detail(self.conn, work_key="imdb:tt15239674")
@@ -777,12 +799,20 @@ class WorkDetailTests(CatalogApiTestCase):
         self.assertEqual(len(unresolved), 1)
         self.assertEqual(unresolved[0]["reason"], "season_unresolved")
 
-    def test_sites_provenance_lists_every_page_the_work_was_seen_on(self):
+    def test_sites_provenance_is_operator_only(self):
+        """Which page a title was scraped from stays in SQLite and the operator port."""
         detail = self.detail("Dune")
-        self.assertEqual(len(detail["sites"]), 1)
-        self.assertEqual(detail["sites"][0]["page_url"], "https://hdhub4u.test/dune-2024/")
-        self.assertEqual(detail["sites"][0]["source_site"], "hdhub4u")
-        self.assertEqual(detail["work"]["site_count"], 1)
+        self.assertNotIn("sites", detail)
+        self.assertNotIn("page_url", json.dumps(detail, sort_keys=True))
+        operator = catalog_api.work_detail(self.conn, work_id=self.work["Dune"]["id"],
+                                           include_provenance=True)
+        self.assertEqual(len(operator["provenance"]["sites"]), 1)
+        self.assertEqual(operator["provenance"]["sites"][0]["page_url"],
+                         "https://hdhub4u.test/dune-2024/")
+        self.assertEqual(operator["provenance"]["sites"][0]["source_site"], "hdhub4u")
+        self.assertEqual(operator["provenance"]["work_key"], "imdb:tt15239674")
+        self.assertEqual(detail["work"]["site_count"], 1,
+                         "how many places carry it is a number; which places is not")
 
     def test_multi_site_work_merges_pages_without_losing_links(self):
         self.add_post("ssrmovies", "https://ssr.test/dune-2024/", clean_title="Dune",
@@ -794,17 +824,16 @@ class WorkDetailTests(CatalogApiTestCase):
         detail = catalog_api.work_detail(self.conn, work_id=self.conn.execute(
             "SELECT id FROM cat_works WHERE work_key = 'imdb:tt15239674'").fetchone()["id"])
         self.assertEqual(detail["work"]["site_count"], 2)
-        self.assertEqual(len(detail["sites"]), 2)
+        self.assertNotIn("sites", detail)
         fourk = [p for p in detail["prints"] if p["resolution"] == "2160p"]
         # The projector keys a print by (label, origin_url), so the same-named 4K print
         # scraped from a second site stays two prints. What matters is that no link is
-        # lost: all three sources are still on the page, each under its own provenance.
+        # lost: all three sources are still on the page, each under its own handle.
         self.assertEqual(len(fourk), 2)
         self.assertEqual(sorted(p["counts"]["links"] for p in fourk), [1, 2])
-        self.assertEqual({p["source_site"] for p in fourk}, {"hdhub4u", "ssrmovies"})
-        self.assertEqual(sorted(tag for p in fourk for tag in
-                                [link["resource_id"] for link in p["links"]]),
-                         ["DUNE-DEAD-FAST", "DUNE-LIVE-SLOW", "DUNE-MIRROR-1"])
+        self.assertEqual(sorted(link["link_id"] for p in fourk for link in p["links"]),
+                         sorted(self.link_of[tag]["id"] for tag in
+                                ("DUNE-DEAD-FAST", "DUNE-LIVE-SLOW", "DUNE-MIRROR-1")))
         self.assertEqual(sum(p["counts"]["links"] for p in detail["prints"]), 9)
 
     def test_availability_and_entitlement_are_reported_for_every_work(self):
@@ -972,8 +1001,8 @@ class PlayBundleTests(CatalogApiTestCase):
         candidates = bundle["candidates"]
         self.assertEqual(len(candidates), 2)
         first, second = candidates
-        self.assertEqual(first["resource_id"], "DUNE-LIVE-SLOW")
-        self.assertEqual(second["resource_id"], "DUNE-DEAD-FAST")
+        self.assertEqual(first["link_id"], self.link_of["DUNE-LIVE-SLOW"]["id"])
+        self.assertEqual(second["link_id"], self.link_of["DUNE-DEAD-FAST"]["id"])
         self.assertTrue(second["dead"])
         self.assertEqual(second["state"], "dead")
         self.assertGreater(second["speed_mbps"], first["speed_mbps"],

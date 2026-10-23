@@ -19,6 +19,12 @@ Fast_Fetch/fast_fetch.db-wal
 *.db-shm
 *.db-wal
 
+# Generated catalog dumps. `fast_fetch.py export` and `export-html` write full
+# ledger rows — site names, hoster names, resource ids, final URLs — which is our
+# whole healing index. They belong on the operator's disk, not a public repo.
+Fast_Fetch/fast_fetch_export.*
+Fast_Fetch/database_view.html
+
 # Scratch/temp files
 Fast_Fetch/_fix_regex.py
 Fast_Fetch/_*.py
