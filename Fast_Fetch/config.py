@@ -120,6 +120,21 @@ else:
 # EXPORT_DIR: where to write HTML, JSON, CSV exports
 EXPORT_DIR = Path(os.environ.get("RADD_EXPORT_DIR", str(BASE_DIR)))
 
+# ── Staging databases ─────────────────────────────────────────────────────────
+# Every site scrapes into its OWN database, and it lives outside the git
+# checkout: a 400 MB staging DB inside the repo is one `git add -A` away from
+# being published, and AGENTS.md's isolation rule exists for exactly that.
+_DATA_DIR_ENV = os.environ.get("RADD_DATA_DIR")
+_ORACLE_DATA_DIR = Path("/home/ubuntu/radd-stream-data")
+DATA_DIR = Path(_DATA_DIR_ENV) if _DATA_DIR_ENV else (
+    _ORACLE_DATA_DIR if _ORACLE_DATA_DIR.exists() else BASE_DIR
+)
+
+
+def staging_db_path(site: str) -> Path:
+    """Where one site's staging database lives, on every machine, never in the repo."""
+    return DATA_DIR / f"{site}.db"
+
 # LOG_DIR: optional log directory
 LOG_DIR = Path(os.environ.get("RADD_LOG_DIR", str(BASE_DIR / "logs")))
 

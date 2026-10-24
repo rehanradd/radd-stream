@@ -1008,6 +1008,91 @@ def parse_katmoviehd_releases(content_html: str, default_season: int | None = No
             "bridge_url": h,
         })
 
+    # Pre-2022 layout fallback: those posts carry Magnet/Torrent/GDTot/AnonFiles
+    # buttons only, which classify_link has never known. Without this pass every
+    # one of them was booked as a scrape failure (6,135 rows audited 2026-10-23).
+    # It runs only when the modern patterns found nothing, so a current post can
+    # never gain duplicate releases from it.
+    return releases or parse_katmoviehd_legacy_releases(content_html, default_season)
+
+
+# Download hosts used by the old KatMovieHD layout, mapped to a service name.
+# Nav and promo anchors on the same pages (imdb, wikipedia, sister sites, the
+# imagetot thumbnail host, 1xcinema) are deliberately NOT sources for this title.
+LEGACY_DOWNLOAD_HOSTS = (
+    "gdtot.", "anonfiles.com", "anonfile.com", "fichier.cc", "up-4ever",
+    "ninjastream.to", "ddownload", "mixdrop", "moondlc",
+)
+LEGACY_TORRENT_HOSTS = ("torrentshub", "torrentgalaxy", "1337x")
+LEGACY_SOURCE_TYPES = ("magnet", "torrent", "gdtot", "anonfiles", "ninjastream")
+
+
+def _legacy_host_type(href: str) -> tuple[str, str]:
+    """Returns (service, file_id) for an old-layout download anchor, else ('', '')."""
+    low = href.lower()
+    if low.startswith("magnet:"):
+        btih = re.search(r"btih:([A-Za-z0-9]+)", low)
+        dn = re.search(r"[?&]dn=([^&\"'\s<>]+)", href)
+        name = urllib.parse.unquote(dn.group(1)) if dn else ""
+        return "magnet", (btih.group(1) if btih else "")[:64] or name[:48]
+    if low.endswith(".torrent") or "?xt=urn:btih" in low or any(t in low for t in LEGACY_TORRENT_HOSTS):
+        return "torrent", urllib.parse.quote(href)[-48:]
+    for host in LEGACY_DOWNLOAD_HOSTS:
+        if host in low:
+            service = host.rstrip(".").rstrip(".").split(".")[0].replace("-", "")
+            if "ninjastream" in low:
+                service = "ninjastream"
+            elif low.startswith("http") and host in ("gdtot.", "anonfiles.com", "anonfile.com"):
+                service = "gdtot" if "gdtot" in low else "anonfiles"
+            tail = href.rstrip("/").split("/")[-1]
+            return service, (tail or href)[:48]
+    return "", ""
+
+
+def parse_katmoviehd_legacy_releases(content_html: str, default_season: int | None = None) -> list[dict]:
+    """Extracts releases from the pre-2022 KatMovieHD download block layout.
+
+    Covers `: DOWNLOAD LINKS :` style posts whose buttons are Magnet, Torrent,
+    GDTot and AnonFiles rather than the current KatDrive / HubCloud ids.
+    """
+    if not content_html:
+        return []
+    releases = []
+    seen = set()
+    has_episodes = bool(re.search(r"\bEpisode\s*\d+\b", content_html, re.I))
+    for m in re.finditer(r'<a\b[^>]*href=["\']([^"\']+)["\'][^>]*>(.*?)</a>',
+                         content_html, re.DOTALL | re.I):
+        href = html.unescape(m.group(1).strip())
+        if href in seen:
+            continue
+        stype, fid = _legacy_host_type(href)
+        if not stype:
+            continue
+        text = re.sub(r"<[^>]+>", " ", m.group(2))
+        text = re.sub(r"\s+", " ", html.unescape(text)).strip()
+        ep_m = re.search(r'(?:Episode|Ep)\s*0?(\d+)', text, re.I)
+        ep_num = int(ep_m.group(1)) if ep_m else None
+        if ep_num is None and has_episodes:
+            pre = list(re.finditer(r'(?:Episode|Ep)\s*0?(\d+)',
+                                   content_html[max(0, m.start() - 500):m.start()], re.I))
+            if pre:
+                ep_num = int(pre[-1].group(1))
+        quality = "720p"
+        for cand, label in (("2160p", "4K"), ("1080p", "1080p"), ("720p", "720p"), ("480p", "480p")):
+            if cand in href.lower() or cand in text.lower():
+                quality = cand
+                break
+        releases.append({
+            "label": (text or f"{stype} download")[:80],
+            "episode_number": ep_num,
+            "season_number": (default_season or 1) if (ep_num is not None) else None,
+            "quality": quality,
+            "resolution": quality,
+            "file_id": fid,
+            "source_type": stype,
+            "bridge_url": href,
+        })
+        seen.add(href)
     return releases
 
 
@@ -1124,8 +1209,29 @@ def resolve_file_sources(
             })
         return None, sources
 
-    # Legacy KMHD REST API lookup
-    api_url = f"{KMHD_API_BASE}/file/{file_id}"
+    elif source_type in LEGACY_SOURCE_TYPES:
+        # Pre-2022 posts carry Magnet/Torrent/GDTot/AnonFiles buttons instead of
+        # KatDrive ids. They are stored verbatim (never dropped, never resolved
+        # against the KatDrive REST API, which has no record of them).
+        names = {
+            "magnet": "🧲 Magnet Torrent",
+            "torrent": "📦 Torrent File",
+            "gdtot": "🌐 GDTot Bridge",
+            "anonfiles": "🌐 AnonFiles Mirror",
+            "ninjastream": "▶ NinjaStream Watch",
+        }
+        sources.append({
+            "source_name": names.get(source_type, f"🌐 {source_type}"),
+            "service": source_type,
+            "resource_id": file_id,
+            "source_url": bridge_url,
+            "final_url": bridge_url,
+            "is_temporary": 0,
+            "quality": "720p",
+        })
+        return None, sources
+
+    # Legacy KMHD REST API lookup    api_url = f"{KMHD_API_BASE}/file/{file_id}"
     data = client.get_api_json(api_url, timeout=timeout)
     if not data or not isinstance(data, dict):
         sources.append({

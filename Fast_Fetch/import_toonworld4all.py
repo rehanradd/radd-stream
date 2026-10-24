@@ -38,11 +38,12 @@ if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
 
 import fast_fetch
+from config import staging_db_path
 from domain_resolver import get_active_base_url
 
 DEFAULT_BASE_URL = "https://toonworld4all.me"
 SITE_NAME = "toonworld4all"
-DB_PATH = BASE_DIR.parent / "toonworld4all.db"
+DB_PATH = staging_db_path("toonworld4all")
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"

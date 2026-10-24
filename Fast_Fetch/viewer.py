@@ -24,6 +24,7 @@ from socketserver import ThreadingMixIn
 
 import redact
 import tiers
+import api_v2
 
 if sys.platform.startswith("win"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -58,6 +59,10 @@ OPERATOR_ONLY_ROUTES = frozenset({
     # — and clients use the paginated /api/v1/posts.
     "/api/data",
 })
+
+#: CORS lives in redact so the v1 and v2 edges share one allow-list (§16.7).
+cors_headers_for = redact.cors_headers_for
+
 
 _SIGNING_SECRET = None
 
@@ -2227,8 +2232,15 @@ def _option_groups(releases, rel_list) -> list:
         merged = tiers.merge(ladders)
         if merged["tiers"]:
             for tier in merged["tiers"]:
+                backups = tier.pop("backups", None) or []
                 if tier["link"] is not None:
                     tier["link"] = redact.project(tier["link"], "ladder_link")
+                # Only the runner-up *handles* travel. The player turns a handle
+                # into our own /api/v1/stream URL exactly as it does for the
+                # winner, so a backup needs nothing more to start — and a backup's
+                # diagnostics are as private as the winner's.
+                tier["backup_handles"] = [str(item["stream_id"]) for item in backups
+                                          if item.get("stream_id")]
             groups.append({"season": season, "episode": episode, **merged})
     groups.sort(key=lambda group: tiers.scope_sort_key(group["season"],
                                                        group["episode"]))
@@ -2317,18 +2329,48 @@ class DashboardHandler(BaseHTTPRequestHandler):
     def send_json(self, data: any, status: int = 200,
                   extra_headers: list[tuple[str, str]] | None = None):
         body = json.dumps(data, ensure_ascii=False).encode("utf-8")
-        headers = [("Access-Control-Allow-Origin", "*")]
+        headers = cors_headers_for(self.headers.get("Origin", ""))
         if extra_headers:
             headers.extend(extra_headers)
         self.send_bytes(body, content_type="application/json; charset=utf-8",
                         status=status, extra_headers=headers)
 
-    def _bucket_for(self, path: str) -> str:
+    def _bucket_for(self, path: str, method: str = "GET") -> str:
+        if api_v2.is_v2(path):
+            # The v2 budget is the same token bucket, under the route map in
+            # `api_v2.ROUTE_BUCKETS`; there is no second limiter.
+            return api_v2.bucket_for(path, method)
         if path in ("/api/v1/stream", "/api/v1/art", "/api/m3u"):
             return "play"
         if path == "/api/v1/stats":
             return "reports"
         return "browse"
+
+    def _public_gate(self, path: str, method: str = "GET") -> bool:
+        """The edge every public request passes: no operator route, one token
+        bucket, the `RateLimit-*` triple on whatever we answer (§16.5).
+
+        Returns True when the caller may proceed. The operator flag lives on the
+        server instance, so this gate is the loopback port's absence, never a
+        header a client can set.
+        """
+        if path in OPERATOR_ONLY_ROUTES:
+            self.send_json({"success": False, "error": "not_found"}, status=404)
+            return False
+        verdict = redact.limiter.check(self._bucket_for(path, method),
+                                       redact.client_ip(self))
+        self.rate_headers = redact.limiter.headers(verdict)
+        if not verdict["allowed"]:
+            if api_v2.is_v2(path):
+                api_v2.problem(self, code="rate_limited", rid=api_v2.request_id(),
+                               instance=path,
+                               detail="This client is over its request budget.",
+                               headers=[("Retry-After", str(verdict["retry_after"]))])
+            else:
+                self.send_json({"success": False, "error": "rate_limited"}, status=429,
+                               extra_headers=[("Retry-After",
+                                                str(verdict["retry_after"]))])
+        return verdict["allowed"]
 
     def _serve_art(self, query_params: dict, full: bool = False) -> None:
         """302 to a work's own artwork, addressed by our handle.
@@ -2359,7 +2401,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
             return
         self.send_response(302)
         self.send_header("Location", target)
-        self.send_header("Access-Control-Allow-Origin", "*")
+        for name, value in cors_headers_for(self.headers.get("Origin", "")):
+            self.send_header(name, value)
         self.send_header("Cache-Control", "public, max-age=86400")
         self.send_header("Connection", "close")
         self.end_headers()
@@ -2373,16 +2416,18 @@ class DashboardHandler(BaseHTTPRequestHandler):
         # query parameter — the whole point of a separate loopback port.
         full = bool(getattr(self.server, "operator", False))
         base_url = "" if full else _public_base(self)
-        if not full:
-            if path in OPERATOR_ONLY_ROUTES:
-                self.send_json({"success": False, "error": "not_found"}, status=404)
-                return
-            verdict = redact.limiter.check(self._bucket_for(path),
-                                           redact.client_ip(self))
-            self.rate_headers = redact.limiter.headers(verdict)
-            if not verdict["allowed"]:
-                self.send_json({"success": False, "error": "rate_limited"}, status=429,
-                               extra_headers=[("Retry-After", str(verdict["retry_after"]))])
+        if not full and not self._public_gate(path, "GET"):
+            return
+
+        if api_v2.is_v2(path):
+            # The whole v2 surface (§12) is mounted here and only here: every
+            # payload comes out of `catalog_api`, whose `@public_edge` decorator
+            # runs `redact.scrub`, so a field added to a view later is denied
+            # rather than published.
+            _ensure_schema()
+            if api_v2.route_get(self, path, query_params, db_path=DB_PATH,
+                                operator=full, base_url=_public_base(self),
+                                secret=signing_secret()):
                 return
 
         if path == "/api/data":
@@ -2504,7 +2549,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     # them. What the user sees is our own URL.
                     self.send_response(302)
                     self.send_header("Location", res["url"])
-                    self.send_header("Access-Control-Allow-Origin", "*")
+                    for name, value in cors_headers_for(self.headers.get("Origin", "")):
+                        self.send_header(name, value)
                     self.send_header("Connection", "close")
                     self.end_headers()
                 else:
@@ -2537,12 +2583,29 @@ class DashboardHandler(BaseHTTPRequestHandler):
         elif path == "/api/v1/stats":
             _ensure_schema()
             with get_db() as conn:
-                posts_c = conn.execute("SELECT COUNT(*) FROM posts").fetchone()[0]
-                rels_c = conn.execute("SELECT COUNT(*) FROM releases").fetchone()[0]
-                srcs_c = conn.execute("SELECT COUNT(*) FROM download_sources").fetchone()[0]
-                active_c = conn.execute("SELECT COUNT(*) FROM download_sources WHERE status = 'active'").fetchone()[0]
-                resumable_c = conn.execute("SELECT COUNT(*) FROM download_sources WHERE is_resumable = 1").fetchone()[0]
-                temp_c = conn.execute("SELECT COUNT(*) FROM download_sources WHERE is_temporary = 1").fetchone()[0]
+                # Every number a client can see excludes 18+ rows, the same rule as the
+                # lists: a count that quietly includes them would advertise that they
+                # exist. One pass per table, conditional sums inside it, because this box
+                # has one core and four separate 2M-row scans is not free.
+                posts_c = conn.execute(
+                    "SELECT COUNT(*) FROM posts WHERE is_18_plus IS NULL OR is_18_plus = 0"
+                ).fetchone()[0]
+                rels_c = conn.execute(
+                    "SELECT COUNT(*) FROM releases r JOIN posts p ON p.id = r.post_id"
+                    " WHERE p.is_18_plus IS NULL OR p.is_18_plus = 0"
+                ).fetchone()[0]
+                src_row = conn.execute(
+                    "SELECT COUNT(*),"
+                    " SUM(CASE WHEN d.status = 'active' THEN 1 ELSE 0 END),"
+                    " SUM(CASE WHEN d.is_resumable = 1 THEN 1 ELSE 0 END),"
+                    " SUM(CASE WHEN d.is_temporary = 1 THEN 1 ELSE 0 END)"
+                    " FROM download_sources d"
+                    " JOIN releases r ON r.id = d.release_id"
+                    " JOIN posts p ON p.id = r.post_id"
+                    " WHERE p.is_18_plus IS NULL OR p.is_18_plus = 0"
+                ).fetchone()
+                srcs_c, active_c, resumable_c, temp_c = (src_row[0] or 0, src_row[1] or 0,
+                                                          src_row[2] or 0, src_row[3] or 0)
             self.send_json(redact.project({
                 "posts": posts_c,
                 "releases": rels_c,
@@ -2571,6 +2634,27 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
         else:
             self.send_bytes(b"Not Found", content_type="text/plain", status=404)
+
+    def do_POST(self):
+        """The v2 write surface (§12): `/play`, link reports, learned offsets.
+
+        Same edge as `do_GET` — operator routes 404, one token bucket, the
+        `RateLimit-*` triple — because a POST is the same attack surface wearing a
+        different verb. Nothing else on this server accepts a POST.
+        """
+        parsed = urllib.parse.urlparse(self.path)
+        path = parsed.path
+        query_params = urllib.parse.parse_qs(parsed.query)
+        full = bool(getattr(self.server, "operator", False))
+        if not full and not self._public_gate(path, "POST"):
+            return
+        if api_v2.is_v2(path):
+            _ensure_schema()
+            if api_v2.route_post(self, path, query_params, db_path=DB_PATH,
+                                 operator=full, base_url=_public_base(self),
+                                 secret=signing_secret()):
+                return
+        self.send_json({"success": False, "error": "not_found"}, status=404)
 
     def log_message(self, format, *args):
         pass

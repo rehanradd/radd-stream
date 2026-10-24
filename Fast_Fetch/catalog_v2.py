@@ -22,7 +22,10 @@ from pathlib import Path
 
 BASE_DIR = Path(__file__).parent.resolve()
 
-SCHEMA_VERSION = 1
+#: v2 -> the link-state vocabulary changed under `link_state.py`: `cat_links.state`
+#: now defaults to 'unchecked' (never probed) instead of claiming 'active', and every
+#: projected link carries `ledger_link_id` so a verdict can reach it without a rebuild.
+SCHEMA_VERSION = 2
 MAX_ENUMERATED_EPISODES = 120
 
 _SERIES_TYPES = {"series", "complete_season", "ongoing_season", "anime", "miniseries"}
@@ -222,6 +225,7 @@ CREATE TABLE IF NOT EXISTS cat_links (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     release_id INTEGER NOT NULL,
     work_id INTEGER NOT NULL,
+    ledger_link_id INTEGER,
     source_site TEXT,
     service TEXT,
     source_name TEXT,
@@ -230,7 +234,10 @@ CREATE TABLE IF NOT EXISTS cat_links (
     final_url TEXT,
     resource_id TEXT,
     playability TEXT NOT NULL DEFAULT 'unknown',
-    state TEXT NOT NULL DEFAULT 'active',
+    -- 'unchecked' is the honest default: a link nobody has knocked on has no
+    -- verdict. 'active' must be EARNED by link_state.propagate(), never inherited
+    -- from a scraper's guess (HANDOFF_audit.md defect D7).
+    state TEXT NOT NULL DEFAULT 'unchecked',
     resumable INTEGER NOT NULL DEFAULT 0,
     accepts_ranges INTEGER NOT NULL DEFAULT 0,
     cors_open INTEGER NOT NULL DEFAULT 0,
@@ -319,7 +326,28 @@ CREATE INDEX IF NOT EXISTS idx_cat_works_browse ON cat_works(updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_cat_releases_work ON cat_releases(work_id, quality_score DESC);
 CREATE INDEX IF NOT EXISTS idx_cat_links_release ON cat_links(release_id, rank_score DESC);
 CREATE INDEX IF NOT EXISTS idx_cat_links_state ON cat_links(state, playability);
+CREATE INDEX IF NOT EXISTS idx_cat_links_ledger ON cat_links(ledger_link_id);
 CREATE INDEX IF NOT EXISTS idx_cat_episodes_work ON cat_episodes(work_id, number);
+"""
+
+
+#: The playability ladder, as one expression, so the projector, `link_state`'s
+#: incremental sync and the API cannot drift into three different scores.
+#: A link we have never verified scores 0 on liveness; a link a probe marked dead
+#: loses 450 — which is what keeps a dead server off the top of the shelf.
+RANK_SCORE_EXPR = """
+    CASE
+        WHEN playability IN ('stream', 'both') THEN 500
+        WHEN playability = 'download' THEN 250
+        WHEN playability = 'resolve_required' THEN 120
+        WHEN playability = 'webview' THEN 80
+        ELSE 0 END
+        + CASE WHEN tier = 1 THEN 150 ELSE 0 END
+        + CASE WHEN ephemeral = 0 THEN 100 ELSE 0 END
+        + CASE WHEN accepts_ranges = 1 THEN 50 ELSE 0 END
+        + CASE WHEN state = 'active' THEN 100
+               WHEN state IN ('unknown', 'unchecked') THEN 0
+               ELSE -450 END
 """
 
 
@@ -397,10 +425,28 @@ def classify_link(service: str, source_url: str, final_url: str,
 
 def ensure_schema(conn: sqlite3.Connection) -> None:
     conn.executescript(DDL)
+    _migrate_link_state(conn)
     conn.execute(
         "INSERT OR REPLACE INTO cat_projection_meta (key, value) VALUES ('schema_version', ?)",
         (str(SCHEMA_VERSION),),
     )
+
+
+def _migrate_link_state(conn: sqlite3.Connection) -> None:
+    """Add the link-state columns to a `cat_links` table built by an older version.
+
+    `CREATE TABLE IF NOT EXISTS` cannot change an existing table, and a v1 projection
+    (catalog_full.db) has no `ledger_link_id` and still defaults `state` to 'active'.
+    The column is added here; the *default* stays a v1 artifact, because a rebuild
+    rewrites every row through `_link_state_of()` anyway — and per the zero-data-loss
+    rule we never recreate a 3.2 GB table to fix a default nobody reads."""
+    existing = {row[1] for row in conn.execute("PRAGMA table_info(cat_links)")}
+    if not existing:
+        return
+    if "ledger_link_id" not in existing:
+        conn.execute("ALTER TABLE cat_links ADD COLUMN ledger_link_id INTEGER")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_cat_links_ledger"
+                 " ON cat_links(ledger_link_id)")
 
 
 def _reset(conn: sqlite3.Connection) -> None:
@@ -622,6 +668,20 @@ def project(conn: sqlite3.Connection, *, rev: int | None = None, reset: bool = T
                      (key, str(value)))
     conn.execute("INSERT OR REPLACE INTO cat_projection_meta (key, value) VALUES ('projected_at', ?)",
                  (str(now),))
+    # How much of the projected catalog has actually been knocked on. Recorded every
+    # rebuild so ops can see the honest coverage number in the same table that says
+    # when the projection was made — a 100%-active catalog with coverage 0.0 is the
+    # defect this exists to expose (HANDOFF_audit.md D7).
+    by_state = {str(row[0]): int(row[1]) for row in
+                conn.execute("SELECT state, COUNT(*) FROM cat_links GROUP BY state")}
+    conn.execute(
+        "INSERT OR REPLACE INTO cat_projection_meta (key, value) VALUES ('links_by_state', ?)",
+        (json.dumps(by_state, sort_keys=True),))
+    conn.execute(
+        "INSERT OR REPLACE INTO cat_projection_meta (key, value) VALUES ('link_coverage', ?)",
+        (str(round(by_state.get("active", 0) / sum(by_state.values()), 4)
+             if by_state else 0.0),))
+    summary["links_by_state"] = by_state
     conn.commit()
     if verbose:
         print(f"[✓] catalog v2 projected: {summary}", flush=True)
@@ -760,18 +820,27 @@ def _project_pages(conn, works, work_ids, release_descriptor, now) -> dict:
                     )
                     if kind == "dead_end":
                         counters["unattributed"] += 1
+                    state = _link_state_of(src)
+                    measured = _measured_evidence(src)
+                    counters["link_state_" + state] = counters.get("link_state_" + state, 0) + 1
                     conn.execute(
                         """
-                        INSERT OR IGNORE INTO cat_links (release_id, work_id, source_site, service,
+                        INSERT OR IGNORE INTO cat_links (release_id, work_id, ledger_link_id,
+                            source_site, service,
                             source_name, kind, url, final_url, resource_id, playability, state,
-                            ephemeral, protocol, size_bytes, http_status, tier)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            resumable, accepts_ranges, cors_open,
+                            ephemeral, protocol, content_type, size_bytes, latency_ms, speed_mbps,
+                            http_status, last_evidence_at, tier)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """,
-                        (release_id, work_id, rel_site,
+                        (release_id, work_id, src["id"], rel_site,
                          src["service"], src["source_name"], kind, src["source_url"], src["final_url"],
-                         src["resource_id"], playability, _pick_col(src, "status", "active"),
+                         src["resource_id"], playability, state,
+                         measured["resumable"], measured["accepts_ranges"], measured["cors_open"],
                          int(src["is_temporary"] or 0), _protocol_of(kind, playability),
+                         measured["content_type"],
                          _pick_col(src, "file_size_bytes", None), _pick_col(src, "http_status", None),
+                         measured["speed_mbps"], measured["latency_ms"], measured["checked_at"],
                          1 if _is_tier1(src["service"]) else 2),
                     )
                     counters["links"] += 1
@@ -833,6 +902,53 @@ def _pick_col(row, name, default):
     return row[name] if name in row.keys() and row[name] is not None else default
 
 
+def _link_state_of(src) -> str:
+    """What the ledger's `status` *means*, in projection vocabulary.
+
+    The authority is `link_state`: a scraper wrote 'active' into every row at ingest
+    and nothing verified it (HANDOFF_audit.md D7), so an 'active' with no probe
+    evidence behind it projects as 'unchecked' — which scores 0 on liveness here and
+    is a legal value on the v2 wire (api_v2.py §filters). A row that was measured, or
+    explicitly marked dead/expired by a scraper or the healer, keeps its state.
+    """
+    status = str(_pick_col(src, "status", "") or "").strip().lower()
+    if status not in ("", "active"):
+        return status
+    verified = any(_pick_col(src, name, None) not in (None, "", 0)
+                   for name in ("checked_at", "last_checked_at", "http_status"))
+    if status == "active" and verified:
+        return "active"
+    return "unchecked"
+
+
+def _measured_evidence(src) -> dict:
+    """The probe facts a ledger row carries, shaped for `cat_links`.
+
+    Everything defaults to "unknown" (0/None) so an unprobed link cannot win a rank
+    on a field nobody filled in."""
+    checked_at = _pick_col(src, "checked_at", None)
+    if checked_at in (None, ""):
+        stamp = _pick_col(src, "last_checked_at", None)
+        checked_at = None
+        if stamp:
+            try:
+                import datetime as _dt
+                parsed = _dt.datetime.strptime(str(stamp)[:19], "%Y-%m-%d %H:%M:%S")
+                checked_at = parsed.replace(tzinfo=_dt.timezone.utc).timestamp()
+            except (ValueError, TypeError):
+                checked_at = None
+    ranges = 1 if int(_pick_col(src, "is_resumable", 0) or 0) else 0
+    return {
+        "resumable": ranges,
+        "accepts_ranges": ranges,
+        "cors_open": int(_pick_col(src, "cors_open", 0) or 0),
+        "content_type": _pick_col(src, "mime_type", None),
+        "speed_mbps": _pick_col(src, "speed_mbps", None),
+        "latency_ms": _pick_col(src, "latency_ms", None),
+        "checked_at": checked_at,
+    }
+
+
 def _protocol_of(kind: str, playability: str) -> str:
     if kind == "hls_manifest":
         return "hls"
@@ -861,22 +977,7 @@ def _finalize(conn, works, work_ids, now) -> None:
                                   AND l.playability IN ('download', 'both', 'resolve_required'))
         """
     )
-    conn.execute(
-        """
-        UPDATE cat_links SET rank_score = CASE
-            WHEN playability IN ('stream', 'both') THEN 500
-            WHEN playability = 'download' THEN 250
-            WHEN playability = 'resolve_required' THEN 120
-            WHEN playability = 'webview' THEN 80
-            ELSE 0 END
-            + CASE WHEN tier = 1 THEN 150 ELSE 0 END
-            + CASE WHEN ephemeral = 0 THEN 100 ELSE 0 END
-            + CASE WHEN accepts_ranges = 1 THEN 50 ELSE 0 END
-            + CASE WHEN state = 'active' THEN 100
-                   WHEN state IN ('unknown', 'unchecked') THEN 0
-                   ELSE -450 END
-        """
-    )
+    conn.execute(f"UPDATE cat_links SET rank_score = {RANK_SCORE_EXPR}")
     conn.execute("UPDATE cat_episodes SET absolute_number = NULL")
     conn.execute(
         """

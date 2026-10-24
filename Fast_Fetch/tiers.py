@@ -34,6 +34,10 @@ from __future__ import annotations
 BANDS = ("2160p", "1080p", "720p", "480p", "sd")
 UNSPECIFIED = "unspecified"
 
+#: How many same-band runner-ups travel with the winner. Two is enough to survive
+#: one CDN refusing us, and it is still a silent list the user never sees.
+BACKUP_LIMIT = 2
+
 #: Weight of each playback kind. A direct file needs nothing from us; a page link
 #: needs our resolver; a download is not playable here; an embed is not playable
 #: at all and is therefore not a candidate for the play ladder. Both vocabularies
@@ -156,18 +160,6 @@ def _seconds_since(value) -> float | None:
         delta = datetime.now(timezone.utc) - stamp.replace(tzinfo=timezone.utc)
         return delta.total_seconds()
     return None
-    from datetime import datetime, timezone
-    text = str(value or "").strip()
-    if not text:
-        return None
-    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d"):
-        try:
-            stamp = datetime.strptime(text[:19], fmt)
-        except ValueError:
-            continue
-        delta = datetime.now(timezone.utc) - stamp.replace(tzinfo=timezone.utc)
-        return delta.total_seconds()
-    return None
 
 
 def score(link, band: str = UNSPECIFIED) -> int:
@@ -255,9 +247,19 @@ def for_release(release, links) -> dict:
         "playable": bool(play_winner),
         "link": None,
         "copies": len(candidates),
+        "backups": [],
     }
     chosen = play_winner or winner
     tier["link"] = chosen[2]
+    # Silent failover needs a runner-up in the same band, not a different quality:
+    # when the winner's CDN answers 403 mid-play, the player hops to the next copy
+    # of the *same* rung at the exact position. Ranking is already done, so these
+    # are free; they are the copies the collapse folded away, kept as candidates
+    # rather than discarded (zero data loss). A play tier only fails over to
+    # something that plays; a download-only tier fails over to other copies.
+    pool = [item[2] for item in scored
+            if item is not chosen and (playable(item[2], band) if play_winner else True)]
+    tier["backups"] = pool[:BACKUP_LIMIT]
     auto = {"band": band, "playable": bool(play_winner)} if play_winner else None
     return {"tiers": [tier], "auto": auto}
 
@@ -274,21 +276,57 @@ def _tier_label(release, band: str) -> str:
     return " · ".join(parts)
 
 
+def _same_link(left, right) -> bool:
+    """Do these two views describe the same copy?
+
+    Identity is the cheap case (the winner object itself). Otherwise the first
+    key both sides carry decides it: ``stream_id`` is minted from the row id, so
+    equal handles mean one copy seen twice, and different handles never do."""
+    if left is right:
+        return True
+    for key in ("stream_id", "link_id", "id"):
+        first = left.get(key) if hasattr(left, "get") else None
+        second = right.get(key) if hasattr(right, "get") else None
+        if first is not None and second is not None:
+            return first == second
+    return False
+
+
 def merge(ladders) -> dict:
     """Merge per-print ladders into one quality switch for the whole title.
 
     Two prints in the same band (the usual case: the same movie scraped from two
     sites) are collapsed to their single best copy, so the user sees one row per
-    quality. ``auto`` prefers the highest band that plays, then the best score."""
+    quality. ``auto`` prefers the highest band that plays, then the best score.
+
+    The collapse must not lose the failover pool: every copy each print offered
+    (winner *and* runner-up) is kept, re-ranked across prints, and the best two
+    that are not the winner travel with it as that band's backups. A user on
+    1080p whose first CDN refuses mid-play still lands on 1080p."""
     by_band: dict[str, dict] = {}
+    offered: dict[str, list] = {}
     for ladder in ladders:
         for tier in ladder.get("tiers", []):
             key = tier["band"]
+            bucket = offered.setdefault(key, [])
+            for item in [tier.get("link"), *(tier.get("backups") or [])]:
+                if item is not None and not any(_same_link(item, held) for held in bucket):
+                    bucket.append(item)
             current = by_band.get(key)
-            if current is None or score(tier["link"], key) > score(current["link"], key):
-                merged = dict(tier)
-                merged["copies"] = (current["copies"] if current else 0) + tier["copies"]
-                by_band[key] = merged
+            # The fold counts every copy the band actually held, whoever won it: a
+            # tie keeps the earlier print (stable) but still adds the newcomer, so
+            # "6 copies collapsed into this row" stays the honest number.
+            promoted = current if (current is not None
+                                   and score(current["link"], key) >= score(tier["link"], key)) \
+                else dict(tier)
+            promoted["copies"] = (current["copies"] if current else 0) + tier["copies"]
+            by_band[key] = promoted
+    for key, tier in by_band.items():
+        rest = [item for item in offered[key] if not _same_link(item, tier["link"])]
+        if tier["playable"]:
+            rest = [item for item in rest if playable(item, key)]
+        rest.sort(key=lambda item: (-score(item, key), str(item.get("stream_id") or "")))
+        tier["backups"] = rest[:BACKUP_LIMIT]
     tiers = sorted(by_band.values(), key=lambda tier: band_rank(tier["band"]))
     playable_tiers = [tier for tier in tiers if tier["playable"]]
     auto = None

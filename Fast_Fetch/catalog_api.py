@@ -362,7 +362,8 @@ def _sort_expr(sort: str) -> str:
 # ── facet filters (shared by browse + search) ────────────────────────────────
 
 def _facet_clauses(content_type, genres, languages, qualities, available,
-                   year_from, year_to, min_quality) -> tuple[list[str], dict]:
+                   year_from, year_to, min_quality, animated=None,
+                   country=(), industry=()) -> tuple[list[str], dict]:
     clauses: list[str] = []
     params: dict = {}
     types: list[str] = []
@@ -428,6 +429,22 @@ def _facet_clauses(content_type, genres, languages, qualities, available,
     if min_quality not in (None, ""):
         clauses.append("COALESCE(w.best_quality_score, 0) >= :minq")
         params["minq"] = int(min_quality)
+    if animated is not None:
+        # API_V2.md §12 lists `animated` as a browse facet; `cat_works.is_animated`
+        # is the projector's own flag, so it filters in SQL like every other facet.
+        clauses.append("COALESCE(w.is_animated, 0) = :animated")
+        params["animated"] = 1 if animated else 0
+    for index, values in enumerate((country, industry)):
+        terms = _iter_terms(values)
+        if not terms:
+            continue
+        column = "country" if index == 0 else "industry"
+        placeholders = []
+        for term_index, term in enumerate(terms):
+            name = f"{column}{index}_{term_index}"
+            placeholders.append(f":{name}")
+            params[name] = normalize_text(term)
+        clauses.append(f"LOWER(COALESCE(w.{column}, '')) IN ({', '.join(placeholders)})")
     return clauses, params
 
 
@@ -1201,7 +1218,7 @@ def _relevance(item: dict, query_norm: str, tokens: list[str]) -> int:
 def browse(conn, *, content_type=None, genres=(), languages=(), qualities=(),
            sort="trending", order="desc", cursor=None, limit=DEFAULT_LIMIT,
            include_adult=False, q=None, available=None, year_from=None, year_to=None,
-           min_quality=None) -> dict:
+           min_quality=None, animated=None, country=(), industry=()) -> dict:
     """Faceted catalog browse with keyset pagination.
 
     Returns ``{items[], next_cursor, has_more, total_estimate, ...}``. `total_estimate`
@@ -1215,7 +1232,8 @@ def browse(conn, *, content_type=None, genres=(), languages=(), qualities=(),
         return err
     limit = _clamp_limit(limit)
     facet_clauses, facet_params = _facet_clauses(
-        content_type, genres, languages, qualities, available, year_from, year_to, min_quality)
+        content_type, genres, languages, qualities, available, year_from, year_to,
+        min_quality, animated=animated, country=country, industry=industry)
     query_norm = normalize_text(q)
     tokens = query_norm.split()
     decoded = None
@@ -2056,6 +2074,12 @@ def play_bundle(conn, *, release_id, episode_id=None, include_adult=False) -> di
         {"quality": print_view.get("resolution") or print_view.get("quality_label"),
          "codec": print_view.get("codec"), "size": print_view.get("size_bytes")},
         candidates)
+    for tier in ladder["tiers"]:
+        # Same rule as the v1 ladder: the runner-ups leave as handles only, so a
+        # silent failover never widens what one response discloses.
+        backups = tier.pop("backups", None) or []
+        tier["backup_handles"] = [str(item["stream_id"]) for item in backups
+                                  if item.get("stream_id")]
     return {
         "ok": True,
         "target": target,

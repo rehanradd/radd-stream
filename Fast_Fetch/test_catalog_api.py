@@ -191,6 +191,21 @@ class CatalogApiTestCase(unittest.TestCase):
         self.conn.commit()
         return link["id"]
 
+    def mark_probe_on_ledger(self, tag, *, status="active", http_status=200):
+        """Writes back the measurement fields `link_state.py`'s sweep owns.
+
+        `cat_link_evidence` is the probe's own journal; the projector reads the ledger's
+        `status`/`http_status`/`last_checked_at`, so a link only earns the `active`
+        state once a measurement is recorded there.
+        """
+        updated = self.conn.execute(
+            "UPDATE download_sources SET status = ?, http_status = ?,"
+            " last_checked_at = strftime('%Y-%m-%d %H:%M:%S','now')"
+            " WHERE resource_id = ?",
+            (status, http_status, tag)).rowcount
+        self.conn.commit()
+        self.assertEqual(updated, 1, f"no ledger download_sources row for tag {tag}")
+
     def set_entitlement(self, title, **changes):
         row = self.conn.execute("SELECT id FROM cat_works WHERE title = ?", (title,)).fetchone()
         self.assertIsNotNone(row, f"work {title} missing")
@@ -1055,7 +1070,23 @@ class PlayBundleTests(CatalogApiTestCase):
         option = bundle["download_options"][0]
         self.assertEqual(option["kind"], "download_only")
         self.assertEqual(option["playability"], "download")
-        self.assertEqual(option["state"], "active")
+        self.assertEqual(option["state"], "unchecked",
+                         "a scraper's blanket 'active' with no probe behind it is not a claim")
+
+    def test_only_a_measured_link_is_allowed_to_claim_active(self):
+        """The honest-state rule, in both directions, on one and the same link."""
+        before = self.bundle("720p CAM")["download_options"][0]
+        self.assertEqual(before["state"], "unchecked")
+
+        self.mark_probe_on_ledger("DUNE-CAM-MIRROR", status="active", http_status=200)
+        self.project(rev=2)
+        after = self.bundle("720p CAM")["download_options"][0]
+        self.assertEqual(after["state"], "active", "a 200 with a stamp is evidence")
+
+        self.mark_probe_on_ledger("DUNE-CAM-MIRROR", status="dead", http_status=404)
+        self.project(rev=2)
+        dead = self.bundle("720p CAM")["download_options"][0]
+        self.assertEqual(dead["state"], "dead", "and a 404 is never hidden as unchecked")
 
     def test_archive_and_bridge_links_are_kept_and_ranked_last(self):
         bundle = self.bundle("480p")
@@ -1390,7 +1421,8 @@ class CatalogStateTests(CatalogApiTestCase):
         state = catalog_api.catalog_state(self.conn)
         self.assertTrue(state["ok"])
         self.assertEqual(state["rev"], 1)
-        self.assertEqual(state["projector_version"], 1)
+        self.assertEqual(state["projector_version"], catalog_v2.SCHEMA_VERSION,
+                         "/state must report the version this data was actually projected with")
         self.assertEqual(state["counts"]["works"],
                          self.conn.execute("SELECT COUNT(*) AS n FROM cat_works WHERE"
                                            " COALESCE(is_18_plus,0)=0").fetchone()["n"])

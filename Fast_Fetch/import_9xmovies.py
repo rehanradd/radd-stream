@@ -41,6 +41,16 @@ USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTM
 
 STOP_REQUESTED = False
 
+# sitemap_cache.scraped state machine, shared by every staging importer and by
+# fast_fetch's crawler: 0 = queued, 1 = indexed, -1 = tried but nothing was
+# indexable (needs review/retry).  The retired value 2 ("skipped") was written
+# but never drained, so skipped pages were lost; the skip path now writes -1 and
+# the pending query still accepts legacy 2 rows so none can strand in that state.
+QUEUED_SCRAPE_STATES = (0, 2)
+PENDING_SELECT = (
+    "SELECT loc, lastmod, slug, raw_json FROM sitemap_cache WHERE scraped IN (?, ?)"
+)
+
 
 def sig_handler(signum, frame):
     global STOP_REQUESTED
@@ -677,7 +687,7 @@ def save_post_to_staging(db_path: Path, result: dict):
     loc = result["loc"]
     if result.get("skipped"):
         with get_db_connection(db_path) as conn:
-            conn.execute("UPDATE sitemap_cache SET scraped = 2 WHERE loc = ?;", (loc,))
+            conn.execute("UPDATE sitemap_cache SET scraped = -1 WHERE loc = ?;", (loc,))
         return
 
     if not result.get("success"):
@@ -966,7 +976,7 @@ def sync_api_catalog(
         page += 1
 
     print(
-        f"[✓] 9xmovies API sync finished: {total_new:,} brand new titles added to {db_path.name} ({total_existing:,} existing skipped, {total_adult:,} adult filtered as scraped=2).",
+        f"[✓] 9xmovies API sync finished: {total_new:,} brand new titles added to {db_path.name} ({total_existing:,} existing skipped, {total_adult:,} adult titles flagged and still queued).",
         flush=True,
     )
     return total_new
@@ -986,10 +996,10 @@ def run_crawler(
 
     with get_db_connection(db_path) as conn:
         cur = conn.cursor()
-        query = "SELECT loc, lastmod, slug, raw_json FROM sitemap_cache WHERE scraped = 0"
+        query = PENDING_SELECT
         if limit:
             query += f" LIMIT {int(limit)}"
-        cur.execute(query)
+        cur.execute(query, QUEUED_SCRAPE_STATES)
         pending = cur.fetchall()
 
     if not pending:

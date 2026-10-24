@@ -102,8 +102,8 @@ class HDTVBImportTests(unittest.TestCase):
             # Pre-populate sitemap_cache
             with fast_fetch.get_db() as conn:
                 conn.execute(
-                    "INSERT INTO sitemap_cache (loc, slug, scraped, site) VALUES (?, ?, 0, 'hdhub4u')",
-                    ("https://hdtvb.net/test-movie.html", "test-movie"),
+                    "INSERT INTO sitemap_cache (loc, slug, scraped, site) VALUES (?, ?, 0, ?)",
+                    ("https://hdtvb.net/test-movie.html", "test-movie", import_hdtvb.SITE_KEY),
                 )
 
             data = {
@@ -114,7 +114,7 @@ class HDTVBImportTests(unittest.TestCase):
                 "year": 2026,
                 "content_type": "movie",
                 "poster_url": "https://hdtvb.net/poster.jpg",
-                "source_site": "hdhub4u",
+                "source_site": import_hdtvb.SITE_KEY,
                 "canonical_key": "test_movie_2026",
                 "releases": [{
                     "release_title": "Test Movie 2026 1080p",
@@ -125,7 +125,7 @@ class HDTVBImportTests(unittest.TestCase):
                     "season": None,
                     "episode": None,
                     "intermediate_url": "https://hubcdn.io/cloud/abc",
-                    "source_site": "hdhub4u",
+                    "source_site": import_hdtvb.SITE_KEY,
                     "sources": [{
                         "source_name": "Cloudflare R2 Direct",
                         "service": "cloudflare_r2",
@@ -141,9 +141,10 @@ class HDTVBImportTests(unittest.TestCase):
 
             # Verify in DB
             with fast_fetch.get_db() as conn:
-                row = conn.execute("SELECT clean_title, year FROM posts WHERE id = ?", (post_id,)).fetchone()
+                row = conn.execute("SELECT clean_title, year, source_site FROM posts WHERE id = ?", (post_id,)).fetchone()
                 self.assertEqual(row["clean_title"], "Test Movie")
                 self.assertEqual(row["year"], 2026)
+                self.assertEqual(row["source_site"], "hdtvb")
 
                 src_row = conn.execute(
                     "SELECT ds.source_name, ds.playback_type, ds.source_url "
@@ -158,6 +159,45 @@ class HDTVBImportTests(unittest.TestCase):
                     ("https://hdtvb.net/test-movie.html",)
                 ).fetchone()
                 self.assertEqual(cache_row["scraped"], 1)
+
+
+class HDTVBProvenanceStampTests(unittest.TestCase):
+    """D3 regression: this importer must only ever stamp its own site key."""
+
+    PAGE_HTML = """
+    <html><head><title>Dummy Film (2026) 1080p &raquo; HDTVB</title></head>
+    <body><h1 class="entry-title">Dummy Film (2026) 1080p</h1>
+    <a href="https://hubcdn.io/cloud/dummy">Download 1.2Gb {1080p-HEVC}</a>
+    </body></html>
+    """
+
+    def test_site_key_is_hdtvb(self):
+        self.assertEqual(import_hdtvb.SITE_KEY, "hdtvb")
+
+    def test_no_hdhub4u_string_literal_survives_in_the_importer(self):
+        source = Path(import_hdtvb.__file__).read_text(encoding="utf-8")
+        self.assertNotIn("'hdhub4u'", source)
+        self.assertNotIn('"hdhub4u"', source)
+
+    def test_extractor_stamps_hdtvb_on_post_and_releases(self):
+        data = import_hdtvb.extract_post_data_hdtvb(
+            "https://hdtvb.net/dummy-film-2026.html", self.PAGE_HTML, resolve_direct=False
+        )
+        self.assertEqual(data["source_site"], "hdtvb")
+        self.assertTrue(data["releases"])
+        for release in data["releases"]:
+            self.assertEqual(release["source_site"], "hdtvb")
+
+    def test_mark_scraped_is_site_scoped(self):
+        source = Path(import_hdtvb.__file__).read_text(encoding="utf-8")
+        self.assertIn(
+            "UPDATE sitemap_cache SET scraped = 1 WHERE loc = ? AND site = ?",
+            source,
+        )
+        self.assertIn(
+            "SELECT loc FROM sitemap_cache WHERE site = ? AND scraped = 0 ORDER BY rowid ASC",
+            source,
+        )
 
 
 if __name__ == "__main__":

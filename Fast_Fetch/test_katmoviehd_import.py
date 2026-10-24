@@ -203,5 +203,73 @@ class TestStagingDatabase(unittest.TestCase):
             self.assertEqual(src_rows[1][1], "pixeldrain")
 
 
+LEGACY_CONTENT = """
+<p>: DOWNLOAD LINKS ::</p>
+<a href="magnet:?xt=urn:btih:E5913B225017BBB677335D7F3BCA71D74FA2CCC6&amp;dn=Lyod.2.2020.720p.HDRip.mkv">Magnet</a> |
+<a href="https://ww.torrentshub.xyz/torrents/Rams.2020.720p.WEBRip.Hindi.Dub.mkv">Torrent</a>
+<a href="https://new.gdtot.eu/file/2249188511">G-Drive- 1</a>
+<a href="https://anonfiles.com/J3XaV4Uap5">Anon-File</a>
+<a href="https://ninjastream.to/download/2KGZ9JB3Mm4Bn">Direct Link</a>
+<a href="https://www.imdb.com/title/tt1234567/">IMDb</a>
+<a href="https://en.wikipedia.org/wiki/Rams">Wiki</a>
+<a href="https://1xcinema.com/movie/rams">Watch on 1XCinema</a>
+<a href="https://lordhd.dad/post/rams">LordHD</a>
+<a href="https://katmoviehd.fit/other">sister site</a>
+"""
+
+
+class LegacyLayoutTests(unittest.TestCase):
+    """The pre-2022 download block (6,135 rows booked as failures on 2026-10-23)."""
+
+    def test_legacy_block_yields_releases(self):
+        rels = import_katmoviehd.parse_katmoviehd_legacy_releases(LEGACY_CONTENT)
+        types = sorted(r["source_type"] for r in rels)
+        self.assertEqual(types, ["anonfiles", "gdtot", "magnet", "ninjastream", "torrent"])
+        self.assertTrue(all(r["bridge_url"] for r in rels))
+
+    def test_legacy_block_ignores_nav_and_promo_links(self):
+        urls = " ".join(r["bridge_url"] for r in
+                        import_katmoviehd.parse_katmoviehd_legacy_releases(LEGACY_CONTENT))
+        for host in ("imdb.com", "wikipedia", "1xcinema", "lordhd", "katmoviehd.fit"):
+            self.assertNotIn(host, urls)
+
+    def test_magnet_hash_and_quality_are_kept(self):
+        rels = import_katmoviehd.parse_katmoviehd_legacy_releases(LEGACY_CONTENT)
+        mag = next(r for r in rels if r["source_type"] == "magnet")
+        self.assertEqual(mag["file_id"], "e5913b225017bbb677335d7f3bca71d74fa2ccc6")
+        self.assertEqual(mag["quality"], "720p")
+
+    def test_fallback_only_runs_when_modern_patterns_find_nothing(self):
+        # Modern content keeps its own answer untouched.
+        modern = import_katmoviehd.parse_katmoviehd_releases(
+            '<a href="https://hubcloud.foo/drive/abc">1080p</a>')
+        self.assertEqual([r["source_type"] for r in modern], ["hubcloud"])
+        # Content with both layouts reports the modern links only.
+        both = import_katmoviehd.parse_katmoviehd_releases(
+            '<a href="https://hubcloud.foo/drive/abc">1080p</a>' + LEGACY_CONTENT)
+        self.assertEqual([r["source_type"] for r in both], ["hubcloud"])
+
+    def test_legacy_sources_are_stored_verbatim_without_api_lookup(self):
+        calls = []
+
+        class NoNetworkClient:
+            def get_text(self, *a, **k):
+                raise AssertionError("legacy links must not be resolved over HTTP")
+
+            def get_api_json(self, url, timeout=12):
+                calls.append(url)
+                return None
+
+        for r in import_katmoviehd.parse_katmoviehd_legacy_releases(LEGACY_CONTENT):
+            size, sources = import_katmoviehd.resolve_file_sources(
+                client=NoNetworkClient(), file_id=r["file_id"],
+                bridge_url=r["bridge_url"], source_type=r["source_type"])
+            self.assertEqual(size, None)
+            self.assertEqual(len(sources), 1)
+            self.assertEqual(sources[0]["service"], r["source_type"])
+            self.assertEqual(sources[0]["final_url"], r["bridge_url"])
+        self.assertEqual(calls, [], "the KatDrive REST API has no legacy records")
+
+
 if __name__ == "__main__":
     unittest.main()

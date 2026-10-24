@@ -997,5 +997,45 @@ class CrawlRetryAccountingTests(unittest.TestCase):
         self.assertEqual(indexed_cols, ["scraped", "attempts"])
 
 
+class SiteScoutStagingIsolationTests(unittest.TestCase):
+    """Integration smoke test: site_scout.py (Phase 1) never targets the production
+    catalog and its stdlib gate works alongside the DB test suite. Imports are
+    stdlib-only so this adds no dependency to the existing database tests."""
+
+    def setUp(self):
+        import site_scout
+        self.site_scout = site_scout
+
+    def test_scaffold_gate_rejects_production_catalog_path(self):
+        code = "import sqlite3\np='/home/ubuntu/radd-stream-data/fast_fetch.db'\n"
+        ok, reasons = self.site_scout.check_stdlib_compliance(
+            code, data_dir=Path("/home/ubuntu/radd-stream-data")
+        )
+        self.assertFalse(ok)
+        self.assertTrue(any("fast_fetch.db" in r for r in reasons))
+
+    def test_scaffold_gate_rejects_third_party_import(self):
+        ok, reasons = self.site_scout.check_stdlib_compliance(
+            "import requests\n", data_dir=Path("/home/ubuntu/radd-stream-data")
+        )
+        self.assertFalse(ok)
+        self.assertTrue(reasons)
+
+    def test_scaffold_gate_accepts_staging_db_draft(self):
+        code = (
+            "import urllib.request, sqlite3\n"
+            "from pathlib import Path\n"
+            "DB = Path('/home/ubuntu/radd-stream-data/vegamovies.db')\n"
+        )
+        ok, reasons = self.site_scout.check_stdlib_compliance(
+            code, data_dir=Path("/home/ubuntu/radd-stream-data")
+        )
+        self.assertTrue(ok, reasons)
+
+    def test_challenge_page_is_flagged_not_bypassed(self):
+        html = "<html><body><div class='cf-turnstile'>Just a moment...</div></body></html>"
+        self.assertTrue(self.site_scout.is_challenge_interstitial(html))
+
+
 if __name__ == "__main__":
     unittest.main()

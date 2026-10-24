@@ -37,28 +37,60 @@ if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
 
 import fast_fetch
+from config import staging_db_path
 from domain_resolver import get_active_base_url
 
 DEFAULT_BASE_URL = "https://www.hindilinks4u.zip"
 SITE_NAME = "hindilinks4u"
-DB_PATH = BASE_DIR.parent / "hindilinks4u.db"
+DB_PATH = staging_db_path("hindilinks4u")
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 )
 MIN_REQUEST_DELAY = 0.3
+# One core, and the API server shares it: wait for the writer lock instead of
+# raising "database is locked" and taking the whole crawl down with it.
+SQLITE_BUSY_TIMEOUT = 30
 
 EMBED_HOSTS = (
     "playmogo", "mixdrop", "streamtape", "upcloud", "vidcloud", "vodstream",
     "superplay", "hdvhls", "jhlink", "dailyupload", "vidbom", "vidhide",
     "filemoon", "doodstream", "embay", "mcloud", "hitlink", "smoov",
     "rabbitstream", "journeywatchers", "vidsrc", "openload", "fmovies",
+    # Added 2026-10-23: hosts used by the site's pre-`video_tabs` layout.
+    # Old posts point every "Server N" button at these two hosts, and the
+    # generic sweep below silently dropped them (see the 3,673-row failure
+    # audit in Fast_Fetch/CONTINUITY.md).
+    "filmshowonline", "dailymotion",
 )
 SOCIAL_HOSTS = (
     "facebook", "twitter", "instagram", "t.me", "telegram", "whatsapp",
     "pinterest", "linkedin", "youtube", "google", "gstatic", "gravatar",
     "wordpress", "gmpg", "w3.org", "doubleclick",
 )
+# Site-wide advertising block that every Hindilinks4u post carries. None of
+# these hosts is a watch/download source for the title on the page.
+PORN_SPAM_HOSTS = (
+    "mydesi", "eromhub", "thotsking", "urdesi", "sexarebe", "egyzeb",
+    "erome", "bokepking", "okxxx7", "fapello", "xnxxxhd", "bokepasar",
+    "desi_leaked", "pakiyan", "bangbros",
+)
+
+# Marker strings of an interstitial bot-check page. We only RECORD that we were
+# served one (cause "blocked: challenge") — we never try to solve or bypass it.
+CHALLENGE_MARKERS = (
+    "just a moment", "cf-browser-verification", "attention-required",
+    "checking your browser", "cf_chl_", "turnstile", "you have been blocked",
+    "error 1020", "enable javascript and cookies to continue",
+)
+
+# Failure causes that will never succeed on a retry, so backlog_drain.sh's
+# requeue pass can be read as "expected" rather than as a bug.
+PERMANENT_CAUSES = frozenset({
+    "http_404_gone", "http_410_gone", "http_403_forbidden",
+    "blocked: challenge", "no_sources_on_page", "parse_no_title",
+    "skipped: not_a_post",
+})
 
 STOP_REQUESTED = False
 
@@ -256,14 +288,102 @@ def _host_of(url: str) -> str:
         return ""
 
 
+def looks_blocked(page: str) -> bool:
+    """True when the body is an interstitial bot-check instead of the post.
+
+    Detection only: the crawler records the cause and moves on. It never
+    attempts to solve, spoof, or otherwise bypass the check.
+    """
+    if not page:
+        return False
+    head = page[:12000].lower()
+    return any(m in head for m in CHALLENGE_MARKERS)
+
+
+def is_post_url(loc: str) -> bool:
+    """False for queued rows that are not a title page (site root, feeds, taxonomy)."""
+    path = urllib.parse.urlparse(loc).path
+    if path in ("", "/"):
+        return False
+    return not any(seg in path for seg in ("/category/", "/tag/", "/author/", "/feed/", "/page/"))
+
+
+_LEGACY_LABEL_RE = re.compile(
+    r"<strong>\s*((?:Server|Episode|Part)\s*[0-9IVX]+[^<]{0,60})", re.I
+)
+# Regions of the post body that are never this title's own sources.
+_LEGACY_STOP_MARKERS = ('<div id="extras"', "You may also like", "Click Here")
+
+
+def extract_hl4u_legacy_servers(entry_html: str) -> list[dict]:
+    """
+    Recovers the site's pre-`video_tabs` layout, which the tab parser cannot see:
+
+        <p><strong>Server 1 – Youtube</strong></p>
+        <p><a href="http://www.filmshowonline.net/videos/192588/">Watch Full Movie</a></p>
+
+    Those embed hosts are not in the tab list and the generic sweep drops them
+    with the social/spam anchors, so every old post used to be filed as a
+    scrape failure. Added 2026-10-23 after auditing the 3,673 `scraped=-1` rows.
+    """
+    if not entry_html:
+        return []
+    body = entry_html
+    for stop in _LEGACY_STOP_MARKERS:
+        cut = body.find(stop)
+        if cut > 0:
+            body = body[:cut]
+
+    labels = list(_LEGACY_LABEL_RE.finditer(body))
+    if not labels:
+        return []
+
+    releases: list[dict] = []
+    seen: set[str] = set()
+    for idx, m in enumerate(labels):
+        start = m.end()
+        stop = labels[idx + 1].start() if idx + 1 < len(labels) else len(body)
+        segment = body[start:min(stop, start + 1500)]
+        label_text = re.sub(r"<[^>]+>", " ", m.group(1))
+        label_text = re.sub(r"\s+", " ", html.unescape(label_text)).strip(" -–\t")
+        for href, anchor_html in re.findall(
+            r'<a[^>]+href=["\']([^"\'\s<>]+)["\'][^>]*>(.*?)</a>', segment, re.S | re.I
+        ):
+            href = html.unescape(href.strip())
+            if not href.startswith("http") or href in seen:
+                continue
+            host = _host_of(href)
+            if not host or "hindilinks4u" in host or any(s in host for s in PORN_SPAM_HOSTS):
+                continue
+            anchor_text = re.sub(r"<[^>]+>", "", anchor_html).strip() or "Watch"
+            full_label = label_text if anchor_text.lower() in ("watch full movie", "watch") \
+                else f"{label_text} · {anchor_text}"
+            seen.add(href)
+            q_m = re.search(r"\b(2160p|1080p|720p|480p)\b", full_label, re.I)
+            releases.append({
+                "label": full_label[:80],
+                "quality": (q_m.group(1).lower() if q_m else "720p"),
+                "resolution": (q_m.group(1).lower() if q_m else "720p"),
+                "size_bytes": None,
+                "season_number": None,
+                "episode_number": None,
+                "codec": "x264",
+                "bridge_url": href,
+                "service": host.split(".")[0],
+                "source_name": f"▶ {full_label[:60]} [{host}]",
+            })
+    return releases
+
+
 def extract_hl4u_servers(entry_html: str, post_url: str) -> list[dict]:
     """
     Extracts watch/download sources from the post content:
+      - the legacy <strong>Server N – Host</strong> + anchor block layout
       - <ul id="video_tabs"> Server N tabs (primary embeds)
       - any remaining external anchors on known embed/download hosts
     """
-    releases = []
-    seen = set()
+    releases = extract_hl4u_legacy_servers(entry_html)
+    seen = {r["bridge_url"] for r in releases}
 
     tabs_ul = re.search(r'<ul[^>]+id=["\']video_tabs["\'][^>]*>(.*?)</ul>', entry_html, re.S | re.I)
     if tabs_ul:
@@ -297,6 +417,8 @@ def extract_hl4u_servers(entry_html: str, post_url: str) -> list[dict]:
         host = _host_of(href)
         if not host or any(s in host for s in SOCIAL_HOSTS) or "hindilinks4u" in host:
             continue
+        if any(s in host for s in PORN_SPAM_HOSTS):
+            continue
         if not any(e in host for e in EMBED_HOSTS) and "download" not in href.lower() and not re.search(r"\.(mkv|mp4)(\.|$)", host + href, re.I):
             continue
         seen.add(href)
@@ -320,20 +442,56 @@ def extract_hl4u_servers(entry_html: str, post_url: str) -> list[dict]:
 
 
 def parse_filmy_page(client: Hindilinks4uClient, post_url: str) -> dict | None:
-    """Fetches and parses one Hindilinks4u post page into a staging post dict."""
+    """Fetches and parses one Hindilinks4u post page into a staging post dict.
+
+    Thin wrapper over parse_filmy_page_detailed() for callers that only want the
+    dict; the crawler uses the detailed form so the reason is never lost.
+    """
+    post, _cause = parse_filmy_page_detailed(client, post_url)
+    return post
+
+
+def parse_filmy_page_detailed(
+    client: Hindilinks4uClient, post_url: str
+) -> tuple[dict | None, dict]:
+    """Fetches and parses one post page, returning (post_or_None, failure_cause).
+
+    `sitemap_cache.scraped=-1` alone conflated five different outcomes, which is
+    why the backlog looked like an 80% failure wall. The cause dict says which:
+
+        http_404_gone / http_410_gone / http_403_forbidden  page died upstream
+        http_429_rate_limited                               our request rate
+        blocked: challenge                                  interstitial bot-check
+        transport_error                                     connection/timeout/empty
+        parse_no_title                                      page drifted shape
+        no_sources_on_page                                  title parsed, upstream
+                                                            published no watch link
+        ok                                                  releases found
+    """
+    if not is_post_url(post_url):
+        return None, _cause("skipped: not_a_post", post_url=post_url)
+
     code, final_url, page = client.get_text(post_url)
     if code != 200 or not page:
-        return None
+        cause = _http_cause(code)
+        return None, _cause(cause, http=code, post_url=post_url)
+
+    if looks_blocked(page):
+        return None, _cause("blocked: challenge", http=code, post_url=post_url,
+                            marker=next((m for m in CHALLENGE_MARKERS
+                                         if m in page[:12000].lower()), ""))
 
     t_m = re.search(r"<title>(.*?)</title>", page, re.S | re.I)
     raw_title = html.unescape(t_m.group(1)).strip() if t_m else ""
     raw_title = re.sub(r"\s*[-–|]\s*Watch Free Movies.*$", "", raw_title, flags=re.I).strip()
     if not raw_title:
-        return None
+        return None, _cause("parse_no_title", http=code, post_url=post_url,
+                            page_bytes=len(page))
 
     clean_title, year, canonical_key = clean_hl4u_title(raw_title)
     if not clean_title:
-        return None
+        return None, _cause("parse_no_title", http=code, post_url=post_url,
+                            raw_title=raw_title[:80])
 
     poster = None
     p_m = re.search(r'<meta[^>]+property=["\']og:image["\'][^>]+content=["\']([^"\']+)["\']', page, re.I)
@@ -365,12 +523,18 @@ def parse_filmy_page(client: Hindilinks4uClient, post_url: str) -> dict | None:
 
     releases = extract_hl4u_servers(entry_html, final_url)
     if not releases:
-        return None
+        # The post is live and readable; the upstream simply publishes no
+        # watch/download link on it (embed block removed, or a series landing
+        # page whose links live on the per-episode pages). A retry cannot fix
+        # that, so it is filed as permanent rather than as a scrape error.
+        return None, _cause("no_sources_on_page", http=code, post_url=post_url,
+                            raw_title=raw_title[:80], entry_found=bool(entry_m),
+                            page_bytes=len(page))
 
     lang_m = re.search(r"(Hindi|Tamil|Telugu|Kannada|Malayalam|English)[^<]{0,80}", raw_title, re.I)
     languages = json.dumps([lang_m.group(1).title()]) if lang_m else json.dumps(["Hindi"])
 
-    return {
+    post = {
         "canonical_key": canonical_key,
         "title": clean_title,
         "original_title": raw_title,
@@ -397,6 +561,57 @@ def parse_filmy_page(client: Hindilinks4uClient, post_url: str) -> dict | None:
             "quality": r["quality"],
         }]} for r in releases],
     }
+    return post, _cause("ok", http=code, releases=len(releases))
+
+
+def _cause(name: str, **info) -> dict:
+    """Builds a failure/success cause record; `permanent` drives requeue triage."""
+    payload = {"cause": name, "permanent": name in PERMANENT_CAUSES, "ts": int(time.time())}
+    payload.update({k: v for k, v in info.items() if v not in (None, "")})
+    return payload
+
+
+def _http_cause(code: int) -> str:
+    if code in (404, 410):
+        return f"http_{code}_gone"
+    if code == 403:
+        return "http_403_forbidden"
+    if code == 429:
+        return "http_429_rate_limited"
+    if code in (500, 502, 503, 504):
+        return f"http_{code}_upstream_error"
+    return "transport_error"
+
+
+def record_cause(db_path: Path, loc: str, scraped: int, cause: dict | None) -> None:
+    """Writes the attempt outcome into sitemap_cache.raw_json (the only spare column).
+
+    `cause=None` stores a SQL NULL, which is how a successful page clears the
+    failure note left by an earlier attempt.
+    """
+    payload = None if cause is None else json.dumps(cause, ensure_ascii=False)[:2000]
+    try:
+        with sqlite3.connect(str(db_path), timeout=SQLITE_BUSY_TIMEOUT) as conn:
+            conn.execute(
+                "UPDATE sitemap_cache SET scraped=?, raw_json=? WHERE loc=?",
+                (scraped, payload, loc),
+            )
+            conn.commit()
+    except sqlite3.Error as exc:
+        print(f"[!] could not record cause for {loc}: {exc}", file=sys.stderr, flush=True)
+
+
+def cause_breakdown(db_path: Path) -> dict:
+    """Counts recorded failure causes; rows from older runs report 'unrecorded'."""
+    counts: dict[str, int] = {}
+    with sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=SQLITE_BUSY_TIMEOUT) as conn:
+        for scraped, raw in conn.execute("SELECT scraped, raw_json FROM sitemap_cache WHERE scraped<>1"):
+            try:
+                name = json.loads(raw)["cause"] if raw else "unrecorded"
+            except (ValueError, KeyError, TypeError):
+                name = "unrecorded"
+            counts[name] = counts.get(name, 0) + 1
+    return counts
 
 
 def save_post_to_staging_db(db_path: Path, post_data: dict) -> bool:
@@ -404,7 +619,7 @@ def save_post_to_staging_db(db_path: Path, post_data: dict) -> bool:
     if not post_data or not post_data.get("releases"):
         return False
 
-    with sqlite3.connect(str(db_path)) as conn:
+    with sqlite3.connect(str(db_path), timeout=SQLITE_BUSY_TIMEOUT) as conn:
         conn.execute("PRAGMA foreign_keys = ON")
         cur = conn.cursor()
         cur.execute(
@@ -519,6 +734,10 @@ def sync_sitemap_to_db(db_path: Path, base_url: str, max_items: int | None = Non
                     continue
                 if any(seg in loc for seg in ("/category/", "/tag/", "/author/", "/feed/")):
                     continue
+                if not is_post_url(loc):
+                    # WordPress sitemaps list the site root on some mirrors; it is
+                    # not a title page and can never yield releases.
+                    continue
                 slug = loc.rstrip("/").split("/")[-1]
                 records.append((loc, None, slug, 0, SITE_NAME, None))
             conn.executemany(
@@ -557,14 +776,24 @@ def run_crawler(db_path: Path, base_url: str, workers: int = 4, delay: float = 0
     started = time.monotonic()
 
     def process_item(loc):
-        post = parse_filmy_page(client, loc)
+        post, cause = parse_filmy_page_detailed(client, loc)
         if not post:
-            return loc, False, 0, 0
-        ok = save_post_to_staging_db(db_path, post)
+            return loc, False, 0, 0, cause
+        try:
+            ok = save_post_to_staging_db(db_path, post)
+        except sqlite3.Error as exc:
+            # A locked or full DB is a retryable transport problem, not a bad
+            # page: say so, and never let it look like upstream died.
+            return loc, False, 0, 0, _cause(
+                "sqlite_locked" if "locked" in str(exc).lower() else "sqlite_error",
+                error=str(exc)[:160], post_url=loc)
         nrels = len(post["releases"])
         nsrcs = sum(len(r.get("sources", [])) for r in post["releases"])
-        return loc, ok, nrels, nsrcs
+        if not ok:
+            return loc, False, 0, 0, _cause("save_rejected", post_url=loc)
+        return loc, True, nrels, nsrcs, _cause("ok", releases=nrels)
 
+    causes: dict[str, int] = {}
     with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
         futures = {pool.submit(process_item, loc): loc for loc in queue}
         for fut in concurrent.futures.as_completed(futures):
@@ -572,15 +801,25 @@ def run_crawler(db_path: Path, base_url: str, workers: int = 4, delay: float = 0
                 for f in futures:
                     f.cancel()
                 break
-            loc, ok, nrels, nsrcs = fut.result()
+            try:
+                loc, ok, nrels, nsrcs, cause = fut.result()
+            except Exception as exc:  # a worker crash must not abort the crawl
+                loc = futures[fut]
+                ok, nrels, nsrcs = False, 0, 0
+                cause = _cause("worker_exception", error=f"{type(exc).__name__}: {exc}"[:160],
+                               post_url=loc)
             done += 1
             if not ok:
                 failed += 1
             total_rels += nrels
             total_srcs += nsrcs
-            with sqlite3.connect(str(db_path)) as conn:
-                conn.execute("UPDATE sitemap_cache SET scraped=? WHERE loc=?", (1 if ok else -1, loc))
-                conn.commit()
+            name = cause.get("cause", "unrecorded")
+            causes[name] = causes.get(name, 0) + 1
+            if ok:
+                # Success clears any earlier failure note for the same page.
+                record_cause(db_path, loc, 1, None)
+            else:
+                record_cause(db_path, loc, -1, cause)
             if done % 10 == 0 or done == len(queue):
                 speed = done / max(0.01, time.monotonic() - started)
                 eta = (len(queue) - done) / max(0.01, speed)
@@ -591,6 +830,12 @@ def run_crawler(db_path: Path, base_url: str, workers: int = 4, delay: float = 0
                 )
 
     print(f"\n[✓] Crawler finished: {done - failed:,} scraped, {failed:,} failed in {time.monotonic()-started:.1f}s", flush=True)
+    if causes:
+        print("[i] this run's outcome breakdown (permanent causes are not worth re-crawling):", flush=True)
+        for name, cnt in sorted(causes.items(), key=lambda kv: -kv[1]):
+            tag = " permanent" if name in PERMANENT_CAUSES or name in (
+                "sqlite_locked", "sqlite_error", "worker_exception") else ""
+            print(f"      {name:26s} {cnt:6,}{tag}", flush=True)
 
 
 def print_status(db_path: Path):
@@ -602,6 +847,11 @@ def print_status(db_path: Path):
         pend = conn.execute("SELECT COUNT(*) FROM sitemap_cache WHERE scraped=0").fetchone()[0]
         fail = conn.execute("SELECT COUNT(*) FROM sitemap_cache WHERE scraped=-1").fetchone()[0]
     print(f"posts={posts:,} (adult-flagged={adult:,}) releases={rels:,} sources={srcs:,} pending={pend:,} failed={fail:,}")
+    breakdown = cause_breakdown(db_path)
+    if breakdown:
+        print("failure causes (recorded by this scraper; 'unrecorded' = attempt predates the bookkeeping):")
+        for name, cnt in sorted(breakdown.items(), key=lambda kv: -kv[1]):
+            print(f"  {name:26s} {cnt:6,}")
 
 
 def main():

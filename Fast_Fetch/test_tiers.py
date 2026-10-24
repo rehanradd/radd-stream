@@ -168,6 +168,66 @@ class PublicShapeTests(unittest.TestCase):
             self.assertNotIn(needle, blob, needle)
 
 
+class FailoverTests(unittest.TestCase):
+    """Mentor method #1: the winner travels with runner-ups of *its own* band.
+
+    A free CDN answers 403 occasionally. The user must not see a dialog and must
+    not drop to another quality, so the same-band copies the collapse folded away
+    stay with the tier as silent backups instead of vanishing."""
+
+    def test_a_play_tier_carries_two_runner_ups_of_its_own_band(self):
+        ladder = tiers.for_release({"quality": "1080p"}, [
+            link(id=1, is_resumable=1), link(id=2), link(id=3), link(id=4)])
+        tier = ladder["tiers"][0]
+        self.assertEqual(tier["link"]["id"], 1)
+        self.assertEqual([item["id"] for item in tier["backups"]], [2, 3])
+        self.assertEqual(len(tier["backups"]), tiers.BACKUP_LIMIT)
+        self.assertTrue(all(tiers.playable(item, "1080p") for item in tier["backups"]))
+
+    def test_an_embed_copy_is_never_a_backup_of_a_play_tier(self):
+        # Hopping from a playing file to a page we can only hand to another app
+        # would be a visible downgrade, not a silent failover.
+        ladder = tiers.for_release({"quality": "1080p"}, [
+            link(id=1, playback_type="direct"), link(id=2, playback_type="iframe"),
+            link(id=3, playback_type="iframe")])
+        tier = ladder["tiers"][0]
+        self.assertEqual(tier["link"]["id"], 1)
+        self.assertEqual(tier["backups"], [])
+
+    def test_a_dead_copy_does_not_take_the_second_backup_slot(self):
+        ladder = tiers.for_release({"quality": "720p"}, [
+            link(id=1, is_resumable=1), link(id=2, status="dead"), link(id=3)])
+        tier = ladder["tiers"][0]
+        self.assertEqual([item["id"] for item in tier["backups"]], [3, 2])
+
+    def test_a_download_only_tier_still_offers_its_other_copies(self):
+        ladder = tiers.for_release({"quality": "480p"}, [
+            link(id=1, playback_type="download"), link(id=2, playback_type="download"),
+            link(id=3, playback_type="download")])
+        tier = ladder["tiers"][0]
+        self.assertEqual(tier["mode"], "download_only")
+        self.assertEqual(len(tier["backups"]), tiers.BACKUP_LIMIT)
+
+    def test_merge_pools_copies_from_every_print_into_one_ladder(self):
+        ladders = [tiers.for_release({"quality": "1080p"}, [link(id=i, is_resumable=1)])
+                   for i in (1, 2, 3, 4)]
+        merged = tiers.merge(ladders)
+        tier = merged["tiers"][0]
+        self.assertEqual(tier["copies"], 4)
+        self.assertNotIn(tier["link"]["id"], [item["id"] for item in tier["backups"]])
+        self.assertEqual(len(tier["backups"]), tiers.BACKUP_LIMIT)
+
+    def test_merge_does_not_list_the_same_copy_twice(self):
+        # Two prints of one post often hold the very same link row.
+        shared = link(id=9, is_resumable=1)
+        merged = tiers.merge([tiers.for_release({"quality": "1080p"}, [shared, link(id=8)]),
+                              tiers.for_release({"quality": "1080p"}, [dict(shared),
+                                                                       link(id=7)])])
+        tier = merged["tiers"][0]
+        ids = [item["id"] for item in [tier["link"], *tier["backups"]]]
+        self.assertEqual(len(ids), len(set(ids)), ids)
+
+
 class DetailRouteTests(unittest.TestCase):
     def setUp(self):
         self.temp_dir = tempfile.TemporaryDirectory()
@@ -231,6 +291,41 @@ class DetailRouteTests(unittest.TestCase):
         for release in detail["releases"]:
             self.assertIn(release["band"], set(tiers.BANDS) | {tiers.UNSPECIFIED})
             self.assertTrue(release["quality_label"])
+
+
+    def test_the_ladder_travels_with_silent_backup_handles(self):
+        # The client fails over without asking: it gets the runner-ups as handles
+        # for the same /api/v1/stream door as the winner, never as links of their own.
+        post_id = self._save("1080p", [
+            {"source_name": f"Mirror {index}", "service": "pixeldrain",
+             "resource_id": chr(96 + index), "source_url": f"https://x.example/{index}",
+             "final_url": f"https://cdn.example/{index}", "is_temporary": 0}
+            for index in (1, 2, 3)])
+        viewer.DB_PATH = self.db_path
+        tier = viewer.api_v1_get_post_detail(
+            post_id, base_url="http://our.box")["option_groups"][0]["tiers"][0]
+        self.assertNotIn("backups", tier)
+        handles = tier["backup_handles"]
+        self.assertEqual(len(handles), tiers.BACKUP_LIMIT)
+        self.assertNotIn(tier["link"]["stream_id"], handles)
+        self.assertEqual(len(set(handles)), len(handles))
+        secret = viewer.signing_secret()
+        row_ids = []
+        for handle in handles:
+            self.assertFalse(str(handle).isdigit())
+            row_ids.append(redact.parse_token(handle, secret))
+        # Every handle must address a copy this post really has, or the player
+        # would "fail over" onto a link that 404s by construction.
+        import sqlite3
+        with sqlite3.connect(self.db_path) as conn:
+            mine = {row[0] for row in conn.execute(
+                "SELECT s.id FROM download_sources s JOIN releases r ON r.id = s.release_id"
+                " WHERE r.post_id = ?", (post_id,))}
+        self.assertTrue(set(row_ids).issubset(mine))
+        self.assertNotIn(redact.parse_token(tier["link"]["stream_id"], secret), row_ids)
+        blob = str(tier).lower()
+        for needle in ("pixeldrain", "hubcloud", "cdn.example", "source_url", "final_url"):
+            self.assertNotIn(needle, blob, needle)
 
 
 if __name__ == "__main__":

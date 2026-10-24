@@ -700,7 +700,7 @@ def provenance_keys(obj, found=None) -> list[str]:
 #: noise, not information about anyone. A sentinel scan masks these before reading
 #: text, because random noise collides with brand spellings.
 MINTED_KEYS = frozenset({"stream_id", "art", "play_url", "download_url",
-                         "link_ref", "id_ref"})
+                         "link_ref", "id_ref", "backup_handles"})
 
 
 def minted_values(obj, found=None) -> list[str]:
@@ -1126,3 +1126,27 @@ def _registry_needles() -> set:
         except Exception:
             pass
     return needles
+
+
+# ---------------------------------------------------------------------------
+# Cross-origin policy: the other half of the same rule
+# ---------------------------------------------------------------------------
+
+#: CORS, per API_V2.md §16.7: an explicit allow-list, never `*`. A wildcard let any
+#: website read the catalog straight from a visitor's browser and re-publish it — the
+#: exact "other person uses our API in their own app" hole the owner ruled out. Our real
+#: clients need nothing here: the Android app is a native HTTP client that sends no
+#: `Origin`, and the dashboard is served by this same origin. Add an exact origin to this
+#: set only when a third-party web client is authorised.
+CORS_ALLOW_ORIGINS: frozenset[str] = frozenset()
+
+
+def cors_headers_for(origin: str) -> list[tuple[str, str]]:
+    """The two headers that make one allow-listed browser origin happy, or none.
+
+    A refused origin gets no header at all, so the browser blocks it and our answer is
+    carried by absence — the same trick the adult rule uses for a 404.
+    """
+    if origin and origin in CORS_ALLOW_ORIGINS:
+        return [("Access-Control-Allow-Origin", origin), ("Vary", "Origin")]
+    return []

@@ -33,6 +33,26 @@ SITEMAP_INDEX_URL = f"{BASE_URL}/sitemap_index.xml"
 DEFAULT_DB_PATH = Path("/home/ubuntu/radd-stream-data/desicinemas.db")
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
 
+# Provenance stamp. This staging database only ever holds desicinemas pages, so
+# every post it writes must say so; merge_catalogs reads `source_site`/`site`
+# from staging rows and rows without a stamp used to land as 'unknown'.
+SITE = "desicinemas"
+
+# The catalog's only legal content types — parse_post_metadata() in fast_fetch.py
+# never emits anything else, so a fifth value silently breaks every type filter.
+LEGAL_MEDIA_TYPES = ("movie", "series", "complete_season", "ongoing_season")
+
+# sitemap_cache.scraped state machine, shared with every other staging importer
+# and with fast_fetch's crawler: 0 = queued, 1 = indexed, -1 = tried but not
+# indexable (needs review). 2 ("skipped") is retired because nothing drained it;
+# skipped pages now land on -1, while the pending query still accepts legacy 2
+# rows so no page can strand in the dead state.
+QUEUED_SCRAPE_STATES = (0, 2)
+PENDING_SELECT = (
+    "SELECT loc, lastmod, slug FROM sitemap_cache"
+    " WHERE scraped IN (%s) ORDER BY rowid ASC" % ", ".join(["?"] * len(QUEUED_SCRAPE_STATES))
+)
+
 STOP_REQUESTED = False
 
 
@@ -103,10 +123,29 @@ def unpack_dean_edwards(packed_js: str) -> str:
 
 
 # --- Title & Metadata Normalizer ---
+def normalize_media_type(media_type: str | None) -> str:
+    """Clamps any scraper page label onto the four content types the catalog stores."""
+    value = str(media_type or "movie").strip().lower()
+    if value in LEGAL_MEDIA_TYPES:
+        return value
+    # Episode/season pages describe part of a series; anything unrecognised is
+    # treated as a single film rather than inventing a fifth type.
+    if any(token in value for token in ("episode", "season", "series", "batch", "pack")):
+        return "series"
+    return "movie"
+
+
+def slug_from_url(url: str | None) -> str:
+    """Stable slug for a page URL, derived exactly like merge_catalogs does."""
+    return urllib.parse.urlsplit(url or "").path.strip("/").replace(".html", "")
+
+
 def clean_desicinemas_title(raw_title: str, url: str = "") -> tuple[str, int | None, int | None, int | None, str | None, str | None, str, str]:
     """
     Cleans raw title from DesiCinemas.
     Returns: (clean_title, year, season_number, episode_number, quality, audio_languages, media_type, canonical_key)
+    `media_type` is always one of LEGAL_MEDIA_TYPES; the page's own shape
+    (movie / series / episode) still drives the canonical key.
     """
     if not raw_title:
         return "Unknown", None, None, None, None, None, "movie", "unknown"
@@ -136,7 +175,7 @@ def clean_desicinemas_title(raw_title: str, url: str = "") -> tuple[str, int | N
     # Detect Season & Episode
     season_num = None
     episode_num = None
-    media_type = "movie"
+    page_kind = "movie"
 
     # Season/Episode in title or URL
     se_match = re.search(r"Season\s*(\d+)\s*(?:Episode\s*(\d+))?", text, re.IGNORECASE)
@@ -148,7 +187,7 @@ def clean_desicinemas_title(raw_title: str, url: str = "") -> tuple[str, int | N
         ep_url_match = re.search(r"Episode\s*(\d+)", text, re.IGNORECASE)
 
     if "/episode/" in url or ep_url_match:
-        media_type = "episode"
+        page_kind = "episode"
         if ep_url_match:
             episode_num = int(ep_url_match.group(1))
         if se_match:
@@ -156,7 +195,7 @@ def clean_desicinemas_title(raw_title: str, url: str = "") -> tuple[str, int | N
             if se_match.group(2) and episode_num is None:
                 episode_num = int(se_match.group(2))
     elif "/series/" in url or "/season/" in url or "Season" in text:
-        media_type = "series"
+        page_kind = "series"
         if se_match:
             season_num = int(se_match.group(1))
 
@@ -177,16 +216,20 @@ def clean_desicinemas_title(raw_title: str, url: str = "") -> tuple[str, int | N
 
     # Generate canonical key
     slug_base = re.sub(r"[^a-z0-9]+", "-", cleaned.lower()).strip("-")
-    if media_type == "episode":
+    if page_kind == "episode":
         s_part = f"s{season_num:02d}" if season_num else "s01"
         e_part = f"e{episode_num:02d}" if episode_num else "e01"
         canonical_key = f"{slug_base}-{s_part}{e_part}"
-    elif media_type == "series":
+    elif page_kind == "series":
         s_part = f"-s{season_num:02d}" if season_num else ""
         canonical_key = f"{slug_base}{s_part}"
     else:
         y_part = f"-{year}" if year else ""
         canonical_key = f"{slug_base}{y_part}"
+
+    # 'episode' was stored here before; it is not a catalog content type, and an
+    # episode page describes a series, so the post is stamped series.
+    media_type = "series" if page_kind in ("episode", "series") else "movie"
 
     return cleaned, year, season_num, episode_num, quality, languages, media_type, canonical_key
 
@@ -443,6 +486,56 @@ def parse_desicinemas_content(content_html: str, url: str) -> tuple[str | None, 
 
 
 # --- Database Layer ---
+def _migrate_posts_provenance(conn: sqlite3.Connection) -> None:
+    """Additive, idempotent repair of staging databases scraped before D1.
+
+    The original posts table had no provenance columns at all, so 5,223 rows
+    merged as source_site='unknown', and it stored the illegal media_type
+    'episode'.  Only columns are added and empty values filled: canonical_key
+    stays the primary key (SQLite cannot ALTER a primary key in, and
+    merge_catalogs already reads rowid as the id), and raw_meta is left intact.
+    """
+    existing = {c[1] for c in conn.execute("PRAGMA table_info(posts);").fetchall()}
+    for col in ("url", "slug", "source_site"):
+        if col not in existing:
+            conn.execute(f"ALTER TABLE posts ADD COLUMN {col} TEXT;")
+
+    # The scraper always wrote the page URL into raw_meta — reuse it as evidence.
+    try:
+        conn.execute(
+            "UPDATE posts SET url = json_extract(raw_meta, '$.loc')"
+            " WHERE (url IS NULL OR url = '') AND raw_meta IS NOT NULL"
+            " AND json_valid(raw_meta) AND json_extract(raw_meta, '$.loc') IS NOT NULL;"
+        )
+    except sqlite3.Error:  # a SQLite build without the JSON extension
+        for row_id, raw_meta in conn.execute(
+            "SELECT rowid, raw_meta FROM posts WHERE (url IS NULL OR url = '') AND raw_meta IS NOT NULL;"
+        ).fetchall():
+            try:
+                loc = (json.loads(raw_meta) or {}).get("loc")
+            except (ValueError, TypeError):
+                continue
+            if loc:
+                conn.execute("UPDATE posts SET url = ? WHERE rowid = ?;", (loc, row_id))
+    for row_id, page_url in conn.execute(
+        "SELECT rowid, url FROM posts WHERE (slug IS NULL OR slug = '') AND url IS NOT NULL AND url != '';"
+    ).fetchall():
+        conn.execute("UPDATE posts SET slug = ? WHERE rowid = ?;", (slug_from_url(page_url), row_id))
+    conn.execute(
+        "UPDATE posts SET source_site = ? WHERE source_site IS NULL OR source_site = '' OR source_site = 'unknown';",
+        (SITE,),
+    )
+    for bad in [row[0] for row in conn.execute(
+        "SELECT DISTINCT media_type FROM posts WHERE media_type IS NOT NULL;"
+    ).fetchall()]:
+        if bad in LEGAL_MEDIA_TYPES:
+            continue
+        conn.execute(
+            "UPDATE posts SET media_type = ? WHERE media_type = ?;",
+            (normalize_media_type(bad), bad),
+        )
+
+
 def init_staging_db(db_path: Path):
     """Initializes isolated SQLite staging database schema."""
     db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -482,7 +575,10 @@ def init_staging_db(db_path: Path):
                 languages TEXT,
                 is_18_plus INTEGER DEFAULT 0,
                 scraped_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                raw_meta TEXT
+                raw_meta TEXT,
+                url TEXT,
+                slug TEXT,
+                source_site TEXT DEFAULT 'desicinemas'
             );
             """
         )
@@ -494,6 +590,7 @@ def init_staging_db(db_path: Path):
                     conn.execute(f"ALTER TABLE posts ADD COLUMN {col} TEXT;")
                 except Exception:
                     pass
+        _migrate_posts_provenance(conn)
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS releases (
@@ -541,7 +638,9 @@ def save_post_to_staging(db_path: Path, item_res: dict):
         cur = conn.cursor()
 
         if item_res.get("skipped"):
-            cur.execute("UPDATE sitemap_cache SET scraped = 1 WHERE loc = ?;", (loc,))
+            # -1, never the retired 2: this page was visited but produced nothing,
+            # and the pending query drains it again on the next run.
+            cur.execute("UPDATE sitemap_cache SET scraped = -1 WHERE loc = ?;", (loc,))
             return
 
         if not item_res.get("success"):
@@ -552,10 +651,11 @@ def save_post_to_staging(db_path: Path, item_res: dict):
             return
 
         p = item_res["post"]
+        page_url = p.get("url") or loc
         cur.execute(
             """
-            INSERT INTO posts (canonical_key, title, clean_title, year, media_type, poster_url, backdrop_url, imdb_id, tmdb_id, synopsis, genres, director, cast_names, languages, is_18_plus, raw_meta)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO posts (canonical_key, title, clean_title, year, media_type, poster_url, backdrop_url, imdb_id, tmdb_id, synopsis, genres, director, cast_names, languages, is_18_plus, raw_meta, url, slug, source_site)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(canonical_key) DO UPDATE SET
                 title = excluded.title,
                 clean_title = excluded.clean_title,
@@ -570,6 +670,9 @@ def save_post_to_staging(db_path: Path, item_res: dict):
                 director = COALESCE(excluded.director, posts.director),
                 cast_names = COALESCE(excluded.cast_names, posts.cast_names),
                 languages = COALESCE(excluded.languages, posts.languages),
+                url = COALESCE(posts.url, excluded.url),
+                slug = COALESCE(posts.slug, excluded.slug),
+                source_site = excluded.source_site,
                 scraped_at = CURRENT_TIMESTAMP;
             """,
             (
@@ -577,7 +680,7 @@ def save_post_to_staging(db_path: Path, item_res: dict):
                 p["title"],
                 p["clean_title"],
                 p.get("year"),
-                p.get("media_type"),
+                normalize_media_type(p.get("media_type")),
                 p.get("poster_url"),
                 p.get("backdrop_url"),
                 p.get("imdb_id"),
@@ -589,6 +692,9 @@ def save_post_to_staging(db_path: Path, item_res: dict):
                 p.get("languages"),
                 p.get("is_18_plus", 0),
                 json.dumps({"loc": loc}),
+                page_url,
+                p.get("slug") or slug_from_url(page_url),
+                p.get("source_site") or SITE,
             ),
         )
 
@@ -707,6 +813,9 @@ def scrape_post_item(item: tuple, client: DesiCinemasClient, unwrap_bridges: boo
                 "clean_title": clean_title,
                 "year": year,
                 "media_type": media_type,
+                "url": loc,
+                "slug": slug_from_url(loc),
+                "source_site": SITE,
                 "poster_url": poster_url,
                 "backdrop_url": backdrop_url,
                 "imdb_id": imdb_id,
@@ -784,10 +893,10 @@ def run_crawler(db_path: Path, workers: int = 4, delay: float = 0.25, limit: int
 
     with sqlite3.connect(str(db_path)) as conn:
         cur = conn.cursor()
-        q = "SELECT loc, lastmod, slug FROM sitemap_cache WHERE scraped = 0 ORDER BY rowid ASC"
+        q = PENDING_SELECT
         if limit:
-            q += f" LIMIT {limit}"
-        cur.execute(q)
+            q += f" LIMIT {int(limit)}"
+        cur.execute(q, QUEUED_SCRAPE_STATES)
         pending = cur.fetchall()
 
     if not pending:

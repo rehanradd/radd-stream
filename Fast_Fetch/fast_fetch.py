@@ -537,8 +537,6 @@ def _init_db(db_path: Path | None = None) -> None:
             last_attempt REAL DEFAULT NULL
         );
 
-        CREATE INDEX IF NOT EXISTS idx_sitemap_slug ON sitemap_cache(slug);
-
         CREATE TABLE IF NOT EXISTS posts (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             url TEXT UNIQUE NOT NULL,
@@ -560,8 +558,6 @@ def _init_db(db_path: Path | None = None) -> None:
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
 
-        CREATE INDEX IF NOT EXISTS idx_posts_slug ON posts(slug);
-
         CREATE TABLE IF NOT EXISTS releases (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             post_id INTEGER NOT NULL,
@@ -580,7 +576,9 @@ def _init_db(db_path: Path | None = None) -> None:
         );
 
         CREATE INDEX IF NOT EXISTS idx_releases_post ON releases(post_id);
-        CREATE INDEX IF NOT EXISTS idx_releases_origin ON releases(post_id, source_site, origin_url);
+        -- idx_releases_origin is created after the migration below: an existing staging
+        -- database still holds the old releases table, and indexing a column that table
+        -- does not have yet aborts the whole script.
 
         CREATE TABLE IF NOT EXISTS download_sources (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -608,6 +606,11 @@ def _init_db(db_path: Path | None = None) -> None:
         CREATE INDEX IF NOT EXISTS idx_sources_status_temp ON download_sources(status, is_temporary);
         CREATE INDEX IF NOT EXISTS idx_sources_rel_status ON download_sources(release_id, status);
         """)
+        # Every index on a column a migration can add is created *after* the migration
+        # pass below. `CREATE TABLE IF NOT EXISTS` is a no-op on an existing staging
+        # database, so indexing a column that old table does not have yet aborts the
+        # whole script — which is exactly how `slug` and `origin_url` each took down
+        # a site's upgrade.
 
         # Insert defaults for domains_config if missing
         for k, v in DEFAULT_DOMAINS.items():
@@ -618,6 +621,7 @@ def _init_db(db_path: Path | None = None) -> None:
         cursor.execute("PRAGMA table_info(posts)")
         existing_p_cols = {r[1] for r in cursor.fetchall()}
         p_cols = {
+            "slug": "TEXT",
             "poster_url": "TEXT",
             "backdrop_urls": "TEXT",
             "imdb_rating": "TEXT",
@@ -658,6 +662,8 @@ def _init_db(db_path: Path | None = None) -> None:
 
         cursor.execute("PRAGMA table_info(sitemap_cache)")
         existing_sm_cols = {r[1] for r in cursor.fetchall()}
+        if "slug" not in existing_sm_cols:
+            cursor.execute("ALTER TABLE sitemap_cache ADD COLUMN slug TEXT")
         if "site" not in existing_sm_cols:
             cursor.execute("ALTER TABLE sitemap_cache ADD COLUMN site TEXT DEFAULT 'vegamovies'")
         if "attempts" not in existing_sm_cols:
@@ -672,6 +678,8 @@ def _init_db(db_path: Path | None = None) -> None:
         conn.execute("CREATE INDEX IF NOT EXISTS idx_sitemap_retry ON sitemap_cache(scraped, attempts)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_posts_tmdb ON posts(tmdb_id)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_posts_imdb ON posts(imdb_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_posts_slug ON posts(slug)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_sitemap_slug ON sitemap_cache(slug)")
         conn.executescript("""
         CREATE TABLE IF NOT EXISTS post_sources (
             post_id INTEGER NOT NULL,
@@ -4596,15 +4604,26 @@ def heal_post_links(post_id: int, verbose: bool = True) -> dict:
     return {"healed": healed_count, "total_active": healed_count}
 
 
-def resolve_live_source(source_id: int) -> dict:
+def resolve_live_source(source_id: int, *, v2: bool = False) -> dict:
     """
     Just-In-Time (JIT) live stream resolver:
     Given a download_sources ID, returns an active, stream-ready URL.
     - If permanent (is_temporary == 0) and active: returns cached final_url instantly.
     - If temporary (is_temporary == 1) or expired: re-resolves the source_url
       bridge on-the-fly, updates the database cache with the fresh token, and returns it.
+
+    ``v2=True`` selects the honest resolution contract for the v2 API (API_V2.md §12,
+    HANDOFF_apidocs B13) and changes nothing on the default path, which the shipped
+    v1 app depends on:
+    - an unknown id and an adult-flagged id return the *same* failure envelope
+      (``code == "not_found"``) so a restricted title is indistinguishable from an
+      absent one, instead of leaking the words "18+" / "restricted";
+    - when re-resolution fails, the answer is an honest
+      ``code == "no_playable_source"`` failure rather than ``success: true`` carrying
+      a stale URL, so a dead link can never look alive to the caller.
     """
     init_db()
+    not_found = {"success": False, "error": "not_found", "code": "not_found"}
     with get_db() as conn:
         row = conn.execute("SELECT * FROM download_sources WHERE id = ?", (source_id,)).fetchone()
         if row:
@@ -4615,8 +4634,13 @@ def resolve_live_source(source_id: int) -> dict:
                 (source_id,),
             ).fetchone()
             if adult and adult[0]:
+                if v2:
+                    # Identical to a missing id: never say why.
+                    return dict(not_found)
                 return {"success": False, "error": "Source restricted (18+ content)"}
     if not row:
+        if v2:
+            return dict(not_found)
         return {"success": False, "error": f"Source #{source_id} not found"}
 
     src = dict(row)
@@ -4718,12 +4742,39 @@ def resolve_live_source(source_id: int) -> dict:
             "file_size_bytes": src.get("file_size_bytes"),
         }
 
+    # Nothing could be re-resolved. The legacy (v1) contract keeps handing back the
+    # last known URL so the shipped app's behaviour is frozen, but the answer is now
+    # flagged honestly (`stale: True`) and the ledger is marked so the projection can
+    # demote the link's measured state instead of treating it as verified. The v2
+    # contract refuses the stale URL outright: a link we could not re-resolve is a
+    # failure, not a success.
+    try:
+        if src["status"] in ("dead", "expired") or src["is_temporary"]:
+            with get_db() as conn:
+                conn.execute(
+                    "UPDATE download_sources SET status = 'expired', "
+                    "last_checked_at = CURRENT_TIMESTAMP WHERE id = ?",
+                    (src["id"],),
+                )
+    except Exception:
+        pass
+    stale_url = src.get("final_url") or src.get("source_url")
+    if v2:
+        return {
+            "success": False,
+            "id": src["id"],
+            "error": "no_playable_source",
+            "code": "no_playable_source",
+            "reason": "re_resolve_failed",
+            "stale": True,
+        }
     return {
         "success": True,
         "id": src["id"],
-        "url": src.get("final_url") or src.get("source_url"),
+        "url": stale_url,
         "cached": True,
         "refreshed": False,
+        "stale": True,
         "service": src["service"],
         "is_temporary": bool(src["is_temporary"]),
         "is_resumable": bool(src["is_resumable"]),

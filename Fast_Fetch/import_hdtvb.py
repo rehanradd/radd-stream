@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """
-import_hdtvb.py — Dedicated staging importer and scraper for HDHub4u (https://hdtvb.net).
+import_hdtvb.py — Dedicated staging importer and scraper for HDTVB (https://hdtvb.net / https://hdutv.com).
+The site republishes the HDHub4u catalog under its own domains, but its staging
+rows belong to the `hdtvb` site key — never to `hdhub4u`.
 
 Key Features:
   1. Dedicated staging database isolation: hdtvb.db (prevents SQLite locking contention).
@@ -445,7 +447,7 @@ def run_hdtvb_scraper(
 
     total_tasks = len(pending_urls)
     print(f"\n{'='*70}")
-    print(f"🚀 HDHub4u (hdtvb.net) Staging Ingestion Pipeline")
+    print(f"🚀 HDTVB (hdtvb.net) Staging Ingestion Pipeline")
     print(f"   Database       : {db_path.name}")
     print(f"   Pending Titles : {total_tasks:,}")
     print(f"   Workers        : {workers} | Delay: {delay}s | Direct R2: {resolve_direct}")
@@ -524,7 +526,7 @@ def run_hdtvb_scraper(
                 except Exception:
                     pass
 
-    print(f"\n[✓] HDHub4u scraping finished: {counters}", flush=True)
+    print(f"\n[✓] HDTVB scraping finished: {counters}", flush=True)
 
 
 def get_status_summary(db_path: Path):
@@ -558,7 +560,7 @@ def get_status_summary(db_path: Path):
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="HDHub4u (hdtvb.net) Staging Importer")
+    parser = argparse.ArgumentParser(description="HDTVB (hdtvb.net) Staging Importer")
     parser.add_argument("--base-url", default=DEFAULT_BASE_URL, help="Base origin URL")
     parser.add_argument("--db-path", default=str(DEFAULT_DB_PATH), help="Target SQLite staging database")
     parser.add_argument("--sync-sitemap", action="store_true", help="Download and sync sitemap.xml to database")
