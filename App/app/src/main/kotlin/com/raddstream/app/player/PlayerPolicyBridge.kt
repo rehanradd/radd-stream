@@ -109,6 +109,8 @@ data class LadderRung(
     val band: String,
     val streamId: String,
     val backupHandles: List<String> = emptyList(),
+    /** The server's own quality-only caption for this rung ("Full HD · X264"); null = show the band. */
+    val label: String? = null,
 ) {
     val usable: Boolean get() = band.isNotBlank() && streamId.isNotBlank()
 }

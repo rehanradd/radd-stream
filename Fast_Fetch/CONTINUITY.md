@@ -482,3 +482,14 @@ routes; restrict the bind and public routes before enabling the public proxy.
   `redirect=0` returns only `stream_id/kind/mime/size/resumable/expires_in`.
 - Nightly backup: `radd-stream-backup_20261024_154000.tar.gz`, 20 databases, 990 MB,
   sha256 `b20f7b0afee4d4f72f4caee9eeba6241b035ee9e6f1225f4bff553801698e5f7`, uploaded to HF.
+
+### 2026-10-24 — Architectural Directive: Oracle VM-Centric Build Mandate & UI Roadmap
+- **Owner Direction**: All development, UI polish, testing, and APK builds are anchored 100% on this Oracle VM. External AI sandboxes (Google AI Studio) are deprecated for this project.
+- **Fleet Merge**: `merge_fleet.py` is actively processing 18 staging databases into `merged_catalog_20261024.db` with low CPU priority (`nice -n19`). Verified 8 sites already merged cleanly.
+- **Android Health**: 245/245 JVM unit tests passing (100% green). Debug APK updated and published to `/var/www/download/radd-stream.apk`.
+- **Next Priorities for Qoder**:
+  1. Complete 18-site fleet merge into `merged_catalog_20261024.db` and verify adult filters.
+  2. Complete Compose UI wiring in `PlayerScreen.kt` (Brightness/Volume vertical HUDs, 200% AudioBoost pill, 2x long-press badge, seek ripples).
+  3. Wire `QualityRungCard` into player bottom sheet (Auto, 4K, 1080p, 720p, 480p).
+  4. Wire Downloads Screen progress & 0-waste stream-to-download promotion.
+  5. Assemble and copy APK to `/var/www/download/radd-stream.apk` on every milestone for direct physical phone testing by the owner.

@@ -6,6 +6,8 @@ import com.raddstream.app.data.ServerSettingsRepository
 import com.raddstream.app.network.models.StatsResponse
 import com.raddstream.app.player.AudioBoost
 import com.raddstream.app.repository.CatalogRepository
+import com.raddstream.app.share.LanShareRunner
+import com.raddstream.app.share.LanShareStatus
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -62,12 +64,17 @@ data class SettingsUiState(
     val isLoadingStats: Boolean = false,
     val prefs: UserPreferences = UserPreferences(),
     val statusMessage: String? = null,
+    /** The persisted LAN-share opt-in — the same value [com.raddstream.app.share.LanShareRunner] obeys. */
+    val lanShareEnabled: Boolean = false,
+    /** The socket's real state, read from the runner so the row never claims more than is true. */
+    val lanShareStatus: LanShareStatus = LanShareStatus.Off,
 )
 
 @HiltViewModel
 class SettingsViewModel @Inject constructor(
     private val settingsRepository: ServerSettingsRepository,
     private val catalogRepository: CatalogRepository,
+    private val lanShareRunner: LanShareRunner,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(SettingsUiState())
@@ -76,6 +83,7 @@ class SettingsViewModel @Inject constructor(
     init {
         loadServerUrlAndStats()
         loadPersistedPrefs()
+        observeLanShare()
     }
 
     private fun loadServerUrlAndStats() {
@@ -110,6 +118,35 @@ class SettingsViewModel @Inject constructor(
                 }
             }
         }
+    }
+
+    /**
+     * LAN share: the switch reads the persisted preference (the single source the runner also obeys),
+     * and the status line reads the socket's real state from the runner. Both are collected, never
+     * sampled, so the row reflects what is actually bound the moment it changes — including on another
+     * screen or after a restart — rather than what was last tapped here.
+     */
+    private fun observeLanShare() {
+        viewModelScope.launch {
+            settingsRepository.lanShareEnabled.collect { enabled ->
+                _uiState.update { it.copy(lanShareEnabled = enabled) }
+            }
+        }
+        viewModelScope.launch {
+            lanShareRunner.status.collect { status ->
+                _uiState.update { it.copy(lanShareStatus = status) }
+            }
+        }
+    }
+
+    /**
+     * Turn LAN sharing on or off. The ViewModel is the only writer of this preference — the socket
+     * itself is owned by the Application's [com.raddstream.app.share.LanShareRunner], which reacts to
+     * this exact stored value, so the UI never reaches a network stack directly.
+     */
+    fun setLanShareEnabled(value: Boolean) {
+        _uiState.update { it.copy(lanShareEnabled = value) }
+        viewModelScope.launch { settingsRepository.saveLanShareEnabled(value) }
     }
 
     fun onServerUrlChanged(newUrl: String) {

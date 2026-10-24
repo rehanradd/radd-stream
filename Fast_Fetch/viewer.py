@@ -2692,7 +2692,7 @@ def make_server(host: str, port: int, operator: bool):
     return server
 
 
-def start_server(port: int = 8080, host: str = "0.0.0.0",
+def start_server(port: int = 8080, host: str = "127.0.0.1",
                  operator_port: int | None = None):
     import threading
     _ensure_schema()

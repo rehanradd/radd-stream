@@ -81,15 +81,7 @@ class BrandDriftTest {
      * workstream. The fix for each is one line: read `Brand.name` or
      * `Brand.copy("offline_notice", …)`. This set must only ever shrink.
      */
-    private val pendingBrandNameMigration = setOf(
-        "App/app/src/main/kotlin/com/raddstream/app/player/CacheAffordance.kt",
-        "App/app/src/main/kotlin/com/raddstream/app/player/PlaybackService.kt",
-        "App/app/src/main/kotlin/com/raddstream/app/ui/screens/DetailScreen.kt",
-        "App/app/src/main/kotlin/com/raddstream/app/ui/screens/DownloadsScreen.kt",
-        "App/app/src/main/kotlin/com/raddstream/app/ui/screens/PlayerScreen.kt",
-        "App/app/src/main/kotlin/com/raddstream/app/ui/screens/SetupScreen.kt",
-        "App/app/src/main/kotlin/com/raddstream/app/viewmodel/PlayerViewModel.kt",
-    )
+    private val pendingBrandNameMigration = setOf<String>()
 
     /** Files that legitimately contain raw paints: the brand palette itself. */
     private val colorOwners = setOf(
@@ -103,9 +95,7 @@ class BrandDriftTest {
 
     private val deepLinkOwners = brandOwners
 
-    private val pendingDeepLinkMigration = setOf(
-        "App/app/src/main/kotlin/com/raddstream/app/ui/navigation/NavGraph.kt",
-    )
+    private val pendingDeepLinkMigration = setOf<String>()
 
     private fun assertRatchet(label: String, offenders: List<String>, owners: Set<String>, pending: Set<String>) {
         val unexpected = offenders.filter { it !in owners && it !in pending }

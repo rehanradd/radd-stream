@@ -24,6 +24,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
+import com.raddstream.app.brand.Brand
 import com.raddstream.app.ui.screens.BrowseScreen
 import com.raddstream.app.ui.screens.DetailScreen
 import com.raddstream.app.ui.screens.DownloadsScreen
@@ -131,7 +132,7 @@ fun RaddStreamNavGraph(
                     },
                 ),
                 deepLinks = listOf(
-                    androidx.navigation.navDeepLink { uriPattern = "radd://browse/{type}" },
+                    androidx.navigation.navDeepLink { uriPattern = Brand.deepLinkUri("browse/{type}") },
                 ),
             ) {
                 BrowseScreen(
@@ -169,7 +170,7 @@ fun RaddStreamNavGraph(
                     navArgument(Screen.Detail.ARG_POST_ID) { type = NavType.IntType },
                 ),
                 deepLinks = listOf(
-                    androidx.navigation.navDeepLink { uriPattern = "radd://detail/{postId}" },
+                    androidx.navigation.navDeepLink { uriPattern = Brand.deepLinkUri("detail/{postId}") },
                 ),
             ) {
                 DetailScreen(

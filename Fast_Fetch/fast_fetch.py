@@ -5089,8 +5089,9 @@ def main():
     serve_p.add_argument("--port", type=int, default=8080, help="Server port (default: 8080)")
     serve_p.add_argument(
         "--host",
-        default="0.0.0.0",
-        help="Bind address (default: 0.0.0.0; use 127.0.0.1 behind a reverse proxy)",
+        default="127.0.0.1",
+        help="Bind address (default: 127.0.0.1 — nginx is the public gate; pass an "
+             "explicit address only when this process really must face the network)",
     )
 
     # domain
@@ -5520,7 +5521,7 @@ def main():
     elif args.command == "serve":
         import viewer
         port = getattr(args, "port", 8080)
-        host = getattr(args, "host", "0.0.0.0")
+        host = getattr(args, "host", "127.0.0.1")
         viewer.start_server(port, host=host)
 
     elif args.command == "domain":

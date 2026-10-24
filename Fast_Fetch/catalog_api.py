@@ -89,7 +89,7 @@ _PLAYABILITY_GROUP = {
     "none": _GROUP_NONE,
 }
 
-_CAM_TAGS = {"cam", "telesync", "telecine", "workprint", "hdcam", "mdcam", "rscam"}
+_CAM_TAGS = {"cam", "telesync", "telecine", "hdtc", "workprint", "hdcam", "mdcam", "rscam"}
 _RES_LABEL = {
     "2160p": "4K", "4k": "4K", "uhd": "4K", "1080p": "1080p", "720p": "720p",
     "480p": "480p", "360p": "360p", "unknown": "",
@@ -101,7 +101,7 @@ _HDR_LABEL = {
 _SOURCE_LABEL = {
     "bluray": "BluRay", "uhd_bluray": "BluRay", "blu_ray": "BluRay", "web_dl": "WEB-DL",
     "webdl": "WEB-DL", "webrip": "WEBRip", "web_rip": "WEBRip", "hdtv": "HDTV",
-    "dvdrip": "DVDRip", "telesync": "TS", "telecine": "Telecine", "cam": "CAM",
+    "dvdrip": "DVDRip", "telesync": "TS", "hdtc": "TS", "telecine": "Telecine", "cam": "CAM",
     "workprint": "WORKPRINT", "unknown": "",
 }
 _EDITION_LABEL = {

@@ -258,5 +258,7 @@ class PlayerSessionStore(
         val rungs: List<LadderRung>,
         val startBand: String?,
         val auto: Boolean,
+        /** The rung the server called best-and-playable — what choosing "Auto" means here. */
+        val autoBand: String? = null,
     )
 }

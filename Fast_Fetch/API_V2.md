@@ -13,16 +13,28 @@ sufficient to implement the client without asking questions.
 
 | Marker | Meaning |
 |---|---|
-| ✅ **Implemented** | The code produces this today, with a passing test in `test_catalog_v2.py` / `test_release_descriptor.py` / `test_link_health.py` / `test_database.py`. |
+| ✅ **Implemented** | The code produces this today, with a passing test in `test_api_v2.py` (Layer 2 / the v2 wire) or `test_catalog_v2.py` / `test_evidence_writeback.py` / `test_release_descriptor.py` / `test_link_health.py` / `test_database.py` (Layers 0-1). |
 | 🛠 **In schema, not populated** | The `cat_*` column exists but the projector or health writer does not fill it yet. A v2 server may return it only if it computes the value itself. |
 | 📝 **Planned** | Part of this v2 contract but **no code produces it yet**. Every planned item is also in §17 as a checkbox. Never write a client against a 📝 field as if it exists. |
 
 **Hard truth, stated once:** Layer 0 (ledger) and Layer 1 (`cat_*` projection) are ✅
-implemented. **Layer 2 — every `/api/v2` endpoint described here — is not implemented in
-`viewer.py` at all today.** The live app runs on frozen v1 endpoints (`/api/v1/posts`,
-`/api/v1/posts/{id}`, `/api/v1/stream`, `/api/v1/stats`). Nothing in this document may be
-described elsewhere as "live"; `/api/v2/manifest` (§8) is the machine-readable status source
-once built, and a client must check it, not this prose, before shipping a feature.
+implemented. **Layer 2 — every `/api/v2` endpoint described here — is ✅ implemented in
+`Fast_Fetch/api_v2.py` and mounted by `Fast_Fetch/viewer.py`** (GET/POST dispatch plus the
+§16.5 token-bucket gate and the §16.9 deny-by-default scrubber), and `Fast_Fetch/test_api_v2.py`
+(46 tests, every §12 route head) is what keeps the rest of this document honest. Two things
+that paragraph does *not* claim, both of them true today:
+
+- **Runtime state is separate from code state.** `radd-stream.service` runs this `viewer.py`,
+  but the live database (`RADD_DB_PATH`) has no `cat_*` tables yet, so every v2 route currently
+  answers `503 unavailable` on that host. Running the Layer-1 projection
+  (`catalog_v2.project()`) against it is the missing deploy step — an operator action, not a
+  code change.
+- The live app's shipped features still ride on the frozen v1 endpoints (`/api/v1/posts`,
+  `/api/v1/posts/{id}`, `/api/v1/stream`, `/api/v1/stats`).
+
+Nothing in this document may be described elsewhere as "live"; `/api/v2/manifest` (§8) is the
+machine-readable status source, and a client must check it — not this prose — before shipping
+a feature.
 
 External models borrowed (short notes inline, sources at the end): TMDB's separation of
 release events from capture medium and its external-id/multi-id identity
@@ -42,17 +54,18 @@ and RFC 9110 cache validators (ETag / `Last-Modified` / `Retry-After`).
 
 ## 2. Why v2 exists — the v1 defects this design removes
 
-Verified in `viewer.py` / `fast_fetch.py`:
+Verified in `viewer.py` / `fast_fetch.py` when this design was written. The "v2 answer"
+column is a status, not a wish: ✅ marks what the code does today.
 
 | # | v1 behaviour | Consequence | v2 answer |
 |---|---|---|---|
 | 1 | `season`/`episode` are free text (`S01` vs `1` vs `Batch`) | client cannot know which episodes exist or which file covers them | structured `cat_episodes` + `cat_releases.coverage_type` ✅ |
-| 2 | `?type=anime` documented but `content_type` never stores `anime` | documented filter returns nothing | `work_type` + `is_animated` facet ✅ (Layer 1), 📝 at the API |
-| 3 | releases `ORDER BY id ASC`; quality is only a `CASE` over `service` inside a release | first-scraped row looks "first" to the UI | computed `quality_score`, a two-axis order (§8) |
-| 4 | `resolve_live_source()` falls through to `success: true` even when no fresh URL was found | dead links look alive forever | `playability`/`state`/`rank_score` are measured properties (§7) |
-| 5 | `status` written `active` at scrape and never re-checked | ranking cannot use reality | `cat_link_evidence` + `link_health.probe()` ✅ (probe), 📝 (write-back into `cat_links`) |
-| 6 | no auth, no rate limit, `Access-Control-Allow-Origin: *`, binds `0.0.0.0` | anyone can hammer the resolver | §16 error/rate-limit/security contracts |
-| 7 | `/api/heal` never writes a response → clients hang | unusable | removed; `POST /api/v2/links/{id}/report` replaces it 📝 |
+| 2 | `?type=anime` documented but `content_type` never stores `anime` | documented filter returns nothing | `work_type` + `is_animated` facet ✅ (Layer 1), ✅ at the API (`?type=`, `?animated=` on `/browse` and `/search`) |
+| 3 | releases `ORDER BY id ASC`; quality is only a `CASE` over `service` inside a release | first-scraped row looks "first" to the UI | computed `quality_score`, a two-axis order (§8) ✅ — `/play` ranks the ladder and re-sorts on the axis the caller named (§9) |
+| 4 | `resolve_live_source()` falls through to `success: true` even when no fresh URL was found | dead links look alive forever | `playability`/`state`/`rank_score` are measured properties (§7); `resolve_live_source(..., v2=True)` returns an honest `no_playable_source` / `not_found` envelope ✅ (`api_v2.resolve_target`) |
+| 5 | `status` written `active` at scrape and never re-checked | ranking cannot use reality | `cat_link_evidence` + `link_health.probe()` ✅ (probe), ✅ (write-back into `cat_links` + `health` rev: `catalog_v2.apply_evidence`, §6.2 — operator-invoked, no route, no loop) |
+| 6 | no auth, no rate limit, `Access-Control-Allow-Origin: *`, binds `0.0.0.0` | anyone can hammer the resolver | §16 contracts: in-app token bucket + `RateLimit-*` on every reply ✅ (§16.5, `viewer._public_gate`), wildcard CORS deleted — the allow-list is empty by default ✅ (§16.7), `radd-stream.service` binds `127.0.0.1` (the module default is still `0.0.0.0` when started without `--host`); auth and nginx `limit_req` remain 📝 |
+| 7 | `/api/heal` never writes a response → clients hang | unusable | removed; `POST /api/v2/links/{id}/report` replaces it ✅ (ingest table `client_link_reports`) |
 | 8 | `is_18_plus` filtering implemented but undocumented | an app could accidentally surface it | single adult rule, §13, tested |
 
 ---
@@ -74,8 +87,9 @@ Verified in `viewer.py` / `fast_fetch.py`:
           · rebuilt any time from Layer 0; the projector is idempotent within one
             ledger state (test_projection_is_idempotent_and_rebuildable ✅)
 
- Layer 2  API (📝 this contract; nothing implemented yet)
-          browse → detail → play, with entitlements and telemetry
+ Layer 2  API (✅ api_v2.py, mounted by viewer.py — tested by test_api_v2.py)
+          browse → detail → play, with telemetry
+          · the §11 entitlement gate is contract-only 📝; everything else in §12 answers
 ```
 
 Rules:
@@ -183,14 +197,14 @@ the **exact enums the code can emit** — anything else never appears:
 | Column | Complete value set (code truth) | Notes |
 |---|---|---|
 | `resolution` | `2160p, 1080p, 720p, 480p, 480p_or_lower, unknown` | `480p_or_lower` (360p/240p/144p) and `unknown` are real values the old table omitted. Default in DB: `unknown`. |
-| `source_tag` | `uhd_bluray, bluray, web_dl, webrip, hdtv, dvdrip, telesync, telecine, ppv, cam, unknown` | `uhd_bluray` only when a `bluray` match meets 2160p. **`hdtc` is not a tag yet**: an HDTC label today lands on `unknown` (weight 60) and even counts as `official_print` (known resolution + unknown source) — documented inaccuracy, planned fix (§17). |
+| `source_tag` | `uhd_bluray, bluray, web_dl, webrip, hdtv, dvdrip, telesync, hdtc, telecine, ppv, cam, unknown` | `uhd_bluray` only when a `bluray` match meets 2160p. **`hdtc` is a cam-family tag** (weight 75): an HDTC label (`HDTC`, `H-DTC`, `HD-TC`, separator variants, any case) lands on `hdtc`, is capped at 250 and is **never** `official_print`. `HDTS` remains `telesync`. |
 | `codec` | `h265, h264, av1, xvid, mpeg2, unknown` | |
 | `hdr` | JSON array, any of `dolby_vision, hdr10_plus, hdr10, hlg` (empty = SDR) | order = best first |
 | `bit_depth` | int `0|8|10|12` (0 = unstated) | |
 | `container` | `mkv, mp4, avi, mov, ts, m4a, unknown` | |
 | `edition` | `director_cut, extended, imax, unrated, remastered, restored, uncut, fan_edit, theatrical, unknown` | |
 | `print_version` | int `0..999` | REPACK/`v2` capture: `version` from the label ✅ (`test_repack_version_is_per_print_not_per_work`) |
-| `release_group` | string, **always `''`** 🛠 | the descriptor does not extract group names; stop describing `group` as a feature |
+| `release_group` | string, **still `''` in the column** 🛠 | the descriptor now emits a parsed `release_group` in `describe()`/`descriptor_json` (trailing `-NAME` suffix, `[NAME]`/`(NAME)`/`{NAME}`, upper-case bare last word, or upper-case word before the resolution; quality/audio/subtitle/version/edition/watermark words denied; `''` whenever unsure). `cat_releases.release_group` stays `''` until `catalog_v2.project()` reads the new key instead of its hardcoded `''` |
 | `size_bytes` / `size_per_episode_bytes` | ints, `0` = unknown | `2.24 GB/E` → per-episode, total stays 0 (Decimal-exact) ✅ |
 | `audio_languages` / `audio_channels` / `audio_codecs` | JSON arrays + single layout string `5.1|2.0|unknown` ✅ | layout is per *release*, not per track — see gap G-1 (§18); `7.1` is folded into `5.1` deliberately |
 | `dual_audio` | 0/1 ✅ | true when ≥2 languages or label says dual/multi audio |
@@ -205,7 +219,7 @@ the **exact enums the code can emit** — anything else never appears:
 ```
 score =  W_res(resolution)        2160p=400  1080p=300  720p=200  480p=120  480p_or_lower=100  unknown=50
        + W_src(source_tag)        uhd_bluray=300 bluray=280 web_dl=240 webrip=220 hdtv=180
-                                   dvdrip=150 telesync=80 telecine=70 ppv=20 cam=20 unknown=60
+                                   dvdrip=150 telesync=80 hdtc=75 telecine=70 ppv=20 cam=20 unknown=60
        + 60  if hdr ∩ {dolby_vision,hdr10,hdr10_plus} and resolution ∈ {1080p,2160p}
        + 30  if bit_depth==12   |   + 20 if bit_depth==10
        + 30  if codec ∈ {h265, av1}
@@ -214,7 +228,7 @@ score =  W_res(resolution)        2160p=400  1080p=300  720p=200  480p=120  480p
        + 25  if dual_audio   + 15 if channel_layout == 5.1
        + 15  if edition ∈ {director_cut, extended, remastered, restored}
        − 60  if watermarked
-cam family (cam/telesync/telecine) totals are capped at 250; final clamp 0..1000.
+cam family (cam/telesync/hdtc/telecine) totals are capped at 250; final clamp 0..1000.
 ```
 
 The `unknown` resolution weight (50) sits **below** every known rung on purpose: a known 480p
@@ -226,7 +240,7 @@ Worked comparisons the app can rely on:
 |---|---|---|
 | `2160p UHD BluRay x265 DDP5.1 DV` | 2160p/uhd_bluray/h265/dolby_vision/official | 400+300+60+30+40 = **830** (+audio bonuses) |
 | `1080p WEB-DL x265 Hindi English ESubs` | 1080p/web_dl/h265/official/dual/ext | 300+240+30+40+20+25 = **655** |
-| `1080p HDTC x265` | 1080p/**unknown**/h265/official(!) | 300+60+30+40 = **430** — too generous today, see `hdtc` gap G-4 |
+| `1080p HDTC x265` | 1080p/**hdtc**/h265/not official, cam-family capped | min(300+75+30, 250) = **250** (was 430 via `unknown`+official — gap G-4, fixed) |
 | `720p WEBRip` | 720p/webrip/official | 200+220+40 = **460** |
 | `1080p CAM` | 1080p/cam → capped | min(1080p+cam+official, 250) = **250** |
 | `480p` no other info | 480p/unknown/official | 120+60+40 = **220** |
@@ -240,7 +254,8 @@ sorts first ✅-documented-as-is. The previously claimed tiebreak chain
 (`official_print desc → link health → site trust → first_seen_at desc`) is 📝; only the
 first element is achievable with data that exists. Ordering rules that *do* hold structurally:
 
-- A CAM can never outrank a distribution print (250 cap vs 460 floor for a bare 720p WEBRip).
+- A cam-family print (cam/telesync/hdtc/telecine) can never outrank a distribution print
+  (250 cap vs 460 floor for a bare 720p WEBRip) — this is what keeps an `HDTC` label honest (G-4).
 - Editions are separate prints, never "qualities" of one another: the API exposes `prints[]`
   keyed by print, each with its own links; `alternate_edition` flag labels them.
 - Watermarked/fan prints are kept and flagged, never silently dropped (Zero Data Loss rule).
@@ -255,11 +270,14 @@ cat_links(id, release_id, work_id, source_site, service, source_name, kind, url,
           expires_at, protocol, content_type, size_bytes, latency_ms, speed_mbps, http_status,
           last_evidence_at, rank_score, tier)
 cat_link_evidence(id, link_id, probed_at, ok, protocol, http_status, content_type, size_bytes,
-          latency_ms, speed_mbps, accepts_ranges, error)
+          latency_ms, speed_mbps, accepts_ranges, error, url)
 ```
 `source_site`, `service`, `source_name`, `url`, `final_url`, `resource_id` are **ledger-side
 columns** — Layer 1 keeps them in full (zero data loss, §16.9) and no public response is
 allowed to repeat them. Everything a client is handed about a link is in §8.1.
+`cat_link_evidence.url` is the probed URL of one sample: it exists only so a rebuild that
+renumbers `cat_links.id` can re-attach the sample to the right link (§6.2), is added by its own
+`ALTER TABLE` after the DDL script (never indexed inside it), and is never served.
 
 ### 6.1 `kind` and `playability` — exact outputs of `classify_link()` ✅
 
@@ -282,23 +300,40 @@ An `embed`-service URL that *looks like a file* stays `embed/webview` — the se
 over the shape. `protocol` column ✅: `hls` | `progressive` | `html` (embed/cloud_page/bridge) |
 `unknown`.
 
-### 6.2 `state`, `tier`, and the unpopulated columns
+### 6.2 `state`, `tier`, and the measured columns
 
-- `state` ✅ is copied from the ledger `download_sources.status`, whose only written values are
-  **`active`, `dead`, `expired`** (`expired` = 401/403 token rot, `dead` = 4xx/5xx/timeout;
-  see `fast_fetch.py:4367,4381`). `unknown`/`unchecked` appear in the rank formula as future
-  values but nothing writes them yet. Default column value: `active`.
+- `state` ✅ has three writers, in order of authority: `catalog_v2._link_state_of()` at
+  projection time (it reads the ledger `download_sources.status`, whose only written values are
+  **`active`, `dead`, `expired`** — `expired` = 401/403 token rot, `dead` = 4xx/5xx/timeout, see
+  `fast_fetch.py:4367,4381` — and demotes an `active` that carries no probe evidence at all to
+  `unchecked`, so a scraper's blanket "active" cannot buy a liveness bonus);
+  `link_state.propagate()` after a ledger sweep; and `catalog_v2.apply_evidence()` from the
+  newest verdict in `cat_link_evidence`. Default column value: `unchecked`. `unknown` is legal
+  on the wire and in the rank formula but nothing writes it.
 - `tier` ✅ `1` for the trusted fast direct hosts (pixeldrain, vegadrive, hubcloud_10g,
   fsl_r2, google_cdn, fastdl, hubcdn), else `2`. (`score_link` accepts tier `3`; the
   projector never assigns it.)
-- 🛠 **Never populated by the projector:** `resumable`, `accepts_ranges`, `cors_open`,
-  `latency_ms`, `speed_mbps`, `content_type`, `last_evidence_at`, `expires_at`. `size_bytes`
-  and `http_status` are copied from the ledger when the scraper recorded them.
-  **No code today writes probe results back into `cat_links`** — probing
-  (`link_health.probe` ✅) updates the *ledger* (`download_sources`) via
-  `fast_fetch.run_health_check`, and `cat_links` is refreshed only when the whole projection
-  re-runs. A v2 server must therefore treat `rank_score` as a *structural prior*, not fresh
-  measurement (see §8.3 and HANDOFF item).
+- ✅ **Measured columns** `resumable`, `accepts_ranges`, `cors_open`, `latency_ms`,
+  `speed_mbps`, `content_type`, `http_status`, `size_bytes`, `last_evidence_at` are written by
+  `catalog_v2.apply_evidence(conn, results=())`: it folds each link's **whole**
+  `cat_link_evidence` journal (EWMA 0.4 on latency/speed, blended only where a sample actually
+  measured something; `state` from the newest verdict — the no-verdict codes `blocked_target`,
+  `blocklisted`, `invalid_url` are journaled but move nothing) and UPDATEs the owning
+  `cat_links` row. `rank_score` becomes `link_health.score_link(...)` when the journal holds a
+  probe-shaped sample, and stays on the structural prior below when it holds only client
+  reports — so a report can earn `state='active'` without hijacking the score scale.
+  `cors_open` is written only when a supplied probe carried the fact. A measured failure buries
+  the link (`0`, behind any live peer); mere age never does. It re-derives instead of
+  incrementing, so re-running is a byte-for-byte no-op, it never deletes a link, and it opens no
+  socket. It is invoked by hand — `python3 -S Fast_Fetch/catalog_v2.py --apply-evidence <db>`
+  (`--link-id`/`--limit` to scope, `--ewma-weight` to tune) — from **no HTTP route and no
+  timer**. `link_state._sync_updates()` writes the same columns straight from the ledger after a
+  health sweep, and `project()` copies whatever the scraper recorded (`checked_at`,
+  `http_status`, `size_bytes`, `latency_ms`, `speed_mbps`, `is_resumable`).
+- 🛠 **Still unpopulated:** `expires_at` — nothing computes a TTL for an ephemeral link (G-6,
+  §8.4). And because the projection itself is disposable, a full `project()` resets every link
+  to the structural prior until `apply_evidence()` re-runs; the journal is the durable half
+  (evidence re-attaches by the URL it probed after a rebuild renumbers `cat_links.id`).
 
 ### 6.3 The exact link-score formulas ✅
 
@@ -310,13 +345,16 @@ rank_score = base(playability)      stream|both = 500 | download = 250 | resolve
              + 150 if tier == 1
              + 100 if ephemeral == 0                 (structural only — is_temporary is copied ✅;
                                                       actual TTL/expiry is NOT computed here)
-             + 50  if accepts_ranges == 1            (column always 0 at projection → never fires)
+             + 50  if accepts_ranges == 1            (0 unless the ledger recorded `is_resumable`;
+                                                      a probe can set it later — see §6.2)
              + 100 if state == 'active' | 0 if 'unknown'/'unchecked' | −450 if 'dead'/'expired'
 ```
 
 **Post-probe `link_health.score_link`** (0..1000, practical ceiling 930) — applies only when a
 `ProbeResult` exists (`ok=False` ⇒ score 0, i.e. a measured-dead link can never outrank a
-live one):
+live one). `catalog_v2.apply_evidence()` writes exactly this value into
+`cat_links.rank_score` for every link whose journal holds a probe-shaped sample, and leaves the
+prior above in place for the rest:
 
 ```
 if not ok: 0
@@ -331,9 +369,13 @@ if not ok: 0
 
 Rolling history uses `merge_health_history` (EWMA, newest sample weight 0.4; latency/speed
 blended only when actually measured) ✅ — one failed check decays `success_ema` to 0.6, two to
-0.36. Probe error codes are stable strings safe to GROUP BY: `timeout, dns, tls, conn_reset,
-conn_error, http_404…, empty_body, not_media, redirect_loop, redirect_limit, blocked_target,
-invalid_url, head_unsupported, blocklisted`.
+0.36. `link_health.merge_evidence_journal()` ✅ replays a link's whole `cat_link_evidence`
+journal through it (newest-verdict `state` via `verdict_state`, no-verdict codes skipped) and
+`catalog_v2.apply_evidence()` writes the result — plus `score_link` on the newest successful
+sample — onto `cat_links`, bumping `cat_projection_meta.health`/`health_at` (§16.2) only when
+something actually moved. Probe error codes are stable strings safe to GROUP BY: `timeout, dns,
+tls, conn_reset, conn_error, http_404…, empty_body, not_media, redirect_loop, redirect_limit,
+blocked_target, invalid_url, head_unsupported, blocklisted`.
 
 ---
 
@@ -344,7 +386,7 @@ invalid_url, head_unsupported, blocklisted`.
 | | PRINT axis | LINK axis |
 |---|---|---|
 | Question | *What is the picture?* (resolution × capture source × HDR/codec/edition) | *How well does this access path work?* (playability, measured throughput, latency, freshness, state) |
-| Producer | `release_descriptor.quality_score` (§5.1) | `cat_links.rank_score` (§6.3) and `score_link` once probes land |
+| Producer | `release_descriptor.quality_score` (§5.1) | `cat_links.rank_score` (§6.3): the structural prior from `project()`, overwritten by `score_link` for any link with a probe in its journal (§6.2 `apply_evidence`) |
 | Scale | 0..1000 (cam ≤ 250; best describable print 935) | static prior 0..900; post-probe 0..1000 (ceiling 930) |
 | Lives on | `cat_releases.quality_score` (one value per print) | `cat_links` (one value per link; links of one print can span the whole scale) |
 | Mutable by | re-scrape of the label only | probing, time (token expiry), health history — *without* touching print quality |
@@ -379,8 +421,8 @@ Why separation matters, in one failure each:
                                           "480p_or_lower": 100, "unknown": 50},
                           "source_tag": {"uhd_bluray": 300, "bluray": 280, "web_dl": 240,
                                           "webrip": 220, "hdtv": 180, "dvdrip": 150,
-                                          "telesync": 80, "telecine": 70, "ppv": 20, "cam": 20,
-                                          "unknown": 60},
+                                          "telesync": 80, "hdtc": 75, "telecine": 70, "ppv": 20,
+                                          "cam": 20, "unknown": 60},
                           "bonuses": {"hdr_at_1080p_plus": 60, "bit_depth_12": 30, "bit_depth_10": 20,
                                        "codec_h265_av1": 30, "official_print": 40,
                                        "subs_external": 20, "subs_hardcoded": 5, "dual_audio": 25,
@@ -437,11 +479,11 @@ bundle time; *(derived)* = computable from the request/URL; *(planned)* = §17.
         "kind": "hls_manifest", "playability": "stream",            // cat: links ✅
         "requires_resolve": false,                                  // derived: playability=='resolve_required'
         "http_headers": {},                                          // planned: resolver presets (Referer/UA)
-        "seekable": true, "accepts_ranges": true,                    // evidence-based; null until probed 🛠
-        "resumable": false,                                          // 🛠 (only ledger writes it today)
-        "cors_open": false,                                          // 🛠 — only matters for webview/web, see §8.4
+        "seekable": true, "accepts_ranges": true,                    // cat: links ✅ — NULL/0 until a probe measured it (§6.2)
+        "resumable": false,                                          // cat: links ✅ (ledger sweep or apply_evidence)
+        "cors_open": false,                                          // cat: links ✅ but only written when a probe carried the fact — matters for webview/web, §8.4
         "ephemeral": true, "expires_at": 1730000900,                 // ephemeral ✅ cat: links; expires_at planned (§8.3)
-        "score": 830, "score_scale": "measured",                     // LINK axis (§6.3) — planned write-back
+        "score": 830, "score_scale": "measured",                     // LINK axis (§6.3) — cat: links.rank_score; measured once apply_evidence has run, else the prior (§17)
         "drm": null },                                               // always null today (§19)
       "tracks": { "audio": [{"lang": "hi", "default": true, "channels": "5.1", "codec": "eac3"}],
                   "subtitles": [] },                                 // PLANNED — gap G-1: no per-track rows exist
@@ -570,12 +612,14 @@ That label choice **is** the two-axis contract visible to the user.
 ## 10. Scenarios — worked request/response examples
 
 The old 20-row scenario matrix is retired from this document: its assertions now live where
-they are provable — `test_catalog_v2.py` ✅ for Layer 1 and the planned
-`test_api_v2_scenarios.py` 📝 for Layer 2. Two matrix rows were factually wrong and are
+they are provable — `test_catalog_v2.py` ✅ for Layer 1 and `test_api_v2.py` ✅ for Layer 2
+(the whole §12 surface, the §13 adult parity, the §16.1 cursors, the §16.9 handles, the
+§16.5 buckets and the §16.4 error shapes). Two matrix rows were factually wrong and are
 corrected here once: adult targets answer **404** (never 403 — §13), and an exhausted
 failover ladder answers 409 `no_playable_source` while **download-only is a 200 with an empty
-ladder** (S11). Below, the twelve scenarios the owner demanded, each with what Layer 1 really
-contains and what Layer 2 must return. Example bodies are trimmed to the teaching fields.
+ladder** (S11) — both are enforced by named tests, not by this prose. Below, the twelve
+scenarios the owner demanded, each with what Layer 1 really contains and what Layer 2 returns.
+Example bodies are trimmed to the teaching fields.
 
 ### S1 — Season delivered as one file per episode
 Ledger: releases `S07 E01 … E08`, one per page line.
@@ -650,12 +694,12 @@ null` (unknown) is the honest field; a real completion signal is 📝.
   "codec":"h265","print_version":0,"quality_score":655},
  {"release_id":72,"label":"1080p WEB-DL x265 ESubs REPACK v2","print_version":2,
   "quality_score":655},   // ties with 71; current order = id ASC ⇒ v1 listed first (§5.2)
- {"release_id":73,"label":"1080p HDTC x265","resolution":"1080p","source_tag":"unknown",
-  "official_print":true,"quality_score":430},  // flags is [] here — the mislabel is in source_tag itself, not a flag (G-4)
  {"release_id":74,"label":"720p WEBRip","quality_score":460},
- {"release_id":75,"label":"480p","quality_score":220},
+ {"release_id":73,"label":"1080p HDTC x265","resolution":"1080p","source_tag":"hdtc",
+  "official_print":false,"quality_score":250},  // cam-family rung: min(300+75+30, cap 250) — G-4 fixed
  {"release_id":76,"label":"1080p CAM i60x","source_tag":"cam","watermarked":true,
-  "quality_score":250,"flags":["watermarked","unofficial"]}] // 320−60=260 → cam cap 250
+  "quality_score":250,"flags":["watermarked","unofficial"]}, // 320−60=260 → cam cap 250; ties 73, id ASC
+ {"release_id":75,"label":"480p","quality_score":220}]
 ```
 The "cleaned official copy" case: an otherwise-identical print without watermark scores +60
 relative to the watermarked one and drops the `watermarked` flag ✅ — they remain two prints;
@@ -798,14 +842,20 @@ Rules that never bend:
 
 ---
 
-## 12. Endpoint surface (all Layer 2 — 📝 until built; status column is the contract)
+## 12. Endpoint surface (all Layer 2 — ✅ built in `api_v2.py`; last column is what still limits a route)
+
+Every row below is implemented and answered by `Fast_Fetch/api_v2.py`, mounted by
+`Fast_Fetch/viewer.py`, and covered by a named test in `Fast_Fetch/test_api_v2.py`
+(the `ROUTE_TESTS` registry asserts the head→test mapping, so a route cannot be added
+without a test). The last column is **not** a to-do for the route existing: it names the
+sub-part that is still 📝/🛠, i.e. the honest ceiling on what a client may build today.
 
 Base: `/api/v2`. JSON everywhere (`application/json; charset=utf-8`) except problem
 responses (§16.4). `v1` stays frozen and untouched — the current APK keeps working.
 
 | Method & path | Purpose | Key params | Blocking deps (§17) |
 |---|---|---|---|
-| `GET /manifest` | machine-readable contract: enums, **both scoring formulas (§7.1)**, limits, versions | — | hand-build from code |
+| `GET /manifest` | machine-readable contract: enums, **both scoring formulas (§7.1)**, limits, versions | — | ✅ hand-built from the code it publishes (`manifest_payload`) |
 | `GET /browse` | faceted browse | `type`, `animated`, `genre`, `language`, `country`, `year_from/to`, `min_quality` (print axis), `available` (link axis), `sort=newest\|rating\|title\|score`, `cursor`, `limit≤100` | indexes exist ✅ |
 | `GET /search` | title search incl. aliases | `q`, facets, `fields` | alias-table join (✅ data) |
 | `GET /suggest` | type-ahead | `q`≥2, `limit≤10` | — |
@@ -813,9 +863,9 @@ responses (§16.4). `v1` stays frozen and untouched — the current APK keeps wo
 | `GET /works/{id}/seasons/{n}` | season + episodes + coverage mode | `fields` | pack enumeration G-2 |
 | `GET /episodes/{id}` | one episode: prints, coverage, links | — | — |
 | `GET /releases/{id}` | one print: descriptor + ranked links | — | — |
-| `POST /play` | PlayBundle | body: one of `work_id/release_id/episode_id` (+season/episode for packs), `prefer`, `device` | resolver wrapper, versions, tracks 📝 |
-| `GET /resolve/{link_id}` | JIT unwrap for `resolve_required` links | — | wraps `resolve_live_source` without its fall-through bug |
-| `POST /links/{id}/report` | client telemetry `played\|stalled\|failed\|resolved` | `event, ms, error` | ingest table 📝 (feeds axis 2) |
+| `POST /play` | PlayBundle | body: one of `work_id/release_id/episode_id` (+season/episode for packs), `prefer`, `device` | two-axis ladder + `prefer` ✅; tracks (G-1) and the §11 entitlement gate still 📝 |
+| `GET /resolve/{link_id}` | JIT unwrap for `resolve_required` links | — | ✅ wraps `resolve_live_source` with `v2=True`, so §2 #4's fall-through cannot return a fake playable |
+| `POST /links/{id}/report` | client telemetry `played\|stalled\|failed\|resolved` | `event, ms, error` | ✅ ingest table `client_link_reports` (side table, survives `project(reset=True)`), appended to `cat_link_evidence` (feeds axis 2) |
 | `POST /episodes/{id}/offset` | learned pack offset | `offset_seconds, chapter_title` | `record_offset` ✅ |
 | `GET /sync?since=` | delta rows (`scope=catalog\|health\|entitlements`) | key on **work_key**, not ids (§3 caveat) | per-group revs 📝 |
 | `GET /collections/{id}` | franchise/pick-list | — | **no table exists** 📝 |
@@ -859,8 +909,11 @@ Concretely:
 - Enforcement lives in **one place**: the Layer-2 query builder's base scope (a single
   `adult_scope()` predicate + the response scrubber), not per-endpoint checks — that is the
   only structure that survives someone adding endpoint #20. Regression tests:
-  `test_database.py::AdultContentFilterTests` (v1) + the Layer-1 flagging test ✅ + a v2
-  parity test (admin-less `404` byte-identical to unknown-id `404`) 📝.
+  `test_database.py::AdultContentFilterTests` (v1) + the Layer-1 flagging test ✅ + the v2
+  parity suite `test_api_v2.py::V2AdultRuleTests` ✅ (every id-bearing route answered with an
+  adult id must return the byte-same `404 not_found` as an unknown id, with no count skew —
+  `test_adult_id_answers_exactly_like_a_missing_id`, cross-checked by
+  `V2StatsHonestyTests` and the `/manifest` census vs `/stats` equality).
 - Known v1 wart to never copy: `resolve_live_source` answers
   `"Source restricted (18+ content)"` on a flagged source, and `/api/v1/stats` counts adult
   posts (App/AGENTS.md §5). v1 is frozen; document and route around it (HANDOFF).
@@ -919,15 +972,18 @@ documented unstable (re-sorts with every ingest). Responses carry `next_cursor`,
 
 ### 16.2 Versions, conditional requests, caching — per-link-group, not one global stamp
 Every GET carries `ETag` + `Cache-Control` + `Last-Modified` (RFC 9110 hygiene).
-Instead of a single global version, each **version group** carries its own rev, surfaced in
+The design intent is that each **version group** carries its own rev, surfaced in
 `meta.versions` and joined into the ETag so a health sweep does not invalidate the catalog
-cache and vice versa:
+cache and vice versa. **What runs today:** one `catalog` rev (MAX `cat_works.source_rev`) is
+joined into every ETag and `If-None-Match` ⇒ `304` works on every cached route; there is no
+`meta.versions` object in any body yet, so a client detects a re-projection because its ETag
+changed, never because it read a field.
 
 | Group | Bumped by | Backing today | Status |
 |---|---|---|---|
 | `catalog` | projection run | `cat_projection_meta.projected_at` + `source_rev` stamped on works | 🛠 one value, needs `catalog_rev` key |
-| `health` | link probe write-back | nothing records it | 📝 |
-| `offsets` | `record_offset` | nothing records it | 📝 |
+| `health` | link probe write-back | `cat_projection_meta.health` (the `cat_link_evidence` row count) + `health_at`, advanced by `catalog_v2.apply_evidence()` (§6.2) only when a link's row actually moved; `cat_links.last_evidence_at` moves with it | 🛠 rev is kept, but no `meta.versions` object exists yet — a client cannot see it |
+| `offsets` | `record_offset` | `cat_offsets` rows exist; nothing records a rev | 📝 |
 | `entitlements` | entitlement edits | `cat_entitlements.updated_at` MAX is derivable | 📝 trivial |
 
 `GET /browse|search`: `public, max-age=60`; detail: `public, max-age=300,
@@ -937,10 +993,15 @@ Weak ETags (`W/"cat-148-health-9213"`) are the correct form since byte-equivalen
 promised (RFC 9110 §9.3.4 weak validators for heuristic-cacheable JSON).
 
 ### 16.3 Delta sync
-`GET /sync?scope=catalog&since=<cursor>` returns row-level upserts keyed by **`work_key`**
-(§3 id-stability) with the group `rev`, plus tombstones for removed works;
-`scope=health` returns link-state deltas (`link_url/state/score/score_scale/last_evidence_at`)
-— that is how an offline cache stays honest without re-downloading the world.
+`GET /sync?scope=catalog&since=<cursor>` returns row-level upserts keyed by **`work_ref`** —
+an opaque handle for the `work_key` value (§3 id-stability; §16.9 keeps the raw `work_key` off
+the wire because it names a scraper's source page) — with the group `rev`, plus a `tombstones`
+list for removed works that is **empty today and says so** (`tombstones_note`: the projector
+records no withdrawal yet, 📝 §17);
+`scope=health` returns link-state deltas (`link_ref`/`state`/`rank_score`/`score_scale`/
+`last_evidence_at`) and `scope=entitlements` the entitlement rows — that is how an offline
+cache stays honest without re-downloading the world. A `since` we did not issue is
+`400 cursor_invalid`, never a silent restart.
 
 ### 16.4 Errors — RFC 9457 `application/problem+json`
 Adopted verbatim (RFC 9457 supersedes 7807): standard members `type`, `title`, `status`,
@@ -989,10 +1050,25 @@ RateLimit-Remaining: 29    // left in this window (on EVERY response, not just 4
 RateLimit-Reset: 47        // seconds until the window reopens
 ```
 A `429` **must** also carry `Retry-After` (RFC 9110; delta-seconds). The app treats
-`Remaining=0` as "schedule after `Reset`" and backs off `/play` proactively. Buckets:
-`/play|/resolve` 30/min per device-IP, reports 10/min, browse/search/suggest 60/min, `/sync`
-120/min; token-bucket per IP behind nginx (`limit_req`), because `viewer.py` has none of this
-today (§2 defect #6) — implemented at the proxy first, in-app second 📝.
+`Remaining=0` as "schedule after `Reset`" and backs off `/play` proactively. Buckets, as
+enforced today by `redact.limiter` (`redact.BUCKET_LIMITS`) and mapped route→bucket by
+`api_v2.ROUTE_BUCKETS` (published verbatim in `/manifest` → `rate_limit`):
+
+| Bucket | Budget | Who pays |
+|---|---|---|
+| `play` | 30 / 60 s | `POST /play`, `GET /resolve`, and v1's `/api/v1/stream`, `/api/v1/art`, `/api/m3u` |
+| `browse` | 60 / 60 s | everything else, `/sync`, `/stats`, `/manifest` included |
+| `reports` | 10 / 60 s | `POST /links/{id}/report`, `POST /episodes/{id}/offset` |
+
+Token bucket per client IP, **in-app**: `viewer._public_gate` consumes one unit per request
+and stamps the `RateLimit-*` triple on *every* reply it produces, the `304`s and the `429`
+included, and the `429` is a `problem+json` body with `code: rate_limited` (§16.4). That
+closes §2 defect #6's "no rate limit" half in code; nginx `limit_req` stays as
+defence-in-depth and is still 📝. The earlier `/sync` 120/min figure is **not** a fourth
+bucket — `/sync` pays into `browse`, and a client must read the numbers from `/manifest`, not
+from this table. The operator port is exempt because the exemption is the port (a second
+server instance with `server.operator = True`), never a header a caller can set.
+`V2RateBucketTests` pins the route→bucket map and drains a bucket to prove the `429`.
 
 ### 16.6 Versioning and compatibility
 Path versioning (`/api/v2`), `meta.contract_version` + `/manifest` as the machine-readable
@@ -1002,23 +1078,38 @@ added and clients must decode unknown ones to `UNKNOWN` (asserted by an app-side
 decodes a payload containing a never-seen enum — carry this from the old contract unchanged).
 
 ### 16.7 Security (blocking before any real exposure)
-- Today: no auth, wildcard CORS, `0.0.0.0` bind, plain HTTP (verified in `viewer.py`; App/AGENTS.md
-  §5). Under §8.3, that means **all admin/auth features are unreachable by design** until TLS
-  exists — the contract's adult-exception and entitlement gates are code-complete rules with
-  no shipped privileged caller.
-- `Access-Control-Allow-Origin`: explicit allow-list, never `*` (nginx already hides the
-  upstream ACAO header — extend that pattern, `ORACLE_DEPLOYMENT.md` proxy config).
+- What `viewer.py` does today: **no auth**, but **no wildcard CORS either** —
+  `redact.CORS_ALLOW_ORIGINS` is an empty allow-list, so a browser origin from anywhere else
+  simply gets no `Access-Control-Allow-Origin` header and is blocked by the browser. The unit
+  runs `--host 127.0.0.1 --port 8080` behind the proxy (`/api/v2` therefore never faces the
+  internet directly), and the operator port is a separate bound server instance
+  (`server.operator`), never a header a caller can set — `X-Radd-Admin` is not read anywhere in
+  the codebase and must not be added. `viewer.start_server`'s *default* host is still
+  `0.0.0.0`, so a manual run without `--host` re-opens the old exposure: deployment flags, not
+  code. Plain HTTP (§8.3) still means **all admin/auth features are unreachable by design** —
+  the contract's adult-exception and entitlement gates are code-complete rules with no shipped
+  privileged caller.
+- `Access-Control-Allow-Origin`: explicit allow-list, never `*` — ✅ done in
+  `redact.cors_headers_for` (nginx already hides the upstream ACAO header — extend that pattern,
+  `ORACLE_DEPLOYMENT.md` proxy config).
 - SSRF: the resolver/proxy never fetches user-supplied URLs; outbound probe targets pass
   `link_health`'s `blocked_target` guard (private/loopback/link-local/metadata ranges,
   embedded creds, non-http schemes) — that guard is ✅ and must wrap every server-side fetch.
-- Rate limits per §16.5; `X-Radd-Admin` honoured only over TLS.
+- Rate limits per §16.5 ✅ in-app (`viewer._public_gate`); the operator port is exempt because
+  the exemption is the port, not a token.
 
 ### 16.8 Observability
-`X-Request-Id` on every response (echoed into problem payloads); `/play` decisions logged
-with the chosen rank, the rejected ranks and their axis scores (§7) so ranking is tunable on
-evidence; `/stats` exposes the link-health mix (`link_health.summarize()` ✅ shape:
-`{total, ok, failed, streamable, downloadable, resumable, cors_open, by_protocol, by_error,
-avg_latency_ms, avg_speed_mbps, ok_ratio}`).
+`X-Request-Id` on every response (echoed into problem payloads) ✅ — `api_v2._cache_headers`
+attaches it to `200`, `302`, `304` and problem answers alike, and
+`V2CachingTests.test_cache_class_per_route` reads it back off each route. `/stats` exposes the
+link-health mix, every number computed inside the adult scope:
+`{by_state, by_playability, by_tier, streamable, downloadable, ok_ratio, probes:{total, ok,
+resumable, avg_speed_mbps, avg_latency_ms}}` ✅ — `V2StatsHonestyTests` re-adds those numbers
+from the fixture rows by hand, so one cannot drift from the other silently.
+`link_health.summarize()`'s fuller `{…, by_protocol, by_error, cors_open}` is the reference
+shape and is still 📝 at the wire. Logging `/play` decisions server-side (chosen rank, rejected
+ranks, their axis scores) is 📝: the `409` body carries `tried` + `candidate_count` for the
+caller, but nothing is recorded here — that log is what §9's "tune ranking on evidence" needs.
 
 ---
 
@@ -1097,11 +1188,16 @@ the two surfaces do not invent two names for one decision.
 Everything 📝/🛠 above, in one place. Nothing here may be described as live anywhere else.
 
 - [ ] **All of Layer 2**: every `/api/v2` endpoint; `/manifest` content per §7.1.
-- [ ] Link-health write-back: `link_health.probe_many` results into `cat_links`
-      (state/speed/latency/accepts_ranges/cors_open/resumable/last_evidence_at) + `health` rev bump.
+- [x] Link-health write-back: `catalog_v2.apply_evidence()` folds `cat_link_evidence` into
+      `cat_links` (state/latency/speed/accepts_ranges/cors_open/resumable/content_type/
+      http_status/size_bytes/last_evidence_at) and bumps `cat_projection_meta.health` (§6.2).
+      Operator-invoked only (`catalog_v2.py --apply-evidence`): no route, no timer, no socket.
 - [ ] `measured` score (`score_link`) replacing the projection prior in `playback.score`, with `score_scale`.
+      Layer 1 now *carries* the measured `rank_score` (§6.2/§6.3); what is left is the Layer-2
+      response choosing it and labelling the scale.
 - [ ] Per-group versions in `cat_projection_meta` (§16.2) and id-stable projection or id-mapping
-      table for persisted client caches (§3).
+      table for persisted client caches (§3). `health` now has one (`health`/`health_at`);
+      `catalog`, `offsets` and `entitlements` still do not, and no body exposes any of them.
 - [ ] Episode enumeration for `season_pack` releases (synthesize from known span/hints) (G-2).
 - [ ] `cat_parts` population + real `parts` coverage (G-3).
 - [ ] Tracks: `cat_tracks` table (per-audio-language codec/channels/default flag, subtitle
@@ -1110,8 +1206,11 @@ Everything 📝/🛠 above, in one place. Nothing here may be described as live 
       entitlement check; `licence_expired` path.
 - [ ] Resolver without `success:true` fall-through (wrap `resolve_live_source`, fix §2 #4) +
       `expires_at` on ephemeral resolved URLs + `requires_https` derivation (§8.3).
-- [ ] `hdtc`/`bdmux`/`dvd` source tags (HDTC currently mis-scored `official_print=true`) (G-4).
-- [ ] `release_group` extraction from labels (column always `''` today).
+- [x] `hdtc` source tag shipped (G-4 resolved): cam-family rung, weight 75, capped at 250, never
+      `official_print`; `/manifest` picks the weight up live from `release_descriptor`.
+- [ ] `bdmux`/`dvd` source tags (still fold into `bluray`/`unknown` today).
+- [ ] `release_group` column write-through: the descriptor now emits the parsed key (§5), but
+      `catalog_v2.project()` still inserts a hardcoded `''` into `cat_releases.release_group`.
 - [ ] Review-queue kinds beyond `season_unresolved`: year conflicts, external-id conflicts,
       resolution tooling (`resolved_at`).
 - [ ] Per-release `identity_suspect` flag + exclusion of unresolved prints from
@@ -1134,10 +1233,10 @@ Everything 📝/🛠 above, in one place. Nothing here may be described as live 
 | G-1 | No per-track rows; audio is one aggregate per print; no subtitle URLs with formats | S1/S6 "pick Hindi 5.1 track, English SDH subs" from the API alone | HLS `EXT-X-MEDIA` parsed **at resolve time** by Media3 itself (free for hls links); progressive links show only the aggregate (`dual_audio`, `subtitle_mode`) — no track UI |
 | G-2 | `season_pack` enumerates no episodes | S2 per-episode grid/play targeting | season-level `pack_releases[]` + offsets (§S2); `target_unresolvable` only when even the season can't be inferred |
 | G-3 | `cat_parts` never written | S4 multi-part movies addressed as parts | label-based `part_stub` heuristic (§S4) |
-| G-4 | No `hdtc` capture-source rung; HDTC scores as `unknown` + official | S6 ordering slightly wrong for cam-adjacent prints | document weight honestly in `/manifest`; UI chip shows label text |
+| G-4 | **Resolved** — `hdtc` is now a cam-family rung (weight 75, capped 250, never `official_print`) | S6 ordering fixed: `1080p HDTC x265` scores 250, below a bare `720p WEBRip` (460) | nothing left for this gap; `bdmux`/`dvd` remain planned (§17) |
 | G-5 | No expected-episode-count source | S5 "season incomplete" badge | show known counts, never claim completeness |
 | G-6 | `expires_at` not computed anywhere | §8.4 | conservative 900 s bundle TTL + re-`/play` recovery |
-| G-7 | Probe results live on the ledger until full re-projection | §9 `prefer=speed` staleness | serve prior with `score_scale='projection_prior'`; never fake `measured` |
+| G-7 | **Resolved at Layer 1** — `catalog_v2.apply_evidence()` writes probe results onto `cat_links` (state, EWMA `latency_ms`/`speed_mbps`, `accepts_ranges`/`resumable`/`cors_open`, `content_type`/`http_status`/`size_bytes`, `last_evidence_at`, measured `rank_score`) and records `health`/`health_at` (§6.2, §6.3) | §9 `prefer=speed` staleness is now a scheduling question, not a schema gap | run `catalog_v2.py --apply-evidence <db>` after a sweep; a link with no probe-shaped sample still serves the prior, and Layer 2 must keep saying so (`score_scale`) until it selects the measured column itself |
 
 ---
 
@@ -1154,7 +1253,8 @@ tier only until an ad decision path exists — §11.2).
 
 1. ✅ `catalog_v2.py` `project(all)`: ledger → `cat_*`, idempotent, counters + `identity_suspect`,
    `test_catalog_v2.py` covering §4/§5/§6/§7 claims.
-2. ✅ `release_descriptor.describe()` for prints; ✅ `link_health` for probing; 📝 write-back (G-7).
+2. ✅ `release_descriptor.describe()` for prints; ✅ `link_health` for probing; ✅ write-back
+   (`catalog_v2.apply_evidence`, operator-invoked — G-7 closed, §6.2).
 3. 📝 `viewer.py` v2 handlers reading only `cat_*` (+ `cat_projection_meta` revs) implementing
    §12–§16, in this order: `/manifest`, `/browse|search|suggest|works`, `/play|/resolve`,
    problem+errors + rate headers, `/sync`, `/feed.m3u`.

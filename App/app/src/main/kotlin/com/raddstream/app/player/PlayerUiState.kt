@@ -150,6 +150,17 @@ data class PlayerUiState(
     val printSheetVisible: Boolean = false,
     val sleepSheetVisible: Boolean = false,
     val playFromDialogVisible: Boolean = false,
+    val qualitySheetVisible: Boolean = false,
+    /**
+     * The rungs the CURRENT scope offers, staged by the detail screen and read back through
+     * [PlayerSessionStore.peekAutoLadder]: band + handle + caption only. Empty for a
+     * deep-linked playback, which honestly has no ladder to offer.
+     */
+    val qualityRungs: List<LadderRung> = emptyList(),
+    /** The rung playback was launched on; null until a ladder is armed. */
+    val qualityBand: String? = null,
+    /** True while Auto owns the choice; a hand-picked rung sets this false. */
+    val qualityAuto: Boolean = false,
     // signature feature (watching → keeping)
     val keep: KeepUiState = KeepUiState.Unavailable,
     val keepRequested: Boolean = false,
@@ -169,4 +180,16 @@ data class PlayerUiState(
 
     /** Whether the cycle-audio affordance would change the sound (two playable tracks). */
     val canCycleAudio: Boolean get() = AudioTrackPolicy.canCycle(audioTrackRows())
+
+    /**
+     * The band to print on the quality control: while Auto is armed the director's live rung
+     * is the truth (it may have moved on throughput), a hand-picked rung is the user's own
+     * decision and never gets second-guessed by an estimate.
+     */
+    val qualityLabel: String
+        get() = (if (qualityAuto) autoQualityBand ?: qualityBand else qualityBand)
+            ?.uppercase() ?: "Auto"
+
+    /** A switch is only honest when the scope actually offers more than one rung. */
+    val canSwitchQuality: Boolean get() = qualityRungs.size > 1
 }

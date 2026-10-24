@@ -79,6 +79,10 @@ TEXT_KEYS = frozenset({
     "quality_label", "season_title", "episode_title", "name", "display_title",
     "original_title", "work_title", "alias", "chapter_title", "detail",
     "page_title", "source_title",
+    # A scene-group token is scraped text, not a controlled vocabulary: an
+    # all-caps site brand inside a release label would otherwise leave here
+    # verbatim and name the site a title came from.
+    "release_group",
 })
 
 #: Words that legitimately appear in our own labels and must never be treated

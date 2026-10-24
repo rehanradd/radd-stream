@@ -3,6 +3,7 @@ package com.raddstream.app.data
 import android.content.Context
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
+import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.floatPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
@@ -62,10 +63,26 @@ class ServerSettingsRepository @Inject constructor(
         }
     }
 
+    /**
+     * The one opt-in that exposes anything: whether kept files may be read over the local network.
+     * Persisted because it is a standing decision, not a session gesture — a viewer who turns it on
+     * for an evening expects it still on until they turn it off, and the [com.raddstream.app.share.LanShareRunner]
+     * reacts to this exact flow. Default is deliberately OFF: nothing binds a socket until the user
+     * says so.
+     */
+    val lanShareEnabled: Flow<Boolean> = dataStore.data.map { preferences ->
+        preferences[LAN_SHARE_ENABLED_KEY] ?: false
+    }
+
+    suspend fun saveLanShareEnabled(enabled: Boolean) {
+        dataStore.edit { preferences -> preferences[LAN_SHARE_ENABLED_KEY] = enabled }
+    }
+
     companion object {
         private val SERVER_URL_KEY = stringPreferencesKey("server_url")
         private val AUDIO_BOOST_LEVEL_KEY = floatPreferencesKey("audio_boost_level")
         private val PREFERRED_AUDIO_LANGUAGE_KEY = stringPreferencesKey("preferred_audio_language")
+        private val LAN_SHARE_ENABLED_KEY = booleanPreferencesKey("lan_share_enabled")
 
         /** AudioBoost's own anchor and ceiling, restated here as the storage contract. */
         const val DEFAULT_AUDIO_BOOST = 1f

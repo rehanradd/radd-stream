@@ -21,10 +21,13 @@ RESOLUTION_UNKNOWN_WEIGHT = 50
 RESOLUTION_WEIGHTS = dict(QUALITY_LADDER, unknown=RESOLUTION_UNKNOWN_WEIGHT)
 
 # Source weights. Match precedence in `_SOURCE_PATTERNS` follows this order, so
-# a label naming two capture methods keeps the better-distributed one.
+# a label naming two capture methods keeps the better-distributed one. `hdtc`
+# (HD-TeleCine) is a cam-family capture: it sits between `telesync` and
+# `telecine` and inherits the cam ceiling, so no resolution can launder it.
 SOURCE_TAG_WEIGHTS = {"uhd_bluray": 300, "bluray": 280, "web_dl": 240, "webrip": 220, "hdtv": 180,
-                      "dvdrip": 150, "telesync": 80, "telecine": 70, "ppv": 20, "cam": 20, "unknown": 60}
-CAM_FAMILY = ("cam", "telesync", "telecine")
+                      "dvdrip": 150, "telesync": 80, "hdtc": 75, "telecine": 70, "ppv": 20,
+                      "cam": 20, "unknown": 60}
+CAM_FAMILY = ("cam", "telesync", "hdtc", "telecine")
 CAM_FAMILY_CEILING = 250
 OFFICIAL_SOURCE_TAGS = ("bluray", "uhd_bluray", "web_dl", "webrip", "hdtv", "dvdrip")
 QUALITY_LABELS = {"2160p": "4K UHD", "1080p": "Full HD", "720p": "HD", "480p": "SD", "480p_or_lower": "SD"}
@@ -79,8 +82,47 @@ SERIES_WORD_RE = r"\b(?:web[\s\-]?series|series|season|saga)\b"
 # so such a label can never be called a movie and its scope stays "unknown".
 EPISODIC_HINTS_RE = r"\b(?:grand\s+)?premieres?\b|\bfinale\b|\bweeklies\b|\blive show\b"
 
+# Conservative scene-group recovery. Group names are UPPER-case by convention, so
+# a mixed-case or lower-case candidate is never guessed; every word the corpus
+# uses for quality, source, codec, container, audio, subtitle, version, edition,
+# pack, language or watermark purposes is denied outright, and `''` is returned
+# whenever the label does not actually carry a group.
+GROUP_MIN_LEN, GROUP_MAX_LEN = 3, 15
+_GROUP_CANDIDATE_RE = re.compile(r"[A-Z][A-Z0-9]{2,14}")
+# The trailing `-NAME` release suffix only counts when what precedes the dash is
+# a scene tech word (x265, 1080p, WEB-DL, HDRip...), so hyphenated titles like
+# "CHIP-IN" or "MECH-X4" never read as a group.
+_GROUP_DASH_RE = re.compile(r"[-_]([A-Za-z][A-Za-z0-9]{2,14})\s*$")
+_GROUP_BRACKET_RE = re.compile(r"[\[\(\{]\s*([A-Za-z][A-Za-z0-9]{2,14})\s*[\]\)\}]")
+_GROUP_RESOLUTION_HEAD_RE = re.compile(
+    r"^(?:2160p?|1080p?|720p|480p|360p|240p|uhd|4k|fhd|full\s?hd)\b", re.I)
+_GROUP_TRIM = " \t.,:;!?|/\\'\"`-_"
+_GROUP_DENY_WORDS = frozenset((
+    "2160p", "1080p", "720p", "480p", "360p", "240p", "uhd", "4k", "fhd", "hd", "sd", "sdr",
+    "hdr", "hdr10", "hdr10plus", "dolbyvision", "dovi", "dv", "hlg", "x265", "x264", "x266",
+    "h265", "h264", "hevc", "avc", "av1", "av01", "xvid", "mpeg", "mpeg2", "prores", "webm",
+    "mkv", "mp4", "avi", "mov", "m4a", "ts", "tc", "scr", "bluray", "bd", "dvd", "dvd5", "dvd9",
+    "bdrip", "brrip", "remux", "demux", "web", "webdl", "webrip", "dvdrip", "hdrip", "hddvd",
+    "vhsrip", "hdtv", "hdtc", "hdts", "hdcam", "cam", "camrip", "telesync", "telecine",
+    "screener", "workprint", "ppv", "dd", "ddp", "ddplus", "dolby", "dts", "dtshd", "dtsx",
+    "truehd", "atmos", "ac3", "eac3", "aac", "flac", "opus", "mp2", "mp3", "stereo", "51",
+    "71", "20", "multi", "dual", "audio", "multiaudio", "dualaudio", "dub", "dubbed", "sub",
+    "subs", "esub", "esubs", "subtitle", "subtitles", "hsub", "hsubs", "engsub", "engsubs",
+    "hardsub", "hardsubs", "burned", "burnt", "hardcoded", "onscreen", "mvs", "batch",
+    "dl", "web", "rip", "org", "unofficial", "official", "single", "series", "webseries",
+    "episode", "movie", "movies", "full", "films", "film",
+    "complete", "completed", "all", "ep", "eps", "episode", "episodes", "season", "seasons",
+    "pack", "zip", "proper", "repack", "internal", "faster", "fix", "fixed", "nfo", "nfofix",
+    "cut", "extended", "unrated", "remastered", "remaster", "restored", "restoration",
+    "uncut", "imax", "fan", "fansub", "fanedit", "theatrical", "original", "directors",
+    "directorscut", "uncensored", "limited", "nogrp", "ngrp", "nogroup", "no", "none",
+    "unknown", "watermark", "watermarked", "wm", "gb", "mb", "tb", "kb",
+)) | frozenset(re.sub(r"[^a-z0-9]", "", w.lower()) for w in WATERMARK_MARKERS) \
+    | frozenset(re.sub(r"[^a-z0-9]", "", w.lower()) for w in LANGUAGE_ALIASES) \
+    | frozenset(re.sub(r"[^a-z0-9]", "", w.lower()) for w in LANGUAGE_ALIASES.values())
+
 PRINT_KEYS = ("resolution", "quality_label", "source_tag", "codec", "bit_depth", "hdr",
-              "container", "audio", "subtitles", "edition", "version", "is_pack",
+              "container", "audio", "subtitles", "edition", "version", "release_group", "is_pack",
               "episode_range", "season", "episode", "scope", "size_bytes", "size_per_episode_bytes",
               "watermarked", "official_print", "quality_score", "title_stub")
 
@@ -96,6 +138,9 @@ _SOURCE_PATTERNS = (
     ("hdtv", r"\bhd\s?tv\b|\bhdtv\b|\bdvb[\s\-]?rip\b|\bdtv\b"),
     ("dvdrip", r"\bdvd[\s\-]?rip\b|\bdvdrip\b|\bhdrip\b|\bhddvd\b|\bvhsrip\b"),
     ("ppv", r"\bppv\b|\bpay[\s\-]?per[\s\-]?view\b"), ("telesync", r"\btelesync\b|\btsrip\b|\bhdts\b|\bts\b"),
+    # HDTC (HD-TeleCine) is a cam-family capture, not a distribution print; the
+    # corpus spells it `HDTC` and `HD-TC`, and every separator variant folds in.
+    ("hdtc", r"\bh[\s\-\.]*d[\s\-\.]*t[\s\-\.]*c\b|\bhd[\s\-\.]*tc\b"),
     ("telecine", r"\btelecine\b|\btc\b|\bscr\b|\bscreener\b"),
     ("cam", r"\bhq[\s\-]?cam\b|\bcam[\s\-]?rip\b|\bcam\b|\bmdf\b|\bcamera\b"))
 _CODEC_PATTERNS = (("h265", r"\bx[\s\-\.]*265\b|\bh[\s\-\.]*265\b|\bhevc\b|\b265\b"),
@@ -309,14 +354,89 @@ def _detect_size(size: str, title: str) -> tuple:
 
 
 def _is_official_print(source_tag: str, watermarked: bool, edition: str, resolution: str) -> bool:
-    """Legitimate/distributed copy rather than a cam or a fan edit. An `unknown`
-    source still counts when the resolution is confirmed: the label names no
-    capture method at all and nothing marks it as a theatre recording, so calling
-    it unofficial would punish plain re-encodes."""
-    if watermarked or edition == "fan_edit":
+    """Legitimate/distributed copy rather than a cam or a fan edit. Every cam-family
+    tag — including `hdtc`, which used to fall through as `unknown` and earn the
+    official bonus — is refused outright. An `unknown` source still counts when the
+    resolution is confirmed: the label names no capture method at all and nothing
+    marks it as a theatre recording, so calling it unofficial would punish plain
+    re-encodes."""
+    if watermarked or edition == "fan_edit" or source_tag in CAM_FAMILY:
         return False
     return (source_tag in OFFICIAL_SOURCE_TAGS
             or (source_tag == "unknown" and resolution != "unknown"))
+
+
+def _plausible_group(candidate: str) -> str:
+    """The candidate as canonical UPPER case, or '' when it is not a group.
+    Rejects: mixed/lower case (never guessed), the denials above, version tokens
+    like V2, anything with a long digit run, and anything a tech detector reads,
+    so `-x265`, `-ESubs`, `-MULTI` and `REPACK v2` can never become a group."""
+    cand = candidate.strip(_GROUP_TRIM)
+    if not GROUP_MIN_LEN <= len(cand) <= GROUP_MAX_LEN or cand != cand.upper():
+        return ""
+    if not _GROUP_CANDIDATE_RE.fullmatch(cand):
+        return ""
+    compact = cand.lower()
+    # `MULTISUBS`/`DUBBED`/`HINDIDUB`-style compounds are quality words too, not groups.
+    if (compact in _GROUP_DENY_WORDS
+            or re.search(r"(?:subs?|dub(?:bed)?|audio|edition|season|episode|pack)$", compact)
+            or re.match(r"^(?:multi|dual|hard|burn|non|with)", compact)
+            or re.fullmatch(
+                r"v\d{1,3}|s\d{1,3}|e\d{1,3}|s\d{1,3}(?:ep|e|x)\d{1,3}|ep(?:isode)?\d{1,3}"
+                r"|part\d*|vol(?:ume)?\d*|season\d*|chapter\d*", compact)
+            or re.search(r"\d{3,}", compact)):
+        return ""
+    padded = " " + compact + " "
+    if (_detect_resolution(compact, "") != "unknown"
+            or _first(_SOURCE_PATTERNS, padded) != "unknown"
+            or _first(_CODEC_PATTERNS, padded) != "unknown"):
+        return ""
+    return cand
+
+
+def _group_prefix_tech(prefix: str) -> bool:
+    """True when some alnum chunk of the text before the dash is a scene tech
+    word (resolution, source or codec), i.e. the dash really is a release
+    suffix (`x265-GROUP`, `1080p.WEB-DL-PEAK`) and not a hyphenated title."""
+    for part in re.split(r"[^a-z0-9]+", prefix.lower()):
+        if not part or not re.search(r"[a-z]", part):
+            continue
+        padded = " " + part + " "
+        if (_detect_resolution(part, "") != "unknown"
+                or _first(_SOURCE_PATTERNS, padded) != "unknown"
+                or _first(_CODEC_PATTERNS, padded) != "unknown"):
+            return True
+    return False
+
+
+def _detect_release_group(title: str, format_named: bool) -> str:
+    """Recover the SCENE group a scraper printed in the label, or ''.
+    Accepted forms, in precedence order: the trailing `-NAME` release suffix
+    (only when the pre-dash text names a tech word), an upper-case
+    `[NAME]`/`(NAME)`/`{NAME}` token, a bare upper-case last word, and an
+    upper-case word immediately before a resolution (the `GROUP 1080p ...`
+    spelling). The last two require the label to name at least one real print
+    component first, so a plain title's final word is never mistaken for a
+    group. The label itself is never rewritten — this is an added field only."""
+    text = _tidy(title)
+    if not text:
+        return ""
+    m = _GROUP_DASH_RE.search(text)
+    if m and (group := _plausible_group(m.group(1))) and _group_prefix_tech(text[:m.start()]):
+        return group
+    for bracketed in _GROUP_BRACKET_RE.findall(text):
+        if (group := _plausible_group(bracketed)):
+            return group
+    if not format_named:
+        return ""
+    words = text.split()
+    if words and (group := _plausible_group(words[-1])):
+        return group
+    for i, word in enumerate(words[1:], start=1):
+        if _GROUP_RESOLUTION_HEAD_RE.match(word.strip(_GROUP_TRIM)):
+            if (group := _plausible_group(words[i - 1])):
+                return group
+    return ""
 
 
 def _quality_label(resolution: str, source_tag: str, quality: str, title: str) -> str:
@@ -421,12 +541,16 @@ def describe(release_title: str = "", quality: str = "", codec: str = "",
         site_blob = " ".join(_squash(f) for f in (release_title, quality, codec, size, source_site))
         watermarked = any(marker in site_blob for marker in WATERMARK_MARKERS)
         official_print = _is_official_print(source_tag, watermarked, edition, resolution)
+        release_group = _detect_release_group(
+            release_title,
+            resolution != "unknown" or source_tag != "unknown" or detected_codec != "unknown")
         return {
             "resolution": resolution,
             "quality_label": _quality_label(resolution, source_tag, q_text, t_text),
             "source_tag": source_tag, "codec": detected_codec, "bit_depth": bit_depth,
             "hdr": hdr, "container": container, "audio": audio, "subtitles": subtitles,
-            "edition": edition, "version": version, "is_pack": is_pack,
+            "edition": edition, "version": version, "release_group": release_group,
+            "is_pack": is_pack,
             "episode_range": episode_range, "season": season_no, "episode": episode_no, "scope": scope,
             "size_bytes": size_bytes, "size_per_episode_bytes": per_episode,
             "watermarked": watermarked, "official_print": official_print,
@@ -444,7 +568,8 @@ def _fallback_print() -> dict:
             "codec": "unknown", "bit_depth": 0, "hdr": [], "container": "unknown",
             "audio": {"languages": [], "channel_layout": "unknown", "codecs": [], "dual_audio": False},
             "subtitles": {"available": False, "hardcoded": False, "external": False, "langs": []},
-            "edition": "unknown", "version": 0, "is_pack": False, "episode_range": "",
+            "edition": "unknown", "version": 0, "release_group": "", "is_pack": False,
+            "episode_range": "",
             "season": 0, "episode": 0, "scope": "unknown", "size_bytes": 0,
             "size_per_episode_bytes": 0, "watermarked": False, "official_print": False,
             "quality_score": combined_quality_score(), "title_stub": ""}

@@ -9,6 +9,12 @@ links, tracks and entitlements — structured, ranked and rebuildable.
 The projection is idempotent: rebuilding it from an unchanged ledger produces the
 same rows. Nothing here ever mutates Layer 0.
 
+`apply_evidence()` closes the other half: it folds measured probe samples — the
+`cat_link_evidence` journal and/or `link_health.ProbeResult`s handed in by the
+operator — onto the owning `cat_links` row as a rolling EWMA blend, so a link's
+`state`, timings and `rank_score` can be healed without re-projecting the catalog.
+It reads the journal and writes the projection; it never opens a socket.
+
 Standard Library only. Zero external pip packages.
 """
 
@@ -16,6 +22,7 @@ from __future__ import annotations
 
 import json
 import re
+import dataclasses
 import sqlite3
 import time
 from pathlib import Path
@@ -270,6 +277,14 @@ CREATE TABLE IF NOT EXISTS cat_link_evidence (
     error TEXT
 );
 
+-- Ordered by (link_id, probed_at) because `apply_evidence()` folds one link's
+-- journal in time order on every run. Both columns are original, so this index
+-- is safe inside the script above -- never put an index on a column a later
+-- migration adds here (that is what broke site upgrades once: the script would
+-- fail on a column that only exists after the ALTER pass has run).
+CREATE INDEX IF NOT EXISTS idx_cat_link_evidence_link
+    ON cat_link_evidence(link_id, probed_at);
+
 CREATE TABLE IF NOT EXISTS cat_entitlements (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     work_id INTEGER,
@@ -426,6 +441,7 @@ def classify_link(service: str, source_url: str, final_url: str,
 def ensure_schema(conn: sqlite3.Connection) -> None:
     conn.executescript(DDL)
     _migrate_link_state(conn)
+    _migrate_evidence_journal(conn)
     conn.execute(
         "INSERT OR REPLACE INTO cat_projection_meta (key, value) VALUES ('schema_version', ?)",
         (str(SCHEMA_VERSION),),
@@ -447,6 +463,36 @@ def _migrate_link_state(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE cat_links ADD COLUMN ledger_link_id INTEGER")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_cat_links_ledger"
                  " ON cat_links(ledger_link_id)")
+
+
+def _has_table(conn: sqlite3.Connection, name: str) -> bool:
+    return conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+        (name,)).fetchone() is not None
+
+
+def _columns(conn: sqlite3.Connection, table: str) -> set:
+    if not _has_table(conn, table):
+        return set()
+    return {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+
+
+def _migrate_evidence_journal(conn: sqlite3.Connection) -> None:
+    """Give ``cat_link_evidence`` the URL each sample was taken against.
+
+    The journal is keyed by ``cat_links.id``, and ``project(reset=True)`` hands
+    out fresh ids — so a row written before a rebuild can silently point at a
+    different link afterwards. Storing the probed URL makes the association
+    re-checkable (and self-healing) without touching the sample itself. Added
+    with its own ``ALTER`` statement, deliberately NOT indexed inside the DDL
+    script: an index on a migrated column would fail on any database built
+    before this column existed. Rows written by older code keep ``url`` NULL and
+    are trusted by ``link_id`` alone, exactly as before.
+    """
+    if not _has_table(conn, "cat_link_evidence"):
+        return
+    if "url" not in _columns(conn, "cat_link_evidence"):
+        conn.execute("ALTER TABLE cat_link_evidence ADD COLUMN url TEXT")
 
 
 def _reset(conn: sqlite3.Connection) -> None:
@@ -775,7 +821,8 @@ def _project_pages(conn, works, work_ids, release_descriptor, now) -> dict:
                             desc.get("codec") or "unknown", int(desc.get("bit_depth") or 0),
                             json.dumps(desc.get("hdr") or []), desc.get("container") or "unknown",
                             desc.get("edition") or "unknown", int(desc.get("version") or 0),
-                            "", int(desc.get("size_bytes") or 0),
+                            str(desc.get("release_group") or ""),
+                            int(desc.get("size_bytes") or 0),
                             int(desc.get("size_per_episode_bytes") or 0),
                             json.dumps((desc.get("audio") or {}).get("languages") or []),
                             (desc.get("audio") or {}).get("channel_layout") or "unknown",
@@ -839,8 +886,9 @@ def _project_pages(conn, works, work_ids, release_descriptor, now) -> dict:
                          measured["resumable"], measured["accepts_ranges"], measured["cors_open"],
                          int(src["is_temporary"] or 0), _protocol_of(kind, playability),
                          measured["content_type"],
-                         _pick_col(src, "file_size_bytes", None), _pick_col(src, "http_status", None),
-                         measured["speed_mbps"], measured["latency_ms"], measured["checked_at"],
+                         _pick_col(src, "file_size_bytes", None),
+                         measured["latency_ms"], measured["speed_mbps"],
+                         _pick_col(src, "http_status", None), measured["checked_at"],
                          1 if _is_tier1(src["service"]) else 2),
                     )
                     counters["links"] += 1
@@ -1105,6 +1153,485 @@ def record_offset(conn, *, work_key: str, episode_number: int, offset_seconds: i
     conn.commit()
 
 
+# ── Measured evidence write-back (API_V2.md §6.2, gap G-7) ──────────────────
+
+#: The newest sample's share in the rolling blend — `link_health`'s documented
+#: EWMA weight, named here too so the write-back and §6.3 cannot drift apart.
+EVIDENCE_EWMA_WEIGHT = 0.4
+
+#: Link ids per read batch. Keeps the `IN (...)` lists bounded on the merged
+#: catalog, which is millions of links on a one-CPU VM.
+EVIDENCE_BATCH = 500
+
+_EVIDENCE_INSERT_SQL = """
+INSERT INTO cat_link_evidence (link_id, probed_at, ok, protocol, http_status,
+    content_type, size_bytes, latency_ms, speed_mbps, accepts_ranges, error, url)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+"""
+
+
+def _link_health():
+    """Import the prober lazily, exactly the way `project()` imports the descriptor."""
+    try:
+        import link_health
+    except ImportError:  # pragma: no cover - package-relative fallback
+        from Fast_Fetch import link_health  # type: ignore
+    return link_health
+
+
+def _result_to_journal(item) -> dict:
+    """One measurement (ProbeResult or dict) -> journal column values.
+
+    `cors_open` is not a journal column (`cat_link_evidence` predates it), so it
+    travels in this dict as an extra key and is written straight to `cat_links`.
+    """
+    lh = _link_health()
+    sample = item if isinstance(item, lh.ProbeResult) else lh.evidence_result(
+        item if isinstance(item, dict) else dict(item))
+    row = item if isinstance(item, dict) else {}
+    link_id = row.get("link_id") or row.get("cat_link_id")
+    try:
+        link_id = int(link_id) if link_id not in (None, "") else None
+    except (TypeError, ValueError):
+        link_id = None
+    checked = float(getattr(sample, "checked_at", 0.0) or row.get("probed_at") or 0.0)
+    # `evidence_result()` has to answer with *some* protocol, so a client report that
+    # never names one comes back as "unusable". That default is a measurement claim
+    # we did not make: keep the journal honest with NULL and let `_blend_link()`
+    # treat the sample as a verdict + timings only (see its docstring).
+    protocol = str(getattr(sample, "protocol", "") or "")
+    if isinstance(item, dict) and not str(row.get("protocol") or "").strip():
+        protocol = ""
+    return {
+        "link_id": link_id,
+        "url": str(row.get("url") or getattr(sample, "url", "") or ""),
+        "match_urls": [str(value) for value in
+                       (getattr(sample, "url", ""), getattr(sample, "redirects_to", ""),
+                        row.get("final_url")) if value],
+        "probed_at": checked,
+        "ok": 1 if getattr(sample, "ok", False) else 0,
+        "protocol": protocol,
+        "http_status": int(getattr(sample, "http_status", 0) or 0),
+        "content_type": str(getattr(sample, "content_type", "") or ""),
+        "size_bytes": int(getattr(sample, "size_bytes", 0) or 0),
+        "latency_ms": int(getattr(sample, "latency_ms", 0) or 0),
+        "speed_mbps": float(getattr(sample, "download_speed_mbps", 0.0) or 0.0),
+        "accepts_ranges": 1 if getattr(sample, "accepts_ranges", False) else 0,
+        "error": str(getattr(sample, "error", "") or ""),
+        "cors_open": bool(getattr(sample, "cors_open", False)),
+    }
+
+
+def _resolve_link_id(conn, values: dict):
+    """The `cat_links.id` a measurement belongs to, or None when nothing matches.
+
+    An explicit id wins (that is how `link_state` addresses a row after a rebuild);
+    otherwise the probed URL has to name a projected link. We never insert a
+    catalog row behind the projector's back — an unknown URL is reported, not created.
+    """
+    if values.get("link_id") is not None:
+        found = conn.execute("SELECT id FROM cat_links WHERE id = ?",
+                             (int(values["link_id"]),)).fetchone()
+        if found is not None:
+            return int(found[0])
+    for candidate in values.get("match_urls") or []:
+        found = conn.execute(
+            "SELECT id FROM cat_links WHERE url = ? OR final_url = ? ORDER BY id DESC LIMIT 1",
+            (candidate, candidate)).fetchone()
+        if found is not None:
+            return int(found[0])
+    return None
+
+
+def _value_differs(old, new) -> bool:
+    """Numeric-tolerant inequality, so replaying an unchanged journal is a real no-op.
+
+    NULL is a different fact from a number: a column nobody filled in becoming 0
+    or 120 counts as a change, while ``1`` versus ``1.0`` versus ``True`` does not.
+    """
+    if old is None or new is None:
+        return not (old is None and new is None)
+    if isinstance(old, bool) or isinstance(new, bool):
+        return bool(old) != bool(new)
+    if isinstance(old, (int, float)) and isinstance(new, (int, float)):
+        return abs(float(old) - float(new)) > 1e-9
+    return str(old) != str(new)
+
+
+def _select_dicts(conn, sql: str, params=()) -> list:
+    """``SELECT`` result as plain dicts, whatever the caller's ``row_factory`` is.
+
+    `apply_evidence` reads whole `cat_links` / `cat_link_evidence` rows and must
+    work both on a `sqlite3.Row` connection (the projector's own) and on a default
+    tuple one (a bare `sqlite3.connect(path)`), so it goes through the cursor
+    description instead of assuming either.
+    """
+    cursor = conn.execute(sql, params)
+    names = [column[0] for column in (cursor.description or ())]
+    out = []
+    for raw in cursor.fetchall():
+        if isinstance(raw, dict):
+            out.append(dict(raw))
+            continue
+        values = tuple(raw)
+        out.append({name: (values[index] if index < len(values) else None)
+                    for index, name in enumerate(names)})
+    return out
+
+
+def _blend_link(link, rows, *, weight: float = EVIDENCE_EWMA_WEIGHT, cors_fact=None):
+    """Fold one link's ordered evidence journal into the columns to write.
+
+    Pure: it reads nothing from the database and writes nothing. Returns
+    ``(values, measured)`` where ``values`` holds only `cat_links` columns and
+    ``measured`` says whether the score in it came from `link_health.score_link`.
+
+    The rules, all of them chosen so a replay of an unchanged journal produces
+    the same answer:
+
+    * ``state`` is the NEWEST verdict — `active`, or `dead`/`expired` for a
+      measured failure (401/403 is token rot, i.e. `expired`). Nothing here looks
+      at a sample's age, and nothing touches a link with no verdict in the
+      journal, so an old link is never silently marked dead.
+    * ``latency_ms`` / ``speed_mbps`` are the EWMA blend of every verdict in the
+      journal (`merge_evidence_journal`, newest share ``weight``), and only when
+      a sample actually measured them — an unmeasured timing stays NULL instead
+      of being faked as 0 (§7.1).
+    * the facts a probe observed — ``http_status``, ``content_type``, ``size_bytes``
+      — come from the newest *probe-shaped* row (one that names a protocol),
+      whatever its verdict, because they are simply the last thing we saw.
+      ``accepts_ranges`` and ``resumable`` (ranges + a file the client can keep)
+      come from the row the score is built from, so the two always agree.
+      Client reports (`POST /links/{id}/report` appends an `ok` plus a client-side
+      latency and no protocol) move state and timings but cannot invent a
+      protocol, and they never switch a link onto the measured scale.
+    * ``rank_score`` is `link_health.score_link` on that blended sample whenever
+      the journal holds a probe that agrees with the newest verdict — so a
+      measured-dead link scores 0 and drops below every live peer. A link the
+      client says works but that has never had a *successful* probe keeps the
+      structural prior instead: prior 0..900 and measured 0..1000 are the two
+      documented scales of §6.3 and mixing a guess with a measurement is exactly
+      the conflation this layer exists to stop.
+    """
+    lh = _link_health()
+    verdicts = [row for row in rows
+                if not lh.is_no_verdict(_pick_col(row, "error", "") or "")]
+    if not verdicts:
+        return {}, False
+    newest = verdicts[-1]
+    newest_ok = bool(int(_pick_col(newest, "ok", 0) or 0))
+    newest_error = str(_pick_col(newest, "error", "") or "")
+    probes = [row for row in verdicts if str(_pick_col(row, "protocol", "") or "")]
+    probes_ok = [row for row in probes if int(_pick_col(row, "ok", 0) or 0)]
+    record = lh.merge_evidence_journal(verdicts, weight=weight)
+
+    values: dict = {}
+    state = lh.verdict_state(newest_ok, error=newest_error,
+                             http_status=int(_pick_col(newest, "http_status", 0) or 0))
+    if state:
+        values["state"] = state
+    if record["latency_ms_ema"]:
+        values["latency_ms"] = int(record["latency_ms_ema"])
+    if record["speed_mbps_ema"]:
+        values["speed_mbps"] = round(float(record["speed_mbps_ema"]), 4)
+    if record["last_checked"]:
+        values["last_evidence_at"] = float(record["last_checked"])
+
+    if probes:
+        observed = probes[-1]
+        status = int(_pick_col(observed, "http_status", 0) or 0)
+        if status:
+            values["http_status"] = status
+        content_type = str(_pick_col(observed, "content_type", "") or "")
+        if content_type:
+            values["content_type"] = content_type
+        size_bytes = int(_pick_col(observed, "size_bytes", 0) or 0)
+        if size_bytes:
+            values["size_bytes"] = size_bytes
+
+    # the sample the score is built from: a probe that matches the newest verdict.
+    # A link the client says works but that has never had a successful probe has
+    # no measurement to score on, so it keeps the structural prior.
+    if newest_ok:
+        fact_row = probes_ok[-1] if probes_ok else None
+    else:
+        fact_row = probes[-1] if probes else None
+    cors_open = cors_fact if cors_fact is not None else bool(
+        _pick_col(link, "cors_open", 0) or 0)
+    if cors_fact is not None:
+        values["cors_open"] = 1 if cors_fact else 0
+
+    if fact_row is None:
+        # nothing but client reports measured this link: keep the structural prior
+        return values, False
+    sample = lh.evidence_result(fact_row)
+    ranges = _pick_col(fact_row, "accepts_ranges", None)
+    if ranges is not None:
+        values["accepts_ranges"] = 1 if int(ranges or 0) else 0
+    if not newest_ok:
+        # the newest verdict failed: the endpoint is not playable right now,
+        # whatever an older sample said about its protocol
+        sample = dataclasses.replace(sample, ok=False, streamable=False,
+                                     downloadable=False, resumable=False,
+                                     error=newest_error or sample.error)
+    sample = dataclasses.replace(
+        sample,
+        latency_ms=int(record["latency_ms_ema"] or sample.latency_ms),
+        download_speed_mbps=float(record["speed_mbps_ema"] or sample.download_speed_mbps),
+        cors_open=cors_open)
+    values["resumable"] = 1 if sample.resumable else 0
+    values["rank_score"] = lh.score_link(
+        sample,
+        playback_type=str(_pick_col(link, "playability", "") or ""),
+        is_temporary=int(_pick_col(link, "ephemeral", 0) or 0),
+        service_tier=int(_pick_col(link, "tier", 2) or 2))
+    return values, True
+
+
+def _refresh_state_rollup(conn, now: float) -> dict:
+    """Recompute the coverage counters `project()` writes, after a state change."""
+    if not _has_table(conn, "cat_projection_meta") or not _has_table(conn, "cat_links"):
+        return {}
+    by_state = {str(row[0]): int(row[1]) for row in
+                conn.execute("SELECT state, COUNT(*) FROM cat_links GROUP BY state")}
+    total = sum(by_state.values())
+    conn.execute("INSERT OR REPLACE INTO cat_projection_meta (key, value) VALUES ('links_by_state', ?)",
+                 (json.dumps(by_state, sort_keys=True),))
+    conn.execute("INSERT OR REPLACE INTO cat_projection_meta (key, value) VALUES ('link_coverage', ?)",
+                 (str(round(by_state.get("active", 0) / total, 4) if total else 0.0),))
+    return by_state
+
+
+def apply_evidence(conn, results=(), *, link_ids=None, limit=None,
+                   weight: float = EVIDENCE_EWMA_WEIGHT, now=None,
+                   commit: bool = True) -> dict:
+    """Write measured probe truth back onto `cat_links` — no re-projection needed.
+
+    This is the write-back API_V2.md §6.2 and gap G-7 said did not exist: probe
+    samples (from `link_health.probe` / `probe_many`, or already journalled in
+    `cat_link_evidence`) land on the owning link's own row, so a v2 server can
+    publish a *measured* `score_scale` for links it projected hours ago, and
+    `/api/v1/stats` liveness stops being a scrape-time guess.
+
+    Args:
+        conn: an open connection to a database that already has the `cat_*`
+            projection. Nothing is created here except the `url` column on the
+            evidence journal (see `_migrate_evidence_journal`).
+        results: measurements to append to the journal first — `ProbeResult`
+            objects, or dicts shaped like one (an extra ``link_id`` key addresses
+            a projected link directly, which survives a rebuild). Empty means
+            "apply the evidence we already have", which is what the CLI does and
+            what makes this safe to run at any cadence.
+        link_ids: restrict the write-back to these `cat_links.id`s.
+        limit: at most this many links this call (batched by `EVIDENCE_BATCH`).
+        weight: newest sample's EWMA share, forwarded to `merge_health_history`.
+        now: wall clock stamped into `health_at` only when something changed.
+        commit: False lets a caller fold this into its own transaction.
+
+    Idempotent by construction: every value is re-derived from the whole journal
+    for the link, never incremented, and a measurement already in the journal is
+    not re-appended (same ``link_id`` + ``probed_at``). Rows are only UPDATEd,
+    never deleted — a link that measured dead stays in the catalog with
+    `state='dead'` and a score of 0, behind every live peer (Zero Data Loss).
+
+    It also does NOT probe: no socket is opened here. The operator (or a test)
+    hands in measurements; `link_state.propagate` remains the only thing that
+    knocks on endpoints, and nothing in any HTTP route calls this function.
+
+    Returns counters — including `health_rev`, the value now in
+    `cat_projection_meta.health` (§16.2's `health` version group) — so the caller
+    can prove what moved.
+    """
+    if not _has_table(conn, "cat_links"):
+        raise ValueError("apply_evidence() needs the cat_* projection; "
+                         "run catalog_v2.project() first")
+    if not _has_table(conn, "cat_link_evidence"):
+        raise ValueError("apply_evidence() needs cat_link_evidence; "
+                         "run catalog_v2.project() first")
+    clock = time.time() if now is None else float(now)
+    _migrate_evidence_journal(conn)
+    link_columns = _columns(conn, "cat_links")
+
+    # ── 1. append the supplied measurements (replaying one is a no-op) ──────
+    added = 0
+    unresolved = 0
+    cors_facts: dict[int, tuple] = {}
+    touched: list[int] = []
+    for item in (results or ()):
+        values = _result_to_journal(item)
+        link_id = _resolve_link_id(conn, values)
+        if link_id is None:
+            unresolved += 1
+            continue
+        seen = conn.execute("SELECT 1 FROM cat_link_evidence"
+                            " WHERE link_id = ? AND probed_at = ? LIMIT 1",
+                            (link_id, values["probed_at"])).fetchone()
+        if seen is None:
+            conn.execute(_EVIDENCE_INSERT_SQL,
+                         (link_id, values["probed_at"], values["ok"], values["protocol"],
+                          values["http_status"], values["content_type"],
+                          values["size_bytes"], values["latency_ms"], values["speed_mbps"],
+                          values["accepts_ranges"], values["error"] or None,
+                          values["url"] or None))
+            added += 1
+        touched.append(link_id)
+        stamp = cors_facts.get(link_id, (-1.0, None))
+        if values["probed_at"] >= stamp[0]:
+            cors_facts[link_id] = (values["probed_at"], bool(values["cors_open"]))
+
+    # ── 2. who has evidence ────────────────────────────────────────────────
+    if link_ids is not None:
+        queue = [int(value) for value in link_ids]
+    else:
+        queue = [int(row[0]) for row in conn.execute(
+            "SELECT DISTINCT l.id FROM cat_links l"
+            " JOIN cat_link_evidence e ON e.link_id = l.id ORDER BY l.id")]
+        for link_id in touched:
+            if link_id not in queue:
+                queue.append(link_id)
+    if limit is not None:
+        queue = queue[:max(int(limit), 0)]
+    pending: list[int] = []
+    for link_id in queue:
+        if link_id not in pending:
+            pending.append(link_id)
+    seen_ids: set[int] = set()
+    scanned = updated = measured = repointed = orphaned = 0
+    prior_refresh: list[int] = []
+    state_changes: dict[str, int] = {}
+
+    # ── 3. fold, batch by batch ────────────────────────────────────────────
+    while pending:
+        chunk: list[int] = []
+        while pending and len(chunk) < EVIDENCE_BATCH:
+            link_id = int(pending.pop(0))
+            if link_id not in seen_ids:
+                seen_ids.add(link_id)
+                chunk.append(link_id)
+        if not chunk:
+            continue
+        marks = ",".join("?" * len(chunk))
+        links = {int(link["id"]): link for link in _select_dicts(
+            conn, f"SELECT * FROM cat_links WHERE id IN ({marks}) ORDER BY id", tuple(chunk))}
+        urls: dict[str, int] = {}
+        owned: dict[int, set] = {}
+        for link_id, row in links.items():
+            names = owned.setdefault(link_id, set())
+            for key in ("url", "final_url"):
+                if row.get(key):
+                    value = str(row[key])
+                    names.add(value)
+                    urls.setdefault(value, link_id)
+        url_marks = ",".join("?" * len(urls)) if urls else ""
+        rows = _select_dicts(
+            conn,
+            f"SELECT * FROM cat_link_evidence WHERE link_id IN ({marks})"
+            + (f" OR (url IS NOT NULL AND url IN ({url_marks}))" if urls else "")
+            + " ORDER BY link_id, probed_at, id",
+            tuple(chunk) + tuple(urls))
+        buckets: dict[int, list] = {link_id: [] for link_id in links}
+        deferred: set[int] = set()
+        for row in rows:
+            raw_id = row.get("link_id")
+            link_id = int(raw_id) if raw_id is not None else None
+            url = str(row["url"]) if row.get("url") else ""
+            if url and not (link_id is not None and url in owned.get(link_id, ())):
+                # the pointer no longer agrees with the URL it was taken against:
+                # re-own the sample by the URL, which is the durable half
+                owner = urls.get(url)
+                if owner is None:
+                    # the sample names a link this batch does not hold: look it up
+                    found = conn.execute(
+                        "SELECT id FROM cat_links WHERE url = ? OR final_url = ?"
+                        " ORDER BY id DESC LIMIT 1", (url, url)).fetchone()
+                    owner = int(found[0]) if found else None
+                    if owner is not None:
+                        urls.setdefault(url, owner)
+                if owner is None:
+                    orphaned += 1         # a sample of a link we do not have
+                    continue
+                if link_id is not None and owner != link_id:
+                    # a rebuild renumbered the links; heal the pointer, never the sample
+                    conn.execute("UPDATE cat_link_evidence SET link_id = ? WHERE id = ?",
+                                 (owner, int(row["id"])))
+                    repointed += 1
+                link_id = owner
+            if link_id is None:
+                orphaned += 1
+                continue
+            if link_id not in buckets:
+                # its journal belongs to another batch: read it all there, not here
+                if link_id not in seen_ids:
+                    deferred.add(int(link_id))
+                else:
+                    orphaned += 1
+                continue
+            buckets[link_id].append(row)
+        for value in sorted(deferred - set(links)):
+            pending.append(int(value))
+        for link_id, journal in buckets.items():
+            link = links.get(link_id)
+            if link is None or not journal:
+                continue
+            scanned += 1
+            values, is_measured = _blend_link(
+                link, journal, weight=weight,
+                cors_fact=cors_facts.get(link_id, (None, None))[1])
+            if not values:
+                continue
+            if is_measured:
+                measured += 1
+            else:
+                prior_refresh.append(link_id)
+            changes = {key: value for key, value in values.items()
+                       if key in link_columns
+                       and _value_differs(_pick_col(link, key, None), value)}
+            if not changes:
+                continue
+            if "state" in changes:
+                state_changes[changes["state"]] = state_changes.get(changes["state"], 0) + 1
+            names = sorted(changes)
+            conn.execute(f"UPDATE cat_links SET {', '.join(f'{name} = ?' for name in names)}"
+                         f" WHERE id = ?", tuple(changes[name] for name in names) + (link_id,))
+            updated += 1
+
+    # ── 4. unmeasured links keep the structural prior (§6.3) ───────────────
+    if prior_refresh:
+        marks = ",".join(str(int(value)) for value in prior_refresh)
+        conn.execute(f"UPDATE cat_links SET rank_score = {RANK_SCORE_EXPR}"
+                     f" WHERE id IN ({marks})")
+
+    # ── 5. the `health` version group (§16.2) ──────────────────────────────
+    journal_rows = int(conn.execute("SELECT COUNT(*) FROM cat_link_evidence").fetchone()[0])
+    stored = None
+    if _has_table(conn, "cat_projection_meta"):
+        row = conn.execute("SELECT value FROM cat_projection_meta WHERE key = 'health'").fetchone()
+        stored = str(row[0]) if row and row[0] is not None else None
+    health_bumped = updated > 0 or added > 0 or stored != str(journal_rows)
+    if health_bumped and _has_table(conn, "cat_projection_meta"):
+        conn.execute("INSERT OR REPLACE INTO cat_projection_meta (key, value)"
+                     " VALUES ('health', ?)", (str(journal_rows),))
+        conn.execute("INSERT OR REPLACE INTO cat_projection_meta (key, value)"
+                     " VALUES ('health_at', ?)", (str(clock),))
+        _refresh_state_rollup(conn, clock)
+    if commit:
+        conn.commit()
+    return {
+        "links_scanned": scanned,
+        "links_updated": updated,
+        "measured_links": measured,
+        "evidence_added": added,
+        "evidence_rows": journal_rows,
+        "evidence_repointed": repointed,
+        "evidence_orphaned": orphaned,
+        "results_unresolved": unresolved,
+        "state_changes": state_changes,
+        "health_rev": journal_rows,
+        "health_bumped": bool(health_bumped),
+        "weight": float(weight),
+    }
+
+
 def project_db(db_path: Path, *, rev: int | None = None, verbose: bool = True) -> dict:
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
@@ -1114,17 +1641,55 @@ def project_db(db_path: Path, *, rev: int | None = None, verbose: bool = True) -
         conn.close()
 
 
+def apply_evidence_db(db_path: Path, *, link_ids=None, limit=None,
+                      weight: float = EVIDENCE_EWMA_WEIGHT, verbose: bool = True) -> dict:
+    """Fold the evidence already recorded in *db_path* back onto its links.
+
+    Deliberately offline: this opens no socket. It applies the `cat_link_evidence`
+    journal the health sweep and the client reports have written; probing stays
+    in `link_state.propagate`, which the operator runs on their own schedule on
+    this one-CPU box.
+    """
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        summary = apply_evidence(conn, (), link_ids=link_ids, limit=limit,
+                                 weight=weight)
+    finally:
+        conn.close()
+    if verbose:
+        print(f"[✓] evidence applied to {summary['links_updated']} of "
+              f"{summary['links_scanned']} links: {summary['measured_links']} measured, "
+              f"health rev {summary['health_rev']}", flush=True)
+    return summary
+
+
 def parse_args(argv=None):
     import argparse
     parser = argparse.ArgumentParser(description="Project the ingest ledger into the catalog v2 tables.")
     parser.add_argument("db", help="Path to a merged catalog database (never a staging DB)")
     parser.add_argument("--rev", type=int, default=None, help="Source revision marker to stamp")
+    parser.add_argument("--apply-evidence", action="store_true",
+                        help="skip the rebuild and only fold existing cat_link_evidence "
+                             "into cat_links (state, EWMA latency/speed, measured "
+                             "rank_score, health rev). Never probes the network.")
+    parser.add_argument("--link-id", type=int, action="append", default=None,
+                        dest="link_ids", help="with --apply-evidence: restrict to these cat_links ids")
+    parser.add_argument("--limit", type=int, default=None,
+                        help="with --apply-evidence: at most this many links per run")
+    parser.add_argument("--ewma-weight", type=float, default=EVIDENCE_EWMA_WEIGHT,
+                        help="newest sample's share of the rolling blend (default 0.4)")
     return parser.parse_args(argv)
 
 
-def main():
-    args = parse_args()
-    summary = project_db(Path(args.db).resolve(), rev=args.rev)
+def main(argv=None):
+    args = parse_args(argv)
+    db_path = Path(args.db).resolve()
+    if args.apply_evidence:
+        summary = apply_evidence_db(db_path, link_ids=args.link_ids, limit=args.limit,
+                                    weight=args.ewma_weight)
+    else:
+        summary = project_db(db_path, rev=args.rev)
     print(json.dumps(summary, indent=2))
 
 

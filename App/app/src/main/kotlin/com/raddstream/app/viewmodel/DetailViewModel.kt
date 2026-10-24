@@ -260,7 +260,7 @@ class DetailViewModel @Inject constructor(
         val auto = ladder.autoBand != null && option.band == ladder.autoBand
         val rungs = ladder.options
             .filter { it.playsHere && it.streamId.isNotBlank() && it.band.isNotBlank() }
-            .map { LadderRung(band = it.band, streamId = it.streamId, backupHandles = it.backupHandles) }
+            .map { LadderRung(band = it.band, streamId = it.streamId, backupHandles = it.backupHandles, label = it.title) }
         PlayerSessionStore.Instance.stageAutoLadder(
             streamId = option.streamId,
             rungs = rungs,

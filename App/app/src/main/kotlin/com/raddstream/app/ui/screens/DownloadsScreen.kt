@@ -37,6 +37,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.raddstream.app.brand.Brand
 import com.raddstream.app.ui.components.EmptyState
 import com.raddstream.app.ui.components.Pill
 import com.raddstream.app.viewmodel.DownloadsViewModel
@@ -168,8 +169,7 @@ private fun PlayableOnlyNotice() {
     ) {
         Icon(Icons.Default.Info, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(20.dp))
         Text(
-            text = "Kept files are encrypted for this device and can be played only inside Radd Stream. " +
-                "They expire on a timer because the source links they came from are temporary.",
+            text = Brand.copy("offline_notice"),
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )

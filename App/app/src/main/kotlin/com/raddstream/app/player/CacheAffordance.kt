@@ -1,5 +1,7 @@
 package com.raddstream.app.player
 
+import com.raddstream.app.brand.Brand
+
 /**
  * Player-side computation behind the "watching → downloading" affordance (the app's
  * signature feature). Pure Kotlin — `CacheAffordanceTest` pins the math. The engine is only
@@ -70,7 +72,7 @@ object CacheAffordance {
             CacheState.STORED -> KeepUiState.Stored(playableOffline = true, note = null)
             CacheState.APP_PRIVATE_ONLY -> KeepUiState.Stored(
                 playableOffline = true,
-                note = "Playable in Radd Stream only",
+                note = Brand.copy("cache_locked_notice"),
             )
             CacheState.INTERRUPTED -> KeepUiState.Blocked(
                 CacheState.INTERRUPTED,

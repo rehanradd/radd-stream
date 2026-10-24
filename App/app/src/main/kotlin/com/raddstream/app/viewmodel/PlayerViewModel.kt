@@ -15,6 +15,7 @@ import androidx.media3.common.Tracks
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
+import com.raddstream.app.brand.Brand
 import com.raddstream.app.player.AspectMode
 import com.raddstream.app.player.AudioBoost
 import com.raddstream.app.player.AudioBoostUi
@@ -223,6 +224,7 @@ class PlayerViewModel @Inject constructor(
         viewModelScope.launch {
             store.bundle.collect { b ->
                 _ui.update { it.copy(bundle = b, activeRendition = store.activeRendition()) }
+                armQualityChoices()
                 // A rung Auto moved to is the SAME episode in a different address, so the
                 // binge policy must not be re-armed by it; only a new file or a new episode
                 // is a new lifecycle. The cache session does change with the address.
@@ -239,6 +241,7 @@ class PlayerViewModel @Inject constructor(
         viewModelScope.launch {
             store.activeRenditionIndex.collect {
                 _ui.update { it.copy(activeRendition = store.activeRendition()) }
+                armQualityChoices()
                 refreshKeepState()
             }
         }
@@ -301,7 +304,7 @@ class PlayerViewModel @Inject constructor(
      * player loads is our own redirector for that handle, built here — never a URL that
      * came from a scraper, and never one that names where the file lives.
      */
-    fun startStreamHandle(streamId: String, title: String) {
+    fun startStreamHandle(streamId: String, title: String, startOverrideMs: Long? = null) {
         if (_ui.value.bundle?.renditions?.firstOrNull()?.playback?.streamId == streamId) return
         viewModelScope.launch {
             val playUrl = streamRedirectUrl(apiProvider.currentBaseUrl(), streamId)
@@ -310,8 +313,81 @@ class PlayerViewModel @Inject constructor(
             val bundle = PlaybackBundle.forStreamHandle(streamId = streamId, playUrl = playUrl,
                                                        title = title,
                                                        backupHandles = store.peekFailover(streamId))
-            beginBundle(bundle, title, resumeKey = streamId)
+            beginBundle(bundle, title, resumeKey = streamId, overrideMs = startOverrideMs)
         }
+    }
+
+    // ── The visible quality switch (Auto + one row per rung of this scope) ─────────
+
+    /**
+     * The ladder of the scope being watched. Held here rather than re-read from the store on
+     * every tap because Auto moves playback onto a rung whose handle the detail screen never
+     * staged a ladder under — the plan belongs to the scope, not to the launched address.
+     */
+    private var ladderPlan: PlayerSessionStore.AutoLadderPlan? = null
+
+    /** The rung the server called best-and-playable, remembered so "Auto" can return to it. */
+    private var autoRungHandle: String? = null
+
+    /** Read the staged ladder for the address now playing, if this scope has one. */
+    private fun armQualityChoices() {
+        val handle = _ui.value.activeRendition?.playback?.streamId?.trim()?.takeIf { it.isNotEmpty() }
+            ?: return
+        val plan = store.peekAutoLadder(handle) ?: return
+        ladderPlan = plan
+        if (plan.auto) autoRungHandle = plan.startBand?.let { band ->
+            plan.rungs.firstOrNull { it.band == band }?.streamId
+        } ?: handle
+        _ui.update {
+            it.copy(
+                qualityRungs = plan.rungs,
+                qualityBand = plan.startBand ?: it.qualityBand,
+                qualityAuto = plan.auto,
+            )
+        }
+    }
+
+    /**
+     * Choose a rung, or give the choice back to Auto ([band] = `auto`).
+     *
+     * The position is carried over, which is the whole point of a quality switch: a viewer
+     * who asks for Full HD mid-scene must not be sent back to the beginning. Switching to a
+     * rung means starting playback on that rung's own handle — the address is still only ever
+     * ours, and the ladder plus that rung's runner-ups are re-staged under it first so a CDN
+     * that refuses still hops silently instead of showing an error.
+     */
+    fun selectQualityBand(band: String?) {
+        val plan = ladderPlan ?: return
+        val wantedAuto = band.isNullOrBlank() || band.equals(LadderForScope.AUTO, ignoreCase = true)
+        val targetBand = if (wantedAuto) {
+            autoRungHandle?.let { handle -> plan.rungs.firstOrNull { it.streamId == handle }?.band }
+                ?: plan.startBand
+        } else {
+            band
+        }
+        val rung = plan.rungs.firstOrNull { it.band == targetBand } ?: return
+        val active = _ui.value.activeRendition
+        val auto = wantedAuto
+        store.autoQuality.configure(plan.rungs, rung.band, auto)
+        store.setAutoBand(if (auto) store.autoQuality.currentBand else null)
+        _ui.update { it.copy(qualitySheetVisible = false, qualityBand = rung.band, qualityAuto = auto) }
+        if (rung.streamId == active?.playback?.streamId) return
+
+        val title = _ui.value.pendingTitle ?: active?.displayLabel() ?: Brand.name
+        val positionMs = controller?.takeIf { it.isConnected }?.currentPosition ?: 0L
+        ladderPlan = PlayerSessionStore.AutoLadderPlan(plan.rungs, rung.band, auto)
+        store.stageFailover(rung.streamId, rung.backupHandles)
+        store.stageAutoLadder(rung.streamId, plan.rungs, rung.band, auto)
+        startStreamHandle(rung.streamId, title, startOverrideMs = positionMs.takeIf { it > 1_000 })
+    }
+
+    fun showQualitySheet() {
+        if (_ui.value.qualityRungs.isEmpty()) return
+        _ui.update { it.copy(qualitySheetVisible = true) }
+    }
+
+    fun hideQualitySheet() {
+        _ui.update { it.copy(qualitySheetVisible = false) }
     }
 
     /** Full contract path: ordered candidate links (API_V2 §5 PlayBundle). */
@@ -347,13 +423,23 @@ class PlayerViewModel @Inject constructor(
         }
     }
 
-    private fun beginBundle(bundle: PlaybackBundle, title: String, resumeKey: String) {
+    private fun beginBundle(
+        bundle: PlaybackBundle,
+        title: String,
+        resumeKey: String,
+        overrideMs: Long? = null,
+    ) {
         store.installBundle(bundle)
         val resume = resumeByTarget[resumeKey] ?: 0L
-        if (resume > RESUME_PROMPT_THRESHOLD_MS) {
-            _ui.update { it.copy(resumeOfferMs = resume, pendingResumeKey = resumeKey, pendingTitle = title) }
-        } else {
-            loadNow(title, resumeKey, resumePosition = 0, override = null)
+        when {
+            // A quality switch lands on a new address mid-scene: the position is the one
+            // thing it must not lose, so it is an override, never a "resume from?" prompt.
+            overrideMs != null -> loadNow(title, resumeKey, resumePosition = 0, override = overrideMs)
+
+            resume > RESUME_PROMPT_THRESHOLD_MS ->
+                _ui.update { it.copy(resumeOfferMs = resume, pendingResumeKey = resumeKey, pendingTitle = title) }
+
+            else -> loadNow(title, resumeKey, resumePosition = 0, override = null)
         }
     }
 
@@ -367,7 +453,7 @@ class PlayerViewModel @Inject constructor(
     fun resolveResume(resume: Boolean) {
         val ms = _ui.value.resumeOfferMs ?: return
         val key = _ui.value.pendingResumeKey ?: return
-        val title = _ui.value.pendingTitle ?: "Radd Stream"
+        val title = _ui.value.pendingTitle ?: Brand.name
         if (resume) {
             loadNow(title, key, resumePosition = ms, override = null)
         } else {
@@ -378,7 +464,7 @@ class PlayerViewModel @Inject constructor(
 
     /** "Play again from" — MX dialog to start at an arbitrary position. */
     fun playFrom(positionMs: Long) {
-        val title = _ui.value.activeRendition?.displayLabel() ?: "Radd Stream"
+        val title = _ui.value.activeRendition?.displayLabel() ?: Brand.name
         val key = store.bundle.value?.target?.workKey ?: title
         loadNow(title, key, resumePosition = 0, override = positionMs.coerceAtLeast(0))
     }
@@ -499,7 +585,7 @@ class PlayerViewModel @Inject constructor(
     }
 
     fun retryCurrentCandidates() {
-        val title = _ui.value.activeRendition?.displayLabel() ?: "Radd Stream"
+        val title = _ui.value.activeRendition?.displayLabel() ?: Brand.name
         store.clearGaveUp()
         store.requestLoad(title = title, resumePositionMs = _ui.value.positionMs)
     }
@@ -1018,7 +1104,7 @@ class PlayerViewModel @Inject constructor(
         is KeepResult.Stored -> KeepUiState.Stored(result.playableOffline, null)
         is KeepResult.OnlyPlayableInApp -> KeepUiState.Blocked(
             CacheState.APP_PRIVATE_ONLY,
-            "Kept — playable in Radd only (${result.ttlSeconds?.let { "${it / 3600} h" } ?: "TTL unknown"})",
+            "Kept — playable in ${Brand.shortName} only (${result.ttlSeconds?.let { "${it / 3600} h" } ?: "TTL unknown"})",
         )
         is KeepResult.StorageFull -> KeepUiState.Blocked(
             CacheState.STORAGE_FULL,

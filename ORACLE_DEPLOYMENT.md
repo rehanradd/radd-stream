@@ -232,14 +232,16 @@ initialized and populated after deployment.
 Important current behavior:
 
 - `python3 Fast_Fetch/fast_fetch.py serve --port 8080` starts the dashboard/API.
-  The default bind remains `0.0.0.0` for compatibility. The CLI now accepts
-  `--host`; the Oracle systemd service must use
+  The default bind is `127.0.0.1`: nginx is the only thing that faces the network.
+  The CLI accepts `--host`; pass an explicit address only when this process really
+  must be reachable from outside the box. The Oracle systemd service uses
   `serve --host 127.0.0.1 --port 8080`. Do not open inbound TCP 8080.
-- The API has no authentication and returns wildcard CORS headers. Routes such
-  as `/api/fetch`, `/api/health-check`, `/api/heal`, `/api/v1/stream`, and
-  `/api/m3u` can trigger outbound work or expose resolved URLs. Do not expose
-  these routes publicly without authentication, rate limits, and protections
-  against requests to private/internal network addresses. Public metadata
+- The API has no authentication. Routes such as `/api/fetch`, `/api/health-check`,
+  `/api/heal`, `/api/v1/stream`, and `/api/m3u` can trigger outbound work or expose
+  resolved URLs, so the public port answers 404 for the ingest-and-probe ones
+  (`viewer.OPERATOR_ONLY_ROUTES`) and only the operator port on 127.0.0.1:8081
+  serves them; nginx never proxies them. Browser CORS is an explicit empty
+  allow-list (`redact.CORS_ALLOW_ORIGINS`), not a wildcard. Public metadata
   access should be limited to `/client`, `/api/v1/posts`, and
   `/api/v1/stats`; deny other `/api/` routes at Nginx unless they have been
   reviewed and secured. In particular, `/api/v1/posts/{id}` returns complete
@@ -358,6 +360,7 @@ Create `/etc/nginx/conf.d/radd-stream-rate-limit.conf` (Nginx includes
 
 ```nginx
 limit_req_zone $binary_remote_addr zone=radd_stream:10m rate=10r/s;
+limit_req_zone $binary_remote_addr zone=radd_stream_v2:10m rate=4r/s;
 ```
 
 Create `/etc/nginx/sites-available/radd-stream` and enable it. This exposes the
@@ -397,6 +400,17 @@ server {
     location = /api/v1/stats {
         limit_except GET HEAD { deny all; }
         proxy_pass http://127.0.0.1:8080;
+    }
+    # v2 is the same deny-by-default projection on a versioned surface, and it is
+    # a verb-first API (`POST /play`, `POST /episodes/{id}/offset`), so it must not
+    # inherit the GET-only rule. Its bucket is tighter than v1's: one `/play` costs
+    # an upstream resolve, which is the most expensive thing this box can do.
+    location /api/v2/ {
+        limit_req zone=radd_stream_v2 burst=20 nodelay;
+        include /etc/nginx/proxy_params;
+        proxy_pass http://127.0.0.1:8080;
+        proxy_connect_timeout 5s;
+        proxy_read_timeout 15s;
     }
     location ^~ /api/ {
         return 403;

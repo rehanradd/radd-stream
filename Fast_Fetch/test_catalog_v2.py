@@ -13,6 +13,7 @@ import json
 import os
 import sqlite3
 import tempfile
+import time
 import unittest
 import unittest.mock
 from pathlib import Path
@@ -21,6 +22,7 @@ os.environ.setdefault("RADD_SKIP_LIVE_ENRICH", "1")
 
 import catalog_v2
 import fast_fetch
+import link_health
 import release_descriptor
 import viewer
 
@@ -566,6 +568,397 @@ class RollupAndSafetyTests(ProjectionTestCase):
         self.assertEqual(row["confirmed_by"], 3)
         self.assertEqual(self.conn.execute(
             "SELECT COUNT(*) FROM cat_offsets WHERE work_key = ?", (key,)).fetchone()[0], 1)
+
+
+class EvidenceWriteBackTests(ProjectionTestCase):
+    """`apply_evidence()` folds measured probes onto `cat_links` (§6.2, gap G-7).
+
+    Every case here is about the honest direction of travel: a link's row must
+    carry what a probe actually saw — never what the projector guessed — and must
+    never disappear because the measurement came back bad.
+    """
+
+    CDN = "https://video-downloads.googleusercontent.com/"
+
+    def src(self, url, **kw):
+        return {"source_name": "g", "service": kw.get("service", "google_cdn"),
+                "resource_id": "x", "source_url": url,
+                "final_url": kw.get("final_url", url),
+                "playback_type": kw.get("playback_type", "direct"),
+                "is_temporary": kw.get("is_temporary", 0), "status": "active"}
+
+    def film(self, title, urls, **kw):
+        """Project one movie whose print has exactly `urls` links, in order."""
+        year = kw.pop("year", 2024)
+        self.add_post("site-a", f"https://a.test/{title.lower().replace(' ', '-')}/",
+                      clean_title=title, year=year, releases=[
+                          {"release_title": f"{title} 1080p", "quality": "1080p",
+                           "sources": [self.src(url) for url in urls]}], **kw)
+        self.project()
+        return self.conn.execute(
+            "SELECT * FROM cat_links WHERE work_id = (SELECT id FROM cat_works WHERE title = ?)"
+            " ORDER BY id", (title,)).fetchall()
+
+    def probe(self, url, **kw):
+        ok = kw.pop("ok", True)
+        kw.setdefault("protocol", "progressive" if ok else "unusable")
+        kw.setdefault("http_status", 206 if ok else 404)
+        if ok:
+            kw.setdefault("content_type", "video/mp4")
+            kw.setdefault("size_bytes", 750000000)
+            kw.setdefault("streamable", True)
+            kw.setdefault("downloadable", True)
+        else:
+            kw.setdefault("error", f"http_{kw['http_status']}")
+        return link_health.ProbeResult(
+            url=url, ok=ok, latency_ms=kw.pop("latency_ms", 100),
+            download_speed_mbps=kw.pop("speed", 12.0),
+            accepts_ranges=kw.pop("accepts_ranges", True),
+            resumable=kw.pop("resumable", ok),
+            cors_open=kw.pop("cors_open", True),
+            checked_at=kw.pop("checked_at", 1000.0), **kw)
+
+    def link_row(self, link_id):
+        return _row(self.conn, "SELECT * FROM cat_links WHERE id = ?", link_id)
+
+    def meta(self, key):
+        row = self.conn.execute("SELECT value FROM cat_projection_meta WHERE key = ?",
+                                 (key,)).fetchone()
+        return row["value"] if row else None
+
+    # ---- the prior, and what measurement replaces --------------------------- #
+    def test_no_evidence_leaves_the_structural_prior_untouched(self):
+        links = self.film("Prior Film", [self.CDN + "P"])
+        before = dict(self.link_row(links[0]["id"]))
+        summary = catalog_v2.apply_evidence(self.conn)
+        self.assertEqual(summary["links_scanned"], 0)
+        self.assertEqual(summary["links_updated"], 0)
+        self.assertEqual(dict(self.link_row(links[0]["id"])), before)
+        self.assertIsNone(before["latency_ms"])
+        self.assertIsNone(before["last_evidence_at"])
+        self.assertEqual(before["state"], "unchecked")
+        self.assertEqual(self.meta("health"), "0")   # rev exists, and says "nothing measured"
+
+    def test_one_good_probe_makes_the_link_measured_and_outrank_its_prior(self):
+        links = self.film("Live Film", [self.CDN + "G"])
+        link_id = links[0]["id"]
+        prior = links[0]["rank_score"]
+        probe = self.probe(self.CDN + "G", latency_ms=100, speed=12.0, checked_at=1500.0)
+        summary = catalog_v2.apply_evidence(self.conn, [probe])
+        row = self.link_row(link_id)
+        self.assertEqual(summary["links_updated"], 1)
+        self.assertEqual(summary["measured_links"], 1)
+        self.assertEqual(summary["evidence_added"], 1)
+        self.assertGreater(row["rank_score"], prior)
+        self.assertEqual(row["rank_score"], link_health.score_link(
+            probe, service_tier=row["tier"], is_temporary=row["ephemeral"]))
+        self.assertEqual(row["state"], "active")
+        self.assertEqual((row["latency_ms"], row["speed_mbps"]), (100, 12.0))
+        self.assertEqual((row["accepts_ranges"], row["resumable"], row["cors_open"]),
+                         (1, 1, 1))
+        self.assertEqual(row["http_status"], 206)
+        self.assertEqual(row["content_type"], "video/mp4")
+        self.assertEqual(row["size_bytes"], 750000000)
+        self.assertEqual(row["last_evidence_at"], 1500.0)
+        self.assertEqual(self.meta("health"), "1")   # §16.2: the health group moved
+        self.assertEqual(json.loads(self.meta("links_by_state")), {"active": 1})
+
+    def test_measured_dead_link_sinks_below_a_live_peer_and_survives(self):
+        links = self.film("Pair Film", [self.CDN + "LIVE", self.CDN + "DEAD"])
+        good, bad = links[0]["id"], links[1]["id"]
+        catalog_v2.apply_evidence(self.conn, [
+            self.probe(self.CDN + "LIVE", checked_at=1000.0),
+            self.probe(self.CDN + "DEAD", ok=False, http_status=503, latency_ms=0,
+                       speed=0.0, accepts_ranges=False, resumable=False, cors_open=False,
+                       checked_at=1000.0),
+        ])
+        live, dead = self.link_row(good), self.link_row(bad)
+        self.assertEqual((live["state"], dead["state"]), ("active", "dead"))
+        self.assertEqual(dead["rank_score"], 0)
+        self.assertGreater(live["rank_score"], dead["rank_score"])
+        self.assertEqual(self.conn.execute(
+            "SELECT COUNT(*) FROM cat_links").fetchone()[0], 2)   # never dropped
+        self.assertEqual(self.link_row(bad)["http_status"], 503)
+
+    def test_403_is_token_rot_not_death(self):
+        links = self.film("Rot Film", [self.CDN + "ROT"])
+        catalog_v2.apply_evidence(self.conn, [
+            self.probe(self.CDN + "ROT", ok=False, http_status=403, latency_ms=90,
+                       speed=0.0, accepts_ranges=False, resumable=False)])
+        row = self.link_row(links[0]["id"])
+        self.assertEqual(row["state"], "expired")
+        self.assertEqual(row["rank_score"], 0)
+        self.assertEqual(row["http_status"], 403)
+
+    def test_aged_evidence_never_marks_a_link_dead(self):
+        """Years old is stale, not dead: only a measured failure changes state."""
+        links = self.film("Old Film", [self.CDN + "A", self.CDN + "B"])
+        old, fresh = links[0]["id"], links[1]["id"]
+        catalog_v2.apply_evidence(self.conn, [
+            self.probe(self.CDN + "A", checked_at=1000.0),           # 1970
+            self.probe(self.CDN + "B", checked_at=time.time()),
+        ])
+        self.assertEqual(self.link_row(old)["state"], "active")
+        self.assertEqual(self.link_row(fresh)["state"], "active")
+        self.assertGreater(self.link_row(old)["rank_score"], 0)
+        self.assertEqual(self.link_row(old)["last_evidence_at"], 1000.0)
+
+    def test_refused_probe_is_not_a_verdict(self):
+        links = self.film("Guard Film", [self.CDN + "SEC"])
+        before = dict(self.link_row(links[0]["id"]))
+        summary = catalog_v2.apply_evidence(self.conn, [self.probe(
+            self.CDN + "SEC", ok=False, http_status=0, protocol="unusable",
+            error="blocked_target", latency_ms=0, speed=0.0, accepts_ranges=False,
+            resumable=False, cors_open=False)])
+        row = self.link_row(links[0]["id"])
+        self.assertEqual(summary["links_updated"], 0)
+        self.assertEqual(row["state"], before["state"])
+        self.assertEqual(row["rank_score"], before["rank_score"])
+        self.assertIsNone(row["last_evidence_at"])
+        self.assertEqual(summary["evidence_added"], 1)   # journaled, just not a verdict
+
+    def test_client_report_without_a_probe_keeps_the_prior_scale(self):
+        links = self.film("Played Film", [self.CDN + "RPT"])
+        self.conn.execute(
+            "INSERT INTO cat_link_evidence (link_id, probed_at, ok, latency_ms, error)"
+            " VALUES (?, ?, 1, 55, NULL)", (links[0]["id"], 2000.0))
+        summary = catalog_v2.apply_evidence(self.conn)
+        row = self.link_row(links[0]["id"])
+        self.assertEqual(summary["measured_links"], 0)
+        self.assertEqual(row["state"], "active")
+        self.assertEqual(row["latency_ms"], 55)
+        self.assertEqual(row["last_evidence_at"], 2000.0)
+        # the prior ladder, with the state the report just earned: 500+150+100+100
+        self.assertEqual(row["rank_score"], 850)
+        self.assertNotEqual(row["rank_score"], links[0]["rank_score"])
+
+    # ---- the rolling blend -------------------------------------------------- #
+    def test_ewma_blends_two_samples_the_documented_way(self):
+        links = self.film("Flap Film", [self.CDN + "EW"])
+        link_id = links[0]["id"]
+        catalog_v2.apply_evidence(self.conn, [self.probe(
+            self.CDN + "EW", latency_ms=100, speed=12.0, checked_at=1000.0)])
+        first = self.link_row(link_id)
+        catalog_v2.apply_evidence(self.conn, [self.probe(
+            self.CDN + "EW", latency_ms=300, speed=4.0, checked_at=2000.0)])
+        second = self.link_row(link_id)
+        self.assertEqual(first["latency_ms"], 100)                 # seeds the record
+        self.assertEqual(second["latency_ms"], 180)                # 100*.6 + 300*.4
+        self.assertAlmostEqual(second["speed_mbps"], 8.8, places=4)  # 12*.6 + 4*.4
+        self.assertEqual(second["last_evidence_at"], 2000.0)
+        # a timeout measures no timing at all, so the blend must not average a fake 0 in
+        catalog_v2.apply_evidence(self.conn, [self.probe(
+            self.CDN + "EW", ok=False, http_status=0, error="timeout", latency_ms=0,
+            speed=0.0, accepts_ranges=False, resumable=False, cors_open=False,
+            checked_at=3000.0)])
+        third = self.link_row(link_id)
+        self.assertEqual(third["latency_ms"], 180)
+        self.assertAlmostEqual(third["speed_mbps"], 8.8, places=4)
+        self.assertEqual(third["state"], "dead")
+        self.assertEqual(third["rank_score"], 0)
+
+    def test_rolling_state_follows_the_newest_verdict_not_the_majority(self):
+        links = self.film("Recover Film", [self.CDN + "RC"])
+        link_id = links[0]["id"]
+        for checked, ok in ((1000.0, True), (2000.0, False), (3000.0, True)):
+            catalog_v2.apply_evidence(self.conn, [self.probe(
+                self.CDN + "RC", ok=ok, http_status=206 if ok else 500,
+                latency_ms=100, checked_at=checked)])
+            state = self.link_row(link_id)["state"]
+            self.assertEqual(state, "active" if ok else "dead")
+        # and a replay of the whole journal from scratch lands on the same answer
+        catalog_v2.ensure_schema(self.conn)
+        rebuilt = catalog_v2.apply_evidence(self.conn, link_ids=[link_id])
+        self.assertEqual(rebuilt["links_updated"], 0)
+
+    # ---- idempotency -------------------------------------------------------- #
+    def test_re_running_the_write_back_is_a_no_op(self):
+        links = self.film("Steady Film", [self.CDN + "ST", self.CDN + "ST2"])
+        catalog_v2.apply_evidence(self.conn, [
+            self.probe(self.CDN + "ST", checked_at=1000.0),
+            self.probe(self.CDN + "ST2", ok=False, http_status=410, latency_ms=0,
+                       speed=0.0, accepts_ranges=False, resumable=False,
+                       cors_open=False, checked_at=1000.0)])
+        snapshot = [dict(row) for row in self.conn.execute(
+            "SELECT * FROM cat_links ORDER BY id")]
+        health, health_at, journal = (self.meta("health"), self.meta("health_at"),
+                                      self.conn.execute(
+                                          "SELECT COUNT(*) FROM cat_link_evidence").fetchone()[0])
+        for _ in range(2):
+            again = catalog_v2.apply_evidence(self.conn)
+            self.assertEqual(again["links_updated"], 0)
+            self.assertEqual(again["evidence_added"], 0)
+            self.assertFalse(again["health_bumped"])
+        self.assertEqual([dict(row) for row in self.conn.execute(
+            "SELECT * FROM cat_links ORDER BY id")], snapshot)
+        self.assertEqual(self.meta("health"), health)
+        self.assertEqual(self.meta("health_at"), health_at)
+        self.assertEqual(self.conn.execute(
+            "SELECT COUNT(*) FROM cat_link_evidence").fetchone()[0], journal)
+
+    def test_replaying_the_same_probe_does_not_double_the_journal(self):
+        links = self.film("Replay Film", [self.CDN + "RP"])
+        probe = self.probe(self.CDN + "RP", checked_at=1000.0)
+        catalog_v2.apply_evidence(self.conn, [probe])
+        second = catalog_v2.apply_evidence(self.conn, [probe])
+        self.assertEqual(second["evidence_added"], 0)
+        self.assertEqual(second["evidence_rows"], 1)
+        self.assertEqual(second["links_updated"], 0)
+
+    # ---- association -------------------------------------------------------- #
+    def test_evidence_is_reattached_to_the_link_its_url_names(self):
+        """A rebuild renumbers `cat_links`; the URL in the sample is the durable half."""
+        links = self.film("Moved Film", [self.CDN + "M1", self.CDN + "M2"])
+        right, wrong = links[0]["id"], links[1]["id"]
+        self.conn.execute(
+            "INSERT INTO cat_link_evidence (link_id, probed_at, ok, protocol, http_status,"
+            " content_type, size_bytes, latency_ms, speed_mbps, accepts_ranges, error, url)"
+            " VALUES (?, ?, 1, 'progressive', 200, 'video/mp4', 1200, 140, 6.5, 1, NULL, ?)",
+            (wrong, 4000.0, self.CDN + "M1"))
+        summary = catalog_v2.apply_evidence(self.conn)
+        self.assertEqual(summary["evidence_repointed"], 1)
+        healed = self.link_row(right)
+        self.assertEqual((healed["state"], healed["latency_ms"], healed["last_evidence_at"]),
+                         ("active", 140, 4000.0))
+        untouched = self.link_row(wrong)
+        self.assertEqual(untouched["state"], "unchecked")
+        self.assertIsNone(untouched["last_evidence_at"])
+        self.assertEqual(self.conn.execute(
+            "SELECT link_id FROM cat_link_evidence WHERE url = ?",
+            (self.CDN + "M1",)).fetchone()[0], right)
+
+    def test_sample_of_an_unknown_url_is_reported_not_applied(self):
+        links = self.film("Ghost Film", [self.CDN + "GHOST"])
+        self.conn.execute(
+            "INSERT INTO cat_link_evidence (link_id, probed_at, ok, protocol, latency_ms, url)"
+            " VALUES (?, ?, 0, 'unusable', 0, 'https://gone.test/nothing')",
+            (links[0]["id"], 5000.0))
+        summary = catalog_v2.apply_evidence(self.conn)
+        self.assertEqual(summary["evidence_orphaned"], 1)
+        self.assertEqual(summary["links_updated"], 0)
+        self.assertEqual(self.link_row(links[0]["id"])["state"], "unchecked")
+
+    def test_link_ids_scope_and_limit_reach_every_link(self):
+        links = self.film("Many Film", [self.CDN + str(i) for i in range(6)])
+        probes = [self.probe(link["url"], checked_at=1000.0 + index)
+                  for index, link in enumerate(links)]
+        catalog_v2.apply_evidence(self.conn, probes)
+        for index in (0, 3, 5):
+            self.assertEqual(self.link_row(links[index]["id"])["state"], "active")
+        only = catalog_v2.apply_evidence(self.conn, link_ids=[links[2]["id"]])
+        self.assertEqual(only["links_scanned"], 1)
+        limited = catalog_v2.apply_evidence(self.conn, limit=2)
+        self.assertLessEqual(limited["links_scanned"], 2)
+
+    def test_write_back_opens_no_socket_and_needs_no_ledger_helpers(self):
+        links = self.film("Offline Film", [self.CDN + "OFF"])
+        link_id = links[0]["id"]
+        self.conn.execute(
+            "INSERT INTO cat_link_evidence (link_id, probed_at, ok, protocol, http_status,"
+            " latency_ms, speed_mbps, accepts_ranges) VALUES (?, ?, 1, 'progressive', 200,"
+            " 80, 3.0, 1)", (link_id, 6000.0))
+
+        def boom(*args, **kwargs):  # pragma: no cover - must never run
+            raise AssertionError("apply_evidence() must not probe the network")
+
+        with unittest.mock.patch.object(link_health, "probe", boom), \
+                unittest.mock.patch.object(link_health, "probe_many", boom):
+            summary = catalog_v2.apply_evidence(self.conn)
+        self.assertEqual(summary["links_updated"], 1)
+        self.assertEqual(self.link_row(link_id)["state"], "active")
+
+    def test_works_on_a_projection_written_by_an_older_schema(self):
+        """No `ledger_link_id`, no `url` on the journal, default tuple rows: still applies.
+
+        Also pins the migration hazard: the extra column is added by its own ALTER
+        and never indexed inside the DDL script that created the table.
+        """
+        conn = sqlite3.connect(":memory:")   # deliberately not sqlite3.Row
+        try:
+            conn.executescript("""
+            CREATE TABLE cat_links (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, release_id INTEGER NOT NULL,
+                work_id INTEGER NOT NULL, url TEXT, final_url TEXT,
+                kind TEXT, playability TEXT, state TEXT NOT NULL DEFAULT 'unchecked',
+                resumable INTEGER NOT NULL DEFAULT 0, accepts_ranges INTEGER NOT NULL DEFAULT 0,
+                cors_open INTEGER NOT NULL DEFAULT 0, ephemeral INTEGER NOT NULL DEFAULT 0,
+                expires_at REAL, protocol TEXT, content_type TEXT, size_bytes INTEGER,
+                latency_ms INTEGER, speed_mbps REAL, http_status INTEGER,
+                last_evidence_at REAL, rank_score INTEGER NOT NULL DEFAULT 0,
+                tier INTEGER NOT NULL DEFAULT 2);
+            CREATE TABLE cat_link_evidence (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, link_id INTEGER NOT NULL,
+                probed_at REAL NOT NULL, ok INTEGER NOT NULL, protocol TEXT,
+                http_status INTEGER, content_type TEXT, size_bytes INTEGER,
+                latency_ms INTEGER, speed_mbps REAL, accepts_ranges INTEGER, error TEXT);
+            CREATE TABLE cat_projection_meta (key TEXT PRIMARY KEY, value TEXT);
+            """)
+            conn.execute("INSERT INTO cat_links (id, release_id, work_id, url, final_url,"
+                         " kind, playability, rank_score, tier)"
+                         " VALUES (7, 1, 1, 'https://cdn.test/old.mp4',"
+                         " 'https://cdn.test/old.mp4', 'cdn_direct', 'stream', 750, 1)")
+            conn.execute("INSERT INTO cat_link_evidence (link_id, probed_at, ok, protocol,"
+                         " http_status, content_type, size_bytes, latency_ms, speed_mbps,"
+                         " accepts_ranges) VALUES (7, 7000.0, 1, 'progressive', 206,"
+                         " 'video/mp4', 4000, 60, 20.0, 1)")
+            summary = catalog_v2.apply_evidence(conn, commit=True)
+            self.assertEqual(summary["links_updated"], 1)
+            row = conn.execute("SELECT state, rank_score, latency_ms, speed_mbps,"
+                               " last_evidence_at, cors_open FROM cat_links"
+                               " WHERE id = 7").fetchone()
+            self.assertEqual(row[0], "active")
+            # 300 stream + 150 download + 100 ranges + 0 CORS + 100 speed + 100 latency
+            # + 100 tier1 = 850: the measured formula, minus the 80 we refuse to invent.
+            self.assertEqual(row[1], 850)
+            self.assertEqual((row[2], row[3], row[4]), (60, 20.0, 7000.0))
+            self.assertEqual(row[5], 0)            # no CORS fact in the journal: not invented
+            columns = {r[1] for r in conn.execute("PRAGMA table_info(cat_link_evidence)")}
+            self.assertIn("url", columns)          # migrated in, and not indexed
+            health = conn.execute("SELECT value FROM cat_projection_meta"
+                                  " WHERE key = 'health'").fetchone()[0]
+            self.assertEqual(health, "1")
+            # a CORS fact from a live probe is the only thing that lifts it further
+            conn.execute("INSERT INTO cat_links (id, release_id, work_id, url, final_url,"
+                         " kind, playability, rank_score, tier)"
+                         " VALUES (8, 1, 1, 'https://cdn.test/cors.mp4',"
+                         " 'https://cdn.test/cors.mp4', 'cdn_direct', 'stream', 750, 1)")
+            catalog_v2.apply_evidence(conn, [link_health.ProbeResult(
+                url="https://cdn.test/cors.mp4", ok=True, protocol="progressive",
+                http_status=206, content_type="video/mp4", size_bytes=4000,
+                streamable=True, downloadable=True, accepts_ranges=True, resumable=True,
+                cors_open=True, latency_ms=60, download_speed_mbps=20.0, checked_at=7000.0)])
+            self.assertEqual(conn.execute(
+                "SELECT rank_score, cors_open FROM cat_links WHERE id = 8").fetchone(),
+                (930, 1))                          # score_link's documented practical ceiling
+        finally:
+            conn.close()
+
+    def test_needs_a_projected_database(self):
+        conn = sqlite3.connect(":memory:")
+        try:
+            with self.assertRaises(ValueError):
+                catalog_v2.apply_evidence(conn)
+        finally:
+            conn.close()
+
+    # ---- adult and provenance posture -------------------------------------- #
+    def test_adult_links_are_healed_like_any_other_and_no_provenance_leaks(self):
+        adult = self.film("Adult Title", [self.CDN + "ADT"], is_18_plus=1)
+        public = self.film("Public Title", [self.CDN + "PUB"])
+        link_ids = [adult[0]["id"], public[0]["id"]]
+        summary = catalog_v2.apply_evidence(self.conn, [
+            self.probe(self.CDN + "ADT", checked_at=1000.0),
+            self.probe(self.CDN + "PUB", checked_at=1000.0)])
+        for link_id in link_ids:
+            self.assertEqual(self.link_row(link_id)["state"], "active")
+        # the flag and the row are untouched: measurement changes state, never visibility
+        self.assertEqual(self.conn.execute(
+            "SELECT is_18_plus FROM cat_works WHERE title = 'Adult Title'").fetchone()[0], 1)
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM cat_links").fetchone()[0], 2)
+        text = json.dumps(summary, sort_keys=True)
+        for leak in ("site-a", "google_cdn", "a.test", "video-downloads", "source_site",
+                     "service", "url", "final_url", "Adult"):
+            self.assertNotIn(leak, text)
 
 
 if __name__ == "__main__":

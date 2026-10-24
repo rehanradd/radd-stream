@@ -19,6 +19,8 @@ Public surface
     score_link()           map a ProbeResult to an integer 0..1000 rank
     summarize()            aggregate a batch of results for ops dashboards
     merge_health_history() EWMA blend of historical + newest probe
+    evidence_result()      adapt one stored `cat_link_evidence` row to ProbeResult
+    merge_evidence_journal() fold a link's whole evidence journal into one record
     probe_many()           ordered ThreadPoolExecutor batch probe
 
 Error codes (``ProbeResult.error`` — stable strings, safe to GROUP BY)
@@ -98,6 +100,9 @@ __all__ = [
     "score_link",
     "summarize",
     "merge_health_history",
+    "evidence_result",
+    "merge_evidence_journal",
+    "EVIDENCE_NO_VERDICT",
     "probe_many",
 ]
 
@@ -120,6 +125,17 @@ DEFAULT_TIMEOUT = 8.0
 DEFAULT_SAMPLE_BYTES = 524288  # 512 KiB bounded body sample
 DEFAULT_MAX_REDIRECTS = 5
 MIN_SAMPLE_FOR_SPEED = 4096  # below this the speed number is a fantasy
+DEFAULT_EWMA_WEIGHT = 0.4    # newest sample's share in merge_health_history()
+
+#: Errors that say something about *us*, not about the endpoint. A probe we
+#: refused to make (SSRF guard, blocklist, unparseable URL) is not a verdict on
+#: the link, so evidence carrying one of these codes must never move `state` or
+#: replace a structural score. Same list `link_state._NO_VERDICT_ERRORS` uses.
+EVIDENCE_NO_VERDICT = ("blocked_target", "blocklisted", "invalid_url")
+
+#: HTTP statuses that mean "the token rotted", not "the file is gone" — the same
+#: split `fast_fetch.run_health_check` writes into `download_sources.status`.
+TOKEN_ROT_STATUSES = (401, 403)
 
 STREAMABLE_PROTOCOLS = ("hls", "dash", "progressive")
 
@@ -821,6 +837,158 @@ def merge_health_history(previous: dict, newest: ProbeResult,
         "last_checked": float(newest.checked_at) if newest and newest.checked_at
         else float(prev.get("last_checked") or 0.0),
     }
+
+
+# ── stored evidence (the `cat_link_evidence` journal) ────────────────────────
+
+def _row_get(row, name, default=None):
+    """Read one field from a ``sqlite3.Row``, dict or ``ProbeResult``.
+
+    The journal is read back as ``sqlite3.Row`` objects, hand-built dicts in
+    tests, and occasionally as a live :class:`ProbeResult` — one accessor keeps
+    the callers below from branching three ways on every field.
+    """
+    if row is None:
+        return default
+    if isinstance(row, dict):
+        value = row.get(name, default)
+        return default if value is None else value
+    keys = getattr(row, "keys", None)
+    if callable(keys) and name in row.keys():
+        value = row[name]
+        return default if value is None else value
+    if name == "speed_mbps" and hasattr(row, "download_speed_mbps"):
+        return row.download_speed_mbps
+    if name == "probed_at" and hasattr(row, "checked_at"):
+        return row.checked_at
+    value = getattr(row, name, default)
+    return default if value is None else value
+
+
+def is_no_verdict(error) -> bool:
+    """True when an error code means we never knocked on the endpoint."""
+    code = str(error or "").strip().lower()
+    return code in EVIDENCE_NO_VERDICT
+
+
+def verdict_state(ok, *, error: str = "", http_status: int = 0) -> str:
+    """The ``cat_links.state`` one measured sample earns: active|dead|expired.
+
+    ``ok`` is the probe's own verdict, so this never asks how *old* the sample
+    is: an unprobed or merely-aged link is not dead here, only a measured failure
+    is. Token rot (401/403) is ``expired`` — the file is there, the URL rotted —
+    matching the ledger vocabulary; every other failure is ``dead``. A
+    no-verdict code returns ``""`` because refusing to probe says nothing.
+    """
+    if is_no_verdict(error):
+        return ""
+    if ok:
+        return "active"
+    try:
+        status = int(http_status or 0)
+    except (TypeError, ValueError):
+        status = 0
+    if status in TOKEN_ROT_STATUSES or str(error or "") in ("http_401", "http_403"):
+        return "expired"
+    return "dead"
+
+
+def evidence_result(row) -> ProbeResult:
+    """Adapt one stored ``cat_link_evidence`` row into a :class:`ProbeResult`.
+
+    The journal keeps the fields a probe measured; it cannot keep the body it
+    sniffed, so two claims are deliberately *conservative* compared with a live
+    probe of the same endpoint:
+
+      * ``downloadable`` needs a progressive file, or an HLS manifest that
+        recorded ``size_bytes`` (a live probe proves it by parsing the playlist);
+      * ``streamable`` likewise needs bytes or a manifest/dash protocol.
+
+    So a stored HLS sample that recorded no size scores as if the bytes were
+    unproven — the next live probe restores the credit. Everything else
+    (protocol, status, timing, ranges) is the recorded truth, and ``error``
+    stays the stable code, so ``verdict_state()`` and ``score_link()`` see
+    exactly what the probe saw.
+    """
+    protocol = str(_row_get(row, "protocol", "") or "").strip().lower() or "unusable"
+    error = str(_row_get(row, "error", "") or "")
+    try:
+        ok = bool(int(_row_get(row, "ok", 0) or 0))
+    except (TypeError, ValueError):
+        ok = bool(_row_get(row, "ok", 0))
+    try:
+        status = int(_row_get(row, "http_status", 0) or 0)
+    except (TypeError, ValueError):
+        status = 0
+    try:
+        size = int(_row_get(row, "size_bytes", 0) or 0)
+    except (TypeError, ValueError):
+        size = 0
+    try:
+        latency = int(_row_get(row, "latency_ms", 0) or 0)
+    except (TypeError, ValueError):
+        latency = 0
+    try:
+        speed = float(_row_get(row, "speed_mbps", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        speed = 0.0
+    try:
+        ranges = bool(int(_row_get(row, "accepts_ranges", 0) or 0))
+    except (TypeError, ValueError):
+        ranges = bool(_row_get(row, "accepts_ranges", 0))
+    live = ok and not error
+    downloadable = bool(live and (protocol == "progressive"
+                                  or (protocol == "hls" and size > 0)))
+    streamable = bool(live and protocol in STREAMABLE_PROTOCOLS
+                      and (size > 0 or protocol in ("hls", "dash")))
+    return ProbeResult(
+        url=str(_row_get(row, "url", "") or _row_get(row, "final_url", "") or ""),
+        ok=bool(live),
+        http_status=status,
+        protocol=protocol,
+        content_type=str(_row_get(row, "content_type", "") or ""),
+        size_bytes=size,
+        accepts_ranges=ranges,
+        resumable=bool(ranges and downloadable),
+        cors_open=bool(_row_get(row, "cors_open", 0)),
+        latency_ms=max(latency, 0),
+        download_speed_mbps=max(speed, 0.0),
+        streamable=streamable,
+        downloadable=downloadable,
+        error="" if ok else error,
+        checked_at=float(_row_get(row, "probed_at", 0.0) or _row_get(row, "checked_at", 0.0) or 0.0),
+    )
+
+
+def merge_evidence_journal(rows, *, weight: float = DEFAULT_EWMA_WEIGHT) -> dict:
+    """Fold one link's whole evidence journal into a single rolling record.
+
+    Rows are read in ``probed_at`` order and passed through
+    :func:`merge_health_history` one at a time, so the result is the same record
+    ops would have accumulated by blending each probe as it arrived — and,
+    because it is recomputed from the journal instead of incremented, replaying
+    the fold over an unchanged journal is byte-for-byte idempotent. That is what
+    lets ``catalog_v2.apply_evidence()`` run from cron as often as it likes.
+    A live :class:`ProbeResult` in the sequence is used as it stands (its
+    body-derived claims are still intact); anything else is adapted through
+    :func:`evidence_result` first.
+
+    No-verdict rows (see :data:`EVIDENCE_NO_VERDICT`) are skipped: a probe we
+    refused to make is not a sample of the endpoint. Returns a record shaped
+    exactly like :func:`merge_health_history` (``checks``, ``success_ema``,
+    ``latency_ms_ema``, ``speed_mbps_ema``, ``last_error``, ``last_checked``),
+    or a zeroed record when nothing in the journal was a measurement.
+    """
+    ordered = sorted((row if isinstance(row, ProbeResult) else evidence_result(row)
+                      for row in (rows or ())),
+                     key=lambda res: (res.checked_at, res.error))
+    merged: dict = {}
+    for res in ordered:
+        if is_no_verdict(res.error):
+            continue
+        merged = merge_health_history(merged, res, weight=weight)
+    return merged or {"checks": 0, "success_ema": 0.0, "latency_ms_ema": 0,
+                      "speed_mbps_ema": 0.0, "last_error": "", "last_checked": 0.0}
 
 
 # ── batch probing ────────────────────────────────────────────────────────────

@@ -68,6 +68,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import coil.compose.AsyncImage
+import com.raddstream.app.brand.Brand
 import com.raddstream.app.network.models.PostDetail
 import com.raddstream.app.ui.components.CapabilityChip
 import com.raddstream.app.ui.components.CamBadge
@@ -690,7 +691,7 @@ private fun PrintCard(
 // ── Platform helpers (share keeps the app's own copy honest) ────────────────
 private fun shareTitle(context: Context, post: PostDetail) {
     val title = post.cleanTitle?.takeIf { it.isNotBlank() } ?: post.title
-    val text = "Check out \"$title\" in Radd Stream."
+    val text = Brand.copy("share_template", "", "title" to title)
     val intent = Intent(Intent.ACTION_SEND).apply {
         type = "text/plain"
         putExtra(Intent.EXTRA_SUBJECT, title)

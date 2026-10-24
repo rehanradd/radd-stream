@@ -17,6 +17,7 @@ import androidx.media3.exoplayer.source.MediaLoadData
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
+import com.raddstream.app.brand.Brand
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -60,7 +61,7 @@ class PlaybackService : MediaSessionService() {
     /** Resume target for the rendition currently being loaded (seek once READY). */
     private var pendingResumeMs: Long? = null
     private var lastKnownPositionMs: Long = 0
-    private var titleHint: String = "Radd Stream"
+    private var titleHint: String = Brand.name
 
     override fun onCreate() {
         super.onCreate()
@@ -68,7 +69,7 @@ class PlaybackService : MediaSessionService() {
         // Cleartext: debug builds allow http (app/src/debug/AndroidManifest.xml); the release
         // HTTP-only gap is documented in PLAYER_SPEC.md §3.4 + HANDOFF_appplayer.md.
         val httpFactory = DefaultHttpDataSource.Factory()
-            .setUserAgent("RaddStream/1.0 (Android Media3)")
+            .setUserAgent(Brand.userAgent)
             .setAllowCrossProtocolRedirects(true)
 
         val exo = ExoPlayer.Builder(this)

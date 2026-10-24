@@ -47,6 +47,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import com.raddstream.app.brand.Brand
 import com.raddstream.app.player.AudioBoost
 import com.raddstream.app.player.AudioBoostUi
+import com.raddstream.app.share.LanShareStatus
 import com.raddstream.app.viewmodel.ImageQuality
 import com.raddstream.app.viewmodel.KeepTtl
 import com.raddstream.app.viewmodel.SettingsViewModel
@@ -134,6 +135,25 @@ fun SettingsScreen(
                 OutlinedButton(onClick = onOpenDownloads, modifier = Modifier.fillMaxWidth()) {
                     Text("Open Downloads")
                 }
+            }
+
+            // ── Share kept files on the local network ──────────────────
+            SettingsCard(title = "Share on your network") {
+                SwitchRow(
+                    checked = state.lanShareEnabled,
+                    onCheckedChange = viewModel::setLanShareEnabled,
+                    label = "Let devices on this network play kept files",
+                )
+                Text(
+                    lanShareStatusLine(state.lanShareStatus),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(
+                    "While this is on, anything on your local network can read your kept files.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
 
             // ── Playback & Display preferences ─────────────────────────
@@ -319,5 +339,19 @@ private fun StatBox(label: String, value: String) {
     Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Text(value, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
         Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
+/**
+ * Renders the socket's real state as one short line. Reports what is actually bound, not what was
+ * asked: a share that could not bind says so plainly, and a live share names the concrete address and
+ * the number of files currently servable so the row never advertises a URL that nothing answers on.
+ */
+private fun lanShareStatusLine(status: LanShareStatus): String = when (status) {
+    LanShareStatus.Off -> "Off — nothing is shared on your network."
+    LanShareStatus.Failed -> "On, but it could not start (port busy). No files are being shared."
+    is LanShareStatus.Listening -> {
+        val where = status.address?.let { "$it:${status.port}" } ?: "port ${status.port}"
+        "Listening on $where · ${status.servableCount} kept ${if (status.servableCount == 1) "file" else "files"}"
     }
 }

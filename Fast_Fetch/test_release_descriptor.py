@@ -423,6 +423,94 @@ class ReleaseDescriptorTests(unittest.TestCase):
                 self.assertIs(p["watermarked"], True)
                 self.assertIs(p["official_print"], False)
 
+    # ------------------------------------------------------------------ #
+    # 13. HDTC is a cam-family capture, never an official print (API_V2 §18 G-4)
+    # ------------------------------------------------------------------ #
+    def test_hdtc_is_capped_cam_family_never_official(self):
+        for spelling in ("HDTC", "hdtc", "H-DTC", "HD-TC", "H.D.TC", "Hdtc"):
+            p = rd.describe(f"Scream (2024) 1080p {spelling} x265")
+            with self.subTest(spelling=spelling):
+                self.assertEqual(p["source_tag"], "hdtc")
+                self.assertIs(p["official_print"], False)
+                self.assertLessEqual(p["quality_score"], rd.CAM_FAMILY_CEILING)
+                self.assertEqual(p["quality_label"], "CAM")
+        # Even the most bonus-rich HDTC print stays under the cam ceiling:
+        # 300 + 75 + 30 (h265) + 60 (HDR at 1080p) + 40 (would-be official) ... capped.
+        rich = rd.describe("Scream (2024) 2160p HDTC x265 HDR10 10Bit ESubs Dual Audio DD 5.1")
+        self.assertEqual(rich["source_tag"], "hdtc")
+        self.assertIs(rich["official_print"], False)
+        self.assertLessEqual(rich["quality_score"], 250)
+        # HDTS is HD-Telesync, a different capture: it still reads `telesync`.
+        self.assertEqual(rd.describe("Scream (2024) 1080p HDTS x265")["source_tag"], "telesync")
+
+    def test_hdtc_print_ranks_below_a_bare_720p_webrip(self):
+        # The ordering claim is the point of the G-4 fix: an HDTC cam rip must
+        # never outrank an honest distribution print.
+        hdtc = rd.describe("Scream (2024) 1080p HDTC x265")
+        webrip = rd.describe("Scream (2024) 720p WEBRip")
+        self.assertEqual(hdtc["quality_score"], 250)          # 300+75+30 capped
+        self.assertEqual(webrip["quality_score"], 460)        # 200+220+40 floor
+        self.assertLess(hdtc["quality_score"], webrip["quality_score"])
+        self.assertIs(webrip["official_print"], True)
+
+    # ------------------------------------------------------------------ #
+    # 14. conservative SCENE group recovery (additional parsed field only)
+    # ------------------------------------------------------------------ #
+    def test_release_group_is_a_print_key(self):
+        self.assertIn("release_group", rd.PRINT_KEYS)
+        self.assertEqual(rd.describe("Bad input ((")["release_group"], "")
+
+    def test_bare_upper_token_after_the_codec_is_the_group(self):
+        p = rd.describe("Dune (2024) 1080p WEB-DL x265 GROUP")
+        self.assertEqual(p["release_group"], "GROUP")
+        dash = rd.describe("Dune.2024.1080p.WEB-DL.x265-GROUP")
+        self.assertEqual(dash["release_group"], "GROUP")
+        bracketed = rd.describe("Dune (2024) [ETRG] 1080p WEB-DL")
+        self.assertEqual(bracketed["release_group"], "ETRG")
+        before_res = rd.describe("Vikram BLACK 1080p WEB-DL x265")
+        self.assertEqual(before_res["release_group"], "BLACK")
+        # Zero Data Loss: the label is never rewritten, the stub keeps its words.
+        self.assertIn("GROUP", dash["title_stub"])
+
+    def test_quality_and_version_words_never_become_a_group(self):
+        rejects = (
+            "Movie (2024) 1080p WEB-DL -x265",
+            "Movie (2024) 1080p WEB-DL -ESubs",
+            "Movie (2024) 1080p WEB-DL -ESUBS",
+            "Movie (2024) 1080p WEB-DL -MULTI",
+            "Movie (2024) 1080p WEB-DL MULTISUBS",
+            "Movie (2024) 1080p WEB-DL HDCAM",
+            "Movie (2024) 1080p WEB-DL HDR",
+            "Movie (2024) 1080p WEB-DL DDP5.1",
+            "Movie (2024) 1080p WEB-DL x265 REPACK v2",
+            "Movie (2024) 1080p WEB-DL x265 REPACK PROPER V2",
+            "Dune (2024) 2160p UHD BluRay x265 DDP5.1 -NOGRP",
+            "Movie (2024) 1080p WEB-DL",
+            "Dune (2024) 2160p WEB-DL x265 GROUP".replace("GROUP", "group"),
+            "Kill Book Two (2004) 1080p WEB-DL Part 2",
+            "Show S01E05 (2023) 1080p WEB-DL",
+            # Real corpus titles: hyphenated names, not release suffixes.
+            "CHIP-IN", "86 EIGHTY-SIX", "CO-ED", "BAT-FAM", "MECH-X4",
+            "Your Honor (IN)", "Kalki 2898 - AD", "Fukrey 3 (2023) HDTC CAM",
+            "Killer Ratings (Season-1) Hindi 720p (Episode 1-7) [550MB] - S01E01",
+            "The New Mutants (2020) Dual Audio [Hindi Dubbed (Unofficial VO) + English (ORG)]",
+        )
+        for label in rejects:
+            p = rd.describe(label)
+            with self.subTest(label=label):
+                self.assertEqual(p["release_group"], "")
+        # The watermark suffix from the corpus fixture is a watermark, not a group.
+        self.assertEqual(rd.describe(AVENGERS)["release_group"], "")
+
+    def test_groupless_and_plain_title_labels_stay_empty(self):
+        for label in ("Inception", "Shivaay (2016)", "",
+                      "Movie (2024) WEB-DL 1080p x265"):
+            # `WEB-DL` sits before the resolution but is not a single upper-case
+            # token, so nothing is guessed.
+            with self.subTest(label=label):
+                self.assertEqual(rd.describe(label)["release_group"], "")
+
+
     def test_language_column_is_merged_and_scoring_bounds(self):
         p = rd.describe("Okja (2017) 1080p WEB-DL", languages="Korean English")
         self.assertEqual(p["audio"]["languages"], ["Korean", "English"])

@@ -45,6 +45,7 @@ import androidx.compose.material.icons.filled.BrightnessHigh
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.FastForward
+import androidx.compose.material.icons.filled.HighQuality
 import androidx.compose.material.icons.filled.Forward10
 import androidx.compose.material.icons.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.filled.KeyboardArrowRight
@@ -109,6 +110,7 @@ import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.CaptionStyleCompat
 import androidx.media3.ui.PlayerView
 import androidx.media3.ui.SubtitleView
+import com.raddstream.app.brand.Brand
 import com.raddstream.app.player.AspectMode
 import com.raddstream.app.player.AudioBoost
 import com.raddstream.app.player.AudioBoostUi
@@ -427,6 +429,7 @@ private fun PlayerScreenContent(
         if (state.subtitleSheetVisible) SubtitleSettingsSheet(state, vm)
         if (state.tracksSheetVisible) TracksSheet(state, vm)
         if (state.printSheetVisible) PrintLogSheet(state, vm)
+        if (state.qualitySheetVisible) QualitySheet(state, vm)
 
         // 8 — lightweight snackbar
         snackbar?.let { msg ->
@@ -451,7 +454,7 @@ private val AccentOrange = Color(0xFFFF8552)
 private val PlayerUiState.dialogBlocking: Boolean
     get() = resumeOfferMs != null || calibration != null || giveUp != null ||
         speedSheetVisible || tracksSheetVisible || subtitleSheetVisible ||
-        printSheetVisible || sleepSheetVisible || playFromDialogVisible
+        printSheetVisible || sleepSheetVisible || playFromDialogVisible || qualitySheetVisible
 
 // ── 1. Surface ─────────────────────────────────────────────────────────────────
 
@@ -805,7 +808,7 @@ private fun TopBar(vm: PlayerViewModel, state: PlayerUiState, onBack: () -> Unit
         Spacer(Modifier.width(6.dp))
         Column(Modifier.weight(1f)) {
             Text(
-                state.pendingTitle ?: print?.displayLabel() ?: "Radd Stream",
+                state.pendingTitle ?: print?.displayLabel() ?: Brand.name,
                 color = Color.White,
                 fontSize = 15.sp,
                 fontWeight = FontWeight.SemiBold,
@@ -915,6 +918,15 @@ private fun BottomControls(
                     .padding(horizontal = 4.dp, vertical = 2.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
+                if (state.canSwitchQuality) {
+                    PlayerControlButton({ vm.showQualitySheet() }, "Quality: ${state.qualityLabel}") {
+                        Icon(
+                            Icons.Default.HighQuality,
+                            null,
+                            tint = if (state.qualityAuto) Color.White else AccentOrange,
+                        )
+                    }
+                }
                 PlayerControlButton({ vm.showSubtitleSheet() }, "Subtitles: ${subtitleStatusLabel(state)}") {
                     Icon(Icons.Default.Subtitles, null, tint = if (subtitleActive(state)) AccentOrange else Color.White)
                 }
@@ -1393,6 +1405,66 @@ private fun SpeedSheet(state: PlayerUiState, vm: PlayerViewModel) {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
+private fun QualitySheet(state: PlayerUiState, vm: PlayerViewModel) {
+    ModalBottomSheet(
+        onDismissRequest = { vm.hideQualitySheet() },
+        sheetState = rememberModalBottomSheetState(),
+        containerColor = Color(0xFF12161F),
+    ) {
+        Column(Modifier.padding(bottom = 20.dp)) {
+            SheetTitle("Quality")
+            QualityRow(
+                title = "Auto (recommended)",
+                detail = if (state.qualityAuto) "Chosen from what your connection is actually moving" else null,
+                selected = state.qualityAuto,
+                onClick = { vm.selectQualityBand("auto") },
+            )
+            state.qualityRungs.forEach { rung ->
+                val selected = !state.qualityAuto && rung.band == state.qualityBand
+                QualityRow(
+                    title = rung.label?.takeIf { it.isNotBlank() } ?: rung.band.uppercase(),
+                    detail = if (selected) "Playing" else null,
+                    selected = selected,
+                    onClick = { vm.selectQualityBand(rung.band) },
+                )
+            }
+            Text(
+                "Switching keeps your position. Auto follows your connection and may move " +
+                    "between these on its own.",
+                color = Color.White.copy(alpha = 0.55f),
+                fontSize = 12.sp,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+            )
+        }
+    }
+}
+
+@Composable
+private fun QualityRow(title: String, detail: String?, selected: Boolean, onClick: () -> Unit) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clickableNoRipple(onClick)
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            title,
+            color = if (selected) AccentOrange else Color.White,
+            fontSize = 14.sp,
+            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+        )
+        if (detail != null) {
+            Spacer(Modifier.width(8.dp))
+            Text(detail, color = Color.White.copy(alpha = 0.5f), fontSize = 12.sp)
+        }
+        Spacer(Modifier.weight(1f))
+        if (selected) Icon(Icons.Default.Check, null, tint = AccentOrange, modifier = Modifier.size(18.dp))
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
 private fun SleepSheet(state: PlayerUiState, vm: PlayerViewModel) {
     ModalBottomSheet(
         onDismissRequest = { vm.hideSleepSheet() },
@@ -1685,6 +1757,12 @@ private fun PrintLogSheet(state: PlayerUiState, vm: PlayerViewModel) {
             }
             Spacer(Modifier.height(6.dp))
             SheetRow(label = "Play from a position…") { vm.showPlayFromDialog() }
+            if (state.canSwitchQuality) {
+                SheetRow(label = "Change quality (${state.qualityLabel})") {
+                    vm.hidePrintSheet()
+                    vm.showQualitySheet()
+                }
+            }
             SheetRow(label = "Mark current position as an episode start…") { vm.openCalibration() }
             SheetRow(label = "Retry current candidates") { vm.retryCurrentCandidates() }
             SheetRow(label = "Open in external player") { vm.openWithExternalPlayer() }

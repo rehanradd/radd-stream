@@ -27,6 +27,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.raddstream.app.brand.Brand
 import com.raddstream.app.ui.theme.AccentGreen
 import com.raddstream.app.ui.theme.AccentPrimary
 import com.raddstream.app.ui.theme.AccentRed
@@ -51,7 +52,7 @@ fun SetupScreen(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
     ) {
-        Text("RADD Stream", style = MaterialTheme.typography.headlineLarge, color = OnBackground)
+        Text(Brand.name, style = MaterialTheme.typography.headlineLarge, color = OnBackground)
         Spacer(Modifier.height(8.dp))
         Text(
             text = "Connect to a catalog server you operate or are authorized to use.",
