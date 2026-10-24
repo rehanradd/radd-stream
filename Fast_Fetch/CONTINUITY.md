@@ -414,3 +414,71 @@ routes; restrict the bind and public routes before enabling the public proxy.
   metadata suppression, not access control. The 302 stream/art redirects still reveal an
   upstream host in a network capture, and the database and logs keep provenance by design.
   Proxying every byte through this 1-core VM was rejected on load grounds.
+
+## 2026-10-23 — Session Milestone: Master Architect Directive & Senior Mentorship
+
+### Accomplishments
+1. **Audited Qoder Execution & System Health**:
+   - Resolved **226,438 HubCloud links** in Toonworld4all staging database (`225,833` resolved successfully, **99.73% yield**), converting raw dead pages into direct Google CDN / Cloudflare R2 links.
+   - Inspected Qoder (`qodercli`) implementing Task 28 (One best+fastest option per tier ladder) and verified offline compilation recovery (`:app:compileDebugKotlin` 271 errors fixed via `CacheContract.kt` block comment repair).
+   - Validated `Fast_Fetch/tiers.py` and `Fast_Fetch/redact.py` across 118 unit tests.
+2. **Master Strategic Directives Published**:
+   - `docs/MASTER_ARCHITECT_DIRECTIVE.md`: Established the 20-Year Blueprint ($0 cost, multi-VM Oracle family cluster, zero-bandwidth 302 redirects, Hugging Face automated snapshots, SQLite FTS5 scaling).
+   - `docs/SENIOR_MENTOR_DIRECTIVE_QODER.md`: Formally accepted duty as Senior Architect & Admin. Provided Qoder with 7 advanced methods (Multi-CDN silent failover ladder, Smart binge pre-caching, MX Player Pro gesture engine, Adaptive network quality switcher, Offline P2P WiFi sharing, Sleep timer with fade-out, Dual audio track matcher).
+3. **Quality Gate Verification**:
+   - `python3 -S Fast_Fetch/test_database.py`: 50/50 OK.
+   - `python3 -S Fast_Fetch/test_vidout.py`: 6/6 OK.
+   - `python3 -S Fast_Fetch/test_tiers.py`: 16/16 OK.
+   - `python3 -S Fast_Fetch/test_redact.py`: 46/46 OK.
+
+## 2026-10-23 — Session: Provenance defects D1/D3/D4 + restamp tool (Qoder)
+
+### Accomplishments
+- **D3 (hdtvb mis-stamping)**: `import_hdtvb.py` already bound every site value to
+  `SITE_KEY = "hdtvb"` (commit `432ed1b`); the remaining `HDHub4u` mentions were
+  docstring/banner/argparse labels that still called the site another name. Those now
+  read HDTVB, with the genuine mirror relationship kept as prose only. Grep proof and a
+  regression test (`test_hdtvb_import.py`) assert no `'hdhub4u'` data literal survives.
+- **D1 (desicinemas provenance)**: `import_desicinemas.py` gained `SITE`,
+  `LEGAL_MEDIA_TYPES`, `normalize_media_type()`, `slug_from_url()`, `url`/`slug`/
+  `source_site` columns, and an additive idempotent migration
+  (`_migrate_posts_provenance`) that backfills them from `raw_meta` and clamps the
+  illegal `media_type='episode'` onto the four legal types. Verified on a **copy** of the
+  live staging DB: 5,223/5,223 rows gained url+slug+site, media_type became
+  movie 2,402 / series 2,821 (identical to what merge_catalogs had been coercing), 0 rows lost.
+- **D4 (dead `scraped=2` state)**: one vocabulary in
+  `import_9xmovies/moviezguru/world4ufree/bolly4u/desicinemas`: the skip path writes -1
+  (never 2) and `PENDING_SELECT` + `QUEUED_SCRAPE_STATES = (0, 2)` drain any legacy 2 row.
+  Note `import_bolly4u.py:736` was a **fourth** writer the audit missed.
+- **New `restamp_provenance.py`**: stdlib, dry-run by default, `--db` required, refuses a
+  production-catalog path without `--force-production`, proves origin from the staging DBs
+  plus `domain_registry.json` (a known stamp only moves when both agree), takes a
+  consistent `.pre-restamp-<UTC>.bak` before writing, and is idempotent.
+  Predicted for `merged_catalog.db` (dry run only, nothing written):
+  posts 12 hdhub4u→hdtvb + 5,223 unknown→desicinemas; post_sources 3,870 + 5,223;
+  releases 79 + 5,285 = **19,692 rows**; `desicinemas.db` staging 2,195 media_type rows;
+  `hdtvb.db`/`hdhub4u.db` staging already clean (0 changes).
+- **Tests**: `test_database.py` 54 OK (50 before — another agent added 4 mid-session),
+  `test_desicinemas.py` 7→11, `test_hdtvb_import.py` 4→8, new `test_provenance_stamping.py` 12,
+  `test_9xmovies.py` 5, `test_moviezguru.py` 6, `test_world4ufree_import.py` 6,
+  `test_bolly4u_import.py` 7, `test_hdhub4u_import.py` 25, `test_merge_catalogs.py` 5,
+  `test_catalog_v2.py` 35, `test_catalog_api.py` 113 — all OK. Nothing committed or pushed;
+  no database was written.
+
+### Next agent should
+- Review the dry-run numbers, then run `restamp_provenance.py --db merged_catalog.db --apply`
+  (backup is automatic) **before** any further merge, and re-run `--sync-sitemaps`/crawler for
+  desicinemas so its own migration runs on the live staging DB.
+
+### 2026-10-24 — init_db ordering fixed; redacted edge deployed; backup green
+- `_init_db` now creates `idx_posts_slug`/`idx_sitemap_slug` *after* the migration pass and
+  adds `slug` to both migration lists. Reproduced on a synthetic pre-`slug` schema (upgrade
+  succeeds, rows kept, indexes created, second run idempotent). The remaining failures when the
+  *ledger* `init_db` is pointed at a site's own staging DB are a schema-family mismatch, not this
+  bug: those DBs use the canonical staging schema (`canonical_key`/`post_url`/`bridge_url`) and
+  were never meant to receive the ledger DDL.
+- Live service restarted from committed code: `/api/v1/posts` no longer contains `source_site`;
+  `/api/v1/posts/{id}` publishes `option_groups`, `play_url` (our redirector) and no upstream URL;
+  `redirect=0` returns only `stream_id/kind/mime/size/resumable/expires_in`.
+- Nightly backup: `radd-stream-backup_20261024_154000.tar.gz`, 20 databases, 990 MB,
+  sha256 `b20f7b0afee4d4f72f4caee9eeba6241b035ee9e6f1225f4bff553801698e5f7`, uploaded to HF.

@@ -385,3 +385,25 @@ Update this file after each independently verified milestone so work can resume 
 - **Oracle deployment result (or why not deployed):**
 - **Next concrete action:**
 - **Blockers / decisions needed:**
+
+### 2026-10-23 — Master Architect Directive & Senior Mentor Guidance to Qoder
+- **Goal:** Ratify the 20-year architectural vision, multi-VM cluster strategy ($0 cost), infinite site expansion protocol, and mentor guidance for Qoder agent (`qwen2.5-coder:1.5b`).
+- **Completed:**
+  1. Authored and published `docs/MASTER_ARCHITECT_DIRECTIVE.md` defining the 20-year blueprint (Zero-bandwidth 302 engine, 100% Python stdlib, multi-VM Oracle cluster, Hugging Face sync, SQLite FTS5, Netflix UI + MX Player parity).
+  2. Authored and published `docs/SENIOR_MENTOR_DIRECTIVE_QODER.md` providing senior mentorship to Qoder with 7 smart methods (Multi-CDN silent failover ladder, Smart binge pre-caching, MX Player Pro gesture engine, Adaptive quality switcher, Offline P2P WiFi sharing, Sleep timer with fade-out, Dual audio track matcher).
+  3. Verified completion of ToonWorld4All bridge resolution: 225,833 / 226,438 links resolved (99.7% completion).
+  4. Audited and confirmed Qoder's Task 28 execution (One winner per quality tier + silent failover, `tiers.py`, `redact.py`).
+  5. Verified 118+ backend unit tests passing cleanly across `test_database` (50/50), `test_vidout` (6/6), `test_tiers` (16/16), and `test_redact` (46/46).
+  6. Authored and published `docs/SITE_SCOUT_SPEC.md` documenting the automated scraper reverse-engineering and synthesis engine for rapid site onboarding.
+- **Next concrete action:** Let Qoder finish Task 28 quality tier collapse, verify offline Gradle build `:app:compileDebugKotlin`, stage & commit verified Android app tree, and execute staging merge once approved.
+
+### 2026-10-24 — Nightly safety pass + backend/app milestone landed
+- **Goal:** run the nightly test gate, back up every database, land reviewed work, and stop the live API leaking provenance.
+- **Completed:** backend milestone `b1d6077` (redaction at the v1 edge, honest `resolve_live_source` v2 contract, `init_db` index-after-migration fix, unmounted `api_v2.py`, site scout, link state, importer resilience) and app milestone `79b754d` (offline cache engine, quality ladder + in-player switch, audio boost/track matching/binge preload, LAN share, `Brand.load` at startup). Live `radd-stream.service` restarted from the committed code; `/api/v1/posts` and `/api/v1/posts/{id}` now carry no `source_site`, no hoster name and no upstream URL, and `play_url` is our own `/api/v1/stream?id=<opaque>`.
+- **Files changed:** `Fast_Fetch/*.py` (31 files), `App/app/src/**` (51 files), `.gitignore`.
+- **Checks run and exact result:** test_database 54, test_redact 47, test_catalog_api 114, test_tiers 23, test_link_state 28, test_site_scout 25, test_provenance_stamping 12, test_hindilinks4u 24, test_katmoviehd_import 14, test_desicinemas 11, test_hdtvb_import 8 — all OK; `:app:assembleDebug` green; `:app:testDebugUnitTest` 245 tests / 28 suites / 0 failures.
+- **Known failures or checks not run:** `test_api_v2.py` is still a WIP suite (46 tests, 9 failures / 5 errors) and was deliberately not committed; no device/emulator exists on this VM, so no on-device behaviour is claimed.
+- **GitHub branch/commit/push result:** pushed `master` → `main` (`bc5f4b2..aac416e`, then `aac416e..79b754d`) via the temporary askpass flow on the explicit clean URL.
+- **Oracle deployment result:** service restarted on `127.0.0.1:8080`; `app-debug.apk` (22,514,525 bytes) installed at `/var/www/download/radd-stream.apk` and serving 200.
+- **Next concrete action:** finish `test_api_v2.py`, mount `/api/v2/` in nginx once its suite is green, and decide the staging→production catalog merge (#14, owner-gated).
+- **Blockers / decisions needed:** the catalog merge is still owner-gated; the live DB holds 201 visible posts while the staging database set holds the bulk. Owner also still needs to revoke the GitHub credential embedded in `.git/config remote.origin.url`.
