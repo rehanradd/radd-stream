@@ -273,10 +273,6 @@ enum class Playability(val wire: String) {
     val isDirectlyPlayable: Boolean
         get() = this == STREAM || this == BOTH
 
-    /** Never silently demoted into a stream: webview is a presentation mode (API_V2.md §8.5). */
-    val needsWebView: Boolean get() = this == WEBVIEW
-    val needsResolver: Boolean get() = this == RESOLVE_REQUIRED
-
     companion object {
         fun fromWire(raw: String?): Playability = when (raw?.trim()?.lowercase()) {
             "stream" -> STREAM

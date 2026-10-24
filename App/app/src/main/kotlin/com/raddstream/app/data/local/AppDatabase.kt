@@ -4,10 +4,38 @@ import androidx.room.Database
 import androidx.room.RoomDatabase
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
+import com.raddstream.app.data.cache.ByteRangeManifestDao
+import com.raddstream.app.data.cache.ByteRangeManifestEntity
+import com.raddstream.app.data.cache.CacheFileDao
+import com.raddstream.app.data.cache.CacheFileEntity
+import com.raddstream.app.data.cache.CacheTaskDao
+import com.raddstream.app.data.cache.CacheTaskEntity
 
-@Database(entities = [FavoritePost::class], version = 2, exportSchema = false)
+/**
+ * The app's single Room database: favorites plus the offline cache engine (tasks, byte ledgers
+ * and the file inventory the TTL sweep and eviction planner walk).
+ *
+ * Version 2 held only favorites; version 3 adds the three cache tables. Because the cache tables
+ * are brand new (they have never shipped on any device), the 2 → 3 step is handled by a
+ * destructive fallback registered in the DI layer, which lets Room generate the cache schema
+ * verbatim from these entities rather than hand-writing DDL that could drift from them. The
+ * favorite migration from 1 is preserved for anyone already on that schema.
+ */
+@Database(
+    entities = [
+        FavoritePost::class,
+        CacheTaskEntity::class,
+        CacheFileEntity::class,
+        ByteRangeManifestEntity::class,
+    ],
+    version = 3,
+    exportSchema = false,
+)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun favoriteDao(): FavoriteDao
+    abstract fun cacheTaskDao(): CacheTaskDao
+    abstract fun cacheFileDao(): CacheFileDao
+    abstract fun byteRangeManifestDao(): ByteRangeManifestDao
 
     companion object {
         /**

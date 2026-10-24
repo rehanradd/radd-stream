@@ -16,6 +16,12 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
 import com.raddstream.app.player.AspectMode
+import com.raddstream.app.player.AudioBoost
+import com.raddstream.app.player.AudioBoostUi
+import com.raddstream.app.player.AudioTrackPolicy
+import com.raddstream.app.player.AudioTrackRow
+import com.raddstream.app.player.BingePrefetchPlanner
+import com.raddstream.app.player.BingePreloadDecision
 import com.raddstream.app.player.CacheAffordance
 import com.raddstream.app.player.CacheEngineHolder
 import com.raddstream.app.player.CacheSnapshot
@@ -23,6 +29,7 @@ import com.raddstream.app.player.CacheState
 import com.raddstream.app.player.CalibrationState
 import com.raddstream.app.player.DeferredOffsetReporter
 import com.raddstream.app.player.EpisodeOffsets
+import com.raddstream.app.player.EpisodeProgression
 import com.raddstream.app.player.ExternalSubtitle
 import com.raddstream.app.player.HandoffWhy
 import com.raddstream.app.player.KeepResult
@@ -30,9 +37,9 @@ import com.raddstream.app.player.KeepUiState
 import com.raddstream.app.player.NextEpisodeAction
 import com.raddstream.app.player.PlaybackBundle
 import com.raddstream.app.player.PlaybackMediaItemFactory
+import com.raddstream.app.player.PlaybackRendition
 import com.raddstream.app.player.PlayerSessionStore
 import com.raddstream.app.player.PlayerUiState
-import com.raddstream.app.player.PlaybackRendition
 import com.raddstream.app.player.RippleState
 import com.raddstream.app.player.RotationMode
 import com.raddstream.app.player.ScreenZone
@@ -46,8 +53,10 @@ import com.raddstream.app.player.subtitle.SubtitleCue
 import com.raddstream.app.player.subtitle.SubtitleFile
 import com.raddstream.app.player.subtitle.SubtitleFormat
 import com.raddstream.app.player.subtitle.SubtitleParser
+import com.raddstream.app.data.ServerSettingsRepository
 import com.raddstream.app.network.ApiProvider
 import com.raddstream.app.network.streamRedirectUrl
+import com.raddstream.app.repository.CatalogRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
@@ -61,6 +70,7 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -78,6 +88,8 @@ import kotlinx.coroutines.withContext
 class PlayerViewModel @Inject constructor(
     @ApplicationContext private val appContext: Context,
     private val apiProvider: ApiProvider,
+    private val settingsRepository: ServerSettingsRepository,
+    private val catalogRepository: CatalogRepository,
 ) : ViewModel() {
 
     private val store: PlayerSessionStore = PlayerSessionStore.Instance
@@ -85,8 +97,21 @@ class PlayerViewModel @Inject constructor(
     private var controller: MediaController? = null
     private var tickerJob: Job? = null
     private var keepJob: Job? = null
+    private var settingsJob: Job? = null
+    private var bingeResolveJob: Job? = null
+    private var bingePrefetchJob: Job? = null
 
     private val sleepTimer = SleepTimer()
+
+    /**
+     * The binge policy plus the fire-once set it makes its caller own. Lives here because
+     * the ViewModel is the only place that knows both the progress tick and the session
+     * lifecycle; the planner itself never touches the player.
+     */
+    private val bingePlanner = BingePrefetchPlanner()
+
+    /** The next episode's handle, once looked up; null means "not addressable yet". */
+    private var nextEpisodeHandle: String? = null
 
     /** In-run resume memory; cross-launch persistence is a data-agent request (handoff). */
     private val resumeByTarget = HashMap<String, Long>()
@@ -107,6 +132,27 @@ class PlayerViewModel @Inject constructor(
     init {
         connectController()
         observeStore()
+        observeSettings()
+    }
+
+    /**
+     * The two preferences the policy classes read. Collected, not sampled, so the settings
+     * screen changing a value is felt by a player that is already running.
+     */
+    private fun observeSettings() {
+        settingsJob?.cancel()
+        settingsJob = viewModelScope.launch {
+            settingsRepository.audioBoostLevel.collect { level ->
+                _ui.update { it.copy(audioBoostLevel = AudioBoost.clampLevel(level)) }
+                applyPlayerVolume()
+            }
+        }
+        viewModelScope.launch {
+            settingsRepository.preferredAudioLanguage.collect { language ->
+                _ui.update { it.copy(preferredAudioLanguage = language) }
+                applyPreferredAudioTrack()
+            }
+        }
     }
 
     // ── Service connection ───────────────────────────────────────────────────────
@@ -155,6 +201,11 @@ class PlayerViewModel @Inject constructor(
                     frameRate = TrackMapper.selectedVideoFrameRate(tracks) ?: state.frameRate,
                 )
             }
+            // Tracks only become decidable now: the media item is prepared, so the audio
+            // language the user set in Settings can be applied to the list the player just
+            // reported. Also the first chance a fresh playback gets — a preference set before
+            // the stream existed could not be honoured anywhere else.
+            applyPreferredAudioTrack()
         }
 
         override fun onPlaybackParametersChanged(playbackParameters: PlaybackParameters) {
@@ -172,6 +223,17 @@ class PlayerViewModel @Inject constructor(
         viewModelScope.launch {
             store.bundle.collect { b ->
                 _ui.update { it.copy(bundle = b, activeRendition = store.activeRendition()) }
+                // A rung Auto moved to is the SAME episode in a different address, so the
+                // binge policy must not be re-armed by it; only a new file or a new episode
+                // is a new lifecycle. The cache session does change with the address.
+                refreshKeepState()
+                val key = bingeBundleKey(b)
+                if (key != watchedBingeKey) {
+                    watchedBingeKey = key
+                    bingePlanner.reset()
+                    nextEpisodeHandle = null
+                    if (b != null) prepareBingePrefetch(b)
+                }
             }
         }
         viewModelScope.launch {
@@ -179,6 +241,9 @@ class PlayerViewModel @Inject constructor(
                 _ui.update { it.copy(activeRendition = store.activeRendition()) }
                 refreshKeepState()
             }
+        }
+        viewModelScope.launch {
+            store.autoBand.collect { band -> _ui.update { it.copy(autoQualityBand = band) } }
         }
         viewModelScope.launch {
             store.failoverLog.collect { log -> _ui.update { it.copy(failoverLog = log) } }
@@ -195,6 +260,8 @@ class PlayerViewModel @Inject constructor(
             }
         }
     }
+
+    private var watchedBingeKey: String? = null
 
     private fun startTicker() {
         tickerJob?.cancel()
@@ -216,6 +283,7 @@ class PlayerViewModel @Inject constructor(
                         val tick = sleepTimer.onTick(now - lastSleepTick)
                         applySleep(tick)
                     }
+                    tickBingePreload(_ui.value.positionMs, _ui.value.durationMs)
                     lastSleepTick = now
                 }
                 delay(200)
@@ -237,8 +305,11 @@ class PlayerViewModel @Inject constructor(
         if (_ui.value.bundle?.renditions?.firstOrNull()?.playback?.streamId == streamId) return
         viewModelScope.launch {
             val playUrl = streamRedirectUrl(apiProvider.currentBaseUrl(), streamId)
+            // Runner-ups of this rung, staged by the detail screen: handles only, so a
+            // 403 mid-play costs one silent hop instead of a dialog and a quality drop.
             val bundle = PlaybackBundle.forStreamHandle(streamId = streamId, playUrl = playUrl,
-                                                       title = title)
+                                                       title = title,
+                                                       backupHandles = store.peekFailover(streamId))
             beginBundle(bundle, title, resumeKey = streamId)
         }
     }
@@ -385,15 +456,46 @@ class PlayerViewModel @Inject constructor(
         c.playbackParameters = PlaybackParameters(restore)
     }
 
+    /**
+     * The user's own volume 0..1, as the right-half gesture sets it. The value handed to
+     * the player is this times the persisted boost, clamped into the 0..1 contract by
+     * [AudioBoostUi.effectivePlayerGain] — see [applyPlayerVolume].
+     */
     fun setUserVolume(volume: Float) {
-        val clamped = volume.coerceIn(0f, 1f)
+        val clamped = if (volume.isFinite()) volume.coerceIn(0f, 1f) else 1f
         _ui.update { it.copy(userVolume = clamped) }
-        val fade = if (_ui.value.sleep.mode == SleepMode.COUNTDOWN) {
-            SleepTimer.volumeFactorFor(_ui.value.sleep.remainingMs, _ui.value.sleep.fadeMs)
+        applyPlayerVolume()
+    }
+
+    /**
+     * The audio level control (1.0 = untouched, [AudioBoost.MAX] = the 200% request). Stored
+     * through the same DataStore the settings screen writes, so a level mixed in the player
+     * is the level the next episode starts with and the one the settings screen shows.
+     */
+    fun setAudioBoostLevel(level: Float) {
+        val clamped = AudioBoost.clampLevel(level)
+        _ui.update { it.copy(audioBoostLevel = clamped) }
+        applyPlayerVolume()
+        viewModelScope.launch { settingsRepository.saveAudioBoostLevel(clamped) }
+    }
+
+    /**
+     * The one place that writes `Player.setVolume`. Three inputs multiply into one legal
+     * number: the persisted boost, the user's own volume and the sleep fade — each clamped
+     * only once, at the end, because the platform's contract is the product, not any one
+     * factor. The boost can never push the result past 1.0; what it does buy is headroom
+     * below the ceiling, which is why the caption comes from
+     * [AudioBoostUi.honestSummary] and not from the requested number.
+     */
+    private fun applyPlayerVolume() {
+        val state = _ui.value
+        val fade = if (state.sleep.mode == SleepMode.COUNTDOWN) {
+            SleepTimer.volumeFactorFor(state.sleep.remainingMs, state.sleep.fadeMs)
         } else {
             1f
         }
-        controller?.volume = clamped * fade
+        val safeFade = if (fade.isFinite()) fade.coerceIn(0f, 1f) else 1f
+        controller?.volume = AudioBoostUi.effectivePlayerGain(state.audioBoostLevel, state.userVolume) * safeFade
     }
 
     fun retryCurrentCandidates() {
@@ -422,6 +524,85 @@ class PlayerViewModel @Inject constructor(
                 ),
             )
         }
+    }
+
+    // ── Smart binge pre-caching ──────────────────────────────────────────────────
+
+    /**
+     * Start looking up the next episode's handle while the current one is still playing, so
+     * the policy has something to ask for at the threshold instead of discovering at 85% that
+     * nobody ever resolved the successor.
+     *
+     * Skipped when the next episode lives in THIS file (a packed season whose offset the
+     * server or the learned ledger already knows): there is no second address to warm, and
+     * the in-file advance the service performs on END is the whole feature there. That path
+     * is left exactly as it was.
+     */
+    private fun prepareBingePrefetch(bundle: PlaybackBundle) {
+        val target = bundle.target
+        val rendition = store.activeRendition() ?: bundle.renditions.firstOrNull()
+        val isSeries = EpisodeProgression.seriesLikeWorkType(target.workType) || target.episode > 0
+        if (!isSeries || target.id <= 0 || rendition == null) return
+        if (nextEpisodeIsInThisFile(bundle, rendition)) return
+        val nextEpisode = target.episode.coerceAtLeast(1) + 1
+        bingeResolveJob?.cancel()
+        bingeResolveJob = viewModelScope.launch {
+            val ladder = catalogRepository.getPostDetail(target.id)
+                ?.let { detail -> QualityLadder.forNumberedScope(detail.optionGroups, target.season.takeIf { it > 0 }, nextEpisode) }
+                ?: LadderForScope.EMPTY
+            nextEpisodeHandle = ladder.resolvedFor(LadderForScope.AUTO)?.streamId?.takeIf { it.isNotBlank() }
+        }
+    }
+
+    /** True when the successor's start position in this same file is already known. */
+    private fun nextEpisodeIsInThisFile(bundle: PlaybackBundle, rendition: PlaybackRendition): Boolean {
+        val coverage = rendition.coverage
+        if (!coverage.isPacked()) return false
+        val target = bundle.target
+        val next = target.episode.coerceAtLeast(1) + 1
+        val season = coverage.season.takeIf { it > 0 } ?: target.season
+        val known = coverage.episodes.any { it.number == next } ||
+            store.learnedOffsets.lookup(target.workKey, season, next, rendition.print.label) != null
+        // A pack that simply runs on (no chapter row) still needs no second address, so it
+        // counts as in-file: the service seeks at END and there is nothing to pre-fetch.
+        return known || coverage.lastEpisode == 0 || next <= coverage.lastEpisode
+    }
+
+    /**
+     * One binge tick: ask the policy, and act on a real request exactly once.
+     *
+     * WHAT THE ACT HONESTLY IS: [BingePreloader] emits a request for the head bytes of the
+     * next episode because the cache boundary it was written against has no head-pull entry
+     * point — only whole-file [ProgressiveCacheEngine.adopt] — and inventing one is the data
+     * agent's call, not this wiring's. So the executable part today is the one thing that
+     * genuinely costs nothing and genuinely speeds the transition: ask our own redirector
+     * about that handle (`redirect=0`), which resolves and caches the upstream link
+     * server-side and proves the handle is alive before the viewer lands on it. The message
+     * says exactly that, never "downloaded".
+     */
+    private fun tickBingePreload(positionMs: Long, durationMs: Long) {
+        val bundle = store.bundle.value ?: return
+        val target = bundle.target
+        val isSeries = EpisodeProgression.seriesLikeWorkType(target.workType) || target.episode > 0
+        val decision = bingePlanner.tick(positionMs, durationMs, isSeries, nextEpisodeHandle)
+        if (decision is BingePreloadDecision.PrefetchNextHead) prefetchNextEpisodeHead(decision.handle)
+    }
+
+    private fun prefetchNextEpisodeHead(handle: String) {
+        bingePrefetchJob?.cancel()
+        bingePrefetchJob = viewModelScope.launch {
+            val answer = runCatching { catalogRepository.resolveStream(handle) }.getOrNull()
+            // `streamId` is the model's own "this answer is usable" test: a successful lookup
+            // that produced no handle of ours is a false success and says nothing to the user.
+            if (answer?.streamId == null) return@launch
+            _events.emit(
+                PlayerEvent.Message("Next episode ready — its link is live, so advancing will not wait on a lookup"),
+            )
+        }
+    }
+
+    private fun bingeBundleKey(bundle: PlaybackBundle?): String? = bundle?.let {
+        "${it.session.id}-${it.target.workKey}-${it.target.season}-${it.target.episode}-${it.target.id}"
     }
 
     // ── Sheet visibility ─────────────────────────────────────────────────────────
@@ -521,6 +702,47 @@ class PlayerViewModel @Inject constructor(
 
     /** null → subtitles off. */
     fun selectSubtitleTrack(option: TrackUiOption?) = selectTrack(C.TRACK_TYPE_TEXT, option)
+
+    /**
+     * Apply the user's audio language to the tracks the player just reported.
+     *
+     * [AudioTrackPolicy.pickPreferred] returns null in the two cases where forcing a
+     * selection would make things worse — the stream has nothing in that language, and the
+     * language is already playing — so a null answer is honoured as "change nothing" rather
+     * than second-guessed here. Media3's own locale heuristic is left in charge exactly when
+     * the user never expressed a preference.
+     */
+    private fun applyPreferredAudioTrack() {
+        val state = _ui.value
+        val preferred = state.preferredAudioLanguage?.takeIf { it.isNotBlank() } ?: return
+        if (controller == null) return
+        val picked = AudioTrackPolicy.pickPreferred(state.audioTrackRows(), preferred) ?: return
+        if (picked == state.selectedAudioId) return
+        val option = state.audioTracks.firstOrNull { it.id == picked } ?: return
+        selectAudioTrack(option)
+    }
+
+    /**
+     * The audio-track cycle affordance: the next playable track, wrapping. Refused out loud
+     * when there is nothing to cycle between, because a button that silently does nothing
+     * reads as a broken button.
+     */
+    fun cycleAudioTrack() {
+        val state = _ui.value
+        val next = AudioTrackPolicy.nextInCycle(state.audioTrackRows(), state.selectedAudioId)
+        if (next == null) {
+            viewModelScope.launch {
+                _events.emit(PlayerEvent.Message("Only one audio track on this print — nothing to switch to"))
+            }
+            return
+        }
+        val option = state.audioTracks.firstOrNull { it.id == next } ?: return
+        selectAudioTrack(option)
+        val name = AudioTrackPolicy.nameFor(option.language)
+        viewModelScope.launch {
+            _events.emit(PlayerEvent.Message("Audio: ${name ?: option.label}"))
+        }
+    }
 
     private fun selectTrack(trackType: Int, option: TrackUiOption?) {
         val c = controller ?: return
@@ -633,12 +855,14 @@ class PlayerViewModel @Inject constructor(
     fun cancelSleep() {
         sleepTimer.cancel()
         _ui.update { it.copy(sleep = sleepTimer.snapshot()) }
-        setUserVolume(_ui.value.userVolume) // restore full volume immediately
+        applyPlayerVolume() // restore the full mix immediately
     }
 
     private fun applySleep(tick: SleepTick) {
         _ui.update { it.copy(sleep = tick.state) }
-        controller?.volume = _ui.value.userVolume * tick.volumeFactor
+        // The fade multiplies the SAME product as the boost (see [applyPlayerVolume]); two
+        // writers of `volume` would each overwrite the other's factors.
+        applyPlayerVolume()
         if (tick.shouldPause) {
             controller?.pause()
             viewModelScope.launch { _events.emit(PlayerEvent.Message("Sleep timer — playback paused")) }
@@ -819,7 +1043,7 @@ class PlayerViewModel @Inject constructor(
         KeepResult.EngineNotWired -> "Keep engine not available in this build"
     }
 
-    // ── GiveUp / embed / external handoff helpers for the screen ─────────────────
+    // ── GiveUp / external handoff helpers for the screen ────────────────────────
 
     fun openWithExternalPlayer() {
         val url = store.activeRendition()?.playback?.playUrl ?: return
@@ -840,6 +1064,9 @@ class PlayerViewModel @Inject constructor(
         rememberResume()
         tickerJob?.cancel()
         keepJob?.cancel()
+        settingsJob?.cancel()
+        bingeResolveJob?.cancel()
+        bingePrefetchJob?.cancel()
         _player.value = null
         controller?.removeListener(playerListener)
         controller?.release()
@@ -863,7 +1090,7 @@ fun Long.formatTime(): String {
     else "%d:%02d".format(minutes, seconds)
 }
 
-/** What the screen must route elsewhere (embed WebView, next episode bundle, external player). */
+/** What the screen must route elsewhere (next-episode bundle, external hand-off). */
 sealed class PlayerEvent {
     data class Message(val text: String) : PlayerEvent()
     data class PlayNextEpisode(val workKey: String?, val postId: Int?, val season: Int, val episode: Int) : PlayerEvent()

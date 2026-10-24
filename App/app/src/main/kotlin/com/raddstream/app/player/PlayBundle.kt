@@ -2,6 +2,7 @@ package com.raddstream.app.player
 
 import com.google.gson.annotations.SerializedName
 import java.net.URI
+import java.net.URLEncoder
 import com.raddstream.app.network.models.CoverageType
 import com.raddstream.app.network.models.LinkAssessment
 import com.raddstream.app.network.models.LinkClassification
@@ -121,6 +122,13 @@ data class PlaybackInfo(
     @SerializedName("kind") val kind: String? = null,
     @SerializedName("playability") val playabilityWire: String? = null,
     @SerializedName("drm") val drm: Map<String, String>? = null,
+    /**
+     * The runner-ups of OUR OWN rung, as handles only (`backup_handles` on the ladder).
+     * They are never displayed: they exist so a 403 from one CDN becomes an instant,
+     * silent hop at the same quality and the same position instead of an error dialog.
+     */
+    @SerializedName("backup_handles")
+    val backupStreamIds: List<String> = emptyList(),
 ) {
     fun kindOrUnknown(): LinkKind = LinkKind.fromWire(kind)
     fun playabilityOrUnknown(): Playability = Playability.fromWire(playabilityWire)
@@ -176,6 +184,28 @@ private fun defaultPort(scheme: String?): Int = when (scheme?.lowercase()) {
     "http" -> 80
     else -> -1
 }
+
+/**
+ * The same redirector addressed by a different handle.
+ *
+ * A silent failover must not widen what the app is allowed to play, so this only
+ * rewrites OUR OWN stream route (`/api/v1/stream?id=<handle>`) and refuses anything
+ * else, returning null when the address is not ours to rewrite. The handle is
+ * url-encoded on the way in: it is base64-ish noise from the server, and a `+` or
+ * `=` in it must not become a query separator.
+ */
+internal fun streamUrlForHandle(playUrl: String?, handle: String): String? {
+    val url = playUrl?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+    val candidate = handle.trim()
+    if (candidate.isEmpty()) return null
+    if (!url.contains(STREAM_ROUTE)) return null
+    val encoded = URLEncoder.encode(candidate, "UTF-8")
+    val rewritten = url.replaceFirst(Regex("([?&])id=[^&#]*"), "$1id=" + encoded)
+    if (rewritten == url) return null
+    return rewritten.takeIf { it.contains(STREAM_ROUTE) && it.contains("id=$encoded") }
+}
+
+private const val STREAM_ROUTE = "/api/v1/stream"
 
 data class AudioTrackInfo(
     @SerializedName("lang") val language: String? = null,
@@ -336,7 +366,9 @@ data class PlaybackBundle(
         /**
          * Bundle for the navigation path in `NavGraph.kt` (`player/{streamId}/{title}`): one
          * handle of ours, classified by the single server-shaped rule in [LinkClassification],
-         * addressed by our own redirector. No failover, because the route carries one handle.
+         * addressed by our own redirector. [backupHandles] come from the ladder the detail
+         * screen already holds (staged through [PlayerSessionStore.stageFailover]), so the route
+         * stays a single opaque handle while a silent same-quality hop is still possible.
          */
         fun forStreamHandle(
             streamId: String,
@@ -347,6 +379,7 @@ data class PlaybackBundle(
             mimeType: String? = null,
             resumable: Boolean = false,
             ephemeral: Boolean = false,
+            backupHandles: List<String> = emptyList(),
         ): PlaybackBundle {
             val classified = LinkClassification.classify(
                 SourceDetail(
@@ -376,6 +409,7 @@ data class PlaybackBundle(
                             resumable = resumable,
                             ephemeral = ephemeral,
                             protocol = classified.protocol.wire,
+                            backupStreamIds = backupHandles.filter { it.isNotBlank() },
                         ),
                     ),
                 ),

@@ -32,6 +32,7 @@ import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.OpenInNew
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -74,10 +75,13 @@ import com.raddstream.app.ui.components.ErrorState
 import com.raddstream.app.ui.components.LoadingState
 import com.raddstream.app.ui.components.Pill
 import com.raddstream.app.ui.components.PrintQualityBadge
+import com.raddstream.app.ui.components.QualityRungCard
 import com.raddstream.app.ui.components.SectionHeader
 import com.raddstream.app.viewmodel.DetailNavigationEvent
 import com.raddstream.app.viewmodel.DetailViewModel
 import com.raddstream.app.viewmodel.EpisodeGroup
+import com.raddstream.app.viewmodel.LadderForScope
+import com.raddstream.app.viewmodel.QualityOption
 import com.raddstream.app.viewmodel.RankedPrint
 import com.raddstream.app.viewmodel.SeasonGroup
 
@@ -98,7 +102,7 @@ fun DetailScreen(
             when (event) {
                 is DetailNavigationEvent.PlayStream -> onPlayStream(event.streamId, event.title)
                 is DetailNavigationEvent.OpenExternal -> openInExternalPlayer(context, event.playUrl)
-                is DetailNavigationEvent.KeepPrint -> onOpenDownloads()
+                is DetailNavigationEvent.KeepRung -> onOpenDownloads()
             }
         }
     }
@@ -169,10 +173,38 @@ fun DetailScreen(
                 onPlayPrint = { print -> viewModel.playPrint(print, external = false) },
                 onOpenExternal = { print -> viewModel.playPrint(print, external = true) },
                 onKeep = viewModel::keepPrint,
+                rungs = RungActions(
+                    ladder = state.ladder,
+                    selectedBand = state.selectedBand,
+                    onPlay = viewModel::playLadder,
+                    onKeep = viewModel::keepRung,
+                ),
+                ladderScope = rungScopeLabel(state.ladderSeason, state.ladderEpisode),
+                onAskRungs = viewModel::showRungsFor,
+                hasRungs = { season, episode -> !viewModel.ladderFor(season, episode).isEmpty },
                 contentPadding = paddingValues,
             )
         }
     }
+}
+
+/**
+ * The quality switch and the download card as one bundle: the same rows render under the work
+ * and under an episode, so a series never inherits another episode's links by accident.
+ */
+private data class RungActions(
+    val ladder: LadderForScope,
+    val selectedBand: String?,
+    val onPlay: (QualityOption) -> Unit,
+    val onKeep: (QualityOption) -> Unit,
+)
+
+/** Which scope a ladder belongs to, in the viewer's words. Null means the whole work. */
+private fun rungScopeLabel(season: Int?, episode: Int?): String? = when {
+    season != null && episode != null -> "Season $season · Episode $episode"
+    episode != null -> "Episode $episode"
+    season != null -> "Season $season"
+    else -> null
 }
 
 @Composable
@@ -189,6 +221,12 @@ private fun DetailContent(
     onPlayPrint: (RankedPrint) -> Unit,
     onOpenExternal: (RankedPrint) -> Unit,
     onKeep: (RankedPrint) -> Unit,
+    /** The quality switch and the download card, as one bundle the rows can reuse. */
+    rungs: RungActions,
+    /** "Season 2 · Episode 5", or null when these rungs are the whole work's. */
+    ladderScope: String?,
+    onAskRungs: (season: Int?, episode: Int?) -> Unit,
+    hasRungs: (season: Int?, episode: Int?) -> Boolean,
     contentPadding: PaddingValues,
 ) {
     val allPrints = (workPrints + seasons.flatMap { it.episodes.flatMap { e -> e.prints } } + seasons.flatMap { it.packedPrints })
@@ -213,6 +251,20 @@ private fun DetailContent(
                 onPlay = { bestPrint?.let(onPlayPrint) },
                 onKeep = { bestPrint?.let(onKeep) },
             )
+        }
+
+        // One row per quality band, exactly as the server collapsed the copies of this
+        // title: the viewer picks a picture, never a server, and never a list of links.
+        // An episode's rungs belong under that episode, not up here.
+        if (!rungs.ladder.isEmpty && ladderScope == null) {
+            item {
+                QualityRungCard(
+                    ladder = rungs.ladder,
+                    selectedBand = rungs.selectedBand,
+                    onPlayRung = rungs.onPlay,
+                    onKeepRung = rungs.onKeep,
+                )
+            }
         }
 
         val synopsis = post.synopsis?.takeIf { it.isNotBlank() }
@@ -241,11 +293,21 @@ private fun DetailContent(
                     }
                 }
                 items(season.episodes, key = { "ep-${season.number}-${it.numberWithinSeason}" }) { episode ->
+                    // A packed season is one file: its ladder is the season's, not an episode's.
+                    val episodeKey = if (episode.onlyPacked) null else episode.numberWithinSeason
+                    val scopeLabel = rungScopeLabel(season.number, episodeKey)
                     EpisodeRow(
                         episode = episode,
                         onPlayPrint = onPlayPrint,
                         onOpenExternal = onOpenExternal,
                         onKeep = onKeep,
+                        scopeLabel = scopeLabel,
+                        canChooseQuality = hasRungs(season.number, episodeKey),
+                        showQuality = ladderScope == scopeLabel && !rungs.ladder.isEmpty,
+                        onChooseQuality = {
+                            onAskRungs(season.number, episodeKey)
+                        },
+                        rungs = rungs,
                     )
                 }
             }
@@ -463,6 +525,12 @@ private fun EpisodeRow(
     onPlayPrint: (RankedPrint) -> Unit,
     onOpenExternal: (RankedPrint) -> Unit,
     onKeep: (RankedPrint) -> Unit,
+    /** "Season 1 · Episode 5" — the card the row opens has to say what it is the ladder of. */
+    scopeLabel: String?,
+    canChooseQuality: Boolean,
+    showQuality: Boolean,
+    onChooseQuality: () -> Unit,
+    rungs: RungActions,
 ) {
     var expanded by remember(episode.absoluteNumber) { mutableStateOf(false) }
     val best = episode.bestPrint
@@ -509,12 +577,27 @@ private fun EpisodeRow(
                     Icon(Icons.Default.PlayArrow, contentDescription = "Play episode ${episode.numberWithinSeason}", tint = MaterialTheme.colorScheme.primary)
                 }
             }
+            if (canChooseQuality) {
+                IconButton(
+                    onClick = onChooseQuality,
+                    modifier = Modifier.size(48.dp),
+                ) {
+                    Icon(
+                        Icons.Default.Tune,
+                        contentDescription = "Choose quality for episode ${episode.numberWithinSeason}",
+                        tint = if (showQuality) MaterialTheme.colorScheme.primary
+                        else MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
         }
 
         if (episode.onlyPacked) {
             Pill(text = "Whole season in one file", backgroundColor = MaterialTheme.colorScheme.surfaceVariant, contentColor = MaterialTheme.colorScheme.onSurfaceVariant)
         }
-        if (episode.prints.isNotEmpty() && episode.prints.size > 1) {
+        // The collapsed ladder replaces the print list wherever the server could fold one
+        // best copy per band; a ledger that cannot is still shown as before, not hidden.
+        if (episode.prints.size > 1 && !canChooseQuality) {
             TextButton(onClick = { expanded = !expanded }) {
                 Text(if (expanded) "Hide prints" else "Show ${episode.prints.size} prints")
             }
@@ -528,6 +611,15 @@ private fun EpisodeRow(
                     onKeep = onKeep,
                 )
             }
+        }
+        if (showQuality) {
+            QualityRungCard(
+                ladder = rungs.ladder,
+                selectedBand = rungs.selectedBand,
+                onPlayRung = rungs.onPlay,
+                onKeepRung = rungs.onKeep,
+                scopeTitle = scopeLabel,
+            )
         }
     }
 }

@@ -102,6 +102,16 @@ data class PlayerUiState(
     val boosting: Boolean = false,
     /** User's own volume; the sleep fade multiplies it (see [SleepTimer.volumeFactorFor]). */
     val userVolume: Float = 1f,
+    /**
+     * The persisted audio level, 0..2 ([AudioBoost]'s unit), multiplied into [userVolume]
+     * by [AudioBoostUi.effectivePlayerGain]. Above 1.0 the excess is a request, not a
+     * promise — see [AudioBoostUi.honestSummary].
+     */
+    val audioBoostLevel: Float = AudioBoost.BASELINE,
+    /** The user's preferred audio language, as they spelled it; null = the player's own pick. */
+    val preferredAudioLanguage: String? = null,
+    /** The rung Auto is playing now; null when Auto is not armed (manual band or no ladder). */
+    val autoQualityBand: String? = null,
     val frameRate: Float? = null,
     // lock + display
     val locked: Boolean = false,
@@ -149,4 +159,14 @@ data class PlayerUiState(
 
     /** True when something is loaded enough to show transport controls. */
     val hasActivePrint: Boolean get() = activeRendition != null
+
+    /**
+     * This snapshot as the audio-language policy needs it: the same rows without the
+     * Media3 `TrackGroup`, so the decision is a plain Kotlin list a JVM test can build.
+     */
+    fun audioTrackRows(): List<AudioTrackRow> =
+        audioTracks.map { AudioTrackRow(it.id, it.language, it.label, it.selected, it.supported) }
+
+    /** Whether the cycle-audio affordance would change the sound (two playable tracks). */
+    val canCycleAudio: Boolean get() = AudioTrackPolicy.canCycle(audioTrackRows())
 }

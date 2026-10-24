@@ -35,14 +35,14 @@ class CacheCoordinator(
     private val taskDao: CacheTaskDao,
     private val manifestDao: ByteRangeManifestDao,
     private val fileDao: CacheFileDao,
-    private val aheadFetcher: AheadFetcher,
+    private val aheadFetcher: AheadExecutor,
     private val rangeFetcher: RangeByteFetcher,
     private val hlsBuffer: HlsAheadBuffer,
     private val storage: StorageGate,
     private val resolver: SourceResolver,
     private val clock: UptimeClock,
     private val policy: SchedulerPolicy,
-    private val networkProvider: () -> NetworkClass,
+    private val networkProvider: @JvmSuppressWildcards () -> NetworkClass,
 ) {
 
     private val jobs = ConcurrentHashMap<Long, Job>()
@@ -86,6 +86,7 @@ class CacheCoordinator(
     private suspend fun driveToCompletionOrSuspend(taskId: Long) {
         val entity = taskDao.getById(taskId) ?: return
         safeTransition(taskId, entity.stateEnum, CacheTaskState.LOADING)
+        taskDao.setParkReason(taskId, null)
         var task = taskDao.getById(taskId) ?: return
         var reResolveBudget = MAX_RERESOLVES
         val mode = if (task.priorityEnum == CachePriority.USER_REQUESTED) FetchMode.FULL_DOWNLOAD
@@ -119,6 +120,7 @@ class CacheCoordinator(
                 }
                 FetchOutcome.STORAGE_SUSPENDED -> {
                     safeTransition(taskId, CacheTaskState.LOADING, CacheTaskState.PAUSED)
+                    taskDao.setParkReason(taskId, ERR_NO_SPACE)
                     return
                 }
                 FetchOutcome.NO_RANGE_FALLBACK -> {
@@ -233,6 +235,37 @@ class CacheCoordinator(
         return handle
     }
 
+    /**
+     * The Downloads-screen enqueue entry point: start (or resume) driving an EXISTING task to its
+     * full window without changing its retention origin. A keep tapped from the detail screen is
+     * already enqueued by [com.raddstream.app.repository.CacheRepository] with user priority and
+     * an auto-preview origin, so it downloads eagerly yet still ages out through [TtlPolicy] —
+     * this method only makes the engine move it. No-op when a pass is already running.
+     */
+    suspend fun startTask(sourceKey: String) {
+        val task = taskDao.getBySourceKey(sourceKey) ?: return
+        if (task.stateEnum == CacheTaskState.COMPLETED) return
+        launchTask(task.id)
+    }
+
+    /** True when this resource already has a live pass (used to keep the handoff idempotent). */
+    fun isDriving(taskId: Long): Boolean = jobs[taskId]?.isActive == true
+
+    /**
+     * Cancel a keep the user aborted: stop its job, drop its held bytes and ledger, and remove the
+     * row so it disappears from the list. Safe to call on a completed or already-gone task.
+     */
+    suspend fun cancelTask(taskId: Long) {
+        jobs[taskId]?.cancel()
+        jobs.remove(taskId)
+        playheadBytes.remove(taskId)
+        val task = taskDao.getById(taskId) ?: return
+        manifestDao.deleteForTask(taskId)
+        runCatching { storage.deleteOnDisk(task.sourceKey) }
+        fileDao.listByTask(taskId).forEach { fileDao.deleteById(it.fileId) }
+        taskDao.deleteById(taskId)
+    }
+
     // ── internals ──────────────────────────────────────────────────────────────
 
     private suspend fun safeTransition(id: Long, from: CacheTaskState, to: CacheTaskState) {
@@ -273,6 +306,9 @@ class CacheCoordinator(
         const val AHEAD_SEGMENTS = 20
         const val MAX_RERESOLVES = 2
         const val DEFAULT_UNKNOWN_REMAINING = 64L * 1024 * 1024
+
+        /** Stable park-reason token for a keep the device had no room for. Never UI text. */
+        const val ERR_NO_SPACE = "no_space"
     }
 }
 

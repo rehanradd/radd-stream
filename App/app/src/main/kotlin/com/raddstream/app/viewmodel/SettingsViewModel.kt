@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.raddstream.app.data.ServerSettingsRepository
 import com.raddstream.app.network.models.StatsResponse
+import com.raddstream.app.player.AudioBoost
 import com.raddstream.app.repository.CatalogRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
@@ -17,11 +18,12 @@ enum class ImageQuality(val label: String) { AUTO("Auto"), HIGH("High"), MEDIUM(
 enum class KeepTtl(val label: String, val hours: Int) { H3("3 hours", 3), H6("6 hours", 6) }
 
 /**
- * Playback/display preferences. The v1 client has no persisted preference store
- * yet, so these live in the ViewModel for the session and are applied where a
- * consumer exists. A `UserPreferencesRepository` (DataStore) is requested in
- * docs/HANDOFF_appui.md #5 — persistence is the ONLY thing missing, the state and
- * every control here is real and functional within the session.
+ * Playback/display preferences. [audioBoost] and [audioLanguage] are persisted through the
+ * app's own DataStore ([ServerSettingsRepository]), because they are settings a viewer mixes
+ * once and expects to still hold next week; the rest live in the ViewModel for the session
+ * and are applied where a consumer exists. A full `UserPreferencesRepository` is requested
+ * in docs/HANDOFF_appui.md #5 — persistence is the ONLY thing missing there, the state and
+ * every control here is real and functional.
  */
 data class UserPreferences(
     val imageQuality: ImageQuality = ImageQuality.AUTO,
@@ -29,6 +31,10 @@ data class UserPreferences(
     val keepTtl: KeepTtl = KeepTtl.H3,
     val subtitleLang: String = "Off",
     val dynamicColor: Boolean = false,
+    /** The audio level 0..2 ([AudioBoost]'s unit); persisted, applied by the player. */
+    val audioBoost: Float = AudioBoost.BASELINE,
+    /** Preferred audio language, or [AUDIO_LANGUAGE_DEFAULT] = leave it to the player. */
+    val audioLanguage: String = AUDIO_LANGUAGE_DEFAULT,
 ) {
     val posterMaxWidthPx: Int
         get() = when (imageQuality) {
@@ -37,6 +43,14 @@ data class UserPreferences(
             ImageQuality.LOW -> 240
             ImageQuality.AUTO -> if (downloadOnMobileData) 400 else 640
         }
+
+    companion object {
+        /** The chip label for "no preference", which is stored as the absence of one. */
+        const val AUDIO_LANGUAGE_DEFAULT = "Player default"
+        val AUDIO_LANGUAGE_OPTIONS = listOf(
+            AUDIO_LANGUAGE_DEFAULT, "English", "Hindi", "Tamil", "Telugu", "Malayalam", "Japanese",
+        )
+    }
 }
 
 data class SettingsUiState(
@@ -61,6 +75,7 @@ class SettingsViewModel @Inject constructor(
 
     init {
         loadServerUrlAndStats()
+        loadPersistedPrefs()
     }
 
     private fun loadServerUrlAndStats() {
@@ -73,6 +88,25 @@ class SettingsViewModel @Inject constructor(
                     _uiState.update { it.copy(stats = stats, isLoadingStats = false) }
                 } catch (_: Exception) {
                     _uiState.update { it.copy(isLoadingStats = false) }
+                }
+            }
+        }
+    }
+
+    /**
+     * The two persisted playback settings, collected rather than sampled so a value written
+     * anywhere (this screen or the player's own sheet) shows up here immediately.
+     */
+    private fun loadPersistedPrefs() {
+        viewModelScope.launch {
+            settingsRepository.audioBoostLevel.collect { level ->
+                _uiState.update { it.copy(prefs = it.prefs.copy(audioBoost = AudioBoost.clampLevel(level))) }
+            }
+        }
+        viewModelScope.launch {
+            settingsRepository.preferredAudioLanguage.collect { language ->
+                _uiState.update {
+                    it.copy(prefs = it.prefs.copy(audioLanguage = language ?: UserPreferences.AUDIO_LANGUAGE_DEFAULT))
                 }
             }
         }
@@ -110,6 +144,26 @@ class SettingsViewModel @Inject constructor(
     fun setKeepTtl(value: KeepTtl) = updatePrefs { it.copy(keepTtl = value) }
     fun setSubtitleLang(value: String) = updatePrefs { it.copy(subtitleLang = value) }
     fun setDynamicColor(value: Boolean) = updatePrefs { it.copy(dynamicColor = value) }
+
+    /**
+     * The persisted audio level. Written straight through to the same store the player
+     * reads, so a mix made here is the mix the next playback starts with — and the caption
+     * the screen shows comes from [AudioBoostUi.honestSummary], which states the applied
+     * value rather than the requested one, because above the player's 100% ceiling the two
+     * genuinely differ on this build.
+     */
+    fun setAudioBoost(level: Float) {
+        val safe = AudioBoost.clampLevel(level)
+        updatePrefs { it.copy(audioBoost = safe) }
+        viewModelScope.launch { settingsRepository.saveAudioBoostLevel(safe) }
+    }
+
+    /** The persisted audio language. [UserPreferences.AUDIO_LANGUAGE_DEFAULT] stores nothing. */
+    fun setAudioLanguage(value: String) {
+        updatePrefs { it.copy(audioLanguage = value) }
+        val store = if (value == UserPreferences.AUDIO_LANGUAGE_DEFAULT) null else value
+        viewModelScope.launch { settingsRepository.savePreferredAudioLanguage(store) }
+    }
 
     fun clearImageCache() {
         // Honest placeholder until the app owns an explicit image-loader reset handle

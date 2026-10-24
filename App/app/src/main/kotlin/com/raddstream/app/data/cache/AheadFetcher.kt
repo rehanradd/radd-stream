@@ -12,6 +12,15 @@ fun interface PlayheadProvider {
     fun currentByte(): Long
 }
 
+/**
+ * The one seam [CacheCoordinator] uses to move bytes. [AheadFetcher] is the production
+ * implementation; tests inject a fake that returns chosen [FetchOutcome]s so the coordinator's
+ * state machine, ledger handoff and re-resolve path can be driven without OkHttp or a disk.
+ */
+fun interface AheadExecutor {
+    suspend fun run(task: CacheTaskEntity, mode: FetchMode, playhead: PlayheadProvider): FetchOutcome
+}
+
 enum class FetchMode { AUTO_PREVIEW_AHEAD, FULL_DOWNLOAD }
 
 /** Terminal-ish outcome of one [AheadFetcher.run] pass. The coordinator drives the next step. */
@@ -48,9 +57,9 @@ class AheadFetcher(
     private val aheadBytes: Long = DEFAULT_AHEAD_BYTES,
     private val maxBytesPerPass: Long = DEFAULT_MAX_BYTES_PER_PASS,
     private val chunkBytes: Int = DEFAULT_CHUNK_BYTES,
-) {
+) : AheadExecutor {
 
-    suspend fun run(
+    override suspend fun run(
         task: CacheTaskEntity,
         mode: FetchMode,
         playhead: PlayheadProvider,

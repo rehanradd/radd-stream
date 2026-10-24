@@ -98,8 +98,7 @@ fun DownloadsScreen(
                         EmptyState(
                             title = "Nothing kept offline yet",
                             message = "Use \"Keep\" on a title's print to save it for offline playback. " +
-                                "The offline cache engine is being wired into this build (see About), " +
-                                "so kept items will appear here with progress and expiry.",
+                                "Kept items appear here with real progress and their expiry date.",
                             icon = {
                                 Icon(
                                     Icons.Default.Download,
@@ -193,20 +192,35 @@ private fun KeptItemRow(item: KeptItem, onCancel: () -> Unit, onRetry: () -> Uni
             Spacer(Modifier.weight(1f))
             StatusPill(item.state)
         }
-        if (item.state == KeepState.DOWNLOADING || item.state == KeepState.QUEUED) {
+        Text(statusLine(item), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface)
+        if (item.state == KeepState.DOWNLOADING || item.state == KeepState.QUEUED || item.state == KeepState.NO_SPACE) {
             LinearProgressIndicator(progress = { item.progress }, modifier = Modifier.fillMaxWidth())
-            Text("${formatMiB(item.bytesDownloaded)} / ${formatMiB(item.bytesTotal)}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-        item.expiresAtMillis?.let {
-            Text("Expires at a fixed time to respect source link rot.", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            val total = if (item.bytesTotal > 0) formatMiB(item.bytesTotal) else "unknown size"
+            Text("${formatMiB(item.bytesDownloaded)} / $total", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             when (item.state) {
-                KeepState.FAILED -> OutlinedButton(onClick = onRetry) { Text("Retry") }
-                KeepState.DOWNLOADING, KeepState.QUEUED, KeepState.PAUSED -> OutlinedButton(onClick = onCancel) { Text("Cancel") }
+                KeepState.FAILED, KeepState.NO_SPACE -> OutlinedButton(onClick = onRetry) { Text("Retry") }
+                KeepState.DOWNLOADING, KeepState.QUEUED, KeepState.PAUSED, KeepState.READY, KeepState.EXPIRING ->
+                    OutlinedButton(onClick = onCancel) { Text("Cancel") }
                 else -> {}
             }
         }
+    }
+}
+
+/** One honest sentence per state. No provenance, no invented progress. */
+private fun statusLine(item: KeptItem): String {
+    val percent = item.percent?.let { " $it%" } ?: ""
+    return when (item.state) {
+        KeepState.QUEUED -> "Queued for download$percent"
+        KeepState.DOWNLOADING -> "Downloading$percent"
+        KeepState.PAUSED -> "Paused"
+        KeepState.NO_SPACE -> "Not enough space to finish — free room and retry"
+        KeepState.READY -> "Kept — available offline"
+        KeepState.EXPIRING -> "Kept — expires soon and auto-deletes"
+        KeepState.EXPIRED -> "Expired — auto-deleted to respect link rot"
+        KeepState.FAILED -> "Download failed — retry to resume"
     }
 }
 
@@ -216,12 +230,22 @@ private fun StatusPill(state: KeepState) {
         KeepState.QUEUED -> "Queued"
         KeepState.DOWNLOADING -> "Downloading"
         KeepState.PAUSED -> "Paused"
-        KeepState.READY -> "Ready"
+        KeepState.READY -> "Kept"
         KeepState.EXPIRING -> "Expiring soon"
+        KeepState.EXPIRED -> "Expired"
+        KeepState.NO_SPACE -> "No space"
         KeepState.FAILED -> "Failed"
     }
-    val bg = if (state == KeepState.FAILED || state == KeepState.EXPIRING) MaterialTheme.colorScheme.errorContainer else MaterialTheme.colorScheme.surfaceVariant
-    val fg = if (state == KeepState.FAILED || state == KeepState.EXPIRING) MaterialTheme.colorScheme.onErrorContainer else MaterialTheme.colorScheme.onSurfaceVariant
+    val bg = if (state == KeepState.FAILED || state == KeepState.EXPIRING || state == KeepState.EXPIRED || state == KeepState.NO_SPACE) {
+        MaterialTheme.colorScheme.errorContainer
+    } else {
+        MaterialTheme.colorScheme.surfaceVariant
+    }
+    val fg = if (state == KeepState.FAILED || state == KeepState.EXPIRING || state == KeepState.EXPIRED || state == KeepState.NO_SPACE) {
+        MaterialTheme.colorScheme.onErrorContainer
+    } else {
+        MaterialTheme.colorScheme.onSurfaceVariant
+    }
     Pill(text = text, backgroundColor = bg, contentColor = fg)
 }
 

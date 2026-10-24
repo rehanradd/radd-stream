@@ -30,6 +30,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -42,11 +43,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import com.raddstream.app.brand.Brand
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.raddstream.app.brand.Brand
+import com.raddstream.app.player.AudioBoost
+import com.raddstream.app.player.AudioBoostUi
 import com.raddstream.app.viewmodel.ImageQuality
 import com.raddstream.app.viewmodel.KeepTtl
 import com.raddstream.app.viewmodel.SettingsViewModel
+import com.raddstream.app.viewmodel.UserPreferences
 
 private val subtitleOptions = listOf("Off", "English", "Hindi", "Tamil", "Telugu")
 
@@ -160,13 +164,57 @@ fun SettingsScreen(
                 }
 
                 Spacer(Modifier.height(10.dp))
+                PreferenceRowTitle("Preferred audio language")
+                val audioOptions = UserPreferences.AUDIO_LANGUAGE_OPTIONS
+                ChipRow(audioOptions, audioOptions.indexOf(state.prefs.audioLanguage).coerceAtLeast(0)) { idx ->
+                    viewModel.setAudioLanguage(audioOptions[idx])
+                }
+                Text(
+                    "Half this catalog is dual audio. The player picks the track that says so; " +
+                        "when nothing matches, its own choice is left alone rather than guessing. " +
+                        "Saved on this device.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+
+                Spacer(Modifier.height(10.dp))
+                PreferenceRowTitle("Audio level")
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    Text(
+                        AudioBoost.labelFor(state.prefs.audioBoost),
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                    Slider(
+                        value = state.prefs.audioBoost.coerceIn(0f, AudioBoost.MAX),
+                        onValueChange = viewModel::setAudioBoost,
+                        valueRange = 0f..AudioBoost.MAX,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+                // The honest part: above the player's 100% ceiling this build adds no
+                // software gain, so the caption states what is applied, not what was asked.
+                Text(
+                    AudioBoostUi.honestSummary(state.prefs.audioBoost, 1f),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+
+                Spacer(Modifier.height(10.dp))
                 SwitchRow(
                     checked = state.prefs.dynamicColor,
                     onCheckedChange = viewModel::setDynamicColor,
                     label = "Dynamic colour from wallpaper",
                 )
                 Text(
-                    "Image size is applied where a consumer exists. Full persistence and dynamic-colour theming are requested from the data/theme owners (see About).",
+                    "Audio level and audio language are saved and read back by the player. " +
+                        "Image size is applied where a consumer exists; full persistence of the " +
+                        "remaining rows and dynamic-colour theming are requested from the " +
+                        "data/theme owners (see About).",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )

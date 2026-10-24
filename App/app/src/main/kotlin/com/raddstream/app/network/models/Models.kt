@@ -127,6 +127,13 @@ data class PostDetail(
     val country: String? = null,
     val language: String? = null,
     val releases: List<ReleaseDetail> = emptyList(),
+    /**
+     * The server's collapsed quality ladder, one group per season/episode scope
+     * (see [OptionGroup]). The quality switch and the download card read THIS, not
+     * the raw `releases[].sources[]`, so one rung means one row to the viewer.
+     */
+    @SerializedName("option_groups")
+    val optionGroups: List<OptionGroup> = emptyList(),
 ) {
     val yearLabel: String? get() = year?.toString()
     val genreList: List<String> get() = WireText.listOf(genres)

@@ -22,6 +22,7 @@ import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -109,6 +110,9 @@ import androidx.media3.ui.CaptionStyleCompat
 import androidx.media3.ui.PlayerView
 import androidx.media3.ui.SubtitleView
 import com.raddstream.app.player.AspectMode
+import com.raddstream.app.player.AudioBoost
+import com.raddstream.app.player.AudioBoostUi
+import com.raddstream.app.player.AudioTrackPolicy
 import com.raddstream.app.player.CacheAffordance
 import com.raddstream.app.player.CalibrationState
 import com.raddstream.app.player.DominantAxis
@@ -814,6 +818,9 @@ private fun TopBar(vm: PlayerViewModel, state: PlayerUiState, onBack: () -> Unit
                     append(print.displayLabel())
                     if (print.playback.isHls()) append(" · HLS")
                     if (print.playback.ephemeral) append(" · expiring link")
+                    // Says out loud that the rung shown is Auto's current choice, so a
+                    // quality that moves on its own is never mistaken for a hand-picked one.
+                    state.autoQualityBand?.let { band -> append(" · Auto: $band") }
                 },
                     color = Color.White.copy(alpha = 0.72f),
                     fontSize = 11.sp,
@@ -1559,6 +1566,20 @@ private fun TracksSheet(state: PlayerUiState, vm: PlayerViewModel) {
                     selected = track.id == state.selectedAudioId || track.selected,
                 ) { vm.selectAudioTrack(track) }
             }
+            if (state.audioTracks.isNotEmpty()) {
+                SheetRow(label = "Cycle audio track", enabled = state.canCycleAudio) {
+                    vm.cycleAudioTrack()
+                }
+                if (state.preferredAudioLanguage != null) {
+                    Text(
+                        "Preferring ${AudioTrackPolicy.nameFor(state.preferredAudioLanguage)
+                            ?: state.preferredAudioLanguage} — set on the Settings screen.",
+                        color = Color.White.copy(alpha = 0.55f),
+                        fontSize = 11.sp,
+                        modifier = Modifier.padding(horizontal = 16.dp),
+                    )
+                }
+            }
             Spacer(Modifier.height(10.dp))
             SheetRow(
                 label = if (state.stereoOnly) "Stereo-only selection: ON" else "Stereo-only selection: off",
@@ -1573,6 +1594,36 @@ private fun TracksSheet(state: PlayerUiState, vm: PlayerViewModel) {
             SheetRow(
                 label = if (state.audioOnly) "Audio-only mode: ON (screen decoder off)" else "Audio-only mode: off",
             ) { vm.toggleAudioOnly() }
+
+            // ── Audio level. The caption is the applied value, not the requested one:
+            //    Media3's setVolume contract stops at 100% and this build adds no software
+            //    gain, so a request above it is reported as capped. See AudioBoostUi.
+            Spacer(Modifier.height(14.dp))
+            SheetTitle("Audio level")
+            Row(
+                Modifier.padding(horizontal = 16.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                Text(
+                    AudioBoost.labelFor(state.audioBoostLevel),
+                    color = AccentOrange,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Slider(
+                    value = state.audioBoostLevel.coerceIn(0f, AudioBoost.MAX),
+                    onValueChange = { vm.setAudioBoostLevel(it) },
+                    valueRange = 0f..AudioBoost.MAX,
+                    modifier = Modifier.weight(1f),
+                )
+            }
+            Text(
+                AudioBoostUi.honestSummary(state.audioBoostLevel, state.userVolume),
+                color = Color.White.copy(alpha = 0.55f),
+                fontSize = 11.sp,
+                modifier = Modifier.padding(horizontal = 16.dp),
+            )
         }
     }
 }
@@ -1653,28 +1704,41 @@ private fun SheetTitle(text: String) {
 }
 
 @Composable
-private fun SheetRow(label: String, selected: Boolean = false, onClick: () -> Unit) {
+private fun SheetRow(label: String, selected: Boolean = false, enabled: Boolean = true, onClick: () -> Unit) {
     ListItem(
         headlineContent = {
-            Text(label, color = if (selected) AccentOrange else Color.White, fontSize = 14.sp)
+            Text(
+                label,
+                color = when {
+                    selected -> AccentOrange
+                    !enabled -> Color.White.copy(alpha = 0.4f)
+                    else -> Color.White
+                },
+                fontSize = 14.sp,
+            )
         },
         leadingContent = if (selected) {
             { Icon(Icons.Default.Check, null, tint = AccentOrange) }
         } else {
             null
         },
-        modifier = Modifier
-            .clickableNoRipple(onClick)
-            .padding(horizontal = 4.dp),
+        // A disabled row stays visible and simply does not consume the press: hiding the
+        // affordance would leave the viewer hunting for a button that has nothing to do.
+        modifier = if (enabled) {
+            Modifier.clickableNoRipple(onClick).padding(horizontal = 4.dp)
+        } else {
+            Modifier.padding(horizontal = 4.dp)
+        },
     )
 }
 
 // ── Event routing ──────────────────────────────────────────────────────────────
 
 /**
- * Routes ViewModel events: messages become the on-screen snackbar via [onMessage]; embed /
- * external-player events fire real intents; next-episode events are delegated to the app
- * (the NavGraph agent wires the PlayBundle-per-episode route — see HANDOFF_appplayer.md).
+ * Routes ViewModel events: messages become the on-screen snackbar via [onMessage]; the
+ * external-player event fires a real intent carrying OUR OWN address; next-episode events
+ * are delegated to the app (the NavGraph agent wires the PlayBundle-per-episode route —
+ * see HANDOFF_appplayer.md).
  */
 @Composable
 private fun PlayerEventWatcher(
@@ -1723,16 +1787,6 @@ private fun openExternally(context: Context, url: String) {
         context.startActivity(Intent.createChooser(intent, "Play with…"))
     } catch (_: ActivityNotFoundException) {
         Toast.makeText(context, "No external video player found", Toast.LENGTH_SHORT).show()
-    }
-}
-
-private fun openInBrowser(context: Context, url: String) {
-    try {
-        context.startActivity(
-            Intent(Intent.ACTION_VIEW, Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
-        )
-    } catch (_: ActivityNotFoundException) {
-        Toast.makeText(context, "No browser available for the embed page", Toast.LENGTH_SHORT).show()
     }
 }
 

@@ -33,6 +33,19 @@ sealed class FailoverDecision {
     /** Keep the same rendition, prepare again after [backoffMs] (policy.retry_same). */
     data class RetrySame(val index: Int, val backoffMs: Long, val record: FailoverRecord) : FailoverDecision()
 
+    /**
+     * Switch to another copy of the SAME rung, [streamId], at [playUrl] (our own
+     * redirector, one handle swapped for another). Silent by contract: same quality,
+     * same position, no banner, no dialog — the viewer keeps watching while a
+     * different server answers.
+     */
+    data class AdvanceBackup(
+        val index: Int,
+        val streamId: String,
+        val playUrl: String,
+        val record: FailoverRecord,
+    ) : FailoverDecision()
+
     /** Switch to rendition [index]; [settledLabel] is what the top-bar chip must show. */
     data class Advance(val index: Int, val settledLabel: String, val record: FailoverRecord) : FailoverDecision()
 
@@ -46,10 +59,28 @@ class FailoverStateMachine(
 ) {
 
     private val attemptsByIndex = HashMap<Int, Int>()
+    private val backupsUsedByIndex = HashMap<Int, Int>()
     private var ranksBurned = 0
     private val _log = ArrayList<FailoverRecord>()
 
     val log: List<FailoverRecord> get() = _log.toList()
+
+    /**
+     * The next silent runner-up of rung [index], as handle + address of ours, or null
+     * when this rung has none left. A backup only ever replaces a URL on our own
+     * redirector ([streamUrlForHandle]), so a hop can never aim the player at an
+     * address the app was not given.
+     */
+    private fun nextBackupFor(index: Int): Pair<String, String>? {
+        val rendition = renditions.getOrNull(index) ?: return null
+        val used = backupsUsedByIndex[index] ?: 0
+        for (handle in rendition.playback.backupStreamIds.drop(used)) {
+            val url = streamUrlForHandle(rendition.playback.playUrl, handle) ?: continue
+            backupsUsedByIndex[index] = used + 1
+            return handle to url
+        }
+        return null
+    }
 
     /** Index chosen at bundle load time, or null when no candidate is directly playable. */
     var activeIndex: Int = -1
@@ -118,6 +149,18 @@ class FailoverStateMachine(
             }
 
             else -> {
+                // Same rung first, other copies next: a different server serving the
+                // same quality is not a downgrade, so it costs no rank and says nothing.
+                val backup = nextBackupFor(index)
+                if (backup != null) {
+                    _log.add(record.copy(action = "silent hop within rung"))
+                    return FailoverDecision.AdvanceBackup(
+                        index = index,
+                        streamId = backup.first,
+                        playUrl = backup.second,
+                        record = record.copy(action = "hopped to a runner-up of this rung"),
+                    )
+                }
                 ranksBurned += 1
                 val next = (index + 1 until renditions.size).firstOrNull { isPlayable(it) }
                 _log.add(record.copy(action = "died → failover"))

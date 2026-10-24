@@ -34,7 +34,16 @@ data class CacheTaskEntity(
     val linkKind: String,
     /** Latest resolved URL; may be a rotating ephemeral one. Never used as an identity. */
     val currentUrl: String,
+    /**
+     * The opaque redirector handle this keep plays through (`/api/v1/stream?id=<handle>`).
+     * It is OUR OWN identity, not a site or a server, and it is what the resolver re-reads to
+     * rebuild the address after a URL rots — the resume path never re-fetches from scratch.
+     */
     val resourceId: String? = null,
+    /** The work title, for the Downloads list only. Carries no provenance. */
+    val title: String = "",
+    /** The quality rung label (for example "1080p · High bitrate"). Quality only, never a host. */
+    val printLabel: String = "",
     val origin: String = CacheOrigin.AUTO_PREVIEW.name,
     val priority: String = CachePriority.AUTO_PREVIEW.name,
     val state: String = CacheTaskState.QUEUED.name,
