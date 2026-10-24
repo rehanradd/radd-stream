@@ -53,3 +53,6 @@ App/local.properties
 
 # Agent CLI session state (scheduling, scratch); never a product artifact
 .qoder/
+
+# Local live database storage directory
+radd-stream-data/
