@@ -50,3 +50,6 @@ App/local.properties
 
 # Local Replit configuration; may contain sensitive values
 .replit
+
+# Agent CLI session state (scheduling, scratch); never a product artifact
+.qoder/
