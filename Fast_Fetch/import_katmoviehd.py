@@ -105,7 +105,24 @@ class KatMovieHDClient:
                 time.sleep(self.request_interval - elapsed)
             self._last_req_time = time.time()
 
-    def get_text(self, url: str, headers: dict | None = None, timeout: int = 15) -> tuple[int, dict, str | None]:
+    def get_text(self, url: str, headers: dict | None = None, timeout: int = 15,
+                 retries: int = 3) -> tuple[int, dict, str | None]:
+        """Fetches a URL and returns (status_code, headers, body).
+
+        Every failure used to come back as the same opaque ``0, {}, None``, so a
+        timeout, a rate-limit, a bot check and a deleted page were one indistinguishable
+        cause in the logs — and the 3,452 requeued rows in the 2026-10-23 backlog drain
+        could not be triaged at all. The codes below are the ones we can name:
+
+            404 / 410   the page is gone upstream (permanent, no retry will help)
+            403 / 429 / 5xx   the host answered but refused us (retry, maybe back off)
+            408   WE timed out; the status never came off the wire
+            0     connection/DNS/TLS failure, or a shutdown was requested
+
+        408 and 0 are synthesised here, never observed from the server, and are
+        returned with the real 4xx/5xx bodies so a bot check stays recognisable.
+        A check is recorded, never solved.
+        """
         self._rate_limit()
         req_headers = {
             "User-Agent": fast_fetch.USER_AGENT,
@@ -116,7 +133,8 @@ class KatMovieHDClient:
             req_headers.update(headers)
 
         req = urllib.request.Request(url, headers=req_headers)
-        for attempt in range(3):
+        last_error_code = 0
+        for attempt in range(max(1, retries)):
             if STOP_REQUESTED:
                 return 0, {}, None
             try:
@@ -127,11 +145,31 @@ class KatMovieHDClient:
                     return code, resp_headers, body
             except urllib.error.HTTPError as e:
                 if e.code in (404, 410):
-                    return e.code, dict(e.headers), None
-                time.sleep(1.0 * (attempt + 1))
+                    # Gone is gone: no body worth reading, no retry worth spending.
+                    return e.code, dict(e.headers or {}), None
+                last_error_code = e.code
+                try:
+                    body = e.read().decode("utf-8", errors="ignore")
+                except Exception:
+                    body = ""
+                if e.code in (403, 429, 500, 502, 503, 504) and attempt < max(1, retries) - 1:
+                    wait = fast_fetch.retry_backoff(attempt + 1)
+                    retry_after = (dict(e.headers or {})).get("Retry-After")
+                    if retry_after:
+                        try:
+                            wait = max(wait, min(60.0, float(retry_after)))
+                        except (TypeError, ValueError):
+                            pass
+                    time.sleep(wait)
+                    continue
+                return e.code, dict(e.headers or {}), body or None
+            except TimeoutError:
+                last_error_code = 408
             except Exception:
-                time.sleep(1.0 * (attempt + 1))
-        return 0, {}, None
+                last_error_code = 0
+            if attempt < max(1, retries) - 1:
+                time.sleep(fast_fetch.retry_backoff(attempt + 1))
+        return last_error_code, {}, None
 
     def get_api_json(self, url: str, timeout: int = 12) -> dict | None:
         self._rate_limit()
@@ -153,10 +191,80 @@ class KatMovieHDClient:
         return None
 
 
+# ── Why a page did not become a post ────────────────────────────────────────
+#
+# `scraped = -1` on its own could not tell an operator whether katmoviehd had
+# deleted the page, whether our parser had drifted, or whether the pass had
+# simply been killed mid-flight — and those three need opposite responses.
+# Every exit from the page fetch/parse path now names its reason, in the same
+# vocabulary `fast_fetch.classify_crawl_failure` uses for the core crawler.
+#
+# Marker strings of an interstitial bot check. We only RECORD that we were served
+# one (`blocked_challenge`); this scraper never attempts to solve, spoof or
+# otherwise bypass it.
+CHALLENGE_MARKERS = (
+    "just a moment", "cf-browser-verification", "attention-required",
+    "checking your browser", "cf_chl_", "turnstile", "you have been blocked",
+    "error 1020", "enable javascript and cookies to continue",
+)
+
+#: katmoviehd-specific causes (the HTTP/transport ones come from fast_fetch).
+KMHD_CAUSE_NOT_A_POST = "not_a_post"                 # permanent: URL is not a post
+KMHD_CAUSE_NO_CHUNK_BODY = "empty_response_body"     # transient: 200 with no SvelteKit chunk
+KMHD_CAUSE_NO_RELEASES = "parse_no_releases"         # transient: parser gap, our bug
+
+#: Causes a requeue must NOT treat as "the page died upstream".
+KMHD_TRANSIENT_CAUSES = frozenset(fast_fetch.TRANSIENT_CRAWL_CAUSES) | {
+    KMHD_CAUSE_NO_CHUNK_BODY,
+}
+
+#: Parked on the first sighting: asking again cannot change the answer.
+PERMANENT_KMHD_CAUSES = frozenset(fast_fetch.PERMANENT_CRAWL_CAUSES)
+
+#: Consecutive host-refused/transport failures that end a pass early. The 2026-10-23
+#: drain ran world4ufree's 2,921 requeued rows through in 12.8 seconds — hundreds of
+#: URLs per second, every one failing — which is a dark domain, not a backlog.
+#: Grinding the rest of the queue down in that state only manufactures -1s.
+SITE_DARK_THRESHOLD = 25
+
+#: Rows booked while a `fail_cause` column existed. `raw_json` is NOT available
+#: for this: it holds the site's own categories/post_title evidence that
+#: `derive_katmoviehd_identity` and rederive_katmoviehd.py read, so the cause
+#: gets its own column instead of overwriting provenance.
+SQLITE_BUSY_TIMEOUT = 30
+
+
+def looks_blocked(page: str | None) -> bool:
+    """True when the body is a bot-check interstitial. Detection only, never a bypass."""
+    if not page:
+        return False
+    head = page[:12000].lower()
+    return any(m in head for m in CHALLENGE_MARKERS)
+
+
+def is_post_slug(slug: str | None) -> bool:
+    """False for the site root/pagination/category URLs that are not posts.
+
+    The sitemap sync writes one row per catalog item, and an empty or non-post
+    slug that reached the crawler was previously booked as an ordinary failure.
+    """
+    s = (slug or "").strip().strip("/")
+    if not s:
+        return False
+    return not s.split("/")[-1].startswith("page")
+
+
+def cause_from_http_code(code: int, body: str | None = None) -> str:
+    """Names a failed page fetch from the status `KatMovieHDClient.get_text` returned."""
+    if looks_blocked(body):
+        return "blocked_challenge"
+    return fast_fetch.classify_crawl_failure(http_code=code)
+
+
 def init_staging_db(db_path: Path):
     """Initializes KatMovieHD staging SQLite database with isolated schema."""
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    with sqlite3.connect(str(db_path)) as conn:
+    with sqlite3.connect(str(db_path), timeout=SQLITE_BUSY_TIMEOUT) as conn:
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA synchronous=NORMAL")
         conn.executescript("""
@@ -225,6 +333,17 @@ def init_staging_db(db_path: Path):
             );
             CREATE INDEX IF NOT EXISTS idx_sources_release_id ON sources(release_id);
         """)
+        # Why a row failed, and how many times we asked. Both are plain ADD
+        # COLUMNs with no index on the new columns, so an old DB gains them
+        # before any CREATE INDEX that could reference them (the schema rule:
+        # an index must never point at a column a later ALTER introduces).
+        sm_cols = {c[1] for c in conn.execute("PRAGMA table_info(sitemap_cache);").fetchall()}
+        if "fail_cause" not in sm_cols:
+            conn.execute("ALTER TABLE sitemap_cache ADD COLUMN fail_cause TEXT DEFAULT NULL")
+        if "attempts" not in sm_cols:
+            conn.execute("ALTER TABLE sitemap_cache ADD COLUMN attempts INTEGER DEFAULT 0")
+        if "last_attempt" not in sm_cols:
+            conn.execute("ALTER TABLE sitemap_cache ADD COLUMN last_attempt REAL DEFAULT NULL")
         # Schema migration check
         existing_cols = [c[1] for c in conn.execute("PRAGMA table_info(posts);").fetchall()]
         for col in ["cast_names", "director", "languages"]:
@@ -953,12 +1072,34 @@ def parse_katmoviehd_releases(content_html: str, default_season: int | None = No
         elif "gofile.io" in href:
             fid = href.rstrip("/").split("/")[-1]
             return "gofile", fid
+        # The site's GDFlix mirror lives on `gd.kmhd.me`, which the broad `kmhd.`
+        # test below would otherwise claim, hiding the real host behind a generic
+        # KMHD gateway. Matched first so both keep their own identity.
+        elif "gd.kmhd." in href or "gdflix" in href or "gad.flx" in href:
+            return "gdflix", href.rstrip("/").split("/")[-1]
         elif "kmhd." in href:
             fid = href.rstrip("/").split("/")[-1]
             return "kmhd", fid
         elif "hubcloud" in href:
             fid = href.rstrip("/").split("/")[-1]
             return "hubcloud", fid
+        # Bridges `resolve_file_sources()` has implemented for years, but which
+        # this anchor pass never recognised — so a post published only with
+        # katdrive/fastdl/send.cm/1fichier/pixeldrain buttons parsed as
+        # "no releases" and was booked as a dead page. Matched on the host the
+        # resolver itself stores.
+        elif "katdrive" in href:
+            return "katdrive", href.rstrip("/").split("/")[-1]
+        elif "fastdl" in href:
+            return "fastdl", href.rstrip("/").split("/")[-1]
+        elif "send.cm" in href:
+            return "sendcm", href.rstrip("/").split("/")[-1]
+        elif "1fichier" in href or "fichier" in href:
+            m = re.search(r"1fichier\.com/(?:\?|#!)?file/?([A-Za-z0-9]+)", href)
+            return "1fichier", (m.group(1) if m else href.rstrip("/").split("/")[-1])
+        elif "pixeldrain" in href:
+            m = re.search(r"pixeldrain\.com/[lu]/([A-Za-z0-9]+)", href)
+            return "pixeldrain", (m.group(1) if m else href.rstrip("/").split("/")[-1])
         return "unknown", ""
 
     for m in re.finditer(r'<a\b[^>]*href=["\']([^"\']+)["\'][^>]*>(.*?)</a>', content_html, re.DOTALL | re.I):
@@ -1025,6 +1166,11 @@ LEGACY_DOWNLOAD_HOSTS = (
 )
 LEGACY_TORRENT_HOSTS = ("torrentshub", "torrentgalaxy", "1337x")
 LEGACY_SOURCE_TYPES = ("magnet", "torrent", "gdtot", "anonfiles", "ninjastream")
+
+#: Mirror hosts the REST resolver already emits for a KMHD file (see
+#: `resolve_file_sources`), and which therefore need no lookup when the page
+#: links to one directly. Stored verbatim under their own service name.
+BRIDGE_SOURCE_TYPES = ("gdflix", "katdrive", "fastdl", "sendcm", "1fichier", "pixeldrain")
 
 
 def _legacy_host_type(href: str) -> tuple[str, str]:
@@ -1209,16 +1355,24 @@ def resolve_file_sources(
             })
         return None, sources
 
-    elif source_type in LEGACY_SOURCE_TYPES:
+    elif source_type in LEGACY_SOURCE_TYPES or source_type in BRIDGE_SOURCE_TYPES:
         # Pre-2022 posts carry Magnet/Torrent/GDTot/AnonFiles buttons instead of
-        # KatDrive ids. They are stored verbatim (never dropped, never resolved
-        # against the KatDrive REST API, which has no record of them).
+        # KatDrive ids, and modern posts sometimes carry a GDFlix/KatDrive/FastDL/
+        # Send.cm/1fichier/PixelDrain button directly. Both groups are stored
+        # verbatim: never dropped, and never sent to the KatDrive REST API, which
+        # has no record of them and would relabel the mirror as a KMHD gateway.
         names = {
             "magnet": "🧲 Magnet Torrent",
             "torrent": "📦 Torrent File",
             "gdtot": "🌐 GDTot Bridge",
             "anonfiles": "🌐 AnonFiles Mirror",
             "ninjastream": "▶ NinjaStream Watch",
+            "gdflix": "⚡ GDFlix Mirror",
+            "katdrive": "⚡ KatDrive Mirror",
+            "fastdl": "⚡ FastDL",
+            "sendcm": "⚡ Send.cm",
+            "1fichier": "🌐 1fichier Mirror",
+            "pixeldrain": "🌐 PixelDrain Mirror",
         }
         sources.append({
             "source_name": names.get(source_type, f"🌐 {source_type}"),
@@ -1231,7 +1385,8 @@ def resolve_file_sources(
         })
         return None, sources
 
-    # Legacy KMHD REST API lookup    api_url = f"{KMHD_API_BASE}/file/{file_id}"
+    # Legacy KMHD REST API lookup
+    api_url = f"{KMHD_API_BASE}/file/{file_id}"
     data = client.get_api_json(api_url, timeout=timeout)
     if not data or not isinstance(data, dict):
         sources.append({
@@ -1347,24 +1502,40 @@ def resolve_file_sources(
     return size_bytes, sources
 
 
-def extract_post_data_katmoviehd(
+def extract_post_data_katmoviehd_detailed(
     client: KatMovieHDClient,
     post_url: str,
     slug: str,
     cached_item: dict | None = None,
     resolve_direct: bool = True,
     timeout: int = 15,
-) -> dict | None:
-    """Extracts post metadata, releases, and unwrapped direct sources from KatMovieHD."""
+) -> tuple[dict | None, str]:
+    """Extracts one post and reports WHY it could not be extracted.
+
+    Returns ``(post_or_None, cause)``. A ``None`` post is never a mystery any
+    more: the cause is one of the names in `fast_fetch.classify_crawl_failure`
+    plus the three katmoviehd-specific ones. Only ``"ok"`` means a post.
+
+    Nothing here declares a page adult-and-therefore-skippable: an 18+ page is
+    extracted and stored like any other, and flagged on the way in.
+    """
+    if not is_post_slug(slug):
+        return None, KMHD_CAUSE_NOT_A_POST
+
     raw_title = cached_item.get("post_title", "") if cached_item else ""
     poster_url = cached_item.get("thumbnail_image") if cached_item else None
     genres_list = cached_item.get("categories", []) if cached_item else []
 
     # Fetch post detail chunk
     detail_url = f"{DEFAULT_BASE_URL}/{slug}/__data.json"
-    code, _, resp_text = client.get_text(detail_url, timeout=timeout)
-    if code != 200 or not resp_text:
-        return None
+    code, resp_headers, resp_text = client.get_text(detail_url, timeout=timeout)
+    if code != 200:
+        return None, cause_from_http_code(code, resp_text)
+    if not resp_text:
+        return None, KMHD_CAUSE_NO_CHUNK_BODY
+    if looks_blocked(resp_text):
+        # A bot check served with a 200: recorded, never satisfied.
+        return None, "blocked_challenge"
 
     post_content = ""
     for line in resp_text.splitlines():
@@ -1381,8 +1552,11 @@ def extract_post_data_katmoviehd(
                 post_content = raw_data[3]
                 break
 
+    # An empty chunk body used to be booked as `{"skipped": True}`, which the
+    # crawler turned into scraped = 1 with no post anywhere — a page counted as
+    # done that was never read. It is a read failure now, and it stays one.
     if not post_content:
-        return {"loc": post_url, "skipped": True}
+        return None, KMHD_CAUSE_NO_CHUNK_BODY
 
     # The page's own category path and its "Movie Name:" / "Series Name:" field
     # label are the site's statement about what it filed — stronger than any
@@ -1397,7 +1571,9 @@ def extract_post_data_katmoviehd(
     season_hint, _ = _extract_season(html.unescape(raw_title or str(slug or "")), str(slug or "").lower())
     parsed_releases = parse_katmoviehd_releases(post_content, default_season=season_hint)
     if not parsed_releases:
-        return None
+        # The page is readable and says nothing we can file as a release: that is
+        # our parser being behind the layout, not upstream deleting anything.
+        return None, KMHD_CAUSE_NO_RELEASES
 
     # IMDB ID & Rating extraction
     imdb_id = None
@@ -1500,7 +1676,7 @@ def extract_post_data_katmoviehd(
             "sources": sources,
         })
 
-    return {
+    post = {
         "canonical_key": canonical_key,
         "title": clean_title,
         "original_title": raw_title,
@@ -1518,6 +1694,31 @@ def extract_post_data_katmoviehd(
         "post_url": post_url,
         "releases": releases_data,
     }
+    return post, "ok"
+
+
+def extract_post_data_katmoviehd(
+    client: KatMovieHDClient,
+    post_url: str,
+    slug: str,
+    cached_item: dict | None = None,
+    resolve_direct: bool = True,
+    timeout: int = 15,
+) -> dict | None:
+    """Compatibility wrapper: the post dict, or None. See the _detailed form.
+
+    Kept because callers outside this file only ever wanted the dict; the crawl
+    loop uses `extract_post_data_katmoviehd_detailed` so the reason is never lost.
+    """
+    post, _cause = extract_post_data_katmoviehd_detailed(
+        client=client,
+        post_url=post_url,
+        slug=slug,
+        cached_item=cached_item,
+        resolve_direct=resolve_direct,
+        timeout=timeout,
+    )
+    return post
 
 
 def save_post_to_staging_db(db_path: Path, post_data: dict) -> bool:
@@ -1525,7 +1726,7 @@ def save_post_to_staging_db(db_path: Path, post_data: dict) -> bool:
     if not post_data or not post_data.get("releases"):
         return False
 
-    with sqlite3.connect(str(db_path)) as conn:
+    with sqlite3.connect(str(db_path), timeout=SQLITE_BUSY_TIMEOUT) as conn:
         cur = conn.cursor()
 
         # 1. Upsert Post
@@ -1686,7 +1887,7 @@ def sync_sveltekit_api_to_db(db_path: Path, max_pages: int | None = None) -> int
             records.append((permalink, lastmod, slug, 0, "katmoviehd", raw_json_str))
 
         if records:
-            with sqlite3.connect(str(db_path)) as conn:
+            with sqlite3.connect(str(db_path), timeout=SQLITE_BUSY_TIMEOUT) as conn:
                 conn.executemany(
                     """
                     INSERT INTO sitemap_cache (loc, lastmod, slug, scraped, site, raw_json)
@@ -1711,6 +1912,82 @@ def sync_sveltekit_api_to_db(db_path: Path, max_pages: int | None = None) -> int
     return total_synced
 
 
+def failure_breakdown(db_path: Path) -> list:
+    """``[(cause, count), ...]`` for the rows that are not a post, parked first.
+
+    This is the answer to "why did the requeued pages fail a second time" — the
+    same question could not be asked before, because every failure was one
+    indistinguishable ``-1``.
+    """
+    with sqlite3.connect(str(db_path), timeout=SQLITE_BUSY_TIMEOUT) as conn:
+        return conn.execute(
+            "SELECT COALESCE(fail_cause, 'unrecorded') AS cause, scraped,"
+            "       COALESCE(attempts, 0), COUNT(*)"
+            " FROM sitemap_cache WHERE scraped <> 1"
+            " GROUP BY cause, scraped, attempts ORDER BY COUNT(*) DESC"
+        ).fetchall()
+
+
+def _book_attempt(
+    db_path: Path,
+    loc: str,
+    *,
+    scraped: int,
+    attempts: int,
+    cause: str | None,
+    write_attempts: int = 4,
+) -> bool:
+    """Records one crawl outcome, retrying a busy database instead of dying on it.
+
+    The 2026-10-23 backlog drain lost 3,452 requeued katmoviehd pages to a single
+    `sqlite3.OperationalError: database is locked` at row 2,680 of 6,135 — the
+    merge writer holds these files, so a lock is expected weather, not a fatal
+    error and definitely not a statement about the page.
+    """
+    last_exc: Exception | None = None
+    for i in range(max(1, write_attempts)):
+        try:
+            with sqlite3.connect(str(db_path), timeout=SQLITE_BUSY_TIMEOUT) as conn:
+                conn.execute(
+                    "UPDATE sitemap_cache SET scraped = ?, attempts = ?,"
+                    " last_attempt = ?, fail_cause = ? WHERE loc = ?",
+                    (scraped, attempts, time.time(), cause, loc),
+                )
+                conn.commit()
+            return True
+        except sqlite3.OperationalError as exc:
+            if "locked" not in str(exc).lower():
+                print(f"[!] cannot book {loc}: {exc}", file=sys.stderr, flush=True)
+                return False
+            last_exc = exc
+            time.sleep(fast_fetch.retry_backoff(i + 1, base=0.25, cap=5.0))
+    print(f"[!] database stayed locked for {loc}: {last_exc}", file=sys.stderr, flush=True)
+    return False
+
+
+def crawl_queue(db_path: Path, limit: int | None = None, *, include_retries: bool = True) -> list:
+    """Rows worth crawling: never-tried first, then failures still inside the budget.
+
+    `WHERE scraped = 0` alone abandoned every failed page forever, which is the
+    other half of the "requeued pages failed" story: the requeue put them back
+    at 0, one lock or one interstitial threw them to -1, and nothing selected
+    them again.
+    """
+    where = "scraped = 0"
+    if include_retries:
+        where += f" OR (scraped = -1 AND COALESCE(attempts, 0) < {fast_fetch.MAX_CRAWL_ATTEMPTS})"
+    query = (
+        "SELECT loc, slug, raw_json, COALESCE(attempts, 0)"
+        f" FROM sitemap_cache WHERE {where} ORDER BY scraped DESC, rowid ASC"
+    )
+    params: tuple = ()
+    if limit:
+        query += " LIMIT ?"
+        params = (int(limit),)
+    with sqlite3.connect(str(db_path), timeout=SQLITE_BUSY_TIMEOUT) as conn:
+        return conn.execute(query, params).fetchall()
+
+
 def run_crawler(
     db_path: Path,
     workers: int = 5,
@@ -1722,13 +1999,7 @@ def run_crawler(
     init_staging_db(db_path)
     client = KatMovieHDClient(request_interval=delay)
 
-    with sqlite3.connect(str(db_path)) as conn:
-        cur = conn.cursor()
-        query = "SELECT loc, slug, raw_json FROM sitemap_cache WHERE scraped = 0 ORDER BY rowid ASC"
-        if limit:
-            query += f" LIMIT {limit}"
-        cur.execute(query)
-        pending_rows = cur.fetchall()
+    pending_rows = crawl_queue(db_path, limit)
 
     if not pending_rows:
         print("[*] No pending titles found in sitemap_cache. Run --sync-api first.", flush=True)
@@ -1744,54 +2015,87 @@ def run_crawler(
     total_r2 = 0
     total_pd = 0
     start_time = time.time()
+    causes: dict[str, int] = {}
+    fuse = fast_fetch.ConsecutiveFailureFuse(threshold=SITE_DARK_THRESHOLD)
 
     def process_item(item):
-        loc, slug, raw_json_str = item
+        loc, slug, raw_json_str, prior_attempts = item
         cached_item = json.loads(raw_json_str) if raw_json_str else None
 
-        post_data = extract_post_data_katmoviehd(
-            client=client,
-            post_url=loc,
-            slug=slug,
-            cached_item=cached_item,
-            resolve_direct=resolve_direct,
-        )
-        if post_data and post_data.get("skipped"):
-            return loc, True, 0, 0, 0, 0
+        try:
+            post_data, cause = extract_post_data_katmoviehd_detailed(
+                client=client,
+                post_url=loc,
+                slug=slug,
+                cached_item=cached_item,
+                resolve_direct=resolve_direct,
+            )
+        except sqlite3.Error as exc:
+            # A locked staging DB is our contention, not a bad page — never let
+            # it be filed as "upstream gone", and never let it end the pass.
+            cause = "sqlite_locked" if "locked" in str(exc).lower() else "sqlite_error"
+            post_data = None
+        except Exception as exc:
+            cause = fast_fetch.classify_crawl_failure(exc=exc)
+            post_data = None
 
-        if not post_data or not post_data.get("releases"):
-            return loc, False, 0, 0, 0, 0
+        if post_data is not None and not post_data.get("releases"):
+            cause = KMHD_CAUSE_NO_RELEASES
+            post_data = None
 
-        ok = save_post_to_staging_db(db_path, post_data)
-        num_rels = len(post_data["releases"])
-        num_srcs = sum(len(r.get("sources", [])) for r in post_data["releases"])
-        r2_cnt = sum(1 for r in post_data["releases"] for s in r.get("sources", []) if s.get("service") == "fsl_r2")
-        pd_cnt = sum(1 for r in post_data["releases"] for s in r.get("sources", []) if s.get("service") == "pixeldrain")
-        return loc, ok, num_rels, num_srcs, r2_cnt, pd_cnt
+        rel_cnt = src_cnt = r2_cnt = pd_cnt = 0
+        if post_data is not None:
+            try:
+                saved = save_post_to_staging_db(db_path, post_data)
+            except sqlite3.Error as exc:
+                saved = False
+                cause = "sqlite_locked" if "locked" in str(exc).lower() else "sqlite_error"
+            if not saved:
+                cause = "save_rejected"
+            else:
+                cause = "ok"
+            rel_cnt = len(post_data["releases"])
+            src_cnt = sum(len(r.get("sources", [])) for r in post_data["releases"])
+            r2_cnt = sum(1 for r in post_data["releases"] for s in r.get("sources", []) if s.get("service") == "fsl_r2")
+            pd_cnt = sum(1 for r in post_data["releases"] for s in r.get("sources", []) if s.get("service") == "pixeldrain")
+
+        return loc, cause, (rel_cnt, src_cnt, r2_cnt, pd_cnt), int(prior_attempts or 0)
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
         futures = {executor.submit(process_item, row): row for row in pending_rows}
 
         for future in concurrent.futures.as_completed(futures):
-            if STOP_REQUESTED:
+            if STOP_REQUESTED or fuse.tripped:
+                for f in futures:
+                    f.cancel()
                 break
-            loc, ok, rel_cnt, src_cnt, r2_cnt, pd_cnt = future.result()
 
-            with sqlite3.connect(str(db_path)) as conn:
-                conn.execute(
-                    "UPDATE sitemap_cache SET scraped = ? WHERE loc = ?",
-                    (1 if ok else -1, loc),
-                )
-                conn.commit()
+            try:
+                loc, cause, counts, prior_attempts = future.result()
+            except Exception as exc:  # a worker crash must not abort the crawl
+                row = futures[future]
+                loc, cause, counts, prior_attempts = row[0], fast_fetch.classify_crawl_failure(exc=exc), (0, 0, 0, 0), int(row[3] or 0)
 
-            if ok:
+            if cause == "ok":
+                scraped, fail_cause = 1, None
+                attempts = prior_attempts + 1
                 completed += 1
-                total_releases += rel_cnt
-                total_sources += src_cnt
-                total_r2 += r2_cnt
-                total_pd += pd_cnt
+                total_releases += counts[0]
+                total_sources += counts[1]
+                total_r2 += counts[2]
+                total_pd += counts[3]
             else:
+                # Terminal-vs-transient in one line: a permanent cause parks the
+                # row now, anything else keeps its retry budget and the reason.
+                scraped, attempts = fast_fetch.crawl_attempt_state(
+                    cause, prior_attempts=prior_attempts, permanent=PERMANENT_KMHD_CAUSES)
+                fail_cause = cause
                 failed += 1
+
+            _book_attempt(db_path, loc, scraped=scraped, attempts=attempts, cause=fail_cause)
+            causes[cause] = causes.get(cause, 0) + 1
+            if cause != "ok":
+                fuse.record(cause)
 
             if (completed + failed) % 10 == 0 or (completed + failed) == total_pending:
                 elapsed = time.time() - start_time
@@ -1826,7 +2130,21 @@ def run_crawler(
                     pass
 
     total_time = time.time() - start_time
-    print(f"\n[✓] Crawler finished: {completed} scraped, {failed} failed in {total_time:.1f}s\n", flush=True)
+    if fuse.tripped:
+        left = total_pending - (completed + failed)
+        print(
+            f"\n[!] Site-dark fuse tripped: {fuse.streak} consecutive failures "
+            f"({fuse.trip_reason}). The domain is refusing or unreachable — that is a "
+            f"fetch-layer problem, not {left:,} dead pages. Stopping; the remaining "
+            f"{left:,} rows keep their queue position untouched.",
+            flush=True,
+        )
+    print(f"\n[✓] Crawler finished: {completed:,} scraped, {failed:,} failed in {total_time:.1f}s\n", flush=True)
+    if causes:
+        print("[i] this pass, by reason (parked = we stop asking, retryable = budget left):", flush=True)
+        for name, cnt in sorted(causes.items(), key=lambda kv: -kv[1]):
+            parked = " parked" if name in PERMANENT_KMHD_CAUSES else (" retryable" if name != "ok" else "")
+            print(f"      {name:26s} {cnt:6,}{parked}", flush=True)
 
 
 def print_status(db_path: Path):
@@ -1835,7 +2153,7 @@ def print_status(db_path: Path):
         print(f"[!] Database {db_path} does not exist yet. Run --sync-api first.")
         return
 
-    with sqlite3.connect(str(db_path)) as conn:
+    with sqlite3.connect(str(db_path), timeout=SQLITE_BUSY_TIMEOUT) as conn:
         cur = conn.cursor()
         total_cache = cur.execute("SELECT COUNT(*) FROM sitemap_cache").fetchone()[0]
         scraped = cur.execute("SELECT COUNT(*) FROM sitemap_cache WHERE scraped = 1").fetchone()[0]
@@ -1860,6 +2178,16 @@ def print_status(db_path: Path):
     print(f" Scraped (Done)      : {scraped:,} ({pct:.1f}%)")
     print(f" Pending             : {pending:,}")
     print(f" Failed/Review       : {failed:,}")
+    breakdown = failure_breakdown(db_path)
+    if breakdown:
+        retryable = sum(n for cause, _scraped, attempts, n in breakdown
+                        if cause != "unrecorded" and attempts < fast_fetch.MAX_CRAWL_ATTEMPTS)
+        print(f"   ├ retryable       : {retryable:,} (budget left — the next pass takes these)")
+        print("   └ by reason:")
+        for cause, _scraped, attempts, n in breakdown[:12]:
+            kind = "parked (upstream gone)" if cause in PERMANENT_KMHD_CAUSES else (
+                "never recorded" if cause == "unrecorded" else "transient")
+            print(f"       {cause:26s} {n:6,}  attempts={attempts}  {kind}")
     print("-" * 55)
     print(f" Catalog Posts       : {posts:,}")
     print(f" Releases Found      : {releases:,}")

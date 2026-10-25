@@ -16,7 +16,7 @@ sys.path.insert(0, "/opt/radd-stream/Fast_Fetch")
 import merge_catalogs
 
 DATA_DIR = Path("/home/ubuntu/radd-stream-data")
-DEFAULT_TARGET = DATA_DIR / "merged_catalog_20261024.db"
+DEFAULT_TARGET = DATA_DIR / "merged_catalog_20261025.db"
 
 SITES = [
     "rareanimes", "toonworld4all", "desicinemas", "hdtvb", "moviezguru",
@@ -24,6 +24,13 @@ SITES = [
     "multimovies", "rogmovies", "ssrmovies", "10xflix", "bolly4u",
     "filmyzilla", "9xmovies", "world4ufree",
 ]
+
+#: A site whose staging database was re-derived after it was first scraped. Merging
+#: the stale `katmoviehd.db` would put 2,118 known media-type collisions back into
+#: the catalog, so the fleet reads the output of `rederive_katmoviehd.py` instead.
+SOURCES = {
+    "katmoviehd": DATA_DIR / "katmoviehd_refreshed.db",
+}
 
 
 def main() -> int:
@@ -38,7 +45,7 @@ def main() -> int:
 
     total_started = time.time()
     for site in SITES:
-        src = DATA_DIR / f"{site}.db"
+        src = SOURCES.get(site, DATA_DIR / f"{site}.db")
         if not src.exists():
             print(f"[!] missing {src}", flush=True)
             results[site] = {"skipped": "missing"}

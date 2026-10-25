@@ -45,6 +45,7 @@ import catalog_api
 import catalog_v2
 import redact
 import release_descriptor
+import tiers
 
 CONTRACT_VERSION = "2.1.0"
 BASE_PATH = "/api/v2"
@@ -81,6 +82,17 @@ _CODE_ALIASES = {
 #: §13: the flag, and any synonym of it, is never a public key — not even as
 #: `false`, because a field that appears only for hidden rows is itself the leak.
 _FLAG_KEY_RE = re.compile(r"adult|18[_+]?plus|restricted|nsfw|x18", re.IGNORECASE)
+
+#: The same vocabulary as a *value*. `_FLAG_KEY_RE` deletes a field called `adult`;
+#: this one deletes the word from a sentence, so a diagnostic that quotes a
+#: upstream refusal cannot publish §13's vocabulary either. `restricted` is matched
+#: only beside the rest of the phrase (a plain "Access restricted" from a hoster is
+#: a transport fact, `18+`/`adult` is the flag), but `adult`, `18+`, `nsfw` and
+#: `x18` are never legitimate public words in any position.
+_FLAG_VALUE_RE = re.compile(
+    r"\b(?:18\s*\+|18[\s_]?plus|adult(?:\s+[a-z]{2,12})?|nsfw|x18|restricted\s+"
+    r"\(?\s*(?:18\s*\+|adult)[^)]*\)?|[(\[]\s*18\s*\+\s*[)\]])\b",
+    re.IGNORECASE)
 
 #: §16.9 is a deny-*list*, so a field added to a Layer-2 shape later is published
 #: until somebody remembers to add its name to `redact.PROVENANCE`. `suggest`
@@ -120,16 +132,58 @@ LINK_RANK_WEIGHTS = {
     "state": {"active": 100, "unknown": 0, "unchecked": 0, "otherwise": -450},
     "range": [0, 900],
 }
-#: The measured half of axis 2 is `tiers.score()`; the manifest names the function
-#: and its inputs rather than duplicating its arithmetic under a second name.
+#: The measured half of axis 2, published as the arithmetic it actually is: the
+#: test suite recomputes `link_health.score_link()` from this table, so a weight
+#: changed on one side without the other fails a test instead of making the
+#: manifest a document a client has to take on faith. `tiers.score()` is a separate
+#: thing (it picks the winner *inside* a quality band from the public link view) and
+#: is published under `band_collapse`, never confused with this.
 LINK_MEASURED = {
-    "field": "candidates[].score",
+    "scale": tiers.MEASURED_SCALE,
+    "field": "candidates[].rank_score",
     "range": [0, 1000],
+    "ceiling": tiers.MEASURED_CEILING,
+    "producer": "link_health.score_link()",
+    "applied_by": "catalog_v2._blend_link() / apply_evidence()",
+    "requires": "a cat_link_evidence row naming a protocol (§6.2)",
+    "weights": {
+        "not_ok": 0,
+        "streamable": 300,
+        "downloadable": 150,
+        "accepts_ranges": 100,
+        "cors_open": 80,
+        "speed": {"points": 100, "saturates_at_mbps": 20},
+        "latency": {"points": 100, "full_at_ms": 150, "zero_at_ms": 3000},
+        "tier_weights": {1: 1.0, 2: 0.7, 3: 0.4},
+        "is_temporary": -150,
+        "protocol_embed": -100,
+    },
+    "clamped": [0, 1000],
+}
+#: §7.1 asks the manifest to say *which scale a given link's `rank_score` is on*.
+#: That is a per-link fact, not a global one, so it is published as the field a
+#: client reads and the rule that fills it — Layer 1 decides it in `_blend_link()`,
+#: and `tiers.scale_of()` is the same decision re-read from the wire shape.
+LINK_SCALE_SELECTOR = {
+    "field": "score_scale",
+    "carried_by": ["candidates[]", "stream_candidates[]", "alternates[]",
+                   "download_options[]", "tiers[].link", "/sync?scope=health items[]"],
+    "values": {tiers.PRIOR_SCALE: list(tiers.SCALE_RANGES[tiers.PRIOR_SCALE]),
+               tiers.MEASURED_SCALE: list(tiers.SCALE_RANGES[tiers.MEASURED_SCALE])},
+    "rule": ("measured when the projector folded a probe into rank_score "
+             "(cat_links carries a measured verdict), else projection_prior"),
+    "decided_by": "tiers.scale_of()",
+    "never_comparable": True,
+}
+#: The band-collapse score, which ranks the copies *inside* one quality band.
+BAND_COLLAPSE = {
+    "field": "tiers[].link score (presentation order only)",
     "formula": "tiers.score(link, band)",
-    "requires": "cat_link_evidence present",
     "inputs": ["kind", "state", "http_status", "resumable", "rank_score",
                "speed_mbps", "latency_ms", "ephemeral", "last_evidence_at",
                "size_bytes"],
+    "note": ("a sort key, never a published number: it adds `rank_score`/4 rather "
+             "than trusting either axis alone, so it is deliberately on neither scale"),
 }
 
 #: The print axis, read out of the module that computes it — never re-typed.
@@ -258,7 +312,7 @@ _DIAGNOSTIC_KEY_RE = re.compile(
 def clean_diagnostic_text(obj):
     """Run every diagnostic string through `redact.scrub_text`, recursively."""
     if isinstance(obj, dict):
-        return {key: (redact.scrub_text(value)
+        return {key: (_flag_value_deny(redact.scrub_text(value))
                       if isinstance(value, str) and _DIAGNOSTIC_KEY_RE.match(str(key))
                       else clean_diagnostic_text(value))
                 for key, value in obj.items()}
@@ -323,12 +377,16 @@ def request_id() -> str:
     return "req_" + uuid.uuid4().hex[:16]
 
 
-def etag_for(seed, rev: int) -> str:
+def etag_for(seed, rev) -> str:
     """Weak validator (§16.2). Byte-equivalence is not promised, so `W/"…"`, and
-    the catalog rev is folded in so a health sweep cannot invalidate a catalog
-    cache and a projection invalidates exactly the caches whose rows moved."""
+    the version vector is folded in so a health sweep cannot invalidate a catalog
+    cache and a projection invalidates exactly the caches whose rows moved.
+
+    `rev` is either one group (an int, the legacy single-catalog form) or the whole
+    `version_vector()` dict; both render through `rev_token`, so a validator and a
+    `/sync` body built from the same vector carry the same digits."""
     digest = hashlib.sha1(str(seed).encode("utf-8")).hexdigest()[:16]
-    return f'W/"cat-{int(rev)}-{digest}"'
+    return f'W/"cat-{rev_token(rev)}-{digest}"'
 
 
 def etag_matches(header: str, etag: str) -> bool:
@@ -362,12 +420,50 @@ def not_modified(handler, *, cache: str, etag: str, rid: str = "",
         for key, value in _cache_headers(cache=cache, etag=etag, rid=rid,
                                          last_modified=last_modified):
             handler.send_header(key, value)
-        for key, value in getattr(handler, "rate_headers", []) or []:
+        # A headerless reply is still a reply: §16.5 puts the triple on the `304`s
+        # too, and this path bypasses `send_bytes`, where the mount attaches it.
+        for key, value in (getattr(handler, "rate_headers", []) or []):
             handler.send_header(key, value)
         handler.send_header("Connection", "close")
         handler.end_headers()
     except (ConnectionResetError, BrokenPipeError, ConnectionAbortedError):
         pass
+
+
+def attach_rate_headers(handler, path: str, method: str = "GET") -> None:
+    """Guarantee this reply carries the §16.5 triple, whoever mounted us.
+
+    The HTTP host's gate spends one token per request and attaches its own copy;
+    when it has, these exact numbers are reused rather than a second contradictory
+    triple. `redact.limiter.peek` never spends, so a bare mount still publishes the
+    budget the *one* shared bucket holds instead of halving every limit — and no
+    route here keeps a counter of its own.
+    """
+    if getattr(handler, "rate_headers", None):
+        return
+    verdict = redact.limiter.peek(bucket_for(path, method), redact.client_ip(handler))
+    handler.rate_headers = redact.limiter.headers(verdict)
+
+
+def retry_after(handler, path: str, method: str = "GET") -> str:
+    """Seconds until this route's bucket reopens, for a caller already over it."""
+    _, opened, _limit, window = redact.limiter.state(
+        bucket_for(path, method), redact.client_ip(handler))
+    return str(max(1, int(round(window - (time.time() - opened)))))
+
+
+def _flag_value_deny(text: str) -> str:
+    """Strip §13's vocabulary out of a value, not just out of a key.
+
+    `deny_flag_keys` removes a field named `adult`; it cannot remove the word from
+    a sentence. A diagnosis is the one family of strings here that quotes somebody
+    else's failure, and v1's resolver answers an 18+ source with
+    `"Source restricted (18+ content)"` — served verbatim, that sentence would tell
+    a caller the title exists *and* why we hide it, which is the exact inference
+    §13 exists to forbid."""
+    if not isinstance(text, str) or not text:
+        return text
+    return re.sub(r"\s{2,}", " ", _FLAG_VALUE_RE.sub("", text)).strip(" ()[]·,-")
 
 
 def problem(handler, *, code: str, rid: str, instance: str, detail: str = "",
@@ -379,26 +475,39 @@ def problem(handler, *, code: str, rid: str, instance: str, detail: str = "",
     answered; `code` is the stable machine code. `details` is scrubbed and
     flag-denied like every other payload, because a diagnostic field is still a
     public field.
+
+    A code outside §16.4's closed list answers `not_found`, never `internal`: a
+    typo, a retired code (`adult_restricted` is the one that matters) or a Layer-2
+    word nobody mapped must not become a new public code, and it must not become a
+    500 that says "this route knows something it will not tell you".
     """
-    status, title = PROBLEM_CODES.get(code, PROBLEM_CODES["internal"])
-    public_code = code if code in PROBLEM_CODES else "internal"
+    given = str(code or "")
+    resolved = _CODE_ALIASES.get(given, given)
+    if resolved not in PROBLEM_CODES or _FLAG_KEY_RE.search(resolved):
+        resolved = "not_found"
+    status, title = PROBLEM_CODES[resolved]
     body = {
-        "type": f"/api/v2/problems/{public_code}",
+        "type": f"/api/v2/problems/{resolved}",
         "title": title,
         "status": status,
         "instance": instance,
-        "code": public_code,
+        "code": resolved,
         "request_id": rid,
     }
     if detail:
-        body["detail"] = redact.scrub_text(detail)
+        body["detail"] = _flag_value_deny(redact.scrub_text(detail))
     if extra:
         body["details"] = clean_diagnostic_text(redact.scrub(deny_flag_keys(extra)))
+    stamp = list(_cache_headers(cache=cache, rid=rid))
+    stamp.extend(headers or [])
+    if resolved == "rate_limited" and not any(
+            name.lower() == "retry-after" for name, _ in stamp):
+        # §16.5: a 429 without `Retry-After` makes a mobile client retry blind.
+        stamp.append(("Retry-After", retry_after(handler, instance,
+                                                 getattr(handler, "v2_method", "GET"))))
     payload = json.dumps(body, ensure_ascii=False).encode("utf-8")
     handler.send_bytes(payload, content_type="application/problem+json; charset=utf-8",
-                       status=status,
-                       extra_headers=(_cache_headers(cache=cache, rid=rid)
-                                      + list(headers or [])))
+                       status=status, extra_headers=stamp)
 
 
 def json_response(handler, payload, *, rid: str, status: int = 200,
@@ -426,8 +535,12 @@ def _from_layer2(result: dict) -> tuple[bool, str, str]:
 
 
 def send_layer2(handler, result: dict, *, rid: str, path: str, cache: str,
-                etag_seed: str, rev: int, last_modified=None, operator: bool = False,
+                etag_seed: str, rev, last_modified=None, operator: bool = False,
                 not_found_detail: str = "") -> None:
+    """Put a Layer-2 envelope on the wire, validating it against the vector.
+
+    `rev` is the whole `version_vector()` (§16.2), so the validator a client reuses
+    moves whenever any group that this reply could depend on moved."""
     ok, code, message = _from_layer2(result)
     if not ok:
         detail = (not_found_detail or message) if code == "not_found" else message
@@ -448,12 +561,85 @@ def send_layer2(handler, result: dict, *, rid: str, path: str, cache: str,
 
 # ── catalog revision / readiness ─────────────────────────────────────────────
 
+#: §16.2's four version groups, in the order they are folded into a validator.
+VERSION_GROUPS = ("catalog_rev", "health_rev", "offsets_rev", "entitlements_rev")
+
+#: The meta key that carried the health group before Layer 1 grew `health_rev`
+#: (§16.2: "Backing today: `cat_projection_meta.health`"). Read as a fallback so a
+#: projection built either way moves the validator instead of resetting it to 0.
+_LEGACY_HEALTH_KEY = "health"
+
+
+def _as_rev(value) -> int:
+    """A revision as a non-negative int; anything unreadable is `0` (§16.2)."""
+    text = str(value if value is not None else "").strip()
+    if not text:
+        return 0
+    try:
+        number = float(text)
+    except (TypeError, ValueError):
+        return 0
+    return int(number) if number > 0 else 0
+
+
 def catalog_rev(conn) -> int:
     try:
         row = conn.execute("SELECT COALESCE(MAX(source_rev), 0) AS v FROM cat_works").fetchone()
     except sqlite3.Error:
         return 0
     return int(row["v"]) if row else 0
+
+
+def _meta_revisions(conn) -> dict:
+    """Read the version groups straight out of `cat_projection_meta`.
+
+    This is the degradation path: Layer 1's own `projection_versions()` helper may
+    not exist yet, or may not carry a key, and a missing key is `0` rather than a
+    crash — the wire must still answer with a validator it can revalidate.
+    """
+    stored: dict[str, str] = {}
+    try:
+        for row in conn.execute("SELECT key, value FROM cat_projection_meta"):
+            stored[str(row[0])] = row[1]
+    except sqlite3.Error:
+        stored = {}
+    out = {key: _as_rev(stored.get(key)) for key in VERSION_GROUPS}
+    if not out["health_rev"]:
+        out["health_rev"] = _as_rev(stored.get(_LEGACY_HEALTH_KEY))
+    return out
+
+
+def version_vector(conn) -> dict:
+    """The four §16.2 groups as one dict — the only source a validator is built from.
+
+    `/sync` publishes this same dict and every cached GET folds it into its `ETag`,
+    so the two can never disagree about what moved. `catalog_rev` is the greater of
+    the declared group and the newest `source_rev` actually stamped on a work: a
+    row that moved further than the declaration did would otherwise keep serving a
+    stale `304` under a validator nobody re-wrote.
+    """
+    getter = getattr(catalog_v2, "projection_versions", None)
+    out = _meta_revisions(conn)
+    if callable(getter):
+        try:
+            given = getter(conn) or {}
+        except Exception:
+            # A half-built Layer-1 helper must not take the edge down; the meta
+            # read above already answers with what the projection actually holds.
+            given = {}
+        if isinstance(given, dict):
+            for key in VERSION_GROUPS:
+                if key in given:
+                    out[key] = _as_rev(given.get(key))
+    out["catalog_rev"] = max(out["catalog_rev"], catalog_rev(conn))
+    return {key: int(out[key]) for key in VERSION_GROUPS}
+
+
+def rev_token(rev) -> str:
+    """A revision, or a whole version vector, as the digits inside an `ETag`."""
+    if isinstance(rev, dict):
+        return "-".join(str(_as_rev(rev.get(key))) for key in VERSION_GROUPS)
+    return str(_as_rev(rev))
 
 
 def projected_at(conn):
@@ -530,6 +716,7 @@ def manifest_payload(conn) -> dict:
     compute it, so the manifest cannot tell a story the code does not act out.
     """
     state = catalog_api.catalog_state(conn)
+    versions = version_vector(conn)
     return {
         "ok": True,
         "contract_version": CONTRACT_VERSION,
@@ -541,11 +728,12 @@ def manifest_payload(conn) -> dict:
                 "field": "candidates[].rank_score",
                 "axes": {
                     "projection_prior": {"range": list(LINK_RANK_WEIGHTS["range"]),
-                                         "weights": dict(LINK_RANK_WEIGHTS)},
+                                         "weights": dict(LINK_RANK_WEIGHTS),
+                                         "producer": "catalog_v2.project()"},
                     "measured": dict(LINK_MEASURED),
                 },
-                "which_one_is_served": ("measured when last_evidence_at is newer than the"
-                                        " projection, else prior"),
+                "which_one_is_served": dict(LINK_SCALE_SELECTOR),
+                "band_collapse": dict(BAND_COLLAPSE),
             },
         },
         "enums": {
@@ -584,7 +772,9 @@ def manifest_payload(conn) -> dict:
                         for code, (status, title) in sorted(PROBLEM_CODES.items())},
         "cache_classes": {"browse": CACHE_BROWSE, "detail": CACHE_DETAIL,
                           "manifest": CACHE_MANIFEST, "no_store": CACHE_NO_STORE},
-        "conditional_requests": {"etag": "weak", "header": "If-None-Match", "on_match": 304},
+        "conditional_requests": {"etag": "weak", "header": "If-None-Match", "on_match": 304,
+                                 "version_groups": list(VERSION_GROUPS),
+                                 "folded_into_etag": True},
         "pagination": {"style": "keyset cursor", "opaque": True,
                        "carries": ["next_cursor", "has_more", "total_estimate", "limit"]},
         "visibility_policy": {
@@ -596,7 +786,8 @@ def manifest_payload(conn) -> dict:
         },
         "implemented": {"layer1": True, "layer2": True, "wire": True,
                         "schema_version": catalog_v2.SCHEMA_VERSION},
-        "catalog": {"rev": int(state.get("rev") or 0),
+        "catalog": {"rev": versions["catalog_rev"],
+                    "versions": dict(versions),
                     "projected_at": state.get("projected_at"),
                     "counts": redact.scrub(deny_flag_keys(
                         public_catalog_counts(conn, state.get("counts") or {})))},
@@ -619,6 +810,7 @@ def stats_payload(conn) -> dict:
     playability, tier, band, language.
     """
     scope = adult_scope("w")
+    versions = version_vector(conn)
     counts = {
         "works": conn.execute(
             f"SELECT COUNT(*) FROM cat_works w WHERE {scope}").fetchone()[0],
@@ -705,7 +897,9 @@ def stats_payload(conn) -> dict:
                 "avg_latency_ms": round(float(measured["latency"] or 0), 2),
             },
         },
-        "catalog": {"rev": catalog_rev(conn), "projected_at": projected_at(conn),
+        "catalog": {"rev": versions["catalog_rev"],
+                    "versions": versions,
+                    "projected_at": projected_at(conn),
                     "schema_version": catalog_v2.SCHEMA_VERSION},
         "generated_at": time.time(),
     }
@@ -715,12 +909,14 @@ def health_payload(conn) -> dict:
     """§12 liveness/readiness. `no-store`: it is an ops endpoint, and a cached
     "ready" is precisely the failure mode it exists to catch."""
     ready = has_catalog(conn)
+    versions = version_vector(conn)
     return {
         "ok": True,
         "status": "ready" if ready else "unavailable",
         "contract_version": CONTRACT_VERSION,
         "schema_version": catalog_v2.SCHEMA_VERSION,
-        "catalog_rev": catalog_rev(conn),
+        "catalog_rev": versions["catalog_rev"],
+        "versions": versions,
         "projected_at": projected_at(conn),
         "server_time": time.time(),
     }
@@ -801,6 +997,7 @@ def sync_payload(conn, *, scope: str, since, limit: int, secret: str,
       forever and never saw the second one.
     """
     rev = catalog_rev(conn)
+    versions = version_vector(conn)
     decoded = cursor_decode(since)
     if decoded is None:
         return {"__error__": "cursor_invalid"}
@@ -829,20 +1026,44 @@ def sync_payload(conn, *, scope: str, since, limit: int, secret: str,
         if rows:
             after = (int(rows[-1]["source_rev"] or 0), int(rows[-1]["id"]))
     elif scope == "health":
-        rows = conn.execute(
-            f"""
-            SELECT l.id, l.state, l.rank_score, l.playability, l.last_evidence_at
-            FROM cat_links l JOIN cat_works w ON w.id = l.work_id
-            WHERE (COALESCE(l.last_evidence_at, 0) > :rev
-                   OR (COALESCE(l.last_evidence_at, 0) = :rev AND l.id > :id)){where}
-            ORDER BY COALESCE(l.last_evidence_at, 0) ASC, l.id ASC LIMIT :lim
-            """, {"rev": float(cur_rev or 0), "id": cur_id, "lim": limit}).fetchall()
+        # §16.3 publishes `score_scale` per row, and §7.1's two scales are not
+        # comparable, so this cannot be a constant: a link whose journal holds a
+        # probe (a row that names a protocol — exactly what `_blend_link()` requires
+        # to switch a score over) is on the measured scale, everything else is
+        # still on the projection prior. An older projection with no evidence table
+        # has nothing measured in it.
+        probe = """CASE WHEN EXISTS (SELECT 1 FROM cat_link_evidence x
+                                     WHERE x.link_id = l.id
+                                       AND COALESCE(x.protocol, '') <> '')
+                        THEN 1 ELSE 0 END AS probed"""
+        try:
+            rows = conn.execute(
+                f"""
+                SELECT l.id, l.state, l.rank_score, l.playability, l.last_evidence_at,
+                       l.latency_ms, {probe}
+                FROM cat_links l JOIN cat_works w ON w.id = l.work_id
+                WHERE (COALESCE(l.last_evidence_at, 0) > :rev
+                       OR (COALESCE(l.last_evidence_at, 0) = :rev AND l.id > :id)){where}
+                ORDER BY COALESCE(l.last_evidence_at, 0) ASC, l.id ASC LIMIT :lim
+                """, {"rev": float(cur_rev or 0), "id": cur_id, "lim": limit}).fetchall()
+        except sqlite3.Error:
+            rows = conn.execute(
+                f"""
+                SELECT l.id, l.state, l.rank_score, l.playability, l.last_evidence_at,
+                       l.latency_ms, 0 AS probed
+                FROM cat_links l JOIN cat_works w ON w.id = l.work_id
+                WHERE (COALESCE(l.last_evidence_at, 0) > :rev
+                       OR (COALESCE(l.last_evidence_at, 0) = :rev AND l.id > :id)){where}
+                ORDER BY COALESCE(l.last_evidence_at, 0) ASC, l.id ASC LIMIT :lim
+                """, {"rev": float(cur_rev or 0), "id": cur_id, "lim": limit}).fetchall()
         for row in rows:
+            scale = tiers.scale_of({"measured": bool(row["probed"]) or row["latency_ms"] is not None})
             items.append({"link_ref": link_ref_for(int(row["id"]), secret),
                           "state": row["state"],
                           "rank_score": row["rank_score"],
                           "playability": row["playability"],
-                          "score_scale": LINK_RANK_WEIGHTS["range"][1],
+                          "score_scale": scale,
+                          "score_range": list(tiers.SCALE_RANGES[scale]),
                           "last_evidence_at": row["last_evidence_at"]})
         if rows:
             after = (float(rows[-1]["last_evidence_at"] or 0.0), int(rows[-1]["id"]))
@@ -867,6 +1088,10 @@ def sync_payload(conn, *, scope: str, since, limit: int, secret: str,
         "ok": True,
         "scope": scope,
         "rev": rev,
+        # §16.2/§16.3: the same four groups the `ETag`s of the cached routes are
+        # folded from, read from the same call — a client that diffs `/sync`
+        # versions and re-reads a validator can never be told two different stories.
+        "versions": versions,
         "items": items,
         "count": len(items),
         "limit": limit,
@@ -1170,6 +1395,8 @@ def route_get(handler, path: str, query: dict, *, db_path, operator: bool,
         return False
     segments = _tail(path)
     rid = request_id()
+    handler.v2_method = "GET"
+    attach_rate_headers(handler, path, "GET")
     if not shape_allowed("GET", segments):
         problem(handler, code="not_found", rid=rid, instance=path,
                 detail="No such v2 route.")
@@ -1181,13 +1408,13 @@ def route_get(handler, path: str, query: dict, *, db_path, operator: bool,
                     detail="The catalog projection has not been built yet.",
                     headers=[("Retry-After", "60")])
             return True
-        rev = catalog_rev(conn)
+        versions = version_vector(conn)
         stamp = projected_at(conn)
         head = segments[0] if segments else ""
 
         if head == "manifest":
             payload = manifest_payload(conn)
-            etag = etag_for(json.dumps(payload, sort_keys=True, default=str), rev)
+            etag = etag_for(json.dumps(payload, sort_keys=True, default=str), versions)
             if etag_matches(str(handler.headers.get("If-None-Match") or ""), etag):
                 not_modified(handler, cache=CACHE_MANIFEST, etag=etag, rid=rid,
                              last_modified=stamp)
@@ -1209,7 +1436,7 @@ def route_get(handler, path: str, query: dict, *, db_path, operator: bool,
             else:
                 result = catalog_api.browse(conn, **kwargs)
             send_layer2(handler, result, rid=rid, path=path, cache=CACHE_BROWSE,
-                        etag_seed=head, rev=rev, last_modified=stamp,
+                        etag_seed=head, rev=versions, last_modified=stamp,
                         operator=operator)
             return True
 
@@ -1224,7 +1451,7 @@ def route_get(handler, path: str, query: dict, *, db_path, operator: bool,
                                          include_adult=bool(operator))
             _public_art(result, base_url=base_url, secret=secret)
             send_layer2(handler, result, rid=rid, path=path, cache=CACHE_BROWSE,
-                        etag_seed=f"suggest|{text}", rev=rev, last_modified=stamp,
+                        etag_seed=f"suggest|{text}", rev=versions, last_modified=stamp,
                         operator=operator)
             return True
 
@@ -1252,7 +1479,7 @@ def route_get(handler, path: str, query: dict, *, db_path, operator: bool,
                 seed, detail = f"work|{ident}|{_q(query, 'fields')}", \
                     "No such work in the catalog."
             send_layer2(handler, result, rid=rid, path=path, cache=CACHE_DETAIL,
-                        etag_seed=seed, rev=rev, last_modified=stamp,
+                        etag_seed=seed, rev=versions, last_modified=stamp,
                         operator=operator, not_found_detail=detail)
             return True
 
@@ -1260,7 +1487,7 @@ def route_get(handler, path: str, query: dict, *, db_path, operator: bool,
             result = catalog_api.episode_detail(conn, episode_id=segments[1],
                                                 include_adult=bool(operator))
             send_layer2(handler, result, rid=rid, path=path, cache=CACHE_DETAIL,
-                        etag_seed=f"episode|{segments[1]}", rev=rev,
+                        etag_seed=f"episode|{segments[1]}", rev=versions,
                         last_modified=stamp, operator=operator,
                         not_found_detail="No such episode in the catalog.")
             return True
@@ -1269,7 +1496,7 @@ def route_get(handler, path: str, query: dict, *, db_path, operator: bool,
             result = catalog_api.release_detail(conn, release_id=segments[1],
                                                 include_adult=bool(operator))
             send_layer2(handler, result, rid=rid, path=path, cache=CACHE_DETAIL,
-                        etag_seed=f"release|{segments[1]}", rev=rev,
+                        etag_seed=f"release|{segments[1]}", rev=versions,
                         last_modified=stamp, operator=operator,
                         not_found_detail="No such print in the catalog.")
             return True
@@ -1302,6 +1529,10 @@ def route_get(handler, path: str, query: dict, *, db_path, operator: bool,
                         str(handler.headers.get("Origin") or "")):
                     handler.send_header(name, value)
                 handler.send_header("X-Request-Id", rid)
+                # §16.5 on the redirect too: this path writes its own header block,
+                # so the budget the gate already spent has to be repeated here.
+                for name, value in (getattr(handler, "rate_headers", []) or []):
+                    handler.send_header(name, value)
                 handler.send_header("Connection", "close")
                 handler.end_headers()
                 return True
@@ -1333,7 +1564,7 @@ def route_get(handler, path: str, query: dict, *, db_path, operator: bool,
                                else "`scope` must be catalog, health or entitlements.")
                 return True
             send_layer2(handler, result, rid=rid, path=path, cache=CACHE_NO_STORE,
-                        etag_seed=f"sync|{scope}|{_q(query, 'since')}", rev=rev,
+                        etag_seed=f"sync|{scope}|{_q(query, 'since')}", rev=versions,
                         last_modified=stamp, operator=operator)
             return True
 
@@ -1347,7 +1578,7 @@ def route_get(handler, path: str, query: dict, *, db_path, operator: bool,
         if head == "feed.m3u":
             body = feed_playlist(conn, work_id=_int_or_none(_q(query, "work_id")),
                                  base_url=base_url, secret=secret)
-            etag = etag_for(body, rev)
+            etag = etag_for(body, versions)
             if etag_matches(str(handler.headers.get("If-None-Match") or ""), etag):
                 not_modified(handler, cache=CACHE_DETAIL, etag=etag, rid=rid,
                              last_modified=stamp)
@@ -1366,7 +1597,7 @@ def route_get(handler, path: str, query: dict, *, db_path, operator: bool,
             payload = stats_payload(conn)
             etag = etag_for(json.dumps(payload["counts"], sort_keys=True, default=str)
                             + json.dumps(payload["catalog"], sort_keys=True,
-                                         default=str), rev)
+                                         default=str), versions)
             if etag_matches(str(handler.headers.get("If-None-Match") or ""), etag):
                 not_modified(handler, cache=CACHE_BROWSE, etag=etag, rid=rid,
                              last_modified=stamp)
@@ -1413,6 +1644,8 @@ def route_post(handler, path: str, query: dict, *, db_path, operator: bool,
         return False
     segments = _tail(path)
     rid = request_id()
+    handler.v2_method = "POST"
+    attach_rate_headers(handler, path, "POST")
     catalog_api.configure_public(base_url, secret)
     body, body_error = read_body(handler)
     if body_error:
@@ -1489,9 +1722,17 @@ def route_play(handler, conn, body: dict, *, rid: str, path: str, operator: bool
     work_id = _int_or_none(body.get("work_id"))
     named = release_id is not None or episode_id is not None or work_id is not None
     if release_id is None and episode_id is not None:
+        # Read inside the adult scope like every other query here. Unscoped, this
+        # one lookup still ended up answering `not_found` (the print it points at is
+        # filtered by `play_bundle`), but a hidden row reaching *any* branch of a
+        # route is the shape that turns into a leak the next time somebody edits the
+        # branch — §13 puts the scope on the read, not on the reply.
+        where = "" if operator else f" AND {adult_scope('w')}"
         row = conn.execute(
-            "SELECT best_release_id FROM cat_episodes WHERE id = ?",
-            (episode_id,)).fetchone()
+            f"""
+            SELECT e.best_release_id FROM cat_episodes e
+            JOIN cat_works w ON w.id = e.work_id WHERE e.id = ?{where}
+            """, (episode_id,)).fetchone()
         release_id = _int_or_none(row["best_release_id"]) if row else None
     if release_id is None and work_id is not None:
         where = "" if operator else f" AND {adult_scope('w')}"

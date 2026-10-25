@@ -996,6 +996,71 @@ class CrawlRetryAccountingTests(unittest.TestCase):
             indexed_cols = [r[2] for r in conn.execute("PRAGMA index_info(idx_sitemap_retry)")]
         self.assertEqual(indexed_cols, ["scraped", "attempts"])
 
+    def payload(self, url, *, with_release):
+        return {
+            "url": url,
+            "slug": url.rstrip("/").split("/")[-1],
+            "title": "Example Film (2024)",
+            "clean_title": "Example Film",
+            "year": 2024,
+            "content_type": "movie",
+            "is_18_plus": 0,
+            "is_animated": 0,
+            "source_site": "example",
+            "industry": "Hollywood",
+            "country": "USA",
+            "language": "English",
+            "canonical_key": fast_fetch.generate_canonical_key("Example Film", 2024),
+            "releases": [{
+                "release_title": "Example Film 1080p", "quality": "1080p", "codec": "x264",
+                "size": "1GB", "languages": "English",
+                "sources": [{"source_name": "Example CDN", "source_url": "https://cdn.example/a"}],
+            }] if with_release else [],
+        }
+
+    def save(self, url, *, with_release):
+        with patch.object(fast_fetch, "fetch_cinemeta_metadata", return_value=None):
+            fast_fetch.save_scraped_data(self.payload(url, with_release=with_release))
+
+    def row_for(self, url):
+        with fast_fetch.get_db() as conn:
+            return conn.execute(
+                "SELECT scraped, attempts, last_cause FROM sitemap_cache WHERE loc = ?",
+                (url,),
+            ).fetchone()
+
+    def test_a_page_that_yielded_nothing_is_not_marked_indexed(self):
+        """The silent-loss path: `scraped = 1` on an empty response hid ~1.7k
+        katmoviehd and ~2.4k hindilinks4u URLs behind a green tick."""
+        url = "https://example.empty/empty-page/"
+        self.seed([(url, "2024-01-01", "empty-page", 0, 0)])
+        self.save(url, with_release=False)
+        row = self.row_for(url)
+        self.assertEqual(row[0], -1, "an unreadable page is a failure, not an index")
+        self.assertEqual(row[1], 1)
+        self.assertEqual(row[2], "parse_no_releases")
+
+    def test_an_empty_page_stays_reachable_until_the_budget_runs_out(self):
+        url = "https://example.empty/retry-me/"
+        self.seed([(url, "2024-01-01", "retry-me", 0, 0)])
+        for _ in range(fast_fetch.MAX_CRAWL_ATTEMPTS - 1):
+            self.save(url, with_release=False)
+        with fast_fetch.get_db() as conn:
+            queued = [r["loc"] for r in fast_fetch.select_crawl_candidates(conn, None, 10)]
+        self.assertEqual(queued, [url])
+        self.save(url, with_release=False)
+        with fast_fetch.get_db() as conn:
+            self.assertEqual(fast_fetch.select_crawl_candidates(conn, None, 10), [])
+
+    def test_a_page_that_yielded_a_release_is_still_indexed(self):
+        url = "https://example.good/good-page/"
+        self.seed([(url, "2024-01-01", "good-page", 0, 0)])
+        self.save(url, with_release=True)
+        row = self.row_for(url)
+        self.assertEqual(row[0], 1)
+        self.assertEqual(row[1], 0)
+        self.assertIsNone(row[2])
+
 
 class SiteScoutStagingIsolationTests(unittest.TestCase):
     """Integration smoke test: site_scout.py (Phase 1) never targets the production

@@ -161,7 +161,13 @@ class FakeHandler:
 
     def finish_reply(self):
         for reply in self.replies:
-            reply["headers"].extend(self.rate_headers)
+            # `viewer.DashboardHandler.send_bytes` is the only place the gate's copy
+            # of the `RateLimit-*` triple is appended, and the resolver's 302 and the
+            # conditional 304 write their own header block without it. Appending it
+            # here as well would let a route that forgot to stamp those two replies
+            # pass, which is the opposite of what §16.5 needs proven.
+            if reply["kind"] == "bytes":
+                reply["headers"].extend(self.rate_headers)
             if "content_type" not in reply:
                 reply["content_type"] = ""
 
@@ -462,8 +468,14 @@ class V2WireFixture(unittest.TestCase):
 
     # ---- the wire -----------------------------------------------------------
     def call(self, path, query=None, *, method="GET", operator=False, body=None,
-             headers=None, raw_body=None):
-        """One route invocation through `api_v2`, exactly as `viewer` mounts it."""
+             headers=None, raw_body=None, gate=True):
+        """One route invocation through `api_v2`, exactly as `viewer` mounts it.
+
+        `gate=False` models the same wire mounted *without* `viewer._public_gate`:
+        no token spent, no `RateLimit-*` attached by the host, so a route that
+        relies on its mount for §16.5's headers fails here instead of passing on
+        borrowed ones.
+        """
         params = {}
         for key, value in (query or {}).items():
             params[key] = [str(value)]
@@ -474,9 +486,10 @@ class V2WireFixture(unittest.TestCase):
                 body or {}, ensure_ascii=False).encode("utf-8")
             sent.setdefault("Content-Length", str(len(payload)))
         handler = FakeHandler(sent, payload)
-        handler.rate_headers = [("RateLimit-Limit", "60"),
-                               ("RateLimit-Remaining", "59"),
-                               ("RateLimit-Reset", "60")]
+        if gate:
+            handler.rate_headers = [("RateLimit-Limit", "60"),
+                                   ("RateLimit-Remaining", "59"),
+                                   ("RateLimit-Reset", "60")]
         route = api_v2.route_get if method == "GET" else api_v2.route_post
         answered = route(handler, path, params, db_path=self.db_path,
                         operator=bool(operator), base_url=HOST, secret=self.secret)
@@ -484,6 +497,10 @@ class V2WireFixture(unittest.TestCase):
         self.assertEqual(len(handler.replies), 1,
                          f"{method} {path} wrote {len(handler.replies)} replies")
         return Reply(handler, path)
+
+    def bare(self, path, query=None, **kwargs):
+        """The same call on a mount that stamped nothing."""
+        return self.call(path, query, gate=False, **kwargs)
 
     def get(self, path, query=None, **kwargs):
         return self.call(path, query, method="GET", **kwargs)

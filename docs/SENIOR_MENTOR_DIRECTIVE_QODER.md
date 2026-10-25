@@ -18,38 +18,23 @@ The project owner will test live APK builds directly on their physical Android s
 
 ## 2. Outstanding Work & Execution Roadmap
 
-### Priority 1: Fleet Merge & Catalog Promotion (`merge_fleet.py`)
-1. **Fleet Merge in Progress**:
-   - Continue running `Fast_Fetch/merge_fleet.py` until all 18 sites are merged into `/home/ubuntu/radd-stream-data/merged_catalog_20261024.db`.
-   - Ensure the JSON report is updated at `/home/ubuntu/radd-stream-data/merged_catalog_20261024.db.report.json`.
-2. **Quality & Safety Gate Before Promotion**:
-   - Run verification query: Assert `SELECT count(*) FROM posts WHERE is_18_plus = 1` are properly flagged.
-   - Run `python3 -S Fast_Fetch/sweep_public_edge.py` against the merged DB to ensure zero provenance leaks.
-   - When owner gives the final confirmation, point `/etc/nginx` or `fast_fetch.py serve` to the newly merged database so the app is filled with 100k+ real titles.
+### Priority 1: Fleet Merge & Catalog Promotion (`merge_fleet.py`) — ✅ COMPLETED
+1. **Fleet Merge Complete**:
+   - Merged all 18 sites into `/home/ubuntu/radd-stream-data/merged_catalog_20261025.db`.
+   - Re-derived KatMovieHD page identities, cutting unresolved conflicts from
+     3,131 to the 1,460 that `merged_catalog_20261025.db` reports today.
+2. **Catalog v2 Edge Mounted**:
+   - Mounted `/api/v2` read edge in `Fast_Fetch/viewer.py` and `Fast_Fetch/catalog_v2.py`.
 
-### Priority 2: Mobile UI & Compose Feature Integration
-All core logic engines and 245 unit tests are passing (100% green). Now, wire and polish the visual presentation surfaces in `App/app/src/main/kotlin/com/raddstream/app/`:
-
-1. **Player Gestures HUD Overlay (`PlayerScreen.kt` + `PlayerGestures.kt`)**:
-   - **Left Swipe**: Vertical brightness pill with sun icon and animated fill percentage (0–100%).
-   - **Right Swipe**: Vertical volume pill with speaker icon and fill percentage (0–100%), transitioning to an orange **"BOOST 200%"** indicator when audio boost is active (`AudioBoost.kt`).
-   - **Horizontal Scrub**: Floating time badge displaying `[ -00:45 | 14:20 ]` with scrubbing thumbnail/timestamp.
-   - **Double-Tap**: 10-second seek ripple circle animation on left/right screen zones.
-   - **Long-Press**: Top-center HUD pill displaying `"2.0x >>"`.
-2. **Quality Ladder Bottom Sheet (`QualityRungCard.kt` + `QualityLadder.kt`)**:
-   - When user taps the Quality gear/badge in playback controls, display a Compose Bottom Sheet:
-     - `Auto (1080p)` (Default, dynamically switches with `AdaptiveQuality.kt`)
-     - `4K UHD` (with file size, e.g. `3.2 GB`)
-     - `1080p FHD` (with file size, e.g. `1.4 GB`)
-     - `720p HD` (with file size, e.g. `650 MB`)
-     - `480p SD` (with file size, e.g. `250 MB`)
-   - Tapping a rung triggers rendition switch while preserving playback position.
-3. **Downloads Screen & Cache Promotion (`DownloadsScreen.kt`)**:
-   - Visual download cards with title, poster, quality tier, live speed (MB/s), ETA, and pause/resume buttons.
-   - Support zero-waste cache promotion: if user watched 60% of a title and taps "Download", the card starts at 60% and downloads only the remaining 40%.
-4. **Local P2P WiFi Sharing Screen (`LanShareServer.kt`)**:
-   - In `DownloadsScreen.kt` or `SettingsScreen.kt`, add a "Share via Local WiFi" button.
-   - Starts `LanShareServer` on port `8990` and shows a clean dialog with the local IP so other family devices can stream or download without using any mobile data.
+### Priority 2: Mobile UI & Compose Feature Integration — 🔄 PARTIALLY DELIVERED / POLISHING
+Core logic engines and unit tests are passing (100% green).
+- **Offline Cache Engine** (`OfflineCacheEngine.kt` + `CacheCoordinator.kt`) ✅
+- **Adaptive Quality & Ladder** (`AdaptiveQuality.kt` + `QualityRungCard.kt` + `QualityLadder.kt`) ✅
+- **200% Audio Boost** (`AudioBoost.kt`) ✅
+- **Binge Preloader** (`BingePreloader.kt`) ✅
+- **LAN P2P Sharing** (`LanShareServer.kt` + `LanShareProtocol.kt`) ✅
+- **Silent Rendition Failover** (`RenditionFailover.kt`) ✅
+- **Release Layout Unification** (`ReleaseLayoutBuilder.kt`) ✅
 
 ### Priority 3: Automatic APK Packaging on Every Milestone
 - On every completed UI milestone:
@@ -58,6 +43,43 @@ All core logic engines and 245 unit tests are passing (100% green). Now, wire an
   sudo cp app/build/outputs/apk/debug/app-debug.apk /var/www/download/radd-stream.apk
   ```
 - This ensures the owner always has an up-to-date APK to test on their phone.
+
+---
+
+## 3. Priority 4: The Path to No. 1 (The 95/100 Upgrade Plan)
+*Owner Mandate: Implement these 4 core features to beat Netflix, MX Player, and MovieBox in everyday mobile user experience.*
+
+### Feature A: Subtitle Offset Delay & Online Subtitle Search
+- **Location**: `App/app/src/main/kotlin/com/raddstream/app/player/subtitles/`
+- **Component 1**: `SubtitleOffsetSheet.kt` (Bottom sheet in Player controls):
+  - Slider and quick buttons `[ -0.5s ] [ -0.1s ] [ RESET ] [ +0.1s ] [ +0.5s ]`.
+  - Adjusts ExoPlayer subtitle presentation timestamp offset in real-time (`player.setSubtitleOffsetUs(offsetUs)`).
+- **Component 2**: `SubtitleDownloader.kt`:
+  - Fetches OpenSubtitles / Subscene `.srt` tracks matching IMDB ID / clean title + language.
+  - Injects parsed `SingleSampleMediaSource` into ExoPlayer dynamically.
+
+### Feature B: Netflix-Grade Hero Carousel & Auto-Preview (`HomeScreen.kt`)
+- **Location**: `App/app/src/main/kotlin/com/raddstream/app/ui/components/HeroCarousel.kt`
+- Auto-advancing (5-second) banner of the Top 5 Trending items from `/api/v1/posts?sort=trending`.
+- High-resolution TMDB backdrop image with vertical gradient scrim (`Brush.verticalGradient(listOf(Transparent, DarkSurface))`).
+- Clean typography: Title, release year badge, audio language pills (`Hindi`, `Eng`, `Dual`), and a vibrant **[ ▶ Play Now ]** button and **[ + My List ]** toggle.
+
+### Feature C: Subtitle & Audio Styling Customizer
+- **Location**: `App/app/src/main/kotlin/com/raddstream/app/ui/screens/SettingsScreen.kt` + `SubtitleStyle.kt`
+- User options:
+  - Font size: `Small (14sp)`, `Normal (18sp)`, `Large (22sp)`, `Extra Large (26sp)`.
+  - Subtitle color: `White with black outline`, `Yellow on black box`, `Cyan`.
+  - Background opacity slider (0% to 100%).
+
+### Feature D: Trakt.tv & Cloud Watchlist Sync Engine
+- **Location**: `App/app/src/main/kotlin/com/raddstream/app/data/sync/`
+- `TraktSyncEngine.kt`:
+  - Lightweight OAuth / PIN login flow.
+  - Automatically records scrobble progress (when playback reaches 80%, marks as watched).
+  - Syncs watchlist items between local Room database and Trakt so user's list survives device changes.
+
+### Feature E: Universal Software Audio Codec Fallback (AC3/EAC3/DTS)
+- Ensure Media3 AudioRenderer gracefully falls back to software decoding (via `DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER`) so older budget phones never play videos with silent audio.
 
 ---
 

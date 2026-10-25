@@ -21,6 +21,7 @@ Standard Library only. Zero external pip packages.
 from __future__ import annotations
 
 import json
+import os
 import re
 import dataclasses
 import sqlite3
@@ -29,11 +30,41 @@ from pathlib import Path
 
 BASE_DIR = Path(__file__).parent.resolve()
 
+#: A full rebuild of the production catalog runs for hours on this one-CPU box and
+#: printed nothing until it finished, so an operator could not tell progress from a
+#: hang. Setting `RADD_PROJECT_PROGRESS=N` reports each stage and a work counter
+#: every N works; unset means silent, which keeps the test output clean.
+PROGRESS_EVERY = int(os.environ.get("RADD_PROJECT_PROGRESS") or 0)
+
+
+def _progress(message: str) -> None:
+    if PROGRESS_EVERY:
+        print(f"[.] {message}", flush=True)
+
 #: v2 -> the link-state vocabulary changed under `link_state.py`: `cat_links.state`
 #: now defaults to 'unchecked' (never probed) instead of claiming 'active', and every
 #: projected link carries `ledger_link_id` so a verdict can reach it without a rebuild.
 SCHEMA_VERSION = 2
 MAX_ENUMERATED_EPISODES = 120
+
+#: The four §16.2 version groups, exactly as `api_v2.py` folds them into an ETag.
+#: Stored in `cat_projection_meta` under `catalog_rev` / `health` / `offsets_rev`
+#: / `entitlements_rev`; `projection_versions()` republishes the health group
+#: under its wire name `health_rev` so a consumer never has to know which meta
+#: key happened to be written first.
+REVISION_KEYS = ("catalog_rev", "health_rev", "offsets_rev", "entitlements_rev")
+_HEALTH_META_KEY = "health"
+
+#: §11.2's interim display ordering, now materialized in
+#: `cat_entitlements.display_priority` (lower shown first).
+DISPLAY_PRIORITY = {"free": 10, "ads": 20, "flatrate": 30, "rental": 40, "purchase": 50}
+_ENTITLEMENT_MODELS = tuple(sorted(DISPLAY_PRIORITY))
+
+#: Reports for one pack offset must reach this many votes before a *different*
+#: report can be refused as a minority (§4.3: "a single wrong report cannot
+#: silently shift everyone's playback"). Below the quorum the newest report still
+#: wins so an early misreport stays cheap to correct.
+OFFSET_QUORUM = 3
 
 _SERIES_TYPES = {"series", "complete_season", "ongoing_season", "anime", "miniseries"}
 
@@ -211,6 +242,7 @@ CREATE TABLE IF NOT EXISTS cat_releases (
     watermarked INTEGER NOT NULL DEFAULT 0,
     official_print INTEGER NOT NULL DEFAULT 0,
     quality_score INTEGER NOT NULL DEFAULT 0,
+    identity_suspect INTEGER NOT NULL DEFAULT 0,
     link_count INTEGER NOT NULL DEFAULT 0,
     streamable_count INTEGER NOT NULL DEFAULT 0,
     downloadable_count INTEGER NOT NULL DEFAULT 0,
@@ -290,6 +322,7 @@ CREATE TABLE IF NOT EXISTS cat_entitlements (
     work_id INTEGER,
     release_id INTEGER,
     model TEXT NOT NULL DEFAULT 'free',
+    display_priority INTEGER NOT NULL DEFAULT 10,
     price_minor INTEGER NOT NULL DEFAULT 0,
     currency TEXT NOT NULL DEFAULT 'INR',
     region TEXT,
@@ -333,6 +366,64 @@ CREATE TABLE IF NOT EXISTS cat_offsets (
     confirmed_by INTEGER NOT NULL DEFAULT 0,
     updated_at REAL NOT NULL,
     PRIMARY KEY (work_key, season_number, episode_number, release_label)
+);
+
+-- Every competing offset ever reported for one (work, season, episode, label), so
+-- `record_offset()` can pick a majority instead of trusting the last writer
+-- (API_V2.md §4.3). Durable like `cat_offsets`: never in `_reset()`.
+CREATE TABLE IF NOT EXISTS cat_offset_votes (
+    work_key TEXT NOT NULL,
+    season_number INTEGER NOT NULL DEFAULT 0,
+    episode_number INTEGER NOT NULL,
+    release_label TEXT NOT NULL DEFAULT '',
+    offset_seconds INTEGER NOT NULL,
+    votes INTEGER NOT NULL DEFAULT 1,
+    updated_at REAL NOT NULL,
+    PRIMARY KEY (work_key, season_number, episode_number, release_label, offset_seconds)
+);
+
+-- Admin-written entitlement offers, keyed by stable identity (work_key, not the
+-- churning `cat_works.id`) exactly like `cat_offsets`, so a paid row survives a
+-- rebuild and is re-applied onto `cat_entitlements` by `_finalize()`.
+CREATE TABLE IF NOT EXISTS cat_entitlement_rules (
+    work_key TEXT NOT NULL,
+    release_label TEXT NOT NULL DEFAULT '',
+    model TEXT NOT NULL,
+    price_minor INTEGER NOT NULL DEFAULT 0,
+    currency TEXT NOT NULL DEFAULT 'INR',
+    region TEXT NOT NULL DEFAULT '',
+    geo_allow TEXT,
+    geo_deny TEXT,
+    valid_from REAL,
+    valid_until REAL,
+    rental_hours INTEGER,
+    ownership TEXT NOT NULL DEFAULT 'permanent',
+    requires_account INTEGER NOT NULL DEFAULT 0,
+    requires_age_gate INTEGER NOT NULL DEFAULT 0,
+    updated_at REAL NOT NULL,
+    PRIMARY KEY (work_key, release_label, model, region)
+);
+
+-- old `cat_*` row id -> new one for the rebuild that replaced it, by stable key
+-- (work_key / natural print tuple / url). Traceability for caches that persisted
+-- numeric ids (API_V2.md §3); append-only across revs, never in `_reset()`.
+CREATE TABLE IF NOT EXISTS cat_id_map (
+    kind TEXT NOT NULL,
+    old_id INTEGER NOT NULL,
+    new_id INTEGER NOT NULL,
+    rev INTEGER NOT NULL,
+    PRIMARY KEY (kind, rev, old_id)
+);
+
+-- Durable "a human already decided this" record for the review queue, keyed by
+-- (kind, work_key, signature) instead of the churning queue row id, so a
+-- resolution survives `_reset()` re-minting the same row on every rebuild.
+CREATE TABLE IF NOT EXISTS cat_review_resolutions (
+    kind TEXT NOT NULL,
+    work_key TEXT NOT NULL,
+    signature TEXT NOT NULL,
+    resolved_at REAL NOT NULL,
+    PRIMARY KEY (kind, work_key, signature)
 );
 
 CREATE INDEX IF NOT EXISTS idx_cat_works_title ON cat_works(title, year);
@@ -442,10 +533,70 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
     conn.executescript(DDL)
     _migrate_link_state(conn)
     _migrate_evidence_journal(conn)
+    _migrate_projection_columns(conn)
     conn.execute(
         "INSERT OR REPLACE INTO cat_projection_meta (key, value) VALUES ('schema_version', ?)",
         (str(SCHEMA_VERSION),),
     )
+
+
+def _migrate_projection_columns(conn: sqlite3.Connection) -> None:
+    """Add the v2.1 columns to tables built by an older projection.
+
+    `identity_suspect` (per-print review marker) and `display_priority` (§11.2's
+    stored ordering) are deliberately NOT indexed inside the DDL script — an index
+    over a migrated column breaks every database built before this ALTER existed.
+    """
+    if _has_table(conn, "cat_releases") and "identity_suspect" not in _columns(conn, "cat_releases"):
+        conn.execute("ALTER TABLE cat_releases ADD COLUMN identity_suspect INTEGER NOT NULL DEFAULT 0")
+    if _has_table(conn, "cat_entitlements") and "display_priority" not in _columns(conn, "cat_entitlements"):
+        conn.execute("ALTER TABLE cat_entitlements ADD COLUMN display_priority"
+                     " INTEGER NOT NULL DEFAULT 10")
+
+
+# ── Version groups (§16.2) ───────────────────────────────────────────────────
+
+def _as_rev(value) -> int:
+    try:
+        number = float(str(value).strip())
+    except (TypeError, ValueError):
+        return 0
+    return int(number) if number > 0 else 0
+
+
+def _read_rev(conn, key: str) -> int:
+    if not _has_table(conn, "cat_projection_meta"):
+        return 0
+    row = conn.execute("SELECT value FROM cat_projection_meta WHERE key = ?", (key,)).fetchone()
+    return _as_rev(row[0] if row else None)
+
+
+def _bump_rev(conn, key: str) -> int:
+    """Monotonic +1 on one `cat_projection_meta` revision key."""
+    nxt = _read_rev(conn, key) + 1
+    conn.execute("INSERT OR REPLACE INTO cat_projection_meta (key, value) VALUES (?, ?)",
+                 (key, str(nxt)))
+    return nxt
+
+
+def projection_versions(conn) -> dict:
+    """The four §16.2 version groups as one dict — all keys always present, `0`
+    when the database has never carried one. This is the ETag/`/sync` read
+    contract for Layer 2; nothing here mutates the database.
+
+    The health group is stored under the original `health` meta key (advanced by
+    `apply_evidence()`) and republished as `health_rev` to match the wire name.
+    """
+    out = {key: 0 for key in REVISION_KEYS}
+    if not _has_table(conn, "cat_projection_meta"):
+        return out
+    stored = {str(row[0]): row[1] for row in
+              conn.execute("SELECT key, value FROM cat_projection_meta")}
+    out["catalog_rev"] = _as_rev(stored.get("catalog_rev"))
+    out["offsets_rev"] = _as_rev(stored.get("offsets_rev"))
+    out["entitlements_rev"] = _as_rev(stored.get("entitlements_rev"))
+    out["health_rev"] = _as_rev(stored.get("health_rev") or stored.get(_HEALTH_META_KEY))
+    return out
 
 
 def _migrate_link_state(conn: sqlite3.Connection) -> None:
@@ -585,6 +736,112 @@ def _hint_int(value) -> int:
     return int(m.group()) if m else 0
 
 
+# ── Facts recoverable from label/page text (§4.2 unpopulated columns) ────────
+# Every rule below extracts only what the ledger text literally says; anything a
+# label does not name stays NULL. Inventing an air date or an episode count is
+# worse than the honest 🛠 marker.
+
+#: Tokens that end an episode-title tail: everything after one of these is
+#: presentation metadata, not the episode's name.
+_EPISODE_TAIL_STOP_RE = re.compile(
+    r"\b(?:\d{3,4}[pi]\b|\d{3,4}p\b|4k|uhd|hd|sd|x[\s.-]*26[45]|h[\s.-]*26[45]|hevc|avc|av1"
+    r"|xvid|mpeg ?2|10\s*bit|8\s*bit|hdr ?\d*\+?|dolby ?vision|dovi|esubs?\b|hsubs?\b|subs?\b"
+    r"|web[\s.-]?(?:dl|rip)|bluray|bdrip|dvdrip|hd ?tv|telesync|hdtc|telecine|cam(?:rip)?"
+    r"|dual|multi[\s-]?audio|audio|hindi|tamil|telugu|english|tollywood|bollywood|hollywood"
+    r"|subbed|dubbed|unrated|extended|remastered|restored|director'?s ?cut|imax|uncut"
+    r"|complete|batch|pack|full|movie|dvd|ddp?\d*|ac[\s.-]?3|aac|opus|flac|atmos|truehd"
+    r"|dts[\s.-]?hd|5\.1|7\.1|2\.0|stereo|mkv|mp4|m4v|avi|ts|fps|ntsc|pal|[vV]\d{1,3})\b|"
+    r"\b\d+(?:\.\d+)?\s*(?:gb|mb|tb)\b|\b\d{2,4}[-/.]\d{2}(?:[-/.]\d{2})?\b",
+    re.IGNORECASE)
+_EPISODE_MARK_RE = re.compile(
+    r"\bs\d{1,2}\s*e\d{1,4}\b|\be(?:p(?:isod(?:e)?)?)?\s*\.?\s*\d{1,4}\b(?![\s.-]*(?:\d))",
+    re.IGNORECASE)
+_AIR_DATE_RE = re.compile(r"\b(\d{4})-(\d{2})-(\d{2})\b")
+_RUNTIME_RE = re.compile(r"\b(\d{2,3})\s*(?:min|mins|minutes)\b", re.IGNORECASE)
+_SEASON_TITLE_RE = re.compile(
+    r"\bseason\s*\d{1,3}\s*[:\-–—]\s*([A-Za-z][A-Za-z0-9' ]{2,60})", re.IGNORECASE)
+_SPECIAL_RE = re.compile(r"\bs00\b|\bs0*0\b|(?<![a-z])specials?(?:\s*[:\-]|$)|\bspecials\b",
+                         re.IGNORECASE)
+_PACK_EP_COUNT_RE = re.compile(r"\b(\d{1,3})\s*(?:eps?\b|episodes?\b|\be\b)", re.IGNORECASE)
+_PACK_EP_RANGE_RE = re.compile(
+    r"\b(?:ep(?:s(?:odes?)?)?|episode)\s*[\(\[\{]?\s*(\d{1,3})\s*[-–]\s*(\d{1,3})\s*[\)\]\}]?",
+    re.IGNORECASE)
+_PART_RE = re.compile(r"\b(?:part|chapter|disc|disk)\s*\.?\s*(\d{1,2})\b", re.IGNORECASE)
+
+
+def _episode_tail_facts(label: str) -> tuple:
+    """(episode_title, air_date, runtime_minutes) recovered from one print label.
+
+    Only the text AFTER an SxxExx/E-number marker is considered; it is cut at the
+    first presentation token and refused when it still carries digits (a stray
+    "1080" is a resolution, not a name). All three return values are NULL when the
+    label does not literally name them.
+    """
+    text = (label or "").replace("_", " ")
+    air_m = _AIR_DATE_RE.search(text)
+    air_date = air_m.group(0) if air_m else None
+    if air_date and not (1 <= int(air_date[5:7]) <= 12 and 1 <= int(air_date[8:10]) <= 31):
+        air_date = None
+    rt_m = _RUNTIME_RE.search(text)
+    runtime = int(rt_m.group(1)) if rt_m and 5 <= int(rt_m.group(1)) <= 600 else None
+    title = None
+    mark = _EPISODE_MARK_RE.search(text)
+    if mark:
+        tail = text[mark.end():]
+        stop = _EPISODE_TAIL_STOP_RE.search(tail)
+        if stop:
+            tail = tail[:stop.start()]
+        words = tail.strip(" -:.·|,()[]").split()
+        if 1 <= len(words) <= 8 and not any(re.search(r"\d", w) for w in words) \
+                and any(c.isalpha() for c in "".join(words)):
+            title = " ".join(words)[:80] or None
+    return title, air_date, runtime
+
+
+def _season_title_from_label(label: str) -> str | None:
+    """`Season 2: Exams` → 'Exams'; a label that only numbers the season stays NULL."""
+    m = _SEASON_TITLE_RE.search(label or "")
+    if not m:
+        return None
+    words = m.group(1).strip(" -:.·|,").split()
+    stop = _EPISODE_TAIL_STOP_RE.search(" ".join(words))
+    if stop:
+        words = words[:len(" ".join(words)[:stop.start()].split())]
+    text = " ".join(words).strip(" -:.·|,")
+    return text[:80] or None
+
+
+def _looks_special(season_text: str, label: str) -> bool:
+    """S00 / 'Specials' naming in the season column or the label — specials are a
+    real season type the ledger carries, not an unresolved season number."""
+    blob = f"{season_text or ''} {label or ''}"
+    return bool(_SPECIAL_RE.search(blob))
+
+
+def _pack_span(label: str) -> tuple[int, int] | None:
+    """(lo, hi) an explicit `EP(01-12)` range or `12EP`/`12 Episodes` count names on
+    a pack label; None when the label says nothing about how many episodes it holds.
+    """
+    text = label or ""
+    m = _PACK_EP_RANGE_RE.search(text)
+    if m:
+        lo, hi = int(m.group(1)), int(m.group(2))
+        if 1 <= lo <= hi and hi - lo + 1 <= MAX_ENUMERATED_EPISODES:
+            return lo, hi
+    m = _PACK_EP_COUNT_RE.search(text)
+    if m:
+        count = int(m.group(1))
+        if 1 <= count <= MAX_ENUMERATED_EPISODES:
+            return 1, count
+    return None
+
+
+def _part_number(label: str) -> int:
+    """Digit a `Part n` / `Chapter n` / `Disc n` marker names, or 0."""
+    m = _PART_RE.search(label or "")
+    return int(m.group(1)) if m else 0
+
+
 def _release_coverage(desc: dict, season_hint, work_family: str) -> tuple[str, int, int]:
     """(coverage_type, season_number, episode_count_covered) for one print."""
     scope = desc.get("scope") or "unknown"
@@ -618,6 +875,10 @@ def project(conn: sqlite3.Connection, *, rev: int | None = None, reset: bool = T
 
     started = time.time()
     ensure_schema(conn)
+    # A rebuild re-allocates every cat_* id; snapshot the stable keys first so the
+    # churn can be recorded in cat_id_map afterwards (§3 id stability).
+    before = _stable_id_lists(conn) if reset else None
+    catalog_rev = _bump_rev(conn, "catalog_rev")
     if reset:
         _reset(conn)
 
@@ -646,6 +907,9 @@ def project(conn: sqlite3.Connection, *, rev: int | None = None, reset: bool = T
             _post_column(row, "imdb_id", default=""), _post_column(row, "tmdb_id"),
         )
         works.setdefault(key, _WorkAccumulator(key)).absorb(row)
+
+    _progress(f"ledger read: {post_count} posts -> {len(works)} works "
+              f"({time.time() - started:.0f}s)")
 
     work_ids: dict[str, int] = {}
     for key, acc in works.items():
@@ -689,26 +953,36 @@ def project(conn: sqlite3.Connection, *, rev: int | None = None, reset: bool = T
         for alias, site, kind in acc.aliases:
             conn.execute(
                 "INSERT OR IGNORE INTO cat_work_aliases (work_id, alias, locale, source_site, kind)"
-                " VALUES (?, NULL, ?, ?, ?)",
+                " VALUES (?, ?, NULL, ?, ?)",
                 (work_id, alias, site, kind),
             )
 
     conn.commit()
+    _progress(f"works written: {len(work_ids)} ({time.time() - started:.0f}s)")
     counters = _project_pages(conn, works, work_ids, release_descriptor, now)
-    _finalize(conn, works, work_ids, now)
+    _progress(f"pages/prints done: {counters['releases']} prints, {counters['links']} links "
+              f"({time.time() - started:.0f}s)")
+    _finalize(conn, works, work_ids, now, counters)
+    _progress(f"finalized ({time.time() - started:.0f}s)")
 
+    mapped = _record_id_map(conn, before, catalog_rev) if before else 0
     summary = {
         "works": len(work_ids),
         "releases": counters["releases"],
         "links": counters["links"],
         "episodes": counters["episodes"],
         "seasons": counters["seasons"],
+        "parts": counters["parts"],
         "posts": post_count,
         "identity_suspect": counters["suspect"],
         "release_dups": counters["release_dups"],
         "unattributed_links": counters["unattributed"],
+        "catalog_rev": catalog_rev,
         "seconds": round(time.time() - started, 2),
     }
+    summary["id_mapped"] = mapped
+    conn.execute("INSERT OR REPLACE INTO cat_projection_meta (key, value) VALUES ('id_map_rows', ?)",
+                 (str(mapped),))
     for key, value in summary.items():
         conn.execute("INSERT OR REPLACE INTO cat_projection_meta (key, value) VALUES (?, ?)",
                      (key, str(value)))
@@ -736,13 +1010,18 @@ def project(conn: sqlite3.Connection, *, rev: int | None = None, reset: bool = T
 
 def _project_pages(conn, works, work_ids, release_descriptor, now) -> dict:
     counters = {"releases": 0, "links": 0, "episodes": 0, "seasons": 0, "suspect": 0,
-                "unattributed": 0, "release_dups": 0}
+                "unattributed": 0, "release_dups": 0, "parts": 0}
     episode_index: dict[tuple[int, int, int], int] = {}
     # (work_id, natural print key) -> release_id, so the same print mirrored by a
     # scraper that re-emitted a page collapses onto one row instead of two siblings.
     print_index: dict[tuple[int, tuple], int] = {}
 
+    seen = 0
     for key, acc in works.items():
+        seen += 1
+        if PROGRESS_EVERY and seen % PROGRESS_EVERY == 0:
+            _progress(f"projects {seen}/{len(works)} works: {counters['releases']} prints, "
+                      f"{counters['links']} links")
         work_id = work_ids[key]
         family = work_family(str(conn.execute(
             "SELECT work_type FROM cat_works WHERE id = ?", (work_id,)).fetchone()[0]))
@@ -795,14 +1074,13 @@ def _project_pages(conn, works, work_ids, release_descriptor, now) -> dict:
                     # its links are still attached below.
                     counters["release_dups"] += 1
                 else:
-                    if season_number == 0 and family == "series":
+                    raw_season = str(rel["season"] or "")
+                    is_special = (season_number == 0 and family == "series"
+                                  and _looks_special(raw_season, rel["release_title"] or ""))
+                    suspect = 1 if (season_number == 0 and family == "series"
+                                    and not is_special) else 0
+                    if suspect:
                         counters["suspect"] += 1
-                        conn.execute(
-                            "INSERT INTO cat_review_queue (kind, work_id, release_id, page_url, detail, raised_at)"
-                            " VALUES ('season_unresolved', ?, NULL, ?, ?, ?)",
-                            (work_id, page_url, json.dumps({"label": rel["release_title"],
-                                                            "season": str(rel["season"] or "")}), now),
-                        )
                     cur = conn.execute(
                         """
                         INSERT INTO cat_releases (work_id, season_number, label, source_site, origin_url,
@@ -810,8 +1088,8 @@ def _project_pages(conn, works, work_ids, release_descriptor, now) -> dict:
                             bit_depth, hdr, container, edition, print_version, release_group, size_bytes,
                             size_per_episode_bytes, audio_languages, audio_channels, audio_codecs,
                             dual_audio, subtitle_mode, subtitle_languages, watermarked, official_print,
-                            quality_score, flags, descriptor_json, created_at)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            quality_score, identity_suspect, flags, descriptor_json, created_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                         (
                             work_id, season_number or None, rel["release_title"],
@@ -832,26 +1110,43 @@ def _project_pages(conn, works, work_ids, release_descriptor, now) -> dict:
                             else ("external" if (desc.get("subtitles") or {}).get("available") else "none"),
                             json.dumps((desc.get("subtitles") or {}).get("langs") or []),
                             1 if desc.get("watermarked") else 0, 1 if desc.get("official_print") else 0,
-                            int(desc.get("quality_score") or 0), json.dumps(_flags_of(desc)),
+                            int(desc.get("quality_score") or 0), suspect, json.dumps(_flags_of(desc)),
                             json.dumps(desc, default=str), now,
                         ),
                     )
                     release_id = cur.lastrowid
+                    if suspect:
+                        _raise_review(
+                            conn, kind="season_unresolved", work_id=work_id,
+                            work_key=key, release_id=release_id, page_url=page_url,
+                            now=now, detail={"label": rel["release_title"],
+                                             "season": raw_season})
                     print_index[pkey] = release_id
                     counters["releases"] += 1
 
-                    season_id = _season_id(conn, work_id, season_number, counters)
+                    season_id = _season_id(conn, work_id, season_number, counters,
+                                           season_type="special" if is_special else "regular")
+                    ep_facts = (_episode_tail_facts(str(rel["release_title"] or ""))
+                                if coverage == "single_episode" else (None, None, None))
                     for ep_number in _covered_episodes(desc, coverage, ep_count):
                         ekey = (work_id, season_number, ep_number)
                         episode_id = episode_index.get(ekey)
                         if episode_id is None:
                             ecur = conn.execute(
-                                "INSERT INTO cat_episodes (work_id, season_id, number) VALUES (?, ?, ?)",
-                                (work_id, season_id, ep_number),
+                                "INSERT INTO cat_episodes (work_id, season_id, number,"
+                                " title, air_date, runtime_minutes) VALUES (?, ?, ?, ?, ?, ?)",
+                                (work_id, season_id, ep_number) + ep_facts,
                             )
                             episode_id = ecur.lastrowid
                             episode_index[ekey] = episode_id
                             counters["episodes"] += 1
+                        elif any(ep_facts):
+                            conn.execute(
+                                "UPDATE cat_episodes SET title = COALESCE(title, ?),"
+                                " air_date = COALESCE(air_date, ?),"
+                                " runtime_minutes = COALESCE(runtime_minutes, ?) WHERE id = ?",
+                                ep_facts + (episode_id,),
+                            )
                         conn.execute(
                             "INSERT OR IGNORE INTO cat_release_episodes"
                             " (release_id, episode_id, ordinal) VALUES (?, ?, ?)",
@@ -911,17 +1206,18 @@ def _flags_of(desc: dict) -> list[str]:
     return flags
 
 
-def _season_id(conn, work_id: int, season_number: int, counters: dict) -> int:
+def _season_id(conn, work_id: int, season_number: int, counters: dict,
+               season_type: str = "regular") -> int:
     number = int(season_number or 0)
     existing = conn.execute(
-        "SELECT id FROM cat_seasons WHERE work_id = ? AND number = ? AND season_type = 'regular'",
-        (work_id, number),
+        "SELECT id FROM cat_seasons WHERE work_id = ? AND number = ? AND season_type = ?",
+        (work_id, number, season_type),
     ).fetchone()
     if existing:
         return existing[0]
     cur = conn.execute(
-        "INSERT INTO cat_seasons (work_id, number, season_type) VALUES (?, ?, 'regular')",
-        (work_id, number),
+        "INSERT INTO cat_seasons (work_id, number, season_type) VALUES (?, ?, ?)",
+        (work_id, number, season_type),
     )
     counters["seasons"] += 1
     return cur.lastrowid
@@ -1013,7 +1309,261 @@ def _is_tier1(service) -> bool:
     }
 
 
-def _finalize(conn, works, work_ids, now) -> None:
+# ── Review queue (S13 / A9) ──────────────────────────────────────────────────
+
+def _raise_review(conn, *, kind: str, work_id, work_key: str, detail: dict,
+                  release_id=None, page_url=None, now: float):
+    """Insert one queue row, honouring a durable admin resolution.
+
+    Resolutions live in `cat_review_resolutions` keyed by (kind, work_key,
+    detail-signature) because `_reset()` re-mints the queue — and the numeric
+    ids behind it — on every rebuild. A resolved rule therefore STAYS resolved
+    across rebuilds, and only re-opens when the underlying label/identity data
+    actually changes the signature.
+    """
+    signature = json.dumps(detail, sort_keys=True, default=str)
+    resolved = conn.execute(
+        "SELECT resolved_at FROM cat_review_resolutions"
+        " WHERE kind = ? AND work_key = ? AND signature = ?",
+        (kind, str(work_key), signature)).fetchone()
+    conn.execute(
+        "INSERT INTO cat_review_queue (kind, work_id, release_id, page_url, detail,"
+        " raised_at, resolved_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (kind, work_id, release_id, page_url, signature, now,
+         float(resolved[0]) if resolved else None))
+    return bool(resolved)
+
+
+def _expand_season_packs(conn, counters, now) -> None:
+    """Materialize the episodes a season pack stands for (G-2), so a pack-only
+    season is enumerable and `best_release_id` can point at the pack.
+
+    The span must come from data the ledger actually carries: an `EP(01-12)` or
+    `12EP`/`12 Episodes` figure on the pack's own label, or the highest episode
+    number already projected in that season from per-episode prints. When neither
+    names a span the season honestly keeps zero episodes and every unresolvable
+    pack raises `season_pack_span_unresolved` for a human.
+    """
+    for pack in _select_dicts(
+            conn,
+            """
+            SELECT r.id AS id, r.work_id AS work_id, w.work_key AS work_key,
+                   r.season_number AS season_number, r.label AS label, s.id AS season_id
+            FROM cat_releases r
+            JOIN cat_works w ON w.id = r.work_id
+            JOIN cat_seasons s ON s.work_id = r.work_id AND s.number = r.season_number
+            WHERE r.coverage_type = 'season_pack' AND r.season_number IS NOT NULL
+            ORDER BY r.id
+            """):
+        hint = _pack_span(str(pack["label"] or ""))
+        max_known = int(conn.execute(
+            "SELECT COALESCE(MAX(number), 0) FROM cat_episodes WHERE season_id = ?",
+            (int(pack["season_id"]),)).fetchone()[0])
+        lo, hi = hint if hint else (1, max_known)
+        if hint and max_known > hi:
+            hi = max_known
+        if hi < lo or hi > MAX_ENUMERATED_EPISODES:
+            _raise_review(
+                conn, kind="season_pack_span_unresolved", work_id=int(pack["work_id"]),
+                work_key=str(pack["work_key"]), release_id=int(pack["id"]), now=now,
+                detail={"label": pack["label"], "season": pack["season_number"]})
+            continue
+        known = {int(row[0]): int(row[1]) for row in conn.execute(
+            "SELECT number, id FROM cat_episodes WHERE season_id = ?", (int(pack["season_id"]),))}
+        for number in range(lo, hi + 1):
+            episode_id = known.get(number)
+            if episode_id is None:
+                cur = conn.execute(
+                    "INSERT INTO cat_episodes (work_id, season_id, number) VALUES (?, ?, ?)",
+                    (int(pack["work_id"]), int(pack["season_id"]), number))
+                episode_id = int(cur.lastrowid)
+                known[number] = episode_id
+                counters["episodes"] += 1
+            conn.execute(
+                "INSERT OR IGNORE INTO cat_release_episodes (release_id, episode_id, ordinal)"
+                " VALUES (?, ?, ?)", (int(pack["id"]), episode_id, number))
+
+
+def _raise_identity_reviews(conn, now) -> None:
+    """Review kinds the projector can raise from projected data alone (§4.1/A9).
+
+    `year_conflict`: same family + normalized title, years within 2, no external
+    id (a real merge candidate the key refused to guess). `external_id_conflict`:
+    an external-id merge whose site titles share no word at all — probably one
+    wrong tmdb/imdb id on a scraper page. Both are informational: they mark the
+    works suspect; they never merge, split or hide anything.
+    """
+    by_base: dict = {}
+    for row in conn.execute(
+            "SELECT id, work_key, year FROM cat_works"
+            " WHERE (imdb_id IS NULL OR imdb_id = '') AND tmdb_id IS NULL"
+            " AND work_key NOT LIKE 'imdb:%' AND work_key NOT LIKE 'tmdb:%'"
+            " ORDER BY id"):
+        base, _, year_text = str(row["work_key"]).rpartition(":")
+        try:
+            year = int(year_text)
+        except (TypeError, ValueError):
+            continue
+        by_base.setdefault(base, []).append((int(row["id"]), str(row["work_key"]), year))
+    for base, entries in sorted(by_base.items()):
+        for index in range(len(entries)):
+            work_id, work_key, year = entries[index]
+            for other_id, other_key, other_year in entries[index + 1:]:
+                gap = abs(year - other_year)
+                if 0 < gap <= 2:
+                    for wid, wkey, sib, sib_key in ((work_id, work_key, other_id, other_key),
+                                                    (other_id, other_key, work_id, work_key)):
+                        _raise_review(
+                            conn, kind="year_conflict", work_id=wid, work_key=wkey, now=now,
+                            detail={"base": base, "sibling_work_key": sib_key,
+                                    "sibling_work_id": sib, "years": sorted([year, other_year])})
+
+    for work in conn.execute(
+            "SELECT id, work_key, title FROM cat_works"
+            " WHERE work_key LIKE 'imdb:%' OR work_key LIKE 'tmdb:%' ORDER BY id"):
+        own = {t for t in normalize_title(str(work["title"] or "")).split() if not t.isdigit()}
+        if not own:
+            continue
+        seen: set = set()
+        for alias in conn.execute(
+                "SELECT DISTINCT alias FROM cat_work_aliases WHERE work_id = ? ORDER BY alias",
+                (int(work["id"]),)):
+            tokens = {t for t in normalize_title(str(alias[0] or "")).split() if not t.isdigit()}
+            fingerprint = tuple(sorted(tokens))
+            if not tokens or fingerprint in seen:
+                continue
+            seen.add(fingerprint)
+            if not (tokens & own):
+                _raise_review(
+                    conn, kind="external_id_conflict", work_id=int(work["id"]),
+                    work_key=str(work["work_key"]), now=now,
+                    detail={"alias": alias[0], "title": work["title"],
+                            "work_key": work["work_key"]})
+
+
+def _derive_season_titles(conn) -> None:
+    """`Season 2: Exams` names the season; a label that only numbers it leaves NULL."""
+    titles: dict = {}
+    for row in conn.execute(
+            "SELECT work_id, season_number, label FROM cat_releases"
+            " WHERE season_number IS NOT NULL AND label IS NOT NULL ORDER BY id"):
+        title = _season_title_from_label(str(row["label"] or ""))
+        if title:
+            titles.setdefault((int(row["work_id"]), int(row["season_number"])), title)
+    for (work_id, number), title in titles.items():
+        conn.execute(
+            "UPDATE cat_seasons SET title = COALESCE(title, ?) WHERE work_id = ? AND number = ?",
+            (title, work_id, number))
+
+
+def _derive_work_runtimes(conn) -> None:
+    """Runtime exists here only when a label literally says `120min`; the first
+    print that names one wins, everything else honestly stays NULL."""
+    runtimes: dict = {}
+    for row in conn.execute(
+            "SELECT work_id, label FROM cat_releases WHERE label IS NOT NULL ORDER BY id"):
+        m = _RUNTIME_RE.search(str(row["label"] or ""))
+        if m and 5 <= int(m.group(1)) <= 600:
+            runtimes.setdefault(int(row["work_id"]), int(m.group(1)))
+    for work_id, minutes in runtimes.items():
+        conn.execute("UPDATE cat_works SET runtime_minutes = ?"
+                     " WHERE id = ? AND runtime_minutes IS NULL", (minutes, work_id))
+
+
+def _derive_parts(conn, counters) -> None:
+    """`cat_parts` is per-work structure, not per-label trivia: parts materialize
+    only when ONE work carries at least two distinct Part/Chapter/Disc numbers on
+    its prints (§S4), which proves the site split the work across parts. A lone
+    `Krrish Part 3` title is a sequel work, not a part of one — never a row here.
+    """
+    per_work: dict = {}
+    for row in conn.execute(
+            "SELECT id, work_id, label FROM cat_releases WHERE label IS NOT NULL ORDER BY id"):
+        part = _part_number(str(row["label"] or ""))
+        if part:
+            per_work.setdefault(int(row["work_id"]), []).append((int(row["id"]), part, row["label"]))
+    for work_id, hits in sorted(per_work.items()):
+        numbers = sorted({part for _, part, _ in hits})
+        if len(numbers) < 2:
+            continue
+        for part in numbers:
+            label = next(label for _, hit_part, label in hits if hit_part == part)
+            m = _PART_RE.search(str(label or ""))
+            title = m.group(0).title() if m else f"Part {part}"
+            conn.execute("INSERT OR IGNORE INTO cat_parts (work_id, number, title) VALUES (?, ?, ?)",
+                         (work_id, part, title))
+            counters["parts"] += 1
+        for release_id, part, _label in hits:
+            conn.execute("UPDATE cat_releases SET part_number = ? WHERE id = ?",
+                         (part, release_id))
+
+
+# ── Id stability across rebuilds (§3 / A2) ───────────────────────────────────
+
+_RELEASE_KEY_SQL = (
+    "SELECT r.id AS id, w.work_key AS work_key, r.label AS label,"
+    " r.source_site AS source_site, r.origin_url AS origin_url,"
+    " r.coverage_type AS coverage_type, r.season_number AS season_number,"
+    " r.episode_range AS episode_range, r.resolution AS resolution,"
+    " r.source_tag AS source_tag, r.codec AS codec, r.size_bytes AS size_bytes"
+    " FROM cat_releases r JOIN cat_works w ON w.id = r.work_id ORDER BY r.id")
+
+
+def _stable_id_lists(conn) -> dict:
+    """{kind: {stable key: [row ids in id order]}} for the current projection."""
+    works: dict = {}
+    releases: dict = {}
+    links: dict = {}
+    if _has_table(conn, "cat_works"):
+        for row in conn.execute("SELECT id, work_key FROM cat_works ORDER BY id"):
+            works.setdefault(str(row["work_key"]), []).append(int(row["id"]))
+    if _has_table(conn, "cat_releases"):
+        for row in _select_dicts(conn, _RELEASE_KEY_SQL):
+            key = (str(row["work_key"]), str(row["label"] or "").strip(),
+                   str(row["source_site"] or ""), str(row["origin_url"] or ""),
+                   str(row["coverage_type"]), row["season_number"],
+                   str(row["episode_range"] or ""), str(row["resolution"] or ""),
+                   str(row["source_tag"] or ""), str(row["codec"] or ""),
+                   int(row["size_bytes"] or 0))
+            releases.setdefault(key, []).append(int(row["id"]))
+    if _has_table(conn, "cat_links"):
+        for row in conn.execute(
+                "SELECT id, COALESCE(NULLIF(url, ''), final_url) AS target"
+                " FROM cat_links ORDER BY id"):
+            if row[0] is not None and row[1]:
+                links.setdefault(str(row[1]), []).append(int(row[0]))
+    return {"work": works, "release": releases, "link": links}
+
+
+def _record_id_map(conn, before: dict, rev: int) -> int:
+    """Write (kind, old_id -> new_id, rev) for every row a rebuild renumbered.
+
+    The delete+insert projector stays honest (ids still churn); what the churn
+    loses, this journal wins: a caller that persisted numeric ids can resolve
+    them once against the new projection instead of guessing. Duplicate stable
+    keys (the same url on two prints) are paired in id order.
+    """
+    after = _stable_id_lists(conn)
+    written = 0
+    for kind, old_lists in before.items():
+        new_lists = after.get(kind) or {}
+        for key, old_ids in old_lists.items():
+            new_ids = new_lists.get(key)
+            if not new_ids:
+                continue
+            for index, old_id in enumerate(old_ids):
+                if index >= len(new_ids):
+                    break
+                new_id = new_ids[index]
+                if new_id != old_id:
+                    conn.execute(
+                        "INSERT OR REPLACE INTO cat_id_map (kind, old_id, new_id, rev)"
+                        " VALUES (?, ?, ?, ?)", (kind, old_id, new_id, rev))
+                    written += 1
+    return written
+
+
+def _finalize(conn, works, work_ids, now, counters) -> None:
     """Roll up counts, availability, best print per episode and default entitlements."""
     conn.execute(
         """
@@ -1026,6 +1576,17 @@ def _finalize(conn, works, work_ids, now) -> None:
         """
     )
     conn.execute(f"UPDATE cat_links SET rank_score = {RANK_SCORE_EXPR}")
+    _expand_season_packs(conn, counters, now)
+    _raise_identity_reviews(conn, now)
+    # A durable resolution clears the print's suspect flag even though the label
+    # data still re-raises the (now-resolved) queue row on every rebuild.
+    conn.execute(
+        """
+        UPDATE cat_releases SET identity_suspect = COALESCE((
+            SELECT 1 FROM cat_review_queue q
+            WHERE q.release_id = cat_releases.id AND q.resolved_at IS NULL), 0)
+        """
+    )
     conn.execute("UPDATE cat_episodes SET absolute_number = NULL")
     conn.execute(
         """
@@ -1038,21 +1599,25 @@ def _finalize(conn, works, work_ids, now) -> None:
         UPDATE cat_episodes SET absolute_number = (SELECT rn FROM ordered WHERE ordered.id = cat_episodes.id)
         """
     )
+    # Best print per episode: quality first, then the fresher capture (a REPACK or
+    # v2 wins its tie against v1 — §5.2), then the later-projected row. An expanded
+    # season pack may win when it is the streamable covering print. Prints with an
+    # unresolved identity review are excluded (S13).
     conn.execute(
         """
         UPDATE cat_episodes SET best_release_id = (
             SELECT re.release_id FROM cat_release_episodes re
             JOIN cat_releases r ON r.id = re.release_id
             WHERE re.episode_id = cat_episodes.id
-              AND r.coverage_type IN ('single_episode', 'episode_range')
-              AND r.streamable_count > 0
-            ORDER BY r.quality_score DESC, r.id ASC LIMIT 1
+              AND r.coverage_type IN ('single_episode', 'episode_range', 'season_pack')
+              AND r.streamable_count > 0 AND r.identity_suspect = 0
+            ORDER BY r.quality_score DESC, r.print_version DESC, r.id DESC LIMIT 1
         ) WHERE EXISTS (
             SELECT 1 FROM cat_release_episodes re
             JOIN cat_releases r ON r.id = re.release_id
             WHERE re.episode_id = cat_episodes.id
-              AND r.coverage_type IN ('single_episode', 'episode_range')
-              AND r.streamable_count > 0
+              AND r.coverage_type IN ('single_episode', 'episode_range', 'season_pack')
+              AND r.streamable_count > 0 AND r.identity_suspect = 0
         )
         """
     )
@@ -1062,6 +1627,9 @@ def _finalize(conn, works, work_ids, now) -> None:
             SELECT COUNT(*) FROM cat_episodes e WHERE e.season_id = cat_seasons.id)
         """
     )
+    _derive_season_titles(conn)
+    _derive_work_runtimes(conn)
+    _derive_parts(conn, counters)
     conn.execute(
         """
         UPDATE cat_works SET
@@ -1071,7 +1639,7 @@ def _finalize(conn, works, work_ids, now) -> None:
             max_resolution = (
                 SELECT r.resolution FROM cat_releases r WHERE r.work_id = cat_works.id
                   AND r.resolution <> 'unknown'
-                ORDER BY r.quality_score DESC LIMIT 1),
+                ORDER BY r.quality_score DESC, r.print_version DESC, r.id DESC LIMIT 1),
             best_quality_score = COALESCE(
                 (SELECT MAX(r.quality_score) FROM cat_releases r WHERE r.work_id = cat_works.id), 0),
             available_stream = COALESCE((
@@ -1086,11 +1654,13 @@ def _finalize(conn, works, work_ids, now) -> None:
     )
     conn.execute(
         """
-        INSERT OR IGNORE INTO cat_entitlements (work_id, release_id, model, ownership, updated_at)
-        SELECT id, NULL, 'free', 'permanent', ? FROM cat_works
+        INSERT OR IGNORE INTO cat_entitlements (work_id, release_id, model,
+                                                display_priority, ownership, updated_at)
+        SELECT id, NULL, 'free', 10, 'permanent', ? FROM cat_works
         """,
         (now,),
     )
+    _reapply_entitlement_rules(conn, now)
     # Re-apply the durable offset ledger onto the freshly built episode links.
     conn.execute(
         """
@@ -1129,28 +1699,340 @@ def _finalize(conn, works, work_ids, now) -> None:
 
 def record_offset(conn, *, work_key: str, episode_number: int, offset_seconds: int,
                   season_number: int = 0, release_label: str = "",
-                  chapter_title: str | None = None) -> None:
+                  chapter_title: str | None = None) -> dict:
     """Store a learned pack offset (or a chapter name) against stable identity.
 
-    Repeated confirmations accumulate in `confirmed_by` so a single wrong report
-    cannot silently shift everyone's playback.
+    Every report is counted in `cat_offset_votes` first; the value published to
+    `cat_offsets` is the vote winner, so a single wrong report cannot silently
+    shift everyone's playback once an offset has `OFFSET_QUORUM` confirmations.
+    A fresh position needs a strict plurality; ties keep the incumbent. Returns
+    the published row's `{offset_seconds, confirmed_by, offsets_rev, quorum}`.
     """
+    ensure_schema(conn)
     now = time.time()
+    season_number = int(season_number or 0)
+    episode_number = int(episode_number)
+    release_label = release_label or ""
+    offset_seconds = int(offset_seconds)
+    conn.execute(
+        """
+        INSERT INTO cat_offset_votes (work_key, season_number, episode_number,
+                                      release_label, offset_seconds, votes, updated_at)
+        VALUES (?, ?, ?, ?, ?, 1, ?)
+        ON CONFLICT(work_key, season_number, episode_number, release_label, offset_seconds)
+        DO UPDATE SET votes = cat_offset_votes.votes + 1, updated_at = excluded.updated_at
+        """,
+        (work_key, season_number, episode_number, release_label, offset_seconds, now),
+    )
+    current = conn.execute(
+        """
+        SELECT offset_seconds, confirmed_by FROM cat_offsets
+        WHERE work_key = ? AND season_number = ? AND episode_number = ? AND release_label = ?
+        """, (work_key, season_number, episode_number, release_label)).fetchone()
+    # A pre-majority offset had no vote ledger; seed its stored confirmations so
+    # history is not discarded when the first new report arrives.
+    if current is not None and not conn.execute(
+        """
+        SELECT 1 FROM cat_offset_votes WHERE work_key = ? AND season_number = ?
+          AND episode_number = ? AND release_label = ? AND offset_seconds = ?
+        """, (work_key, season_number, episode_number, release_label,
+              int(current[0]))).fetchone():
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO cat_offset_votes (work_key, season_number, episode_number,
+                                                     release_label, offset_seconds, votes, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (work_key, season_number, episode_number, release_label,
+             int(current[0]), max(int(current[1] or 0), 1), now),
+        )
+    voted = conn.execute(
+        """
+        SELECT offset_seconds, votes FROM cat_offset_votes
+        WHERE work_key = ? AND season_number = ? AND episode_number = ? AND release_label = ?
+        ORDER BY votes DESC, offset_seconds ASC
+        """, (work_key, season_number, episode_number, release_label)).fetchall()
+    winner, votes = int(voted[0][0]), int(voted[0][1])
+    incumbent = int(current[0]) if current is not None else None
+    if incumbent is not None and incumbent != winner:
+        inc_votes = next((int(v) for o, v in voted if int(o) == incumbent), 0)
+        if inc_votes >= votes:
+            winner, votes = incumbent, inc_votes
+    changed = current is None or int(current[0]) != winner or bool(chapter_title)
     conn.execute(
         """
         INSERT INTO cat_offsets (work_key, season_number, episode_number, release_label,
                                  offset_seconds, chapter_title, confirmed_by, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, 1, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(work_key, season_number, episode_number, release_label) DO UPDATE SET
             offset_seconds = excluded.offset_seconds,
             chapter_title = COALESCE(excluded.chapter_title, cat_offsets.chapter_title),
-            confirmed_by = cat_offsets.confirmed_by + 1,
+            confirmed_by = excluded.confirmed_by,
             updated_at = excluded.updated_at
         """,
-        (work_key, int(season_number or 0), int(episode_number), release_label or "",
-         int(offset_seconds), chapter_title, now),
+        (work_key, season_number, episode_number, release_label,
+         winner, chapter_title, votes, now),
     )
+    offsets_rev = _bump_rev(conn, "offsets_rev") if changed else _read_rev(conn, "offsets_rev")
     conn.commit()
+    return {"offset_seconds": winner, "confirmed_by": votes,
+            "offsets_rev": offsets_rev, "quorum": OFFSET_QUORUM}
+
+
+# ── Entitlements (A12) ───────────────────────────────────────────────────────
+
+def derive_display_priority(model: str, price_minor: int = 0) -> int:
+    """Offer sort weight (§11.2): free first, purchase last; unknown models last."""
+    return DISPLAY_PRIORITY.get(str(model or "").strip().casefold(), 100)
+
+
+def _upsert_entitlement(conn, *, work_id: int, release_id, model: str,
+                        price_minor: int, currency: str, region, geo_allow, geo_deny,
+                        valid_from, valid_until, rental_hours, ownership,
+                        requires_account: int, requires_age_gate: int, now: float) -> None:
+    """Write one offer row, NULL-safely.
+
+    `UNIQUE (work_id, release_id, model, region)` cannot enforce uniqueness while
+    `region` is NULL (SQLite treats NULLs as distinct), so the conflict search is
+    done by hand instead of relying on the constraint.
+    """
+    found = conn.execute(
+        "SELECT id FROM cat_entitlements WHERE work_id = ? AND release_id IS ?"
+        " AND model = ? AND region IS ?",
+        (work_id, release_id, model, region)).fetchone()
+    if found is not None:
+        conn.execute(
+            """
+            UPDATE cat_entitlements SET price_minor = ?, currency = ?, geo_allow = ?,
+                geo_deny = ?, valid_from = ?, valid_until = ?, rental_hours = ?,
+                ownership = ?, requires_account = ?, requires_age_gate = ?,
+                display_priority = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (price_minor, currency, geo_allow, geo_deny, valid_from, valid_until,
+             rental_hours, ownership, int(requires_account), int(requires_age_gate),
+             derive_display_priority(model), now, int(found[0])),
+        )
+    else:
+        conn.execute(
+            """
+            INSERT INTO cat_entitlements (work_id, release_id, model, display_priority,
+                price_minor, currency, region, geo_allow, geo_deny, valid_from, valid_until,
+                rental_hours, ownership, requires_account, requires_age_gate, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (work_id, release_id, model, derive_display_priority(model), price_minor,
+             currency, region, geo_allow, geo_deny, valid_from, valid_until, rental_hours,
+             ownership, int(requires_account), int(requires_age_gate), now),
+        )
+
+
+def set_entitlement(conn, *, work_key: str, model: str, release_label: str = "",
+                    region: str = "", price_minor: int = 0, currency: str = "INR",
+                    valid_from=None, valid_until=None, rental_hours=None,
+                    ownership: str = "permanent", requires_account: int = 0,
+                    requires_age_gate: int = 0, geo_allow=None, geo_deny=None,
+                    now: float | None = None, commit: bool = True) -> dict:
+    """Write a paid/free offer for one work (or one specific print of it).
+
+    The offer is stored twice: as a durable `cat_entitlement_rules` row keyed by
+    `work_key` (so it survives every rebuild and is re-applied by `_finalize()`),
+    and — when that work is currently projected — straight onto `cat_entitlements`
+    so the API serves it without waiting for the next projection. Bumps
+    `entitlements_rev` and nothing else.
+    """
+    ensure_schema(conn)
+    model = str(model or "").strip().casefold()
+    if model not in _ENTITLEMENT_MODELS:
+        raise ValueError(f"unknown entitlement model {model!r}; "
+                         f"expected one of {', '.join(_ENTITLEMENT_MODELS)}")
+    now = time.time() if now is None else float(now)
+    release_label = str(release_label or "")
+    region_value = str(region or "")
+    conn.execute(
+        """
+        INSERT INTO cat_entitlement_rules (work_key, release_label, model, price_minor,
+            currency, region, geo_allow, geo_deny, valid_from, valid_until, rental_hours,
+            ownership, requires_account, requires_age_gate, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(work_key, release_label, model, region) DO UPDATE SET
+            price_minor = excluded.price_minor, currency = excluded.currency,
+            geo_allow = excluded.geo_allow, geo_deny = excluded.geo_deny,
+            valid_from = excluded.valid_from, valid_until = excluded.valid_until,
+            rental_hours = excluded.rental_hours, ownership = excluded.ownership,
+            requires_account = excluded.requires_account,
+            requires_age_gate = excluded.requires_age_gate, updated_at = excluded.updated_at
+        """,
+        (work_key, release_label, model, int(price_minor or 0), currency or "INR",
+         region_value, geo_allow, geo_deny, valid_from, valid_until, rental_hours,
+         ownership or "permanent", int(requires_account or 0),
+         int(requires_age_gate or 0), now),
+    )
+    applied = _apply_entitlement_rule(conn, {
+        "work_key": work_key, "release_label": release_label, "model": model,
+        "price_minor": int(price_minor or 0), "currency": currency or "INR",
+        "region": region_value, "geo_allow": geo_allow, "geo_deny": geo_deny,
+        "valid_from": valid_from, "valid_until": valid_until,
+        "rental_hours": rental_hours, "ownership": ownership or "permanent",
+        "requires_account": int(requires_account or 0),
+        "requires_age_gate": int(requires_age_gate or 0),
+    }, now)
+    entitlements_rev = _bump_rev(conn, "entitlements_rev")
+    if commit:
+        conn.commit()
+    return {"work_key": work_key, "model": model, "applied": bool(applied),
+            "display_priority": derive_display_priority(model),
+            "entitlements_rev": entitlements_rev}
+
+
+def _rule_target(conn, rule: dict):
+    """(work_id, release_id) for one durable rule, or None when nothing matches yet."""
+    work = conn.execute("SELECT id FROM cat_works WHERE work_key = ?",
+                        (str(rule["work_key"]),)).fetchone()
+    if work is None:
+        return None
+    work_id = int(work[0])
+    label = str(rule.get("release_label") or "")
+    if not label:
+        return work_id, None
+    rel = conn.execute(
+        "SELECT id FROM cat_releases WHERE work_id = ? AND label = ? ORDER BY id LIMIT 1",
+        (work_id, label)).fetchone()
+    if rel is None:
+        return None
+    return work_id, int(rel[0])
+
+
+def _apply_entitlement_rule(conn, rule: dict, now: float) -> bool:
+    target = _rule_target(conn, rule)
+    if target is None:
+        return False
+    work_id, release_id = target
+    region = str(rule.get("region") or "") or None
+    if str(rule["model"]) != "free" and release_id is None and region is None:
+        # A work-level paid offer replaces the projector's automatic free default
+        # at the same scope; per-print offers sit alongside it.
+        conn.execute(
+            "DELETE FROM cat_entitlements WHERE work_id = ? AND model = 'free'"
+            " AND release_id IS NULL AND region IS NULL", (work_id,))
+    _upsert_entitlement(
+        conn, work_id=work_id, release_id=release_id, model=str(rule["model"]),
+        price_minor=int(rule.get("price_minor") or 0),
+        currency=str(rule.get("currency") or "INR"), region=region,
+        geo_allow=rule.get("geo_allow"), geo_deny=rule.get("geo_deny"),
+        valid_from=rule.get("valid_from"), valid_until=rule.get("valid_until"),
+        rental_hours=rule.get("rental_hours"), ownership=str(rule.get("ownership") or "permanent"),
+        requires_account=int(rule.get("requires_account") or 0),
+        requires_age_gate=int(rule.get("requires_age_gate") or 0), now=now)
+    if release_id is None and str(rule["model"]) != "free":
+        conn.execute("UPDATE cat_works SET entitlement_model = ? WHERE id = ?",
+                     (str(rule["model"]), work_id))
+    return True
+
+
+def _reapply_entitlement_rules(conn, now: float) -> int:
+    """Re-project every durable offer onto the fresh `cat_entitlements` rows.
+
+    Runs inside `_finalize()`, after the automatic free defaults: it does NOT bump
+    `entitlements_rev`, because the rebuild already bumped `catalog_rev` and the
+    offers themselves have not been edited.
+    """
+    applied = 0
+    for rule in _select_dicts(
+            conn, "SELECT * FROM cat_entitlement_rules ORDER BY work_key, release_label, model, region"):
+        if _apply_entitlement_rule(conn, rule, now):
+            applied += 1
+    return applied
+
+
+# ── Review resolution (S13) ──────────────────────────────────────────────────
+
+def resolve_reviews(conn, *, review_ids=(), kind: str | None = None,
+                    work_id: int | None = None, now: float | None = None,
+                    commit: bool = True) -> int:
+    """Mark queue rows resolved, remember the decision durably, refresh flags.
+
+    The durable copy in `cat_review_resolutions` is keyed by (kind, work_key,
+    detail-signature) so the same finding stays settled through every future
+    rebuild; after stamping, release/work suspect flags and episode best prints
+    are recomputed so a cleared suspect can win `best_release_id` immediately.
+    """
+    ensure_schema(conn)
+    now = time.time() if now is None else float(now)
+    ids = [int(i) for i in review_ids or ()]
+    clauses, params = [], []
+    if ids:
+        clauses.append("id IN (%s)" % ",".join("?" * len(ids)))
+        params.extend(ids)
+    if kind:
+        clauses.append("kind = ?")
+        params.append(kind)
+    if work_id is not None:
+        clauses.append("work_id = ?")
+        params.append(int(work_id))
+    if not clauses:
+        raise ValueError("resolve_reviews needs review_ids, kind or work_id")
+    rows = _select_dicts(
+        conn,
+        "SELECT id, kind, work_id, release_id, detail FROM cat_review_queue"
+        " WHERE resolved_at IS NULL AND " + " AND ".join(clauses) + " ORDER BY id",
+        tuple(params))
+    count = 0
+    for row in rows:
+        conn.execute("UPDATE cat_review_queue SET resolved_at = ? WHERE id = ?",
+                     (now, int(row["id"])))
+        work_key = ""
+        if row.get("work_id") is not None:
+            found = conn.execute("SELECT work_key FROM cat_works WHERE id = ?",
+                                 (int(row["work_id"]),)).fetchone()
+            work_key = str(found[0]) if found else ""
+        elif row.get("release_id") is not None:
+            found = conn.execute(
+                """
+                SELECT w.work_key FROM cat_releases r
+                JOIN cat_works w ON w.id = r.work_id WHERE r.id = ?
+                """, (int(row["release_id"]),)).fetchone()
+            work_key = str(found[0]) if found else ""
+        conn.execute(
+            "INSERT OR REPLACE INTO cat_review_resolutions (kind, work_key, signature, resolved_at)"
+            " VALUES (?, ?, ?, ?)",
+            (str(row["kind"]), work_key, str(row["detail"] or ""), float(now)))
+        count += 1
+    conn.execute(
+        """
+        UPDATE cat_releases SET identity_suspect = COALESCE((
+            SELECT 1 FROM cat_review_queue q
+            WHERE q.release_id = cat_releases.id AND q.resolved_at IS NULL), 0)
+        """
+    )
+    conn.execute(
+        """
+        UPDATE cat_works SET identity_suspect = COALESCE((
+            SELECT 1 FROM cat_review_queue q
+            WHERE q.work_id = cat_works.id AND q.resolved_at IS NULL), 0)
+        """
+    )
+    conn.execute(
+        """
+        UPDATE cat_episodes SET best_release_id = (
+            SELECT re.release_id FROM cat_release_episodes re
+            JOIN cat_releases r ON r.id = re.release_id
+            WHERE re.episode_id = cat_episodes.id
+              AND r.coverage_type IN ('single_episode', 'episode_range', 'season_pack')
+              AND r.streamable_count > 0 AND r.identity_suspect = 0
+            ORDER BY r.quality_score DESC, r.print_version DESC, r.id DESC LIMIT 1
+        ) WHERE EXISTS (
+            SELECT 1 FROM cat_release_episodes re
+            JOIN cat_releases r ON r.id = re.release_id
+            WHERE re.episode_id = cat_episodes.id
+              AND r.coverage_type IN ('single_episode', 'episode_range', 'season_pack')
+              AND r.streamable_count > 0 AND r.identity_suspect = 0
+        )
+        """
+    )
+    if commit:
+        conn.commit()
+    return count
 
 
 # ── Measured evidence write-back (API_V2.md §6.2, gap G-7) ──────────────────
@@ -1679,13 +2561,58 @@ def parse_args(argv=None):
                         help="with --apply-evidence: at most this many links per run")
     parser.add_argument("--ewma-weight", type=float, default=EVIDENCE_EWMA_WEIGHT,
                         help="newest sample's share of the rolling blend (default 0.4)")
+    parser.add_argument("--set-entitlement", metavar="WORK_KEY", default=None,
+                        help="write an entitlement offer for one work_key and exit")
+    parser.add_argument("--model", default="free",
+                        help="with --set-entitlement: free|ads|flatrate|rental|purchase")
+    parser.add_argument("--price", type=int, default=0,
+                        help="with --set-entitlement: price in minor units (default 0)")
+    parser.add_argument("--currency", default="INR", help="with --set-entitlement: ISO code")
+    parser.add_argument("--region", default="",
+                        help="with --set-entitlement: offer region, empty = global")
+    parser.add_argument("--release-label", default="",
+                        help="with --set-entitlement: bind the offer to one print label")
+    parser.add_argument("--rental-hours", type=int, default=None,
+                        help="with --set-entitlement: rental window in hours")
+    parser.add_argument("--valid-from", type=float, default=None,
+                        help="with --set-entitlement: offer start (unix seconds)")
+    parser.add_argument("--valid-until", type=float, default=None,
+                        help="with --set-entitlement: offer end (unix seconds)")
+    parser.add_argument("--ownership", default="permanent",
+                        help="with --set-entitlement: permanent|rental|timered")
+    parser.add_argument("--requires-account", action="store_true",
+                        help="with --set-entitlement: viewer must be signed in")
+    parser.add_argument("--requires-age-gate", action="store_true",
+                        help="with --set-entitlement: viewer must pass the 18+ gate")
+    parser.add_argument("--resolve-review", type=int, action="append", default=None,
+                        dest="review_ids", help="mark these cat_review_queue ids resolved and exit")
     return parser.parse_args(argv)
 
 
 def main(argv=None):
     args = parse_args(argv)
     db_path = Path(args.db).resolve()
-    if args.apply_evidence:
+    if args.set_entitlement:
+        conn = sqlite3.connect(db_path)
+        try:
+            summary = set_entitlement(
+                conn, work_key=args.set_entitlement, model=args.model,
+                release_label=args.release_label, region=args.region,
+                price_minor=args.price, currency=args.currency,
+                valid_from=args.valid_from, valid_until=args.valid_until,
+                rental_hours=args.rental_hours, ownership=args.ownership,
+                requires_account=1 if args.requires_account else 0,
+                requires_age_gate=1 if args.requires_age_gate else 0)
+        finally:
+            conn.close()
+    elif args.review_ids:
+        conn = sqlite3.connect(db_path)
+        try:
+            count = resolve_reviews(conn, review_ids=args.review_ids)
+        finally:
+            conn.close()
+        summary = {"resolved_reviews": count}
+    elif args.apply_evidence:
         summary = apply_evidence_db(db_path, link_ids=args.link_ids, limit=args.limit,
                                     weight=args.ewma_weight)
     else:

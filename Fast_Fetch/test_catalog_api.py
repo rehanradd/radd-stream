@@ -786,20 +786,24 @@ class WorkDetailTests(CatalogApiTestCase):
         detail = self.detail("Split Film")
         parts = detail["parts"]
         self.assertEqual([p["number"] for p in parts], [1, 2])
-        self.assertTrue(all(p["inferred"] for p in parts))
-        self.assertEqual([p["source"] for p in parts], ["print_label", "print_label"])
+        # The projector now materializes parts itself (A4), so the authoritative
+        # table wins over the API re-inferring them from the print labels.
+        self.assertTrue(all(not p["inferred"] for p in parts))
+        self.assertEqual({p["source"] for p in parts}, {"cat_parts"})
         self.assertEqual(len(detail["prints"]), 2)
         self.assertNotEqual(detail["prints"][0]["release_id"],
                             detail["prints"][1]["release_id"])
 
     def test_parts_are_read_from_cat_parts_when_the_projector_fills_it(self):
+        work_id = self.work["Split Film"]["id"]
+        self.conn.execute("DELETE FROM cat_parts WHERE work_id = ?", (work_id,))
         self.conn.execute("INSERT INTO cat_parts (work_id, number, title) VALUES (?, 1, 'Part One')",
-                          (self.work["Split Film"]["id"],))
+                          (work_id,))
         self.conn.execute("INSERT INTO cat_parts (work_id, number, title) VALUES (?, 2, 'Part Two')",
-                          (self.work["Split Film"]["id"],))
+                          (work_id,))
         self.conn.commit()
         parts = catalog_api.work_detail(self.conn,
-                                        work_id=self.work["Split Film"]["id"])["parts"]
+                                        work_id=work_id)["parts"]
         self.assertEqual([p["number"] for p in parts], [1, 2])
         self.assertEqual([p["inferred"] for p in parts], [False, False])
         self.assertEqual({p["source"] for p in parts}, {"cat_parts"})
@@ -1430,7 +1434,12 @@ class CatalogStateTests(CatalogApiTestCase):
         self.assertGreater(state["counts"]["links"], 0)
         self.assertEqual(state["counts"]["link_states"].get("dead"), 2,
                          "DUNE-DEAD-FAST and DEADAIR")
-        self.assertEqual(state["counts"]["open_review_queue"], 1)
+        self.assertEqual(
+            {r["kind"] for r in self.conn.execute(
+                "SELECT kind FROM cat_review_queue WHERE resolved_at IS NULL")},
+            {"season_unresolved", "season_pack_span_unresolved"},
+            "one unresolved season and one pack whose episode span is unknown")
+        self.assertEqual(state["counts"]["open_review_queue"], 2)
         self.assertEqual(state["counts"]["offsets"], 2)
         self.assertIsNotNone(state["projected_at"])
 

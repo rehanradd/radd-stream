@@ -286,7 +286,10 @@ def _episode_range_bounds(text) -> tuple[int, int]:
 
 
 def _adult_clause(alias: str) -> str:
-    return f"({alias}.is_18_plus IS NULL OR {alias}.is_18_plus = 0)"
+    """§13's one predicate, from `redact.adult_clause` — the same string
+    `api_v2.adult_scope()` uses, so the read layer and the wire cannot drift apart
+    into two rules with two blind spots."""
+    return redact.adult_clause(alias)
 
 
 def _has_table(conn, name: str) -> bool:
@@ -692,7 +695,8 @@ def _link_view(row, evidence: dict | None, secret: str = "") -> dict:
         ranges = measured["accepts_ranges"]
     state = link.get("state") or "unknown"
     resumable = bool(link.get("resumable")) or bool(ranges)
-    return {
+    measured_flag = bool(measured) or link.get("latency_ms") is not None
+    view = {
         "link_id": link["id"],
         "release_id": link["release_id"],
         "work_id": link["work_id"],
@@ -722,10 +726,15 @@ def _link_view(row, evidence: dict | None, secret: str = "") -> dict:
         "speed_mbps": speed,
         # Honest about provenance: `measured` is only true when link_health actually
         # probed this link (cat_links carries no latency of its own until then).
-        "measured": bool(measured) or link.get("latency_ms") is not None,
+        "measured": measured_flag,
+        # §7.1: the two scales of axis 2 are not comparable, so a client that
+        # re-ranks offline is told which one this `rank_score` was produced on.
+        "score_scale": tiers.scale_of({"measured": measured_flag}),
+        "score_range": tiers.score_range({"measured": measured_flag}),
         "last_evidence_at": measured.get("probed_at") if measured else link.get("last_evidence_at"),
         "probe_error": measured.get("error") if measured else None,
     }
+    return view
 
 
 def _sort_links(links: list[dict]) -> list[dict]:

@@ -15,6 +15,7 @@ from __future__ import annotations
 import sys
 import json
 import sqlite3
+import time
 import urllib.parse
 from contextlib import contextmanager
 import os
@@ -72,6 +73,41 @@ def signing_secret() -> str:
     if _SIGNING_SECRET is None:
         _SIGNING_SECRET = redact.stream_secret(DB_PATH)
     return _SIGNING_SECRET
+
+
+#: The fallback lifetime of a temporary bridge token, in seconds. This is the old
+#: constant, kept only as the *ceiling* for links whose hoster declared nothing;
+#: a measured window always beats it.
+TEMPORARY_TOKEN_CEILING = 6 * 3600
+
+
+def stream_expires_in(res: dict) -> float | None:
+    """Seconds a just-handed-out stream URL is good for, measured where possible.
+
+    Order of honesty:
+      1. `expires_in` from `resolve_live_source` — read off the hoster's own
+         `Cache-Control: max-age` / `Expires` for the URL we are serving (A5);
+      2. for a temporary token with no declared window, the 6-hour bridge ceiling
+         less the time it has already been alive, so a client is never promised a
+         longer life than the token actually has left;
+      3. None for a permanent link — it has no expiry to report, and inventing one
+         is exactly what the made-up bundle TTL used to do.
+    """
+    measured = res.get("expires_in")
+    if measured is not None:
+        try:
+            return max(0.0, float(measured))
+        except (TypeError, ValueError):
+            pass
+    if not res.get("is_temporary"):
+        return None
+    expires_at = res.get("expires_at")
+    if expires_at is not None:
+        try:
+            return max(0.0, float(expires_at) - time.time())
+        except (TypeError, ValueError):
+            pass
+    return float(TEMPORARY_TOKEN_CEILING)
 
 
 @contextmanager
@@ -2549,6 +2585,11 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     # them. What the user sees is our own URL.
                     self.send_response(302)
                     self.send_header("Location", res["url"])
+                    # This 302 points at somebody else's signed token. A shared
+                    # proxy or browser cache that keeps it hands one user's token
+                    # to the next, and serves a dead one after its window closes:
+                    # never cacheable, whatever the observed TTL says.
+                    self.send_header("Cache-Control", "no-store")
                     for name, value in cors_headers_for(self.headers.get("Origin", "")):
                         self.send_header(name, value)
                     self.send_header("Connection", "close")
@@ -2566,7 +2607,13 @@ class DashboardHandler(BaseHTTPRequestHandler):
                             "mime_type": res.get("mime_type"),
                             "file_size_bytes": res.get("file_size_bytes"),
                             "resumable": bool(res.get("is_resumable")),
-                            "expires_in": 6 * 3600 if res.get("is_temporary") else None,
+                            # Same key, same type, now sourced from what the hoster
+                            # declared (resolve_live_source read Cache-Control /
+                            # Expires off the response) instead of from a constant.
+                            # When nothing was measured we still quote the 6-hour
+                            # temporary-token ceiling the bridges are known to
+                            # honour, minus the window the URL has already lived.
+                            "expires_in": stream_expires_in(res),
                         })
                     else:
                         self.send_json(res)

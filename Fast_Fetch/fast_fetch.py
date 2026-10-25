@@ -670,6 +670,23 @@ def _init_db(db_path: Path | None = None) -> None:
             cursor.execute("ALTER TABLE sitemap_cache ADD COLUMN attempts INTEGER DEFAULT 0")
         if "last_attempt" not in existing_sm_cols:
             cursor.execute("ALTER TABLE sitemap_cache ADD COLUMN last_attempt REAL DEFAULT NULL")
+        if "last_cause" not in existing_sm_cols:
+            # A bare `scraped = -1` could not tell an operator whether a page was
+            # gone upstream or merely unreadable by us — the two need opposite
+            # actions (drop it vs fix the parser). `record_crawl_attempt()` writes
+            # the reason; nothing indexes it, so the ALTER stays safe on old DBs.
+            cursor.execute("ALTER TABLE sitemap_cache ADD COLUMN last_cause TEXT DEFAULT NULL")
+
+        cursor.execute("PRAGMA table_info(download_sources)")
+        existing_ds_cols = {r[1] for r in cursor.fetchall()}
+        if "expires_at" not in existing_ds_cols:
+            # Epoch seconds at which the *observed* URL stops working, learned from
+            # the response's own Cache-Control / Expires on the last resolve
+            # (HANDOFF_apidocs A5). NULL means "never observed" — it is deliberately
+            # not back-filled with a guess.
+            cursor.execute("ALTER TABLE download_sources ADD COLUMN expires_at REAL DEFAULT NULL")
+        if "ttl_source" not in existing_ds_cols:
+            cursor.execute("ALTER TABLE download_sources ADD COLUMN ttl_source TEXT DEFAULT NULL")
 
         conn.execute("CREATE INDEX IF NOT EXISTS idx_posts_source_ind ON posts(source_site, industry)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_posts_canonical_key ON posts(canonical_key)")
@@ -4335,8 +4352,24 @@ def _save_scraped_data(data: dict, *, ensure_db: bool = True) -> int:
                     ),
                 )
 
-        # Mark in sitemap_cache as scraped
-        conn.execute("UPDATE sitemap_cache SET scraped = 1 WHERE loc = ?", (url,))
+        # A page that produced no release was never "indexed": it is an empty or
+        # unreadable response. Marking it scraped = 1 anyway is exactly how ~1.7k
+        # katmoviehd and ~2.4k hindilinks4u URLs went missing with a green tick on
+        # them, invisible to every later audit. Book a transient failure instead, so
+        # the retry budget spends attempts on it, `last_cause` records why, and
+        # `select_crawl_candidates` keeps it visible until the budget runs out.
+        if valid_releases:
+            conn.execute("UPDATE sitemap_cache SET scraped = 1 WHERE loc = ?", (url,))
+        else:
+            prior = conn.execute(
+                "SELECT attempts FROM sitemap_cache WHERE loc = ?", (url,)).fetchone()
+            parked, attempts = crawl_attempt_state(
+                "parse_no_releases", prior_attempts=(prior[0] if prior else 0) or 0)
+            conn.execute(
+                "UPDATE sitemap_cache SET scraped = ?, attempts = ?, last_attempt = ?,"
+                " last_cause = ? WHERE loc = ?",
+                (parked, attempts, time.time(), "parse_no_releases", url),
+            )
 
     return post_id
 
@@ -4347,21 +4380,191 @@ def _save_scraped_data(data: dict, *, ensure_db: bool = True) -> int:
 # abandoned rather than queued.
 MAX_CRAWL_ATTEMPTS = 3
 
+#: Causes that describe the PAGE rather than our bad luck. A 404 will 404 again,
+#: so it is parked on the first sighting instead of burning three requests on it;
+#: everything else stays eligible for the retry budget. Keeping the two lists
+#: separate is what lets an operator tell "gone upstream" from "our parser broke"
+#: without re-crawling anything.
+PERMANENT_CRAWL_CAUSES = frozenset({
+    "http_404_gone",
+    "http_410_gone",
+    "not_a_post",
+})
 
-def record_crawl_attempt(url: str, *, indexed: bool) -> None:
-    """Stamp the crawl outcome; a failed page stays eligible until MAX_CRAWL_ATTEMPTS."""
+#: Retried until MAX_CRAWL_ATTEMPTS, then parked with the cause still on the row.
+TRANSIENT_CRAWL_CAUSES = frozenset({
+    "transport_error",
+    "timeout",
+    "http_403_forbidden",
+    "http_429_rate_limited",
+    "http_5xx_upstream_error",
+    "blocked_challenge",
+    "parse_no_releases",
+    "parse_error",
+    "sqlite_locked",
+})
+
+
+def classify_crawl_failure(exc=None, *, http_code=None, cause=None) -> str:
+    """Name the reason a page did not become a post, in one of the two vocabularies.
+
+    Detection only: a Cloudflare/JS interstitial is recorded as `blocked_challenge`
+    and left alone — this never tries to solve or spoof a bot check.
+    """
+    if cause:
+        return str(cause)[:60]
+    code = http_code
+    if exc is not None:
+        if isinstance(exc, urllib.error.HTTPError):
+            code = exc.code
+        elif isinstance(exc, TimeoutError):
+            # `socket.timeout` is an alias of TimeoutError on Python 3.10+.
+            return "timeout"
+        elif isinstance(exc, sqlite3.OperationalError) and "locked" in str(exc).lower():
+            return "sqlite_locked"
+        elif isinstance(exc, (urllib.error.URLError, OSError)):
+            return "transport_error"
+        return "parse_error"
+    if code in (404, 410):
+        return f"http_{code}_gone"
+    if code == 403:
+        return "http_403_forbidden"
+    if code == 408:
+        # A scraper-synthesised "we timed out" code, never a server response.
+        return "timeout"
+    if code == 429:
+        return "http_429_rate_limited"
+    if code and code >= 500:
+        return "http_5xx_upstream_error"
+    # `0` is what a scraper returns for "no response at all" — a connection
+    # failure, not a page. It is falsy, so it must not fall through to the
+    # parse-nothing default below.
+    if code is not None and code != 200:
+        return "transport_error"
+    return "parse_no_releases"
+
+
+#: Causes that mean "asking again right now makes it worse": the host is dark,
+#: rate-limiting us, or bot-checking every page. A whole run of these is not a
+#: backlog to grind through, it is a site we cannot crawl — world4ufree burned
+#: 2,921 requeued rows in 12.8 seconds, which is only possible if every request
+#: failed without ever returning a page.
+SITE_DARK_CAUSES = frozenset({
+    "transport_error",
+    "timeout",
+    "http_403_forbidden",
+    "http_429_rate_limited",
+    "http_5xx_upstream_error",
+    "blocked_challenge",
+})
+
+
+def crawl_attempt_state(
+    cause: str | None,
+    *,
+    prior_attempts: int = 0,
+    permanent: frozenset = PERMANENT_CRAWL_CAUSES,
+    max_attempts: int = MAX_CRAWL_ATTEMPTS,
+) -> tuple[int, int]:
+    """``(scraped, attempts)`` to book for a FAILED crawl attempt.
+
+    Both outcomes are still ``-1`` — what separates them is the attempt count.
+    A permanent cause parks the row on the first sighting (a 404 does not turn
+    into a 200 because we asked twice more), while a transient one spends its
+    retry budget and stays selectable by ``select_crawl_candidates`` until that
+    budget runs out. The per-site staging crawlers use this same rule so an
+    operator reads one vocabulary everywhere, with ``last_cause`` saying which
+    of "gone upstream" and "we could not read it" a ``-1` actually means.
+    """
+    attempts = max(0, int(prior_attempts)) + 1
+    if cause in permanent:
+        return -1, max_attempts
+    return -1, min(attempts, max_attempts)
+
+
+def retry_backoff(attempt: int, *, base: float = 2.0, cap: float = 60.0) -> float:
+    """Seconds to sit out before re-trying a transiently-failed URL in the same pass."""
+    return min(cap, base * (2 ** max(0, int(attempt) - 1)))
+
+
+class ConsecutiveFailureFuse:
+    """Thread-safe stop signal for a pass that is failing for ONE external reason.
+
+    counting individual failures is useless in a backlog; counting *consecutive*
+    transport/403/429/5xx failures finds the case where the whole domain is dark
+    or is bot-checking us. When it trips the crawler stops spending requests and
+    leaves the rest of the queue untouched, so "abandoned" and "failed" stay
+    distinguishable rows instead of thousands of identical ``-1``.
+    """
+
+    def __init__(self, threshold: int = 25, causes: frozenset = SITE_DARK_CAUSES):
+        self.threshold = max(1, int(threshold))
+        self.causes = causes
+        self._streak = 0
+        self._trip_reason: str | None = None
+        self._lock = threading.Lock()
+
+    @property
+    def tripped(self) -> bool:
+        return self._trip_reason is not None
+
+    @property
+    def streak(self) -> int:
+        return self._streak
+
+    @property
+    def trip_reason(self) -> str | None:
+        return self._trip_reason
+
+    def record(self, cause: str | None) -> bool:
+        """Book one outcome; True when this call tripped the fuse."""
+        with self._lock:
+            if cause in self.causes:
+                self._streak += 1
+                if self._trip_reason is None and self._streak >= self.threshold:
+                    self._trip_reason = cause
+                return self._trip_reason is not None
+            self._streak = 0
+            return False
+
+
+def crawl_failure_breakdown(site: str | None = None, *, db_conn=None) -> list:
+    """(cause, parked_count) for the failures the crawler gave up on."""
+    sql = ("SELECT COALESCE(last_cause, 'unrecorded') AS cause, COUNT(*) "
+           "FROM sitemap_cache WHERE scraped = -1")
+    params: tuple = ()
+    if site:
+        sql += " AND site = ?"
+        params = (site,)
+    sql += " GROUP BY cause ORDER BY COUNT(*) DESC"
+    if db_conn is not None:
+        return db_conn.execute(sql, params).fetchall()
+    with get_db() as conn:
+        return conn.execute(sql, params).fetchall()
+
+
+def record_crawl_attempt(url: str, *, indexed: bool, cause: str | None = None) -> None:
+    """Stamp the crawl outcome; a failed page stays eligible until MAX_CRAWL_ATTEMPTS.
+
+    `cause` is written to `sitemap_cache.last_cause` so `-1` stops being one opaque
+    wall: a permanent cause parks the row immediately, a transient one leaves it in
+    the retry budget, and a later reader can count the two apart.
+    """
+    parked_permanently = (not indexed) and cause in PERMANENT_CRAWL_CAUSES
     with get_db() as conn:
         if indexed:
             conn.execute(
-                "UPDATE sitemap_cache SET scraped = 1, attempts = attempts + 1, last_attempt = ?"
-                " WHERE loc = ?",
+                "UPDATE sitemap_cache SET scraped = 1, attempts = attempts + 1,"
+                " last_attempt = ?, last_cause = NULL WHERE loc = ?",
                 (time.time(), url),
             )
         else:
             conn.execute(
-                "UPDATE sitemap_cache SET scraped = -1, attempts = attempts + 1, last_attempt = ?"
-                " WHERE loc = ?",
-                (time.time(), url),
+                "UPDATE sitemap_cache SET scraped = -1,"
+                " attempts = CASE WHEN ? = 1 THEN ? ELSE attempts + 1 END,"
+                " last_attempt = ?, last_cause = ? WHERE loc = ?",
+                (1 if parked_permanently else 0, MAX_CRAWL_ATTEMPTS, time.time(),
+                 cause, url),
             )
 
 
@@ -4604,6 +4807,201 @@ def heal_post_links(post_id: int, verbose: bool = True) -> dict:
     return {"healed": healed_count, "total_active": healed_count}
 
 
+# ── Observed link expiry (HANDOFF_apidocs A5) ────────────────────────────────
+#
+# Nothing used to write `cat_links.expires_at`, so `/play` sent a bundle-level
+# 900 s that had nothing behind it and `resolve_live_source()` guessed at
+# temporality with a 6-hour `last_checked_at` heuristic. These three functions
+# replace the guess with a measurement where one is available, and stay silent
+# (NULL, never a fabricated number) where it is not.
+#
+# An upstream CDN can lie or publish absurd windows (a year, or 0), so what we
+# record is clamped into a band that is honest *for us*: short enough that a
+# client never plays a dead URL believing the doc, long enough that we do not
+# re-resolve a healthy link every second.
+LINK_TTL_MAX_SECONDS = 900.0
+LINK_TTL_MIN_SECONDS = 5.0
+
+
+def parse_observed_ttl(headers, *, now: float | None = None) -> float | None:
+    """Seconds a URL is still good for, read from the response's own headers.
+
+    Accepts any case-insensitive mapping (or list of pairs). Only statements
+    about *freshness* are honoured:
+
+      Cache-Control: max-age=N   (or s-maxage=N when max-age is absent)
+      Expires: <HTTP-date>
+
+    `no-store` / `no-cache` are deliberately NOT read as "expired": they forbid
+    an HTTP cache from re-serving the body, which says nothing about whether the
+    signed token in the query string still works — treating them as 0 would make
+    every honest CDN link look dead. No directive at all returns None, which the
+    caller records as "never observed" rather than as a made-up TTL.
+    """
+    if not headers:
+        return None
+    now_ts = time.time() if now is None else float(now)
+    get = headers.get if hasattr(headers, "get") else dict(headers).get
+
+    def _lookup(name: str):
+        value = get(name)
+        if value is not None:
+            return value
+        low = name.lower()
+        for key, val in (headers.items() if hasattr(headers, "items") else []):
+            if str(key).lower() == low:
+                return val
+        return None
+
+    ttl: float | None = None
+    cc = _lookup("Cache-Control")
+    if cc:
+        ages = {}
+        for part in str(cc).lower().split(","):
+            if "=" in part:
+                k, _, v = part.partition("=")
+                try:
+                    ages[k.strip()] = float(v.strip().strip('"'))
+                except ValueError:
+                    continue
+        if "max-age" in ages:
+            ttl = ages["max-age"]
+        elif "s-maxage" in ages:
+            ttl = ages["s-maxage"]
+
+    if ttl is None:
+        expires = _lookup("Expires")
+        if expires:
+            try:
+                from email.utils import parsedate_to_datetime
+                exp_dt = parsedate_to_datetime(str(expires))
+            except Exception:
+                exp_dt = None
+            if exp_dt is not None:
+                try:
+                    ttl = exp_dt.timestamp() - now_ts
+                except (OverflowError, OSError, ValueError):
+                    ttl = None
+
+    if ttl is None:
+        return None
+    if ttl <= 0:
+        return 0.0
+    # A declared window longer than our band is not trusted wholesale: the
+    # longest real expiry we will promise a client is LINK_TTL_MAX_SECONDS.
+    return min(float(ttl), LINK_TTL_MAX_SECONDS)
+
+
+def probe_url_ttl(url: str, *, timeout: int = 6, headers: dict | None = None) -> tuple[float | None, dict]:
+    """Knock on a resolved URL and report its own freshness window.
+
+    Returns ``(ttl_seconds_or_None, {"observed": bool, "reason": str, ...})``.
+    Tries HEAD first (one packet, no body) and falls back to a 1-byte ranged GET,
+    because plenty of hosters answer 405/501 to HEAD. Never raises: a link we can
+    serve but cannot interrogate simply has no observed TTL, and the caller must
+    be able to tell "the host answered and declared nothing" (`no_directive`)
+    from "we never got through" (`unreachable`) — only the first is information.
+    """
+    if not url or not url.startswith("http"):
+        return None, {"observed": False, "reason": "not_a_url"}
+    base = {
+        "User-Agent": USER_AGENT,
+        "Accept": "*/*",
+        "Accept-Ranges": "bytes",
+    }
+    if headers:
+        base.update(headers)
+    attempts = (
+        ("HEAD", {}),
+        ("GET", {"Range": "bytes=0-0"}),
+    )
+    for method, extra in attempts:
+        req = urllib.request.Request(url, headers={**base, **extra}, method=method)
+        try:
+            with urllib.request.urlopen(req, context=SSL_CONTEXT, timeout=timeout) as resp:
+                raw = dict(resp.headers)
+                status = resp.status
+                try:
+                    resp.read(1)
+                except Exception:
+                    pass
+        except Exception:
+            continue
+        ttl = parse_observed_ttl(raw)
+        if ttl is None:
+            return None, {"observed": False, "reason": "no_directive", "http": status}
+        return ttl, {
+            "observed": True,
+            "ttl": ttl,
+            "expires_at": time.time() + ttl,
+            "http": status,
+        }
+    return None, {"observed": False, "reason": "unreachable"}
+
+
+def record_link_expiry(source_id: int, ttl_seconds: float | None = None, *,
+                       expires_at: float | None = None,
+                       observed_via: str = "probe",
+                       clear: bool = False) -> float | None:
+    """Persist an observed expiry on the ledger link and its projected twin.
+
+    Writes `download_sources.expires_at` (the ledger, our side of the boundary)
+    and mirrors it onto `cat_links.expires_at` through
+    `cat_links.ledger_link_id`, which is the link the v2 projector published from
+    this exact row. The projection stays the projection: it is disposable, and a
+    rebuild simply re-derives `expires_at` as NULL until the next resolve reports
+    a fresh measurement — so writing through here is a cache fill, not an edit.
+
+    A call with nothing to report leaves the previous observation alone; only
+    `clear=True` deliberately writes NULL, which the resolve path uses when the
+    host answered and declared no lifetime for the URL it just issued.
+    Returns the stored `expires_at` (None when the row was cleared or not written).
+    """
+    if clear:
+        expires_at = None
+    elif expires_at is None:
+        if ttl_seconds is None:
+            return None
+        expires_at = time.time() + max(0.0, float(ttl_seconds))
+    stored = None if expires_at is None else float(expires_at)
+    try:
+        with get_db() as conn:
+            conn.execute(
+                "UPDATE download_sources SET expires_at = ?, ttl_source = ?,"
+                " last_checked_at = CURRENT_TIMESTAMP WHERE id = ?",
+                (stored, observed_via, int(source_id)),
+            )
+            # The projected catalog may live in another file, or not exist yet.
+            try:
+                conn.execute(
+                    "UPDATE cat_links SET expires_at = ? WHERE ledger_link_id = ?",
+                    (stored, int(source_id)),
+                )
+            except sqlite3.Error:
+                pass
+    except sqlite3.Error:
+        return None
+    return stored
+
+
+def _expiry_fields(src: dict, *, now: float | None = None) -> dict:
+    """The published freshness pair for a resolve answer.
+
+    `expires_in` is relative because a client cannot trust the server clock;
+    `expires_at` is absolute so `/play` can echo the same instant it was given.
+    Both are None when we have never measured — silence, not a made-up window.
+    """
+    raw = src.get("expires_at")
+    if raw is None:
+        return {"expires_at": None, "expires_in": None}
+    try:
+        stamp = float(raw)
+    except (TypeError, ValueError):
+        return {"expires_at": None, "expires_in": None}
+    remaining = stamp - (time.time() if now is None else now)
+    return {"expires_at": stamp, "expires_in": max(0.0, round(remaining, 3))}
+
+
 def resolve_live_source(source_id: int, *, v2: bool = False) -> dict:
     """
     Just-In-Time (JIT) live stream resolver:
@@ -4647,8 +5045,14 @@ def resolve_live_source(source_id: int, *, v2: bool = False) -> dict:
     now_ts = time.time()
 
     needs_refresh = False
+    observed_expiry = _expiry_fields(src)
     if src["status"] in ("dead", "expired"):
         needs_refresh = True
+    elif observed_expiry["expires_in"] is not None:
+        # A measured window beats the heuristic: if we recorded that this token
+        # dies in 20 minutes, it is not "fresh" just because we last looked at it
+        # an hour ago — and equally it is not stale after 25 minutes.
+        needs_refresh = observed_expiry["expires_in"] <= 0
     elif src["is_temporary"]:
         if not src.get("last_checked_at"):
             needs_refresh = True
@@ -4674,6 +5078,7 @@ def resolve_live_source(source_id: int, *, v2: bool = False) -> dict:
             "source_name": src["source_name"],
             "mime_type": src.get("mime_type"),
             "file_size_bytes": src.get("file_size_bytes"),
+            **observed_expiry,
         }
 
     # Needs fresh unwrap
@@ -4728,6 +5133,21 @@ def resolve_live_source(source_id: int, *, v2: bool = False) -> dict:
                     last_checked_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
                 WHERE id = ?
             """, (fresh_url, fresh_temp, src["id"]))
+        # Ask the URL itself how long it lives, instead of assuming. A fresh token
+        # whose host declares no freshness window keeps `expires_at` NULL, and the
+        # next call then falls back to the documented 6-hour temporary-link
+        # ceiling rather than to a number we invented for it.
+        observed_ttl, observed_info = probe_url_ttl(fresh_url)
+        expires_at = observed_info.get("expires_at")
+        if expires_at is not None:
+            record_link_expiry(src["id"], observed_ttl, expires_at=expires_at,
+                               observed_via="response_headers")
+            src["expires_at"] = expires_at
+        elif observed_info.get("reason") == "no_directive":
+            # The host answered and declared nothing: drop any older measurement
+            # so a stale, longer window cannot outlive the token it was read from.
+            record_link_expiry(src["id"], clear=True, observed_via="no_directive")
+            src["expires_at"] = None
         return {
             "success": True,
             "id": src["id"],
@@ -4740,6 +5160,7 @@ def resolve_live_source(source_id: int, *, v2: bool = False) -> dict:
             "source_name": src["source_name"],
             "mime_type": src.get("mime_type"),
             "file_size_bytes": src.get("file_size_bytes"),
+            **_expiry_fields(src),
         }
 
     # Nothing could be re-resolved. The legacy (v1) contract keeps handing back the
@@ -4781,6 +5202,7 @@ def resolve_live_source(source_id: int, *, v2: bool = False) -> dict:
         "source_name": src["source_name"],
         "mime_type": src.get("mime_type"),
         "file_size_bytes": src.get("file_size_bytes"),
+        **_expiry_fields(src),
     }
 
 
@@ -5244,11 +5666,13 @@ def main():
                     ind_badge = f" [{data.get('industry', 'N/A')}]"
                     print(f"      ✓ Post #{pid}: {data['clean_title'][:30]}{ind_badge} | {rel_cnt} rel, {src_cnt} links{tag18}{anim_tag}", flush=True)
                 else:
-                    record_crawl_attempt(url, indexed=False)
+                    record_crawl_attempt(url, indexed=False,
+                                         cause=classify_crawl_failure(cause="parse_no_releases"))
                     print(f"      ⚠ Skipped (no releases found)", flush=True)
             except Exception as e:
-                record_crawl_attempt(url, indexed=False)
-                print(f"      ✗ Error: {e}", flush=True)
+                reason = classify_crawl_failure(exc=e)
+                record_crawl_attempt(url, indexed=False, cause=reason)
+                print(f"      ✗ Error: [{reason}] {e}", flush=True)
 
         print("\n" + "=" * 70)
         with get_db() as conn:
@@ -5260,8 +5684,15 @@ def main():
                 "SELECT COUNT(*) FROM sitemap_cache WHERE scraped = 0 OR (scraped = -1 AND attempts < ?)",
                 (MAX_CRAWL_ATTEMPTS,),
             ).fetchone()[0]
+            _breakdown = crawl_failure_breakdown(site_filter, db_conn=conn)
         print(f"🎉 Crawl Complete! Indexed {crawled_count}/{len(rows)} posts")
         print(f"🔁 Still queued: {_queued:,} | 🛑 Parked after {MAX_CRAWL_ATTEMPTS} attempts: {_parked:,}")
+        if _breakdown:
+            # 'gone' and 'broken' are different work items; say which is which.
+            print("🧭 Parked failures by cause (permanent = upstream gone, others retry-able):")
+            for _cause, _n in _breakdown[:10]:
+                _kind = "permanent" if _cause in PERMANENT_CRAWL_CAUSES else "transient"
+                print(f"      {_cause:26s} {_n:7,}  {_kind}")
         print(f"📦 Total releases added: {total_releases}")
         print(f"🔗 Total direct sources added: {total_sources}")
         print(f"🌐 Services detected: {', '.join(sorted(new_services_found))}")

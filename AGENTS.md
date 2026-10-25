@@ -15,7 +15,6 @@ radd-stream/                        ← repo root
 ├── AGENTS.md                       ← THIS FILE — start here
 ├── README.md                       ← public-facing project description
 ├── DISCLAIMER.md                   ← legal / framing notice
-├── DAO.md                          ← eternal mission directive
 ├── push.py / github_push.py / emergency_push.py
 │                                   ← retired no-op stubs; use Git instead
 ├── setup_check.py                  ← system sanity check for backend
@@ -31,6 +30,7 @@ radd-stream/                        ← repo root
 │
 ├── Fast_Fetch/                     ← 🐍 PYTHON BACKEND (data engine + REST API)
 │   ├── AGENTS.md                   ← deep backend-specific agent guide (read this for backend work)
+│   ├── DAO.md                      ← eternal mission directive
 │   ├── CONTINUITY.md               ← session log + milestone tracker (update every session)
 │   ├── API_V2.md                   ← catalog v2 data model + REST contract (read before designing any endpoint)
 │   ├── SITES.md                    ← per-site scraping reference
@@ -154,11 +154,11 @@ database already exists there.
 
 ### Backend
 ```bash
-# From repo root: /home/runner/workspace/radd-stream
+# From repo root: /opt/radd-stream  (Oracle VM)
 
-# Run all offline tests
-python -S Fast_Fetch/test_database.py    # 36 tests
-python -S Fast_Fetch/test_vidout.py      # 6 tests
+# Run all offline tests — one module per invocation; this runner ignores extra names
+python3 -S Fast_Fetch/test_database.py    # 54 tests
+python3 -S Fast_Fetch/test_vidout.py      # 6 tests
 
 # Live site audit (writes to temp DB)
 python Fast_Fetch/test_all_sites.py
@@ -181,13 +181,16 @@ python Fast_Fetch/fast_fetch.py search "Inception"
 ### App (no local Android Studio needed)
 ```bash
 # GitHub only discovers workflows under the repository-root .github/workflows/.
-# The current workflow files are nested in App/.github/workflows and will not trigger there.
+# Root now carries ci.yml, release.yml and backend-ci.yml; the copies still sitting
+# in App/.github/workflows are inert and are being retired.
 
 # To create a signed release:
 # 1. Tag the commit
 git tag v1.0.0
-# 2. Push the tag with Git using the temporary askpass helper in ORACLE_DEPLOYMENT.md
-git push origin v1.0.0
+# 2. Push the tag with Git using the temporary askpass helper in ORACLE_DEPLOYMENT.md,
+#    against the explicit clean URL — never `origin`, whose stored remote still
+#    embeds a leaked credential until the owner revokes it:
+git push https://github.com/radddao/radd-stream.git v1.0.0
 # → GitHub Actions builds signed APK + creates Release automatically
 
 # Download APK: github.com/radddao/radd-stream/actions (debug)

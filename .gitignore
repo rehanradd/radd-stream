@@ -56,3 +56,8 @@ App/local.properties
 
 # Local live database storage directory
 radd-stream-data/
+
+# Runtime crawler tallies and the agent chat archive: regenerated every minute by
+# the scrapers and auto_chat_sync.py, so they are working state, not product.
+Fast_Fetch/*_status.json
+Fast_Fetch/CHAT_HISTORY.md

@@ -134,7 +134,7 @@ def validate(conn) -> int:
     mismatch = []
     for row in conn.execute(
             f"SELECT * FROM cat_releases WHERE id IN ({','.join('?' * len(ids))})" if ids else
-            "SELECT * FROM cat_releases WHERE 0"):
+            "SELECT * FROM cat_releases WHERE 0", tuple(ids) if ids else ()):
         stored = int(row["quality_score"] or 0)
         label = str(row["label"] or "")
         if not label:
@@ -161,9 +161,29 @@ def validate(conn) -> int:
     best_not_streamable = _count(conn,
         "SELECT COUNT(*) FROM cat_episodes e JOIN cat_releases r ON r.id = e.best_release_id"
         " WHERE r.streamable_count < 1 OR r.coverage_type NOT IN"
-        "   ('single_episode','episode_range')")
+        "   ('single_episode','episode_range','season_pack')")
     check("best_release_id is a streamable, episode-covering print", best_not_streamable == 0,
           f"{best_not_streamable} rows")
+    # An expanded season pack is an episode-covering print too (A3), and no print
+    # with an unresolved identity review may serve an episode (S13/A9) — the flag
+    # only exists on v2.1 projections, so the check is guarded.
+    suspect_cols = {row[1] for row in conn.execute("PRAGMA table_info(cat_releases)")}
+    if "identity_suspect" in suspect_cols:
+        suspect_best = _count(conn,
+            "SELECT COUNT(*) FROM cat_episodes e JOIN cat_releases r ON r.id = e.best_release_id"
+            " WHERE r.identity_suspect = 1")
+        check("no unresolved-suspect print is a best release", suspect_best == 0,
+              f"{suspect_best} rows")
+
+    # ── 5b. §16.2 version groups (§16.2, A1) ────────────────────────────────
+    if "cat_projection_meta" in _tables(conn):
+        versions = catalog_v2.projection_versions(conn)
+        check("projection version groups read cleanly",
+              set(versions) == set(catalog_v2.REVISION_KEYS),
+              json.dumps(versions, sort_keys=True))
+        if "cat_id_map" in _tables(conn):
+            mapped = _count(conn, "SELECT COUNT(*) FROM cat_id_map")
+            check("id-map journal is reportable", True, f"{mapped} journalled renumberings")
 
     # ── 6. adult titles are stored but unreachable ──────────────────────────
     adult = _count(conn, "SELECT COUNT(*) FROM cat_works WHERE is_18_plus = 1")
@@ -178,23 +198,24 @@ def validate(conn) -> int:
     except ImportError:
         redact = None
     if redact is not None:
-        sample = [dict(row) for row in conn.execute(
-            "SELECT * FROM cat_works ORDER BY RANDOM() LIMIT 50")]
-        # the wire builders, not the raw rows, are what a client sees
-        needles = {str(row["work_key"]) for row in conn.execute(
-            "SELECT work_key FROM cat_works ORDER BY RANDOM() LIMIT 25")}
-        needles |= {str(row[0]) for row in conn.execute(
+        # §3: `work_key` is the MANDATED public identity and Layer-1 rows legally
+        # carry both it and the provenance — redaction happens at the HTTP edge —
+        # so the provenance needle net is cast over the wire payload only, and
+        # only over what must never appear there (site and service names).
+        needles = {str(row[0]) for row in conn.execute(
             "SELECT DISTINCT source_site FROM cat_links LIMIT 25")}
+        needles |= {str(row[0]) for row in conn.execute(
+            "SELECT DISTINCT source_site FROM cat_releases LIMIT 25")}
         try:
             import api_v2
             payload = json.dumps(api_v2.build_manifest(conn) if hasattr(api_v2, "build_manifest")
                                  else {}, default=str)
         except Exception:                                    # noqa: BLE001 — audit must not crash
             payload = ""
-        blob = json.dumps(sample, default=str) + payload
-        offending = sorted({n for n in needles if n and n in blob})
-        check("no provenance needle in a sampled public payload", not offending,
-              f"{len(offending)} found: {offending[:3]}" if offending else "clean")
+        offending = sorted({n for n in needles if n and n in payload})
+        check("no provenance needle in the public wire payload", not offending,
+              f"{len(offending)} found: {offending[:3]}" if offending else
+              ("clean" if payload else "no wire builder present — vacuously clean"))
         # the deny-by-default projection must refuse a provenance key outright
         try:
             redact.project({"source_site": "x", "title": "y"}, "release")

@@ -483,13 +483,18 @@ routes; restrict the bind and public routes before enabling the public proxy.
 - Nightly backup: `radd-stream-backup_20261024_154000.tar.gz`, 20 databases, 990 MB,
   sha256 `b20f7b0afee4d4f72f4caee9eeba6241b035ee9e6f1225f4bff553801698e5f7`, uploaded to HF.
 
-### 2026-10-24 — Architectural Directive: Oracle VM-Centric Build Mandate & UI Roadmap
-- **Owner Direction**: All development, UI polish, testing, and APK builds are anchored 100% on this Oracle VM. External AI sandboxes (Google AI Studio) are deprecated for this project.
-- **Fleet Merge**: `merge_fleet.py` is actively processing 18 staging databases into `merged_catalog_20261024.db` with low CPU priority (`nice -n19`). Verified 8 sites already merged cleanly.
-- **Android Health**: 245/245 JVM unit tests passing (100% green). Debug APK updated and published to `/var/www/download/radd-stream.apk`.
-- **Next Priorities for Qoder**:
-  1. Complete 18-site fleet merge into `merged_catalog_20261024.db` and verify adult filters.
-  2. Complete Compose UI wiring in `PlayerScreen.kt` (Brightness/Volume vertical HUDs, 200% AudioBoost pill, 2x long-press badge, seek ripples).
-  3. Wire `QualityRungCard` into player bottom sheet (Auto, 4K, 1080p, 720p, 480p).
-  4. Wire Downloads Screen progress & 0-waste stream-to-download promotion.
-  5. Assemble and copy APK to `/var/www/download/radd-stream.apk` on every milestone for direct physical phone testing by the owner.
+### 2026-10-25 — Fleet Merge 18/18 Finished; Release Parser Cleaned; Priority 4 Roadmapped
+- **Fleet Merge 100% Completed**: All 18 staging databases merged into `/home/ubuntu/radd-stream-data/merged_catalog_20261025.db` with KatMovieHD re-derived (`merge_conflicts` measured at 1,460; 130,007 posts, 1,598,614 releases, 3,699,521 links).
+- **Core Engine Shipped**: Offline cache engine, adaptive quality ladder, 200% audio boost, binge preloader, and LAN P2P sharing landed in commits `79b754d` and `7e2be42`.
+- **App Architecture Refined**: Replaced 528 lines of redundant `ReleaseParser.kt` with unified `ReleaseLayoutBuilder.kt`.
+- **Priority 4 Roadmap Bound to Qoder**: Tasked Qoder via `docs/SENIOR_MENTOR_DIRECTIVE_QODER.md` to deliver:
+  1. Subtitle Offset & Online Subtitle Search (`SubtitleOffsetSheet.kt`)
+  2. Netflix-Grade Hero Carousel (`HeroCarousel.kt` on `HomeScreen.kt`)
+  3. Subtitle & Audio Styling Customizer (font size, yellow/white styling, box background)
+  4. Trakt.tv / Cloud Watchlist Sync Engine
+  5. Universal Software Audio Codec Fallback (AC3/EAC3/DTS for budget phone audio)
+- **Sanitation**: What actually moved was three untracked items — `load_catalog.py`, a 271 MB stale
+  `merged_catalog_stale_prerelease_fix.db` and a leftover build directory — now in
+  `/home/ubuntu/project_trash_bin/`. No tracked source or test file was deleted (the only tracked
+  removals this cycle are the four Kotlin files task #23 replaced). Spared `Fast_Fetch/multimovies.db`
+  after discovering it contains 612k releases (80k more than staging).

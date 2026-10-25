@@ -1011,6 +1011,10 @@ BUCKET_LIMITS = {
     "reports": (10, 60.0),   # /stats
 }
 
+#: The budget for a bucket name nobody declared. An unmapped route must still be
+#: throttled (§16.5), so it pays into these numbers rather than into none.
+DEFAULT_BUCKET = (60, 60.0)
+
 
 class RateLimiter:
     def __init__(self, limits=None):
@@ -1021,22 +1025,43 @@ class RateLimiter:
 
     def check(self, bucket: str, client: str, moment: float | None = None) -> dict:
         """Consume one unit. Returns the IETF RateLimit-* triple plus `allowed`."""
-        limit, window = self.limits.get(bucket, (60, 60.0))
         now = time.time() if moment is None else moment
-        key = (bucket, client or "?")
-        left, opened = self._buckets.get(key, (float(limit), now))
-        if now - opened >= window:
-            left, opened = float(limit), now
+        left, opened, limit, window = self.state(bucket, client, now)
         if left < 1:
             reset = max(0.0, window - (now - opened))
             return {"allowed": False, "limit": limit, "remaining": 0,
                     "reset": int(round(reset)), "retry_after": int(round(reset)) or 1}
-        self._buckets[key] = (left - 1.0, opened)
+        self._buckets[(bucket, client or "?")] = (left - 1.0, opened)
         if len(self._buckets) > 4096:      # a page of dead visitors must not grow RAM
             self._buckets = {k: v for k, v in self._buckets.items() if now - v[1] < window}
         reset = int(round(window - (now - opened)))
         return {"allowed": True, "limit": limit, "remaining": int(left - 1),
                 "reset": max(0, reset)}
+
+    def state(self, bucket: str, client: str, moment: float | None = None) -> tuple:
+        """The bucket's live ``(left, opened, limit, window)`` without spending it.
+
+        Refilling a window that has aged out is the same pure read `check()` does
+        first, so a peek is never staler than the answer it mirrors."""
+        limit, window = self.limits.get(bucket, DEFAULT_BUCKET)
+        now = time.time() if moment is None else moment
+        left, opened = self._buckets.get((bucket, client or "?"), (float(limit), now))
+        if now - opened >= window:
+            return float(limit), now, limit, window
+        return left, opened, limit, window
+
+    def peek(self, bucket: str, client: str, moment: float | None = None) -> dict:
+        """Read the budget a caller has left.
+
+        `check()` is the one place a token is spent, and the HTTP host spends it
+        once per request; a route that needed the numbers for its own headers had
+        to be able to ask without paying again, or every budget would halve and
+        this module would hold two views of one bucket."""
+        now = time.time() if moment is None else moment
+        left, opened, limit, window = self.state(bucket, client, now)
+        return {"allowed": left >= 1, "limit": limit,
+                "remaining": max(0, int(left)),
+                "reset": max(0, int(round(window - (now - opened))))}
 
     def headers(self, verdict: dict) -> list[tuple[str, str]]:
         return [("RateLimit-Limit", str(verdict["limit"])),

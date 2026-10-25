@@ -162,6 +162,41 @@ def _seconds_since(value) -> float | None:
     return None
 
 
+#: API_V2.md §7.1 / §6.3 — the two scales axis 2 can be on, as data. A projection
+#: prior (0..900) and a measured score (0..1000) are *not* comparable, and a client
+#: that re-ranks offline must know which one it is holding: a 750 prior means "this
+#: looks like a live CDN direct", a 750 measured means "we knocked on it and it did".
+PRIOR_SCALE = "projection_prior"
+MEASURED_SCALE = "measured"
+SCALE_RANGES = {PRIOR_SCALE: (0, 900), MEASURED_SCALE: (0, 1000)}
+#: `cat_links.measured_ceiling` is not a column; the ceiling is a property of the
+#: measured formula (`link_health.score_link` tops out at 930 for a describable
+#: link), published so a client can clamp its own re-ranking without guessing.
+MEASURED_CEILING = 930
+
+
+def scale_of(link) -> str:
+    """Which scale this link's `rank_score` is currently on (§7.1).
+
+    The projector decides it and says so: `_blend_link()` returns the measured
+    flag only when the evidence journal holds a *probe* that agrees with the
+    newest verdict, and keeps the structural prior otherwise — a client report
+    confirms a verdict but never measures a protocol, so it cannot move a link
+    onto the measured scale. A link view with no flag at all (a raw ledger row,
+    which v1 also ranks) is unmeasured by definition."""
+    row = link if isinstance(link, dict) else dict(link)
+    flag = row.get("measured")
+    if flag is None:
+        # A raw `cat_links`/ledger row: timings only exist once a probe wrote them.
+        flag = row.get("latency_ms") is not None or row.get("speed_mbps") is not None
+    return MEASURED_SCALE if bool(flag) else PRIOR_SCALE
+
+
+def score_range(link) -> list:
+    """The declared range for this link's score — [0, 900] or [0, 1000]."""
+    return list(SCALE_RANGES[scale_of(link)])
+
+
 def score(link, band: str = UNSPECIFIED) -> int:
     """One integer per candidate: higher wins. Deterministic, no network.
 

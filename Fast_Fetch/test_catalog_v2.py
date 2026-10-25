@@ -961,5 +961,615 @@ class EvidenceWriteBackTests(ProjectionTestCase):
             self.assertNotIn(leak, text)
 
 
+class RevisionVectorTests(ProjectionTestCase):
+    """§16.2: four monotonic version groups, each moved only by its own writer."""
+
+    CDN = "https://video-downloads.googleusercontent.com/"
+
+    def src(self, url):
+        return {"source_name": "g", "service": "google_cdn", "resource_id": "x",
+                "source_url": url, "final_url": url, "playback_type": "direct",
+                "is_temporary": 0, "status": "active"}
+
+    def batch_series(self, title="Sync Beats"):
+        self.add_post("site-a", f"https://a.test/{title.casefold().replace(' ', '-')}/",
+                      clean_title=title, year=2020, content_type="series", releases=[
+                          {"release_title": f"{title} S01E1-E2", "season": "1",
+                           "episode": "1-2", "quality": "720p",
+                           "sources": [self.src(self.CDN + title.replace(' ', '-'))]}])
+        self.project()
+        return self.works(title, 2020)[0]
+
+    def test_projection_versions_has_every_key_zero_before_any_projection(self):
+        versions = catalog_v2.projection_versions(self.conn)
+        self.assertEqual(set(versions), set(catalog_v2.REVISION_KEYS))
+        self.assertEqual(versions, {"catalog_rev": 0, "health_rev": 0,
+                                    "offsets_rev": 0, "entitlements_rev": 0})
+
+    def test_unchanged_rebuild_bumps_catalog_rev_and_nothing_else(self):
+        self.batch_series()
+        first = catalog_v2.projection_versions(self.conn)
+        self.assertEqual(first["catalog_rev"], 1)
+        summary = catalog_v2.project(self.conn, rev=1, verbose=False)
+        second = catalog_v2.projection_versions(self.conn)
+        self.assertEqual(second["catalog_rev"], first["catalog_rev"] + 1)
+        self.assertEqual(summary["catalog_rev"], second["catalog_rev"])
+        for key in ("health_rev", "offsets_rev", "entitlements_rev"):
+            self.assertEqual(second[key], first[key])
+
+    def test_offset_report_bumps_offsets_rev_and_nothing_else(self):
+        work = self.batch_series("Offset Beats")
+        before = catalog_v2.projection_versions(self.conn)
+        catalog_v2.record_offset(self.conn, work_key=work["work_key"], season_number=1,
+                                 episode_number=1, offset_seconds=800)
+        after = catalog_v2.projection_versions(self.conn)
+        self.assertEqual(after["offsets_rev"], before["offsets_rev"] + 1)
+        for key in ("catalog_rev", "health_rev", "entitlements_rev"):
+            self.assertEqual(after[key], before[key])
+
+    def test_entitlement_edit_bumps_entitlements_rev_and_nothing_else(self):
+        work = self.batch_series("Paid Beats")
+        before = catalog_v2.projection_versions(self.conn)
+        catalog_v2.set_entitlement(self.conn, work_key=work["work_key"],
+                                   model="rental", price_minor=1500)
+        after = catalog_v2.projection_versions(self.conn)
+        self.assertEqual(after["entitlements_rev"], before["entitlements_rev"] + 1)
+        for key in ("catalog_rev", "health_rev", "offsets_rev"):
+            self.assertEqual(after[key], before[key])
+
+    def test_evidence_apply_bumps_health_rev_and_nothing_else(self):
+        work = self.batch_series("Measured Beats")
+        link = self.conn.execute(
+            "SELECT id, url FROM cat_links WHERE work_id = ?", (work["id"],)).fetchone()
+        before = catalog_v2.projection_versions(self.conn)
+        probe = link_health.ProbeResult(url=link["url"], ok=True, protocol="progressive",
+                                        http_status=206, content_type="video/mp4",
+                                        size_bytes=500000000, latency_ms=80,
+                                        download_speed_mbps=9.0, accepts_ranges=True,
+                                        resumable=True, cors_open=True, checked_at=1000.0)
+        catalog_v2.apply_evidence(self.conn, [probe])
+        after = catalog_v2.projection_versions(self.conn)
+        self.assertEqual(after["health_rev"], 1)
+        for key in ("catalog_rev", "offsets_rev", "entitlements_rev"):
+            self.assertEqual(after[key], before[key])
+
+
+class IdMapTests(ProjectionTestCase):
+    """§3/A2: ids still churn on rebuild, but every renumbering is journalled."""
+
+    CDN = "https://video-downloads.googleusercontent.com/"
+
+    def src(self, tag):
+        return {"source_name": "g", "service": "google_cdn", "resource_id": tag,
+                "source_url": f"{self.CDN}{tag}", "final_url": f"{self.CDN}{tag}",
+                "playback_type": "direct", "is_temporary": 0, "status": "active"}
+
+    def test_rebuild_journals_renumbered_release_and_link_ids(self):
+        self.add_post("site-a", "https://a.test/first-film/", clean_title="First Film",
+                      year=2020, releases=[
+                          {"release_title": "First Film 1080p", "quality": "1080p",
+                           "sources": [self.src("F1")]}])
+        self.add_post("site-a", "https://a.test/second-film/", clean_title="Second Film",
+                      year=2021, releases=[
+                          {"release_title": "Second Film 1080p", "quality": "1080p",
+                           "sources": [self.src("S1")]}])
+        self.project()
+        old_release = self.conn.execute(
+            "SELECT r.id FROM cat_releases r JOIN cat_works w ON w.id = r.work_id"
+            " WHERE w.title = 'Second Film'").fetchone()[0]
+        old_link = self.conn.execute(
+            "SELECT l.id FROM cat_links l JOIN cat_releases r ON r.id = l.release_id"
+            " JOIN cat_works w ON w.id = r.work_id WHERE w.title = 'Second Film'").fetchone()[0]
+        # a second print on the FIRST work shifts every later row's id by one
+        self.add_post("site-b", "https://b.test/first-film-4k/", clean_title="First Film",
+                      year=2020, releases=[
+                          {"release_title": "First Film 4K", "quality": "2160p",
+                           "sources": [self.src("F2")]}])
+        summary = catalog_v2.project(self.conn, rev=2, verbose=False)
+        new_release = self.conn.execute(
+            "SELECT r.id FROM cat_releases r JOIN cat_works w ON w.id = r.work_id"
+            " WHERE w.title = 'Second Film'").fetchone()[0]
+        new_link = self.conn.execute(
+            "SELECT l.id FROM cat_links l JOIN cat_releases r ON r.id = l.release_id"
+            " JOIN cat_works w ON w.id = r.work_id WHERE w.title = 'Second Film'").fetchone()[0]
+        self.assertNotEqual(old_release, new_release)
+        self.assertNotEqual(old_link, new_link)
+        for kind, old, new in (("release", old_release, new_release),
+                               ("link", old_link, new_link)):
+            row = _row(self.conn,
+                       "SELECT * FROM cat_id_map WHERE kind = ? AND old_id = ?", kind, old)
+            self.assertIsNotNone(row, f"{kind} id churn not journalled")
+            self.assertEqual(row["new_id"], new)
+            self.assertEqual(row["rev"], summary["catalog_rev"])
+        # works kept their order — nothing journalled that did not move
+        self.assertEqual(self.conn.execute(
+            "SELECT COUNT(*) FROM cat_id_map WHERE kind = 'work'").fetchone()[0], 0)
+        self.assertEqual(summary["id_mapped"], 2)
+
+
+class SeasonPackExpansionTests(ProjectionTestCase):
+    """A3/G-2: a pack is enumerable exactly when the ledger says how long it is."""
+
+    CDN = "https://video-downloads.googleusercontent.com/"
+
+    def src(self, tag):
+        return {"source_name": "g", "service": "google_cdn", "resource_id": tag,
+                "source_url": f"{self.CDN}{tag}", "final_url": f"{self.CDN}{tag}",
+                "playback_type": "direct", "is_temporary": 0, "status": "active"}
+
+    def pack_post(self, title, label, extra_releases=(), tag="PACK"):
+        releases = [{"release_title": label, "season": "1", "episode": "Batch",
+                     "quality": "720p", "sources": [self.src(tag)]}]
+        releases += list(extra_releases)
+        self.add_post("site-a", f"https://a.test/{title.casefold().replace(' ', '-')}/",
+                      clean_title=title, year=2021, content_type="series",
+                      releases=releases)
+
+    def test_pack_with_episode_count_hint_becomes_enumerable(self):
+        self.pack_post("Harbor Lights", "Harbor Lights S01 Complete 12EP 720p")
+        summary = self.project()
+        work = self.works("Harbor Lights", 2021)[0]
+        numbers = [e["number"] for e in self.conn.execute(
+            "SELECT number FROM cat_episodes WHERE work_id = ? ORDER BY number",
+            (work["id"],)).fetchall()]
+        self.assertEqual(numbers, list(range(1, 13)))
+        self.assertEqual(summary["episodes"], 12)
+        rel = self.releases(work["id"])[0]
+        self.assertEqual(rel["coverage_type"], "season_pack")
+        linked = self.conn.execute(
+            "SELECT COUNT(*) FROM cat_release_episodes WHERE release_id = ?",
+            (rel["id"],)).fetchone()[0]
+        self.assertEqual(linked, 12)
+        # the pack is a streamable covering print, so it can be the best print
+        best = self.conn.execute(
+            "SELECT COUNT(*) FROM cat_episodes WHERE work_id = ? AND best_release_id = ?",
+            (work["id"], rel["id"])).fetchone()[0]
+        self.assertEqual(best, 12)
+
+    def test_pack_without_any_span_data_stays_empty_and_queued(self):
+        self.pack_post("Silent Waters", "Silent Waters S01 Complete 720p")
+        self.project()
+        work = self.works("Silent Waters", 2021)[0]
+        self.assertEqual(self.conn.execute(
+            "SELECT COUNT(*) FROM cat_episodes WHERE work_id = ?",
+            (work["id"],)).fetchone()[0], 0, "an unknowable span must not be invented")
+        row = _row(self.conn,
+                   "SELECT * FROM cat_review_queue WHERE kind = 'season_pack_span_unresolved'")
+        self.assertIsNotNone(row)
+        self.assertEqual(row["work_id"], work["id"])
+        self.assertIsNotNone(row["release_id"], "the queue row must name the pack print")
+
+    def test_pack_expands_only_beyond_the_episodes_already_projected(self):
+        episodes = [{"release_title": f"Grid Runners S01E{n}", "season": "1",
+                     "episode": str(n), "quality": "720p",
+                     "sources": [self.src(f"GR{n}")]} for n in (1, 2, 3)]
+        self.pack_post("Grid Runners", "Grid Runners S01 Complete 12EP 720p",
+                       extra_releases=episodes, tag="GRP")
+        self.project()
+        work = self.works("Grid Runners", 2021)[0]
+        self.assertEqual(self.conn.execute(
+            "SELECT COUNT(*) FROM cat_episodes WHERE work_id = ?",
+            (work["id"],)).fetchone()[0], 12)
+        pack = self.conn.execute(
+            "SELECT id FROM cat_releases WHERE work_id = ? AND coverage_type = 'season_pack'",
+            (work["id"],)).fetchone()[0]
+        self.assertEqual(self.conn.execute(
+            "SELECT COUNT(*) FROM cat_release_episodes WHERE release_id = ?",
+            (pack,)).fetchone()[0], 12)
+        covering = self.conn.execute(
+            """
+            SELECT COUNT(DISTINCT re.release_id) FROM cat_release_episodes re
+            JOIN cat_episodes e ON e.id = re.episode_id
+            WHERE e.work_id = ? AND e.number = 1
+            """, (work["id"],)).fetchone()[0]
+        self.assertEqual(covering, 2, "episode 1 must be covered by its own print AND the pack")
+
+
+class RepackTieBreakTests(ProjectionTestCase):
+    """A7/§5.2: on a quality tie the fresher print wins — print_version DESC, id DESC."""
+
+    CDN = "https://video-downloads.googleusercontent.com/"
+
+    def src(self, tag):
+        return {"source_name": "g", "service": "google_cdn", "resource_id": tag,
+                "source_url": f"{self.CDN}{tag}", "final_url": f"{self.CDN}{tag}",
+                "playback_type": "direct", "is_temporary": 0, "status": "active"}
+
+    def test_equal_quality_newer_print_wins_best_release(self):
+        self.add_post("site-a", "https://a.test/tide-line/", clean_title="Tide Line",
+                      year=2022, content_type="series", releases=[
+                          {"release_title": "Tide Line S01E01 720p WEB-DL x264 v1",
+                           "season": "S01", "episode": "01", "quality": "720p",
+                           "codec": "x264", "sources": [self.src("TIDE-V1")]},
+                          {"release_title": "Tide Line S01E01 720p WEB-DL x264 v2",
+                           "season": "S01", "episode": "01", "quality": "720p",
+                           "codec": "x264", "sources": [self.src("TIDE-V2")]},
+                      ])
+        self.project()
+        work = self.works("Tide Line", 2022)[0]
+        first, second = self.releases(work["id"])
+        self.assertEqual(first["quality_score"], second["quality_score"],
+                         "fixture lost its tie — scores must be equal to prove the rule")
+        self.assertGreater(second["print_version"], first["print_version"])
+        episode = _row(self.conn, "SELECT * FROM cat_episodes WHERE work_id = ?", work["id"])
+        self.assertEqual(episode["best_release_id"], second["id"],
+                         "the older v1 print won the tie (id ASC is reverted behaviour)")
+
+    def test_full_print_tie_prefers_the_later_id_at_work_and_episode_level(self):
+        self.add_post("site-a", "https://a.test/parity-line/", clean_title="Parity Line",
+                      year=2022, content_type="series", releases=[
+                          {"release_title": "Parity Line S01E01 720p WEBRip x265",
+                           "season": "S01", "episode": "01", "quality": "720p",
+                           "codec": "x265", "size": "800MB",
+                           "sources": [self.src("PAR-A")]},
+                          {"release_title": "Parity Line S01E01 480p BluRay x265 ESubs",
+                           "season": "S01", "episode": "01", "quality": "480p",
+                           "codec": "x265", "size": "800MB",
+                           "sources": [self.src("PAR-B")]},
+                      ])
+        self.project()
+        work = self.works("Parity Line", 2022)[0]
+        first, second = self.releases(work["id"])
+        self.assertEqual(first["quality_score"], second["quality_score"])
+        self.assertEqual(first["print_version"], second["print_version"])
+        self.assertLess(first["id"], second["id"])
+        episode = _row(self.conn, "SELECT * FROM cat_episodes WHERE work_id = ?", work["id"])
+        self.assertEqual(episode["best_release_id"], second["id"],
+                         "episode tie did not go id DESC")
+        self.assertEqual(work["max_resolution"], second["resolution"],
+                         "work max_resolution did not agree with the episode tiebreak")
+
+
+class OffsetMajorityTests(ProjectionTestCase):
+    """A8/§4.3: offsets publish by vote, so one wrong report cannot move playback."""
+
+    def series(self, title="Late Beats"):
+        self.add_post("site-a", f"https://a.test/{title.casefold().replace(' ', '-')}/",
+                      clean_title=title, year=2021, content_type="series", releases=[
+                          {"release_title": f"{title} S01E1-E2", "season": "1",
+                           "episode": "1-2", "quality": "720p"}])
+        self.project()
+        return self.works(title, 2021)[0]["work_key"]
+
+    def report(self, key, seconds):
+        return catalog_v2.record_offset(self.conn, work_key=key, season_number=1,
+                                        episode_number=1, offset_seconds=seconds)
+
+    def published(self, key):
+        return _row(self.conn,
+                    "SELECT * FROM cat_offsets WHERE work_key = ?", key)
+
+    def test_quorate_offset_survives_a_single_wrong_report(self):
+        key = self.series("Quorum Beats")
+        for _ in range(3):
+            result = self.report(key, 900)
+        self.assertEqual(result["confirmed_by"], 3)
+        self.assertEqual(result["quorum"], catalog_v2.OFFSET_QUORUM)
+        wrong = self.report(key, -200)
+        self.assertEqual(wrong["offset_seconds"], 900,
+                         "one dissent outvoted a quorate offset")
+        row = self.published(key)
+        self.assertEqual(row["offset_seconds"], 900)
+
+    def test_strict_majority_flips_the_published_offset(self):
+        key = self.flip_setup = self.series("Flip Beats")
+        for _ in range(3):
+            self.report(key, 900)
+        for _ in range(3):
+            self.assertEqual(self.report(key, -200)["offset_seconds"], 900)
+        flipped = self.report(key, -200)
+        self.assertEqual(flipped["offset_seconds"], -200, "4-3 majority did not flip")
+        self.assertEqual(self.published(key)["offset_seconds"], -200)
+
+    def test_equal_votes_keep_the_incumbent_instead_of_the_last_writer(self):
+        key = self.series("Steady Beats")
+        self.report(key, 900)
+        tied = self.report(key, -200)
+        self.assertEqual(tied["offset_seconds"], 900, "a 1-1 tie followed the last writer")
+        self.report(key, 900)
+        self.assertEqual(self.published(key)["offset_seconds"], 900)
+
+    def test_legacy_confirmations_are_seeded_into_the_vote_ledger(self):
+        key = self.series("Legacy Beats")
+        self.conn.execute(
+            "INSERT INTO cat_offsets (work_key, season_number, episode_number,"
+            " release_label, offset_seconds, confirmed_by, updated_at)"
+            " VALUES (?, 1, 1, '', 900, 3, ?)", (key, time.time()))
+        self.conn.commit()
+        result = self.report(key, -200)
+        self.assertEqual(result["offset_seconds"], 900,
+                         "pre-majority confirmations were not seeded as votes")
+
+    def test_confirmation_only_report_does_not_bump_offsets_rev(self):
+        key = self.series("Quiet Beats")
+        self.report(key, 900)
+        rev = catalog_v2.projection_versions(self.conn)["offsets_rev"]
+        self.report(key, 900)
+        self.assertEqual(catalog_v2.projection_versions(self.conn)["offsets_rev"], rev)
+
+
+class ReviewQueueTests(ProjectionTestCase):
+    """A9/S13: year and external-id conflicts queue for a human; resolutions stick."""
+
+    CDN = "https://video-downloads.googleusercontent.com/"
+
+    def src(self, tag):
+        return {"source_name": "g", "service": "google_cdn", "resource_id": tag,
+                "source_url": f"{self.CDN}{tag}", "final_url": f"{self.CDN}{tag}",
+                "playback_type": "direct", "is_temporary": 0, "status": "active"}
+
+    def test_close_years_without_external_ids_are_queued_as_year_conflict(self):
+        self.add_post("site-a", "https://a.test/echo-falls-2023/",
+                      clean_title="Echo Falls", year=2023)
+        self.add_post("site-b", "https://b.test/echo-falls-2025/",
+                      clean_title="Echo Falls", year=2025)
+        self.project()
+        rows = self.conn.execute(
+            "SELECT * FROM cat_review_queue WHERE kind = 'year_conflict'").fetchall()
+        self.assertEqual(len(rows), 2, "both sides of the conflict must be queued")
+        for work in self.conn.execute(
+                "SELECT * FROM cat_works WHERE title = 'Echo Falls'").fetchall():
+            self.assertEqual(work["identity_suspect"], 1)
+
+    def test_distant_years_are_not_a_year_conflict(self):
+        self.add_post("site-a", "https://a.test/far-apart-2011/",
+                      clean_title="Far Apart", year=2011)
+        self.add_post("site-b", "https://b.test/far-apart-2024/",
+                      clean_title="Far Apart", year=2024)
+        self.project()
+        self.assertEqual(self.conn.execute(
+            "SELECT COUNT(*) FROM cat_review_queue WHERE kind = 'year_conflict'"
+            " AND detail LIKE '%Far Apart%'").fetchone()[0], 0)
+
+    def test_merged_alias_sharing_no_words_raises_external_id_conflict(self):
+        self.add_post("site-a", "https://a.test/quantum-heist/",
+                      clean_title="Quantum Heist", year=2023, imdb_id="tt9990001",
+                      releases=[{"release_title": "Quantum Heist 1080p", "quality": "1080p"}])
+        self.add_post("site-b", "https://b.test/desi-detective/",
+                      clean_title="Desi Detective", year=2023, imdb_id="tt9990001",
+                      releases=[{"release_title": "Desi Detective 1080p", "quality": "1080p"}])
+        self.project()
+        self.assertEqual(len(self.works("Quantum Heist", 2023)), 1)
+        row = _row(self.conn,
+                   "SELECT * FROM cat_review_queue WHERE kind = 'external_id_conflict'")
+        self.assertIsNotNone(row, "an imdb merge with zero shared words must be reviewed")
+
+    def test_ordinary_alias_does_not_raise_external_id_conflict(self):
+        self.add_post("site-a", "https://a.test/quantum-heist/",
+                      clean_title="Quantum Heist", year=2023, imdb_id="tt9990002",
+                      releases=[{"release_title": "Quantum Heist 1080p", "quality": "1080p"}])
+        self.add_post("site-b", "https://b.test/quantum-heist-hindi/",
+                      clean_title="Quantum Heist", year=2023, imdb_id="tt9990002",
+                      releases=[{"release_title": "Quantum Heist Hindi 1080p",
+                                 "quality": "1080p"}])
+        self.project()
+        self.assertEqual(self.conn.execute(
+            "SELECT COUNT(*) FROM cat_review_queue WHERE kind = 'external_id_conflict'"
+        ).fetchone()[0], 0)
+
+    def test_suspect_print_is_excluded_until_a_cli_resolution_restores_it(self):
+        self.add_post("site-a", "https://a.test/mystery-drops/",
+                      clean_title="Mystery Drops", year=2022, content_type="series",
+                      releases=[{"release_title": "Mystery Drops E02 720p", "season": "",
+                                 "episode": "2", "quality": "720p",
+                                 "sources": [self.src("MYST-E2")]}])
+        self.project()
+        work = self.works("Mystery Drops", 2022)[0]
+        rel = self.releases(work["id"])[0]
+        self.assertEqual(rel["identity_suspect"], 1)
+        episode = _row(self.conn, "SELECT * FROM cat_episodes WHERE work_id = ?", work["id"])
+        self.assertIsNone(episode["best_release_id"],
+                          "an unresolved suspect print must not serve anyone")
+        queue = _row(self.conn,
+                     "SELECT * FROM cat_review_queue WHERE kind = 'season_unresolved'"
+                     " AND release_id = ?", rel["id"])
+        self.assertIsNotNone(queue)
+        with __import__("contextlib").redirect_stdout(__import__("io").StringIO()):
+            catalog_v2.main([str(self.db_path), "--resolve-review", str(queue["id"])])
+        self.assertIsNotNone(self.conn.execute(
+            "SELECT resolved_at FROM cat_review_queue WHERE id = ?",
+            (queue["id"],)).fetchone()[0])
+        episode = _row(self.conn, "SELECT * FROM cat_episodes WHERE work_id = ?", work["id"])
+        self.assertEqual(episode["best_release_id"], rel["id"],
+                         "resolving the review must let the print win its episode back")
+        # the decision sticks through a full rebuild — no re-suspecting, no re-queueing
+        catalog_v2.project(self.conn, rev=2, verbose=False)
+        rel = self.releases(work["id"])[0]
+        self.assertEqual(rel["identity_suspect"], 0)
+        queue = _row(self.conn,
+                     "SELECT * FROM cat_review_queue WHERE kind = 'season_unresolved'"
+                     " AND release_id = ?", rel["id"])
+        self.assertIsNotNone(queue["resolved_at"],
+                             "a resolved review re-opened itself on rebuild")
+        episode = _row(self.conn, "SELECT * FROM cat_episodes WHERE work_id = ?", work["id"])
+        self.assertEqual(episode["best_release_id"], rel["id"])
+
+
+class UnpopulatedColumnsTests(ProjectionTestCase):
+    """A11/§4.2: episode/season/work columns carry exactly what the ledger says."""
+
+    def series(self, title, releases, year=2020):
+        self.add_post("site-a", f"https://a.test/{title.casefold().replace(' ', '-')}/",
+                      clean_title=title, year=year, content_type="series",
+                      releases=releases)
+        self.project()
+        return self.works(title, year)[0]
+
+    def test_label_named_episode_facts_are_populated(self):
+        work = self.series("Campus Beats", [
+            {"release_title": "Campus Beats S01E02 Midterm Blues 2020-05-10 45min 1080p WEB-DL",
+             "season": "S01", "episode": "02", "quality": "1080p"}])
+        episode = _row(self.conn, "SELECT * FROM cat_episodes WHERE work_id = ?", work["id"])
+        self.assertEqual(episode["title"], "Midterm Blues")
+        self.assertEqual(episode["air_date"], "2020-05-10")
+        self.assertEqual(episode["runtime_minutes"], 45)
+
+    def test_bare_label_leaves_the_columns_null(self):
+        work = self.series("Quiet Beats", [
+            {"release_title": "Quiet Beats S01E01 720p", "season": "1",
+             "episode": "1", "quality": "720p"}])
+        episode = _row(self.conn, "SELECT * FROM cat_episodes WHERE work_id = ?", work["id"])
+        self.assertIsNone(episode["title"])
+        self.assertIsNone(episode["air_date"])
+        self.assertIsNone(episode["runtime_minutes"])
+
+    def test_season_title_is_taken_from_the_label_that_names_one(self):
+        work = self.series("Exam Beats", [
+            {"release_title": "Exam Beats Season 2: Exams 720p", "season": "2",
+             "episode": "Batch", "quality": "720p"}])
+        season = _row(self.conn, "SELECT * FROM cat_seasons WHERE work_id = ? AND number = 2",
+                      work["id"])
+        self.assertEqual(season["title"], "Exams")
+
+    def test_s00_print_is_a_special_season_not_an_unresolved_zero(self):
+        work = self.series("Holiday Beats", [
+            {"release_title": "Holiday Beats S00E01 Holiday Special 720p",
+             "season": "S00", "episode": "1", "quality": "720p"}])
+        season = _row(self.conn, "SELECT * FROM cat_seasons WHERE work_id = ? AND number = 0",
+                      work["id"])
+        self.assertEqual(season["season_type"], "special")
+        rel = self.releases(work["id"])[0]
+        self.assertEqual(rel["identity_suspect"], 0)
+        self.assertEqual(self.conn.execute(
+            "SELECT COUNT(*) FROM cat_review_queue WHERE kind = 'season_unresolved'"
+        ).fetchone()[0], 0)
+
+    def test_work_runtime_only_when_a_label_states_it(self):
+        self.add_post("site-a", "https://a.test/long-says-film/",
+                      clean_title="Long Says Film", year=2019, releases=[
+                          {"release_title": "Long Says Film 1080p 120min WEB-DL",
+                           "quality": "1080p"}])
+        self.add_post("site-a", "https://a.test/quiet-film/",
+                      clean_title="Quiet Film", year=2019, releases=[
+                          {"release_title": "Quiet Film 1080p WEB-DL", "quality": "1080p"}])
+        self.project()
+        self.assertEqual(self.works("Long Says Film", 2019)[0]["runtime_minutes"], 120)
+        self.assertIsNone(self.works("Quiet Film", 2019)[0]["runtime_minutes"],
+                          "runtime nobody stated must stay NULL, not be invented")
+
+
+class PartsTests(ProjectionTestCase):
+    """A4/S4: cat_parts exists only where one work really splits into parts."""
+
+    def film(self, title, labels, year=2024):
+        self.add_post("site-a", f"https://a.test/{title.casefold().replace(' ', '-')}/",
+                      clean_title=title, year=year, releases=[
+                          {"release_title": label, "quality": "1080p"}
+                          for label in labels])
+        self.project()
+        return self.works(title, year)[0]
+
+    def test_parts_and_chapters_materialize_and_link_their_prints(self):
+        work = self.film("Dusk Saga", ["Dusk Saga Part 1 1080p",
+                                       "Dusk Saga Chapter 2 1080p",
+                                       "Dusk Saga Disc 3 1080p"])
+        parts = self.conn.execute(
+            "SELECT number, title FROM cat_parts WHERE work_id = ? ORDER BY number",
+            (work["id"],)).fetchall()
+        self.assertEqual([p["number"] for p in parts], [1, 2, 3])
+        self.assertTrue(all(p["title"] for p in parts))
+        by_label = {r["label"]: r["part_number"] for r in self.releases(work["id"])}
+        self.assertEqual(by_label["Dusk Saga Part 1 1080p"], 1)
+        self.assertEqual(by_label["Dusk Saga Chapter 2 1080p"], 2)
+        self.assertEqual(by_label["Dusk Saga Disc 3 1080p"], 3)
+
+    def test_a_single_part_label_does_not_fabricate_structure(self):
+        work = self.film("Lone Part Film", ["Lone Part Film Part 2 1080p"])
+        self.assertEqual(self.conn.execute(
+            "SELECT COUNT(*) FROM cat_parts WHERE work_id = ?",
+            (work["id"],)).fetchone()[0], 0)
+
+
+class EntitlementTests(ProjectionTestCase):
+    """A12/§11.2: paid offers are writable, survive rebuilds, and order by priority."""
+
+    def film(self, title="Vault Film", year=2023, label=None):
+        self.add_post("site-a", f"https://a.test/{title.casefold().replace(' ', '-')}/",
+                      clean_title=title, year=year, releases=[
+                          {"release_title": label or f"{title} 1080p WEB-DL",
+                           "quality": "1080p"}])
+        self.project()
+        return self.works(title, year)[0]
+
+    def offers(self, work_id):
+        return self.conn.execute(
+            "SELECT * FROM cat_entitlements WHERE work_id = ? ORDER BY display_priority",
+            (work_id,)).fetchall()
+
+    def test_display_priority_matches_the_documented_ladder(self):
+        self.assertEqual(
+            [catalog_v2.derive_display_priority(m) for m in
+             ("free", "ads", "flatrate", "rental", "purchase")],
+            [10, 20, 30, 40, 50])
+
+    def test_work_level_paid_offer_replaces_the_free_default(self):
+        work = self.film("Flatrate Film")
+        result = catalog_v2.set_entitlement(self.conn, work_key=work["work_key"],
+                                            model="flatrate", price_minor=4900,
+                                            currency="INR")
+        self.assertTrue(result["applied"])
+        rows = self.offers(work["id"])
+        self.assertEqual([r["model"] for r in rows], ["flatrate"])
+        self.assertEqual(rows[0]["display_priority"], 30)
+        self.assertEqual(rows[0]["price_minor"], 4900)
+        self.assertEqual(self.works("Flatrate Film", 2023)[0]["entitlement_model"], "flatrate")
+
+    def test_unknown_model_is_refused(self):
+        work = self.film("Guarded Film")
+        with self.assertRaises(ValueError):
+            catalog_v2.set_entitlement(self.conn, work_key=work["work_key"], model="barter")
+
+    def test_offer_survives_a_full_rebuild(self):
+        work = self.film("Rented Film")
+        catalog_v2.set_entitlement(self.conn, work_key=work["work_key"], model="rental",
+                                   price_minor=1900, rental_hours=48, ownership="timered")
+        catalog_v2.project(self.conn, rev=2, verbose=False)
+        rows = self.offers(work["id"])
+        self.assertEqual([r["model"] for r in rows], ["rental"])
+        self.assertEqual(rows[0]["rental_hours"], 48)
+        self.assertEqual(rows[0]["display_priority"], 40)
+
+    def test_per_print_offer_sits_alongside_the_work_default(self):
+        work = self.film("Dual Offer Film", label="Dual Offer Film 4K HDR")
+        catalog_v2.set_entitlement(self.conn, work_key=work["work_key"], model="purchase",
+                                   release_label="Dual Offer Film 4K HDR", price_minor=9900)
+        rows = self.offers(work["id"])
+        models = sorted(r["model"] for r in rows)
+        self.assertEqual(models, ["free", "purchase"])
+        purchase = next(r for r in rows if r["model"] == "purchase")
+        self.assertIsNotNone(purchase["release_id"])
+        self.assertEqual(purchase["display_priority"], 50)
+
+    def test_rule_for_an_unprojected_print_is_applied_by_the_next_projection(self):
+        work = self.film("Future Print Film")
+        result = catalog_v2.set_entitlement(self.conn, work_key=work["work_key"],
+                                            model="ads", release_label="Future Print Film 2160p")
+        self.assertFalse(result["applied"])
+        self.add_post("site-b", "https://b.test/future-print-film-uhd/",
+                      clean_title="Future Print Film", year=2023, releases=[
+                          {"release_title": "Future Print Film 2160p", "quality": "2160p"}])
+        catalog_v2.project(self.conn, rev=2, verbose=False)
+        rows = self.offers(self.works("Future Print Film", 2023)[0]["id"])
+        self.assertIn("ads", [r["model"] for r in rows])
+        ads = next(r for r in rows if r["model"] == "ads")
+        self.assertIsNotNone(ads["release_id"])
+
+    def test_cli_writes_an_entitlement(self):
+        import contextlib
+        import io
+        work = self.film("Cli Priced Film")
+        buffer = io.StringIO()
+        with contextlib.redirect_stdout(buffer):
+            catalog_v2.main([str(self.db_path), "--set-entitlement", work["work_key"],
+                             "--model", "rental", "--price", "1500",
+                             "--rental-hours", "24"])
+        payload = json.loads(buffer.getvalue())
+        self.assertEqual(payload["model"], "rental")
+        rows = self.offers(work["id"])
+        self.assertEqual([r["model"] for r in rows], ["rental"])
+        self.assertEqual(rows[0]["rental_hours"], 24)
+        self.assertEqual(rows[0]["requires_account"], 0)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
