@@ -671,7 +671,74 @@ the state actually present in `App/app/src` and `Fast_Fetch/viewer.py`. The prio
 **Next agent should:** pick one of (1)/(2)/(3) as real work, then re-verify these
 sections against the code again rather than trusting prose.
 
+### 2026-10-25 — Task #23: collapse the duplicated model layer (compile + JVM tests green)
 
+**Concept → surviving owner → deleted/relocated copies** (rule 1, one owner per concept):
+- *quality-ladder view state* → kept `viewmodel/QualityLadder.kt`'s view types
+  (`QualityOption`/`LadderForScope`/`object QualityLadder`) **relocated** to
+  `player/QualityLadder.kt` (genuinely player-local view state), with `LadderTier.toOptionOrNull`
+  the single crossing from the wire. Wire owner `network/models/QualityLadder.kt`
+  (`LadderLink`/`LadderTier`/`LadderAuto`/`OptionGroup`, `@SerializedName`) stays the sole wire
+  owner. **Deleted** `viewmodel/QualityLadder.kt` (+ its test → `player/QualityLadderTest.kt`).
+- *release-label grammar* → surviving owner `network/models/ReleaseLabelParsing.kt`
+  (`PrintDescriptor`/`PrintScope`/`ReleaseLabelParsing`, a faithful port of
+  `Fast_Fetch/release_descriptor.py`) + `network/models/CatalogEnums.kt`. **Deleted**
+  `viewmodel/ReleaseParser.kt` (the 528-line duplicate: `V1Resolution`/`V1SourceTag`/
+  `V1HdrFormat`/`V1Codec`/`V1Edition`, `LinkHealth`, `parseSizeBytes`/`parseScope`/`parseLanguages`,
+  `wordMatch`) and `viewmodel/ReleaseParserTest.kt`.
+- *detail-screen view state* → NEW `viewmodel/ReleaseLayoutBuilder.kt` owns ONLY presentation
+  (`RankedLink`/`RankedPrint` wrapping a `PrintDescriptor`, `EpisodeGroup`/`SeasonGroup`/
+  `ReleaseLayout`, enum→string display maps, grouping). It imports the network enums — no second
+  grammar, no `typealias`/re-export/`@Deprecated` shim (rule 1). `RankedPrint.resolution/sourceTag/
+  hdr/codec/edition/coverage/season` are all read off `release.printDescriptor`.
+
+**Grammar rules that MOVED** (file:line in the deleted `ReleaseParser.kt` → survivor):
+`V1Resolution.fromText:46-55`, `V1SourceTag.fromText:76-90`, `V1HdrFormat.fromText:101-110`,
+`V1Codec.fromText:120-128`, `V1Edition.fromText:141-151`, `parseScope:482-504`,
+`parseSizeBytes:338-350`, `parseLanguages:352-366`, `wordMatch:35-36` → all replaced by
+`ReleaseLabelParsing.describe()`/`detect*()` + `CatalogEnums.*.fromWire` (documented in the
+builder's header port-table). `LinkHealth` (3 states) → richer `LinkState` (`network/models/
+CatalogEnums.kt:291`, adds EXPIRED/UNCHECKED).
+
+**Deliberate, server-faithful deltas** (asserted in `ReleaseLayoutBuilderTest`):
+size DECIMAL(1000)→BINARY(1024) (`2.4GB`→`2_576_980_378`); no synthetic `"Multi-audio"` language
+(real `dualAudio` flag instead); a bare `"HD"`/`"576"`/`"sd"` quality word no longer fabricates a
+resolution rung (stays `Resolution.UNKNOWN`, keeps the honest `"HD"` **label** — matches
+`release_descriptor._quality_label`); ranking is the single `qualityScore*10+availableLinks`
+print scale (CAM capped at 250 → a CAM can never outrank any official print).
+
+**C17** — verified already correct in the survivor and now pinned by tests in `ModelsTest.kt`:
+`is_temporary` is `Boolean?` via `LenientBooleanAdapter` (decodes `1`/`true`/`"1"`, junk→null,
+never `Int?`); every server-string enum has `UNKNOWN` + a non-crashing `fromWire`
+(`a link status the app has never seen degrades to UNKNOWN`,
+`every fromWire table answers UNKNOWN ...` — 19 enums). No snake_case↔structured field mismatch
+survived in the collapsed types (they read `printDescriptor`).
+
+**Bug fixed during collapse:** a whole-work film (`CoverageType.WHOLE_WORK`) set `isPacked=true`,
+which made `looksLikeSeries()` route movies into the (empty) series branch and blank `workPrints`.
+Fixed by triggering the series branch only on `SEASON_PACK`/season/episode, never `WHOLE_WORK`.
+`ReleaseLayout.isSeriesLike` kept its name so `DetailScreen`/`DetailViewModel` are unchanged.
+
+**Build:** `./gradlew --offline :app:compileDebugKotlin :app:testDebugUnitTest` → BUILD SUCCESSFUL.
+284 JVM unit tests, 0 failures/errors/skipped (ReleaseLayoutBuilderTest 16, player.QualityLadderTest 8,
+ModelsTest 11, ProvenanceWireTest 4). One transient unrelated `hiltJavaCompileDebugUnitTest`
+"cyclic inheritance" stale-codegen error cleared by removing `build/generated/hilt/*/debugUnitTest`.
+
+**NOT done (honest scope):** concepts 3 & 4 (player↔v2-domain `CatalogV2`, `Models.kt`↔`CatalogV2`)
+were NOT merged. **Correction, same day:** the claim that `/api/v2` is "documented but not
+served" was verified against a 2026-10-22 read of `viewer.py` and is no longer true — the v2
+edge is mounted (`viewer.py:2464` GET, `:2700` POST via `api_v2.route_get`/`route_post`) and
+serves `manifest`, `browse`, `search`, `suggest`, `works/{id}`, `works/{id}/seasons/{n}`,
+`POST /play`, `POST /links/{id}/report`, `resolve`, `offset`, `sync`, `stats`, `collections`,
+`feed.m3u`. What is actually true is narrower: **the app cannot use any of it yet**, because
+every v2 route answers `unavailable` ("The catalog projection has not been built yet") until
+the live database is swapped to the projected catalog (task #38). So the LIVE app path stays
+v1(`Models.kt`)+viewmodel+player, `CatalogV2`/`V2Wire`/`V1CatalogMapper` remain
+target-contract code, and `EndpointGaps` now means "unreachable for this install", not
+"unimplemented on the server". Migrating the player/UI onto the v2 domain types would be a
+behaviour change that cannot be verified on this no-device, 1-CPU box, so it was left intact
+rather than silently rewritten; v1 fallback `Models.kt` is retained per rule 3 (its DTOs are
+the ones actually parsed).
 
 ---
 

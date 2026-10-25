@@ -81,9 +81,41 @@ Core logic engines and unit tests are passing (100% green).
 ### Feature E: Universal Software Audio Codec Fallback (AC3/EAC3/DTS)
 - Ensure Media3 AudioRenderer gracefully falls back to software decoding (via `DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER`) so older budget phones never play videos with silent audio.
 
+### Feature F: Pure Cinema / Ghost Mode (Sub-Focus Unobstructed Playback)
+*Owner Innovation: Traditional video players irritate users by showing giant play/pause icons and dark scrims over long subtitles when paused. Modern viewers know how to use gestures and want zero distractions.*
+- **Location**: `App/app/src/main/kotlin/com/raddstream/app/player/PlayerUiState.kt` & `PlayerScreen.kt`
+- **Component 1**: `ViewMode` Enum:
+  - `NORMAL`: Standard full on-screen controls, top bar, progress slider, and center buttons.
+  - `MINIMAL`: Hairline bottom progress bar; center play/pause button hidden; tap toggles play/pause with zero center blockage.
+  - `PURE_CINEMA` (Ghost / Sub-Focus Mode):
+    - **Zero Pause Distraction**: When paused, **NO dark scrim** and **NO giant play button** in the center. The video freeze-frames in 100% crystal clarity so the user can comfortably read subtitles or study the scene without obstruction.
+    - **Single-Tap Toggle**: Tap anywhere on the screen toggles play/pause with 0ms delay and zero on-screen widgets.
+    - **Active Invisible Gestures**: Keeps left-swipe brightness, right-swipe volume/boost, double-tap 10s seek, and long-press 2x speed active.
+    - **Edge Hairline HUD**: 2dp glowing bezel hairline for volume/brightness rather than center-blocking cards.
+    - **"What Did They Say?" Instant Rewind**: Two-finger tap jumps back 3 seconds with subtitles.
+    - **Unobtrusive Exit**: 15% opacity floating ghost-eye icon in the corner to toggle back to Normal Mode.
+
+### Feature G: 2.0x Long-Press Speed Optimization Engine (Zero-Freeze on Budget & 4GB Phones)
+*Problem: On budget/4GB phones, long-pressing 2.0x speed causes the video decoder to freeze and drop frames because low-end chipsets cannot decode 1080p at 120fps.*
+- **Architectural Solution (Zero RAM Burden)**:
+  1. **MediaCodec Asynchronous Queueing**: Configure `DefaultRenderersFactory.setEnableDecoderFallback(true)` and async buffer processing in Media3 so the video thread never blocks on synchronous frame release.
+  2. **Resolution-Aware Smart Turbo**:
+     - On heavy 1080p/4K content on lower-tier SoCs, cap long-press speed to **1.6x** (or 1.75x) instead of a rigid 2.0x. 1.6x provides 90% skimming velocity with **50% less decoder workload**, running completely freeze-free.
+     - On 720p/480p streams, full 2.0x is enabled.
+  3. **Atomic Gesture Parameter Call**: Ensure `onLongPress` dispatches `setPlaybackParameters(PlaybackParameters(speed, 1.0f))` strictly once on pointer down and once on pointer up (never inside the drag loop).
+  4. **Low-Overhead Sonic Audio Stretch**: Prevent CPU audio resampler starvation by adjusting `DefaultAudioSink` buffer bounds for fast playback.
+
+### Feature H: Night-Mode Speech / Dialogue Normalizer (Dynamic Range Compression)
+- **Problem**: Movies have deafening loud action scenes/music and inaudible whispered dialogue.
+- **Solution**: A one-tap "Night Dialogue Boost" audio processor in `AudioBoost.kt` that compresses excessive sound peaks and boosts human speech frequencies (300Hz–3kHz), so dialogue is always crystal-clear without disturbing roommates.
+
+### Feature I: Bluetooth Earbud Audio-Sync Delay Slider (`-500ms ... +500ms`)
+- **Problem**: Budget Bluetooth wireless earbuds have 150ms–300ms audio latency, causing lip-sync mismatch.
+- **Solution**: A quick 1-tap slider in the Audio Sheet adjusting audio track presentation time offset in Media3 so dialogue matches actor lips perfectly.
+
 ---
 
-## 3. Inviolable Constraints Reminder
+## 4. Inviolable Constraints Reminder
 1. **Python Stdlib Only**: Zero pip or npm packages on the backend.
 2. **Staging Isolation**: Merges must only write to specified snapshot target files (e.g. `merged_catalog_20261024.db`). Never overwrite live `fast_fetch.db` without confirmation.
 3. **18+ Content Suppression**: Adult content must remain strictly filtered out at query level across all public endpoints and UI views.

@@ -184,24 +184,40 @@
 │  Ep1  Ep2  Ep3  Ep4  Ep5   │  ← episode grid chips
 │  ─────────────────────────  │
 │                             │
-│  Sources                    │  ← section header
+│  Quality                    │  ← one row per BAND, from the server
 │  ┌────────────────────────┐ │
-│  │ 🔵 1080p · VegaDrive   │ │  ← source row
-│  │          ▶ Play  ↗     │ │
-│  └────────────────────────┘ │
-│  ┌────────────────────────┐ │
-│  │ 🟡 720p · HubCloud     │ │
-│  │          ▶ Play  ↗     │ │
+│  │ ● Auto      Best for   │ │  ← default rung: the ladder's own
+│  │   ▶  Keep   this place │ │     pointer, not "highest number"
+│  ├────────────────────────┤ │
+│  │ ○ 1080p                │ │  ← one option per band: no copies,
+│  │   ▶  Keep              │ │     no servers, no addresses
+│  ├────────────────────────┤ │
+│  │ ○ 720p        1.4 GB   │ │  ← size, so a metered connection
+│  │   ▶  Keep              │ │     can choose on price
+│  ├────────────────────────┤ │
+│  │ ○ Data saver  480p     │ │
+│  │   ▶  Keep              │ │
 │  └────────────────────────┘ │
 │                             │
 └─────────────────────────────┘
 ```
 
 **UX Notes:**
-- `▶ PLAY` button uses highest-quality available source automatically
-- `▶ Play` on each source row plays that specific source
-- `↗` icon → "Open in external player" (Intent to VLC/MPV/MX)
-- Series: tapping episode chip navigates to that episode's sources
+- `▶ PLAY` starts the auto ladder: the best rung that actually plays here, and if a
+  link dies mid-session the ladder steps down on its own. The viewer never has to
+  pick a source to get that.
+- The list is built from `QualityOption` (`App/.../player/QualityLadder.kt`), which the
+  server produced by collapsing every copy of every print into one best-and-fastest
+  option per band (`Fast_Fetch/tiers.py`). A row has a picture quality and a size —
+  **it has no field for a site, a hoster, or an address, and must never gain one**;
+  the earlier `1080p · VegaDrive` / `720p · HubCloud` rows in this file documented a
+  server-name list that the API no longer emits and the plan forbids.
+- `Keep` = "play while downloading, keep offline"; it hands the rung to
+  `CacheCoordinator` and the row shows progress in place. `↗` external-player
+  hand-off was removed with the embed surfaces (task #29) — there is one player.
+- A band whose only copy cannot be presented inline says `Download only` out loud
+  rather than failing invisibly.
+- Series: tapping an episode chip re-scopes the same rung list to that episode.
 - ❤️ fab button (bottom-right) toggles watchlist
 - Share button in top app bar generates deep link
 

@@ -493,6 +493,9 @@ routes; restrict the bind and public routes before enabling the public proxy.
   3. Subtitle & Audio Styling Customizer (font size, yellow/white styling, box background)
   4. Trakt.tv / Cloud Watchlist Sync Engine
   5. Universal Software Audio Codec Fallback (AC3/EAC3/DTS for budget phone audio)
+  6. Pure Cinema / Ghost Mode (Sub-Focus Unobstructed Playback: zero pause scrim/icons, active gestures, edge hairline HUD, 3s instant rewind)
+  7. 2.0x Long-Press Speed Optimization Engine (Asynchronous MediaCodec + Smart Turbo 1.6x/2.0x scaling to eliminate freeze on 4GB budget phones)
+  8. Night-Mode Dialogue Normalizer (Dynamic Range Compression) & Bluetooth Audio-Sync Delay Slider
 - **Sanitation**: What actually moved was three untracked items — `load_catalog.py`, a 271 MB stale
   `merged_catalog_stale_prerelease_fix.db` and a leftover build directory — now in
   `/home/ubuntu/project_trash_bin/`. No tracked source or test file was deleted (the only tracked
