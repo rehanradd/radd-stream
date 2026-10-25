@@ -2143,8 +2143,18 @@ def api_v1_get_posts(query: str = "", content_type: str = "", page: int = 1,
             q_param = f"%{query}%"
             params.extend([q_param, q_param, q_param])
         if content_type:
-            where_clauses.append("p.content_type = ?")
-            params.append(content_type)
+            # `type=anime` is the one filter value that is not a `content_type`: the
+            # ledger stores animation as a flag on the post (`is_animated`, plus an
+            # `industry` of Anime) and only ever writes movie / series /
+            # complete_season / ongoing_season to `content_type`. Exact equality on
+            # the type column therefore answered that chip with zero rows forever.
+            # Answer it from the flag the data actually carries, the way the
+            # operator dashboard already counts animated titles.
+            if content_type.strip().lower() == "anime":
+                where_clauses.append("(p.is_animated = 1 OR lower(p.industry) LIKE '%anime%')")
+            else:
+                where_clauses.append("p.content_type = ?")
+                params.append(content_type)
 
         where_sql = " AND ".join(where_clauses)
         total = conn.execute(f"SELECT COUNT(*) FROM posts p WHERE {where_sql}", params).fetchone()[0]

@@ -156,6 +156,32 @@ def is_adult_title(*texts) -> int:
     return 1 if any(re.search(p, joined, re.IGNORECASE) for p in ADULT_TITLE_PATTERNS) else 0
 
 
+#: The animation vocabulary, in one place. `posts.is_animated` is what the app's
+#: Anime filter and the v2 `animated` facet read, so every writer must agree on it.
+ANIMATED_TITLE_PATTERNS = (
+    r"\banime\b", r"\banimation\b", r"\banimated\b", r"\bcartoon\b",
+    r"\bdonghua\b", r"\bcrunchyroll\b", r"\bgokuhd\b",
+)
+
+
+def looks_animated(*texts) -> int:
+    """Returns 1 when any title/slug/genre text names animation. Same shape as
+    `is_adult_title()`: a flag a caller may assert, never one it can contradict."""
+    joined = " ".join(t for t in texts if t)
+    return 1 if any(re.search(p, joined, re.IGNORECASE) for p in ANIMATED_TITLE_PATTERNS) else 0
+
+
+#: Sites whose whole catalog is animation. Their staging schema carries no
+#: `is_animated` column at all, so a post that came from one of them is animated by
+#: construction. This is ledger-side evidence only: it sets a content flag and is
+#: never copied onto a wire field — see `redact.py`.
+ANIME_ONLY_SITES = frozenset({"rareanimes", "toonworld4all"})
+
+
+def site_implies_animation(source_site) -> int:
+    return 1 if str(source_site or "").strip().lower() in ANIME_ONLY_SITES else 0
+
+
 def normalize_url(url: str) -> str:
     """
     Normalizes a URL to point to current live domains if it uses an older/alternate domain.
@@ -345,8 +371,7 @@ def classify_media(source_site: str, title: str, slug: str, html: str = "") -> d
         else:
             source_site = "vegamovies"
 
-    anim_patterns = [r"\banime\b", r"\banimation\b", r"\banimated\b", r"\bcartoon\b", r"\bdonghua\b", r"\bcrunchyroll\b", r"\bgokuhd\b"]
-    is_anime = any(re.search(p, title_slug) for p in anim_patterns)
+    is_anime = bool(looks_animated(title_slug))
     is_kdrama = bool(re.search(r"\b(k-drama|kdrama|korean)\b", title_slug))
     is_cdrama = bool(re.search(r"\b(c-drama|cdrama|chinese)\b", title_slug))
     is_japanese_live = bool(re.search(r"\b(japanese|j-drama)\b", title_slug)) and not is_anime
@@ -443,6 +468,9 @@ def classify_media(source_site: str, title: str, slug: str, html: str = "") -> d
         "industry": industry,
         "country": country,
         "language": language,
+        # The classification already had to decide whether this is animation to pick
+        # the industry; returning that verdict is what lets one rule own the column.
+        "animated": 1 if is_anime else 0,
     }
 
 
@@ -743,9 +771,11 @@ def _init_db(db_path: Path | None = None) -> None:
             meta = classify_media(site, up["title"] or up["clean_title"], up["slug"], "")
             conn.execute("""
                 UPDATE posts
-                SET source_site = ?, industry = ?, country = ?, language = ?
+                SET source_site = ?, industry = ?, country = ?, language = ?,
+                    is_animated = MAX(is_animated, ?)
                 WHERE id = ?
-            """, (meta["source_site"], meta["industry"], meta["country"], meta["language"], up["id"]))
+            """, (meta["source_site"], meta["industry"], meta["country"], meta["language"],
+                  meta["animated"], up["id"]))
 
         # Backfill canonical_key on existing posts
         missing_ckey = conn.execute("SELECT id, title, clean_title, year FROM posts WHERE canonical_key IS NULL OR canonical_key = ''").fetchall()
@@ -1738,9 +1768,8 @@ def parse_post_metadata(page_url: str, html: str) -> dict:
     title_slug_text = f"{raw_title} {slug}"
     is_18_plus = is_adult_title(raw_title, slug)
 
-    # 7. Animation / Anime Flag
-    anim_patterns = [r"\banime\b", r"\banimation\b", r"\banimated\b", r"\bcartoon\b", r"\bdonghua\b", r"\bcrunchyroll\b", r"\bgokuhd\b"]
-    is_animated = 1 if any(re.search(p, title_slug_text, re.IGNORECASE) for p in anim_patterns) else 0
+    # 7. Animation / Anime Flag — the shared rule, not a second copy of the patterns
+    is_animated = looks_animated(title_slug_text)
 
     # 8. Media Classification (Source Site, Industry, Country, Language)
     source_site = "rogmovies" if "rogmovies" in page_url.lower() else "vegamovies"
@@ -4079,6 +4108,20 @@ def save_scraped_data(
     )
     if enrich_metadata:
         _enrich_scraped_metadata(data)
+    # The animation flag, decided once for every scraper at the place a payload
+    # becomes a post. A site's own parser may assert it; otherwise the shared title,
+    # slug and genre vocabulary does. Before this, exactly one page parser ever set
+    # the column, so 130,016 merged posts carried one animated title and an Anime
+    # filter had nothing honest to show.
+    data["is_animated"] = int(
+        bool(data.get("is_animated"))
+        or site_implies_animation(data.get("source_site"))
+        or looks_animated(
+            data.get("clean_title") or data.get("title") or "",
+            data.get("slug") or data.get("url") or "",
+            data.get("genres") or "",
+        )
+    )
     with _DB_WRITE_LOCK:
         return _save_scraped_data(data, ensure_db=ensure_db)
 

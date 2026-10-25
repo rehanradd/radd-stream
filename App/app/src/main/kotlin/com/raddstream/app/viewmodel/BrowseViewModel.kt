@@ -94,6 +94,9 @@ class BrowseViewModel @Inject constructor(
             null -> "Recently added"
             "movie" -> "Movies"
             "series" -> "Series"
+            // `anime` is a filter, not a stored `content_type`: animation is a flag on
+            // the post, and the server answers the chip from that flag.
+            "anime" -> "Anime"
             "complete_season" -> "Complete seasons"
             "ongoing_season" -> "Ongoing seasons"
             else -> "Catalog"

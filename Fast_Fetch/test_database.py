@@ -641,6 +641,47 @@ class DatabaseSaveTests(unittest.TestCase):
             self.assertEqual(detail["imdb_id"], "tt9999999")
             self.assertEqual(len(detail["releases"]), 1)
 
+    def test_api_v1_type_anime_answers_the_animation_flag(self):
+        """`type=anime` used to be compared against `content_type`, which only ever
+        holds movie / series / complete_season / ongoing_season — so the chip the app
+        shows returned zero rows while `/api/v1/stats` counted animated titles."""
+        animated = self.media("site_a", "https://site-a.example/animated-film/",
+                              title="Animated Film (2024)", clean_title="Animated Film")
+        animated["is_animated"] = 1
+        fast_fetch.save_scraped_data(animated)
+        industry_anime = self.media("site_b", "https://site-b.example/other-film/",
+                                    clean_title="Other Film", year=2023)
+        industry_anime["industry"] = "Anime"
+        fast_fetch.save_scraped_data(industry_anime)
+        plain = self.media("site_c", "https://site-c.example/live-action-film/",
+                           clean_title="Live Action Film", year=2022)
+        fast_fetch.save_scraped_data(plain)
+        series = self.media("site_d", "https://site-d.example/animated-series/",
+                            clean_title="Animated Series", year=2021,
+                            content_type="series")
+        series["is_animated"] = 1
+        fast_fetch.save_scraped_data(series)
+        with patch.object(viewer, "DB_PATH", self.db_path):
+            anime = viewer.api_v1_get_posts(content_type="anime", limit=10)
+            self.assertEqual(anime["total"], 3)
+            self.assertEqual(
+                sorted(r["clean_title"] for r in anime["results"]),
+                ["Animated Film", "Animated Series", "Other Film"],
+            )
+            # Every other value keeps the exact-equality filter it always had, and
+            # animation is orthogonal to it: an animated series is still a series.
+            self.assertEqual(
+                sorted(r["clean_title"] for r in
+                       viewer.api_v1_get_posts(content_type="movie", limit=10)["results"]),
+                ["Animated Film", "Live Action Film", "Other Film"],
+            )
+            self.assertEqual(
+                [r["clean_title"] for r in
+                 viewer.api_v1_get_posts(content_type="series", limit=10)["results"]],
+                ["Animated Series"],
+            )
+            self.assertEqual(viewer.api_v1_get_posts(limit=10)["total"], 4)
+
     def test_api_v1_rules(self):
         rules = viewer.api_v1_rules()
         self.assertIn("version", rules)

@@ -113,6 +113,7 @@ private fun JumpOffRow(onBrowseType: (String?) -> Unit) {
         JumpOff("All", null),
         JumpOff("Movies", "movie"),
         JumpOff("Series", "series"),
+        JumpOff("Anime", "anime"),
         JumpOff("Seasons", "complete_season"),
     )
     Column(Modifier.padding(top = 4.dp)) {
