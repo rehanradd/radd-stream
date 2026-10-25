@@ -455,6 +455,45 @@ class LinkTruthTests(ProjectionTestCase):
         self.assertEqual(rel["link_count"], 2)
 
 
+    def test_counts_are_the_links_that_exist_including_a_print_with_none(self):
+        """The roll-up is a grouped pass over `cat_links`, not a per-print subquery.
+
+        Two things that rewrite could silently break: a print with no links keeps its
+        NOT NULL DEFAULT 0 instead of being left unstamped, and the streamable /
+        downloadable partition is exactly what the link rows say (a `both` link counts
+        in each, a `resolve_required` only in downloadable).
+        """
+        self.add_post("site-a", "https://a.test/counted-film/", clean_title="Counted Film",
+                      year=2022, releases=[
+                          {"release_title": "Counted Film 1080p", "quality": "1080p",
+                           "sources": [self.src("cdn", "https://video-downloads.googleusercontent.com/S1"),
+                                       self.src("cdn", "https://video-downloads.googleusercontent.com/S2"),
+                                       self.src("dl", "https://download.test/f.bin")]},
+                          {"release_title": "Counted Film 480p", "quality": "480p",
+                           "sources": []},
+                      ])
+        self.project()
+        for rel in self.releases(self.works("Counted Film", 2022)[0]["id"]):
+            rows = self.conn.execute(
+                "SELECT playability FROM cat_links WHERE release_id = ?",
+                (rel["id"],)).fetchall()
+            playable = [r[0] for r in rows]
+            self.assertEqual(
+                rel["link_count"], len(playable),
+                f"{rel['label']}: link_count must be the links that exist")
+            self.assertEqual(
+                rel["streamable_count"],
+                sum(1 for p in playable if p in ("stream", "both")))
+            self.assertEqual(
+                rel["downloadable_count"],
+                sum(1 for p in playable if p in ("download", "both", "resolve_required")))
+        labels = {rel["label"]: rel for rel in self.releases(self.works("Counted Film", 2022)[0]["id"])}
+        bare = [rel for rel in labels.values() if rel["link_count"] == 0]
+        self.assertTrue(bare, "the source-less 480p print must exist with zero links")
+        self.assertEqual(bare[0]["streamable_count"], 0)
+        self.assertEqual(bare[0]["downloadable_count"], 0)
+
+
 class RollupAndSafetyTests(ProjectionTestCase):
     def test_projection_is_idempotent_and_rebuildable(self):
         self.add_post("site-a", "https://a.test/steady-film/", clean_title="Steady Film",
