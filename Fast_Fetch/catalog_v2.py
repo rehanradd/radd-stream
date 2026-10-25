@@ -41,6 +41,24 @@ def _progress(message: str) -> None:
     if PROGRESS_EVERY:
         print(f"[.] {message}", flush=True)
 
+
+def _stage(conn: sqlite3.Connection, label: str) -> None:
+    """Commit one finalize stage and push the WAL back into the database file.
+
+    Finalize used to run as one transaction, so a full rebuild grew the write-ahead log
+    past 3 GB and then every read SQLite performed had to consult that log — the
+    roll-ups slowed to a crawl precisely because earlier roll-ups had filled the journal.
+    Committing per stage bounds the log, and it means a failure costs one stage instead of
+    the whole projection. A checkpoint is advisory: an in-memory or busy database simply
+    keeps its journal, which is correct and must not abort the rebuild.
+    """
+    conn.commit()
+    try:
+        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    except sqlite3.Error:
+        pass
+    _progress(f"finalize: {label}")
+
 #: v2 -> the link-state vocabulary changed under `link_state.py`: `cat_links.state`
 #: now defaults to 'unchecked' (never probed) instead of claiming 'active', and every
 #: projected link carries `ledger_link_id` so a verdict can reach it without a rebuild.
@@ -434,6 +452,21 @@ CREATE INDEX IF NOT EXISTS idx_cat_links_release ON cat_links(release_id, rank_s
 CREATE INDEX IF NOT EXISTS idx_cat_links_state ON cat_links(state, playability);
 CREATE INDEX IF NOT EXISTS idx_cat_links_ledger ON cat_links(ledger_link_id);
 CREATE INDEX IF NOT EXISTS idx_cat_episodes_work ON cat_episodes(work_id, number);
+
+-- The two join directions the roll-ups and Layer-2 reads actually ask about, which the
+-- composite primary keys do not lead with. `cat_release_episodes` is keyed
+-- (release_id, episode_id), so "which prints cover this episode" — asked once per episode
+-- by `best_release_id` — scanned the whole table every time; `cat_review_queue` had no
+-- index at all, so stamping `identity_suspect` scanned it once per print. With 1.3M prints
+-- and a million episode links that is not slow, it is endless: a rebuild spent over two
+-- hours in `UPDATE cat_releases` and never committed. All four columns are original, so
+-- these belong in the script, not in the ALTER pass.
+CREATE INDEX IF NOT EXISTS idx_cat_release_episodes_episode
+    ON cat_release_episodes(episode_id, release_id);
+CREATE INDEX IF NOT EXISTS idx_cat_review_queue_work
+    ON cat_review_queue(work_id, resolved_at);
+CREATE INDEX IF NOT EXISTS idx_cat_review_queue_release
+    ON cat_review_queue(release_id, resolved_at);
 """
 
 
@@ -1565,19 +1598,33 @@ def _record_id_map(conn, before: dict, rev: int) -> int:
 
 def _finalize(conn, works, work_ids, now, counters) -> None:
     """Roll up counts, availability, best print per episode and default entitlements."""
+    # One grouped pass over the links, not three correlated COUNT subqueries per print.
+    # The old shape probed the link index three times for each of 1.3M prints; grouping
+    # once by release_id reads every link a single time and leaves prints with no links
+    # at their NOT NULL DEFAULT 0, which is the same answer.
     conn.execute(
         """
         UPDATE cat_releases SET
-            link_count = (SELECT COUNT(*) FROM cat_links l WHERE l.release_id = cat_releases.id),
-            streamable_count = (SELECT COUNT(*) FROM cat_links l WHERE l.release_id = cat_releases.id
-                                 AND l.playability IN ('stream', 'both')),
-            downloadable_count = (SELECT COUNT(*) FROM cat_links l WHERE l.release_id = cat_releases.id
-                                  AND l.playability IN ('download', 'both', 'resolve_required'))
+            link_count = agg.total,
+            streamable_count = agg.streamable,
+            downloadable_count = agg.downloadable
+        FROM (
+            SELECT release_id,
+                   COUNT(*) AS total,
+                   SUM(playability IN ('stream', 'both')) AS streamable,
+                   SUM(playability IN ('download', 'both', 'resolve_required')) AS downloadable
+            FROM cat_links
+            GROUP BY release_id
+        ) agg
+        WHERE agg.release_id = cat_releases.id
         """
     )
+    _stage(conn, "link counts")
     conn.execute(f"UPDATE cat_links SET rank_score = {RANK_SCORE_EXPR}")
+    _stage(conn, "rank scores")
     _expand_season_packs(conn, counters, now)
     _raise_identity_reviews(conn, now)
+    _stage(conn, "season packs expanded, identity reviews raised")
     # A durable resolution clears the print's suspect flag even though the label
     # data still re-raises the (now-resolved) queue row on every rebuild.
     conn.execute(
@@ -1599,6 +1646,7 @@ def _finalize(conn, works, work_ids, now, counters) -> None:
         UPDATE cat_episodes SET absolute_number = (SELECT rn FROM ordered WHERE ordered.id = cat_episodes.id)
         """
     )
+    _stage(conn, "suspect flags and absolute episode numbers")
     # Best print per episode: quality first, then the fresher capture (a REPACK or
     # v2 wins its tie against v1 — §5.2), then the later-projected row. An expanded
     # season pack may win when it is the streamable covering print. Prints with an
@@ -1627,9 +1675,11 @@ def _finalize(conn, works, work_ids, now, counters) -> None:
             SELECT COUNT(*) FROM cat_episodes e WHERE e.season_id = cat_seasons.id)
         """
     )
+    _stage(conn, "best print per episode, season counts")
     _derive_season_titles(conn)
     _derive_work_runtimes(conn)
     _derive_parts(conn, counters)
+    _stage(conn, "season titles, runtimes, parts")
     conn.execute(
         """
         UPDATE cat_works SET
@@ -1661,6 +1711,7 @@ def _finalize(conn, works, work_ids, now, counters) -> None:
         (now,),
     )
     _reapply_entitlement_rules(conn, now)
+    _stage(conn, "work roll-ups and entitlements")
     # Re-apply the durable offset ledger onto the freshly built episode links.
     conn.execute(
         """
