@@ -84,13 +84,46 @@ CHALLENGE_MARKERS = (
     "error 1020", "enable javascript and cookies to continue",
 )
 
-# Failure causes that will never succeed on a retry, so backlog_drain.sh's
-# requeue pass can be read as "expected" rather than as a bug.
-PERMANENT_CAUSES = frozenset({
-    "http_404_gone", "http_410_gone", "http_403_forbidden",
-    "blocked: challenge", "no_sources_on_page", "parse_no_title",
-    "skipped: not_a_post",
-})
+# Failure vocabulary, layered on the SHARED core in fast_fetch.py so the crawler
+# and the operator read ONE classification everywhere. This site used to park
+# every failure at scraped=-1 forever and call "page has no links yet" permanent;
+# a re-drain then re-marked the same recoverable parser-gap pages -1 for good.
+# The live probes say otherwise: sampled -1 URLs answer HTTP 200 with content the
+# legacy-layout extractor recovers, so those pages are TRANSIENT, not dead.
+#
+# PERMANENT = the PAGE itself says it will never work (gone upstream, not a post
+# at all). Parked on the first sighting via fast_fetch.crawl_attempt_state().
+PERMANENT_CAUSES = frozenset(fast_fetch.PERMANENT_CRAWL_CAUSES) | {
+    "skipped: not_a_post",   # site spelling of the core 'not_a_post' skip
+}
+
+# TRANSIENT = our bad luck or a parser gap a later pass can heal: transport /
+# timeout / 403 / 429 / 5xx / an interstitial bot-check, a title we failed to
+# parse, or a live post whose watch links have not been published yet. These
+# spend the shared retry budget (fast_fetch.MAX_CRAWL_ATTEMPTS) and stay
+# selectable by crawl_queue() until that budget runs out. http_403_forbidden and
+# blocked_challenge are already in the core transient set; the names below are
+# the ones this site actually emits.
+TRANSIENT_CAUSES = frozenset(fast_fetch.TRANSIENT_CRAWL_CAUSES) | {
+    "no_sources_on_page",    # title parsed, upstream published no link *yet*
+    "parse_no_title",        # page drifted shape — recover on a re-crawl
+    "blocked: challenge",    # site spelling of the core 'blocked_challenge'
+    # _http_cause() emits the per-code spelling, not the core 'http_5xx' bucket:
+    "http_500_upstream_error",
+    "http_502_upstream_error",
+    "http_503_upstream_error",
+    "http_504_upstream_error",
+    # booking/save problems are OUR contention, never a statement about the page:
+    "sqlite_locked",
+    "sqlite_error",
+    "save_rejected",
+    "worker_exception",
+}
+
+# Consecutive host-refused / transport failures that end a pass early. Without a
+# fuse a single dark-host run manufactures fresh -1s at full speed (one observed
+# pass produced 1,324 in a row) instead of stopping while the domain is down.
+SITE_DARK_THRESHOLD = 25
 
 STOP_REQUESTED = False
 
@@ -171,9 +204,11 @@ def init_staging_db(db_path: Path):
                 slug TEXT,
                 scraped INTEGER DEFAULT 0,
                 site TEXT DEFAULT 'hindilinks4u',
-                raw_json TEXT
+                raw_json TEXT,
+                attempts INTEGER DEFAULT 0,
+                last_attempt REAL DEFAULT NULL,
+                last_cause TEXT DEFAULT NULL
             );
-            CREATE INDEX IF NOT EXISTS idx_sm_scraped ON sitemap_cache(scraped);
 
             CREATE TABLE IF NOT EXISTS posts (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -198,7 +233,6 @@ def init_staging_db(db_path: Path):
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP,
                 updated_at TEXT DEFAULT CURRENT_TIMESTAMP
             );
-            CREATE INDEX IF NOT EXISTS idx_posts_canonical ON posts(canonical_key);
 
             CREATE TABLE IF NOT EXISTS releases (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -214,7 +248,6 @@ def init_staging_db(db_path: Path):
                 bridge_url TEXT,
                 FOREIGN KEY(post_id) REFERENCES posts(id) ON DELETE CASCADE
             );
-            CREATE INDEX IF NOT EXISTS idx_releases_post_id ON releases(post_id);
 
             CREATE TABLE IF NOT EXISTS sources (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -228,6 +261,26 @@ def init_staging_db(db_path: Path):
                 quality TEXT,
                 FOREIGN KEY(release_id) REFERENCES releases(id) ON DELETE CASCADE
             );
+        """)
+        # Why a row failed and how many times we asked. These are plain ADD
+        # COLUMNs, guarded by PRAGMA so the migration is idempotent and never
+        # raises on a DB that already has them. Every CREATE INDEX that could
+        # reference one of these columns runs AFTER this block (the project's
+        # known defect class: an index pointing at a column a later ALTER adds).
+        sm_cols = {c[1] for c in conn.execute("PRAGMA table_info(sitemap_cache);").fetchall()}
+        if "attempts" not in sm_cols:
+            conn.execute("ALTER TABLE sitemap_cache ADD COLUMN attempts INTEGER DEFAULT 0")
+        if "last_attempt" not in sm_cols:
+            conn.execute("ALTER TABLE sitemap_cache ADD COLUMN last_attempt REAL DEFAULT NULL")
+        if "last_cause" not in sm_cols:
+            conn.execute("ALTER TABLE sitemap_cache ADD COLUMN last_cause TEXT DEFAULT NULL")
+
+        # Index creation happens last, once every column they touch is present.
+        conn.executescript("""
+            CREATE INDEX IF NOT EXISTS idx_sm_scraped ON sitemap_cache(scraped);
+            CREATE INDEX IF NOT EXISTS idx_sm_retry ON sitemap_cache(scraped, attempts);
+            CREATE INDEX IF NOT EXISTS idx_posts_canonical ON posts(canonical_key);
+            CREATE INDEX IF NOT EXISTS idx_releases_post_id ON releases(post_id);
             CREATE INDEX IF NOT EXISTS idx_sources_release_id ON sources(release_id);
         """)
         conn.commit()
@@ -457,16 +510,20 @@ def parse_filmy_page_detailed(
     """Fetches and parses one post page, returning (post_or_None, failure_cause).
 
     `sitemap_cache.scraped=-1` alone conflated five different outcomes, which is
-    why the backlog looked like an 80% failure wall. The cause dict says which:
+    why the backlog looked like an 80% failure wall. The cause dict says which,
+    and PERMANENT_CAUSES vs TRANSIENT_CAUSES (both layered on the shared core in
+    fast_fetch.py) says whether it is parked or re-queued:
 
-        http_404_gone / http_410_gone / http_403_forbidden  page died upstream
-        http_429_rate_limited                               our request rate
-        blocked: challenge                                  interstitial bot-check
-        transport_error                                     connection/timeout/empty
-        parse_no_title                                      page drifted shape
-        no_sources_on_page                                  title parsed, upstream
-                                                            published no watch link
-        ok                                                  releases found
+        http_404_gone / http_410_gone     parked (PERMANENT): page died upstream
+        skipped: not_a_post               parked (PERMANENT): not a title page
+        http_403_forbidden / http_429     retryable (transient): host / our rate
+        blocked: challenge                retryable: interstitial bot-check
+        transport_error                   retryable: connection/timeout/empty
+        parse_no_title                    retryable: page drifted shape
+        no_sources_on_page                retryable: upstream published no link
+                                          *yet* — the legacy-layout extractor
+                                          recovers these on a later pass
+        ok                                releases found
     """
     if not is_post_url(post_url):
         return None, _cause("skipped: not_a_post", post_url=post_url)
@@ -523,10 +580,11 @@ def parse_filmy_page_detailed(
 
     releases = extract_hl4u_servers(entry_html, final_url)
     if not releases:
-        # The post is live and readable; the upstream simply publishes no
-        # watch/download link on it (embed block removed, or a series landing
-        # page whose links live on the per-episode pages). A retry cannot fix
-        # that, so it is filed as permanent rather than as a scrape error.
+        # The post is live and readable but the tab parser found no watch link
+        # this pass — the embed block may not be published yet, or a later layout
+        # revision (the legacy <strong>Server N</strong> form) needs re-reading.
+        # A re-crawl can recover these, so it is TRANSIENT and spends the shared
+        # retry budget rather than parking the row forever.
         return None, _cause("no_sources_on_page", http=code, post_url=post_url,
                             raw_title=raw_title[:80], entry_found=bool(entry_m),
                             page_bytes=len(page))
@@ -583,22 +641,58 @@ def _http_cause(code: int) -> str:
     return "transport_error"
 
 
-def record_cause(db_path: Path, loc: str, scraped: int, cause: dict | None) -> None:
-    """Writes the attempt outcome into sitemap_cache.raw_json (the only spare column).
+def record_cause(
+    db_path: Path,
+    loc: str,
+    scraped: int,
+    cause: dict | None,
+    *,
+    attempts: int | None = None,
+    write_attempts: int = 4,
+) -> bool:
+    """Books one crawl outcome, retrying a busy database instead of dying on it.
 
-    `cause=None` stores a SQL NULL, which is how a successful page clears the
-    failure note left by an earlier attempt.
+    The 2026-10-23 backlog drain lost a whole pass to a single
+    `sqlite3.OperationalError: database is locked` on the booking write — the
+    merge writer holds these staging files, so a lock is expected weather, not a
+    fatal error and definitely not a statement about the page. Bounded retries
+    (fast_fetch.retry_backoff) absorb it; on exhaustion we return False and leave
+    the row UNCHANGED so it stays in the queue. A crashed crawl is worse than a
+    deferred one.
+
+    `attempts` is the value computed by fast_fetch.crawl_attempt_state() (park vs
+    retry budget). Passing it writes the attempts/last_attempt/last_cause columns;
+    omitting it keeps the old raw_json-only behaviour so existing callers still
+    work. `cause=None` stores NULL, which is how a success clears the earlier note.
     """
     payload = None if cause is None else json.dumps(cause, ensure_ascii=False)[:2000]
-    try:
-        with sqlite3.connect(str(db_path), timeout=SQLITE_BUSY_TIMEOUT) as conn:
-            conn.execute(
-                "UPDATE sitemap_cache SET scraped=?, raw_json=? WHERE loc=?",
-                (scraped, payload, loc),
-            )
-            conn.commit()
-    except sqlite3.Error as exc:
-        print(f"[!] could not record cause for {loc}: {exc}", file=sys.stderr, flush=True)
+    last_cause = None if cause is None else cause.get("cause")
+    if attempts is None:
+        sql = "UPDATE sitemap_cache SET scraped=?, raw_json=?, last_cause=? WHERE loc=?"
+        params: tuple = (scraped, payload, last_cause, loc)
+    else:
+        sql = ("UPDATE sitemap_cache SET scraped=?, raw_json=?, last_cause=?,"
+               " attempts=?, last_attempt=? WHERE loc=?")
+        params = (scraped, payload, last_cause, int(attempts), time.time(), loc)
+
+    last_exc: Exception | None = None
+    for i in range(max(1, write_attempts)):
+        try:
+            with sqlite3.connect(str(db_path), timeout=SQLITE_BUSY_TIMEOUT) as conn:
+                conn.execute(sql, params)
+                conn.commit()
+            return True
+        except sqlite3.OperationalError as exc:
+            if "locked" not in str(exc).lower():
+                print(f"[!] could not book {loc}: {exc}", file=sys.stderr, flush=True)
+                return False
+            last_exc = exc
+            time.sleep(fast_fetch.retry_backoff(i + 1, base=0.25, cap=5.0))
+        except sqlite3.Error as exc:
+            print(f"[!] could not record cause for {loc}: {exc}", file=sys.stderr, flush=True)
+            return False
+    print(f"[!] database stayed locked for {loc}: {last_exc}", file=sys.stderr, flush=True)
+    return False
 
 
 def cause_breakdown(db_path: Path) -> dict:
@@ -614,11 +708,12 @@ def cause_breakdown(db_path: Path) -> dict:
     return counts
 
 
-def save_post_to_staging_db(db_path: Path, post_data: dict) -> bool:
-    """Persists post metadata, releases, and sources into the isolated staging DB."""
-    if not post_data or not post_data.get("releases"):
-        return False
+def _save_post_once(db_path: Path, post_data: dict) -> bool:
+    """One non-retried write of a post + its releases/sources into the staging DB.
 
+    May raise sqlite3.OperationalError on a lock; save_post_to_staging_db() is the
+    lock-tolerant wrapper callers should use.
+    """
     with sqlite3.connect(str(db_path), timeout=SQLITE_BUSY_TIMEOUT) as conn:
         conn.execute("PRAGMA foreign_keys = ON")
         cur = conn.cursor()
@@ -705,7 +800,30 @@ def save_post_to_staging_db(db_path: Path, post_data: dict) -> bool:
     return True
 
 
-def sync_sitemap_to_db(db_path: Path, base_url: str, max_items: int | None = None) -> int:
+def save_post_to_staging_db(db_path: Path, post_data: dict, *, write_attempts: int = 4) -> bool:
+    """Persists a post, retrying a busy database instead of dying on it.
+
+    Same lock-tolerance ported from import_katmoviehd._book_attempt: the merge
+    writer shares these staging files, so a transient `database is locked` is
+    weather, not a bad page. We back off (fast_fetch.retry_backoff) and re-write;
+    on exhaustion we return False and leave the row untouched so it stays in the
+    queue for a later pass. A crashed crawl is worse than a deferred one.
+    Non-lock SQLite errors still propagate so the caller can classify them.
+    """
+    if not post_data or not post_data.get("releases"):
+        return False
+    last_exc: Exception | None = None
+    for i in range(max(1, write_attempts)):
+        try:
+            return _save_post_once(db_path, post_data)
+        except sqlite3.OperationalError as exc:
+            if "locked" not in str(exc).lower():
+                raise
+            last_exc = exc
+            time.sleep(fast_fetch.retry_backoff(i + 1, base=0.25, cap=5.0))
+    print(f"[!] database stayed locked while saving "
+          f"{post_data.get('post_url', '?')}: {last_exc}", file=sys.stderr, flush=True)
+    return False
     """Pulls all post-sitemap*.xml entries into sitemap_cache."""
     init_staging_db(db_path)
     client = Hindilinks4uClient(base_url=base_url)
@@ -757,15 +875,47 @@ def sync_sitemap_to_db(db_path: Path, base_url: str, max_items: int | None = Non
     return total
 
 
-def run_crawler(db_path: Path, base_url: str, workers: int = 4, delay: float = 0.3, limit: int | None = None):
-    init_staging_db(db_path)
-    client = Hindilinks4uClient(base_url=base_url, request_interval=delay)
+def crawl_queue(db_path: Path, limit: int | None = None) -> list:
+    """Rows worth crawling now: never-tried first, then failures inside the budget.
 
-    with sqlite3.connect(str(db_path)) as conn:
-        q = "SELECT loc FROM sitemap_cache WHERE scraped = 0 ORDER BY rowid ASC"
-        if limit:
-            q += f" LIMIT {int(limit)}"
-        queue = [r[0] for r in conn.execute(q).fetchall()]
+    The old `SELECT loc FROM sitemap_cache WHERE scraped = 0` abandoned every
+    failed page forever — the requeue put a row back at 0, one lock or one
+    interstitial threw it to -1, and nothing selected it again. Now a -1 row
+    re-enters the queue while COALESCE(attempts, 0) < fast_fetch.MAX_CRAWL_ATTEMPTS.
+    A permanent cause is parked by fast_fetch.crawl_attempt_state() (which sets
+    attempts to the max on the first sighting), so it drops out here without this
+    query needing to know the cause vocabulary. Returns (loc, prior_attempts).
+    """
+    where = (
+        "scraped = 0 OR (scraped = -1 AND COALESCE(attempts, 0) < "
+        f"{fast_fetch.MAX_CRAWL_ATTEMPTS})"
+    )
+    query = (
+        f"SELECT loc, COALESCE(attempts, 0) FROM sitemap_cache WHERE {where}"
+        " ORDER BY scraped DESC, rowid ASC"
+    )
+    params: tuple = ()
+    if limit:
+        query += " LIMIT ?"
+        params = (int(limit),)
+    with sqlite3.connect(str(db_path), timeout=SQLITE_BUSY_TIMEOUT) as conn:
+        return conn.execute(query, params).fetchall()
+
+
+def run_crawler(
+    db_path: Path,
+    base_url: str,
+    workers: int = 4,
+    delay: float = 0.3,
+    limit: int | None = None,
+    client: "Hindilinks4uClient | None" = None,
+    dark_threshold: int = SITE_DARK_THRESHOLD,
+):
+    init_staging_db(db_path)
+    if client is None:
+        client = Hindilinks4uClient(base_url=base_url, request_interval=delay)
+
+    queue = crawl_queue(db_path, limit)
 
     if not queue:
         print("[!] No pending titles. Run --sync-sitemap first.", flush=True)
@@ -774,52 +924,69 @@ def run_crawler(db_path: Path, base_url: str, workers: int = 4, delay: float = 0
     print(f"[*] Starting Hindilinks4u crawler: {len(queue):,} titles | {workers} workers", flush=True)
     done = failed = total_rels = total_srcs = 0
     started = time.monotonic()
+    # Dark-host fuse: a whole run of transport/403/429/5xx/challenge failures is
+    # a site we cannot crawl, not a backlog to grind to -1. Stop spending
+    # requests and leave the rest of the queue untouched.
+    fuse = fast_fetch.ConsecutiveFailureFuse(threshold=dark_threshold)
 
-    def process_item(loc):
+    def process_item(item):
+        loc = item[0]
+        prior_attempts = int(item[1] or 0)
         post, cause = parse_filmy_page_detailed(client, loc)
         if not post:
-            return loc, False, 0, 0, cause
+            return loc, prior_attempts, False, 0, 0, cause
         try:
             ok = save_post_to_staging_db(db_path, post)
         except sqlite3.Error as exc:
             # A locked or full DB is a retryable transport problem, not a bad
             # page: say so, and never let it look like upstream died.
-            return loc, False, 0, 0, _cause(
+            return loc, prior_attempts, False, 0, 0, _cause(
                 "sqlite_locked" if "locked" in str(exc).lower() else "sqlite_error",
                 error=str(exc)[:160], post_url=loc)
         nrels = len(post["releases"])
         nsrcs = sum(len(r.get("sources", [])) for r in post["releases"])
         if not ok:
-            return loc, False, 0, 0, _cause("save_rejected", post_url=loc)
-        return loc, True, nrels, nsrcs, _cause("ok", releases=nrels)
+            # save_post_to_staging_db returned False: a deferred (locked) write,
+            # never a statement about the page — retryable.
+            return loc, prior_attempts, False, 0, 0, _cause("save_rejected", post_url=loc)
+        return loc, prior_attempts, True, nrels, nsrcs, _cause("ok", releases=nrels)
 
     causes: dict[str, int] = {}
     with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
-        futures = {pool.submit(process_item, loc): loc for loc in queue}
+        futures = {pool.submit(process_item, item): item for item in queue}
         for fut in concurrent.futures.as_completed(futures):
-            if STOP_REQUESTED:
+            if STOP_REQUESTED or fuse.tripped:
                 for f in futures:
                     f.cancel()
                 break
             try:
-                loc, ok, nrels, nsrcs, cause = fut.result()
+                loc, prior_attempts, ok, nrels, nsrcs, cause = fut.result()
             except Exception as exc:  # a worker crash must not abort the crawl
-                loc = futures[fut]
+                item = futures[fut]
+                loc, prior_attempts = item[0], int(item[1] or 0)
                 ok, nrels, nsrcs = False, 0, 0
                 cause = _cause("worker_exception", error=f"{type(exc).__name__}: {exc}"[:160],
                                post_url=loc)
             done += 1
-            if not ok:
-                failed += 1
             total_rels += nrels
             total_srcs += nsrcs
             name = cause.get("cause", "unrecorded")
             causes[name] = causes.get(name, 0) + 1
             if ok:
+                scraped = 1
+                attempts = prior_attempts + 1
                 # Success clears any earlier failure note for the same page.
-                record_cause(db_path, loc, 1, None)
+                record_cause(db_path, loc, 1, None, attempts=attempts)
             else:
-                record_cause(db_path, loc, -1, cause)
+                failed += 1
+                # Park-vs-retry is delegated to the shared core, not decided
+                # here: a permanent cause parks on the first sighting (attempts
+                # -> MAX, so crawl_queue stops selecting it); anything else spends
+                # one unit of the budget and stays selectable for a later pass.
+                scraped, attempts = fast_fetch.crawl_attempt_state(
+                    name, prior_attempts=prior_attempts, permanent=PERMANENT_CAUSES)
+                record_cause(db_path, loc, -1, cause, attempts=attempts)
+                fuse.record(name)
             if done % 10 == 0 or done == len(queue):
                 speed = done / max(0.01, time.monotonic() - started)
                 eta = (len(queue) - done) / max(0.01, speed)
@@ -829,12 +996,23 @@ def run_crawler(db_path: Path, base_url: str, workers: int = 4, delay: float = 0
                     flush=True,
                 )
 
+    if fuse.tripped:
+        left = len(queue) - done
+        print(
+            f"\n[!] Site-dark fuse tripped: {fuse.streak} consecutive failures "
+            f"({fuse.trip_reason}). The domain is refusing or unreachable — that is a "
+            f"fetch-layer problem, not {left:,} dead pages. Stopping; the remaining "
+            f"{left:,} rows keep their queue position untouched.",
+            flush=True,
+        )
+
     print(f"\n[✓] Crawler finished: {done - failed:,} scraped, {failed:,} failed in {time.monotonic()-started:.1f}s", flush=True)
     if causes:
-        print("[i] this run's outcome breakdown (permanent causes are not worth re-crawling):", flush=True)
+        print("[i] this run's outcome breakdown (parked = we stop asking, retryable = budget left):", flush=True)
         for name, cnt in sorted(causes.items(), key=lambda kv: -kv[1]):
-            tag = " permanent" if name in PERMANENT_CAUSES or name in (
-                "sqlite_locked", "sqlite_error", "worker_exception") else ""
+            # A lock or a worker crash says nothing about the PAGE, so it is never
+            # "permanent" — it is retryable, parked only for genuine page causes.
+            tag = " parked" if name in PERMANENT_CAUSES else (" retryable" if name != "ok" else "")
             print(f"      {name:26s} {cnt:6,}{tag}", flush=True)
 
 

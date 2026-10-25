@@ -235,16 +235,22 @@ class CauseTests(unittest.TestCase):
                                                    "https://www.hindilinks4u.zip/x/")
         self.assertIsNone(post)
         self.assertEqual(cause["cause"], "blocked: challenge")
-        self.assertTrue(cause["permanent"])
+        # We only re-request; nothing here solves or spoofs the check. A bot screen
+        # is the host's momentary mood, not a statement about the page, so it
+        # spends the shared retry budget and goes dark once the budget is spent.
+        self.assertFalse(cause["permanent"])
         self.assertTrue(hl.looks_blocked(CHALLENGE_PAGE))
         self.assertFalse(hl.looks_blocked(PAGE))
 
-    def test_sourceless_page_is_permanent_not_a_scrape_error(self):
+    def test_sourceless_page_is_retried_not_parked_forever(self):
         post, cause = hl.parse_filmy_page_detailed(FakeClient(SOURCELESS_PAGE),
                                                    "https://www.hindilinks4u.zip/addicted/")
         self.assertIsNone(post)
         self.assertEqual(cause["cause"], "no_sources_on_page")
-        self.assertTrue(cause["permanent"])
+        # Live probes: a page that today parses a title but no watch links often
+        # has them next week. Parking it permanently is how ~2.4k recoverable URLs
+        # went silently missing, so this is a transient failure inside the budget.
+        self.assertFalse(cause["permanent"])
         self.assertIn("Addicted", cause["raw_title"])
 
     def test_non_post_urls_are_skipped_without_a_request(self):
