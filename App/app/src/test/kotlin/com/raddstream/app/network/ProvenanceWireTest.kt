@@ -7,7 +7,7 @@ import com.raddstream.app.network.models.ReleaseDetail
 import com.raddstream.app.network.models.SourceDetail
 import com.raddstream.app.network.models.V1CatalogMapper
 import com.raddstream.app.network.models.PrintGoldenVectors
-import com.raddstream.app.viewmodel.ReleaseParser
+import com.raddstream.app.viewmodel.ReleaseLayoutBuilder
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -96,7 +96,7 @@ class ProvenanceWireTest {
     }
 
     private fun printWith(streamId: String, label: String, kind: String) =
-        ReleaseParser.build(
+        ReleaseLayoutBuilder.build(
             contentType = "movie",
             releases = listOf(
                 ReleaseDetail(

@@ -78,11 +78,11 @@ import com.raddstream.app.ui.components.Pill
 import com.raddstream.app.ui.components.PrintQualityBadge
 import com.raddstream.app.ui.components.QualityRungCard
 import com.raddstream.app.ui.components.SectionHeader
+import com.raddstream.app.player.LadderForScope
+import com.raddstream.app.player.QualityOption
 import com.raddstream.app.viewmodel.DetailNavigationEvent
 import com.raddstream.app.viewmodel.DetailViewModel
 import com.raddstream.app.viewmodel.EpisodeGroup
-import com.raddstream.app.viewmodel.LadderForScope
-import com.raddstream.app.viewmodel.QualityOption
 import com.raddstream.app.viewmodel.RankedPrint
 import com.raddstream.app.viewmodel.SeasonGroup
 

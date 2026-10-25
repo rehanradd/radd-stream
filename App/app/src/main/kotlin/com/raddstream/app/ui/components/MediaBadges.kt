@@ -27,7 +27,8 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import com.raddstream.app.viewmodel.LinkHealth
+import com.raddstream.app.network.models.LinkState
+import com.raddstream.app.network.models.Resolution
 import com.raddstream.app.viewmodel.RankedPrint
 
 /**
@@ -78,13 +79,13 @@ fun Pill(
 fun PrintQualityBadge(print: RankedPrint, modifier: Modifier = Modifier) {
     val bg = when {
         print.isCam -> MaterialTheme.colorScheme.errorContainer
-        print.resolution.tier >= 4 -> MaterialTheme.colorScheme.primaryContainer
+        print.resolution == Resolution.R2160 -> MaterialTheme.colorScheme.primaryContainer
         print.isOfficialPrint -> MaterialTheme.colorScheme.tertiaryContainer
         else -> MaterialTheme.colorScheme.surfaceVariant
     }
     val fg = when {
         print.isCam -> MaterialTheme.colorScheme.onErrorContainer
-        print.resolution.tier >= 4 -> MaterialTheme.colorScheme.onPrimaryContainer
+        print.resolution == Resolution.R2160 -> MaterialTheme.colorScheme.onPrimaryContainer
         print.isOfficialPrint -> MaterialTheme.colorScheme.onTertiaryContainer
         else -> MaterialTheme.colorScheme.onSurfaceVariant
     }
@@ -133,20 +134,21 @@ fun CamBadge(modifier: Modifier = Modifier) {
  */
 @Composable
 fun LinkHealthChip(
-    health: LinkHealth,
+    health: LinkState,
     ephemeral: Boolean,
     resumable: Boolean,
     modifier: Modifier = Modifier,
 ) {
     val dotColor = when (health) {
-        LinkHealth.ACTIVE -> MaterialTheme.colorScheme.primary
-        LinkHealth.DEAD -> MaterialTheme.colorScheme.error
-        LinkHealth.UNKNOWN -> MaterialTheme.colorScheme.outline
+        LinkState.ACTIVE -> MaterialTheme.colorScheme.primary
+        LinkState.DEAD, LinkState.EXPIRED -> MaterialTheme.colorScheme.error
+        LinkState.UNCHECKED, LinkState.UNKNOWN -> MaterialTheme.colorScheme.outline
     }
     val healthText = when (health) {
-        LinkHealth.ACTIVE -> "Working"
-        LinkHealth.DEAD -> "Dead"
-        LinkHealth.UNKNOWN -> "Unverified"
+        LinkState.ACTIVE -> "Working"
+        LinkState.DEAD -> "Dead"
+        LinkState.EXPIRED -> "Expired"
+        LinkState.UNCHECKED, LinkState.UNKNOWN -> "Unverified"
     }
     val desc = buildString {
         append("Link status $healthText")

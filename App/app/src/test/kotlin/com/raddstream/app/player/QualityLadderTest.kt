@@ -1,4 +1,4 @@
-package com.raddstream.app.viewmodel
+package com.raddstream.app.player
 
 import com.raddstream.app.network.models.LadderAuto
 import com.raddstream.app.network.models.LadderLink
@@ -14,7 +14,11 @@ import org.junit.Test
  * The ladder is the server's decision, delivered as data; the app's only job is to
  * render it without inventing anything. These tests pin that: one row per rung, Auto
  * pointing where the server pointed, a rung that cannot play saying so, and no scope
- * ever borrowing another scope's links.
+ * ever borrowing another episode's links.
+ *
+ * Lives in `player` because the view-state it tests ([QualityLadder], [LadderForScope],
+ * [QualityOption]) is the player-local rung model; the wire types it maps FROM
+ * ([OptionGroup], [LadderTier], [LadderLink], [LadderAuto]) belong to `network/models`.
  */
 class QualityLadderTest {
 

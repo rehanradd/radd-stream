@@ -4,9 +4,11 @@ package com.raddstream.app.network.models
  * ─────────────────────────────────────────────────────────────────────────────
  *  v2 DOMAIN MODEL — the contract the app is built for
  * ─────────────────────────────────────────────────────────────────────────────
- * NOT SERVED YET: no `/api/v2` route exists in `Fast_Fetch/viewer.py` (verified by reading
- * its `do_GET`, which has exactly nine v1 routes and none of them v2, and by the absence of
- * any `do_POST`). Everything in this file is therefore (a) the shape the app programs
+ * NOT SERVED YET, for this install: `Fast_Fetch/api_v2.py` now implements the v2 routes and
+ * `viewer.py` mounts them, but every one of them requires the `cat_*` projection and the
+ * database the public service runs on has none, so a real request answers `unavailable` and
+ * the app must stay on v1 until the live catalog is swapped (see `EndpointGaps`).
+ * Everything in this file is therefore (a) the shape the app programs
  * against and (b) the shape [V1CatalogMapper] translates the live v1 payload INTO, so the
  * app runs today against the current server and switches source without any UI rewrite.
  *
@@ -132,7 +134,11 @@ data class EpisodeAddress(
             (absolute != null && absolute == other.absolute)
 }
 
-/** `cat_parts` — multi-part films. NOT SERVED YET (gap G-3): the table exists, nothing writes it. */
+/**
+ * `cat_parts` — multi-part films. The projector fills the table from `Part/Chapter/Disc n`
+ * labels when one work's prints name two or more parts, so a client reads structure instead
+ * of guessing it; a work with no real parts still has no rows (API_V2.md §S4).
+ */
 data class Part(
     val number: Int,
     val title: String? = null,

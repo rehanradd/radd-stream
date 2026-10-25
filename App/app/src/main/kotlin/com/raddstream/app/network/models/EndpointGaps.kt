@@ -1,19 +1,25 @@
 package com.raddstream.app.network.models
 
 /*
- * THE NOT-SERVED-YET REGISTRY.
+ * THE NOT-SERVED-YET REGISTRY — scoped to what THIS INSTALL can reach.
  *
- * Every capability the app is designed for but the CURRENT server cannot answer, listed in
- * one place so no future reader mistakes a target contract for a live endpoint. Verified by
- * reading `Fast_Fetch/viewer.py::do_GET` (2026-10-22): the only routes that exist are
- * `/api/v1/posts`, `/api/v1/posts/{id}`, `/api/v1/stream`, `/api/v1/rules`, `/api/v1/stats`,
- * plus the non-contract dashboard routes (`/api/data`, `/api/sitemap`, `/api/fetch`,
- * `/api/m3u`, `/api/health-check`, `/api/heal`, `/client`, `/`). There is no `do_POST`, so
- * anything that needs a POST cannot exist at all yet.
+ * Every capability this app is designed against but cannot call from a real install today,
+ * listed in one place so no future reader mistakes a target contract for a live endpoint.
+ *
+ * Read the header carefully: it is about what OUR INSTALL can reach, not about what the
+ * server implements. `Fast_Fetch/api_v2.py` is mounted in `viewer.py` and answers
+ * `/api/v2/manifest|browse|search|suggest|works|episodes|releases|sync|stats`, plus
+ * `POST /play`, `POST /links/{id}/report`, `resolve` and `offset`. None of it is usable yet
+ * because every v2 route requires the `cat_*` projection, and the database the public service
+ * runs on has none — so the honest answer to a v2 request today is
+ * `unavailable` ("The catalog projection has not been built yet", with `Retry-After: 60`).
+ * What remains genuinely unimplemented server-side is tracked in `Fast_Fetch/API_V2.md` §17,
+ * not here.
  *
  * The rule for the rest of the app: code that would call one of these must be marked with a
  * [EndpointGaps.require] comment at the call site and must degrade to the v1 path, never
- * fail and never fabricate a response.
+ * fail and never fabricate a response. Dropping an entry here means "this install can now
+ * reach it and the call site has been switched over", never "the route file exists".
  */
 enum class EndpointGaps(
     /** The endpoint the v2 contract wants. */

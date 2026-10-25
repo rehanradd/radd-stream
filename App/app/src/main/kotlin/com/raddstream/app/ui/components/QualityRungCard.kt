@@ -22,8 +22,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import com.raddstream.app.viewmodel.LadderForScope
-import com.raddstream.app.viewmodel.QualityOption
+import com.raddstream.app.player.LadderForScope
+import com.raddstream.app.player.QualityOption
 
 /**
  * The quality switch and the download card, in one row per rung — exactly one option

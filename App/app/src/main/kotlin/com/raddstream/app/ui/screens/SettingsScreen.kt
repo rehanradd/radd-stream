@@ -81,7 +81,7 @@ fun SettingsScreen(
                     value = state.serverUrl,
                     onValueChange = viewModel::onServerUrlChanged,
                     label = { Text("Server URL") },
-                    placeholder = { Text("http://92.4.95.252") },
+                    placeholder = { Text("http://<host> — one address, any catalog you may use") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                 )

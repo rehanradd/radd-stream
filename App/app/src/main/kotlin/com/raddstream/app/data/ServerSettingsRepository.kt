@@ -8,6 +8,7 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.floatPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import com.raddstream.app.brand.Brand
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -22,8 +23,16 @@ class ServerSettingsRepository @Inject constructor(
 ) {
     private val dataStore: DataStore<Preferences> = context.serverSettingsDataStore
 
+    /**
+     * The server this install talks to: the person's own choice if they made one,
+     * otherwise the address the brand file ships. Returning the brand default here — rather
+     * than special-casing "no saved value" in every caller — is what makes a fresh install
+     * open on real content instead of on a setup form; an unbranded build still yields null
+     * and the app still opens on Setup.
+     */
     val serverUrl: Flow<String?> = dataStore.data.map { preferences ->
-        preferences[SERVER_URL_KEY]
+        preferences[SERVER_URL_KEY]?.takeIf { it.isNotBlank() }
+            ?: Brand.defaultServerUrl.takeIf { it.isNotBlank() }
     }
 
     suspend fun saveServerUrl(url: String) {

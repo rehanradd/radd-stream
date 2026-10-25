@@ -4,10 +4,14 @@ import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.raddstream.app.network.models.LinkClassification
+import com.raddstream.app.network.models.LinkState
 import com.raddstream.app.network.models.PostDetail
 import com.raddstream.app.network.models.SourceDetail
+import com.raddstream.app.player.LadderForScope
 import com.raddstream.app.player.LadderRung
 import com.raddstream.app.player.PlayerSessionStore
+import com.raddstream.app.player.QualityLadder
+import com.raddstream.app.player.QualityOption
 import com.raddstream.app.repository.CacheRepository
 import com.raddstream.app.repository.CatalogRepository
 import com.raddstream.app.repository.FavoritesRepository
@@ -93,7 +97,7 @@ class DetailViewModel @Inject constructor(
             try {
                 val detail = catalogRepository.getPostDetail(postId)
                 if (detail != null) {
-                    val layout = ReleaseParser.build(detail.contentType, detail.releases)
+                    val layout = ReleaseLayoutBuilder.build(detail.contentType, detail.releases)
                     _uiState.update {
                         it.copy(
                             post = detail,
@@ -314,7 +318,7 @@ class DetailViewModel @Inject constructor(
     private fun linkFrom(source: SourceDetail): RankedLink = RankedLink(
         streamId = source.streamId.orEmpty(),
         linkId = source.linkId,
-        health = LinkHealth.ACTIVE,
+        health = LinkState.ACTIVE,
         ephemeral = source.isEphemeral,
         resumable = source.isResumableLink,
         playUrl = source.bestUrl,

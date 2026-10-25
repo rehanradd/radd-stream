@@ -123,6 +123,17 @@ object Brand {
 
     // ── Deep links + network identity ────────────────────────────────────────
     val deepLinkScheme: String get() = string("deeplink.scheme").ifBlank { BuildConfig.BRAND_DEEPLINK_SCHEME }
+
+    /**
+     * The catalog server a fresh install talks to, so "install and go" works. Empty means
+     * "ship no server": the app then opens on Setup exactly as it did before this key
+     * existed. Whatever is here is only a starting point — the person can point it at any
+     * catalog they are authorized to use, and that choice is what gets persisted.
+     */
+    val defaultServerUrl: String
+        get() = string("network.default_server_url")
+            .ifBlank { BuildConfig.BRAND_NETWORK_DEFAULT_SERVER_URL }.trim()
+
     val userAgent: String get() =
         "${string("network.user_agent.product").ifBlank { BuildConfig.BRAND_NETWORK_USER_AGENT_PRODUCT }}" +
             "/${versionName} (${string("network.user_agent.version_suffix")

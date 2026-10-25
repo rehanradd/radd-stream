@@ -1,4 +1,4 @@
-package com.raddstream.app.viewmodel
+package com.raddstream.app.player
 
 import com.raddstream.app.network.models.LadderTier
 import com.raddstream.app.network.models.OptionGroup
@@ -12,6 +12,12 @@ import com.raddstream.app.network.models.OptionGroup
  * our one player can start it here, and the silent runner-ups to hop to if the
  * first CDN refuses. Site names, hoster names and upstream addresses are not on
  * the wire model, so they cannot reach a composable from here either.
+ *
+ * WHY IT LIVES IN `player`: this is the app-local VIEW state of a rung — a handle, our own
+ * address, and whether this player can present it. The server's own ladder contract
+ * (`network/models/QualityLadder.kt`: [OptionGroup], [LadderTier], …) is the single wire owner,
+ * and the one function below that crosses the boundary is [LadderTier.toOptionOrNull]. There
+ * is deliberately no second copy of either layer and no alias tying them together.
  */
 data class QualityOption(
     /** `2160p | 1080p | 720p | 480p | sd | unspecified` — the switch's row key. */

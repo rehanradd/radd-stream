@@ -2,6 +2,7 @@ package com.raddstream.app.viewmodel
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.raddstream.app.brand.Brand
 import com.raddstream.app.repository.CatalogRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
@@ -23,7 +24,10 @@ data class SetupUiState(
 class SetupViewModel @Inject constructor(
     private val catalogRepository: CatalogRepository,
 ) : ViewModel() {
-    private val _uiState = MutableStateFlow(SetupUiState())
+    // Prefilled with the address the brand file ships, so reaching this screen is a
+    // one-tap "Connect" instead of typing an IP — and so a self-hoster who lands here
+    // can see the default they are about to replace.
+    private val _uiState = MutableStateFlow(SetupUiState(serverUrl = Brand.defaultServerUrl))
     val uiState = _uiState.asStateFlow()
 
     fun onServerUrlChanged(value: String) {

@@ -1,13 +1,36 @@
 package com.raddstream.app.network
 
 import com.raddstream.app.data.local.FavoritePost
+import com.raddstream.app.network.models.Codec
+import com.raddstream.app.network.models.Container
+import com.raddstream.app.network.models.CoverageType
+import com.raddstream.app.network.models.Edition
+import com.raddstream.app.network.models.EntitlementModel
+import com.raddstream.app.network.models.HdrFormat
+import com.raddstream.app.network.models.LinkClassification
+import com.raddstream.app.network.models.LinkKind
+import com.raddstream.app.network.models.LinkState
+import com.raddstream.app.network.models.Ownership
+import com.raddstream.app.network.models.Playability
+import com.raddstream.app.network.models.PlayProtocol
 import com.raddstream.app.network.models.Post
 import com.raddstream.app.network.models.PostDetail
 import com.raddstream.app.network.models.PostDetailResponse
 import com.raddstream.app.network.models.PostsResponse
+import com.raddstream.app.network.models.PrintFlag
+import com.raddstream.app.network.models.ProblemCode
+import com.raddstream.app.network.models.Resolution
+import com.raddstream.app.network.models.ScoreScale
+import com.raddstream.app.network.models.SeasonType
+import com.raddstream.app.network.models.SourceTag
 import com.raddstream.app.network.models.StatsResponse
 import com.raddstream.app.network.models.StreamResponse
+import com.raddstream.app.network.models.SubtitleMode
+import com.raddstream.app.network.models.WorkFlag
+import com.raddstream.app.network.models.WorkType
+import com.raddstream.app.network.models.SourceDetail
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -185,5 +208,99 @@ class ModelsTest {
         assertEquals(42, response.activeSources)
         assertEquals(8, response.resumableSources)
         assertEquals(3, response.temporarySources)
+    }
+
+    /*
+     * ── C17: the field-modelling bugs the collapse had to leave fixed ─────────────
+     * API_V2.md §15 / §16.6, and the two live spellings documented in AGENTS.md §5:
+     *  - `is_temporary` is INTEGER 0/1 on `/api/v1/posts/{id}` and a real JSON boolean on
+     *    `/api/v1/stream`. Modelling it as `Int?` (the old bug) makes one of the two endpoints
+     *    throw; the surviving model is `Boolean?` behind `LenientBooleanAdapter`, so BOTH decode.
+     *  - every enum-ish column arrives as a String and is turned into an enum only through
+     *    `fromWire(...)`, which must answer UNKNOWN for a value the app has never seen rather
+     *    than crash or guess. Gson never touches these fields, so a new server word cannot
+     *    break decoding either.
+     */
+
+    @Test
+    fun `is_temporary decodes as an integer flag and as a real boolean`() {
+        val asInteger = gson.fromJson(
+            """{"stream_id":"s1","play_url":"http://127.0.0.1:8080/api/v1/stream?id=s1","is_temporary":1,"is_resumable":0}""",
+            SourceDetail::class.java,
+        )
+        assertEquals(true, asInteger.isTemporary)
+        assertEquals(false, asInteger.isResumable)
+        assertTrue(asInteger.isEphemeral)
+        assertFalse(asInteger.isResumableLink)
+
+        val asBoolean = gson.fromJson(
+            """{"stream_id":"s2","play_url":"http://127.0.0.1:8080/api/v1/stream?id=s2","is_temporary":true,"is_resumable":true}""",
+            SourceDetail::class.java,
+        )
+        assertEquals(true, asBoolean.isTemporary)
+        assertTrue(asBoolean.isEphemeral)
+        assertTrue(asBoolean.isResumableLink)
+
+        // A value that is neither spelling is "no evidence", not a fabricated false.
+        val asGarbage = gson.fromJson(
+            """{"stream_id":"s3","play_url":"http://127.0.0.1:8080/api/v1/stream?id=s3","is_temporary":"maybe"}""",
+            SourceDetail::class.java,
+        )
+        assertNull(asGarbage.isTemporary)
+        assertFalse(asGarbage.isEphemeral)
+    }
+
+    @Test
+    fun `a link status the app has never seen degrades to UNKNOWN and still decodes`() {
+        val source = gson.fromJson(
+            """
+              {"stream_id":"s9","play_url":"http://127.0.0.1:8080/api/v1/stream?id=s9",
+               "kind":"quantum_tunnel","status":"flapping","playability":"chromecast"}
+            """.trimIndent(),
+            SourceDetail::class.java,
+        )
+        assertEquals("quantum_tunnel", source.kind)
+        assertEquals("flapping", source.status)
+
+        // The enum conversion is ours, not Gson's, and it must never throw on an unseen word.
+        assertEquals(LinkKind.UNKNOWN, LinkClassification.kindFromWire(source.kind, Playability.UNKNOWN))
+        assertEquals(LinkState.UNKNOWN, LinkClassification.stateOf(source.status))
+        assertEquals(Playability.UNKNOWN, Playability.fromWire(source.playability))
+    }
+
+    @Test
+    fun `every fromWire table answers UNKNOWN for a value it has never seen`() {
+        // API_V2.md §16.6: the server adds values and never renames them, so a new word must
+        // land on UNKNOWN for every enum parsed from a server string.
+        assertEquals(Resolution.UNKNOWN, Resolution.fromWire("8k"))
+        assertEquals(SourceTag.UNKNOWN, SourceTag.fromWire("laserdisc"))
+        assertEquals(Codec.UNKNOWN, Codec.fromWire("vvc"))
+        assertEquals(HdrFormat.UNKNOWN, HdrFormat.fromWire("hdr20"))
+        assertEquals(Edition.UNKNOWN, Edition.fromWire("cut_by_the_numbers"))
+        assertEquals(CoverageType.UNKNOWN, CoverageType.fromWire("half_a_season"))
+        assertEquals(LinkKind.UNKNOWN, LinkKind.fromWire("carrier_pigeon"))
+        assertEquals(LinkState.UNKNOWN, LinkState.fromWire("flapping"))
+        assertEquals(PlayProtocol.UNKNOWN, PlayProtocol.fromWire("srt"))
+        assertEquals(WorkType.UNKNOWN, WorkType.fromWire("podcast"))
+        assertEquals(SeasonType.UNKNOWN, SeasonType.fromWire("crossover"))
+        assertEquals(Container.UNKNOWN, Container.fromWire("wmv"))
+        assertEquals(SubtitleMode.UNKNOWN, SubtitleMode.fromWire("burned_to_disk"))
+        assertEquals(EntitlementModel.UNKNOWN, EntitlementModel.fromWire("trade_barter"))
+        assertEquals(Ownership.UNKNOWN, Ownership.fromWire("borrowed"))
+        assertEquals(ScoreScale.UNKNOWN, ScoreScale.fromWire("vibes"))
+        assertEquals(WorkFlag.UNKNOWN, WorkFlag.fromWire("shaky"))
+        assertEquals(PrintFlag.UNKNOWN, PrintFlag.fromWire("suspiciously_short"))
+        assertEquals(ProblemCode.UNKNOWN, ProblemCode.fromWire("teapot"))
+    }
+
+    @Test
+    fun `a print column that arrives as text is still read as a number`() {
+        // `file_size_bytes` is a 64-bit column but SQLite can hand back TEXT; the lenient long
+        // adapter must take the digits and never crash a whole catalog row over one cell.
+        val source = gson.fromJson(
+            """{"stream_id":"s5","play_url":"http://127.0.0.1:8080/api/v1/stream?id=s5","file_size_bytes":"18253611008"}""",
+            SourceDetail::class.java,
+        )
+        assertEquals(18_253_611_008L, source.fileSizeBytes)
     }
 }
