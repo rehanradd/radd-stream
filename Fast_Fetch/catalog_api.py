@@ -1625,9 +1625,11 @@ def _detail_flags(work: dict, prints: list[dict], reviews, dead_only: bool) -> l
 
 
 def _parts_for_work(conn, work: dict, prints: list[dict]) -> list[dict]:
-    """Multi-part films. `cat_parts` is the authoritative source; the projector does
-    not fill it today, so sibling whole_work prints whose label names a part are
-    reported as parts with `inferred: true` instead of being merged into one item.
+    """Multi-part films. `cat_parts` is the authoritative source — the projector fills
+    it from one work's prints whose labels name two or more distinct parts — so rows
+    there are reported with `inferred: false`. Only when the table has nothing for the
+    work does this fall back to re-inferring parts from sibling whole_work print
+    labels, which are reported `inferred: true` instead of merged into one item.
     """
     out: list[dict] = []
     if _has_table(conn, "cat_parts"):

@@ -104,8 +104,10 @@ Rules:
   every projection. They are stable only while nobody re-projects. Anything a client persists
   (offline cache, favorites, WorkManager downloads) must key on `work_key` (stable string) and
   re-resolve numeric ids after a projection change (detected via `meta.versions`, §16.2).
-  A stable-id projector or an id-mapping table is 📝 (§17) — this is a real gap, not a
-  theoretical one (TRAKT/TMDB clients likewise key on immutable ids, not autoincrement rows).
+  The projector keeps the honest delete+insert rebuild **and** journals every renumbering in
+  the durable `cat_id_map (kind, old_id, new_id, rev)` table (`rev` = the `catalog_rev` of the
+  rebuild that moved the id), so a cache that persisted numeric ids can resolve them once
+  instead of guessing (✅ `test_rebuild_journals_renumbered_release_and_link_ids`).
 
 ---
 
@@ -127,13 +129,16 @@ Consequences the client must know:
 
 - **Movie and series never merge** — the family prefix forbids it (`test_movie_and_series_never_collapse_together` ✅). The 2019 movie *X* and the 2019 series *X* are two works, both keyed, both browsable with `?type=` separated.
 - **Year disagreement never merges**: with no external id, year is part of the key, so one
-  site saying 2019 and another 2020 produces two works. **No review row is raised today** —
-  the only `cat_review_queue.kind` the projector ever writes is `season_unresolved`
-  (series release with no parsable season). "year-conflict review" and
-  "external-id collision blocks promotion" are 📝 (§17). The earlier claim of a
+  site saying 2019 and another 2020 produces two works. Both are now flagged for a human:
+  `_raise_identity_reviews` writes `cat_review_queue.kind='year_conflict'` when same-family
+  works share a normalized title and their years differ by ≤2 with no external ids (a real
+  merge candidate the key refused to guess) ✅; `season_unresolved` (series release with no
+  parsable season) remains, plus `external_id_conflict` and `season_pack_span_unresolved`.
+  The earlier claim of a
   `cat_work_external_id` provenance table is **false — no such table exists.**
 - **External-id merges are silent**: if two sites tag the same wrong `tmdb_id`, the
-  projector merges them. Detection rules (id used by rows with mismatched titles) are 📝.
+  projector merges them. Detection ✅: a merged alias sharing no word with the work's own
+  title raises `external_id_conflict` (informational — nothing is split or hidden).
 - Aliases: every distinct scraped page title is stored in `cat_work_aliases`
   (`kind='aka'`, `source_site` set, `locale` NULL today). `original|localized|transliteration|romanized`
   kinds are 📝 — nothing writes them yet.
@@ -145,7 +150,8 @@ Consequences the client must know:
 
 ```
 work (cat_works) ──< season (cat_seasons) ──< episode (cat_episodes)
-  ├──< part (cat_parts)                      📝 table exists; projector never writes it
+  ├──< part (cat_parts)                      ✅ written when ONE work's prints carry ≥2
+  │                                            distinct Part/Chapter/Disc numbers (§S4)
   └──< release = print (cat_releases) ──< link (cat_links) ──< evidence (cat_link_evidence)
 ```
 
@@ -156,11 +162,15 @@ work (cat_works) ──< season (cat_seasons) ──< episode (cat_episodes)
   values (§16.6).
 - `is_animated` is a separate boolean on `cat_works` — the `animated=true` facet works for
   any `work_type`.
-- `season.number` is an integer ✅. `season_type` exists; only `'regular'` is ever written ✅.
-  `special`/`extra` seasons are 📝.
+- `season.number` is an integer ✅. `season_type` is `'regular'` by default and `'special'`
+  when the season column or the label literally names S00/`Specials` ✅
+  (`test_s00_print_is_a_special_season_not_an_unresolved_zero`); `'extra'` remains 📝.
 - `episode.number` (within season) and `absolute_number` (show-wide, computed by
   `ROW_NUMBER() OVER (PARTITION BY work ORDER BY season, number)` in `_finalize` ✅, Trakt-style).
-  `episode.title`, `air_date`, `runtime_minutes`: 🛠 columns exist, never populated.
+  `episode.title`/`air_date`/`runtime_minutes`, `season.title` and `cat_works.runtime_minutes`
+  are now populated **only from what the ledger text literally says** (an `SxxExx <name>` tail,
+  a `YYYY-MM-DD` date, a `45min` figure, a `Season 2: <name>` label — §4.2 A11); anything a
+  label does not name stays NULL. No external metadata is invented.
 
 ### 4.3 Coverage — the pack problem ✅
 
@@ -172,20 +182,30 @@ projector's `_release_coverage()` never emits it). Materialised facts:
   mapping rows ✅, capped at `MAX_ENUMERATED_EPISODES = 120` per range — a 1000-episode batch
   label stays described (`coverage_type` + `episode_range` text) without fabricating rows
   (`test_giant_batch_range_does_not_fabricate_thousands_of_episodes` ✅).
-- `season_pack` and `whole_work` **enumerate zero episodes** (`_covered_episodes` returns
-  `[]`). So a season that exists *only* as one packed file currently has **no episode rows at
-  all** — see the worked example S2 and gap G-2 (§18). This is the single most important
-  limitation of Layer 1 for the app.
-- `cat_episodes.best_release_id` is set only from releases with
-  `coverage_type IN ('single_episode','episode_range')` **and** `streamable_count > 0`,
-  ordered `quality_score DESC, id ASC` ✅ (`test_best_release_is_chosen_from_streamable_prints_only`).
-  It is never a season-pack release. For pack-only coverage the client must use the season
-  listing (§14 `/seasons/{n}`) and pick the pack release explicitly.
+- `whole_work` prints enumerate zero episodes ✅ (correct — a movie has none). A
+  `season_pack` is now expanded (`_expand_season_packs`) into episodes **only when the ledger
+  genuinely names the span**: an `EP(01-12)`/`12EP`/`12 Episodes` figure on the pack's own
+  label, or episode rows already projected in that season from per-episode prints (the pack
+  then covers at least up to the highest known number, within `MAX_ENUMERATED_EPISODES`).
+  An expanded pack links `cat_release_episodes` rows 1:1 and can win `best_release_id`. When
+  neither source names a span the season keeps zero episodes — inventing a count is forbidden —
+  and the pack raises `season_pack_span_unresolved` in the review queue for a human; gap G-2
+  now only bites the genuinely unknowable packs (§S2).
+- `cat_episodes.best_release_id` is set from releases with
+  `coverage_type IN ('single_episode','episode_range','season_pack')` **and**
+  `streamable_count > 0` **and** `identity_suspect = 0`, ordered
+  `quality_score DESC, print_version DESC, id DESC` ✅
+  (`test_best_release_is_chosen_from_streamable_prints_only`,
+  `test_pack_with_episode_count_hint_becomes_enumerable`). Prints with an *unresolved*
+  identity review are excluded until `catalog_v2.resolve_reviews()` settles them (§S13).
 - Pack offsets: `cat_release_episodes.offset_seconds` and `chapter_title` are re-applied from
   the durable `cat_offsets` ledger on every rebuild ✅ (`record_offset`,
   keyed by `(work_key, season_number, episode_number, release_label)` — stable identity, not
-  numeric ids, precisely because ids churn). `confirmed_by` is a monotonic counter; **the last
-  write wins** — there is no majority vote yet 📝.
+  numeric ids, precisely because ids churn). Every report is first counted in the durable
+  `cat_offset_votes` ledger and the published value is the **vote winner**: an offset with
+  `OFFSET_QUORUM = 3` confirmations cannot be moved by a dissent, ties keep the incumbent
+  (the last writer never silently wins), and a strict plurality flips it ✅
+  (`OffsetMajorityTests`; pre-majority `confirmed_by` history is seeded into the vote ledger).
 
 ---
 
@@ -247,12 +267,16 @@ Worked comparisons the app can rely on:
 
 ### 5.2 Ordering the UI shows (print axis)
 
-Implemented today (`_finalize`, `idx_cat_releases_work`): `quality_score DESC, id ASC` —
-note `id ASC` means the **earlier-projected** row wins ties, i.e. "fresher repack wins" is
-**not** what runs; repack v1/v2 with identical descriptors tie on score and v1 (lower id)
-sorts first ✅-documented-as-is. The previously claimed tiebreak chain
-(`official_print desc → link health → site trust → first_seen_at desc`) is 📝; only the
-first element is achievable with data that exists. Ordering rules that *do* hold structurally:
+Implemented (`_finalize` episode/work selection and `validate_catalog_full.py`):
+`quality_score DESC, print_version DESC, id DESC` — a REPACK or `v2` print now wins its tie
+against `v1` at identical descriptors ✅ (`test_equal_quality_newer_print_wins_best_release`),
+and a full tie (same version, same score) resolves deterministically to the later-projected
+row (`test_full_print_tie_prefers_the_later_id_at_work_and_episode_level`); the episode query
+and the work-level `max_resolution` subquery use the same chain so the two cannot disagree.
+`idx_cat_releases_work` still pre-filters on `quality_score DESC`. The previously claimed
+tiebreak chain (`official_print desc → link health → site trust → first_seen_at desc`) is 📝;
+only these first elements are achievable with data that exists. Ordering rules that *do* hold
+structurally:
 
 - A cam-family print (cam/telesync/hdtc/telecine) can never outrank a distribution print
   (250 cap vs 460 floor for a bare 720p WEBRip) — this is what keeps an `HDTC` label honest (G-4).
@@ -501,7 +525,7 @@ bundle time; *(derived)* = computable from the request/URL; *(planned)* = §17.
   ],
   "download_options": [ { "release_id": 555, "stream_id": "kQ3q…", "kind": "download_only",
       "resumable": true, "size_bytes": 2405181686, "score": 250, "expires_at": null } ],
-  "entitlement": {"model": "free", "display_priority": 10},          // §11; model free always today ✅
+  "entitlement": {"model": "free", "display_priority": 10},          // §11; free until an offer says otherwise; paid models writable via `catalog_v2.set_entitlement` / `--set-entitlement` ✅
   "failure_policy": {"retry_same": 1, "then_next_rank": true, "max_ranks": 3,
                      "report_url": "/api/v2/links/555/report", "backoff_ms": 800 } // planned
 }
@@ -634,10 +658,15 @@ Layer 1 ✅: 8 `cat_releases` rows `coverage_type='single_episode'` (season 7), 
 
 ### S2 — One file for the whole season (pack only)
 Ledger: one release `S07 Complete [Batch] 720p`.
-Layer 1 **today** ✅ (and this is a limitation, not a feature): one `cat_releases` row
-`coverage_type='season_pack'`, **zero `cat_episodes` rows** (`_covered_episodes` returns `[]`
-for packs — gap G-2). `best_release_id` on episodes cannot exist.
-The API must therefore answer per-episode requests *through the season*:
+Layer 1 **today** ✅: one `cat_releases` row `coverage_type='season_pack'`. If (and only if)
+the ledger names the span — the label says `EP(01-12)`/`12EP`/`12 Episodes`, or per-episode
+prints already establish episodes in that season — `_expand_season_packs` materializes the
+episode rows and links the pack to each one 1:1, and the pack can then win
+`best_release_id` (`test_pack_with_episode_count_hint_becomes_enumerable` ✅). This label says
+nothing about a count, so the season keeps **zero `cat_episodes` rows** and the pack raises
+`season_pack_span_unresolved` for review — inventing an episode grid is forbidden (G-2, §18).
+For a season that still has no rows the API must answer per-episode requests *through the
+season*:
 ```jsonc
 // GET /api/v2/works/1234/seasons/7
 {"season": {"number": 7, "episode_count": 0, "coverage": "season_pack_only",
@@ -654,7 +683,8 @@ The API must therefore answer per-episode requests *through the season*:
 Client rule: a season with `coverage='season_pack_only'` shows a file-per-season card, never
 a fake episode grid. (TMDB models each episode as its own release event with `air_date`;
 Trakt likewise needs `absolute_number`. Since neither exists here, the honest card is the
-pack. Synthesising episode rows from `episode_count` hints is 📝 §17.)
+pack. Episode-row synthesis from label/ledger hints ✅ (§4.3) — an external expected-count
+source remains 📝 §17/G-5.)
 
 ### S3 — Episodes split across batches on one page (`EP(01-06)` + `EP(07-12)`)
 Two `cat_releases` rows, `coverage_type='episode_range'`, `episode_range='1-6'` and `'7-12'`;
@@ -663,20 +693,24 @@ Two `cat_releases` rows, `coverage_type='episode_range'`, `episode_range='1-6'` 
 the range-2 print only, offset from `cat_offsets` when learned.
 
 ### S4 — Movie released in Part 1 / Part 2
-Schema intent: `cat_parts` + `coverage_type` referencing parts. **Code today:** `cat_parts`
-is never written (gap G-3); two-part releases land as two `whole_work` releases of the same
-work, distinguished only by `label`/`title_stub` ("Part 1"/"Part 2"). A naive `/play` would
+Schema intent: `cat_parts` + `coverage_type` referencing parts. **Code today** ✅: when ONE
+work's prints carry at least two distinct `Part n` / `Chapter n` / `Disc n` numbers,
+`_derive_parts` writes those `cat_parts` rows and stamps `cat_releases.part_number` on each
+matching print (`test_parts_and_chapters_materialize_and_link_their_prints`); a single lone
+`Part 2` label fabricates nothing (`test_a_single_part_label_does_not_fabricate_structure`).
+There is still no `parts` value in `coverage_type` (📝), so parts remain `whole_work` prints
+that are now *structurally* addressable. A naive `/play` would
 offer *either* as covering the whole work — wrong for parts.
 Interim contract (what v2 must do with today's data): if a work has >1 `whole_work` release
 whose labels carry a part pattern, the API marks each `{"coverage":{"type":"whole_work","part_stub":"Part 1"}}`
-(📝 `part_stub` is an API-computed extension field, not a DB column) and the UI lists them as
-ordered cards; `/play` for "the movie" must return the *requested part* only. Full `cat_parts`
-population + a real `parts` coverage scope are 📝.
+(✅ readable from `cat_releases.part_number` / `cat_parts`, no heuristic needed) and the UI
+lists them as ordered cards; `/play` for "the movie" must return the *requested part* only.
+A real `parts` coverage scope remains 📝.
 ```jsonc
 // GET /api/v2/works/777  (Baahubali-style, two ledger releases today)
 {"id":777,"title":"Two Crowns","work_type":"movie",
  "parts":[{"ordinal":1,"label":"Part 1","release_ids":[901]},{"ordinal":2,"label":"Part 2","release_ids":[902]}]}
-// "parts" here is Layer-2 heuristic output, not cat_parts data (cat_parts is empty today).
+// "parts" is now backed by cat_parts rows + cat_releases.part_number, not a Layer-2 guess.
 ```
 
 ### S5 — Multiple seasons, only some complete
@@ -693,12 +727,12 @@ null` (unknown) is the honest field; a real completion signal is 📝.
  {"release_id":71,"label":"1080p WEB-DL x265 ESubs","resolution":"1080p","source_tag":"web_dl",
   "codec":"h265","print_version":0,"quality_score":655},
  {"release_id":72,"label":"1080p WEB-DL x265 ESubs REPACK v2","print_version":2,
-  "quality_score":655},   // ties with 71; current order = id ASC ⇒ v1 listed first (§5.2)
+  "quality_score":655},   // ties with 71; print_version DESC ⇒ the fresher REPACK lists first (§5.2)
  {"release_id":74,"label":"720p WEBRip","quality_score":460},
+ {"release_id":76,"label":"1080p CAM i60x","source_tag":"cam","watermarked":true,
+  "quality_score":250,"flags":["watermarked","unofficial"]}, // 320−60=260 → cam cap 250; ties 73, id DESC (§5.2)
  {"release_id":73,"label":"1080p HDTC x265","resolution":"1080p","source_tag":"hdtc",
   "official_print":false,"quality_score":250},  // cam-family rung: min(300+75+30, cap 250) — G-4 fixed
- {"release_id":76,"label":"1080p CAM i60x","source_tag":"cam","watermarked":true,
-  "quality_score":250,"flags":["watermarked","unofficial"]}, // 320−60=260 → cam cap 250; ties 73, id ASC
  {"release_id":75,"label":"480p","quality_score":220}]
 ```
 The "cleaned official copy" case: an otherwise-identical print without watermark scores +60
@@ -762,11 +796,15 @@ renders a "Save offline" card.
 `cat_works.identity_suspect` ✅ (set when an open `cat_review_queue` row exists — `_finalize`).
 This is **not** an error: browse/search/detail serve the work with
 `"flags":["identity_suspect"]` (it's a data-confidence marker, not an adult marker; no count
-skew rule applies). **Code truth:** there is no per-release suspect flag — `cat_releases` has
-no `identity_suspect` column and `_finalize` does *not* exclude suspect prints from
-`episodes[].best_release_id`; the queue is informational only today. Per-release flagging and
-best-print exclusion are 📝 (§17). `/play` still works — links are real regardless of label
-hygiene. Admin resolution (mark `cat_review_queue.resolved_at`) is 📝 (nothing writes it).
+skew rule applies). **Code truth ✅:** `cat_releases.identity_suspect` exists (DDL + ALTER
+migration) — a series print whose season number is an *unresolved zero* gets it, and
+`_finalize` excludes unresolved-suspect prints from `episodes[].best_release_id` until a
+human settles the finding. `/play` still works — links are real regardless of label
+hygiene. Admin resolution: `catalog_v2.resolve_reviews(conn, review_ids|kind|work_id)` or CLI
+`python3 catalog_v2.py <db> --resolve-review ID` ✅ stamps `resolved_at` and mirrors the
+decision into the durable `cat_review_resolutions (kind, work_key, signature)` table, so the
+finding STAYS resolved through every later rebuild — and only re-opens if the underlying
+label data changes the signature.
 
 ---
 
@@ -774,12 +812,20 @@ hygiene. Admin resolution (mark `cat_review_queue.resolved_at`) is 📝 (nothing
 
 ### 11.1 What exists ✅ and what is designed 📝
 
-`cat_entitlements(id, work_id|null, release_id|null, model, price_minor, currency, region,
+`cat_entitlements(id, work_id|null, release_id|null, model, display_priority, price_minor,
+currency, region,
 geo_allow, geo_deny, valid_from, valid_until, rental_hours, ownership, requires_account,
 requires_age_gate, updated_at)` — all columns exist, the projector inserts exactly one row
-per work with `model='free', ownership='permanent'` ✅, and
-`cat_works.entitlement_model` defaults `'free'`. **No server enforces anything else today**;
-writing paid rows (admin CLI) is 📝.
+per work with `model='free', ownership='permanent', display_priority=10` ✅, and
+`cat_works.entitlement_model` defaults `'free'`. Paid/free offers are now writable:
+`catalog_v2.set_entitlement(conn, work_key=…, model=…)` or the CLI
+`catalog_v2.py <db> --set-entitlement WORK_KEY --model rental --price 1900 --rental-hours 48
+[--release-label PRINT] [--region IN] …` ✅. Offers persist as durable
+`cat_entitlement_rules` rows keyed by `work_key` and are re-applied by every rebuild
+(`_reapply_entitlement_rules`), so they survive `_reset()`; a work-level paid offer replaces
+that work's automatic free row, a per-print offer sits alongside it. Each edit bumps
+`entitlements_rev` (§16.2) and nothing else. **No server enforces anything else today**;
+the `/play` entitlement gate and the `licence_expired` path remain 📝.
 
 ### 11.2 The vocabulary (borrowed from IMDb/Gracenote delivery-channel categories)
 
@@ -792,9 +838,13 @@ writing paid rows (admin CLI) is 📝.
 | `purchase` | transactional, owned | tvod | licence 📝 |
 
 `display_priority` (INTEGER, lower shown first — the Gracenote/JustWatch ordering that makes
-"Free with ads" beat "Rent HD" on the same card) **does not exist as a column yet** — 📝
-(§17). Until then the server must synthesize it: `free=10, ads=20, flatrate=30, rental=40,
-purchase=50`, tie-broken by `price_minor` and `resolution` rank of the linked prints.
+"Free with ads" beat "Rent HD" on the same card) **is now a stored column** ✅: the projector
+writes it via the single documented derivation `catalog_v2.derive_display_priority(model)` =
+`free=10, ads=20, flatrate=30, rental=40, purchase=50` (unknown models 100); default-free rows
+carry 10. The server may still tie-break equal priorities by `price_minor` and the
+`resolution` rank of the linked prints. Databases upgraded from an older schema get the column
+through `_migrate_projection_columns` (DEFAULT 10) — it is deliberately not indexed inside the
+DDL script, per the ALTER/index rule.
 
 ### 11.3 The complete state machine (normative for the app)
 
@@ -974,17 +1024,20 @@ documented unstable (re-sorts with every ingest). Responses carry `next_cursor`,
 Every GET carries `ETag` + `Cache-Control` + `Last-Modified` (RFC 9110 hygiene).
 The design intent is that each **version group** carries its own rev, surfaced in
 `meta.versions` and joined into the ETag so a health sweep does not invalidate the catalog
-cache and vice versa. **What runs today:** one `catalog` rev (MAX `cat_works.source_rev`) is
-joined into every ETag and `If-None-Match` ⇒ `304` works on every cached route; there is no
-`meta.versions` object in any body yet, so a client detects a re-projection because its ETag
-changed, never because it read a field.
+cache and vice versa. **What runs today:** all four groups exist as monotonic keys in
+`cat_projection_meta`, advanced only by their own writer, and Layer 1 exposes them as one
+read-only dict via `catalog_v2.projection_versions(conn)` — `{"catalog_rev", "health_rev",
+"offsets_rev", "entitlements_rev"}`, every key present, `0` when the database has never
+carried one; that is the ETag contract for Layer 2. `api_v2` additionally treats MAX
+`cat_works.source_rev` as a lower bound for `catalog_rev`. Whether a body already carries the
+`meta.versions` object is the Layer-2 agent's call, not a Layer-1 gap.
 
 | Group | Bumped by | Backing today | Status |
 |---|---|---|---|
-| `catalog` | projection run | `cat_projection_meta.projected_at` + `source_rev` stamped on works | 🛠 one value, needs `catalog_rev` key |
-| `health` | link probe write-back | `cat_projection_meta.health` (the `cat_link_evidence` row count) + `health_at`, advanced by `catalog_v2.apply_evidence()` (§6.2) only when a link's row actually moved; `cat_links.last_evidence_at` moves with it | 🛠 rev is kept, but no `meta.versions` object exists yet — a client cannot see it |
-| `offsets` | `record_offset` | `cat_offsets` rows exist; nothing records a rev | 📝 |
-| `entitlements` | entitlement edits | `cat_entitlements.updated_at` MAX is derivable | 📝 trivial |
+| `catalog` | every `project()` run (an unchanged ledger still bumps it — §17 acceptance) | `cat_projection_meta.catalog_rev`, monotonic +1; `cat_projection_meta.projected_at` + `source_rev` stamped on works remain for ops | ✅ |
+| `health` | link probe write-back | `cat_projection_meta.health` (the `cat_link_evidence` row count) + `health_at`, advanced by `catalog_v2.apply_evidence()` (§6.2) only when a link's row actually moved; `cat_links.last_evidence_at` moves with it; republished as `health_rev` by `projection_versions()` under the original wire key | ✅ |
+| `offsets` | `record_offset` | `cat_projection_meta.offsets_rev`, bumped when a *published* offset actually moves (a pure confirmation does not) | ✅ |
+| `entitlements` | entitlement edits | `cat_projection_meta.entitlements_rev`, bumped by `set_entitlement()` (rebuild re-application does NOT re-bump it — `catalog_rev` covers that) | ✅ |
 
 `GET /browse|search`: `public, max-age=60`; detail: `public, max-age=300,
 stale-while-revalidate=3600`; `/play`, `/resolve`: `no-store`; `/manifest`: `public,
@@ -1195,33 +1248,51 @@ Everything 📝/🛠 above, in one place. Nothing here may be described as live 
 - [ ] `measured` score (`score_link`) replacing the projection prior in `playback.score`, with `score_scale`.
       Layer 1 now *carries* the measured `rank_score` (§6.2/§6.3); what is left is the Layer-2
       response choosing it and labelling the scale.
-- [ ] Per-group versions in `cat_projection_meta` (§16.2) and id-stable projection or id-mapping
-      table for persisted client caches (§3). `health` now has one (`health`/`health_at`);
-      `catalog`, `offsets` and `entitlements` still do not, and no body exposes any of them.
-- [ ] Episode enumeration for `season_pack` releases (synthesize from known span/hints) (G-2).
-- [ ] `cat_parts` population + real `parts` coverage (G-3).
+- [x] Per-group versions in `cat_projection_meta` (§16.2): `catalog_rev`/`offsets_rev`/
+      `entitlements_rev` are monotonic keys bumped only by their own writer, `health` keeps
+      its existing mechanism (republished as `health_rev`); all four read together through
+      `catalog_v2.projection_versions(conn)`. Id churn is journalled in the durable
+      `cat_id_map (kind, old_id, new_id, rev)` table for persisted client caches (§3).
+      What is left: a `meta.versions` object in response bodies (Layer 2).
+- [ ] Episode enumeration for `season_pack` releases (synthesize from known span/hints) (G-2):
+      [x] label-hint / per-episode-print spans expand 1:1 (§4.3); unknowable spans stay empty
+      and raise `season_pack_span_unresolved` — an external expected-count source is still open.
+- [ ] `cat_parts` population + real `parts` coverage (G-3): [x] population via
+      `Part/Chapter/Disc n` labels with `cat_releases.part_number` links (§S4); a `parts`
+      value in `coverage_type` is still open.
 - [ ] Tracks: `cat_tracks` table (per-audio-language codec/channels/default flag, subtitle
       external URLs/formats) or HLS-`EXT-X-MEDIA` parsing at resolve time (G-1).
-- [ ] `display_priority` column/derivation (§11.2); paid `model` rows + admin CLI; `/play`
-      entitlement check; `licence_expired` path.
+- [x] `display_priority` column + derivation `catalog_v2.derive_display_priority` (§11.2);
+      paid `model` rows + admin write path (`set_entitlement`, CLI `--set-entitlement`, §11.1).
+- [ ] `/play` entitlement check + `licence_expired` problem (§11.3/§16.4) — Layer 2.
 - [ ] Resolver without `success:true` fall-through (wrap `resolve_live_source`, fix §2 #4) +
       `expires_at` on ephemeral resolved URLs + `requires_https` derivation (§8.3).
 - [x] `hdtc` source tag shipped (G-4 resolved): cam-family rung, weight 75, capped at 250, never
       `official_print`; `/manifest` picks the weight up live from `release_descriptor`.
 - [ ] `bdmux`/`dvd` source tags (still fold into `bluray`/`unknown` today).
-- [ ] `release_group` column write-through: the descriptor now emits the parsed key (§5), but
-      `catalog_v2.project()` still inserts a hardcoded `''` into `cat_releases.release_group`.
-- [ ] Review-queue kinds beyond `season_unresolved`: year conflicts, external-id conflicts,
-      resolution tooling (`resolved_at`).
-- [ ] Per-release `identity_suspect` flag + exclusion of unresolved prints from
-      `episodes[].best_release_id` (S13 — queue exists but is informational only today).
+- [x] `release_group` column write-through: `catalog_v2.project()` inserts
+      `desc.get("release_group")` into `cat_releases.release_group` (verified against the
+      projector insert; the descriptor emits the parsed key, §5).
+- [x] Review-queue kinds beyond `season_unresolved`: `year_conflict` (same normalized
+      title+family, years ≤2 apart, no external ids), `external_id_conflict` (an external-id
+      merge whose alias shares no word with the title) and `season_pack_span_unresolved`;
+      resolution tooling is `catalog_v2.resolve_reviews()` / CLI `--resolve-review`, durable
+      in `cat_review_resolutions` (`resolved_at` survives every rebuild, §S13).
+- [x] Per-release `identity_suspect` flag (`cat_releases.identity_suspect`, ALTER-migrated)
+      + exclusion of unresolved prints from `episodes[].best_release_id` (S13).
 - [ ] `collections` table + endpoint; `credits` table; structured `images[]` with width/kind.
-- [ ] `season_type='special'/'extra'`, `episode.title/air_date/runtime_minutes` population.
-- [ ] Alias `kind ∈ {original, localized, transliteration, romanized}` population.
+- [x] `season_type='special'` from S00/`Specials` labels and `episode.title/air_date/
+      runtime_minutes`, `season.title`, `cat_works.runtime_minutes` population — strictly
+      from literal label text; unstated facts stay NULL (§4.2). `'extra'` season types: 📝.
+- [ ] Alias `kind ∈ {original, localized, transliteration, romanized}` population. (Note:
+      the projector's alias INSERT bound `alias` to the wrong column until A9 — fixed; every
+      rebuild from now on actually fills `cat_work_aliases`.)
 - [ ] Rate limiting (nginx `limit_req` then in-app) + `RateLimit-*` headers (§16.5).
 - [ ] RFC 9457 problem handler + `X-Request-Id` (§16.4, §16.8).
-- [ ] Majority-vote pack offsets (today: last write wins, §4.3).
-- [ ] Repack-freshness tiebreak (today: `id ASC`, §5.2).
+- [x] Majority-vote pack offsets: `cat_offset_votes` + `OFFSET_QUORUM = 3`, incumbent keeps
+      ties, published value moves only on a strict plurality (§4.3).
+- [x] Repack-freshness tiebreak: `quality_score DESC, print_version DESC, id DESC` at both
+  the episode and work level (§5.2).
 - [ ] Adult v2 parity test: admin-less 404 byte-identical to unknown-id 404 (§13).
 
 ---
@@ -1231,8 +1302,8 @@ Everything 📝/🛠 above, in one place. Nothing here may be described as live 
 | ID | Gap | Scenario blocked / degraded | Workaround the API must implement now |
 |---|---|---|---|
 | G-1 | No per-track rows; audio is one aggregate per print; no subtitle URLs with formats | S1/S6 "pick Hindi 5.1 track, English SDH subs" from the API alone | HLS `EXT-X-MEDIA` parsed **at resolve time** by Media3 itself (free for hls links); progressive links show only the aggregate (`dual_audio`, `subtitle_mode`) — no track UI |
-| G-2 | `season_pack` enumerates no episodes | S2 per-episode grid/play targeting | season-level `pack_releases[]` + offsets (§S2); `target_unresolvable` only when even the season can't be inferred |
-| G-3 | `cat_parts` never written | S4 multi-part movies addressed as parts | label-based `part_stub` heuristic (§S4) |
+| G-2 | `season_pack` span unknowable from the ledger (no external expected-count source) | S2 per-episode grid/play targeting for label-silent packs only — packs whose span IS named (label hint or existing per-episode prints) now enumerate 1:1 and can win `best_release_id` (§4.3) | unknowable packs raise `season_pack_span_unresolved`; season-level `pack_releases[]` + offsets (§S2) remain the API answer there; `target_unresolvable` only when even the season can't be inferred |
+| G-3 | no `parts` value in `coverage_type` | S4 "the movie is exactly this part" as a coverage mode | **resolved at Layer 1 for data**: `cat_parts` + `cat_releases.part_number` are populated from `Part/Chapter/Disc n` labels (§S4); Layer 2 can read structure instead of guessing |
 | G-4 | **Resolved** — `hdtc` is now a cam-family rung (weight 75, capped 250, never `official_print`) | S6 ordering fixed: `1080p HDTC x265` scores 250, below a bare `720p WEBRip` (460) | nothing left for this gap; `bdmux`/`dvd` remain planned (§17) |
 | G-5 | No expected-episode-count source | S5 "season incomplete" badge | show known counts, never claim completeness |
 | G-6 | `expires_at` not computed anywhere | §8.4 | conservative 900 s bundle TTL + re-`/play` recovery |
