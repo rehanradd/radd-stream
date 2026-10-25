@@ -1,8 +1,9 @@
 # Radd Stream — Catalog API v2: contract, data model, and playback guide
 
-**Contract version:** `2.1.0` · **Layer-1 schema:** `SCHEMA_VERSION = 1` (`Fast_Fetch/catalog_v2.py`)
-**Verified against code on 2026-10-22:** `catalog_v2.py`, `release_descriptor.py`,
-`link_health.py`, `fast_fetch.py` (ledger DDL + `resolve_live_source`), `viewer.py` (v1 only),
+**Contract version:** `2.1.0` · **Layer-1 schema:** `SCHEMA_VERSION = 2` (`Fast_Fetch/catalog_v2.py:65`)
+**Verified against code on 2026-10-22, re-verified line-by-line on 2026-10-25:** `catalog_v2.py`,
+`release_descriptor.py`, `link_health.py`, `fast_fetch.py` (ledger DDL + `resolve_live_source`),
+`viewer.py` (v1 + the mounted v2 edge),
 `test_catalog_v2.py`, `ORACLE_DEPLOYMENT.md`.
 **Consumers:** the Kotlin/Media3 Android app today; a website later. This document must be
 sufficient to implement the client without asking questions.
@@ -329,7 +330,7 @@ over the shape. `protocol` column ✅: `hls` | `progressive` | `html` (embed/clo
 - `state` ✅ has three writers, in order of authority: `catalog_v2._link_state_of()` at
   projection time (it reads the ledger `download_sources.status`, whose only written values are
   **`active`, `dead`, `expired`** — `expired` = 401/403 token rot, `dead` = 4xx/5xx/timeout, see
-  `fast_fetch.py:4367,4381` — and demotes an `active` that carries no probe evidence at all to
+  `fast_fetch.py:4637,4683` — and demotes an `active` that carries no probe evidence at all to
   `unchecked`, so a scraper's blanket "active" cannot buy a liveness bonus);
   `link_state.propagate()` after a ledger sweep; and `catalog_v2.apply_evidence()` from the
   newest verdict in `cat_link_evidence`. Default column value: `unchecked`. `unknown` is legal

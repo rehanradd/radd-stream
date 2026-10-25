@@ -14,13 +14,13 @@ ownership prevented it. Each item names the file, the function/table, and the ac
    edit paths). API §16.2 ETags and §16.3 `/sync` depend on these.
    *Accept:* rebuild with unchanged ledger bumps only `catalog_rev`; an offset report bumps
    `offsets_rev` and nothing else.
-   **Docs-check 2026-10-25 — DONE.** `REVISION_KEYS` `catalog_v2.py:55` (health stored under the
-   original `health` meta key `:56`), monotonic `_bump_rev()` `:574`, read-only
-   `projection_versions()` `:582` which always returns all four keys and republishes health as
-   `health_rev` `:598`. Bump sites: `project()` → `catalog_rev` only `:881`;
-   `record_offset()` → `offsets_rev`, and only when a *published* value moved `:1761`/`:1776`;
-   `set_entitlement()` → `entitlements_rev` `:1880`; `apply_evidence()` → `health` + `health_at`
-   `:2492-2497`. Both acceptance halves hold (verified by reading the code paths; the health value
+   **Docs-check 2026-10-25 — DONE.** `REVISION_KEYS` `catalog_v2.py:73` (health stored under the
+   original `health` meta key `:74`), monotonic `_bump_rev()` `:607`, read-only
+   `projection_versions()` `:615` which always returns all four keys and republishes health as
+   `health_rev` `:631`. Bump sites: `project()` → `catalog_rev` only `:914`;
+   `record_offset()` → `offsets_rev`, and only when a *published* value moved `:1812`/`:1827`;
+   `set_entitlement()` → `entitlements_rev` `:1931`; `apply_evidence()` → `health` + `health_at`
+   `:2543-2548`. Both acceptance halves hold (verified by reading the code paths; the health value
    is the `cat_link_evidence` row count re-derived, not a `+1` counter). Layer 2 folds the whole
    vector into every weak ETag: `api_v2.py:565`, `:612`, `:380`, `:638`.
 2. **ID stability across rebuilds.** `_reset()` truncates `cat_*` and `sqlite_sequence`, so
@@ -29,12 +29,12 @@ ownership prevented it. Each item names the file, the function/table, and the ac
    or (b) add a `cat_id_map(old_id, new_id, rev)`. Docs currently mandate `work_key` for any
    persisted cache (§3) — a real fix should let the docs drop that warning.
    **Docs-check 2026-10-25 — PARTIAL (option (b) taken, option (a) not).** The durable
-   `cat_id_map (kind, old_id, new_id, rev)` table exists (`catalog_v2.py:410`) and is fed by
-   `_record_id_map()`, called with the pre-rebuild snapshot taken at `:880` and written at `:968`;
-   `_reset()` (`:649-654`) deliberately does *not* clear it — nor `cat_offsets`,
+   `cat_id_map (kind, old_id, new_id, rev)` table exists (`catalog_v2.py:428`) and is fed by
+   `_record_id_map()`, called with the pre-rebuild snapshot taken at `:913` and written at `:1001`;
+   `_reset()` (`:682-687`) deliberately does *not* clear it — nor `cat_offsets`,
    `cat_offset_votes`, `cat_entitlement_rules`, `cat_review_resolutions`, `cat_link_evidence` or
    `cat_projection_meta`, so the journal and every rev key outlive a rebuild. Projection is still
-   delete+insert (`:882-883`), so numeric ids are still re-allocated: **the §3 `work_key` warning
+   delete+insert (`:915-916`), so numeric ids are still re-allocated: **the §3 `work_key` warning
    cannot be dropped**, and API_V2.md §3 now says exactly that.
 3. **Season-pack episode enumeration (gap G-2).** `_covered_episodes()` returns `[]` for
    `coverage_type='season_pack'`, so a pack-only season has zero `cat_episodes` rows and
@@ -42,25 +42,25 @@ ownership prevented it. Each item names the file, the function/table, and the ac
    episode span is known (label `EP(01-12)`, `posts.seasons` hint, or a future TMDB count), or
    an explicit API-level season-targeted play path that the docs can standardize on (§S2).
    **Docs-check 2026-10-25 — DONE for the known-span half; the external-count source is still open.**
-   `_covered_episodes()` still returns `[]` for a pack at insert time (`catalog_v2.py:1240`), but
-   `_expand_season_packs()` (`:1337`), called from the projection tail, materializes the episodes
+   `_covered_episodes()` still returns `[]` for a pack at insert time (`catalog_v2.py:1259`), but
+   `_expand_season_packs()` (`:1370`), called from the projection tail, materializes the episodes
    when the ledger genuinely names the span — a `EP(01-12)`/`12EP`/`12 Episodes` figure on the
    pack's own label, or episode rows already projected in that season — links
    `cat_release_episodes` 1:1 within `MAX_ENUMERATED_EPISODES`, and the pack then qualifies for
-   `best_release_id` (the `_finalize` filter accepts `season_pack` at `:1612`/`:1619`). When
-   neither source names a span it raises `season_pack_span_unresolved` (`:1366`) instead of
+   `best_release_id` (the `_finalize` filter accepts `season_pack` at `:1660`/`:1667`). When
+   neither source names a span it raises `season_pack_span_unresolved` (`:1399`) instead of
    inventing a grid. Tests: `test_pack_with_episode_count_hint_becomes_enumerable`
-   (`test_catalog_v2.py:1108`). **No season-targeted `/play` fallback path was added**, and
+   (`test_catalog_v2.py:1147`). **No season-targeted `/play` fallback path was added**, and
    `season_detail()` returns no `pack_releases[]`/`known_episode_span` member — API_V2.md §S2 is
    corrected to the shape the code really answers (`season.pack_only`).
 4. **`cat_parts` is never populated (gap G-3).** The table exists; add projector rules for
    "Part 1/2", "Chapter", disc patterns, and either a `coverage_type='parts'` (docs removed
    that claim — re-add only when the code emits it) or per-part link sets.
    **Docs-check 2026-10-25 — DONE (via the second alternative).** `_derive_parts()`
-   (`catalog_v2.py:1473`, called from `_finalize` `:1632`) writes `cat_parts` rows when one work's
-   prints carry **at least two distinct** `Part n`/`Chapter n`/`Disc n` numbers (`:1487` — a lone
+   (`catalog_v2.py:1506`, called from `_finalize` `:1681`) writes `cat_parts` rows when one work's
+   prints carry **at least two distinct** `Part n`/`Chapter n`/`Disc n` numbers (`:1520` — a lone
    `Part 2` fabricates nothing, `test_a_single_part_label_does_not_fabricate_structure`
-   `test_catalog_v2.py:1476`) and stamps `cat_releases.part_number` on each matching print (`:1497`),
+   `test_catalog_v2.py:1515`) and stamps `cat_releases.part_number` on each matching print (`:1530`),
    which is the per-print link the item asked for. `coverage_type='parts'` is still **not** emitted
    by `_release_coverage()`, so §4.3/§S4 keep saying so; note that Layer 2's own
    `COVERAGE_TYPES` tuple does still list `parts` (`catalog_api.py:66`) and `/manifest` therefore
@@ -71,16 +71,16 @@ ownership prevented it. Each item names the file, the function/table, and the ac
    `cat_links` (or a per-resolve side table) so `/play` can send real expiry instead of the
    bundle-level 900 s assumption.
    **Docs-check 2026-10-25 — PARTIAL (the value exists now; the projector still does not own it).**
-   The resolve path asks the URL how long it lives: `parse_observed_ttl()` (`fast_fetch.py:4826`)
-   reads the host's own freshness directive, `probe_url_ttl()` `:4895` fetches it, and
-   `record_link_expiry()` `:4942` writes `download_sources.expires_at` **and mirrors it onto the
-   projection** with `UPDATE cat_links SET expires_at = ? WHERE ledger_link_id = ?` (`:4977`), or
-   clears it when the host answered and declared no lifetime (`:5146-5150`). Layer 2 passes the
+   The resolve path asks the URL how long it lives: `parse_observed_ttl()` (`fast_fetch.py:4869`)
+   reads the host's own freshness directive, `probe_url_ttl()` `:4938` fetches it, and
+   `record_link_expiry()` `:4985` writes `download_sources.expires_at` **and mirrors it onto the
+   projection** with `UPDATE cat_links SET expires_at = ? WHERE ledger_link_id = ?` (`:5020`), or
+   clears it when the host answered and declared no lifetime (`:5192`). Layer 2 passes the
    column straight through (`catalog_api.py:718`), so `/play` can carry a real `expires_at`.
    What is *not* done: `project()` still never writes the column (it is absent from the
-   `cat_links` INSERT at `catalog_v2.py:1170-1176`), so a rebuild resets every `expires_at` to
+   `cat_links` INSERT at `catalog_v2.py:1203-1209`), so a rebuild resets every `expires_at` to
    NULL until the next resolve re-measures — which `record_link_expiry`'s own docstring states
-   (`fast_fetch.py:4950-4953`). API_V2.md §6.2/§8.4/§18 G-6 are corrected to that as-built
+   (`fast_fetch.py:4990-4994`). API_V2.md §6.2/§8.4/§18 G-6 are corrected to that as-built
    behaviour; the assumption is no longer "TTLs are unknown until resolution time" *and* nothing
    in `cat_links` survives a rebuild.
 6. **Probe write-back into `cat_links`.** `link_health.probe()/score_link/merge_health_history`
@@ -90,14 +90,14 @@ ownership prevented it. Each item names the file, the function/table, and the ac
    content_type, last_evidence_at, rank_score (measured)` and inserts `cat_link_evidence`
    rows, plus bump `health_rev`. Until then the docs' `score_scale:"measured"` path (§7.1) is
    unreachable and rank_score's `+50 accepts_ranges` / speed terms are dead code in practice.
-   **Docs-check 2026-10-25 — DONE.** `catalog_v2.apply_evidence()` (`:2287`, CLI
-   `--apply-evidence` `:2554`, optional `--link-id`/`--limit`/`--ewma-weight`) replays each link's
+   **Docs-check 2026-10-25 — DONE.** `catalog_v2.apply_evidence()` (`:2338`, CLI
+   `--apply-evidence` `:2605`, optional `--link-id`/`--limit`/`--ewma-weight`) replays each link's
    whole `cat_link_evidence` journal and UPDATEs the owning `cat_links` row with
    `state/latency_ms/speed_mbps/accepts_ranges/cors_open/resumable/content_type/http_status/`
    `size_bytes/last_evidence_at` (EWMA 0.4, blended only where a sample measured something),
-   switches `rank_score` to `link_health.score_link()` through `_blend_link()` (`:2164`) only when
+   switches `rank_score` to `link_health.score_link()` through `_blend_link()` (`:2215`) only when
    the journal holds a probe-shaped sample, re-derives rather than increments (idempotent), and
-   advances the health group (`:2487-2498`). It opens no socket and is reached from no HTTP route.
+   advances the health group (`:2538-2549`). It opens no socket and is reached from no HTTP route.
    The `score_scale` promise is now reachable end to end: Layer 2 labels every link with
    `score_scale`/`score_range` (`catalog_api.py:732-733`, `/sync?scope=health` at
    `api_v2.py:1065-1066`) and `/manifest` publishes both scales as data
@@ -108,16 +108,16 @@ ownership prevented it. Each item names the file, the function/table, and the ac
    and update the docs line when done.
    **Docs-check 2026-10-25 — DONE at Layer 1.** The episode `best_release_id` subquery is
    `ORDER BY r.quality_score DESC, r.print_version DESC, r.id DESC LIMIT 1`
-   (`catalog_v2.py:1614`, with the `identity_suspect = 0` filter at `:1613`/`:1620`) and the work
-   level `max_resolution` subquery uses the identical chain (`:1642`), so the two cannot disagree.
-   Tests: `test_equal_quality_newer_print_wins_best_release` (`test_catalog_v2.py:1178`),
-   `test_full_print_tie_prefers_the_later_id_at_work_and_episode_level` `:1198`.
+   (`catalog_v2.py:1662`, with the `identity_suspect = 0` filter at `:1661`/`:1668`) and the work
+   level `max_resolution` subquery uses the identical chain (`:1692`), so the two cannot disagree.
+   Tests: `test_equal_quality_newer_print_wins_best_release` (`test_catalog_v2.py:1217`),
+   `test_full_print_tie_prefers_the_later_id_at_work_and_episode_level` `:1237`.
    **The docs line needed a second edit, because the item's premise was incomplete:** this chain is
    the *projection's* selection rule, not "the ordering the UI shows". Layer 2 orders the prints a
    client actually reads differently — `quality_score DESC, official_print DESC, id ASC` for
    `work_detail.prints[]` (`catalog_api.py:1426`), `(-quality_score, release_id)` inside a print
    group (`:1680`), and `quality_score DESC, r.id ASC` for the work-level print pick in
-   `POST /play` (`api_v2.py:1743`). None of those three applies a `print_version` tiebreak, so
+   `POST /play` (`api_v2.py:1713`). None of those three applies a `print_version` tiebreak, so
    API_V2.md §5.2/§S6 now separate the two layers instead of presenting the Layer-1 chain as the
    UI order.
 8. **Offset majority vote.** `record_offset` last-write-wins with a `confirmed_by` counter;
@@ -126,18 +126,18 @@ ownership prevented it. Each item names the file, the function/table, and the ac
    or fix the docstring.
    **Docs-check 2026-10-25 — DONE as a majority vote, not as a quorum gate; the docstring is still
    the loose half.** Every report is first counted in the durable `cat_offset_votes` ledger
-   (`catalog_v2.py:374`, INSERT/`DO UPDATE … votes + 1` at `:1717-1726`), the published value is the
-   vote winner (`ORDER BY votes DESC, offset_seconds ASC` `:1749-1755`), an incumbent is only
-   displaced by a **strict** plurality (ties keep it, `:1757-1760`), and pre-majority
-   `confirmed_by` history is seeded into the ledger first (`:1734-1748`). What the item asked for
-   as "`confirmed_by ≥ 3`" is *not* an enforcement threshold: `OFFSET_QUORUM = 3` (`:67`) is only
-   echoed as information in the return value (`"quorum"` `:1779`, and
-   `test_catalog_v2.py:1247` asserts exactly that) — it appears nowhere in the decision logic, so
+   (`catalog_v2.py:392`, INSERT/`DO UPDATE … votes + 1` at `:1768-1777`), the published value is the
+   vote winner (`ORDER BY votes DESC, offset_seconds ASC` `:1800-1806`), an incumbent is only
+   displaced by a **strict** plurality (ties keep it, `:1808-1811`), and pre-majority
+   `confirmed_by` history is seeded into the ledger first (`:1785-1799`). What the item asked for
+   as "`confirmed_by ≥ 3`" is *not* an enforcement threshold: `OFFSET_QUORUM = 3` (`:85`) is only
+   echoed as information in the return value (`"quorum"` `:1830`, and
+   `test_catalog_v2.py:1286` asserts exactly that) — it appears nowhere in the decision logic, so
    an offset at 1 vote can still be flipped by a 2-vote dissent. API_V2.md §4.3 is corrected to the
    plurality rule; the two sentences that still over-promise are the `record_offset` docstring
-   ("cannot silently shift … once an offset has `OFFSET_QUORUM` confirmations", `:1705-1707`) and
+   ("cannot silently shift … once an offset has `OFFSET_QUORUM` confirmations", `:1756-1758`) and
    the constant's own comment ("must reach this many votes before a *different* report can be
-   refused as a minority … Below the quorum the newest report still wins", `:63-66`) — neither
+   refused as a minority … Below the quorum the newest report still wins", `:81-84`) — neither
    behaviour exists in the decision logic. Both are `.py` edits, out of this task's scope.
 9. **Review-queue coverage.** Only `season_unresolved` is ever written. Add kinds
    `year_conflict` (same normalized title+family, years differ by ≤2, no external ids),
@@ -145,15 +145,15 @@ ownership prevented it. Each item names the file, the function/table, and the ac
    `resolved_at` via an admin CLI. Also add a per-release suspect flag (`cat_releases` has no
    `identity_suspect` column) and exclude unresolved prints from `best_release_id` — the old
    doc claimed that exclusion; docs now state it is unimplemented (API_V2.md S13, §17).
-   **Docs-check 2026-10-25 — DONE.** `_raise_identity_reviews()` (`catalog_v2.py:1387`, called from
-   `_finalize` `:1580`) adds `year_conflict` (`:1416`: same normalized family + years ≤2 apart + no
-   external id) and `external_id_conflict` (`:1437`: an id-keyed work whose alias shares no word
-   with its title); `_expand_season_packs()` adds `season_pack_span_unresolved` (`:1366`) and the
-   insert path already added `season_unresolved` (`:1119`). `cat_releases.identity_suspect` exists
-   (DDL `:245`, written at `:1113` from the same suspect flag) and unresolved prints are excluded
-   from `episodes[].best_release_id` (`:1613`/`:1620`); `cat_works.identity_suspect` is re-derived
-   from any *open* review row (`:1649-1650`). Resolution is `resolve_reviews()` (`:1950`) +
-   `--resolve-review` (`:2587`), mirrored into the durable `cat_review_resolutions` table (`:421`)
+   **Docs-check 2026-10-25 — DONE.** `_raise_identity_reviews()` (`catalog_v2.py:1420`, called from
+   `_finalize` `:1626`) adds `year_conflict` (`:1449`: same normalized family + years ≤2 apart + no
+   external id) and `external_id_conflict` (`:1470`: an id-keyed work whose alias shares no word
+   with its title); `_expand_season_packs()` adds `season_pack_span_unresolved` (`:1399`) and the
+   insert path already added `season_unresolved` (`:1152`). `cat_releases.identity_suspect` exists
+   (DDL `:263`, written at `:1146` from the same suspect flag) and unresolved prints are excluded
+   from `episodes[].best_release_id` (`:1661`/`:1668`); `cat_works.identity_suspect` is re-derived
+   from any *open* review row (`:1699-1700`). Resolution is `resolve_reviews()` (`:2001`) +
+   `--resolve-review` (`:2638`), mirrored into the durable `cat_review_resolutions` table (`:439`)
    so a settled finding survives a rebuild. Both kinds are informational: nothing merges, splits or
    hides. Note for the docs: `year_conflict`/`external_id_conflict` mark the **work** only — they
    never set `cat_releases.identity_suspect`, which stays a season-scope flag.
@@ -172,9 +172,9 @@ ownership prevented it. Each item names the file, the function/table, and the ac
     - `release_group` **DONE on both sides** — `_detect_release_group()`
       (`release_descriptor.py:412`) emits the parsed group, and the projector reads the key instead
       of a hardcoded empty string: `str(desc.get("release_group") or "")`
-      (`catalog_v2.py:1102`). API_V2.md §5's row still said the column "stays `''`" — corrected.
+      (`catalog_v2.py:1135`). API_V2.md §5's row still said the column "stays `''`" — corrected.
     - `tv_special`/`miniseries` work types **NOT STARTED** — `_WORK_TYPE_BY_CONTENT`
-      (`catalog_v2.py:71-80`) still has no entry for either, so `work_type_for()` (`:469`)
+      (`catalog_v2.py:89-98`) still has no entry for either, so `work_type_for()` (`:502`)
       cannot produce them and the producible enum stays
       `movie|series|anime|documentary|sport_event|music_video|unknown`. (`miniseries` exists only
       as a *scope* word in `release_descriptor._detect_scope()` (`:333`, returns at `:338`), which
@@ -187,37 +187,37 @@ ownership prevented it. Each item names the file, the function/table, and the ac
     **Docs-check 2026-10-25 — PARTIAL: five of six populated, alias kinds are not.**
     - `episode.title`/`air_date`/`runtime_minutes` **DONE** — `_episode_tail_facts()` reads them
       off the literal `SxxExx <name>`/`YYYY-MM-DD`/`45min` tail of a `single_episode` label and the
-      insert/update pass them through (`catalog_v2.py:1129-1149`); nothing is guessed, and a
-      `season_pack`/`episode_range` print passes `(None, None, None)` (`:1130`), so a pack never
+      insert/update pass them through (`catalog_v2.py:1162-1182`); nothing is guessed, and a
+      `season_pack`/`episode_range` print passes `(None, None, None)` (`:1163`), so a pack never
       invents episode names.
-    - `season.title` **DONE** — `_derive_season_titles()` (`:1444`, called at `:1630`) takes
+    - `season.title` **DONE** — `_derive_season_titles()` (`:1477`, called at `:1679`) takes
       `Season 2: Exams`-style names from the label and leaves an unnamed season NULL.
     - `season_type='special'` **DONE** — `_season_id(..., season_type="special" if is_special
-      else "regular")` at `:1127-1128`; `test_s00_print_is_a_special_season_not_an_unresolved_zero`
-      (`test_catalog_v2.py:1424`). `'extra'` is still not produced by anything.
-    - `cat_works.runtime_minutes` **DONE** — `_derive_work_runtimes()` (`:1459`, called at `:1631`).
+      else "regular")` at `:1160-1161`; `test_s00_print_is_a_special_season_not_an_unresolved_zero`
+      (`test_catalog_v2.py:1463`). `'extra'` is still not produced by anything.
+    - `cat_works.runtime_minutes` **DONE** — `_derive_work_runtimes()` (`:1492`, called at `:1680`).
     - Alias `kind`s beyond `aka` **NOT STARTED** — the only writer is
-      `self.aliases.add((str(title), site, "aka"))` (`:712`), so every row the projector inserts at
-      `:954-958` is `kind='aka'` with `locale` bound to a literal `NULL`; `original|localized|
+      `self.aliases.add((str(title), site, "aka"))` (`:745`), so every row the projector inserts at
+      `:987-991` is `kind='aka'` with `locale` bound to a literal `NULL`; `original|localized|
       transliteration|romanized` remain 🛠 and §17 keeps that checkbox open.
 12. **Entitlements writer.** Projector only inserts the default `free/permanent` row. Need an
     admin path (CLI or guarded API) to create `flatrate/ads/rental/purchase` rows and a
     `display_priority` column or documented derivation (docs §11.2 fixes the interim ordering).
     **Docs-check 2026-10-25 — DONE as a CLI/operator path, deliberately not as an HTTP route.**
-    The default free row is still what `project()` seeds (`catalog_v2.py:1655-1662`,
+    The default free row is still what `project()` seeds (`catalog_v2.py:1705-1712`,
     `model='free', display_priority=10, ownership='permanent'`), and on top of it:
-    `set_entitlement()` (`:1830`) writes work- or print-scoped offers, bumps only
-    `entitlements_rev` (`:1880`), and records a durable `cat_entitlement_rules` row (`:388`) that
-    `_reapply_entitlement_rules()` (`:1933`, called from `_finalize` `:1663`) re-applies after every
-    rebuild without re-bumping the rev. `derive_display_priority()` (`:1784`) is the single
+    `set_entitlement()` (`:1881`) writes work- or print-scoped offers, bumps only
+    `entitlements_rev` (`:1931`), and records a durable `cat_entitlement_rules` row (`:406`) that
+    `_reapply_entitlement_rules()` (`:1984`, called from `_finalize` `:1713`) re-applies after every
+    rebuild without re-bumping the rev. `derive_display_priority()` (`:1835`) is the single
     documented derivation (`free=10 ads=20 flatrate=30 rental=40 purchase=50`, unknown `100`) and
-    the column is written at insert (`cat_entitlements.display_priority`, DDL `:325`). The only
-    write surface is `python3 catalog_v2.py <db> --set-entitlement …` (`:2564-2585`) — no v2 route
+    the column is written at insert (`cat_entitlements.display_priority`, DDL `:343`). The only
+    write surface is `python3 catalog_v2.py <db> --set-entitlement …` (`:2615-2636`) — no v2 route
     accepts an entitlement body, which is why API_V2.md §11.1 says "no server enforces anything".
 
 ## B. `Fast_Fetch/fast_fetch.py` / `viewer.py` (resolver + Layer-2 host)
 
-13. **v2-safe resolver.** `resolve_live_source()` (fast_fetch.py:4551) has two behaviors the
+13. **v2-safe resolver.** `resolve_live_source()` (fast_fetch.py:5048) has two behaviors the
     v2 contract forbids and docs cannot fix:
     - falls through to `success:true` with a stale URL when re-resolution fails (§2 defect #4);
     - returns the string `"Source restricted (18+ content)"` for adult-flagged sources,
@@ -226,7 +226,7 @@ ownership prevented it. Each item names the file, the function/table, and the ac
       must wrap the unwrap logic with (a) honest failure (per-rank `failed`, 409
       `no_playable_source`) and (b) adult → identical `404 not_found`.
     **Docs-check 2026-10-25 — DONE.** `resolve_live_source(source_id, *, v2=False)`
-    (`fast_fetch.py:5005`) keeps the frozen v1 default and, under `v2=True`, returns the *same*
+    (`fast_fetch.py:5048`) keeps the frozen v1 default and, under `v2=True`, returns the *same*
     `{"success": False, "code": "not_found"}` envelope for an adult-flagged source (`:5028-5037`) as
     for an unknown id (`:5039-5041`) — the string `"Source restricted (18+ content)"` is now a
     v1-only artefact (`:5038`) — and an exhausted re-resolution answers an honest failure instead of
@@ -242,7 +242,7 @@ ownership prevented it. Each item names the file, the function/table, and the ac
     (§16.4); `RateLimit-Limit/Remaining/Reset` + `Retry-After` on 429 (§16.5, nginx first);
     ETag/`If-None-Match` 304 + per-group versions (§16.2); `/manifest` exposing both scoring
     formulas as data (§7.1).
-    **Docs-check 2026-10-25 — DONE.** `api_v2.py` (1870 lines) is mounted by `viewer.py:2458-2467`
+    **Docs-check 2026-10-25 — DONE.** `api_v2.py` (1870 lines) is mounted by `viewer.py:2474` (GET) and `:2710` (POST)
     (GET) and `:2698-2705` (POST) and covers every §12 head; `ROUTE_ARITY` (`:236`) refuses
     undocumented path shapes and `ROUTE_TESTS` (`test_api_v2.py:1882`) pins one test per head
     (46 tests). The four named sub-items: `adult_scope()` is the single where-clause (`api_v2.py:266`,
@@ -273,18 +273,20 @@ ownership prevented it. Each item names the file, the function/table, and the ac
     is provenance (§16.9). `public_catalog_counts()` (`:671`) does the same job for `/manifest` so the
     census and `/stats` cannot disagree (`V2StatsHonestyTests`, `test_api_v2.py:1603`). v1's
     `/api/v1/stats` is unchanged and still unscoped — frozen, and API_V2.md §13 says so.
-16. **CORS wildcard + 0.0.0.0 bind** (viewer.py:2037/2211): §16.7 requires an allow-list;
+16. **CORS wildcard + 0.0.0.0 bind** (the defect the 2026-10-22 audit recorded at the since-moved
+    (the two hand-written `Access-Control-Allow-Origin: *` senders; both are gone — see below):
+    §16.7 requires an allow-list;
     nginx `proxy_hide_header Access-Control-Allow-Origin` already exists in
     ORACLE_DEPLOYMENT.md — set the explicit list there first, then fix the app.
     **Docs-check 2026-10-25 — DONE in the app, with an empty list by design.**
     `redact.CORS_ALLOW_ORIGINS` is `frozenset()` (`redact.py:1170`) and
     `cors_headers_for()` emits the two headers **only** for an exact listed origin, nothing at all
     otherwise (`:1173-1181`); `viewer.py:65` binds that same function, so every reply path
-    (`send_json` `:2368`, `/api/art` `:2440`, the v2 `302` at `api_v2.py:1528`) uses the allow-list
+    (`send_json` `:2378`, the `/download` 302 `:2448-2450`, the v2 `302` at `api_v2.py:1525`) uses the allow-list
     and the `*` is gone. The bind default is now loopback: `start_server(port=8080,
-    host="127.0.0.1")` (`viewer.py:2742`, `__main__` `:2787-2789`) and the operator instance is
-    `RADD_INTERNAL_HOST` default `127.0.0.1` on `OPERATOR_PORT` 8081 (`:2751-2753`, `:47`), with
-    `server.operator` set per instance (`:2738`) so no request can negotiate it.
+    host="127.0.0.1")` (`viewer.py:2752`, `__main__` `:2797`) and the operator instance is
+    `RADD_INTERNAL_HOST` default `127.0.0.1` on `OPERATOR_PORT` 8081 (`:2761-2763`, `:47`), with
+    `server.operator` set per instance (`:2748`) so no request can negotiate it.
     **Unverified, outside this repo's code:** whether
     `ORACLE_DEPLOYMENT.md`'s nginx block actually hides/replaces the header today — not checked
     here, so API_V2.md §16.7 does not claim it.
@@ -305,7 +307,7 @@ ownership prevented it. Each item names the file, the function/table, and the ac
     `V1CatalogMapper.kt`) but are **not wired to the player/UI**: the app's live path is still
     v1 `Models.kt`, and those files carry `// NOT SERVED YET — needs /api/v2/play (see
     EndpointGaps.PLAY)` comments (`V1CatalogMapper.kt:188`, `V2Wire.kt:9`,
-    `network/models/EndpointGaps.kt:18`) that are now **stale in the other direction** — the server
+    `network/models/EndpointGaps.kt:96`) that are now **stale in the other direction** — the server
     side of `/api/v2/play`, `/works` and `/releases` does answer today (`Fast_Fetch/api_v2.py`,
     `test_api_v2.py`). Migrating the app onto the v2 types is explicitly out of that task's scope
     ("NOT done (honest scope)"), so API_V2.md §15 keeps the Android note as a client TODO and §17
@@ -338,10 +340,10 @@ in any item above:
    (`:771`). Nothing can emit them: Layer 2's own error vocabulary is only `invalid_input`,
    `not_found` and `cursor_invalid` (`catalog_api.py:170,175,1126,1252,1255`), `_CODE_ALIASES`
    (`api_v2.py:74`) maps nothing into those four, `/play` never consults
-   `catalog_api.resolve_entitlement()` (`:2149`), and there is no bundle `session.id` concept
-   (`play_bundle` returns no `session` member, `catalog_api.py:2092-2120`). `licence_required` also
+   `catalog_api.resolve_entitlement()` (`:2152`), and there is no bundle `session.id` concept
+   (`play_bundle` returns no `session` member, `catalog_api.py:2094-2122`). `licence_required` also
    appears as a Layer-2 **decision string** inside `resolve_entitlement`
-   (`catalog_api.py:2247,2267`, `test_catalog_api.py:1259`) — that is a data value in an
+   (`catalog_api.py:2249,2269`, `test_catalog_api.py:1259`) — that is a data value in an
    entitlement object, not an HTTP status, and the docs now say which is which.
 2. **`expires_at` moved out of "never computed"** (item A5): the resolve path measures it and
    mirrors it onto `cat_links`, but the projector does not persist it, so the honest statement is

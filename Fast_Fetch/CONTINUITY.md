@@ -496,6 +496,7 @@ routes; restrict the bind and public routes before enabling the public proxy.
   6. Pure Cinema / Ghost Mode (Sub-Focus Unobstructed Playback: zero pause scrim/icons, active gestures, edge hairline HUD, 3s instant rewind)
   7. 2.0x Long-Press Speed Optimization Engine (Asynchronous MediaCodec + Smart Turbo 1.6x/2.0x scaling to eliminate freeze on 4GB budget phones)
   8. Night-Mode Dialogue Normalizer (Dynamic Range Compression) & Bluetooth Audio-Sync Delay Slider
+  9. Priority 5: The "Desi Cine-Finder" (South Asia TikTok/Reels clip & scene identifier: 0 video upload, client-side keyframes, on-device OCR, Lens intent bridge, Share-to-Stream sheet, and SQLite FTS5 natural language plot search)
 - **Sanitation**: What actually moved was three untracked items — `load_catalog.py`, a 271 MB stale
   `merged_catalog_stale_prerelease_fix.db` and a leftover build directory — now in
   `/home/ubuntu/project_trash_bin/`. No tracked source or test file was deleted (the only tracked

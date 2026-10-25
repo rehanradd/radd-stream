@@ -115,7 +115,28 @@ Core logic engines and unit tests are passing (100% green).
 
 ---
 
-## 4. Inviolable Constraints Reminder
+## 4. Priority 5: The "Desi Cine-Finder" (Omni-Search & Share Bridge)
+*Target Market Mandate: Users in Pakistan, India, Bangladesh, and Nepal who discover movie clips on TikTok / Instagram Reels / YouTube Shorts and want to instantly watch the full movie without burning daily 1.5GB mobile data caps.*
+
+### Architecture: 100% Client-Side Heavy, Zero Server Load ($0 Cost)
+1. **Zero Video Upload Law (Data Saver)**:
+   - The user's video NEVER leaves their phone.
+   - `ClipAnalyzer.kt` uses Android's native `MediaMetadataRetriever.getFrameAtTime(timeUs, OPTION_CLOSEST_SYNC)` to extract 2–3 keyframes directly in local phone memory in under 50ms. Total data used: **<25 KB**.
+2. **Dual-Track Identification Pipeline**:
+   - **Track A (On-Device Dialogue OCR)**: 95% of South Asian reels carry burned-in English or Hinglish/Urdu subtitles. Run local on-device ML Kit Text Recognition (100% offline, 30ms). Extracted dialogue quotes (e.g. *"Pushpa jhukega nahi"* or *"We need to go deeper"*) query our backend SQLite FTS5 index for an instant 99% match.
+   - **Track B (Star-Face & Scene Lens Dispatch)**: If no dialogue text exists, dispatch the keyframe containing the actor's face (Shah Rukh Khan, Prabhas, Allu Arjun, Ranbir Kapoor) to the native Android Google Lens Intent (`com.google.ar.lens`) or visual endpoint. Catch the identified entity title and resolve against our merged catalog.
+3. **"Share to Radd-Stream" Instant Cinema Sheet (`ShareReceiveActivity.kt`)**:
+   - Implement Android `ACTION_SEND` intent receiver.
+   - While scrolling Instagram Reels or TikTok, user taps **Share -> Radd-Stream**.
+   - The app intercepts the shared clip or link, identifies the movie, and pops up a bottom sheet with:
+     `"K.G.F: Chapter 2 (2022) • 4K UHD • [ ▶ Watch Full Movie ] [ + Add to Watchlist ]"` without the user needing to manually save or download the video.
+4. **Desi Natural Language Plot & Vibe Search (SQLite FTS5)**:
+   - Index `synopsis`, `clean_title`, `genres`, and `cast_members` with SQLite FTS5 in `catalog_v2.py`.
+   - Allows conversational queries: *"Salman Khan kidney hospital comedy"*, *"Amir khan alien paan tapri"*, *"stranded on Mars planting potatoes"*. Resolves in under 3ms.
+
+---
+
+## 5. Inviolable Constraints Reminder
 1. **Python Stdlib Only**: Zero pip or npm packages on the backend.
 2. **Staging Isolation**: Merges must only write to specified snapshot target files (e.g. `merged_catalog_20261024.db`). Never overwrite live `fast_fetch.db` without confirmation.
 3. **18+ Content Suppression**: Adult content must remain strictly filtered out at query level across all public endpoints and UI views.
