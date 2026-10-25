@@ -505,7 +505,10 @@ def snapshot_code(output_dir: Path) -> Path | None:
 def main():
     parser = argparse.ArgumentParser(description="radd-stream Cloud Backup Manager")
     parser.add_argument("--dir", default="/home/ubuntu/radd-stream-data", help="Directory containing SQLite DBs")
-    parser.add_argument("--out", default="/tmp/radd-stream-backups", help="Directory to save backup archives")
+    parser.add_argument("--out", default="/home/ubuntu/radd-stream-backups",
+                        help="Directory to save backup archives. Not /tmp: this is the only "
+                             "copy that exists before an upload finishes, and a cleaner or a "
+                             "reboot takes /tmp with it.")
     parser.add_argument("--github", action="store_true", help="Upload to GitHub Releases")
     parser.add_argument("--telegram", action="store_true", help="Upload to Telegram channel")
     parser.add_argument("--r2", action="store_true", help="Upload to Cloudflare R2 bucket")

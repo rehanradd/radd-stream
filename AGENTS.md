@@ -15,7 +15,7 @@ radd-stream/                        ← repo root
 ├── AGENTS.md                       ← THIS FILE — start here
 ├── README.md                       ← public-facing project description
 ├── DISCLAIMER.md                   ← legal / framing notice
-├── push.py / github_push.py / emergency_push.py
+├── push.py / github_push.py / emergency_push.py / push_github.py / safe_push.sh
 │                                   ← retired no-op stubs; use Git instead
 ├── setup_check.py                  ← system sanity check for backend
 ├── run.sh / run.bat                ← one-command launchers (backend)
@@ -112,7 +112,7 @@ Verify only whether the two configured variable names are present; never read or
 - Stage only reviewed paths (`git add <paths>`), inspect the staged names/diff, and keep secrets, databases, APKs, build outputs, and uploaded chat files out of commits. Never use `git add -A` or force-push. Per owner authorization, agents may push verified, tested milestones directly to `main` so automated CI triggers and autonomous progress is seamless.
 - Treat `.replit` as local-only sensitive configuration: do not inspect its values or stage, commit, or push it. It is ignored and untracked. The user chose to leave historical copies intact; do not rewrite history unless they explicitly change that decision.
 - Use Git over HTTPS with the temporary askpass procedure in `ORACLE_DEPLOYMENT.md`. Never put credentials in URLs, command arguments, files, or logs.
-- Do **not** run or restore `push.py`, `github_push.py`, or `emergency_push.py`. Their previous versions were GitHub Contents API uploaders that could write broad file sets directly to `main`; the current files are no-op warning stubs. A local commit remains recoverable if a normal push fails—record the failure and next step in the checkpoint rather than claiming it synced.
+- Do **not** run or restore `push.py`, `github_push.py`, `emergency_push.py`, `push_github.py`, or `safe_push.sh`. Their previous versions were GitHub Contents API uploaders that could write broad file sets directly to `main`; `safe_push.sh` additionally staged every path it found (`git add -u` plus all untracked files), committed without a test gate, and pushed through the `origin` remote whose URL still carries the owner's unrevoked token. All five files are now no-op warning stubs. A local commit remains recoverable if a normal push fails—record the failure and next step in the checkpoint rather than claiming it synced.
 - Oracle deployment is separate from a GitHub branch push. Only deploy through a verified, tested release path after CI passes; do not copy untested or WIP code to the live host.
 
 ---
