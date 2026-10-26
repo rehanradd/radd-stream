@@ -948,9 +948,16 @@ def project(conn: sqlite3.Connection, *, rev: int | None = None, reset: bool = T
     for key, acc in works.items():
         head = acc.posts[0]
         title = _post_column(head, "clean_title", default="") or _post_column(head, "title", "Unknown")
+        # Rolled up over every page in the work, exactly like `is_18_plus`: the head
+        # post is the richest record, not a statement about the medium, and a show
+        # carried by an anime-only page alongside a general one is animation either
+        # way. Reading the head alone made both the `anime` work type and the Anime
+        # facet depend on which site won the merge.
+        is_animated = 1 if any(int(_post_column(p, "is_animated", default=0) or 0)
+                               for p in acc.posts) else 0
         wtype = work_type_for(
             _post_column(head, "content_type", default="movie"),
-            int(_post_column(head, "is_animated", default=0) or 0),
+            is_animated,
             title,
         )
         year = _post_column(head, "year")
@@ -969,7 +976,7 @@ def project(conn: sqlite3.Connection, *, rev: int | None = None, reset: bool = T
             """,
             (
                 key, title, _post_column(head, "title", default=title), year, wtype,
-                int(_post_column(head, "is_animated", default=0) or 0),
+                is_animated,
                 1 if any(int(_post_column(p, "is_18_plus", default=0) or 0) for p in acc.posts) else 0,
                 acc.best.get("synopsis"), acc.best.get("genres"),
                 _post_column(head, "language", default=""), _post_column(head, "country", default="Unknown"),

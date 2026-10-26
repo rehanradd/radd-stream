@@ -539,6 +539,28 @@ class RollupAndSafetyTests(ProjectionTestCase):
         self.project()
         self.assertEqual(self.works("Toon Show", 2024)[0]["work_type"], "anime")
 
+    def test_animation_is_rolled_up_over_every_page_not_just_the_head(self):
+        """The ledger is read `ORDER BY p.id`, so `site-a` below is the head post —
+        and it does not know the show is animated. Type and facet must come from the
+        work's pages together, the way `is_18_plus` already does; otherwise which
+        site happened to win the merge decides whether the Anime filter finds it."""
+        self.add_post("site-a", "https://a.test/toon-boat/", clean_title="Toon Boat",
+                      year=2024, content_type="series", is_animated=0)
+        self.add_post("rareanimes", "https://r.test/toon-boat/", clean_title="Toon Boat",
+                      year=2024, content_type="series", is_animated=1)
+        self.project()
+        work = self.works("Toon Boat", 2024)[0]
+        self.assertEqual(work["is_animated"], 1)
+        self.assertEqual(work["work_type"], "anime")
+
+    def test_a_work_no_page_calls_animated_stays_unflagged(self):
+        self.add_post("site-a", "https://a.test/straight-film/", clean_title="Straight Film",
+                      year=2024)
+        self.add_post("site-b", "https://b.test/straight-film/", clean_title="Straight Film",
+                      year=2024)
+        self.project()
+        self.assertEqual(self.works("Straight Film", 2024)[0]["is_animated"], 0)
+
     def test_every_work_gets_a_default_free_entitlement(self):
         self.add_post("site-a", "https://a.test/free-film/", clean_title="Free Film", year=2023)
         self.project()

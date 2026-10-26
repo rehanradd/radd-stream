@@ -8,6 +8,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import backfill_animated_flag as bf
+import catalog_v2
 import fast_fetch
 
 
@@ -169,6 +170,98 @@ class BackfillAnimatedFlagTests(unittest.TestCase):
         conn.commit()
         with self.assertRaises(ValueError):
             bf.scan(conn, apply=True, progress=False)
+
+
+class ProjectionReconciliationTests(unittest.TestCase):
+    """`--projection` is a shortcut over `cat_works`, so it has to land exactly
+    where a full rebuild would have landed — that equality is the whole test."""
+
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.db_path = Path(self.temp_dir.name) / "catalog.db"
+        self.patch = patch.object(fast_fetch, "DB_PATH", self.db_path)
+        self.patch.start()
+        fast_fetch.init_db()
+        self.conn = sqlite3.connect(str(self.db_path))
+        self.conn.row_factory = sqlite3.Row
+
+    def tearDown(self):
+        self.conn.close()
+        self.patch.stop()
+        self.temp_dir.cleanup()
+
+    def _series(self, *, site, slug, clean, animated):
+        fast_fetch.save_scraped_data({
+            "url": f"https://{site}.test/{slug}/", "slug": slug,
+            "title": f"{clean} (2024)", "clean_title": clean, "year": 2024,
+            "content_type": "series", "source_site": site,
+            "is_animated": animated, "releases": [],
+        }, enrich_metadata=False, ensure_db=False)
+        self.conn.commit()
+
+    def _shape(self):
+        return {f"{r['title']}|{r['year']}": (r["is_animated"], r["work_type"])
+                for r in self.conn.execute("SELECT title, year, is_animated, work_type"
+                                           " FROM cat_works")}
+
+    def test_the_shortcut_lands_where_a_rebuild_would_have_landed(self):
+        self._series(site="site_a", slug="toon-boat", clean="Toon Boat", animated=0)
+        self._series(site="rareanimes", slug="toon-boat-x", clean="Toon Boat", animated=1)
+        self._series(site="site_a", slug="plain-series", clean="Plain Series", animated=0)
+        catalog_v2.project(self.conn, rev=1, verbose=False)
+        # Simulate the projection this tool is meant to repair: built before the
+        # roll-up existed, so no work knows it is animated.
+        self.conn.execute("UPDATE cat_works SET is_animated = 0, work_type = 'series'")
+        self.conn.commit()
+
+        result = bf.reconcile_projection(self.conn, apply=True)
+        repaired = self._shape()
+        self.assertEqual(result["works_to_flag"], 1, result)
+
+        catalog_v2.project(self.conn, rev=2, verbose=False)
+        self.assertEqual(repaired, self._shape(),
+                         "the shortcut disagrees with a fresh projection")
+
+    def test_a_dry_run_reports_and_writes_nothing(self):
+        self._series(site="rareanimes", slug="naruto", clean="Naruto", animated=1)
+        catalog_v2.project(self.conn, rev=1, verbose=False)
+        self.conn.execute("UPDATE cat_works SET is_animated = 0, work_type = 'series'")
+        self.conn.commit()
+        before = self._shape()
+        result = bf.reconcile_projection(self.conn, apply=False)
+        self.assertEqual(result["works_to_flag"], 1, result)
+        self.assertEqual(before, self._shape(), "a dry run wrote")
+
+    def test_an_animated_movie_stays_a_movie(self):
+        """`work_type_for()` only re-types series and unknown — an animated film is
+        still a film, and the shortcut must not invent an `anime` bucket for it.
+        The stale state being repaired is the honest one: the film was projected as
+        a movie, only the flag went missing."""
+        fast_fetch.save_scraped_data({
+            "url": "https://site-a.test/aria/", "slug": "aria",
+            "title": "Aria (2024)", "clean_title": "Aria", "year": 2024,
+            "content_type": "movie", "source_site": "site_a",
+            "is_animated": 1, "releases": [],
+        }, enrich_metadata=False, ensure_db=False)
+        self.conn.commit()
+        catalog_v2.project(self.conn, rev=1, verbose=False)
+        self.conn.execute("UPDATE cat_works SET is_animated = 0")
+        self.conn.commit()
+        bf.reconcile_projection(self.conn, apply=True)
+        row = self.conn.execute("SELECT is_animated, work_type FROM cat_works").fetchone()
+        self.assertEqual((row["is_animated"], row["work_type"]), (1, "movie"))
+
+    def test_a_ledger_with_no_projection_says_so(self):
+        other = Path(self.temp_dir.name) / "ledger-only.db"
+        conn = sqlite3.connect(str(other))
+        try:
+            # `applied` means a write happened; with no `cat_*` layer there was
+            # nothing to write, and that is reported instead of crashing.
+            self.assertEqual(bf.reconcile_projection(conn, apply=True),
+                             {"projection": False, "works_to_flag": 0,
+                              "works_to_retype": 0, "applied": False})
+        finally:
+            conn.close()
 
 
 if __name__ == "__main__":
