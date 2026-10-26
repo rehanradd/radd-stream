@@ -564,10 +564,15 @@ no TLS anywhere — `ORACLE_DEPLOYMENT.md`, and `viewer.py` has no TLS support).
   that leaves exactly two honest options for a release build: point at a TLS-terminated host
   (deployment gap), or ship debug builds only. The app must surface this as a distinct state
   (`insecure_host` banner), not silently fail playback.
-- Because transport is cleartext: **no Authorization header, no device token, no account
-  concept may be sent to this host** (root AGENTS.md + §16.7). All admin/keyed surfaces stay
-  internal until TLS exists. Entitlement gating (§11) is therefore *honor-system* on HTTP —
-  documented, not hidden: paid models must not go live on this host.
+- Because transport is cleartext: **no credential may be sent for anything the catalog
+  needs** (root AGENTS.md + §16.7). `/play`, the read routes and the v1 surface take no
+  `Authorization` header, no device token and no cookie — signing out changes what you may
+  *see* not at all, so there is nothing to steal to watch something. The single exception is
+  the optional sync-account surface (§12.1), whose bearer is a sync key; that trade is
+  documented in `accounts_api.py` ("WHAT THIS IS NOT") and the app must state it to the user
+  once. An operator must never put anything sensitive behind an account on this host, and
+  admin/keyed surfaces stay loopback-only (§12.2). Entitlement gating (§11) is therefore
+  *honor-system* on HTTP — documented, not hidden: paid models must not go live on this host.
 - Session/token hygiene on ephemeral links: bundle URLs must never be logged by the client
   (they carry CDN tokens in query strings) and never persisted past `expires_at`.
 
@@ -884,9 +889,12 @@ Rules that never bend:
    most specific row (release > work) — 📝.
 3. `geo_allow`/`geo_deny`/`region` are stored ✅; enforcement (GeoIP) is 📝 and must stay off
    on the current host (no reliable client-IP chain behind nginx without config).
-4. `requires_account`/`requires_age_gate` are stored ✅; **no accounts exist** (§19) and the
-   age-gate flag is *only* for mature-but-not-adult content — it must never be used for
-   `is_18_plus` works, which follow §13 instead.
+4. `requires_account`/`requires_age_gate` are stored ✅. Optional sync accounts now exist
+   (§12.1) but they deliberately hold *no* entitlement meaning — an account syncs favorites
+   and resume points and cannot unlock anything, so `requires_account=1` still has nothing to
+   check against and must stay dark on this host. The age-gate flag is *only* for
+   mature-but-not-adult content — it must never be used for `is_18_plus` works, which follow
+   §13 instead.
 5. Flipping one title between paid and free is exactly: update/insert the
    `cat_entitlements` row; `updated_at` bumps the `entitlements` version group (§16.2);
    clients refresh via `scope=entitlements` sync or the next detail fetch's ETag miss.
@@ -926,6 +934,68 @@ responses (§16.4). `v1` stays frozen and untouched — the current APK keeps wo
 
 Removed from v2: `/api/heal` (never responded), `/api/fetch` (unauthenticated remote ingest
 — becomes CLI-only behind TLS when accounts exist).
+
+### 12.1 Optional sync accounts — `/api/v2/account*` ✅ built, public port
+
+`Fast_Fetch/accounts.py` owns the data, `Fast_Fetch/accounts_api.py` owns the wire, and
+`Fast_Fetch/viewer.py` mounts it on the **public** port (a phone has no other way to reach
+it). Auth is one 256-bit key in `Authorization: Bearer <sync_key>` — no password, no email,
+no cookie, no JWT. It is *optional*: every catalog route answers identically with or
+without it, and an account changes what is stored for you, never what you may read.
+
+| Method & path | Purpose | Notes on the wire |
+|---|---|---|
+| `POST /account` | create (or import) | `{}` → `201`, and the `sync_key` appears **in this response only**. Re-POST `{"sync_key": …}` → `200 {"account":{"created":false}}` with no key, so a stored key can never be re-read out of the server. |
+| `GET /account` | who am I | `{"created_at", "last_seen_at"}` — nothing else, and no hash, ever. |
+| `POST /account/revoke` | delete me | tombstones the key as `revoked:<sha256>`; a revoked key and a never-issued one give the *same* 401, so this endpoint is not a key checker. |
+| `GET /account/favorites?n=` | list | `n` default 200, max 1000. |
+| `POST /account/favorites` | add | body `{"work_ref", "season_number"?, "episode_number"?}` → `201`; idempotent. |
+| `POST /account/favorites/remove` | drop | → `{"removed": true\|false}`. |
+| `GET /account/progress?n=` | continue watching | newest-first. |
+| `POST /account/progress` | report position | body adds `position_seconds`, `duration_seconds`, `client_updated_at` (the merge key: newest client timestamp wins). |
+| `POST /account/progress/remove` | drop a row | → `{"removed": bool}`. |
+
+Three rules make this safe to expose, and each is tested
+(`Fast_Fetch/test_accounts.py`, `test_accounts_api.py`, `test_operator_isolation.py`):
+
+* **One name for one handle.** A work is addressed by `work_ref`, the opaque handle the
+  server minted and publishes on catalog items (`api_v2.py:1023`); the same key is what
+  comes back on a favorite or progress row (`accounts.PUBLIC_REF_KEY`). A raw `work_key`
+  — which is built from scraped data and can literally contain a site name — crosses this
+  boundary in neither direction, and a forged or foreign handle is a `400` that never
+  quotes the input.
+* **Adult is still suppressed.** `accounts` re-checks the catalog before it stores or
+  returns anything, so favoriting an adult `work_ref` is refused exactly like a
+  nonexistent one. An account is not a way to see what the public edge hides.
+* **Cost is bounded twice.** `redact.BUCKET_LIMITS["account"]` is 30 requests/60s per
+  client IP, and `accounts.AttemptTracker` charges *failures only* per key and globally
+  (8 strikes, 15 minutes) — a good key is never rate-limited by someone else's guessing.
+
+Deployment caveat that cannot be coded away: the host is plain HTTP with no certificate,
+so the sync key travels in the clear and anyone on the path can become that account (which
+is only someone's favorites and resume points — never put anything sensitive behind one).
+The app must tell the user this once, at account creation. See the module docstring of
+`accounts_api.py`, "WHAT THIS IS NOT".
+
+### 12.2 Operator surface — `/admin` ✅ built, loopback port only
+
+`Fast_Fetch/admin_panel.py` answers `/admin` (one HTML page) and `/admin/api/<screen>`
+(JSON: `projection`, `catalog`, `link-health`, `review`, `adult`) plus exactly **one**
+write, `POST /admin/api/links/{link_id}/evidence`, which re-folds measured probe facts
+onto a link through `catalog_v2.apply_evidence()`. Reachability is three independent
+layers, and nginx is the only one that is not in this codebase:
+
+1. it runs only on the operator instance (`viewer.make_server(..., operator=True)`,
+   loopback bind, `RADD_INTERNAL_PORT` 8081);
+2. `viewer.OPERATOR_ONLY_PREFIXES = ("/admin",)` makes the *public* port answer the plain
+   404 it uses for a path it has never heard of — a stranger cannot learn the panel exists;
+3. `admin_panel._gate` checks the loopback peer and then an `hmac.compare_digest` bearer
+   against `RADD_ADMIN_TOKEN`, failing closed when the token is unset. A missing token and
+   a wrong token return byte-identical bodies.
+
+Every response body is scanned against `redact.needles()` before it is emitted; an offender
+collapses the *whole* answer to one fixed 500 string rather than rendering part of it.
+**Never proxy `/admin`** — the reverse proxy must not have a `location /admin` block.
 
 ---
 
@@ -1315,9 +1385,10 @@ Everything 📝/🛠 above, in one place. Nothing here may be described as live 
 ## 19. Deliberate non-goals (v2, for now)
 DRM licence serving (`playback.drm` stays `null`; Widevine/FairPlay systems require licensed
 content and a TLS host we don't have), torrent *playback* (torrent files are `download_only`
-links, honestly classified), server-side transcoding, accounts/profiles (nothing to auth over,
-§8.3), recommendation ML, subtitle authoring, ad insertion (the `ads` model is a labelling
-tier only until an ad decision path exists — §11.2).
+links, honestly classified), server-side transcoding, account *profiles* (the §12.1 sync
+account is a key with two lists — no display name, no avatar, no friends, and no entitlement
+meaning, §8.3), recommendation ML, subtitle authoring, ad insertion (the `ads` model is a
+labelling tier only until an ad decision path exists — §11.2).
 
 ---
 

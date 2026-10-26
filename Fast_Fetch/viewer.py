@@ -26,6 +26,8 @@ from socketserver import ThreadingMixIn
 import redact
 import tiers
 import api_v2
+import accounts_api
+import admin_panel
 
 if sys.platform.startswith("win"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -60,6 +62,13 @@ OPERATOR_ONLY_ROUTES = frozenset({
     # — and clients use the paginated /api/v1/posts.
     "/api/data",
 })
+
+#: Same answer as a route above, but for a whole subtree: `/admin` is one page and
+#: five JSON screens under it, and listing them individually is how one of them
+#: gets forgotten when the panel grows. Reachability is this prefix plus the
+#: loopback bind plus nginx never proxying `/admin`; `admin_panel._gate` is the
+#: token lock on that already-localhost-only door, not a login.
+OPERATOR_ONLY_PREFIXES = ("/admin",)
 
 #: CORS lives in redact so the v1 and v2 edges share one allow-list (§16.7).
 cors_headers_for = redact.cors_headers_for
@@ -2381,7 +2390,22 @@ class DashboardHandler(BaseHTTPRequestHandler):
         self.send_bytes(body, content_type="application/json; charset=utf-8",
                         status=status, extra_headers=headers)
 
+    def send_triple(self, answered: tuple) -> None:
+        """One `(status, content_type, body)` answer from `admin_panel` or
+        `accounts_api` — the tuple contract both use so each stays testable as a
+        function call and this stays the only thing that writes a socket.
+        `send_bytes` adds the `RateLimit-*` triple and closes the connection, so
+        the headers a bucket already bought are not thrown away at the last step."""
+        status, content_type, body = answered
+        self.send_bytes(body, content_type=content_type, status=status)
+
     def _bucket_for(self, path: str, method: str = "GET") -> str:
+        if accounts_api.is_account(path):
+            # Account writes are small and boring; the reason for a budget of their
+            # own is the sync key. A caller may hammer `Authorization` guesses all
+            # afternoon, and `accounts.LIMITER` charges failures per key — an
+            # unthrottled port would just let it spend other people's budgets.
+            return "account"
         if api_v2.is_v2(path):
             # The v2 budget is the same token bucket, under the route map in
             # `api_v2.ROUTE_BUCKETS`; there is no second limiter.
@@ -2400,7 +2424,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
         server instance, so this gate is the loopback port's absence, never a
         header a client can set.
         """
-        if path in OPERATOR_ONLY_ROUTES:
+        if path in OPERATOR_ONLY_ROUTES or path.startswith(OPERATOR_ONLY_PREFIXES):
             self.send_json({"success": False, "error": "not_found"}, status=404)
             return False
         verdict = redact.limiter.check(self._bucket_for(path, method),
@@ -2464,6 +2488,34 @@ class DashboardHandler(BaseHTTPRequestHandler):
         base_url = "" if full else _public_base(self)
         if not full and not self._public_gate(path, "GET"):
             return
+
+        if path.startswith(OPERATOR_ONLY_PREFIXES):
+            # Reached only on the loopback instance: `_public_gate` 404s this
+            # prefix on the public port, so a caller there cannot even learn the
+            # panel exists. The module re-checks the peer and the bearer token.
+            if not full:
+                self.send_json({"success": False, "error": "not_found"}, status=404)
+                return
+            answered = admin_panel.route_get(
+                path, query_params, db_path=DB_PATH,
+                peer_address=self.client_address[0],
+                token_header=self.headers.get("Authorization", ""))
+            if answered is not None:
+                self.send_triple(answered)
+                return
+
+        if accounts_api.is_account(path):
+            # Optional sync accounts ride the public port — a phone has no other
+            # way to reach them — but they never see provenance: `accounts_api`
+            # mints every work identifier through `signing_secret()`, the same
+            # handle machinery `/play` uses, and refuses anything it did not mint.
+            _ensure_schema()
+            answered = accounts_api.route_get(
+                path, query_params, db_path=accounts_api.state_db(), catalog_path=DB_PATH,
+                secret=signing_secret(), headers=self.headers)
+            if answered is not None:
+                self.send_triple(answered)
+                return
 
         if api_v2.is_v2(path):
             # The whole v2 surface (§12) is mounted here and only here: every
@@ -2693,11 +2745,12 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self.send_bytes(b"Not Found", content_type="text/plain", status=404)
 
     def do_POST(self):
-        """The v2 write surface (§12): `/play`, link reports, learned offsets.
+        """The v2 write surface (§12): `/play`, link reports, learned offsets,
+        and the account writes that put a favorite or a resume point on the server.
 
         Same edge as `do_GET` — operator routes 404, one token bucket, the
         `RateLimit-*` triple — because a POST is the same attack surface wearing a
-        different verb. Nothing else on this server accepts a POST.
+        different verb.
         """
         parsed = urllib.parse.urlparse(self.path)
         path = parsed.path
@@ -2705,6 +2758,30 @@ class DashboardHandler(BaseHTTPRequestHandler):
         full = bool(getattr(self.server, "operator", False))
         if not full and not self._public_gate(path, "POST"):
             return
+        if path.startswith(OPERATOR_ONLY_PREFIXES):
+            if not full:
+                self.send_json({"success": False, "error": "not_found"}, status=404)
+                return
+            answered = admin_panel.route_post(
+                path, query_params, db_path=DB_PATH,
+                peer_address=self.client_address[0],
+                token_header=self.headers.get("Authorization", ""))
+            if answered is not None:
+                self.send_triple(answered)
+                return
+        if accounts_api.is_account(path):
+            _ensure_schema()
+            payload, code = api_v2.read_body(self)
+            if payload is None:
+                api_v2.problem(self, code=code or "invalid_params",
+                               rid=api_v2.request_id(), instance=path)
+                return
+            answered = accounts_api.route_post(
+                path, payload, db_path=accounts_api.state_db(), catalog_path=DB_PATH,
+                secret=signing_secret(), headers=self.headers)
+            if answered is not None:
+                self.send_triple(answered)
+                return
         if api_v2.is_v2(path):
             _ensure_schema()
             if api_v2.route_post(self, path, query_params, db_path=DB_PATH,
