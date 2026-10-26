@@ -50,6 +50,8 @@ import com.raddstream.app.player.SleepMode
 import com.raddstream.app.player.SleepTick
 import com.raddstream.app.player.SleepTimer
 import com.raddstream.app.player.StartResolution
+import com.raddstream.app.player.SubtitleTrackDecision
+import com.raddstream.app.player.SubtitleTrackPolicy
 import com.raddstream.app.player.SubtitleUiSettings
 import com.raddstream.app.player.TrackUiOption
 import com.raddstream.app.player.subtitle.SubtitleCue
@@ -60,6 +62,7 @@ import com.raddstream.app.data.ServerSettingsRepository
 import com.raddstream.app.network.ApiProvider
 import com.raddstream.app.network.streamRedirectUrl
 import com.raddstream.app.repository.CatalogRepository
+import com.raddstream.app.sync.SyncAccountRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
@@ -93,6 +96,7 @@ class PlayerViewModel @Inject constructor(
     private val apiProvider: ApiProvider,
     private val settingsRepository: ServerSettingsRepository,
     private val catalogRepository: CatalogRepository,
+    private val syncAccountRepository: SyncAccountRepository,
 ) : ViewModel() {
 
     private val store: PlayerSessionStore = PlayerSessionStore.Instance
@@ -119,6 +123,14 @@ class PlayerViewModel @Inject constructor(
     /** In-run resume memory; cross-launch persistence is a data-agent request (handoff). */
     private val resumeByTarget = HashMap<String, Long>()
 
+    /**
+     * Whether this device has a sync key, mirrored so a twice-a-second tick can read a boolean
+     * instead of suspending on a Flow. False is the ordinary case, and then every account call
+     * below returns before it builds a request — the player is exactly what it was before the
+     * optional account existed.
+     */
+    private var syncSignedIn: Boolean = false
+
     private val _ui = MutableStateFlow(PlayerUiState())
     val uiState: StateFlow<PlayerUiState> = _ui.asStateFlow()
 
@@ -136,10 +148,22 @@ class PlayerViewModel @Inject constructor(
         connectController()
         observeStore()
         observeSettings()
+        observeSyncAccount()
     }
 
     /**
-     * The two preferences the policy classes read. Collected, not sampled, so the settings
+     * The one account preference this player cares about: is there a key at all. Collected
+     * rather than sampled, so signing in or out mid-session is felt by a player that is
+     * already running, and so the tick loop never has to suspend to ask.
+     */
+    private fun observeSyncAccount() {
+        viewModelScope.launch {
+            syncAccountRepository.signedIn.collect { signIn -> syncSignedIn = signIn }
+        }
+    }
+
+    /**
+     * The three preferences the policy classes read. Collected, not sampled, so the settings
      * screen changing a value is felt by a player that is already running.
      */
     private fun observeSettings() {
@@ -154,6 +178,12 @@ class PlayerViewModel @Inject constructor(
             settingsRepository.preferredAudioLanguage.collect { language ->
                 _ui.update { it.copy(preferredAudioLanguage = language) }
                 applyPreferredAudioTrack()
+            }
+        }
+        viewModelScope.launch {
+            settingsRepository.preferredSubtitleLanguage.collect { language ->
+                _ui.update { it.copy(preferredSubtitleLanguage = language) }
+                applyPreferredSubtitleTrack()
             }
         }
     }
@@ -207,8 +237,10 @@ class PlayerViewModel @Inject constructor(
             // Tracks only become decidable now: the media item is prepared, so the audio
             // language the user set in Settings can be applied to the list the player just
             // reported. Also the first chance a fresh playback gets — a preference set before
-            // the stream existed could not be honoured anywhere else.
+            // the stream existed could not be honoured anywhere else. The subtitle row applies
+            // at the same moment, for the same reason, through its own fire-once gate.
             applyPreferredAudioTrack()
+            applyPreferredSubtitleTrack()
         }
 
         override fun onPlaybackParametersChanged(playbackParameters: PlaybackParameters) {
@@ -289,6 +321,9 @@ class PlayerViewModel @Inject constructor(
                         applySleep(tick)
                     }
                     tickBingePreload(_ui.value.positionMs, _ui.value.durationMs)
+                    // The account's own heartbeat: one report per fifteen seconds at most, and
+                    // the gate is a boolean read, so this tick costs nothing when it is not due.
+                    if (c.isPlaying) reportResume(c, c.currentPosition, forced = false)
                     lastSleepTick = now
                 }
                 delay(200)
@@ -315,8 +350,30 @@ class PlayerViewModel @Inject constructor(
             val bundle = PlaybackBundle.forStreamHandle(streamId = streamId, playUrl = playUrl,
                                                        title = title,
                                                        backupHandles = store.peekFailover(streamId))
+            seedResumeFromSync(streamId, startOverrideMs)
             beginBundle(bundle, title, resumeKey = streamId, overrideMs = startOverrideMs)
         }
+    }
+
+    /**
+     * Continue Watching across devices, in the one place this player already looks: the pulled
+     * server row seeds [resumeByTarget] — the same map a position on THIS device writes — and
+     * only where that map is empty and no explicit start was asked for. So the order of
+     * precedence is honest: a viewer who is watching in this process wins over anything a sync
+     * pass remembered, an explicit seek-to wins over both, and a playback the detail screen
+     * could not name has nothing to look up at all. Nothing is re-ordered, nothing is awaited:
+     * a slow account read cannot hold the play button, which is why the existing in-memory path
+     * runs unchanged whether or not this finds anything.
+     */
+    private suspend fun seedResumeFromSync(resumeKey: String, explicitStartMs: Long?) {
+        if (explicitStartMs != null) return
+        if (!syncSignedIn) return
+        if (resumeByTarget[resumeKey] != null) return
+        val scope = store.peekWorkRef(resumeKey) ?: return
+        val syncedMs = syncAccountRepository.resumePositionMs(scope.workRef, scope.season, scope.episode)
+            ?: return
+        // Re-checked: a position measured while this lookup was running outranks a pulled row.
+        if (resumeByTarget[resumeKey] == null) resumeByTarget[resumeKey] = syncedMs
     }
 
     // ── The visible quality switch (Auto + one row per rung of this scope) ─────────
@@ -380,6 +437,13 @@ class PlayerViewModel @Inject constructor(
         ladderPlan = PlayerSessionStore.AutoLadderPlan(plan.rungs, rung.band, auto)
         store.stageFailover(rung.streamId, rung.backupHandles)
         store.stageAutoLadder(rung.streamId, plan.rungs, rung.band, auto)
+        // The work did not change, only its address: carry the staged handle over, so a
+        // quality switch (or a silent hop onto this rung's runner-up) keeps reporting resume
+        // points against the same scope the detail screen named.
+        store.peekWorkRef(active?.playback?.streamId)?.let { scope ->
+            store.stageWorkRef(rung.streamId, scope)
+            rung.backupHandles.forEach { store.stageWorkRef(it, scope) }
+        }
         startStreamHandle(rung.streamId, title, startOverrideMs = positionMs.takeIf { it > 1_000 })
     }
 
@@ -471,12 +535,44 @@ class PlayerViewModel @Inject constructor(
         loadNow(title, key, resumePosition = 0, override = positionMs.coerceAtLeast(0))
     }
 
-    private fun rememberResume() {
+    private fun rememberResume(forced: Boolean = true) {
         val c = controller ?: return
         val bundle = store.bundle.value ?: return
         val key = bundle.target.workKey ?: c.currentMediaItem?.mediaId ?: return
         val pos = c.currentPosition
         if (pos > 5_000 && pos < c.duration) resumeByTarget[key] = pos else resumeByTarget.remove(key)
+        reportResume(c, pos, forced)
+    }
+
+    /**
+     * Tell the optional sync account where viewing is, at the same moment this class already
+     * remembers it for itself. Three rules decide everything here, and all three live in
+     * [SyncAccountRepository] rather than in this player:
+     *  - the work is named by the handle the detail screen staged, never by a title, a row id
+     *    or a work key. Nothing staged means nothing reported: a deep-linked playback has no
+     *    provenable identity on the account surface, and guessing is not an option;
+     *  - [forced] is a stop, a pause or a teardown — positions worth a request. Anything else
+     *    goes through the fifteen-second gate, which is checked WITHOUT suspending so a
+     *    twice-a-second tick costs one boolean and no coroutine at all;
+     *  - a refusal is silent and cannot touch playback. Every failure path in the sync layer
+     *    returns a value this function throws away, because a viewer mid-scene must never lose
+     *    their picture to a resume-point upload.
+     */
+    private fun reportResume(c: MediaController, positionMs: Long, forced: Boolean) {
+        if (!syncSignedIn) return
+        val scope = store.currentSyncScope() ?: return
+        if (positionMs <= 0L) return
+        if (!forced && !syncAccountRepository.progressReportDue()) return
+        viewModelScope.launch {
+            syncAccountRepository.reportProgress(
+                workRef = scope.workRef,
+                season = scope.season,
+                episode = scope.episode,
+                positionMs = positionMs,
+                durationMs = if (c.duration > 0) c.duration else _ui.value.durationMs,
+                forced = forced,
+            )
+        }
     }
 
     // ── Transport & value controls ───────────────────────────────────────────────
@@ -808,6 +904,48 @@ class PlayerViewModel @Inject constructor(
         if (picked == state.selectedAudioId) return
         val option = state.audioTracks.firstOrNull { it.id == picked } ?: return
         selectAudioTrack(option)
+    }
+
+    /**
+     * The (playback, preference) pair the subtitle row has already honoured.
+     *
+     * WHY TEXT NEEDS A GATE AUDIO DOES NOT: audio can only ever be asked to select a track or
+     * to say nothing, and a hand-picked track simply re-reports itself. The subtitle row also
+     * says "turn off", and `onTracksChanged` fires after every selection made from the
+     * Subtitles sheet — re-running an Off on that report would silence what the viewer just
+     * chose, mid-episode. The pair is keyed on the binge lifecycle rather than the media item,
+     * for the same reason the planner is: a silent failover or an Auto move is a new address
+     * for the same viewing, and dropping the subtitles under either would be a second bug.
+     * A new file, a new episode, or a new preference value changes the pair and re-arms it.
+     */
+    private var subtitleHonouredFor: Pair<String, String?>? = null
+
+    /**
+     * Apply the Settings subtitle language to the text tracks the player just reported.
+     *
+     * [SubtitleTrackPolicy.decide] makes the three-way call and goes through the same
+     * matcher the audio row uses, so a preference typed as "Hindi" finds a track tagged "hi"
+     * here exactly as it does for audio, and an unmatched preference leaves the player's own
+     * default alone instead of guessing. Off is the same act as the sheet's "Turn subtitles
+     * off": it disables the text renderer, which also quietens a native external file.
+     */
+    private fun applyPreferredSubtitleTrack() {
+        if (controller == null) return
+        val state = _ui.value
+        // Before the gate: a file with no text tracks has nothing to pick and nothing to
+        // silence, and it must not spend the pair a file that has tracks will need.
+        if (state.subtitleTracks.isEmpty()) return
+        val key = bingeBundleKey(store.bundle.value).orEmpty() to state.preferredSubtitleLanguage
+        if (key == subtitleHonouredFor) return
+        subtitleHonouredFor = key
+        when (val decision = SubtitleTrackPolicy.decide(state.subtitleTrackRows(), state.preferredSubtitleLanguage)) {
+            SubtitleTrackDecision.TurnOff -> selectSubtitleTrack(null)
+            SubtitleTrackDecision.LeaveAlone -> Unit
+            is SubtitleTrackDecision.Select -> {
+                val option = state.subtitleTracks.firstOrNull { it.id == decision.id } ?: return
+                selectSubtitleTrack(option)
+            }
+        }
     }
 
     /**

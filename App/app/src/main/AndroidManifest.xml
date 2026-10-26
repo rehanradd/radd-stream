@@ -30,6 +30,7 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.RaddStream"
         android:hardwareAccelerated="true"
+        android:networkSecurityConfig="@xml/network_security_config"
         android:largeHeap="true">
 
         <activity

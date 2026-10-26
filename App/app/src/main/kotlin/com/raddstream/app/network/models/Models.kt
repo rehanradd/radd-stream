@@ -83,6 +83,16 @@ data class Post(
     val releaseCount: Int? = null,
     @SerializedName("source_count")
     val sourceCount: Int? = null,
+    /**
+     * The server-minted handle for THIS work — the only name the sync account accepts.
+     * Today's v1 projection sends no such key, so this decodes to null and stays null,
+     * which is exactly the right answer: a null here means "this title cannot be named to
+     * the account surface", and nothing may invent a stand-in for it. Decoding it as an
+     * absent field costs the app nothing, and it is modelled (rather than read from a raw
+     * map) so [com.raddstream.app.sync] has one typed place to ask.
+     */
+    @SerializedName("work_ref")
+    val workRef: String? = null,
 ) {
     /** Display helper so UI never has to know that `year` is numeric on the wire. */
     val yearLabel: String? get() = year?.toString()
@@ -134,6 +144,9 @@ data class PostDetail(
      */
     @SerializedName("option_groups")
     val optionGroups: List<OptionGroup> = emptyList(),
+    /** Same handle as [Post.workRef], null until the server sends one. See [Post.workRef]. */
+    @SerializedName("work_ref")
+    val workRef: String? = null,
 ) {
     val yearLabel: String? get() = year?.toString()
     val genreList: List<String> get() = WireText.listOf(genres)

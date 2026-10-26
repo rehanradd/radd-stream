@@ -22,18 +22,16 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import coil.compose.AsyncImage
 import com.raddstream.app.network.models.Post
 
 /**
  * The canonical catalog tile. Used by Home rails, the search grid, My List and
- * Downloads. Kept intentionally light (one AsyncImage + a couple of Texts) and
+ * Downloads. Kept intentionally light (one [CatalogImage] + a couple of Texts) and
  * always rendered inside a keyed lazy container so Compose can recycle slots cheaply
  * on low-RAM phones (Compose performance guidance).
  *
@@ -99,11 +97,10 @@ fun PosterCard(
                         )
                     }
                 } else {
-                    AsyncImage(
-                        model = posterUrl,
+                    CatalogImage(
+                        url = posterUrl,
                         contentDescription = null, // tile-level a11y already announced the title
                         modifier = Modifier.fillMaxSize(),
-                        contentScale = ContentScale.Crop,
                     )
                 }
 

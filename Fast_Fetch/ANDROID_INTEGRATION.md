@@ -60,7 +60,12 @@ The remaining `GET` routes in `do_GET()` are dashboard/admin oriented, not clien
 integration points: `/api/data` (the full catalog dump — **operator port only**, it would
 be a clone of the collection in one request), `/api/sitemap`, `/api/fetch`,
 `/api/health-check`, `/`, `/index.html`, `/mobile`, `/favicon.ico`. There is **no
-`/api/v1/sync`** and no `POST` handler at all.
+`/api/v1/sync`** — cross-device sync is the optional v2 account surface (§7), and it is
+the only thing on this server that is `POST`ed to with a credential. `do_POST()` itself
+is not empty any more: it answers `/admin*` (operator port only), `/api/v2/account*` (§7),
+and the v2 write routes (`POST /api/v2/play`, `POST /api/v2/links/{ref}/report`,
+`POST /api/v2/episodes/{ref}/offset`); every other
+path is a `404`, the same answer an unknown path gets on `GET`.
 
 > ⚠️ **Reality (verified against viewer.py 2026-10-22)** — three things in this
 > section used to be wrong, and they cost people afternoons:
@@ -150,15 +155,19 @@ an address.
 
 ### Security posture — as much as a stdlib HTTP-only box can have
 
-There is still **no authentication**: no API key, no bearer token, no session. What has
-changed is that the public port no longer answers with anything worth scraping whole:
+Nothing here is *required* to read the catalog: every v1 and v2 browse, detail, artwork
+and stream route answers a signed-out client. What was added since is one **optional**
+authenticated surface — `/api/v2/account*` (§7), a bearer sync key — and it changes what
+is *stored* for a viewer, never what they are *allowed to read*. Beyond that, the public
+port no longer answers with anything worth scraping whole:
 
 - every response is a projection (`redact.project`), so provenance fields are absent by
   construction rather than by luck (§2 above);
 - playables, artwork and streams are addressed by signed opaque handles; a raw row id is
   rejected (`400`), so 3.07 M links cannot be walked;
 - `IETF RateLimit-*` + `Retry-After` headers on every response — buckets `browse`
-  60/min, `play` 30/min, `reports` 10/min;
+  60/min, `play` 30/min, `reports` 10/min, `account` 30/min per client IP
+  (`redact.BUCKET_LIMITS`);
 - the whole-catalog dump (`/api/data`), the bridge table (`/api/v1/rules`), the sitemap
   feed, `/api/fetch`, `/api/heal`, `/api/health-check` are **operator-port only** —
   `404` on the public port;
@@ -168,8 +177,16 @@ changed is that the public port no longer answers with anything worth scraping w
 `send_json()` still stamps `Access-Control-Allow-Origin: *` (viewer.py), `start_server()`
 still defaults to `0.0.0.0`, and the Oracle host serves plain HTTP with no TLS. Treat
 everything the public port does return as public to anyone who can reach it — which is
-now exactly what a user sees, plus nothing that names where it came from. Never put
-credentials or personal data behind this API.
+now exactly what a user sees, plus nothing that names where it came from.
+
+The one credential this API accepts is a §7 sync key, and it is the reason the missing
+TLS is a real user-facing problem rather than a footnote: on `http://92.4.95.252` the
+`Authorization: Bearer …` header crosses the network in the clear, so anyone on the path
+can read it and become that account — which is only that viewer's favorites and resume
+points, and is exactly why nothing personal, no password and no email may be stored
+behind one. The app says this to the viewer on the card that creates the key. The fix is
+a certificate on the host, not a cleverer token format, and it is the owner's call
+(`ORACLE_DEPLOYMENT.md`).
 
 
 ---
@@ -421,3 +438,65 @@ class RaddStreamClient(private val baseUrl: String) {
     }
 }
 ```
+
+---
+
+## 7. Optional Sync Accounts — `/api/v2/account*`
+
+The one part of this API that knows who you are, and the only thing the app sends a
+credential for. It is **optional**: a fresh install is signed out, nothing on the browse or
+play path asks, and pressing "Sync" is what creates an account.
+
+### 7.1 The routes
+
+`Fast_Fetch/accounts_api.py` owns this edge, `Fast_Fetch/accounts.py` owns the data. Full
+contract in `API_V2.md` §12.1; this is the client-facing summary.
+
+| Route | Verb | Body / query | Answer |
+| :--- | :--- | :--- | :--- |
+| `/api/v2/account` | `POST` | `{}` — or `{"sync_key": "…"}` to adopt a key this app already minted | `201 {"account": {"created": true, "created_at": …, "sync_key": "…"}}`, or `200 {"account": {"created": false, "created_at": …}}` when that key already exists. **The plaintext key is returned exactly once.** |
+| `/api/v2/account` | `GET` | — | `{"account": {"created_at", "last_seen_at"}}` |
+| `/api/v2/account/favorites` | `GET` | `?limit=` (default 200, clamped to 1000) | `{"favorites": [{work_ref, season_number, episode_number, added_at}], "count": n}` |
+| `/api/v2/account/favorites` | `POST` | `{work_ref, season_number?, episode_number?}` | `201 {"favorite": {…}}` |
+| `/api/v2/account/favorites/remove` | `POST` | same body | `{"removed": true/false}` |
+| `/api/v2/account/progress` | `GET` | `?limit=` | `{"progress": [{work_ref, season_number, episode_number, position_seconds, duration_seconds, client_updated_at, updated_at}], "count": n}` |
+| `/api/v2/account/progress` | `POST` | `{work_ref, position_seconds, duration_seconds, season_number?, episode_number?, client_updated_at?}` | `201 {"progress": {…}}` — last-write-wins per (work, season, episode) |
+| `/api/v2/account/progress/remove` | `POST` | `{work_ref, season_number?, episode_number?}` | `{"removed": true/false}` |
+| `/api/v2/account/revoke` | `POST` | — | `{"revoked": true}` |
+
+Every row is identified by `work_ref` — the same minted handle a catalog item carries —
+never by a `work_key` and never by `account_id`. A raw `work_key` in a request body is a
+`400`, the same answer as a forged handle, and neither quotes the caller's input back.
+
+### 7.2 What a client must do with a refusal
+
+Refusals are RFC 9457 `application/problem+json` with the same closed code list as the
+catalog (`api_v2.PROBLEM_CODES`), so one parser covers both. `detail` is a sentence for
+logs, never for a viewer. The mapping `SyncContract.verdictOf()` implements:
+
+- `401` / `unauthorised` → **sign this device out.** Never retry a 401 in-session: the sync
+  key *is* the whole credential, so "asking harder" is a brute-force attempt against your
+  own viewer, and `accounts.LIMITER` locks the key on a failure window (`429`).
+- `429` / `rate_limited` → **pause the session** and stop writing until `Retry-After`
+  passes. Applies to both the per-IP `account` bucket and the per-key lockout.
+- `404` **and the request carried no `work_ref`** → the account itself is unknown; sign out.
+- `404` / `400` / `403` / `409` **on a call that named a work** → that one item is refused
+  (hidden adult title, or a work no longer in the projection — indistinguishable by
+  design, `accounts.work_is_visible`); drop the item, keep the account.
+- `5xx` / anything unmapped → keep the local write. Sync is a copy, not the record.
+
+Local state is written first and synced after, so a viewer's list never waits on this VM.
+
+### 7.3 Limits a client must not try to grow
+
+No passwords, no email, no sessions, no JWT, and no user-visible profile: an account holds
+favorites and resume points and nothing else, and it grants no additional access — an
+authenticated client sees exactly what a signed-out one does. An adult-flagged work cannot
+be favorited or given a resume point even with a valid minted handle; the answer is the
+same `404` an unknown work gets. A library is capped at 5,000 favorites and 5,000 progress
+rows (`accounts.MAX_FAVORITES` / `MAX_PROGRESS`), and the answer when it is full is `409
+account_full` — a client that hits it should stop syncing, not retry. A `client_updated_at`
+more than a day ahead of this server's clock is clamped to the receipt time, so one device
+showing 2035 cannot freeze a row. And the caveat that matters most is the one on the account
+card in the app: this host is plain HTTP, so `Authorization: Bearer …` travels in the clear
+(§"Security posture"). Turn on TLS on the host before telling anyone an account is safe.

@@ -193,6 +193,13 @@ class PlayerSessionStore(
 
         /** A handful of open titles is all the staging a back-navigation ever needs. */
         const val MAX_STAGED_FAILOVERS = 24
+
+        /**
+         * How many launched addresses remember which work they are. Bigger than the failover
+         * cap on purpose: one whole quality ladder is a dozen handles, and an eviction here
+         * only costs the resume point of a title the viewer stopped opening.
+         */
+        const val MAX_STAGED_SCOPES = 96
     }
 
     /**
@@ -261,4 +268,40 @@ class PlayerSessionStore(
         /** The rung the server called best-and-playable — what choosing "Auto" means here. */
         val autoBand: String? = null,
     )
+
+    /**
+     * Which work a launched rung actually is, in the ONLY form the sync account accepts: the
+     * handle the server minted, plus the scope the viewer asked for. Staged by the detail
+     * screen beside [stageFailover], read by the player when it reports a position or looks
+     * up a resume point from another device.
+     *
+     * Same discipline as the ladder staging, on purpose: handles only, in memory only, nothing
+     * here survives a process death, and a playback that was deep-linked simply has no entry —
+     * so it syncs nothing rather than guessing which work a bare stream handle belongs to.
+     * A raw work key is NOT staged here: it can name a source site, and this map's values are
+     * the only legal way to point at a work on the account surface.
+     */
+    private val stagedWorkRefs = LinkedHashMap<String, SyncScope>()
+
+    fun stageWorkRef(streamId: String, scope: SyncScope?) {
+        if (streamId.isBlank() || scope == null) return
+        stagedWorkRefs.remove(streamId)
+        stagedWorkRefs[streamId] = scope
+        while (stagedWorkRefs.size > MAX_STAGED_SCOPES) {
+            stagedWorkRefs.remove(stagedWorkRefs.keys.first())
+        }
+    }
+
+    fun peekWorkRef(streamId: String?): SyncScope? =
+        streamId?.trim()?.takeIf { it.isNotEmpty() }?.let { stagedWorkRefs[it] }
+
+    /** The scope the viewer is currently watching, or null when nothing was staged. */
+    fun currentSyncScope(): SyncScope? = peekWorkRef(activeRendition()?.playback?.streamId)
+
+    fun clearStagedWorkRefs() {
+        stagedWorkRefs.clear()
+    }
+
+    /** One work, one scope: what a resume point is actually about. */
+    data class SyncScope(val workRef: String, val season: Int, val episode: Int)
 }

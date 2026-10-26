@@ -16,7 +16,24 @@ data class FavoritePost(
     val posterUrl: String? = null,
     val imdbRating: String? = null,
     val addedAt: Long = System.currentTimeMillis(),
+    /**
+     * The server-minted handle for this work, exactly as the catalog payload delivered it.
+     * It is the ONLY thing this app may name a work with on the sync surface, and it is
+     * null for every row saved by a build that never had one — including every row saved
+     * from today's v1 catalog, which serves no handle at all. A null here means "this
+     * favorite stays on the device", and no code below may guess a value for it.
+     */
+    val workRef: String? = null,
+    /**
+     * Wall-clock millis of the last write the server accepted for this row, or null while
+     * it is local-only. A sync push retries rows whose stamp is missing without touching
+     * ones already on the library, so a flaky evening costs a retry, not a duplicate.
+     */
+    val syncedAt: Long? = null,
 ) {
+    /** True when this row CAN be named on the sync surface — not "true when it should be". */
+    val syncable: Boolean get() = !workRef.isNullOrBlank()
+
     fun toPost(): Post = Post(
         id = id,
         title = title,
@@ -25,6 +42,7 @@ data class FavoritePost(
         contentType = contentType,
         posterUrl = posterUrl,
         imdbRating = imdbRating,
+        workRef = workRef,
     )
 
     companion object {
@@ -36,6 +54,7 @@ data class FavoritePost(
             contentType = post.contentType,
             posterUrl = post.posterUrl,
             imdbRating = post.imdbRating,
+            workRef = post.workRef,
         )
 
         fun fromPostDetail(detail: PostDetail): FavoritePost = FavoritePost(
@@ -46,6 +65,7 @@ data class FavoritePost(
             contentType = detail.contentType,
             posterUrl = detail.posterUrl,
             imdbRating = detail.imdbRating,
+            workRef = detail.workRef,
         )
     }
 }

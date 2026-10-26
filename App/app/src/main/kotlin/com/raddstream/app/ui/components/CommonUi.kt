@@ -38,6 +38,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -204,6 +205,8 @@ fun ErrorState(
     message: String,
     onRetry: () -> Unit,
     modifier: Modifier = Modifier,
+    secondaryLabel: String? = null,
+    onSecondary: (() -> Unit)? = null,
 ) {
     EmptyState(
         title = "Something went wrong",
@@ -218,10 +221,19 @@ fun ErrorState(
             )
         },
         action = {
-            OutlinedButton(onClick = onRetry) {
-                Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(18.dp))
-                Spacer(Modifier.width(8.dp))
-                Text("Retry")
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                OutlinedButton(onClick = onRetry) {
+                    Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text("Retry")
+                }
+                // A server that is down has two honest answers: try again, or go
+                // talk to a different server. Without the second one a person whose
+                // configured address is simply wrong can only retry forever.
+                if (secondaryLabel != null && onSecondary != null) {
+                    Spacer(Modifier.height(8.dp))
+                    TextButton(onClick = onSecondary) { Text(secondaryLabel) }
+                }
             }
         },
     )

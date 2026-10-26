@@ -32,6 +32,10 @@ import java.util.concurrent.ConcurrentHashMap
  * reduce to an opaque handle here ([KeepIdentity.handleFromRedirectorUrl]) and then to a task key
  * ([KeepIdentity.sourceKeyFor]). A non-redirector address simply has no task, so the engine reports
  * null rather than inventing progress or touching a foreign host.
+ *
+ * RETENTION: the window is read through [KeepTtlHolder] on every use rather than injected once as a
+ * frozen [TtlHours] — this class is a `@Singleton` that outlives a settings change, and it would
+ * otherwise keep quoting the old window to the player after the sweep had moved to the new one.
  */
 @Singleton
 class OfflineCacheEngine @Inject constructor(
@@ -40,7 +44,7 @@ class OfflineCacheEngine @Inject constructor(
     private val taskDao: CacheTaskDao,
     private val fileDao: CacheFileDao,
     private val storage: StorageGate,
-    private val ttlHours: TtlHours,
+    private val keepTtl: KeepTtlHolder,
     @CacheScope private val scope: CoroutineScope,
 ) : ProgressiveCacheEngine {
 
@@ -78,10 +82,12 @@ class OfflineCacheEngine @Inject constructor(
                     KeepResult.Stored(localHandle = task.sourceKey, playableOffline = hasCommittedFile(task.sourceKey))
                 } else {
                     // An offline keep is app-private and ages out on the retention window — say so
-                    // honestly instead of claiming a permanent stored file.
+                    // honestly instead of claiming a permanent stored file. The window is read from
+                    // [KeepTtlHolder] at the moment of the keep, the same live source the sweeper
+                    // uses, so the number the player is told is the number the delete obeys.
                     KeepResult.OnlyPlayableInApp(
                         reason = "Saved for offline playback in this app only",
-                        ttlSeconds = ttlHours.millis / 1000L,
+                        ttlSeconds = keepTtl.ttlHours().millis / 1000L,
                     )
                 }
             }
@@ -138,7 +144,11 @@ class OfflineCacheEngine @Inject constructor(
     private fun emptySnapshot(): StateFlow<CacheSnapshot?> = MutableStateFlow<CacheSnapshot?>(null)
 
     private fun CacheTaskEntity.toSnapshot(): CacheSnapshot {
-        val expires = if (originEnum == CacheOrigin.USER_KEEP) null else createdAtWallClock + ttlHours.millis
+        // The projected expiry uses the window live *now*, which is exactly what [TtlPolicy] will
+        // apply on the next sweep — the policy ages a file against the current setting, not against
+        // the one in force when the bytes landed. Two different numbers in these two places would be
+        // a row that promises a delete that never happens, or the reverse.
+        val expires = if (originEnum == CacheOrigin.USER_KEEP) null else createdAtWallClock + keepTtl.ttlHours().millis
         val pausedForSpace = stateEnum == CacheTaskState.PAUSED && lastError == CacheCoordinator.ERR_NO_SPACE
         val state = when (stateEnum) {
             CacheTaskState.QUEUED, CacheTaskState.LOADING -> CacheState.KEEPING

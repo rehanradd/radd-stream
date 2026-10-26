@@ -19,6 +19,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -35,12 +36,18 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -63,8 +70,20 @@ fun SettingsScreen(
 ) {
     val state by viewModel.uiState.collectAsState()
 
+    // A status line this screen used to print inside the About card as a button that did
+    // nothing. It is a transient answer to an action, so it lives where every other screen
+    // in this app puts one: a snack bar, shown once, then cleared back through the ViewModel
+    // so rotating the device does not re-announce a tap from ten minutes ago.
+    val snackbarHostState = remember { SnackbarHostState() }
+    LaunchedEffect(state.statusMessage) {
+        val message = state.statusMessage ?: return@LaunchedEffect
+        snackbarHostState.showSnackbar(message)
+        viewModel.clearStatus()
+    }
+
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = { TopAppBar(title = { Text("Settings") }) },
     ) { contentPadding ->
         Column(
@@ -156,6 +175,128 @@ fun SettingsScreen(
                 )
             }
 
+            // ── The optional sync account ──────────────────────────────
+            SettingsCard(title = "Account", icon = Icons.Default.Person) {
+                val account = state.account
+                Text(
+                    if (account.signedIn) {
+                        "Signed in on this device. Your saved list and resume points are kept on the " +
+                            "connected server as well as here."
+                    } else {
+                        "Optional. Without an account everything in this app works exactly as it " +
+                            "does now: your saved list and resume points stay on this device."
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+
+                account.revealedKey?.let { key ->
+                    OutlinedTextField(
+                        value = key,
+                        onValueChange = {},
+                        readOnly = true,
+                        label = { Text("Your sync key") },
+                        textStyle = MaterialTheme.typography.bodySmall,
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                        trailingIcon = {
+                            val clipboard = LocalClipboardManager.current
+                            TextButton(onClick = { clipboard.setText(AnnotatedString(key)) }) {
+                                Text("Copy")
+                            }
+                        },
+                    )
+                    // Honest, and it must stay honest: this deployment has no TLS, so the copy
+                    // says the key crosses the network in the clear instead of implying a
+                    // protection the transport does not provide.
+                    Text(
+                        SettingsViewModel.REVEAL_WARNING,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                    TextButton(onClick = viewModel::hideRevealedKey) { Text("Done showing this key") }
+                }
+
+                if (account.signedIn && account.revealedKey == null && account.keyHint.isNotEmpty()) {
+                    Text(
+                        "Key on this device: ${account.keyHint}. The full key was shown once, when it " +
+                            "was created, and is not stored anywhere it can be re-displayed.",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+
+                if (!account.signedIn) {
+                    OutlinedTextField(
+                        value = account.restoreInput,
+                        onValueChange = viewModel::onRestoreKeyChanged,
+                        label = { Text("Restore with a key") },
+                        placeholder = { Text("Paste a sync key from another device") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        Button(
+                            onClick = viewModel::createAccount,
+                            enabled = !account.isBusy,
+                            modifier = Modifier.weight(1f),
+                        ) {
+                            BusyLabel(account.isBusy, "Create account")
+                        }
+                        OutlinedButton(
+                            onClick = viewModel::restoreWithKey,
+                            enabled = !account.isBusy && account.restoreInput.isNotBlank(),
+                            modifier = Modifier.weight(1f),
+                        ) {
+                            Text("Restore")
+                        }
+                    }
+                } else {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        Button(
+                            onClick = viewModel::syncNow,
+                            enabled = !account.isBusy,
+                            modifier = Modifier.weight(1f),
+                        ) {
+                            BusyLabel(account.isBusy, "Sync now")
+                        }
+                        OutlinedButton(
+                            onClick = viewModel::signOut,
+                            enabled = !account.isBusy,
+                            modifier = Modifier.weight(1f),
+                        ) {
+                            Text("Sign out (revokes the key)")
+                        }
+                    }
+                }
+
+                account.message?.let { msg ->
+                    Text(
+                        msg,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (account.messageIsError) {
+                            MaterialTheme.colorScheme.error
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        },
+                    )
+                }
+                Text(
+                    "Sync only ever names a title by the reference the server gave it, so a " +
+                        "title this app cannot reference stays on this device. Your saved list " +
+                        "is read from this device either way — offline, it shows exactly what it " +
+                        "always showed.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+
             // ── Playback & Display preferences ─────────────────────────
             SettingsCard(title = "Playback & Display") {
                 PreferenceRowTitle("Image quality")
@@ -168,7 +309,15 @@ fun SettingsScreen(
                 SwitchRow(
                     checked = state.prefs.downloadOnMobileData,
                     onCheckedChange = viewModel::setDownloadOnMobileData,
-                    label = "Load images & keep items over mobile data",
+                    label = "Load poster images over mobile data",
+                )
+                // A keep you asked for downloads on any network, always — that promise is not
+                // what this switch is for, so it no longer claims to be.
+                Text(
+                    "A title you kept offline downloads whatever network you are on; this only " +
+                        "governs the thumbnails on the screens you browse.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
 
                 Spacer(Modifier.height(10.dp))
@@ -224,17 +373,22 @@ fun SettingsScreen(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
 
-                Spacer(Modifier.height(10.dp))
-                SwitchRow(
-                    checked = state.prefs.dynamicColor,
-                    onCheckedChange = viewModel::setDynamicColor,
-                    label = "Dynamic colour from wallpaper",
-                )
+                // Wallpaper colour is a brand decision, not a user one: this brand file
+                // locks the palette (features.dynamic_color=false), and a switch that is
+                // overruled by the build it ships in is worse than no switch. It appears
+                // the moment a re-skin permits it.
+                if (Brand.dynamicColorAllowed) {
+                    Spacer(Modifier.height(10.dp))
+                    SwitchRow(
+                        checked = state.prefs.dynamicColor,
+                        onCheckedChange = viewModel::setDynamicColor,
+                        label = "Dynamic colour from wallpaper",
+                    )
+                }
                 Text(
-                    "Audio level and audio language are saved and read back by the player. " +
-                        "Image size is applied where a consumer exists; full persistence of the " +
-                        "remaining rows and dynamic-colour theming are requested from the " +
-                        "data/theme owners (see About).",
+                    "Saved on this device, and applied the next time each one matters: image size " +
+                        "from the next poster, the keep duration from the next download, audio and " +
+                        "subtitle language from the next playback.",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -243,10 +397,12 @@ fun SettingsScreen(
             // ── Cache ──────────────────────────────────────────────────
             SettingsCard(title = "Storage & cache") {
                 Button(onClick = viewModel::clearImageCache, modifier = Modifier.fillMaxWidth()) {
-                    Text("Clear cache")
+                    Text("Clear poster images")
                 }
                 Text(
-                    "Poster images are cached automatically. Offline keeps are cleared individually on the Downloads screen.",
+                    "This clears only the poster images the app has fetched; they come back as you " +
+                        "browse. Videos you kept for offline are not touched here — they are removed " +
+                        "individually on the Downloads screen.",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -268,14 +424,17 @@ fun SettingsScreen(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 Text(
-                    "Version: client build ${Brand.versionName} (${Brand.versionCode}) • ${Brand.schemeName}\nTransport: plain HTTP to the connected server (dev only)\n" +
-                        "Search facets beyond title/type, server-side sort, and the offline cache engine are pending backend/engine work.",
+                    "Version ${Brand.versionName} (${Brand.versionCode}) • ${Brand.schemeName}\n" +
+                        "Connection: " +
+                        if (state.serverUrl.trim().startsWith("https", ignoreCase = true)) {
+                            "secured with TLS."
+                        } else {
+                            "plain HTTP — the server address you set does not use https, so anything " +
+                                "this app sends, including a sync key, can be read on the local network."
+                        },
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                state.statusMessage?.let { msg ->
-                    TextButton(onClick = { }) { Text(msg) }
-                }
             }
         }
     }
@@ -305,9 +464,26 @@ private fun SettingsCard(
     }
 }
 
+/**
+ * A button label that shows its own request. Kept to one helper so the account card's two
+ * network-touching buttons spin the same indicator the server card already uses, and a tap
+ * that is still in flight never looks like a tap that did nothing.
+ */
 @Composable
-private fun PreferenceRowTitle(text: String) {
-    Text(text, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurface)
+private fun BusyLabel(busy: Boolean, label: String) {
+    if (busy) {
+        CircularProgressIndicator(
+            Modifier.size(18.dp),
+            strokeWidth = 2.dp,
+            color = MaterialTheme.colorScheme.onPrimary,
+        )
+    } else {
+        Text(label)
+    }
+}
+
+@Composable
+private fun PreferenceRowTitle(text: String) {    Text(text, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurface)
 }
 
 @Composable

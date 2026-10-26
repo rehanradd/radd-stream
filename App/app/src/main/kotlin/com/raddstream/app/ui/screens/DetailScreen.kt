@@ -60,18 +60,17 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
-import coil.compose.AsyncImage
 import com.raddstream.app.brand.Brand
 import com.raddstream.app.network.models.PostDetail
 import com.raddstream.app.ui.components.CapabilityChip
 import com.raddstream.app.ui.components.CamBadge
+import com.raddstream.app.ui.components.CatalogImage
 import com.raddstream.app.ui.components.ErrorState
 import com.raddstream.app.ui.components.LoadingState
 import com.raddstream.app.ui.components.Pill
@@ -347,11 +346,10 @@ private fun PosterHeader(post: PostDetail, capabilities: List<String>) {
             contentAlignment = Alignment.Center,
         ) {
             if (!post.posterUrl.isNullOrBlank()) {
-                AsyncImage(
-                    model = post.posterUrl,
+                CatalogImage(
+                    url = post.posterUrl,
                     contentDescription = "${post.cleanTitle ?: post.title} poster",
                     modifier = Modifier.fillMaxSize(),
-                    contentScale = ContentScale.Crop,
                 )
             } else {
                 Text("No poster", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.labelMedium)

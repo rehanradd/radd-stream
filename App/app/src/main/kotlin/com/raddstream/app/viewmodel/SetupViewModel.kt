@@ -3,6 +3,7 @@ package com.raddstream.app.viewmodel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.raddstream.app.brand.Brand
+import com.raddstream.app.network.friendlyNetworkError
 import com.raddstream.app.repository.CatalogRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
@@ -64,7 +65,7 @@ class SetupViewModel @Inject constructor(
                     it.copy(
                         isChecking = false,
                         isConnected = false,
-                        message = error.message ?: "Could not connect to that server.",
+                        message = friendlyNetworkError(error, "Could not connect to that server."),
                         messageIsError = true,
                     )
                 }

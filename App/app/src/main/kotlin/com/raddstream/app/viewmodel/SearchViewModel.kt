@@ -2,6 +2,7 @@ package com.raddstream.app.viewmodel
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.raddstream.app.network.friendlyNetworkError
 import com.raddstream.app.network.models.Post
 import com.raddstream.app.repository.CatalogRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -139,7 +140,7 @@ class SearchViewModel @Inject constructor(
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Exception) {
-                _uiState.update { it.copy(error = error.message ?: "Could not load more.") }
+                _uiState.update { it.copy(error = friendlyNetworkError(error, "Could not load more.")) }
             } finally {
                 _uiState.update { it.copy(isLoadingMore = false) }
             }
@@ -189,7 +190,7 @@ class SearchViewModel @Inject constructor(
                 _uiState.update {
                     it.copy(
                         isLoading = false,
-                        error = error.message ?: "Search failed. Check the server connection.",
+                        error = friendlyNetworkError(error, "Search failed. Check the server connection."),
                         groups = emptyList(),
                         resultCount = 0,
                     )

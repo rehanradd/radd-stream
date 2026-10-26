@@ -225,12 +225,6 @@ data class Entitlement(
         /** The only entitlement the live server implies for every catalog row today. */
         val freeDefault = Entitlement(EntitlementModel.FREE, Ownership.PERMANENT)
     }
-
-    /** §8.3: a gated offer may never be played over the cleartext host. */
-    fun isPlayableOn(cleartextHttp: Boolean): Boolean =
-        !needsLicenceGate || !cleartextHttp
-
-    private val needsLicenceGate: Boolean get() = model.needsLicence
 }
 
 /** What the server says the work currently is, per print. */

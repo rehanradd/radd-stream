@@ -110,6 +110,11 @@ data class PlayerUiState(
     val audioBoostLevel: Float = AudioBoost.BASELINE,
     /** The user's preferred audio language, as they spelled it; null = the player's own pick. */
     val preferredAudioLanguage: String? = null,
+    /**
+     * The user's preferred subtitle language, as they spelled it. Null is not "no opinion":
+     * the Settings row stores the absence of a value for "Off", so null means no subtitles.
+     */
+    val preferredSubtitleLanguage: String? = null,
     /** The rung Auto is playing now; null when Auto is not armed (manual band or no ladder). */
     val autoQualityBand: String? = null,
     val frameRate: Float? = null,
@@ -177,6 +182,14 @@ data class PlayerUiState(
      */
     fun audioTrackRows(): List<AudioTrackRow> =
         audioTracks.map { AudioTrackRow(it.id, it.language, it.label, it.selected, it.supported) }
+
+    /**
+     * The text tracks in the shape the subtitle-language policy consumes — the same row type
+     * as [audioTrackRows], because what a language decision reads is a tag and a label, not
+     * a renderer.
+     */
+    fun subtitleTrackRows(): List<AudioTrackRow> =
+        subtitleTracks.map { AudioTrackRow(it.id, it.language, it.label, it.selected, it.supported) }
 
     /** Whether the cycle-audio affordance would change the sound (two playable tracks). */
     val canCycleAudio: Boolean get() = AudioTrackPolicy.canCycle(audioTrackRows())

@@ -147,10 +147,6 @@ data class PlaybackInfo(
     val effectiveSeekable: Boolean
         get() = seekable != false && acceptsRanges != false
 
-    /** §8.3: cleartext media URL — playable in debug builds only; release blocks it. */
-    val isCleartext: Boolean
-        get() = playUrl?.startsWith("http://") == true
-
     /**
      * The address is only usable if it is OUR OWN redirector. Every hand-off in the app checks
      * this, so an upstream URL could not be opened even if one somehow reached this model.

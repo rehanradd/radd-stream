@@ -54,6 +54,7 @@ fun HomeScreen(
     onSearchClick: () -> Unit,
     onPostClick: (Int) -> Unit = {},
     onBrowseType: (String?) -> Unit = {},
+    onSetupServerClick: () -> Unit = {},
     viewModel: HomeViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsState()
@@ -87,7 +88,14 @@ fun HomeScreen(
             // Fatal error only when *every* rail failed and none has data to show.
             val anyVisible = state.sections.any { it.visible }
             if (state.fatal != null && !anyVisible) {
-                ErrorState(message = state.fatal ?: "Server did not respond.", onRetry = viewModel::refresh)
+                ErrorState(
+                    message = state.fatal ?: "Server did not respond.",
+                    onRetry = viewModel::refresh,
+                    // The address is the one thing a person can fix themselves, and
+                    // Settings is four taps away. Offer it where the failure is seen.
+                    secondaryLabel = "Set up a server",
+                    onSecondary = onSetupServerClick,
+                )
             } else {
                 JumpOffRow(onBrowseType = onBrowseType)
                 Spacer(Modifier.height(8.dp))

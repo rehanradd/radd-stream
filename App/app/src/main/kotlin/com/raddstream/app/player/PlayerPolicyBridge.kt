@@ -8,8 +8,9 @@ import kotlin.math.roundToInt
  * ─────────────────────────────────────────────────────────────────────────────
  * The four policy classes next to this file (AudioBoost, AudioTrackMatcher,
  * AdaptiveQualitySwitcher, BingePreloader) are deliberately Android-free, and the
- * player around them is deliberately not. This file is the seam: it holds NO rule of
- * its own, only the reduction from what Media3 reports to what a rule consumes, plus
+ * player around them is deliberately not. This file is the seam: it holds no rule of its
+ * own beyond the two stated on the objects below (the audio-language reduction, the subtitle
+ * `Off` row), only the reduction from what Media3 reports to what a rule consumes, plus
  * the small amount of state a rule needs but refuses to own (the fire-once set, the
  * staged ladder, "which rung are we actually playing").
  *
@@ -22,9 +23,13 @@ import kotlin.math.roundToInt
  */
 
 /**
- * One audio track reduced to what a language decision needs. Mirrors
+ * One track reduced to what a language decision needs. Mirrors
  * [AudioCandidate] but is owned by the seam, because the player's own row type carries
  * a Media3 `TrackGroup` and a seam that needs a device to test is a seam nobody trusts.
+ *
+ * Audio in the name, language in the fields: a text track offers exactly the same three
+ * facts (an address, a declared tag, a human label), so the subtitle preference reuses
+ * these rows instead of growing a second row type that happens to have the same shape.
  */
 data class AudioTrackRow(
     val id: String,
@@ -58,6 +63,56 @@ object AudioTrackPolicy {
 
     /** The English name for a language tag, when this catalog knows it; null otherwise. */
     fun nameFor(tag: String?): String? = AudioTrackMatcher.displayName(tag)
+}
+
+/**
+ * The three things the subtitle-language preference can honestly ask of the text tracks.
+ *
+ * Three, not two, because "Off" is a wish rather than an absence: the Settings row means
+ * "no subtitles", which is an action with a visible result, while "nothing matched" means
+ * the app has no business touching what the player already chose. Collapsing those two into
+ * a nullable id would make one of them a lie.
+ */
+sealed interface SubtitleTrackDecision {
+    /** Select this text track id — the preference found its track. */
+    data class Select(val id: String) : SubtitleTrackDecision
+
+    /** Disable text: the viewer asked for no subtitles. */
+    data object TurnOff : SubtitleTrackDecision
+
+    /** Change nothing — nothing matched, or the match is already playing. */
+    data object LeaveAlone : SubtitleTrackDecision
+}
+
+/**
+ * The subtitle-language preference applied to real text tracks.
+ *
+ * It owns NO string matching. [AudioTrackMatcher] already knows that a preference spelled
+ * "Hindi" belongs to a track tagged "hi" and that a label saying "[IN]" counts while
+ * "Surrounded" does not — none of that is specific to audio, and a second table for
+ * subtitles would be a second thing free to disagree with the first. What is specific to
+ * subtitles is the `Off` row, so that is the only judgement made here.
+ */
+object SubtitleTrackPolicy {
+
+    /**
+     * What to do with the text tracks for [preferred], as the viewer spelled it (a BCP-47
+     * tag or a name typed into the chip row).
+     *
+     * Null, blank and the literal `Off` all mean turn text off. The storage contract maps
+     * the chip's "Off" to null before it is written, so the literal check is not rescuing a
+     * leaked value — it is this function refusing to assume which caller spelled off which way.
+     */
+    fun decide(rows: List<AudioTrackRow>, preferred: String?): SubtitleTrackDecision {
+        val wanted = preferred?.trim()?.takeIf { it.isNotEmpty() && !it.equals(OFF, ignoreCase = true) }
+            ?: return SubtitleTrackDecision.TurnOff
+        val picked = AudioTrackMatcher.match(AudioTrackPolicy.candidates(rows), wanted)
+            ?: return SubtitleTrackDecision.LeaveAlone
+        return SubtitleTrackDecision.Select(picked)
+    }
+
+    /** The chip-row spelling of "no subtitles", matched case-insensitively above. */
+    private const val OFF = "Off"
 }
 
 /**

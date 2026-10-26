@@ -3,6 +3,7 @@ package com.raddstream.app.viewmodel
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.raddstream.app.network.friendlyNetworkError
 import com.raddstream.app.network.models.LinkClassification
 import com.raddstream.app.network.models.LinkState
 import com.raddstream.app.network.models.PostDetail
@@ -16,6 +17,7 @@ import com.raddstream.app.repository.CacheRepository
 import com.raddstream.app.repository.CatalogRepository
 import com.raddstream.app.repository.FavoritesRepository
 import com.raddstream.app.repository.KeepOutcome
+import com.raddstream.app.sync.SyncAccountRepository
 import com.raddstream.app.ui.navigation.Screen
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
@@ -61,6 +63,7 @@ class DetailViewModel @Inject constructor(
     private val catalogRepository: CatalogRepository,
     private val favoritesRepository: FavoritesRepository,
     private val cacheRepository: CacheRepository,
+    private val syncAccountRepository: SyncAccountRepository,
 ) : ViewModel() {
 
     private val postId: Int = (savedStateHandle[Screen.Detail.ARG_POST_ID] as? String)?.toIntOrNull()
@@ -107,6 +110,10 @@ class DetailViewModel @Inject constructor(
                             isLoading = false,
                         )
                     }
+                    // A row saved before this app had a handle becomes syncable the moment the
+                    // catalog finally names its work. Nothing here fabricates a handle: an absent
+                    // key is a no-op, and a present one is the server's own.
+                    syncAccountRepository.adoptWorkRef(postId, detail.workRef)
                 } else {
                     _uiState.update {
                         it.copy(isLoading = false, error = "This title is not available on the connected server.")
@@ -114,7 +121,7 @@ class DetailViewModel @Inject constructor(
                 }
             } catch (ex: Exception) {
                 _uiState.update {
-                    it.copy(isLoading = false, error = ex.message ?: "Failed to load details. Check connection.")
+                    it.copy(isLoading = false, error = friendlyNetworkError(ex, "Failed to load details. Check connection."))
                 }
             }
         }
@@ -236,6 +243,15 @@ class DetailViewModel @Inject constructor(
         }
         PlayerSessionStore.Instance.stageFailover(option.streamId, option.backupHandles)
         stageAutoLadder(option)
+        stageSyncScope(
+            streamId = option.streamId,
+            season = _uiState.value.ladderSeason,
+            episode = _uiState.value.ladderEpisode,
+            // Every rung of this scope's ladder plus each rung's runner-ups: Auto moves
+            // playback onto another address without coming back through this screen, and a
+            // resume point belongs to the episode, not to whichever address served it.
+            backupHandles = _uiState.value.ladder.options.flatMap { listOf(it.streamId) + it.backupHandles },
+        )
         _uiState.update { it.copy(selectedBand = option.band) }
         viewModelScope.launch {
             if (external && option.playUrl != null) {
@@ -273,6 +289,32 @@ class DetailViewModel @Inject constructor(
         )
     }
 
+    /**
+     * Which work a launched rung is, in the only form the sync account accepts: the handle the
+     * server minted for this post. Nothing is staged when the catalog named no handle, so a
+     * deep-linked or un-named playback simply syncs nothing instead of guessing at an
+     * identifier — the player reads these back from [PlayerSessionStore].
+     *
+     * A rung's silent runner-ups are staged under the same scope, because a CDN that refuses
+     * moves playback onto one of them without anybody choosing a new work: the resume point
+     * belongs to the episode, not to the address that happened to serve it.
+     */
+    private fun stageSyncScope(
+        streamId: String,
+        season: Int?,
+        episode: Int?,
+        backupHandles: List<String> = emptyList(),
+    ) {
+        val workRef = _uiState.value.post?.workRef?.takeIf { it.isNotBlank() } ?: return
+        val scope = PlayerSessionStore.SyncScope(
+            workRef = workRef,
+            season = season ?: 0,
+            episode = episode ?: 0,
+        )
+        PlayerSessionStore.Instance.stageWorkRef(streamId = streamId, scope = scope)
+        backupHandles.forEach { PlayerSessionStore.Instance.stageWorkRef(it, scope) }
+    }
+
     /** Play the best link this print offers. The server already ranked them. */
     fun playPrint(print: RankedPrint, external: Boolean = false) {
         val link = print.links.firstOrNull { it.playableHere } ?: print.links.firstOrNull { it.keepable }
@@ -280,20 +322,25 @@ class DetailViewModel @Inject constructor(
             _uiState.update { it.copy(actionMessage = "Nothing playable on this print yet.") }
             return
         }
-        playLink(link, external)
+        playLink(link, external, print.season, print.episodeFrom)
     }
 
     /**
      * Nothing is resolved here: the server hands us an opaque handle plus OUR OWN redirector
      * for it, and the 302 happens at playback time. A link without either is not a link.
+     *
+     * [season] / [episode] are the scope this row belongs to, when the caller knows it. They
+     * decide which resume point the player looks up, so an unknown scope is passed on as the
+     * card's own rather than as a guess of 0/0.
      */
-    fun playLink(link: RankedLink, external: Boolean = false) {
+    fun playLink(link: RankedLink, external: Boolean = false, season: Int? = null, episode: Int? = null) {
         val title = _uiState.value.post?.let { it.cleanTitle ?: it.title } ?: "Stream"
         val playUrl = link.playUrl
         if (link.streamId.isBlank() || playUrl.isNullOrBlank()) {
             _uiState.update { it.copy(actionMessage = "This option is download-only.") }
             return
         }
+        stageSyncScope(link.streamId, season ?: _uiState.value.ladderSeason, episode ?: _uiState.value.ladderEpisode)
         viewModelScope.launch {
             if (external) _navEvents.emit(DetailNavigationEvent.OpenExternal(link.streamId, playUrl))
             else _navEvents.emit(DetailNavigationEvent.PlayStream(link.streamId, title))

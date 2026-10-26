@@ -3,6 +3,7 @@ package com.raddstream.app.viewmodel
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.raddstream.app.network.friendlyNetworkError
 import com.raddstream.app.network.models.Post
 import com.raddstream.app.repository.CatalogRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -58,7 +59,7 @@ class BrowseViewModel @Inject constructor(
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Exception) {
-                _uiState.update { it.copy(loading = false, error = error.message ?: "Could not load this category.") }
+                _uiState.update { it.copy(loading = false, error = friendlyNetworkError(error, "Could not load this category.")) }
             }
         }
     }
@@ -82,7 +83,7 @@ class BrowseViewModel @Inject constructor(
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Exception) {
-                _uiState.update { it.copy(loadingMore = false, error = error.message ?: "Could not load more.") }
+                _uiState.update { it.copy(loadingMore = false, error = friendlyNetworkError(error, "Could not load more.")) }
             }
         }
     }

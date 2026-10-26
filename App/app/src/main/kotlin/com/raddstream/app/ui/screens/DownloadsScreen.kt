@@ -19,6 +19,7 @@ import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -49,6 +50,7 @@ import com.raddstream.app.viewmodel.StorageInfo
 @Composable
 fun DownloadsScreen(
     onBackClick: () -> Unit,
+    onPlay: (KeptItem) -> Unit = {},
     viewModel: DownloadsViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsState()
@@ -114,7 +116,12 @@ fun DownloadsScreen(
                 }
             } else {
                 items(state.items, key = { it.id }) { item ->
-                    KeptItemRow(item = item, onCancel = { viewModel.cancel(item) }, onRetry = { viewModel.retry(item) })
+                    KeptItemRow(
+                        item = item,
+                        onPlay = { onPlay(item) },
+                        onCancel = { viewModel.cancel(item) },
+                        onRetry = { viewModel.retry(item) },
+                    )
                 }
             }
         }
@@ -177,7 +184,12 @@ private fun PlayableOnlyNotice() {
 }
 
 @Composable
-private fun KeptItemRow(item: KeptItem, onCancel: () -> Unit, onRetry: () -> Unit) {
+private fun KeptItemRow(
+    item: KeptItem,
+    onPlay: () -> Unit,
+    onCancel: () -> Unit,
+    onRetry: () -> Unit,
+) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -199,6 +211,12 @@ private fun KeptItemRow(item: KeptItem, onCancel: () -> Unit, onRetry: () -> Uni
             Text("${formatMiB(item.bytesDownloaded)} / $total", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            // The one action a kept file exists for. It opens the same player every other
+            // surface uses, addressed by the keep's own redirector handle, so the cached bytes
+            // are found by the engine's play-from-cache rung rather than a second playback path.
+            if (item.playable) {
+                Button(onClick = onPlay, modifier = Modifier.weight(1f)) { Text("Play") }
+            }
             when (item.state) {
                 KeepState.FAILED, KeepState.NO_SPACE -> OutlinedButton(onClick = onRetry) { Text("Retry") }
                 KeepState.DOWNLOADING, KeepState.QUEUED, KeepState.PAUSED, KeepState.READY, KeepState.EXPIRING ->

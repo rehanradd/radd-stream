@@ -11,8 +11,11 @@ import javax.inject.Singleton
  * reclamation of an orphaned temp file left by a killed download — no new timer anywhere: the
  * window comes from the injected [TtlHours] and the arithmetic from [TtlPolicy].
  *
- * The retention window is provided lazily so a future user setting (3 vs 6 hours) is picked up on
- * every sweep instead of being frozen into a single constructed sweeper.
+ * The retention window is provided lazily so the user's 3 h / 6 h choice (persisted in
+ * [com.raddstream.app.data.ServerSettingsRepository], mirrored live by [KeepTtlHolder]) is picked up
+ * on every sweep instead of being frozen into a single constructed sweeper. The provider is a plain
+ * volatile read, never a suspending DataStore call: a sweep runs off the main thread on a timer and
+ * must not block on disk to learn what the Settings screen already knows.
  */
 @Singleton
 class RoomCacheSweepStore @Inject constructor(

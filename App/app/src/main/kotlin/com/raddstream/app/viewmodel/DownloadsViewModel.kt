@@ -8,7 +8,7 @@ import com.raddstream.app.data.cache.CacheCoordinator
 import com.raddstream.app.data.cache.CacheOrigin
 import com.raddstream.app.data.cache.CacheTaskEntity
 import com.raddstream.app.data.cache.CacheTaskState
-import com.raddstream.app.data.cache.TtlHours
+import com.raddstream.app.data.cache.KeepTtlHolder
 import com.raddstream.app.repository.CacheRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -33,6 +33,13 @@ data class KeptItem(
     val bytesTotal: Long,
     val state: KeepState,
     val expiresAtMillis: Long?,
+    /**
+     * The opaque redirector handle this keep plays through — the same handle a stream route
+     * takes, and the only address the player may be handed. Null when the engine never got one
+     * (a task created before the keep was resolved, or one the server refused to name), which
+     * is why [playable] checks it rather than trusting the state alone.
+     */
+    val streamHandle: String? = null,
 ) {
     val progress: Float
         get() = if (bytesTotal > 0) (bytesDownloaded.toFloat() / bytesTotal.toFloat()).coerceIn(0f, 1f) else 0f
@@ -40,6 +47,15 @@ data class KeptItem(
     /** Whole-file percent for the downloading line; null when the size was never learned. */
     val percent: Int?
         get() = if (bytesTotal > 0) (progress * 100).toInt().coerceIn(0, 100) else null
+
+    /**
+     * A row may be tapped to play only while bytes are on the device AND the engine has a
+     * handle to play them through. An expiring keep is included deliberately: it is still
+     * here, and the screen already says out loud how long it will be.
+     */
+    val playable: Boolean
+        get() = !streamHandle.isNullOrBlank() &&
+            (state == KeepState.READY || state == KeepState.EXPIRING)
 
     fun remainingMillis(now: Long): Long? = expiresAtMillis?.let { (it - now).coerceAtLeast(0) }
 }
@@ -66,7 +82,7 @@ data class DownloadsUiState(
 class DownloadsViewModel @Inject constructor(
     @ApplicationContext private val context: Context,
     private val cacheRepository: CacheRepository,
-    private val ttlHours: TtlHours,
+    private val keepTtl: KeepTtlHolder,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(DownloadsUiState())
@@ -145,6 +161,7 @@ class DownloadsViewModel @Inject constructor(
             bytesTotal = task.totalSizeBytes,
             state = state,
             expiresAtMillis = expiresAt,
+            streamHandle = task.resourceId?.takeIf { it.isNotBlank() },
         )
     }
 
@@ -152,7 +169,10 @@ class DownloadsViewModel @Inject constructor(
     private fun expiryFor(task: CacheTaskEntity): Long? {
         if (task.originEnum == CacheOrigin.USER_KEEP) return null
         if (task.stateEnum != CacheTaskState.COMPLETED && task.stateEnum != CacheTaskState.EXPIRED) return null
-        return task.createdAtWallClock + ttlHours.millis
+        // Read live from [KeepTtlHolder] — the same source the sweep deletes against — so this row
+        // cannot promise a minute the engine has no intention of honouring. A settings change lands
+        // on the next task emission; nothing here owns a timer of its own.
+        return task.createdAtWallClock + keepTtl.ttlHours().millis
     }
 
     companion object {

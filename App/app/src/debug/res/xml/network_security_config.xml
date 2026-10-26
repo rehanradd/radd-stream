@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Debug builds only. Deliberately wider than release: whoever is developing the
+     backend points this app at their own box — a laptop on the LAN, a VM by name, a
+     tunnel — and a generated allow-list of the one production host would break that.
+     Release never sees this file; it gets `@xml/network_security_config` generated
+     from /brand.properties, which permits cleartext for loopback only unless the
+     owner explicitly opts the shipped host in with
+     `network.release_cleartext_for_default_host=true`. -->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true" />
+</network-security-config>

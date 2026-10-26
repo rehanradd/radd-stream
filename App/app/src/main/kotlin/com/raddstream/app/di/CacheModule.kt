@@ -13,6 +13,7 @@ import com.raddstream.app.data.cache.CacheTaskDao
 import com.raddstream.app.data.cache.ConnectivityProbe
 import com.raddstream.app.data.cache.HlsAheadBuffer
 import com.raddstream.app.data.cache.KeepSourceFactory
+import com.raddstream.app.data.cache.KeepTtlHolder
 import com.raddstream.app.data.cache.NetworkClass
 import com.raddstream.app.data.cache.RangeByteFetcher
 import com.raddstream.app.data.cache.RedirectorSourceResolver
@@ -86,13 +87,23 @@ object CacheModule {
     )
 
     /**
-     * The auto-preview retention window the sweep applies to ephemeral keeps. [TtlPolicy] offers
-     * exactly two knobs (3 or 6 hours); six is the "watch it tonight" default and is the timer the
-     * sweeper uses — never a new, independently hardcoded one.
+     * The auto-preview retention window the sweep applies to ephemeral keeps, straight from
+     * [KeepTtlHolder] — i.e. from the same DataStore key the Settings screen's 3 h / 6 h control
+     * writes. This used to be a hardcoded `TtlHours.SIX`, which is precisely why that control did
+     * nothing.
+     *
+     * DELIBERATELY NOT `@Singleton`: the value changes while the process lives, so caching the
+     * instance would freeze whichever window happened to be read first (and on a cold start that is
+     * the 3-hour default, silently ignoring a saved 6). [RoomCacheSweepStore] asks through a
+     * [javax.inject.Provider] once per sweep, so an unscoped binding is how the fresh value arrives —
+     * and the read is a plain volatile field, so calling it off the main thread costs nothing.
+     *
+     * The holder itself needs no `@Provides`: it is an `@Inject`-constructed `@Singleton` that seeds
+     * itself from [com.raddstream.app.RaddStreamApplication], the same way
+     * [com.raddstream.app.share.LanShareRunner] is started.
      */
     @Provides
-    @Singleton
-    fun provideTtlHours(): TtlHours = TtlHours.SIX
+    fun provideTtlHours(holder: KeepTtlHolder): TtlHours = holder.ttlHours()
 
     @Provides
     @Singleton

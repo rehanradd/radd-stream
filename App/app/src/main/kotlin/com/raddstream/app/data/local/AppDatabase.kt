@@ -20,6 +20,13 @@ import com.raddstream.app.data.cache.CacheTaskEntity
  * destructive fallback registered in the DI layer, which lets Room generate the cache schema
  * verbatim from these entities rather than hand-writing DDL that could drift from them. The
  * favorite migration from 1 is preserved for anyone already on that schema.
+ *
+ * Version 4 is the optional sync account. It adds two columns to `favorite_posts` (the
+ * server-minted handle, and the stamp of the write that last succeeded) and the
+ * `synced_progress` mirror, and it is written as real DDL rather than left to the destructive
+ * fallback on purpose: a saved list is the one table in this app a viewer would notice losing,
+ * and an app that wipes it because a feature was switched on has broken a promise the feature
+ * never made.
  */
 @Database(
     entities = [
@@ -27,8 +34,9 @@ import com.raddstream.app.data.cache.CacheTaskEntity
         CacheTaskEntity::class,
         CacheFileEntity::class,
         ByteRangeManifestEntity::class,
+        SyncedProgressEntity::class,
     ],
-    version = 3,
+    version = 4,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -36,6 +44,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun cacheTaskDao(): CacheTaskDao
     abstract fun cacheFileDao(): CacheFileDao
     abstract fun byteRangeManifestDao(): ByteRangeManifestDao
+    abstract fun syncedProgressDao(): SyncedProgressDao
 
     companion object {
         /**
@@ -60,6 +69,29 @@ abstract class AppDatabase : RoomDatabase() {
                 )
                 db.execSQL("DROP TABLE favorite_posts")
                 db.execSQL("ALTER TABLE favorite_posts_new RENAME TO favorite_posts")
+            }
+        }
+
+        /**
+         * 3 → 4: the sync-account columns and the resume-point mirror. Both favorite columns
+         * are nullable, so an existing row means "local only" the moment it lands and nothing
+         * in this step can change what a signed-out viewer sees.
+         *
+         * The second statement is one ADD COLUMN per statement because SQLite has never
+         * supported adding two columns at once; a reader that expects one line here throws
+         * "near ,: SQL syntax error" at open instead of telling anybody what went wrong.
+         */
+        val MIGRATION_3_4: Migration = object : Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE favorite_posts ADD COLUMN workRef TEXT")
+                db.execSQL("ALTER TABLE favorite_posts ADD COLUMN syncedAt INTEGER")
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS synced_progress (" +
+                        "workRef TEXT NOT NULL, seasonNumber INTEGER NOT NULL, " +
+                        "episodeNumber INTEGER NOT NULL, positionSeconds REAL NOT NULL, " +
+                        "durationSeconds REAL NOT NULL, clientUpdatedAt REAL NOT NULL, " +
+                        "pulledAt INTEGER NOT NULL, PRIMARY KEY(workRef, seasonNumber, episodeNumber))",
+                )
             }
         }
     }

@@ -120,6 +120,7 @@ fun RaddStreamNavGraph(
                     onSearchClick = { navController.navigate(Screen.Search.route) },
                     onPostClick = { postId -> navController.navigate(Screen.Detail.createRoute(postId)) },
                     onBrowseType = { type -> navController.navigate(Screen.Browse.createRoute(type)) },
+                    onSetupServerClick = { navController.navigate(Screen.Setup.route) },
                 )
             }
 
@@ -161,7 +162,14 @@ fun RaddStreamNavGraph(
             }
 
             composable(Screen.Downloads.route) {
-                DownloadsScreen(onBackClick = { navController.popBackStack() })
+                DownloadsScreen(
+                    onBackClick = { navController.popBackStack() },
+                    onPlay = { item ->
+                        item.streamHandle?.let {
+                            navController.navigate(Screen.Player.createRoute(it, item.title))
+                        }
+                    },
+                )
             }
 
             composable(

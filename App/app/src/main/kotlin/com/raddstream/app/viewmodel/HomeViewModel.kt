@@ -2,6 +2,7 @@ package com.raddstream.app.viewmodel
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.raddstream.app.network.friendlyNetworkError
 import com.raddstream.app.network.models.Post
 import com.raddstream.app.repository.CatalogRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -98,7 +99,7 @@ class HomeViewModel @Inject constructor(
                 _uiState.update {
                     it.copy(
                         isRefreshing = false,
-                        fatal = error.message ?: "Your connected catalog server did not respond.",
+                        fatal = friendlyNetworkError(error, "Your connected catalog server did not respond."),
                     )
                 }
             }
@@ -113,7 +114,9 @@ class HomeViewModel @Inject constructor(
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (error: Exception) {
-            markSection(section.key) { it.copy(loading = false, error = error.message ?: "Could not load this row.") }
+            markSection(section.key) {
+                it.copy(loading = false, error = friendlyNetworkError(error, "Could not load this row."))
+            }
         }
     }
 
