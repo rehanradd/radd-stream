@@ -44,6 +44,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+import html
 import json
 import os
 import re
@@ -385,7 +386,27 @@ _PURE_DESCRIPTOR_RE = re.compile(
     r"|(?:watch|play)\s+online|all\s+direct\s+links?)$",
     re.IGNORECASE)
 _ORPHAN_SEP_RE = re.compile(r"\s*(?:[-–—|·:,]\s*)+(?:[-–—|·:,]\s*)+")
-_ENTITIES = {"&#8211;": "-", "&ndash;": "-", "&amp;": "&", "&nbsp;": " "}
+
+
+def _decode_entities(text: str) -> str:
+    """Resolve HTML character references before anything else looks at the string.
+
+    A stored title is whatever the site's page said, and a page says an apostrophe
+    as ``&#8217;`` and a dash as ``&ndash;``. Decoding is the difference between
+    serving ``JoJo&#8217;s Bizarre Adventure`` and serving the title.
+
+    Run twice on purpose: a CMS that escaped its own escapes answers
+    ``&amp;#8217;``, which becomes a readable ``&#8217;`` on the first pass and only
+    resolves on the second. Two passes is the bound — an input built as a long
+    ``&amp;amp;amp;…`` chain would otherwise make this loop as many times as the
+    caller's patience allows.
+
+    ``&nbsp;`` decodes to U+00A0, a space nothing else here treats as one, so it is
+    folded to an ordinary space in the same breath.
+    """
+    if "&" not in text:
+        return text
+    return html.unescape(html.unescape(text)).replace("\xa0", " ")
 
 #: A deletion must not leave the reader staring at a hole. Once the brand is
 #: gone, a connective that now points at nothing ("… links Free on",
@@ -493,9 +514,7 @@ def scrub_text(value) -> str:
     text = str(value if value is not None else "")
     if not text:
         return ""
-    out = text
-    for entity, replacement in _ENTITIES.items():
-        out = out.replace(entity, replacement)
+    out = _decode_entities(text)
     # Checked before the cut as well as after it: "All Direct Links" would
     # otherwise leave the orphan word "All" standing where a label used to be.
     if len(out.split()) > 1 and _PURE_DESCRIPTOR_RE.match(out):
@@ -704,7 +723,7 @@ def provenance_keys(obj, found=None) -> list[str]:
 #: noise, not information about anyone. A sentinel scan masks these before reading
 #: text, because random noise collides with brand spellings.
 MINTED_KEYS = frozenset({"stream_id", "art", "play_url", "download_url",
-                         "link_ref", "id_ref", "backup_handles"})
+                         "link_ref", "work_ref", "backup_handles"})
 
 
 def minted_values(obj, found=None) -> list[str]:
@@ -1009,6 +1028,7 @@ BUCKET_LIMITS = {
     "play": (30, 60.0),      # /stream, /art, /m3u — the expensive ones
     "browse": (60, 60.0),    # /posts, /api/data, search, sitemap
     "reports": (10, 60.0),   # /stats
+    "account": (30, 60.0),   # /api/v2/account* — cheap calls, but they carry a key
 }
 
 #: The budget for a bucket name nobody declared. An unmapped route must still be

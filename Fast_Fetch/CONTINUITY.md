@@ -497,6 +497,12 @@ routes; restrict the bind and public routes before enabling the public proxy.
   7. 2.0x Long-Press Speed Optimization Engine (Asynchronous MediaCodec + Smart Turbo 1.6x/2.0x scaling to eliminate freeze on 4GB budget phones)
   8. Night-Mode Dialogue Normalizer (Dynamic Range Compression) & Bluetooth Audio-Sync Delay Slider
   9. Priority 5: The "Desi Cine-Finder" (South Asia TikTok/Reels clip & scene identifier: 0 video upload, client-side keyframes, on-device OCR, Lens intent bridge, Share-to-Stream sheet, and SQLite FTS5 natural language plot search)
+  10. Priority 6: Sovereign Admin & Monetization Blueprint (`Fast_Fetch/admin_panel.py`: loopback-only
+      operator panel, remote config, broadcast alerts, anti-crack HMAC signed payloads, 17/17 operator
+      isolation tests passing). The accompanying business-side spec and account-setup guide are
+      deliberately **not in this repository** — they name payment rails and an operator location, and
+      publishing them here (this tree is mirrored to a public dataset) is the owner's call, not an
+      agent's. Ask before writing either into a tracked file.
 - **Sanitation**: What actually moved was three untracked items — `load_catalog.py`, a 271 MB stale
   `merged_catalog_stale_prerelease_fix.db` and a leftover build directory — now in
   `/home/ubuntu/project_trash_bin/`. No tracked source or test file was deleted (the only tracked

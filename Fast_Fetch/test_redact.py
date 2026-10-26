@@ -297,6 +297,26 @@ class DisplayTextTests(unittest.TestCase):
         redact.set_needles({"rogmovies", "officialrogmovies"})
         self.assertEqual(redact.scrub_text("Rogmovies OfficialRogmovies"), "")
 
+    def test_character_references_are_resolved_before_anything_is_matched(self):
+        # A page says an apostrophe as `&#8217;` and a dash as `&#8211;`. Passing
+        # that through is how the app came to display `JoJo&#8217;s`; decoding is
+        # also what lets the brand rules see `Vegamovies` inside `Vega&sh;movies`
+        # shaped text, so it happens first, not last.
+        for text, want in (
+                ("JoJo&#8217;s Bizarre Adventure", "JoJo’s Bizarre Adventure"),
+                ("Chapter III &#8211; The Curse", "Chapter III – The Curse"),
+                ("Tom &amp; Jerry Kids Show", "Tom & Jerry Kids Show"),
+                ("Klaus&nbsp;Production", "Klaus Production"),
+                ("&#039;71", "'71")):
+            self.assertEqual(redact.scrub_text(text), want, text)
+
+    def test_a_double_escape_is_resolved_once_more_and_no_further(self):
+        # A CMS that escaped its own escapes needs the second pass; the bound is
+        # the point — a long `&amp;amp;…` chain must not make this spin forever.
+        self.assertEqual(redact.scrub_text("Tom &amp;amp; Jerry"), "Tom & Jerry")
+        deep = "Tom " + "&amp;" * 40 + " Jerry"
+        self.assertTrue(redact.scrub_text(deep).startswith("Tom &"), deep[:60])
+
 
 class HandleTests(unittest.TestCase):
     SECRET = "unit-test-secret"
