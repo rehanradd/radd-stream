@@ -25,6 +25,23 @@ Update this file after each independently verified milestone so work can resume 
 - **Subtitle rule:** every `.vtt/.srt/.ass` track becomes its own `sources` row with
   `playback_type='subtitle'`, and the full track map is kept in `raw_meta`. Tracks are never
   dropped or deduplicated by language.
+- **Subtitle audit result (verified by query):** the legacy pipeline stored **zero** subtitle
+  rows — 17,541 filmiyin sources, 2,229+ dramacool sources and every sampled legacy range
+  carry no `playback_type='subtitle'` row and no `.vtt` URL. Subtitle capture begins with the
+  new importers; kisskh is the first catalog expected to yield real tracks.
+- **Progress at 00:50:** commits `e6b5dd7` (5movierulz, moviecok, dramacool, resolvers),
+  `ecb6a84` (levidia), `7069e2f` (filmiy.in importer that built the existing 3,837-post
+  staging DB — it had been untracked, 38 tests) are local and **pushed**; GitHub master is
+  `7069e2f`. qoder1's `3fb1a6c`, `a0ecbce`, `1a7b475` verified green and included.
+- **In flight:** serialized crawl queue (`tmux crawl_queue`, `/tmp/radd_crawl_queue.log`) is
+  ingesting dramacool (283+ posts / 4,992 sources and rising), then 5movierulz, moviecok,
+  levidia. qoder3 is hardening `test_kisskh_import.py` after one test (`test_crawl_from_the_command_line`)
+  made a live socket call and hung; it is adding a socket guard so the suite is offline.
+  qoder1 is building a read-only `Fast_Fetch/audit_staging.py` inventory.
+- **Open items:** mp4moviez parser upgrade for JS-gated `data-key` downloads; qoder1 left
+  uncommitted `App/app/build.gradle.kts` (disables lint abort on error) and
+  `VipUpgradeScreen.kt`/`ScreenSnapshotTest.kt` — verified compiling but not accepted yet;
+  kisskh is the 30th integration and is not done.
 
 ## Current checkpoint — 2026-10-27 (the download route was 403; it is open, and the client half was declined on purpose)
 
