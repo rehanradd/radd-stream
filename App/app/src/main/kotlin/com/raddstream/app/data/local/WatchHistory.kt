@@ -81,6 +81,17 @@ interface WatchHistoryDao {
     @Query("SELECT * FROM watch_history ORDER BY updatedAt DESC LIMIT :limit")
     fun observeRecent(limit: Int): Flow<List<WatchHistoryEntity>>
 
+    /**
+     * Where this device last stopped in one exact scope. The rail reads [observeRecent] to
+     * show a position; this is the same number read by the player, so a tile and the tape it
+     * promises are the same row rather than two answers to one question.
+     */
+    @Query(
+        "SELECT * FROM watch_history WHERE workRef = :workRef AND seasonNumber = :season " +
+            "AND episodeNumber = :episode",
+    )
+    suspend fun findScope(workRef: String, season: Int, episode: Int): WatchHistoryEntity?
+
     @Query("DELETE FROM watch_history")
     suspend fun clear()
 }

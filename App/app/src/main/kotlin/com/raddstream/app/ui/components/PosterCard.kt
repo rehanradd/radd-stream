@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -47,6 +48,15 @@ fun PosterCard(
     onClick: (() -> Unit)? = null,
     onLongClick: (() -> Unit)? = null,
     rank: Int? = null,
+    /**
+     * How far a title the viewer already started has run, 0f..1f, or null when the app never
+     * learned a duration. Only the Continue watching rail has an honest answer for this: a bar
+     * on any other tile would claim a position the viewer has no row for. It is drawn as a
+     * width, not only as a colour, so it survives a colour-blind viewer and a screen reader.
+     */
+    progressFraction: Float? = null,
+    /** The same fact in words — "S2:E5 · 23 min left". */
+    progressLabel: String? = null,
 ) {
     val title = post.cleanTitle?.takeIf { it.isNotBlank() } ?: post.title
     val typeLabel = post.contentType?.takeIf { it.isNotBlank() }?.replaceFirstChar { it.uppercase() }
@@ -58,6 +68,7 @@ fun PosterCard(
         append(title)
         if (details.isNotBlank()) append(", ").append(details)
         post.imdbRating?.takeIf { it.isNotBlank() }?.let { append(", rating ").append(it).append(" out of 10") }
+        if (progressLabel != null) append(", ").append(progressLabel)
     }
 
     val clickable = Modifier.semantics { contentDescription = a11y }
@@ -120,8 +131,24 @@ fun PosterCard(
                         .height(36.dp),
                 )
 
-                if (rank != null) {
+                progressFraction?.let { fraction ->
                     Box(
+                        Modifier
+                            .align(Alignment.BottomCenter)
+                            .fillMaxWidth()
+                            .height(3.dp)
+                            .background(MaterialTheme.colorScheme.scrim.copy(alpha = 0.55f)),
+                    ) {
+                        Box(
+                            Modifier
+                                .fillMaxWidth(fraction.coerceIn(0f, 1f))
+                                .fillMaxHeight()
+                                .background(MaterialTheme.colorScheme.primary),
+                        )
+                    }
+                }
+
+                if (rank != null) {                    Box(
                         modifier = Modifier
                             .align(Alignment.TopStart)
                             .padding(6.dp)
@@ -174,6 +201,17 @@ fun PosterCard(
                 // Dub status decides whether this title is watchable at all for a
                 // Hindi/Urdu-first viewer, so it is said on the tile, not after a tap.
                 AudioBadgeChipRow(badges = TileAudioBadges.forPost(post))
+
+                progressLabel?.let { label ->
+                    Text(
+                        text = label,
+                        color = MaterialTheme.colorScheme.primary,
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
             }
         }
     }

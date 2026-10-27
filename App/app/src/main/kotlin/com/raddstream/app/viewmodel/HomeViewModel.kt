@@ -50,7 +50,7 @@ data class HomeUiState(
     val isRefreshing: Boolean = false,
     val fatal: String? = null,
     /** Real local rows only — see [WatchHistoryMerge] for why an unnameable pull is dropped. */
-    val continueWatching: List<Post> = emptyList(),
+    val continueWatching: List<ResumeTile> = emptyList(),
     /** Set when the operator has published a downloadable build; null means "no news". */
     val updateNotice: AppUpdate? = null,
 )
@@ -117,6 +117,10 @@ class HomeViewModel @Inject constructor(
      * pulled a newer position for the same scope, the server's timestamp. The merge is pure
      * ([WatchHistoryMerge]) and drops any handle this device cannot name — a card must never
      * be a guess at what a server row was.
+     *
+     * A row leaves here as a [ResumeTile], not a bare [Post]: where viewing stopped is the
+     * only reason this rail exists, and a tile that hides it is indistinguishable from any
+     * other poster on the page.
      */
     private fun observeContinueWatching() {
         viewModelScope.launch {
@@ -125,15 +129,7 @@ class HomeViewModel @Inject constructor(
                 syncedProgressDao.observeRecent(WatchHistoryMerge.DEFAULT_LIMIT * 2),
             ) { local, synced -> WatchHistoryMerge.merge(local, synced) }
                 .collect { rows ->
-                    val items = rows.mapNotNull { row ->
-                        if (row.postId <= 0) return@mapNotNull null
-                        Post(
-                            id = row.postId,
-                            title = row.title,
-                            cleanTitle = row.title,
-                            posterUrl = row.posterUrl,
-                        )
-                    }
+                    val items = rows.mapNotNull { ResumeTile.of(it) }
                     _uiState.update { it.copy(continueWatching = items) }
                 }
         }

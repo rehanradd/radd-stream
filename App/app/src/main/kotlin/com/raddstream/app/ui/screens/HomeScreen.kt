@@ -132,8 +132,18 @@ fun HomeScreen(
                             title = "Continue watching",
                             modifier = Modifier.padding(horizontal = 16.dp),
                         )
-                        MediaRail(items = state.continueWatching, key = { it.id }) { post ->
-                            PosterCard(post = post, onClick = { onPostClick(post.id) })
+                        // Keyed on the scope, not the work: two rows of the same series are two
+                        // different episodes, and a duplicate key would crash the rail.
+                        MediaRail(
+                            items = state.continueWatching,
+                            key = { "${it.post.id}|${it.season}|${it.episode}" },
+                        ) { tile ->
+                            PosterCard(
+                                post = tile.post,
+                                onClick = { onPostClick(tile.post.id) },
+                                progressFraction = tile.progressFraction,
+                                progressLabel = tile.resumeLabel,
+                            )
                         }
                         Spacer(Modifier.height(8.dp))
                     }

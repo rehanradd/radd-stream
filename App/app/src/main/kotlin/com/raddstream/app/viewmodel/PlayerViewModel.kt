@@ -446,7 +446,7 @@ class PlayerViewModel @Inject constructor(
                                                        title = title,
                                                        backupHandles = store.peekFailover(streamId))
                 .withStagedTarget(streamId)
-            seedResumeFromSync(streamId, startOverrideMs)
+            seedResumeFromStoredPositions(streamId, startOverrideMs)
             beginBundle(bundle, title, resumeKey = streamId, overrideMs = startOverrideMs)
         }
     }
@@ -510,24 +510,30 @@ class PlayerViewModel @Inject constructor(
     }
 
     /**
-     * Continue Watching across devices, in the one place this player already looks: the pulled
-     * server row seeds [resumeByTarget] — the same map a position on THIS device writes — and
-     * only where that map is empty and no explicit start was asked for. So the order of
-     * precedence is honest: a viewer who is watching in this process wins over anything a sync
-     * pass remembered, an explicit seek-to wins over both, and a playback the detail screen
-     * could not name has nothing to look up at all. Nothing is re-ordered, nothing is awaited:
-     * a slow account read cannot hold the play button, which is why the existing in-memory path
-     * runs unchanged whether or not this finds anything.
+     * The stored position for the scope this handle is about to play, in the one place this
+     * player already looks. [ResumeSeed] owns the precedence; what lives here is the two reads
+     * and the write into [resumeByTarget] — the same map a position on THIS device writes.
+     *
+     * Nothing is re-ordered and nothing blocks the play button on it: both lookups are local
+     * Room reads that only run when this process has no live position to offer, so a slow
+     * account row cannot hold back playback, and a playback the detail screen could not name
+     * has nothing to look up at all.
      */
-    private suspend fun seedResumeFromSync(resumeKey: String, explicitStartMs: Long?) {
+    private suspend fun seedResumeFromStoredPositions(resumeKey: String, explicitStartMs: Long?) {
         if (explicitStartMs != null) return
-        if (!syncSignedIn) return
         if (resumeByTarget[resumeKey] != null) return
         val scope = store.peekWorkRef(resumeKey) ?: return
-        val syncedMs = syncAccountRepository.resumePositionMs(scope.workRef, scope.season, scope.episode)
+        val syncedMs = if (syncSignedIn) {
+            syncAccountRepository.resumePositionMs(scope.workRef, scope.season, scope.episode)
+        } else {
+            null
+        }
+        val localMs = watchHistoryDao.findScope(scope.workRef, scope.season, scope.episode)
+            ?.positionMs
+        val seed = ResumeSeed.seedFor(explicitStartMs, resumeByTarget[resumeKey], syncedMs, localMs)
             ?: return
-        // Re-checked: a position measured while this lookup was running outranks a pulled row.
-        if (resumeByTarget[resumeKey] == null) resumeByTarget[resumeKey] = syncedMs
+        // Re-checked: a position measured while these lookups were running outranks either row.
+        if (resumeByTarget[resumeKey] == null) resumeByTarget[resumeKey] = seed
     }
 
     // ── The visible quality switch (Auto + one row per rung of this scope) ─────────
