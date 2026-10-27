@@ -49,6 +49,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import com.raddstream.app.ui.components.ErrorState
 import com.raddstream.app.ui.components.HeroCarousel
 import com.raddstream.app.ui.components.HeroSkeleton
+import com.raddstream.app.ui.components.InlineLoadFailure
 import com.raddstream.app.ui.components.MediaRail
 import com.raddstream.app.ui.components.PosterCard
 import com.raddstream.app.ui.components.SectionHeader
@@ -291,7 +292,7 @@ private fun HomeRailSection(
                 }
             }
         }
-        section.visible -> {
+        section.items.isNotEmpty() -> {
             Column {
                 SectionHeader(
                     title = section.title,
@@ -300,6 +301,12 @@ private fun HomeRailSection(
                 )
                 MediaRail(items = section.items, key = { it.id }) { post ->
                     PosterCard(post = post, onClick = { onPostClick(post.id) })
+                }
+                // The rows here are real and from this page; the refresh that failed is a
+                // separate fact and has to be said, or the screen claims a freshness it
+                // does not have.
+                section.refreshFailure?.let { reason ->
+                    InlineLoadFailure(message = reason, onRetry = onRetry)
                 }
                 Spacer(Modifier.height(8.dp))
             }

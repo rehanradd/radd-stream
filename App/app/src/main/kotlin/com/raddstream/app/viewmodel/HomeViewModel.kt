@@ -43,6 +43,13 @@ data class HomeSection(
     val error: String? = null,
 ) {
     val visible: Boolean get() = items.isNotEmpty() && error == null
+
+    /**
+     * A rail that already has rows and whose newest refresh came back empty-handed. Without
+     * this the old rows stayed on screen and the failure went nowhere — `visible` was false, so
+     * the section rendered no branch at all and the rail simply vanished from the page.
+     */
+    val refreshFailure: String? get() = error?.takeIf { items.isNotEmpty() }
 }
 
 data class HomeUiState(
