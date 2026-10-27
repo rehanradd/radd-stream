@@ -31,15 +31,25 @@ import kotlinx.coroutines.launch
  * (`4K` also matches 2160p/UHD). That is why the chip works even though the v1
  * list row itself carries no quality column.
  *
- * "Trending" is honest about its input: the ledger has no play-count column, so
- * the server ranks by how many prints/mirrors the catalog holds for the work.
+ * The default sort is [SearchSort.NEWEST], which the server answers from its own
+ * index (`p.id DESC`). The alternatives are all measured on the live catalog as
+ * several seconds per page — `trending`/`rating`/`title` each force a scan over the
+ * whole result set before paging — so they stay opt-in and the default never pays
+ * for them.
+ *
+ * "Most Sources" is named for its actual input: the ledger has no play-count column,
+ * so the server ranks by how many prints and mirrors the catalog holds for a work.
+ * Calling it "Trending" would promise popularity data that does not exist.
  */
-
 enum class SearchSort(val label: String, val wireValue: String) {
-    TRENDING("Trending", "trending"),
     NEWEST("Newest", "newest"),
+    MOST_SOURCES("Most Sources", "trending"),
     HIGHEST_IMDB("Highest IMDb", "rating"),
-    TITLE("Title A–Z", "title"),
+    TITLE("Title A–Z", "title");
+
+    companion object {
+        val DEFAULT = NEWEST
+    }
 }
 
 enum class IndustryFilter(val label: String, val wireValue: String?) {
@@ -92,11 +102,10 @@ data class SearchUiState(
     val isLoadingMore: Boolean = false,
     val error: String? = null,
     val filters: SearchFilters = SearchFilters(),
-    val sort: SearchSort = SearchSort.TRENDING,
+    val sort: SearchSort = SearchSort.DEFAULT,
     val groups: List<TypeGroup> = emptyList(),
     val resultCount: Int = 0,
     val recents: List<String> = emptyList(),
-    val trendingHidden: Boolean = true, // no play counts — see SearchSort.TRENDING
     val page: Int = 1,
     val hasMore: Boolean = false,
     val hasSearched: Boolean = false,
@@ -107,7 +116,7 @@ data class SearchUiState(
 
     val hasActiveFilters: Boolean
         get() = filters.type != null || filters.anyServerFilterActive ||
-            filters.anyClientFilterActive || sort != SearchSort.TRENDING
+            filters.anyClientFilterActive || sort != SearchSort.DEFAULT
 }
 
 @HiltViewModel
@@ -192,7 +201,7 @@ class SearchViewModel @Inject constructor(
         _uiState.update {
             it.copy(
                 filters = SearchFilters(type = it.filters.type),
-                sort = SearchSort.TRENDING,
+                sort = SearchSort.DEFAULT,
             )
         }
         scheduleSearch(reset = true)
@@ -319,7 +328,7 @@ class SearchViewModel @Inject constructor(
                                 .thenByDescending { it.id },
                         )
                         // Mirrors the server's coverage ranking: no play counts exist.
-                        SearchSort.TRENDING -> posts.sortedWith(
+                        SearchSort.MOST_SOURCES -> posts.sortedWith(
                             compareByDescending<Post> { (it.releaseCount ?: 0) + (it.sourceCount ?: 0) }
                                 .thenByDescending { it.id },
                         )
