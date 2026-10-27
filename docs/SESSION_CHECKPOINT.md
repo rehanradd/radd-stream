@@ -33,15 +33,21 @@ Update this file after each independently verified milestone so work can resume 
   `ecb6a84` (levidia), `7069e2f` (filmiy.in importer that built the existing 3,837-post
   staging DB — it had been untracked, 38 tests) are local and **pushed**; GitHub master is
   `7069e2f`. qoder1's `3fb1a6c`, `a0ecbce`, `1a7b475` verified green and included.
-- **In flight:** serialized crawl queue (`tmux crawl_queue`, `/tmp/radd_crawl_queue.log`) is
-  ingesting dramacool (283+ posts / 4,992 sources and rising), then 5movierulz, moviecok,
-  levidia. qoder3 is hardening `test_kisskh_import.py` after one test (`test_crawl_from_the_command_line`)
-  made a live socket call and hung; it is adding a socket guard so the suite is offline.
-  qoder1 is building a read-only `Fast_Fetch/audit_staging.py` inventory.
-- **Open items:** mp4moviez parser upgrade for JS-gated `data-key` downloads; qoder1 left
-  uncommitted `App/app/build.gradle.kts` (disables lint abort on error) and
-  `VipUpgradeScreen.kt`/`ScreenSnapshotTest.kt` — verified compiling but not accepted yet;
-  kisskh is the 30th integration and is not done.
+- **Progress at 01:20:** dramacool finished (544 posts / 9,675 sources); 5movierulz finished
+  (601 pages, 442 unique works / 6,491 sources); moviecok is crawling (753+ posts); levidia
+  next. `Fast_Fetch/audit_staging.py` is committed and pushed (`9fa263f`): 27 catalogs,
+  292,462 posts, 2.48M releases, 1.98M sources, 0 measurable subtitle rows, 17,373 adult-flagged
+  posts, plus schema-drift warnings for every legacy DB. qoder1's App snapshot work landed as
+  `6c923f7` after lint suppression was removed; 481 tests, 0 failures, `OVERLAP=NO`. GitHub
+  master is `6c923f7`.
+- **kisskh, ready for pilot:** suite is 129 tests OK in 9.6 s with no live socket; all three
+  review findings fixed (missing-column migration for `sources`, single-quote slug path,
+  subtitle rows stored `unverified`). Player-data was probed independently: eleven live
+  `text/vtt` tracks per title (tl, km, en, id, ms, pt, ar, hi, de, fr, es), a sampled track
+  returning HTTP 200.
+- **Open items:** mp4moviez parser upgrade for JS-gated `data-key` downloads; kisskh pilot +
+  full ingest + commit (owner: qoder3); moviecok/levidia crawls; no new candidate domains are
+  live (eight probed today all NXDOMAIN/000).
 
 ## Current checkpoint — 2026-10-27 (the download route was 403; it is open, and the client half was declined on purpose)
 
