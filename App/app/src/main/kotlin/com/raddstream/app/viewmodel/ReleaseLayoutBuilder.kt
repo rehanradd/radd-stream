@@ -520,10 +520,14 @@ private fun Edition.display(): String = when (this) {
     Edition.UNKNOWN -> ""
 }
 
+// [sizeBytes] is BINARY — `detectSize` multiplies by 1024 to match `release_descriptor`, which is
+// how a "15.2GB" print is really 15.2 x 1024^3 bytes. Dividing it by 1000 here printed that same
+// file as "16.3 GB", so the detail screen disagreed with the label the release carries and with
+// the download card, which reads sizeBytes directly. Same units on both sides of the arrow.
 private fun formatBytes(bytes: Long): String = when {
-    bytes >= 1_000_000_000_000 -> "%.1f TB".format(bytes / 1_000_000_000_000.0)
-    bytes >= 1_000_000_000 -> "%.1f GB".format(bytes / 1_000_000_000.0)
-    bytes >= 1_000_000 -> "%.0f MB".format(bytes / 1_000_000.0)
-    bytes >= 1_000 -> "%.0f KB".format(bytes / 1_000.0)
+    bytes >= 1L shl 40 -> "%.1f TB".format(bytes / (1L shl 40).toDouble())
+    bytes >= 1L shl 30 -> "%.1f GB".format(bytes / (1L shl 30).toDouble())
+    bytes >= 1L shl 20 -> "%.0f MB".format(bytes / (1L shl 20).toDouble())
+    bytes >= 1L shl 10 -> "%.0f KB".format(bytes / (1L shl 10).toDouble())
     else -> "$bytes B"
 }

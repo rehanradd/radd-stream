@@ -283,6 +283,19 @@ class ReleaseLayoutBuilderTest {
     }
 
     @Test
+    fun `the size a print shows matches the size the print carries`() {
+        // sizeBytes is BINARY, so the formatter that shows it must divide by 1024 too.
+        // Dividing by 1000 printed the same file two ways: the release row's own "2.4 GB"
+        // and a detail line claiming "2.6 GB" — and the download card, which reads sizeBytes
+        // directly, agreed with neither.
+        val print = moviePrint(release(id = 1, releaseTitle = "Film", size = "2.4GB")).first()
+        assertTrue(
+            "detailLine read \"${print.detailLine}\" for a 2.4GB print",
+            print.detailLine.contains("2.4 GB"),
+        )
+    }
+
+    @Test
     fun `languages come from the surviving grammar`() {
         val print = moviePrint(release(id = 1, releaseTitle = "Film", languages = "Hindi English Dual Audio")).first()
         assertTrue(print.languages.contains("Hindi"))
