@@ -1312,3 +1312,100 @@ here, so their snapshot cases executed nowhere on this host.
 **Git:** only this log entry is staged/committed — no source changes, and the parallel
 session's three uncommitted App files were left untouched.
 
+### Session 17 — Screen snapshot suite made to snapshot the real app (2026-10-27)
+
+**Goal:** `app/src/test/kotlin/com/raddstream/app/ui/ScreenSnapshotTest.kt` — render core screen
+states under Robolectric and write PNGs to `app/build/reports/screenshots/`.
+
+**What was actually wrong with the draft, beyond the two names another session already fixed
+(`RaddTheme` → `RaddStreamTheme`, `BackgroundDark` → `RaddInk950`, which does not exist in
+`ui/theme/Color.kt`):** `captureVipNoticeCard` rendered no app code at all. It laid out three
+`Text` calls with invented marketing copy ("Unlock 1080p & 4K Ultra HD streaming directly via
+10Gbps CDN attachments", "👑 VIP Access Required") — a snapshot of the test, not of the screen,
+and it promised a 1080p/4K entitlement the app only gates behind the operator's
+`quality_gate` flag. A snapshot suite that paints a stand-in hides exactly the regressions it
+exists to catch.
+
+**Rewritten to six captures of real composables, each asserting its PNG has bytes and its
+bitmap has dimensions:**
+- `01_maintenance_locked` / `02_maintenance_server_switch` — the actual `MaintenanceScreen`
+  in both honest states, with a semantics check that "Use a different server" is absent when
+  `onChangeServer` is null and present otherwise (the escape hatch Session 15 added).
+- `03_poster_cards` — `PosterCard` with provenance-laden raw title vs clean title, no artwork
+  (branded fallback), a rank, a rating, and a deliberately over-long title to show the 2-line
+  ellipsis; cards get an explicit `width` so `aspectRatio(0.68f)` resolves in the test surface.
+- `04_quality_badges` — `PrintQualityBadge`/`HdrBadge`/`PrintSourceBadge`/`AudioBadge`/
+  `SubtitleBadge`, fed by prints from the detail screen's own path
+  (`ReleaseLayoutBuilder.build(contentType, List<ReleaseDetail>)`), never a hand-built
+  `PrintDescriptor`.
+- `05_vip_payment_instructions` / `06_vip_payment_unconfigured` — the real VIP layout with all
+  four operator handles published, and the "nowhere to send a payment" state.
+
+**Main-source change (the only one):** `PricingSection`, `PaymentSection`, `MethodSection` in
+`ui/screens/VipUpgradeScreen.kt` went `private` → `internal`. `VipUpgradeScreen` itself takes
+`hiltViewModel()`, which cannot be satisfied by `createComposeRule()`, so the payment
+instructions are only snapshot-able if their sections are reachable from the test source set
+(AGP associates it with the debug variant, so `internal` is enough). The screen's own
+composition is unchanged.
+
+**Verified on this host:** `:app:compileDebugUnitTestKotlin` with the queue → BUILD SUCCESSFUL,
+and the compiled `ScreenSnapshotTest.class` contains `qualityBadgeStrip` /
+`vipPaymentInstructions` (proof it was my content that compiled, not a stale build).
+`:app:testDebugUnitTest` → **452 tests / 55 suites / 0 failures / 0 errors / 0 skipped**; the
+XMLs and `VipUpgradeScreenKt.class` (22:51:34, after my 22:49:37 edit) are both newer than the
+edits, so the green run covers them. `OVERLAP=NO`.
+
+**Finding the owner needs to act on:** no PNG exists on this box and none can. `app/build.gradle.kts`
+excludes this class on aarch64/arm64 (Robolectric ships no native runtime — robolectric/robolectric#9166,
+it dies during `@Rule` evaluation so an in-test `Assume` cannot catch it), and GitHub Actions is
+disabled at the account level, so the x86_64 runner that would render them is not running either.
+`ci.yml`'s `ci-reports` artifact already covers `App/app/build/reports`, so re-enabling Actions is
+the whole remaining step to actually get the images.
+
+**Not verified:** the pixel content itself. Six captures compiled here and have never executed
+anywhere.
+
+### Session 18 — Region preference and Hindi/Urdu-first release ordering (2026-10-27)
+
+**What this session was for:** a `desi_dubs` viewer should never have to scroll past English
+originals to find the Hindi dub. The preference is now stored and the detail screen's release
+selector obeys it.
+
+**1. The preference is a DataStore key with a real default.** `data/UserRegion.kt` owns the three
+wire names (`desi_dubs`, `east_asian`, `international`), `DEFAULT = desi_dubs`, and a
+`normalize()` that trims, case-folds and falls back to the default rather than to a guess.
+`ServerSettingsRepository.userRegion: Flow<String>` reads it (`USER_REGION_KEY`) and
+`saveUserRegion()` writes through the same normalizer. Only `desi_dubs` changes ordering today;
+the other two are stored so a choice is never rewritten, and no list is re-ranked for them.
+
+**2. The release selector leads with the dub, without breaking the CAM rule.**
+`ReleaseLayoutBuilder.orderPrints(prints, region)` first ranks by `rankKey` exactly as before;
+for `desi_dubs` it then *stably* re-partitions by (`officialPrint`, `isDesiDub`). Stability
+keeps the server's quality order inside each class, and the official/CAM key keeps the existing
+invariant that a Hindi CAM still sits below an English official print — language priority never
+overrides print quality class. `RankedPrint.isDesiDub` is true for a Hindi/Urdu audio language
+or a dual/multi-audio descriptor; it decides row order only, never playability. The rule is
+applied to work prints, episode prints and packed-season prints. `DetailViewModel` collects
+`userRegion` alongside the other viewer preferences and passes it to both
+`ReleaseLayoutBuilder.build` calls, so a change re-publishes without reopening the screen.
+
+**3. Urdu is now part of the release-label grammar.** `LANGUAGE_ALIASES` in
+`ReleaseLabelParsing.kt` gained `urdu`/`urd` next to `hindi`/`hin`; without it an
+"Urdu Dubbed" title parsed no audio language at all (the player's `AudioTrackMatcher` already
+knew the code). This is additive — every existing alias and test is unchanged.
+
+**Tests / build:** `/tmp/qbuild.sh :app:compileDebugKotlin :app:testDebugUnitTest` →
+BUILD SUCCESSFUL, `GRADLE_EXIT=0`, `OVERLAP=NO`, **460 tests / 56 suites / 0 failures / 0
+errors / 0 skipped**. The new `RegionPreferenceTest` contributes 8 cases: default is
+`desi_dubs`, known/unknown values normalize correctly, Hindi and Urdu dubs lead a
+higher-ranked English print under `desi_dubs`, a dual-audio label leads, `east_asian` keeps
+pure quality order, a Hindi CAM stays below an English official, and episode prints follow
+the same rule.
+
+**Scoped out deliberately:** no Settings row yet, so only the default is reachable by a user;
+`saveUserRegion()` is the seam a settings control will use. Home/Browse rails and the
+user-chosen Search sort modes were not re-ordered — a regional preference should not silently
+override "Newest" or "Highest IMDb" — so "catalog items" here means the releases the detail
+screen lists.
+
+**Not verified:** no device/emulator pass, so the visual order is compile/unit-verified only.
