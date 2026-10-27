@@ -2,7 +2,45 @@
 
 Update this file after each independently verified milestone so work can resume across accounts, tools, and usage limits.
 
-## Current checkpoint — 2026-10-27 (the by-media endpoint, and the APK that was still stale)
+## Current checkpoint — 2026-10-27 (the shortener waterfall was unreachable, and now it is — with a catch)
+
+- **Goal:** finish the server half of M-MON-04 / P-B-02 / P-B-03, the monetization items
+  the inventory listed as P0 and that needed no phone.
+- **The finding that reframed the task.** `/api/v1/download` — the *only* route in
+  `viewer.py` that runs `shorten_download_url` (one call site, line 3207) — was answered
+  **403 by nginx**. So the entire waterfall was dead from any client, and no amount of
+  app-side work would have touched it. Opening it was the actual blocker.
+- **Shipped.** `GET /api/v2/account/vip-pass` in `Fast_Fetch/accounts_api.py`: 401 without a
+  key, `402 licence_required` for a free account, `200 {pass, expires_at, membership_until}`
+  for a member. `VIP_PASS_TTL_SECONDS = 6 h`, and the window is `min(now + TTL, vip_until)` —
+  ten minutes of membership cannot buy six hours of capability. `redact.mint_vip_pass` had
+  existed with **no caller** before this.
+- **nginx.** `= /api/v1/download` added (GET/HEAD only, `burst=20`, 30 s read timeout) and both
+  capability-carrying routes now log under a new `radd_capability` format — the standard format
+  minus `$args`, because `$args` is where `?vip=` lives. Proved with `SECRETSENTINEL`
+  strings: zero matches in `/var/log/nginx/access.log` for a capability that was definitely
+  served, while other routes still log args.
+- **Tests.** `test_accounts_api.py` 38 OK (the vip-pass cases are a `VipPass` subclass of a new
+  `EdgeFixture` mixin — subclassing `Edge` directly had silently re-run all 29 inherited cases,
+  67 → 38). `test_download_endpoint.py` 18, `test_database` 64, `test_vidout` 6,
+  `test_payments`, `test_catalog_v2`, `test_media_search` 21, `test_admin_panel`, `test_redact`
+  49 — all OK, one module per invocation. Edge sweep with `--probe`, covering the new
+  `download` descriptor scan: **OK, 0 flags**.
+- **The catch, and why no Kotlin was written.** The inventory's build text for M-MON-04 says
+  "switch `DeviceDownloadsRepository` to `/api/v1/download` and attach `Authorization: Bearer`".
+  Two reasons that is not a task: (1) `/api/v1/stream` was never monetized, so an in-app VIP was
+  never walking through a shortener — the bypass it asks for buys nothing; (2) *a shortened link
+  is a landing page, not the file* (`test_download_endpoint.py`'s own words). Pointing OkHttp's
+  byte pipe at it writes an interstitial into `Movies/RaddStream/*.mp4` and destroys
+  pause/resume. Monetizing a free download means handing it to something a human taps, which
+  trades the app's download promise for revenue — **an owner decision, not an engineering one.**
+  The inventory's M-MON-04, P-B-02, P-B-03 and caveat 2/5 are rewritten to say exactly this.
+- **Live verification:** `download?id=bad` → the server's own 400; `account/vip-pass` → 401
+  problem body publicly; POST `download` → 403; `/api/data`, `/api/v2/health` → 403 unchanged.
+- **Next:** nothing here needs a phone, but nothing further can be built without the owner's
+  call on free-tier downloads. Task 4 stays open as that decision, not as code.
+
+## Previous checkpoint — 2026-10-27 (the by-media endpoint, and the APK that was still stale)
 
 - **Goal:** close the two decided-but-unbuilt items that did not need a phone: the
   identify-a-file search (`/api/v1/search/by-media`) and the debug APK the public

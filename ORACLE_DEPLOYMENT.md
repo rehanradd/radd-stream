@@ -369,17 +369,34 @@ PWA and only the list/statistics metadata endpoints: `/client`,
 `/api/v1/posts`, and `/api/v1/stats`. Every other `/api/` route is denied:
 
 > What is actually installed on this box (checked 27 Oct) is narrower than the
-> sample below and does not proxy `/client`: three `location` blocks for
-> `/api/v1/posts`, `/api/v1/stats` and `/api/v1/stream`, a
-> `location ^~ /api/ { return 403; }` catch-all, `/download/` for the APK, and
-> `location /` pointing at code-server on `127.0.0.1:8443`. Two more blocks were
-> added on 27 Oct because the Android client cannot do anything without them —
-> `= /api/v1/app/remote-config` (GET/HEAD only) and `^~ /api/v2/account`
-> (GET/HEAD/POST/PUT/DELETE, the server authenticates those itself). Verified
-> from outside: `remote-config` answers 200, `account/entitlement` answers its
-> own 401 problem body, and `/api/v2/health` and `/api/admin` are still nginx's
-> 403. A previous copy of this file is kept at
-> `/etc/nginx/radd-stream.pre-v2.bak`.
+> sample below and does not proxy `/client`: `location /download/` for the APK,
+> prefix blocks for `/api/v1/posts` (which therefore covers `/api/v1/posts/{id}`)
+> and `/api/v1/stream`, exact blocks for `/api/v1/stats`,
+> `/api/v1/app/remote-config`, `/api/v1/search/by-media` and `/api/v1/download`,
+> a `^~ /api/v2/account` block (GET/HEAD/POST/PUT/DELETE — the server
+> authenticates those itself), the `location ^~ /api/ { return 403; }` catch-all,
+> and `location /` pointing at code-server on `127.0.0.1:8443`. The v1 pieces
+> exist because the Android client cannot do anything without them; `download`
+> was added on 27 Oct because the deny was answering it 403, which made the
+> operator's whole shortener waterfall unreachable from any client
+> (`docs/FULL_MASTER_FEATURE_INVENTORY.md` M-MON-04). `/api/v1/art` is still
+> denied on purpose: `poster_url` and `backdrop_urls` in a projected row are
+> upstream CDN addresses and no Kotlin source references that route.
+>
+> `/api/v1/stream` and `/api/v1/download` are the only two routes that take a
+> capability in the query string (`?vip=`), so both log under the
+> `radd_capability` format defined in `nginx.conf`, which is the standard one
+> minus `$args`. Proved with sentinels: a request carrying
+> `?vip=PASSSENTINEL` produced zero matches for that string anywhere in
+> `/var/log/nginx/access.log`, while other routes still log their args.
+>
+> Verified from outside on 27 Oct: `remote-config` 200, `posts/{id}` 200,
+> `search/by-media` 200, `download?id=bad` the server's own 400,
+> `account/vip-pass` a 401 problem body, and `/api/v2/health`, `/api/data` and
+> `POST /api/v1/download` are still nginx's 403/405-class refusals. Previous
+> copies: `/etc/nginx/radd-stream.pre-v2.bak`,
+> `/etc/nginx/radd-stream.pre-bymedia.bak`,
+> `/etc/nginx/radd-stream.pre-download.bak`, `/etc/nginx/nginx.conf.pre-caplog.bak`.
 
 ```nginx
 server {

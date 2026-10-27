@@ -13,6 +13,7 @@ import json
 import sqlite3
 import sys
 import tempfile
+import time
 from contextlib import closing
 import unittest
 from pathlib import Path
@@ -43,7 +44,13 @@ def catalog_fixture(path) -> Path:
     return Path(path)
 
 
-class Edge(unittest.TestCase):
+class EdgeFixture:
+    """The state every case here runs against, shared so no test runs twice.
+
+    It was `Edge`'s own body until the vip-pass cases subclassed `Edge` for it and
+    quietly re-ran every test in the file — a mixin plus two thin subclasses is the
+    only shape that keeps `setUp` and the helpers in one place."""
+
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
@@ -108,7 +115,12 @@ class Edge(unittest.TestCase):
         self.assertEqual(payload["type"], f"/api/v2/problems/{code}")
         self.assertTrue(payload["request_id"].startswith("req_"))
 
+
+class Edge(EdgeFixture, unittest.TestCase):
+    """The account surface itself: enrollment, favourites, progress, revoke."""
+
     # ── enrollment ───────────────────────────────────────────────────────
+
     def test_create_answers_201_with_the_key_once_and_no_row_id(self):
         made = self.post(P)
         self.assertEqual(self.status(made), 201)
@@ -372,6 +384,115 @@ class Edge(unittest.TestCase):
         names = {row[0] for row in sqlite3.connect(str(fresh)).execute(
             "SELECT name FROM sqlite_master WHERE type='table'")}
         self.assertLessEqual({"user_accounts", "user_favorites", "user_progress"}, names)
+
+
+class VipPass(EdgeFixture, unittest.TestCase):
+    """`GET /api/v2/account/vip-pass` — the capability a redirect can carry.
+
+    The bypass exists (`/api/v1/download` honours it) and the signer exists
+    (`redact.mint_vip_pass`); what did not exist was anything that minted one, so a
+    payer could buy VIP and still be walked through the shortener. These cases are
+    about the two ways that could go wrong: a free account getting one, and a pass
+    outliving the membership it came from.
+    """
+
+    def grant(self, until):
+        with closing(accounts.connect(self.state)) as conn:
+            row = conn.execute("SELECT id FROM user_accounts LIMIT 1").fetchone()
+            conn.execute("UPDATE user_accounts SET vip_until = ? WHERE id = ?",
+                         (float(until), row["id"]))
+            conn.commit()
+
+    def test_no_key_is_401_and_mints_nothing(self):
+        answered = self.get(P + "/vip-pass")
+        status, _ctype, raw = answered
+        payload = json.loads(raw.decode("utf-8"))
+        self.assertEqual(status, 401)
+        self.assertEqual(payload["code"], "unauthorised")
+        self.assertNotIn("pass", payload)
+
+    def test_a_free_account_is_told_to_pay_and_gets_no_capability(self):
+        self.key = self.enroll()
+        status, _ctype, raw = self.get(P + "/vip-pass", headers=self.auth())
+        payload = json.loads(raw.decode("utf-8"))
+        self.assertEqual(status, 402)
+        self.assertEqual(payload["code"], "licence_required")
+        self.assertNotIn("pass", payload)
+
+    def test_a_member_gets_a_pass_that_the_download_route_itself_accepts(self):
+        """The point of the whole route: `viewer.request_is_vip` must say True.
+
+        A pass that mints fine but does not satisfy the consumer is exactly the bug
+        this file exists to catch — the two halves are written by different hands.
+        """
+        import viewer
+        self.key = self.enroll()
+        now = time.time()
+        self.grant(now + 30 * 86400)
+        status, _ctype, raw = self.get(P + "/vip-pass", headers=self.auth())
+        self.assertEqual(status, 200, raw)
+        payload = json.loads(raw.decode("utf-8"))
+        self.assertIsNotNone(redact.parse_vip_pass(payload["pass"], SECRET, now=now))
+        honoured = viewer.request_is_vip({}, {"vip": [payload["pass"]]}, secret=SECRET)
+        self.assertTrue(honoured, "the pass bypasses nothing")
+
+    def test_a_pass_never_outlives_the_membership_it_was_minted_from(self):
+        """Six hours of capability paid for by ten minutes of membership is a bug."""
+        self.key = self.enroll()
+        now = time.time()
+        remaining = 600.0
+        self.grant(now + remaining)
+        _status, _ctype, raw = self.get(P + "/vip-pass", headers=self.auth())
+        payload = json.loads(raw.decode("utf-8"))
+        self.assertAlmostEqual(payload["expires_at"], now + remaining, delta=5)
+        self.assertLessEqual(payload["expires_at"], now + remaining + 5)
+        self.assertIsNone(redact.parse_vip_pass(payload["pass"], SECRET,
+                                               now=now + remaining + 1))
+
+    def test_a_full_window_is_capped_at_the_ttl_not_at_the_month(self):
+        self.key = self.enroll()
+        now = time.time()
+        self.grant(now + 365 * 86400)
+        _status, _ctype, raw = self.get(P + "/vip-pass", headers=self.auth())
+        payload = json.loads(raw.decode("utf-8"))
+        self.assertAlmostEqual(payload["expires_at"],
+                               now + accounts_api.VIP_PASS_TTL_SECONDS, delta=5)
+        self.assertEqual(payload["membership_until"], now + 365 * 86400)
+
+    def test_a_lapsed_membership_is_refused_not_minted_expired(self):
+        self.key = self.enroll()
+        self.grant(time.time() - 5)
+        status, _ctype, raw = self.get(P + "/vip-pass", headers=self.auth())
+        payload = json.loads(raw.decode("utf-8"))
+        self.assertEqual(status, 402, payload)
+        self.assertNotIn("pass", payload)
+
+    def test_an_unknown_key_stays_404_rather_than_looking_free(self):
+        """Revoked, wrong and never-minted stay indistinguishable — the rule the
+        rest of the account surface already holds — and none of them mints."""
+        answered = self.get(P + "/vip-pass",
+                            headers={"Authorization": "Bearer " + "a" * 64})
+        status, _ctype, raw = answered
+        payload = json.loads(raw.decode("utf-8"))
+        self.assertEqual(status, 404)
+        self.assertEqual(payload["code"], "not_found")
+        self.assertNotIn("pass", payload)
+
+    def test_the_body_carries_the_pass_and_two_numbers_and_nothing_else(self):
+        self.key = self.enroll()
+        self.grant(time.time() + 86400)
+        _status, _ctype, raw = self.get(P + "/vip-pass", headers=self.auth())
+        self.assertEqual(set(json.loads(raw.decode("utf-8"))),
+                         {"pass", "expires_at", "membership_until"})
+
+    def test_a_pass_carries_no_identity_and_no_provenance(self):
+        self.key = self.enroll()
+        self.grant(time.time() + 86400)
+        _status, _ctype, raw = self.get(P + "/vip-pass", headers=self.auth())
+        payload = json.loads(raw.decode("utf-8"))
+        for needle in NEEDLES | {str(self.key)}:
+            self.assertNotIn(needle.lower(), raw.decode("utf-8").lower(), needle)
+        self.assertIsNone(redact.parse_vip_pass(payload["pass"][:-2] + "AA", SECRET))
 
 
 if __name__ == "__main__":

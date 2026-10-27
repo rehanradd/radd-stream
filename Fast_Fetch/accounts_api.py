@@ -57,6 +57,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import time
 from contextlib import closing
 
 import accounts
@@ -84,6 +85,14 @@ LIMITER = accounts.attempt_tracker
 #: there is exactly one body-size ceiling on this server.
 DEFAULT_N = 200
 MAX_N = 1000
+
+#: How long a `GET /api/v2/account/vip-pass` answer stays good. A pass has no
+#: revocation list, so this is the only knob that limits the damage of one that
+#: leaked — through an access log, a history entry, or a screen recording of a
+#: share sheet. Six hours covers an evening of downloading on one device, which is
+#: the whole use case, and it is still far shorter than the month a payer bought.
+#: The app is expected to re-ask when it refreshes its entitlement.
+VIP_PASS_TTL_SECONDS = 6 * 3600
 
 #: `accounts.py` codes mapped onto §16.4's closed vocabulary, because this edge
 #: publishes the same problem bodies as the rest of v2 and may not invent codes:
@@ -310,6 +319,41 @@ def route_get(path, query, *, db_path, catalog_path, secret, headers) -> tuple |
             earned = payments.entitlement(db_path, key, tracker=LIMITER)
             return _respond({"entitlement": redact.project(
                 earned, "account_entitlement")})
+        if tail == ["vip-pass"]:
+            # Mint the capability a *URL* can carry. `/api/v1/download` shortens a
+            # free viewer's link and lets a member straight through, and it decides
+            # from either an `Authorization` header or a `?vip=` pass — but the
+            # player and the system download manager follow that redirect outside
+            # this process, so a header cannot ride along. The pass is therefore the
+            # only way an entitled account can reach the bypass it paid for.
+            #
+            # What it is not: an account. It carries one expiry instant and no user
+            # id, price or payment detail (`redact.mint_vip_pass`), so a leaked pass
+            # reveals nothing about a person and cannot be pointed at one. What that
+            # costs is honesty: there is no revocation list, so the window stays
+            # short and the app is expected to ask again.
+            if not key:
+                return _problem("unauthorised", 401,
+                                "a bearer sync key is required", path)
+            earned = payments.entitlement(db_path, key, tracker=LIMITER)
+            moment = time.time()
+            membership_end = float(earned.get("vip_until") or 0.0)
+            if not earned.get("vip"):
+                # 402, not 403: §16.4 already declares "a licence is required before
+                # this can be played", and this is that sentence about a pass.
+                return _problem("licence_required", 402,
+                                "this account has no live membership", path)
+            expires_at = min(moment + VIP_PASS_TTL_SECONDS, membership_end)
+            if expires_at <= moment:
+                # Lost the membership between the check and here. Same answer as
+                # having none, never a pass that parses as already expired.
+                return _problem("licence_expired", 410,
+                                "this membership has lapsed", path)
+            return _respond({
+                "pass": redact.mint_vip_pass(expires_at, secret),
+                "expires_at": expires_at,
+                "membership_until": membership_end,
+            })
         return _problem("not_found", 404, "no such account route", path)
     except Exception as error:                      # noqa: BLE001 — the edge answers, it never re-raises
         return _refused(error, path)

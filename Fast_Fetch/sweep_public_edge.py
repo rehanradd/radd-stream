@@ -294,6 +294,15 @@ class Sweep:
                         self.scan(f"/api/v1/stream"
                                   f"?id={urllib.parse.quote(source['stream_id'])}"
                                   f"&redirect=0", expect=(200, 404))
+                        # The download twin: it is the only route that runs the
+                        # shortener waterfall, it hands out a `filename` and a
+                        # `mime_type` built from our own row, and `redirect=1`
+                        # answers with a `Location` that must be our host or a
+                        # configured shortener — never the hoster's own address.
+                        self.scan(f"/api/v1/download"
+                                  f"?id={urllib.parse.quote(source['stream_id'])}"
+                                  f"&redirect=0", expect=(200, 404),
+                                  label="download descriptor")
                 for key in ("poster_url", "backdrop_urls"):
                     for ref in re.split(r"[,\s]+", str(detail.get(key) or "")):
                         if "api/v1/art" in ref:

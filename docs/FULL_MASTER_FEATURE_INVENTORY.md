@@ -102,10 +102,16 @@ today, with build specifications for everything still missing.
 1. The backend is far more complete than its own `PROJECT_MAP.md` says: `/api/v1/download`,
    `/api/v1/art`, `/api/v1/app/remote-config`, the two-port split, the shortener waterfall, accounts,
    admin, v2 routes, link health and backups all exist.
-2. The documented **nginx allowlist blocks the very routes the app needs** (`/api/v1/posts/{id}`,
-   `/api/v1/stream`, `/api/v1/download`, `/api/v1/art`, `/api/v1/app/remote-config`). On a host built
-   exactly to `ORACLE_DEPLOYMENT.md`, the app can list posts but cannot open a detail page, play,
-   download, load art, or read VIP pricing.
+2. The documented **nginx allowlist blocked the very routes the app needs** (`/api/v1/posts/{id}`,
+   `/api/v1/stream`, `/api/v1/download`, `/api/v1/app/remote-config`). That is no longer true on the
+   live host: all four answer on the public port as of 2026-10-27, and `/api/v1/posts/{id}` is served
+   by the `/api/v1/posts` prefix location. `/api/v1/art` is still denied — and that one is immaterial,
+   because `poster_url`/`backdrop_urls` in a projected row are upstream CDN addresses (TMDB,
+   Amazon) and no Kotlin source references `/api/v1/art` at all. The reference block in
+   `ORACLE_DEPLOYMENT.md` ("Reference deployment configuration": `location = /api/v1/posts`,
+   `location = /api/v1/stats`, everything else under `/api/` denied, and line 455 saying so outright)
+   is what the caveat was about, and it is now superseded by
+   `/etc/nginx/sites-enabled/radd-stream` on the live host.
 3. Three of the brief's named capabilities — **click-to-search from a user device**, **local device
    media scanning**, and **audio-fingerprint matching** — have **zero origin** in any directive or
    chat message. They are not half-built; they were never specified. **Reverse search** does exist as
@@ -113,9 +119,12 @@ today, with build specifications for everything still missing.
 4. "Audio track matcher" in the code is a **language-track selector** (`AudioTrackMatcher.kt`), not
    acoustic fingerprinting. The archive explicitly rejected Shazam-style audio recognition for movie
    identification.
-5. Monetization is mostly **UI + configuration**, not a transaction system: no payment ledger, no
-   approval write, no `vip_until` mutation, no ad SDK, and the app's download path bypasses the
-   shortener route entirely.
+5. Monetization is mostly **UI + configuration**, not a transaction system. That was the honest state
+   and it has moved: a payment ledger, an operator approval write and the `vip_until` mutation it
+   implies now exist (§M-MON-01, `Fast_Fetch/payments.py`), and `/api/v1/download` now has a route
+   that can mint the capability a redirect can carry (§P-B-03). Two pieces still do not exist: **no ad
+   SDK**, and **the app's download path bypasses the shortener route entirely** — which is not a bug
+   that can be fixed by pointing it at `/api/v1/download`, for the reason given in §M-MON-04.
 6. A second, deeper wiring pass (recorded in §18.1) moved **eleven capabilities out of "fully built"**.
    They compile and are unit-tested, but the shipped flow never calls them: playhead reporting for the
    ahead-cache, stay-forever keeps, local playback of kept files, binge byte prefetch, cross-file next
@@ -443,8 +452,8 @@ terms, not as a code TODO.
 | ID | Feature | What exists | What is missing | Consequence |
 |---|---|---|---|---|
 | P-B-01 | API v2 live availability | All routes implemented and tested | The live catalog has no/stale `cat_*` projection; `project` is not in the 6-hour pipeline | `/api/v2/*` answers `unavailable`, so server-ranked play, FTS search, sync and offsets are unreachable |
-| P-B-02 | Shortener monetization | Weighted rotation, cache, fallback, `/api/v1/download` | App never calls `/api/v1/download`; it downloads via `/api/v1/stream` | Free-tier downloads earn **zero** shortener revenue |
-| P-B-03 | VIP bypass | `request_is_vip` accepts account `vip_until` or signed pass | No endpoint mints a pass; no admin action sets `vip_until`; no app sends the bearer on downloads | The bypass can never trigger |
+| P-B-02 | Shortener monetization | Weighted rotation, cache, fallback, `/api/v1/download`; nginx no longer denies it (public since 2026-10-27) | App never calls `/api/v1/download`; it downloads via `/api/v1/stream`. **And it cannot simply switch**: a shortened target is a landing page a human taps, not the file — see M-MON-04 | Free-tier downloads earn **zero** shortener revenue |
+| P-B-03 | VIP bypass | `request_is_vip` accepts account `vip_until` or signed pass; `GET /api/v2/account/vip-pass` mints one (200 / 401 / 402, capped at the membership); admin approval sets `vip_until` | No app sends the bearer or `?vip=` on downloads — and no app needs to yet, because `/api/v1/stream` was never monetized, so nothing was bypassing | The bypass is reachable and tested; the *reason* to use it arrives with P-B-02 |
 | P-B-04 | Admin panel | Screens + three writes + token gate | Token is a static systemd literal; no audit log; no CSRF/rotation | Weak operational security for the one write surface |
 | P-B-05 | Domain rotation | Probe + registry + active base URL | Not invoked by importers/cron on 403/404; no scheduled probe | Site migrations still require a manual registry edit |
 | P-B-06 | Site Scout | Stages 1–4 incl. disciple scaffold | No `bridge_tracer.py`; no automated promotion of a scaffold into CI; manual review required | Adding a site stays human-in-the-loop |
@@ -745,11 +754,41 @@ expiry, and is bound to one account.
 neither; no ad request on a metered network if data saver is on (configurable).
 
 ### M-MON-04 — Shortener-aware client downloads
-**Build:** switch `DeviceDownloadsRepository` from `/api/v1/stream` to `/api/v1/download` and attach
-`Authorization: Bearer <sync key>` when signed in; keep `/api/v1/stream` as fallback if `/download`
-404s. This is what makes P-B-02/P-B-03 real.
-**Acceptance:** a free signed-out download goes through the configured shortener; a VIP account gets
-the direct URL; a shortener outage still downloads.
+**Status: server half BUILT and DEPLOYED; the client half as written cannot be built, and the
+replacement is an owner decision, not an engineering one.**
+
+What shipped (2026-10-27): `/api/v1/download` answers on the public port (nginx denied it before, so
+the whole waterfall was unreachable from any client), `GET /api/v2/account/vip-pass` mints the
+capability a URL can carry, and both routes log under `radd_capability`, a format with no `$args`, so
+a `?vip=` never reaches an access log.
+
+Why the original build text does not work. It says: switch `DeviceDownloadsRepository` from
+`/api/v1/stream` to `/api/v1/download` and attach the bearer. Two things are wrong with that.
+
+1. **The bearer it asks for buys nothing.** `DownloadService` pipes bytes itself with OkHttp, so an
+   `Authorization` header would reach our route fine — but `/api/v1/stream`, the route it uses today,
+   has **never** run the shortener: `shorten_download_url` has exactly one call site in `viewer.py`
+   (line 3207, the download route). A VIP in-app was therefore never being walked through a shortener,
+   so there is no bypass waiting to be attached. Attaching a pass here monetizes nothing and breaks
+   nothing; it is a no-op dressed as a milestone.
+2. **A free download cannot be monetized and kept resumable.** `test_download_endpoint.py` states it
+   in its own comment: *"A shortened target is a landing page, not the file."* Point the byte pipe at
+   `/api/v1/download?redirect=1` for a signed-out viewer and OkHttp faithfully follows the shortener to
+   an interstitial and writes HTML into `Movies/RaddStream/` under a `.mp4` name. That is not a slower
+   download; it is a broken one, and it loses the pause/resume the app exists to provide.
+
+So the acceptance line ("a free signed-out download goes through the configured shortener") is
+reachable only by **handing the free download to something a human operates** — the shortener URL to a
+browser, the way `openInExternalPlayer()` already hands a stream URL to an external player. That
+trades the app's download promise for revenue on the free tier. **Owner decides, and the options are
+not symmetric:** a paid member's expectation is untouched by any of this, while a free viewer's is
+replaced. Until that call is made, the honest status is that free-tier shortener revenue is zero and
+the server is ready for whichever answer is chosen.
+
+**Acceptance:** ~~a free signed-out download goes through the configured shortener~~ *(needs the
+decision above)*; a VIP account gets the direct URL — **met**, by both proofs (`?vip=` pass and bearer
+header) and asserted in `test_download_endpoint.py`; a shortener outage still downloads — **met**
+(falls back to the direct URL; monetization can never break a download).
 
 ### M-MON-05 — Quality gating matrix (free vs VIP)
 **Status: HALF BUILT, and off by default.** The client rule exists (`VipQualityGate`) and the
@@ -958,10 +997,13 @@ This section exists because "implemented" and "usable" diverged in production.
 ## 25. Prioritized build queue
 
 **P0 — make what exists usable (days, not weeks)**
-1. **M-INF-02** nginx allowlist for detail/stream/download/art/remote-config. Without it the app is a
-   catalog list.
+1. **M-INF-02** ~~nginx allowlist for detail/stream/download/art/remote-config~~ **done on the live
+   host** — detail, stream, download and remote-config answer publicly; `art` stays denied and the app
+   does not reference it (caveat 2 above). Without it the app is a catalog list.
 2. **M-INF-01** add `project` to the 6-hour pipeline; verify `/api/v2/manifest`.
-3. **M-MON-04** point downloads at `/api/v1/download` (unlocks shortener + VIP bypass).
+3. **M-MON-04** point downloads at `/api/v1/download` (unlocks shortener + VIP bypass). **Server half
+   done 2026-10-27; the client half is now an owner decision, not a task** — see the rewrite of that
+   section, which explains why a byte pipe cannot follow a shortener interstitial.
 4. **M-MON-01** payment ledger + approval + entitlement (the only path to real VIP revenue).
 5. **M-PLAT-03 / M-PLAT-04** inbound share + full deep links (cheap distribution wins).
 6. **M-SRCH-01 / M-SRCH-02** local library + click-to-search (brief requirement, self-contained).
