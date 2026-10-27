@@ -13,10 +13,46 @@ Last updated: 2026-10-22 for the REST-surface and test-suite sections below (ver
 
 ## Git branches and Android CI
 
-- The current GitHub `main` snapshot has root `.github/workflows/ci.yml` and `release.yml`; additional workflows remain under `App/.github/workflows/`. Only root-level workflows are discovered automatically by GitHub Actions.
-- The separate `radddao-work` branch contains additional Android MVP work and is divergent from `main`; review differences before merging and do not merge it wholesale.
-- The latest Actions run was not checked in this session. Verify the current run status before relying on CI.
-- Expected Android output: GitHub Actions builds a debug APK as a downloadable artifact; version-tag release builds require signing secrets configured in GitHub Actions.
+Re-read against the live remote on 2026-10-27 (every claim below is an API/git answer, not a
+recollection — this is the section that had gone stale twice running).
+
+- **`master` and `main` are both on the remote, and GitHub's default branch is `main`.**
+  `main` = `3271a1d`; `master` = `47d90a1`; `main..master` is **25 commits, and `master..main` is
+  zero** — so `master` is a clean fast-forward of `main` and nothing on `main` is missing from it.
+  Every recent session's milestones (the payment ledger, the v2 projector, the by-media route,
+  the VIP pass route, this file's own corrections) are on `master`, **including the code running on
+  the Oracle box**, while the repo's default branch is 25 commits behind it.
+- **That split is unresolved and it is the owner's call, not an agent's.** Root `AGENTS.md`
+  authorizes pushing *verified, tested milestones directly to `main`* so CI triggers and progress is
+  autonomous; but no session since the split has pushed `main`, and this document's own
+  instruction (§Workflow) is "work in an agent/task branch". Both readings cannot be followed at
+  once. Consequence if it stays as it is: a fresh agent clones the default branch, finds a tree
+  without the ledger or the projector, and re-implements work that already shipped.
+- Root workflows, verified present on `master`: `.github/workflows/ci.yml`, `release.yml`,
+  `backend-ci.yml` (all three `state: active`). The copies still sitting in `App/.github/workflows`
+  are inert — GitHub only discovers repo-root `.github/workflows/`.
+- **CI has never run on this repository.** `GET /repos/radddao/radd-stream/actions/runs` returns
+  `total_count: 0`, `/actions/workflows/backend-ci.yml/runs` returns `total_count: 0`,
+  `check-runs` for `47d90a1` is empty, and `/actions/permissions` says
+  `{"enabled": true, "allowed_actions": "all"}`. `backend-ci.yml` triggers on
+  `push: branches: ["**"]`, so the last 25 pushes should have produced runs and produced none.
+  The release surface is empty to match: **zero tags and zero GitHub Releases on the remote**, so
+  the signed-APK flow below has never executed and the only published APK is the debug build in
+  `/var/www/download/`, placed there by hand.
+  **Until that is explained, treat every "CI green" precondition in `AGENTS.md` and
+  `ORACLE_DEPLOYMENT.md` as unmet-by-default, not as passed** — the local suites are the only real
+  gate, which is why this project runs them one module per invocation before every push. The
+  release path is affected the same way: `release.yml` is what signs the APK with the four keystore
+  secrets, and a tag push cannot run a workflow that has never run.
+- Expected Android output *if* CI ever runs: a debug APK as a downloadable artifact; version-tag
+  release builds additionally need `KEYSTORE_BASE64`, `KEY_STORE_PASSWORD`, `KEY_ALIAS`,
+  `KEY_PASSWORD` present as repository Actions secrets (verified only by name, never by value).
+- The separate `radddao-work` branch (`95b74a2`) contains additional Android MVP work, is divergent
+  from `main`, and stays unmerged; review differences before merging and do not merge it wholesale.
+  Six `agent/*` branches are also still on the remote (`7starhd-importer-deployment-20261018`,
+  `multimovies-full-import`, `multimovies-import-regression-fix`, `portable-context`,
+  `replit-bootstrap-access-fix`, `staging-merge-approval-gate-20261018`). Whether any of them is
+  already merged was not checked here, so leave them alone rather than pruning them.
 
 ## Verified REST surface (2026-10-22, re-read against `Fast_Fetch/viewer.py`)
 

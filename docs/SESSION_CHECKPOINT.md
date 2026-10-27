@@ -37,6 +37,19 @@ Update this file after each independently verified milestone so work can resume 
   The inventory's M-MON-04, P-B-02, P-B-03 and caveat 2/5 are rewritten to say exactly this.
 - **Live verification:** `download?id=bad` → the server's own 400; `account/vip-pass` → 401
   problem body publicly; POST `download` → 403; `/api/data`, `/api/v2/health` → 403 unchanged.
+- **Two repo-level facts found while verifying this push, both now written into
+  `docs/PROJECT_MAP.md`, and one of them needs the owner:** (a) GitHub's **default branch is `main`
+  (= `3271a1d`) and `master` is 25 commits ahead of it with `main..master` a clean fast-forward** —
+  so the deployed code, the payment ledger and both new routes are absent from the branch a fresh
+  clone lands on; `AGENTS.md` authorizes pushing milestones to `main` while every recent session
+  pushed `master`, and those cannot both be right. (b) **CI has never run on this repository:**
+  `actions/runs`, `backend-ci.yml/runs` and `check-runs` for `47d90a1` all report zero while
+  `/actions/permissions` says enabled/`all` and `backend-ci.yml` triggers on `push: branches: ["**"]`.
+  Until that is explained, "wait for CI green" in `AGENTS.md`/`ORACLE_DEPLOYMENT.md` is unmet by
+  default and the local suites are the only real gate — and the release path is empty too: the
+  remote has **zero tags and zero GitHub Releases**, so the signed-APK flow `AGENTS.md` describes
+  has never once run, and the only published APK is the debug build sitting in
+  `/var/www/download/` that task 5 placed there by hand.
 - **Next:** nothing here needs a phone, but nothing further can be built without the owner's
   call on free-tier downloads. Task 4 stays open as that decision, not as code.
 
