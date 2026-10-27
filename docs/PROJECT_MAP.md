@@ -16,33 +16,28 @@ Last updated: 2026-10-22 for the REST-surface and test-suite sections below (ver
 Re-read against the live remote on 2026-10-27 (every claim below is an API/git answer, not a
 recollection — this is the section that had gone stale twice running).
 
-- **`master` and `main` are both on the remote, and GitHub's default branch is `main`.**
-  `main` = `3271a1d`; `master` = `47d90a1`; `main..master` is **25 commits, and `master..main` is
-  zero** — so `master` is a clean fast-forward of `main` and nothing on `main` is missing from it.
-  Every recent session's milestones (the payment ledger, the v2 projector, the by-media route,
-  the VIP pass route, this file's own corrections) are on `master`, **including the code running on
-  the Oracle box**, while the repo's default branch is 25 commits behind it.
-- **That split is unresolved and it is the owner's call, not an agent's.** Root `AGENTS.md`
-  authorizes pushing *verified, tested milestones directly to `main`* so CI triggers and progress is
-  autonomous; but no session since the split has pushed `main`, and this document's own
-  instruction (§Workflow) is "work in an agent/task branch". Both readings cannot be followed at
-  once. Consequence if it stays as it is: a fresh agent clones the default branch, finds a tree
-  without the ledger or the projector, and re-implements work that already shipped.
+- **Resolved 2026-10-27 by the owner: `main` was fast-forwarded to `master`.** Both heads are now
+  `095c3c7`, and the push was `master:main` — a pure fast-forward, no force, no history rewrite, so
+  nothing that was on `main` was discarded (`main..master` was 25 commits, `master..main` was zero).
+  **`AGENTS.md`'s rule is now operative as written: push verified, tested milestones to `main`.**
+  `master` is not retired and is not to be deleted; keep it pointing at the same commit as `main`
+  when you push, and never let the two drift again without saying so here.
 - Root workflows, verified present on `master`: `.github/workflows/ci.yml`, `release.yml`,
   `backend-ci.yml` (all three `state: active`). The copies still sitting in `App/.github/workflows`
   are inert — GitHub only discovers repo-root `.github/workflows/`.
-- **CI has never run on this repository.** `GET /repos/radddao/radd-stream/actions/runs` returns
-  `total_count: 0`, `/actions/workflows/backend-ci.yml/runs` returns `total_count: 0`,
-  `check-runs` for `47d90a1` is empty, and `/actions/permissions` says
-  `{"enabled": true, "allowed_actions": "all"}`. `backend-ci.yml` triggers on
-  `push: branches: ["**"]`, so the last 25 pushes should have produced runs and produced none.
-  The release surface is empty to match: **zero tags and zero GitHub Releases on the remote**, so
-  the signed-APK flow below has never executed and the only published APK is the debug build in
-  `/var/www/download/`, placed there by hand.
-  **Until that is explained, treat every "CI green" precondition in `AGENTS.md` and
-  `ORACLE_DEPLOYMENT.md` as unmet-by-default, not as passed** — the local suites are the only real
-  gate, which is why this project runs them one module per invocation before every push. The
-  release path is affected the same way: `release.yml` is what signs the APK with the four keystore
+- **CI has never run on this repository, and the cause is already known — it is the account, not this
+  tree** (root `AGENTS.md` §Current Project Status: "Actions is disabled at the account level").
+  This session verified that it is still true rather than trusting the line: `actions/runs` returns
+  `total_count: 0`, `/actions/workflows/backend-ci.yml/runs` returns `total_count: 0`, `check-runs`
+  for `47d90a1` is empty, and a push that landed on the *default* branch on 2026-10-27 produced no
+  run either. `/actions/permissions` answers `{"enabled": true, "allowed_actions": "all"}` because
+  that endpoint reports the **repository** setting; the account-level switch sits above it and turns
+  nothing on here. `backend-ci.yml` itself is fine — it triggers on `push: branches: ["**"]`.
+  Zero tags and zero GitHub Releases match this: the signed-APK flow has never executed, and the only
+  published APK is the debug build in `/var/www/download/`, placed there by hand.
+  **So every "CI green" precondition in `AGENTS.md` and `ORACLE_DEPLOYMENT.md` is unmet-by-default,
+  not passed** — the offline suites, run one module per invocation, are the only real gate, and the
+  local Gradle build is the app's. `release.yml` is what would sign the APK with the four keystore
   secrets, and a tag push cannot run a workflow that has never run.
 - Expected Android output *if* CI ever runs: a debug APK as a downloadable artifact; version-tag
   release builds additionally need `KEYSTORE_BASE64`, `KEY_STORE_PASSWORD`, `KEY_ALIAS`,

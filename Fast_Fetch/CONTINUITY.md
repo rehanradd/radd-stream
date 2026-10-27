@@ -962,3 +962,20 @@ descriptor alongside the stream one: **OK — 0 flags**; the 11 hand-review hits
 `account/vip-pass` → 401 problem body on the public port; POST `download` → 403; `/api/data` and
 `/api/v2/health` → 403 unchanged. Backups: `radd-stream.pre-download.bak`,
 `nginx.conf.pre-caplog.bak` (plus `radd-stream.pre-bymedia.bak` from the previous session).
+
+**Two decisions the owner made after this shipped, recorded because they change what "done" means.**
+1. **Keep the byte pipe.** Free downloads stay on `/api/v1/stream` with an honest pause that keeps
+   its bytes; **free-tier shortener revenue is accepted at zero** and VIP purchases are the
+   monetization. So the app half of P-B-02/M-MON-04 is closed *won't-fix*, not unfinished — the
+   waterfall remains configured, reachable and tested, serving the browser hand-off and any future
+   surface with a human at the end of it. Do not re-propose piping a shortener interstitial into
+   `Movies/RaddStream/`.
+2. **`main` was fast-forwarded to `master`** (`master:main`, pure fast-forward, no force, both heads
+   at `095c3c7`; `main..master` was 25 and `master..main` was 0). `AGENTS.md`'s "push verified
+   milestones directly to `main`" is the rule again, and `master` keeps the same commit rather than
+   being deleted. **Verified, not discovered:** CI has never run and the cause is the account-level
+   Actions switch `AGENTS.md` already records — `actions/runs` returns `total_count: 0` even for
+   today's default-branch push, while `/actions/permissions` reports enabled/`all` because that is
+   the *repository* setting, which sits under the account one. Zero tags and zero Releases match it.
+   **"CI green" is unmet-by-default, not passed**, so the suites above are the gate and every session
+   should keep running them before a push rather than waiting on a check that will never arrive.

@@ -2,7 +2,7 @@
 
 Update this file after each independently verified milestone so work can resume across accounts, tools, and usage limits.
 
-## Current checkpoint — 2026-10-27 (the shortener waterfall was unreachable, and now it is — with a catch)
+## Current checkpoint — 2026-10-27 (the download route was 403; it is open, and the client half was declined on purpose)
 
 - **Goal:** finish the server half of M-MON-04 / P-B-02 / P-B-03, the monetization items
   the inventory listed as P0 and that needed no phone.
@@ -32,26 +32,28 @@ Update this file after each independently verified milestone so work can resume 
   never walking through a shortener — the bypass it asks for buys nothing; (2) *a shortened link
   is a landing page, not the file* (`test_download_endpoint.py`'s own words). Pointing OkHttp's
   byte pipe at it writes an interstitial into `Movies/RaddStream/*.mp4` and destroys
-  pause/resume. Monetizing a free download means handing it to something a human taps, which
-  trades the app's download promise for revenue — **an owner decision, not an engineering one.**
-  The inventory's M-MON-04, P-B-02, P-B-03 and caveat 2/5 are rewritten to say exactly this.
+  pause/resume. **Asked and answered on 2026-10-27: keep the byte pipe.** Free-tier shortener
+  revenue is accepted at zero, VIP purchases are the monetization, and **no Kotlin was written**.
+  M-MON-04 is closed, P-B-02 is closed *won't-fix*, and both say why — so the next agent re-poses it
+  against a recorded decision instead of rediscovering it from `viewer.py:3207`.
 - **Live verification:** `download?id=bad` → the server's own 400; `account/vip-pass` → 401
   problem body publicly; POST `download` → 403; `/api/data`, `/api/v2/health` → 403 unchanged.
-- **Two repo-level facts found while verifying this push, both now written into
-  `docs/PROJECT_MAP.md`, and one of them needs the owner:** (a) GitHub's **default branch is `main`
-  (= `3271a1d`) and `master` is 25 commits ahead of it with `main..master` a clean fast-forward** —
-  so the deployed code, the payment ledger and both new routes are absent from the branch a fresh
-  clone lands on; `AGENTS.md` authorizes pushing milestones to `main` while every recent session
-  pushed `master`, and those cannot both be right. (b) **CI has never run on this repository:**
-  `actions/runs`, `backend-ci.yml/runs` and `check-runs` for `47d90a1` all report zero while
-  `/actions/permissions` says enabled/`all` and `backend-ci.yml` triggers on `push: branches: ["**"]`.
-  Until that is explained, "wait for CI green" in `AGENTS.md`/`ORACLE_DEPLOYMENT.md` is unmet by
-  default and the local suites are the only real gate — and the release path is empty too: the
-  remote has **zero tags and zero GitHub Releases**, so the signed-APK flow `AGENTS.md` describes
-  has never once run, and the only published APK is the debug build sitting in
-  `/var/www/download/` that task 5 placed there by hand.
-- **Next:** nothing here needs a phone, but nothing further can be built without the owner's
-  call on free-tier downloads. Task 4 stays open as that decision, not as code.
+- **Two repo-level facts found while verifying this push, both now in `docs/PROJECT_MAP.md`.**
+  (a) **Resolved by the owner:** GitHub's default branch was `main` (= `3271a1d`) while 25 commits of
+  shipped work sat on `master`, `master..main` = 0. `master:main` was pushed as a **pure
+  fast-forward — no force, no history rewrite, nothing on `main` discarded**; both heads are now
+  `095c3c7`. `AGENTS.md`'s "push verified milestones to `main`" is operative from here, and `master`
+  keeps pointing at the same commit rather than being deleted.
+  (b) **Verified, not discovered:** CI has never run on this repository, and the cause is the
+  account-level Actions switch that root `AGENTS.md` already records. `actions/runs`,
+  `backend-ci.yml/runs` and `check-runs` for `47d90a1` all report zero, and today's push that landed
+  on the *default* branch produced no run either; `/actions/permissions` says enabled/`all` because
+  that is the **repository** setting, which sits under the account one. Zero tags and zero GitHub
+  Releases match it — the signed-APK flow has never executed, and the only published APK is the debug
+  build task 5 placed in `/var/www/download/` by hand. **"CI green" is therefore unmet-by-default,
+  not passed**, so the offline suites are the gate; that is what this session relied on.
+- **Next:** task 10 (`M-SRCH-01`'s client half) and the outstanding device passes are all that is left
+  of the decided work. Both need a phone or an emulator, and this box has neither.
 
 ## Previous checkpoint — 2026-10-27 (the by-media endpoint, and the APK that was still stale)
 
