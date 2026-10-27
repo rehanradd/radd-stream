@@ -29,6 +29,63 @@ data class VipRemoteConfig(
     val apkUpdateUrl: String = "",
     val vip: VipRemotePricing = VipRemotePricing(),
     val payments: VipRemotePayments = VipRemotePayments(),
+    /** Operator switches for whole surfaces; every one defaults ON when the body omits it. */
+    @SerializedName("feature_flags")
+    val featureFlags: VipRemoteFeatureFlags = VipRemoteFeatureFlags(),
+    /** Ad-network ids, displayed nowhere: they only decide whether a slot has real inventory. */
+    val ads: VipRemoteAds = VipRemoteAds(),
+    /**
+     * Which download link shorteners the operator has configured. A network whose token is
+     * empty is reported as `configured = false`, so the app never offers a mirror the server
+     * would fail to shorten. The tokens themselves never leave the server.
+     */
+    @SerializedName("link_shorteners")
+    val linkShorteners: List<VipRemoteLinkShortener> = emptyList(),
+)
+
+/**
+ * The real server keys are `downloads`, `pure_cinema` and `chromecast`
+ * (`Fast_Fetch/admin_panel.py:remote_config`). The brief's `*_enabled` spelling is accepted as
+ * an alternate so a future/renamed body still decodes instead of silently turning a switch off.
+ *
+ * Every flag defaults to `true`: the server ships them enabled, and a partial body must not
+ * remove a surface the app has always had. Only an explicit `false` turns anything off.
+ */
+data class VipRemoteFeatureFlags(
+    @SerializedName(value = "downloads", alternate = ["downloads_enabled"])
+    val downloads: Boolean = true,
+    @SerializedName("pure_cinema")
+    val pureCinema: Boolean = true,
+    @SerializedName("chromecast")
+    val chromecast: Boolean = true,
+    @SerializedName(value = "sharing", alternate = ["sharing_enabled"])
+    val sharing: Boolean = true,
+    @SerializedName(value = "search", alternate = ["search_enabled"])
+    val search: Boolean = true,
+    /**
+     * The operator's choice to charge VIP for the top rungs. Defaults FALSE, the opposite of
+     * the four flags above, because this one is not a feature the viewer already had: on, it
+     * hides 1080p and 4K from everyone the ledger has not confirmed. A deployment that never
+     * sets it must stay fully watchable, so an absent key means "do not restrict".
+     */
+    @SerializedName(value = "quality_gate", alternate = ["quality_gating_enabled"])
+    val qualityGate: Boolean = false,
+)
+
+data class VipRemoteAds(
+    @SerializedName("monetag_rewarded_zone_id")
+    val monetagRewardedZoneId: String = "",
+    @SerializedName("adsterra_native_banner_id")
+    val adsterraNativeBannerId: String = "",
+) {
+    /** True when the rewarded slot has a zone to request; an empty id means "no inventory". */
+    val hasRewardedInventory: Boolean
+        get() = monetagRewardedZoneId.isNotBlank()
+}
+
+data class VipRemoteLinkShortener(
+    val network: String = "",
+    val configured: Boolean = false,
 )
 
 data class VipRemotePricing(

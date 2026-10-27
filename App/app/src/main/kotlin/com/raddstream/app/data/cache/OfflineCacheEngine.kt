@@ -14,11 +14,14 @@ import com.raddstream.app.repository.KeepOutcome
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.withContext
+import java.io.File
 import java.util.concurrent.ConcurrentHashMap
 
 /**
@@ -49,6 +52,9 @@ class OfflineCacheEngine @Inject constructor(
 ) : ProgressiveCacheEngine {
 
     private val observed = ConcurrentHashMap<String, StateFlow<CacheSnapshot?>>()
+
+    /** Live loopback servers, one per kept work being served; guarded by a lock on the map. */
+    private val proxies = LinkedHashMap<String, LocalMediaProxy>()
 
     @Volatile
     private var lastFreeBytes: Long = Long.MAX_VALUE
@@ -100,7 +106,9 @@ class OfflineCacheEngine @Inject constructor(
     }
 
     override suspend fun release(key: CacheSessionKey) {
-        key.sourceKeyOrNull()?.let(observed::remove)
+        val sourceKey = key.sourceKeyOrNull() ?: return
+        observed.remove(sourceKey)
+        closeProxy(sourceKey)
     }
 
     override fun storagePressure(): StoragePressure = when {
@@ -109,11 +117,64 @@ class OfflineCacheEngine @Inject constructor(
         else -> StoragePressure.OK
     }
 
-    /** For an already-stored file, hand the player a local URI it can open; null = nothing complete. */
+    /**
+     * For an already-stored file, hand the player a loopback URL it can open; null = nothing
+     * complete.
+     *
+     * A committed cache file lives in the app's PRIVATE directory, so a `file://` URI only works
+     * while this process is the reader — and it gives Media3 no Range protocol of its own. Serving
+     * it through [LocalMediaProxy] puts the bytes behind a loopback HTTP server that answers
+     * `Range` requests exactly like a CDN would, which is what `DefaultHttpDataSource` already
+     * knows how to consume (and what makes a kept file seekable without copying it anywhere).
+     *
+     * One proxy per work, reused across seeks and episode restarts: binding a fresh socket on
+     * every open would leak file descriptors for as long as the player keeps re-opening its
+     * source. The map is bounded, because a device that has played many kept files must not
+     * accumulate one listening socket per title for the life of the process.
+     */
     override suspend fun playableUri(key: CacheSessionKey): String? {
         val sourceKey = key.sourceKeyOrNull() ?: return null
         val committed = fileDao.getBySourceKey(sourceKey).firstOrNull { it.isComplete && !it.isTemporary }
-        return committed?.toLocalUri()?.toString()
+            ?: return null
+        val file = File(committed.path)
+        if (!file.isFile || file.length() <= 0L) {
+            closeProxy(sourceKey)
+            return null
+        }
+        return withContext(Dispatchers.IO) { proxyFor(sourceKey, file).baseHttpUrl }
+    }
+
+    private fun proxyFor(sourceKey: String, file: File): LocalMediaProxy = synchronized(proxies) {
+        proxies[sourceKey]?.let { return it }
+        val fresh = LocalMediaProxy(
+            file = file,
+            // A committed file is complete, so the verified prefix is the whole file. The
+            // provider is read per request, so a sweep that truncates the file is answered
+            // honestly (416) instead of serving bytes that no longer exist.
+            prefixProvider = { file.length() },
+            contentType = contentTypeFor(file),
+        )
+        proxies[sourceKey] = fresh
+        while (proxies.size > MAX_LIVE_PROXIES) {
+            val eldest = proxies.keys.firstOrNull { it != sourceKey } ?: break
+            proxies.remove(eldest)?.close()
+        }
+        fresh
+    }
+
+    private fun closeProxy(sourceKey: String) {
+        synchronized(proxies) { proxies.remove(sourceKey) }?.close()
+    }
+
+    private fun contentTypeFor(file: File): String = when (file.extension.lowercase()) {
+        "mp4", "m4v" -> "video/mp4"
+        "mkv" -> "video/x-matroska"
+        "webm" -> "video/webm"
+        "ts" -> "video/mp2t"
+        "m3u8" -> "application/vnd.apple.mpegurl"
+        "mp3" -> "audio/mpeg"
+        "m4a" -> "audio/mp4"
+        else -> "application/octet-stream"
     }
 
     /**
@@ -171,5 +232,8 @@ class OfflineCacheEngine @Inject constructor(
 
     companion object {
         private const val PRESSURE_NEAR_FULL_BYTES = 1L * 1024 * 1024 * 1024
+
+        /** Loopback servers kept alive at once; the player opens one work at a time. */
+        private const val MAX_LIVE_PROXIES = 4
     }
 }

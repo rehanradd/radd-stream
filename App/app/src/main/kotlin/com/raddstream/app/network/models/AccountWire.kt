@@ -19,6 +19,8 @@ import com.google.gson.annotations.SerializedName
  *   GET  api/v2/account/progress?limit=n    -> {progress[], count}
  *   POST api/v2/account/progress            -> {progress}
  *   POST api/v2/account/progress/remove     -> {removed}
+ *   POST api/v2/account/payment             -> payment{payment_id, status, plan, amount_pkr, method, submitted_at}
+ *   GET  api/v2/account/entitlement         -> entitlement{vip, vip_until, pending}
  *
  * THREE THINGS THESE MODELS ENFORCE, because the server cannot enforce them for us:
  *
@@ -128,6 +130,63 @@ data class ProgressRequest(
     @SerializedName("position_seconds") val positionSeconds: Double = 0.0,
     @SerializedName("duration_seconds") val durationSeconds: Double = 0.0,
     @SerializedName("client_updated_at") val clientUpdatedAt: Double = 0.0,
+)
+
+/**
+ * Body of POST api/v2/account/payment — the whole claim a viewer can make.
+ *
+ * There is no amount field and there must never be one: the server prices the plan
+ * itself (`payments.submit_payment` looks the amount up and answers 400 to any body
+ * that carries one), so a client cannot negotiate its own membership. `tid` is the
+ * transaction reference from the confirmation SMS, sent as one alphanumeric token
+ * because the server matches it against the method's shape with no whitespace.
+ */
+data class PaymentRequest(
+    @SerializedName("plan") val plan: String,
+    @SerializedName("method") val method: String,
+    @SerializedName("tid") val tid: String,
+)
+
+/**
+ * The receipt a filed claim comes back as. `status` is `pending` — the operator's
+ * queue, not a verdict — and the TID is deliberately absent: the response carries
+ * every other field of the request and not the one thing a shoulder-surfing screen
+ * could read.
+ */
+data class PaymentReceipt(
+    @SerializedName("payment_id") val paymentId: Int = 0,
+    val status: String? = null,
+    val plan: String? = null,
+    @SerializedName("amount_pkr") val amountPkr: Int = 0,
+    val method: String? = null,
+    @SerializedName("submitted_at") val submittedAt: Double = 0.0,
+)
+
+data class PaymentSubmitResponse(
+    val payment: PaymentReceipt? = null,
+)
+
+/**
+ * GET api/v2/account/entitlement — "am I VIP yet?".
+ *
+ * `vip` is `vip_until > now` on the SERVER's clock, `vip_until` is its expiry in epoch
+ * seconds, and `pending` means a claim exists that nobody has closed. Both can be true
+ * at once after a late renewal, so a screen that shows one must not hide the other.
+ * Nothing here is derived from a rewarded pass: a device-local pass is not a server
+ * entitlement and cannot become one by being stored.
+ *
+ * Named apart from `CatalogV2`'s `Entitlement` on purpose: that one is a catalog row's licence
+ * for one work (free or paid, ownership, price), this one is the account's membership over
+ * every work. Two different questions under one name would be worse than two names.
+ */
+data class AccountEntitlement(
+    val vip: Boolean = false,
+    @SerializedName("vip_until") val vipUntil: Double = 0.0,
+    val pending: Boolean = false,
+)
+
+data class EntitlementResponse(
+    val entitlement: AccountEntitlement? = null,
 )
 
 /**

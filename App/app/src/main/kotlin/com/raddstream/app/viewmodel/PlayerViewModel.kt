@@ -162,6 +162,27 @@ class PlayerViewModel @Inject constructor(
      */
     private var syncSignedIn: Boolean = false
 
+    /**
+     * Whether the server has confirmed paid VIP for this account. Mirrored rather than
+     * sampled for the same reason as [syncSignedIn]: a break decision is made on a tap, not
+     * in a suspending context. It is the ledger's answer and nothing else — a rewarded
+     * device pass is a separate fact and is read where it is stored.
+     */
+    private var syncEntitled: Boolean = false
+
+    /**
+     * The operator's 1080p/4K switch, mirrored from remote config. Off is the shipped default,
+     * so a free viewer keeps the whole ladder; [premiumAccess] is what the gate is actually
+     * handed at every site below.
+     */
+    private var qualityGateEnabled: Boolean = false
+
+    /** A confirmed member, or everyone while the operator has not turned gating on. */
+    private val premiumAccess: Boolean get() = VipQualityGate.premiumAccess(qualityGateEnabled, syncEntitled)
+
+    /** The rewarded pass's own deadline, in epoch milliseconds; `0` means none was ever granted. */
+    private var rewardedVipExpiresAt: Long = 0L
+
     private val _ui = MutableStateFlow(PlayerUiState())
     val uiState: StateFlow<PlayerUiState> = _ui.asStateFlow()
 
@@ -183,15 +204,45 @@ class PlayerViewModel @Inject constructor(
     }
 
     /**
-     * The one account preference this player cares about: is there a key at all. Collected
-     * rather than sampled, so signing in or out mid-session is felt by a player that is
-     * already running, and so the tick loop never has to suspend to ask.
+     * The two account facts this player cares about, plus the one device fact: is there a key,
+     * what does the ledger say about it, and is a rewarded pass still running. Collected rather
+     * than sampled, so signing in or out mid-session is felt by a player that is already
+     * running, and so the tick loop never has to suspend to ask.
      */
     private fun observeSyncAccount() {
         viewModelScope.launch {
             syncAccountRepository.signedIn.collect { signIn -> syncSignedIn = signIn }
         }
+        viewModelScope.launch {
+            syncAccountRepository.entitlement.collect { earned ->
+                syncEntitled = earned?.vip == true
+                // A membership approved mid-playback should make its rungs selectable now,
+                // not after the next episode.
+                armQualityChoices()
+            }
+        }
+        viewModelScope.launch {
+            settingsRepository.rewardedVipExpiresAt.collect { expiresAt ->
+                rewardedVipExpiresAt = expiresAt
+            }
+        }
+        viewModelScope.launch {
+            settingsRepository.qualityGateEnabled.collect { enabled ->
+                qualityGateEnabled = enabled
+                armQualityChoices()
+            }
+        }
     }
+
+    /**
+     * Whether a sponsor slot may be raised at all right now. Both doors are already promises
+     * the app made out loud — paid VIP is sold as "no sponsor cards", and the rewarded card
+     * reads "four hours of ad-free" — so either one silences the slot. What VIP alone buys and
+     * a device pass does not is the server-side capability (an unshortened link, a higher
+     * rung), and nothing here pretends a rewarded pass can grant that.
+     */
+    fun isAdFree(now: Long = System.currentTimeMillis()): Boolean =
+        RewardedVipPass.isAdFree(syncEntitled, rewardedVipExpiresAt, now)
 
     /**
      * The preferences the policy classes read. Collected, not sampled, so the settings
@@ -495,9 +546,21 @@ class PlayerViewModel @Inject constructor(
     private fun armQualityChoices() {
         val handle = _ui.value.activeRendition?.playback?.streamId?.trim()?.takeIf { it.isNotEmpty() }
             ?: return
-        val plan = store.peekAutoLadder(handle) ?: return
+        val staged = store.peekAutoLadder(handle) ?: return
+        // The detail screen already gates what it stages, but a deep link or a membership
+        // that lapsed mid-session could still hand us a premium rung. The player applies the
+        // same rule at the point the switch is built, so no premium choice is ever offered.
+        val rungs = staged.rungs.filter { VipQualityGate.allowsBand(it.band, premiumAccess) }
+        if (rungs.isEmpty()) return
+        val startBand = staged.startBand?.takeIf { band -> rungs.any { it.band == band } }
+            ?: rungs.first().band
+        val plan = staged.copy(
+            rungs = rungs,
+            startBand = startBand,
+            autoBand = staged.autoBand?.takeIf { band -> rungs.any { it.band == band } },
+        )
         ladderPlan = plan
-        if (plan.auto) autoRungHandle = plan.startBand?.let { band ->
+        if (plan.auto) autoRungHandle = staged.startBand?.let { band ->
             plan.rungs.firstOrNull { it.band == band }?.streamId
         } ?: handle
         _ui.update {
@@ -528,6 +591,7 @@ class PlayerViewModel @Inject constructor(
             band
         }
         val rung = plan.rungs.firstOrNull { it.band == targetBand } ?: return
+        if (!VipQualityGate.allowsBand(rung.band, premiumAccess)) return
         val active = _ui.value.activeRendition
         val auto = wantedAuto
         store.autoQuality.configure(plan.rungs, rung.band, auto)
@@ -872,6 +936,7 @@ class PlayerViewModel @Inject constructor(
                 positionMs = state.positionMs,
                 durationMs = state.durationMs,
                 hasNextEpisode = state.isEnded && hasSuccessorAtEnd(state),
+                isEntitled = isAdFree(),
             ),
         )
         _ui.update { it.copy(adBreak = slot) }
@@ -947,10 +1012,13 @@ class PlayerViewModel @Inject constructor(
     /** The successor's own ladder, reduced to what a hand-off needs. */
     private suspend fun lookupNextEpisode(postId: Int, season: Int, episode: Int): PreparedNextEpisode? {
         val detail = runCatching { catalogRepository.getPostDetail(postId) }.getOrNull() ?: return null
-        val ladder = QualityLadder.forNumberedScope(
-            detail.optionGroups,
-            season.takeIf { it > 0 },
-            episode,
+        val ladder = VipQualityGate.gate(
+            QualityLadder.forNumberedScope(
+                detail.optionGroups,
+                season.takeIf { it > 0 },
+                episode,
+            ),
+            premiumAccess,
         )
         val option = ladder.resolvedFor(LadderForScope.AUTO) ?: return null
         val handle = option.streamId.takeIf { it.isNotBlank() } ?: return null

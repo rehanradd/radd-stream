@@ -27,6 +27,27 @@ The user has no powerful PC and cannot run Android Studio. The **entire build pi
 - GitHub Releases for APK distribution
 - GitHub web editor / Codespaces / Replit for code editing
 
+### 1a. Correction: builds DO happen on this VM, and only one at a time
+
+The rule above is stale as written. GitHub Actions is currently disabled at the account
+level, so on the Oracle host the real verification loop is a **local** offline Gradle run —
+that is how every milestone since has been proven. It is also how agents break each other's
+builds: this VM has **one vCPU**, and two concurrent Gradle invocations writing into the same
+`App/app/build` tree fail BOTH of them (`kaptDebugKotlin` aborts with
+`Unable to delete directory .../generated/source/kapt` — a lock race, not a code error).
+
+So, on this host:
+
+- **Never run `./gradlew` directly.** Use the queue, which waits for any other agent's build
+  and then takes an exclusive lock: `/tmp/qbuild.sh :app:compileDebugKotlin :app:testDebugUnitTest`
+- Read the `GRADLE_EXIT=` line it prints, not your pipeline's status — `... | tail` reports
+  the exit code of `tail`, which is always 0.
+- Never read `app/build/test-results/**` as passing without checking the file is newer than
+  your run; a stale XML looks identical to a green one.
+- One build at a time, and no build while another agent is mid-verification. If you are a
+  fan-out worker, edit freely and build rarely — each build is minutes of this VM's entire
+  CPU.
+
 ---
 
 ## 2. Build System Architecture
@@ -1083,3 +1104,129 @@ scrolling and the dialog are compile/unit-verified only. Remote config has no ve
 code, so the notice cannot claim "newer" — it says "a new build is available".
 `maintenance_mode` is decoded but no screen consumes it yet. Nothing committed (no commit
 requested).
+
+### Session 13 — The VIP claim becomes a real server round-trip (2026-10-27)
+
+**What was false before this:** the app's "Submit" button stored the transaction ID in
+DataStore and told the viewer it had been kept — the server was never called, so a paid
+membership could not exist. `VipUpgradeScreen` even said "this server has no payment
+collection endpoint". `Fast_Fetch/payments.py` already had one, deployed and tested; the app
+just never spoke to it.
+
+**The contract, taken from the server rather than invented:** `POST api/v2/account/payment`
+with bearer sync key and body `{"plan","method","tid"}`; `GET api/v2/account/entitlement`
+returning `{"vip","vip_until","pending"}` through `redact.py`'s `account_payment` /
+`account_entitlement` projections. The projections deliberately carry **no `tid`** — the
+ledger keeps it, the phone never gets it back.
+
+**Wired:**
+- `AccountWire.kt` — `PaymentRequest`, `PaymentReceipt`, `PaymentSubmitResponse`,
+  `AccountEntitlement`, `EntitlementResponse`. The membership type is `AccountEntitlement`,
+  **not** `Entitlement`: `CatalogV2.kt:216` already owns that name for a per-work licence,
+  and reusing it was a redeclaration that only surfaced at compile time.
+- `SyncAccountRepository.kt` — `submitPayment()` classifies through the existing
+  `SyncContract` verdicts (no retries, `detail` never surfaces); `refreshEntitlement()` is
+  throttled to one read per 60 s and keeps the last good answer on a transient failure, but
+  clears on `SIGN_OUT`; `startEntitlementWatch()` polls every 6 h from
+  `RaddStreamApplication.onCreate()` and never starts without a key.
+- `VipViewModel.kt` — plans/channels became the server's own spellings (`vip_monthly`,
+  `jazzcash`, …), `submitTransaction()` posts when signed in and keeps the draft on the
+  device when not, `VipSubmission.outcome()` maps every refusal to our own sentence, and a
+  kept draft is auto-filed once an account exists.
+- Entitlement now gates something real: `AdSlotPolicy.decide()` returns `AdSlot.NONE` when
+  `isEntitled`, and the sponsor card leaves `DetailScreen`. The rewarded pass and the server
+  membership both silence ads and nothing else — **no resolution/quality gate was invented**,
+  because remote config publishes no such flag.
+- `VipUpgradeScreen` gained the plan/channel pickers, an entitlement card, a live
+  "Sending…" state, and honest copy for the signed-out path.
+
+**Drift pinned:** `VipWireContractTest` reads `payments.py` and `redact.py` off disk (the
+`BrandDriftTest` pattern) and asserts plan names, plan days, fallback prices, channel names
+and both projection field sets, plus that `tid` appears in neither.
+
+**Tests / build:** `:app:compileDebugKotlin :app:testDebugUnitTest` → BUILD SUCCESSFUL,
+**410 tests / 50 suites / 0 failures** (new: `VipWireContractTest` 9, `VipSubmissionTest` 6,
+`ModelsTest` +3, `AdSlotPolicyTest` +2, `RewardedVipPassTest` +2). `PosterCardProvenanceTest`
+still self-skips on aarch64.
+
+**Operational finding for every agent on this host:** two concurrent Gradle invocations in
+`App/` corrupt each other's kapt output (`BUILD FAILED`, no compile errors) on this 1-vCPU
+VM. Builds now go through `/tmp/qbuild.sh`, which waits for other agents' builds and takes an
+exclusive lock; the rule is recorded in `App/AGENTS.md` §1a. Also: `android_tasks.md` was
+instructing workers to POST to a `/api/v1/vip/submit-tid` route **that does not exist** —
+corrected, because a second fake payment path would have shipped beside the real one.
+
+**Deliberately not verified:** no device or emulator, so the posted claim, the operator's
+approval round-trip and the entitlement countdown are compile/unit-verified only. A
+`GET` before `POST` ordering question was settled by live probe: `viewer.py` reads the body
+before dispatch, so a missing bearer is a 401 on every account route, uniformly — not a bug.
+
+### Session 14 — The android_tasks sprint: remote switches, VIP quality gate, recents, subtitles, kept-file playback (2026-10-27)
+
+**Goal:** work the six-task `android_tasks.md` sprint in order, Kotlin only, running
+`testDebugUnitTest` after each change.
+
+**1. Remote config is fully decoded and obeyed.** `VipRemoteConfig` now carries everything
+`admin_panel.py:remote_config` publishes: `maintenance_mode`, `apk_update_url`, the
+`feature_flags` board (`downloads`, `pure_cinema`, `chromecast`, `quality_gate`, plus the
+aliases the brief allowed), `ads` (`monetag_rewarded_zone_id`, `adsterra_native_banner_id`),
+and `link_shorteners` (network + configured — the tokens never leave the server).
+`ServerSettingsRepository` mirrors maintenance and the feature switches in ONE atomic
+DataStore write, so a torn refresh cannot leave half a config behind. A new
+application-scoped `RemoteConfigWatcher` refreshes every five minutes and only writes after
+a fully decoded answer; it is started in `RaddStreamApplication`, beside the entitlement
+watch. `MaintenanceScreen` renders ahead of navigation in `MainActivity`, so the whole app
+is behind the notice, not just the home page. (A second session on this host added the
+operator `quality_gate` flag to the same board; the tree below was verified as one unit.)
+
+**2. VIP: one real payment route and an enforceable quality promise.** The brief named
+`POST /api/v1/vip/submit-tid`; that route does not exist. The Retrofit method is therefore
+named `submitVipTid` but wired to the ledger route that does exist
+(`POST api/v2/account/payment`), and `phone` is neither collected nor sent because the
+server accepts `{plan, method, tid}` only. The entitlement is cached in DataStore
+(`vip_active` / `vip_until` / `vip_pending_claim`) and hydrated at startup so a restart knows
+what the last confirmed answer was; sign-out clears it. `VipQualityGate` holds the single
+premium rule (2160p/4K/1080p), applied in `DetailViewModel` when the layout and ladder are
+derived and again in `PlayerViewModel` when the quality switch and binge look-ahead are
+armed — with a visible "4K and 1080p are part of VIP" card instead of silently deleting
+sources. It is behind the operator's `quality_gate` switch: with the flag off, no viewer is
+restricted. The rewarded pass buys ad-free, never a higher rung, and the code says so.
+
+**3. Search recents survive a restart.** `ServerSettingsRepository.searchRecents` stores the
+rail as one U+001F-joined string (newest first) rather than a `Set`, because recency is the
+whole point; every write trims, drops blanks, strips the separator, dedupes and caps at
+`SEARCH_RECENTS_MAX = 20`. `SearchViewModel` hydrates from the flow at init and writes
+through the same normaliser, so the optimistic UI and the persisted list cannot disagree.
+
+**4. Subtitle parsing is pinned by tests.** New `SubtitleParsersTest` (15): SRT with and
+without indices, CRLF, multiline cues, tag stripping, out-of-order cues; VTT header/NOTE/cue
+settings/`MM:SS.mmm`; empty and whitespace-only input; malformed start/end/reversed timing
+skipped without throwing; `parseTimestamp` shape rejects; a 20,000-cue SRT and a 10,000-cue
+VTT parsed in order; `activeCues` delay semantics; format detection.
+
+**5. A kept file is played through the loopback proxy.** `OfflineCacheEngine.playableUri`
+no longer returns a `file://` URI: it serves the committed cache file through
+`LocalMediaProxy` on `127.0.0.1`, one bounded LRU of four servers, with a content type from
+the file extension. `PlaybackService.handleLoad` now asks for a kept copy BEFORE building the
+media item and swaps the rendition to that loopback URL (clearing the redirector's
+`expires_at`), logging the choice in the failover trail; an engine miss or failure falls
+straight through to the server. Two real defects were fixed in `LocalMediaProxy` on the way:
+it materialised the whole requested range in a `ByteArray` (an open-ended `bytes=0-` request
+would have read a movie into memory — it now streams 64 KiB chunks), and its range parser
+treated an explicit end as exclusive (`bytes=0-99` answered 99 bytes, leaving a one-byte hole
+at every seek — HTTP ranges are inclusive).
+
+**Tests / build:** `/tmp/qbuild.sh -Dorg.gradle.jvmargs="-Xmx1536m" compileDebugKotlin
+testDebugUnitTest` → BUILD SUCCESSFUL, **447 tests / 54 suites / 0 failures**
+(`LocalMediaProxyTest` 7, `SearchRecentsTest` 7, `SubtitleParsersTest` 15). Another session
+was building the same working tree during this sprint; the final serialized run reported
+`OVERLAP=NO`, and the test task was cache-validated against the exact sources in the commit.
+`PosterCardProvenanceTest` still self-skips on aarch64.
+
+**Deliberately not verified:** no device or emulator, so Media3 playing a loopback URL, the
+maintenance overlay, the VIP upsell card and the recents rail are compile/unit-verified only.
+The proxy is exercised over real HTTP in `LocalMediaProxyTest`, but not by ExoPlayer.
+
+**GitHub branch/commit/push result:** App changes committed locally in this session; not
+pushed (no push requested). **Oracle deployment result:** not deployed.
+

@@ -3,6 +3,7 @@ package com.raddstream.app.viewmodel
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.raddstream.app.data.ServerSettingsRepository
 import com.raddstream.app.data.downloads.DeviceDownloadResult
 import com.raddstream.app.data.downloads.DeviceDownloadsRepository
 import com.raddstream.app.data.local.WatchHistoryDao
@@ -46,6 +47,16 @@ data class DetailUiState(
     val ladderEpisode: Int? = null,
     /** null / [LadderForScope.AUTO] = let the ladder's own pointer choose the rung. */
     val selectedBand: String? = LadderForScope.AUTO,
+    /**
+     * Whether the house sponsor card may be shown for this viewer at all. False is the
+     * ordinary case; a confirmed membership or a live rewarded pass turns the card off, which
+     * is what both of those offers say they do.
+     */
+    val adFree: Boolean = false,
+    /** The ledger's answer, mirrored so the quality gate and its upsell read one fact. */
+    val vip: Boolean = false,
+    /** True when this title has 4K/1080p sources that the current viewer cannot play. */
+    val premiumSourcesLocked: Boolean = false,
 )
 
 sealed class DetailNavigationEvent {
@@ -69,6 +80,7 @@ class DetailViewModel @Inject constructor(
     private val favoritesRepository: FavoritesRepository,
     private val deviceDownloads: DeviceDownloadsRepository,
     private val syncAccountRepository: SyncAccountRepository,
+    private val settingsRepository: ServerSettingsRepository,
     private val watchHistoryDao: WatchHistoryDao,
 ) : ViewModel() {
 
@@ -85,6 +97,96 @@ class DetailViewModel @Inject constructor(
     init {
         loadDetail()
         observeFavorite()
+        observeEntitlement()
+    }
+
+    /**
+     * Whether this viewer is owed a page without the house card. Both inputs are pushed, so a
+     * membership approved while this screen was open removes the card without a reload; the
+     * rule itself lives in [RewardedVipPass.isAdFree], which the player applies identically.
+     *
+     * The entitlement also decides which sources exist on this page (see [VipQualityGate]), so
+     * the same push rebuilds the gated layout and ladder — a viewer who upgrades while looking
+     * at a title gets its 4K rungs without reopening the screen.
+     */
+    private fun observeEntitlement() {
+        viewModelScope.launch {
+            syncAccountRepository.entitlement.collect { earned ->
+                serverVip = earned?.vip == true
+                publishViewerContent()
+            }
+        }
+        viewModelScope.launch {
+            settingsRepository.rewardedVipExpiresAt.collect { expiresAt ->
+                rewardedExpiresAt = expiresAt
+                publishViewerContent()
+            }
+        }
+        viewModelScope.launch {
+            settingsRepository.qualityGateEnabled.collect { enabled ->
+                qualityGateEnabled = enabled
+                publishViewerContent()
+            }
+        }
+    }
+
+    private var serverVip: Boolean = false
+    private var rewardedExpiresAt: Long = 0L
+
+    /**
+     * The operator's switch, not this screen's opinion. Off is the shipped default, so the
+     * catalog stays whole for a free viewer until the owner decides 1080p/4K should cost
+     * something; [premiumAccess] is what every gate call below actually passes.
+     */
+    private var qualityGateEnabled: Boolean = false
+
+    /** Who may see the top rungs: a confirmed member, or everyone while the switch is off. */
+    private val premiumAccess: Boolean get() = VipQualityGate.premiumAccess(qualityGateEnabled, serverVip)
+
+    /** The ungated catalog answer; every gated view is derived from it on entitlement change. */
+    private var rawDetail: PostDetail? = null
+
+    /**
+     * Rebuild the presentation from the raw detail and the current viewer. Both the print list
+     * and the quality ladder go through [VipQualityGate]; a VIP viewer gets the original objects
+     * back unchanged, so this costs nothing on the ordinary paid path.
+     */
+    private fun publishViewerContent() {
+        val detail = rawDetail
+        if (detail == null) {
+            _uiState.update {
+                it.copy(adFree = RewardedVipPass.isAdFree(serverVip, rewardedExpiresAt))
+            }
+            return
+        }
+        val artwork = detail.backdropList.ifEmpty {
+            listOfNotNull(detail.posterUrl?.takeIf(String::isNotBlank))
+        }
+        val full = ReleaseLayoutBuilder.build(
+            detail.contentType,
+            detail.releases,
+            artwork,
+            detail.seasonArtwork,
+        )
+        val state = _uiState.value
+        val scope = QualityLadder.forNumberedScope(
+            detail.optionGroups,
+            state.ladderSeason,
+            state.ladderEpisode,
+        )
+        val premiumLocked = qualityGateEnabled && !serverVip && (
+            VipQualityGate.hasPremiumPrints(full) ||
+                scope.options.any { VipQualityGate.isPremiumBand(it.band) || VipQualityGate.isPremiumLabel(it.title) }
+            )
+        _uiState.update {
+            it.copy(
+                layout = VipQualityGate.gate(full, premiumAccess),
+                ladder = VipQualityGate.gate(scope, premiumAccess),
+                vip = serverVip,
+                premiumSourcesLocked = premiumLocked,
+                adFree = RewardedVipPass.isAdFree(serverVip, rewardedExpiresAt),
+            )
+        }
     }
 
     private fun observeFavorite() {
@@ -117,15 +219,17 @@ class DetailViewModel @Inject constructor(
                         artwork,
                         detail.seasonArtwork,
                     )
+                    rawDetail = detail
                     _uiState.update {
                         it.copy(
                             post = detail,
-                            layout = layout,
-                            ladder = QualityLadder.forNumberedScope(detail.optionGroups, null, null),
                             selectedSeason = layout.seasons.firstOrNull()?.number,
                             isLoading = false,
                         )
                     }
+                    // The catalog answer is ungated; what the viewer may SEE is decided here,
+                    // from the entitlement the repository already holds.
+                    publishViewerContent()
                     // A row saved before this app had a handle becomes syncable the moment the
                     // catalog finally names its work. Nothing here fabricates a handle: an absent
                     // key is a no-op, and a present one is the server's own.
@@ -174,10 +278,13 @@ class DetailViewModel @Inject constructor(
      * whole title, because that is what a movie's payload looks like.
      */
     fun ladderFor(season: Int?, episode: Int?): LadderForScope =
-        QualityLadder.forNumberedScope(
-            _uiState.value.post?.optionGroups.orEmpty(),
-            season,
-            episode,
+        VipQualityGate.gate(
+            QualityLadder.forNumberedScope(
+                _uiState.value.post?.optionGroups.orEmpty(),
+                season,
+                episode,
+            ),
+            premiumAccess,
         )
 
     /**
@@ -190,10 +297,13 @@ class DetailViewModel @Inject constructor(
     fun showRungsFor(season: Int?, episode: Int?) {
         _uiState.update {
             it.copy(
-                ladder = QualityLadder.forNumberedScope(
-                    _uiState.value.post?.optionGroups.orEmpty(),
-                    season,
-                    episode,
+                ladder = VipQualityGate.gate(
+                    QualityLadder.forNumberedScope(
+                        _uiState.value.post?.optionGroups.orEmpty(),
+                        season,
+                        episode,
+                    ),
+                    premiumAccess,
                 ),
                 ladderSeason = season,
                 ladderEpisode = episode,
@@ -204,12 +314,21 @@ class DetailViewModel @Inject constructor(
 
     /** A rung this app cannot present is downloaded, and the row says so — no hidden failure. */
     fun keepRung(option: QualityOption) {
+        if (isLocked(option)) {
+            _uiState.update { it.copy(actionMessage = VipQualityGate.LOCKED_MESSAGE) }
+            return
+        }
         _uiState.update { it.copy(selectedBand = option.band) }
         keep(
             handle = option.streamId,
             printLabel = option.title,
         )
     }
+
+    /** A premium rung the current viewer may not take, decided from the same gate the UI uses. */
+    private fun isLocked(option: QualityOption): Boolean =
+        !VipQualityGate.allowsBand(option.band, premiumAccess) ||
+            (!premiumAccess && VipQualityGate.isPremiumLabel(option.title))
 
     /**
      * Ask Android's DownloadManager for one public file, by OUR opaque handle.
@@ -257,6 +376,10 @@ class DetailViewModel @Inject constructor(
      * measured throughput — while the navigation route still carries one opaque handle only.
      */
     fun playLadder(option: QualityOption, external: Boolean = false) {
+        if (isLocked(option)) {
+            _uiState.update { it.copy(actionMessage = VipQualityGate.LOCKED_MESSAGE) }
+            return
+        }
         val title = _uiState.value.post?.let { it.cleanTitle ?: it.title } ?: "Stream"
         if (option.streamId.isBlank()) {
             _uiState.update { it.copy(actionMessage = "Nothing playable on this rung yet.") }
@@ -342,6 +465,10 @@ class DetailViewModel @Inject constructor(
 
     /** Play the best link this print offers. The server already ranked them. */
     fun playPrint(print: RankedPrint, external: Boolean = false) {
+        if (!VipQualityGate.allowsResolution(print.resolution, premiumAccess)) {
+            _uiState.update { it.copy(actionMessage = VipQualityGate.LOCKED_MESSAGE) }
+            return
+        }
         val link = print.links.firstOrNull { it.playableHere } ?: print.links.firstOrNull { it.keepable }
         if (link == null) {
             _uiState.update { it.copy(actionMessage = "Nothing playable on this print yet.") }
@@ -422,6 +549,10 @@ class DetailViewModel @Inject constructor(
     }
 
     fun keepPrint(print: RankedPrint) {
+        if (!VipQualityGate.allowsResolution(print.resolution, premiumAccess)) {
+            _uiState.update { it.copy(actionMessage = VipQualityGate.LOCKED_MESSAGE) }
+            return
+        }
         val link = print.links.firstOrNull { !it.streamId.isBlank() }
         keep(
             handle = link?.streamId.orEmpty(),

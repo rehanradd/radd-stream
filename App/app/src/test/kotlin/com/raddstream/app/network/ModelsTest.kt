@@ -4,6 +4,7 @@ import com.raddstream.app.data.local.FavoritePost
 import com.raddstream.app.network.models.Codec
 import com.raddstream.app.network.models.Container
 import com.raddstream.app.network.models.CoverageType
+import com.raddstream.app.network.models.EntitlementResponse
 import com.raddstream.app.network.models.Edition
 import com.raddstream.app.network.models.EntitlementModel
 import com.raddstream.app.network.models.HdrFormat
@@ -11,6 +12,7 @@ import com.raddstream.app.network.models.LinkClassification
 import com.raddstream.app.network.models.LinkKind
 import com.raddstream.app.network.models.LinkState
 import com.raddstream.app.network.models.Ownership
+import com.raddstream.app.network.models.PaymentSubmitResponse
 import com.raddstream.app.network.models.Playability
 import com.raddstream.app.network.models.PlayProtocol
 import com.raddstream.app.network.models.Post
@@ -345,5 +347,45 @@ class ModelsTest {
             SourceDetail::class.java,
         )
         assertEquals(18_253_611_008L, source.fileSizeBytes)
+    }
+
+    @Test
+    fun `the payment receipt the ledger answers is read whole`() {
+        // Exactly the body `accounts_api` projects for `account_payment`: an int row id, the
+        // server's own price, epoch REAL seconds, and no `tid` anywhere in it.
+        val answered = gson.fromJson(
+            """{"payment":{"payment_id":7,"status":"pending","plan":"vip_monthly",
+               "amount_pkr":200,"method":"jazzcash","submitted_at":1700000000.5}}""",
+            PaymentSubmitResponse::class.java,
+        )
+        val receipt = answered.payment!!
+        assertEquals(7, receipt.paymentId)
+        assertEquals("pending", receipt.status)
+        assertEquals("vip_monthly", receipt.plan)
+        assertEquals(200, receipt.amountPkr)
+        assertEquals("jazzcash", receipt.method)
+        assertEquals(1_700_000_000.5, receipt.submittedAt, 0.001)
+    }
+
+    @Test
+    fun `an entitlement answer is read on the server's clock, not this device's`() {
+        val earned = gson.fromJson(
+            """{"entitlement":{"vip":true,"vip_until":1702591999.75,"pending":false}}""",
+            EntitlementResponse::class.java,
+        ).entitlement!!
+        assertTrue(earned.vip)
+        assertFalse(earned.pending)
+        assertEquals(1_702_591_999.75, earned.vipUntil, 0.001)
+    }
+
+    @Test
+    fun `a missing or junk entitlement is nothing read rather than a refusal`() {
+        // Gson does not run Kotlin defaults for an absent key, so every field must survive both
+        // an empty object and a body shaped by a different server build.
+        listOf("""{"entitlement":{}}""", """{"entitlement":null}""", """{}""").forEach { raw ->
+            val answered = gson.fromJson(raw, EntitlementResponse::class.java)
+            assertFalse("$raw must not fabricate VIP", answered.entitlement?.vip == true)
+            assertFalse(answered.entitlement?.pending == true)
+        }
     }
 }

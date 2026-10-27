@@ -5,21 +5,33 @@ import com.raddstream.app.data.ServerSettingsRepository
 import com.raddstream.app.data.local.FavoriteDao
 import com.raddstream.app.data.local.SyncedProgressDao
 import com.raddstream.app.data.local.SyncedProgressEntity
+import com.raddstream.app.di.CacheScope
 import com.raddstream.app.network.ApiProvider
 import com.raddstream.app.network.RaddStreamApi
 import com.raddstream.app.network.bearerHeader
 import com.raddstream.app.network.buildRaddGson
 import com.raddstream.app.network.models.AccountCreateRequest
+import com.raddstream.app.network.models.AccountEntitlement
 import com.raddstream.app.network.models.AccountProblem
 import com.raddstream.app.network.models.FavoriteEntry
 import com.raddstream.app.network.models.FavoriteRequest
+import com.raddstream.app.network.models.PaymentReceipt
+import com.raddstream.app.network.models.PaymentRequest
 import com.raddstream.app.network.models.ProgressEntry
 import com.raddstream.app.network.models.ProgressRequest
+import java.util.concurrent.atomic.AtomicBoolean
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import retrofit2.HttpException
 
 /** The outcome of the two calls that mint or adopt a key, in the UI's vocabulary. */
@@ -64,12 +76,15 @@ class SyncAccountRepository @Inject constructor(
     private val settingsRepository: ServerSettingsRepository,
     private val favoriteDao: FavoriteDao,
     private val syncedProgressDao: SyncedProgressDao,
+    @CacheScope private val scope: CoroutineScope,
 ) {
 
     /** The stored key. Null means signed out, and every caller below treats that as normal. */
     val syncKey: Flow<String?> = settingsRepository.syncKey
 
     val signedIn: Flow<Boolean> = settingsRepository.syncKey.map { !it.isNullOrBlank() }
+
+    private val _entitlement = MutableStateFlow<AccountEntitlement?>(null)
 
     /** Rule 4's session flag: set by the first 429, cleared by a sign-out or a restart. */
     @Volatile
@@ -81,6 +96,18 @@ class SyncAccountRepository @Inject constructor(
     private val progressThrottle = ProgressThrottle()
 
     val isPaused: Boolean get() = pausedByThrottle
+
+    init {
+        // The last confirmed answer survives a restart. Loading it here means a screen that
+        // opens before the launch poll lands already knows what this account may play, and a
+        // device in flight mode does not lose a membership the ledger already granted.
+        scope.launch {
+            if (currentKey() == null || _entitlement.value != null) return@launch
+            _entitlement.value = runCatching {
+                settingsRepository.storedEntitlement.first()
+            }.getOrNull()
+        }
+    }
 
     // ── account lifecycle ────────────────────────────────────────────────────────
 
@@ -183,9 +210,10 @@ class SyncAccountRepository @Inject constructor(
         pausedByThrottle = false
         progressThrottle.reset()
         syncedProgressDao.clear()
+        clearEntitlement()
+        settingsRepository.clearStoredEntitlement()
         settingsRepository.saveSyncKey(null)
     }
-
     // ── best-effort writes, each called AFTER the local write already happened ─────
 
     /** Add one favorite. The handle is the whole API surface for "which title". */
@@ -265,6 +293,10 @@ class SyncAccountRepository @Inject constructor(
     /** "Sync now": read both lists, write what the library is missing, fold in what it has. */
     suspend fun syncNow(): SyncReport {
         if (currentKey() == null || pausedByThrottle) return SyncReport()
+        // Membership rides the same pass as the lists: signing in on a second device should
+        // show a VIP the operator already approved, and the throttle below keeps a repeated
+        // "Sync now" from asking the same question twice in a minute.
+        refreshEntitlement()
         return try {
             val api = apiProvider.current()
             val auth = bearerHeader(currentKey())
@@ -332,6 +364,126 @@ class SyncAccountRepository @Inject constructor(
         val row = favoriteDao.findById(postId) ?: return
         if (row.workRef == ref) return
         favoriteDao.updateWorkRef(postId, ref)
+    }
+
+    // ── paid VIP: the claim, and the answer to "did it land?" ────────────────────
+
+    /**
+     * The server's last word on this account's membership, or null when nothing has been
+     * read yet. Null is a real state and not a failure: a signed-out device never asks, and
+     * a screen that treated "never asked" as "not VIP" would hide a pending claim that the
+     * viewer can still see the moment they sign in.
+     */
+    val entitlement: StateFlow<AccountEntitlement?> = _entitlement.asStateFlow()
+
+    private val startedWatch = AtomicBoolean(false)
+    private var lastEntitlementReadMs: Long = 0L
+
+    /**
+     * File one claimed payment. The reference never leaves this call as a stored value: the
+     * server keeps it in its ledger and the receipt deliberately does not carry it back.
+     *
+     * A refusal is [Refusal] in our own vocabulary, and which one it is changes what the
+     * screen says: `REJECTED` means the plan/method/reference shape the operator's server
+     * accepts (a 400 — the viewer typed something that is not a TID), `THROTTLED` means this
+     * account already filed inside the server's window (one claim per
+     * [ENTITLEMENT_MIN_INTERVAL_MS] is generous next to it), and `SIGNED_OUT` means the key
+     * died on the way. A 429 pauses the rest of this session's syncing like any other 429 —
+     * that is [SyncContract]'s rule for every route, and a payment-specific exception to it
+     * would be a second policy nobody audited.
+     *
+     * Nothing here retries, and nothing here pretends a filed claim is a purchase: it is
+     * `pending` until a human approves it on the operator's own loopback panel.
+     */
+    suspend fun submitPayment(plan: String, method: String, tid: String): PaymentFiled {
+        val key = currentKey() ?: return PaymentFiled.Refused(Refusal.SIGNED_OUT)
+        return try {
+            val answer = apiProvider.current()
+                .submitVipTid(bearerHeader(key), PaymentRequest(plan, method, tid))
+            val receipt = answer.payment
+            if (receipt == null || receipt.paymentId <= 0) {
+                // A 201 we cannot read is not a filing; the viewer must not be told to wait
+                // for an approval that has no row behind it.
+                return PaymentFiled.Refused(Refusal.REJECTED)
+            }
+            refreshEntitlement(force = true)
+            PaymentFiled.Accepted(receipt)
+        } catch (error: Exception) {
+            when (verdictOf(error, hadWorkRef = false)) {
+                ServerVerdict.SIGN_OUT -> {
+                    signOutLocally()
+                    PaymentFiled.Refused(Refusal.SIGNED_OUT)
+                }
+                ServerVerdict.PAUSE_SESSION -> {
+                    pausedByThrottle = true
+                    PaymentFiled.Refused(Refusal.THROTTLED)
+                }
+                ServerVerdict.REJECT_ITEM -> PaymentFiled.Refused(Refusal.REJECTED)
+                ServerVerdict.TRANSIENT_FAILURE -> PaymentFiled.Refused(Refusal.OFFLINE)
+            }
+        }
+    }
+
+    /**
+     * GET api/v2/account/entitlement — the only call that can turn "paid" into "VIP".
+     *
+     * A signed-out device never asks (that would be a 401 burst against a key that does not
+     * exist), and a read younger than [ENTITLEMENT_MIN_INTERVAL_MS] is answered from the last
+     * one unless [force]. Failure keeps the previous value rather than clearing it: a viewer
+     * whose membership was confirmed does not lose VIP because a flight mode was on, and the
+     * app never treats "could not ask" as "not entitled".
+     */
+    suspend fun refreshEntitlement(force: Boolean = false): AccountEntitlement? {
+        val key = currentKey() ?: return null
+        val now = System.currentTimeMillis()
+        if (!force && now - lastEntitlementReadMs < ENTITLEMENT_MIN_INTERVAL_MS) return _entitlement.value
+        return try {
+            val read = apiProvider.current().getEntitlement(bearerHeader(key)).entitlement
+            if (read != null) {
+                lastEntitlementReadMs = now
+                _entitlement.value = read
+                // Mirror the server's answer so the next cold start has it before any network
+                // call can fail. The ledger remains the only authority; this is its cache.
+                settingsRepository.saveEntitlement(read)
+            }
+            read
+        } catch (error: Exception) {
+            when (verdictOf(error, hadWorkRef = false)) {
+                ServerVerdict.SIGN_OUT -> {
+                    signOutLocally()
+                    _entitlement.value = null
+                    null
+                }
+                ServerVerdict.PAUSE_SESSION -> {
+                    pausedByThrottle = true
+                    _entitlement.value
+                }
+                else -> _entitlement.value
+            }
+        }
+    }
+
+    /**
+     * The 6-hour poll the monetization spec asks for. Started once by the Application on the
+     * app-lifetime [CacheScope], like every other holder in this app: it asks once at launch
+     * and then on the interval, and it stops when the process does — no worker, no alarm, no
+     * background job. An app that was closed simply re-reads on the next launch, which is why
+     * the deadline itself lives on the server and not in a counter here.
+     */
+    fun startEntitlementWatch() {
+        if (!startedWatch.compareAndSet(false, true)) return
+        scope.launch {
+            while (isActive) {
+                if (currentKey() != null) refreshEntitlement()
+                delay(ENTITLEMENT_POLL_INTERVAL_MS)
+            }
+        }
+    }
+
+    /** Forget the membership the moment the credential that produced it is gone. */
+    private fun clearEntitlement() {
+        _entitlement.value = null
+        lastEntitlementReadMs = 0L
     }
 
     // ── the plumbing every call shares ───────────────────────────────────────────
@@ -412,7 +564,25 @@ class SyncAccountRepository @Inject constructor(
         /** One pass writes at most this many favorites: a first sync of a long list must not
          * turn into a burst that trips the server's own attempt window. */
         const val MAX_WRITES_PER_PASS = 50
+
+        /** How often the app asks the server about membership while it is alive: 6 hours,
+         * the cadence the monetization spec names. A launch always asks once, immediately. */
+        const val ENTITLEMENT_POLL_INTERVAL_MS = 6L * 60L * 60L * 1000L
+
+        /** Two reads closer than this are one read. Opening the VIP card repeatedly is not a
+         * reason to send the same question to the server twice in a minute. */
+        const val ENTITLEMENT_MIN_INTERVAL_MS = 60L * 1000L
     }
+}
+
+/** What a payment submission did, in the screen's own vocabulary. */
+sealed class PaymentFiled {
+    /** Filed. The receipt is the server's row: `status` is `pending` and the price is the
+     * server's, not the one the device displayed. */
+    data class Accepted(val receipt: PaymentReceipt) : PaymentFiled()
+
+    /** Not filed, for a reason this app can say without quoting the server. */
+    data class Refused(val reason: Refusal) : PaymentFiled()
 }
 
 /** The server's favorite rows, filtered to the ones this app is allowed to talk about. */

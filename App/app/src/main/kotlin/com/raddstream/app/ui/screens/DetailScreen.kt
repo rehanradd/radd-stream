@@ -51,6 +51,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -245,6 +246,8 @@ fun DetailScreen(
                     onKeep = { option -> downloadWithStoragePermission { viewModel.keepRung(option) } },
                 ),
                 ladderScope = rungScopeLabel(state.ladderSeason, state.ladderEpisode),
+                adFree = state.adFree,
+                premiumSourcesLocked = state.premiumSourcesLocked,
                 onAskRungs = viewModel::showRungsFor,
                 hasRungs = { season, episode -> !viewModel.ladderFor(season, episode).isEmpty },
                 onOpenVipUpgrade = onOpenVipUpgrade,
@@ -291,6 +294,10 @@ private fun DetailContent(
     rungs: RungActions,
     /** "Season 2 · Episode 5", or null when these rungs are the whole work's. */
     ladderScope: String?,
+    /** False only for a viewer the operator has not confirmed: it decides the sponsor slot. */
+    adFree: Boolean,
+    /** True when this title has 4K/1080p sources the current viewer may not take. */
+    premiumSourcesLocked: Boolean,
     onAskRungs: (season: Int?, episode: Int?) -> Unit,
     hasRungs: (season: Int?, episode: Int?) -> Boolean,
     onOpenVipUpgrade: () -> Unit,
@@ -322,7 +329,11 @@ private fun DetailContent(
 
         // A first-party sponsor slot: no third-party SDK, no hidden network call, and it
         // says who paid for the space. The upgrade is the same flow Settings offers.
-        item { SponsorCard(onOpenVipUpgrade = onOpenVipUpgrade) }
+        // Removing it for an entitled viewer is the purchase: both the paid card and the
+        // rewarded one promise exactly this, on screen, in words.
+        if (!adFree) {
+            item { SponsorCard(onOpenVipUpgrade = onOpenVipUpgrade) }
+        }
 
         // One row per quality band, exactly as the server collapsed the copies of this
         // title: the viewer picks a picture, never a server, and never a list of links.
@@ -336,6 +347,12 @@ private fun DetailContent(
                     onKeepRung = rungs.onKeep,
                 )
             }
+        }
+
+        // The gate is not a silent removal: a viewer who came for the 4K copy is told where
+        // it went and given the same upgrade door the sponsor card uses.
+        if (premiumSourcesLocked) {
+            item { VipSourcesCard(onOpenVipUpgrade = onOpenVipUpgrade) }
         }
 
         val synopsis = post.synopsis?.takeIf { it.isNotBlank() }
@@ -542,6 +559,34 @@ private fun SponsorCard(onOpenVipUpgrade: () -> Unit) {
             )
             Text(
                 text = Brand.copy("sponsor_body", "A membership keeps this catalog running."),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        TextButton(onClick = onOpenVipUpgrade) { Text("Upgrade") }
+    }
+}
+
+@Composable
+private fun VipSourcesCard(onOpenVipUpgrade: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+            .padding(14.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(
+                text = "4K and 1080p are part of VIP",
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+            Text(
+                text = "Free playback stays at 720p and below. Upgrade to unlock every source on this title.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )

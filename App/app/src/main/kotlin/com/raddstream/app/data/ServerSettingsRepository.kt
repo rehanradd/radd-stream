@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
+import androidx.datastore.preferences.core.doublePreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.floatPreferencesKey
 import androidx.datastore.preferences.core.intPreferencesKey
@@ -11,6 +12,7 @@ import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.raddstream.app.brand.Brand
+import com.raddstream.app.network.models.AccountEntitlement
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -91,6 +93,25 @@ class ServerSettingsRepository @Inject constructor(
     }
 
     /**
+     * The queries this install has searched, newest first, capped at
+     * [SEARCH_RECENTS_MAX]. Persisted because a recents rail that empties on every restart
+     * is not a history — it is a list of what this process happened to type. Stored as one
+     * separator-joined string rather than a string set: recency is the whole point, and a
+     * `Set` cannot preserve it.
+     */
+    val searchRecents: Flow<List<String>> = dataStore.data.map { preferences ->
+        decodeSearchRecents(preferences[SEARCH_RECENTS_KEY])
+    }
+
+    suspend fun saveSearchRecents(recents: List<String>) {
+        val normalized = normalizeSearchRecents(recents)
+        dataStore.edit { preferences ->
+            if (normalized.isEmpty()) preferences.remove(SEARCH_RECENTS_KEY)
+            else preferences[SEARCH_RECENTS_KEY] = normalized.joinToString(SEARCH_RECENTS_SEPARATOR)
+        }
+    }
+
+    /**
      * The sync account's key, or null when this install is signed out — which is the
      * default and stays the default until the viewer presses the button.
      *
@@ -108,6 +129,94 @@ class ServerSettingsRepository @Inject constructor(
         dataStore.edit { preferences ->
             if (clean == null) preferences.remove(SYNC_KEY_KEY)
             else preferences[SYNC_KEY_KEY] = clean
+        }
+    }
+
+    // ── The operator's remote switches ──────────────────────────────────────────
+    //
+    // Mirrored into DataStore rather than sampled from the network in every screen: the last
+    // body we actually received is what the app obeys, so a dead server on launch leaves the
+    // previous answer in force instead of silently reopening a catalog under maintenance.
+    // Every one defaults to the app's historical behaviour (no maintenance, feature on).
+
+    /** True while the operator has put the whole catalog behind a maintenance notice. */
+    val maintenanceMode: Flow<Boolean> = dataStore.data.map { preferences ->
+        preferences[MAINTENANCE_MODE_KEY] ?: false
+    }
+
+    /** Operator switch for background downloads; on unless the server says otherwise. */
+    val downloadsFeatureEnabled: Flow<Boolean> = dataStore.data.map { preferences ->
+        preferences[FEATURE_DOWNLOADS_KEY] ?: true
+    }
+
+    /** Operator switch for LAN sharing; on unless the server says otherwise. */
+    val sharingFeatureEnabled: Flow<Boolean> = dataStore.data.map { preferences ->
+        preferences[FEATURE_SHARING_KEY] ?: true
+    }
+
+    /** Operator switch for catalog search; on unless the server says otherwise. */
+    val searchFeatureEnabled: Flow<Boolean> = dataStore.data.map { preferences ->
+        preferences[FEATURE_SEARCH_KEY] ?: true
+    }
+
+    /**
+     * Whether the operator has chosen to charge VIP for 1080p/4K. Off unless the server says
+     * on — the inverse of the four above, because this switch takes content away rather than
+     * offering a feature, and a deployment that never set it must not go dark by default.
+     */
+    val qualityGateEnabled: Flow<Boolean> = dataStore.data.map { preferences ->
+        preferences[FEATURE_QUALITY_GATE_KEY] ?: false
+    }
+
+    /**
+     * Record one received remote-config body. A single write keeps the switches from a
+     * torn refresh; the caller ([com.raddstream.app.data.RemoteConfigWatcher]) writes only
+     * after a successful, fully decoded response.
+     */
+    suspend fun saveRemoteFlags(
+        maintenanceMode: Boolean,
+        downloadsEnabled: Boolean,
+        sharingEnabled: Boolean,
+        searchEnabled: Boolean,
+        qualityGateEnabled: Boolean,
+    ) {
+        dataStore.edit { preferences ->
+            preferences[MAINTENANCE_MODE_KEY] = maintenanceMode
+            preferences[FEATURE_DOWNLOADS_KEY] = downloadsEnabled
+            preferences[FEATURE_SHARING_KEY] = sharingEnabled
+            preferences[FEATURE_SEARCH_KEY] = searchEnabled
+            preferences[FEATURE_QUALITY_GATE_KEY] = qualityGateEnabled
+        }
+    }
+
+    /**
+     * The last entitlement the ledger confirmed, mirrored here so a restart does not have to
+     * wait for a round trip before it knows what this account may play. It is a CACHE of the
+     * server's answer, never a second authority: a signed-out device clears it, and every
+     * successful `GET /api/v2/account/entitlement` overwrites it.
+     */
+    val storedEntitlement: Flow<AccountEntitlement?> = dataStore.data.map { preferences ->
+        val vip = preferences[VIP_ACTIVE_KEY] ?: return@map null
+        AccountEntitlement(
+            vip = vip,
+            vipUntil = preferences[VIP_UNTIL_KEY] ?: 0.0,
+            pending = preferences[VIP_PENDING_CLAIM_KEY] ?: false,
+        )
+    }
+
+    suspend fun saveEntitlement(entitlement: AccountEntitlement) {
+        dataStore.edit { preferences ->
+            preferences[VIP_ACTIVE_KEY] = entitlement.vip
+            preferences[VIP_UNTIL_KEY] = entitlement.vipUntil
+            preferences[VIP_PENDING_CLAIM_KEY] = entitlement.pending
+        }
+    }
+
+    suspend fun clearStoredEntitlement() {
+        dataStore.edit { preferences ->
+            preferences.remove(VIP_ACTIVE_KEY)
+            preferences.remove(VIP_UNTIL_KEY)
+            preferences.remove(VIP_PENDING_CLAIM_KEY)
         }
     }
 
@@ -200,6 +309,7 @@ class ServerSettingsRepository @Inject constructor(
         VipPendingSubmission(
             transactionId = transactionId,
             plan = preferences[VIP_PENDING_PLAN_KEY].orEmpty(),
+            method = preferences[VIP_PENDING_METHOD_KEY].orEmpty(),
             amountPkr = preferences[VIP_PENDING_AMOUNT_KEY] ?: 0,
             submittedAt = preferences[VIP_PENDING_SUBMITTED_AT_KEY] ?: 0L,
         )
@@ -211,6 +321,7 @@ class ServerSettingsRepository @Inject constructor(
         dataStore.edit { preferences ->
             preferences[VIP_PENDING_TID_KEY] = tid
             preferences[VIP_PENDING_PLAN_KEY] = submission.plan
+            preferences[VIP_PENDING_METHOD_KEY] = submission.method
             preferences[VIP_PENDING_AMOUNT_KEY] = submission.amountPkr
             preferences[VIP_PENDING_SUBMITTED_AT_KEY] = submission.submittedAt
         }
@@ -220,6 +331,7 @@ class ServerSettingsRepository @Inject constructor(
         dataStore.edit { preferences ->
             preferences.remove(VIP_PENDING_TID_KEY)
             preferences.remove(VIP_PENDING_PLAN_KEY)
+            preferences.remove(VIP_PENDING_METHOD_KEY)
             preferences.remove(VIP_PENDING_AMOUNT_KEY)
             preferences.remove(VIP_PENDING_SUBMITTED_AT_KEY)
         }
@@ -261,7 +373,16 @@ class ServerSettingsRepository @Inject constructor(
         private val AUDIO_BOOST_LEVEL_KEY = floatPreferencesKey("audio_boost_level")
         private val PREFERRED_AUDIO_LANGUAGE_KEY = stringPreferencesKey("preferred_audio_language")
         private val LAN_SHARE_ENABLED_KEY = booleanPreferencesKey("lan_share_enabled")
+        private val MAINTENANCE_MODE_KEY = booleanPreferencesKey("maintenance_mode")
+        private val FEATURE_DOWNLOADS_KEY = booleanPreferencesKey("feature_downloads")
+        private val FEATURE_SHARING_KEY = booleanPreferencesKey("feature_sharing")
+        private val FEATURE_SEARCH_KEY = booleanPreferencesKey("feature_search")
+        private val FEATURE_QUALITY_GATE_KEY = booleanPreferencesKey("feature_quality_gate")
+        private val VIP_ACTIVE_KEY = booleanPreferencesKey("vip_active")
+        private val VIP_UNTIL_KEY = doublePreferencesKey("vip_until")
+        private val VIP_PENDING_CLAIM_KEY = booleanPreferencesKey("vip_pending_claim")
         private val SYNC_KEY_KEY = stringPreferencesKey("sync_key")
+        private val SEARCH_RECENTS_KEY = stringPreferencesKey("search_recents")
         private val IMAGE_QUALITY_KEY = stringPreferencesKey("image_quality")
         private val MOBILE_DATA_KEY = booleanPreferencesKey("mobile_data_allowed")
         private val KEEP_TTL_KEY = intPreferencesKey("keep_ttl_hours")
@@ -270,6 +391,7 @@ class ServerSettingsRepository @Inject constructor(
         private val VIEW_MODE_KEY = stringPreferencesKey("view_mode")
         private val VIP_PENDING_TID_KEY = stringPreferencesKey("vip_pending_tid")
         private val VIP_PENDING_PLAN_KEY = stringPreferencesKey("vip_pending_plan")
+        private val VIP_PENDING_METHOD_KEY = stringPreferencesKey("vip_pending_method")
         private val VIP_PENDING_AMOUNT_KEY = intPreferencesKey("vip_pending_amount")
         private val VIP_PENDING_SUBMITTED_AT_KEY = longPreferencesKey("vip_pending_submitted_at")
         private val REWARDED_VIP_EXPIRES_AT_KEY = longPreferencesKey("rewarded_vip_expires_at")
@@ -300,11 +422,38 @@ class ServerSettingsRepository @Inject constructor(
  * One transaction reference awaiting the operator's confirmation, as it is stored on the
  * device. [plan] is the storage name of the chosen VIP plan and [amountPkr] is what the
  * screen quoted when the reference was entered — kept together so a later price change
- * cannot silently restate what the viewer says they paid.
+ * cannot silently restate what the viewer says they paid. [method] is what makes the draft
+ * resubmittable: each payment method has its own reference shape on the server, so a draft
+ * that forgot which one it was filed under could only ever be refused.
  */
 data class VipPendingSubmission(
     val transactionId: String,
     val plan: String,
+    val method: String,
     val amountPkr: Int,
     val submittedAt: Long,
 )
+
+/** How many searches the rail remembers; also the cap enforced on every write. */
+internal const val SEARCH_RECENTS_MAX = 20
+
+/**
+ * The field separator for the stored recents string. U+001F (unit separator) is not
+ * typeable on any keyboard and is stripped from every query before writing, so a stored
+ * list always round-trips to exactly the queries that produced it.
+ */
+private const val SEARCH_RECENTS_SEPARATOR = "\u001F"
+
+/** Trim, drop blanks, strip the separator, dedupe (newest wins), and cap the list. */
+internal fun normalizeSearchRecents(values: List<String>): List<String> =
+    values.asSequence()
+        .map { raw -> raw.filterNot { it == SEARCH_RECENTS_SEPARATOR[0] }.trim() }
+        .filter { it.isNotEmpty() }
+        .distinct()
+        .take(SEARCH_RECENTS_MAX)
+        .toList()
+
+internal fun decodeSearchRecents(raw: String?): List<String> {
+    if (raw.isNullOrEmpty()) return emptyList()
+    return normalizeSearchRecents(raw.split(SEARCH_RECENTS_SEPARATOR))
+}

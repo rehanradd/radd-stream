@@ -21,6 +21,8 @@ data class AdSlotState(
     val durationMs: Long,
     /** Whether a successor exists; a break that leads nowhere is worse than no break. */
     val hasNextEpisode: Boolean,
+    /** The server's paid membership. A rewarded device pass is not this and never will be. */
+    val isEntitled: Boolean = false,
 )
 
 /**
@@ -42,6 +44,10 @@ object AdSlotPolicy {
     const val PRE_ROLL_GRACE_MS = 2_000L
 
     fun decide(state: AdSlotState): AdSlot {
+        // A paid membership buys the absence of these slots, at every moment and not just
+        // during playback: the between-episodes break is the one a binge actually hits, so
+        // honouring VIP only mid-title would sell the wrong thing.
+        if (state.isEntitled) return AdSlot.NONE
         if (state.isEnded) {
             return if (state.isSeriesEpisode && state.hasNextEpisode) {
                 AdSlot.BETWEEN_EPISODES

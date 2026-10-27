@@ -62,6 +62,7 @@ import com.raddstream.app.ui.theme.RaddInk950
 import com.raddstream.app.ui.theme.RaddSignalGold
 import com.raddstream.app.viewmodel.RewardedVipPass
 import com.raddstream.app.viewmodel.VipPlan
+import com.raddstream.app.viewmodel.VipMethod
 import com.raddstream.app.viewmodel.VipUiState
 import com.raddstream.app.viewmodel.VipViewModel
 import java.text.SimpleDateFormat
@@ -74,10 +75,11 @@ import kotlinx.coroutines.launch
  * The VIP upgrade flow, priced and routed entirely by the connected server.
  *
  * The screen has three honest states and never blurs them: prices/handles not loaded yet,
- * loaded (payment instructions plus the reference form), and a reference waiting on the
- * operator. Nothing here flips a premium flag locally — this server has no payment
- * collection endpoint, so the form keeps the reference on the device and says so, rather
- * than selling a membership the app cannot verify.
+ * loaded (payment instructions plus the reference form), and a claim waiting on the operator.
+ * Nothing here flips a premium flag locally — the reference is POSTed to the server's payment
+ * ledger, which files it as `pending` at the price that server holds, and VIP arrives only when
+ * a human approves that row and this device reads the entitlement back. A reference the server
+ * could not be reached is the one case kept on the device, and it says so.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -119,6 +121,7 @@ fun VipUpgradeScreen(
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
             VipHero()
+            EntitlementCard(state = state)
             RewardedVipSection(
                 expiresAt = state.rewardedVipExpiresAt,
                 onWatchAd = { viewModel.grantRewardedVip() },
@@ -139,6 +142,7 @@ fun VipUpgradeScreen(
                             scope.launch { snackbarHostState.showSnackbar("$label copied") }
                         },
                     )
+                    MethodSection(state = state, onSelect = viewModel::selectMethod)
                     val pending = state.pending
                     if (pending != null) {
                         PendingCard(
@@ -154,11 +158,113 @@ fun VipUpgradeScreen(
 
             Text(
                 "Payment accounts are published by the operator of the connected catalog. " +
-                    "This app never sees your transfer; it keeps only the reference you type " +
-                    "here, on this device.",
+                    "This app never sees your transfer: it sends only the reference you type " +
+                    "here, to that operator's verification queue.",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+        }
+    }
+}
+
+/**
+ * What the server itself says about this account.
+ *
+ * Three sentences and no fourth: VIP confirmed with its expiry, a claim on file that nobody
+ * has closed yet, or — when this device holds no account to attach a claim to — the one line
+ * that explains why submitting here is not enough. An entitlement the app has never read is
+ * not reported as "not VIP": the card simply does not raise a claim about a question nobody
+ * asked. A rewarded pass is deliberately absent from this card; it lives on the device and the
+ * operator's ledger has never heard of it.
+ */
+@Composable
+private fun EntitlementCard(state: VipUiState) {
+    val earned = state.entitlement
+    val until = state.vipUntilMillis
+    val title = when {
+        earned == null -> return
+        earned.vip -> "VIP is active"
+        earned.pending -> "Awaiting the operator's confirmation"
+        else -> return
+    }
+    Surface(
+        color = if (earned.vip) {
+            RaddSignalGold.copy(alpha = 0.14f)
+        } else {
+            MaterialTheme.colorScheme.surface
+        },
+        shape = RoundedCornerShape(16.dp),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    if (earned.vip) Icons.Default.Check else Icons.Default.Info,
+                    contentDescription = null,
+                    tint = if (earned.vip) RaddSignalGold else MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(18.dp),
+                )
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    title,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onBackground,
+                )
+            }
+            Text(
+                when {
+                    earned.vip && until > 0L -> "Confirmed through ${expiryLabel(until)}."
+                    earned.vip -> "Confirmed by the operator."
+                    else -> "A payment was filed and no decision has been recorded yet. " +
+                        "VIP turns on here by itself once the operator approves it."
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+/**
+ * Which channel the payment was actually sent through. The server validates a reference
+ * against the channel it came from, so this is not cosmetics: an EasyPaisa reference filed as
+ * JazzCash is refused, and only the viewer knows which app they opened.
+ */
+@Composable
+private fun MethodSection(state: VipUiState, onSelect: (VipMethod) -> Unit) {
+    val offered = state.offeredMethods
+    if (offered.isEmpty()) return
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        SectionLabel("I paid through")
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            offered.forEach { method ->
+                val selected = state.selectedMethod == method
+                Surface(
+                    color = if (selected) {
+                        RaddSignalGold.copy(alpha = 0.16f)
+                    } else {
+                        MaterialTheme.colorScheme.surface
+                    },
+                    shape = RoundedCornerShape(12.dp),
+                    border = BorderStroke(
+                        width = if (selected) 2.dp else 1.dp,
+                        color = if (selected) RaddSignalGold else MaterialTheme.colorScheme.outlineVariant,
+                    ),
+                    modifier = Modifier.clickable { onSelect(method) },
+                ) {
+                    Text(
+                        method.label,
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                    )
+                }
+            }
         }
     }
 }
@@ -502,15 +608,31 @@ private fun VerificationSection(state: VipUiState, viewModel: VipViewModel) {
         )
         Button(
             onClick = viewModel::submitTransaction,
-            enabled = state.canSubmit && state.transactionId.isNotBlank(),
+            enabled = state.canSubmit && state.transactionId.isNotBlank() &&
+                state.selectedMethod != null,
             modifier = Modifier.fillMaxWidth(),
         ) {
-            Text("Submit for verification")
+            if (state.isSubmitting) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(18.dp),
+                    strokeWidth = 2.dp,
+                    color = MaterialTheme.colorScheme.onPrimary,
+                )
+                Spacer(Modifier.width(8.dp))
+                Text("Sending…")
+            } else {
+                Text("Submit for verification")
+            }
         }
         Text(
-            "The reference is saved on this device and is not sent anywhere automatically. " +
-                "This server has no payment-verification endpoint yet, so VIP turns on only " +
-                "after the operator confirms the payment.",
+            if (!state.signedIn) {
+                "This device is not signed in to an account, so a reference sent now is kept " +
+                    "here and filed the moment you sign in on the Settings tab. The operator " +
+                    "attaches a payment to an account, not to a phone."
+            } else {
+                "The reference goes to this server's verification queue. VIP turns on once the " +
+                    "operator confirms the payment — nothing is activated by this app."
+            },
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -535,13 +657,13 @@ private fun PendingCard(
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(
-                    Icons.Default.Check,
+                    Icons.Default.Info,
                     contentDescription = null,
                     tint = MaterialTheme.colorScheme.onPrimaryContainer,
                 )
                 Spacer(Modifier.width(8.dp))
                 Text(
-                    "Awaiting operator confirmation",
+                    "Not sent to the operator yet",
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.SemiBold,
                     color = MaterialTheme.colorScheme.onPrimaryContainer,
@@ -553,21 +675,24 @@ private fun PendingCard(
                 color = MaterialTheme.colorScheme.onPrimaryContainer,
             )
             Text(
-                "Reference ${pending.transactionId}",
+                listOfNotNull(
+                    "Reference ${pending.transactionId}",
+                    VipMethod.fromWire(pending.method)?.label,
+                ).joinToString(" · "),
                 style = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace),
                 color = MaterialTheme.colorScheme.onPrimaryContainer,
             )
             if (pending.submittedAt > 0L) {
                 Text(
-                    "Submitted ${submittedLabel(pending.submittedAt)}",
+                    "Entered ${submittedLabel(pending.submittedAt)}",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onPrimaryContainer,
                 )
             }
             Text(
-                "Saved on this device and not sent anywhere automatically. Keep the reference " +
-                    "for follow-up; VIP activates once the operator confirms the payment. " +
-                    "Removing the request does not cancel a transfer you have already made.",
+                "This reference never reached the server, so it is held on this device and " +
+                    "sent again the next time this screen loads with a connection. Removing it " +
+                    "does not cancel a transfer you have already made.",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onPrimaryContainer,
             )
@@ -649,3 +774,7 @@ private fun yearlyBadge(state: VipUiState): String? {
 
 private fun submittedLabel(epochMs: Long): String =
     SimpleDateFormat("d MMM yyyy, HH:mm", Locale.getDefault()).format(Date(epochMs))
+
+/** The server's expiry, printed in the viewer's own calendar. It is a deadline, not a countdown. */
+private fun expiryLabel(epochMs: Long): String =
+    SimpleDateFormat("d MMM yyyy", Locale.getDefault()).format(Date(epochMs))

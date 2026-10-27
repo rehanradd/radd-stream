@@ -2,6 +2,8 @@ package com.raddstream.app.viewmodel
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.raddstream.app.data.ServerSettingsRepository
+import com.raddstream.app.data.normalizeSearchRecents
 import com.raddstream.app.network.friendlyNetworkError
 import com.raddstream.app.network.models.Post
 import com.raddstream.app.repository.CatalogRepository
@@ -111,6 +113,7 @@ data class SearchUiState(
 @HiltViewModel
 class SearchViewModel @Inject constructor(
     private val catalogRepository: CatalogRepository,
+    private val settingsRepository: ServerSettingsRepository,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(SearchUiState())
@@ -119,7 +122,17 @@ class SearchViewModel @Inject constructor(
     private var searchJob: Job? = null
     private var moreJob: Job? = null
     private var rawResults: List<Post> = emptyList()
-    private val recents = mutableListOf<String>()
+
+    init {
+        // The rail is a history, not a session scratch pad: hydrate from the persisted list
+        // and keep following it, so a second device state (e.g. a reset) cannot leave the
+        // screen showing queries the store no longer holds.
+        viewModelScope.launch {
+            settingsRepository.searchRecents.collect { stored ->
+                _uiState.update { it.copy(recents = stored) }
+            }
+        }
+    }
 
     fun onQueryChanged(query: String) {
         _uiState.update { it.copy(query = query, error = null) }
@@ -318,7 +331,6 @@ class SearchViewModel @Inject constructor(
             it.copy(
                 groups = groups,
                 resultCount = filtered.size,
-                recents = recents.toList(),
             )
         }
     }
@@ -326,16 +338,17 @@ class SearchViewModel @Inject constructor(
     private fun recordRecent(query: String) {
         val trimmed = query.trim()
         if (trimmed.isBlank()) return
-        recents.remove(trimmed)
-        recents.add(0, trimmed)
-        while (recents.size > RECENTS_MAX) recents.removeAt(recents.lastIndex)
-        _uiState.update { it.copy(recents = recents.toList()) }
+        val next = normalizeSearchRecents(listOf(trimmed) + _uiState.value.recents)
+        if (next == _uiState.value.recents) return
+        // Show the new rail immediately, then persist the same list; the store's flow will
+        // echo it back and settle the state.
+        _uiState.update { it.copy(recents = next) }
+        viewModelScope.launch { settingsRepository.saveSearchRecents(next) }
     }
 
     private companion object {
         const val DEBOUNCE_MS = 300L
         const val PAGE_SIZE = 100
-        const val RECENTS_MAX = 10
 
         val typeComparator = compareBy<String> { typeOrder(it) }
 

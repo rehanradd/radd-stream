@@ -2,10 +2,12 @@ package com.raddstream.app
 
 import android.app.Application
 import com.raddstream.app.brand.Brand
+import com.raddstream.app.data.RemoteConfigWatcher
 import com.raddstream.app.data.cache.CacheEngineRunner
 import com.raddstream.app.data.cache.KeepTtlHolder
 import com.raddstream.app.images.ImageSizingHolder
 import com.raddstream.app.share.LanShareRunner
+import com.raddstream.app.sync.SyncAccountRepository
 import dagger.hilt.android.HiltAndroidApp
 import javax.inject.Inject
 
@@ -27,6 +29,12 @@ class RaddStreamApplication : Application() {
 
     @Inject
     lateinit var imageSizingHolder: ImageSizingHolder
+
+    @Inject
+    lateinit var syncAccountRepository: SyncAccountRepository
+
+    @Inject
+    lateinit var remoteConfigWatcher: RemoteConfigWatcher
 
     override fun onCreate() {
         super.onCreate()
@@ -53,5 +61,14 @@ class RaddStreamApplication : Application() {
         // starting it here is safe — a fresh install never exposes a share. It reads its preference,
         // never the UI, so this is the only place the server is ever constructed.
         lanShareRunner.start()
+        // Membership is the server's fact, not this device's, so it is read at launch and then on a
+        // 6-hour interval for as long as this process lives. Nothing starts when there is no account
+        // key to ask with, and an app that was simply closed re-reads on the next launch — which is
+        // why the expiry lives on the ledger and never as a countdown here.
+        syncAccountRepository.startEntitlementWatch()
+        // The operator's switches are process state, not a screen's private fetch: this is the
+        // only reader of `/remote-config` that runs before any UI, and it is what makes
+        // maintenance mode cover the whole app instead of only a screen someone opened.
+        remoteConfigWatcher.start()
     }
 }

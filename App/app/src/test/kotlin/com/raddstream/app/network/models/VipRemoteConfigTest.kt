@@ -96,6 +96,71 @@ class VipRemoteConfigTest {
     }
 
     @Test
+    fun `decodes feature flags, ads and configured shorteners`() {
+        val config = gson.fromJson(
+            """
+            {
+              "success": true,
+              "feature_flags": {"downloads": false, "pure_cinema": true, "chromecast": false},
+              "ads": {"monetag_rewarded_zone_id": "zone-1",
+                      "adsterra_native_banner_id": "banner-1"},
+              "link_shorteners": [
+                {"network": "shrinkme", "configured": true},
+                {"network": "droplink", "configured": false}
+              ]
+            }
+            """.trimIndent(),
+            VipRemoteConfig::class.java,
+        )
+
+        assertFalse(config.featureFlags.downloads)
+        assertTrue(config.featureFlags.pureCinema)
+        assertFalse(config.featureFlags.chromecast)
+        // A flags object that does not mention the restriction leaves it off.
+        assertFalse(config.featureFlags.qualityGate)
+        assertEquals("zone-1", config.ads.monetagRewardedZoneId)
+        assertEquals("banner-1", config.ads.adsterraNativeBannerId)
+        assertTrue(config.ads.hasRewardedInventory)
+        assertEquals(2, config.linkShorteners.size)
+        assertEquals("shrinkme", config.linkShorteners[0].network)
+        assertTrue(config.linkShorteners[0].configured)
+        assertFalse(config.linkShorteners[1].configured)
+    }
+
+    @Test
+    fun `accepts the brief feature-flag aliases without losing the rest`() {
+        val config = gson.fromJson(
+            """
+            {"success": true,
+             "feature_flags": {"downloads_enabled": false,
+                               "sharing_enabled": false,
+                               "search_enabled": false}}
+            """.trimIndent(),
+            VipRemoteConfig::class.java,
+        )
+
+        assertFalse(config.featureFlags.downloads)
+        assertFalse(config.featureFlags.sharing)
+        assertFalse(config.featureFlags.search)
+        // A partial flag object keeps the enabled default for keys it did not mention.
+        assertTrue(config.featureFlags.pureCinema)
+        assertTrue(config.featureFlags.chromecast)
+    }
+
+    @Test
+    fun `absent switches default to the historical app behaviour`() {
+        val config = gson.fromJson("""{"success": true}""", VipRemoteConfig::class.java)
+
+        assertTrue(config.featureFlags.downloads)
+        assertTrue(config.featureFlags.pureCinema)
+        assertTrue(config.featureFlags.chromecast)
+        assertTrue(config.featureFlags.sharing)
+        assertTrue(config.featureFlags.search)
+        assertFalse(config.ads.hasRewardedInventory)
+        assertTrue(config.linkShorteners.isEmpty())
+    }
+
+    @Test
     fun `one filled handle is enough to offer a submission`() {
         val payments = VipRemotePayments(
             jazzcash = VipRemoteJazzCash(tillId = "", mobileAccount = ""),
@@ -104,5 +169,28 @@ class VipRemoteConfigTest {
         )
 
         assertTrue(payments.hasAnyHandle)
+    }
+
+    /**
+     * Both a server that answers `quality_gate: false` and one that never heard of the key
+     * have to mean the same thing on the phone: nobody is restricted. A paywall that switched
+     * itself on because a field was missing would be the worst possible default, so this pins
+     * the direction rather than the value.
+     */
+    @Test
+    fun `the quality gate stays off when the server says nothing about it`() {
+        assertFalse(
+            gson.fromJson("""{"success": true}""", VipRemoteConfig::class.java)
+                .featureFlags.qualityGate,
+        )
+        val older = gson.fromJson(
+            """{"feature_flags": {"downloads": true, "pure_cinema": true, "chromecast": true}}""",
+            VipRemoteConfig::class.java,
+        )
+        assertFalse(older.featureFlags.qualityGate)
+        assertTrue(
+            gson.fromJson("""{"feature_flags": {"quality_gate": true}}""", VipRemoteConfig::class.java)
+                .featureFlags.qualityGate,
+        )
     }
 }

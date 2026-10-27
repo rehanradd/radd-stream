@@ -139,7 +139,7 @@ class PlaybackService : MediaSessionService() {
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaSession? =
         mediaSession
 
-    private fun handleLoad(request: PlayerSessionStore.LoadRequest) {
+    private suspend fun handleLoad(request: PlayerSessionStore.LoadRequest) {
         val bundle = store.bundle.value ?: return
         val exo = player ?: return
         exo.pause()
@@ -175,7 +175,57 @@ class PlaybackService : MediaSessionService() {
         lastKnownPositionMs = pendingResumeMs ?: 0L
         store.setActiveIndex(start)
         armAutoQuality(bundle, start)
-        loadRendition(bundle, start)
+        // A kept copy is always the better source, offline or not: no CDN, no redirect, and the
+        // bytes are already on this device. Ask before touching the network, and never let a
+        // local read failure block the remote one — the failover machine still holds the bundle's
+        // own rung and will advance to it if the local copy turns out to be unusable.
+        val rendition = bundle.renditions.getOrNull(start)
+        val localUrl = localCopyUrlFor(rendition)
+        if (rendition != null && localUrl != null) {
+            store.appendFailover(
+                listOf(
+                    FailoverRecord(
+                        rendition.rank, rendition.releaseId, rendition.displayLabel(),
+                        "saved on this device", "playing the kept copy",
+                    ),
+                ),
+            )
+            loadRenditionOf(
+                bundle,
+                rendition.copy(
+                    playback = rendition.playback.copy(
+                        playUrl = localUrl,
+                        // The kept bytes do not rot: the redirector's expiry no longer applies.
+                        expiresAt = null,
+                        ephemeral = false,
+                    ),
+                ),
+            )
+        } else {
+            loadRendition(bundle, start)
+        }
+    }
+
+    /**
+     * The loopback address of a complete kept copy of this rendition, or null when there is none.
+     *
+     * The cache identifies a file by the opaque handle embedded in OUR OWN redirector address, so
+     * only such an address can name one. A `content://`/`file://` download and a deep link have no
+     * such handle and are played exactly as handed over. An engine failure is silence, not an
+     * error: the caller then streams from the server as it always did.
+     */
+    private suspend fun localCopyUrlFor(rendition: PlaybackRendition?): String? {
+        val playback = rendition?.playback ?: return null
+        val url = playback.playUrl?.takeIf { it.isNotBlank() } ?: return null
+        val handle = playback.streamId?.takeIf { it.isNotBlank() } ?: return null
+        val engine = CacheEngineHolder.engine ?: return null
+        return try {
+            engine.playableUri(CacheSessionKey(renditionKey = handle, url = url))
+        } catch (cancelled: kotlinx.coroutines.CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            null
+        }
     }
 
     private fun loadRendition(bundle: PlaybackBundle, index: Int) =

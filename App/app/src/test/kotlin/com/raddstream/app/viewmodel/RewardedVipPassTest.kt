@@ -44,4 +44,19 @@ class RewardedVipPassTest {
         assertEquals("0m 1s", RewardedVipPass.formatRemaining(1L))
         assertEquals("0m 1s", RewardedVipPass.formatRemaining(999L))
     }
+
+    @Test
+    fun `either promise silences a sponsor slot`() {
+        // The paid card and the rewarded card both say, in words, that no sponsor break is owed.
+        assertTrue(RewardedVipPass.isAdFree(serverVip = true, rewardedExpiresAt = 0L, now = now))
+        assertTrue(RewardedVipPass.isAdFree(serverVip = false, rewardedExpiresAt = now + fourHours, now = now))
+    }
+
+    @Test
+    fun `a lapsed membership with no pass is not ad-free`() {
+        // `serverVip` is the ledger's live answer, so a membership that expired arrives here as
+        // false; nothing in this function can age a paid grant on its own clock.
+        assertFalse(RewardedVipPass.isAdFree(serverVip = false, rewardedExpiresAt = 0L, now = now))
+        assertFalse(RewardedVipPass.isAdFree(serverVip = false, rewardedExpiresAt = now - 1L, now = now))
+    }
 }

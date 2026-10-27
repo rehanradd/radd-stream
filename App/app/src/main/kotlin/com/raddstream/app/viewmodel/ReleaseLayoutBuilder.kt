@@ -366,6 +366,9 @@ object ReleaseLayoutBuilder {
         }
     }
 
+    /** The capability chips for a set of prints; reused when a gate filters some out. */
+    internal fun capabilitiesOf(prints: List<RankedPrint>): List<String> = deriveCapabilities(prints)
+
     private fun deriveCapabilities(prints: List<RankedPrint>): List<String> {
         val out = LinkedHashSet<String>()
         if (prints.any { it.resolution == Resolution.R2160 }) out.add("4K")

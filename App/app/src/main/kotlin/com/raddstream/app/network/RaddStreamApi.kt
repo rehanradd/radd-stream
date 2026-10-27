@@ -3,9 +3,12 @@ package com.raddstream.app.network
 import com.raddstream.app.network.models.AccountCreateRequest
 import com.raddstream.app.network.models.AccountCreateResponse
 import com.raddstream.app.network.models.AccountInfoResponse
+import com.raddstream.app.network.models.EntitlementResponse
 import com.raddstream.app.network.models.FavoriteRequest
 import com.raddstream.app.network.models.FavoriteWriteResponse
 import com.raddstream.app.network.models.FavoritesResponse
+import com.raddstream.app.network.models.PaymentRequest
+import com.raddstream.app.network.models.PaymentSubmitResponse
 import com.raddstream.app.network.models.PostDetailResponse
 import com.raddstream.app.network.models.PostsResponse
 import com.raddstream.app.network.models.ProgressRequest
@@ -193,4 +196,42 @@ interface RaddStreamApi {
         @Header("Authorization") authorization: String?,
         @Body body: ProgressRequest,
     ): RemovedResponse
+
+    /**
+     * File a claimed transaction reference — the TID form's one write.
+     *
+     * The screen action is "submit the transaction id", so this is named for it. The route
+     * is the one this deployment actually serves: `POST /api/v2/account/payment`. There is
+     * no `/api/v1/vip/submit-tid` on this server, and a client that called one would turn a
+     * real payment into a 404, so the method points at the ledger instead of at a note.
+     *
+     * `phone` is deliberately absent from the body: the ledger keys a claim to the sync
+     * account and matches the reference against the payment channel, so the payer's own
+     * mobile number is neither needed nor collected. Sending PII the server never reads
+     * would be worse than useless.
+     *
+     * A claim, not a purchase: the server stores it as `pending`, prices the plan from
+     * its own table and only a human on the loopback panel turns it into VIP. One
+     * submission per account per window, so a second tap inside five minutes is a 429
+     * with `retry_after` rather than a duplicate row. The answer is a receipt without
+     * the reference in it.
+     */
+    @POST("api/v2/account/payment")
+    suspend fun submitVipTid(
+        @Header("Authorization") authorization: String?,
+        @Body body: PaymentRequest,
+    ): PaymentSubmitResponse
+
+    /**
+     * GET /api/v2/account/entitlement — the only question that answers "am I VIP?".
+     *
+     * Auth behaves exactly like every other account route, because `viewer.py` reads the
+     * body before dispatch: no key is a 401 and a key the server does not know is a 404,
+     * on this route and on the list routes alike. So nothing here has to special-case a
+     * missing key.
+     */
+    @GET("api/v2/account/entitlement")
+    suspend fun getEntitlement(
+        @Header("Authorization") authorization: String?,
+    ): EntitlementResponse
 }

@@ -5,8 +5,12 @@ import androidx.lifecycle.viewModelScope
 import com.raddstream.app.data.ServerSettingsRepository
 import com.raddstream.app.data.VipPendingSubmission
 import com.raddstream.app.network.friendlyNetworkError
+import com.raddstream.app.network.models.AccountEntitlement
 import com.raddstream.app.network.models.VipRemoteConfig
 import com.raddstream.app.repository.CatalogRepository
+import com.raddstream.app.sync.PaymentFiled
+import com.raddstream.app.sync.Refusal
+import com.raddstream.app.sync.SyncAccountRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import java.util.Locale
 import javax.inject.Inject
@@ -16,13 +20,50 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
 /** The two plans the remote config prices. [days] is what a confirmed payment buys. */
-enum class VipPlan(val storageName: String, val label: String, val period: String, val days: Int) {
-    MONTHLY("MONTHLY", "Monthly VIP", "30 days", 30),
-    YEARLY("YEARLY", "Yearly VIP", "365 days", 365);
+enum class VipPlan(
+    val storageName: String,
+    /** The name the server's own price table sells this plan under (`payments.PLAN_DEFAULTS`). */
+    val wireName: String,
+    val label: String,
+    val period: String,
+    val days: Int,
+) {
+    MONTHLY("MONTHLY", "vip_monthly", "Monthly VIP", "30 days", 30),
+    YEARLY("YEARLY", "vip_yearly", "Yearly VIP", "365 days", 365);
 
     companion object {
-        fun fromStorage(name: String?): VipPlan =
-            entries.firstOrNull { it.storageName == name } ?: MONTHLY
+        /**
+         * A plan name read back from storage or from the wire. Both forms have to work:
+         * drafts written before this screen could talk to a server hold `MONTHLY`, and the
+         * ledger's own rows hold `vip_monthly`. Unknown names answer [MONTHLY] because that is
+         * what an unreadable plan costs, never because guessing a plan is acceptable.
+         */
+        fun fromStorage(name: String?): VipPlan {
+            val key = name?.trim()?.uppercase(Locale.ROOT)
+            return entries.firstOrNull {
+                it.storageName == key || it.wireName == name?.trim()?.lowercase(Locale.ROOT)
+            } ?: MONTHLY
+        }
+
+        /** Null for a name this build does not sell; the caller must not guess a plan. */
+        fun fromWire(name: String?): VipPlan? = entries.firstOrNull { it.wireName == name }
+    }
+}
+
+/**
+ * The three payment channels the operator's guide names, in the order the server accepts
+ * them (`payments.METHODS`). Each has its own reference shape on the server, which is why
+ * the channel is part of a submission and not just a label beside one.
+ */
+enum class VipMethod(val wireName: String, val label: String) {
+    JAZZCASH("jazzcash", "JazzCash"),
+    EASYPAISA("easypaisa", "EasyPaisa"),
+    RAAST("raast", "Raast");
+
+    companion object {
+        /** Null for a name this build does not sell: the caller must not guess a channel. */
+        fun fromWire(name: String?): VipMethod? =
+            entries.firstOrNull { it.wireName == name?.trim()?.lowercase(Locale.ROOT) }
     }
 }
 
@@ -47,6 +88,20 @@ object RewardedVipPass {
         val seconds = totalSeconds % 60
         return if (hours > 0) "${hours}h ${minutes}m ${seconds}s" else "${minutes}m ${seconds}s"
     }
+
+    /**
+     * Whether this viewer may be shown a sponsor slot at all, from the two facts that can
+     * silence one. Both promises are already on screen in words — the paid card says VIP is
+     * what removes sponsor cards, the rewarded card says four hours ad-free — so honouring
+     * either is keeping a sentence the app printed, and deciding it in two places is how one
+     * of them drifts. A server capability (an unshortened link, a higher rung) is NOT decided
+     * here: only `vip` from the ledger can buy that, and this function has no say over it.
+     */
+    fun isAdFree(
+        serverVip: Boolean,
+        rewardedExpiresAt: Long,
+        now: Long = System.currentTimeMillis(),
+    ): Boolean = serverVip || isActive(rewardedExpiresAt, now)
 }
 
 /**
@@ -87,11 +142,18 @@ data class VipUiState(
     val easyPaisaMobile: String = "",
     val raastInstantId: String = "",
     val selectedPlan: VipPlan = VipPlan.MONTHLY,
+    val selectedMethod: VipMethod? = null,
     val transactionId: String = "",
     val tidError: String? = null,
     val pending: VipPendingSubmission? = null,
     val statusMessage: String? = null,
     val rewardedVipExpiresAt: Long = 0L,
+    /** Whether this device holds a sync key — the only thing the ledger can attach a claim to. */
+    val signedIn: Boolean = false,
+    /** The server's own answer, or null while it has never been read on this device. */
+    val entitlement: AccountEntitlement? = null,
+    /** A submission is in flight, so the button cannot be pressed into a second claim. */
+    val isSubmitting: Boolean = false,
 ) {
     fun priceFor(plan: VipPlan): Int =
         if (plan == VipPlan.MONTHLY) monthlyPkr else yearlyPkr
@@ -103,13 +165,39 @@ data class VipUiState(
 
     /** Submit is live only for a loaded screen that has somewhere to pay. */
     val canSubmit: Boolean
-        get() = !isLoading && loadError == null && hasPaymentHandle && pending == null
+        get() = !isLoading && loadError == null && hasPaymentHandle &&
+            pending == null && !isSubmitting
+
+    /** The handle for one channel, blank when the operator has not published that one. */
+    fun handleFor(method: VipMethod): String = when (method) {
+        VipMethod.JAZZCASH -> listOf(jazzCashTillId, jazzCashMobileAccount)
+            .firstOrNull { it.isNotBlank() }.orEmpty()
+        VipMethod.EASYPAISA -> easyPaisaMobile
+        VipMethod.RAAST -> raastInstantId
+    }
+
+    /** The channels this server can actually be paid through, in the guide's order. */
+    val offeredMethods: List<VipMethod>
+        get() = VipMethod.entries.filter { handleFor(it).isNotBlank() }
+
+    /** Server-side membership only. A rewarded device pass is deliberately not VIP here. */
+    val isVip: Boolean get() = entitlement?.vip == true
+
+    val hasPendingClaim: Boolean get() = entitlement?.pending == true || pending != null
+
+    /** When [AccountEntitlement.vipUntil] is in the future; otherwise no date is shown. */
+    val vipUntilMillis: Long
+        get() {
+            val until = entitlement?.vipUntil ?: return 0L
+            return if (until > 0.0) (until * 1000.0).toLong() else 0L
+        }
 }
 
 @HiltViewModel
 class VipViewModel @Inject constructor(
     private val catalogRepository: CatalogRepository,
     private val settingsRepository: ServerSettingsRepository,
+    private val syncAccountRepository: SyncAccountRepository,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(VipUiState())
@@ -118,6 +206,7 @@ class VipViewModel @Inject constructor(
     init {
         observePending()
         observeRewardedVip()
+        observeAccount()
         loadConfig()
     }
 
@@ -134,6 +223,27 @@ class VipViewModel @Inject constructor(
             settingsRepository.rewardedVipExpiresAt.collect { expiresAt ->
                 _uiState.update { it.copy(rewardedVipExpiresAt = expiresAt) }
             }
+        }
+    }
+
+    /**
+     * The account this app talks to, and what that account is entitled to. Both are pushed,
+     * not polled here: [SyncAccountRepository] refreshes at launch and on its own interval,
+     * so opening this screen only has to ask for a fresh read once, not own a timer.
+     */
+    private fun observeAccount() {
+        viewModelScope.launch {
+            syncAccountRepository.signedIn.collect { signed ->
+                _uiState.update { it.copy(signedIn = signed) }
+            }
+        }
+        viewModelScope.launch {
+            syncAccountRepository.entitlement.collect { earned ->
+                _uiState.update { it.copy(entitlement = earned) }
+            }
+        }
+        viewModelScope.launch {
+            syncAccountRepository.refreshEntitlement()
         }
     }
 
@@ -169,6 +279,7 @@ class VipViewModel @Inject constructor(
                     return@launch
                 }
                 _uiState.update { current -> current.withConfig(config) }
+                resubmitStoredDraft()
             } catch (ex: Exception) {
                 _uiState.update {
                     it.copy(
@@ -180,8 +291,39 @@ class VipViewModel @Inject constructor(
         }
     }
 
+    /**
+     * A reference kept on this device that never reached the ledger is the one case where
+     * local persistence is not a lie: it says "this was typed and it was not sent". So the
+     * next load that can reach the server files it, and a claim the server already holds
+     * clears the draft instead of duplicating it.
+     */
+    private suspend fun resubmitStoredDraft() {
+        val current = _uiState.value
+        val draft = current.pending ?: return
+        if (!current.signedIn) return
+        val method = VipMethod.fromWire(draft.method) ?: return
+        val plan = VipPlan.fromWire(draft.plan) ?: return
+        if (current.entitlement?.pending == true) {
+            // The operator's queue already has this claim; the draft is a filing that landed
+            // while the app was dying. Keep the one copy that has a receipt behind it.
+            settingsRepository.clearVipPendingSubmission()
+            return
+        }
+        _uiState.update { it.copy(isSubmitting = true) }
+        val filed = syncAccountRepository.submitPayment(plan.wireName, method.wireName, draft.transactionId)
+        _uiState.update { it.copy(isSubmitting = false) }
+        if (filed is PaymentFiled.Accepted) {
+            settingsRepository.clearVipPendingSubmission()
+            _uiState.update { it.copy(statusMessage = VipSubmission.outcome(filed).message) }
+        }
+    }
+
     fun selectPlan(plan: VipPlan) {
         _uiState.update { it.copy(selectedPlan = plan) }
+    }
+
+    fun selectMethod(method: VipMethod) {
+        _uiState.update { it.copy(selectedMethod = method, tidError = null) }
     }
 
     fun onTransactionIdChanged(value: String) {
@@ -189,9 +331,12 @@ class VipViewModel @Inject constructor(
     }
 
     /**
-     * Keep the reference for verification. There is no payment-collection endpoint on this
-     * server, so the app neither POSTs it nor flips a VIP flag: it stores the reference
-     * beside the plan and amount it was quoted for and reports the state as pending.
+     * Send the reference to the operator's ledger.
+     *
+     * The claim goes to the server, which stores it as `pending` beside the price IT charges
+     * for that plan; nothing here flips a VIP flag, and a reference the server refuses is not
+     * quietly kept as a "success" on the device. Only an unreachable server leaves a draft
+     * behind, and the message says which of those happened.
      */
     fun submitTransaction() {
         val current = _uiState.value
@@ -202,21 +347,46 @@ class VipViewModel @Inject constructor(
             return
         }
         if (!current.canSubmit) return
+        val method = current.selectedMethod ?: current.offeredMethods.firstOrNull()
+        if (method == null) {
+            _uiState.update { it.copy(statusMessage = "The operator has not published a payment account yet.") }
+            return
+        }
+        val plan = current.selectedPlan
         viewModelScope.launch {
-            val submission = VipPendingSubmission(
-                transactionId = tid,
-                plan = current.selectedPlan.storageName,
-                amountPkr = current.priceFor(current.selectedPlan),
-                submittedAt = System.currentTimeMillis(),
-            )
-            settingsRepository.saveVipPendingSubmission(submission)
+            if (!current.signedIn) {
+                // The ledger keys a claim to an account, so a signed-out submission has
+                // nowhere to arrive. Keeping the reference here is not a fake success: the
+                // message says it was not sent, and the next load files it once there is a key.
+                settingsRepository.saveVipPendingSubmission(
+                    draftOf(current, plan, method, tid),
+                )
+                _uiState.update {
+                    it.copy(
+                        transactionId = "",
+                        tidError = null,
+                        statusMessage = VipSubmission.outcome(PaymentFiled.Refused(Refusal.SIGNED_OUT)).message,
+                    )
+                }
+                return@launch
+            }
+            _uiState.update { it.copy(isSubmitting = true) }
+            val filed = syncAccountRepository.submitPayment(plan.wireName, method.wireName, tid)
+            val outcome = VipSubmission.outcome(filed)
+            _uiState.update { it.copy(isSubmitting = false) }
+            if (filed is PaymentFiled.Accepted) {
+                settingsRepository.clearVipPendingSubmission()
+            } else if (outcome.keepDraft) {
+                settingsRepository.saveVipPendingSubmission(draftOf(current, plan, method, tid))
+            }
             _uiState.update {
                 it.copy(
-                    transactionId = "",
-                    tidError = null,
-                    statusMessage = "Reference saved on this device. Keep it for follow-up with the operator.",
+                    transactionId = if (outcome.clearField) "" else it.transactionId,
+                    tidError = outcome.tidError,
+                    statusMessage = outcome.message,
                 )
             }
+            syncAccountRepository.refreshEntitlement(force = filed is PaymentFiled.Accepted)
         }
     }
 
@@ -236,6 +406,19 @@ class VipViewModel @Inject constructor(
     /** Re-run the remote-config fetch after a transient failure. */
     fun retry() = loadConfig()
 
+    private fun draftOf(
+        current: VipUiState,
+        plan: VipPlan,
+        method: VipMethod,
+        tid: String,
+    ) = VipPendingSubmission(
+        transactionId = tid,
+        plan = plan.wireName,
+        method = method.wireName,
+        amountPkr = current.priceFor(plan),
+        submittedAt = System.currentTimeMillis(),
+    )
+
     companion object {
         /** The prices the operator specification ships; the server may price them differently. */
         const val DEFAULT_MONTHLY_PKR = 200
@@ -244,17 +427,79 @@ class VipViewModel @Inject constructor(
 }
 
 /**
+ * The one sentence each filing attempt deserves, decided apart from the ViewModel so it can
+ * be tested without a network, a Hilt graph or a device.
+ *
+ * [keepDraft] is the whole difference between a failure that loses a reference and one that
+ * does not: an unreachable server keeps what the viewer typed, everything else does not,
+ * because a draft that survives a refusal invites a resubmit of a claim the operator already
+ * has in front of them.
+ */
+object VipSubmission {
+    data class Outcome(
+        val message: String,
+        val keepDraft: Boolean,
+        val clearField: Boolean,
+        val tidError: String? = null,
+    )
+
+    fun outcome(filed: PaymentFiled): Outcome = when (filed) {
+        is PaymentFiled.Accepted -> Outcome(
+            message = "Reference filed. The operator confirms the payment, then VIP turns on " +
+                "by itself — no reinstall and nothing to send again.",
+            keepDraft = false,
+            clearField = true,
+        )
+        is PaymentFiled.Refused -> when (filed.reason) {
+            Refusal.OFFLINE, Refusal.NO_SERVER -> Outcome(
+                message = "Could not reach the server, so the reference was kept on this device and " +
+                    "will be sent again when you are online.",
+                keepDraft = true,
+                clearField = true,
+            )
+            Refusal.REJECTED, Refusal.WEAK_KEY -> Outcome(
+                message = "The server did not accept that reference for the channel you chose. " +
+                    "Check the transaction ID in your confirmation SMS and send it again.",
+                keepDraft = false,
+                clearField = false,
+                tidError = "That reference does not match this channel's format.",
+            )
+            Refusal.THROTTLED -> Outcome(
+                message = "A reference was already filed for this account a moment ago. Wait a few " +
+                    "minutes before sending another.",
+                keepDraft = false,
+                clearField = true,
+            )
+            Refusal.SIGNED_OUT -> Outcome(
+                message = "Sign in on the Settings tab first: the operator attaches a reference to " +
+                    "your account, and this device has no account to attach it to. The reference is " +
+                    "kept here and sent once you are signed in.",
+                keepDraft = true,
+                clearField = true,
+            )
+        }
+    }
+}
+
+/**
  * Fold the wire body into state. A price of zero means the operator never set one, so the
  * documented PKR defaults stand rather than printing a free plan.
  */
-private fun VipUiState.withConfig(config: VipRemoteConfig): VipUiState = copy(
-    isLoading = false,
-    loadError = null,
-    currency = config.currency.trim().ifBlank { "PKR" },
-    monthlyPkr = config.vip.monthlyPkr.takeIf { it > 0 } ?: VipViewModel.DEFAULT_MONTHLY_PKR,
-    yearlyPkr = config.vip.yearlyPkr.takeIf { it > 0 } ?: VipViewModel.DEFAULT_YEARLY_PKR,
-    jazzCashTillId = config.payments.jazzcash.tillId.trim(),
-    jazzCashMobileAccount = config.payments.jazzcash.mobileAccount.trim(),
-    easyPaisaMobile = config.payments.easypaisa.mobileNumber.trim(),
-    raastInstantId = config.payments.raast.instantId.trim(),
-)
+private fun VipUiState.withConfig(config: VipRemoteConfig): VipUiState {
+    val folded = copy(
+        isLoading = false,
+        loadError = null,
+        currency = config.currency.trim().ifBlank { "PKR" },
+        monthlyPkr = config.vip.monthlyPkr.takeIf { it > 0 } ?: VipViewModel.DEFAULT_MONTHLY_PKR,
+        yearlyPkr = config.vip.yearlyPkr.takeIf { it > 0 } ?: VipViewModel.DEFAULT_YEARLY_PKR,
+        jazzCashTillId = config.payments.jazzcash.tillId.trim(),
+        jazzCashMobileAccount = config.payments.jazzcash.mobileAccount.trim(),
+        easyPaisaMobile = config.payments.easypaisa.mobileNumber.trim(),
+        raastInstantId = config.payments.raast.instantId.trim(),
+    )
+    // A channel the viewer already picked stays picked; otherwise the first one the
+    // operator actually published is chosen, so a submission never names a channel that
+    // has no account behind it.
+    val stillOffered = selectedMethod?.takeIf { folded.handleFor(it).isNotBlank() }
+    return folded.copy(selectedMethod = stillOffered ?: folded.offeredMethods.firstOrNull())
+}

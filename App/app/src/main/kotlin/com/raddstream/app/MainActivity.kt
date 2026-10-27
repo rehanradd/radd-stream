@@ -20,6 +20,7 @@ import com.raddstream.app.brand.Brand
 import com.raddstream.app.data.ServerSettingsRepository
 import com.raddstream.app.ui.navigation.Screen
 import com.raddstream.app.ui.navigation.RaddStreamNavGraph
+import com.raddstream.app.ui.screens.MaintenanceScreen
 import com.raddstream.app.ui.theme.RaddStreamTheme
 import com.raddstream.app.ui.theme.BackgroundDark
 import dagger.hilt.android.AndroidEntryPoint
@@ -70,6 +71,14 @@ class MainActivity : ComponentActivity() {
             }
             val dynamicColorRequested by dynamicColorPreference.collectAsState(initial = brandSeed)
 
+            // The operator's maintenance switch, mirrored into DataStore by RemoteConfigWatcher.
+            // Seeded `false` so a cold start paints the app it always painted; the flag can only
+            // ever take the user out of the catalog, never hold them at a spinner while it loads.
+            val maintenancePreference: Flow<Boolean> = remember(serverSettingsRepository) {
+                serverSettingsRepository.maintenanceMode.catch { emit(false) }
+            }
+            val underMaintenance by maintenancePreference.collectAsState(initial = false)
+
             RaddStreamTheme(dynamicColor = effectiveDynamicColor(dynamicColorRequested)) {
                 var startDestination by remember { mutableStateOf<String?>(null) }
                 LaunchedEffect(Unit) {
@@ -89,16 +98,31 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier.fillMaxSize(),
                     color = BackgroundDark,
                 ) {
+                    var changingServer by remember { mutableStateOf(false) }
+                    LaunchedEffect(underMaintenance) {
+                        // Leave the escape behind as soon as the notice clears, so a server that
+                        // goes back into maintenance cannot be outrun by a stale flag here.
+                        if (!underMaintenance) changingServer = false
+                    }
                     val destination = startDestination
-                    if (destination == null) {
-                        Box(
+                    when {
+                        // The notice outranks routing — but it must not outrank the address field.
+                        // The inventory (M-MON-06) asks for navigation blocked "except Settings",
+                        // and this is the screen that changes which server the app talks to, so a
+                        // wrongly flagged deployment stays survivable instead of becoming a brick.
+                        underMaintenance && !changingServer -> MaintenanceScreen(
+                            onChangeServer = {
+                                startDestination = Screen.Setup.route
+                                changingServer = true
+                            },
+                        )
+                        destination == null -> Box(
                             modifier = Modifier.fillMaxSize(),
                             contentAlignment = Alignment.Center,
                         ) {
                             CircularProgressIndicator()
                         }
-                    } else {
-                        RaddStreamNavGraph(startDestination = destination)
+                        else -> RaddStreamNavGraph(startDestination = destination)
                     }
                 }
             }
