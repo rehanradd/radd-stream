@@ -153,6 +153,14 @@ BASE_NEEDLES = frozenset({
     # never ends a real title, and `public_label` cannot emit it at all.
     "katmovie", "katmovie18", "katdrama", "katworld", "movieheist",
     "moviesbaba", "filmyflare", "gdirect", "gdrive", "g-drive", "google drive",
+    # From the 270-post-per-site edge sweep, where each one named a file server
+    # inside a scraped release label ("Ozark S01E01 NXStream", "480P [GDFlix]
+    # 500MB"). Checked the same way as the group above: 0 rows of `posts` contain
+    # the token in `clean_title` or `title`, so deleting it cannot eat a real
+    # title. "Nexus" appeared in the same labels and was deliberately NOT added —
+    # it is a word people title films with, and the residual scan will keep
+    # reporting it for a human rather than let the edge silently blank a title.
+    "gdflix", "modiplay", "nxstream", "screenscape",
 })
 
 # ── views: the only thing that may be serialised ─────────────────────────────

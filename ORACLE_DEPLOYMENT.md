@@ -368,6 +368,19 @@ Create `/etc/nginx/sites-available/radd-stream` and enable it. This exposes the
 PWA and only the list/statistics metadata endpoints: `/client`,
 `/api/v1/posts`, and `/api/v1/stats`. Every other `/api/` route is denied:
 
+> What is actually installed on this box (checked 27 Oct) is narrower than the
+> sample below and does not proxy `/client`: three `location` blocks for
+> `/api/v1/posts`, `/api/v1/stats` and `/api/v1/stream`, a
+> `location ^~ /api/ { return 403; }` catch-all, `/download/` for the APK, and
+> `location /` pointing at code-server on `127.0.0.1:8443`. Two more blocks were
+> added on 27 Oct because the Android client cannot do anything without them —
+> `= /api/v1/app/remote-config` (GET/HEAD only) and `^~ /api/v2/account`
+> (GET/HEAD/POST/PUT/DELETE, the server authenticates those itself). Verified
+> from outside: `remote-config` answers 200, `account/entitlement` answers its
+> own 401 problem body, and `/api/v2/health` and `/api/admin` are still nginx's
+> 403. A previous copy of this file is kept at
+> `/etc/nginx/radd-stream.pre-v2.bak`.
+
 ```nginx
 server {
     listen 80 default_server;
