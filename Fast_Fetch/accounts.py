@@ -170,7 +170,10 @@ from pathlib import Path
 BASE_DIR = Path(__file__).parent.resolve()
 
 #: Bumped only when the shape of the state changes incompatibly; additive columns
-#: are installed by `_migrate_columns` and never require a bump.
+#: are installed by `_migrate_columns` and never require a bump. A NEW TABLE (the
+#: `payment_transactions` ledger) likewise needs no bump: `ensure_schema()` runs
+#: the whole `CREATE ... IF NOT EXISTS` script on every `connect()`, so an older
+#: file gains the table on its next open and every older row is still valid.
 SCHEMA_VERSION = 1
 
 DB_FILENAME = "user_state.db"
@@ -448,6 +451,34 @@ CREATE TABLE IF NOT EXISTS user_state_meta (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS payment_transactions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    -- No FOREIGN KEY ... ON DELETE CASCADE on purpose: `prune_accounts()` deletes
+    -- an idle account, and a money ledger that vanishes with the account that
+    -- paid into it is not auditable. The row outlives the account.
+    account_id INTEGER NOT NULL,
+    plan TEXT NOT NULL,
+    amount_pkr INTEGER NOT NULL,
+    method TEXT NOT NULL,
+    tid TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    submitted_at REAL NOT NULL,
+    reviewed_at REAL,
+    reviewer_note TEXT
+);
+
+CREATE TABLE IF NOT EXISTS payment_review_audit (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    payment_id INTEGER NOT NULL,
+    account_id INTEGER NOT NULL,
+    action TEXT NOT NULL,
+    prior_vip_until REAL NOT NULL DEFAULT 0,
+    new_vip_until REAL NOT NULL DEFAULT 0,
+    reviewer TEXT NOT NULL DEFAULT '',
+    note TEXT,
+    acted_at REAL NOT NULL
+);
 """
 
 #: Columns this release needs that an older database may not have, as
@@ -476,6 +507,14 @@ CREATE INDEX IF NOT EXISTS idx_user_prog_account ON user_progress(account_id, cl
 CREATE UNIQUE INDEX IF NOT EXISTS ux_user_prog_scope
     ON user_progress(account_id, work_key, season_number, episode_number);
 CREATE INDEX IF NOT EXISTS idx_user_accounts_last_seen ON user_accounts(last_seen_at);
+-- The operator's queue is `status` ordered by `submitted_at`; the rate limiter's
+-- question is "when did THIS account last submit", and both must not scan.
+CREATE INDEX IF NOT EXISTS idx_user_payment_status
+    ON payment_transactions(status, submitted_at);
+CREATE INDEX IF NOT EXISTS idx_user_payment_account
+    ON payment_transactions(account_id, submitted_at);
+CREATE INDEX IF NOT EXISTS idx_payment_audit_payment
+    ON payment_review_audit(payment_id, acted_at);
 """
 
 

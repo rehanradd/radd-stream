@@ -61,11 +61,19 @@ from contextlib import closing
 
 import accounts
 import api_v2
+import payments
 import redact
 
 PREFIX = "/api/v2/account"
 JSON = "application/json; charset=utf-8"
 PROBLEM = "application/problem+json; charset=utf-8"
+
+#: The only keys a payment submission may carry. `plan` selects the price, `method`
+#: selects the transaction-id shape, `tid` is the claim itself. Anything else —
+#: above all `amount_pkr`/`amount`, the exact key a caller would send to price its
+#: own purchase — is a 400 before the ledger is opened, so a client can never be
+#: the one that decides what VIP costs.
+_PAYMENT_KEYS = frozenset({"plan", "method", "tid"})
 
 #: The account surface is tiny and every call is cheap, so the edge keeps one
 #: limiter for the whole process — the same object `accounts.py` falls back to,
@@ -292,6 +300,16 @@ def route_get(path, query, *, db_path, catalog_path, secret, headers) -> tuple |
                                           catalog=catalog, tracker=LIMITER)
             return _respond({"progress": [accounts.to_public(r, mint) for r in rows],
                              "count": len(rows)})
+        if tail == ["entitlement"]:
+            # The one read that answers "am I VIP yet?". A caller with no key at
+            # all gets 401 rather than the favorites routes' 404: this is not a
+            # lookup that can miss, it is a question only an account can ask.
+            if not key:
+                return _problem("unauthorised", 401,
+                                "a bearer sync key is required", path)
+            earned = payments.entitlement(db_path, key, tracker=LIMITER)
+            return _respond({"entitlement": redact.project(
+                earned, "account_entitlement")})
         return _problem("not_found", 404, "no such account route", path)
     except Exception as error:                      # noqa: BLE001 — the edge answers, it never re-raises
         return _refused(error, path)
@@ -368,6 +386,25 @@ def route_post(path, body, *, db_path, catalog_path, secret, headers) -> tuple |
                                             episode_number=payload.get("episode_number"),
                                             tracker=LIMITER)
             return _respond({"removed": bool(gone)})
+        if tail == ["payment"]:
+            # A claim, not an entitlement: `payments.submit_payment` stores what
+            # the operator's own price table says the plan costs, and only a
+            # human on the loopback panel can turn it into VIP.
+            extra = sorted(str(name) for name in payload if name not in _PAYMENT_KEYS)
+            if extra:
+                # Named once, without the offending key spelled back: a body that
+                # carried `amount_pkr` is either a buggy client or someone testing
+                # whether this server prices itself, and neither gets a lesson.
+                return _problem("invalid_params", 400,
+                                "a payment submission accepts plan, method and tid only",
+                                path)
+            account = accounts.authenticate(db_path, key, tracker=LIMITER)
+            filed = payments.submit_payment(
+                db_path, account["account_id"],
+                plan=payload.get("plan"), method=payload.get("method"),
+                tid=payload.get("tid"), catalog_path=catalog_path)
+            return _respond({"payment": redact.project(filed, "account_payment")},
+                            status=201)
         return _problem("not_found", 404, "no such account route", path)
     except Exception as error:                      # noqa: BLE001 — the edge answers, it never re-raises
         return _refused(error, path)

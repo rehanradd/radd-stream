@@ -65,28 +65,45 @@ PROVENANCE (absolute, ``redact.py`` is the vocabulary owner):
   upstream URLs — still fails the whole page closed. No scraped URL is ever
   rendered anywhere in this module.
 
-WRITES, and only three: ``POST /admin/api/links/{link_id}/evidence`` re-folds
+WRITES, and only five: ``POST /admin/api/links/{link_id}/evidence`` re-folds
 that link's existing ``cat_link_evidence`` journal onto its row via
 ``catalog_v2.apply_evidence`` with its existing signature;
 ``POST /admin/action/save-monetization`` persists the operator's own payment, ad
-and shortener settings to ``app_remote_config``; and
+and shortener settings to ``app_remote_config``;
 ``POST /admin/action/run-scraper`` queues one bounded crawler/sitemap run for a
 validated crawler handle, records it in ``admin_fleet_audit`` and spawns it as a
-background child process. The latter two consume a request body, and neither
-reads a socket: the mount parses the JSON and hands the dict in as ``body`` (see
-:func:`takes_body`). Everything else is read-only; see the comment on
-:func:`route_post`.
+background child process; and ``POST /admin/action/approve-payment`` /
+``/admin/action/reject-payment`` close ONE ``payment_transactions`` row (see
+``payments.py``) behind a CSRF token minted by this process. The last four
+consume a request body, and none of them reads a socket: the mount parses the
+body (JSON, or the form-encoding this page's own ``<form>`` posts) and hands the
+dict in as ``body`` (see :func:`takes_body`). Everything else is read-only; see
+the comment on :func:`route_post`.
 
+THE PAYMENT QUEUE (``/admin/payments``, ``docs/FULL_MASTER_FEATURE_INVENTORY.md``
+§M-MON-01), and the one place a transaction id is ever printed:
+  A claimed JazzCash / EasyPaisa / Raast payment lives in the accounts ledger
+  (``user_state.db``), not the catalog, so this surface opens that file too and
+  the two writes go through ``payments.approve_payment`` / ``reject_payment``,
+  which credit ``vip_until`` and close the row in one IMMEDIATE transaction.
+  A TID is a payment artifact: it appears on this loopback screen — whose entire
+  job is comparing it against the operator's own SMS — in NO account-surface
+  response, and in no log line this module writes. The account is named here by
+  ``payments.account_hint``, a truncated second-generation digest of the stored
+  key hash: enough to match a payer's screenshot to a row, not enough to
+  enumerate, reverse, or print a hash.
 Standard Library only, like the rest of the backend.
 """
 
 from __future__ import annotations
 
+import hashlib
 import html
 import hmac
 import json
 import os
 import re
+import secrets
 import sqlite3
 import subprocess
 import sys
@@ -98,8 +115,10 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
+import accounts
 import catalog_v2
 import config
+import payments
 import redact
 
 ADMIN_PREFIX = "/admin"
@@ -1374,6 +1393,270 @@ def _run_scraper_action(path, body, db_path):
     })
 
 
+# ── the payment queue: pending claims, one click to close them ───────────────
+#
+# `docs/FULL_MASTER_FEATURE_INVENTORY.md` §M-MON-01. A user has posted a
+# transaction id; nothing on this server can verify it against a bank, so a human
+# with the operator's phone is the verifier and this page is what they click.
+# The ledger itself lives in `payments.py` / `user_state.db`; everything here is
+# the operator's view of it plus the two writes that close a row.
+
+PAYMENTS_PATH = "/admin/payments"
+APPROVE_PAYMENT_PATH = "/admin/action/approve-payment"
+REJECT_PAYMENT_PATH = "/admin/action/reject-payment"
+#: action segment (from the path) → the status `payments.py` writes.
+_PAYMENT_ACTIONS = {
+    APPROVE_PAYMENT_PATH.rsplit("/", 1)[-1]: payments.STATUS_APPROVED,
+    REJECT_PAYMENT_PATH.rsplit("/", 1)[-1]: payments.STATUS_REJECTED,
+}
+#: The only keys a review POST may carry. `note` is the operator's reason, shown
+#: back to the payer as a boolean-free string on this page only; `reviewer` is a
+#: free-text label for the audit row. An unknown key is refused the same way the
+#: scraper action refuses one: no path from a request body to anything executed.
+_PAYMENT_BODY_KEYS = frozenset({"payment_id", "csrf", "note", "reviewer", "_form"})
+#: Tells this module the POST came from the page's own `<form>` (so it answers
+#: with the refreshed page) rather than from a JSON client (which gets the JSON
+#: receipt). The parsed keys are identical either way.
+_FORM_FLAG = "_form"
+
+_PENDING_LIMIT = 100
+_RECENT_LIMIT = 20
+
+LEDGER_UNAVAILABLE = "the payment ledger is unavailable"
+
+#: A CSRF token proves the POST came from a page THIS process rendered — the one
+#: thing a cross-origin form cannot do, since it cannot read the response. The
+#: secret is per-process and never stored, printed or shipped: a restart
+#: invalidates a page left open in a tab, and the operator reloads. That is the
+#: right trade against putting a forgeable long-lived token in a file.
+_CSRF_SECRET = secrets.token_bytes(32)
+_CSRF_CHARS = 32
+_MAX_NOTE = 200
+
+
+def _csrf_token(action: str, payment_id) -> str:
+    """One token bound to (action, payment id) — not to a session, because this
+    panel has no session and no cookie, and a token good for exactly one button on
+    exactly one row is less to leak and less to replay."""
+    digest = hmac.new(_CSRF_SECRET, f"{action}:{payment_id}".encode("utf-8"),
+                      hashlib.sha256).hexdigest()
+    return digest[:_CSRF_CHARS]
+
+
+def _csrf_ok(action: str, payment_id, token) -> bool:
+    """Constant-time, length-clamped, and identical for a missing and a wrong
+    token: nothing here tells a prober whether a row exists yet."""
+    return hmac.compare_digest(_csrf_token(action, payment_id),
+                               str(token or "")[:_CSRF_CHARS])
+
+
+@contextmanager
+def _ledger(state_db_path=None):
+    """A connection to the accounts ledger, schema included.
+
+    The queue lives in `user_state.db` — the same file as `user_accounts.vip_until`
+    — because a credit that wrote to a different file than the ledger row it
+    approves would not be one transaction, and the whole guarantee of the approve
+    path is that it is. `accounts.connect` runs the same idempotent
+    `ensure_schema()` the account edge runs, so a deployment whose state file
+    predates this release gains the two tables on its first operator read instead
+    of answering 500 until somebody notices."""
+    conn = accounts.connect(Path(state_db_path) if state_db_path
+                            else accounts.default_db_path())
+    try:
+        yield conn
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def _payment_rows(conn, limit: int = _PENDING_LIMIT) -> dict:
+    """The queue and its recent history, as data. Raw `tid` included, because the
+    operator is the only reader this surface has (`viewer.py` 404s `/admin` on the
+    public port, `_gate` demands loopback plus the bearer token) and a TID they
+    cannot see is a TID they cannot check."""
+    pending = payments.list_payments(conn, status=payments.STATUS_PENDING, limit=limit)
+    recent = payments.list_payments(conn, status=None, limit=_RECENT_LIMIT)
+    for row in pending:
+        row["audit"] = payments.audit_for(conn, row["payment_id"], limit=3)
+    return {
+        "available": True,
+        "currency": "PKR",
+        "plans": [{"plan": name, "amount_pkr": payments.default_price(name),
+                   "days": payments.plan_days(name)}
+                  for name in payments.plan_names()],
+        "pending_count": len(pending),
+        "pending": pending,
+        "recent": recent,
+        "approve_path": APPROVE_PAYMENT_PATH,
+        "reject_path": REJECT_PAYMENT_PATH,
+        "note": ("a transaction id is a claim until a human who has read the"
+                 " payment SMS closes it; nothing here verifies one"),
+    }
+
+
+def screen_payments(state_db_path=None, *, limit: int = _PENDING_LIMIT) -> dict:
+    """`GET /admin/api/payments` — the queue as JSON. Fails to an honest empty
+    state rather than a crash, like every other screen."""
+    try:
+        with _ledger(state_db_path) as conn:
+            return _payment_rows(conn, limit=limit)
+    except sqlite3.Error:
+        return {"available": False, "detail": LEDGER_UNAVAILABLE}
+
+
+def _review_payment(action, path, body, state_db_path):
+    """Close one ledger row. Returns `(result, None)` or `(None, refusal_tuple)`.
+
+    Order is fixed: shape, then the CSRF token, then the write. A row that does
+    not exist and a row whose token does not match take the same 403 — a
+    mismatched token is refused without the ledger being opened at all, so this
+    route cannot be used to ask "does payment 17 exist?"."""
+    if not isinstance(body, dict):
+        return None, refuse_bad_body(path)
+    unknown = sorted(str(key) for key in body if key not in _PAYMENT_BODY_KEYS)
+    if unknown:
+        return None, _problem("invalid_params", path, "Unknown review setting.")
+    payment_id = _int_or_none(body.get("payment_id"))
+    if payment_id is None or payment_id < 1:
+        return None, _problem("invalid_params", path,
+                              "Payment id must be a positive integer.")
+    if not _csrf_ok(action, payment_id, body.get("csrf")):
+        return None, _problem("forbidden", path,
+                              "That review token does not match this payment.")
+    note = str(body.get("note", "") or "")[:_MAX_NOTE]
+    reviewer = str(body.get("reviewer", "") or "")[:40]
+    try:
+        with _ledger(state_db_path) as conn:
+            if action == payments.STATUS_APPROVED:
+                result = payments.approve_payment(conn, payment_id,
+                                                  reviewer=reviewer, note=note)
+            else:
+                result = payments.reject_payment(conn, payment_id,
+                                                 reviewer=reviewer, note=note)
+    except accounts.AccountError as error:
+        return None, _problem(getattr(error, "code", "invalid_params")
+                              if getattr(error, "code", "") in _PROBLEM
+                              else "not_found", path, getattr(error, "detail", ""))
+    except sqlite3.Error:
+        return None, _problem("unavailable", path, LEDGER_UNAVAILABLE)
+    return result, None
+
+
+def _review_banner(result: dict) -> str:
+    """The one sentence the page may say about a review. It names no payer, no
+    key and no TID, and it says plainly when the click credited nobody."""
+    if result["changed"]:
+        if result["status"] == payments.STATUS_APPROVED:
+            return (f"payment {result['payment_id']} approved — "
+                    f"{result['days']} days credited, no double credit on replay")
+        return f"payment {result['payment_id']} rejected — vip_until was not touched"
+    return (f"payment {result['payment_id']} was already "
+            f"{result['status']} — nothing was written and no second credit was made")
+
+
+def _payment_forms(action_path, row, token) -> str:
+    """The two buttons, as real HTML forms.
+
+    Each carries the CSRF token for its own (action, payment) pair, the admin
+    bearer token the gate already demanded (a `<form>` cannot set an
+    `Authorization` header, so the page's own token travels in the action URL —
+    this is the loopback panel of an operator who typed that token themselves),
+    and for a reject a short note the operator can type."""
+    identifier = row["payment_id"]
+    shared = (f'<input type="hidden" name="payment_id" value="{_e(identifier)}">'
+              f'<input type="hidden" name="{_FORM_FLAG}" value="1">'
+              f'<input type="hidden" name="reviewer" value="panel">')
+    approve = (
+        f'<form method="post" class="inline" action="'
+        f'{_e(action_path)}?token={_e(token)}">'
+        f'{shared}'
+        f'<input type="hidden" name="csrf" value="{_e(_csrf_token(payments.STATUS_APPROVED, identifier))}">'
+        '<button class="btn" type="submit">Approve</button></form>')
+    reject = (
+        f'<form method="post" class="inline" action="'
+        f'{_e(REJECT_PAYMENT_PATH)}?token={_e(token)}">'
+        f'{shared}'
+        f'<input type="hidden" name="csrf" value="{_e(_csrf_token(payments.STATUS_REJECTED, identifier))}">'
+        '<input class="limit" type="text" name="note" maxlength="80"'
+        ' placeholder="why"> <button class="btn" type="submit">Reject</button>'
+        '</form>')
+    return approve + " " + reject
+
+
+def render_payments_page(data, query, banner=""):
+    """The payment queue page. Loopback only, like the rest of `/admin`."""
+    token = _q(query, "token")
+    parts = [
+        "<!DOCTYPE html><html lang=\"en\"><head><meta charset=\"UTF-8\">",
+        "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">",
+        "<title>payments — admin</title>",
+        f"<style>{_STYLE}</style>",
+        "<style>form.inline { display: inline; }</style></head><body>",
+        '<div class="wrap">',
+        "<h1>Payment queue</h1>",
+        '<p class="sub"><a href="/admin">operator panel</a> · pending claims'
+        ' against the PKR price list. Loopback only, no TLS.</p>',
+        '<div class="warn"><strong>Nothing here verifies a payment.</strong> A'
+        ' transaction id is what the payer typed. Check your own payment SMS for'
+        ' the amount and the reference before you approve, and approve only then.'
+        ' A TID is printed on this page and nowhere else on the account surface.'
+        '</div>',
+    ]
+    if banner:
+        parts.append(f'<p id="ops-status" class="ok statusline">{_e(banner)}</p>')
+    else:
+        parts.append('<p id="ops-status" class="statusline"></p>')
+    if not data.get("available"):
+        parts.append('<section class="card"><div class="empty">'
+                     + _e(LEDGER_UNAVAILABLE) + '</div></section>')
+        parts.append("</div></body></html>")
+        return "".join(parts)
+
+    prices = ", ".join(f"{row['plan']} = PKR {row['amount_pkr']} for"
+                       f" {row['days']} days" for row in data.get("plans") or [])
+    parts.append(f'<p class="hint">Server price list (the client cannot set an'
+                 f' amount): {_e(prices)}</p>')
+
+    def table(rows, *, actions):
+        cells = []
+        for row in rows or []:
+            submitted = _ts(row.get("submitted_at"))
+            trail = "; ".join(
+                f"{entry['action']} by {entry['reviewer']}"
+                for entry in row.get("audit") or [])
+            line = [_e(row.get("hint")) or '<span class="empty">—</span>',
+                    _e(row.get("method")), _e(row.get("tid")),
+                    _e(row.get("amount_pkr")), _e(row.get("plan")), submitted]
+            if actions:
+                line.append(_payment_forms(APPROVE_PAYMENT_PATH, row, token))
+            else:
+                line.append(_e(row.get("status"))
+                            + (" — " + _e(row.get("reviewer_note"))
+                               if row.get("reviewer_note") else "")
+                            + ("; " + _e(trail) if trail else ""))
+            cells.append(line)
+        return cells
+
+    parts.append('<section class="card"><h2>Pending</h2>')
+    parts.append(_table(("account", "method", "TID", "PKR", "plan", "submitted",
+                         "actions"),
+                        table(data.get("pending"), actions=True)))
+    parts.append(f'<p class="hint">{_e(data.get("pending_count"))} open claim(s).'
+                 ' The account column is a one-way fingerprint of the sync key'
+                 " the payer holds — it identifies the row to you and nothing to"
+                 " anyone else.</p></section>")
+    parts.append('<section class="card"><h2>Recently reviewed</h2>')
+    parts.append(_table(("account", "method", "TID", "PKR", "plan", "submitted",
+                         "outcome"),
+                        table(data.get("recent"), actions=False)))
+    parts.append("</section></div></body></html>")
+    return "".join(parts)
+
+
 # The screen registry: name → (callable, whether it takes `n`).
 _SCREENS = {
     "projection": (lambda conn, q: screen_projection(conn), False),
@@ -1665,6 +1948,8 @@ def render_admin_page(conn, q):
         ' mounted on the loopback port only and never prints a scraped upstream'
         ' URL. The scraper card names the 18 engines you configured; the public'
         ' port answers 404 for <code>/admin</code> and all of its routes.</div>',
+        '<p class="sub"><a href="/admin/payments">Payment queue</a> — pending'
+        ' JazzCash / EasyPaisa / Raast claims, approve or reject.</p>',
         '<p id="ops-status" class="statusline"></p>',
     ]
 
@@ -1757,11 +2042,18 @@ def _segments(path):
     return [piece for piece in (path or "").split("/") if piece]
 
 
-def route_get(path, query, *, db_path, peer_address, token_header):
+def route_get(path, query, *, db_path, peer_address, token_header,
+              state_db_path=None):
 
     """Serve one admin GET. Returns ``(status, content_type, body_bytes)`` when
     answered, or ``None`` when ``path`` is not under ``/admin`` (the caller falls
-    through, exactly as ``api_v2.route_get`` reports "not mine")."""
+    through, exactly as ``api_v2.route_get`` reports "not mine").
+
+    ``state_db_path`` is the accounts ledger (``user_state.db``) the payment queue
+    reads. It is a parameter and not a global because the mount owns both paths and
+    a test owns its own temp files: the catalog and the ledger are two different
+    SQLite files, and only ``/admin/payments`` and its JSON screen touch the second
+    one."""
     if not _is_admin(path):
         return None
     effective_token = token_header or (query.get("token", [""])[0] if query else "")
@@ -1769,8 +2061,18 @@ def route_get(path, query, *, db_path, peer_address, token_header):
     if refusal is not None:
         return refusal
     try:
+        segments = _segments(path)   # ["admin"] or ["admin","api",<name>]
+        if segments == ["admin", "payments"]:
+            # Rendered from the ledger alone: a catalog with no projection still
+            # has a payment queue, and a payment queue with no pending claim is
+            # still a page.
+            data = screen_payments(state_db_path, limit=_limit(query, _PENDING_LIMIT))
+            return _respond_html(render_payments_page(data, query))
+        if (len(segments) == 3 and segments[1] == "api"
+                and segments[2] == "payments"):
+            return _respond_json(200, screen_payments(
+                state_db_path, limit=_limit(query, _PENDING_LIMIT)))
         with _session(db_path) as conn:
-            segments = _segments(path)   # ["admin"] or ["admin","api",<name>]
             if segments == ["admin"]:
                 return _respond_html(render_admin_page(conn, query),
                                      allow=_fleet_needle_allow())
@@ -1793,17 +2095,42 @@ def route_get(path, query, *, db_path, peer_address, token_header):
 _BODY_ACTIONS = frozenset({
     SAVE_MONETIZATION_PATH.rsplit("/", 1)[-1],
     RUN_SCRAPER_PATH.rsplit("/", 1)[-1],
+    APPROVE_PAYMENT_PATH.rsplit("/", 1)[-1],
+    REJECT_PAYMENT_PATH.rsplit("/", 1)[-1],
 })
 
 
 def takes_body(path):
     """Whether this admin POST consumes a request body — so the mount knows when
     to read one and can leave every other POST's bytes alone. Only the settings
-    save and the scraper action do: the evidence re-fold derives everything from
-    the journal already in the database."""
+    save, the scraper action and the two payment reviews do: the evidence re-fold
+    derives everything from the journal already in the database."""
     segments = _segments(path)
     return (len(segments) == 3 and segments[1] == "action"
             and segments[2] in _BODY_ACTIONS)
+
+
+def form_encoded(content_type) -> bool:
+    """Whether the mount should hand us a urlencoded form instead of JSON. The
+    payment queue's Approve/Reject buttons are real ``<form>``s, so that a review
+    works with JavaScript switched off; every other admin action stays JSON."""
+    return str(content_type or "").split(";")[0].strip().lower() == \
+        "application/x-www-form-urlencoded"
+
+
+def parse_form_body(raw) -> dict:
+    """A urlencoded body into the flat dict the action expects.
+
+    Keys are kept as written and values are the first occurrence, so a body that
+    repeats ``payment_id`` cannot make a route choose between two rows. Never
+    raises: an unparseable body is an empty dict, and every action already refuses
+    a body without its own keys."""
+    try:
+        text = bytes(raw).decode("utf-8", "replace")
+    except (TypeError, ValueError):
+        return {}
+    pairs = urllib.parse.parse_qs(text, keep_blank_values=True)
+    return {key: values[0] for key, values in pairs.items() if values}
 
 
 def refuse_bad_body(path):
@@ -1813,19 +2140,22 @@ def refuse_bad_body(path):
     return _problem("invalid_params", path, "The request body must be a JSON object.")
 
 
-def route_post(path, query, *, db_path, peer_address, token_header, body=None):
+def route_post(path, query, *, db_path, peer_address, token_header, body=None,
+               state_db_path=None):
     """Serve one admin POST. Same tuple/``None`` contract as :func:`route_get`.
 
-    Three writes, no more. ``POST /admin/api/links/{id}/evidence`` takes no body:
+    Five writes, no more. ``POST /admin/api/links/{id}/evidence`` takes no body:
     the mount owns the socket and the documented action ("fold this link's
     recorded evidence back onto its row") needs only the link id from the path —
     ``catalog_v2.apply_evidence(conn, link_ids=[...])`` re-derives everything from
-    the existing ``cat_link_evidence`` journal. Two actions do take a body and
+    the existing ``cat_link_evidence`` journal. Four actions do take a body and
     receive it already parsed as ``body`` (see :func:`takes_body`), because
     reading a socket is the mount's job and not this module's:
-    ``/admin/action/save-monetization`` writes the settings row, and
-    ``/admin/action/run-scraper`` queues one validated, bounded crawler child.
-    No screen gains a setter that ``catalog_v2`` does not already expose."""
+    ``/admin/action/save-monetization`` writes the settings row,
+    ``/admin/action/run-scraper`` queues one validated, bounded crawler child, and
+    ``/admin/action/approve-payment`` / ``reject-payment`` close one claimed
+    payment behind a CSRF token minted here (see :data:`_CSRF_SECRET`).
+    No screen gains a setter that ``payments.py`` does not already expose."""
     if not _is_admin(path):
         return None
     effective_token = token_header or (query.get("token", [""])[0] if query else "")
@@ -1835,6 +2165,23 @@ def route_post(path, query, *, db_path, peer_address, token_header, body=None):
     segments = _segments(path)
     try:
         if takes_body(path):
+            if segments[2] in _PAYMENT_ACTIONS:
+                result, denied = _review_payment(_PAYMENT_ACTIONS[segments[2]],
+                                                 path, body, state_db_path)
+                if denied is not None:
+                    return denied
+                if not (isinstance(body, dict) and str(body.get(_FORM_FLAG) or "")):
+                    # A JSON client gets a receipt. No TID in it: the operator's
+                    # own tool can re-read the queue for that, and a response that
+                    # echoed one would be one more place a payment artifact could
+                    # end up in a log.
+                    return _respond_json(200, {"ok": True, "review": result})
+                # The page's own form: answer with the refreshed queue and one
+                # sentence about what the click did, so a double-click visibly
+                # credits nobody the second time.
+                data = screen_payments(state_db_path)
+                return _respond_html(render_payments_page(
+                    data, query, _review_banner(result)))
             if not isinstance(body, dict):
                 return refuse_bad_body(path)
             if segments[2] == RUN_SCRAPER_PATH.rsplit("/", 1)[-1]:

@@ -233,6 +233,23 @@ VIEWS: dict[str, frozenset[str]] = {
         "audio", "subtitle_mode", "details", "flags", "season_number",
         "part_number", "episode_range",
     }),
+    # The account surface's own two shapes (`accounts_api.py`), published here
+    # rather than hand-built at the edge: a payment the ledger recorded and the
+    # entitlement that payment may one day buy.
+    #
+    # `account_payment` deliberately has NO `tid` key. A transaction id is a
+    # payment artifact the submitter just read off their own SMS — echoing it
+    # back would put it in a server access log and a client cache for no benefit,
+    # and `payments.py` promises never to do that. What the receipt confirms is
+    # the row's identity, price and state, which is everything the app needs to
+    # show "pending verification".
+    # `account_entitlement` is the three keys `docs/FULL_MASTER_FEATURE_INVENTORY.md`
+    # §M-MON-01 names, and nothing else: no plan history, no amounts, no
+    # operator note, no account id.
+    "account_payment": frozenset({
+        "payment_id", "status", "plan", "amount_pkr", "method", "submitted_at",
+    }),
+    "account_entitlement": frozenset({"vip", "vip_until", "pending"}),
 }
 
 

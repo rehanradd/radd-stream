@@ -2935,7 +2935,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
             answered = admin_panel.route_get(
                 path, query_params, db_path=DB_PATH,
                 peer_address=self.client_address[0],
-                token_header=self.headers.get("Authorization", ""))
+                token_header=self.headers.get("Authorization", ""),
+                state_db_path=accounts_api.state_db())
             if answered is not None:
                 self.send_triple(answered)
                 return
@@ -3270,15 +3271,27 @@ class DashboardHandler(BaseHTTPRequestHandler):
             # problem vocabulary rather than gaining a second shape here.
             body = None
             if admin_panel.takes_body(path):
-                body, body_error = api_v2.read_body(self)
-                if body_error:
-                    self.send_triple(admin_panel.refuse_bad_body(path))
-                    return
+                content_type = str(self.headers.get("Content-Type", "") or "")
+                if admin_panel.form_encoded(content_type):
+                    # The payment queue's Approve/Reject buttons are real HTML
+                    # forms, so a review works with JavaScript off. The same
+                    # ceiling as JSON applies: never read more than the body cap.
+                    try:
+                        length = int(self.headers.get("Content-Length") or 0)
+                    except (TypeError, ValueError):
+                        length = 0
+                    length = max(0, min(length, api_v2.MAX_BODY_BYTES))
+                    body = admin_panel.parse_form_body(self.rfile.read(length))
+                else:
+                    body, body_error = api_v2.read_body(self)
+                    if body_error:
+                        self.send_triple(admin_panel.refuse_bad_body(path))
+                        return
             answered = admin_panel.route_post(
                 path, query_params, db_path=DB_PATH,
                 peer_address=self.client_address[0],
                 token_header=self.headers.get("Authorization", ""),
-                body=body)
+                body=body, state_db_path=accounts_api.state_db())
             if answered is not None:
                 self.send_triple(answered)
                 return
