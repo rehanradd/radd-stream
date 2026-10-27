@@ -1280,3 +1280,35 @@ clean URL. `radd-stream.service` restarted (the running process predated the pay
 `/remote-config` was missing `quality_gate`), and two nginx blocks were added because every
 `/api/v2/account*` route and `remote-config` were a public 403 — see `ORACLE_DEPLOYMENT.md`.
 
+### Session 16 — Independent verification of the android_tasks sprint (2026-10-27)
+
+**What this session was for:** the six-task sprint was already in the tree from Sessions 14–15
+(Task 2 was closed by the orchestrator as done), so this session re-verified it under the
+one-build-at-a-time queue instead of re-implementing anything. No Kotlin source was changed here.
+
+**Result:** `/tmp/qbuild.sh :app:compileDebugKotlin :app:testDebugUnitTest` → BUILD SUCCESSFUL,
+`GRADLE_EXIT=0`, `FOREIGN_BUILD_PIDS_SEEN=` empty, `OVERLAP=NO`. Test results: **452 tests /
+55 suites / 0 failures / 0 errors / 0 skipped**, all 55 XMLs written by that run (previous
+newest was `1793106530`).
+
+**One transient failure, not a defect in committed code:** the first run failed
+`:app:compileDebugUnitTestKotlin` on `ScreenSnapshotTest.kt` referencing `RaddTheme`, a
+composable that does not exist (`ui/theme/Theme.kt` defines `RaddStreamTheme`). That file is
+untracked work from a parallel session; it was corrected to `RaddStreamTheme` while the build
+was in flight, and the rerun compiled it. The file and its `build.gradle.kts` arm64 exclusion
+remain uncommitted and are not part of this session's commit.
+
+**What the run re-proves:** maintenance flag → overlay + "Use a different server" escape;
+`RemoteConfigWatcher`'s five-minute fail-safe poll; recents persisted to DataStore with the
+20-entry cap; `SubtitleParsersTest`; a finished keep played through `LocalMediaProxy`
+(`PlaybackService.handleLoad` → `OfflineCacheEngine.playableUri`); and the VIP quality gate
+still behind `feature_flags.quality_gate` (default OFF) via
+`VipQualityGate.premiumAccess`.
+
+**Deliberately not verified:** no device/emulator pass. `ScreenSnapshotTest` and
+`PosterCardProvenanceTest` are excluded on aarch64 because Robolectric has no native runtime
+here, so their snapshot cases executed nowhere on this host.
+
+**Git:** only this log entry is staged/committed — no source changes, and the parallel
+session's three uncommitted App files were left untouched.
+
