@@ -31,6 +31,7 @@ FIXTURE = """<!DOCTYPE html><html><head>
 <div class="Fun"><b>Genre:</b> <a href="https://www.pagalmovies.fit/genre/Erotic/1.html"><i>Erotic</i></a>, <a href="https://www.pagalmovies.fit/genre/Romance/1.html"><i>Romance</i></a></div>
 <div class="Fun"><b>Release Date:</b> <i>2026</i></div>
 <div class="Fun"><b>Duration:</b> <i>n/a</i></div>
+<div class="Fun"><b>Updated Webseries:</b> <a href="/movie/1/Hunkkaar_2026.html">Hunkkaar: The Roar (2026) S01 Jiohotstar Hindi Web Series</a> | <a href="/movie/2/Waiting_Hai_2026.html">Waiting Hai (2026) S01 Amazon Prime Hindi Web Series</a></div>
 <h1 class="subox" align="left">Eyes (2026) Atrangii Full Hot Short Film</h1>
 <p class="showimage"><img class="absmiddle" src="https://www.pagalmovies.fit/files/images/Eyes_(2026)_Atrangii_Full_Hot_Short_Film.jpg" height="260" width="220"/></p>
 <h2 class="subox">Download Eyes (2026) Atrangii Full Hot Short Film</h2>
@@ -78,6 +79,14 @@ SERIES_FIXTURE = """<html><head><title>Game of Thrones Season 8 Pagalmovies</tit
 
 HOMEPAGE_FIXTURE = """<html><head><title>PagalMovies 2026 - Download Bollywood,Hollywood,English Dubbed Movies</title></head>
 <body><h1 class="subox">PagalMovies 2026 - Download Bollywood Hollywood Movies</h1></body></html>"""
+
+# Taken from a live page (movie/2005) whose film has no genre rows at all.
+PLACEHOLDER_GENRE_FIXTURE = FIXTURE.replace(
+    '<div class="Fun"><b>Genre:</b> <a href="https://www.pagalmovies.fit/genre/Erotic/1.html">'
+    '<i>Erotic</i></a>, <a href="https://www.pagalmovies.fit/genre/Romance/1.html">'
+    '<i>Romance</i></a></div>',
+    '<div class="Fun"><b>Genre:</b> <a href="https://www.pagalmovies.casa/genre/N/A/1.html">'
+    '<i><font color="#7B68EE"><b>N/A</b></font></i></a></div>')
 
 
 def fake_download_chain(url, referer=None, timeout=25):
@@ -131,6 +140,52 @@ class TestTitleCleaning(unittest.TestCase):
         self.assertEqual(got["clean_title"], "Matargashti")
 
 
+class TestAuditHygiene(unittest.TestCase):
+    """The six defects the full-staging audit found in the first shipped version."""
+
+    def test_a_film_named_for_a_year_keeps_its_name(self):
+        for title, year in (("1922 (2017) English Movie", 2017),
+                            ("1917 (2019) English Movie", 2019),
+                            ("2018 (2023) Tamil Movie", 2023)):
+            got = pm.parse_title(title, title.lower().replace(" ", "_"))
+            with self.subTest(title=title):
+                self.assertEqual(got["clean_title"], title.split(" (")[0])
+                self.assertEqual(got["year"], year)
+
+    def test_the_bracketed_year_outranks_a_bare_one(self):
+        """The packaging marks where the name ends; the name may itself be a year."""
+        got = pm.parse_title("1922 (2017) English Movie", "")
+        self.assertEqual(got["year"], 2017)
+
+    def test_a_descriptor_that_opens_the_title_is_part_of_the_name(self):
+        self.assertEqual(pm.parse_title("Dual (2025) Hindi Movie", "")["clean_title"], "Dual")
+        self.assertEqual(
+            pm.parse_title("Complete Unknown (2016) English Movie", "")["clean_title"],
+            "Complete Unknown")
+
+    def test_the_title_fallback_keeps_the_site_case(self):
+        got = pm.parse_title("(2020) Hindi Dubbed Full Movie", "The_Frozen_North")
+        self.assertEqual(got["clean_title"], "The Frozen North")
+
+    def test_an_unclosed_site_bracket_does_not_hang_off_the_title(self):
+        got = pm.parse_title("The Return Of Jafar - Aladin 2 (1994 Hindi Dubbed Movie", "x")
+        self.assertEqual(got["clean_title"], "The Return Of Jafar - Aladin 2")
+
+    def test_a_bracketed_pseudo_year_is_neither_a_year_nor_a_name(self):
+        got = pm.parse_title("Pagal Premi (20012) Bhojpuri Full Movie",
+                             "Pagal_premi_(20012)_bhojpuri_full_movie")
+        self.assertIsNone(got["year"])
+        self.assertNotIn("20012", got["clean_title"])
+
+    def test_the_live_origin_is_queued_and_the_old_one_still_belongs(self):
+        self.assertTrue(pm.BASE_URL.endswith(".casa"), pm.BASE_URL)
+        self.assertTrue(pm.SITEMAP_URL.startswith(pm.BASE_URL))
+        for host in ("https://www.pagalmovies.casa/movie/1/x.html",
+                     "https://www.pagalmovies.fit/movie/1/x.html"):
+            self.assertTrue(pm._is_site_url(host), host)
+        self.assertFalse(pm._is_site_url("https://pagalmovies-copy.example.com/movie/1/x.html"))
+
+
 class TestSizeParsing(unittest.TestCase):
     def test_site_writes_both_cases_and_commas(self):
         self.assertEqual(pm.parse_size_to_bytes("329.113 MB"), int(329.113 * 1024 ** 2))
@@ -138,6 +193,12 @@ class TestSizeParsing(unittest.TestCase):
         self.assertEqual(pm.parse_size_to_bytes("1.21 GB"), int(1.21 * 1024 ** 3))
         self.assertIsNone(pm.parse_size_to_bytes(None))
         self.assertIsNone(pm.parse_size_to_bytes("n/a"))
+
+    def test_a_size_below_one_file_is_the_site_placeholder(self):
+        """No tier of a feature is measured in bytes; those rows carry no size."""
+        for text in ("0.000 MB", "-1.000 B", "0.000 B", "753.000 B", "1.499 KB", "0 KB"):
+            with self.subTest(text=text):
+                self.assertIsNone(pm.parse_size_to_bytes(text))
 
 
 class TestAdultFlagging(unittest.TestCase):
@@ -267,7 +328,21 @@ class TestParsePage(unittest.TestCase):
             post = pm.parse_page(MOVIE_URL)
         src = post["releases"][0]["sources"][0]
         self.assertEqual(src["status"], "unknown")
-        self.assertEqual(src["source_url"], "https://www.pagalmovies.fit/download/21801")
+        self.assertEqual(src["source_url"], f"{pm.BASE_URL}/download/21801")
+
+    def test_the_site_placeholder_genre_link_is_not_a_genre(self):
+        """Live pages publish <a>...<b>N/A</b></a> as the only genre of a title."""
+        with mock.patch.object(pm, "http_get",
+                               return_value=(200, MOVIE_URL, PLACEHOLDER_GENRE_FIXTURE)):
+            post = pm.parse_page(MOVIE_URL)
+        self.assertIsNone(post["genres"])
+
+    def test_the_updated_webseries_strip_is_not_this_posts_metadata(self):
+        with mock.patch.object(pm, "http_get", return_value=(200, MOVIE_URL, FIXTURE)):
+            post = pm.parse_page(MOVIE_URL)
+        block = post["raw_meta"]["info_block"]
+        self.assertNotIn("updated webseries", block)
+        self.assertNotIn("Hunkkaar", json.dumps(post["raw_meta"], ensure_ascii=False))
 
 
 class TestResolveLinks(unittest.TestCase):
@@ -276,7 +351,8 @@ class TestResolveLinks(unittest.TestCase):
             return pm.parse_page(MOVIE_URL)
 
     def test_chain_walk_stores_every_provider(self):
-        post = pm.resolve_links(self._post(), probe=True)
+        with mock.patch.object(pm, "http_get_once", side_effect=fake_download_chain):
+            post = pm.resolve_links(self._post(), probe=True)
         services = [s["service"] for s in post["releases"][0]["sources"]]
         self.assertEqual(len(services), 8)
         self.assertIn("skydrop", services)

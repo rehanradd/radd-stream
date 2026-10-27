@@ -53,7 +53,9 @@ from pathlib import Path
 # Configuration
 # ---------------------------------------------------------------------------
 
-BASE_URL = "https://www.pagalmovies.fit"
+# The origin moves between country TLDs and 301s the old one to the new; both
+# shapes stay accepted by SITE_HOST_RE, which is what decides site membership.
+BASE_URL = "https://www.pagalmovies.casa"
 SITEMAP_URL = f"{BASE_URL}/sitemap.xml"
 DEFAULT_DB_PATH = Path("/home/ubuntu/radd-stream-data/pagalmovies.db")
 USER_AGENT = (
@@ -96,8 +98,9 @@ for _sig in (signal.SIGINT, signal.SIGTERM):
 # ---------------------------------------------------------------------------
 
 # Hosts the site itself answers on (it rotates TLDs and mirrors its own name).
-SITE_HOST_RE = re.compile(r"""pagalmovies?\.[a-z]{2,}"""
-                          r"""|pagal\s?movies""", re.I)
+# Host membership, so label-anchored: a look-alike ("pagalmovies-copy.example.com")
+# is not the site, and following its redirects would be following someone else.
+SITE_HOST_RE = re.compile(r"""(?:^|\.)pagal\s?movies?\.[a-z]{2,}""", re.I)
 
 # Ad / tracker / shortlink hosts that are never media, and whose names must not
 # reach a client.
@@ -180,6 +183,8 @@ SEASON_RE = re.compile(r"\bS(\d{1,2})\b|\bSeas[oe]n\s*(\d{1,2})\b", re.I)
 EPISODE_RE = re.compile(r"\bE(?:p(?:sode|sodes)?)?\.?\s*(\d{1,3})\b", re.I)
 PART_RE = re.compile(r"\bPart\s*(\d{1,2})\b", re.I)
 SIZE_TEXT_RE = re.compile(r"(\d+(?:[.,]\d+)?)\s*(TB|GB|KB|MB|PB)\b", re.I)
+SIDEBAR_LABEL_RE = re.compile(r"(?:updated|trending|recent|popular|random)\b"
+                              r".*\b(?:web[\s\-]?series|series|movies?)\b")
 RATING_RE = re.compile(r"(?:imdb|rating)\D{0,8}(\d+(?:[.,]\d+)?)", re.I)
 IMDB_ID_RE = re.compile(r"\b(tt\d{7,9})\b", re.I)
 
@@ -400,7 +405,13 @@ def _file_id(url: str) -> str | None:
 
 
 def parse_size_to_bytes(text: str | None) -> int | None:
-    """'329.113 MB' / '105.67 mb' / '1.1Gb' -> bytes (binary units, catalog convention)."""
+    """
+    '329.113 MB' / '105.67 mb' / '1.1Gb' -> bytes (binary units, catalog convention).
+
+    The site's placeholder run ("-1.000 B", "0.000 MB", "1.499 KB") is the absence
+    of a measurement, so anything under a megabyte reads back as unknown rather
+    than as a tier the file could never have.
+    """
     if not text:
         return None
     m = SIZE_TEXT_RE.search(text)
@@ -411,7 +422,8 @@ def parse_size_to_bytes(text: str | None) -> int | None:
     except ValueError:
         return None
     unit = m.group(2).upper()
-    return int(num * {"KB": 1024, "MB": 1024 ** 2, "GB": 1024 ** 3, "TB": 1024 ** 4}[unit])
+    size = int(num * {"KB": 1024, "MB": 1024 ** 2, "GB": 1024 ** 3, "TB": 1024 ** 4}[unit])
+    return size if size >= 1024 ** 2 else None
 
 
 def _pretty_slug(slug: str) -> str:
@@ -502,8 +514,11 @@ def _drop_packaging_brackets(title: str) -> tuple[str, list[str]]:
         return " "
 
     def paren(m: re.Match) -> str:
-        lowered = m.group(1).lower()
-        if (any(w in lowered for w in DESCRIPTOR_WORDS) or QUALITY_RE.search(lowered)
+        lowered = m.group(1).strip().lower()
+        # A bracketed digit run longer than a year ("Pagal Premi (20012)") is the
+        # site mistyping its own packaging, never part of the work's name.
+        if (re.fullmatch(r"\d{5,}", lowered)
+                or any(w in lowered for w in DESCRIPTOR_WORDS) or QUALITY_RE.search(lowered)
                 or re.search(r"\b(?:clear|hd|hq|cam|dvd|predvd|work\s?print|multi\s?audio)\b",
                              lowered)):
             groups.append(m.group(1))
@@ -525,12 +540,19 @@ def parse_title(raw_title: str, slug: str = "", explicit_year: int | None = None
 
     year = explicit_year
     if year is None:
-        m = YEAR_RE.search(brandless) or re.search(r"[\-_ ]((?:19|20)\d{2})[\-_.]", slug or "")
+        # A bracketed year is the packaging; a bare one can be the name ("1922"),
+        # so the bracket is read first and the bare run only as a fallback.
+        m = (re.search(r"[\(\[{]\s*((?:19|20)\d{2})\s*[\)\]}]", brandless)
+             or YEAR_RE.search(brandless)
+             or re.search(r"[\-_ ]((?:19|20)\d{2})[\-_.]", slug or ""))
         year = int(m.group(1)) if m else None
 
     # The site writes "<Title> (YYYY) <descriptors>", so the bracketed year marks
-    # where the work's name ends and its packaging begins.
-    head = re.split(r"\s*[\(\[{]\s*(?:19|20)\d{2}\s*[\)\]}]\s", brandless, maxsplit=1)[0]
+    # where the work's name ends and its packaging begins. Its own typo sometimes
+    # drops the closing bracket ("Aladin 2 (1994 Hindi Dubbed Movie"), which is
+    # still that seam.
+    head = re.split(r"\s*[\(\[{]\s*(?:19|20)\d{2}\s*(?:[\)\]}]\s|(?=\s|$))",
+                    brandless, maxsplit=1)[0]
 
     slug_text = _pretty_slug(slug or "")
     season_m = (SEASON_RE.search(head) or SEASON_RE.search(brandless)
@@ -542,11 +564,22 @@ def parse_title(raw_title: str, slug: str = "", explicit_year: int | None = None
 
     stripped, _groups = _drop_packaging_brackets(head)
     stripped = _strip_packaging(stripped)
-    stripped = re.sub(r"\b(?:19|20)\d{2}\b", " ", stripped)
+    without_year = re.sub(r"\b(?:19|20)\d{2}\b", " ", stripped)
+    # A work can be named for a year ("1922", "1917", "2018"), so the inline-year
+    # strip only runs when something survives it.
+    if _bare(without_year):
+        stripped = without_year
     stripped = re.sub(r"[\(\[\{]\s*[\)\]\}]", " ", stripped)
-    clean = re.sub(r"\s+", " ", stripped).strip(" -–:,,.\u00a7")
+    # The site sometimes forgets to close a bracket, which leaves an opener
+    # holding nothing but the descriptors we just stripped.
+    for opener, closer in (("(", ")"), ("[", "]"), ("{", "}")):
+        if stripped.count(opener) != stripped.count(closer):
+            stripped = stripped.replace(opener, " ").replace(closer, " ")
+    clean = _bare(stripped)
     if not clean:
-        clean = scrub_brand(_pretty_slug(slug or "").replace("_", " ")) or brandless
+        # Nothing survived the descriptor run: trust the site's own words, in the
+        # case it printed them, over the lowercased slug.
+        clean = _bare(head) or _capitalize(scrub_brand(_pretty_slug(slug or ""))) or brandless
 
     lowered = f" {re.sub(r'[^a-z ]+', ' ', (brandless + ' ' + slug_text).lower())} "
     languages = [w for w in LANGUAGE_WORDS if f" {w} " in lowered or f"_{w}_" in f"_{slug_text.lower()}_"]
@@ -568,9 +601,26 @@ def parse_title(raw_title: str, slug: str = "", explicit_year: int | None = None
     }
 
 
+def _bare(text: str) -> str:
+    """Collapses the whitespace and separator litter a token strip leaves behind."""
+    return re.sub(r"\s+", " ", text or "").strip(" -–:,,.\u00a7")
+
+
+def _capitalize(text: str) -> str:
+    """Upper-cases each word's leading letter, leaving any inner case untouched."""
+    return re.sub(r"(^|\s)([a-z])", lambda m: m.group(1) + m.group(2).upper(), text or "")
+
+
 def _strip_packaging(text: str) -> str:
     """Drops the release-descriptor run the site bolts onto its <h1>/<h2>."""
     out = text
+    # A work can be named for one of these words ("Dual", "Complete Unknown",
+    # "Movie"), so the leading token is masked out of the strip and put back
+    # afterwards; nothing else in the string is allowed to match the sentinel.
+    lead_m = re.match(r"\s*([^\W_]+)", out, re.U)
+    lead = lead_m.group(1) if lead_m else ""
+    if lead:
+        out = out[:lead_m.start(1)] + "\x00" + out[lead_m.end(1):]
     for _ in range(2):
         out = re.sub(
             r"""\b(?:480p|576p|720p|1080p|2160p|4k|uhd|hd|sd|web-?dl|webrip|bluray|"""
@@ -584,7 +634,7 @@ def _strip_packaging(text: str) -> str:
                      r"voot\s*original|sonyliv|zee5|altpalicki|hoichoi|aha|hulu|brazzers|"
                      r"atrangi+i|bablu\s*tv|ullu\s*original|uucinema|bomju|jio)\b",
                      " ", out, flags=re.I)
-    return out
+    return out.replace("\x00", lead) if lead else out
 
 
 # ---------------------------------------------------------------------------
@@ -617,8 +667,12 @@ def _info_block(html: str) -> dict:
         if not label_m:
             continue
         label = _clean_text(label_m.group(1)).lower()
+        # The rolling "Updated Webseries" strip is the site advertising other
+        # posts in this page's grid; it is not metadata about this work.
+        if SIDEBAR_LABEL_RE.match(label):
+            continue
         value_html = label_m.group(2)
-        links = [(_clean_text(t), href) for href, t in
+        links = [(_meaningful(_clean_text(t)), href) for href, t in
                  re.findall(r"""<a\b[^>]*?href=["']([^"']+?)["'][^>]*>(.*?)</a>""",
                             value_html, re.S | re.I)]
         value = _meaningful(_clean_text(value_html))
@@ -627,7 +681,7 @@ def _info_block(html: str) -> dict:
             fields["__genres"] = [t for t, _ in links if t] or ([value] if value else [])
         if label.startswith("category"):
             fields["__category"] = value
-            fields["__category_href"] = next((h for _, h in links), "")
+            fields["__category_href"] = next((h for _, h in links if h), "")
     return fields
 
 

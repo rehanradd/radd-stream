@@ -1076,3 +1076,95 @@ pipeline; that is the operator's call too.
 no production catalog written. `merge_catalogs` contract tests confirm `_source_family`
 reads this staging shape (`sources` present → `staging`) and `_post_release_rows` joins on
 `post_canonical_key`, which is how this schema links releases.
+
+## 2026-10-27 — Session: the six audit findings in the pagalmovies importer, landed (Qoder)
+
+**Goal:** the audit of the fully-crawled `pagalmovies.db` (6,842 posts / 9,447 releases)
+named six defects. This session lands all six, each with an offline test, then heals the
+~100 staging rows they had already written, and pushes. Staging isolation held throughout:
+`fast_fetch.db` was opened read-only to count it and never written (203 posts, mtime 01:59,
+0 pagalmovies rows — unchanged since before the crawl).
+
+**The six, as shipped in `import_pagalmovies.py`:**
+
+1. **A title that is a year survived its own cleaning.** `1922 (2017) English Movie` came back
+   as the lowercased slug (`1922 2017 english movie`) because the inline-year strip ran
+   unconditionally and the empty result fell through to the slug. The strip is now guarded:
+   it runs only when something survives it, and a **bracketed** year is read before a bare
+   one, because the bracket is where the site's packaging starts and a bare four-digit run can
+   be the work's name (`1922`, `1917`, `2018` are all films here). Years still come from the
+   site's Release Date first where it has one.
+2. **A descriptor that opens a title was eaten.** `_strip_packaging` drops `dual`, `complete`,
+   `movie`, `film`, `south`, `latest` wherever they sit, so *Dual* → nothing and
+   *Complete Unknown* → *Unknown*. The leading token is now masked out of the strip and put
+   back; only one call site exists, and it is always the page's own `<h1>`. The empty-result
+   fallback also keeps the site's title case instead of the lowercased slug.
+3. **`genres='N/A'` (95 rows).** `_info_block` ran `_meaningful()` over a row's plain text but
+   not over its link labels, and the site's placeholder genre is a link:
+   `<b>Genre:</b> <a href="…/genre/N/A/1.html"><b>N/A</b></a>`. Labels now go through
+   `_meaningful` too, so those rows store NULL like the other placeholders.
+4. **Placeholder sizes.** Pages carry `0.000 MB` / `-1.000 B` / `1.499 KB` for files they never
+   measured; 6 releases had them stored as 0–32,763 bytes. `parse_size_to_bytes` now returns
+   NULL for anything under a megabyte — no tier of a feature is that small, so a sub-MB number
+   is the absence of a measurement, not a measurement. (`size_text` is still not a column: the
+   releases shape is `merge_catalogs`' contract, and adding a column to staging to keep a
+   string we now reject was not worth the ripple.)
+5. **`Pagal Premi (20012)`** — the site mistypes its own packaging year. A bracketed digit run
+   longer than four is now packaging, never a name and never a year.
+6. **The origin rotated mid-audit** (`www.pagalmovies.fit` → `www.pagalmovies.casa`, the old one
+   301s). `BASE_URL`/`SITEMAP_URL` point at the live origin. Queue entries and rows written
+   before the rotation still parse, because `_is_site_url` decides membership by host pattern,
+   not by `BASE_URL`.
+
+**Two things the work uncovered that were not on the list, and are now fixed too:**
+`SITE_HOST_RE` was `pagalmovies?\.[a-z]{2,}|pagal\s?movies` — the second alternative is
+unanchored, so `pagalmovies-copy.example.com` counted as the site and the crawler would follow
+its redirects as ours. It is now label-anchored (`(?:^|\.)pagal\s?movies?\.[a-z]{2,}`), which
+is also what keeps the `.fit`/`.casa` pair working. And an **unclosed** site bracket
+(`Aladin 2 (1994 Hindi Dubbed Movie`) left `( Hindi` hanging off a title: the head-seam split
+no longer requires the closing character, and a bracket whose partners are missing is dropped.
+
+**Healed in staging, offline, from data already stored** (no re-crawl, no production write;
+`/tmp/pm_heal.py`, DB copied first to `pagalmovies.db.pre-heal-20261027`): 8 `clean_title`
+values, 95 `genres='N/A'` → NULL (NULL rate 33 → 128), 6 sub-MB `size_bytes` → NULL, and the
+`Updated Webseries` row stripped from 6,839 `raw_meta`/`raw_json` blobs. `PRAGMA integrity_check`
+ok, 0 orphan releases, 0 orphan sources, 0 duplicate keys.
+
+**The sixth sidebar finding, for the record:** the site publishes one identical rolling strip —
+`Hunkkaar: The Roar (2026) S01 Jiohotstar …| Waiting Hai (2026) … | Musafir Cafe (2026) …` —
+inside `<div class="Fun">` on 2,999 of 3,000 sampled pages. It is not metadata about the work;
+it names three other titles and their platforms, and it was the only place outside
+`source_site`/`url`/resource URLs where those platform words sat.
+
+**Deliberately not done.** *7 rows whose stored year is the site's SEO title rather than its
+own Release Date* (`the-40-year-old-virgin_1965`, `300_2006`, `cabin-fever_2002`,
+`halloween-ii_2005`, `sister-act-2-…_1997`, `dead-alive-braindead_1992`, `jersey-boys_2012`)
+would rekey under the precedence rule. Five have a free target key; **two collide with rows that
+already exist** — the same film published on two pages with different years in the slug — so
+correcting them is a merge decision (which row wins, whose releases survive), not a rewrite.
+Left alone and named here rather than half-applied. *Titles that keep a trailing language word*
+(`Pagal Premi Bhojpuri`) keep it: `_strip_packaging` has never stripped language names, and
+doing so would take it away from rows like `Political Khiladi (ko 2) South Indian Hindi` that
+the catalog already ships; that is a convention change, not a defect fix. *Stored `.fit` URLs*
+in 6,842 `posts.url` / 9,447 `releases.bridge_url` / 9,447 `sources.*_url` rows are not
+rewritten to `.casa`: they still resolve through the redirect, `sitemap_cache.loc` is the queue's
+primary key, and rewriting it would re-queue all 16,018 URLs as new. *Still no merge into
+`fast_fetch.db`.* *Still untracked, and not mine to push:* `import_filmiyin.py` /
+`test_filmiyin_import.py`, `import_mp4moviez.py` / `test_mp4moviez_import.py`, and the
+`App/` changes sitting in this same checkout.
+
+**Checks:** `importers/test_pagalmovies_import.py` **54 OK** (was 44 — the new tests are
+`TestAuditHygiene` plus the placeholder-size, placeholder-genre and sidebar cases),
+`importers/test_filmiyin_import.py` 38 OK, `test_database.py` 64 OK, `test_vidout.py` 6 OK,
+and `test_redact`, `test_api_v2`, `test_admin_panel`, `test_catalog_api`,
+`test_provenance_stamping`, `test_operator_isolation`, `test_media_search` all OK;
+`import fast_fetch, viewer, merge_catalogs, import_pagalmovies, import_filmiyin` OK.
+`test_chain_walk_stores_every_provider` was **silently hitting the live network** — it called
+`resolve_links` without patching `http_get_once`, so it passed or failed on the mirror host's
+rate limit and would have gone red for reasons unrelated to the code. It now patches the chain
+and is offline like the rest of the file. Live verification was done separately, deliberately:
+`_parse_page` against three URLs taken from the new origin (titles, sizes and info-block keys
+clean, sidebar gone) and against a retired-`.fit` queue entry that 301s to `.casa` and still
+parses with `genres=None` and `size_bytes=None`. `merge_catalogs` re-checked on the healed rows:
+`_source_family` → `staging`, `_collect_staging_post` returns `1922` / 2017 / `Crime, Drama,
+Horror` with `317.36 MB` prints — into a temp target only.
