@@ -669,13 +669,16 @@ even if the app was never opened.
 ## 21. Growth, monetization and payments
 
 ### M-MON-01 — Payment ledger + approval + entitlement
-**Status: BUILT (server + app), device pass outstanding.** The ledger, the two routes, the admin
+**Status: BUILT (server + app + deployed), device pass outstanding.** The ledger, the two routes, the admin
 approval screen and the client round-trip all exist and are tested; what is still owed is a phone
-in a hand (see the acceptance line below). Steps 1–7 are done as written. Step 8 is done **except**
-the quality clause, deliberately: it says to "read the gate from remote config", and remote config
-publishes no quality field, so gating resolutions in the client would have been an invention. The
-real prerequisite is M-MON-05's server-side `max_quality` in the PlayBundle, which does not exist
-yet — do not close that gap from the app.
+in a hand (see the acceptance line below). Steps 1–7 are done as written. Step 8's quality clause
+is now satisfied the honest way: remote config *does* publish a quality field
+(`feature_flags.quality_gate`), it defaults off, and the client gates on it rather than on a guess —
+see M-MON-05 for what is still server-side.
+**Deployment fact that was blocking all of this:** the installed nginx swallowed every v2 route
+behind `location ^~ /api/ { return 403; }`, so `/api/v2/account*` and
+`/api/v1/app/remote-config` were unreachable from any viewer's phone. Both are exposed now; the
+runbook records the exact blocks and the backup path.
 **Origin:** `MASTER_ADMIN_MONETIZATION_SPEC.md` §2–3 (tables `app_users`, `payment_transactions`,
 admin pending list, 1-click approve); `PAKISTAN_OPERATOR_GUIDE.md`.
 **Current state (was: UI + settings only, TID stays on the phone, `vip_until` never written):**
@@ -745,11 +748,12 @@ ladder (shows locked rungs with "VIP"), and the server refuses to mint handles a
 **Acceptance:** free user sees 720p playable, 1080p/4K locked with an upgrade path; VIP sees all.
 
 ### M-MON-06 — Maintenance mode UI
-**Status: BUILT with one deviation.** `RemoteConfigWatcher` polls `/api/v1/app/remote-config` every
-5 min and persists the switch; `MainActivity` replaces the nav graph with `MaintenanceScreen` while
-it is on. The spec's "all navigation blocked **except Settings**" is NOT honoured — Settings is
-covered too, so a viewer pointed at a server stuck in maintenance has no way to change server. Fix
-that before calling this row done.
+**Status: BUILT.** `RemoteConfigWatcher` polls `/api/v1/app/remote-config` every 5 min and persists
+the switch; `MainActivity` replaces the nav graph with `MaintenanceScreen` while it is on. The spec's
+"all navigation blocked **except Settings**" is honoured by the only part of Settings a viewer
+actually needs under a wrongly-flagged server: the notice carries "Use a different server", which
+routes to `Screen.Setup` (the address field) and stays available until the flag clears. Full
+Settings remains behind the overlay — the escape is to another server, not to the rest of the app.
 **Build:** `HomeViewModel` observes `maintenanceMode`; show a full-screen "We'll be back" with retry
 and a link to Telegram; all navigation blocked except Settings. Admin already has the switch.
 **Acceptance:** toggling the admin flag changes the app within one refresh, no reinstall.

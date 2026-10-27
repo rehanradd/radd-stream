@@ -769,3 +769,85 @@ feature's contract.
 **Checks:** `python3 -S Fast_Fetch/test_database.py` and `test_vidout.py` unchanged (no backend
 edit); Android `:app:compileDebugKotlin :app:testDebugUnitTest` green — see `App/AGENTS.md`
 Session 13 for the counts.
+
+---
+
+## 2026-10-27 — Session: the switch shipped, the edge swept, nginx was the blocker (Qoder)
+
+- **Operator switch deployed.** `radd-stream.service` was still running a process that predated the
+  payment ledger, so `/api/v1/app/remote-config` served only three flags. Restarted; it now serves
+  `feature_flags.quality_gate = false` — the decided shape: the 1080p/4K charge exists in `/admin`
+  and is off, because withholds catalog content rather than a feature a viewer was free to use.
+- **The real production blocker was nginx, not code.** The installed site proxied only
+  `/api/v1/posts`, `/api/v1/stats`, `/api/v1/stream`, and `location ^~ /api/ { return 403; }`
+  swallowed everything else — so from outside, every `/api/v2/account*` route and
+  `/api/v1/app/remote-config` answered **403**. The app had been written against endpoints no
+  viewer could reach. Added those two locations (accounts allow POST/PUT/DELETE because the server
+  authenticates them itself with its bearer key), kept the catch-all deny, backed up the previous
+  file to `/etc/nginx/radd-stream.pre-v2.bak`, `nginx -t` before reload. Verified publicly:
+  `remote-config` 200, `account/entitlement` 401 with its own problem body, `account/payment`
+  POST 401 without a key, `/api/v2/health` and `/api/admin` still 403.
+- **`sweep_public_edge.py` run for real, on a snapshot.** Built `/tmp/edge_snapshot.db` (31 MB:
+  15 posts per site × 18 sites including 18+ rows, plus only the `releases`/`download_sources`/
+  `post_sources`/`cat_*` rows those posts join to) rather than copying the 6.2 GB live catalog;
+  the live file was opened read-only and never written. Two things it needed to be told: the v1↔v2
+  bridge is `cat_work_sites.post_id` (not `canonical_key` ↔ `work_key`, which match nothing), and
+  `cat_work_sites` must be copied once, by post id, or its unique `(work_id, page_url)` trips.
+- **Finding, and the fix.** The sweep exits 0 while printing a hand-review list, and that list was
+  the value: public JSON carried `"Ozark S01E01 ModiPlay"` and `"480P [GDFlix] 1.89 GB"` in
+  `release_title`, because `scrub_text()` deletes only tokens in `BASE_NEEDLES` and those four
+  server names were not among them. Added `gdflix`, `modiplay`, `nxstream`, `screenscape` after the
+  check the file itself requires — zero rows of `posts` contain the token in `clean_title` or
+  `title`. **`"Nexus"` was left out on purpose** (it titles real films; a blanked title is worse
+  than a brand left for a human), same reasoning for `"Short"` and `"Torrent"`. After the restart
+  the two posts that leaked them name none of the four.
+- **Mistake worth recording:** the first needle was typed `modipley`, which scrubs nothing and looks
+  correct in a test that only checks the list is non-empty. The spelling that matters is the one in
+  the data — `ModiPlay` → `modiplay`. Verified by scrubbing the real string, not by re-reading the
+  diff.
+
+**Checks:** `test_redact.py` 49 OK, `test_database.py` 64 OK, `test_vidout.py` 6 OK,
+`test_admin_panel.py` 56 OK, `setup_check.py` all pass, `sweep_public_edge.py` exit 0 before and
+after the fix. App: `:app:compileDebugKotlin :app:testDebugUnitTest` → 452 tests / 55 suites /
+0 failures with `OVERLAP=NO`. Commits `fbd0000…50edcb4` pushed to `master`.
+
+---
+
+## 2026-10-27 — Session: filmiy.in gets its own staging importer (Qoder)
+
+- **New module, no dispatcher edits.** `Fast_Fetch/importers/import_filmiyin.py` (~800 lines,
+  stdlib only) scrapes `https://filmiy.in` into `/home/ubuntu/radd-stream-data/filmiyin.db`
+  and nothing else. `fast_fetch.py`, `viewer.py` and the production catalog were not touched —
+  strict staging isolation, and no merge without the operator's word.
+- **The task spec's recon was wrong and the code follows the site, not the spec.** It claimed a
+  "protection layer: none" and supplied a sample post with 0 embeds and two download mirrors.
+  In reality every page sits behind a Cloudflare JS challenge and the site's only mirrors are
+  `new1.filesdl.co/cloud/<Laravel-encrypted token>`. Those are stored verbatim as
+  `js_required` — the §4.12 greenmotors.cc precedent — never dropped, `is_temporary=0`.
+- **Four bugs the first sample run exposed:**
+  1. related-post cards were harvested as this title's downloads (24 releases where 3 exist) →
+     same-host links are navigation, excluded in `harvest_links`;
+  2. releasing per `canonical_key` silently deleted the earlier page's prints when one title is
+     published on a season page and an episode-pack page → added `releases.origin_url` and
+     replace per page, with a regression test;
+  3. title-derived keys stranded rows every time the cleaner improved (12 posts became 33 after
+     an edit) → `build_canonical_key` derives from the URL slug, right-trimming packaging tokens
+     but keeping numeric titles (`3-idiots`, `jailer-2`) by only eating a number after
+     `episode/ep/part/extras/unseen/bonus/add`;
+  4. `imagecloud_*` thumbnails from the shelf became this title's backdrops → screenshots are
+     scoped to `/uploads/posts/` and must match the slug.
+- **18+ flagging is deliberately narrower here.** UnCut appears on every title, so it is not a
+  signal; bare `sex` is not either (`Gail Daughtry and the Celebrity Sex Pass` is a real film and
+  its title is preserved whole). Ambiguous words — `bold`, `lust`, `sensual` — count only in the
+  site's own labels, never in a synopsis, because a false positive hides a mainstream series from
+  every display surface: `Dil Padosi` was flagged by "a bold, glamorous couple" and now is not,
+  while `Mocktail (18+)` still is.
+- **Provenance stops at this edge.** `scrub_brand()` on display strings, tracker hosts excluded,
+  same-site links dropped, and a leak sweep over the staging rows returns NONE.
+- **Scale:** `sync` queues 5,740 URLs; a 150-page sample crawl produced 147 posts / 716 releases
+  / 716 sources across 480p·720p·1080p·2160p, idempotent on re-crawl.
+- **Not done, on purpose:** `fast_fetch.py` dispatcher integration (DEFAULT_DOMAINS,
+  `normalize_url`, a `sync_sitemaps()` block, `SITE_CHOICES`) and the remaining 5,590 queued pages.
+
+**Checks:** `importers/test_filmiyin_import.py` 38 OK (all offline, `http_get` patched),
+`test_database.py` 64 OK, `test_vidout.py` 6 OK, `python -c "import fast_fetch"` OK.

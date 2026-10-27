@@ -1227,6 +1227,56 @@ was building the same working tree during this sprint; the final serialized run 
 maintenance overlay, the VIP upsell card and the recents rail are compile/unit-verified only.
 The proxy is exercised over real HTTP in `LocalMediaProxyTest`, but not by ExoPlayer.
 
-**GitHub branch/commit/push result:** App changes committed locally in this session; not
-pushed (no push requested). **Oracle deployment result:** not deployed.
+**GitHub branch/commit/push result:** App changes committed locally in this session; a later
+session pushed them (`d3c54d1` carries this sprint's tree to `master`). **Oracle deployment
+result:** not deployed from App — the app is not a server process; the API that serves it was
+restarted, see Session 15.
+
+### Session 15 — The gate became an operator switch, the maintenance notice kept a door, and a tapped keep plays its own bytes (2026-10-27)
+
+**What this session was for:** close the three gaps Session 14 left open, each of which was a
+decision rather than a defect, and get the tree verified green on an idle VM before shipping.
+
+**1. The VIP quality gate answers to the operator, and defaults off.** A worker had written a
+hard "1080p/4K is VIP" rule into `DetailViewModel`/`PlayerViewModel` on a brief that asked for
+something softer, and shipping it would have hidden catalog content from every viewer the ledger
+has not confirmed — including all signed-out ones. The rule stayed; what changed is that it now
+reads `feature_flags.quality_gate`, which `admin_panel.py` publishes and `/admin` toggles, and
+which **defaults to 0** where the three flags beside it default to 1, because those hide a feature
+a viewer was already free to use and this one withholds content. `test_admin_panel.py` pins that
+inverse default (a flip to `1` stays visible in `/admin`, and a second save of `0` clears it).
+Every call site now goes through one pure function, `VipQualityGate.premiumAccess(gateEnabled,
+isVip) = isVip || !gateEnabled`, so the detail page and the player cannot disagree; identity is
+asserted when the switch is off, meaning the same list object comes back out of `gate()`.
+
+**2. A maintenance-flagged server is no longer a brick.** `MaintenanceScreen` covered the whole app
+including the screen that changes which server the app talks to, so a wrongly-flagged deployment
+had no escape. The notice now carries "Use a different server" → `Screen.Setup`, and the escape is
+dropped as soon as the flag clears.
+
+**3. Tapping an in-app keep plays the file that is already on the device.** Session 14 made
+`PlaybackService` prefer a kept copy at load; the Downloads screen still sent every tap back out
+through `/api/v1/stream`, so a kept title needed the resolver, a live upstream and a data plan.
+`DownloadsViewModel.playRoute()` now asks the engine by task key and routes through one pure
+truth table (`KeepPlayback.route`): local wins whenever the engine can name a complete file —
+including a task that never got a handle — otherwise the handle, otherwise `NothingPlayable`,
+which says so instead of navigating to an empty player. `OfflineCacheEngine.playableUri` and the
+new `playableUriForSourceKey` share one `serveUri`, so the player and the list cannot disagree
+about what "complete" means.
+
+**Tests / build:** `/tmp/qbuild3.sh :app:compileDebugKotlin :app:testDebugUnitTest` → BUILD
+SUCCESSFUL, **452 tests / 55 suites / 0 failures**, all 55 result XMLs newer than the run,
+`OVERLAP=NO`. Backend in the same tree: 49 `test_redact` + 64 `test_database` + 6 `test_vidout` +
+56 `test_admin_panel`, `setup_check.py` all pass. `PosterCardProvenanceTest` still self-skips on
+aarch64, and `/tmp/qbuild.sh`'s foreign-build detector was replaced: it matched another agent's
+`bash -c` that merely *mentions* `GradleWrapperMain`, which deadlocked this session's queue
+against a session that was waiting for a build to start. The new one counts only a `java` process.
+
+**Deliberately not verified:** no device or emulator was used, so the locked-rung card, the
+maintenance notice and its escape, and Media3 opening a loopback URL are compile/unit-verified only.
+
+**GitHub / Oracle:** `d3c54d1`, `6449970`, `b4fee9a`, `50edcb4` pushed to `master` on the explicit
+clean URL. `radd-stream.service` restarted (the running process predated the payment ledger, so
+`/remote-config` was missing `quality_gate`), and two nginx blocks were added because every
+`/api/v2/account*` route and `remote-config` were a public 403 — see `ORACLE_DEPLOYMENT.md`.
 
