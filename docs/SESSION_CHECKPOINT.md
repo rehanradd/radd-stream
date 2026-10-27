@@ -2,6 +2,30 @@
 
 Update this file after each independently verified milestone so work can resume across accounts, tools, and usage limits.
 
+## Overnight fleet contract — 2026-10-28 (owner approved full autonomy, live API frozen)
+
+- **Fleet, verified:** qoder1 (`~/.qoder`) = App region/settings + snapshot work; qoder2
+  (`~/.qoder_account2`, me) = fleet orchestrator; qoder3 (`~/.qoder_account3`) = kisskh
+  importer; `agy` (Antigravity) = roadmap/supervision; `vm_monitor` = pane tail. No Gemini
+  CLI process exists on this host.
+- **Rules enforced:** one Gradle build at a time (prefer `/tmp/qbuild.sh`; qoder1 ran one
+  direct build at 00:24, no other build was started); at most two crawlers, both `nice`d;
+  live API (`merged_catalog_20261025.db`, 115,938 posts) is frozen; staging DBs only; no
+  secrets echoed; no `git add -A`, no force-push.
+- **Site roster, verified live by probe:** 21 existing importers + kisskh (building) +
+  dramacool.li + 5movierulz.green + moviecok.xyz + levidia.ch = 26 catalogs; plus four
+  resolver adapters (vidsrc.sh, superembed.stream, vidlink.pro, 2embed.cc) = 30 integrations.
+  Dead replacements ruled out: desiserials (.org parked, .com redirect), moviesflix (parked),
+  isaimini (/lander), animepahe (challenge), asianc (timeout), apnetv (403), dramacool.ch
+  (reset), kissasian.vip (for sale).
+- **mp4moviez:** 29,848 posts stored; remaining 3,119 URLs are 2,565 adult pages + 442
+  category listings + 112 Unicode-titled posts, and the site moved those pages to JS-gated
+  `data-key` download buttons. The old `dl.php` parser cannot see links; a resolver upgrade
+  is the follow-up, not a crawl outage.
+- **Subtitle rule:** every `.vtt/.srt/.ass` track becomes its own `sources` row with
+  `playback_type='subtitle'`, and the full track map is kept in `raw_meta`. Tracks are never
+  dropped or deduplicated by language.
+
 ## Current checkpoint — 2026-10-27 (the download route was 403; it is open, and the client half was declined on purpose)
 
 - **Goal:** finish the server half of M-MON-04 / P-B-02 / P-B-03, the monetization items
