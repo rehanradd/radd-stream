@@ -288,6 +288,52 @@ fun LoadingState(modifier: Modifier = Modifier) {
 }
 
 /**
+ * The compact cousin of [ErrorState]: a page that already shows content but could not
+ * finish loading — a failed next page, a detail reload that came back empty — says so in
+ * one line with a retry, instead of replacing the content the viewer can already see.
+ *
+ * This exists because `ErrorState` is a full-screen placeholder, and every screen here
+ * only reached for it when its list was EMPTY. A load that failed on page 3 therefore
+ * rendered nothing at all: the viewer saw a shorter list than the server has and no way
+ * to know the difference.
+ */
+@Composable
+fun InlineLoadFailure(
+    message: String,
+    onRetry: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            Icons.Default.Info,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.error,
+            modifier = Modifier.size(20.dp),
+        )
+        Spacer(Modifier.width(10.dp))
+        Text(
+            text = message,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.weight(1f),
+        )
+        TextButton(
+            onClick = onRetry,
+            modifier = Modifier.heightIn(min = 48.dp),
+        ) {
+            Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
+            Spacer(Modifier.width(6.dp))
+            Text("Retry")
+        }
+    }
+}
+
+/**
  * A horizontal content rail. Kept generic so Home can render every row (newly
  * added, per-type, continue watching) with one keyed, recycled, lazily-composed
  * strip — cheap on low-RAM devices.

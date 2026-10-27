@@ -68,7 +68,7 @@ class BrowseViewModel @Inject constructor(
         val state = _uiState.value
         if (!state.hasMore || state.loading || state.loadingMore) return
         loadJob = viewModelScope.launch {
-            _uiState.update { it.copy(loadingMore = true) }
+            _uiState.update { it.copy(loadingMore = true, error = null) }
             val next = state.page + 1
             try {
                 val resp = catalogRepository.getPosts(type = type, page = next, limit = PAGE)

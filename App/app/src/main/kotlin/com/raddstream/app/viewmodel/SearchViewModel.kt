@@ -96,6 +96,20 @@ data class SearchFilters(
 
 data class TypeGroup(val label: String, val typeKey: String?, val items: List<Post>)
 
+/**
+ * How many results to claim, in words the viewer can trust.
+ *
+ * [loaded] is what this device has paged in and passed the client-side filters;
+ * [serverTotal] is what the server says the query matches. They differ whenever the
+ * viewer has not scrolled to the end OR has set a year range, which the ledger has no
+ * column for, so it is narrowed here. Saying "37 results" while the server holds 4,000
+ * of them is the difference between a filtered catalog and a broken-looking one.
+ */
+internal fun resultsSummary(loaded: Int, serverTotal: Int, hasMore: Boolean): String = when {
+    hasMore || loaded < serverTotal -> "Showing $loaded of $serverTotal"
+    else -> "$loaded result" + if (loaded == 1) "" else "s"
+}
+
 data class SearchUiState(
     val query: String = "",
     val isLoading: Boolean = false,
@@ -105,6 +119,8 @@ data class SearchUiState(
     val sort: SearchSort = SearchSort.DEFAULT,
     val groups: List<TypeGroup> = emptyList(),
     val resultCount: Int = 0,
+    /** What the server says the query matches, not merely what this page holds. */
+    val serverTotal: Int = 0,
     val recents: List<String> = emptyList(),
     val page: Int = 1,
     val hasMore: Boolean = false,
@@ -212,7 +228,7 @@ class SearchViewModel @Inject constructor(
         if (!state.hasMore || state.isLoadingMore || !state.hasSearchIntent) return
         moreJob?.cancel()
         moreJob = viewModelScope.launch {
-            _uiState.update { it.copy(isLoadingMore = true) }
+            _uiState.update { it.copy(isLoadingMore = true, error = null) }
             val next = state.page + 1
             try {
                 val resp = catalogRepository.getPosts(
@@ -226,7 +242,13 @@ class SearchViewModel @Inject constructor(
                     limit = PAGE_SIZE,
                 )
                 rawResults = rawResults + resp.results
-                _uiState.update { it.copy(page = next, hasMore = resp.results.size >= PAGE_SIZE && next < resp.totalPages) }
+                _uiState.update {
+                    it.copy(
+                        page = next,
+                        serverTotal = resp.total,
+                        hasMore = resp.results.size >= PAGE_SIZE && next < resp.totalPages,
+                    )
+                }
                 recompute()
             } catch (cancelled: CancellationException) {
                 throw cancelled
@@ -248,7 +270,7 @@ class SearchViewModel @Inject constructor(
             _uiState.update {
                 it.copy(
                     isLoading = false, error = null, groups = emptyList(), resultCount = 0,
-                    hasSearched = false, hasMore = false, page = 1,
+                    serverTotal = 0, hasSearched = false, hasMore = false, page = 1,
                 )
             }
             return
@@ -274,6 +296,7 @@ class SearchViewModel @Inject constructor(
                         isLoading = false,
                         hasSearched = true,
                         page = 1,
+                        serverTotal = resp.total,
                         hasMore = resp.results.size >= PAGE_SIZE && resp.totalPages > 1,
                         error = null,
                     )

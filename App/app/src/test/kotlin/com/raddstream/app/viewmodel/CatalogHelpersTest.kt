@@ -67,4 +67,19 @@ class CatalogHelpersTest {
         val past = KeptItem("5", "T", "480p", 0, 0, KeepState.EXPIRING, expiresAtMillis = now - 1_000)
         assertEquals(0L, past.remainingMillis(now))
     }
+
+    @Test
+    fun `a partial page never claims to be the whole answer`() {
+        // The old header said "37 results" for a query the server reported as 4,112 strong,
+        // because it counted only the page this device had paged in.
+        assertEquals("Showing 37 of 4112", resultsSummary(loaded = 37, serverTotal = 4112, hasMore = true))
+        assertEquals("Showing 37 of 4112", resultsSummary(loaded = 37, serverTotal = 4112, hasMore = false))
+    }
+
+    @Test
+    fun `a complete answer is counted plainly`() {
+        assertEquals("1 result", resultsSummary(loaded = 1, serverTotal = 1, hasMore = false))
+        assertEquals("12 results", resultsSummary(loaded = 12, serverTotal = 12, hasMore = false))
+        assertEquals("0 results", resultsSummary(loaded = 0, serverTotal = 0, hasMore = false))
+    }
 }

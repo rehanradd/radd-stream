@@ -29,7 +29,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.raddstream.app.ui.components.EmptyState
 import com.raddstream.app.ui.components.ErrorState
+import com.raddstream.app.ui.components.InlineLoadFailure
 import com.raddstream.app.ui.components.PosterCard
 import com.raddstream.app.ui.components.PosterGridSkeleton
 import com.raddstream.app.ui.components.rememberGridEndlessPaging
@@ -66,6 +68,11 @@ fun BrowseScreen(
             state.error != null && state.items.isEmpty() ->
                 ErrorState(message = state.error ?: "Could not load.", onRetry = viewModel::load,
                     modifier = Modifier.padding(contentPadding))
+            state.items.isEmpty() -> EmptyState(
+                title = "Nothing here yet",
+                message = "This category has no titles on the connected server.",
+                modifier = Modifier.padding(contentPadding),
+            )
             else -> LazyVerticalGrid(
                 state = gridState,
                 columns = GridCells.Adaptive(minSize = 120.dp),
@@ -82,6 +89,13 @@ fun BrowseScreen(
                         Box(Modifier.fillMaxWidth().height(60.dp), contentAlignment = Alignment.Center) {
                             CircularProgressIndicator(Modifier.height(28.dp), strokeWidth = 2.dp)
                         }
+                    }
+                }
+                // The grid is what the viewer can see; a page that failed to arrive is not.
+                // Without this a dead next page just looks like a shorter category.
+                state.error?.let { failure ->
+                    item(contentType = "failure") {
+                        InlineLoadFailure(message = failure, onRetry = viewModel::loadMore)
                     }
                 }
             }

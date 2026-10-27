@@ -84,6 +84,7 @@ import com.raddstream.app.ui.components.CatalogImage
 import com.raddstream.app.ui.components.ErrorState
 import com.raddstream.app.ui.components.HdrBadge
 import com.raddstream.app.ui.components.ImageFallbackCard
+import com.raddstream.app.ui.components.InlineLoadFailure
 import com.raddstream.app.ui.components.LoadingState
 import com.raddstream.app.ui.components.Pill
 import com.raddstream.app.ui.components.PrintQualityBadge
@@ -251,6 +252,8 @@ fun DetailScreen(
                 onAskRungs = viewModel::showRungsFor,
                 hasRungs = { season, episode -> !viewModel.ladderFor(season, episode).isEmpty },
                 onOpenVipUpgrade = onOpenVipUpgrade,
+                reloadError = state.error,
+                onRetryReload = viewModel::loadDetail,
                 contentPadding = paddingValues,
             )
         }
@@ -301,6 +304,14 @@ private fun DetailContent(
     onAskRungs: (season: Int?, episode: Int?) -> Unit,
     hasRungs: (season: Int?, episode: Int?) -> Boolean,
     onOpenVipUpgrade: () -> Unit,
+    /**
+     * A reload of a title that is already on screen. Null in the normal case. It arrives here
+     * rather than through the full-screen error because the viewer can already read the
+     * synopsis, the prints and the play button — what failed is the refresh underneath them,
+     * and silently keeping a stale list looks exactly like a successful one.
+     */
+    reloadError: String?,
+    onRetryReload: () -> Unit,
     contentPadding: PaddingValues,
 ) {
     val allPrints = (workPrints + seasons.flatMap { it.episodes.flatMap { e -> e.prints } } + seasons.flatMap { it.packedPrints })
@@ -316,6 +327,12 @@ private fun DetailContent(
         ),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
+        reloadError?.let { failure ->
+            item(contentType = "reload-failure") {
+                InlineLoadFailure(message = failure, onRetry = onRetryReload)
+            }
+        }
+
         item { PosterHeader(post = post, capabilities = capabilities) }
 
         item {

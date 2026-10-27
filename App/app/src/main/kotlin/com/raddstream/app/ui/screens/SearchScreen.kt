@@ -55,6 +55,7 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.raddstream.app.ui.components.EmptyState
+import com.raddstream.app.ui.components.InlineLoadFailure
 import com.raddstream.app.ui.components.ErrorState
 import com.raddstream.app.ui.components.LoadingState
 import com.raddstream.app.ui.components.MediaRail
@@ -67,6 +68,7 @@ import com.raddstream.app.viewmodel.QualityFilter
 import com.raddstream.app.viewmodel.SearchSort
 import com.raddstream.app.viewmodel.SearchUiState
 import com.raddstream.app.viewmodel.SearchViewModel
+import com.raddstream.app.viewmodel.resultsSummary
 
 private val typeChips = listOf(
     "All" to null,
@@ -96,7 +98,15 @@ fun SearchScreen(
         containerColor = MaterialTheme.colorScheme.background,
         topBar = {
             TopAppBar(
-                title = { Text(if (state.hasSearched) "${state.resultCount} results" else "Search") },
+                title = {
+                    Text(
+                        if (state.hasSearched) {
+                            resultsSummary(state.resultCount, state.serverTotal, state.hasMore)
+                        } else {
+                            "Search"
+                        },
+                    )
+                },
                 navigationIcon = {
                     IconButton(onClick = onBackClick) {
                         Icon(Icons.Default.ArrowBack, contentDescription = "Back")
@@ -288,7 +298,7 @@ private fun SearchBody(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(
-                    text = "${state.resultCount} result" + if (state.resultCount == 1) "" else "s",
+                    text = resultsSummary(state.resultCount, state.serverTotal, state.hasMore),
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -313,6 +323,13 @@ private fun SearchBody(
                         Text(if (state.isLoadingMore) "Loading…" else "Load more")
                     }
                 }
+            }
+
+            // A failed next page used to be invisible: the retry path was reachable only when
+            // every group was empty, so a search that died on page 3 looked like a catalog that
+            // simply had three pages.
+            state.error?.let { failure ->
+                InlineLoadFailure(message = failure, onRetry = viewModel::loadMore)
             }
         }
     }
