@@ -9,6 +9,7 @@ import com.raddstream.app.data.cache.CacheOrigin
 import com.raddstream.app.data.cache.CacheTaskEntity
 import com.raddstream.app.data.cache.CacheTaskState
 import com.raddstream.app.data.cache.KeepTtlHolder
+import com.raddstream.app.data.cache.OfflineCacheEngine
 import com.raddstream.app.data.downloads.DeviceDownload
 import com.raddstream.app.data.downloads.DeviceDownloadsRepository
 import com.raddstream.app.repository.CacheRepository
@@ -42,6 +43,11 @@ data class KeptItem(
      * is why [playable] checks it rather than trusting the state alone.
      */
     val streamHandle: String? = null,
+    /**
+     * The engine's opaque task key, so a tap can ask for this keep's own bytes without the screen
+     * ever holding a URL or a host. No provenance and no locator — an identity inside this app.
+     */
+    val sourceKey: String = "",
 ) {
     val progress: Float
         get() = if (bytesTotal > 0) (bytesDownloaded.toFloat() / bytesTotal.toFloat()).coerceIn(0f, 1f) else 0f
@@ -60,6 +66,30 @@ data class KeptItem(
             (state == KeepState.READY || state == KeepState.EXPIRING)
 
     fun remainingMillis(now: Long): Long? = expiresAtMillis?.let { (it - now).coerceAtLeast(0) }
+}
+
+/**
+ * What a tapped keep should do: play the bytes already on this device, play through the
+ * redirector handle, or explain that neither is possible yet.
+ */
+sealed class KeepRoute {
+    data class Local(val uri: String) : KeepRoute()
+    data class Stream(val handle: String) : KeepRoute()
+    object NothingPlayable : KeepRoute()
+}
+
+object KeepPlayback {
+    /**
+     * Local bytes win whenever the engine could serve them: a complete keep needs no network, no
+     * resolver round-trip, and no live upstream, and the loopback server answers `Range` so seeking
+     * stays cheap. [streamHandle] is the fallback for a keep whose file the engine cannot name —
+     * a task written before the resolver ever saw it, or one whose bytes were swept since.
+     */
+    fun route(localUri: String?, streamHandle: String?, playable: Boolean): KeepRoute = when {
+        !localUri.isNullOrBlank() -> KeepRoute.Local(localUri)
+        playable && !streamHandle.isNullOrBlank() -> KeepRoute.Stream(streamHandle)
+        else -> KeepRoute.NothingPlayable
+    }
 }
 
 data class StorageInfo(val freeBytes: Long, val totalBytes: Long) {
@@ -91,6 +121,7 @@ class DownloadsViewModel @Inject constructor(
     private val cacheRepository: CacheRepository,
     private val keepTtl: KeepTtlHolder,
     private val deviceDownloads: DeviceDownloadsRepository,
+    private val cacheEngine: OfflineCacheEngine,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(DownloadsUiState())
@@ -189,7 +220,28 @@ class DownloadsViewModel @Inject constructor(
             state = state,
             expiresAtMillis = expiresAt,
             streamHandle = task.resourceId?.takeIf { it.isNotBlank() },
+            sourceKey = task.sourceKey,
         )
+    }
+
+    /**
+     * Resolve a tap. The engine answers from the file manifest, so a keep the sweep already
+     * truncated — or one that never finished landing — has no local address and falls back to the
+     * handle rather than opening a player on bytes that are not there.
+     */
+    suspend fun playRoute(item: KeptItem): KeepRoute {
+        val complete = item.state == KeepState.READY || item.state == KeepState.EXPIRING
+        val local = if (complete) {
+            runCatching { cacheEngine.playableUriForSourceKey(item.sourceKey) }.getOrNull()
+        } else {
+            null
+        }
+        return KeepPlayback.route(local, item.streamHandle, item.playable)
+    }
+
+    /** The row said Play and nothing behind it is playable any more — say so instead of idling. */
+    fun reportUnplayable() {
+        _uiState.update { it.copy(statusMessage = "That keep is no longer stored on this device.") }
     }
 
     /** The retention window's own expiry for a finished ephemeral keep; null for a permanent one. */

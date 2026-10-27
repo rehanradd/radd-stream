@@ -35,6 +35,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -48,8 +49,10 @@ import com.raddstream.app.ui.components.EmptyState
 import com.raddstream.app.ui.components.Pill
 import com.raddstream.app.viewmodel.DownloadsViewModel
 import com.raddstream.app.viewmodel.KeepState
+import com.raddstream.app.viewmodel.KeepRoute
 import com.raddstream.app.viewmodel.KeptItem
 import com.raddstream.app.viewmodel.StorageInfo
+import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -60,6 +63,9 @@ fun DownloadsScreen(
     viewModel: DownloadsViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsState()
+    // A keep tap has to ask the engine a question before it can navigate, and navigation is a
+    // side effect — so it runs on the composition's own scope and dies with the screen.
+    val clicks = rememberCoroutineScope()
 
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
@@ -120,7 +126,18 @@ fun DownloadsScreen(
                 items(state.items, key = { it.id }) { item ->
                     KeptItemRow(
                         item = item,
-                        onPlay = { onPlay(item) },
+                        // Local bytes first, the redirector handle only if the engine could not
+                        // name a complete file: a keep that is really on the device needs no
+                        // network, no resolver round-trip, and no live upstream to play.
+                        onPlay = {
+                            clicks.launch {
+                                when (val route = viewModel.playRoute(item)) {
+                                    is KeepRoute.Local -> onPlayLocal(route.uri, item.title)
+                                    is KeepRoute.Stream -> onPlay(item)
+                                    KeepRoute.NothingPlayable -> viewModel.reportUnplayable()
+                                }
+                            }
+                        },
                         onCancel = { viewModel.cancel(item) },
                         onRetry = { viewModel.retry(item) },
                     )

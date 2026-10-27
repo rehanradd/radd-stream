@@ -132,8 +132,17 @@ class OfflineCacheEngine @Inject constructor(
      * source. The map is bounded, because a device that has played many kept files must not
      * accumulate one listening socket per title for the life of the process.
      */
-    override suspend fun playableUri(key: CacheSessionKey): String? {
-        val sourceKey = key.sourceKeyOrNull() ?: return null
+    override suspend fun playableUri(key: CacheSessionKey): String? =
+        key.sourceKeyOrNull()?.let { serveUri(it) }
+
+    /**
+     * The same answer for a keep whose task identity the caller already holds, so the Downloads
+     * screen never has to reconstruct a redirector URL it never stored.
+     */
+    suspend fun playableUriForSourceKey(sourceKey: String): String? =
+        sourceKey.takeIf { it.isNotBlank() }?.let { serveUri(it) }
+
+    private suspend fun serveUri(sourceKey: String): String? {
         val committed = fileDao.getBySourceKey(sourceKey).firstOrNull { it.isComplete && !it.isTemporary }
             ?: return null
         val file = File(committed.path)
