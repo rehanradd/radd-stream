@@ -99,6 +99,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -133,6 +135,7 @@ import com.raddstream.app.player.PlayerUiState
 import com.raddstream.app.player.ScreenZone
 import com.raddstream.app.player.SleepMode
 import com.raddstream.app.player.SleepTimerState
+import com.raddstream.app.player.StartPhase
 import com.raddstream.app.player.TapCommand
 import com.raddstream.app.player.subtitles.SubtitleOffset
 import com.raddstream.app.player.subtitles.SubtitleOffsetSheet
@@ -412,7 +415,9 @@ private fun PlayerScreenContent(
             ConnectionErrorCard(err, onRetry = { vm.retryCurrentCandidates() })
         }
 
-        if (state.isBuffering && !state.isPlaying && state.giveUp == null) {
+        if (state.isBuffering && !state.isPlaying && state.giveUp == null &&
+            state.startPhase == StartPhase.NONE
+        ) {
             CircularProgressIndicator(
                 modifier = Modifier
                     .align(Alignment.Center)
@@ -420,6 +425,14 @@ private fun PlayerScreenContent(
                 color = AccentOrange,
                 strokeWidth = 3.dp,
             )
+        }
+
+        // The window before the first frame is the one a viewer cannot tell apart from a
+        // crash, so it is the one window the player narrates out loud. It survives the lock
+        // and Ghost mode for the same reason the buffering spinner does: feedback is not
+        // furniture.
+        state.startPhase.takeIf { it != StartPhase.NONE }?.let { phase ->
+            StartNoticeCard(phase = phase, title = state.pendingTitle)
         }
 
         if (state.isEnded && controlsVisible && !state.locked && !state.pureCinema) {
@@ -1367,6 +1380,44 @@ private fun ConnectionErrorCard(message: String, onRetry: () -> Unit) {
 }
 
 // ── Give-up card (§5 handoff reasons) ──────────────────────────────────────────
+
+@Composable
+private fun StartNoticeCard(phase: StartPhase, title: String?) {
+    val label = phase.label
+    val spoken = if (title.isNullOrBlank()) label else "$label $title"
+    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            modifier = Modifier
+                .padding(horizontal = 32.dp)
+                .semantics(mergeDescendants = true) { contentDescription = spoken },
+        ) {
+            CircularProgressIndicator(
+                modifier = Modifier.size(46.dp),
+                color = AccentOrange,
+                strokeWidth = 3.dp,
+            )
+            Spacer(Modifier.height(14.dp))
+            Text(
+                label,
+                color = Color.White,
+                style = MaterialTheme.typography.bodyMedium,
+                textAlign = TextAlign.Center,
+            )
+            if (!title.isNullOrBlank()) {
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    title,
+                    color = Color.White.copy(alpha = 0.65f),
+                    style = MaterialTheme.typography.bodySmall,
+                    textAlign = TextAlign.Center,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+    }
+}
 
 @Composable
 private fun GiveUpCard(

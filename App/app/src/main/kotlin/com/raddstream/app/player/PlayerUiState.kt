@@ -58,6 +58,27 @@ enum class ViewMode(val label: String) {
 }
 
 /**
+ * What the player owes the viewer while the picture they asked for is not on screen yet.
+ *
+ * The screen used to paint nothing at all in that window: a black frame from the moment the
+ * route opened until Media3 decoded its first frame, which on a slow resolver or a cold
+ * service start is indistinguishable from a crash. The phase is DERIVED, never stored — the
+ * fields below are the ones the listener already publishes — so no second source of truth
+ * can disagree with the player about whether it is still coming.
+ *
+ * [CONNECTING_PLAYER] is the window before the `MediaController` exists; [STARTING] is every
+ * moment after that where no file has been loaded yet. A stall once the file IS loaded is not
+ * a start at all, so it is [NONE] and the plain buffering spinner owns it; a viewer's own
+ * pause is neither.
+ */
+enum class StartPhase(val label: String) {
+    NONE(""),
+    CONNECTING_PLAYER("Connecting to the player…"),
+    STARTING("Starting playback…"),
+    ;
+}
+
+/**
  * Screen orientation while the player is open. Playback entry locks to sensor landscape;
  * the Rotate control flips between the two so a viewer can watch portrait in one tap.
  */
@@ -218,6 +239,24 @@ data class PlayerUiState(
 
     /** True when something is loaded enough to show transport controls. */
     val hasActivePrint: Boolean get() = activeRendition != null
+
+    /**
+     * The one question the screen asks to decide whether it owes the viewer a "coming right
+     * up" notice. Every card that already explains itself wins over this, and once the file
+     * is loaded (`durationMs` known) the notice has nothing left to say — a stall then is
+     * buffering, and a silence is the viewer's own pause.
+     */
+    val startPhase: StartPhase
+        get() = when {
+            connectionError != null -> StartPhase.NONE
+            giveUp != null -> StartPhase.NONE
+            resumeOfferMs != null -> StartPhase.NONE
+            isPlaying -> StartPhase.NONE
+            isEnded -> StartPhase.NONE
+            !connected -> StartPhase.CONNECTING_PLAYER
+            durationMs == 0L -> StartPhase.STARTING
+            else -> StartPhase.NONE
+        }
 
     /**
      * This snapshot as the audio-language policy needs it: the same rows without the
