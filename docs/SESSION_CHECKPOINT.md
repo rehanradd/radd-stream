@@ -45,9 +45,24 @@ Update this file after each independently verified milestone so work can resume 
   subtitle rows stored `unverified`). Player-data was probed independently: eleven live
   `text/vtt` tracks per title (tl, km, en, id, ms, pt, ar, hi, de, fr, es), a sampled track
   returning HTTP 200.
-- **Open items:** mp4moviez parser upgrade for JS-gated `data-key` downloads; kisskh pilot +
-  full ingest + commit (owner: qoder3); moviecok/levidia crawls; no new candidate domains are
-  live (eight probed today all NXDOMAIN/000).
+- **Milestone closed at 02:00 — 30 integrations, verified.** 26 catalogs (21 legacy site
+  parsers plus dramacool, 5movierulz, moviecok, levidia, kisskh) and 4 resolver adapters
+  (vidsrc, vidlink, 2embed live; superembed documented-blocked) = 30. kisskh shipped as
+  `44efa5a` (2 files, 2,784 lines, 129 tests) plus continuity `a311012`; GitHub master is
+  `a311012`. Final kisskh staging: **669 works, 11,550 releases, 12,999 stream + 763 iframe +
+  126,984 subtitle sources**, eleven languages at 11,533 rows each (ar, de, en, es, fr, hi,
+  id, km, ms, pt, tl) from res.cloudinary.com and sub.cdnauto.xyz, every subtitle row honestly
+  `unverified`, 10 adult-flagged works stored and never displayed, episode maps in `raw_meta`
+  for all 669. Other new catalogs: dramacool 544/9,675; 5movierulz 442/6,491; moviecok
+  1,738/7,452; levidia 147/2,976; filmiyin 3,837/17,541. The legacy 21 still carry no
+  subtitle data (audit-proven), so kisskh is the first subtitled catalog.
+- **Live-site constraint learned:** kisskh's REST listing at `per_page=100&_embed=1` returns
+  5.3 MB and crosses a 30 s timeout; `per_page=20` with a 60 s listing timeout works. Do not
+  combine `_fields` with `_embed` on that host — `_embedded` comes back empty.
+- **Open items:** mp4moviez parser upgrade for JS-gated `data-key` downloads; the untracked
+  `import_mp4moviez.py`/`test_mp4moviez_import.py` are unverified OpenRouter drafts (their test
+  imports a module that does not exist) — do not commit them as-is. Eight new candidate
+  domains probed today were all NXDOMAIN, so the roster stays at 26 catalogs.
 
 ## Current checkpoint — 2026-10-27 (the download route was 403; it is open, and the client half was declined on purpose)
 
