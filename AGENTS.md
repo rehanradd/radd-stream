@@ -137,14 +137,14 @@ Every agent — no matter how short the session — MUST do this before ending:
 
 | Component | Status | Phase |
 |---|---|---|
-| Backend: ingestion, SQLite catalog, resolver, REST API | ✅ Implemented in source; Oracle deployment pending | Complete |
+| Backend: ingestion, SQLite catalog, resolver, REST API | ✅ **Deployed and running on this host** — `systemctl is-active radd-stream` → `active`, `fast_fetch.py serve --host 127.0.0.1:8080` behind Nginx | Complete |
 | Android App: server setup, metadata catalog, search | ✅ Implemented; device verification pending | Phase 1 |
-| Android App: details and playback | ⏳ Deferred | Phase 2 |
-| Android GitHub Actions | ⚠️ Workflow files are nested under `App/.github/workflows`; latest observed run failed at Android SDK setup | Needs verification |
+| Android App: details and playback | ✅ Implemented (Media3 playback, favorites, keeps, VIP screen); device verification pending | Phase 2 |
+| Android GitHub Actions | ⛔ **Actions is disabled at the account level**, so no workflow run is a gate right now. The three workflows are at repo-root `.github/workflows` (`ci.yml`, `release.yml`, `backend-ci.yml`) and are ready; the copies under `App/.github/workflows` are inert. Verification is a **local** offline Gradle run on this VM — see `App/AGENTS.md` §1a for the one-build-at-a-time rule. | Owner action needed |
 
 The current Oracle host and its HTTP-only limitations are documented in
-[`ORACLE_DEPLOYMENT.md`](ORACLE_DEPLOYMENT.md). Do not assume a service or
-database already exists there.
+[`ORACLE_DEPLOYMENT.md`](ORACLE_DEPLOYMENT.md). The backend is **already deployed there and is the
+running system** — do not treat it as hypothetical, and never copy untested or WIP code onto it.
 
 ---
 

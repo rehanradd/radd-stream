@@ -517,13 +517,19 @@ class Monetization(Fixture):
     def test_remote_controls_have_honest_defaults_before_any_save(self):
         """An unconfigured deployment is open for business: no maintenance
         window, no update banner, and all three features on. A flag that
-        defaulted off would look like a feature the owner had switched off."""
+        defaulted off would look like a feature the owner had switched off.
+
+        `quality_gate` is the deliberate exception. It is not a feature the viewer
+        already had — it withholds 1080p and 4K from anyone the ledger has not
+        confirmed, so its honest default is off, and a paid catalog stays a choice
+        the operator makes in /admin rather than something a deployment ships by
+        accident."""
         data = self.public()
         self.assertFalse(data["maintenance_mode"])
         self.assertEqual(data["apk_update_url"], "")
         self.assertEqual(data["feature_flags"],
                          {"downloads": True, "pure_cinema": True,
-                          "chromecast": True})
+                          "chromecast": True, "quality_gate": False})
 
     def test_the_remote_controls_round_trip_through_the_save_and_the_public_body(self):
         answered = self.save({
@@ -532,6 +538,7 @@ class Monetization(Fixture):
             "feature_downloads": False,
             "feature_pure_cinema": True,
             "feature_chromecast": False,
+            "feature_quality_gate": True,
         })
         self.assertEqual(answered[0], 200, answered)
         data = self.public()
@@ -540,7 +547,7 @@ class Monetization(Fixture):
                          "https://downloads.example/app/radd-stream.apk")
         self.assertEqual(data["feature_flags"],
                          {"downloads": False, "pure_cinema": True,
-                          "chromecast": False})
+                          "chromecast": False, "quality_gate": True})
         values = self.values()
         self.assertEqual(values["maintenance_mode"], "on")
         self.assertEqual(values["feature_downloads"], "off")

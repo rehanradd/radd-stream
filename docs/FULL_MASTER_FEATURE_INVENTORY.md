@@ -669,9 +669,18 @@ even if the app was never opened.
 ## 21. Growth, monetization and payments
 
 ### M-MON-01 — Payment ledger + approval + entitlement
+**Status: BUILT (server + app), device pass outstanding.** The ledger, the two routes, the admin
+approval screen and the client round-trip all exist and are tested; what is still owed is a phone
+in a hand (see the acceptance line below). Steps 1–7 are done as written. Step 8 is done **except**
+the quality clause, deliberately: it says to "read the gate from remote config", and remote config
+publishes no quality field, so gating resolutions in the client would have been an invention. The
+real prerequisite is M-MON-05's server-side `max_quality` in the PlayBundle, which does not exist
+yet — do not close that gap from the app.
 **Origin:** `MASTER_ADMIN_MONETIZATION_SPEC.md` §2–3 (tables `app_users`, `payment_transactions`,
 admin pending list, 1-click approve); `PAKISTAN_OPERATOR_GUIDE.md`.
-**Current state:** UI + settings only; TID stays on the phone; `vip_until` is never written.
+**Current state (was: UI + settings only, TID stays on the phone, `vip_until` never written):**
+the TID is filed to the server, `pending` comes back, and `vip_until` is written only by an
+operator approval.
 **Build (server):**
 1. Add tables in the accounts DB:
    `payment_transactions(id, account_id, plan, amount_pkr, method, tid, status, submitted_at, reviewed_at, reviewer_note)`;
@@ -723,6 +732,12 @@ neither; no ad request on a metered network if data saver is on (configurable).
 the direct URL; a shortener outage still downloads.
 
 ### M-MON-05 — Quality gating matrix (free vs VIP)
+**Status: HALF BUILT, and off by default.** The client rule exists (`VipQualityGate`) and the
+operator can now turn it on (`feature_quality_gate` in `/admin`, published as
+`feature_flags.quality_gate`). With the switch off, which is what a deployment ships with, nothing
+is restricted — a catalog that was never priced should not go dark on its own. Still outstanding:
+the server-side `max_quality` on the PlayBundle and the resolver refusing to mint a handle above
+the cap, which is what turns a client-side courtesy into an actual entitlement.
 **Origin:** MONETIZATION "non-strict quality gating"; AUDIT §3.
 **Build:** server-side entitlement field in the PlayBundle (`max_quality`), client honours it in the
 ladder (shows locked rungs with "VIP"), and the server refuses to mint handles above the cap. Keep it
@@ -730,6 +745,11 @@ ladder (shows locked rungs with "VIP"), and the server refuses to mint handles a
 **Acceptance:** free user sees 720p playable, 1080p/4K locked with an upgrade path; VIP sees all.
 
 ### M-MON-06 — Maintenance mode UI
+**Status: BUILT with one deviation.** `RemoteConfigWatcher` polls `/api/v1/app/remote-config` every
+5 min and persists the switch; `MainActivity` replaces the nav graph with `MaintenanceScreen` while
+it is on. The spec's "all navigation blocked **except Settings**" is NOT honoured — Settings is
+covered too, so a viewer pointed at a server stuck in maintenance has no way to change server. Fix
+that before calling this row done.
 **Build:** `HomeViewModel` observes `maintenanceMode`; show a full-screen "We'll be back" with retry
 and a link to Telegram; all navigation blocked except Settings. Admin already has the switch.
 **Acceptance:** toggling the admin flag changes the app within one refresh, no reinstall.

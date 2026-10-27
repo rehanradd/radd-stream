@@ -937,6 +937,11 @@ MONETIZATION_FIELDS = (
     ("feature_downloads", "Background Downloads", _FLAG, 1),
     ("feature_pure_cinema", "Pure Cinema Mode", _FLAG, 1),
     ("feature_chromecast", "Chromecast", _FLAG, 1),
+    # Defaults OFF on purpose. The three flags above hide a feature the viewer was
+    # already free to use; this one withholds catalog content (1080p and 4K) from
+    # anyone the ledger has not confirmed, which is a business decision and not a
+    # default. Flip it in /admin when the approval traffic exists to serve it.
+    ("feature_quality_gate", "Charge VIP for 1080p/4K", _FLAG, 0),
 )
 _FIELD_BY_KEY = {row[0]: row for row in MONETIZATION_FIELDS}
 
@@ -1266,6 +1271,10 @@ def remote_config(conn):
             "downloads": flag("feature_downloads"),
             "pure_cinema": flag("feature_pure_cinema"),
             "chromecast": flag("feature_chromecast"),
+            # The client must not guess this one: without it, a phone that knows the
+            # ledger says "not VIP" would hide 1080p and 4K from a viewer the operator
+            # never asked it to restrict.
+            "quality_gate": flag("feature_quality_gate"),
         },
         "vip": {
             "monthly_pkr": int(values.get("vip_monthly_pkr") or 0),
@@ -1902,6 +1911,11 @@ def _config_card(monetization):
     out += toggle("feature_pure_cinema")
     out += toggle("feature_chromecast")
     out += toggle("feature_downloads")
+    out += toggle("feature_quality_gate")
+    out += ('<p class="hint">Charging VIP for 1080p/4K hides those rungs from every '
+            'viewer the ledger has not confirmed, including signed-out ones. Off means '
+            'the catalog is fully watchable, which is the honest default until approvals '
+            'actually happen.</p>')
     out += text_row("apk_update_url", "APK update banner",
                     "https://downloads.example/app.apk")
     out += ('<h2 style="margin-top:18px">Pakistani payment channels</h2>'
