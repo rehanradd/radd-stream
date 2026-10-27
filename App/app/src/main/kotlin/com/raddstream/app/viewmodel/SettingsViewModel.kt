@@ -120,7 +120,7 @@ data class AccountUiState(
     val signedIn: Boolean = false,
     val revealedKey: String? = null,
     val keyHint: String = "",
-    val restoreInput: String = "",
+    val quickInput: String = "",
     val isBusy: Boolean = false,
     val message: String? = null,
     val messageIsError: Boolean = false,
@@ -388,11 +388,57 @@ class SettingsViewModel @Inject constructor(
         accountAction { syncAccountRepository.createAccount() }
     }
 
-    /** Import a key typed or read off another device. A wrong key is refused, never retried. */
-    fun restoreWithKey() {
+    /**
+     * One tap: sign in with a Pakistani mobile number or a 16-character sync key, then pull
+     * the library down immediately. The sign-in answer alone would leave a second device
+     * signed in but empty until the viewer found "Sync now", which is exactly the extra tap
+     * this flow exists to remove. A failed first sync does not undo the sign-in.
+     */
+    fun quickSignIn() {
         if (noServerYet()) return
-        val candidate = _uiState.value.account.restoreInput
-        accountAction { syncAccountRepository.restoreWithKey(candidate) }
+        val candidate = _uiState.value.account.quickInput
+        if (candidate.isBlank() || _uiState.value.account.isBusy) return
+        _uiState.update { it.copy(account = it.account.copy(isBusy = true, message = null)) }
+        viewModelScope.launch {
+            when (val outcome = syncAccountRepository.quickSignIn(candidate)) {
+                is AccountMutation.SignedIn -> {
+                    val report = syncAccountRepository.syncNow()
+                    // A sync that hit a 401/404 drops the key; do not leave the card claiming
+                    // a sign-in the storage no longer backs.
+                    val stillSignedIn = syncAccountRepository.signedIn.first()
+                    _uiState.update {
+                        it.copy(
+                            account = it.account.copy(
+                                isBusy = false,
+                                signedIn = stillSignedIn,
+                                revealedKey = null,
+                                quickInput = "",
+                                lastReport = report,
+                                message = if (stillSignedIn) {
+                                    syncSentence(
+                                        report,
+                                        paused = syncAccountRepository.isPaused,
+                                        signedIn = true,
+                                    )
+                                } else {
+                                    refusalSentence(Refusal.SIGNED_OUT)
+                                },
+                                messageIsError = !stillSignedIn || !report.completed,
+                            ),
+                        )
+                    }
+                }
+                is AccountMutation.Refused -> _uiState.update {
+                    it.copy(
+                        account = it.account.copy(
+                            isBusy = false,
+                            message = refusalSentence(outcome.reason),
+                            messageIsError = true,
+                        ),
+                    )
+                }
+            }
+        }
     }
 
     /**
@@ -413,8 +459,8 @@ class SettingsViewModel @Inject constructor(
         return true
     }
 
-    fun onRestoreKeyChanged(value: String) {
-        _uiState.update { it.copy(account = it.account.copy(restoreInput = value, message = null)) }
+    fun onQuickInputChanged(value: String) {
+        _uiState.update { it.copy(account = it.account.copy(quickInput = value, message = null)) }
     }
 
     /** Forget the full key on this screen; the preview stays, the credential does not linger. */
@@ -457,7 +503,7 @@ class SettingsViewModel @Inject constructor(
                     account = it.account.copy(
                         isBusy = false,
                         revealedKey = null,
-                        restoreInput = "",
+                        quickInput = "",
                         message = "Signed out. The saved list and every kept file stayed on this device.",
                         messageIsError = false,
                     ),
@@ -478,7 +524,7 @@ class SettingsViewModel @Inject constructor(
                             isBusy = false,
                             signedIn = true,
                             revealedKey = outcome.revealedKey,
-                            restoreInput = "",
+                            quickInput = "",
                             message = if (outcome.revealedKey != null) {
                                 REVEAL_WARNING
                             } else {
@@ -517,7 +563,7 @@ class SettingsViewModel @Inject constructor(
 /** Our own sentence for a refusal. The server's `detail` text is never shown, by design. */
 private fun refusalSentence(reason: Refusal): String = when (reason) {
     Refusal.NO_SERVER -> "No server is connected yet, so there is nothing to sign in to."
-    Refusal.WEAK_KEY -> "That does not look like a complete key. Paste the whole key from the other device."
+    Refusal.WEAK_KEY -> "Enter a Pakistani mobile number (03XXXXXXXXX), a 16-character sync key, or the full key from the other device."
     Refusal.REJECTED -> "The server refused that key. Nothing was changed on this device."
     Refusal.THROTTLED -> "The server is asking this device to slow down. Syncing is paused until the app is restarted."
     Refusal.OFFLINE -> "The server could not be reached. Nothing was changed on this device."
@@ -529,11 +575,19 @@ private fun refusalSentence(reason: Refusal): String = when (reason) {
  * account payload carries no displayable metadata, so any sentence naming what was synced would
  * have to invent one.
  */
-private fun syncSentence(report: SyncReport, paused: Boolean): String = when {
-    paused -> "The server asked this device to slow down, so syncing is paused until the app is restarted."
-    !report.completed -> "Sync did not finish. Nothing was lost: your saved list is still on this device."
+private fun syncSentence(report: SyncReport, paused: Boolean, signedIn: Boolean = false): String = when {
+    paused -> if (signedIn) {
+        "Signed in, but the server asked this device to slow down, so the first sync is paused until the app is restarted."
+    } else {
+        "The server asked this device to slow down, so syncing is paused until the app is restarted."
+    }
+    !report.completed -> if (signedIn) {
+        "Signed in on this device, but the first sync did not finish. Nothing was lost: tap Sync now to try again."
+    } else {
+        "Sync did not finish. Nothing was lost: your saved list is still on this device."
+    }
     else -> buildString {
-        append("Synced. ")
+        append(if (signedIn) "Signed in and synced. " else "Synced. ")
         append("${report.favoritesPushed} ${if (report.favoritesPushed == 1) "save" else "s"} sent up, ")
         append("${report.progressRowsPulled} resume ${if (report.progressRowsPulled == 1) "point" else "points"} pulled down.")
         if (report.favoritesUnknownHere > 0) {

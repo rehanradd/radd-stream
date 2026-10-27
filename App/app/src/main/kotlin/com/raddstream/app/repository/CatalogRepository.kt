@@ -6,6 +6,7 @@ import com.raddstream.app.network.models.PostDetail
 import com.raddstream.app.network.models.PostsResponse
 import com.raddstream.app.network.models.StatsResponse
 import com.raddstream.app.network.models.StreamResponse
+import com.raddstream.app.network.models.VipRemoteConfig
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -26,11 +27,19 @@ class CatalogRepository @Inject constructor(
     suspend fun getPosts(
         query: String? = null,
         type: String? = null,
+        industry: String? = null,
+        genre: String? = null,
+        quality: String? = null,
+        sort: String? = null,
         page: Int = 1,
         limit: Int = 20,
     ): PostsResponse = apiProvider.current().getPosts(
         query = query?.takeIf(String::isNotBlank),
         type = type,
+        industry = industry,
+        genre = genre,
+        quality = quality,
+        sort = sort,
         page = page,
         limit = limit,
     )
@@ -49,4 +58,7 @@ class CatalogRepository @Inject constructor(
      */
     suspend fun resolveStream(streamId: String): StreamResponse =
         apiProvider.current().resolveStream(streamId, redirect = "0")
+
+    /** Live VIP prices and payment handles; never cached here, the server sets its own max-age. */
+    suspend fun getRemoteConfig(): VipRemoteConfig = apiProvider.current().getRemoteConfig()
 }

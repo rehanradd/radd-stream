@@ -66,7 +66,7 @@ agents and app developers:
 1. Start with root `AGENTS.md`, `SESSION.md`, `CHANGELOG.md`, and this map; then read the relevant subsystem guide and continuity log. Preserve `Fast_Fetch/DAO.md` unless the user explicitly asks to change it.
 2. Work in an agent/task branch. Keep changes focused and verify each coherent milestone.
 3. After every tested milestone, update `docs/SESSION_CHECKPOINT.md`, stage only reviewed paths, inspect the staged diff, commit, and push the branch. If checks cannot finish before the session ends, push a clearly labeled WIP checkpoint to the task branch and record pending checks; do not wait for a quota warning.
-4. Never stage or push `.replit`; it is local-only and ignored. Use the temporary Git askpass procedure in `ORACLE_DEPLOYMENT.md`. Do not run or restore `push.py`, `github_push.py`, or `emergency_push.py`; their former versions used broad per-file GitHub API writes and could target `main`, while the current files are warning stubs.
+4. Never stage or push `.replit`; it is local-only and ignored. Use the temporary Git askpass procedure in `ORACLE_DEPLOYMENT.md`. Do not run or restore `push.py`, `github_push.py`, or `emergency_push.py`; their former versions used broad per-file GitHub API writes and could target `main`, and the warning stubs that replaced them have since been deleted from the tree.
 5. On push failure, preserve the local commit and checkpoint, report the exact failure, and do not claim synchronization.
 
 ## Secrets

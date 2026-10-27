@@ -53,6 +53,9 @@ App/local.properties
 
 # Agent CLI session state (scheduling, scratch); never a product artifact
 .qoder/
+.qoder_account2/
+.qoder_account3/
+Fast_Fetch/auto_crawl_cron.sh
 
 # Local live database storage directory
 radd-stream-data/

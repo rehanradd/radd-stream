@@ -843,3 +843,243 @@ migrate the 7 pending brand-name files + `NavGraph.kt` `radd://` literals +
 `PlayerScreen.kt` raw paints, delete the now-unused `res/values/strings.xml`
 `app_name`, point `ic_launcher_*.xml` at `@color/radd_launcher_*`, and add
 `-keep class com.raddstream.app.BuildConfig { *; }` to `proguard-rules.pro`.
+
+---
+
+### Session 8 — Hero banner, ghost mode, image fallback, repo hygiene (2026-10-26)
+
+**Status:** all four asks implemented and **verified by Gradle on this box**:
+`./gradlew --offline testDebugUnitTest assembleDebug` → BUILD SUCCESSFUL, **320 JVM
+tests, 0 failures**, `app/build/outputs/apk/debug/app-debug.apk` produced. Nothing
+committed (no commit was requested); the tree still carries other workstreams' edits.
+
+**Created:** `ui/components/HeroCarousel.kt` (400dp full-bleed pager, auto-advance
+gated on `rememberReduceMotion`, vertical scrim, year/type badge + language pills,
+Watch Now button, tappable page dots), `test/…/ui/HeroCarouselTest.kt`,
+`test/…/network/models/WireTextTest.kt`.
+**Changed:** `ui/screens/HomeScreen.kt` (hero over the first visible rail,
+`HERO_LIMIT = 6`, no invented rail), `network/models/Models.kt` (`Post.backdropUrls`
+/ `backdropList` / `heroArtUrl` — the list route really does send `backdrop_urls`;
+`Fast_Fetch/viewer.py` `_art_pair()` proves it, so §5's "no backdrop on the list row"
+note is stale), `player/PlayerUiState.kt` (`ViewMode.STANDARD|PURE_CINEMA` +
+`pureCinema`), `player/PlayerGestures.kt` (`pureCinema`, `cinemaRewindMs = 3_000`,
+`onTwoFingerTap`), `ui/screens/PlayerScreen.kt` (`EdgeHud` hairline + three chips, no
+pause scrim / no center button in cinema, read-only Initial-pass pointer lane with a
+nano-time guard so the two-finger rewind never steals the single tap or the pinch),
+`viewmodel/PlayerViewModel.kt` + `data/ServerSettingsRepository.kt` (the mode is
+persisted and re-read like the other gestures), `ui/components/CatalogImage.kt`
+(`error = { ImageFallbackCard(...) }`, new public `fallbackLabel`), `PosterCard.kt`,
+`brand/Brand.kt` + `/brand.properties` (`copy.hero_watch_now`).
+**Fixed (a real crash, found only because the hero exercised a new path):**
+`WireText.splitOnAny` called an unqualified `listOf(source)` inside `object WireText`,
+which resolved to the *member* `WireText.listOf` — infinite mutual recursion, so every
+non-JSON text column (any CSV `genres`, any `"Hindi + English"` `language`) threw
+`StackOverflowError`. Now `kotlin.collections.listOf`, and `WireTextTest` is the first
+suite to cover those shapes at all.
+**Removed:** the five retired push stubs at the repo root (`push.py`,
+`github_push.py`, `emergency_push.py`, `push_github.py`, `safe_push.sh`) — verified
+each was a `Disabled:`-and-exit-2 no-op first, then deleted with plain `rm`; root
+`AGENTS.md` repo map and the "do not run or restore" bullet updated to say they are
+gone from the tree and their history stays in Git.
+**Not verified:** no device or emulator run — the pager, the HUD and the two-finger
+gesture are compile- and unit-verified only; Compose rendering needs a manual pass.
+**Next agent should:** put the hero behind a real "featured" projection once the
+backend sends one (today it reuses rail 1 by design), cover the cinema-mode pointer
+arbitration with an instrumentation test, and fold the remaining `PlayerScreen.kt`
+raw paints back into `Color.kt` so `pendingColorMigration` can shrink.
+
+### Session 9 — Subtitle sync sheet + Pakistani VIP upgrade screen (2026-10-26)
+
+**Status:** both features implemented and **verified by Gradle on this box**:
+`./gradlew --offline testDebugUnitTest assembleDebug` → BUILD SUCCESSFUL, **339 JVM
+tests, 0 failures**, `app/build/outputs/apk/debug/app-debug.apk` produced. Nothing
+committed (no commit was requested); the tree still carries other workstreams' edits.
+
+**Created:** `player/subtitles/SubtitleOffsetSheet.kt` (pure `SubtitleOffset`
+clamp/shift/reset/quantize/format/describe + `ModalBottomSheet` with live readout,
+±60s slider, `-0.5s -0.1s RESET +0.1s +0.5s`, external-overlay hint),
+`test/…/player/subtitles/SubtitleOffsetTest.kt` (8), `ui/screens/VipUpgradeScreen.kt`,
+`viewmodel/VipViewModel.kt` (`VipPlan`, `VipTid`, `VipUiState`, remote-config load with
+retry, pending-reference flow), `network/models/VipRemoteConfig.kt`,
+`test/…/network/models/VipRemoteConfigTest.kt` (4), `test/…/viewmodel/VipTidTest.kt` (5).
+**Changed:** `player/PlayerUiState.kt` (`subtitleOffsetSheetVisible`),
+`viewmodel/PlayerViewModel.kt` (`show/hideSubtitleOffsetSheet`, `setSubtitleOffset`),
+`ui/screens/PlayerScreen.kt` (sync control button, sheet render, `dialogBlocking`, the
+old inline delay slider replaced by a row that opens the new sheet),
+`network/RaddStreamApi.kt` + `repository/CatalogRepository.kt`
+(`GET api/v1/app/remote-config`), `data/ServerSettingsRepository.kt`
+(`VipPendingSubmission` persisted in the existing DataStore),
+`ui/navigation/Screen.kt` + `NavGraph.kt` (`vip_upgrade` route),
+`ui/screens/SettingsScreen.kt` (VIP card, `onOpenVipUpgrade`).
+**Deliberately honest about activation:** the backend publishes prices and payment
+handles at `/api/v1/app/remote-config` but has **no endpoint that receives a transaction
+id and no approval ledger**, so the screen does not flip a VIP flag client-side. A
+submitted reference is stored on the device as pending and both the form and the pending
+card say it was not sent automatically. Prices fall back to PKR 200 / 1,500 and handles
+show “Not configured yet” when the operator has not filled them in.
+**Not verified:** no device or emulator run — both screens are compile- and
+unit-verified only; the sheet animation and copy/snackbar interaction need a manual pass.
+**Next agent should:** add the missing server-side payment submission + operator
+approval route before claiming “instant activation”, then have this screen POST the TID
+and read back a real VIP status instead of the local pending record.
+
+### Session 10 — Distinct season artwork + one-tap phone/key sync (2026-10-26)
+
+**Goal:** stop repeating the root series poster across every season, and make the optional
+sync account reachable in one tap with a Pakistani mobile number or a 16-character key.
+
+**Server artwork now reaches the screen.** `PostDetail` decodes the new
+`season_artwork` array (`seasonArtworkRows` raw, `seasonArtwork` non-null getter because
+Gson does not run Kotlin defaults for an absent key). `DetailViewModel` passes it into
+`ReleaseLayoutBuilder.build(...)`, where a published `season_poster` wins for its season
+and a published `episode_still` wins for its exact (season, episode). The existing work-art
+pool remains only as the fallback for databases that have not run `backfill_tmdb.py`.
+`DetailScreen` already paints `SeasonGroup.artworkUrl`, `SeasonHeader` and
+`EpisodeRow.stillUrl` through `CatalogImage` with the branded gradient when null.
+
+**One-tap account sync.** `SyncContract` now carries the phone rules: canonical
+`03XXXXXXXXX` normalization (accepts `3XXXXXXXXX`, `+92`, `92`, `0092`, spaces/dashes),
+a deterministic 16-character key derived with SHA-256 and a public domain separator, and
+`quickLoginKey()` which sends a 16- or 43-character key the viewer already holds
+**unchanged** — re-deriving a stored credential would open a different, empty library.
+The manual base64url encoder exists because `java.util.Base64` is API 26. The card shows
+one field and one "Sign in" button; signing in immediately runs `syncNow()` so the second
+device pulls bookmarks and resume points without a second tap. "Create a random key"
+remains for a credential only the viewer knows. The copy states plainly that a phone
+number is a convenience, not a secret: anyone who knows it can derive the same key.
+After the first sync, the card re-reads stored sign-in state, so a sync that hit a 401/404
+(and therefore dropped the key) cannot leave the card claiming a session storage no longer
+backs.
+
+**Tests / build:** `./gradlew --offline testDebugUnitTest assembleDebug` → BUILD
+SUCCESSFUL, 356 unit tests across 42 classes, 0 failures, `app-debug.apk` produced. New/updated:
+`SyncContractTest` (8), `ReleaseLayoutBuilderTest` (+2 published-art cases),
+`ModelsTest` (+2 season_artwork cases).
+
+**Deliberately not verified:** no device or emulator run, so the account card's real
+network round-trip and the season grid's image loading are compile/unit-verified only.
+Nothing committed (no commit requested); the tree still carries other workstreams' edits.
+
+### Session 11 — Shimmer, tier badges, 85% binge hand-off, sponsor-slot guard (2026-10-27)
+
+**Goal:** Netflix/Prime-style loading polish, release-tier audio/HDR badges, instant
+next-episode hand-off, and a structural guarantee that a sponsor break can never interrupt
+a running title.
+
+**Loading.** `ShimmerBox` sweeps a soft highlight band across a `surfaceVariant` base with
+a 1.4 s linear pass; `rememberReduceMotion()` swaps it for a static block. `SkeletonBox`
+uses the same primitive, and `CatalogImage.loading` now paints it, so `PosterCard`, every
+rail tile and the new `HeroSkeleton` (full-bleed shimmer plus title/badge/button bars at
+`HERO_HEIGHT`) all share one animation. `HomeScreen` shows `HeroSkeleton` while the first
+rail is loading and no hero items exist yet.
+
+**Badges.** `MediaBadges.kt` gained `HdrBadge`, `PrintSourceBadge`, `AudioBadge` and
+`SubtitleBadge`, fed by the existing `PrintDescriptor` (`hdrs`, `source`, `dualAudio`,
+`audioLangs`, subtitle flags). `DetailScreen` renders them in `FlowRow`s on both the
+per-episode best print and each release card, alongside the resolution badge.
+
+**Binge hand-off.** Route launches carry only an opaque handle, so the episode identity now
+travels separately: `PlayerSessionStore.SyncScope` gained `postId`/`workType`,
+`DetailViewModel.stageSyncScope` fills them, and `startStreamHandle` stamps a
+`PlayTarget` with `PlaybackBundle.withStagedTarget`. `prepareBingePrefetch` resolves the
+successor's ladder (`QualityLadder.forNumberedScope` → `resolvedFor(AUTO)`) while the
+current episode plays; at 85% `prefetchNextEpisodeHead` asks the redirector about that
+handle; END / manual-next calls `openPrepared`, which stages work refs, failover handles
+and the auto ladder before loading. A cold END still resolves on demand, and only falls
+back to `PlayerEvent.PlayNextEpisode` when no playable rung exists. In-file packed
+successors are skipped because the service already seeks within the same file.
+
+**Sponsor timing.** `AdSlotPolicy` is the only placement authority: `PRE_ROLL` requires
+paused-at-start within a 2 s grace, `BETWEEN_EPISODES` requires a real END plus a successor
+(`EpisodeProgression.computeNext`, including in-file), and every playing title returns
+`NONE`. `PlayerUiState.adBreak`, `PlayerViewModel.requestAdBreak()`/`dismissAdBreak()`,
+`SponsorBreakDialog` and the `dialogBlocking` gate are wired, but nothing raises a break
+automatically: there is no ad SDK, creative or VIP entitlement in the app, so this is a
+guarded seam rather than a fake ad.
+
+**Tests / build:** `./gradlew --offline assembleDebug` → BUILD SUCCESSFUL;
+`./gradlew --offline testDebugUnitTest` → 371 tests / 45 suites / 0 failures. New:
+`AdSlotPolicyTest` (7), `BingePreloaderTest` (8, pre-existing file re-verified).
+
+**Deliberately not verified:** no device/emulator run, so shimmer smoothness, badge
+layout under long language lists and the next-episode hand-off are compile/unit-verified
+only. Nothing committed (no commit requested).
+
+---
+
+### Session 12 — Rewarded 4-hour VIP pass on the device (2026-10-27)
+
+**Goal:** the app half of the earning engine — a time-boxed VIP grant that the backend's
+shortener bypass can honour, without inventing an entitlement the app cannot prove.
+
+**Storage.** `ServerSettingsRepository` gained `rewardedVipExpiresAt` (a
+`longPreferencesKey` deadline, default `0L`), `grantRewardedVip(hours = 4)` and
+`isRewardedVipActive()`. A grant sets `max(now, current) + hours`, so re-watching extends
+an active pass instead of truncating it, and hours are clamped to 1..24. Because the
+deadline is wall-clock and persisted, it survives process death and a sleeping device;
+nothing ticks in the background.
+
+**State.** `VipViewModel` exposes `rewardedVipExpiresAt` in `VipUiState`, observes the
+flow at init, and offers `grantRewardedVip()` plus a synchronous
+`isRewardedVipActive(now)`. `RewardedVipPass` is a pure helper (no Android types) for
+`remainingMs`, `isActive` and `formatRemaining` — `3h 59m 58s`, `59m 58s` — which is what
+makes the countdown testable on the JVM.
+
+**Screen.** `VipUpgradeScreen` renders a `RewardedVipSection` under the hero: when no pass
+is active, the button reads exactly **"Watch Ad for 4-Hour VIP Pass"**; when one is, the
+card shows *"VIP pass active"* with a one-second countdown driven by a `LaunchedEffect`
+against the stored deadline. The card says plainly that this build ships no ad player, so
+the press activates the pass directly, and that the pass is device-local — the same
+honesty rule the VIP screen already applies to the operator's manual confirmation.
+
+**Tests / build:** `./gradlew --offline :app:compileDebugKotlin :app:testDebugUnitTest`
+→ BUILD SUCCESSFUL (exit 0); 381 tests / 47 suites / 0 failures, including the new
+`RewardedVipPassTest` (5). Note: the run competed with a second Gradle invocation from
+another session on the same project, which forced Kotlin to fall back to in-process
+compilation — slow, but the result is a full compile plus test pass.
+
+**Deliberately not verified:** no device/emulator run, so the countdown's visual tick and
+button state are compile/unit-verified only. The pass is device-local by design: the app
+does not and cannot mint the server-side `vip` capability, so a rewarded viewer still sees
+shortened links until an operator-side grant exists. Nothing committed (no commit
+requested).
+
+### Session 12 — Facet search, hero ambient glow, broadcast update dialog (2026-10-27)
+
+**Goal:** the requested "2026 Luxury UI & Multi-Filter Search" pass: real multi-facet
+search, a subtle radial glow behind the hero banner, and a one-tap APK update notice fed
+by `apk_update_url` in remote config.
+
+**Search.** `/api/v1/posts` now accepts `industry`, `genre`, `quality` and `sort`
+(server-side SQL before paging, so a chip narrows the catalog instead of the rows already
+on the phone). Quality is an `EXISTS` test over `releases.quality` because the v1 list row
+has no quality column; `4K` also matches 2160p/UHD. "Trending" is honest — there is no
+play-count column, so it ranks by `release_count + source_count`. The app's
+`SearchViewModel` owns the facet enums, `hasSearchIntent` (a blank query with a facet is
+still a search, so `loadMore` pages), and re-fetches on every facet/sort change through the
+same 300 ms debounce. `SearchScreen` renders one scrolling rail (Type · Industry · Genre ·
+Quality · Sort) and the same groups as `FlowRow`s in the filter sheet, plus a loading state.
+
+**Hero glow.** `HeroAmbientGlow` draws two low-alpha radial blooms from the theme's
+primary/secondary/tertiary and cross-fades them when the active page changes (snaps under
+`rememberReduceMotion()`). The banner card is inset 14dp with a 24dp corner so the light
+reads around it; `HeroSkeleton` matches the inset so the page does not jump.
+
+**Update dialog.** `VipRemoteConfig` decodes `apk_update_url` and `maintenance_mode`.
+`AppUpdate.from(config)` is the pure rule (non-empty + http(s) only), `HomeViewModel`
+re-checks on load/refresh and fails silently, and `HomeScreen` shows a branded
+`AlertDialog` whose "Update Now" opens the link via `ACTION_VIEW` (no
+REQUEST_INSTALL_PACKAGES; installing stays the platform's job). The dialog closes only if
+the browser actually launched; `Later` suppresses that URL for the session. Added
+`copy.update_title` / `copy.update_message` / `copy.update_now` to `/brand.properties`.
+
+**Tests / build:** `./gradlew --offline :app:compileDebugKotlin` → BUILD SUCCESSFUL;
+`./gradlew --offline testDebugUnitTest` → 381 tests / 47 suites / 0 failures (new
+`AppUpdateTest` 3, `VipRemoteConfigTest` 6, `BrandDriftTest` 9). Backend:
+`python3 -S Fast_Fetch/test_database.py` → 64 OK; `test_vidout.py` → 6 OK.
+
+**Deliberately not verified:** no device/emulator run, so glow smoothness, facet-rail
+scrolling and the dialog are compile/unit-verified only. Remote config has no version
+code, so the notice cannot claim "newer" — it says "a new build is available".
+`maintenance_mode` is decoded but no screen consumes it yet. Nothing committed (no commit
+requested).

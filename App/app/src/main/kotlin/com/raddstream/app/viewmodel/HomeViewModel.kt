@@ -2,8 +2,13 @@ package com.raddstream.app.viewmodel
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.raddstream.app.data.local.SyncedProgressDao
+import com.raddstream.app.data.local.WatchHistoryDao
+import com.raddstream.app.data.local.WatchHistoryMerge
 import com.raddstream.app.network.friendlyNetworkError
 import com.raddstream.app.network.models.Post
+import com.raddstream.app.network.models.VipRemoteConfig
+import com.raddstream.app.network.models.WireText
 import com.raddstream.app.repository.CatalogRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
@@ -13,6 +18,8 @@ import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
@@ -42,11 +49,35 @@ data class HomeUiState(
     val sections: List<HomeSection> = emptyList(),
     val isRefreshing: Boolean = false,
     val fatal: String? = null,
+    /** Real local rows only — see [WatchHistoryMerge] for why an unnameable pull is dropped. */
+    val continueWatching: List<Post> = emptyList(),
+    /** Set when the operator has published a downloadable build; null means "no news". */
+    val updateNotice: AppUpdate? = null,
 )
+
+/**
+ * A build the operator published through remote config.
+ *
+ * The published body carries no version code, so this cannot compare versions: a
+ * non-empty, http(s) URL is the whole signal, and the copy says "a new build is
+ * available" rather than pretending to know whether it is newer than this APK.
+ */
+data class AppUpdate(
+    val url: String,
+    val publishedAt: Long,
+) {
+    companion object {
+        /** Null unless the operator actually published a usable download link. */
+        fun from(config: VipRemoteConfig?): AppUpdate? {
+            val url = config?.apkUpdateUrl?.trim().orEmpty()
+            if (!WireText.isHttpUrl(url)) return null
+            return AppUpdate(url = url, publishedAt = config?.updatedAt ?: 0L)
+        }
+    }
+}
 
 private const val RESERVE_NOTE = """
     Reserved rails awaiting server support (see docs/HANDOFF_appui.md):
-      - continue_watching : needs a per-post resume-state source (Room DAO) — requested.
       - trending          : needs GET /api/v1/trending or a play-count field — requested.
       - because_you_watch : needs GET /api/v1/related?work_id= (API_V2.md collections) — requested.
       - genre / language jump-off : needs GET /api/v1/facets (browse facets) — requested.
@@ -56,12 +87,18 @@ private const val RESERVE_NOTE = """
 @HiltViewModel
 class HomeViewModel @Inject constructor(
     private val catalogRepository: CatalogRepository,
+    private val watchHistoryDao: WatchHistoryDao,
+    private val syncedProgressDao: SyncedProgressDao,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(HomeUiState())
     val uiState = _uiState.asStateFlow()
 
+    /** A URL the viewer already declined stays declined for this app session. */
+    private var dismissedUpdateUrl: String? = null
+
     init {
+        observeContinueWatching()
         // Only rails v1 can honestly serve today. `type = null` == recently added
         // (the API default order is `p.id DESC` per viewer.py:1905, i.e. freshest scrape).
         val initial = listOf(
@@ -72,9 +109,63 @@ class HomeViewModel @Inject constructor(
         )
         _uiState.update { it.copy(sections = initial) }
         loadAll(force = true)
+        checkForUpdate()
     }
 
-    fun refresh() = loadAll(force = true)
+    /**
+     * Continue watching, from rows this device wrote while playing and, when a sync pass
+     * pulled a newer position for the same scope, the server's timestamp. The merge is pure
+     * ([WatchHistoryMerge]) and drops any handle this device cannot name — a card must never
+     * be a guess at what a server row was.
+     */
+    private fun observeContinueWatching() {
+        viewModelScope.launch {
+            combine(
+                watchHistoryDao.observeRecent(WatchHistoryMerge.DEFAULT_LIMIT * 2),
+                syncedProgressDao.observeRecent(WatchHistoryMerge.DEFAULT_LIMIT * 2),
+            ) { local, synced -> WatchHistoryMerge.merge(local, synced) }
+                .collect { rows ->
+                    val items = rows.mapNotNull { row ->
+                        if (row.postId <= 0) return@mapNotNull null
+                        Post(
+                            id = row.postId,
+                            title = row.title,
+                            cleanTitle = row.title,
+                            posterUrl = row.posterUrl,
+                        )
+                    }
+                    _uiState.update { it.copy(continueWatching = items) }
+                }
+        }
+    }
+
+    fun refresh() {
+        loadAll(force = true)
+        checkForUpdate()
+    }
+
+    fun dismissUpdate() {
+        dismissedUpdateUrl = _uiState.value.updateNotice?.url
+        _uiState.update { it.copy(updateNotice = null) }
+    }
+
+    /**
+     * Remote config is decoration on Home: an unreachable endpoint or a malformed body
+     * must never turn into an error banner over a catalog that loaded fine.
+     */
+    private fun checkForUpdate() {
+        viewModelScope.launch {
+            val notice = try {
+                AppUpdate.from(catalogRepository.getRemoteConfig())
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                return@launch
+            }
+            if (notice != null && notice.url == dismissedUpdateUrl) return@launch
+            _uiState.update { it.copy(updateNotice = notice) }
+        }
+    }
 
     fun retrySection(key: String) {
         val section = _uiState.value.sections.firstOrNull { it.key == key } ?: return

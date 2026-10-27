@@ -9,11 +9,20 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
 
+    <!-- Download progress notification + data-sync foreground service (Android 14+) -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+
     <!-- Picture-in-Picture -->
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
 
     <!-- Keep screen on during playback -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+
+    <!-- Public video downloads on API 28 and older; API 29+ writes through DownloadManager. -->
+    <uses-permission
+        android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        android:maxSdkVersion="28" />
 
     <!--
       Brand: android:label and the deep-link scheme below are generated from
@@ -65,6 +74,12 @@
                 <action android:name="androidx.media3.session.MediaSessionService" />
             </intent-filter>
         </service>
+
+        <!-- Public video downloads (pause/resume/progress notification) -->
+        <service
+            android:name=".data.downloads.DownloadService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
 
     </application>
 

@@ -235,7 +235,8 @@ class Sweep:
         try:
             self.wait_until_up()
 
-            for path in ("/api/v1/stats", "/", "/client"):
+            for path in ("/api/v1/stats", "/api/v1/app/remote-config", "/",
+                         "/client"):
                 self.scan(path)
             for page in (1, 2, 3, 250):
                 self.scan(f"/api/v1/posts?limit=100&page={page}")

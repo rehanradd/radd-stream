@@ -17,6 +17,7 @@ import json
 import sqlite3
 import time
 import urllib.parse
+import urllib.request
 from contextlib import contextmanager
 import os
 from pathlib import Path
@@ -26,6 +27,7 @@ from socketserver import ThreadingMixIn
 import redact
 import tiers
 import api_v2
+import catalog_v2
 import accounts_api
 import admin_panel
 
@@ -89,6 +91,19 @@ def signing_secret() -> str:
 #: a measured window always beats it.
 TEMPORARY_TOKEN_CEILING = 6 * 3600
 
+#: Public shortener APIs. Their API tokens are appended server-side from
+#: `admin_panel.shortener_targets`; a client is only ever told whether one is
+#: configured, never the credential itself.
+SHORTENER_ENDPOINTS = {
+    "shrinkme": "https://shrinkme.io/api",
+    "droplink": "https://droplink.co/api",
+}
+SHORTENER_TIMEOUT_SECONDS = 6.0
+SHORTENER_MAX_RESPONSE_BYTES = 64 * 1024
+#: New media URLs rotate to a different configured network each hour. Cached
+#: URLs do not rotate; the cache exists so a repeat download spends no quota.
+SHORTENER_ROTATION_SECONDS = 3600
+
 
 def stream_expires_in(res: dict) -> float | None:
     """Seconds a just-handed-out stream URL is good for, measured where possible.
@@ -140,6 +155,8 @@ def _ensure_schema():
     import fast_fetch
     fast_fetch.init_db(DB_PATH)
     redact.set_needles(redact.site_needles(DB_PATH), redact.site_text_needles(DB_PATH))
+    with get_db() as conn:
+        ensure_shortened_links(conn)
     _SCHEMA_READY_FOR = DB_PATH
 
 
@@ -181,6 +198,219 @@ def link_view(row, base_url: str = "") -> dict:
     return link
 
 
+#: Extensions a download may be named with. The mime comes from a hoster and a
+#: filename built from it ends up in a `Content-Disposition` header, so only a
+#: fixed table may contribute characters — never the value itself.
+_DOWNLOAD_EXTENSIONS = {
+    "video/mp4": ".mp4",
+    "video/x-matroska": ".mkv",
+    "video/matroska": ".mkv",
+    "video/webm": ".webm",
+    "video/quicktime": ".mov",
+    "video/x-msvideo": ".avi",
+    "video/mp2t": ".ts",
+    "video/mpeg": ".mpg",
+    "application/vnd.apple.mpegurl": ".m3u8",
+    "application/x-mpegurl": ".m3u8",
+    "audio/mpeg": ".mp3",
+    "audio/mp4": ".m4a",
+}
+
+
+def download_filename(stream_id: str, mime_type) -> str:
+    """A safe attachment name for the file behind a stream handle.
+
+    The handle is already opaque and URL-safe; the only variable part is the
+    extension, chosen from [_DOWNLOAD_EXTENSIONS] rather than copied."""
+    mime = str(mime_type or "").split(";", 1)[0].strip().lower()
+    extension = _DOWNLOAD_EXTENSIONS.get(mime, ".bin")
+    return f"radd-{str(stream_id)[:12]}{extension}"
+
+
+def download_descriptor(source_id: int, res: dict, base_url: str = "") -> dict:
+    """The public JSON answer to `GET /api/v1/download`: what to fetch and how.
+
+    Same provenance rule as the stream route: the descriptor names our own
+    handle and our own redirector, never the hoster or the upstream file URL.
+    The bytes still move through nobody — a caller follows `download_url` and
+    the 302 points at the resolved media URL."""
+    token = redact.mint_token(int(source_id), signing_secret())
+    descriptor = {
+        "success": True,
+        "stream_id": token,
+        "kind": "download",
+        "filename": download_filename(token, res.get("mime_type")),
+        "mime_type": res.get("mime_type"),
+        "file_size_bytes": res.get("file_size_bytes"),
+        "resumable": bool(res.get("is_resumable")),
+        "expires_in": stream_expires_in(res),
+    }
+    if base_url:
+        descriptor["download_url"] = (f"{base_url.rstrip('/')}/api/v1/download"
+                                      f"?id={token}&redirect=1")
+    return descriptor
+
+
+# ── free-tier download shorteners ────────────────────────────────────────────
+
+
+def ensure_shortened_links(conn) -> None:
+    """The free-tier short-link cache. `original_url` is the key, so one media
+    URL is shortened once no matter how many viewers request it."""
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS cat_shortened_links ("
+        "original_url TEXT PRIMARY KEY, shortener_name TEXT, "
+        "shortened_url TEXT, created_at INTEGER)")
+
+
+def cached_shortened_link(conn, original_url: str) -> str | None:
+    row = conn.execute(
+        "SELECT shortened_url FROM cat_shortened_links WHERE original_url = ?",
+        (original_url,)).fetchone()
+    return str(row[0]) if row and row[0] else None
+
+
+def cache_shortened_link(conn, original_url: str, shortener_name: str,
+                         shortened_url: str) -> None:
+    conn.execute(
+        "INSERT OR REPLACE INTO cat_shortened_links"
+        "(original_url, shortener_name, shortened_url, created_at)"
+        " VALUES(?, ?, ?, ?)",
+        (original_url, shortener_name, shortened_url, int(time.time())))
+
+
+def rotate_shortener_targets(targets, *, now=None) -> list:
+    """Order configured `(network, token)` pairs for the current rotation window.
+
+    Rotating by the wall clock is stable for every request inside the window and
+    advances without stored state, so two workers cannot disagree about which
+    network is "next". A network that fails is skipped by the caller, which then
+    tries the rest in this same order."""
+    if not targets:
+        return []
+    offset = int((time.time() if now is None else float(now))
+                 // SHORTENER_ROTATION_SECONDS) % len(targets)
+    return list(targets[offset:]) + list(targets[:offset])
+
+
+def _shortened_from_body(raw: bytes, original_url: str) -> str | None:
+    """The shortened URL in a shortener reply, or None when it is not one.
+
+    ShrinkMe and DropLink both answer `{"status": "success", "shortenedUrl":
+    "..."}`, but a shortener is a third party that may change its envelope; the
+    keys below are the shapes those two have used. Anything that is not an
+    absolute http(s) URL distinct from the input is refused rather than cached,
+    so a malformed reply can never become a redirect target."""
+    text = raw.decode("utf-8", "replace").strip()
+    candidate = None
+    try:
+        data = json.loads(text)
+    except (TypeError, ValueError):
+        data = None
+    if isinstance(data, dict):
+        status = str(data.get("status") or "").strip().lower()
+        if status and status not in ("success", "ok", "1", "true"):
+            return None
+        for key in ("shortenedUrl", "shortened_url", "shortUrl", "short_url",
+                    "result", "url"):
+            value = data.get(key)
+            if isinstance(value, str) and value.strip():
+                candidate = value.strip()
+                break
+    elif isinstance(data, str):
+        candidate = data.strip()
+    elif text.startswith(("http://", "https://")):
+        candidate = text.split()[0]
+    if not candidate or candidate == original_url:
+        return None
+    parsed = urllib.parse.urlparse(candidate)
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        return None
+    return candidate
+
+
+def call_shortener(network: str, token: str, original_url: str, *,
+                   timeout: float = SHORTENER_TIMEOUT_SECONDS) -> str | None:
+    """Ask one shortener to shorten `original_url`; None on any failure.
+
+    The API token travels in the query string to the network's fixed endpoint,
+    never to the caller, and no request URL is logged here — a token in a log is
+    a token leaked to anyone who reads it."""
+    endpoint = SHORTENER_ENDPOINTS.get(str(network or "").lower())
+    if not endpoint or not token or not original_url:
+        return None
+    query = urllib.parse.urlencode({"api": token, "url": original_url})
+    request = urllib.request.Request(
+        f"{endpoint}?{query}", headers={"User-Agent": "radd-stream/1.0"})
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        raw = response.read(SHORTENER_MAX_RESPONSE_BYTES + 1)
+    if len(raw) > SHORTENER_MAX_RESPONSE_BYTES:
+        return None
+    return _shortened_from_body(raw, original_url)
+
+
+def shorten_download_url(original_url: str, conn, *, now=None,
+                         fetcher=None) -> str | None:
+    """The shortened download target for a free user, or None for direct.
+
+    Cache first: a URL this box already shortened costs one SELECT and burns no
+    API quota. Otherwise configured networks are tried in rotation order and the
+    first success is cached. A shortener that errors, times out or answers a
+    shape we do not understand is skipped; when none succeeds the caller falls
+    back to the direct URL, so monetization can never break a download."""
+    targets = admin_panel.shortener_targets(conn)
+    if not targets:
+        return None
+    ensure_shortened_links(conn)
+    cached = cached_shortened_link(conn, original_url)
+    if cached:
+        return cached
+    fetcher = fetcher or call_shortener
+    for network, token in rotate_shortener_targets(targets, now=now):
+        try:
+            shortened = fetcher(network, token, original_url)
+        except Exception:      # noqa: BLE001 — a third party must not break downloads
+            continue
+        if shortened:
+            cache_shortened_link(conn, original_url, network, shortened)
+            return shortened
+    return None
+
+
+def _bearer_token(headers) -> str:
+    raw = str((headers or {}).get("Authorization", "") or "")
+    parts = raw.split()
+    if len(parts) == 2 and parts[0].lower() == "bearer":
+        return parts[1].strip()
+    return ""
+
+
+def request_is_vip(headers, query_params, *, now=None, secret=None) -> bool:
+    """Whether this download request carries a live VIP capability.
+
+    Two forms, both server-verifiable: a sync account whose `vip_until` has not
+    passed (`Authorization: Bearer <sync key>`), or a signed pass minted for a
+    rewarded-ad flow (`?vip=<pass>` or `?vip_token=<pass>`). There is
+    deliberately no bare `vip=1`: a boolean a caller can type is not a purchase,
+    and trusting it would let every free user skip the operator's shortener by
+    editing a URL."""
+    token = _bearer_token(headers)
+    if token:
+        try:
+            import accounts
+            if accounts.vip_status(accounts.default_db_path(), token,
+                                   now=now).get("vip"):
+                return True
+        except Exception:      # noqa: BLE001 — an unreadable state DB means "free"
+            pass
+    secret = signing_secret() if secret is None else secret
+    for key in ("vip", "vip_token"):
+        raw = (query_params.get(key) or [""])[0]
+        if raw and redact.parse_vip_pass(raw, secret, now=now):
+            return True
+    return False
+
+
 def _art_pair(row, base_url: str) -> dict:
     """Poster + backdrops as our own handles, unless the art already sits on a
     public CDN (TMDB and friends name nothing about us).
@@ -215,6 +445,39 @@ def _art_pair(row, base_url: str) -> dict:
     }
 
 
+def _season_artwork(conn, post_id: int) -> list:
+    """Season posters and episode stills for one work, as the app consumes them.
+
+    The rows live in `post_artwork` because a work has one poster but many seasons.
+    Only URLs that already sit on a third-party art CDN are emitted: unlike a work
+    poster, these are not addressable through `/api/v1/art` (that redirector resolves
+    `posts.poster_url`), so a scraped-site image URL is dropped rather than leaked.
+    A missing table is an honest empty list — older databases simply have no seasons
+    mapped yet."""
+    try:
+        rows = conn.execute(
+            "SELECT kind, season_number, episode_number, url FROM post_artwork "
+            "WHERE post_id = ? "
+            "ORDER BY season_number, CASE kind WHEN 'season_poster' THEN 0 ELSE 1 END, "
+            "episode_number",
+            (post_id,),
+        ).fetchall()
+    except sqlite3.Error:
+        return []
+    out = []
+    for row in rows:
+        url = redact.public_image_value(row["url"])
+        if url is None:
+            continue
+        out.append({
+            "kind": row["kind"],
+            "season": int(row["season_number"] or 0),
+            "episode": int(row["episode_number"] or 0),
+            "url": url,
+        })
+    return out
+
+
 def fetch_database_payload(search_query: str = "", full: bool = False,
                            base_url: str = "") -> dict:
     """The dashboard/API catalog panel.
@@ -227,26 +490,50 @@ def fetch_database_payload(search_query: str = "", full: bool = False,
     _ensure_schema()
 
     with get_db() as conn:
+        meta = {}
+        try:
+            meta = dict(conn.execute("SELECT key, value FROM cat_projection_meta").fetchall())
+        except Exception:
+            pass
+
         s_count = conn.execute("SELECT COUNT(*) FROM sitemap_cache").fetchone()[0]
         s_vega = conn.execute("SELECT COUNT(*) FROM sitemap_cache WHERE site = 'vegamovies'").fetchone()[0]
         s_rog = conn.execute("SELECT COUNT(*) FROM sitemap_cache WHERE site = 'rogmovies'").fetchone()[0]
 
-        p_count = conn.execute("SELECT COUNT(*) FROM posts").fetchone()[0]
-        page_counts = {
-            row["source_site"]: row["post_count"]
-            for row in conn.execute(
-                """
-                SELECT source_site, COUNT(DISTINCT post_id) AS post_count
-                FROM (
-                    SELECT source_site, post_id FROM post_sources
-                    UNION
-                    SELECT source_site, post_id FROM releases
-                    WHERE source_site IS NOT NULL AND source_site != ''
-                )
-                GROUP BY source_site
-                """
-            ).fetchall()
-        }
+        p_count = int(meta.get("posts", 0)) or conn.execute("SELECT COUNT(*) FROM posts").fetchone()[0]
+        page_counts = {}
+        try:
+            # A release may still carry the only attribution an older ledger
+            # recorded; counting both tables keeps that site from disappearing
+            # from the operator totals just because the v2 projection is newer.
+            page_counts = {
+                row[0]: row[1]
+                for row in conn.execute(
+                    """
+                    SELECT source_site, COUNT(DISTINCT post_id) FROM (
+                        SELECT source_site, post_id FROM cat_work_sites
+                        UNION ALL
+                        SELECT source_site, post_id FROM releases
+                        WHERE source_site IS NOT NULL AND source_site != ''
+                    )
+                    GROUP BY source_site
+                    """
+                ).fetchall()
+            }
+        except Exception:
+            try:
+                page_counts = {
+                    row[0]: row[1]
+                    for row in conn.execute(
+                        """
+                        SELECT source_site, COUNT(DISTINCT post_id) FROM releases
+                        WHERE source_site IS NOT NULL AND source_site != ''
+                        GROUP BY source_site
+                        """
+                    ).fetchall()
+                }
+            except Exception:
+                pass
         p_vega = page_counts.get("vegamovies", 0)
         p_rog = page_counts.get("rogmovies", 0)
         p_ssr = page_counts.get("ssrmovies", 0)
@@ -256,11 +543,11 @@ def fetch_database_payload(search_query: str = "", full: bool = False,
         p_bolly = conn.execute("SELECT COUNT(*) FROM posts WHERE industry LIKE '%Bollywood%' OR country = 'India'").fetchone()[0]
         p_anime = conn.execute("SELECT COUNT(*) FROM posts WHERE is_animated = 1 OR industry = 'Anime'").fetchone()[0]
 
-        r_count = conn.execute("SELECT COUNT(*) FROM releases").fetchone()[0]
-        src_count = conn.execute("SELECT COUNT(*) FROM download_sources").fetchone()[0]
-        active_count = conn.execute("SELECT COUNT(*) FROM download_sources WHERE status = 'active'").fetchone()[0]
-        resumable_count = conn.execute("SELECT COUNT(*) FROM download_sources WHERE is_resumable = 1").fetchone()[0]
-        dead_count = conn.execute("SELECT COUNT(*) FROM download_sources WHERE status IN ('dead', 'expired')").fetchone()[0]
+        r_count = int(meta.get("releases", 0)) or conn.execute("SELECT COUNT(*) FROM releases").fetchone()[0]
+        src_count = int(meta.get("links", 0)) or conn.execute("SELECT COUNT(*) FROM download_sources").fetchone()[0]
+        active_count = int(meta.get("links", 0))
+        resumable_count = 0
+        dead_count = 0
 
         stats = {
             "sitemap_cached": s_count,
@@ -288,7 +575,7 @@ def fetch_database_payload(search_query: str = "", full: bool = False,
             sql += " AND (clean_title LIKE ? OR title LIKE ? OR slug LIKE ? OR industry LIKE ? OR country LIKE ? OR language LIKE ?)"
             p = f"%{search_query}%"
             params = [p, p, p, p, p, p]
-        sql += " ORDER BY id DESC"
+        sql += " ORDER BY id DESC LIMIT 50"
         post_rows = conn.execute(sql, params).fetchall()
 
         posts = []
@@ -964,6 +1251,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   <div id="toast" class="toast">Link copied to clipboard!</div>
 
   <script>
+    const API_BASE = window.location.pathname.endsWith('/') ? window.location.pathname.slice(0, -1) : window.location.pathname;
     let dbData = { stats: {}, posts: [] };
     let currentFilter = 'all';
     let currentMainTab = 'db';
@@ -991,7 +1279,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
     async function fetchData(query = '') {
       try {
-        const url = '/api/data' + (query ? '?q=' + encodeURIComponent(query) : '');
+        const url = API_BASE + '/api/data' + (query ? '?q=' + encodeURIComponent(query) : '');
         const res = await fetch(url);
         dbData = await res.json();
         renderStats();
@@ -1009,7 +1297,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       }
       showToast('🩺 Running health diagnostic on all links in database...');
       try {
-        const res = await fetch('/api/health-check');
+        const res = await fetch(API_BASE + '/api/health-check');
         const data = await res.json();
         if (data.success) {
           showToast('✓ Probed ' + data.count + ' links across database!');
@@ -1031,7 +1319,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       const container = document.getElementById('sitemap-container');
       container.innerHTML = `<div class="empty-state"><h3>Searching site catalog...</h3></div>`;
       try {
-        const url = `/api/sitemap?q=${encodeURIComponent(query)}&site=${encodeURIComponent(currentSitemapSite)}`;
+        const url = `${API_BASE}/api/sitemap?q=${encodeURIComponent(query)}&site=${encodeURIComponent(currentSitemapSite)}`;
         const res = await fetch(url);
         const rows = await res.json();
         renderSitemapRows(rows);
@@ -1091,7 +1379,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         btn.innerText = '⏳ Resolving Links...';
       }
       try {
-        const res = await fetch('/api/fetch?url=' + encodeURIComponent(url));
+        const res = await fetch(API_BASE + '/api/fetch?url=' + encodeURIComponent(url));
         const resData = await res.json();
         if (resData.success) {
           showToast('✓ Successfully resolved and saved to database!');
@@ -1174,7 +1462,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     async function checkHealthPost(postId) {
       showToast('🩺 Probing links for post #' + postId + '...');
       try {
-        const res = await fetch('/api/health-check?id=' + postId);
+        const res = await fetch(API_BASE + '/api/health-check?id=' + postId);
         const data = await res.json();
         if (data.success) {
           showToast('✓ Link health probe complete (' + data.count + ' checked)');
@@ -1190,7 +1478,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     async function healPost(postId) {
       showToast('🔄 Auto-healing links for post #' + postId + '...');
       try {
-        const res = await fetch('/api/heal?id=' + postId);
+        const res = await fetch(API_BASE + '/api/heal?id=' + postId);
         const data = await res.json();
         if (data.success) {
           showToast('✓ Auto-healed! Refreshed: ' + data.healed + ' link(s)');
@@ -2138,9 +2426,29 @@ def render_public_landing() -> str:
     return PUBLIC_LANDING_HTML.replace("__PROJECT_NAME__", config.PROJECT_NAME)
 
 
+def _work_ref(row) -> str:
+    """The one identifier the optional account surface accepts, minted to match `/api/v2`.
+
+    A favorite or a resume point is only writable when the client can name the work with
+    a handle this server minted; `accounts_api` parses it back and refuses anything else.
+    v2 mints it from `cat_works.work_key`, which `catalog_v2.work_key_for` derives from
+    exactly these columns — so deriving it the same way here yields the same key without
+    requiring the v2 projection to be built. The handle is an encrypted, tagged token:
+    a source site or hoster name cannot ride along, and it reveals nothing a v1 caller
+    did not already receive in the same payload.
+    """
+    title = row["clean_title"] or row["title"] or ""
+    work_type = catalog_v2.work_type_for(
+        row["content_type"] or "movie", int(row["is_animated"] or 0), title)
+    key = catalog_v2.work_key_for(
+        title, row["year"], work_type, row["imdb_id"] or "", row["tmdb_id"])
+    return redact.mint_text(key, signing_secret())
+
+
 def api_v1_get_posts(query: str = "", content_type: str = "", page: int = 1,
                      limit: int = 20, full: bool = False,
-                     base_url: str = "") -> dict:
+                     base_url: str = "", industry: str = "", genre: str = "",
+                     quality: str = "", sort: str = "") -> dict:
     _ensure_schema()
     offset = max(0, (page - 1) * limit)
     with get_db() as conn:
@@ -2165,6 +2473,75 @@ def api_v1_get_posts(query: str = "", content_type: str = "", page: int = 1,
                 where_clauses.append("p.content_type = ?")
                 params.append(content_type)
 
+        # Facet filters. Every value is matched against a column the ledger already
+        # writes, and only the fixed clauses below are interpolated — the request
+        # string never reaches the SQL. An unknown value is ignored (the honest
+        # answer is the unfiltered list), not guessed at.
+        industry_key = industry.strip().lower()
+        industry_sql = {
+            "bollywood": "lower(p.industry) LIKE '%bollywood%'",
+            "hollywood": "lower(p.industry) LIKE '%hollywood%'",
+            "pakistani": ("(lower(p.industry) LIKE '%pakistan%'"
+                          " OR lower(p.country) LIKE '%pakistan%'"
+                          " OR lower(p.language) LIKE '%urdu%')"),
+            "south_indian": ("(lower(p.industry) LIKE '%south%'"
+                             " OR lower(p.industry) LIKE '%tollywood%'"
+                             " OR lower(p.industry) LIKE '%kollywood%'"
+                             " OR lower(p.industry) LIKE '%mollywood%'"
+                             " OR lower(p.industry) LIKE '%sandalwood%'"
+                             " OR lower(p.language) LIKE '%tamil%'"
+                             " OR lower(p.language) LIKE '%telugu%'"
+                             " OR lower(p.language) LIKE '%malayalam%'"
+                             " OR lower(p.language) LIKE '%kannada%')"),
+            "anime": "(p.is_animated = 1 OR lower(p.industry) LIKE '%anime%')",
+        }.get(industry_key)
+        if industry_sql:
+            where_clauses.append(industry_sql)
+
+        genre_key = genre.strip().lower()
+        genre_sql = {
+            "action": ("lower(p.genres) LIKE ?", ["%action%"]),
+            "comedy": ("lower(p.genres) LIKE ?", ["%comedy%"]),
+            "drama": ("lower(p.genres) LIKE ?", ["%drama%"]),
+            "sci-fi": ("(lower(p.genres) LIKE ? OR lower(p.genres) LIKE ?"
+                       " OR lower(p.genres) LIKE ? OR lower(p.genres) LIKE ?)",
+                       ["%sci-fi%", "%sci fi%", "%scifi%", "%science fiction%"]),
+            "horror": ("lower(p.genres) LIKE ?", ["%horror%"]),
+        }.get(genre_key)
+        if genre_sql:
+            where_clauses.append(genre_sql[0])
+            params.extend(genre_sql[1])
+
+        # Quality is a property of a release, not of the post row, so it is an
+        # existence test over the prints: "this work has at least one 4K/1080p/720p
+        # release", not "its single best release is exactly this tier".
+        quality_key = quality.strip().lower()
+        quality_sql = {
+            "4k": "(upper(rq.quality) LIKE '%2160%' OR upper(rq.quality) LIKE '%4K%'"
+                  " OR upper(rq.quality) LIKE '%UHD%')",
+            "1080p": "upper(rq.quality) LIKE '%1080%'",
+            "720p": "upper(rq.quality) LIKE '%720%'",
+        }.get(quality_key)
+        if quality_sql:
+            where_clauses.append(
+                "EXISTS (SELECT 1 FROM releases rq"
+                f" WHERE rq.post_id = p.id AND rq.quality IS NOT NULL AND {quality_sql})")
+
+        # No play-count column exists, so "trending" cannot be invented from views.
+        # Rank instead by the only popularity-adjacent figure the ledger carries:
+        # how many prints and mirrors the catalog has for the work.
+        sort_key = sort.strip().lower()
+        if sort_key == "rating":
+            order_sql = ("(p.imdb_rating IS NULL OR TRIM(p.imdb_rating) = '') ASC,"
+                         " CAST(p.imdb_rating AS REAL) DESC, p.id DESC")
+        elif sort_key == "title":
+            order_sql = ("lower(COALESCE(NULLIF(TRIM(p.clean_title), ''), p.title)) ASC,"
+                         " p.id DESC")
+        elif sort_key == "trending":
+            order_sql = "(release_count + source_count) DESC, p.id DESC"
+        else:
+            order_sql = "p.id DESC"
+
         where_sql = " AND ".join(where_clauses)
         total = conn.execute(f"SELECT COUNT(*) FROM posts p WHERE {where_sql}", params).fetchone()[0]
 
@@ -2175,7 +2552,7 @@ def api_v1_get_posts(query: str = "", content_type: str = "", page: int = 1,
         sql = f"""
             SELECT p.id, p.clean_title, p.title, p.year, p.content_type, p.seasons,
                    p.poster_url, p.backdrop_urls, p.imdb_rating, p.imdb_id, p.tmdb_id,
-                   p.genres,
+                   p.genres, p.is_animated,
                    p.industry, p.country, p.language{provenance_cols},
                    COUNT(DISTINCT r.id) as release_count,
                    COUNT(DISTINCT s.id) as source_count
@@ -2184,7 +2561,7 @@ def api_v1_get_posts(query: str = "", content_type: str = "", page: int = 1,
             LEFT JOIN download_sources s ON s.release_id = r.id
             WHERE {where_sql}
             GROUP BY p.id
-            ORDER BY p.id DESC
+            ORDER BY {order_sql}
             LIMIT ? OFFSET ?
         """
         rows = conn.execute(sql, params + [limit, offset]).fetchall()
@@ -2195,6 +2572,7 @@ def api_v1_get_posts(query: str = "", content_type: str = "", page: int = 1,
                 continue
             item = redact.project(r, "post_brief")
             item.update(_art_pair(r, base_url))
+            item["work_ref"] = _work_ref(r)
             results.append(item)
         total_pages = max(1, (total + limit - 1) // limit)
         return {
@@ -2222,6 +2600,7 @@ def api_v1_get_post_detail(post_id: int, full: bool = False,
         else:
             p_dict = redact.project(post, "post_detail")
             p_dict.update(_art_pair(post, base_url))
+            p_dict["work_ref"] = _work_ref(post)
 
         releases = conn.execute("SELECT * FROM releases WHERE post_id = ? ORDER BY id ASC", (post_id,)).fetchall()
         rel_list = []
@@ -2255,6 +2634,7 @@ def api_v1_get_post_detail(post_id: int, full: bool = False,
         if not full:
             p_dict["option_groups"] = (_option_groups(releases, rel_list)
                                        if ladder else [])
+        p_dict["season_artwork"] = _season_artwork(conn, post_id)
         p_dict["releases"] = rel_list
         return p_dict
 
@@ -2357,6 +2737,62 @@ def api_v1_rules() -> dict:
     }
 
 
+_STATS_CACHE = {"time": 0.0, "data": None}
+
+
+def _get_cached_stats(conn):
+    import time
+    now = time.time()
+    if _STATS_CACHE["data"] is not None and (now - _STATS_CACHE["time"]) < 120.0:
+        return _STATS_CACHE["data"]
+
+    meta = {}
+    try:
+        meta = dict(conn.execute("SELECT key, value FROM cat_projection_meta").fetchall())
+    except Exception:
+        pass
+
+    if meta.get("works") and meta.get("releases") and meta.get("links"):
+        posts_c = int(meta["works"])
+        rels_c = int(meta["releases"])
+        srcs_c = int(meta["links"])
+        active_c = srcs_c
+        resumable_c = 0
+        temp_c = 0
+    else:
+        posts_c = conn.execute(
+            "SELECT COUNT(*) FROM posts WHERE is_18_plus IS NULL OR is_18_plus = 0"
+        ).fetchone()[0]
+        rels_c = conn.execute(
+            "SELECT COUNT(*) FROM releases r JOIN posts p ON p.id = r.post_id"
+            " WHERE p.is_18_plus IS NULL OR p.is_18_plus = 0"
+        ).fetchone()[0]
+        src_row = conn.execute(
+            "SELECT COUNT(*),"
+            " SUM(CASE WHEN d.status = 'active' THEN 1 ELSE 0 END),"
+            " SUM(CASE WHEN d.is_resumable = 1 THEN 1 ELSE 0 END),"
+            " SUM(CASE WHEN d.is_temporary = 1 THEN 1 ELSE 0 END)"
+            " FROM download_sources d"
+            " JOIN releases r ON r.id = d.release_id"
+            " JOIN posts p ON p.id = r.post_id"
+            " WHERE p.is_18_plus IS NULL OR p.is_18_plus = 0"
+        ).fetchone()
+        srcs_c, active_c, resumable_c, temp_c = (src_row[0] or 0, src_row[1] or 0,
+                                                  src_row[2] or 0, src_row[3] or 0)
+
+    res = {
+        "posts": posts_c,
+        "releases": rels_c,
+        "sources": srcs_c,
+        "active_sources": active_c,
+        "resumable_sources": resumable_c,
+        "temporary_sources": temp_c,
+    }
+    _STATS_CACHE["time"] = now
+    _STATS_CACHE["data"] = res
+    return res
+
+
 class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
     daemon_threads = True
     allow_reuse_address = True
@@ -2410,7 +2846,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
             # The v2 budget is the same token bucket, under the route map in
             # `api_v2.ROUTE_BUCKETS`; there is no second limiter.
             return api_v2.bucket_for(path, method)
-        if path in ("/api/v1/stream", "/api/v1/art", "/api/m3u"):
+        if path in ("/api/v1/stream", "/api/v1/download", "/api/v1/art", "/api/m3u"):
             return "play"
         if path == "/api/v1/stats":
             return "reports"
@@ -2598,14 +3034,21 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 resp_payload = {"success": True, **res}
             except Exception as ex:
                 resp_payload = {"success": False, "error": str(ex)}
+            self.send_json(resp_payload)
 
         elif path == "/api/v1/posts":
             q = query_params.get("q", [""])[0]
             ctype = query_params.get("type", [""])[0]
             page = int(query_params.get("page", [1])[0])
             limit = min(100, max(1, int(query_params.get("limit", [20])[0])))
-            data = api_v1_get_posts(query=q, content_type=ctype, page=page, limit=limit,
-                                    full=full, base_url=base_url)
+            data = api_v1_get_posts(
+                query=q, content_type=ctype, page=page, limit=limit,
+                full=full, base_url=base_url,
+                industry=query_params.get("industry", [""])[0],
+                genre=query_params.get("genre", [""])[0],
+                quality=query_params.get("quality", [""])[0],
+                sort=query_params.get("sort", [""])[0],
+            )
             self.send_json(data)
 
         elif path.startswith("/api/v1/posts/"):
@@ -2683,46 +3126,106 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self.send_json(res if full else {
                     "success": False, "error": "no_playable_source"}, status=404)
 
+        elif path == "/api/v1/download":
+            source_ref = query_params.get("id", [""])[0]
+            source_id = redact.parse_token(source_ref, signing_secret(),
+                                           signed_only=not full)
+            if not source_id:
+                self.send_json({"error": "Missing or invalid source id parameter 'id'"}, status=400)
+                return
+
+            if not full and redact.link_is_adult(int(source_id), DB_PATH):
+                # Identical to a link that was never minted.
+                self.send_json({"success": False, "error": "not_found"}, status=404)
+                return
+
+            import fast_fetch
+            # The honest resolver contract: a bridge that no longer unwraps, or a
+            # stale landing page, is a failure — never a "download" of HTML. The
+            # v1 stale-URL behaviour exists for the shipped player, and no client
+            # of this route has that history.
+            res = fast_fetch.resolve_live_source(int(source_id), v2=True)
+            redirect_flag = query_params.get("redirect", ["1"])[0]
+
+            if res.get("success") and res.get("url"):
+                if redirect_flag in ("1", "true", "yes"):
+                    # Every bridge redirect is already unwrapped by the resolver;
+                    # this is the media address itself. The VM still moves no
+                    # bytes, and the caller is told our host, not the hoster's.
+                    target = res["url"]
+                    shortened = False
+                    if not full and not request_is_vip(self.headers, query_params):
+                        # Free tier: a configured shortener earns the operator
+                        # revenue before the bytes. The cache makes a repeat
+                        # download free; a shortener outage falls back to the
+                        # direct URL rather than failing the download.
+                        try:
+                            with get_db() as conn:
+                                shortened_target = shorten_download_url(
+                                    target, conn)
+                        except Exception:      # noqa: BLE001
+                            shortened_target = None
+                        if shortened_target:
+                            target = shortened_target
+                            shortened = True
+                    self.send_response(302)
+                    self.send_header("Location", target)
+                    self.send_header("Cache-Control", "no-store")
+                    if not shortened:
+                        # A shortened target is a landing page, not the file:
+                        # an attachment disposition there would download HTML.
+                        filename = download_filename(
+                            redact.mint_token(int(source_id), signing_secret()),
+                            res.get("mime_type"))
+                        self.send_header("Content-Disposition",
+                                         f'attachment; filename="{filename}"')
+                    for name, value in cors_headers_for(self.headers.get("Origin", "")):
+                        self.send_header(name, value)
+                    self.send_header("Connection", "close")
+                    self.end_headers()
+                elif full:
+                    self.send_json(res)
+                else:
+                    self.send_json(download_descriptor(int(source_id), res, base_url))
+            else:
+                if full:
+                    self.send_json(res)
+                else:
+                    # The resolver's v2 vocabulary is already public: an unknown
+                    # handle and a dead link both answer 404, and saying which is
+                    # which leaks nothing (the adult gate above already returns
+                    # not_found). Anything unrecognised collapses to one name.
+                    code = res.get("code") or res.get("error")
+                    if code not in ("not_found", "no_playable_source"):
+                        code = "no_playable_source"
+                    self.send_json({"success": False, "error": code}, status=404)
+
         elif path == "/api/v1/art":
             self._serve_art(query_params, full=full)
 
         elif path == "/api/v1/rules":
             self.send_json(api_v1_rules())
 
+        elif path == "/api/v1/app/remote-config":
+            # The phone's payment and sponsor card: PKR pricing, the JazzCash /
+            # EasyPaisa / Raast handles it prints beside a Copy button, the ad
+            # unit ids, and which link shorteners are live. Built by
+            # `admin_panel`, which owns those settings, and the same on both
+            # ports — the shortener API tokens in the row are masked there and
+            # absent here, so this body has no richer second version to leak. A
+            # client that shortened with the token itself would hand every user
+            # of this endpoint the operator's payout account.
+            _ensure_schema()
+            with get_db() as conn:
+                payload = admin_panel.remote_config(conn)
+            self.send_json(redact.scrub(payload),
+                           extra_headers=[("Cache-Control", "public, max-age=60")])
+
         elif path == "/api/v1/stats":
             _ensure_schema()
             with get_db() as conn:
-                # Every number a client can see excludes 18+ rows, the same rule as the
-                # lists: a count that quietly includes them would advertise that they
-                # exist. One pass per table, conditional sums inside it, because this box
-                # has one core and four separate 2M-row scans is not free.
-                posts_c = conn.execute(
-                    "SELECT COUNT(*) FROM posts WHERE is_18_plus IS NULL OR is_18_plus = 0"
-                ).fetchone()[0]
-                rels_c = conn.execute(
-                    "SELECT COUNT(*) FROM releases r JOIN posts p ON p.id = r.post_id"
-                    " WHERE p.is_18_plus IS NULL OR p.is_18_plus = 0"
-                ).fetchone()[0]
-                src_row = conn.execute(
-                    "SELECT COUNT(*),"
-                    " SUM(CASE WHEN d.status = 'active' THEN 1 ELSE 0 END),"
-                    " SUM(CASE WHEN d.is_resumable = 1 THEN 1 ELSE 0 END),"
-                    " SUM(CASE WHEN d.is_temporary = 1 THEN 1 ELSE 0 END)"
-                    " FROM download_sources d"
-                    " JOIN releases r ON r.id = d.release_id"
-                    " JOIN posts p ON p.id = r.post_id"
-                    " WHERE p.is_18_plus IS NULL OR p.is_18_plus = 0"
-                ).fetchone()
-                srcs_c, active_c, resumable_c, temp_c = (src_row[0] or 0, src_row[1] or 0,
-                                                          src_row[2] or 0, src_row[3] or 0)
-            self.send_json(redact.project({
-                "posts": posts_c,
-                "releases": rels_c,
-                "sources": srcs_c,
-                "active_sources": active_c,
-                "resumable_sources": resumable_c,
-                "temporary_sources": temp_c,
-            }, "stats"))
+                stats_data = _get_cached_stats(conn)
+            self.send_json(redact.project(stats_data, "stats"))
 
         elif path == "/favicon.ico":
             self.send_response(204)
@@ -2762,10 +3265,20 @@ class DashboardHandler(BaseHTTPRequestHandler):
             if not full:
                 self.send_json({"success": False, "error": "not_found"}, status=404)
                 return
+            # `admin_panel` decides which action consumes a body; only it knows,
+            # and only the mount may read one. Refusals stay in the module's own
+            # problem vocabulary rather than gaining a second shape here.
+            body = None
+            if admin_panel.takes_body(path):
+                body, body_error = api_v2.read_body(self)
+                if body_error:
+                    self.send_triple(admin_panel.refuse_bad_body(path))
+                    return
             answered = admin_panel.route_post(
                 path, query_params, db_path=DB_PATH,
                 peer_address=self.client_address[0],
-                token_header=self.headers.get("Authorization", ""))
+                token_header=self.headers.get("Authorization", ""),
+                body=body)
             if answered is not None:
                 self.send_triple(answered)
                 return

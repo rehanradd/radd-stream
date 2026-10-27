@@ -16,34 +16,68 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
 /**
- * Rich search built on what `GET /api/v1/posts` can do *today*: a single `q` LIKE and
- * a single `type`, paged. Everything else is composed honestly on top:
+ * Rich search built on what `GET /api/v1/posts` can do today.
  *
- *  - **Server-driven:** free-text `q` (debounced) + `type` + paging (`page`/`limit`).
- *  - **Client-driven over the accumulated page(s):** sort, year range, source-site
- *    filter, and grouping by content type. These operate on rows already fetched
- *    (first page is `limit = 100`, the v1 max, so ordinary queries are complete in
- *    one page). We label sorting as "within loaded results" and request true
- *    server-side sort/facets in docs/HANDOFF_appui.md rather than pretending the
- *    subset is the whole catalog.
+ *  - **Server-driven:** free-text `q` (debounced), `type`, and the industry /
+ *    genre / quality / sort facets. The backend composes them into SQL before
+ *    paging, so a chip narrows the whole catalog rather than only the rows this
+ *    device has already loaded.
+ *  - **Client-driven over the accumulated page(s):** the year range and the
+ *    final per-group ordering. Grouping by content type is presentation only.
  *
- * We deliberately do NOT render genre / language / quality-floor / availability chips,
- * because the v1 list payload carries none of those fields — offering them would be
- * dead UI. The server facet endpoint is requested instead.
+ * Quality facets are an existence test over `releases.quality` on the server
+ * (`4K` also matches 2160p/UHD). That is why the chip works even though the v1
+ * list row itself carries no quality column.
+ *
+ * "Trending" is honest about its input: the ledger has no play-count column, so
+ * the server ranks by how many prints/mirrors the catalog holds for the work.
  */
 
-enum class SearchSort(val label: String) {
-    RELEVANCE("Server order"),
-    NEWEST("Newest"),
-    TITLE("Title A–Z"),
-    RATING("Rating"),
+enum class SearchSort(val label: String, val wireValue: String) {
+    TRENDING("Trending", "trending"),
+    NEWEST("Newest", "newest"),
+    HIGHEST_IMDB("Highest IMDb", "rating"),
+    TITLE("Title A–Z", "title"),
+}
+
+enum class IndustryFilter(val label: String, val wireValue: String?) {
+    ALL("All", null),
+    BOLLYWOOD("Bollywood", "bollywood"),
+    HOLLYWOOD("Hollywood", "hollywood"),
+    PAKISTANI("Pakistani", "pakistani"),
+    SOUTH_INDIAN("South Indian", "south_indian"),
+    ANIME("Anime", "anime"),
+}
+
+enum class GenreFilter(val label: String, val wireValue: String?) {
+    ALL("All", null),
+    ACTION("Action", "action"),
+    COMEDY("Comedy", "comedy"),
+    DRAMA("Drama", "drama"),
+    SCI_FI("Sci-Fi", "sci-fi"),
+    HORROR("Horror", "horror"),
+}
+
+enum class QualityFilter(val label: String, val wireValue: String?) {
+    ALL("All", null),
+    UHD_4K("4K", "4k"),
+    FULL_HD("1080p", "1080p"),
+    HD("720p", "720p"),
 }
 
 data class SearchFilters(
     val type: String? = null,
+    val industry: IndustryFilter = IndustryFilter.ALL,
+    val genre: GenreFilter = GenreFilter.ALL,
+    val quality: QualityFilter = QualityFilter.ALL,
     val yearFrom: Int? = null,
     val yearTo: Int? = null,
 ) {
+    val anyServerFilterActive: Boolean
+        get() = industry != IndustryFilter.ALL ||
+            genre != GenreFilter.ALL ||
+            quality != QualityFilter.ALL
+
     val anyClientFilterActive: Boolean
         get() = yearFrom != null || yearTo != null
 }
@@ -56,17 +90,22 @@ data class SearchUiState(
     val isLoadingMore: Boolean = false,
     val error: String? = null,
     val filters: SearchFilters = SearchFilters(),
-    val sort: SearchSort = SearchSort.RELEVANCE,
+    val sort: SearchSort = SearchSort.TRENDING,
     val groups: List<TypeGroup> = emptyList(),
     val resultCount: Int = 0,
     val recents: List<String> = emptyList(),
-    val trendingHidden: Boolean = true, // no server support — see handoff; never faked
+    val trendingHidden: Boolean = true, // no play counts — see SearchSort.TRENDING
     val page: Int = 1,
     val hasMore: Boolean = false,
     val hasSearched: Boolean = false,
 ) {
+    /** A blank query is still a search when a server facet is selected. */
+    val hasSearchIntent: Boolean
+        get() = query.isNotBlank() || filters.anyServerFilterActive
+
     val hasActiveFilters: Boolean
-        get() = filters.type != null || filters.anyClientFilterActive || sort != SearchSort.RELEVANCE
+        get() = filters.type != null || filters.anyServerFilterActive ||
+            filters.anyClientFilterActive || sort != SearchSort.TRENDING
 }
 
 @HiltViewModel
@@ -105,9 +144,30 @@ class SearchViewModel @Inject constructor(
         scheduleSearch(reset = true)
     }
 
+    fun selectIndustry(industry: IndustryFilter) {
+        if (_uiState.value.filters.industry == industry) return
+        _uiState.update { it.copy(filters = it.filters.copy(industry = industry)) }
+        scheduleSearch(reset = true)
+    }
+
+    fun selectGenre(genre: GenreFilter) {
+        if (_uiState.value.filters.genre == genre) return
+        _uiState.update { it.copy(filters = it.filters.copy(genre = genre)) }
+        scheduleSearch(reset = true)
+    }
+
+    fun selectQuality(quality: QualityFilter) {
+        if (_uiState.value.filters.quality == quality) return
+        _uiState.update { it.copy(filters = it.filters.copy(quality = quality)) }
+        scheduleSearch(reset = true)
+    }
+
     fun setSort(sort: SearchSort) {
+        if (_uiState.value.sort == sort) return
         _uiState.update { it.copy(sort = sort) }
-        recompute()
+        // Sort is a server ordering, so re-fetch instead of reordering only the
+        // rows this device happens to hold.
+        scheduleSearch(reset = true)
     }
 
     fun setYearRange(from: Int?, to: Int?) {
@@ -116,13 +176,18 @@ class SearchViewModel @Inject constructor(
     }
 
     fun resetFilters() {
-        _uiState.update { it.copy(filters = SearchFilters(type = it.filters.type), sort = SearchSort.RELEVANCE) }
-        recompute()
+        _uiState.update {
+            it.copy(
+                filters = SearchFilters(type = it.filters.type),
+                sort = SearchSort.TRENDING,
+            )
+        }
+        scheduleSearch(reset = true)
     }
 
     fun loadMore() {
         val state = _uiState.value
-        if (!state.hasMore || state.isLoadingMore || state.query.isBlank()) return
+        if (!state.hasMore || state.isLoadingMore || !state.hasSearchIntent) return
         moreJob?.cancel()
         moreJob = viewModelScope.launch {
             _uiState.update { it.copy(isLoadingMore = true) }
@@ -131,6 +196,10 @@ class SearchViewModel @Inject constructor(
                 val resp = catalogRepository.getPosts(
                     query = state.query.trim(),
                     type = state.filters.type,
+                    industry = state.filters.industry.wireValue,
+                    genre = state.filters.genre.wireValue,
+                    quality = state.filters.quality.wireValue,
+                    sort = state.sort.wireValue,
                     page = next,
                     limit = PAGE_SIZE,
                 )
@@ -149,8 +218,10 @@ class SearchViewModel @Inject constructor(
 
     private fun scheduleSearch(reset: Boolean, immediate: Boolean = false) {
         searchJob?.cancel()
-        val query = _uiState.value.query.trim()
-        if (query.isBlank()) {
+        val state = _uiState.value
+        val query = state.query.trim()
+        val filters = state.filters
+        if (query.isBlank() && !filters.anyServerFilterActive) {
             rawResults = emptyList()
             _uiState.update {
                 it.copy(
@@ -167,7 +238,11 @@ class SearchViewModel @Inject constructor(
             try {
                 val resp = catalogRepository.getPosts(
                     query = query,
-                    type = _uiState.value.filters.type,
+                    type = filters.type,
+                    industry = filters.industry.wireValue,
+                    genre = filters.genre.wireValue,
+                    quality = filters.quality.wireValue,
+                    sort = state.sort.wireValue,
                     page = 1,
                     limit = PAGE_SIZE,
                 )
@@ -222,9 +297,19 @@ class SearchViewModel @Inject constructor(
                     typeKey = posts.firstOrNull()?.contentType,
                     items = when (sort) {
                         SearchSort.TITLE -> posts.sortedBy { (it.cleanTitle ?: it.title).lowercase() }
-                        SearchSort.RATING -> posts.sortedByDescending { it.imdbRating?.toDoubleOrNull() ?: -1.0 }
-                        SearchSort.NEWEST -> posts.sortedByDescending { it.year ?: 0 }
-                        SearchSort.RELEVANCE -> posts
+                        SearchSort.HIGHEST_IMDB -> posts.sortedWith(
+                            compareByDescending<Post> { it.imdbRating?.toDoubleOrNull() ?: -1.0 }
+                                .thenByDescending { it.id },
+                        )
+                        SearchSort.NEWEST -> posts.sortedWith(
+                            compareByDescending<Post> { it.year ?: 0 }
+                                .thenByDescending { it.id },
+                        )
+                        // Mirrors the server's coverage ranking: no play counts exist.
+                        SearchSort.TRENDING -> posts.sortedWith(
+                            compareByDescending<Post> { (it.releaseCount ?: 0) + (it.sourceCount ?: 0) }
+                                .thenByDescending { it.id },
+                        )
                     },
                 )
             }

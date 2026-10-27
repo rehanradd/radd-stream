@@ -12,6 +12,7 @@ sealed class Screen(val route: String) {
     object MyList : Screen("my_list")
     object Settings : Screen("settings")
     object Downloads : Screen("downloads")
+    object VipUpgrade : Screen("vip_upgrade")
     object Browse : Screen("browse/{type}") {
         const val ARG_TYPE = "type"
         fun createRoute(type: String?): String = "browse/${type ?: "all"}"
@@ -44,6 +45,28 @@ sealed class Screen(val route: String) {
             }
 
         fun decodeTitle(encoded: String): String =
+            try {
+                URLDecoder.decode(encoded, StandardCharsets.UTF_8.name())
+            } catch (_: Exception) {
+                encoded
+            }
+    }
+
+    /**
+     * A finished public download addressed by its own local content/file URI. It is not a
+     * stream handle and must not be routed through the redirector: the bytes are already here.
+     */
+    object PlayerLocal : Screen("player_local/{uri}/{title}") {
+        const val ARG_URI = "uri"
+        const val ARG_TITLE = "title"
+
+        fun createRoute(uri: String, title: String): String {
+            val encodedUri = URLEncoder.encode(uri, StandardCharsets.UTF_8.name())
+            val encodedTitle = URLEncoder.encode(title, StandardCharsets.UTF_8.name())
+            return "player_local/$encodedUri/$encodedTitle"
+        }
+
+        fun decode(encoded: String): String =
             try {
                 URLDecoder.decode(encoded, StandardCharsets.UTF_8.name())
             } catch (_: Exception) {

@@ -89,18 +89,18 @@ fun PosterCard(
             ) {
                 val posterUrl = post.posterUrl?.takeIf { it.isNotBlank() }
                 if (posterUrl == null) {
-                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        Text(
-                            text = title.take(2).uppercase(),
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            style = MaterialTheme.typography.titleMedium,
-                        )
-                    }
+                    ImageFallbackCard(
+                        modifier = Modifier.fillMaxSize(),
+                        label = title.take(2).uppercase(),
+                    )
                 } else {
                     CatalogImage(
                         url = posterUrl,
                         contentDescription = null, // tile-level a11y already announced the title
                         modifier = Modifier.fillMaxSize(),
+                        // A dead poster URL must not look like "no artwork exists" — the
+                        // branded fallback says what failed, and keeps the title readable.
+                        fallbackLabel = title.take(2).uppercase(),
                     )
                 }
 

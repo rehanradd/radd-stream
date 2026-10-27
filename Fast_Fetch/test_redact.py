@@ -119,7 +119,9 @@ class FixtureMixin(unittest.TestCase):
         self.second_id = fast_fetch.save_scraped_data(
             media("hdhub4u", "https://hdhub4u.example/example-film-hd/",
                   quality="720p", service="hubcloud", source_name="HubCloud Link",
-                  final_url="https://hubcloud.foo/dr/xyz",
+                  # `pixel.` is HubCloud's byte server; a bare `/drive/` host is a
+                  # landing page and is refused by the resolver on purpose.
+                  final_url="https://pixel.hubcloud.foo/drive/xyz",
                   poster="https://img.hdhub4u.example/poster.jpg"))
         self.adult_id = fast_fetch.save_scraped_data(
             media("gamerxyt", "https://gamerxyt.example/adult-title/",

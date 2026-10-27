@@ -100,23 +100,30 @@ class SyncAccountRepository @Inject constructor(
     }
 
     /**
-     * Import a key the viewer already has — read off another device's account card, or one
-     * they wrote down. POST api/v2/account with the key in the body answers `created: false`
-     * for a key this server already knows, and opens a library around one it does not. Both
-     * outcomes store the same key, and the second one is the honest limit of a restore: a
-     * typo long enough to pass the shape check opens a NEW empty library rather than failing,
-     * so the card says to paste the whole key instead of promising a not-found answer.
+     * One tap: sign in with a Pakistani mobile number or a key the viewer already holds.
+     *
+     * A mobile number is normalized and derived into a 16-character credential on this
+     * device (see [SyncContract.quickLoginKey]); the number itself never leaves the phone.
+     * A 16-character server-minted key, or an older longer key, is sent unchanged — that is
+     * what makes the same key open the same library on a second device. The card's honest
+     * warning about a number's small entropy lives in the screen, not in this call.
+     *
+     * POST api/v2/account with the key in the body answers `created: false` for a key this
+     * server already knows, and opens a library around one it does not. A typo long enough
+     * to pass the shape check therefore opens a NEW empty library rather than failing, so
+     * the card says to check the number or key instead of promising a not-found answer.
      */
-    suspend fun restoreWithKey(candidate: String): AccountMutation {
-        val key = candidate.trim()
-        if (!SyncContract.isUsableSyncKey(key)) {
-            return AccountMutation.Refused(Refusal.WEAK_KEY)
-        }
+    suspend fun quickSignIn(input: String): AccountMutation {
+        val key = SyncContract.quickLoginKey(input)
+            ?: return AccountMutation.Refused(Refusal.WEAK_KEY)
         return try {
             val answer = apiProvider.current().createAccount(AccountCreateRequest(syncKey = key)).account
             val stored = answer?.syncKey?.trim()?.takeIf { it.isNotEmpty() } ?: key
             settingsRepository.saveSyncKey(stored)
-            AccountMutation.SignedIn(revealedKey = if (answer?.created == true) stored else null)
+            // Nothing to reveal: the viewer supplied the credential (or the number it is
+            // derived from), and can do so again on any device. Minting a fresh random key
+            // is the separate "Create account" door, and that is the only reveal path.
+            AccountMutation.SignedIn(revealedKey = null)
         } catch (error: Exception) {
             refusalOf(error, hadWorkRef = false)
         }

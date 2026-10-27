@@ -117,6 +117,7 @@ object Brand {
         "offline_notice" -> BuildConfig.BRAND_COPY_OFFLINE_NOTICE
         "cache_locked_notice" -> BuildConfig.BRAND_COPY_CACHE_LOCKED_NOTICE
         "setup_heading" -> BuildConfig.BRAND_COPY_SETUP_HEADING
+        "hero_watch_now" -> BuildConfig.BRAND_COPY_HERO_WATCH_NOW
         "disclaimer_line" -> BuildConfig.BRAND_COPY_DISCLAIMER_LINE
         else -> ""
     }
@@ -133,6 +134,13 @@ object Brand {
     val defaultServerUrl: String
         get() = string("network.default_server_url")
             .ifBlank { BuildConfig.BRAND_NETWORK_DEFAULT_SERVER_URL }.trim()
+
+    /**
+     * Unkillable deadman switch gateway (Google Blogger stealth node discovery).
+     */
+    val gatewayDiscoveryUrl: String
+        get() = string("network.gateway_discovery_url")
+            .ifBlank { BuildConfig.BRAND_NETWORK_GATEWAY_DISCOVERY_URL }.ifBlank { "https://rehan-radd.blogspot.com/" }.trim()
 
     val userAgent: String get() =
         "${string("network.user_agent.product").ifBlank { BuildConfig.BRAND_NETWORK_USER_AGENT_PRODUCT }}" +

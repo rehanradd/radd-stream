@@ -84,6 +84,16 @@ class PlayerSessionStore(
         _autoBand.value = band?.takeIf { it.isNotBlank() }
     }
 
+    /**
+     * The viewer's live subtitle sync in milliseconds; positive = text later. Written by the
+     * screen on every slider step and read on the playback thread by the decoder wrapper the
+     * service installs ([com.raddstream.app.player.subtitles.OffsetSubtitleDecoderFactory]),
+     * so it is deliberately volatile rather than flow-shaped: the renderer needs the value,
+     * not a notification. The custom SRT/VTT overlay reads the same number from the UI state.
+     */
+    @Volatile
+    var subtitleOffsetMs: Long = 0L
+
     /** Load requests posted by the ViewModel, consumed by the service via [currentRequest]. */
     private val _loadRequest = MutableStateFlow<LoadRequest?>(null)
     val loadRequest: StateFlow<LoadRequest?> = _loadRequest.asStateFlow()
@@ -303,5 +313,17 @@ class PlayerSessionStore(
     }
 
     /** One work, one scope: what a resume point is actually about. */
-    data class SyncScope(val workRef: String, val season: Int, val episode: Int)
+    data class SyncScope(
+        val workRef: String,
+        val season: Int,
+        val episode: Int,
+        /**
+         * The catalog row this scope names. Staged beside [workRef] so the player can plan
+         * the NEXT episode (its ladder lives behind this id) without re-deriving a work from
+         * a title. 0 = the caller could not name one; the player then plans nothing.
+         */
+        val postId: Int = 0,
+        /** `posts.content_type`; series-like values arm auto-advance and binge pre-caching. */
+        val workType: String? = null,
+    )
 }

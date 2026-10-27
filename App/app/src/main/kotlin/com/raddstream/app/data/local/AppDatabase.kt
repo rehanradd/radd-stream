@@ -27,6 +27,10 @@ import com.raddstream.app.data.cache.CacheTaskEntity
  * fallback on purpose: a saved list is the one table in this app a viewer would notice losing,
  * and an app that wipes it because a feature was switched on has broken a promise the feature
  * never made.
+ *
+ * Version 5 adds `watch_history`, the local Continue watching rows. It is a new table with no
+ * prior data, but it is still real DDL: the destructive fallback on this builder would take
+ * `favorite_posts` with it.
  */
 @Database(
     entities = [
@@ -35,8 +39,9 @@ import com.raddstream.app.data.cache.CacheTaskEntity
         CacheFileEntity::class,
         ByteRangeManifestEntity::class,
         SyncedProgressEntity::class,
+        WatchHistoryEntity::class,
     ],
-    version = 4,
+    version = 5,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -45,6 +50,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun cacheFileDao(): CacheFileDao
     abstract fun byteRangeManifestDao(): ByteRangeManifestDao
     abstract fun syncedProgressDao(): SyncedProgressDao
+    abstract fun watchHistoryDao(): WatchHistoryDao
 
     companion object {
         /**
@@ -91,6 +97,20 @@ abstract class AppDatabase : RoomDatabase() {
                         "episodeNumber INTEGER NOT NULL, positionSeconds REAL NOT NULL, " +
                         "durationSeconds REAL NOT NULL, clientUpdatedAt REAL NOT NULL, " +
                         "pulledAt INTEGER NOT NULL, PRIMARY KEY(workRef, seasonNumber, episodeNumber))",
+                )
+            }
+        }
+
+        /** 4 → 5: the local Continue watching rows. One statement, no existing row touched. */
+        val MIGRATION_4_5: Migration = object : Migration(4, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS watch_history (" +
+                        "workRef TEXT NOT NULL, postId INTEGER NOT NULL, title TEXT NOT NULL, " +
+                        "posterUrl TEXT, seasonNumber INTEGER NOT NULL, " +
+                        "episodeNumber INTEGER NOT NULL, positionMs INTEGER NOT NULL, " +
+                        "durationMs INTEGER NOT NULL, updatedAt INTEGER NOT NULL, " +
+                        "PRIMARY KEY(workRef, seasonNumber, episodeNumber))",
                 )
             }
         }

@@ -1,6 +1,7 @@
 package com.raddstream.app.ui.screens
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -18,6 +19,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -39,6 +42,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.raddstream.app.brand.Brand
+import com.raddstream.app.data.downloads.DeviceDownload
+import com.raddstream.app.data.downloads.DeviceDownloadState
 import com.raddstream.app.ui.components.EmptyState
 import com.raddstream.app.ui.components.Pill
 import com.raddstream.app.viewmodel.DownloadsViewModel
@@ -51,6 +56,7 @@ import com.raddstream.app.viewmodel.StorageInfo
 fun DownloadsScreen(
     onBackClick: () -> Unit,
     onPlay: (KeptItem) -> Unit = {},
+    onPlayLocal: (uri: String, title: String) -> Unit = { _, _ -> },
     viewModel: DownloadsViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsState()
@@ -79,7 +85,6 @@ fun DownloadsScreen(
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
             item { StorageCard(state.storage) }
-            item { PlayableOnlyNotice() }
             state.statusMessage?.let { msg ->
                 item {
                     Text(
@@ -90,7 +95,39 @@ fun DownloadsScreen(
                 }
             }
 
-            if (state.items.isEmpty()) {
+            if (state.deviceDownloads.isNotEmpty()) {
+                item { SectionTitle("Saved to this device") }
+                item {
+                    NoticeCard(
+                        "Files live in Movies/RaddStream and keep playing after the app closes. " +
+                            "The notification shows live progress; pause or resume here.",
+                    )
+                }
+                items(state.deviceDownloads, key = { "device-${it.id}" }) { item ->
+                    DeviceDownloadRow(
+                        item = item,
+                        onPlay = { item.localUri?.let { onPlayLocal(it, item.title) } },
+                        onPause = { viewModel.pauseDownload(item) },
+                        onResume = { viewModel.resumeDownload(item) },
+                        onRemove = { viewModel.removeDownload(item) },
+                    )
+                }
+            }
+
+            if (state.items.isNotEmpty()) {
+                item { SectionTitle("In-app keeps") }
+                item { PlayableOnlyNotice() }
+                items(state.items, key = { it.id }) { item ->
+                    KeptItemRow(
+                        item = item,
+                        onPlay = { onPlay(item) },
+                        onCancel = { viewModel.cancel(item) },
+                        onRetry = { viewModel.retry(item) },
+                    )
+                }
+            }
+
+            if (!state.hasAnything && !state.isLoading) {
                 item {
                     Column(
                         modifier = Modifier
@@ -99,9 +136,9 @@ fun DownloadsScreen(
                         verticalArrangement = Arrangement.Center,
                     ) {
                         EmptyState(
-                            title = "Nothing kept offline yet",
-                            message = "Use \"Keep\" on a title's print to save it for offline playback. " +
-                                "Kept items appear here with real progress and their expiry date.",
+                            title = "Nothing downloaded yet",
+                            message = "Use the download button on a print or episode. " +
+                                "The file is saved to Movies/RaddStream with live progress and plays here when finished.",
                             icon = {
                                 Icon(
                                     Icons.Default.Download,
@@ -114,17 +151,43 @@ fun DownloadsScreen(
                         )
                     }
                 }
-            } else {
-                items(state.items, key = { it.id }) { item ->
-                    KeptItemRow(
-                        item = item,
-                        onPlay = { onPlay(item) },
-                        onCancel = { viewModel.cancel(item) },
-                        onRetry = { viewModel.retry(item) },
-                    )
-                }
             }
         }
+    }
+}
+
+@Composable
+private fun SectionTitle(text: String) {
+    Text(
+        text = text,
+        style = MaterialTheme.typography.titleMedium,
+        fontWeight = FontWeight.SemiBold,
+        color = MaterialTheme.colorScheme.onBackground,
+    )
+}
+
+@Composable
+private fun NoticeCard(text: String) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant)
+            .padding(14.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalAlignment = Alignment.Top,
+    ) {
+        Icon(
+            Icons.Default.Info,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(20.dp),
+        )
+        Text(
+            text = text,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
 }
 
@@ -155,7 +218,7 @@ private fun StorageCard(storage: StorageInfo?) {
         )
         if (storage.lowSpace) {
             Text(
-                "Low space — offline keeps need room for the whole file plus playback headroom.",
+                "Low space — a download needs room for the whole file.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.error,
             )
@@ -165,22 +228,119 @@ private fun StorageCard(storage: StorageInfo?) {
 
 @Composable
 private fun PlayableOnlyNotice() {
-    Row(
+    NoticeCard(Brand.copy("offline_notice"))
+}
+
+@Composable
+private fun DeviceDownloadRow(
+    item: DeviceDownload,
+    onPlay: () -> Unit,
+    onPause: () -> Unit,
+    onResume: () -> Unit,
+    onRemove: () -> Unit,
+) {
+    Column(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(12.dp))
-            .background(MaterialTheme.colorScheme.surfaceVariant)
+            .background(MaterialTheme.colorScheme.surface)
+            // A finished download is a file on this device: the whole row opens it
+            // in the local player, with no server and no redirector involved. The
+            // inner buttons still consume their own taps.
+            .clickable(
+                enabled = item.playing,
+                onClickLabel = if (item.playing) "Play ${item.title} offline" else null,
+                onClick = onPlay,
+            )
             .padding(14.dp),
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
-        verticalAlignment = Alignment.Top,
+        verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        Icon(Icons.Default.Info, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(20.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = item.title,
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 2,
+                modifier = Modifier.weight(1f),
+            )
+            DeviceStatusPill(item.state)
+        }
+        if (item.printLabel.isNotBlank()) {
+            Text(
+                item.printLabel,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
         Text(
-            text = Brand.copy("offline_notice"),
+            deviceStatusLine(item),
             style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            color = MaterialTheme.colorScheme.onSurface,
         )
+        if (item.state == DeviceDownloadState.DOWNLOADING ||
+            item.state == DeviceDownloadState.QUEUED
+        ) {
+            LinearProgressIndicator(progress = { item.progress }, modifier = Modifier.fillMaxWidth())
+            val total = if (item.bytesTotal > 0) formatMiB(item.bytesTotal) else "unknown size"
+            Text(
+                "${formatMiB(item.bytesDownloaded)} / $total",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            if (item.playing) {
+                Button(onClick = onPlay, modifier = Modifier.weight(1f)) {
+                    Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.size(6.dp))
+                    Text("Play")
+                }
+            }
+            if (item.canPause) {
+                OutlinedButton(onClick = onPause) {
+                    Icon(Icons.Default.Pause, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.size(6.dp))
+                    Text("Pause")
+                }
+            }
+            if (item.canResume) {
+                OutlinedButton(onClick = onResume) { Text("Resume") }
+            }
+            OutlinedButton(onClick = onRemove) {
+                Text(if (item.playing) "Delete" else "Cancel")
+            }
+        }
     }
+}
+
+/** One honest sentence per DownloadManager state. */
+private fun deviceStatusLine(item: DeviceDownload): String {
+    val percent = item.percent?.let { " $it%" } ?: ""
+    return when (item.state) {
+        DeviceDownloadState.QUEUED -> "Queued$percent"
+        DeviceDownloadState.DOWNLOADING -> "Downloading$percent"
+        DeviceDownloadState.PAUSED -> "Paused — resume when you are ready"
+        DeviceDownloadState.READY -> "Saved — plays here or in any video player"
+        DeviceDownloadState.FAILED -> "Download failed — resume, or cancel and try again"
+    }
+}
+
+@Composable
+private fun DeviceStatusPill(state: DeviceDownloadState) {
+    val text = when (state) {
+        DeviceDownloadState.QUEUED -> "Queued"
+        DeviceDownloadState.DOWNLOADING -> "Downloading"
+        DeviceDownloadState.PAUSED -> "Paused"
+        DeviceDownloadState.READY -> "Saved"
+        DeviceDownloadState.FAILED -> "Failed"
+    }
+    val error = state == DeviceDownloadState.FAILED
+    Pill(
+        text = text,
+        backgroundColor = if (error) MaterialTheme.colorScheme.errorContainer else MaterialTheme.colorScheme.surfaceVariant,
+        contentColor = if (error) MaterialTheme.colorScheme.onErrorContainer else MaterialTheme.colorScheme.onSurfaceVariant,
+    )
 }
 
 @Composable
@@ -211,9 +371,6 @@ private fun KeptItemRow(
             Text("${formatMiB(item.bytesDownloaded)} / $total", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            // The one action a kept file exists for. It opens the same player every other
-            // surface uses, addressed by the keep's own redirector handle, so the cached bytes
-            // are found by the engine's play-from-cache rung rather than a second playback path.
             if (item.playable) {
                 Button(onClick = onPlay, modifier = Modifier.weight(1f)) { Text("Play") }
             }

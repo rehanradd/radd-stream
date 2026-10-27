@@ -43,7 +43,8 @@ object PlaybackMediaItemFactory {
             )
 
         // Native subtitle configurations for non-custom-render externals (API_V2 tracks.subtitles
-        // and user-picked exotic formats). SRT/VTT we parse ourselves for delay control.
+        // and user-picked exotic formats). SRT/VTT we parse ourselves for the overlay; both
+        // paths obey the same subtitle-sync offset (see OffsetSubtitleDecoderFactory).
         val nativeSubs = externalSubtitles.filterNot { it.customRendered }
         if (nativeSubs.isNotEmpty()) {
             builder.setSubtitleConfigurations(

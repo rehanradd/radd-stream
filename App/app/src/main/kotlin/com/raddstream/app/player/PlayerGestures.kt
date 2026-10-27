@@ -12,7 +12,9 @@ package com.raddstream.app.player
  *  - vertical drag LEFT half → brightness · RIGHT half → volume,
  *  - horizontal drag → scrub (full width == full duration, clamped),
  *  - long press → speed boost to [GestureSettings.boostSpeed], release restores,
- *  - pinch out/in → aspect ZOOM / FIT (mode-based: PlayerSurfaceView absent in Media3 1.3.1).
+ *  - pinch out/in → aspect ZOOM / FIT (mode-based: PlayerSurfaceView absent in Media3 1.3.1),
+ *  - two-finger tap → the [GestureSettings.cinemaRewindMs] jump back, and only in
+ *    [ViewMode.PURE_CINEMA], where there is no rewind button to press (see `PlayerUiState`).
  */
 
 enum class ScreenZone { LEFT, CENTER, RIGHT }
@@ -25,6 +27,15 @@ data class GestureSettings(
     val horizontalScrubEnabled: Boolean = true,
     val longPressBoostEnabled: Boolean = true,
     val lockGestures: Boolean = false, // the on-screen LOCK button sets this
+    /**
+     * Ghost mode: the chrome is gone, so the two-finger rewind is the only seek affordance
+     * that does not need a screen tap to become visible. Off by default — in the normal
+     * chrome a second rewind gesture over the ±10s buttons would be a surprise.
+     */
+    val pureCinema: Boolean = false,
+    /** What a two-finger tap buys. Three seconds: enough to catch a line of dialogue, too
+     *  short to be a substitute for the scrubber. */
+    val cinemaRewindMs: Long = 3_000L,
 )
 
 sealed class TapCommand {
@@ -92,6 +103,20 @@ object GestureMapper {
 
     fun onLongPress(settings: GestureSettings): Boolean =
         settings.longPressBoostEnabled && !settings.lockGestures
+
+    /**
+     * Two-finger tap → the ghost-mode rewind. Silent outside [ViewMode.PURE_CINEMA] and
+     * silent under the lock, which is the same rule every other seek path obeys: a locked
+     * player must not be seekable by a gesture no one can see. The feedback is reported on
+     * the LEFT edge — a rewind is a backward motion, and Ghost mode keeps its acknowledgements
+     * out of the middle of the picture.
+     */
+    fun onTwoFingerTap(settings: GestureSettings): TapCommand {
+        if (!settings.pureCinema || settings.lockGestures || settings.cinemaRewindMs <= 0L) {
+            return TapCommand.None
+        }
+        return TapCommand.SeekWithRipple(-settings.cinemaRewindMs, ScreenZone.LEFT)
+    }
 
     /**
      * Vertical drag → HUD delta. Convention: dragging UP (negative dy in screen coords)

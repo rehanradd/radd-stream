@@ -1,7 +1,6 @@
 package com.raddstream.app.ui.components
 
-import androidx.compose.animation.animateColorAsState
-import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
@@ -46,6 +45,12 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.RectangleShape
+import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.platform.LocalContext
 import android.provider.Settings
 import androidx.compose.ui.text.style.TextAlign
@@ -107,37 +112,73 @@ fun SectionHeader(
 }
 
 /**
- * Lazy placeholder that pulses opacity when motion is allowed, or draws a static
- * block when the user reduced motion — never a blank gap during load.
+ * A true shimmer: a soft highlight band swept across a dim base rather than an opacity
+ * pulse. Used for every placeholder — poster tiles, hero slides, rail skeletons — so a
+ * loading screen reads as "artwork is on its way" instead of a row of blank boxes.
+ *
+ * The band travels at a constant speed ([SHIMMER_PERIOD_MS] per pass), which is what makes
+ * it feel calm rather than throb. With reduced motion on, the same box is painted as a
+ * static block, so the placeholder never disappears and nothing moves.
+ */
+@Composable
+fun ShimmerBox(
+    modifier: Modifier = Modifier,
+    shape: Shape = RectangleShape,
+) {
+    val reduceMotion = rememberReduceMotion()
+    val base = MaterialTheme.colorScheme.surfaceVariant
+    if (reduceMotion) {
+        Box(modifier.clip(shape).background(base.copy(alpha = 0.5f)))
+        return
+    }
+    val highlight = MaterialTheme.colorScheme.onSurfaceVariant
+    val transition = rememberInfiniteTransition(label = "shimmer")
+    val progress by transition.animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(SHIMMER_PERIOD_MS, easing = LinearEasing),
+        ),
+        label = "shimmerProgress",
+    )
+    Box(
+        modifier
+            .clip(shape)
+            .background(base)
+            .drawWithContent {
+                drawContent()
+                val band = size.width * 0.55f
+                val travel = size.width + band * 2f
+                val x = -band + travel * progress
+                drawRect(
+                    Brush.linearGradient(
+                        colors = listOf(Color.Transparent, highlight.copy(alpha = 0.16f), Color.Transparent),
+                        start = Offset(x, 0f),
+                        end = Offset(x + band, size.height),
+                    )
+                )
+            },
+    )
+}
+
+/**
+ * Lazy placeholder that shimmers when motion is allowed, or draws a static block when
+ * the user reduced motion — never a blank gap during load.
  */
 @Composable
 fun SkeletonBox(
     modifier: Modifier = Modifier,
     aspectRatioValue: Float? = null,
 ) {
-    val reduceMotion = rememberReduceMotion()
-    val transition = rememberInfiniteTransition(label = "skeleton")
-    val alpha by transition.animateFloat(
-        initialValue = 0.35f,
-        targetValue = 0.75f,
-        animationSpec = infiniteRepeatable(tween(700), RepeatMode.Reverse),
-        label = "skeletonAlpha",
-    )
-    val targetAlpha = if (reduceMotion) 0.5f else alpha
-    val color = MaterialTheme.colorScheme.surfaceVariant
-    val animatedColor by animateColorAsState(
-        targetValue = color.copy(alpha = targetAlpha),
-        animationSpec = tween(if (reduceMotion) 0 else 200),
-        label = "skeletonColor",
-    )
-    val shape = RoundedCornerShape(12.dp)
     val boxModifier = if (aspectRatioValue != null) {
         modifier.fillMaxWidth().aspectRatio(aspectRatioValue)
     } else {
         modifier
     }
-    Box(boxModifier.clip(shape).background(animatedColor))
+    ShimmerBox(boxModifier, shape = RoundedCornerShape(12.dp))
 }
+
+private const val SHIMMER_PERIOD_MS = 1_400
 
 @Composable
 fun PosterGridSkeleton(

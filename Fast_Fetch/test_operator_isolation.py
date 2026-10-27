@@ -147,7 +147,11 @@ class AdminInvisibleOnThePublicPort(TwoPortFixture):
         404 the rest of the server uses for a path it has never heard of."""
         for method, path in (("GET", "/admin"), ("GET", "/admin/api/projection"),
                              ("GET", "/admin/api/adult"),
-                             ("POST", "/admin/api/links/1/evidence")):
+                             ("GET", "/admin/api/monetization"),
+                             ("GET", "/admin/api/fleet"),
+                             ("POST", "/admin/api/links/1/evidence"),
+                             ("POST", admin_panel.SAVE_MONETIZATION_PATH),
+                             ("POST", admin_panel.RUN_SCRAPER_PATH)):
             status, _headers, raw = self.public_fetch(path, method=method,
                                                       body={} if method == "POST" else None)
             self.assertEqual(status, 404, f"{method} {path}: {raw[:200]!r}")
@@ -201,7 +205,8 @@ class AdminOnTheOperatorPort(TwoPortFixture):
         """`screen_adult_proof` and friends were written as functions; this proves
         the route table maps `/admin/api/<name>` onto them at all."""
         with mock.patch.dict("os.environ", {"RADD_ADMIN_TOKEN": TOKEN}):
-            for name in ("projection", "adult", "link-health", "review", "catalog"):
+            for name in ("projection", "adult", "link-health", "review",
+                         "catalog", "fleet"):
                 status, headers, raw = self.operator_fetch(
                     f"/admin/api/{name}",
                     headers={"Authorization": f"Bearer {TOKEN}"})
@@ -209,6 +214,19 @@ class AdminOnTheOperatorPort(TwoPortFixture):
                 self.assertTrue(headers.get("Content-Type", "").startswith(
                     "application/json"), name)
                 self.assertTrue(json.loads(raw)["available"], name)
+
+    def test_the_scraper_action_reads_its_body_and_refuses_an_unknown_handle(self):
+        """The mount reads a body only for the actions that declare one. An
+        unknown handle must be a 400 before any child process is imagined."""
+        with mock.patch.dict("os.environ", {"RADD_ADMIN_TOKEN": TOKEN}):
+            status, headers, raw = self.operator_fetch(
+                admin_panel.RUN_SCRAPER_PATH, method="POST",
+                body={"crawler": "crawler-99", "mode": "sync"},
+                headers={"Authorization": f"Bearer {TOKEN}"})
+        self.assertEqual(status, 400, raw[:200])
+        self.assertTrue(headers.get("Content-Type", "").startswith(
+            "application/problem+json"), headers)
+        self.assertEqual(json.loads(raw)["code"], "invalid_params")
 
     def test_the_one_write_action_works_over_a_socket(self):
         link_id = self.conn.execute("SELECT id FROM cat_links LIMIT 1").fetchone()[0]
@@ -227,7 +245,7 @@ class AccountRoundTrip(TwoPortFixture):
         self.assertEqual(status, 201, raw[:200])
         account = json.loads(raw)["account"]
         key = account["sync_key"]
-        self.assertTrue(key and len(key) >= 32)
+        self.assertGreaterEqual(len(key), accounts.MIN_SYNC_KEY_CHARS)
         ref, work_key = self.work_ref()
 
         status, _h, raw = self.public_fetch("/api/v2/account/favorites", method="POST",
@@ -315,7 +333,8 @@ class NothingPublicCarriesProvenance(TwoPortFixture):
                           headers={"Authorization": f"Bearer {key}"})
         seen = []
         for path in ("/api/v2/manifest", "/api/v2/works", "/api/v2/account",
-                     "/api/v2/account/favorites", "/posts", "/client"):
+                     "/api/v2/account/favorites", "/api/v1/app/remote-config",
+                     "/posts", "/client"):
             try:
                 status, _h, raw = self.public_fetch(
                     path, headers={"Authorization": f"Bearer {key}"})
@@ -327,6 +346,62 @@ class NothingPublicCarriesProvenance(TwoPortFixture):
                     seen.append((path, needle))
             self.assertLess(status, 500, f"{path} → {status}")
         self.assertEqual(seen, [], f"provenance reached the public wire: {seen}")
+
+
+class RemoteConfigOverTheWire(TwoPortFixture):
+    """The monetization row, saved through the admin socket and read through the
+    public one. A unit call cannot show that `do_POST` reads the body it is handed
+    and that `do_GET` answers at all, which is what this is for."""
+
+    PATH = "/api/v1/app/remote-config"
+    SECRET = "shrinkme-live-api-token-445566"
+
+    def save(self, body):
+        with mock.patch.dict("os.environ", {"RADD_ADMIN_TOKEN": TOKEN}):
+            return self.operator_fetch(admin_panel.SAVE_MONETIZATION_PATH,
+                                       method="POST", body=body,
+                                       headers={"Authorization": f"Bearer {TOKEN}"})
+
+    def test_the_settings_save_through_the_real_admin_socket(self):
+        status, _h, raw = self.save({"pak_till_id": "123456",
+                                     "vip_monthly_pkr": 200,
+                                     "shrinkme_api_token": self.SECRET})
+        self.assertEqual(status, 200, raw[:200])
+        self.assertIn("pak_till_id", json.loads(raw)["saved"])
+
+    def test_the_public_port_serves_the_payment_screen(self):
+        self.save({"pak_till_id": "123456", "pak_raast_id": "03001234567",
+                   "vip_yearly_pkr": 1500, "monetag_zone_id": "10293847"})
+        status, headers, raw = self.public_fetch(self.PATH)
+        self.assertEqual(status, 200, raw[:200])
+        self.assertTrue(headers.get("Content-Type", "").startswith("application/json"))
+        data = json.loads(raw)
+        self.assertEqual(data["payments"]["jazzcash"]["till_id"], "123456")
+        self.assertEqual(data["payments"]["raast"]["instant_id"], "03001234567")
+        self.assertEqual(data["vip"]["yearly_pkr"], 1500)
+        self.assertEqual(data["ads"]["monetag_rewarded_zone_id"], "10293847")
+
+    def test_neither_port_ever_hands_out_a_shortener_token(self):
+        """Both answers go out over plain HTTP to a box that has no TLS. A token
+        in either is the operator's payout account, usable by whoever reads it."""
+        self.save({"shrinkme_api_token": self.SECRET})
+        for base, label in ((self.public_url, "public"), (self.operator_url, "operator")):
+            _s, _h, raw = self.fetch(base, self.PATH)
+            self.assertNotIn(self.SECRET.encode(), raw, f"{label} port leaked it")
+        with mock.patch.dict("os.environ", {"RADD_ADMIN_TOKEN": TOKEN}):
+            _s, _h, page = self.operator_fetch("/admin",
+                                               headers={"Authorization":
+                                                        f"Bearer {TOKEN}"})
+            self.assertNotIn(self.SECRET.encode(), page, "the card printed it")
+
+    def test_an_unset_row_still_answers_rather_than_500(self):
+        """A fresh install has no settings table until the first read makes it; a
+        phone polling config on launch must get defaults, not an error page."""
+        status, _h, raw = self.public_fetch(self.PATH)
+        self.assertEqual(status, 200, raw[:200])
+        data = json.loads(raw)
+        self.assertEqual(data["vip"], {"monthly_pkr": 200, "yearly_pkr": 1500})
+        self.assertEqual(data["payments"]["jazzcash"]["till_id"], "")
 
 
 if __name__ == "__main__":

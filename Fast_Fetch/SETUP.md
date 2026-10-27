@@ -71,8 +71,8 @@ Use Git with GitHub CLI or the operating system's secure credential manager on
 Windows. In Replit, use the temporary askpass flow in
 [`../ORACLE_DEPLOYMENT.md`](../ORACLE_DEPLOYMENT.md). Do not put a token in a
 Git URL, command argument, source file, or log. The old
-`github_push.py`, `push.py`, and `emergency_push.py` uploaders are retired;
-their current command-line entrypoints are safe warning stubs. Use Git on a
+`github_push.py`, `push.py`, and `emergency_push.py` uploaders are retired; the
+warning stubs that replaced them have been deleted from the repo root. Use Git on a
 task branch as described in `SESSION.md`.
 
 ### Environment Variables (Windows)

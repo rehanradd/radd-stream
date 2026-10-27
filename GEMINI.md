@@ -39,3 +39,11 @@ Whenever you conquer a new site, deploy or finish a crawler, or implement a feat
 - Update `UNIVERSAL_AI_PROMPT.md` and `radd-stream/docs/SESSION_CHECKPOINT.md`.
 - Update `ANTIGRAVITY_HANDOFF.md`.
 - Record your session milestone in `radd-stream/Fast_Fetch/CONTINUITY.md`.
+
+## 5. Operator Identity & Geographic Reality (Permanent Memory)
+The Dao Partner and Project Owner is based in **Lahore, Punjab, Pakistan**.
+All monetization, admin controls, payment rails, and user assumptions are permanently anchored to Pakistan:
+- **Primary Currency**: PKR (Pakistani Rupee).
+- **Payment Channels**: JazzCash (Merchant Till ID & Account), EasyPaisa, Raast (State Bank Instant ID), NayaPay, SadaPay.
+- **Telecom & User Reality**: Daily prepaid 4G caps (Jazz, Zong, Telenor, Ufone). Zero client video uploads; all data must be lightweight (<25KB). High demand for Bollywood, Hollywood Hindi Dubs, Pakistani Dramas (Hum, ARY, Geo), South Indian Dubs, and Anime.
+- **Operator Runbook**: See `radd-stream/docs/PAKISTAN_OPERATOR_GUIDE.md` for complete step-by-step instructions.

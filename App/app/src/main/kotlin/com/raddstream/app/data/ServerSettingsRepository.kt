@@ -7,6 +7,7 @@ import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.floatPreferencesKey
 import androidx.datastore.preferences.core.intPreferencesKey
+import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.raddstream.app.brand.Brand
@@ -14,6 +15,7 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 
 private val Context.serverSettingsDataStore by preferencesDataStore(name = "radd_stream_settings")
@@ -168,6 +170,92 @@ class ServerSettingsRepository @Inject constructor(
         dataStore.edit { preferences -> preferences[DYNAMIC_COLOR_KEY] = enabled }
     }
 
+    /**
+     * The player's chrome mode: [com.raddstream.app.player.ViewMode] enum name, `STANDARD`
+     * unless the viewer opted into Ghost. Persisted for the same reason as the other rows
+     * above — a viewer who watches in a chrome-less frame every night should not have to
+     * re-enter it for every episode, and a player that forgets it is a control that lies.
+     * An unreadable stored name is [DEFAULT_VIEW_MODE], never a guess.
+     */
+    val viewModeChoice: Flow<String> = dataStore.data.map { preferences ->
+        preferences[VIEW_MODE_KEY]?.takeIf { it == VIEW_MODE_STANDARD || it == VIEW_MODE_PURE_CINEMA }
+            ?: DEFAULT_VIEW_MODE
+    }
+
+    suspend fun saveViewModeChoice(name: String) {
+        val safe = if (name == VIEW_MODE_PURE_CINEMA) VIEW_MODE_PURE_CINEMA else VIEW_MODE_STANDARD
+        dataStore.edit { preferences -> preferences[VIEW_MODE_KEY] = safe }
+    }
+
+    /**
+     * The VIP payment reference the viewer entered, or null when nothing is awaiting
+     * verification. This deployment has no endpoint that receives a transaction id, so
+     * the reference is kept HERE — on the device that typed it — and the screen says
+     * exactly that. Storing it is not activation: nothing in this app treats a pending
+     * reference as a paid account.
+     */
+    val vipPendingSubmission: Flow<VipPendingSubmission?> = dataStore.data.map { preferences ->
+        val transactionId = preferences[VIP_PENDING_TID_KEY]?.takeIf { it.isNotBlank() }
+            ?: return@map null
+        VipPendingSubmission(
+            transactionId = transactionId,
+            plan = preferences[VIP_PENDING_PLAN_KEY].orEmpty(),
+            amountPkr = preferences[VIP_PENDING_AMOUNT_KEY] ?: 0,
+            submittedAt = preferences[VIP_PENDING_SUBMITTED_AT_KEY] ?: 0L,
+        )
+    }
+
+    suspend fun saveVipPendingSubmission(submission: VipPendingSubmission) {
+        val tid = submission.transactionId.trim()
+        if (tid.isEmpty()) return
+        dataStore.edit { preferences ->
+            preferences[VIP_PENDING_TID_KEY] = tid
+            preferences[VIP_PENDING_PLAN_KEY] = submission.plan
+            preferences[VIP_PENDING_AMOUNT_KEY] = submission.amountPkr
+            preferences[VIP_PENDING_SUBMITTED_AT_KEY] = submission.submittedAt
+        }
+    }
+
+    suspend fun clearVipPendingSubmission() {
+        dataStore.edit { preferences ->
+            preferences.remove(VIP_PENDING_TID_KEY)
+            preferences.remove(VIP_PENDING_PLAN_KEY)
+            preferences.remove(VIP_PENDING_AMOUNT_KEY)
+            preferences.remove(VIP_PENDING_SUBMITTED_AT_KEY)
+        }
+    }
+
+    /**
+     * When the current rewarded-ad VIP pass lapses, in epoch milliseconds; `0` means
+     * no pass has ever been granted. Stored here rather than in a ViewModel because a
+     * reward the app forgets on process death would be a reward the viewer did not get.
+     */
+    val rewardedVipExpiresAt: Flow<Long> = dataStore.data.map { preferences ->
+        preferences[REWARDED_VIP_EXPIRES_AT_KEY] ?: 0L
+    }
+
+    /**
+     * Grant [hours] of VIP for watching a rewarded ad.
+     *
+     * A second grant while a pass is still live extends it from its current expiry
+     * instead of truncating the remaining time. The value is a wall-clock instant so
+     * it survives a reboot; it is private app state, not a server entitlement, and the
+     * screen says so rather than implying a paid membership.
+     */
+    suspend fun grantRewardedVip(hours: Int = DEFAULT_REWARDED_VIP_HOURS) {
+        val safeHours = hours.coerceIn(1, MAX_REWARDED_VIP_HOURS)
+        val addedMs = safeHours * 60L * 60_000L
+        dataStore.edit { preferences ->
+            val now = System.currentTimeMillis()
+            val current = preferences[REWARDED_VIP_EXPIRES_AT_KEY] ?: 0L
+            preferences[REWARDED_VIP_EXPIRES_AT_KEY] = maxOf(now, current) + addedMs
+        }
+    }
+
+    /** Whether a rewarded-ad pass is live right now. Suspends while DataStore loads. */
+    suspend fun isRewardedVipActive(): Boolean =
+        rewardedVipExpiresAt.first() > System.currentTimeMillis()
+
     companion object {
         private val SERVER_URL_KEY = stringPreferencesKey("server_url")
         private val AUDIO_BOOST_LEVEL_KEY = floatPreferencesKey("audio_boost_level")
@@ -179,6 +267,12 @@ class ServerSettingsRepository @Inject constructor(
         private val KEEP_TTL_KEY = intPreferencesKey("keep_ttl_hours")
         private val PREFERRED_SUBTITLE_LANGUAGE_KEY = stringPreferencesKey("preferred_subtitle_language")
         private val DYNAMIC_COLOR_KEY = booleanPreferencesKey("dynamic_color")
+        private val VIEW_MODE_KEY = stringPreferencesKey("view_mode")
+        private val VIP_PENDING_TID_KEY = stringPreferencesKey("vip_pending_tid")
+        private val VIP_PENDING_PLAN_KEY = stringPreferencesKey("vip_pending_plan")
+        private val VIP_PENDING_AMOUNT_KEY = intPreferencesKey("vip_pending_amount")
+        private val VIP_PENDING_SUBMITTED_AT_KEY = longPreferencesKey("vip_pending_submitted_at")
+        private val REWARDED_VIP_EXPIRES_AT_KEY = longPreferencesKey("rewarded_vip_expires_at")
 
         /** AudioBoost's own anchor and ceiling, restated here as the storage contract. */
         const val DEFAULT_AUDIO_BOOST = 1f
@@ -190,5 +284,27 @@ class ServerSettingsRepository @Inject constructor(
         const val KEEP_TTL_HOURS_6 = 6
         const val DEFAULT_KEEP_TTL_HOURS = KEEP_TTL_HOURS_3
         const val SUBTITLE_OFF = "Off"
+
+        /** The rewarded pass the screen offers: four hours, and no single grant over a day. */
+        const val DEFAULT_REWARDED_VIP_HOURS = 4
+        const val MAX_REWARDED_VIP_HOURS = 24
+
+        /** [com.raddstream.app.player.ViewMode] enum names — the storage contract for the row above. */
+        const val VIEW_MODE_STANDARD = "STANDARD"
+        const val VIEW_MODE_PURE_CINEMA = "PURE_CINEMA"
+        const val DEFAULT_VIEW_MODE = VIEW_MODE_STANDARD
     }
 }
+
+/**
+ * One transaction reference awaiting the operator's confirmation, as it is stored on the
+ * device. [plan] is the storage name of the chosen VIP plan and [amountPkr] is what the
+ * screen quoted when the reference was entered — kept together so a later price change
+ * cannot silently restate what the viewer says they paid.
+ */
+data class VipPendingSubmission(
+    val transactionId: String,
+    val plan: String,
+    val amountPkr: Int,
+    val submittedAt: Long,
+)

@@ -209,7 +209,8 @@ never print the token to diagnose it. Respect branch protection and push to a
 feature branch or use a pull request when direct pushes are not allowed.
 
 The legacy `push.py`, `github_push.py`, and `emergency_push.py` uploaders are
-retired and their command-line entrypoints are disabled. They used broad
+retired, and the disabled warning stubs that replaced them have been deleted from
+the repo root. They used broad
 GitHub API writes and could target `main`; the emergency uploader skipped
 tests. For new work, use Git with the temporary askpass helper above, commit
 reviewed files on a task branch, and run the documented tests directly.

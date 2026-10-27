@@ -5,6 +5,7 @@ import androidx.room.Entity
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
+import kotlinx.coroutines.flow.Flow
 
 /**
  * A resume point pulled from the sync account, kept exactly as the server answered it.
@@ -49,6 +50,10 @@ interface SyncedProgressDao {
 
     @Query("SELECT * FROM synced_progress ORDER BY clientUpdatedAt DESC LIMIT :limit")
     suspend fun recent(limit: Int): List<SyncedProgressEntity>
+
+    /** The same recent rows as a flow, for a screen that must react to a pull while open. */
+    @Query("SELECT * FROM synced_progress ORDER BY clientUpdatedAt DESC LIMIT :limit")
+    fun observeRecent(limit: Int): Flow<List<SyncedProgressEntity>>
 
     @Query("SELECT COUNT(*) FROM synced_progress")
     suspend fun count(): Int

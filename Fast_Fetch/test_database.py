@@ -625,6 +625,126 @@ class DatabaseSaveTests(unittest.TestCase):
         self.assertEqual(res["url"], "https://fresh.r2.cloudflarestorage.com/new_token")
         self.assertTrue(res["refreshed"])
 
+    def test_direct_media_and_bridge_urls_are_classified_honestly(self):
+        direct = (
+            "https://cdn.example/movie.mkv",
+            "https://cdn.example/movie.mp4?token=abc",
+            "https://video-downloads.googleusercontent.com/abc/file",
+            "https://drive.usercontent.google.com/download?id=abc&export=download",
+            "https://pixeldrain.com/api/file/abc123",
+            "https://bucket.r2.cloudflarestorage.com/a/b/token",
+            "https://pub-1a2b.r2.dev/a/b",
+        )
+        bridges = (
+            "https://hubcloud.ist/drive/abc123",
+            "https://hubcloud.ist/?id=abc",
+            "https://fastdl.beer/embed.php?download=abc",
+            "https://new5.gdflix.io/file/abc123",
+            "https://pixeldrain.com/u/abc123",
+            "https://pixeldrain.com/d/abc123",
+            "https://gamerxyt.com/hubcloud.php?id=abc",
+            "https://secure.linkszilla.top/view/abc",
+        )
+        for url in direct:
+            self.assertTrue(fast_fetch.is_direct_media_url(url), url)
+        for url in bridges:
+            self.assertTrue(fast_fetch.is_bridge_url(url), url)
+            self.assertFalse(fast_fetch.is_direct_media_url(url), url)
+
+    def test_resolve_live_source_unwraps_a_cached_fastdl_bridge(self):
+        """A stored FastDL `embed.php` page is HTML, not video. The resolver must
+        re-resolve it to the Google CDN address and persist that instead of
+        handing ExoPlayer the landing page."""
+        media_data = self.media("vegamovies", "https://vegamovies.example/film/")
+        media_data["releases"][0]["sources"] = [{
+            "source_name": "FastDL",
+            "service": "fastdl",
+            "resource_id": "abc123",
+            "source_url": "https://fastdl.beer/embed.php?download=abc123",
+            "final_url": "https://fastdl.beer/embed.php?download=abc123",
+            "is_temporary": 1,
+        }]
+        fast_fetch.save_scraped_data(media_data)
+        with fast_fetch.get_db() as conn:
+            source = conn.execute("SELECT id FROM download_sources LIMIT 1").fetchone()
+
+        direct = "https://video-downloads.googleusercontent.com/abc/file.mp4"
+        with patch.object(fast_fetch, "unwrap_fastdl",
+                          return_value=(direct, "abc123", 1)), \
+             patch.object(fast_fetch, "probe_url_ttl",
+                          return_value=(None, {"observed": False,
+                                               "reason": "no_directive"})):
+            res = fast_fetch.resolve_live_source(source["id"])
+
+        self.assertTrue(res["success"], res)
+        self.assertEqual(res["url"], direct)
+        self.assertTrue(res["refreshed"])
+        with fast_fetch.get_db() as conn:
+            stored = conn.execute(
+                "SELECT final_url FROM download_sources WHERE id = ?",
+                (source["id"],)).fetchone()
+        self.assertEqual(stored["final_url"], direct)
+
+    def test_unwrap_gdflix_finds_the_google_endpoint_behind_the_landing_page(self):
+        page = ('<script>const player={"fileId":"1AbCdEfGhIjKlMnOpQrStUvWxYz12"};</script>')
+        with patch.object(fast_fetch, "http_get",
+                          return_value=(200, "https://new5.gdflix.io/file/x", page)):
+            url, res_id, temp = fast_fetch.unwrap_gdflix("https://new5.gdflix.io/file/x")
+        self.assertTrue(url.startswith("https://drive.usercontent.google.com/download?id="), url)
+        self.assertEqual(res_id, "x")
+        self.assertEqual(temp, 1)
+
+        embedded = '<a href="https://video-downloads.googleusercontent.com/abc/file.mp4">'
+        with patch.object(fast_fetch, "http_get",
+                          return_value=(200, "https://new5.gdflix.io/file/x", embedded)):
+            url, _res_id, _temp = fast_fetch.unwrap_gdflix("https://new5.gdflix.io/file/x")
+        self.assertEqual(url, "https://video-downloads.googleusercontent.com/abc/file.mp4")
+
+    def test_resolve_live_source_refuses_a_bridge_it_cannot_unwrap(self):
+        """The whole point of the bridge guard: an unwrap that fails must not be
+        reported as a playable stream. The v1 contract keeps stale *media* URLs,
+        but never a landing page."""
+        media_data = self.media("ssrmovies", "https://ssrmovies.example/film/")
+        bridge = "https://new5.gdflix.io/file/j8Fp2VRK3AzEz3n"
+        media_data["releases"][0]["sources"] = [{
+            "source_name": "GDFlix Mirror",
+            "service": "gdflix",
+            "resource_id": "j8Fp2VRK3AzEz3n",
+            "source_url": bridge,
+            "final_url": bridge,
+            "is_temporary": 1,
+        }]
+        fast_fetch.save_scraped_data(media_data)
+        with fast_fetch.get_db() as conn:
+            source = conn.execute("SELECT id FROM download_sources LIMIT 1").fetchone()
+
+        with patch.object(fast_fetch, "unwrap_gdflix",
+                          return_value=(bridge, "j8Fp2VRK3AzEz3n", 0)):
+            res = fast_fetch.resolve_live_source(source["id"])
+
+        self.assertFalse(res["success"], res)
+        self.assertEqual(res["code"], "no_playable_source")
+        self.assertEqual(res["reason"], "bridge_unresolved")
+
+    def test_a_cached_direct_media_url_is_still_served_from_cache(self):
+        media_data = self.media("site_a", "https://site-a.example/direct/")
+        media_data["releases"][0]["sources"] = [{
+            "source_name": "Direct CDN",
+            "service": "google_cdn",
+            "resource_id": "direct-1",
+            "source_url": "https://video-downloads.googleusercontent.com/abc/file.mp4",
+            "final_url": "https://video-downloads.googleusercontent.com/abc/file.mp4",
+            "is_temporary": 0,
+        }]
+        fast_fetch.save_scraped_data(media_data)
+        with fast_fetch.get_db() as conn:
+            source = conn.execute(
+                "SELECT id, final_url FROM download_sources LIMIT 1").fetchone()
+        res = fast_fetch.resolve_live_source(source["id"])
+        self.assertTrue(res["success"], res)
+        self.assertTrue(res["cached"])
+        self.assertEqual(res["url"], source["final_url"])
+
     def test_api_v1_posts_and_detail(self):
         post_id = fast_fetch.save_scraped_data(
             self.media("site_a", "https://site-a.example/example-film/", imdb_id="tt9999999")
@@ -681,6 +801,73 @@ class DatabaseSaveTests(unittest.TestCase):
                 ["Animated Series"],
             )
             self.assertEqual(viewer.api_v1_get_posts(limit=10)["total"], 4)
+
+    def test_api_v1_list_filters_use_the_columns_the_ledger_actually_writes(self):
+        """Industry/genre/quality/sort are composed by the list route itself, so a
+        chip narrows the whole catalog before paging instead of only the rows a
+        client happened to load. Quality is an existence test over releases."""
+        bolly = self.media("site_a", "https://site-a.example/bolly-action/",
+                           clean_title="Bolly Action", year=2024, quality="1080p")
+        bolly.update({"industry": "Bollywood", "genres": "Action, Drama",
+                      "imdb_rating": "8.4"})
+        fast_fetch.save_scraped_data(bolly)
+
+        holly = self.media("site_b", "https://site-b.example/holly-four/",
+                           clean_title="Holly Four", year=2023, quality="2160p")
+        holly.update({"industry": "Hollywood", "genres": "Drama, Sci-Fi",
+                      "imdb_rating": "7.1"})
+        fast_fetch.save_scraped_data(holly)
+
+        pak = self.media("site_c", "https://site-c.example/pak-comedy/",
+                         clean_title="Pak Comedy", year=2022, quality="720p")
+        pak.update({"industry": "Pakistani", "country": "Pakistan",
+                    "language": "Urdu", "genres": "Comedy", "imdb_rating": "6.5"})
+        fast_fetch.save_scraped_data(pak)
+
+        anime = self.media("site_d", "https://site-d.example/anime-horror/",
+                           clean_title="Anime Horror", year=2021, quality="2160p")
+        anime.update({"industry": "Anime", "is_animated": 1,
+                      "genres": "Horror, Action", "imdb_rating": "9.0"})
+        fast_fetch.save_scraped_data(anime)
+
+        south = self.media("site_e", "https://site-e.example/south-drama/",
+                           clean_title="South Drama", year=2020, quality="720p")
+        south.update({"industry": "Tollywood (Telugu)", "country": "India",
+                      "language": "Telugu", "genres": "Drama"})
+        fast_fetch.save_scraped_data(south)
+
+        with patch.object(viewer, "DB_PATH", self.db_path):
+            def titles(**filters):
+                return sorted(r["clean_title"] for r in
+                              viewer.api_v1_get_posts(limit=10, **filters)["results"])
+
+            self.assertEqual(titles(industry="bollywood"), ["Bolly Action"])
+            self.assertEqual(titles(industry="hollywood"), ["Holly Four"])
+            self.assertEqual(titles(industry="pakistani"), ["Pak Comedy"])
+            self.assertEqual(titles(industry="south_indian"), ["South Drama"])
+            self.assertEqual(titles(industry="anime"), ["Anime Horror"])
+
+            self.assertEqual(titles(genre="action"), ["Anime Horror", "Bolly Action"])
+            self.assertEqual(titles(genre="sci-fi"), ["Holly Four"])
+            self.assertEqual(titles(genre="horror"), ["Anime Horror"])
+
+            self.assertEqual(titles(quality="4k"), ["Anime Horror", "Holly Four"])
+            self.assertEqual(titles(quality="1080p"), ["Bolly Action"])
+            self.assertEqual(titles(quality="720p"), ["Pak Comedy", "South Drama"])
+
+            # Facets compose with the existing text/type filters.
+            self.assertEqual(
+                titles(query="Bolly", quality="1080p", genre="action"),
+                ["Bolly Action"])
+
+            self.assertEqual(
+                [r["clean_title"] for r in
+                 viewer.api_v1_get_posts(limit=10, sort="title")["results"]],
+                ["Anime Horror", "Bolly Action", "Holly Four", "Pak Comedy", "South Drama"])
+            rated = [r["clean_title"] for r in
+                     viewer.api_v1_get_posts(limit=10, sort="rating")["results"]]
+            self.assertEqual(rated[:3], ["Anime Horror", "Bolly Action", "Holly Four"])
+            self.assertEqual(rated[-1], "South Drama")  # no rating sorts last
 
     def test_api_v1_rules(self):
         rules = viewer.api_v1_rules()

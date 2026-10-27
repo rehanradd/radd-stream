@@ -3,6 +3,10 @@ package com.raddstream.app.viewmodel
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.raddstream.app.data.downloads.DeviceDownloadResult
+import com.raddstream.app.data.downloads.DeviceDownloadsRepository
+import com.raddstream.app.data.local.WatchHistoryDao
+import com.raddstream.app.data.local.WatchHistoryEntity
 import com.raddstream.app.network.friendlyNetworkError
 import com.raddstream.app.network.models.LinkClassification
 import com.raddstream.app.network.models.LinkState
@@ -13,10 +17,8 @@ import com.raddstream.app.player.LadderRung
 import com.raddstream.app.player.PlayerSessionStore
 import com.raddstream.app.player.QualityLadder
 import com.raddstream.app.player.QualityOption
-import com.raddstream.app.repository.CacheRepository
 import com.raddstream.app.repository.CatalogRepository
 import com.raddstream.app.repository.FavoritesRepository
-import com.raddstream.app.repository.KeepOutcome
 import com.raddstream.app.sync.SyncAccountRepository
 import com.raddstream.app.ui.navigation.Screen
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -53,8 +55,11 @@ sealed class DetailNavigationEvent {
     /** The one hand-off this app makes, and it carries OUR OWN address. */
     data class OpenExternal(val streamId: String, val playUrl: String) : DetailNavigationEvent()
 
-    /** A keep the engine accepted: its row is already moving, so show the Downloads screen. */
-    data class KeepRung(val label: String) : DetailNavigationEvent()
+    /** A download Android accepted: its public file is already moving, so show Downloads. */
+    data class DownloadStarted(val label: String) : DetailNavigationEvent()
+
+    /** A legacy device must grant storage before a public download can start. */
+    data object DownloadNeedsPermission : DetailNavigationEvent()
 }
 
 @HiltViewModel
@@ -62,8 +67,9 @@ class DetailViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle,
     private val catalogRepository: CatalogRepository,
     private val favoritesRepository: FavoritesRepository,
-    private val cacheRepository: CacheRepository,
+    private val deviceDownloads: DeviceDownloadsRepository,
     private val syncAccountRepository: SyncAccountRepository,
+    private val watchHistoryDao: WatchHistoryDao,
 ) : ViewModel() {
 
     private val postId: Int = (savedStateHandle[Screen.Detail.ARG_POST_ID] as? String)?.toIntOrNull()
@@ -100,7 +106,17 @@ class DetailViewModel @Inject constructor(
             try {
                 val detail = catalogRepository.getPostDetail(postId)
                 if (detail != null) {
-                    val layout = ReleaseLayoutBuilder.build(detail.contentType, detail.releases)
+                    // Wide art only: a portrait poster cropped into a 16:9 still looks broken,
+                    // so it is used just when the catalog has no backdrop at all.
+                    val artwork = detail.backdropList.ifEmpty {
+                        listOfNotNull(detail.posterUrl?.takeIf(String::isNotBlank))
+                    }
+                    val layout = ReleaseLayoutBuilder.build(
+                        detail.contentType,
+                        detail.releases,
+                        artwork,
+                        detail.seasonArtwork,
+                    )
                     _uiState.update {
                         it.copy(
                             post = detail,
@@ -186,48 +202,53 @@ class DetailViewModel @Inject constructor(
         }
     }
 
-    /** A rung this app cannot present is kept, and the row says so — no hidden failure. */
+    /** A rung this app cannot present is downloaded, and the row says so — no hidden failure. */
     fun keepRung(option: QualityOption) {
         _uiState.update { it.copy(selectedBand = option.band) }
         keep(
             handle = option.streamId,
-            sizeBytes = option.sizeBytes,
-            resumable = option.resumable,
             printLabel = option.title,
         )
     }
 
     /**
-     * Ask the cache engine for one copy, by OUR opaque handle.
+     * Ask Android's DownloadManager for one public file, by OUR opaque handle.
      *
-     * Every branch answers out loud: a keep that started routes to the Downloads screen where
-     * its row is already moving, and a refusal stays here with the real numbers, because a
-     * download button that quietly does nothing is worse than one that says no.
+     * Every branch answers out loud: an accepted download routes to the Downloads screen where
+     * its row is already moving; a legacy device learns it must grant storage first, because a
+     * button that quietly does nothing is worse than one that says no. The address handed to
+     * DownloadManager is our own redirector — the server verified the handle, and the upstream
+     * location never enters this app.
      */
-    private fun keep(handle: String, sizeBytes: Long?, resumable: Boolean, printLabel: String) {
+    private fun keep(handle: String, printLabel: String) {
+        lastDownload = handle to printLabel
         if (handle.isBlank()) {
-            _uiState.update { it.copy(actionMessage = "Nothing to keep on this rung yet.") }
+            _uiState.update { it.copy(actionMessage = "Nothing to download on this rung yet.") }
             return
         }
         val workTitle = _uiState.value.post?.let { it.cleanTitle ?: it.title } ?: "Stream"
         viewModelScope.launch {
-            when (val outcome =
-                cacheRepository.keep(handle, workTitle, sizeBytes, resumable, printLabel)) {
-                is KeepOutcome.Enqueued, is KeepOutcome.AlreadyKept ->
-                    _navEvents.emit(DetailNavigationEvent.KeepRung(printLabel))
-                is KeepOutcome.NoSpace -> _uiState.update {
-                    it.copy(
-                        actionMessage = "Not enough room: needs " +
-                            QualityOption.formatBytes(outcome.requiredBytes) +
-                            ", " + QualityOption.formatBytes(outcome.availableBytes) + " free."
-                    )
+            when (val outcome = deviceDownloads.enqueue(handle, workTitle, printLabel)) {
+                is DeviceDownloadResult.Enqueued -> {
+                    lastDownload = null
+                    _navEvents.emit(DetailNavigationEvent.DownloadStarted(printLabel))
                 }
-                KeepOutcome.Unavailable -> _uiState.update {
-                    it.copy(actionMessage = "This copy can't be kept yet.")
+                is DeviceDownloadResult.NeedsPermission ->
+                    _navEvents.emit(DetailNavigationEvent.DownloadNeedsPermission)
+                is DeviceDownloadResult.Refused -> {
+                    lastDownload = null
+                    _uiState.update { it.copy(actionMessage = outcome.message) }
                 }
             }
         }
     }
+
+    /** Re-run the request that stopped for a storage grant, once the viewer allows it. */
+    fun retryLastDownload() {
+        lastDownload?.let { (handle, label) -> keep(handle, label) }
+    }
+
+    private var lastDownload: Pair<String, String>? = null
 
     /**
      * Play one rung of the ladder. The rung's runner-ups and the ladder itself are staged
@@ -259,9 +280,9 @@ class DetailViewModel @Inject constructor(
             } else if (option.playsHere) {
                 _navEvents.emit(DetailNavigationEvent.PlayStream(option.streamId, title))
             } else {
-                // Not a failure and not a silent no-op: the rung is keepable, and saying
-                // so is the honest answer to a tap on a picture we cannot stream here.
-                _navEvents.emit(DetailNavigationEvent.KeepRung(option.title))
+                // Not a failure and not a silent no-op: the rung can be downloaded, and
+                // saying so is the honest answer to a tap on a picture we cannot stream here.
+                keep(option.streamId, option.title)
             }
         }
     }
@@ -304,15 +325,19 @@ class DetailViewModel @Inject constructor(
         season: Int?,
         episode: Int?,
         backupHandles: List<String> = emptyList(),
-    ) {
-        val workRef = _uiState.value.post?.workRef?.takeIf { it.isNotBlank() } ?: return
+    ): PlayerSessionStore.SyncScope? {
+        val workRef = _uiState.value.post?.workRef?.takeIf { it.isNotBlank() } ?: return null
+        val post = _uiState.value.post
         val scope = PlayerSessionStore.SyncScope(
             workRef = workRef,
             season = season ?: 0,
             episode = episode ?: 0,
+            postId = post?.id ?: 0,
+            workType = post?.contentType,
         )
         PlayerSessionStore.Instance.stageWorkRef(streamId = streamId, scope = scope)
         backupHandles.forEach { PlayerSessionStore.Instance.stageWorkRef(it, scope) }
+        return scope
     }
 
     /** Play the best link this print offers. The server already ranked them. */
@@ -340,10 +365,54 @@ class DetailViewModel @Inject constructor(
             _uiState.update { it.copy(actionMessage = "This option is download-only.") }
             return
         }
-        stageSyncScope(link.streamId, season ?: _uiState.value.ladderSeason, episode ?: _uiState.value.ladderEpisode)
+        val scope = stageSyncScope(
+            link.streamId,
+            season ?: _uiState.value.ladderSeason,
+            episode ?: _uiState.value.ladderEpisode,
+        )
+        rememberWatchStart(scope)
         viewModelScope.launch {
             if (external) _navEvents.emit(DetailNavigationEvent.OpenExternal(link.streamId, playUrl))
             else _navEvents.emit(DetailNavigationEvent.PlayStream(link.streamId, title))
+        }
+    }
+
+    /**
+     * Put this scope at the top of Continue watching the moment playback is launched. The row
+     * carries the catalog title and art so the rail never has to guess what a handle means;
+     * [PlayerViewModel] owns the position from here on. A work the server could not name has
+     * no handle, so there is no row to write — the player's own in-memory resume still works.
+     */
+    private fun rememberWatchStart(scope: PlayerSessionStore.SyncScope?) {
+        val bound = scope ?: return
+        val post = _uiState.value.post ?: return
+        val title = post.cleanTitle?.takeIf { it.isNotBlank() } ?: post.title
+        val now = System.currentTimeMillis()
+        viewModelScope.launch {
+            watchHistoryDao.insertIfAbsent(
+                WatchHistoryEntity(
+                    workRef = bound.workRef,
+                    postId = post.id,
+                    title = title,
+                    posterUrl = post.posterUrl?.takeIf { it.isNotBlank() },
+                    seasonNumber = bound.season,
+                    episodeNumber = bound.episode,
+                    positionMs = 0L,
+                    durationMs = 0L,
+                    updatedAt = now,
+                ),
+            )
+            // A row that already existed keeps its position but still moves to the top and
+            // picks up art the detail screen may have learned since it was first written.
+            watchHistoryDao.touch(
+                workRef = bound.workRef,
+                season = bound.season,
+                episode = bound.episode,
+                postId = post.id,
+                title = title,
+                posterUrl = post.posterUrl?.takeIf { it.isNotBlank() },
+                updatedAt = now,
+            )
         }
     }
 
@@ -356,8 +425,6 @@ class DetailViewModel @Inject constructor(
         val link = print.links.firstOrNull { !it.streamId.isBlank() }
         keep(
             handle = link?.streamId.orEmpty(),
-            sizeBytes = print.sizeBytes,
-            resumable = link?.resumable ?: false,
             printLabel = print.qualityLabel,
         )
     }

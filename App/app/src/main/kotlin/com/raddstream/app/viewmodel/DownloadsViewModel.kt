@@ -9,6 +9,8 @@ import com.raddstream.app.data.cache.CacheOrigin
 import com.raddstream.app.data.cache.CacheTaskEntity
 import com.raddstream.app.data.cache.CacheTaskState
 import com.raddstream.app.data.cache.KeepTtlHolder
+import com.raddstream.app.data.downloads.DeviceDownload
+import com.raddstream.app.data.downloads.DeviceDownloadsRepository
 import com.raddstream.app.repository.CacheRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -71,18 +73,24 @@ data class StorageInfo(val freeBytes: Long, val totalBytes: Long) {
 }
 
 data class DownloadsUiState(
+    /** Public files in `Movies/RaddStream/`, owned by Android's DownloadManager. */
+    val deviceDownloads: List<DeviceDownload> = emptyList(),
+    /** In-app keeps from the cache engine — private storage, expiry-bound. */
     val items: List<KeptItem> = emptyList(),
     val storage: StorageInfo? = null,
     val isLoading: Boolean = true,
     val engineAvailable: Boolean = false,
     val statusMessage: String? = null,
-)
+) {
+    val hasAnything: Boolean get() = deviceDownloads.isNotEmpty() || items.isNotEmpty()
+}
 
 @HiltViewModel
 class DownloadsViewModel @Inject constructor(
     @ApplicationContext private val context: Context,
     private val cacheRepository: CacheRepository,
     private val keepTtl: KeepTtlHolder,
+    private val deviceDownloads: DeviceDownloadsRepository,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(DownloadsUiState())
@@ -95,6 +103,11 @@ class DownloadsViewModel @Inject constructor(
         viewModelScope.launch {
             cacheRepository.tasksFlow().collect { rows ->
                 _uiState.update { it.copy(items = rows.map(::toKeptItem), isLoading = false) }
+            }
+        }
+        viewModelScope.launch {
+            deviceDownloads.downloads.collect { rows ->
+                _uiState.update { it.copy(deviceDownloads = rows, isLoading = false) }
             }
         }
     }
@@ -132,6 +145,20 @@ class DownloadsViewModel @Inject constructor(
             runCatching { cacheRepository.resume(taskId) }
                 .onFailure { _uiState.update { s -> s.copy(statusMessage = "Could not resume that download.") } }
         }
+    }
+
+    // --- public download service actions ---
+
+    fun pauseDownload(item: DeviceDownload) {
+        deviceDownloads.requestPause(item.id)
+    }
+
+    fun resumeDownload(item: DeviceDownload) {
+        deviceDownloads.requestResume(item.id)
+    }
+
+    fun removeDownload(item: DeviceDownload) {
+        deviceDownloads.requestRemove(item.id)
     }
 
     /**

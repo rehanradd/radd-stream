@@ -30,29 +30,55 @@ enum class AspectMode(val label: String, val resizeMode: Int) {
     }
 }
 
-/** Manual video rotation (MX rotation button cycles these). The screen maps degrees to
- * `Activity.requestedOrientation`; [degrees] also drives the fallback graphics rotation. */
-enum class RotationMode(val label: String, val degrees: Int) {
-    NONE("Auto", 0),
-    CLOCKWISE("90°", 90),
-    UPSIDE_DOWN("180°", 180),
-    COUNTER_CLOCKWISE("270°", 270),
+/**
+ * How much chrome the player paints over the picture.
+ *
+ * [STANDARD] is the MX-style three-zone chrome every control lives in. [PURE_CINEMA] is the
+ * Ghost mode: no pause scrim, no giant centre play button, no full-width top and bottom
+ * bars — the whole frame is picture, and the only chrome left is a translucent strip at the
+ * edges that fades out with the same timer the normal bars use. Entering it is a deliberate
+ * choice (a button in the standard bottom row), leaving it is one tap of that same edge
+ * strip, so a viewer can never be trapped in a chrome-less frame they cannot escape.
+ *
+ * Ghost mode does not remove feedback, only furniture: buffering, the seek acknowledgements,
+ * the failover cards and the give-up card all still show, because a viewer who cannot find
+ * the pause button is worse off than one who sees a spinner.
+ */
+enum class ViewMode(val label: String) {
+    STANDARD("Full chrome"),
+    PURE_CINEMA("Ghost"),
     ;
 
     companion object {
-        fun nextOf(mode: RotationMode): RotationMode = entries[(mode.ordinal + 1) % entries.size]
+        fun nextOf(mode: ViewMode): ViewMode = entries[(mode.ordinal + 1) % entries.size]
+
+        /** Storage contract: an unknown or absent name is the mode nobody opted into. */
+        fun fromName(name: String?): ViewMode = entries.firstOrNull { it.name == name } ?: STANDARD
     }
 }
 
 /**
- * Subtitle presentation. [delayMs] is fully honoured for the custom-rendered SRT/VTT overlay;
- * for native (embedded / Media3-parsed) tracks 1.3.1 exposes no audio-sync subtitle delay —
- * size/position/style ARE applied to `SubtitleView` (PLAYER_SPEC §2.3, honest limitation).
+ * Screen orientation while the player is open. Playback entry locks to sensor landscape;
+ * the Rotate control flips between the two so a viewer can watch portrait in one tap.
+ */
+enum class PlayerOrientation(val label: String) {
+    LANDSCAPE("Landscape"),
+    PORTRAIT("Portrait"),
+    ;
+
+    fun toggled(): PlayerOrientation = if (this == LANDSCAPE) PORTRAIT else LANDSCAPE
+}
+
+/**
+ * Subtitle presentation. [delayMs] is honoured on both render paths: the custom SRT/VTT
+ * overlay reads it directly, and native (embedded / Media3-parsed) tracks are retimed by
+ * the decoder wrapper the playback service installs. Size/position/style reach the native
+ * `SubtitleView` as before (PLAYER_SPEC §2.3).
  */
 data class SubtitleUiSettings(
     /** 50..200 %; applied as fractional text size for native and sp scale for the overlay. */
     val sizePercent: Int = 100,
-    /** Positive = subtitles appear later (MX "subtitle sync"). Custom path only. */
+    /** Positive = subtitles appear later (MX "subtitle sync"); both render paths. */
     val delayMs: Long = 0,
     /** Vertical gap from the bottom edge, fraction of video height (native + overlay). */
     val bottomFraction: Float = 0.05f,
@@ -121,7 +147,9 @@ data class PlayerUiState(
     // lock + display
     val locked: Boolean = false,
     val aspect: AspectMode = AspectMode.FIT,
-    val rotation: RotationMode = RotationMode.NONE,
+    val orientation: PlayerOrientation = PlayerOrientation.LANDSCAPE,
+    /** Ghost mode or the full MX chrome. Persisted, because nobody wants it reset per episode. */
+    val viewMode: ViewMode = ViewMode.STANDARD,
     val audioOnly: Boolean = false,
     val stereoOnly: Boolean = false,
     // failover narration (§5: which print settled, why the others died)
@@ -152,10 +180,17 @@ data class PlayerUiState(
     val speedSheetVisible: Boolean = false,
     val tracksSheetVisible: Boolean = false,
     val subtitleSheetVisible: Boolean = false,
+    val subtitleOffsetSheetVisible: Boolean = false,
     val printSheetVisible: Boolean = false,
     val sleepSheetVisible: Boolean = false,
     val playFromDialogVisible: Boolean = false,
     val qualitySheetVisible: Boolean = false,
+    /**
+     * The sponsor slot currently on screen, if any. Only [AdSlotPolicy.decide] can raise it,
+     * and that policy has no value for a title that is playing — so this field can never be
+     * the reason a scene is interrupted.
+     */
+    val adBreak: AdSlot = AdSlot.NONE,
     /**
      * The rungs the CURRENT scope offers, staged by the detail screen and read back through
      * [PlayerSessionStore.peekAutoLadder]: band + handle + caption only. Empty for a
@@ -172,6 +207,14 @@ data class PlayerUiState(
 ) {
     /** MX behaviour: the lock button also disables every seek path. */
     val seekEnabled: Boolean get() = !locked
+
+    /**
+     * Ghost mode. Every chrome decision in the screen asks this one question instead of
+     * comparing the enum at four call sites — the pause scrim, the centre play button and
+     * the full-width bars are the three things it switches off, and the edge strip plus the
+     * two-finger rewind are the two things it switches on.
+     */
+    val pureCinema: Boolean get() = viewMode == ViewMode.PURE_CINEMA
 
     /** True when something is loaded enough to show transport controls. */
     val hasActivePrint: Boolean get() = activeRendition != null

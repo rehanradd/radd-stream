@@ -16,6 +16,9 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
 import com.raddstream.app.brand.Brand
+import com.raddstream.app.player.AdSlot
+import com.raddstream.app.player.AdSlotPolicy
+import com.raddstream.app.player.AdSlotState
 import com.raddstream.app.player.AspectMode
 import com.raddstream.app.player.AudioBoost
 import com.raddstream.app.player.AudioBoostUi
@@ -36,15 +39,20 @@ import com.raddstream.app.player.HandoffWhy
 import com.raddstream.app.player.KeepResult
 import com.raddstream.app.player.KeepUiState
 import com.raddstream.app.player.LadderForScope
+import com.raddstream.app.player.LadderRung
 import com.raddstream.app.player.NextEpisodeAction
 import com.raddstream.app.player.PlaybackBundle
+import com.raddstream.app.player.PlaybackInfo
 import com.raddstream.app.player.PlaybackMediaItemFactory
 import com.raddstream.app.player.PlaybackRendition
+import com.raddstream.app.player.PlayTarget
 import com.raddstream.app.player.PlayerSessionStore
+import com.raddstream.app.player.PrintInfo
+import com.raddstream.app.player.SessionInfo
 import com.raddstream.app.player.PlayerUiState
 import com.raddstream.app.player.QualityLadder
 import com.raddstream.app.player.RippleState
-import com.raddstream.app.player.RotationMode
+import com.raddstream.app.player.PlayerOrientation
 import com.raddstream.app.player.ScreenZone
 import com.raddstream.app.player.SleepMode
 import com.raddstream.app.player.SleepTick
@@ -54,11 +62,14 @@ import com.raddstream.app.player.SubtitleTrackDecision
 import com.raddstream.app.player.SubtitleTrackPolicy
 import com.raddstream.app.player.SubtitleUiSettings
 import com.raddstream.app.player.TrackUiOption
+import com.raddstream.app.player.ViewMode
 import com.raddstream.app.player.subtitle.SubtitleCue
 import com.raddstream.app.player.subtitle.SubtitleFile
 import com.raddstream.app.player.subtitle.SubtitleFormat
 import com.raddstream.app.player.subtitle.SubtitleParser
+import com.raddstream.app.player.subtitles.SubtitleOffset
 import com.raddstream.app.data.ServerSettingsRepository
+import com.raddstream.app.data.local.WatchHistoryDao
 import com.raddstream.app.network.ApiProvider
 import com.raddstream.app.network.streamRedirectUrl
 import com.raddstream.app.repository.CatalogRepository
@@ -97,6 +108,7 @@ class PlayerViewModel @Inject constructor(
     private val settingsRepository: ServerSettingsRepository,
     private val catalogRepository: CatalogRepository,
     private val syncAccountRepository: SyncAccountRepository,
+    private val watchHistoryDao: WatchHistoryDao,
 ) : ViewModel() {
 
     private val store: PlayerSessionStore = PlayerSessionStore.Instance
@@ -119,6 +131,25 @@ class PlayerViewModel @Inject constructor(
 
     /** The next episode's handle, once looked up; null means "not addressable yet". */
     private var nextEpisodeHandle: String? = null
+
+    /**
+     * Everything needed to open the successor without touching the catalog again: its
+     * handle, rungs and the scope it belongs to. [resolved] flips when the 85% pass has
+     * asked our redirector about the handle, which is what makes the open instant.
+     */
+    private data class PreparedNextEpisode(
+        val season: Int,
+        val episode: Int,
+        val handle: String,
+        val title: String,
+        val backupHandles: List<String>,
+        val rungs: List<LadderRung>,
+        val startBand: String?,
+        val auto: Boolean,
+        val resolved: Boolean = false,
+    )
+
+    private var preparedNextEpisode: PreparedNextEpisode? = null
 
     /** In-run resume memory; cross-launch persistence is a data-agent request (handoff). */
     private val resumeByTarget = HashMap<String, Long>()
@@ -163,7 +194,7 @@ class PlayerViewModel @Inject constructor(
     }
 
     /**
-     * The three preferences the policy classes read. Collected, not sampled, so the settings
+     * The preferences the policy classes read. Collected, not sampled, so the settings
      * screen changing a value is felt by a player that is already running.
      */
     private fun observeSettings() {
@@ -186,6 +217,12 @@ class PlayerViewModel @Inject constructor(
                 applyPreferredSubtitleTrack()
             }
         }
+        // …plus the one display preference the player owns: Ghost mode or the full chrome.
+        viewModelScope.launch {
+            settingsRepository.viewModeChoice.collect { name ->
+                _ui.update { it.copy(viewMode = ViewMode.fromName(name)) }
+            }
+        }
     }
 
     // ── Service connection ───────────────────────────────────────────────────────
@@ -199,6 +236,9 @@ class PlayerViewModel @Inject constructor(
                 val c = future.get()
                 controller = c
                 _player.value = c
+                // The service is a process singleton and may still hold a previous screen's
+                // sync; a fresh ViewModel starts at 0, so publish that before playback starts.
+                store.subtitleOffsetMs = _ui.value.subtitle.delayMs
                 c.addListener(playerListener)
                 _ui.update { it.copy(connected = true) }
                 startTicker()
@@ -268,6 +308,9 @@ class PlayerViewModel @Inject constructor(
                     watchedBingeKey = key
                     bingePlanner.reset()
                     nextEpisodeHandle = null
+                    preparedNextEpisode = null
+                    bingeResolveJob?.cancel()
+                    bingePrefetchJob?.cancel()
                     if (b != null) prepareBingePrefetch(b)
                 }
             }
@@ -321,6 +364,7 @@ class PlayerViewModel @Inject constructor(
                         applySleep(tick)
                     }
                     tickBingePreload(_ui.value.positionMs, _ui.value.durationMs)
+                    store.reportPlayhead(store.activeRendition()?.playback?.playUrl, _ui.value.positionMs, _ui.value.durationMs)
                     // The account's own heartbeat: one report per fifteen seconds at most, and
                     // the gate is a boolean read, so this tick costs nothing when it is not due.
                     if (c.isPlaying) reportResume(c, c.currentPosition, forced = false)
@@ -350,9 +394,68 @@ class PlayerViewModel @Inject constructor(
             val bundle = PlaybackBundle.forStreamHandle(streamId = streamId, playUrl = playUrl,
                                                        title = title,
                                                        backupHandles = store.peekFailover(streamId))
+                .withStagedTarget(streamId)
             seedResumeFromSync(streamId, startOverrideMs)
             beginBundle(bundle, title, resumeKey = streamId, overrideMs = startOverrideMs)
         }
+    }
+
+    /**
+     * The route carries one opaque handle, but the detail screen staged which work and which
+     * episode that handle is. Stamping that onto the bundle is what lets the service decide
+     * that an END has a successor at all, and what gives binge pre-caching a post id to look
+     * the successor's ladder up by. A handle with no staged scope (a deep link) keeps the
+     * route bundle's empty target, so it behaves exactly as before.
+     */
+    private fun PlaybackBundle.withStagedTarget(streamId: String): PlaybackBundle {
+        val scope = store.peekWorkRef(streamId) ?: return this
+        if (scope.postId <= 0) return this
+        return copy(
+            target = PlayTarget(
+                kind = if (scope.episode > 0) "episode" else "work",
+                id = scope.postId,
+                workKey = scope.workRef.takeIf { it.isNotBlank() },
+                workType = scope.workType,
+                season = scope.season,
+                episode = scope.episode,
+            ),
+        )
+    }
+
+    /**
+     * Route path `player_local/{uri}/{title}`: a finished public download. The bytes are on
+     * this device, so no redirector and no upstream origin is involved — the bundle carries
+     * the local content/file URI and every other control surface behaves exactly as usual.
+     */
+    fun startLocalUri(uri: String, title: String) {
+        val clean = uri.trim()
+        if (clean.isEmpty()) return
+        if (_ui.value.bundle?.renditions?.firstOrNull()?.playback?.playUrl == clean) return
+        val extension = Uri.parse(clean).lastPathSegment?.substringAfterLast('.')?.lowercase()
+        val mime = extension?.let {
+            android.webkit.MimeTypeMap.getSingleton().getMimeTypeFromExtension(it)
+        }
+        val bundle = PlaybackBundle(
+            session = SessionInfo(id = "local-${clean.hashCode().toString(16)}"),
+            target = PlayTarget(kind = "local", id = 0),
+            renditions = listOf(
+                PlaybackRendition(
+                    rank = 1,
+                    print = PrintInfo(label = "Downloaded"),
+                    playback = PlaybackInfo(
+                        playUrl = clean,
+                        streamId = "local",
+                        label = "Saved to device",
+                        protocol = "progressive",
+                        mimeType = mime,
+                        resumable = true,
+                        kind = "direct",
+                        playabilityWire = "stream",
+                    ),
+                ),
+            ),
+        )
+        beginBundle(bundle, title, resumeKey = clean)
     }
 
     /**
@@ -559,9 +662,11 @@ class PlayerViewModel @Inject constructor(
      *    their picture to a resume-point upload.
      */
     private fun reportResume(c: MediaController, positionMs: Long, forced: Boolean) {
-        if (!syncSignedIn) return
         val scope = store.currentSyncScope() ?: return
         if (positionMs <= 0L) return
+        val durationMs = if (c.duration > 0) c.duration else _ui.value.durationMs
+        rememberLocally(scope, positionMs, durationMs, forced)
+        if (!syncSignedIn) return
         if (!forced && !syncAccountRepository.progressReportDue()) return
         viewModelScope.launch {
             syncAccountRepository.reportProgress(
@@ -569,11 +674,42 @@ class PlayerViewModel @Inject constructor(
                 season = scope.season,
                 episode = scope.episode,
                 positionMs = positionMs,
-                durationMs = if (c.duration > 0) c.duration else _ui.value.durationMs,
+                durationMs = durationMs,
                 forced = forced,
             )
         }
     }
+
+    /**
+     * Continue watching is a local fact, not an account feature: a guest who never signed in
+     * still gets a rail. Writes ride the same forced-or-fifteen-seconds gate as the account
+     * report (the tick calls this five times a second, so an ungated write would be a database
+     * hammer), and a scope with no history row — a deep link this app never opened — updates
+     * nothing rather than inventing a title.
+     */
+    private fun rememberLocally(
+        scope: PlayerSessionStore.SyncScope,
+        positionMs: Long,
+        durationMs: Long,
+        forced: Boolean,
+    ) {
+        val now = System.currentTimeMillis()
+        if (!forced && now - lastHistoryWriteAt < HISTORY_WRITE_INTERVAL_MS) return
+        lastHistoryWriteAt = now
+        viewModelScope.launch {
+            watchHistoryDao.recordPosition(
+                workRef = scope.workRef,
+                season = scope.season,
+                episode = scope.episode,
+                positionMs = positionMs,
+                durationMs = durationMs,
+                updatedAt = now,
+            )
+        }
+    }
+
+    /** Epoch millis of the last local history write; see [rememberLocally]. */
+    private var lastHistoryWriteAt: Long = 0L
 
     // ── Transport & value controls ───────────────────────────────────────────────
 
@@ -698,15 +834,74 @@ class PlayerViewModel @Inject constructor(
             }
             return
         }
+        val season = target.season
+        val nextEpisode = (target.episode.coerceAtLeast(1)) + 1
         viewModelScope.launch {
+            if (openNextEpisode(season, nextEpisode, target.id.takeIf { it > 0 })) return@launch
             _events.emit(
                 PlayerEvent.PlayNextEpisode(
                     workKey = target.workKey,
                     postId = target.id.takeIf { it > 0 },
-                    season = target.season,
-                    episode = (target.episode.coerceAtLeast(1)) + 1,
+                    season = season,
+                    episode = nextEpisode,
                 ),
             )
+        }
+    }
+
+    // ── Sponsor placement ────────────────────────────────────────────────────────
+
+    /**
+     * The only door a sponsor break can come through. A pre-roll or interstitial caller must
+     * ask this instead of deciding placement itself; a running title always gets
+     * [AdSlot.NONE], which is what makes "never mid-scene" structural rather than a promise.
+     *
+     * Nothing raises a break on its own today — the app ships no ad SDK or creative — so
+     * this is a guarded seam rather than an automatic ad.
+     */
+    fun requestAdBreak(): AdSlot {
+        val state = _ui.value
+        val target = store.bundle.value?.target
+        val scope = store.currentSyncScope()
+        val episode = target?.episode?.takeIf { it > 0 } ?: scope?.episode ?: 0
+        val slot = AdSlotPolicy.decide(
+            AdSlotState(
+                isSeriesEpisode = episode > 0,
+                isEnded = state.isEnded,
+                isPlaying = state.isPlaying,
+                positionMs = state.positionMs,
+                durationMs = state.durationMs,
+                hasNextEpisode = state.isEnded && hasSuccessorAtEnd(state),
+            ),
+        )
+        _ui.update { it.copy(adBreak = slot) }
+        return slot
+    }
+
+    fun dismissAdBreak() {
+        _ui.update { it.copy(adBreak = AdSlot.NONE) }
+    }
+
+    /**
+     * Whether the END that just happened leads anywhere. A packed file's in-file successor
+     * counts, so a between-episodes break is never shown before a dead end.
+     */
+    private fun hasSuccessorAtEnd(state: PlayerUiState): Boolean {
+        val bundle = store.bundle.value ?: return false
+        return when (
+            EpisodeProgression.computeNext(
+                bundle = bundle,
+                rendition = store.activeRendition(),
+                learned = store.learnedOffsets,
+                positionMs = state.positionMs,
+                durationMs = state.durationMs,
+            )
+        ) {
+            is NextEpisodeAction.InFileSeek,
+            is NextEpisodeAction.NextBundleRequest,
+            is NextEpisodeAction.CalibrationNeeded,
+            -> true
+            else -> false
         }
     }
 
@@ -717,25 +912,69 @@ class PlayerViewModel @Inject constructor(
      * the policy has something to ask for at the threshold instead of discovering at 85% that
      * nobody ever resolved the successor.
      *
+     * The episode context comes from the bundle when the server supplied one, and from the
+     * scope the detail screen staged otherwise — a route launch carries one opaque handle,
+     * so without that stamp there would be no post id to look a successor's ladder up by.
+     *
      * Skipped when the next episode lives in THIS file (a packed season whose offset the
      * server or the learned ledger already knows): there is no second address to warm, and
-     * the in-file advance the service performs on END is the whole feature there. That path
-     * is left exactly as it was.
+     * the in-file advance the service performs on END is the whole feature there.
      */
     private fun prepareBingePrefetch(bundle: PlaybackBundle) {
         val target = bundle.target
         val rendition = store.activeRendition() ?: bundle.renditions.firstOrNull()
-        val isSeries = EpisodeProgression.seriesLikeWorkType(target.workType) || target.episode > 0
-        if (!isSeries || target.id <= 0 || rendition == null) return
+        val scope = store.currentSyncScope()
+        val episode = target.episode.takeIf { it > 0 } ?: scope?.episode ?: 0
+        val season = target.season.takeIf { it > 0 } ?: scope?.season ?: 0
+        val postId = target.id.takeIf { it > 0 } ?: scope?.postId ?: 0
+        val isSeries = EpisodeProgression.seriesLikeWorkType(target.workType ?: scope?.workType) ||
+            episode > 0
+        if (!isSeries || postId <= 0 || episode <= 0 || rendition == null) return
         if (nextEpisodeIsInThisFile(bundle, rendition)) return
-        val nextEpisode = target.episode.coerceAtLeast(1) + 1
+        val nextEpisode = episode + 1
+        val expectedKey = bingeBundleKey(bundle)
         bingeResolveJob?.cancel()
         bingeResolveJob = viewModelScope.launch {
-            val ladder = catalogRepository.getPostDetail(target.id)
-                ?.let { detail -> QualityLadder.forNumberedScope(detail.optionGroups, target.season.takeIf { it > 0 }, nextEpisode) }
-                ?: LadderForScope.EMPTY
-            nextEpisodeHandle = ladder.resolvedFor(LadderForScope.AUTO)?.streamId?.takeIf { it.isNotBlank() }
+            val prepared = lookupNextEpisode(postId, season, nextEpisode) ?: return@launch
+            // A bundle switch while the lookup ran means this successor belongs to a
+            // viewing the viewer already left; never arm it against the new episode.
+            if (bingeBundleKey(store.bundle.value) != expectedKey) return@launch
+            nextEpisodeHandle = prepared.handle
+            preparedNextEpisode = prepared
         }
+    }
+
+    /** The successor's own ladder, reduced to what a hand-off needs. */
+    private suspend fun lookupNextEpisode(postId: Int, season: Int, episode: Int): PreparedNextEpisode? {
+        val detail = runCatching { catalogRepository.getPostDetail(postId) }.getOrNull() ?: return null
+        val ladder = QualityLadder.forNumberedScope(
+            detail.optionGroups,
+            season.takeIf { it > 0 },
+            episode,
+        )
+        val option = ladder.resolvedFor(LadderForScope.AUTO) ?: return null
+        val handle = option.streamId.takeIf { it.isNotBlank() } ?: return null
+        val rungs = ladder.options
+            .filter { it.playsHere && it.streamId.isNotBlank() && it.band.isNotBlank() }
+            .map {
+                LadderRung(
+                    band = it.band,
+                    streamId = it.streamId,
+                    backupHandles = it.backupHandles,
+                    label = it.title,
+                )
+            }
+        val title = detail.cleanTitle?.takeIf { it.isNotBlank() } ?: detail.title
+        return PreparedNextEpisode(
+            season = season,
+            episode = episode,
+            handle = handle,
+            title = title,
+            backupHandles = option.backupHandles,
+            rungs = rungs,
+            startBand = option.band,
+            auto = ladder.autoBand != null && option.band == ladder.autoBand,
+        )
     }
 
     /** True when the successor's start position in this same file is already known. */
@@ -761,13 +1000,14 @@ class PlayerViewModel @Inject constructor(
      * agent's call, not this wiring's. So the executable part today is the one thing that
      * genuinely costs nothing and genuinely speeds the transition: ask our own redirector
      * about that handle (`redirect=0`), which resolves and caches the upstream link
-     * server-side and proves the handle is alive before the viewer lands on it. The message
-     * says exactly that, never "downloaded".
+     * server-side, proves the handle is alive, and arms the prepared successor so the END
+     * hand-off is a load rather than a lookup.
      */
     private fun tickBingePreload(positionMs: Long, durationMs: Long) {
         val bundle = store.bundle.value ?: return
         val target = bundle.target
-        val isSeries = EpisodeProgression.seriesLikeWorkType(target.workType) || target.episode > 0
+        val episode = target.episode.takeIf { it > 0 } ?: store.currentSyncScope()?.episode ?: 0
+        val isSeries = EpisodeProgression.seriesLikeWorkType(target.workType) || episode > 0
         val decision = bingePlanner.tick(positionMs, durationMs, isSeries, nextEpisodeHandle)
         if (decision is BingePreloadDecision.PrefetchNextHead) prefetchNextEpisodeHead(decision.handle)
     }
@@ -779,10 +1019,57 @@ class PlayerViewModel @Inject constructor(
             // `streamId` is the model's own "this answer is usable" test: a successful lookup
             // that produced no handle of ours is a false success and says nothing to the user.
             if (answer?.streamId == null) return@launch
+            val prepared = preparedNextEpisode
+            if (prepared != null && prepared.handle == handle) {
+                preparedNextEpisode = prepared.copy(resolved = true)
+            }
             _events.emit(
                 PlayerEvent.Message("Next episode ready — its link is live, so advancing will not wait on a lookup"),
             )
         }
+    }
+
+    /**
+     * Open the successor requested by the END signal or the manual next button.
+     *
+     * [preparedNextEpisode] is the fast path: the ladder was already resolved and the
+     * redirector was already asked at 85%, so this is an install and a load. When nothing
+     * was prepared (a very short episode, a seek past the threshold, a just-opened link)
+     * the ladder is looked up now, which is still the same hand-off minus the warming.
+     * False means no playable rung exists, and the caller falls back to the app's event
+     * route rather than pretending the episode advanced.
+     */
+    private suspend fun openNextEpisode(season: Int, episode: Int, postId: Int?): Boolean {
+        val prepared = preparedNextEpisode
+            ?.takeIf { it.season == season && it.episode == episode }
+            ?: lookupNextEpisode(
+                postId = postId?.takeIf { it > 0 } ?: store.currentSyncScope()?.postId ?: return false,
+                season = season,
+                episode = episode,
+            )
+            ?: return false
+        openPrepared(prepared)
+        return true
+    }
+
+    private fun openPrepared(prepared: PreparedNextEpisode) {
+        // Carry the work's scope onto every address of the successor, exactly as the detail
+        // screen does when it launches a rung: a resume point belongs to the episode, not to
+        // whichever handle happens to serve it.
+        store.currentSyncScope()?.let { current ->
+            val scope = current.copy(season = prepared.season, episode = prepared.episode)
+            (listOf(prepared.handle) + prepared.backupHandles +
+                prepared.rungs.flatMap { listOf(it.streamId) + it.backupHandles })
+                .distinct()
+                .forEach { store.stageWorkRef(it, scope) }
+        }
+        store.stageFailover(prepared.handle, prepared.backupHandles)
+        if (prepared.rungs.isNotEmpty()) {
+            store.stageAutoLadder(prepared.handle, prepared.rungs, prepared.startBand, prepared.auto)
+        }
+        preparedNextEpisode = null
+        nextEpisodeHandle = null
+        startStreamHandle(prepared.handle, prepared.title)
     }
 
     private fun bingeBundleKey(bundle: PlaybackBundle?): String? = bundle?.let {
@@ -813,6 +1100,28 @@ class PlayerViewModel @Inject constructor(
 
     fun hideSubtitleSheet() {
         _ui.update { it.copy(subtitleSheetVisible = false) }
+    }
+
+    /** Opens the sync sheet alone: the subtitle list and the offset control never stack. */
+    fun showSubtitleOffsetSheet() {
+        _ui.update { it.copy(subtitleSheetVisible = false, subtitleOffsetSheetVisible = true) }
+    }
+
+    fun hideSubtitleOffsetSheet() {
+        _ui.update { it.copy(subtitleOffsetSheetVisible = false) }
+    }
+
+    /**
+     * Live subtitle sync. Called on every slider frame and on each quick button, so the
+     * custom SRT/VTT overlay re-renders on the next frame AND the service's decoder wrapper
+     * retimes the native track from the same number while playback continues.
+     *
+     * A positive value shows the text later, matching both render paths.
+     */
+    fun setSubtitleOffset(delayMs: Long) {
+        val clamped = SubtitleOffset.clamp(delayMs)
+        _ui.update { it.copy(subtitle = it.subtitle.copy(delayMs = clamped)) }
+        store.subtitleOffsetMs = clamped
     }
 
     fun showPrintSheet() {
@@ -849,12 +1158,23 @@ class PlayerViewModel @Inject constructor(
         _ui.update { it.copy(aspect = mode) }
     }
 
-    fun cycleRotation() {
-        _ui.update { it.copy(rotation = RotationMode.nextOf(it.rotation)) }
+    fun toggleOrientation() {
+        _ui.update { it.copy(orientation = it.orientation.toggled()) }
     }
 
     fun setLocked(locked: Boolean) {
         _ui.update { it.copy(locked = locked) }
+    }
+
+    /**
+     * Full chrome ↔ Ghost mode. Persisted through the same DataStore the settings screen
+     * writes, so the next episode opens in the frame the viewer last asked for, and so the
+     * two entry points (this button and the settings row) can never disagree.
+     */
+    fun toggleViewMode() {
+        val to = ViewMode.nextOf(_ui.value.viewMode)
+        _ui.update { it.copy(viewMode = to) }
+        viewModelScope.launch { settingsRepository.saveViewModeChoice(to.name) }
     }
 
     fun toggleAudioOnly() {
@@ -995,8 +1315,8 @@ class PlayerViewModel @Inject constructor(
         _ui.update { it.copy(subtitle = settings.clamped()) }
     }
 
-    /** Bundle-provided or SAF-picked external subtitle. SRT/VTT → custom render (delay!),
-     *  exotic formats → Media3 native SubtitleConfiguration (no delay in 1.3.1). */
+    /** Bundle-provided or SAF-picked external subtitle. SRT/VTT → our overlay (delay read
+     *  directly); exotic formats → Media3 SubtitleConfiguration (delay via the decoder wrapper). */
     fun addExternalSubtitle(url: String, label: String, formatHint: String) {
         viewModelScope.launch {
             val ext = ExternalSubtitle(
@@ -1110,6 +1430,9 @@ class PlayerViewModel @Inject constructor(
         store.clearNextEpisode()
         when (action) {
             is NextEpisodeAction.NextBundleRequest -> viewModelScope.launch {
+                // The prepared successor (resolved at 85%) opens without a catalog lookup;
+                // a cold END still resolves on demand before falling back to the app route.
+                if (openNextEpisode(action.season, action.nextEpisode, action.postId)) return@launch
                 _events.emit(
                     PlayerEvent.PlayNextEpisode(
                         workKey = action.workKey,
@@ -1303,6 +1626,9 @@ class PlayerViewModel @Inject constructor(
     companion object {
         const val RESUME_PROMPT_THRESHOLD_MS = 10_000L
         const val MAX_SUBTITLE_BYTES = 4_000_000
+
+        /** At most one local history write per this interval; a forced stop always writes. */
+        const val HISTORY_WRITE_INTERVAL_MS = 15_000L
     }
 }
 

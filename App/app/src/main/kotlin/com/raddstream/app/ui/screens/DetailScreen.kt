@@ -1,13 +1,20 @@
 package com.raddstream.app.ui.screens
 
+import android.Manifest
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.Build
 import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -22,7 +29,6 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
@@ -32,6 +38,7 @@ import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.OpenInNew
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -65,18 +72,24 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.raddstream.app.brand.Brand
 import com.raddstream.app.network.models.PostDetail
+import com.raddstream.app.ui.components.AudioBadge
 import com.raddstream.app.ui.components.CapabilityChip
 import com.raddstream.app.ui.components.CamBadge
 import com.raddstream.app.ui.components.CatalogImage
 import com.raddstream.app.ui.components.ErrorState
+import com.raddstream.app.ui.components.HdrBadge
+import com.raddstream.app.ui.components.ImageFallbackCard
 import com.raddstream.app.ui.components.LoadingState
 import com.raddstream.app.ui.components.Pill
 import com.raddstream.app.ui.components.PrintQualityBadge
+import com.raddstream.app.ui.components.PrintSourceBadge
 import com.raddstream.app.ui.components.QualityRungCard
 import com.raddstream.app.ui.components.SectionHeader
+import com.raddstream.app.ui.components.SubtitleBadge
 import com.raddstream.app.player.LadderForScope
 import com.raddstream.app.player.QualityOption
 import com.raddstream.app.viewmodel.DetailNavigationEvent
@@ -91,18 +104,70 @@ fun DetailScreen(
     onBackClick: () -> Unit,
     onPlayStream: (streamId: String, title: String) -> Unit,
     onOpenDownloads: () -> Unit = {},
+    onOpenVipUpgrade: () -> Unit = {},
     viewModel: DetailViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsState()
     val snackbarHostState = remember { SnackbarHostState() }
     val context = LocalContext.current
+    var pendingDownload by remember { mutableStateOf<(() -> Unit)?>(null) }
+    val permissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        val action = pendingDownload
+        pendingDownload = null
+        if (granted) action?.invoke()
+        else Toast.makeText(
+            context,
+            "Storage access is needed to save videos in Movies/RaddStream.",
+            Toast.LENGTH_LONG,
+        ).show()
+    }
+    val notificationLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) {
+        val action = pendingDownload
+        pendingDownload = null
+        // A denied notification still lets the download run; only the progress card is silent.
+        action?.invoke()
+    }
+
+    fun requestNotificationsThen(action: () -> Unit) {
+        val needsGrant = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.POST_NOTIFICATIONS,
+            ) != PackageManager.PERMISSION_GRANTED
+        if (needsGrant) {
+            pendingDownload = action
+            notificationLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        } else {
+            action()
+        }
+    }
+
+    fun downloadWithStoragePermission(action: () -> Unit) {
+        val needsLegacyGrant = Build.VERSION.SDK_INT < Build.VERSION_CODES.Q &&
+            ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.WRITE_EXTERNAL_STORAGE,
+            ) != PackageManager.PERMISSION_GRANTED
+        if (needsLegacyGrant) {
+            pendingDownload = { requestNotificationsThen(action) }
+            permissionLauncher.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE)
+        } else {
+            requestNotificationsThen(action)
+        }
+    }
 
     LaunchedEffect(viewModel.navEvents) {
         viewModel.navEvents.collect { event ->
             when (event) {
                 is DetailNavigationEvent.PlayStream -> onPlayStream(event.streamId, event.title)
                 is DetailNavigationEvent.OpenExternal -> openInExternalPlayer(context, event.playUrl)
-                is DetailNavigationEvent.KeepRung -> onOpenDownloads()
+                is DetailNavigationEvent.DownloadStarted -> onOpenDownloads()
+                is DetailNavigationEvent.DownloadNeedsPermission ->
+                    downloadWithStoragePermission { viewModel.retryLastDownload() }
             }
         }
     }
@@ -172,16 +237,17 @@ fun DetailScreen(
                 onSelectSeason = viewModel::selectSeason,
                 onPlayPrint = { print -> viewModel.playPrint(print, external = false) },
                 onOpenExternal = { print -> viewModel.playPrint(print, external = true) },
-                onKeep = viewModel::keepPrint,
+                onKeep = { print -> downloadWithStoragePermission { viewModel.keepPrint(print) } },
                 rungs = RungActions(
                     ladder = state.ladder,
                     selectedBand = state.selectedBand,
                     onPlay = viewModel::playLadder,
-                    onKeep = viewModel::keepRung,
+                    onKeep = { option -> downloadWithStoragePermission { viewModel.keepRung(option) } },
                 ),
                 ladderScope = rungScopeLabel(state.ladderSeason, state.ladderEpisode),
                 onAskRungs = viewModel::showRungsFor,
                 hasRungs = { season, episode -> !viewModel.ladderFor(season, episode).isEmpty },
+                onOpenVipUpgrade = onOpenVipUpgrade,
                 contentPadding = paddingValues,
             )
         }
@@ -227,6 +293,7 @@ private fun DetailContent(
     ladderScope: String?,
     onAskRungs: (season: Int?, episode: Int?) -> Unit,
     hasRungs: (season: Int?, episode: Int?) -> Boolean,
+    onOpenVipUpgrade: () -> Unit,
     contentPadding: PaddingValues,
 ) {
     val allPrints = (workPrints + seasons.flatMap { it.episodes.flatMap { e -> e.prints } } + seasons.flatMap { it.packedPrints })
@@ -252,6 +319,10 @@ private fun DetailContent(
                 onKeep = { bestPrint?.let(onKeep) },
             )
         }
+
+        // A first-party sponsor slot: no third-party SDK, no hidden network call, and it
+        // says who paid for the space. The upgrade is the same flow Settings offers.
+        item { SponsorCard(onOpenVipUpgrade = onOpenVipUpgrade) }
 
         // One row per quality band, exactly as the server collapsed the copies of this
         // title: the viewer picks a picture, never a server, and never a list of links.
@@ -283,6 +354,7 @@ private fun DetailContent(
             }
             val season = seasons.firstOrNull { it.number == selectedSeason } ?: seasons.firstOrNull()
             if (season != null) {
+                item { SeasonHeader(season) }
                 if (season.packedPrints.isNotEmpty()) {
                     item {
                         PackedSeasonBanner(
@@ -350,9 +422,13 @@ private fun PosterHeader(post: PostDetail, capabilities: List<String>) {
                     url = post.posterUrl,
                     contentDescription = "${post.cleanTitle ?: post.title} poster",
                     modifier = Modifier.fillMaxSize(),
+                    fallbackLabel = (post.cleanTitle ?: post.title).take(2).uppercase(),
                 )
             } else {
-                Text("No poster", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.labelMedium)
+                ImageFallbackCard(
+                    modifier = Modifier.fillMaxSize(),
+                    label = (post.cleanTitle ?: post.title).take(2).uppercase(),
+                )
             }
         }
 
@@ -416,8 +492,61 @@ private fun PrimaryActions(
             Text(if (bestPrint?.isCam == true) "Play (cam)" else "Play")
         }
         OutlinedButton(onClick = onKeep, enabled = hasAnyPrint, modifier = Modifier.height(52.dp)) {
-            Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(20.dp))
+            Icon(Icons.Default.Download, contentDescription = "Download video", modifier = Modifier.size(20.dp))
         }
+    }
+}
+
+/**
+ * The native sponsor slot. It is a first-party house card: the app renders no remote HTML,
+ * loads no third-party script, and sends no ad-network request, so it cannot quietly become
+ * a tracker. The space is honestly labelled, and the action is the same VIP flow the
+ * Settings screen opens.
+ */
+@Composable
+private fun SponsorCard(onOpenVipUpgrade: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant)
+            .padding(14.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            modifier = Modifier
+                .size(38.dp)
+                .clip(RoundedCornerShape(19.dp))
+                .background(MaterialTheme.colorScheme.primaryContainer),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                Icons.Default.Star,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                modifier = Modifier.size(20.dp),
+            )
+        }
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(
+                text = "Sponsored",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Text(
+                text = Brand.copy("sponsor_title", "Go VIP — no sponsor cards"),
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+            Text(
+                text = Brand.copy("sponsor_body", "A membership keeps this catalog running."),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        TextButton(onClick = onOpenVipUpgrade) { Text("Upgrade") }
     }
 }
 
@@ -478,8 +607,86 @@ private fun SeasonChips(seasons: List<SeasonGroup>, selectedSeason: Int?, onSele
                     selected = selectedSeason == s.number,
                     onClick = { onSelect(s.number) },
                     label = { Text("Season ${s.number} · ${s.episodeCount}") },
+                    leadingIcon = { SeasonThumbnail(season = s, modifier = Modifier.size(24.dp)) },
                 )
             }
+        }
+    }
+}
+
+/** A season's own artwork at chip size. Null art is answered by the branded gradient, not a hole. */
+@Composable
+private fun SeasonThumbnail(season: SeasonGroup, modifier: Modifier = Modifier) {
+    Box(
+        modifier = modifier
+            .clip(RoundedCornerShape(4.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant),
+    ) {
+        val art = season.artworkUrl
+        if (art != null) {
+            CatalogImage(
+                url = art,
+                contentDescription = null,
+                modifier = Modifier.fillMaxSize(),
+                fallbackLabel = "S${season.number}",
+            )
+        } else {
+            ImageFallbackCard(modifier = Modifier.fillMaxSize())
+        }
+    }
+}
+
+/**
+ * The selected season's header. Its image is the season's slice of the work's wide art, so a
+ * multi-season show never presents the same root poster above every season's episode list.
+ */
+@Composable
+private fun SeasonHeader(season: SeasonGroup) {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .aspectRatio(3.2f)
+            .clip(RoundedCornerShape(12.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant),
+    ) {
+        val art = season.artworkUrl
+        if (art != null) {
+            CatalogImage(
+                url = art,
+                contentDescription = "Season ${season.number} artwork",
+                modifier = Modifier.fillMaxSize(),
+                fallbackLabel = "S${season.number}",
+            )
+        } else {
+            ImageFallbackCard(modifier = Modifier.fillMaxSize(), label = "S${season.number}")
+        }
+        Box(
+            Modifier
+                .fillMaxSize()
+                .background(
+                    Brush.verticalGradient(
+                        listOf(
+                            Color.Transparent,
+                            MaterialTheme.colorScheme.scrim.copy(alpha = 0.85f),
+                        )
+                    )
+                )
+        )
+        Column(
+            modifier = Modifier.align(Alignment.BottomStart).padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(2.dp),
+        ) {
+            Text(
+                text = "Season ${season.number}",
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onBackground,
+            )
+            Text(
+                text = "${season.episodeCount} episode${if (season.episodeCount == 1) "" else "s"}",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onBackground,
+            )
         }
     }
 }
@@ -512,12 +719,13 @@ private fun PackedSeasonBanner(season: SeasonGroup, onPlay: (RankedPrint) -> Uni
                 Text("Play season")
             }
             OutlinedButton(onClick = { onKeep(pack) }) {
-                Icon(Icons.Default.Download, contentDescription = null)
+                Icon(Icons.Default.Download, contentDescription = "Download season")
             }
         }
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun EpisodeRow(
     episode: EpisodeGroup,
@@ -544,12 +752,37 @@ private fun EpisodeRow(
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             Box(
                 modifier = Modifier
-                    .size(38.dp)
-                    .clip(CircleShape)
+                    .width(88.dp)
+                    .aspectRatio(16f / 9f)
+                    .clip(RoundedCornerShape(8.dp))
                     .background(MaterialTheme.colorScheme.surfaceVariant),
                 contentAlignment = Alignment.Center,
             ) {
-                Text("${episode.absoluteNumber}", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurface)
+                val still = episode.stillUrl
+                if (still != null) {
+                    CatalogImage(
+                        url = still,
+                        contentDescription = "Episode ${episode.numberWithinSeason} preview",
+                        modifier = Modifier.fillMaxSize(),
+                        fallbackLabel = "E${episode.numberWithinSeason}",
+                    )
+                } else {
+                    ImageFallbackCard(modifier = Modifier.fillMaxSize())
+                }
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.BottomStart)
+                        .padding(3.dp)
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(MaterialTheme.colorScheme.scrim.copy(alpha = 0.75f))
+                        .padding(horizontal = 4.dp, vertical = 1.dp),
+                ) {
+                    Text(
+                        text = "${episode.absoluteNumber}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onBackground,
+                    )
+                }
             }
             Column(Modifier.weight(1f)) {
                 Text(
@@ -562,11 +795,31 @@ private fun EpisodeRow(
                 )
                 val suffix = if (episode.onlyPacked) " · packed in season file" else
                     if (episode.prints.size > 1) " · ${episode.prints.size} prints" else ""
-                Text(
-                    text = (best?.qualityLabel ?: "No quality info") + suffix,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+                if (best != null) {
+                    // The same three axes the print card leads with, condensed for the row:
+                    // quality, HDR and audio. Subtitles stay on the expanded print card.
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        PrintQualityBadge(print = best)
+                        HdrBadge(print = best)
+                        AudioBadge(print = best)
+                    }
+                } else {
+                    Text(
+                        text = "No quality info",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                if (suffix.isNotBlank()) {
+                    Text(
+                        text = suffix.trim().removePrefix("·").trim(),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
             best?.let {
                 IconButton(
@@ -623,6 +876,7 @@ private fun EpisodeRow(
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun PrintCard(
     print: RankedPrint,
@@ -655,6 +909,18 @@ private fun PrintCard(
             Text(print.detailLine, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
 
+        // The tier's own facts, as badges rather than one run-on sentence: a 4K HDR
+        // WEB-DL print and its audio/subtitle story read in a glance here.
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            HdrBadge(print = print)
+            PrintSourceBadge(print = print)
+            AudioBadge(print = print)
+            SubtitleBadge(print = print)
+        }
+
         if (print.isCam) {
             Text(
                 "This is a cam/bootleg recording. Pick an official print above when one exists.",
@@ -674,7 +940,7 @@ private fun PrintCard(
                 Text("Play")
             }
             OutlinedButton(onClick = { onKeep(print) }) {
-                Icon(Icons.Default.Download, contentDescription = "Keep offline")
+                Icon(Icons.Default.Download, contentDescription = "Download video")
             }
             if (print.playableHere) {
                 IconButton(onClick = { onOpenExternal(print) }, modifier = Modifier.size(40.dp)) {

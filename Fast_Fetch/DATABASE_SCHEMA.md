@@ -29,6 +29,7 @@ The system operates on an embedded SQLite database (`fast_fetch.db`):
 erDiagram
     SITEMAP_CACHE ||--o| POSTS : "cached page URLs"
     POSTS ||--o{ POST_SOURCES : "has source pages across sites"
+    POSTS ||--o{ POST_ARTWORK : "has season posters and episode stills"
     POSTS ||--o{ RELEASES : "has multiple quality/episodes"
     RELEASES ||--o{ DOWNLOAD_SOURCES : "has multiple CDN mirrors"
     DOMAINS_CONFIG ||--o{ POSTS : "provides mirror endpoints"
@@ -69,6 +70,19 @@ erDiagram
         string source_slug "Site-specific slug"
         timestamp first_seen_at "First indexed time"
         timestamp last_seen_at "Most recent successful scrape"
+    }
+
+    POST_ARTWORK {
+        integer post_id FK "References posts(id) ON DELETE CASCADE"
+        string kind "season_poster | episode_still"
+        integer season_number "TMDB season number; 0 = specials"
+        integer episode_number "0 for a season poster"
+        string url "Public TMDB CDN image URL"
+        string source "Producer of this row (tmdb)"
+        integer width "Optional pixel width"
+        integer height "Optional pixel height"
+        string language "Optional ISO 639-1 image language"
+        timestamp updated_at "Most recent write"
     }
 
     RELEASES {
@@ -286,6 +300,34 @@ Indexes the catalog of 16,000+ sitemapped posts locally across Vegamovies & RogM
 
 ---
 
+### 2.7 Table: `post_artwork`
+Season-level artwork for a series, kept out of `posts` because one work has many
+seasons. `posts.poster_url` remains the work's single poster; this table maps each
+TMDB season to its own poster and each episode to its own still. The v1 detail
+route publishes these rows as `season_artwork`, and only URLs already on a public
+image CDN (`redact.PUBLIC_IMAGE_HOSTS`, which includes `image.tmdb.org`) are
+emitted — a scraped site's image URL is dropped rather than leaked. Filled by
+`backfill_tmdb.py`; a database with no rows here is valid and simply has no
+season artwork mapped.
+
+| Column | Data Type | Constraints | Description |
+|---|---|---|---|
+| `post_id` | `INTEGER` | `NOT NULL`, `FOREIGN KEY REFERENCES posts(id) ON DELETE CASCADE` | Parent work |
+| `kind` | `TEXT` | `NOT NULL` | `season_poster` or `episode_still` |
+| `season_number` | `INTEGER` | `NOT NULL`, `DEFAULT 0` | TMDB season number (`0` = specials) |
+| `episode_number` | `INTEGER` | `NOT NULL`, `DEFAULT 0` | Episode number; `0` for a season poster |
+| `url` | `TEXT` | `NOT NULL` | Public TMDB CDN image URL |
+| `source` | `TEXT` | `NOT NULL`, `DEFAULT 'tmdb'` | Producer of the row |
+| `width` | `INTEGER` | `NULLABLE` | Pixel width when TMDB supplied metadata |
+| `height` | `INTEGER` | `NULLABLE` | Pixel height when TMDB supplied metadata |
+| `language` | `TEXT` | `NULLABLE` | ISO 639-1 language of the image |
+| `updated_at` | `TIMESTAMP` | `DEFAULT CURRENT_TIMESTAMP` | Most recent write |
+
+The primary key is `(post_id, kind, season_number, episode_number)`, so a rerun
+upserts one row per slot instead of duplicating art.
+
+---
+
 ## 3. Database Indexes
 
 To maintain sub-millisecond query performance as the catalog scales to tens of thousands of links, the schema defines the following SQLite indexes:
@@ -304,4 +346,5 @@ CREATE INDEX IF NOT EXISTS idx_posts_tmdb ON posts(tmdb_id);
 CREATE INDEX IF NOT EXISTS idx_posts_imdb ON posts(imdb_id);
 CREATE INDEX IF NOT EXISTS idx_post_sources_post ON post_sources(post_id);
 CREATE INDEX IF NOT EXISTS idx_post_sources_site_post ON post_sources(source_site, post_id);
+CREATE INDEX IF NOT EXISTS idx_post_artwork_post ON post_artwork(post_id, kind, season_number);
 ```

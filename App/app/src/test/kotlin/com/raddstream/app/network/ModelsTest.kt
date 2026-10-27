@@ -21,6 +21,7 @@ import com.raddstream.app.network.models.PrintFlag
 import com.raddstream.app.network.models.ProblemCode
 import com.raddstream.app.network.models.Resolution
 import com.raddstream.app.network.models.ScoreScale
+import com.raddstream.app.network.models.SeasonArtwork
 import com.raddstream.app.network.models.SeasonType
 import com.raddstream.app.network.models.SourceTag
 import com.raddstream.app.network.models.StatsResponse
@@ -136,6 +137,48 @@ class ModelsTest {
         assertEquals("s1.abcdef", source.streamId)
         assertEquals("Fast direct", source.label)
         assertEquals("direct", source.kind)
+    }
+
+    @Test
+    fun `season artwork decodes into distinct season and episode entries`() {
+        val json = """
+            {
+              "success": true,
+              "data": {
+                "id": 202,
+                "title": "Example Show",
+                "content_type": "series",
+                "season_artwork": [
+                  {"kind": "season_poster", "season": 1, "episode": 0, "url": "https://image.tmdb.org/s1.jpg"},
+                  {"kind": "season_poster", "season": 2, "episode": 0, "url": "https://image.tmdb.org/s2.jpg"},
+                  {"kind": "episode_still", "season": 1, "episode": 1, "url": "https://image.tmdb.org/e1.jpg"}
+                ]
+              }
+            }
+        """.trimIndent()
+
+        val data = gson.fromJson(json, PostDetailResponse::class.java).data!!
+
+        assertEquals(3, data.seasonArtwork.size)
+        val posters = data.seasonArtwork.filter { it.kind == "season_poster" }
+        assertEquals(listOf(1, 2), posters.map { it.season })
+        assertEquals(
+            listOf("https://image.tmdb.org/s1.jpg", "https://image.tmdb.org/s2.jpg"),
+            posters.map { it.url },
+        )
+        val still = data.seasonArtwork.single { it.kind == "episode_still" }
+        assertEquals(1, still.season)
+        assertEquals(1, still.episode)
+        assertEquals("https://image.tmdb.org/e1.jpg", still.url)
+    }
+
+    @Test
+    fun `a detail without season artwork defaults to an empty list`() {
+        val data = gson.fromJson(
+            """{"success":true,"data":{"id":203,"title":"Film","content_type":"movie"}}""",
+            PostDetailResponse::class.java,
+        ).data!!
+        assertTrue(data.seasonArtwork.isEmpty())
     }
 
     @Test

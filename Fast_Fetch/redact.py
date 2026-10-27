@@ -103,6 +103,10 @@ GENERIC_TOKENS = frozenset({
     "avc", "dvdscr", "bluray", "webrip", "cam", "ts", "print", "first",
     "unknown", "resumable", "temporary", "expired", "active", "dead",
     "status", "state", "link", "links", "new", "none", "null",
+    "drop", "schema", "version", "speed",
+    "http", "https", "click", "page", "pages", "upstream", "upload", "share",
+    "send", "support", "fonts", "gateway", "google", "github", "imdb", "api",
+    "embed", "american",
 })
 
 #: Image hosts we are willing to name in public. Art that is not already on one
@@ -850,6 +854,39 @@ def parse_token(token, secret: str, signed_only: bool = False) -> int | None:
     return int(struct.unpack(">q", raw)[0])
 
 
+_VIP_PASS_VERSION = 3
+
+
+def mint_vip_pass(expires_at: float, secret: str) -> str:
+    """Sign an expiry instant into a compact VIP pass handle.
+
+    A pass is a capability, not an account: whoever holds it is treated as VIP
+    until the signed instant. It carries no user id, price or payment detail, so
+    a leaked pass reveals nothing — and because there is no revocation list, the
+    only way to end one early is to rotate the signing secret.
+    """
+    body = struct.pack(">q", int(expires_at))
+    tag = hmac.new(secret.encode("utf-8"), b"vip" + body,
+                   hashlib.sha256).digest()[:8]
+    return _b64(bytes([_VIP_PASS_VERSION]) + body + tag)
+
+
+def parse_vip_pass(token, secret: str, now: float | None = None) -> float | None:
+    """The expiry a pass was minted for, or ``None`` for anything not ours,
+    tampered with, or already lapsed. A capability check, never an account."""
+    data = _unb64(str(token or ""))
+    if data is None or len(data) != 1 + 8 + 8 or data[0] != _VIP_PASS_VERSION:
+        return None
+    body, tag = data[1:9], data[9:]
+    want = hmac.new(secret.encode("utf-8"), b"vip" + body,
+                    hashlib.sha256).digest()[:8]
+    if not hmac.compare_digest(tag, want):
+        return None
+    expires_at = float(struct.unpack(">q", body)[0])
+    moment = time.time() if now is None else float(now)
+    return expires_at if expires_at > moment else None
+
+
 def mint_text(value: str, secret: str) -> str:
     """Opaque, reversible handle for a string (an art URL that has no row id)."""
     raw = value.encode("utf-8")
@@ -926,6 +963,21 @@ def art_ref(target_id, secret: str, base_url: str, kind: str = "poster",
             f"&k={kind}&n={index}{scope}")
 
 
+def public_image_value(url) -> str | None:
+    """The URL itself when its host is a third-party art CDN we may name.
+
+    This is the only shape a season poster or an episode still may leave this box
+    in: those rows are never routed through ``/api/v1/art`` (that redirector
+    resolves a *work's* poster), so a non-public image URL is dropped rather than
+    handed out. The scan is the same one :func:`public_art_value` uses."""
+    text = str(url or "").strip()
+    if not text:
+        return None
+    host = text.split("//", 1)[-1].split("/", 1)[0].split("@")[-1].lower()
+    host = host.split(":", 1)[0]
+    return text if host in PUBLIC_IMAGE_HOSTS else None
+
+
 def public_art_value(url, post_id, secret: str, base_url: str,
                      kind: str = "poster", index: int = 0, table: str = "posts"):
     """Rewrite one stored image URL for public consumption.
@@ -934,13 +986,12 @@ def public_art_value(url, post_id, secret: str, base_url: str,
     us or our sources); art hosted by a site we scrape becomes an ``art_ref``.
     With no base URL known (an offline test, a request without a Host header)
     the handle is root-relative, which every same-origin consumer resolves."""
+    direct = public_image_value(url)
+    if direct is not None:
+        return direct
     text = str(url or "").strip()
     if not text:
         return None
-    host = text.split("//", 1)[-1].split("/", 1)[0].split("@")[-1].lower()
-    host = host.split(":", 1)[0]
-    if host in PUBLIC_IMAGE_HOSTS:
-        return text
     scope = "" if table == "posts" else f"&t={table}"
     if not base_url:
         return (f"/api/v1/art?id={mint_token(post_id, secret)}"
@@ -1111,17 +1162,29 @@ def site_needles(db_path=None) -> frozenset[str]:
     if db_path and Path(db_path).exists():
         try:
             with sqlite3.connect(f"file:{db_path}?mode=ro", uri=True) as conn:
-                for sql in ("SELECT DISTINCT source_site FROM posts",
-                            "SELECT DISTINCT service FROM download_sources"):
-                    for (value,) in conn.execute(sql):
+                has_cat_sites = conn.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='cat_work_sites'"
+                ).fetchone()
+                if has_cat_sites:
+                    for (value,) in conn.execute("SELECT DISTINCT source_site FROM cat_work_sites"):
                         needles.add(str(value or "").strip().lower())
-                # `source_name` is prose ("⚡ PixelDrain [Direct CDN]"); only its
-                # leading brand word is a token, never the whole string.
-                for (value,) in conn.execute(
-                        "SELECT DISTINCT source_name FROM download_sources"):
-                    head = re.match(r"\W*([A-Za-z][A-Za-z0-9\-]{4,})", str(value or ""))
-                    if head:
-                        needles.add(head.group(1).lower())
+                else:
+                    for (value,) in conn.execute("SELECT DISTINCT source_site FROM posts"):
+                        needles.add(str(value or "").strip().lower())
+                # For download_sources, scan when table is small or indexed; _registry_needles()
+                # already carries all canonical hosters and services.
+                has_service_idx = conn.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='index' AND tbl_name='download_sources' AND name='idx_sources_service'"
+                ).fetchone()
+                sub_cnt = conn.execute("SELECT count(*) FROM (SELECT 1 FROM download_sources LIMIT 100000)").fetchone()[0]
+                if has_service_idx or sub_cnt < 100000:
+                    for (value,) in conn.execute("SELECT DISTINCT service FROM download_sources"):
+                        needles.add(str(value or "").strip().lower())
+                    for (value,) in conn.execute(
+                            "SELECT DISTINCT source_name FROM download_sources"):
+                        head = re.match(r"\W*([A-Za-z][A-Za-z0-9\-]{4,})", str(value or ""))
+                        if head:
+                            needles.add(head.group(1).lower())
         except Exception:
             pass
     return frozenset(

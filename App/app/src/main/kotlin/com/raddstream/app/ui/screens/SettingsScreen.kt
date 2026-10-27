@@ -20,6 +20,7 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -66,6 +67,7 @@ private val subtitleOptions = listOf("Off", "English", "Hindi", "Tamil", "Telugu
 @Composable
 fun SettingsScreen(
     onOpenDownloads: () -> Unit = {},
+    onOpenVipUpgrade: () -> Unit = {},
     viewModel: SettingsViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsState()
@@ -156,6 +158,20 @@ fun SettingsScreen(
                 }
             }
 
+            // ── VIP membership ─────────────────────────────────────────
+            SettingsCard(title = "VIP Membership", icon = Icons.Default.Star) {
+                Text(
+                    "Support the catalog with a monthly or yearly membership. Pay through " +
+                        "JazzCash, EasyPaisa or Raast, then submit the transaction ID from " +
+                        "your confirmation.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Button(onClick = onOpenVipUpgrade, modifier = Modifier.fillMaxWidth()) {
+                    Text("Upgrade to VIP")
+                }
+            }
+
             // ── Share kept files on the local network ──────────────────
             SettingsCard(title = "Share on your network") {
                 SwitchRow(
@@ -180,11 +196,12 @@ fun SettingsScreen(
                 val account = state.account
                 Text(
                     if (account.signedIn) {
-                        "Signed in on this device. Your saved list and resume points are kept on the " +
-                            "connected server as well as here."
+                        "Signed in on this device. Your saved list, watch history and resume points " +
+                            "are kept on the connected server as well as here."
                     } else {
-                        "Optional. Without an account everything in this app works exactly as it " +
-                            "does now: your saved list and resume points stay on this device."
+                        "Guest mode. Everything in this app works without an account: your saved " +
+                            "list, watch history and resume points stay on this device. Sign in only " +
+                            "if you want them on another device."
                     },
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -228,30 +245,38 @@ fun SettingsScreen(
 
                 if (!account.signedIn) {
                     OutlinedTextField(
-                        value = account.restoreInput,
-                        onValueChange = viewModel::onRestoreKeyChanged,
-                        label = { Text("Restore with a key") },
-                        placeholder = { Text("Paste a sync key from another device") },
+                        value = account.quickInput,
+                        onValueChange = viewModel::onQuickInputChanged,
+                        label = { Text("Mobile number or 16-character sync key") },
+                        placeholder = { Text("03XXXXXXXXX or a 16-character key") },
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth(),
+                    )
+                    Text(
+                        "One tap signs in with the same number on every device. A mobile number " +
+                            "is a convenience, not a secret: anyone who knows it can derive the " +
+                            "same key and open this list. For a credential only you know, create " +
+                            "a random 16-character key instead and keep it somewhere safe.",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(10.dp),
                     ) {
                         Button(
+                            onClick = viewModel::quickSignIn,
+                            enabled = !account.isBusy && account.quickInput.isNotBlank(),
+                            modifier = Modifier.weight(1f),
+                        ) {
+                            BusyLabel(account.isBusy, "Sign in")
+                        }
+                        OutlinedButton(
                             onClick = viewModel::createAccount,
                             enabled = !account.isBusy,
                             modifier = Modifier.weight(1f),
                         ) {
-                            BusyLabel(account.isBusy, "Create account")
-                        }
-                        OutlinedButton(
-                            onClick = viewModel::restoreWithKey,
-                            enabled = !account.isBusy && account.restoreInput.isNotBlank(),
-                            modifier = Modifier.weight(1f),
-                        ) {
-                            Text("Restore")
+                            Text("Create a random key")
                         }
                     }
                 } else {

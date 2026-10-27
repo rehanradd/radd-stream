@@ -10,6 +10,7 @@ import com.raddstream.app.network.models.Playability
 import com.raddstream.app.network.models.ReleaseDetail
 import com.raddstream.app.network.models.ReleaseLabelParsing
 import com.raddstream.app.network.models.Resolution
+import com.raddstream.app.network.models.SeasonArtwork
 import com.raddstream.app.network.models.SourceDetail
 import com.raddstream.app.network.models.SourceTag
 import com.raddstream.app.network.models.WorkType
@@ -122,6 +123,12 @@ data class RankedPrint(
     val isPacked: Boolean get() = coverage.isPacked
     val dualAudio: Boolean get() = descriptor.dualAudio
 
+    /** Subtitle facts, read straight off the descriptor so the badge layer adds no grammar. */
+    val subtitlesAvailable: Boolean get() = descriptor.subtitlesAvailable
+    val subtitlesExternal: Boolean get() = descriptor.subtitlesExternal
+    val subtitlesHardcoded: Boolean get() = descriptor.subtitlesHardcoded
+    val subtitleLangs: List<String> get() = descriptor.subtitleLangs
+
     /** The surviving print-quality axis (0..1000); never comparable with a link score. */
     val qualityScore: Int get() = descriptor.qualityScore
 
@@ -177,6 +184,12 @@ data class EpisodeGroup(
     val absoluteNumber: Int,
     val title: String?,
     val prints: List<RankedPrint>,
+    /**
+     * Wide artwork for this episode, chosen from the work's own backdrop set (see
+     * [ReleaseLayoutBuilder]). Null when the catalog carries no usable wide art — the row
+     * then paints the branded gradient card rather than repeating the series poster.
+     */
+    val stillUrl: String? = null,
 ) {
     val bestPrint: RankedPrint? get() = prints.maxByOrNull { it.rankKey }
     val onlyPacked: Boolean get() = prints.isNotEmpty() && prints.all { it.isPacked }
@@ -187,6 +200,11 @@ data class SeasonGroup(
     val number: Int,
     val episodes: List<EpisodeGroup>,
     val packedPrints: List<RankedPrint>,
+    /**
+     * This season's own artwork, distinct from its siblings whenever the catalog carries more
+     * than one wide image. Null means the caller should draw the branded fallback.
+     */
+    val artworkUrl: String? = null,
 ) {
     val episodeCount: Int get() = episodes.size
     val bestPrint: RankedPrint? get() = (episodes.flatMap { it.prints } + packedPrints).maxByOrNull { it.rankKey }
@@ -218,9 +236,38 @@ data class ReleaseLayout(
 object ReleaseLayoutBuilder {
 
     fun build(contentType: String?, releases: List<ReleaseDetail>): ReleaseLayout =
-        build(contentType, null, releases)
+        build(contentType, null, releases, emptyList(), emptyList())
 
-    fun build(contentType: String?, workType: WorkType?, releases: List<ReleaseDetail>): ReleaseLayout {
+    fun build(
+        contentType: String?,
+        releases: List<ReleaseDetail>,
+        artwork: List<String>,
+        seasonArtwork: List<SeasonArtwork> = emptyList(),
+    ): ReleaseLayout = build(contentType, null, releases, artwork, seasonArtwork)
+
+    /**
+     * [artwork] is the work's wide art pool, best first (backdrops, then poster).
+     * [seasonArtwork] is the server's mapped season poster / episode still set, which always
+     * wins for the season or episode it names. The pool remains a fallback for databases
+     * written before `backfill_tmdb.py` ran: it distributes real work-level images, and it
+     * never pretends a work backdrop is an official season poster or an episode frame.
+     */
+    fun build(
+        contentType: String?,
+        workType: WorkType?,
+        releases: List<ReleaseDetail>,
+        artwork: List<String> = emptyList(),
+        seasonArtwork: List<SeasonArtwork> = emptyList(),
+    ): ReleaseLayout {
+        val pool = artwork.filter { it.isNotBlank() }.distinct()
+        val publishedPosters = seasonArtwork
+            .asSequence()
+            .filter { it.kind == "season_poster" && !it.url.isNullOrBlank() }
+            .associate { it.season to it.url!! }
+        val publishedStills = seasonArtwork
+            .asSequence()
+            .filter { it.kind == "episode_still" && !it.url.isNullOrBlank() }
+            .associate { (it.season to it.episode) to it.url!! }
         val prints = releases.map { toPrint(it, workType) }
         val isSeries = looksLikeSeries(contentType, prints)
         val officialCount = prints.count { it.isOfficialPrint }
@@ -240,7 +287,7 @@ object ReleaseLayoutBuilder {
         }
 
         val bySeason = prints.groupBy { it.season ?: 1 }
-        val seasons = bySeason.toSortedMap().map { (seasonNum, seasonPrints) ->
+        val seasons = bySeason.toSortedMap().entries.mapIndexed { seasonIndex, (seasonNum, seasonPrints) ->
             val packed = seasonPrints.filter { it.isPacked }
             val perEpisode = seasonPrints.filterNot { it.isPacked }
             val epNumbers = sortedSetOf<Int>()
@@ -250,7 +297,7 @@ object ReleaseLayoutBuilder {
                 var n = from
                 while (n <= to) { epNumbers.add(n); n++ }
             }
-            val episodes = epNumbers.map { num ->
+            val episodes = epNumbers.mapIndexed { episodeIndex, num ->
                 val covering = perEpisode.filter { p ->
                     val from = p.episodeFrom ?: return@filter false
                     val to = (p.episodeTo ?: from).coerceAtLeast(from)
@@ -262,9 +309,17 @@ object ReleaseLayoutBuilder {
                     absoluteNumber = num,
                     title = covering.firstNotNullOfOrNull { it.rawTitle?.takeIf(String::isNotBlank) },
                     prints = (covering + packed).sortedByDescending { it.rankKey },
+                    stillUrl = publishedStills[seasonNum to num]
+                        ?: stillAt(pool, seasonIndex, episodeIndex),
                 )
             }
-            SeasonGroup(number = seasonNum, episodes = episodes, packedPrints = packed)
+            SeasonGroup(
+                number = seasonNum,
+                episodes = episodes,
+                packedPrints = packed,
+                artworkUrl = publishedPosters[seasonNum]
+                    ?: artworkAt(pool, seasonIndex),
+            )
         }
         // Recompute show-wide absolute numbering across seasons.
         var running = 0
@@ -282,6 +337,22 @@ object ReleaseLayoutBuilder {
             totalPrints = prints.size,
         )
     }
+
+    /**
+     * Index into the work's wide-art pool. Seasons take one image each, in order; a pool
+     * shorter than the season list wraps, which is still a deliberate choice rather than one
+     * repeated poster on every card.
+     */
+    private fun artworkAt(pool: List<String>, index: Int): String? =
+        if (pool.isEmpty()) null else pool[index % pool.size]
+
+    /**
+     * Episode stills only exist when the work carries more than one wide image. With a single
+     * backdrop every row would show the identical frame, which reads as a broken grid; null
+     * lets the row draw the branded gradient with its episode number instead.
+     */
+    private fun stillAt(pool: List<String>, seasonIndex: Int, episodeIndex: Int): String? =
+        if (pool.size < 2) null else pool[(seasonIndex * 3 + episodeIndex) % pool.size]
 
     private fun looksLikeSeries(contentType: String?, prints: List<RankedPrint>): Boolean {
         val ct = contentType?.lowercase().orEmpty()

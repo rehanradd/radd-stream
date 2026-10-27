@@ -50,6 +50,7 @@ import androidx.compose.material.icons.filled.Forward10
 import androidx.compose.material.icons.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.ListAlt
+import androidx.compose.material.icons.filled.LocalMovies
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material.icons.filled.MusicNote
@@ -61,6 +62,7 @@ import androidx.compose.material.icons.filled.RotateRight
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Subtitles
+import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.filled.VolumeMute
 import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material.icons.filled.Warning
@@ -92,6 +94,7 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
@@ -111,6 +114,7 @@ import androidx.media3.ui.CaptionStyleCompat
 import androidx.media3.ui.PlayerView
 import androidx.media3.ui.SubtitleView
 import com.raddstream.app.brand.Brand
+import com.raddstream.app.player.AdSlot
 import com.raddstream.app.player.AspectMode
 import com.raddstream.app.player.AudioBoost
 import com.raddstream.app.player.AudioBoostUi
@@ -124,11 +128,14 @@ import com.raddstream.app.player.GestureSettings
 import com.raddstream.app.player.HandoffWhy
 import com.raddstream.app.player.KeepUiState
 import com.raddstream.app.player.PinchCommand
+import com.raddstream.app.player.PlayerOrientation
 import com.raddstream.app.player.PlayerUiState
 import com.raddstream.app.player.ScreenZone
 import com.raddstream.app.player.SleepMode
 import com.raddstream.app.player.SleepTimerState
 import com.raddstream.app.player.TapCommand
+import com.raddstream.app.player.subtitles.SubtitleOffset
+import com.raddstream.app.player.subtitles.SubtitleOffsetSheet
 import com.raddstream.app.player.dragHalfZone
 import com.raddstream.app.player.dominantAxis
 import com.raddstream.app.viewmodel.PlayerEvent
@@ -147,12 +154,16 @@ import kotlinx.coroutines.delay
  *    `pointerInput` lanes so they never fight over events.
  *  - [TopBar] / [CenterControls] / [BottomControls] — three-zone fading chrome with the MX
  *    bottom button row (subtitles, audio, speed, lock, ±10s, frame-step, next episode,
- *    sleep, aspect, rotate, audio-only, stereo-select, PiP).
- *  - Sheets/dialogs — speed, sleep timer (fade-out), subtitle settings (delay for the
- *    custom path), tracks, prints + failover log, resume prompt, pack calibration,
+ *    sleep, aspect, rotate, audio-only, stereo-select, cinema, PiP).
+ *  - [EdgeHud] — what the same three zones collapse to in Ghost mode
+ *    ([com.raddstream.app.player.ViewMode.PURE_CINEMA]): no pause scrim, no centre button,
+ *    only edge chips and a 2dp progress line.
+ *  - Sheets/dialogs — speed, sleep timer (fade-out), subtitle settings (sync applies to
+ *    both render paths), tracks, prints + failover log, resume prompt, pack calibration,
  *    play-from, give-up card with the four §5 handoff reasons.
- *  - [SubtitleOverlay] — custom-rendered external SRT/VTT (the only path with subtitle
- *    delay in Media3 1.3.1; native `SubtitleView` handles embedded tracks).
+ *  - [SubtitleOverlay] — custom-rendered external SRT/VTT (delay read straight from the
+ *    settings); embedded and Media3-parsed tracks get the same delay from the service's
+ *    decoder wrapper.
  *  - [KeepChip] — signature "watching → keeping" affordance fed by `ProgressiveCacheEngine`
  *    snapshots through [CacheAffordance].
  *
@@ -165,11 +176,16 @@ fun PlayerScreen(
     title: String,
     onBackClick: () -> Unit,
     onPlayNextEpisode: (workKey: String?, postId: Int?, season: Int, episode: Int) -> Unit = { _, _, _, _ -> },
+    localUri: String? = null,
     viewModel: PlayerViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsState()
-    LaunchedEffect(streamId) {
-        if (streamId.isNotBlank()) viewModel.startStreamHandle(streamId, title)
+    LaunchedEffect(streamId, localUri) {
+        if (!localUri.isNullOrBlank()) {
+            viewModel.startLocalUri(localUri, title)
+        } else if (streamId.isNotBlank()) {
+            viewModel.startStreamHandle(streamId, title)
+        }
     }
     PlayerScreenContent(state, viewModel, onBackClick, onPlayNextEpisode)
 }
@@ -218,6 +234,7 @@ private fun PlayerScreenContent(
             WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
         insets?.hide(WindowInsetsCompat.Type.systemBars())
         val originalBrightness = window?.attributes?.screenBrightness
+        activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
         onDispose {
             window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
             insets?.show(WindowInsetsCompat.Type.systemBars())
@@ -240,13 +257,11 @@ private fun PlayerScreenContent(
         }
     }
 
-    // Manual rotation (MX rotate button). configChanges on MainActivity keeps playback alive.
-    LaunchedEffect(state.rotation) {
-        activity?.requestedOrientation = when (state.rotation.degrees) {
-            90 -> ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
-            180 -> ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
-            270 -> ActivityInfo.SCREEN_ORIENTATION_REVERSE_LANDSCAPE
-            else -> ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+    // Manual orientation (rotate button). configChanges on MainActivity keeps playback alive.
+    LaunchedEffect(state.orientation) {
+        activity?.requestedOrientation = when (state.orientation) {
+            PlayerOrientation.LANDSCAPE -> ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+            PlayerOrientation.PORTRAIT -> ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT
         }
     }
 
@@ -340,16 +355,21 @@ private fun PlayerScreenContent(
         scrubPreviewMs?.let { ScrubToast(target = it, durationMs = state.durationMs) }
         if (state.boosting) BoostBadge()
 
-        // 5 — chrome
+        // 5 — chrome. Ghost mode paints only the edge strip; everything else keeps the
+        // three-zone MX bars, the pause scrim and the big centre button.
         if (controlsVisible && !state.locked) {
-            TopBar(vm = vm, state = state, onBack = onBackClick)
-            CenterControls(state, vm)
-            BottomControls(
-                state = state,
-                vm = vm,
-                onEnterPip = launchPip,
-                onActivity = { interactTick = System.nanoTime() },
-            )
+            if (state.pureCinema) {
+                EdgeHud(state = state, vm = vm, onBack = onBackClick)
+            } else {
+                TopBar(vm = vm, state = state, onBack = onBackClick)
+                CenterControls(state, vm)
+                BottomControls(
+                    state = state,
+                    vm = vm,
+                    onEnterPip = launchPip,
+                    onActivity = { interactTick = System.nanoTime() },
+                )
+            }
         }
         if (state.locked) {
             UnlockFab(onUnlock = { vm.setLocked(false) })
@@ -402,7 +422,7 @@ private fun PlayerScreenContent(
             )
         }
 
-        if (state.isEnded && controlsVisible && !state.locked) {
+        if (state.isEnded && controlsVisible && !state.locked && !state.pureCinema) {
             PlayAgainButton(onPlayAgain = { vm.playFrom(0) })
         }
 
@@ -427,9 +447,20 @@ private fun PlayerScreenContent(
         if (state.speedSheetVisible) SpeedSheet(state, vm)
         if (state.sleepSheetVisible) SleepSheet(state, vm)
         if (state.subtitleSheetVisible) SubtitleSettingsSheet(state, vm)
+        if (state.subtitleOffsetSheetVisible) {
+            SubtitleOffsetSheet(
+                offsetMs = state.subtitle.delayMs,
+                hasCustomOverlay = state.customSubtitleLoaded != null,
+                onOffsetChange = { vm.setSubtitleOffset(it) },
+                onDismiss = { vm.hideSubtitleOffsetSheet() },
+            )
+        }
         if (state.tracksSheetVisible) TracksSheet(state, vm)
         if (state.printSheetVisible) PrintLogSheet(state, vm)
         if (state.qualitySheetVisible) QualitySheet(state, vm)
+        if (state.adBreak != AdSlot.NONE) {
+            SponsorBreakDialog(slot = state.adBreak, onDismiss = { vm.dismissAdBreak() })
+        }
 
         // 8 — lightweight snackbar
         snackbar?.let { msg ->
@@ -450,11 +481,19 @@ private fun PlayerScreenContent(
 
 private val AccentOrange = Color(0xFFFF8552)
 
+/**
+ * How long after a two-finger rewind the single-tap chrome toggle stays suppressed. The
+ * two lanes see the same up event in different passes, so this is a safety margin for the
+ * one that wins by a hair — not a debounce a user can feel.
+ */
+private const val TWO_FINGER_TAP_GUARD_NS = 250_000_000L
+
 /** True when any blocking dialog/sheet is up — pauses the controls auto-hide. */
 private val PlayerUiState.dialogBlocking: Boolean
     get() = resumeOfferMs != null || calibration != null || giveUp != null ||
         speedSheetVisible || tracksSheetVisible || subtitleSheetVisible ||
-        printSheetVisible || sleepSheetVisible || playFromDialogVisible || qualitySheetVisible
+        subtitleOffsetSheetVisible || printSheetVisible || sleepSheetVisible ||
+        playFromDialogVisible || qualitySheetVisible || adBreak != AdSlot.NONE
 
 // ── 1. Surface ─────────────────────────────────────────────────────────────────
 
@@ -485,8 +524,8 @@ private fun PlayerSurface(vm: PlayerViewModel, state: PlayerUiState) {
 
 /**
  * Native embedded-subtitle rendering (size/position/colors) — every call below was verified
- * public in media3-ui 1.3.1. Subtitle *delay* is NOT available natively in 1.3.1; that only
- * works on the custom SRT/VTT path ([SubtitleOverlay]).
+ * public in media3-ui 1.3.1. Sync is applied below this layer by the service's decoder
+ * wrapper, so this styling and the custom SRT/VTT overlay ([SubtitleOverlay]) agree.
  */
 @OptIn(UnstableApi::class)
 private fun styleNativeSubtitles(view: PlayerView, state: PlayerUiState) {
@@ -549,22 +588,77 @@ private fun GestureOverlay(
     onBoostStart: () -> Unit,
     onBoostEnd: () -> Unit,
 ) {
-    val settings = GestureSettings(lockGestures = state.locked)
+    val settings = GestureSettings(
+        lockGestures = state.locked,
+        pureCinema = state.pureCinema,
+    )
     // Values that must be fresh inside long-lived pointer loops:
     val latestSettings by rememberUpdatedState(settings)
     val latestDuration by rememberUpdatedState(state.durationMs)
     val latestPosition by rememberUpdatedState(state.positionMs)
+    /**
+     * Stamp of the last confirmed two-finger tap. The two-finger lane below watches the
+     * Initial pass, which every frame delivers before the Main pass the tap lane reads, so
+     * by the time `detectTapGestures` decides an up was a tap this stamp is already set —
+     * one two-finger tap rewinds, it does not also toggle the chrome. A stamp rather than
+     * consumption: consuming the pointers here would silently kill pinch-to-zoom, which
+     * needs the same two fingers.
+     */
+    val twoFingerStamp = remember { LongArray(1) }
 
     Box(
         Modifier
             .fillMaxSize()
+            // Lane E — two fingers down, still, together → the Ghost rewind. Reads only, never
+            // consumes, so lanes A–D keep working exactly as they did.
+            .pointerInput(Unit) {
+                awaitEachGesture {
+                    val down = awaitFirstDown(requireUnconsumed = false)
+                    val origins = hashMapOf(down.id.value to down.position)
+                    val slop = viewConfiguration.touchSlop
+                    var sawSecondPointer = false
+                    var moved = false
+                    while (true) {
+                        val event = awaitPointerEvent(PointerEventPass.Initial)
+                        // Both fingers in one frame counts, even if only one of them is a
+                        // pointer we happened to see go down: index-then-thumb and a true
+                        // simultaneous tap must behave the same.
+                        if (event.changes.size >= 2) sawSecondPointer = true
+                        event.changes.filter { it.pressed }.forEach { change ->
+                            val at = origins[change.id.value]
+                            if (at == null) {
+                                origins[change.id.value] = change.position
+                                if (origins.size >= 2) sawSecondPointer = true
+                            } else if (kotlin.math.abs(change.position.x - at.x) > slop ||
+                                kotlin.math.abs(change.position.y - at.y) > slop
+                            ) {
+                                moved = true
+                            }
+                        }
+                        if (event.changes.none { it.pressed }) break
+                    }
+                    if (sawSecondPointer && !moved) {
+                        when (val cmd = GestureMapper.onTwoFingerTap(latestSettings)) {
+                            is TapCommand.SeekWithRipple -> {
+                                twoFingerStamp[0] = System.nanoTime()
+                                vm.seekBy(cmd.deltaMs)
+                                vm.showRipple(cmd.zone, cmd.deltaMs)
+                            }
+                            else -> Unit
+                        }
+                    }
+                }
+            }
             // Lane A — taps: single → controls, double → ±10s ripple / play-pause, long → boost
             .pointerInput(Unit) {
                 // PointerInputScope.size is an IntSize (width/height), not an Offset.
                 val paneSize: androidx.compose.ui.unit.IntSize = this.size
                 detectTapGestures(
                     onTap = {
-                        if (GestureMapper.onSingleTap(latestSettings) == TapCommand.ToggleControls) {
+                        val justRewound = System.nanoTime() - twoFingerStamp[0] < TWO_FINGER_TAP_GUARD_NS
+                        if (!justRewound &&
+                            GestureMapper.onSingleTap(latestSettings) == TapCommand.ToggleControls
+                        ) {
                             onToggleControls()
                         }
                     },
@@ -876,6 +970,133 @@ private fun CenterControls(state: PlayerUiState, vm: PlayerViewModel) {
     }
 }
 
+/**
+ * The whole chrome of Ghost mode ([com.raddstream.app.player.ViewMode.PURE_CINEMA]) — and
+ * the only thing left when the frame is deliberately furniture-free:
+ *
+ *  - no scrim across the picture and no scrim behind a pause: the frame keeps its own
+ *    brightness whether you are playing or paused, which is the entire point of the mode;
+ *  - no giant centre play button. Transport lives at the bottom-left edge;
+ *  - three small chips hugging the edges (back + title, transport + time, exit + lock), each
+ *    with its own rounded backing so it stays readable over a white frame without any of
+ *    them dimming the image;
+ *  - a 2dp played-progress line along the very top edge, so position is legible without a
+ *    bar sitting on top of the picture.
+ *
+ * It fades on the same timer as the normal bars, a single tap brings it back, and a
+ * two-finger tap rewinds [com.raddstream.app.player.GestureSettings.cinemaRewindMs] — the
+ * affordance that makes a chrome-less frame still usable. The exit chip is why leaving is
+ * never a hunt: one tap returns the full MX chrome.
+ */
+@Composable
+private fun EdgeHud(
+    state: PlayerUiState,
+    vm: PlayerViewModel,
+    onBack: () -> Unit,
+) {
+    val played = if (state.durationMs > 0) {
+        (state.positionMs.toFloat() / state.durationMs).coerceIn(0f, 1f)
+    } else {
+        0f
+    }
+    Box(Modifier.fillMaxSize()) {
+        // Progress, painted on the edge of the frame rather than across the image.
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .align(Alignment.TopStart)
+                .height(2.dp)
+                .background(Color(0x33FFFFFF)),
+        ) {
+            Box(
+                Modifier
+                    .fillMaxWidth(played)
+                    .height(2.dp)
+                    .background(AccentOrange),
+            )
+        }
+
+        // Top-left: leave, and what is playing.
+        Row(
+            modifier = Modifier
+                .align(Alignment.TopStart)
+                .padding(start = 6.dp, top = 6.dp)
+                .background(Color(0x66000000), CircleShape)
+                .padding(horizontal = 6.dp, vertical = 2.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            IconButton(onClick = onBack, modifier = Modifier.size(38.dp)) {
+                Icon(Icons.Default.ArrowBack, "Back", tint = Color.White, modifier = Modifier.size(20.dp))
+            }
+            Text(
+                text = state.pendingTitle ?: state.activeRendition?.displayLabel() ?: Brand.name,
+                color = Color.White.copy(alpha = 0.85f),
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Medium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier
+                    .widthIn(max = 220.dp)
+                    .padding(end = 8.dp),
+            )
+        }
+
+        // Bottom-left: transport. Tapping it at the end of a file replays from the top,
+        // because this mode has no separate "play again" furniture to fall back on.
+        Row(
+            modifier = Modifier
+                .align(Alignment.BottomStart)
+                .padding(start = 6.dp, bottom = 10.dp)
+                .background(Color(0x66000000), CircleShape)
+                .padding(horizontal = 6.dp, vertical = 2.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            IconButton(
+                onClick = { if (state.isEnded) vm.playFrom(0) else vm.togglePlayPause() },
+                modifier = Modifier.size(38.dp),
+            ) {
+                Icon(
+                    if (state.isPlaying && !state.isBuffering) Icons.Default.Pause else Icons.Default.PlayArrow,
+                    if (state.isPlaying) "Pause" else "Play",
+                    tint = Color.White,
+                    modifier = Modifier.size(20.dp),
+                )
+            }
+            Text(
+                text = buildString {
+                    append(state.positionMs.formatTime())
+                    append(if (state.durationMs > 0) " / ${state.durationMs.formatTime()}" else " / --:--")
+                },
+                color = Color.White.copy(alpha = 0.8f),
+                fontSize = 11.sp,
+                modifier = Modifier.padding(end = 8.dp),
+            )
+        }
+
+        // Bottom-right: the way back to the full chrome, plus the lock.
+        Row(
+            modifier = Modifier
+                .align(Alignment.BottomEnd)
+                .padding(end = 6.dp, bottom = 10.dp)
+                .background(Color(0x66000000), CircleShape)
+                .padding(horizontal = 4.dp, vertical = 2.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            IconButton(onClick = { vm.toggleViewMode() }, modifier = Modifier.size(38.dp)) {
+                Icon(
+                    Icons.Default.LocalMovies,
+                    "Leave cinema mode",
+                    tint = AccentOrange,
+                    modifier = Modifier.size(20.dp),
+                )
+            }
+            IconButton(onClick = { vm.setLocked(true) }, modifier = Modifier.size(38.dp)) {
+                Icon(Icons.Default.Lock, "Lock controls", tint = Color.White, modifier = Modifier.size(18.dp))
+            }
+        }
+    }
+}
+
 @Composable
 private fun BottomControls(
     state: PlayerUiState,
@@ -930,6 +1151,16 @@ private fun BottomControls(
                 PlayerControlButton({ vm.showSubtitleSheet() }, "Subtitles: ${subtitleStatusLabel(state)}") {
                     Icon(Icons.Default.Subtitles, null, tint = if (subtitleActive(state)) AccentOrange else Color.White)
                 }
+                PlayerControlButton(
+                    { vm.showSubtitleOffsetSheet() },
+                    "Subtitle sync: ${SubtitleOffset.format(state.subtitle.delayMs)}",
+                ) {
+                    Icon(
+                        Icons.Default.Sync,
+                        null,
+                        tint = if (state.subtitle.delayMs != 0L) AccentOrange else Color.White,
+                    )
+                }
                 PlayerControlButton({ vm.showTracksSheet() }, "Audio tracks") {
                     Icon(
                         Icons.Default.MusicNote,
@@ -964,14 +1195,19 @@ private fun BottomControls(
                 PlayerControlButton({ vm.cycleAspect(); onActivity() }, "Aspect: ${state.aspect.label}") {
                     Icon(Icons.Default.AspectRatio, null, tint = if (state.aspect != AspectMode.FIT) AccentOrange else Color.White)
                 }
-                PlayerControlButton({ vm.cycleRotation(); onActivity() }, "Rotate (${state.rotation.degrees}°)") {
-                    Icon(Icons.Default.RotateRight, null, tint = if (state.rotation.degrees != 0) AccentOrange else Color.White)
+                PlayerControlButton({ vm.toggleOrientation(); onActivity() }, "Orientation: ${state.orientation.label}") {
+                    Icon(Icons.Default.RotateRight, null, tint = if (state.orientation == PlayerOrientation.PORTRAIT) AccentOrange else Color.White)
                 }
                 PlayerControlButton({ vm.toggleAudioOnly() }, "Audio-only playback") {
                     Icon(Icons.Default.MusicNote, null, tint = if (state.audioOnly) AccentOrange else Color.White)
                 }
                 PlayerControlButton({ vm.toggleStereoOnly() }, "Stereo-only track selection") {
                     Icon(Icons.Default.VolumeUp, null, tint = if (state.stereoOnly) AccentOrange else Color.White)
+                }
+                // Enters Ghost mode; the edge HUD's own chip is the only way back out, so
+                // this button is deliberately last-ish and clearly labelled, not a bare icon.
+                PlayerControlButton({ vm.toggleViewMode(); onActivity() }, "Cinema mode — hide every control") {
+                    Icon(Icons.Default.LocalMovies, null, tint = Color.White)
                 }
                 PlayerControlButton(onEnterPip, "Picture-in-picture") {
                     Icon(Icons.Default.PictureInPicture, null, tint = Color.White)
@@ -1278,6 +1514,35 @@ private fun ResumeDialog(state: PlayerUiState, vm: PlayerViewModel) {
     )
 }
 
+/**
+ * A break rendered only in the two slots [AdSlot] permits. The copy states the placement
+ * rule instead of inventing an ad that the app does not yet serve.
+ */
+@Composable
+private fun SponsorBreakDialog(slot: AdSlot, onDismiss: () -> Unit) {
+    val moment = when (slot) {
+        AdSlot.PRE_ROLL -> "before playback starts"
+        AdSlot.BETWEEN_EPISODES -> "between two episodes"
+        AdSlot.NONE -> return
+    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = Color(0xFF151A23),
+        title = { Text("Sponsor break", color = Color.White, fontSize = 16.sp) },
+        text = {
+            Text(
+                "A free-tier break can only appear $moment — never in the middle of a title. " +
+                    "Continue whenever you are ready.",
+                color = Color.White.copy(alpha = 0.8f),
+                fontSize = 13.sp,
+            )
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text("Continue", color = AccentOrange) }
+        },
+    )
+}
+
 @Composable
 private fun CalibrationDialog(
     state: CalibrationState,
@@ -1564,18 +1829,11 @@ private fun SubtitleSettingsSheet(state: PlayerUiState, vm: PlayerViewModel) {
                 modifier = Modifier.padding(horizontal = 16.dp),
             )
 
-            Text(
-                "Delay ${state.subtitle.delayMs / 1000}s (external SRT/VTT overlay only)",
-                color = Color.White,
-                fontSize = 13.sp,
-                modifier = Modifier.padding(horizontal = 16.dp),
-            )
-            Slider(
-                value = state.subtitle.delayMs.toFloat(),
-                onValueChange = { vm.setSubtitleSettings(state.subtitle.copy(delayMs = it.toLong())) },
-                valueRange = -30_000f..30_000f,
-                modifier = Modifier.padding(horizontal = 16.dp),
-            )
+            // One control owns the offset: this row hands over to the sheet with the live
+            // slider and the ±0.1s/±0.5s buttons, so the two can never disagree.
+            SheetRow(label = "Subtitle sync: ${SubtitleOffset.format(state.subtitle.delayMs)}") {
+                vm.showSubtitleOffsetSheet()
+            }
 
             Row(Modifier.padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text("Bold", color = Color.White, fontSize = 13.sp, modifier = Modifier.weight(1f))
@@ -1599,8 +1857,8 @@ private fun SubtitleSettingsSheet(state: PlayerUiState, vm: PlayerViewModel) {
             if (state.customSubtitleLoaded != null) {
                 SheetRow(label = "Remove “${state.customSubtitleLoaded}”") { vm.removeCustomSubtitle() }
                 Text(
-                    "This overlay honours the delay slider. Embedded/exotic tracks render " +
-                        "natively with size & position only (Media3 1.3.1 limitation).",
+                    "Subtitle sync applies to this overlay and to every embedded track. " +
+                        "Size, position and colour styling still come from the controls above.",
                     color = Color.White.copy(alpha = 0.55f),
                     fontSize = 11.sp,
                     modifier = Modifier.padding(horizontal = 16.dp),

@@ -15,10 +15,16 @@ This module does not pretend otherwise. It implements the only account shape tha
 survives cleartext transport:
 
 * **A sync key, never a password.** An account *is* a high-entropy random token
-  (`secrets.token_urlsafe(32)`, 256 bits) minted at creation and shown exactly
-  once. There is no password, no email, no phone, no recovery question — nothing
-  a human would reuse elsewhere and nothing an attacker gains a foothold from.
-  There is no login: the key is the account, and there is nothing to log *in* to.
+  (`secrets.token_urlsafe(12)`, 96 bits) minted at creation and shown exactly
+  once. There is no password, no email, no recovery question — nothing a human
+  would reuse elsewhere and nothing an attacker gains a foothold from. There is
+  no login: the key is the account, and there is nothing to log *in* to.
+  A client MAY derive its 16 characters from something a viewer already knows
+  (the Android app offers a Pakistani mobile number as a convenience). The server
+  never receives the number, cannot tell a derived key from a random one, and
+  treats it identically. That convenience is worth strictly less than a minted
+  key: anyone who knows the number can derive the same string, so the app must
+  say so in the UI instead of calling it a secret.
 * **The blast radius is a bookmark list.** What an account holds is favorites and
   playback progress — `work_key` plus season/episode plus seconds watched. If a
   sync key is captured off the wire, the most an observer can do is read or
@@ -114,8 +120,12 @@ THE LIMITER, AND WHAT IT DOES NOT DO
 It exists so that hammering one captured or guessed string burns out.
 
 Honest limits — the part a reviewer must not be sold:
-* The key space is 2^256, so guessing a live key is not a threat model at all.
+* A minted key is 96 bits, so guessing a live key is not a threat model at all.
   The limiter changes nothing about that.
+* A key the app derived from a phone number is NOT 96 bits of entropy: the phone
+  space is small enough to enumerate offline. This module cannot see the
+  difference, so the app's copy must say, plainly, that a phone number is a
+  convenience and not a secret. Nothing here may describe it as protected.
 * A limiter keyed on the *guess* cannot slow an attacker who changes the guess
   every attempt; that is what the per-IP token buckets of §16.5 (`redact.
   RateLimiter`) are for, and the HTTP layer applies those. A shared secondary
@@ -167,11 +177,13 @@ DB_FILENAME = "user_state.db"
 DEFAULT_BUSY_TIMEOUT_MS = 5000
 
 # ── tuning knobs (every one overridable per call, so tests stay deterministic) ─
-#: A sync key is 256 bits of `secrets` output, which base64url renders as 43
-#: characters. 24 is the floor a *client-minted* key must clear to be admitted at
-#: all: below it the value is guessable, and creating such an account would be
-#: handing out a credential that is not one.
-MIN_SYNC_KEY_CHARS = 24
+#: A minted sync key is 96 bits of `secrets` output, which base64url renders as 16
+#: characters. 16 is the floor a *client-minted* key must clear to be admitted at
+#: all: below it even a random value is close enough to guessable to be worth
+#: refusing. A key the app derived from a phone number is also 16 characters and
+#: clears this shape check; its real strength is the phone space, which the app's
+#: own copy has to be honest about (module docstring).
+MIN_SYNC_KEY_CHARS = 16
 MAX_SYNC_KEY_CHARS = 256
 MAX_WORK_KEY_CHARS = 256
 #: Fixed window for the per-key attempt counter, and how long a burned-out key
@@ -400,7 +412,8 @@ CREATE TABLE IF NOT EXISTS user_accounts (
     key_hash TEXT UNIQUE NOT NULL,
     created_at REAL NOT NULL,
     last_seen_at REAL NOT NULL DEFAULT 0,
-    revoked_at REAL
+    revoked_at REAL,
+    vip_until REAL NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS user_favorites (
@@ -445,6 +458,10 @@ _NEW_COLUMNS = {
     "user_accounts": {
         "last_seen_at": ("REAL NOT NULL DEFAULT 0", "SET last_seen_at = created_at"),
         "revoked_at": ("REAL", None),
+        # Epoch seconds; 0 means never granted. A rewarded pass and a paid
+        # membership use the same column, because the question the download
+        # route asks is the same for both: is this account VIP right now?
+        "vip_until": ("REAL NOT NULL DEFAULT 0", None),
     },
     "user_progress": {
         "client_updated_at": ("REAL NOT NULL DEFAULT 0", "SET client_updated_at = updated_at"),
@@ -527,9 +544,11 @@ def schema_version(conn_or_path) -> int:
 
 
 def new_sync_key() -> str:
-    """A fresh 256-bit sync key, urlsafe so it survives a header and a query
-    string unchanged. The only place the plaintext form is produced."""
-    return secrets.token_urlsafe(32)
+    """A fresh 96-bit sync key, urlsafe so it survives a header and a query
+    string unchanged. 12 random bytes render as exactly 16 base64url characters —
+    the length the Android app's one-tap screen calls a "16-character sync key".
+    The only place the plaintext form is produced."""
+    return secrets.token_urlsafe(12)
 
 
 def _hash_key(key: str) -> str:
@@ -537,19 +556,20 @@ def _hash_key(key: str) -> str:
 
     Why not PBKDF2/scrypt/argon2, when "hash a credential" conventionally means a
     slow KDF? Because a slow KDF exists to make a *low-entropy human secret*
-    expensive to search. There is no dictionary here: the input is 256 bits of
-    uniform randomness from `secrets`, so an attacker holding this database file
-    faces 2^256 preimages whatever we spend per hash, and the digest is not
-    invertible by anybody. Making it slow would buy nothing against that attacker
-    while costing this one-CPU box a cycle on every single request.
+    expensive to search. A minted key is 96 bits of uniform randomness from
+    `secrets`, so an attacker holding this database file faces 2^96 preimages
+    whatever we spend per hash, and the digest is not invertible by anybody.
+    Making it slow would buy nothing against that attacker while costing this
+    one-CPU box a cycle on every single request.
 
-    The honest version of that sentence, written down rather than implied: it only
-    holds because the secret is random and never chosen by a human. The moment
-    anybody proposes a password, an email, a phone number or a human-readable code
-    as an account credential, this function becomes wrong — and so does offering
-    an account at all on a cleartext host (§8.3). Putting a bcrypt-shaped KDF in
-    this file would advertise protection we do not actually have, and DAO.md #6
-    forbids describing a capability we do not have.
+    A key the APP derived from a phone number is the opposite case: its real input
+    space is the phone space, so the digest of one is brute-forceable offline no
+    matter what this function costs. A slow KDF would not change that verdict — it
+    would only make every legitimate request on this one-CPU box expensive — so the
+    honest fix is in the app's copy, which must say a phone number is a
+    convenience and not a secret. Pretending a bcrypt-shaped function protects a
+    number-derived key would advertise a capability this file does not have
+    (DAO.md #6).
 
     The `sha256:` prefix is not decoration either: it records which form the column
     holds, so a future release that needs a different construction can migrate row
@@ -765,7 +785,7 @@ def _authenticate(conn: sqlite3.Connection, key, *, now: float | None = None,
     now = time.time() if now is None else float(now)
     wanted = _hash_key(key.strip())
     row = conn.execute(
-        "SELECT id, key_hash, created_at, last_seen_at FROM user_accounts"
+        "SELECT id, key_hash, created_at, last_seen_at, vip_until FROM user_accounts"
         " WHERE key_hash = ?", (wanted,)).fetchone()
     if row is None or not _verify_hash(row["key_hash"], wanted):
         per_key = tracker.record_failure(conn, wanted, now)
@@ -775,7 +795,8 @@ def _authenticate(conn: sqlite3.Connection, key, *, now: float | None = None,
         raise UnknownAccount()
     tracker.record_success(conn, wanted, now)
     account = {"account_id": int(row["id"]), "created_at": float(row["created_at"]),
-               "last_seen_at": float(row["last_seen_at"] or 0) or float(row["created_at"])}
+               "last_seen_at": float(row["last_seen_at"] or 0) or float(row["created_at"]),
+               "vip_until": float(row["vip_until"] or 0)}
     if touch and now - account["last_seen_at"] >= LAST_SEEN_WRITE_INTERVAL:
         conn.execute("UPDATE user_accounts SET last_seen_at = ? WHERE id = ?",
                      (now, account["account_id"]))
@@ -789,13 +810,37 @@ def authenticate(conn_or_path, key, *, now: float | None = None,
     """The public form: resolve a sync key to its account and bump `last_seen_at`.
 
     This is what every stateful route calls first. Raises `UnknownAccount` (404) or
-    `Locked` (429); returns `{"account_id", "created_at", "last_seen_at"}` — never a
-    hash, never a key."""
+    `Locked` (429); returns `{"account_id", "created_at", "last_seen_at",
+    "vip_until"}` — never a hash, never a key."""
     with _borrow(conn_or_path) as conn:
         try:
             return _authenticate(conn, key, now=now, tracker=tracker)
         finally:
             _commit(conn)
+
+
+def vip_status(conn_or_path, key, *, now: float | None = None) -> dict:
+    """Read-only VIP check for a presented sync key.
+
+    Deliberately not :func:`authenticate`: the download route asks "is this VIP?"
+    on every free request, and a wrong or absent key is an ordinary free user —
+    not an attack worth charging against that key's attempt budget (which would
+    let anyone lock out a real viewer by hammering their handle). A revoked key
+    is not VIP. Returns `{"vip": bool, "vip_until": epoch_seconds}` and never
+    raises for an unknown key."""
+    moment = time.time() if now is None else float(now)
+    if not isinstance(key, str) or not key.strip():
+        return {"vip": False, "vip_until": 0.0}
+    wanted = _hash_key(key.strip())
+    with _borrow(conn_or_path) as conn:
+        row = conn.execute(
+            "SELECT key_hash, vip_until, revoked_at FROM user_accounts"
+            " WHERE key_hash = ?", (wanted,)).fetchone()
+    if (row is None or row["revoked_at"] is not None
+            or not _verify_hash(row["key_hash"], wanted)):
+        return {"vip": False, "vip_until": 0.0}
+    until = float(row["vip_until"] or 0)
+    return {"vip": until > moment, "vip_until": until}
 
 
 def resolve_account(conn_or_path, key, *, now: float | None = None,

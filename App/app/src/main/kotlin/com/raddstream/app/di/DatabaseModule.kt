@@ -8,6 +8,7 @@ import com.raddstream.app.data.cache.CacheTaskDao
 import com.raddstream.app.data.local.AppDatabase
 import com.raddstream.app.data.local.FavoriteDao
 import com.raddstream.app.data.local.SyncedProgressDao
+import com.raddstream.app.data.local.WatchHistoryDao
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -27,7 +28,11 @@ object DatabaseModule {
             AppDatabase::class.java,
             "radd_stream_local.db",
         )
-            .addMigrations(AppDatabase.MIGRATION_1_2, AppDatabase.MIGRATION_3_4)
+            .addMigrations(
+                AppDatabase.MIGRATION_1_2,
+                AppDatabase.MIGRATION_3_4,
+                AppDatabase.MIGRATION_4_5,
+            )
             // Version 3 adds the offline cache tables for the first time. They have never shipped
             // on any device, so a destructive fallback lets Room generate their schema verbatim
             // from the entities instead of hand-written DDL that could drift out of sync and
@@ -59,6 +64,11 @@ object DatabaseModule {
     @Provides
     fun provideSyncedProgressDao(database: AppDatabase): SyncedProgressDao {
         return database.syncedProgressDao()
+    }
+
+    @Provides
+    fun provideWatchHistoryDao(database: AppDatabase): WatchHistoryDao {
+        return database.watchHistoryDao()
     }
 }
 

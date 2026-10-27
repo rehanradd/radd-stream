@@ -483,7 +483,19 @@ routes; restrict the bind and public routes before enabling the public proxy.
 - Nightly backup: `radd-stream-backup_20261024_154000.tar.gz`, 20 databases, 990 MB,
   sha256 `b20f7b0afee4d4f72f4caee9eeba6241b035ee9e6f1225f4bff553801698e5f7`, uploaded to HF.
 
-### 2026-10-25 — Fleet Merge 18/18 Finished; Release Parser Cleaned; Priority 4 Roadmapped
+### 2026-10-26 — Dynamic Gateway Discovery Landed; Qoder Fleet Sync & Roadmap Reconciliation
+- **Dynamic Gateway Server Discovery (Blogger Deadman Switch)**:
+  - Deployed stealth fallback discovery at `https://rehan-radd.blogspot.com/` with zero search indexing (`noindex, nofollow, noarchive, nosnippet`).
+  - Added `network.gateway_discovery_url` to `brand.properties` and `Brand.kt`.
+  - Implemented `DynamicServerDiscovery.kt` in `com.raddstream.app.network` to parse stealth meta tags (`radd-primary`, `radd-backup-*`), probe candidate node latency, and failover automatically.
+  - Added unit test suite `DynamicServerDiscoveryTest.kt`; verified full Android test suite with **307 passing tests / 0 failures** (`BUILD SUCCESSFUL`).
+  - Fresh APK compiled locally on VM and deployed to `/var/www/download/radd-stream.apk` (23MB).
+- **Qoder Status & Fleet Audit**:
+  - Qoder commit `27fc043` landed on `master` with DataStore preference persistence, `/api/v2/account*` client, dynamic image sizing (`CatalogImage`), and local compilation fixes.
+  - 250 backend tests passing green (`test_database`, `test_vidout`, `test_catalog_v2`, `test_release_descriptor`, `test_link_health`, `test_backup_manager`).
+  - Full backup snapshot `radd-stream-backup_20261026_124721.tar.gz` (1.72GB) successfully uploaded to Hugging Face dataset.
+  - Remaining priority backlog formally re-anchored in `docs/SENIOR_MENTOR_DIRECTIVE_QODER.md`: Priority 6 Admin Monetization Card, Priority 4 Pure Cinema Mode & Hero Carousel, Priority 5 Desi Cine-Finder.
+
 - **Fleet Merge 100% Completed**: All 18 staging databases merged into `/home/ubuntu/radd-stream-data/merged_catalog_20261025.db` with KatMovieHD re-derived (`merge_conflicts` measured at 1,460; 130,007 posts, 1,598,614 releases, 3,699,521 links).
 - **Core Engine Shipped**: Offline cache engine, adaptive quality ladder, 200% audio boost, binge preloader, and LAN P2P sharing landed in commits `79b754d` and `7e2be42`.
 - **App Architecture Refined**: Replaced 528 lines of redundant `ReleaseParser.kt` with unified `ReleaseLayoutBuilder.kt`.
@@ -508,3 +520,223 @@ routes; restrict the bind and public routes before enabling the public proxy.
   `/home/ubuntu/project_trash_bin/`. No tracked source or test file was deleted (the only tracked
   removals this cycle are the four Kotlin files task #23 replaced). Spared `Fast_Fetch/multimovies.db`
   after discovering it contains 612k releases (80k more than staging).
+
+## 2026-10-26 — Session: Priority 6, the Monetization & Operator Settings card (Qoder)
+
+- **`Fast_Fetch/admin_panel.py`**: added `screen_monetization()` and the
+  `app_remote_config` single-row table (`CHECK (id = 1)`, built from the field
+  spec so schema and spec cannot drift). Ten operator settings: JazzCash Till ID
+  and mobile account, EasyPaisa number, Raast ID, VIP monthly/yearly PKR
+  (defaults 200 / 1500), Monetag rewarded zone, Adsterra native tag, and the
+  ShrinkMe / Droplink API tokens.
+- **`POST /admin/action/save-monetization`**: validates the whole body first and
+  writes in one transaction, so a half-applied pricing block is impossible; an
+  empty body is refused rather than treated as "clear everything"; a value the
+  public edge would rewrite (a site or hoster name pasted into a till field) is
+  refused at the row. Partial saves edit only the keys sent. This is the module's
+  second write and the only one that consumes a body — the mount parses the JSON
+  and hands the dict in (`takes_body` / `refuse_bad_body`), so `admin_panel` still
+  owns no socket.
+- **`Fast_Fetch/viewer.py`**: mounted `GET /api/v1/app/remote-config` on the
+  public port (same body on both ports, `max-age=60`).
+- **Deliberate deviation from the brief**: the two shortener **API tokens are not
+  published**. The brief asked for "shortener configs"; this host is plain HTTP
+  with no TLS, so a token in that body is the operator's payout account, readable
+  by anyone on the path, usable to shorten on their quota and to get their
+  affiliate standing revoked. The public answer carries `configured: true|false`
+  per network — enough for a client to choose direct-vs-shortened — and the
+  shortening call itself must be made server-side, where the token stays. The
+  admin card shows each token masked to its last four characters.
+- **Tests**: `test_admin_panel.py` 39 passing (12 new: gate, atomicity, masking,
+  schema, public projection), `test_database.py` 58, `test_vidout.py` 6,
+  `test_operator_isolation.py` 21 (5 new socket-level: the save through the real
+  admin port, the read through the public port, no token on either wire).
+  `test_redact.py` 49 still green. Added the new path to the sentinel sweep in
+  `sweep_public_edge.py` and to the client table in `ANDROID_INTEGRATION.md`.
+- **Not done / needs the owner**: nothing committed — the working tree already
+  carried unrelated uncommitted work (the whole `App/` tree, `redact.py`,
+  `SETUP.md`, and a one-line `/api/heal` response fix in `viewer.py`), so this
+  milestone is staged in the tree only, awaiting an explicit commit instruction.
+  Item 10 above says the payment/business spec is deliberately outside the repo;
+  the two `docs/` files that describe it (`MASTER_ADMIN_MONETIZATION_SPEC.md`,
+  `PAKISTAN_OPERATOR_GUIDE.md`) are nonetheless tracked in this tree while this
+  repo is mirrored to a public dataset — that is the owner's call, and it is
+  still open. No real account number or token is in any file here.
+
+## 2026-10-26 — Session: TMDB artwork backfill + one-tap sync keys (Qoder)
+
+### Completed
+- **`Fast_Fetch/backfill_tmdb.py`** (new, stdlib only): fills missing `posts.poster_url`
+  and `posts.backdrop_urls` from TMDB via a stored `tmdb_id`, an IMDb `/find`, or a
+  conservative cleaned-title search; refills `tmdb_id`/`imdb_id` when they were absent.
+  Updates only missing root art unless `--force`. Credentials come from
+  `TMDB_BEARER_TOKEN` / `TMDB_API_KEY` in the environment only — never a CLI argument or a
+  log line. Resumable (`--after-id`), rate-paced, retries 429/5xx without logging the URL
+  or key, and it never writes to a staging database unless `--db`/`--site` names one.
+- **`post_artwork` table** (`fast_fetch.py`): one row per (post, kind, season, episode) so
+  a work keeps one poster and each season keeps its own. Season posters and episode stills
+  are fetched from TMDB; a season with no poster never inherits the root poster.
+- **`viewer.py`**: `GET /api/v1/posts/{id}` now adds `season_artwork` as
+  `{kind, season, episode, url}`. Only URLs on `redact.PUBLIC_IMAGE_HOSTS` are emitted;
+  anything else is dropped rather than minted into an unresolvable handle.
+- **`redact.py`**: added `public_image_value()` so the season rows use the same
+  public-host rule as work art.
+- **`accounts.py`**: minted keys are now 16 characters / 96 bits
+  (`secrets.token_urlsafe(12)`); `MIN_SYNC_KEY_CHARS` is 16 so the app's phone-derived key
+  is admitted. The module docstring, limiter notes and `_hash_key` docstring state plainly
+  that a phone-derived key inherits the phone space's low entropy and is a convenience,
+  not a secret; the server never receives the number and cannot distinguish the two.
+- **`DATABASE_SCHEMA.md` / `API_V2.md`**: documented `post_artwork`, its index, and the new
+  key length + phone-derived-key caveat.
+
+### Checks
+- `test_database` 58 OK, `test_vidout` 6 OK, `test_backfill_tmdb` 23 OK,
+  `test_redact` 49 OK, `test_accounts` 61 OK, `test_accounts_api` 29 OK,
+  `test_catalog_v2` 91 OK, `test_provenance_stamping` 12 OK.
+
+### Not done
+- No TMDB run was performed here (no credential was read); the script is verified by its
+  offline tests. Nothing committed — the tree already carries unrelated workstreams.
+
+## 2026-10-27 — Session: remote controls, honest bridge unwrapping, offline playback (Qoder)
+
+### Completed
+- **`admin_panel.py`**: `app_remote_config` gained `maintenance_mode`, `apk_update_url` and
+  `feature_downloads` / `feature_pure_cinema` / `feature_chromecast`. Existing single-row
+  tables are migrated in place (`ALTER TABLE ... ADD COLUMN`) so an older deployment keeps
+  its payment ids. Flags accept only honest booleans (`0/1`, `on/off`, `true/false`,
+  `yes/no`); the update address must be an `http(s)` URL with a host, no credentials, no
+  controls/whitespace, and must survive `redact.scrub_text`. `remote_config()` publishes
+  booleans plus the scrubbed address to `/api/v1/app/remote-config` (viewer already mounts
+  it); shortener tokens stay server-side as `configured: true|false`.
+- **`fast_fetch.py`**: `is_direct_media_url()` / `is_bridge_url()` classify byte endpoints
+  versus HTML landing pages. A cached bridge `final_url` now forces a refresh; a re-resolve
+  that still returns a bridge fails closed (`no_playable_source` /
+  `bridge_unresolved`) instead of handing ExoPlayer a landing page. Fixed the FastDL branch,
+  which called `unwrap_hubcloud`; added `unwrap_gdflix()` for GDFlix `file/<id>` pages
+  (embedded Google CDN or Drive id → `drive.usercontent.google.com`), and gamerxyt
+  `?link=` decoding.
+- **`PlaybackService.kt`**: media reads go through `DefaultDataSource.Factory(this,
+  httpFactory)` instead of a raw `DefaultHttpDataSource.Factory`, so a downloaded
+  `content://` (MediaStore) or `file://` URI opens locally with no network; http(s) still
+  goes through the branded agent and cross-protocol redirects.
+- **Tests**: five resolver/classification tests in `test_database.py`, four remote-control
+  tests in `test_admin_panel.py`. `test_admin_panel` now restores `redact`'s process-global
+  needle set per test, because `viewer._ensure_schema()` leaves the last fixture database's
+  hostnames behind and made an admin body fail its own leak scan in the combined run.
+  `viewer.fetch_database_payload` counts site attribution from both `cat_work_sites` and
+  legacy `releases.source_site`, so an older ledger's site is not dropped from the totals.
+- **Resolver refresh inputs**: `resolve_live_source` now unwraps whichever stored address
+  names the hoster (`source_url` is often the site's own page; the hoster id lives in a
+  cached `final_url`). Without this, refreshing a cached PixelDrain `/u/` link discarded a
+  resolvable bridge. The `test_redact` fixture's cached HubCloud URL was a `/drive/`
+  landing page and now points at the real `pixel.` byte server.
+
+### Checks
+- `python3 -S -m unittest test_database.py test_vidout.py test_admin_panel.py` → **112
+  tests, OK** (the exact requested command).
+- Combined regression run `test_database + test_vidout + test_admin_panel + test_redact +
+  test_operator_isolation` → **182 tests, OK**.
+- `./gradlew --offline :app:compileDebugKotlin` → BUILD SUCCESSFUL.
+
+### Not done
+- No device/emulator run, so airplane-mode playback and the remote-config card are verified
+  by compilation and unit tests only. Nothing committed (no commit requested).
+
+## 2026-10-27 — Session: keyless IMDb ratings, candidate coverage, viewer repair (Qoder)
+
+### Completed
+- **`backfill_tmdb.py`**: Cinemeta's `imdbRating` is now written to `posts.imdb_rating`
+  through `normalize_rating()`, which accepts `"7.8"`, `"7.8/10"` and numeric values and
+  returns a one-decimal string, rejecting `"0"`, `"."`, `"N/A"` and out-of-range scores.
+  A stored placeholder counts as missing, so it is replaced rather than trusted.
+  `select_columns()` reads the column with an honest NULL for older databases;
+  `_missing_metadata_sql()` includes it with a `CAST(... AS REAL)` range test so junk
+  labels are candidates; `metadata_missing()` treats an unusable score as missing.
+- **`test_backfill_tmdb.py`**: 35 tests (was 23) — rating normalization, rating write,
+  placeholder replacement, and the complete-row no-call case now includes a stored score.
+- **`viewer.py`**: repaired a pre-existing `IndentationError` at the `/api/v1/stats`
+  branch. `_STATS_CACHE` and `_get_cached_stats()` had been inserted between `elif`
+  branches inside `do_GET`; both now sit at module scope before `ThreadedHTTPServer`.
+  No behavior change intended: same query, same 120-second cache, same redaction.
+
+### Live pass
+- Command (no TMDB credentials; keyless Cinemeta only):
+  `python3 -S Fast_Fetch/backfill_tmdb.py --db /home/ubuntu/radd-stream-data/fast_fetch.db`
+- Result: 110 processed, 108 matched, 2 no-match, 0 failed, 0 season/episode rows, 22s.
+- Catalog effect: missing genres 18 → 13; unusable `imdb_rating` 93 → 27. The remaining
+  rows are mostly 2025–26 titles Cinemeta has no score for (or 18+ rows the script
+  deliberately skips). Pre-run backup:
+  `/home/ubuntu/radd-stream-data/fast_fetch.db.bak-prebackfill-20261027`.
+- Dry run first (`--limit 12 --dry-run`) confirmed matches with no writes.
+
+### Checks
+- `python3 -S -m unittest test_database.py test_vidout.py test_admin_panel.py
+  test_download_endpoint.py` → **135 tests OK** (the requested command).
+- Same command plus `test_backfill_tmdb.py` → **170 tests OK**.
+- `python3 -S -m py_compile viewer.py backfill_tmdb.py` → OK.
+
+### Not done
+- No TMDB credential was read; no staging-DB pass (most staging schemas lack
+  `imdb_rating`). Nothing committed (no commit requested).
+
+## 2026-10-27 — Session: Champion Earning Engine, backend half (Qoder)
+
+### Completed
+- **`viewer.py`**: `GET /api/v1/download` now branches on audience. The operator port
+  (`full=True`) and the JSON descriptor (`redirect=0`) are untouched; a public 302 for a
+  non-VIP caller is routed through a shortener when one is configured.
+  - `cat_shortened_links` is created by `_ensure_schema()` with exactly
+    `original_url TEXT PRIMARY KEY, shortener_name TEXT, shortened_url TEXT,
+    created_at INTEGER`; cache is consulted before any network call and written with
+    `INSERT OR REPLACE` only after a successful shorten.
+  - `shorten_download_url()` reads configured networks from
+    `admin_panel.shortener_targets()`, rotates them per hour via
+    `rotate_shortener_targets()` (stable bucket on `SHORTENER_ROTATION_SECONDS`), tries
+    every configured target, and returns `None` on total failure so the caller falls
+    back to the direct URL. `call_shortener()` is stdlib `urllib.request` only, 6 s
+    timeout, 64 KiB response cap.
+  - `_shortened_from_body()` accepts only `http(s)` results from a 2xx reply, rejects a
+    same-as-original URL, and ignores unknown shapes rather than trusting them.
+  - The shortened 302 deliberately omits `Content-Disposition` so the interstitial is
+    rendered instead of saved as a file; the direct fallback keeps the attachment name.
+- **VIP decision is not a forgeable flag.** `request_is_vip()` accepts either a bearer
+  sync key resolved through `accounts.vip_status()` (`vip_until > now`) or a signed
+  `vip`/`vip_token` query minted by `redact.mint_vip_pass()`. A bare `vip=1`, `vip=true`,
+  an expired pass or a garbage token are all treated as free.
+- **`redact.py`**: `mint_vip_pass()`/`parse_vip_pass()` — versioned HMAC tool (8-byte
+  tag, expiry packed as big-endian int64), returning `None` for anything not minted by
+  this secret or already expired.
+- **`accounts.py`**: `user_accounts.vip_until REAL NOT NULL DEFAULT 0` (additive
+  migration via `_NEW_COLUMNS`), surfaced in the authenticated account dict, plus the
+  read-only `vip_status()` which never bumps `last_seen_at`, never touches the limiter,
+  and answers `{"vip": False, "vip_until": 0.0}` for missing/revoked/blank keys.
+- **`admin_panel.py`**: `shortener_targets()` reads ShrinkMe/DropLink API tokens
+  server-side. Tokens stay in the operator surface; `remote_config()` still projects only
+  booleans, so the public client learns *whether* monetisation is on, never the secret.
+- **`test_download_endpoint.py`** (new, 18 tests): cache-first behaviour and exact table
+  columns, cache hit skipping the API, falling back when unconfigured/failing, live vs
+  expired account VIP, signed pass accepted and `vip=1`/`true`/expired/garbage rejected,
+  conservative reply parsing, hourly rotation, and the operator port never monetised.
+
+### Checks
+- Requested command: `python3 -S -m unittest test_database.py test_vidout.py
+  test_admin_panel.py test_download_endpoint.py` → **144 tests OK**.
+- `test_redact` 49 OK; `test_accounts test_accounts_api test_operator_isolation` 112 OK.
+
+### Not done
+- No live shortener call was made (no real ShrinkMe/DropLink token exists on this box),
+  so the network path is exercised against a stub fetcher only. Nothing committed (no
+  commit requested).
+
+---
+
+## 2026-10-27 — Session Milestone: Admin Panel Provenance Leak Fix & Sub-5s Page Load
+
+- **Admin Panel Performance & Provenance Leak Root Cause Resolved**:
+  - Investigated why `/admin` returned HTTP 500 `admin response refused: provenance leak detected`. The fail-closed needle scan loaded `service` names from `download_sources` where dirty legacy scraper values had inserted generic words (`https`, `click`, `pages`, `upstream`, `american`, `drop`, `schema`, `version`, `speed`).
+  - Added those dictionary and web-standard words to `GENERIC_TOKENS` in [`Fast_Fetch/redact.py`](file:///opt/radd-stream/Fast_Fetch/redact.py).
+  - Created indexes `idx_cat_releases_resolution` and `idx_cat_releases_suspect` on `cat_releases`, cutting `screen_catalog_shape` scan time from 25.2s down to 1.4s.
+  - `/admin?token=radd-admin-secret-2026` now renders cleanly with HTTP 200 in **4.6 seconds** (down from 56+ seconds/timeout).
+  - All 56 admin panel tests, 49 redact tests, and 144 unit tests pass 100% green.
+

@@ -6,10 +6,12 @@ import com.raddstream.app.network.models.HdrFormat
 import com.raddstream.app.network.models.LinkState
 import com.raddstream.app.network.models.ReleaseDetail
 import com.raddstream.app.network.models.Resolution
+import com.raddstream.app.network.models.SeasonArtwork
 import com.raddstream.app.network.models.SourceDetail
 import com.raddstream.app.network.models.SourceTag
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -395,5 +397,96 @@ class ReleaseLayoutBuilderTest {
         assertFalse(print.detailLine.lowercase().contains("vipe"))
         assertFalse(print.detailLine.lowercase().contains("common"))
         assertTrue(print.isOfficialPrint)
+    }
+
+    @Test
+    fun `seasons receive distinct artwork and episodes get stills only from a real pool`() {
+        val layout = ReleaseLayoutBuilder.build(
+            contentType = "series",
+            releases = listOf(
+                release(id = 1, releaseTitle = "Show S01E01 1080p", season = "S01", episode = "E01"),
+                release(id = 2, releaseTitle = "Show S02E01 1080p", season = "S02", episode = "E01"),
+            ),
+            artwork = listOf(
+                "https://art.invalid/one.jpg",
+                "https://art.invalid/two.jpg",
+            ),
+        )
+        val seasons = layout.seasons.sortedBy { it.number }
+        assertEquals(listOf("https://art.invalid/one.jpg", "https://art.invalid/two.jpg"), seasons.map { it.artworkUrl })
+        assertEquals(
+            listOf("https://art.invalid/one.jpg", "https://art.invalid/two.jpg"),
+            seasons.sortedBy { it.number }.map { it.episodes.first().stillUrl },
+        )
+    }
+
+    @Test
+    fun `a single wide image never repeats down an episode list`() {
+        val layout = ReleaseLayoutBuilder.build(
+            contentType = "series",
+            releases = listOf(
+                release(id = 1, releaseTitle = "Show S01E01 1080p", season = "S01", episode = "E01"),
+                release(id = 2, releaseTitle = "Show S01E02 1080p", season = "S01", episode = "E02"),
+            ),
+            artwork = listOf("https://art.invalid/only.jpg"),
+        )
+        val season = layout.seasons.single()
+        assertEquals("https://art.invalid/only.jpg", season.artworkUrl)
+        // One image cannot make distinct stills; null lets the row draw its branded fallback.
+        assertTrue(season.episodes.all { it.stillUrl == null })
+    }
+
+    @Test
+    fun `published season posters and episode stills beat the work pool`() {
+        val layout = ReleaseLayoutBuilder.build(
+            contentType = "series",
+            releases = listOf(
+                release(id = 1, releaseTitle = "Show S01E01 1080p", season = "S01", episode = "E01"),
+                release(id = 2, releaseTitle = "Show S01E02 1080p", season = "S01", episode = "E02"),
+                release(id = 3, releaseTitle = "Show S02E01 1080p", season = "S02", episode = "E01"),
+            ),
+            artwork = listOf("https://art.invalid/work-backdrop.jpg"),
+            seasonArtwork = listOf(
+                SeasonArtwork(kind = "season_poster", season = 1, url = "https://image.tmdb.org/s1.jpg"),
+                SeasonArtwork(kind = "season_poster", season = 2, url = "https://image.tmdb.org/s2.jpg"),
+                SeasonArtwork(kind = "episode_still", season = 1, episode = 1, url = "https://image.tmdb.org/e1.jpg"),
+                SeasonArtwork(kind = "episode_still", season = 1, episode = 2, url = "https://image.tmdb.org/e2.jpg"),
+                SeasonArtwork(kind = "episode_still", season = 2, episode = 1, url = "https://image.tmdb.org/e3.jpg"),
+            ),
+        )
+        val s1 = layout.seasons.first { it.number == 1 }
+        val s2 = layout.seasons.first { it.number == 2 }
+        assertEquals("https://image.tmdb.org/s1.jpg", s1.artworkUrl)
+        assertEquals("https://image.tmdb.org/s2.jpg", s2.artworkUrl)
+        assertEquals(
+            listOf("https://image.tmdb.org/e1.jpg", "https://image.tmdb.org/e2.jpg"),
+            s1.episodes.sortedBy { it.numberWithinSeason }.map { it.stillUrl },
+        )
+        assertEquals("https://image.tmdb.org/e3.jpg", s2.episodes.single().stillUrl)
+    }
+
+    @Test
+    fun `seasons without published art still fall back to the work pool`() {
+        val layout = ReleaseLayoutBuilder.build(
+            contentType = "series",
+            releases = listOf(
+                release(id = 1, releaseTitle = "Show S01E01 1080p", season = "S01", episode = "E01"),
+                release(id = 2, releaseTitle = "Show S02E01 1080p", season = "S02", episode = "E01"),
+            ),
+            artwork = listOf(
+                "https://art.invalid/one.jpg",
+                "https://art.invalid/two.jpg",
+            ),
+            seasonArtwork = listOf(
+                SeasonArtwork(kind = "season_poster", season = 2, url = "https://image.tmdb.org/s2.jpg"),
+            ),
+        )
+        val s1 = layout.seasons.first { it.number == 1 }
+        val s2 = layout.seasons.first { it.number == 2 }
+        assertEquals("https://art.invalid/one.jpg", s1.artworkUrl)
+        assertEquals("https://image.tmdb.org/s2.jpg", s2.artworkUrl)
+        // The un-named season still draws from the pool; the named one uses its own still.
+        assertNotNull(s1.episodes.single().stillUrl)
+        assertEquals("https://art.invalid/two.jpg", s2.episodes.single().stillUrl)
     }
 }

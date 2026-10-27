@@ -34,6 +34,7 @@ import com.raddstream.app.ui.screens.PlayerScreen
 import com.raddstream.app.ui.screens.SearchScreen
 import com.raddstream.app.ui.screens.SettingsScreen
 import com.raddstream.app.ui.screens.SetupScreen
+import com.raddstream.app.ui.screens.VipUpgradeScreen
 import com.raddstream.app.ui.theme.AccentPrimary
 import com.raddstream.app.ui.theme.BackgroundDark
 import com.raddstream.app.ui.theme.OnSurfaceMuted
@@ -158,7 +159,12 @@ fun RaddStreamNavGraph(
             composable(Screen.Settings.route) {
                 SettingsScreen(
                     onOpenDownloads = { navController.navigate(Screen.Downloads.route) },
+                    onOpenVipUpgrade = { navController.navigate(Screen.VipUpgrade.route) },
                 )
+            }
+
+            composable(Screen.VipUpgrade.route) {
+                VipUpgradeScreen(onBackClick = { navController.popBackStack() })
             }
 
             composable(Screen.Downloads.route) {
@@ -168,6 +174,9 @@ fun RaddStreamNavGraph(
                         item.streamHandle?.let {
                             navController.navigate(Screen.Player.createRoute(it, item.title))
                         }
+                    },
+                    onPlayLocal = { uri, title ->
+                        navController.navigate(Screen.PlayerLocal.createRoute(uri, title))
                     },
                 )
             }
@@ -187,6 +196,7 @@ fun RaddStreamNavGraph(
                         navController.navigate(Screen.Player.createRoute(streamId, title))
                     },
                     onOpenDownloads = { navController.navigate(Screen.Downloads.route) },
+                    onOpenVipUpgrade = { navController.navigate(Screen.VipUpgrade.route) },
                 )
             }
 
@@ -205,6 +215,35 @@ fun RaddStreamNavGraph(
                 PlayerScreen(
                     streamId = streamId,
                     title = title,
+                    onBackClick = { navController.popBackStack() },
+                    onPlayNextEpisode = { _, nextPostId, season, episode ->
+                        if (nextPostId != null && nextPostId > 0) {
+                            navController.navigate(Screen.Detail.createRoute(nextPostId)) {
+                                launchSingleTop = true
+                                popUpTo(Screen.Player.route) { inclusive = true }
+                            }
+                        }
+                    },
+                )
+            }
+
+            composable(
+                route = Screen.PlayerLocal.route,
+                arguments = listOf(
+                    navArgument(Screen.PlayerLocal.ARG_URI) { type = NavType.StringType },
+                    navArgument(Screen.PlayerLocal.ARG_TITLE) { type = NavType.StringType },
+                ),
+            ) { backStackEntry ->
+                val localUri = Screen.PlayerLocal.decode(
+                    backStackEntry.arguments?.getString(Screen.PlayerLocal.ARG_URI).orEmpty(),
+                )
+                val title = Screen.PlayerLocal.decode(
+                    backStackEntry.arguments?.getString(Screen.PlayerLocal.ARG_TITLE).orEmpty(),
+                )
+                PlayerScreen(
+                    streamId = "",
+                    title = title,
+                    localUri = localUri,
                     onBackClick = { navController.popBackStack() },
                 )
             }

@@ -4,6 +4,9 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -13,6 +16,8 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -51,11 +56,16 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.raddstream.app.ui.components.EmptyState
 import com.raddstream.app.ui.components.ErrorState
+import com.raddstream.app.ui.components.LoadingState
 import com.raddstream.app.ui.components.MediaRail
 import com.raddstream.app.ui.components.Pill
 import com.raddstream.app.ui.components.PosterCard
 import com.raddstream.app.ui.components.SectionHeader
+import com.raddstream.app.viewmodel.GenreFilter
+import com.raddstream.app.viewmodel.IndustryFilter
+import com.raddstream.app.viewmodel.QualityFilter
 import com.raddstream.app.viewmodel.SearchSort
+import com.raddstream.app.viewmodel.SearchUiState
 import com.raddstream.app.viewmodel.SearchViewModel
 
 private val typeChips = listOf(
@@ -64,6 +74,12 @@ private val typeChips = listOf(
     "Series" to "series",
     "Seasons" to "complete_season",
 )
+
+/** One line of the facet rail: a quiet group caption or a selectable chip. */
+private sealed interface FilterRailEntry {
+    data class Caption(val label: String) : FilterRailEntry
+    data class Choice(val label: String, val selected: Boolean, val onClick: () -> Unit) : FilterRailEntry
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -123,19 +139,7 @@ fun SearchScreen(
             )
 
             Spacer(Modifier.height(8.dp))
-            Row(
-                modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                typeChips.forEach { (label, value) ->
-                    FilterChip(
-                        selected = state.filters.type == value,
-                        onClick = { viewModel.selectType(value) },
-                        label = { Text(label) },
-                    )
-                }
-            }
+            FilterRail(state = state, viewModel = viewModel)
 
             SearchBody(
                 state = state,
@@ -161,15 +165,84 @@ fun SearchScreen(
     }
 }
 
+/**
+ * The whole filter surface in one scrolled line: Type, Industry, Genre, Quality and
+ * Sort. Every choice re-runs the debounced server search, so a chip narrows the
+ * catalog rather than the handful of rows this device happens to hold.
+ */
+@Composable
+private fun FilterRail(state: SearchUiState, viewModel: SearchViewModel) {
+    val entries = buildList {
+        add(FilterRailEntry.Caption("Type"))
+        typeChips.forEach { (label, value) ->
+            add(FilterRailEntry.Choice(label, state.filters.type == value) { viewModel.selectType(value) })
+        }
+        add(FilterRailEntry.Caption("Industry"))
+        IndustryFilter.entries.forEach { industry ->
+            add(
+                FilterRailEntry.Choice(
+                    industry.label,
+                    state.filters.industry == industry,
+                ) { viewModel.selectIndustry(industry) },
+            )
+        }
+        add(FilterRailEntry.Caption("Genre"))
+        GenreFilter.entries.forEach { genre ->
+            add(
+                FilterRailEntry.Choice(
+                    genre.label,
+                    state.filters.genre == genre,
+                ) { viewModel.selectGenre(genre) },
+            )
+        }
+        add(FilterRailEntry.Caption("Quality"))
+        QualityFilter.entries.forEach { quality ->
+            add(
+                FilterRailEntry.Choice(
+                    quality.label,
+                    state.filters.quality == quality,
+                ) { viewModel.selectQuality(quality) },
+            )
+        }
+        add(FilterRailEntry.Caption("Sort"))
+        SearchSort.entries.forEach { sort ->
+            add(FilterRailEntry.Choice(sort.label, state.sort == sort) { viewModel.setSort(sort) })
+        }
+    }
+
+    LazyRow(
+        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        contentPadding = PaddingValues(vertical = 4.dp),
+    ) {
+        items(entries.size) { index ->
+            when (val entry = entries[index]) {
+                is FilterRailEntry.Caption -> Text(
+                    text = entry.label,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(start = if (index == 0) 0.dp else 12.dp),
+                )
+                is FilterRailEntry.Choice -> FilterChip(
+                    selected = entry.selected,
+                    onClick = entry.onClick,
+                    label = { Text(entry.label) },
+                )
+            }
+        }
+    }
+}
+
 @Composable
 private fun SearchBody(
-    state: com.raddstream.app.viewmodel.SearchUiState,
+    state: SearchUiState,
     viewModel: SearchViewModel,
     onPostClick: (Int) -> Unit,
     onOpenFilters: () -> Unit,
 ) {
     when {
-        state.query.isBlank() -> {
+        !state.hasSearchIntent -> {
             if (state.recents.isNotEmpty()) {
                 Column(Modifier.fillMaxWidth()) {
                     SectionHeader(title = "Recent searches", modifier = Modifier.padding(top = 8.dp))
@@ -185,16 +258,23 @@ private fun SearchBody(
             } else {
                 EmptyState(
                     title = "Search your catalog",
-                    message = "Type a title to begin. Recent searches will show up here.",
+                    message = "Type a title or pick a filter to begin. Recent searches will show up here.",
                     icon = { Icon(Icons.Default.Search, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(40.dp)) },
                 )
             }
         }
+        state.isLoading && state.groups.isEmpty() -> LoadingState(
+            Modifier.fillMaxWidth().height(160.dp),
+        )
         state.error != null && state.groups.isEmpty() -> ErrorState(message = state.error ?: "Search failed.", onRetry = viewModel::submitCurrentQuery)
         state.groups.isEmpty() -> EmptyState(
             title = "No matches",
-            message = "No titles matched \"${state.query}\"" +
-                if (state.hasActiveFilters) " with the current filters." else ".",
+            message = when {
+                state.query.isNotBlank() && state.hasActiveFilters ->
+                    "No titles matched \"${state.query}\" with the current filters."
+                state.query.isNotBlank() -> "No titles matched \"${state.query}\"."
+                else -> "Nothing in the catalog matched these filters."
+            },
             action = {
                 if (state.hasActiveFilters) {
                     OutlinedButton(onClick = viewModel::resetFilters) { Text("Clear filters") }
@@ -238,10 +318,10 @@ private fun SearchBody(
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 private fun FilterSheetContent(
-    state: com.raddstream.app.viewmodel.SearchUiState,
+    state: SearchUiState,
     viewModel: SearchViewModel,
     onDone: () -> Unit,
 ) {
@@ -253,9 +333,32 @@ private fun FilterSheetContent(
             .padding(bottom = 32.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
+        FacetChips(
+            title = "Industry",
+            options = IndustryFilter.entries,
+            label = { it.label },
+            isSelected = { state.filters.industry == it },
+            onSelect = viewModel::selectIndustry,
+        )
+        FacetChips(
+            title = "Genre",
+            options = GenreFilter.entries,
+            label = { it.label },
+            isSelected = { state.filters.genre == it },
+            onSelect = viewModel::selectGenre,
+        )
+        FacetChips(
+            title = "Quality",
+            options = QualityFilter.entries,
+            label = { it.label },
+            isSelected = { state.filters.quality == it },
+            onSelect = viewModel::selectQuality,
+        )
+
         Text("Sort results", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurface)
         Text(
-            "Sorting applies to the loaded results. Server-side sort is requested (see about).",
+            "Facets and sort run on the server before paging, so they narrow the whole catalog. " +
+                "Only the year range applies to the loaded pages.",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -294,6 +397,27 @@ private fun FilterSheetContent(
         ) {
             TextButton(onClick = viewModel::resetFilters) { Text("Reset") }
             Button(onClick = onDone) { Text("Apply") }
+        }
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun <T> FacetChips(
+    title: String,
+    options: List<T>,
+    label: (T) -> String,
+    isSelected: (T) -> Boolean,
+    onSelect: (T) -> Unit,
+) {
+    Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurface)
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        options.forEach { option ->
+            FilterChip(
+                selected = isSelected(option),
+                onClick = { onSelect(option) },
+                label = { Text(label(option)) },
+            )
         }
     }
 }

@@ -83,4 +83,12 @@ Whenever you:
 1. Inspect the latest entries in `radd-stream/docs/SESSION_CHECKPOINT.md` and `ANTIGRAVITY_HANDOFF.md`.
 2. Check the live state of active processes and databases on the Oracle VM (`92.4.95.252`).
 3. Report the current cluster status to the user and state the next planned action.
+
+---
+
+### 7. Permanent Operator Identity (Lahore, Punjab, Pakistan)
+The Project Owner and Dao Partner is located in **Lahore, Punjab, Pakistan**.
+- All financial, admin, and monetization engines use Pakistani Rupee (`PKR`), JazzCash (Till ID), EasyPaisa, and Raast.
+- All user workflows respect South Asian daily prepaid 4G data constraints (<25KB data consumption).
+- Comprehensive operator runbook is located at `radd-stream/docs/PAKISTAN_OPERATOR_GUIDE.md`.
 ```

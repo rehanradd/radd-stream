@@ -15,6 +15,7 @@ import com.raddstream.app.network.models.RemovedResponse
 import com.raddstream.app.network.models.RevokedResponse
 import com.raddstream.app.network.models.StatsResponse
 import com.raddstream.app.network.models.StreamResponse
+import com.raddstream.app.network.models.VipRemoteConfig
 import retrofit2.http.Body
 import retrofit2.http.GET
 import retrofit2.http.Header
@@ -50,11 +51,23 @@ fun bearerHeader(syncKey: String?): String? =
  */
 interface RaddStreamApi {
 
-    /** GET /api/v1/posts — paginated metadata catalog with optional search + type filter. */
+    /**
+     * GET /api/v1/posts — paginated metadata catalog.
+     *
+     * `industry`, `genre`, `quality` and `sort` narrow/reorder the whole catalog on
+     * the server before paging (see `Fast_Fetch/viewer.py:api_v1_get_posts`), so a
+     * chip stays correct across pages instead of filtering only the rows already
+     * loaded. Each value is one of the small fixed vocabularies in
+     * `SearchViewModel`; null simply omits the query parameter.
+     */
     @GET("api/v1/posts")
     suspend fun getPosts(
         @Query("q") query: String? = null,
         @Query("type") type: String? = null,
+        @Query("industry") industry: String? = null,
+        @Query("genre") genre: String? = null,
+        @Query("quality") quality: String? = null,
+        @Query("sort") sort: String? = null,
         @Query("page") page: Int = 1,
         @Query("limit") limit: Int = 20,
     ): PostsResponse
@@ -82,6 +95,17 @@ interface RaddStreamApi {
     /** GET /api/v1/stats — catalog and diagnostic counts. */
     @GET("api/v1/stats")
     suspend fun getStats(): StatsResponse
+
+    /**
+     * GET /api/v1/app/remote-config — VIP pricing and the operator's payment handles.
+     *
+     * Public and unauthenticated by design: it is the same body a web client reads, and
+     * the admin panel masks the one thing in its row that must never travel (the
+     * shortener tokens). Handles may legitimately be empty on a server that has not
+     * configured payments yet — an empty value is the honest answer, not an error.
+     */
+    @GET("api/v1/app/remote-config")
+    suspend fun getRemoteConfig(): VipRemoteConfig
 
     // ── OPTIONAL sync account (api/v2/account) ───────────────────────────────────
     //

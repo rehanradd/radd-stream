@@ -1,5 +1,7 @@
 package com.raddstream.app.sync
 
+import java.security.MessageDigest
+
 /**
  * SyncContract — the pure decisions behind the optional sync account.
  *
@@ -115,8 +117,26 @@ data class SyncReport(
 object SyncContract {
 
     /** Mirrors `accounts.MIN_SYNC_KEY_CHARS` / `MAX_SYNC_KEY_CHARS`. */
-    const val MIN_SYNC_KEY_CHARS = 24
+    const val MIN_SYNC_KEY_CHARS = 16
     const val MAX_SYNC_KEY_CHARS = 256
+
+    /** The length the server mints and the card calls a "16-character Sync Key". */
+    const val SHORT_SYNC_KEY_CHARS = 16
+
+    /**
+     * The length earlier server releases minted (`token_urlsafe(32)`). Accepted unchanged so
+     * a viewer who wrote one down keeps their library; not advertised on the card.
+     */
+    const val LEGACY_SYNC_KEY_CHARS = 43
+
+    /**
+     * Domain separation for a key derived from a mobile number. It is PUBLIC by design — it
+     * ships in the APK and provides no secrecy. Its only job is to keep this derivation from
+     * colliding with some other hash of the same digits. The number is the only secret, and
+     * it is a weak one: anyone who knows it can derive the same key. The card says exactly
+     * that rather than calling the result a protected credential.
+     */
+    const val PHONE_KEY_NAMESPACE = "phone-sync/v1"
 
     /** Rule 1: only a non-blank minted handle may go on the wire. */
     fun canNameOnServer(workRef: String?): Boolean = !workRef.isNullOrBlank()
@@ -138,6 +158,107 @@ object SyncContract {
     fun keyPreview(syncKey: String?): String {
         val key = syncKey?.takeIf { it.isNotBlank() } ?: return ""
         return if (key.length <= 12) key else "${key.take(6)}…${key.takeLast(4)}"
+    }
+
+    /**
+     * A Pakistani mobile number as the account card accepts it: `03XXXXXXXXX`,
+     * `3XXXXXXXXX`, `+923XXXXXXXXX`, `923XXXXXXXXX` or `00923XXXXXXXXX`, with spaces,
+     * dashes or brackets. Returns the canonical `03XXXXXXXXX` form, or null when the
+     * input is not a complete Pakistani mobile number.
+     */
+    fun normalizePakistaniMobile(raw: String?): String? {
+        val compact = raw?.trim()?.replace(Regex("[\\s()\\-]"), "") ?: return null
+        if (compact.isEmpty()) return null
+        val digits = compact.removePrefix("+")
+        if (digits.isEmpty() || digits.any { !it.isDigit() }) return null
+        val national = when {
+            digits.startsWith("0092") -> digits.substring(4)
+            digits.startsWith("92") -> digits.substring(2)
+            digits.startsWith("0") -> digits.substring(1)
+            else -> digits
+        }
+        if (national.length != 10 || national[0] != '3') return null
+        return "0$national"
+    }
+
+    /**
+     * A key exactly as the server mints it: sixteen characters from the URL-safe alphabet.
+     * Case is preserved. The key IS the credential, so folding case would silently change
+     * which account it opens — and throw away entropy while doing it.
+     */
+    fun isShortSyncKey(raw: String?): Boolean {
+        val text = raw?.trim() ?: return false
+        if (text.length != SHORT_SYNC_KEY_CHARS) return false
+        return text.all {
+            it in 'A'..'Z' || it in 'a'..'z' || it in '0'..'9' || it == '-' || it == '_'
+        }
+    }
+
+    /**
+     * The credential to send for one quick-login input.
+     *
+     *  - a Pakistani mobile number → a 16-character key derived with SHA-256, so the same
+     *    number opens the same library on every device and the number itself never reaches
+     *    the wire or the server's database;
+     *  - a key the viewer already holds (the server's 16 characters, or the 43-character
+     *    key older releases minted) → that key unchanged. Re-deriving a credential the
+     *    viewer already has would open a different, empty library.
+     *
+     * Null means "not something this card can send". The number-derived key inherits the
+     * phone space's small entropy, not 96 bits; [PHONE_KEY_NAMESPACE] is where that fact is
+     * written down instead of being papered over by this function.
+     */
+    fun quickLoginKey(raw: String?): String? {
+        val text = raw?.trim() ?: return null
+        normalizePakistaniMobile(text)?.let { phone ->
+            val digest = MessageDigest.getInstance("SHA-256")
+                .digest("$PHONE_KEY_NAMESPACE|$phone".toByteArray(Charsets.UTF_8))
+            return base64Url(digest.copyOf(12))
+        }
+        // Exactly the two shapes the account surface has ever minted. A near-miss (a key
+        // with a character dropped or added) is refused here instead of opening a new,
+        // empty library on the server — the honest typo answer is a message, not a blank list.
+        if (isShortSyncKey(text)) return text
+        if (text.length == LEGACY_SYNC_KEY_CHARS && isUsableSyncKey(text)) return text
+        return null
+    }
+
+    fun isQuickLoginInput(raw: String?): Boolean = quickLoginKey(raw) != null
+
+    /**
+     * base64url without padding, written out because `java.util.Base64` is API 26 and this
+     * app still installs on API 21. Twelve bytes render as exactly sixteen characters, which
+     * is the whole reason the derived key fits the card's promise.
+     */
+    private fun base64Url(bytes: ByteArray): String {
+        val alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+        val out = StringBuilder((bytes.size * 4 + 2) / 3)
+        var i = 0
+        while (i + 2 < bytes.size) {
+            val chunk = ((bytes[i].toInt() and 0xFF) shl 16) or
+                ((bytes[i + 1].toInt() and 0xFF) shl 8) or
+                (bytes[i + 2].toInt() and 0xFF)
+            out.append(alphabet[(chunk ushr 18) and 63])
+            out.append(alphabet[(chunk ushr 12) and 63])
+            out.append(alphabet[(chunk ushr 6) and 63])
+            out.append(alphabet[chunk and 63])
+            i += 3
+        }
+        when (bytes.size - i) {
+            1 -> {
+                val chunk = (bytes[i].toInt() and 0xFF) shl 16
+                out.append(alphabet[(chunk ushr 18) and 63])
+                out.append(alphabet[(chunk ushr 12) and 63])
+            }
+            2 -> {
+                val chunk = ((bytes[i].toInt() and 0xFF) shl 16) or
+                    ((bytes[i + 1].toInt() and 0xFF) shl 8)
+                out.append(alphabet[(chunk ushr 18) and 63])
+                out.append(alphabet[(chunk ushr 12) and 63])
+                out.append(alphabet[(chunk ushr 6) and 63])
+            }
+        }
+        return out.toString()
     }
 
     /**

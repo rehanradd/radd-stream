@@ -112,7 +112,7 @@ class CreateAccountTests(StateTestCase):
         account = self.new_account()
         self.assertTrue(account["created"])
         key = account["sync_key"]
-        self.assertEqual(len(key), 43)                    # secrets.token_urlsafe(32)
+        self.assertEqual(len(key), 16)                    # secrets.token_urlsafe(12)
         self.assertNotIn("=", key)                        # urlsafe, header-friendly
         stored = self.conn.execute("SELECT key_hash FROM user_accounts").fetchone()[0]
         self.assertEqual(stored, "sha256:" + hashlib.sha256(key.encode()).hexdigest())

@@ -1,5 +1,6 @@
 package com.raddstream.app.player
 
+import android.content.Context
 import android.content.Intent
 import android.os.Handler
 import android.os.Looper
@@ -9,15 +10,21 @@ import androidx.media3.common.C
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.Renderer
 import androidx.media3.exoplayer.analytics.AnalyticsListener
 import androidx.media3.exoplayer.source.LoadEventInfo
 import androidx.media3.exoplayer.source.MediaLoadData
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import androidx.media3.exoplayer.text.TextOutput
+import androidx.media3.exoplayer.text.TextRenderer
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
 import com.raddstream.app.brand.Brand
+import com.raddstream.app.player.subtitles.OffsetSubtitleDecoderFactory
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -71,9 +78,39 @@ class PlaybackService : MediaSessionService() {
         val httpFactory = DefaultHttpDataSource.Factory()
             .setUserAgent(Brand.userAgent)
             .setAllowCrossProtocolRedirects(true)
+        // Local playback: a finished download is a `content://` (MediaStore) or
+        // `file://` URI, not an HTTP address. Handing DefaultHttpDataSource a
+        // content URI makes ExoPlayer fail before the first frame, so all reads
+        // go through DefaultDataSource — it opens local schemes directly (no
+        // network, no connectivity check) and delegates http(s) to the factory
+        // above. This is what makes a saved file play in airplane mode.
+        val dataFactory = DefaultDataSource.Factory(this, httpFactory)
+
+        // TextRenderer is the one renderer we replace: it is final in 1.3.1 and knows no
+        // subtitle offset, so its decoder gets a wrapper that holds each cue block back by
+        // the live sync value (see OffsetSubtitleDecoderFactory). Every other renderer stays
+        // exactly as DefaultRenderersFactory builds it.
+        val renderersFactory = object : DefaultRenderersFactory(this) {
+            override fun buildTextRenderers(
+                context: Context,
+                output: TextOutput,
+                outputLooper: Looper,
+                extensionRendererMode: Int,
+                out: ArrayList<Renderer>,
+            ) {
+                out.add(
+                    TextRenderer(
+                        output,
+                        outputLooper,
+                        OffsetSubtitleDecoderFactory { store.subtitleOffsetMs },
+                    ),
+                )
+            }
+        }
 
         val exo = ExoPlayer.Builder(this)
-            .setMediaSourceFactory(DefaultMediaSourceFactory(httpFactory))
+            .setRenderersFactory(renderersFactory)
+            .setMediaSourceFactory(DefaultMediaSourceFactory(dataFactory))
             .setSeekBackIncrementMs(MX_SKIP_MS)
             .setSeekForwardIncrementMs(MX_SKIP_MS)
             .setAudioAttributes(AudioAttributes.DEFAULT, /* handleAudioFocus= */ true)

@@ -939,8 +939,12 @@ Removed from v2: `/api/heal` (never responded), `/api/fetch` (unauthenticated re
 
 `Fast_Fetch/accounts.py` owns the data, `Fast_Fetch/accounts_api.py` owns the wire, and
 `Fast_Fetch/viewer.py` mounts it on the **public** port (a phone has no other way to reach
-it). Auth is one 256-bit key in `Authorization: Bearer <sync_key>` — no password, no email,
-no cookie, no JWT. It is *optional*: every catalog route answers identically with or
+it). Auth is one 16-character (96-bit) key in `Authorization: Bearer <sync_key>` — no
+password, no email, no cookie, no JWT. The Android card may derive that key on-device
+from a Pakistani mobile number; the server never receives the number and cannot tell a
+derived key from a minted one, but such a key has only the phone space's entropy, so the
+app must present the number as a convenience rather than a secret. It is *optional*: every
+catalog route answers identically with or
 without it, and an account changes what is stored for you, never what you may read.
 
 | Method & path | Purpose | Notes on the wire |

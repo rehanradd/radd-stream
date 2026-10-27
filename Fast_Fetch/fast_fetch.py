@@ -541,6 +541,31 @@ def get_db(db_path: Path | None = None):
         conn.close()
 
 
+#: Season-level artwork lives beside the work, not inside it: a show has one root
+#: poster and then one season poster plus one still per episode. Keeping the rows
+#: in their own table means `posts.poster_url` stays the single answer for "the
+#: work's poster" and a backfill can add or refresh seasons without rewriting it.
+#: `kind` is `season_poster` (episode_number 0) or `episode_still`.
+POST_ARTWORK_DDL = """
+CREATE TABLE IF NOT EXISTS post_artwork (
+    post_id INTEGER NOT NULL,
+    kind TEXT NOT NULL,
+    season_number INTEGER NOT NULL DEFAULT 0,
+    episode_number INTEGER NOT NULL DEFAULT 0,
+    url TEXT NOT NULL,
+    source TEXT NOT NULL DEFAULT 'tmdb',
+    width INTEGER,
+    height INTEGER,
+    language TEXT,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (post_id, kind, season_number, episode_number),
+    FOREIGN KEY (post_id) REFERENCES posts(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_post_artwork_post
+    ON post_artwork(post_id, kind, season_number);
+"""
+
+
 def init_db(db_path: Path | None = None) -> None:
     with _DB_WRITE_LOCK:
         _init_db(db_path)
@@ -740,6 +765,7 @@ def _init_db(db_path: Path | None = None) -> None:
         CREATE INDEX IF NOT EXISTS idx_post_sources_post ON post_sources(post_id);
         CREATE INDEX IF NOT EXISTS idx_post_sources_site_post ON post_sources(source_site, post_id);
         """)
+        conn.executescript(POST_ARTWORK_DDL)
 
         # Preserve each known post's original source URL when upgrading older DBs.
         conn.execute("""
@@ -1978,6 +2004,121 @@ def unwrap_pixeldrain(pixeldrain_url: str) -> tuple[str, str, int]:
         direct_url = f"https://pixeldrain.com/api/file/{file_id}"
         return direct_url, file_id, 0
     return pixeldrain_url, pixeldrain_url.rstrip("/").split("/")[-1], 0
+
+
+#: A path ending in one of these is media ExoPlayer/`ffprobe` can open directly.
+#: Query strings are stripped before the test, so `…/movie.mkv?token=…` counts.
+_MEDIA_SUFFIXES = (
+    ".mp4", ".m4v", ".mkv", ".webm", ".mov", ".avi", ".wmv", ".flv", ".ts",
+    ".m3u8", ".mpd", ".mp3", ".m4a", ".aac",
+)
+#: Hosts whose whole purpose is to answer with bytes, even when the path has no
+#: extension (a signed R2 object, Google's download endpoint, PixelDrain's API).
+_DIRECT_MEDIA_HOSTS = frozenset({
+    "video-downloads.googleusercontent.com",
+    "drive.usercontent.google.com",
+    "storage.direct-cloud.org",
+    "firebasestorage.googleapis.com",
+})
+_DIRECT_MEDIA_HOST_SUFFIXES = (".r2.cloudflarestorage.com", ".r2.dev")
+_DIRECT_MEDIA_MARKERS = ("pixeldrain.com/api/file/",)
+#: Hosts that serve an HTML landing/embed page whose only value is the link it
+#: hides. Returning one of these as a "stream" is what this pair of helpers is
+#: here to prevent.
+_BRIDGE_HOST_MARKERS = (
+    "nexdrive", "vcloud", "vegadrive", "linkszilla", "greenmotors",
+    "mobilejsr", "10moviesz",
+)
+
+
+def is_direct_media_url(url: str) -> bool:
+    """Whether ``url`` is already an endpoint that serves media bytes.
+
+    Deliberately evidence-based: an extension, a known byte-serving host, or the
+    PixelDrain API marker. An unknown URL is *not* called direct here; callers
+    that need to tell "unknown" from "known bridge" use :func:`is_bridge_url`,
+    because refusing every unrecognised host would break the long tail of CDNs
+    this ledger already holds.
+    """
+    parsed = urllib.parse.urlsplit(str(url or ""))
+    if parsed.scheme.lower() not in ("http", "https"):
+        return False
+    host = (parsed.hostname or "").lower()
+    path = (parsed.path or "").lower()
+    if path.endswith(_MEDIA_SUFFIXES):
+        return True
+    if host in _DIRECT_MEDIA_HOSTS:
+        return True
+    if any(host.endswith(suffix) for suffix in _DIRECT_MEDIA_HOST_SUFFIXES):
+        return True
+    low = str(url).lower()
+    return any(marker in low for marker in _DIRECT_MEDIA_MARKERS)
+
+
+def is_bridge_url(url: str) -> bool:
+    """Whether ``url`` is a known HTML landing/embed page, not playable media.
+
+    Used in two places in :func:`resolve_live_source`: a cached `final_url` that
+    is a bridge is refreshed instead of served (a stored landing page would make
+    ExoPlayer show an error where a video should be), and a re-resolve that still
+    hands back a bridge is treated as a failure rather than a stream.
+    """
+    parsed = urllib.parse.urlsplit(str(url or ""))
+    if parsed.scheme.lower() not in ("http", "https"):
+        return False
+    host = (parsed.hostname or "").lower()
+    path = (parsed.path or "").lower()
+    query = (parsed.query or "").lower()
+    if "hubcloud" in host:
+        # `pixel.hubcloud…` is the 10Gbps byte server; everything else on a
+        # hubcloud host is the `/drive/<id>` landing page or a gpdl redirector.
+        return not host.startswith("pixel.")
+    if "gamerxyt" in host:
+        return "link=" not in query          # dl.php?link=<direct> unwraps
+    if "fastdl" in host:
+        return "embed" in path or "download=" in query or path.endswith(".php")
+    if "gdflix" in host:
+        return "/file/" in path or path in ("", "/")
+    if "pixeldrain" in host:
+        return "/api/file/" not in path
+    return any(marker in host for marker in _BRIDGE_HOST_MARKERS)
+
+
+def unwrap_gdflix(gdflix_url: str) -> tuple[str, str, int]:
+    """GDFlix `file/<ID>` page → the direct Google endpoint behind it.
+
+    GDFlix is a Google Drive proxy: the `/file/<id>` address is an HTML landing
+    page and playing it in ExoPlayer produces an error, not a video. The page
+    carries either an embedded `video-downloads.googleusercontent.com` URL or a
+    Drive file id; both are unwrapped here. When neither is present the landing
+    page is returned unchanged and the caller's bridge guard refuses it.
+    """
+    res_id = gdflix_url.rstrip("/").split("/")[-1].split("?")[0]
+    try:
+        code, _final_u, page = http_get(gdflix_url, timeout=10)
+    except Exception:
+        return gdflix_url, res_id, 0
+    if code != 200 or not page:
+        return gdflix_url, res_id, 0
+
+    direct = re.search(
+        r'https?://video-downloads\.googleusercontent\.com/[^\s"\'<>\\]+', page)
+    if direct:
+        return html_module.unescape(direct.group(0)), res_id, 1
+
+    for pattern in (
+        r'drive\.google\.com/file/d/([A-Za-z0-9_-]{20,})',
+        r'drive\.google\.com/uc\?(?:[^"\'<>]*&)?id=([A-Za-z0-9_-]{20,})',
+        r'drive\.usercontent\.google\.com/download\?(?:[^"\'<>]*&)?id=([A-Za-z0-9_-]{20,})',
+        r'"fileId"\s*:\s*"([A-Za-z0-9_-]{20,})"',
+        r'data-id=["\']([A-Za-z0-9_-]{20,})["\']',
+    ):
+        match = re.search(pattern, page)
+        if match:
+            file_id = match.group(1)
+            return (f"https://drive.usercontent.google.com/download"
+                    f"?id={file_id}&export=download"), res_id, 1
+    return gdflix_url, res_id, 0
 
 
 def unwrap_hubcloud_drive(hub_drive_url: str) -> list[dict]:
@@ -5096,6 +5237,11 @@ def resolve_live_source(source_id: int, *, v2: bool = False) -> dict:
         # dies in 20 minutes, it is not "fresh" just because we last looked at it
         # an hour ago — and equally it is not stale after 25 minutes.
         needs_refresh = observed_expiry["expires_in"] <= 0
+    elif src.get("final_url") and is_bridge_url(src["final_url"]):
+        # A cached landing page (HubCloud `/drive/…`, FastDL embed, GDFlix
+        # `/file/…`, PixelDrain `/u/…`) is not playable media. Re-resolve it
+        # instead of handing ExoPlayer HTML.
+        needs_refresh = True
     elif src["is_temporary"]:
         if not src.get("last_checked_at"):
             needs_refresh = True
@@ -5126,47 +5272,102 @@ def resolve_live_source(source_id: int, *, v2: bool = False) -> dict:
 
     # Needs fresh unwrap
     source_u = src.get("source_url") or src.get("final_url") or ""
+    cached_u = src.get("final_url") or ""
     service = src.get("service") or ""
     fresh_url = None
     fresh_temp = src["is_temporary"]
 
+    def hoster_input(marker):
+        """The stored address that actually names this hoster.
+
+        `source_url` is usually the site's own landing page; the hoster id often
+        lives only in a previously unwrapped `final_url`. Prefer whichever one
+        names the service, so a cached bridge can still be refreshed instead of
+        being discarded as unresolvable.
+        """
+        low_source = source_u.lower()
+        low_cached = cached_u.lower()
+        if marker in low_source:
+            return source_u
+        if marker in low_cached:
+            return cached_u
+        return source_u
+
     try:
-        if service in ("fsl_r2", "hubcloud_10g", "hubcloud") or "hubcloud" in source_u:
-            unwrapped = unwrap_hubcloud_drive(source_u)
-            for item in unwrapped:
-                if item.get("service") == service:
-                    fresh_url = item.get("final_url")
-                    fresh_temp = item.get("is_temporary", fresh_temp)
-                    break
-            if not fresh_url and unwrapped:
-                fresh_url = unwrapped[0].get("final_url")
-                fresh_temp = unwrapped[0].get("is_temporary", fresh_temp)
-        elif service == "direct_cloud" or "direct-cloud" in source_u:
-            fresh_url, _, fresh_temp = unwrap_direct_cloud(source_u)
-        elif service == "greenmotors" or "greenmotors" in source_u:
-            unwrapped = unwrap_greenmotors(source_u)
+        if (service in ("fsl_r2", "hubcloud_10g", "hubcloud")
+                or "hubcloud" in source_u.lower() or "hubcloud" in cached_u.lower()):
+            hub = hoster_input("hubcloud")
+            # `gpdl…hubcloud` is a redirector that carries the Google CDN URL in
+            # its own Location; `/drive/<id>` is a landing page that needs the
+            # gamerxyt hop. Try the cheap one for a gpdl URL first.
+            if "gpdl" in hub:
+                direct_u, _svc, is_temp = unwrap_hubcloud(hub)
+                if is_direct_media_url(direct_u):
+                    fresh_url = direct_u
+                    fresh_temp = is_temp
+            if not fresh_url:
+                unwrapped = unwrap_hubcloud_drive(hub)
+                for item in unwrapped:
+                    if item.get("service") == service:
+                        fresh_url = item.get("final_url")
+                        fresh_temp = item.get("is_temporary", fresh_temp)
+                        break
+                if not fresh_url and unwrapped:
+                    fresh_url = unwrapped[0].get("final_url")
+                    fresh_temp = unwrapped[0].get("is_temporary", fresh_temp)
+        elif (service == "direct_cloud" or "direct-cloud" in source_u.lower()
+              or "direct-cloud" in cached_u.lower()):
+            fresh_url, _, fresh_temp = unwrap_direct_cloud(hoster_input("direct-cloud"))
+        elif (service == "greenmotors" or "greenmotors" in source_u.lower()
+              or "greenmotors" in cached_u.lower()):
+            unwrapped = unwrap_greenmotors(hoster_input("greenmotors"))
             if unwrapped:
                 fresh_url = unwrapped[0].get("final_url")
                 fresh_temp = unwrapped[0].get("is_temporary", fresh_temp)
-        elif service == "vcloud" or "vcloud" in source_u:
-            v_res = unwrap_vcloud(source_u)
+        elif (service == "vcloud" or "vcloud" in source_u.lower()
+              or "vcloud" in cached_u.lower()):
+            v_res = unwrap_vcloud(hoster_input("vcloud"))
             if v_res:
                 fresh_url = v_res[0][2]
                 fresh_temp = v_res[0][3]
-        elif service == "fastdl" or "fastdl" in source_u:
-            direct_u, svc, is_temp = unwrap_hubcloud(source_u)
+        elif (service == "fastdl" or "fastdl" in source_u.lower()
+              or "fastdl" in cached_u.lower()):
+            # FastDL's `embed.php?download=<id>` page carries `var reurl = …`;
+            # `unwrap_hubcloud` knows nothing about that shape.
+            direct_u, _res_id, is_temp = unwrap_fastdl(hoster_input("fastdl"))
             fresh_url = direct_u
             fresh_temp = is_temp
-        elif service == "pixeldrain" or "pixeldrain" in source_u:
-            direct_u, _, is_temp = unwrap_pixeldrain(source_u)
+        elif (service == "gdflix" or "gdflix" in source_u.lower()
+              or "gdflix" in cached_u.lower()):
+            direct_u, _res_id, is_temp = unwrap_gdflix(hoster_input("gdflix"))
             fresh_url = direct_u
             fresh_temp = is_temp
-        elif service == "vegadrive" or "vegadrive" in source_u:
-            direct_u, _, is_temp = unwrap_vegadrive(source_u)
+        elif (service == "pixeldrain" or "pixeldrain" in source_u.lower()
+              or "pixeldrain" in cached_u.lower()):
+            direct_u, _, is_temp = unwrap_pixeldrain(hoster_input("pixeldrain"))
             fresh_url = direct_u
             fresh_temp = is_temp
+        elif (service == "vegadrive" or "vegadrive" in source_u.lower()
+              or "vegadrive" in cached_u.lower()):
+            direct_u, _, is_temp = unwrap_vegadrive(hoster_input("vegadrive"))
+            fresh_url = direct_u
+            fresh_temp = is_temp
+        elif "gamerxyt" in source_u.lower() or "gamerxyt" in cached_u.lower():
+            gamer = hoster_input("gamerxyt")
+            if "link=" in gamer:
+                query = urllib.parse.parse_qs(urllib.parse.urlsplit(gamer).query)
+                candidate = urllib.parse.unquote((query.get("link") or [""])[0])
+                if candidate:
+                    fresh_url = candidate
+                    fresh_temp = 1
     except Exception:
         pass
+
+    # A resolver that answered with another landing page has not resolved
+    # anything. Never persist it as the playable address: the callers below treat
+    # "no fresh direct URL" honestly instead of sending ExoPlayer HTML.
+    if fresh_url and is_bridge_url(fresh_url) and not is_direct_media_url(fresh_url):
+        fresh_url = None
 
     if fresh_url and fresh_url != source_u:
         with get_db() as conn:
@@ -5223,13 +5424,18 @@ def resolve_live_source(source_id: int, *, v2: bool = False) -> dict:
     except Exception:
         pass
     stale_url = src.get("final_url") or src.get("source_url")
-    if v2:
+    bridge_stale = bool(stale_url) and is_bridge_url(stale_url)
+    if v2 or bridge_stale:
+        # v1 keeps its frozen stale-URL behaviour for a real media address, but a
+        # bridge page is never a playable answer in either contract: ExoPlayer
+        # would fetch HTML and fail. Say "no playable source" instead of handing
+        # the caller a landing page.
         return {
             "success": False,
             "id": src["id"],
             "error": "no_playable_source",
             "code": "no_playable_source",
-            "reason": "re_resolve_failed",
+            "reason": "bridge_unresolved" if bridge_stale else "re_resolve_failed",
             "stale": True,
         }
     return {

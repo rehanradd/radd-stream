@@ -45,7 +45,9 @@ object WireText {
     fun splitOnAny(text: String?, vararg separators: String): List<String> {
         val source = text?.trim().orEmpty()
         if (source.isEmpty()) return emptyList()
-        var parts = listOf(source)
+        // Qualified on purpose: inside this object an unqualified `listOf` is THIS member
+        // function, so the short form would call itself forever on any non-JSON value.
+        var parts: List<String> = kotlin.collections.listOf(source)
         for (separator in separators) {
             parts = parts.flatMap { it.split(separator) }
         }

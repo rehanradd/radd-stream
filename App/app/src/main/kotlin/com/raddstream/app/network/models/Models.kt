@@ -67,6 +67,15 @@ data class Post(
     val seasons: String? = null,
     @SerializedName("poster_url")
     val posterUrl: String? = null,
+    /**
+     * `posts.backdrop_urls` on the list row — the same wide TMDB/CDN artwork the detail
+     * route sends, as TEXT holding a JSON array of URLs (or one bare URL). Read it with
+     * [backdropList], never as a `List<String>`: the wire type is a String. Null on a
+     * server whose list projection predates the column, which is why every wide-artwork UI
+     * must fall back to [posterUrl] rather than assume it.
+     */
+    @SerializedName("backdrop_urls")
+    val backdropUrls: String? = null,
     /** `posts.imdb_rating` is TEXT in the ledger ("6.9", "8"), not a JSON number. */
     @SerializedName("imdb_rating")
     val imdbRating: String? = null,
@@ -97,6 +106,9 @@ data class Post(
     /** Display helper so UI never has to know that `year` is numeric on the wire. */
     val yearLabel: String? get() = year?.toString()
     val genreList: List<String> get() = WireText.listOf(genres)
+    val backdropList: List<String> get() = WireText.listOf(backdropUrls)
+    /** The widest artwork this row carries: the first backdrop, else the poster, else none. */
+    val heroArtUrl: String? get() = backdropList.firstOrNull() ?: posterUrl?.takeIf { it.isNotBlank() }
     val displayTitle: String get() = cleanTitle?.takeIf { it.isNotBlank() } ?: title
 }
 
@@ -147,12 +159,38 @@ data class PostDetail(
     /** Same handle as [Post.workRef], null until the server sends one. See [Post.workRef]. */
     @SerializedName("work_ref")
     val workRef: String? = null,
+    /**
+     * Season posters and episode stills the server has mapped for this work. Empty when
+     * the catalog has not run the TMDB artwork backfill; [ReleaseLayoutBuilder] then keeps
+     * its honest fallback of spreading the work's own wide art. Never the root poster
+     * copied once per season — the backfill refuses to write a season it has no poster for.
+     *
+     * The raw list is nullable because Gson does not run Kotlin default initialisers for a
+     * missing key; [seasonArtwork] is the only form callers should read.
+     */
+    @SerializedName("season_artwork")
+    val seasonArtworkRows: List<SeasonArtwork>? = null,
 ) {
     val yearLabel: String? get() = year?.toString()
     val genreList: List<String> get() = WireText.listOf(genres)
     val backdropList: List<String> get() = WireText.listOf(backdropUrls)
+    val seasonArtwork: List<SeasonArtwork> get() = seasonArtworkRows.orEmpty()
     val displayTitle: String get() = cleanTitle?.takeIf { it.isNotBlank() } ?: title
 }
+
+/**
+ * One row of `season_artwork` from `GET /api/v1/posts/{id}`.
+ *
+ * `kind` is `season_poster` (with `episode` 0) or `episode_still`. `season` uses the
+ * server's TMDB numbering, which is also the numbering [ReleaseDetail.seasonNumber]
+ * reads, so a poster is attached to the season the viewer is looking at.
+ */
+data class SeasonArtwork(
+    val kind: String? = null,
+    val season: Int = 0,
+    val episode: Int = 0,
+    val url: String? = null,
+)
 
 /**
  * One `releases` row, exactly as the public view projects it:

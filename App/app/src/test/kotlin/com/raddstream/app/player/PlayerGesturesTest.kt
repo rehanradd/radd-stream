@@ -73,6 +73,45 @@ class PlayerGesturesTest {
     }
 
     @Test
+    fun `two-finger tap rewinds three seconds in ghost mode only`() {
+        assertEquals(TapCommand.None, GestureMapper.onTwoFingerTap(base))
+
+        val cinema = base.copy(pureCinema = true)
+        assertEquals(
+            TapCommand.SeekWithRipple(-3_000L, ScreenZone.LEFT),
+            GestureMapper.onTwoFingerTap(cinema),
+        )
+        assertEquals(
+            TapCommand.SeekWithRipple(-750L, ScreenZone.LEFT),
+            GestureMapper.onTwoFingerTap(cinema.copy(cinemaRewindMs = 750L)),
+        )
+    }
+
+    @Test
+    fun `a locked ghost frame answers nothing, because no seek may hide behind the lock`() {
+        assertEquals(
+            TapCommand.None,
+            GestureMapper.onTwoFingerTap(GestureSettings(pureCinema = true, lockGestures = true)),
+        )
+        assertEquals(
+            TapCommand.None,
+            GestureMapper.onTwoFingerTap(GestureSettings(pureCinema = true, cinemaRewindMs = 0L)),
+        )
+    }
+
+    @Test
+    fun `view mode cycles and an unknown stored name is the mode nobody opted into`() {
+        assertEquals(ViewMode.PURE_CINEMA, ViewMode.nextOf(ViewMode.STANDARD))
+        assertEquals(ViewMode.STANDARD, ViewMode.nextOf(ViewMode.PURE_CINEMA))
+        assertEquals(ViewMode.STANDARD, ViewMode.fromName("STANDARD"))
+        assertEquals(ViewMode.PURE_CINEMA, ViewMode.fromName("PURE_CINEMA"))
+        assertEquals(ViewMode.STANDARD, ViewMode.fromName("CINEMA_MAX"))
+        assertEquals(ViewMode.STANDARD, ViewMode.fromName(null))
+        assertFalse(PlayerUiState().pureCinema)
+        assertTrue(PlayerUiState(viewMode = ViewMode.PURE_CINEMA).pureCinema)
+    }
+
+    @Test
     fun `dragging up increases and the centre stays quiet`() {
         val left = GestureMapper.onVerticalDrag(ScreenZone.LEFT, -480f, height, base)
         assertTrue(left is DragCommand.BrightnessDelta && left.fractionPerSwipe > 0f)
