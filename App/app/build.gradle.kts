@@ -200,6 +200,35 @@ android {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
         }
     }
+
+    // Compose semantics assertions run on the JVM under Robolectric. This box has
+    // no /dev/kvm, so an emulator is not an option; without includeAndroidResources
+    // Robolectric cannot stand up the framework the composition needs.
+    testOptions {
+        unitTests {
+            isIncludeAndroidResources = true
+            isReturnDefaultValues = true
+        }
+    }
+}
+
+// ── Robolectric UI tests: x86_64 only ────────────────────────────────────────
+// Robolectric's native runtime ships no Linux/aarch64 build (robolectric/robolectric#9166),
+// and it fails while the runner boots — during @Rule evaluation, before any line of the test
+// body — so an in-test Assume cannot catch it. Excluding here is the only place that works.
+// These classes therefore run on an x86_64 CI runner, never on this ARM host.
+tasks.withType<Test>().configureEach {
+    if (System.getProperty("os.arch")?.lowercase() in setOf("aarch64", "arm64")) {
+        filter {
+            excludeTestsMatching("com.raddstream.app.ui.components.PosterCardProvenanceTest")
+        }
+        doFirst {
+            logger.lifecycle(
+                "Skipping PosterCardProvenanceTest: Robolectric has no native runtime for " +
+                    "${System.getProperty("os.arch")}. Run this class on an x86_64 CI runner."
+            )
+        }
+    }
 }
 
 // ── brand.json: generated asset, single runtime source for Brand.kt ──────────
@@ -319,4 +348,9 @@ dependencies {
 
     // ── Tests ─────────────────────────────────────────────────────────────────
     testImplementation(libs.junit)
+    testImplementation(composeBom)
+    testImplementation(libs.robolectric)
+    testImplementation(libs.androidx.test.core)
+    testImplementation(libs.compose.ui.test.junit4)
+    debugImplementation(libs.compose.ui.test.manifest)
 }

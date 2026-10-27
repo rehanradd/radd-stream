@@ -15,6 +15,8 @@ lifecycle           = "2.8.3"
 coroutines          = "1.8.1"
 datastore           = "1.1.1"
 core-ktx            = "1.13.1"
+robolectric         = "4.14.1"
+androidx-test       = "1.6.1"
 
 [libraries]
 # Compose
@@ -67,6 +69,11 @@ core-ktx                = { group = "androidx.core", name = "core-ktx", version.
 
 # Testing
 junit                   = { group = "junit", name = "junit", version = "4.13.2" }
+robolectric             = { group = "org.robolectric", name = "robolectric", version.ref = "robolectric" }
+androidx-test-core      = { group = "androidx.test", name = "core", version.ref = "androidx-test" }
+# Compose semantics assertions, run on the JVM under Robolectric (no emulator, no KVM).
+compose-ui-test-junit4  = { group = "androidx.compose.ui", name = "ui-test-junit4" }
+compose-ui-test-manifest = { group = "androidx.compose.ui", name = "ui-test-manifest" }
 
 [plugins]
 android-application = { id = "com.android.application",        version.ref = "agp" }
