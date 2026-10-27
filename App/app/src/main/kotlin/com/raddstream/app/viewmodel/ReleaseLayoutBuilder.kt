@@ -1,5 +1,6 @@
 package com.raddstream.app.viewmodel
 
+import com.raddstream.app.data.UserRegion
 import com.raddstream.app.network.models.Codec
 import com.raddstream.app.network.models.CoverageType
 import com.raddstream.app.network.models.Edition
@@ -123,6 +124,14 @@ data class RankedPrint(
     val isPacked: Boolean get() = coverage.isPacked
     val dualAudio: Boolean get() = descriptor.dualAudio
 
+    /**
+     * True when this print carries a Hindi or Urdu track, or is labelled dual/multi audio.
+     * Presentation only: it decides where the row sits in the selector for a
+     * [UserRegion.DESI_DUBS] viewer, never what the viewer may play.
+     */
+    val isDesiDub: Boolean
+        get() = dualAudio || languages.any { it.equals("Hindi", ignoreCase = true) || it.equals("Urdu", ignoreCase = true) }
+
     /** Subtitle facts, read straight off the descriptor so the badge layer adds no grammar. */
     val subtitlesAvailable: Boolean get() = descriptor.subtitlesAvailable
     val subtitlesExternal: Boolean get() = descriptor.subtitlesExternal
@@ -243,7 +252,8 @@ object ReleaseLayoutBuilder {
         releases: List<ReleaseDetail>,
         artwork: List<String>,
         seasonArtwork: List<SeasonArtwork> = emptyList(),
-    ): ReleaseLayout = build(contentType, null, releases, artwork, seasonArtwork)
+        region: String = UserRegion.DEFAULT,
+    ): ReleaseLayout = build(contentType, null, releases, artwork, seasonArtwork, region)
 
     /**
      * [artwork] is the work's wide art pool, best first (backdrops, then poster).
@@ -251,6 +261,9 @@ object ReleaseLayoutBuilder {
      * wins for the season or episode it names. The pool remains a fallback for databases
      * written before `backfill_tmdb.py` ran: it distributes real work-level images, and it
      * never pretends a work backdrop is an official season poster or an episode frame.
+     *
+     * [region] is the viewer's regional-dub preference ([UserRegion]); it re-partitions the
+     * print lists the detail screen renders but never filters them.
      */
     fun build(
         contentType: String?,
@@ -258,6 +271,7 @@ object ReleaseLayoutBuilder {
         releases: List<ReleaseDetail>,
         artwork: List<String> = emptyList(),
         seasonArtwork: List<SeasonArtwork> = emptyList(),
+        region: String = UserRegion.DEFAULT,
     ): ReleaseLayout {
         val pool = artwork.filter { it.isNotBlank() }.distinct()
         val publishedPosters = seasonArtwork
@@ -278,7 +292,7 @@ object ReleaseLayoutBuilder {
             return ReleaseLayout(
                 isSeriesLike = false,
                 seasons = emptyList(),
-                workPrints = prints.sortedByDescending { it.rankKey },
+                workPrints = orderPrints(prints, region),
                 capabilities = capabilities,
                 officialPrintCount = officialCount,
                 camPrintCount = camCount,
@@ -308,7 +322,7 @@ object ReleaseLayoutBuilder {
                     numberWithinSeason = num,
                     absoluteNumber = num,
                     title = covering.firstNotNullOfOrNull { it.rawTitle?.takeIf(String::isNotBlank) },
-                    prints = (covering + packed).sortedByDescending { it.rankKey },
+                    prints = orderPrints(covering + packed, region),
                     stillUrl = publishedStills[seasonNum to num]
                         ?: stillAt(pool, seasonIndex, episodeIndex),
                 )
@@ -316,7 +330,7 @@ object ReleaseLayoutBuilder {
             SeasonGroup(
                 number = seasonNum,
                 episodes = episodes,
-                packedPrints = packed,
+                packedPrints = orderPrints(packed, region),
                 artworkUrl = publishedPosters[seasonNum]
                     ?: artworkAt(pool, seasonIndex),
             )
@@ -335,6 +349,25 @@ object ReleaseLayoutBuilder {
             officialPrintCount = officialCount,
             camPrintCount = camCount,
             totalPrints = prints.size,
+        )
+    }
+
+    /**
+     * The order the release selector presents one print list in.
+     *
+     * Quality is the rule: the server's print score decides, and a CAM never outranks an
+     * official print. For [UserRegion.DESI_DUBS] the ranked list is then stably
+     * re-partitioned so a Hindi/Urdu/dual-audio print leads its own official/CAM class —
+     * a Pakistani or Indian viewer should not have to scroll past English originals to
+     * find the dub. Stability leaves the quality order untouched inside every class, and
+     * language never lifts a CAM above an official print.
+     */
+    internal fun orderPrints(prints: List<RankedPrint>, region: String): List<RankedPrint> {
+        val ranked = prints.sortedByDescending { it.rankKey }
+        if (UserRegion.normalize(region) != UserRegion.DESI_DUBS) return ranked
+        return ranked.sortedWith(
+            compareByDescending<RankedPrint> { it.isOfficialPrint }
+                .thenByDescending { it.isDesiDub },
         )
     }
 

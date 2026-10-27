@@ -4,6 +4,7 @@ import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.raddstream.app.data.ServerSettingsRepository
+import com.raddstream.app.data.UserRegion
 import com.raddstream.app.data.downloads.DeviceDownloadResult
 import com.raddstream.app.data.downloads.DeviceDownloadsRepository
 import com.raddstream.app.data.local.WatchHistoryDao
@@ -128,6 +129,12 @@ class DetailViewModel @Inject constructor(
                 publishViewerContent()
             }
         }
+        viewModelScope.launch {
+            settingsRepository.userRegion.collect { region ->
+                userRegion = region
+                publishViewerContent()
+            }
+        }
     }
 
     private var serverVip: Boolean = false
@@ -139,6 +146,12 @@ class DetailViewModel @Inject constructor(
      * something; [premiumAccess] is what every gate call below actually passes.
      */
     private var qualityGateEnabled: Boolean = false
+
+    /**
+     * The viewer's regional-dub preference; [UserRegion.DEFAULT] until DataStore answers,
+     * which already is the shipped default. It only reorders the release selector.
+     */
+    private var userRegion: String = UserRegion.DEFAULT
 
     /** Who may see the top rungs: a confirmed member, or everyone while the switch is off. */
     private val premiumAccess: Boolean get() = VipQualityGate.premiumAccess(qualityGateEnabled, serverVip)
@@ -167,6 +180,7 @@ class DetailViewModel @Inject constructor(
             detail.releases,
             artwork,
             detail.seasonArtwork,
+            region = userRegion,
         )
         val state = _uiState.value
         val scope = QualityLadder.forNumberedScope(
@@ -218,6 +232,7 @@ class DetailViewModel @Inject constructor(
                         detail.releases,
                         artwork,
                         detail.seasonArtwork,
+                        region = userRegion,
                     )
                     rawDetail = detail
                     _uiState.update {

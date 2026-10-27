@@ -78,6 +78,24 @@ class ServerSettingsRepository @Inject constructor(
     }
 
     /**
+     * The viewer's regional-dub preference: [UserRegion.DESI_DUBS] (the default for this
+     * catalog's audience), [UserRegion.EAST_ASIAN] or [UserRegion.INTERNATIONAL].
+     *
+     * It changes what the release selector leads with, not what the app will play: a
+     * `desi_dubs` viewer sees Hindi/Urdu/dual-audio prints first, while every other region
+     * keeps the server's quality ordering. An unreadable stored value is [UserRegion.DEFAULT].
+     */
+    val userRegion: Flow<String> = dataStore.data.map { preferences ->
+        UserRegion.normalize(preferences[USER_REGION_KEY])
+    }
+
+    suspend fun saveUserRegion(region: String) {
+        dataStore.edit { preferences ->
+            preferences[USER_REGION_KEY] = UserRegion.normalize(region)
+        }
+    }
+
+    /**
      * The one opt-in that exposes anything: whether kept files may be read over the local network.
      * Persisted because it is a standing decision, not a session gesture — a viewer who turns it on
      * for an evening expects it still on until they turn it off, and the [com.raddstream.app.share.LanShareRunner]
@@ -372,6 +390,7 @@ class ServerSettingsRepository @Inject constructor(
         private val SERVER_URL_KEY = stringPreferencesKey("server_url")
         private val AUDIO_BOOST_LEVEL_KEY = floatPreferencesKey("audio_boost_level")
         private val PREFERRED_AUDIO_LANGUAGE_KEY = stringPreferencesKey("preferred_audio_language")
+        private val USER_REGION_KEY = stringPreferencesKey("user_region")
         private val LAN_SHARE_ENABLED_KEY = booleanPreferencesKey("lan_share_enabled")
         private val MAINTENANCE_MODE_KEY = booleanPreferencesKey("maintenance_mode")
         private val FEATURE_DOWNLOADS_KEY = booleanPreferencesKey("feature_downloads")

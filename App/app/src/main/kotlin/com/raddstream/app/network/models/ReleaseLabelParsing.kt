@@ -139,7 +139,8 @@ object ReleaseLabelParsing {
 
     /** `LANGUAGE_ALIASES`. */
     private val LANGUAGE_ALIASES: Map<String, String> = mapOf(
-        "hindi" to "Hindi", "hin" to "Hindi", "english" to "English", "eng" to "English",
+        "hindi" to "Hindi", "hin" to "Hindi", "urdu" to "Urdu", "urd" to "Urdu",
+        "english" to "English", "eng" to "English",
         "tamil" to "Tamil", "tam" to "Tamil", "telugu" to "Telugu", "tel" to "Telugu",
         "telegu" to "Telugu", "kannada" to "Kannada", "kan" to "Kannada",
         "malayalam" to "Malayalam", "mal" to "Malayalam", "mallu" to "Malayalam",
