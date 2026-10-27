@@ -869,6 +869,51 @@ class DatabaseSaveTests(unittest.TestCase):
             self.assertEqual(rated[:3], ["Anime Horror", "Bolly Action", "Holly Four"])
             self.assertEqual(rated[-1], "South Drama")  # no rating sorts last
 
+    def test_api_v1_list_reports_whether_a_work_has_a_subtitled_print(self):
+        """The tile's Subtitled chip needs one answer per work, and the label grammar owns
+        the vocabulary. `subtitled` is that grammar's verdict — a work whose prints never
+        claim subtitles reports False, and a word that merely looks like `sub` never
+        raises the chip."""
+        esubbed = self.media("site_a", "https://site-a.example/esub/",
+                             clean_title="Esub Show", quality="1080p")
+        esubbed["releases"][0]["release_title"] = "Esub Show 1080p WEB-DL x265 [English] ESubs"
+        fast_fetch.save_scraped_data(esubbed)
+
+        plain = self.media("site_b", "https://site-b.example/plain/",
+                           clean_title="Plain Show", quality="720p")
+        plain["releases"][0]["release_title"] = "Plain Show 720p WEB-DL x265"
+        fast_fetch.save_scraped_data(plain)
+
+        hardsub = self.media("site_c", "https://site-c.example/hsub/",
+                             clean_title="Hardsub Anime", quality="720p")
+        hardsub["releases"][0]["release_title"] = "Hardsub Anime 720p x265 HardSubs"
+        fast_fetch.save_scraped_data(hardsub)
+
+        # The verdict is per WORK, so it must hold even when the subtitled print is not
+        # the one the prefilter happens to read first.
+        later = self.media("site_d", "https://site-d.example/later/",
+                           clean_title="Later Subbed", quality="1080p")
+        later["releases"][0]["release_title"] = "Later Subbed 1080p x265"
+        later["releases"].append(dict(later["releases"][0],
+                                      release_title="Later Subbed 2160p HDR10 ESUB",
+                                      quality="2160p",
+                                      intermediate_url="https://site-d.example/release-2"))
+        fast_fetch.save_scraped_data(later)
+
+        lookalike = self.media("site_e", "https://site-e.example/submarine/",
+                               clean_title="Submerged", quality="1080p")
+        lookalike["releases"][0]["release_title"] = "Submerged 1080p x265 BluRay"
+        fast_fetch.save_scraped_data(lookalike)
+
+        with patch.object(viewer, "DB_PATH", self.db_path):
+            flags = {r["clean_title"]: r["subtitled"]
+                     for r in viewer.api_v1_get_posts(limit=10)["results"]}
+            self.assertEqual(
+                flags,
+                {"Esub Show": True, "Plain Show": False, "Hardsub Anime": True,
+                 "Later Subbed": True, "Submerged": False},
+            )
+
     def test_api_v1_rules(self):
         rules = viewer.api_v1_rules()
         self.assertIn("version", rules)

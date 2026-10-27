@@ -2447,6 +2447,47 @@ def _work_ref(row) -> str:
     return redact.mint_text(key, signing_secret())
 
 
+def _subtitled_posts(conn, post_ids) -> dict:
+    """Which of these works have at least one subtitled print, in the label's own words.
+
+    Subtitles belong to a release, not to the post row, so the answer is an existence
+    test — and it is the print grammar's answer, not a second vocabulary: `describe()`
+    is what the detail route already runs per release.
+
+    Two things keep it cheap enough for a list page. The SQL prefilter keeps only rows
+    whose label contains `sub`, which every subtitle pattern in `release_descriptor`
+    requires, so a true positive can never be dropped; and a work stops being scanned the
+    moment one subtitled print is found. `False` therefore means "no print of this work
+    claims subtitles", never "unexamined".
+    """
+    if not post_ids:
+        return {}
+    import release_descriptor
+
+    marks = ",".join("?" * len(post_ids))
+    rows = conn.execute(
+        "SELECT post_id, release_title, quality, codec, languages FROM releases"
+        f" WHERE post_id IN ({marks})"
+        "   AND (lower(release_title) LIKE '%sub%'"
+        "     OR lower(COALESCE(quality, '')) LIKE '%sub%'"
+        "     OR lower(COALESCE(codec, '')) LIKE '%sub%')",
+        list(post_ids),
+    ).fetchall()
+    flags = {int(pid): False for pid in post_ids}
+    for row in rows:
+        pid = int(row["post_id"])
+        if flags[pid]:
+            continue
+        described = release_descriptor.describe(
+            release_title=row["release_title"],
+            quality=row["quality"],
+            codec=row["codec"],
+            languages=row["languages"],
+        )
+        flags[pid] = bool((described.get("subtitles") or {}).get("available"))
+    return flags
+
+
 def api_v1_get_posts(query: str = "", content_type: str = "", page: int = 1,
                      limit: int = 20, full: bool = False,
                      base_url: str = "", industry: str = "", genre: str = "",
@@ -2568,6 +2609,7 @@ def api_v1_get_posts(query: str = "", content_type: str = "", page: int = 1,
         """
         rows = conn.execute(sql, params + [limit, offset]).fetchall()
         results = []
+        subtitled = {} if full else _subtitled_posts(conn, [r["id"] for r in rows])
         for r in rows:
             if full:
                 results.append(dict(r))
@@ -2575,6 +2617,7 @@ def api_v1_get_posts(query: str = "", content_type: str = "", page: int = 1,
             item = redact.project(r, "post_brief")
             item.update(_art_pair(r, base_url))
             item["work_ref"] = _work_ref(r)
+            item["subtitled"] = bool(subtitled.get(int(r["id"]), False))
             results.append(item)
         total_pages = max(1, (total + limit - 1) // limit)
         return {
