@@ -210,6 +210,15 @@ staging database's counts, **not** the unified catalog's:
 **numbers** when present. Results are ordered `p.id DESC` (newest first), and rows
 with `is_18_plus = 1` are excluded by the SQL `WHERE` (viewer.py:1891).
 
+> **Added 2026-10-28 (Session 19):** the list payload now carries one more key,
+> `subtitled` — a JSON **boolean** the server computes per work by
+> `viewer._subtitled_posts()` (viewer.py:2450, applied at :2612/:2620). It answers
+> "does at least one print of this work claim subtitles", using the same
+> `release_descriptor` grammar the detail screen uses, so it is an existence test over
+> the ledger's own labels and never a per-release promise. The sampled row above
+> predates the key. `Post.subtitled` is `Boolean?`: a server that has not been
+> restarted sends nothing, and the app renders no badge rather than an assumed one.
+
 ### `GET /api/v1/posts/{id}`
 Returns `{"success": true, "data": {...}}`, where `data` is the raw `posts` row
 plus `source_pages[]` and `releases[]`, each release carrying `sources[]`.
@@ -1317,9 +1326,8 @@ session's three uncommitted App files were left untouched.
 **Goal:** `app/src/test/kotlin/com/raddstream/app/ui/ScreenSnapshotTest.kt` — render core screen
 states under Robolectric and write PNGs to `app/build/reports/screenshots/`.
 
-**What was actually wrong with the draft, beyond the two names another session already fixed
-(`RaddTheme` → `RaddStreamTheme`, `BackgroundDark` → `RaddInk950`, which does not exist in
-`ui/theme/Color.kt`):** `captureVipNoticeCard` rendered no app code at all. It laid out three
+**What was actually wrong with the draft, beyond the one name another session already fixed
+(`RaddTheme` → `RaddStreamTheme`):** `captureVipNoticeCard` rendered no app code at all. It laid out three
 `Text` calls with invented marketing copy ("Unlock 1080p & 4K Ultra HD streaming directly via
 10Gbps CDN attachments", "👑 VIP Access Required") — a snapshot of the test, not of the screen,
 and it promised a 1080p/4K entitlement the app only gates behind the operator's
@@ -1409,3 +1417,78 @@ override "Newest" or "Highest IMDb" — so "catalog items" here means the releas
 screen lists.
 
 **Not verified:** no device/emulator pass, so the visual order is compile/unit-verified only.
+
+### Session 19 — First-run region onboarding, and the dub answer moved onto the tile (2026-10-28)
+
+**Goal:** the two asks were (1) a first-install content/region screen with three choices and a
+Continue button, and (2) prominent audio chips on `PosterCard` — Hindi Dubbed / Urdu Dubbed /
+Dual Audio / Subtitled — so a Pakistani or Indian viewer learns what the file *is* before tapping it.
+
+**Created:** `data/RegionChoices.kt` (the three cards, their contents lines, and the two stored
+keys each one seeds), `viewmodel/RegionViewModel.kt` (`RegionUiState`, `select`, `saveAndContinue`),
+`ui/screens/RegionSelectionScreen.kt`, `ui/components/AudioBadgeChips.kt`
+(`TileAudioBadge`, `TileAudioBadges.forPost`, `AudioBadgeChipRow`), `data/RegionChoicesTest.kt` (9),
+`ui/components/AudioBadgeChipsTest.kt` (12).
+**Changed:** `ui/navigation/Screen.kt` (`Region`), `NavGraph.kt` (the route, and a
+`onOpenRegionChoice` entrance from Settings), `MainActivity.kt` (three-way start destination),
+`ui/screens/SettingsScreen.kt` (a "Watching region" row + `subtitleOptions` made `internal`),
+`viewmodel/SettingsViewModel.kt` (`SettingsUiState.userRegion`, the eighth collected preference flow,
+`"Urdu"` in `AUDIO_LANGUAGE_OPTIONS`), `data/ServerSettingsRepository.kt` (`regionChoiceRecorded`,
+`saveRegionChoice`), `network/models/Models.kt` (`Post.subtitled`), `ui/components/PosterCard.kt`
+(the chip row), `Fast_Fetch/viewer.py` (`_subtitled_posts` + the list projection),
+`Fast_Fetch/test_database.py` (the new wire case → 65 tests).
+
+**Three decisions the next agent should not re-litigate by accident:**
+- **One owner for the card and for the write.** `RegionChoices` is what the screen renders *and*
+  what `saveRegionChoice` stores, so the promise on a card cannot drift from the record. A card may
+  only seed words the Settings chips already display — `RegionChoicesTest` pins that, and that is
+  why `subtitleOptions` is `internal` now.
+- **`region_choice_recorded` is load-bearing.** `userRegion` normalizes an absent key to
+  `desi_dubs`, so "nobody answered" and "they chose the default card" are otherwise the same stored
+  value; without the flag, either every returning viewer sees onboarding again or none ever does.
+  A store that throws on that read routes to **Home**, not to onboarding: a preference screen must
+  never become the door.
+- **`east_asian` seeds NO audio language on purpose** (subtitle only). Naming any preferred track
+  would let `AudioTrackMatcher` demote the original that viewer came for.
+
+**The Subtitled chip is the server's answer, not the app's guess.** Subtitles are a property of a
+print, never of the `posts` row, so `viewer._subtitled_posts()` runs one bounded existence test per
+page: a SQL `%sub%` prefilter (cannot drop a true positive — every subtitle pattern in
+`release_descriptor` contains "sub"), then the real grammar confirms it, stopping at the first
+subtitled print of each work. `Post.subtitled` is `Boolean?` so an un-restarted server earns no badge
+rather than a false one. **The live service has NOT been restarted**, so the deployed API does not
+send this key yet and the chip is dark in production until someone deploys it.
+
+**Errors this session made and fixed (all caught by a real build, not by reading):**
+1. `collectAsStateWithLifecycle` does not resolve here — `libs.versions.toml` declares only
+   `lifecycle-viewmodel-compose`, and `runtime-compose` is not on the classpath (MainActivity
+   already says so). Every screen uses `collectAsState`; the new one must too.
+2. `Surface(onClick = …)` is the experimental M3 overload and nothing else in this tree uses it.
+   `RegionChoiceCard` is now a plain `Surface` + `Modifier.clickable`, matching `PosterCard`.
+3. `MAX_ON_TILE` lives on `TileAudioBadges`, not on the enum — `Unresolved reference` in the first
+   test compile.
+4. Two of my own test expectations encoded the wrong rule and the rules in the code were right:
+   a Telugu work carrying a Hindi track **is** a Hindi dub (chip shown), and an unknown-industry
+   work with `subtitled=true` shows DUAL_AUDIO **and** SUBTITLED. Also removed a redundant
+   `post.industry != null` from `canJudgeDub` — an empty original-set already *is* that case.
+
+**Verified on this host:** `/tmp/qbuild3.sh -Dorg.gradle.jvmargs='-Xmx1536m' :app:compileDebugKotlin
+:app:testDebugUnitTest` → BUILD SUCCESSFUL, `GRADLE_EXIT=0`, `OVERLAP=NO`, **481 tests / 58 suites /
+0 failures / 0 errors / 0 skipped**, every result XML timestamped after the run started (00:30:56 →
+00:31:30). Backend in the same tree: `test_database.py` 65 OK, `test_redact.py` 49 OK,
+`test_vidout.py` 6 OK, `setup_check.py` all pass.
+
+**Deliberately not verified:** no device or emulator, so the onboarding layout, the chip row's
+effect on grid row height, and the Settings row are compile/unit-verified only; `ScreenSnapshotTest`
+still cannot run here (aarch64 excludes it in `app/build.gradle.kts`). Nothing committed (no commit
+requested); the tree still carries other workstreams' edits.
+
+**Doc truth corrected:** Session 17 claimed `BackgroundDark` does not exist in `ui/theme/Color.kt` —
+that was false (`Color.kt:264` is `val BackgroundDark = RaddInk950`, used by `MainActivity`); the
+sentence is fixed in place. §5 now records the 18th list key. Root `AGENTS.md`'s
+`test_database.py` count went 54 → 65.
+
+**Next agent should:** deploy (restart `radd-stream.service`) when this tree becomes the live one, so
+`subtitled` actually ships; decide whether two chips on a tile are enough or the cap should
+rise with a device check; and note the region screen is reachable later only through
+Settings → "Change what you watch", which is the intended single entrance.

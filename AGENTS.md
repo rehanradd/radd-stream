@@ -155,7 +155,7 @@ running system** — do not treat it as hypothetical, and never copy untested or
 # From repo root: /opt/radd-stream  (Oracle VM)
 
 # Run all offline tests — one module per invocation; this runner ignores extra names
-python3 -S Fast_Fetch/test_database.py    # 54 tests
+python3 -S Fast_Fetch/test_database.py    # 65 tests
 python3 -S Fast_Fetch/test_vidout.py      # 6 tests
 
 # Live site audit (writes to temp DB)
