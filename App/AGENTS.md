@@ -1492,3 +1492,32 @@ sentence is fixed in place. §5 now records the 18th list key. Root `AGENTS.md`'
 `subtitled` actually ships; decide whether two chips on a tile are enough or the cap should
 rise with a device check; and note the region screen is reachable later only through
 Settings → "Change what you watch", which is the intended single entrance.
+
+### Session 20 — android_tasks sprint closed at the current head (2026-10-28)
+
+Tasks 1, 3, 4 and 5 were delivered by Sessions 14–15 and verified in Session 16; this session
+audited them again against the current tree and re-ran the gate instead of re-implementing
+anything. No Kotlin source changed. Task 2 stayed untouched.
+
+Where each task actually lives:
+- **Task 1:** `VipRemoteConfig.kt` decodes `maintenance_mode`, `feature_flags` (with the brief's
+  `*_enabled` spellings as alternates), `ads`, and `link_shorteners`;
+  `ServerSettingsRepository.maintenanceMode` is the Flow; `MainActivity` paints
+  `MaintenanceScreen` ahead of routing and keeps the Setup escape.
+- **Task 3:** recents persist through DataStore (`searchRecents` / `saveSearchRecents`), capped by
+  `SEARCH_RECENTS_MAX = 20`; `SearchViewModel` reloads them on init.
+- **Task 4:** `player/subtitle/SubtitleParsersTest.kt` covers empty/whitespace input, malformed
+  timing lines, bad timestamp shapes, multiple arrows, and very large SRT/VTT.
+- **Task 5:** the cached-copy check lives where playback owns it —
+  `PlaybackService.localCopyUrlFor` asks `CacheEngineHolder.engine.playableUri(...)` before loading
+  the remote URL; `DownloadsViewModel` uses `playableUriForSourceKey` for the keep list. Putting
+  the check in `PlayerViewModel` would have duplicated a decision the player already makes.
+
+**Gate:** the first pass reported every task UP-TO-DATE, so it proved nothing; forcing
+`:app:testDebugUnitTest --rerun` executed the suite → BUILD SUCCESSFUL, `GRADLE_EXIT=0`,
+`OVERLAP=NO`, **481 tests / 58 suites / 0 failures / 0 errors / 0 skipped**, all 58 XMLs written
+by that run. Backend files were not touched.
+
+**Not verified:** no device or emulator pass. `ScreenSnapshotTest` and `PosterCardProvenanceTest`
+remain excluded on aarch64 (no Robolectric native runtime here), so those cases execute nowhere
+on this host.
