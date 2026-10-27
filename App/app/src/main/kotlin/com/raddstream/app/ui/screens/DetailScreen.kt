@@ -469,7 +469,7 @@ private fun PosterHeader(post: PostDetail, capabilities: List<String>) {
             post.imdbRating?.takeIf(String::isNotBlank)?.let { rating ->
                 Pill(text = "★ $rating IMDb", backgroundColor = MaterialTheme.colorScheme.tertiaryContainer, contentColor = MaterialTheme.colorScheme.onTertiaryContainer)
             }
-            val genres = post.genres?.split(",")?.map { it.trim() }?.filter { it.isNotBlank() }.orEmpty()
+            val genres = post.genreList
             if (genres.isNotEmpty()) {
                 Row(
                     modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),

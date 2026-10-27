@@ -388,4 +388,30 @@ class ModelsTest {
             assertFalse(answered.entitlement?.pending == true)
         }
     }
+
+    @Test
+    fun `the live genres column never paints as a genre`() {
+        // Sampled verbatim from `GET /api/v1/posts?limit=1` on the running service
+        // (2026-10-28): the ledger stores a JSON ARRAY STRING, so an untitled work
+        // arrives as "[]" and a titled one as "[\"Action\", \"Drama\"]". Splitting
+        // that column on commas is what put a literal `[]` on the detail screen.
+        val none = gson.fromJson(
+            """{"id":1,"title":"X","clean_title":"X","genres":"[]"}""",
+            Post::class.java,
+        )
+        assertEquals(emptyList<String>(), none.genreList)
+
+        val two = gson.fromJson(
+            """{"id":2,"title":"Y","clean_title":"Y","genres":"[\"Action\", \"Drama\"]"}""",
+            Post::class.java,
+        )
+        assertEquals(listOf("Action", "Drama"), two.genreList)
+
+        // The CSV spelling the same column uses in older staging rows still reads.
+        val csv = gson.fromJson(
+            """{"id":3,"title":"Z","clean_title":"Z","genres":"Action, Drama"}""",
+            Post::class.java,
+        )
+        assertEquals(listOf("Action", "Drama"), csv.genreList)
+    }
 }
