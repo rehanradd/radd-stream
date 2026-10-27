@@ -31,7 +31,8 @@ import kotlinx.coroutines.flow.first
 
 /**
  * Single-activity host.
- * Routes first-time users to server setup and returning users to the catalog.
+ * Routes an install with no server to setup, one that has a server but has never been asked
+ * what it watches to the region screen, and a returning viewer straight to the catalog.
  *
  * This activity also owns the app-wide theme, which is why the wallpaper-colour
  * preference is read *here*: it is the only place where the answer can reach
@@ -87,10 +88,13 @@ class MainActivity : ComponentActivity() {
                     } catch (_: Exception) {
                         null
                     }
-                    startDestination = if (savedUrl.isNullOrBlank()) {
-                        Screen.Setup.route
-                    } else {
-                        Screen.Home.route
+                    startDestination = when {
+                        savedUrl.isNullOrBlank() -> Screen.Setup.route
+                        // First install after the server is connected gets one chance to say what
+                        // they watch; a store that cannot answer is treated as "already asked",
+                        // because onboarding is a convenience and must never become the door.
+                        regionChoiceUnanswered(serverSettingsRepository) -> Screen.Region.route
+                        else -> Screen.Home.route
                     }
                 }
 
@@ -146,3 +150,21 @@ class MainActivity : ComponentActivity() {
  */
 private fun effectiveDynamicColor(storedEnabled: Boolean): Boolean =
     storedEnabled && Brand.dynamicColorAllowed
+
+/**
+ * Whether this install has never been through the region screen.
+ *
+ * `userRegion` cannot answer that on its own: it normalizes an absent key to
+ * [com.raddstream.app.data.UserRegion.DEFAULT], so "nobody chose" and "a viewer chose the default
+ * card" are the same stored value. The separate recorded-flag is what distinguishes them, and it
+ * is the only reason a first install opens once and never again.
+ *
+ * A store that throws reads as "already asked". Onboarding decides which print leads a list; it is
+ * not required to reach the catalog, so a failing read must not become a wall.
+ */
+private suspend fun regionChoiceUnanswered(settings: ServerSettingsRepository): Boolean =
+    try {
+        !settings.regionChoiceRecorded.first()
+    } catch (_: Exception) {
+        false
+    }

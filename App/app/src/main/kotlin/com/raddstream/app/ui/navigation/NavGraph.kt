@@ -31,6 +31,7 @@ import com.raddstream.app.ui.screens.DownloadsScreen
 import com.raddstream.app.ui.screens.HomeScreen
 import com.raddstream.app.ui.screens.MyListScreen
 import com.raddstream.app.ui.screens.PlayerScreen
+import com.raddstream.app.ui.screens.RegionSelectionScreen
 import com.raddstream.app.ui.screens.SearchScreen
 import com.raddstream.app.ui.screens.SettingsScreen
 import com.raddstream.app.ui.screens.SetupScreen
@@ -116,6 +117,22 @@ fun RaddStreamNavGraph(
                 )
             }
 
+            composable(Screen.Region.route) {
+                RegionSelectionScreen(
+                    onContinue = {
+                        // Two entrances, one button. Opened from Settings the viewer already has a
+                        // catalog behind this screen, so popping back to it keeps one Home entry;
+                        // on a first install the region screen IS the whole stack, and there is
+                        // nothing to pop, so Home is pushed and this screen leaves for good.
+                        if (!navController.popBackStack(Screen.Home.route, inclusive = false)) {
+                            navController.navigate(Screen.Home.route) {
+                                popUpTo(Screen.Region.route) { inclusive = true }
+                            }
+                        }
+                    },
+                )
+            }
+
             composable(Screen.Home.route) {
                 HomeScreen(
                     onSearchClick = { navController.navigate(Screen.Search.route) },
@@ -160,6 +177,7 @@ fun RaddStreamNavGraph(
                 SettingsScreen(
                     onOpenDownloads = { navController.navigate(Screen.Downloads.route) },
                     onOpenVipUpgrade = { navController.navigate(Screen.VipUpgrade.route) },
+                    onOpenRegionChoice = { navController.navigate(Screen.Region.route) },
                 )
             }
 

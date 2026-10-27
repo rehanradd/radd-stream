@@ -88,6 +88,15 @@ data class Post(
     val industry: String? = null,
     val country: String? = null,
     val language: String? = null,
+    /**
+     * Whether at least one print of this work claims subtitles, as the server's own
+     * release-label grammar answered it (`viewer._subtitled_posts`). Subtitles are a
+     * property of a print, never of the post row, so this is an existence test the ledger
+     * makes on our behalf — not a per-release promise. `false` means the work's labels
+     * never said so; a row from a server that predates the key decodes to null and simply
+     * earns no badge rather than an assumed one.
+     */
+    val subtitled: Boolean? = null,
     @SerializedName("release_count")
     val releaseCount: Int? = null,
     @SerializedName("source_count")

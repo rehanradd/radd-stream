@@ -96,6 +96,37 @@ class ServerSettingsRepository @Inject constructor(
     }
 
     /**
+     * Whether the viewer has actually been asked. [userRegion] always answers something
+     * ([UserRegion.DEFAULT] for a viewer who never chose), so first-run routing cannot tell
+     * "the default" from "nobody answered" without this.
+     */
+    val regionChoiceRecorded: Flow<Boolean> = dataStore.data.map { preferences ->
+        preferences[REGION_RECORDED_KEY] == true
+    }
+
+    /**
+     * The onboarding answer as ONE write: the region, the two language defaults it implies,
+     * and the record that the question was asked.
+     *
+     * One `edit` matters here — four separate writes would let a process death between them
+     * leave a viewer tagged `desi_dubs` while the player still prefers English, which is a
+     * state no card on that screen described. A null language removes the preference rather
+     * than storing a word for it, matching what Settings does when it picks its own default.
+     */
+    suspend fun saveRegionChoice(region: String, audioLanguage: String?, subtitleLanguage: String?) {
+        val cleanAudio = audioLanguage?.trim()?.takeIf { it.isNotEmpty() }
+        val cleanSubtitle = subtitleLanguage?.trim()?.takeIf { it.isNotEmpty() && it != SUBTITLE_OFF }
+        dataStore.edit { preferences ->
+            preferences[USER_REGION_KEY] = UserRegion.normalize(region)
+            if (cleanAudio == null) preferences.remove(PREFERRED_AUDIO_LANGUAGE_KEY)
+            else preferences[PREFERRED_AUDIO_LANGUAGE_KEY] = cleanAudio
+            if (cleanSubtitle == null) preferences.remove(PREFERRED_SUBTITLE_LANGUAGE_KEY)
+            else preferences[PREFERRED_SUBTITLE_LANGUAGE_KEY] = cleanSubtitle
+            preferences[REGION_RECORDED_KEY] = true
+        }
+    }
+
+    /**
      * The one opt-in that exposes anything: whether kept files may be read over the local network.
      * Persisted because it is a standing decision, not a session gesture — a viewer who turns it on
      * for an evening expects it still on until they turn it off, and the [com.raddstream.app.share.LanShareRunner]
@@ -391,6 +422,7 @@ class ServerSettingsRepository @Inject constructor(
         private val AUDIO_BOOST_LEVEL_KEY = floatPreferencesKey("audio_boost_level")
         private val PREFERRED_AUDIO_LANGUAGE_KEY = stringPreferencesKey("preferred_audio_language")
         private val USER_REGION_KEY = stringPreferencesKey("user_region")
+        private val REGION_RECORDED_KEY = booleanPreferencesKey("region_choice_recorded")
         private val LAN_SHARE_ENABLED_KEY = booleanPreferencesKey("lan_share_enabled")
         private val MAINTENANCE_MODE_KEY = booleanPreferencesKey("maintenance_mode")
         private val FEATURE_DOWNLOADS_KEY = booleanPreferencesKey("feature_downloads")

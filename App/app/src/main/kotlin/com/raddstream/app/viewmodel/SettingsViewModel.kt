@@ -5,6 +5,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import coil.Coil
 import com.raddstream.app.data.ServerSettingsRepository
+import com.raddstream.app.data.UserRegion
 import com.raddstream.app.network.friendlyNetworkError
 import com.raddstream.app.network.models.StatsResponse
 import com.raddstream.app.player.AudioBoost
@@ -82,7 +83,7 @@ data class UserPreferences(
         /** The chip label for "no preference", which is stored as the absence of one. */
         const val AUDIO_LANGUAGE_DEFAULT = "Player default"
         val AUDIO_LANGUAGE_OPTIONS = listOf(
-            AUDIO_LANGUAGE_DEFAULT, "English", "Hindi", "Tamil", "Telugu", "Malayalam", "Japanese",
+            AUDIO_LANGUAGE_DEFAULT, "English", "Hindi", "Urdu", "Tamil", "Telugu", "Malayalam", "Japanese",
         )
 
         /** Subtitles start off — a catalog this mixed has no language worth guessing. */
@@ -105,6 +106,12 @@ data class SettingsUiState(
     val lanShareStatus: LanShareStatus = LanShareStatus.Off,
     /** The OPTIONAL sync account. Signed out, this card is one line and one button. */
     val account: AccountUiState = AccountUiState(),
+    /**
+     * The regional-dub choice the onboarding screen wrote, normalized. Seeded with
+     * [UserRegion.DEFAULT] because the store always answers a value — the card label below
+     * shows which one, and tapping it opens the same screen the first install showed.
+     */
+    val userRegion: String = UserRegion.DEFAULT,
 )
 
 /**
@@ -185,9 +192,9 @@ class SettingsViewModel @Inject constructor(
     /**
      * Every row in the Playback & Display card, collected rather than sampled so a value
      * written anywhere shows up here immediately, and so a tap survives process death.
-     * These seven flows are the whole preference layer: the player, the theme, the image
-     * loader and the offline sweeper each read the same stored values, which is what makes
-     * a chip here a setting rather than a decoration.
+     * These eight flows are the whole preference layer: the player, the theme, the image
+     * loader, the offline sweeper and the release selector each read the same stored values,
+     * which is what makes a chip here a setting rather than a decoration.
      */
     private fun loadPersistedPrefs() {
         viewModelScope.launch {
@@ -227,6 +234,13 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch {
             settingsRepository.dynamicColorEnabled.collect { enabled ->
                 _uiState.update { it.copy(prefs = it.prefs.copy(dynamicColor = enabled)) }
+            }
+        }
+        // Collected, not sampled: the region screen this row opens writes the same key, so the
+        // label a viewer comes back to must already be the one they just chose.
+        viewModelScope.launch {
+            settingsRepository.userRegion.collect { region ->
+                _uiState.update { it.copy(userRegion = region) }
             }
         }
     }

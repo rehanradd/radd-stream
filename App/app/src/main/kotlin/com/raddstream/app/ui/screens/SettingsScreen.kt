@@ -53,6 +53,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.raddstream.app.brand.Brand
+import com.raddstream.app.data.RegionChoices
 import com.raddstream.app.player.AudioBoost
 import com.raddstream.app.player.AudioBoostUi
 import com.raddstream.app.share.LanShareStatus
@@ -61,13 +62,16 @@ import com.raddstream.app.viewmodel.KeepTtl
 import com.raddstream.app.viewmodel.SettingsViewModel
 import com.raddstream.app.viewmodel.UserPreferences
 
-private val subtitleOptions = listOf("Off", "English", "Hindi", "Tamil", "Telugu")
+/** The subtitle chips, in the order the row shows them. Readable by the region test, which
+ * pins that a card can only ever seed a word this row can actually display. */
+internal val subtitleOptions = listOf("Off", "English", "Hindi", "Tamil", "Telugu")
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(
     onOpenDownloads: () -> Unit = {},
     onOpenVipUpgrade: () -> Unit = {},
+    onOpenRegionChoice: () -> Unit = {},
     viewModel: SettingsViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsState()
@@ -324,6 +328,23 @@ fun SettingsScreen(
 
             // ── Playback & Display preferences ─────────────────────────
             SettingsCard(title = "Playback & Display") {
+                PreferenceRowTitle("Watching region")
+                val region = RegionChoices.byId(state.userRegion)
+                Text(
+                    region.title,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+                Text(
+                    region.preferenceLine(),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                TextButton(onClick = onOpenRegionChoice) {
+                    Text("Change what you watch")
+                }
+
+                Spacer(Modifier.height(10.dp))
                 PreferenceRowTitle("Image quality")
                 ChipRow(ImageQuality.entries.toList().map { it.label }, ImageQuality.entries.indexOf(state.prefs.imageQuality)) { idx ->
                     viewModel.setImageQuality(ImageQuality.entries.toList()[idx])

@@ -171,6 +171,9 @@ fun PosterCard(
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
+                // Dub status decides whether this title is watchable at all for a
+                // Hindi/Urdu-first viewer, so it is said on the tile, not after a tap.
+                AudioBadgeChipRow(badges = TileAudioBadges.forPost(post))
             }
         }
     }

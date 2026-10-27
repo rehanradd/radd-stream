@@ -7,6 +7,7 @@ import java.nio.charset.StandardCharsets
 /** All navigation destinations as a sealed class. */
 sealed class Screen(val route: String) {
     object Setup : Screen("setup")
+    object Region : Screen("region")
     object Home : Screen("home")
     object Search : Screen("search")
     object MyList : Screen("my_list")
