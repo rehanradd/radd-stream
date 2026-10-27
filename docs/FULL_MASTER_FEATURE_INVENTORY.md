@@ -542,6 +542,23 @@ scoring, scanner cursor mapping.
 **Acceptance:** tapping any of 20 sample filenames yields the correct work for ≥16; no file bytes
 leave the device.
 
+> **Status 2026-10-27 — the server half is BUILT and DEPLOYED, the phone half is not.**
+> `GET /api/v1/search/by-media` (`Fast_Fetch/media_search.py`, routed in `viewer.py`, public as a
+> rate-limited GET-only nginx location) takes the facts a `MediaStore` row already carries —
+> `DISPLAY_NAME`, `DURATION`, and the print's rung — and answers which work they belong to. It does
+> the part steps 5–6 of this spec never could: the media facts are **evidence, not keywords**, and
+> every hint comes back as `matched_on`, `mismatched_on` or `unknown_on`, because a ledger that has
+> no runtime for a work must not be credited with agreeing about one. A title is required and its
+> absence is a `400`, not a top-ten list: 130 016 works, several thousand of them ~120-minute 480p
+> films, and duration plus rung cannot discriminate among them.
+> **What remains is steps 1–4 and 7** (permissions, `DeviceMediaScanner`, the screen, the Room
+> mapping), and it is deliberately not started: none of it can be verified on this box — there is
+> still no device and no emulator here, and a half-written `MediaStore` query that has never run
+> against a real phone is exactly the kind of "implemented" that this file has repeatedly had to
+> walk back. Verified: 21 tests in `Fast_Fetch/test_media_search.py`, and the new route is inside
+> the `sweep_public_edge.py` route set (adult rows absent, no provenance, no upstream host).
+> Measured on the live catalog: 0.37 s for a five-candidate query.
+
 ### M-SRCH-02 — Local device media scanning / library
 **Goal:** browse and play media already on the phone, without a server.
 **Origin:** never specified; adjacent to archive feature 3 (SD card) only for downloads.

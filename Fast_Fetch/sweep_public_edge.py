@@ -217,8 +217,16 @@ class Sweep:
         per_site = [r[0] for r in conn.execute(
             "SELECT MAX(id) FROM posts WHERE source_site IS NOT NULL "
             "AND (is_18_plus IS NULL OR is_18_plus = 0) GROUP BY source_site")]
-        hidden = [r[0] for r in conn.execute(
-            "SELECT id FROM posts WHERE is_18_plus = 1 ORDER BY RANDOM() LIMIT 10")]
+        hidden_rows = conn.execute(
+            "SELECT id, COALESCE(NULLIF(clean_title,''), title) AS t FROM posts"
+            " WHERE is_18_plus = 1 ORDER BY RANDOM() LIMIT 10").fetchall()
+        hidden = [r[0] for r in hidden_rows]
+        hidden_titles = [(int(r[0]), str(r["t"]).strip()) for r in hidden_rows if r["t"]]
+        sample_titles = [str(r[0]) for r in conn.execute(
+            "SELECT COALESCE(NULLIF(clean_title,''), title) FROM posts"
+            " WHERE (is_18_plus IS NULL OR is_18_plus = 0)"
+            " AND COALESCE(NULLIF(clean_title,''), title) IS NOT NULL"
+            " ORDER BY RANDOM() LIMIT 6") if r[0]]
         sample = sorted(set(ids + per_site))
         raw_link_row = conn.execute(
             "SELECT s.id FROM download_sources s JOIN releases r ON r.id = s.release_id "
@@ -244,6 +252,33 @@ class Sweep:
                 self.scan(f"/api/v1/posts?type={ctype}&limit=100")
             for query in ("2024", "hind", "bollywood", "720p", "480p", "anime"):
                 self.scan(f"/api/v1/posts?q={urllib.parse.quote(query)}&limit=100")
+
+            # ── the by-media edge ────────────────────────────────────────────
+            # It answers with the same rows as `q=`, so it inherits every leak this
+            # walk already looks for — plus one it does not: the three-way
+            # matched/mismatched/unknown report, which is derived from `cat_*`
+            # columns and must not carry a print label or an upstream word either.
+            for title in sample_titles:
+                quoted = urllib.parse.quote(title)
+                self.scan(f"/api/v1/search/by-media?q={quoted}"
+                          f"&duration_s=5400&resolution=1080p&limit=20")
+                self.scan(f"/api/v1/search/by-media?q={quoted}"
+                          f"&language=hindi&resolution=480p&limit=20")
+            for hid, title in hidden_titles[:3]:
+                status, _, body = self.scan(
+                    f"/api/v1/search/by-media?q={urllib.parse.quote(title)}"
+                    f"&duration_s=7200", expect=(200, 400), label="hidden by-media")
+                # Not "the response must be empty" — a lookalike non-adult title may
+                # legitimately share the substring. The rule is the one the rest of
+                # the edge follows: the flagged WORK must not come back.
+                if status == 200:
+                    answered = {r.get("id") for r in json.loads(body).get("results", [])}
+                    if hid in answered:
+                        self.flag(f"by-media returned hidden post {hid} for {title!r}")
+            self.scan("/api/v1/search/by-media?duration_s=5400&resolution=1080p",
+                      expect=(400,), label="by-media without a title")
+            self.scan("/api/v1/search/by-media?q=a&duration_s=notanumber",
+                      expect=(200,), label="by-media with a garbage duration")
 
             probed = 0
             for index, post_id in enumerate(sample):

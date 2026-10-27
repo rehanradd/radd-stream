@@ -30,6 +30,7 @@ import api_v2
 import catalog_v2
 import accounts_api
 import admin_panel
+import media_search
 
 if sys.platform.startswith("win"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -2409,6 +2410,7 @@ PUBLIC_LANDING_HTML = """<!DOCTYPE html>
     <ul>
       <li><a href="/client">__PROJECT_NAME__ Web client</a></li>
       <li><code>GET /api/v1/posts?q=&amp;type=&amp;page=&amp;limit=</code></li>
+      <li><code>GET /api/v1/search/by-media?q=&amp;duration_s=&amp;resolution=&amp;language=</code></li>
       <li><code>GET /api/v1/posts/{id}</code></li>
       <li><code>GET /api/v1/stream?id=&amp;redirect=1</code></li>
       <li><code>GET /api/v1/stats</code></li>
@@ -2582,6 +2584,29 @@ def api_v1_get_posts(query: str = "", content_type: str = "", page: int = 1,
             "total_pages": total_pages,
             "results": results,
         }
+
+
+def api_v1_search_by_media(query: str = "", duration_s=None, resolution: str = "",
+                           audio_language: str = "", limit: int = 10,
+                           full: bool = False, base_url: str = "") -> dict:
+    """/api/v1/search/by-media — what the file in the viewer's hand probably is.
+
+    Thin on purpose: the matching and the three-way honesty report live in
+    `media_search`. This function only supplies what that module cannot own — the
+    artwork handles and the account-surface work reference — through the same
+    `_art_pair` / `_work_ref` every other v1 list already uses, so a by-media row
+    and a `q=` row are indistinguishable shapes to the client.
+    """
+    _ensure_schema()
+
+    def enrich(item, row):
+        item.update(_art_pair(row, base_url))
+        item["work_ref"] = _work_ref(row)
+
+    with get_db() as conn:
+        return media_search.search_by_media(
+            conn, title=query, duration_s=duration_s, resolution=resolution,
+            audio_language=audio_language, limit=limit, full=full, enrich=enrich)
 
 
 def api_v1_get_post_detail(post_id: int, full: bool = False,
@@ -3051,6 +3076,23 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 sort=query_params.get("sort", [""])[0],
             )
             self.send_json(data)
+
+        elif path == "/api/v1/search/by-media":
+            def number(name):
+                raw = query_params.get(name, [""])[0].strip()
+                return raw or None
+            try:
+                limit = int(query_params.get("limit", [10])[0])
+            except ValueError:
+                limit = 10
+            data = api_v1_search_by_media(
+                query=query_params.get("q", [""])[0],
+                duration_s=number("duration_s"),
+                resolution=number("resolution"),
+                audio_language=query_params.get("language", [""])[0],
+                limit=limit, full=full, base_url=base_url,
+            )
+            self.send_json(data, status=200 if data.get("success") else 400)
 
         elif path.startswith("/api/v1/posts/"):
             parts = path.strip("/").split("/")
