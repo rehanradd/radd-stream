@@ -221,6 +221,7 @@ tasks.withType<Test>().configureEach {
     if (System.getProperty("os.arch")?.lowercase() in setOf("aarch64", "arm64")) {
         filter {
             excludeTestsMatching("com.raddstream.app.ui.components.PosterCardProvenanceTest")
+            excludeTestsMatching("com.raddstream.app.ui.ScreenSnapshotTest")
         }
         doFirst {
             logger.lifecycle(

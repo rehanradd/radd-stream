@@ -235,7 +235,7 @@ private fun EntitlementCard(state: VipUiState) {
  * JazzCash is refused, and only the viewer knows which app they opened.
  */
 @Composable
-private fun MethodSection(state: VipUiState, onSelect: (VipMethod) -> Unit) {
+internal fun MethodSection(state: VipUiState, onSelect: (VipMethod) -> Unit) {
     val offered = state.offeredMethods
     if (offered.isEmpty()) return
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -385,7 +385,7 @@ private fun RewardedVipSection(expiresAt: Long, onWatchAd: () -> Unit) {
 }
 
 @Composable
-private fun PricingSection(state: VipUiState, onSelect: (VipPlan) -> Unit) {
+internal fun PricingSection(state: VipUiState, onSelect: (VipPlan) -> Unit) {
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         SectionLabel("Choose your plan")
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -475,7 +475,7 @@ private fun PlanCard(
 }
 
 @Composable
-private fun PaymentSection(state: VipUiState, onCopy: (label: String, value: String) -> Unit) {
+internal fun PaymentSection(state: VipUiState, onCopy: (label: String, value: String) -> Unit) {
     val amount = amountLabel(state.currency, state.priceFor(state.selectedPlan))
     Surface(
         color = MaterialTheme.colorScheme.surface,
