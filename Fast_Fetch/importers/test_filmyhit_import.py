@@ -227,6 +227,15 @@ class ReleaseTests(unittest.TestCase):
         html = '<a href="https://brightadnetwork.com/jump/next.php?r=1">Download</a>'
         self.assertEqual(fh.server_sources(html, "480p"), [])
 
+    def test_an_empty_poster_anchor_does_not_hide_the_label(self):
+        # Live pages repeat the bridge href on the poster link (an <img> with no
+        # text) before the labeled download button.
+        links = [(BRIDGE_1, ""), (BRIDGE_1, "720p1.21 GB · MKV")]
+        releases = fh.releases_from_page(page(links=links), MOVIE_URL, "Movie", None)
+        self.assertEqual(len(releases), 1)
+        self.assertEqual(releases[0]["quality"], "720p")
+        self.assertEqual(releases[0]["raw_meta"]["label_text"], "720p1.21 GB · MKV")
+
 
 class BuildRecordTests(unittest.TestCase):
     def test_movie_record_fields(self):

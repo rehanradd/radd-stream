@@ -397,6 +397,7 @@ def releases_from_page(html: str, loc: str, title: str,
             entry["format"] = entry["format"] or (
                 FORMAT_RE.search(text).group(1).upper() if FORMAT_RE.search(text)
                 else None)
+            entry["label_text"] = entry["label_text"] or text
 
     out = []
     for entry in releases.values():
