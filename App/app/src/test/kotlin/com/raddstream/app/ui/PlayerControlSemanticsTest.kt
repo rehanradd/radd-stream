@@ -17,6 +17,14 @@ import java.io.File
  */
 class PlayerControlSemanticsTest {
 
+    /**
+     * A word the helper has never heard of. `subtitleStatusLabel` takes the off-word as a
+     * parameter instead of owning it, so the screen can speak the resource value while this test
+     * proves the helper hardcodes nothing: a sentinel the helper could not possibly invent, echoed
+     * back, is the whole assertion.
+     */
+    private val OFF_WORD = "no text track"
+
     private val playerScreen: File by lazy {
         var dir: File? = File("").absoluteFile
         while (dir != null) {
@@ -115,13 +123,13 @@ class PlayerControlSemanticsTest {
 
     @Test
     fun `nothing is announced while no text track is loaded`() {
-        assertEquals("off", subtitleStatusLabel(PlayerUiState()))
+        assertEquals(OFF_WORD, subtitleStatusLabel(PlayerUiState(), OFF_WORD))
     }
 
     @Test
     fun `an external file is named by its own label`() {
         val state = PlayerUiState(customSubtitleLoaded = "subtitles.srt")
-        assertEquals("subtitles.srt", subtitleStatusLabel(state))
+        assertEquals("subtitles.srt", subtitleStatusLabel(state, OFF_WORD))
     }
 
     @Test
@@ -130,6 +138,6 @@ class PlayerControlSemanticsTest {
         // "English [CC]" about a track that is gone would be the button lying. Building a real
         // Media3 TrackUiOption needs a device-side class, so this covers the empty-report case,
         // which is the one that can strand a stale id.
-        assertEquals("off", subtitleStatusLabel(PlayerUiState(selectedSubtitleId = "9")))
+        assertEquals(OFF_WORD, subtitleStatusLabel(PlayerUiState(selectedSubtitleId = "9"), OFF_WORD))
     }
 }

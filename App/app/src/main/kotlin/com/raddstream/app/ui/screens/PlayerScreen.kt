@@ -104,6 +104,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -120,6 +121,7 @@ import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.CaptionStyleCompat
 import androidx.media3.ui.PlayerView
 import androidx.media3.ui.SubtitleView
+import com.raddstream.app.R
 import com.raddstream.app.brand.Brand
 import com.raddstream.app.player.AdSlot
 import com.raddstream.app.player.AspectMode
@@ -339,7 +341,7 @@ private fun PlayerScreenContent(
         // 1 — video surface or audio-only placeholder
         if (state.audioOnly) {
             AudioOnlySurface(
-                title = state.pendingTitle ?: state.activeRendition?.displayLabel() ?: "Audio",
+                title = state.pendingTitle ?: state.activeRendition?.displayLabel() ?: stringResource(R.string.player_audio_title),
                 isPlaying = state.isPlaying,
             )
         } else {
@@ -610,7 +612,8 @@ private fun AudioOnlySurface(title: String, isPlaying: Boolean) {
             )
             Spacer(Modifier.height(6.dp))
             Text(
-                if (isPlaying) "Audio only — video decoder off" else "Audio only — paused",
+                if (isPlaying) stringResource(R.string.player_audio_only_active)
+                else stringResource(R.string.player_audio_only_paused),
                 color = Color.White.copy(alpha = 0.6f),
                 fontSize = brandSp(12),
             )
@@ -854,9 +857,9 @@ private fun HudToast(hud: Hud) {
         is Hud.Boost -> Icons.Default.FastForward
     }
     val label = when (hud) {
-        is Hud.Brightness -> "Brightness ${(hud.value * 100).toInt()}%"
-        is Hud.Volume -> "Volume ${(hud.value * 100).toInt()}%"
-        is Hud.Boost -> "Boosting — release to restore"
+        is Hud.Brightness -> stringResource(R.string.player_brightness, (hud.value * 100).toInt())
+        is Hud.Volume -> stringResource(R.string.player_volume, (hud.value * 100).toInt())
+        is Hud.Boost -> stringResource(R.string.player_boost_hint)
     }
     val fraction = when (hud) {
         is Hud.Brightness -> hud.value
@@ -902,7 +905,7 @@ private fun ScrubToast(target: Long, durationMs: Long) {
             modifier = Modifier.padding(bottom = 130.dp),
         ) {
             Text(
-                "${target.formatTime()} / ${durationMs.formatTime()}",
+                stringResource(R.string.player_time_of, target.formatTime(), durationMs.formatTime()),
                 color = Color.White,
                 fontSize = brandSp(14),
                 modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp),
@@ -922,7 +925,7 @@ private fun BoostBadge() {
             Row(Modifier.padding(horizontal = 10.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                 Icon(Icons.Default.FastForward, null, tint = Color.Black, modifier = Modifier.size(16.dp))
                 Spacer(Modifier.width(4.dp))
-                Text("Boosting speed", color = Color.Black, fontSize = brandSp(12), fontWeight = FontWeight.Bold)
+                Text(stringResource(R.string.player_boost_badge), color = Color.Black, fontSize = brandSp(12), fontWeight = FontWeight.Bold)
             }
         }
     }
@@ -941,7 +944,7 @@ private fun TopBar(vm: PlayerViewModel, state: PlayerUiState, onBack: () -> Unit
         verticalAlignment = Alignment.CenterVertically,
     ) {
         IconButton(onClick = onBack) {
-            Icon(Icons.Default.ArrowBack, "Back", tint = Color.White)
+            Icon(Icons.Default.ArrowBack, stringResource(R.string.player_back), tint = Color.White)
         }
         Spacer(Modifier.width(6.dp))
         Column(Modifier.weight(1f)) {
@@ -954,14 +957,17 @@ private fun TopBar(vm: PlayerViewModel, state: PlayerUiState, onBack: () -> Unit
                 overflow = TextOverflow.Ellipsis,
             )
             if (print != null) {
+                val hlsTag = stringResource(R.string.player_tag_hls)
+                val expiringTag = stringResource(R.string.player_tag_expiring)
+                val autoTag = state.autoQualityBand?.let { band -> stringResource(R.string.player_tag_auto, band) }
                 Text(
                 buildString {
                     append(print.displayLabel())
-                    if (print.playback.isHls()) append(" · HLS")
-                    if (print.playback.ephemeral) append(" · expiring link")
+                    if (print.playback.isHls()) append(" · ").append(hlsTag)
+                    if (print.playback.ephemeral) append(" · ").append(expiringTag)
                     // Says out loud that the rung shown is Auto's current choice, so a
                     // quality that moves on its own is never mistaken for a hand-picked one.
-                    state.autoQualityBand?.let { band -> append(" · Auto: $band") }
+                    autoTag?.let { append(" · ").append(it) }
                 },
                     color = Color.White.copy(alpha = 0.72f),
                     fontSize = brandSp(11),
@@ -973,7 +979,7 @@ private fun TopBar(vm: PlayerViewModel, state: PlayerUiState, onBack: () -> Unit
         if (state.sleep.mode == SleepMode.COUNTDOWN) {
             Icon(
                 Icons.Default.Bedtime,
-                "Sleep in ${state.sleep.remainingMs.formatTime()}",
+                stringResource(R.string.player_sleep_remaining, state.sleep.remainingMs.formatTime()),
                 tint = AccentOrange,
                 modifier = Modifier
                     .size(16.dp)
@@ -982,7 +988,7 @@ private fun TopBar(vm: PlayerViewModel, state: PlayerUiState, onBack: () -> Unit
         }
         if (state.speed != 1f && !state.boosting) {
             Text(
-                "${state.speed}×",
+                stringResource(R.string.player_speed_short, state.speed),
                 color = AccentOrange,
                 fontSize = brandSp(13),
                 fontWeight = FontWeight.Bold,
@@ -991,7 +997,7 @@ private fun TopBar(vm: PlayerViewModel, state: PlayerUiState, onBack: () -> Unit
         }
         KeepChip(state, vm)
         IconButton(onClick = { vm.showPrintSheet() }) {
-            Icon(Icons.Default.ListAlt, "Prints & tools", tint = Color.White)
+            Icon(Icons.Default.ListAlt, stringResource(R.string.player_prints_tools), tint = Color.White)
         }
     }
 }
@@ -1004,7 +1010,7 @@ private fun CenterControls(state: PlayerUiState, vm: PlayerViewModel) {
                 IconButton(onClick = { vm.togglePlayPause() }, modifier = Modifier.size(72.dp)) {
                     Icon(
                         if (state.isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                        if (state.isPlaying) "Pause" else "Play",
+                        if (state.isPlaying) stringResource(R.string.player_pause) else stringResource(R.string.player_play),
                         tint = Color.White,
                         modifier = Modifier.size(44.dp),
                     )
@@ -1069,7 +1075,7 @@ private fun EdgeHud(
                 .padding(horizontal = 6.dp, vertical = 2.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            ControlTarget(label = "Back", onClick = onBack) {
+            ControlTarget(label = stringResource(R.string.player_back), onClick = onBack) {
                 Icon(Icons.Default.ArrowBack, null, tint = Color.White, modifier = Modifier.size(20.dp))
             }
             Text(
@@ -1096,7 +1102,7 @@ private fun EdgeHud(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             ControlTarget(
-                label = if (state.isPlaying) "Pause" else "Play",
+                label = if (state.isPlaying) stringResource(R.string.player_pause) else stringResource(R.string.player_play),
                 onClick = { if (state.isEnded) vm.playFrom(0) else vm.togglePlayPause() },
             ) {
                 Icon(
@@ -1107,9 +1113,14 @@ private fun EdgeHud(
                 )
             }
             Text(
-                text = buildString {
-                    append(state.positionMs.formatTime())
-                    append(if (state.durationMs > 0) " / ${state.durationMs.formatTime()}" else " / --:--")
+                text = if (state.durationMs > 0) {
+                    stringResource(
+                        R.string.player_time_of,
+                        state.positionMs.formatTime(),
+                        state.durationMs.formatTime(),
+                    )
+                } else {
+                    stringResource(R.string.player_time_of_unknown, state.positionMs.formatTime())
                 },
                 color = Color.White.copy(alpha = 0.8f),
                 fontSize = brandSp(11),
@@ -1126,7 +1137,7 @@ private fun EdgeHud(
                 .padding(horizontal = 4.dp, vertical = 2.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            ControlTarget(label = "Leave cinema mode", onClick = { vm.toggleViewMode() }) {
+            ControlTarget(label = stringResource(R.string.player_leave_cinema), onClick = { vm.toggleViewMode() }) {
                 Icon(
                     Icons.Default.LocalMovies,
                     null,
@@ -1134,7 +1145,7 @@ private fun EdgeHud(
                     modifier = Modifier.size(20.dp),
                 )
             }
-            ControlTarget(label = "Lock controls", onClick = { vm.setLocked(true) }) {
+            ControlTarget(label = stringResource(R.string.player_lock), onClick = { vm.setLocked(true) }) {
                 Icon(Icons.Default.Lock, null, tint = Color.White, modifier = Modifier.size(18.dp))
             }
         }
@@ -1183,8 +1194,9 @@ private fun BottomControls(
                     .padding(horizontal = 4.dp, vertical = 2.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
+                val subtitleWord = subtitleStatusLabel(state, stringResource(R.string.player_off))
                 if (state.canSwitchQuality) {
-                    PlayerControlButton({ vm.showQualitySheet() }, "Quality: ${state.qualityLabel}") {
+                    PlayerControlButton({ vm.showQualitySheet() }, stringResource(R.string.player_quality_label, state.qualityLabel)) {
                         Icon(
                             Icons.Default.HighQuality,
                             null,
@@ -1192,12 +1204,12 @@ private fun BottomControls(
                         )
                     }
                 }
-                PlayerControlButton({ vm.showSubtitleSheet() }, "Subtitles: ${subtitleStatusLabel(state)}") {
+                PlayerControlButton({ vm.showSubtitleSheet() }, stringResource(R.string.player_subtitles_label, subtitleWord)) {
                     Icon(Icons.Default.Subtitles, null, tint = if (subtitleActive(state)) AccentOrange else Color.White)
                 }
                 PlayerControlButton(
                     { vm.showSubtitleOffsetSheet() },
-                    "Subtitle sync: ${SubtitleOffset.format(state.subtitle.delayMs)}",
+                    stringResource(R.string.player_subtitle_sync, SubtitleOffset.format(state.subtitle.delayMs)),
                 ) {
                     Icon(
                         Icons.Default.Sync,
@@ -1205,47 +1217,47 @@ private fun BottomControls(
                         tint = if (state.subtitle.delayMs != 0L) AccentOrange else Color.White,
                     )
                 }
-                PlayerControlButton({ vm.showTracksSheet() }, "Audio tracks") {
+                PlayerControlButton({ vm.showTracksSheet() }, stringResource(R.string.player_audio_tracks)) {
                     Icon(
                         Icons.Default.MusicNote,
                         null,
                         tint = if (state.selectedAudioId != null) AccentOrange else Color.White,
                     )
                 }
-                PlayerControlButton({ vm.showSpeedSheet() }, "Speed ${state.speed}×") {
+                PlayerControlButton({ vm.showSpeedSheet() }, stringResource(R.string.player_speed_label, state.speed)) {
                     Icon(Icons.Default.Speed, null, tint = if (state.speed != 1f) AccentOrange else Color.White)
                 }
-                PlayerControlButton({ vm.setLocked(true) }, "Lock controls") {
+                PlayerControlButton({ vm.setLocked(true) }, stringResource(R.string.player_lock)) {
                     Icon(Icons.Default.Lock, null, tint = Color.White)
                 }
-                PlayerControlButton({ vm.seekBy(-10_000); onActivity() }, "Rewind 10 seconds") {
+                PlayerControlButton({ vm.seekBy(-10_000); onActivity() }, stringResource(R.string.player_rewind_10)) {
                     Icon(Icons.Default.Replay10, null, tint = Color.White)
                 }
-                PlayerControlButton({ vm.seekBy(10_000); onActivity() }, "Forward 10 seconds") {
+                PlayerControlButton({ vm.seekBy(10_000); onActivity() }, stringResource(R.string.player_forward_10)) {
                     Icon(Icons.Default.Forward10, null, tint = Color.White)
                 }
-                PlayerControlButton({ vm.stepFrame(-1) }, "Step back one frame") {
+                PlayerControlButton({ vm.stepFrame(-1) }, stringResource(R.string.player_frame_back)) {
                     Icon(Icons.Default.KeyboardArrowLeft, null, tint = Color.White)
                 }
-                PlayerControlButton({ vm.stepFrame(1) }, "Step forward one frame") {
+                PlayerControlButton({ vm.stepFrame(1) }, stringResource(R.string.player_frame_forward)) {
                     Icon(Icons.Default.KeyboardArrowRight, null, tint = Color.White)
                 }
-                PlayerControlButton({ vm.requestNextEpisode() }, "Next episode") {
+                PlayerControlButton({ vm.requestNextEpisode() }, stringResource(R.string.player_next_episode)) {
                     Icon(Icons.Default.SkipNext, null, tint = Color.White)
                 }
-                PlayerControlButton({ vm.showSleepSheet() }, "Sleep timer") {
+                PlayerControlButton({ vm.showSleepSheet() }, stringResource(R.string.player_sleep_timer)) {
                     Icon(Icons.Default.Bedtime, null, tint = if (state.sleep.mode != SleepMode.OFF) AccentOrange else Color.White)
                 }
-                PlayerControlButton({ vm.cycleAspect(); onActivity() }, "Aspect: ${state.aspect.label}") {
+                PlayerControlButton({ vm.cycleAspect(); onActivity() }, stringResource(R.string.player_aspect_label, state.aspect.label)) {
                     Icon(Icons.Default.AspectRatio, null, tint = if (state.aspect != AspectMode.FIT) AccentOrange else Color.White)
                 }
-                PlayerControlButton({ vm.toggleOrientation(); onActivity() }, "Orientation: ${state.orientation.label}") {
+                PlayerControlButton({ vm.toggleOrientation(); onActivity() }, stringResource(R.string.player_orientation_label, state.orientation.label)) {
                     Icon(Icons.Default.RotateRight, null, tint = if (state.orientation == PlayerOrientation.PORTRAIT) AccentOrange else Color.White)
                 }
-                PlayerControlButton({ vm.toggleAudioOnly() }, "Audio-only playback") {
+                PlayerControlButton({ vm.toggleAudioOnly() }, stringResource(R.string.player_audio_only_toggle)) {
                     Icon(Icons.Default.MusicNote, null, tint = if (state.audioOnly) AccentOrange else Color.White)
                 }
-                PlayerControlButton({ vm.toggleStereoOnly() }, "Stereo-only track selection") {
+                PlayerControlButton({ vm.toggleStereoOnly() }, stringResource(R.string.player_stereo_only_toggle)) {
                     Icon(Icons.Default.VolumeUp, null, tint = if (state.stereoOnly) AccentOrange else Color.White)
                 }
                 // Enters Ghost mode; the edge HUD's own chip is the only way back out, so
@@ -1253,11 +1265,11 @@ private fun BottomControls(
                 // Hidden entirely when the operator's `pure_cinema` switch is off — an entry
                 // point to a frame this build refuses to paint is only a button that lies.
                 if (state.pureCinemaAllowed) {
-                    PlayerControlButton({ vm.toggleViewMode(); onActivity() }, "Cinema mode — hide every control") {
+                    PlayerControlButton({ vm.toggleViewMode(); onActivity() }, stringResource(R.string.player_cinema_mode)) {
                         Icon(Icons.Default.LocalMovies, null, tint = Color.White)
                     }
                 }
-                PlayerControlButton(onEnterPip, "Picture-in-picture") {
+                PlayerControlButton(onEnterPip, stringResource(R.string.player_pip)) {
                     Icon(Icons.Default.PictureInPicture, null, tint = Color.White)
                 }
             }
@@ -1273,10 +1285,10 @@ private fun subtitleActive(state: PlayerUiState) =
  * The word the subtitles control speaks: which text is loaded, or an honest "off". Internal
  * so `PlayerControlSemanticsTest` can assert a named control is never rendered nameless.
  */
-internal fun subtitleStatusLabel(state: PlayerUiState): String =
+internal fun subtitleStatusLabel(state: PlayerUiState, offWord: String): String =
     state.customSubtitleLoaded
         ?: state.selectedSubtitleId?.let { id -> state.subtitleTracks.firstOrNull { it.id == id }?.label }
-        ?: "off"
+        ?: offWord
 
 /** Android's minimum touch target. Every press in this file is at least this wide and tall. */
 private val MinControlTarget = 48.dp
@@ -1406,7 +1418,7 @@ private fun UnlockFab(onUnlock: () -> Unit) {
             modifier = Modifier.padding(16.dp),
         ) {
             IconButton(onClick = onUnlock) {
-                Icon(Icons.Default.LockOpen, "Unlock", tint = Color.White)
+                Icon(Icons.Default.LockOpen, stringResource(R.string.player_unlock), tint = Color.White)
             }
         }
     }
@@ -1426,7 +1438,7 @@ private fun PlayAgainButton(onPlayAgain: () -> Unit) {
             ) {
                 Icon(Icons.Default.Replay10, null, tint = Color.White)
                 Spacer(Modifier.width(8.dp))
-                Text("Play again from 0:00", color = Color.White, fontSize = brandSp(14))
+                Text(stringResource(R.string.player_play_again), color = Color.White, fontSize = brandSp(14))
             }
         }
     }
@@ -1443,7 +1455,7 @@ private fun ConnectionErrorCard(message: String, onRetry: () -> Unit) {
             Spacer(Modifier.height(10.dp))
             Text(message, color = Color.White, fontSize = brandSp(13), textAlign = TextAlign.Center)
             Spacer(Modifier.height(12.dp))
-            OutlinedButton(onClick = onRetry) { Text("Retry", color = Color.White) }
+            OutlinedButton(onClick = onRetry) { Text(stringResource(R.string.player_retry), color = Color.White) }
         }
     }
 }
@@ -1453,7 +1465,7 @@ private fun ConnectionErrorCard(message: String, onRetry: () -> Unit) {
 @Composable
 private fun StartNoticeCard(phase: StartPhase, title: String?) {
     val label = phase.label
-    val spoken = if (title.isNullOrBlank()) label else "$label $title"
+    val spoken = if (title.isNullOrBlank()) label else stringResource(R.string.player_notice_spaced, label, title)
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
@@ -1502,8 +1514,8 @@ private fun GiveUpCard(
         title = {
             Text(
                 when (why) {
-                    HandoffWhy.DOWNLOAD_ONLY -> "Download only"
-                    HandoffWhy.NO_CANDIDATE_LEFT -> "Nothing playable here right now"
+                    HandoffWhy.DOWNLOAD_ONLY -> stringResource(R.string.player_giveup_download_only)
+                    HandoffWhy.NO_CANDIDATE_LEFT -> stringResource(R.string.player_giveup_no_candidate)
                 },
                 color = Color.White,
                 fontSize = brandSp(16),
@@ -1516,10 +1528,9 @@ private fun GiveUpCard(
                 Text(
                     when (why) {
                         HandoffWhy.DOWNLOAD_ONLY ->
-                            "This quality can be kept for offline viewing, but it cannot stream here."
+                            stringResource(R.string.player_giveup_download_body)
                         HandoffWhy.NO_CANDIDATE_LEFT ->
-                            "Every option for this print failed. Retry, keep it for offline, or open it " +
-                                "in another player."
+                            stringResource(R.string.player_giveup_no_candidate_body)
                     },
                     color = Color.White.copy(alpha = 0.6f),
                     fontSize = brandSp(12),
@@ -1528,12 +1539,12 @@ private fun GiveUpCard(
         },
         confirmButton = {
             Row {
-                TextButton(onClick = onRetry) { Text("Retry", color = AccentOrange) }
-                TextButton(onClick = onExternal) { Text("Open with another player", color = AccentOrange) }
+                TextButton(onClick = onRetry) { Text(stringResource(R.string.player_retry), color = AccentOrange) }
+                TextButton(onClick = onExternal) { Text(stringResource(R.string.player_open_external), color = AccentOrange) }
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) { Text("Close", color = Color.White.copy(alpha = 0.7f)) }
+            TextButton(onClick = onDismiss) { Text(stringResource(R.string.player_close), color = Color.White.copy(alpha = 0.7f)) }
         },
     )
 }
@@ -1583,7 +1594,8 @@ private fun SubtitleOverlay(state: PlayerUiState, vm: PlayerViewModel) {
 @Composable
 private fun SubtitleColourSwatch(colour: SubtitleColor, selected: Boolean, onSelect: () -> Unit) {
     val paint = colour.paint()
-    val spoken = "${colour.label} subtitles" + if (selected) ", selected" else ""
+    val selectedSuffix = if (selected) stringResource(R.string.player_selected_suffix) else ""
+    val spoken = stringResource(R.string.player_subtitles_for_colour, colour.label) + selectedSuffix
     ControlTarget(label = spoken, onClick = onSelect) {
         Box(
             modifier = Modifier
@@ -1642,19 +1654,23 @@ private fun ResumeDialog(state: PlayerUiState, vm: PlayerViewModel) {
     AlertDialog(
         onDismissRequest = { vm.resolveResume(false) },
         containerColor = RaddPlayerDialog,
-        title = { Text("Resume playback?", color = Color.White, fontSize = brandSp(16)) },
+        title = { Text(stringResource(R.string.player_resume_title), color = Color.White, fontSize = brandSp(16)) },
         text = {
             Text(
-                "You stopped at ${ms.formatTime()} on “${state.pendingTitle ?: "this print"}”.",
+                stringResource(
+                    R.string.player_resume_body,
+                    ms.formatTime(),
+                    state.pendingTitle ?: stringResource(R.string.player_this_print),
+                ),
                 color = Color.White.copy(alpha = 0.8f),
                 fontSize = brandSp(13),
             )
         },
         confirmButton = {
-            TextButton(onClick = { vm.resolveResume(true) }) { Text("Resume", color = AccentOrange) }
+            TextButton(onClick = { vm.resolveResume(true) }) { Text(stringResource(R.string.player_resume), color = AccentOrange) }
         },
         dismissButton = {
-            TextButton(onClick = { vm.resolveResume(false) }) { Text("Start over", color = Color.White.copy(alpha = 0.7f)) }
+            TextButton(onClick = { vm.resolveResume(false) }) { Text(stringResource(R.string.player_start_over), color = Color.White.copy(alpha = 0.7f)) }
         },
     )
 }
@@ -1666,24 +1682,23 @@ private fun ResumeDialog(state: PlayerUiState, vm: PlayerViewModel) {
 @Composable
 private fun SponsorBreakDialog(slot: AdSlot, onDismiss: () -> Unit) {
     val moment = when (slot) {
-        AdSlot.PRE_ROLL -> "before playback starts"
-        AdSlot.BETWEEN_EPISODES -> "between two episodes"
+        AdSlot.PRE_ROLL -> stringResource(R.string.player_slot_pre_roll)
+        AdSlot.BETWEEN_EPISODES -> stringResource(R.string.player_slot_between)
         AdSlot.NONE -> return
     }
     AlertDialog(
         onDismissRequest = onDismiss,
         containerColor = RaddPlayerDialog,
-        title = { Text("Sponsor break", color = Color.White, fontSize = brandSp(16)) },
+        title = { Text(stringResource(R.string.player_ad_title), color = Color.White, fontSize = brandSp(16)) },
         text = {
             Text(
-                "A free-tier break can only appear $moment — never in the middle of a title. " +
-                    "Continue whenever you are ready.",
+                stringResource(R.string.player_ad_body, moment),
                 color = Color.White.copy(alpha = 0.8f),
                 fontSize = brandSp(13),
             )
         },
         confirmButton = {
-            TextButton(onClick = onDismiss) { Text("Continue", color = AccentOrange) }
+            TextButton(onClick = onDismiss) { Text(stringResource(R.string.player_continue), color = AccentOrange) }
         },
     )
 }
@@ -1698,12 +1713,11 @@ private fun CalibrationDialog(
     AlertDialog(
         onDismissRequest = onDismiss,
         containerColor = RaddPlayerDialog,
-        title = { Text("Calibrate episode start", color = Color.White, fontSize = brandSp(16)) },
+        title = { Text(stringResource(R.string.player_calibration_title), color = Color.White, fontSize = brandSp(16)) },
         text = {
             Column {
                 Text(
-                    state.warning
-                        ?: "This file packs several episodes. Pause exactly where the target episode starts, then confirm.",
+                    state.warning ?: stringResource(R.string.player_calibration_body),
                     color = Color.White.copy(alpha = 0.8f),
                     fontSize = brandSp(13),
                 )
@@ -1711,7 +1725,7 @@ private fun CalibrationDialog(
                 OutlinedTextField(
                     value = text,
                     onValueChange = { text = it.filter { c -> c.isDigit() }.take(3) },
-                    label = { Text("Episode number", color = Color.White.copy(alpha = 0.6f)) },
+                    label = { Text(stringResource(R.string.player_episode_number), color = Color.White.copy(alpha = 0.6f)) },
                     singleLine = true,
                 )
             }
@@ -1719,10 +1733,10 @@ private fun CalibrationDialog(
         confirmButton = {
             TextButton(
                 onClick = { text.toIntOrNull()?.let { onConfirm(it) } ?: onDismiss() },
-            ) { Text("Mark current position", color = AccentOrange) }
+            ) { Text(stringResource(R.string.player_mark_position), color = AccentOrange) }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) { Text("Cancel", color = Color.White.copy(alpha = 0.7f)) }
+            TextButton(onClick = onDismiss) { Text(stringResource(R.string.player_cancel), color = Color.White.copy(alpha = 0.7f)) }
         },
     )
 }
@@ -1736,20 +1750,20 @@ private fun PlayFromDialog(
     AlertDialog(
         onDismissRequest = onDismiss,
         containerColor = RaddPlayerDialog,
-        title = { Text("Play from", color = Color.White, fontSize = brandSp(16)) },
+        title = { Text(stringResource(R.string.player_play_from_title), color = Color.White, fontSize = brandSp(16)) },
         text = {
             OutlinedTextField(
                 value = text,
                 onValueChange = { text = it },
-                label = { Text("mm:ss or h:mm:ss", color = Color.White.copy(alpha = 0.6f)) },
+                label = { Text(stringResource(R.string.player_play_from_hint), color = Color.White.copy(alpha = 0.6f)) },
                 singleLine = true,
             )
         },
         confirmButton = {
-            TextButton(onClick = { onSubmit(parseTimeToMs(text)) }) { Text("Go", color = AccentOrange) }
+            TextButton(onClick = { onSubmit(parseTimeToMs(text)) }) { Text(stringResource(R.string.player_go), color = AccentOrange) }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) { Text("Cancel", color = Color.White.copy(alpha = 0.7f)) }
+            TextButton(onClick = onDismiss) { Text(stringResource(R.string.player_cancel), color = Color.White.copy(alpha = 0.7f)) }
         },
     )
 }
@@ -1778,7 +1792,7 @@ private fun SpeedSheet(state: PlayerUiState, vm: PlayerViewModel) {
         containerColor = RaddPlayerSheet,
     ) {
         Column(Modifier.padding(bottom = 20.dp)) {
-            SheetTitle("Playback speed (pitch preserved)")
+            SheetTitle(stringResource(R.string.player_speed_title))
             Row(
                 Modifier
                     .horizontalScroll(rememberScrollState())
@@ -1800,7 +1814,7 @@ private fun SpeedSheet(state: PlayerUiState, vm: PlayerViewModel) {
                             contentAlignment = Alignment.Center,
                         ) {
                             Text(
-                                "${preset}×",
+                                stringResource(R.string.player_speed_short, preset),
                                 color = if (selected) Color.Black else Color.White,
                                 fontSize = brandSp(13),
                             )
@@ -1810,7 +1824,7 @@ private fun SpeedSheet(state: PlayerUiState, vm: PlayerViewModel) {
             }
             Spacer(Modifier.height(12.dp))
             Text(
-                "Long-press the video any time for a 2× boost — releasing restores this speed.",
+                stringResource(R.string.player_boost_note),
                 color = Color.White.copy(alpha = 0.55f),
                 fontSize = brandSp(12),
                 modifier = Modifier.padding(horizontal = 16.dp),
@@ -1828,10 +1842,10 @@ private fun QualitySheet(state: PlayerUiState, vm: PlayerViewModel) {
         containerColor = RaddPlayerSheet,
     ) {
         Column(Modifier.padding(bottom = 20.dp)) {
-            SheetTitle("Quality")
+            SheetTitle(stringResource(R.string.player_quality_title))
             QualityRow(
-                title = "Auto (recommended)",
-                detail = if (state.qualityAuto) "Chosen from what your connection is actually moving" else null,
+                title = stringResource(R.string.player_quality_auto),
+                detail = if (state.qualityAuto) stringResource(R.string.player_quality_auto_detail) else null,
                 selected = state.qualityAuto,
                 onClick = { vm.selectQualityBand("auto") },
             )
@@ -1839,14 +1853,13 @@ private fun QualitySheet(state: PlayerUiState, vm: PlayerViewModel) {
                 val selected = !state.qualityAuto && rung.band == state.qualityBand
                 QualityRow(
                     title = rung.label?.takeIf { it.isNotBlank() } ?: rung.band.uppercase(),
-                    detail = if (selected) "Playing" else null,
+                    detail = if (selected) stringResource(R.string.player_playing) else null,
                     selected = selected,
                     onClick = { vm.selectQualityBand(rung.band) },
                 )
             }
             Text(
-                "Switching keeps your position. Auto follows your connection and may move " +
-                    "between these on its own.",
+                stringResource(R.string.player_quality_note),
                 color = Color.White.copy(alpha = 0.55f),
                 fontSize = brandSp(12),
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
@@ -1889,22 +1902,22 @@ private fun SleepSheet(state: PlayerUiState, vm: PlayerViewModel) {
         containerColor = RaddPlayerSheet,
     ) {
         Column(Modifier.padding(bottom = 20.dp)) {
-            SheetTitle("Sleep timer")
+            SheetTitle(stringResource(R.string.player_sleep_timer))
             if (state.sleep.mode == SleepMode.COUNTDOWN) {
                 Text(
-                    "Fading out — ${state.sleep.remainingMs.formatTime()} left",
+                    stringResource(R.string.player_sleep_fading, state.sleep.remainingMs.formatTime()),
                     color = AccentOrange,
                     fontSize = brandSp(13),
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
                 )
             }
             SleepTimerState.PRESETS_MS.forEach { preset ->
-                SheetRow(label = "${preset / 60_000} minutes") { vm.startSleepCountdown(preset) }
+                SheetRow(label = stringResource(R.string.player_sleep_minutes, preset / 60_000)) { vm.startSleepCountdown(preset) }
             }
-            SheetRow(label = "At end of this video") { vm.sleepAtVideoEnd() }
-            SheetRow(label = "Off") { vm.cancelSleep() }
+            SheetRow(label = stringResource(R.string.player_sleep_at_end)) { vm.sleepAtVideoEnd() }
+            SheetRow(label = stringResource(R.string.player_off_label)) { vm.cancelSleep() }
             Text(
-                "Volume fades down over the last ${state.sleep.fadeMs / 1000}s, then playback pauses (MX behaviour).",
+                stringResource(R.string.player_sleep_note, state.sleep.fadeMs / 1000),
                 color = Color.White.copy(alpha = 0.55f),
                 fontSize = brandSp(12),
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
@@ -1919,7 +1932,7 @@ private fun SubtitleSettingsSheet(state: PlayerUiState, vm: PlayerViewModel) {
     val ctx = LocalContext.current
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
         if (uri != null) {
-            val name = queryDisplayName(ctx, uri) ?: "external subtitle"
+            val name = queryDisplayName(ctx, uri) ?: ctx.getString(R.string.player_external_subtitle)
             val hint = name.substringAfterLast('.', "srt").lowercase()
             vm.addExternalSubtitle(url = uri.toString(), label = name, formatHint = hint)
         }
@@ -1934,12 +1947,12 @@ private fun SubtitleSettingsSheet(state: PlayerUiState, vm: PlayerViewModel) {
                 .verticalScroll(rememberScrollState())
                 .padding(bottom = 24.dp),
         ) {
-            SheetTitle("Subtitles")
+            SheetTitle(stringResource(R.string.player_subtitles_title))
             if (state.subtitleTracks.isEmpty() && state.customSubtitleLoaded == null &&
                 state.nativeExternals.isEmpty()
             ) {
                 Text(
-                    "No embedded subtitle tracks in this print — load an external file below.",
+                    stringResource(R.string.player_subtitle_none),
                     color = Color.White.copy(alpha = 0.6f),
                     fontSize = brandSp(12),
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
@@ -1951,12 +1964,12 @@ private fun SubtitleSettingsSheet(state: PlayerUiState, vm: PlayerViewModel) {
                 }
             }
             if (state.selectedSubtitleId != null) {
-                SheetRow(label = "Turn subtitles off") { vm.selectSubtitleTrack(null) }
+                SheetRow(label = stringResource(R.string.player_subtitle_turn_off)) { vm.selectSubtitleTrack(null) }
             }
 
             Spacer(Modifier.height(8.dp))
             Text(
-                "Size ${state.subtitle.sizePercent}%",
+                stringResource(R.string.player_subtitle_size, state.subtitle.sizePercent),
                 color = Color.White,
                 fontSize = brandSp(13),
                 modifier = Modifier.padding(horizontal = 16.dp),
@@ -1969,7 +1982,7 @@ private fun SubtitleSettingsSheet(state: PlayerUiState, vm: PlayerViewModel) {
             )
 
             Text(
-                "Bottom position ${(state.subtitle.bottomFraction * 100).toInt()}%",
+                stringResource(R.string.player_subtitle_position, (state.subtitle.bottomFraction * 100).toInt()),
                 color = Color.White,
                 fontSize = brandSp(13),
                 modifier = Modifier.padding(horizontal = 16.dp),
@@ -1983,19 +1996,19 @@ private fun SubtitleSettingsSheet(state: PlayerUiState, vm: PlayerViewModel) {
 
             // One control owns the offset: this row hands over to the sheet with the live
             // slider and the ±0.1s/±0.5s buttons, so the two can never disagree.
-            SheetRow(label = "Subtitle sync: ${SubtitleOffset.format(state.subtitle.delayMs)}") {
+            SheetRow(label = stringResource(R.string.player_subtitle_sync, SubtitleOffset.format(state.subtitle.delayMs))) {
                 vm.showSubtitleOffsetSheet()
             }
 
             Row(Modifier.padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text("Bold", color = Color.White, fontSize = brandSp(13), modifier = Modifier.weight(1f))
+                Text(stringResource(R.string.player_subtitle_bold), color = Color.White, fontSize = brandSp(13), modifier = Modifier.weight(1f))
                 Switch(
                     checked = state.subtitle.bold,
                     onCheckedChange = { vm.setSubtitleSettings(state.subtitle.copy(bold = it)) },
                 )
             }
             Row(Modifier.padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text("Text background", color = Color.White, fontSize = brandSp(13), modifier = Modifier.weight(1f))
+                Text(stringResource(R.string.player_subtitle_background), color = Color.White, fontSize = brandSp(13), modifier = Modifier.weight(1f))
                 Switch(
                     checked = state.subtitle.textBackground,
                     onCheckedChange = { vm.setSubtitleSettings(state.subtitle.copy(textBackground = it)) },
@@ -2003,7 +2016,7 @@ private fun SubtitleSettingsSheet(state: PlayerUiState, vm: PlayerViewModel) {
             }
 
             Text(
-                "Colour",
+                stringResource(R.string.player_subtitle_colour),
                 color = Color.White,
                 fontSize = brandSp(13),
                 modifier = Modifier.padding(horizontal = 16.dp),
@@ -2022,14 +2035,13 @@ private fun SubtitleSettingsSheet(state: PlayerUiState, vm: PlayerViewModel) {
             }
 
             Spacer(Modifier.height(8.dp))
-            SheetRow(label = "Load external subtitle file (SRT / VTT / ASS)…") {
+            SheetRow(label = stringResource(R.string.player_subtitle_load)) {
                 picker.launch(arrayOf("*/*"))
             }
             if (state.customSubtitleLoaded != null) {
-                SheetRow(label = "Remove “${state.customSubtitleLoaded}”") { vm.removeCustomSubtitle() }
+                SheetRow(label = stringResource(R.string.player_subtitle_remove, state.customSubtitleLoaded ?: "")) { vm.removeCustomSubtitle() }
                 Text(
-                    "Subtitle sync applies to this overlay and to every embedded track. " +
-                        "Size, position and colour styling still come from the controls above.",
+                    stringResource(R.string.player_subtitle_sync_note),
                     color = Color.White.copy(alpha = 0.55f),
                     fontSize = brandSp(11),
                     modifier = Modifier.padding(horizontal = 16.dp),
@@ -2052,10 +2064,10 @@ private fun TracksSheet(state: PlayerUiState, vm: PlayerViewModel) {
                 .verticalScroll(rememberScrollState())
                 .padding(bottom = 24.dp),
         ) {
-            SheetTitle("Audio tracks")
+            SheetTitle(stringResource(R.string.player_audio_tracks))
             if (state.audioTracks.isEmpty()) {
                 Text(
-                    "No track info for this print yet.",
+                    stringResource(R.string.player_track_none),
                     color = Color.White.copy(alpha = 0.6f),
                     fontSize = brandSp(12),
                     modifier = Modifier.padding(horizontal = 16.dp),
@@ -2063,18 +2075,23 @@ private fun TracksSheet(state: PlayerUiState, vm: PlayerViewModel) {
             }
             state.audioTracks.forEach { track ->
                 SheetRow(
-                    label = track.label + (track.language?.let { " · $it" } ?: ""),
+                    label = track.language
+                        ?.let { stringResource(R.string.player_track_with_language, track.label, it) }
+                        ?: track.label,
                     selected = track.id == state.selectedAudioId || track.selected,
                 ) { vm.selectAudioTrack(track) }
             }
             if (state.audioTracks.isNotEmpty()) {
-                SheetRow(label = "Cycle audio track", enabled = state.canCycleAudio) {
+                SheetRow(label = stringResource(R.string.player_cycle_audio), enabled = state.canCycleAudio) {
                     vm.cycleAudioTrack()
                 }
                 if (state.preferredAudioLanguage != null) {
                     Text(
-                        "Preferring ${AudioTrackPolicy.nameFor(state.preferredAudioLanguage)
-                            ?: state.preferredAudioLanguage} — set on the Settings screen.",
+                        stringResource(
+                            R.string.player_preferred_audio,
+                            AudioTrackPolicy.nameFor(state.preferredAudioLanguage)
+                                ?: state.preferredAudioLanguage,
+                        ),
                         color = Color.White.copy(alpha = 0.55f),
                         fontSize = brandSp(11),
                         modifier = Modifier.padding(horizontal = 16.dp),
@@ -2083,17 +2100,16 @@ private fun TracksSheet(state: PlayerUiState, vm: PlayerViewModel) {
             }
             Spacer(Modifier.height(10.dp))
             SheetRow(
-                label = if (state.stereoOnly) "Stereo-only selection: ON" else "Stereo-only selection: off",
+                label = if (state.stereoOnly) stringResource(R.string.player_stereo_on) else stringResource(R.string.player_stereo_off),
             ) { vm.toggleStereoOnly() }
             Text(
-                "Note: this restricts track SELECTION to ≤2-channel tracks; 1.3.1 cannot downmix " +
-                    "5.1/Atmos to stereo.",
+                stringResource(R.string.player_stereo_note),
                 color = Color.White.copy(alpha = 0.55f),
                 fontSize = brandSp(11),
                 modifier = Modifier.padding(horizontal = 16.dp),
             )
             SheetRow(
-                label = if (state.audioOnly) "Audio-only mode: ON (screen decoder off)" else "Audio-only mode: off",
+                label = if (state.audioOnly) stringResource(R.string.player_audio_only_on) else stringResource(R.string.player_audio_only_off),
             ) { vm.toggleAudioOnly() }
 
             // ── Audio level. Media3's setVolume contract stops at 100% and this build adds no
@@ -2101,7 +2117,7 @@ private fun TracksSheet(state: PlayerUiState, vm: PlayerViewModel) {
             //    range nothing can act on is a promise broken on every drag, caption or no caption.
             //    A build that grows a DynamicsProcessing stage widens this from AudioBoostUi alone.
             Spacer(Modifier.height(14.dp))
-            SheetTitle("Audio level")
+            SheetTitle(stringResource(R.string.player_audio_level))
             Row(
                 Modifier.padding(horizontal = 16.dp),
                 verticalAlignment = Alignment.CenterVertically,
@@ -2143,21 +2159,23 @@ private fun PrintLogSheet(state: PlayerUiState, vm: PlayerViewModel) {
                 .verticalScroll(rememberScrollState())
                 .padding(bottom = 24.dp),
         ) {
-            SheetTitle("Prints & failover")
+            SheetTitle(stringResource(R.string.player_prints_title))
             Text(
-                "Ranked candidates — the first playable one wins; switches happen automatically " +
-                    "on playback errors, preserving position.",
+                stringResource(R.string.player_prints_note),
                 color = Color.White.copy(alpha = 0.6f),
                 fontSize = brandSp(12),
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
             )
             state.bundle?.renditions?.forEach { r ->
                 val active = r.rank == state.activeRendition?.rank
+                val rankText = stringResource(R.string.player_rune_rank, r.rank, r.displayLabel())
+                val hlsTag = stringResource(R.string.player_tag_hls)
+                val playingTag = stringResource(R.string.player_rune_playing)
                 Text(
                     buildString {
-                        append("#${r.rank}  ${r.displayLabel()}")
-                        if (r.playback.isHls()) append("  ·  HLS")
-                        if (active) append("   ← playing")
+                        append(rankText)
+                        if (r.playback.isHls()) append("  ·  ").append(hlsTag)
+                        if (active) append("   ← ").append(playingTag)
                     },
                     color = if (active) AccentOrange else Color.White.copy(alpha = 0.8f),
                     fontSize = brandSp(13),
@@ -2166,10 +2184,16 @@ private fun PrintLogSheet(state: PlayerUiState, vm: PlayerViewModel) {
             }
             if (state.failoverLog.isNotEmpty()) {
                 Spacer(Modifier.height(10.dp))
-                SheetTitle("Failover log")
+                SheetTitle(stringResource(R.string.player_failover_log))
                 state.failoverLog.forEach { record ->
                     Text(
-                        "#${record.rank} ${record.label}: ${record.reason} → ${record.action}",
+                        stringResource(
+                            R.string.player_failover_record,
+                            record.rank,
+                            record.label,
+                            record.reason,
+                            record.action,
+                        ),
                         color = Color.White.copy(alpha = 0.7f),
                         fontSize = brandSp(12),
                         modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp),
@@ -2178,24 +2202,23 @@ private fun PrintLogSheet(state: PlayerUiState, vm: PlayerViewModel) {
             }
             state.bundle?.failurePolicy?.let { p ->
                 Text(
-                    "Policy: retry same ×${p.retrySame}, backoff ${p.backoffMs} ms, then next rank, " +
-                        "max ${p.maxRanks} ranks.",
+                    stringResource(R.string.player_failover_policy, p.retrySame, p.backoffMs, p.maxRanks),
                     color = Color.White.copy(alpha = 0.5f),
                     fontSize = brandSp(11),
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
                 )
             }
             Spacer(Modifier.height(6.dp))
-            SheetRow(label = "Play from a position…") { vm.showPlayFromDialog() }
+            SheetRow(label = stringResource(R.string.player_play_from_row)) { vm.showPlayFromDialog() }
             if (state.canSwitchQuality) {
-                SheetRow(label = "Change quality (${state.qualityLabel})") {
+                SheetRow(label = stringResource(R.string.player_change_quality, state.qualityLabel)) {
                     vm.hidePrintSheet()
                     vm.showQualitySheet()
                 }
             }
-            SheetRow(label = "Mark current position as an episode start…") { vm.openCalibration() }
-            SheetRow(label = "Retry current candidates") { vm.retryCurrentCandidates() }
-            SheetRow(label = "Open in external player") { vm.openWithExternalPlayer() }
+            SheetRow(label = stringResource(R.string.player_calibrate_row)) { vm.openCalibration() }
+            SheetRow(label = stringResource(R.string.player_retry_row)) { vm.retryCurrentCandidates() }
+            SheetRow(label = stringResource(R.string.player_open_external_row)) { vm.openWithExternalPlayer() }
         }
     }
 }
@@ -2278,10 +2301,10 @@ private fun rememberPipLauncher(): () -> Unit {
                 val params = android.app.PictureInPictureParams.Builder().build()
                 activity.enterPictureInPictureMode(params)
             } catch (t: Throwable) {
-                Toast.makeText(context, "PiP refused by the system: ${t.message}", Toast.LENGTH_SHORT).show()
+                Toast.makeText(context, context.getString(R.string.player_pip_refused, t.message), Toast.LENGTH_SHORT).show()
             }
         } else {
-            Toast.makeText(context, "Picture-in-picture needs Android 8.0+", Toast.LENGTH_SHORT).show()
+            Toast.makeText(context, context.getString(R.string.player_pip_unsupported), Toast.LENGTH_SHORT).show()
         }
     }
 }
@@ -2292,9 +2315,9 @@ private fun openExternally(context: Context, url: String) {
             setDataAndType(Uri.parse(url), "video/*")
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }
-        context.startActivity(Intent.createChooser(intent, "Play with…"))
+        context.startActivity(Intent.createChooser(intent, context.getString(R.string.player_chooser)))
     } catch (_: ActivityNotFoundException) {
-        Toast.makeText(context, "No external video player found", Toast.LENGTH_SHORT).show()
+        Toast.makeText(context, context.getString(R.string.player_no_external_player), Toast.LENGTH_SHORT).show()
     }
 }
 
