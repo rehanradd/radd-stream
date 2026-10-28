@@ -102,10 +102,36 @@ tmdb_id, work_ref, year
 | `GET /api/v2/stats` | **0 bytes at 120 s** |
 | `GET /api/v2/works/zz`, `/api/v2/nope`, `/api/v2/links/zz/resolve` | correct `404` problem+json in 0.4–0.7 s |
 
-Two honest notes on that table. First, these are **loopback** numbers — the public path adds the
-proxy and the network, so a phone does strictly worse. Second, the projection **is** built on
-this host: `/home/ubuntu/radd-stream-data/merged_catalog_20261025.db` carries the full `cat_*`
-set (`cat_works` 116,922 rows, `cat_releases` 1,383,752, `cat_links` 3,783,959,
+### 2b. Measured v1 latency on the same box, same day — including the four routes the app actually calls
+
+| Route | Result |
+|---|---|
+| `GET /api/v1/stats` | **200 in 0.004 s** (the 120 s `_STATS_CACHE`, `viewer.py:2821-2823`, is doing its job) |
+| `GET /api/v1/posts?limit=20` | **200 in 0.209 s** |
+| `GET /api/v1/posts?type=anime&limit=20` | **200 in 0.330 s** — the anime filter is not a slow path |
+| `GET /api/v1/app/remote-config` | **200 in 0.014 s** |
+| `GET /api/v1/posts/100858`, `/108678` (small works) | **200 in 0.02–0.03 s**, 4–5 KB |
+| `GET /api/v1/posts/40582` (Naruto: ~1,000 releases) | **200 in 10.38 s, 3,454,126 bytes** |
+| `GET /api/v1/search/by-media?q=naruto&limit=3` | **200 in 82.4 s** (§4-D) |
+| `GET /api/v1/search/by-media?q=naruto&duration_s=1400` | **0 bytes at 45 s** (curl exit 28) |
+
+**Why the last two rows decide a client feature, and the sixth row decides not to change one.**
+The app's OkHttp client is built with `connectTimeout(10, SECONDS)` and `readTimeout(15, SECONDS)`
+(`ApiProvider.kt:51-52`). So by-media can never be wired: every call would surface as a
+`SocketTimeoutException` and `friendlyNetworkError` would answer "The server took too long to
+answer. Try again." — a control that fails 100 % of the time. The 3.4 MB / 10.4 s detail page, by
+contrast, **is inside** the budget, so no timeout is touched here: the margin is recorded because
+the largest work in the catalog is not necessarily the one this probe happened to pick, and a
+future work with more releases would cross 15 s on this box. Raising the read timeout to chase one
+measurement would be guessing; the honest response to a 40 % margin is to note it and let the
+detail route be tuned, not the client to be papered over.
+
+### 2c. Two honest notes on the v2 table, restated so the next reader does not repeat the mistake
+
+First, these are **loopback** numbers — the public path adds the proxy and the network, so a
+phone does strictly worse. Second, the projection **is** built on this host:
+`/home/ubuntu/radd-stream-data/merged_catalog_20261025.db` carries the full `cat_*` set
+(`cat_works` 116,922 rows, `cat_releases` 1,383,752, `cat_links` 3,783,959,
 `projected_at` set, build took 9,770 s). So the blocker is **not** the one the docs say it is:
 `api_v2.py:659 has_catalog()` would answer `503 unavailable`, and the routes instead disappear
 into multi-minute full read-model queries that never write a response within any client timeout.
@@ -154,7 +180,7 @@ row is one call site plus one test, and none needs a server change.
 | A | ~~The Anime entry actually filters~~ **DONE — `69b3795`, gated at `daeb3d2`** | `GET /api/v1/posts?type=anime` → `total 5307` (measured). `HomeScreen.kt:237` sends `type=anime`, `SearchScreen`'s `typeChips` gained the same entry, and `viewer.py:2513`/`:2539` both answer it | Shipped: `Post.isAnimated` decodes the INTEGER 0/1 column through `LenientBooleanAdapter`, `V1CatalogMapper.animatedFromList` reads it, and one label owner (`WorkTypeLabel.of`) paints "Anime" on the tile, the hero and the detail header; a flagged series also groups into its own rail (`typeGroupKey`). Pinned by `AnimeWireTest` (12). **One honest remainder:** `FavoritePost` stores no `is_animated` column, so a favourite saved from the grid still labels an anime "Series" — a Room v6 migration, which cannot be verified on this no-device box, so it is recorded rather than shipped |
 | B | ~~Server-named favourites from any tile~~ **DONE — verified in code, not assumed** | `work_ref` on the list row (measured); `api/v2/account/favorites` + `/progress` reachable through nginx | Shipped: `FavoritePost.workRef` is the stored column, `fromPost`/`fromPostDetail` both carry the server's handle onto the row, `syncable` is `!workRef.isNullOrBlank()`, and `SyncAccountRepository.pushFavorite`/`removeRemoteFavorite`/`pushProgress` refuse anything else with `SyncAck.NOT_NAMABLE` (`:220-231`, `:257`) — a title, a row id or a work key is never sent. The only rows that stay on the device are the ones saved by a build that never received a handle, which is the honest answer, not a gap |
 | C | **A paid VIP actually skipping the shortener** — **MEASURED 2026-10-28: NOT WORTH CLIENT CODE YET, do not implement** | `GET /api/v2/account/vip-pass` (`accounts_api.py:322-353`: bearer key → `{pass, expires_at, membership_until}`, `402` when no live membership) and `GET /api/v1/download` are both proxied publicly, and `request_is_vip()` honours `?vip=`. But the pass guards exactly one thing — the operator's monetization waterfall — and that waterfall **does not run on this deployment**: live `GET /api/v1/app/remote-config` answers `link_shorteners: [{shrinkme, configured: false}, {droplink, configured: false}]`, and `viewer.shorten_download_url()` returns `None` the moment `admin_panel.shortener_targets()` is empty (`viewer.py:362-364`), so free and VIP download identically. Worse, **the app never touches `/api/v1/download` at all**: `ApiProvider.streamRedirectUrl` (`:98`) is the only byte-path builder in `App/app/src`, and every consumer (`CacheSeeds.kt`, `DeviceDownloadsRepository.kt`, `PlayerViewModel.kt`) uses `/api/v1/stream`, which has no shortener in its code path | **Closed as "no client code".** Wiring the pass today would bypass nothing, would be unverifiable offline (there is no behavioural difference to test against the live host), and would add a secret-bearing field to the keep pipeline for a benefit no viewer could observe. **Reopen when** an operator configures a shortener in `/admin` (remote-config then answers `configured: true`) — at that point the row becomes real work: declare the Retrofit method, cache the pass beside the entitlement (the 6 h watch already exists), and attach it to the `/api/v1/download` path, taking care that `KeepIdentity.handleFromRedirectorUrl` still recovers the handle from a URL that carries `?vip=` |
-| D | **"Which work is this file?" identification** | `GET /api/v1/search/by-media` is proxied and rate-limited (comment in the nginx block says it was added *for phones in the field*) | Nothing calls it. Wiring it is a scanner/`Intent.ACTION_VIEW` feature with no server dependency |
+| D | **"Which work is this file?" identification** — **MEASURED 2026-10-28: SKIP THE WIRING, the route is unreachable in practice from a phone** | `GET /api/v1/search/by-media` is proxied, rate-limited and *correct*: loopback `?q=naruto&limit=3` answers `200` with the honest three-way report (`matched_on` / `mismatched_on` / `unknown_on`, plus `runtime_minutes`, `resolutions`, `is_animated`, `work_ref`) — the same row shape as a `q=` search, so a client could render it with no new model. **But it answered in 82.4 s**, and `?q=naruto&duration_s=1400` did not answer within 45 s at all (`curl` exit 28). The app's OkHttp client is configured with `readTimeout(15, SECONDS)` (`ApiProvider.kt:52`), so every call would die as a `SocketTimeoutException` and `friendlyNetworkError` would say "The server took too long to answer. Try again." — a button that fails 100 % of the time is worse than no button | **Not app work.** The route needs the same tuning the v2 reads need (task §2's SLOW class: `browse`/`search`/`stats` hung past 120 s, `manifest` 33–80 s); this is one more member of that family, and its cost is concentrated in the per-candidate `_subtitled_posts` / enrichment pass over a `LIKE '%title%'` set. Whoever tunes Layer 2 makes this row real; then the wiring is one Retrofit method plus one Detail-screen diagnostic row, and the row shape is already proven above. **Recorded, deliberately not implemented** |
 | E | **The Subtitled chip lighting up** | `viewer._subtitled_posts` in this tree; `Post.subtitled: Boolean?` already tolerates its absence | A **deploy** (restart `radd-stream.service`), which the owner does — the app needs no change and currently renders nothing, correctly. **Owner decision 2026-10-28: no restart now.** The live API stays frozen until the owner says otherwise, so this ships with the next planned deploy and belongs in that release note ("tiles now badge a work whose prints claim subtitles; a server that has not shipped the key shows no badge"), not in a client workaround |
 | F | ~~Season/episode grouping~~ **DONE — the keys were retired in code long before this doc caught up; `App/AGENTS.md` §6 corrected at `cf10f03`** | `releases[].season` / `episode` / `release_title` are on the detail wire and are exactly what `ReleaseDetail` maps (`Models.kt:236-253`); `seasonNumber`/`episodeNumber`/`resolution`/`sizeBytes` are derivations through `printDescriptor` (`:264-286`), `audio` is `languages`, and `episode_title` does not exist because no server column backs it | Nothing left. `SeasonChips` paints `SeasonGroup.number`, which `ReleaseLayoutBuilder.kt:300-330` builds from those derived numbers, so grouping is live. `StreamResponse.isTemporary` is `Boolean?` (`:343-345`) on `LenientBooleanAdapter`. The stale §6 warning that claimed all five keys were phantom is what this row was really about, and it is now retired in the guide itself |
 
