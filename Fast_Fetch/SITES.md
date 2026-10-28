@@ -807,10 +807,17 @@ Anime/Asian scouting detail and the endpoints that *do* publish sitemaps are in 
 - **Series are the majority** of the catalogue (~80%), average ~22.5 episodes.
   There is no bulk endpoint: one API call per episode, which makes a full crawl
   network-bound (measured ≈2.3 titles/min at `--workers 1 --delay 0.15`).
+- **Rate limiting (measured 2026-10-29):** after roughly a thousand API calls at
+  0.15 s spacing the host began answering `HTTP 429` to detail pages *and*
+  `/sitemap.xml`, with no `Retry-After`, and kept doing so for over an hour. All
+  three importers now share a cooldown: the first 429 records
+  `kind=rate-limited` on that row, sets a module event, and every later queued
+  row is skipped without a request or a spent attempt (the run prints
+  `paused=rate-limited`). Resume later with a slower delay rather than hammering.
 - **Command:**
   ```bash
   python3 -S Fast_Fetch/importers/import_filmywap.py sync
-  python3 -S Fast_Fetch/importers/import_filmywap.py crawl --workers 1 --delay 0.15
+  python3 -S Fast_Fetch/importers/import_filmywap.py crawl --workers 1 --delay 0.5
   python3 -S Fast_Fetch/importers/import_filmywap.py stats
   ```
 
