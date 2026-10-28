@@ -1263,10 +1263,25 @@ def _parse_record(loc: str, raw_json: str | None, page_html: str) -> tuple[dict 
     if not (page_html or "").strip():
         return None, "empty-page"
     if not re.search(r"<a\b[^>]*app-ep-row-item", page_html, re.I):
-        return None, "no-episode-rows"
+        # A served shell is not proof of an empty series: the episode grid is the
+        # post's stored body, so read it from wp-json before declining. The one row
+        # that needs this cannot be rescued by it — /from-old-country-bumpkin-to-
+        # master-swordsman/ measures 397 bytes of body on 2026-10-28, an empty
+        # paragraph plus a hidden SEO block, and no REST field in its 13,617-byte
+        # record contains an iframe, so the rows exist nowhere a parser can reach.
+        rendered = _stored_body(slug_from(loc))
+        if not re.search(r"<a\b[^>]*app-ep-row-item", rendered, re.I):
+            return None, "no-episode-rows"
+        page_html = page_html + "\n" + rendered
     record = build_record(wp_post, page_html, loc)
     record["queue_payload"] = wp_post
     return record, ""
+
+
+def _stored_body(slug: str) -> str:
+    """The post's saved content as published in REST, or nothing."""
+    post = _fetch_post_by_slug(slug) or {}
+    return (post.get("content") or {}).get("rendered") or ""
 
 
 def _bump_error(db_path: Path, loc: str, note: str = "", park_now: bool = False,

@@ -560,5 +560,68 @@ class TestFailureRetries(unittest.TestCase):
         self.assertEqual(self._row(), (-1, 1, "http-404"))
 
 
+class TestRestFallthrough(unittest.TestCase):
+    """
+    A page served without its rows is not a series without episodes — but the
+    stored body is the last place they can be, and it is measured, not assumed.
+
+    `/from-old-country-bumpkin-to-master-swordsman/` answers 200 with a document
+    containing no episode anchor at all. Before declining it, the crawler re-reads
+    the post through wp-json, where the grid normally lives. The measured answer
+    for that one series is the fixture below: 397 bytes, an empty paragraph and a
+    hidden SEO block — no iframe in any of its 13,617 bytes.
+    """
+
+    LOC = "https://animahd.com/from-old-country-bumpkin-to-master-swordsman/"
+    SHELL = HEADER.replace("Naruto Shippuden", "From Old Country Bumpkin")
+    MEASURED_BODY = (
+        '\n<p class="wp-block-paragraph"></p>\n\n\n'
+        '<div class="yoast-seo-hidden-block" style="display:none !important">\n'
+        "<h1>From Old Country Bumpkin to Master Swordsman</h1>\n"
+        "<h2>Watch From Old Country Bumpkin to Master Swordsman Online All "
+        "Episodes</h2>\n"
+        "<p>Stream From Old Country Bumpkin to Master Swordsman full episodes in "
+        "HD audio video layout properties safely mapped to tracking embed "
+        "streams.</p>\n</div>\n"
+    )
+
+    def test_a_shell_page_is_re_read_through_wp_json(self):
+        body = row_html()
+        with mock.patch.object(ah, "_fetch_post_by_slug",
+                               return_value={"content": {"rendered": body}}) as fetch:
+            record, verdict = ah._parse_record(self.LOC, json.dumps(wp_post()),
+                                               self.SHELL)
+        self.assertEqual(verdict, "")
+        fetch.assert_called_once_with("from-old-country-bumpkin-to-master-swordsman")
+        self.assertEqual(len(record["releases"]), 1)
+        self.assertTrue(record["releases"][0]["bridge_url"]
+                        .startswith("https://animahd.com/player/?file_id="))
+
+    def test_a_stored_body_with_no_rows_declines_with_the_reason_that_is_true(self):
+        with mock.patch.object(ah, "_fetch_post_by_slug",
+                               return_value={"content": {"rendered":
+                                                         self.MEASURED_BODY}}):
+            record, verdict = ah._parse_record(self.LOC, json.dumps(wp_post()),
+                                               self.SHELL)
+        self.assertIsNone(record)
+        self.assertEqual(verdict, "no-episode-rows")
+
+    def test_a_missing_rest_record_declines_instead_of_crashing(self):
+        with mock.patch.object(ah, "_fetch_post_by_slug", return_value=None):
+            record, verdict = ah._parse_record(self.LOC, json.dumps(wp_post()),
+                                               self.SHELL)
+        self.assertIsNone(record)
+        self.assertEqual(verdict, "no-episode-rows")
+
+    def test_a_page_that_already_has_its_rows_never_asks_rest_again(self):
+        page = self.SHELL + row_html()
+        with mock.patch.object(ah, "_fetch_post_by_slug",
+                               side_effect=AssertionError("wasted request")) as fetch:
+            record, verdict = ah._parse_record(self.LOC, json.dumps(wp_post()), page)
+        self.assertEqual(verdict, "")
+        fetch.assert_not_called()
+        self.assertEqual(len(record["releases"]), 1)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
