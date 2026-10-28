@@ -16,6 +16,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -28,8 +29,9 @@ import kotlinx.coroutines.withContext
  * one class the Application owns, driven by the DataStore the Settings ViewModel already writes.
  *
  * How the toggle reaches the server: the Settings ViewModel saves the boolean through
- * [ServerSettingsRepository]; this runner collects that same flow and calls [enable]/[disable]. The
- * UI never touches the socket, and the socket never reads the UI — the preference is the only channel.
+ * [ServerSettingsRepository]; this runner collects that flow together with the operator's
+ * `sharing` switch and calls [enable]/[disable]. The UI never touches the socket, and the socket
+ * never reads the UI — the two persisted switches are the only channel.
  *
  * Why the catalog is a snapshot refreshed on the app's clock rather than queried per request: the
  * server's `catalogProvider` is a plain (non-suspend) function, and Room reads are suspend. So we
@@ -57,8 +59,15 @@ class LanShareRunner @Inject constructor(
     fun start() {
         if (!started.compareAndSet(false, true)) return
         scope.launch {
-            settings.lanShareEnabled.collect { enabled ->
-                if (enabled) enable() else disable()
+            // Two switches, one socket: the viewer's own row ANDs with the operator's
+            // `feature_flags.sharing`, because a viewer toggle that outranks the server's board
+            // would make the operator's switch decorative. Either one off means nothing is served;
+            // collecting both as one flow also means a remote-config refresh can close a socket
+            // that a viewer opened minutes earlier, without waiting for them to touch the row.
+            combine(settings.lanShareEnabled, settings.sharingFeatureEnabled) { wanted, allowed ->
+                shouldServe(wanted, allowed)
+            }.collect { serve ->
+                if (serve) enable() else disable()
             }
         }
     }
@@ -131,5 +140,14 @@ class LanShareRunner @Inject constructor(
 
     companion object {
         private const val REFRESH_MILLIS = 15_000L
+
+        /**
+         * Whether the socket may serve: the viewer's row ANDs with the operator's board.
+         *
+         * Pure, because this is the whole policy and it is the kind of rule that gets quietly
+         * inverted by whoever wires the next switch — either input off must mean nothing served.
+         */
+        fun shouldServe(wantedByViewer: Boolean, allowedByOperator: Boolean): Boolean =
+            wantedByViewer && allowedByOperator
     }
 }

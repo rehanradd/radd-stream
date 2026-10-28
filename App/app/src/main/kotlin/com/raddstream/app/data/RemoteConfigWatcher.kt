@@ -54,12 +54,15 @@ class RemoteConfigWatcher @Inject constructor(
             return
         }
         if (!config.success) return
+        // `flags.chromecast` is deliberately not mirrored: this build has no cast UI at all, so
+        // there is no feature for that switch to take away. Storing it would be a dead key.
         val flags = config.featureFlags
         settings.saveRemoteFlags(
             maintenanceMode = config.maintenanceMode,
             downloadsEnabled = flags.downloads,
             sharingEnabled = flags.sharing,
             searchEnabled = flags.search,
+            pureCinemaEnabled = flags.pureCinema,
             qualityGateEnabled = flags.qualityGate,
         )
     }

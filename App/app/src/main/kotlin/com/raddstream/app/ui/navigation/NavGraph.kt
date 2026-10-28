@@ -25,6 +25,7 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.raddstream.app.brand.Brand
+import com.raddstream.app.data.RemoteFeatures
 import com.raddstream.app.ui.screens.BrowseScreen
 import com.raddstream.app.ui.screens.DetailScreen
 import com.raddstream.app.ui.screens.DownloadsScreen
@@ -48,20 +49,31 @@ private data class BottomNavItem(
     val icon: ImageVector,
 )
 
+/**
+ * The whole navigable app.
+ *
+ * [features] is the operator's board, read once by the activity and handed down: the switches
+ * have to be obeyed by the tab bar and by the screens' own entry points together, or a hidden
+ * tab beside a still-live "Open Downloads" card is a feature that is half removed. The routes
+ * themselves stay registered even for a switched-off feature — a back stack that already holds
+ * that screen must not name a destination the graph cannot resolve, and a kept file stays
+ * playable no matter what the board says about making new ones.
+ */
 @Composable
 fun RaddStreamNavGraph(
     navController: NavHostController = rememberNavController(),
     startDestination: String,
+    features: RemoteFeatures = RemoteFeatures(),
 ) {
     val navBackStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = navBackStackEntry?.destination?.route
 
-    val bottomNavItems = listOf(
-        BottomNavItem("Home", Screen.Home.route, Icons.Default.Home),
-        BottomNavItem("Search", Screen.Search.route, Icons.Default.Search),
-        BottomNavItem("My List", Screen.MyList.route, Icons.Default.Favorite),
-        BottomNavItem("Settings", Screen.Settings.route, Icons.Default.Settings),
-    )
+    val bottomNavItems = buildList {
+        add(BottomNavItem("Home", Screen.Home.route, Icons.Default.Home))
+        if (features.search) add(BottomNavItem("Search", Screen.Search.route, Icons.Default.Search))
+        add(BottomNavItem("My List", Screen.MyList.route, Icons.Default.Favorite))
+        add(BottomNavItem("Settings", Screen.Settings.route, Icons.Default.Settings))
+    }
 
     val showBottomBar = currentRoute in bottomNavItems.map { it.route }
 
@@ -136,6 +148,7 @@ fun RaddStreamNavGraph(
             composable(Screen.Home.route) {
                 HomeScreen(
                     onSearchClick = { navController.navigate(Screen.Search.route) },
+                    searchEnabled = features.search,
                     onPostClick = { postId -> navController.navigate(Screen.Detail.createRoute(postId)) },
                     onBrowseType = { type -> navController.navigate(Screen.Browse.createRoute(type)) },
                     onSetupServerClick = { navController.navigate(Screen.Setup.route) },
@@ -175,6 +188,7 @@ fun RaddStreamNavGraph(
 
             composable(Screen.Settings.route) {
                 SettingsScreen(
+                    features = features,
                     onOpenDownloads = { navController.navigate(Screen.Downloads.route) },
                     onOpenVipUpgrade = { navController.navigate(Screen.VipUpgrade.route) },
                     onOpenRegionChoice = { navController.navigate(Screen.Region.route) },

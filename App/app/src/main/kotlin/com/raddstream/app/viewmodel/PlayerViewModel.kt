@@ -120,6 +120,12 @@ class PlayerViewModel @Inject constructor(
     private var bingeResolveJob: Job? = null
     private var bingePrefetchJob: Job? = null
 
+    /**
+     * The operator's `feature_flags.downloads`, on until the board says otherwise. It decides
+     * whether this player offers a keep at all — see [refreshKeepState] and [keepCurrent].
+     */
+    private var downloadsAllowed: Boolean = true
+
     private val sleepTimer = SleepTimer()
 
     /**
@@ -272,6 +278,23 @@ class PlayerViewModel @Inject constructor(
         viewModelScope.launch {
             settingsRepository.viewModeChoice.collect { name ->
                 _ui.update { it.copy(viewMode = ViewMode.fromName(name)) }
+            }
+        }
+        // …and the operator's answer for that same preference. Nothing is written back: the
+        // viewer's stored choice survives, and PlayerUiState.pureCinema is the one place that
+        // refuses to honour it while `pure_cinema` is off, so the frame returns on its own.
+        viewModelScope.launch {
+            settingsRepository.pureCinemaFeatureEnabled.collect { allowed ->
+                _ui.update { it.copy(pureCinemaAllowed = allowed) }
+            }
+        }
+        // The board's downloads switch, which decides whether the keep chip is offered at all.
+        // Re-asking the keep state is what makes a refresh take the chip away mid-play instead
+        // of leaving a button that can no longer write a file.
+        viewModelScope.launch {
+            settingsRepository.downloadsFeatureEnabled.collect { allowed ->
+                downloadsAllowed = allowed
+                refreshKeepState()
             }
         }
     }
@@ -1244,9 +1267,15 @@ class PlayerViewModel @Inject constructor(
      * Full chrome ↔ Ghost mode. Persisted through the same DataStore the settings screen
      * writes, so the next episode opens in the frame the viewer last asked for, and so the
      * two entry points (this button and the settings row) can never disagree.
+     *
+     * The operator's `pure_cinema` switch is the one thing that can refuse this: the screen
+     * already hides both buttons while it is off, and this guard is what stops any other caller
+     * from smuggling chrome away behind that switch. The stored choice is not rewritten, so the
+     * viewer gets the mode back the moment the board allows it again.
      */
     fun toggleViewMode() {
         val to = ViewMode.nextOf(_ui.value.viewMode)
+        if (to == ViewMode.PURE_CINEMA && !_ui.value.pureCinemaAllowed) return
         _ui.update { it.copy(viewMode = to) }
         viewModelScope.launch { settingsRepository.saveViewModeChoice(to.name) }
     }
@@ -1583,13 +1612,18 @@ class PlayerViewModel @Inject constructor(
 
     // ── Signature feature: watching → keeping ────────────────────────────────────
 
-    /** Re-attaches the cache observer to the CURRENT rendition (called on every switch). */
+    /**
+     * Re-attaches the cache observer to the CURRENT rendition (called on every switch).
+     *
+     * With the operator's downloads switch off the chip is removed rather than left clickable:
+     * [KeepUiState.Unavailable] is the state this screen already renders as "no keep here".
+     */
     fun refreshKeepState() {
         keepJob?.cancel()
         latestSnapshot = null
         val engine = CacheEngineHolder.engine
         val key = store.cacheKey()
-        if (engine == null || key == null) {
+        if (engine == null || key == null || !downloadsAllowed) {
             _ui.update { it.copy(keep = KeepUiState.Unavailable, keepRequested = false) }
             return
         }
@@ -1605,6 +1639,12 @@ class PlayerViewModel @Inject constructor(
 
     /** The *Keep this* button. Hands engine position + already-fetched bytes, never restarts. */
     fun keepCurrent() {
+        if (!downloadsAllowed) {
+            viewModelScope.launch {
+                _events.emit(PlayerEvent.Message("Keeping files for offline is switched off for this server"))
+            }
+            return
+        }
         val engine = CacheEngineHolder.engine
         val key = store.cacheKey()
         val c = controller

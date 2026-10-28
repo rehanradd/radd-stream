@@ -135,6 +135,11 @@ class DetailViewModel @Inject constructor(
                 publishViewerContent()
             }
         }
+        viewModelScope.launch {
+            settingsRepository.downloadsFeatureEnabled.collect { enabled ->
+                downloadsEnabled = enabled
+            }
+        }
     }
 
     private var serverVip: Boolean = false
@@ -152,6 +157,13 @@ class DetailViewModel @Inject constructor(
      * which already is the shipped default. It only reorders the release selector.
      */
     private var userRegion: String = UserRegion.DEFAULT
+
+    /**
+     * The operator's `feature_flags.downloads`, on until the board says otherwise. Obeyed at
+     * [keep], the one choke point every keep affordance on this screen funnels through, so
+     * switching the feature off stops bytes reaching the device rather than merely hiding a row.
+     */
+    private var downloadsEnabled: Boolean = true
 
     /** Who may see the top rungs: a confirmed member, or everyone while the switch is off. */
     private val premiumAccess: Boolean get() = VipQualityGate.premiumAccess(qualityGateEnabled, serverVip)
@@ -356,6 +368,11 @@ class DetailViewModel @Inject constructor(
      */
     private fun keep(handle: String, printLabel: String) {
         lastDownload = handle to printLabel
+        if (!downloadsEnabled) {
+            lastDownload = null
+            _uiState.update { it.copy(actionMessage = "Keeping files for offline is switched off for this server.") }
+            return
+        }
         if (handle.isBlank()) {
             _uiState.update { it.copy(actionMessage = "Nothing to download on this rung yet.") }
             return

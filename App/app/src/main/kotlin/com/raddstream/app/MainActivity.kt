@@ -17,6 +17,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import com.raddstream.app.brand.Brand
+import com.raddstream.app.data.RemoteFeatures
 import com.raddstream.app.data.ServerSettingsRepository
 import com.raddstream.app.ui.navigation.Screen
 import com.raddstream.app.ui.navigation.RaddStreamNavGraph
@@ -80,6 +81,16 @@ class MainActivity : ComponentActivity() {
             }
             val underMaintenance by maintenancePreference.collectAsState(initial = false)
 
+            // The operator's feature board, as one snapshot for the same reason it is written as
+            // one DataStore edit: a tab bar that hides Search while the Settings card still offers
+            // Downloads has answered two different server replies. Seeded all-on, so a cold start
+            // paints the app every deployment has always shipped, and a store that cannot answer
+            // takes features away from nobody.
+            val featuresPreference: Flow<RemoteFeatures> = remember(serverSettingsRepository) {
+                serverSettingsRepository.remoteFeatures.catch { emit(RemoteFeatures()) }
+            }
+            val operatorFeatures by featuresPreference.collectAsState(initial = RemoteFeatures())
+
             RaddStreamTheme(dynamicColor = effectiveDynamicColor(dynamicColorRequested)) {
                 var startDestination by remember { mutableStateOf<String?>(null) }
                 LaunchedEffect(Unit) {
@@ -126,7 +137,10 @@ class MainActivity : ComponentActivity() {
                         ) {
                             CircularProgressIndicator()
                         }
-                        else -> RaddStreamNavGraph(startDestination = destination)
+                        else -> RaddStreamNavGraph(
+                            startDestination = destination,
+                            features = operatorFeatures,
+                        )
                     }
                 }
             }

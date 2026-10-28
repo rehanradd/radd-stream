@@ -171,6 +171,12 @@ data class PlayerUiState(
     val orientation: PlayerOrientation = PlayerOrientation.LANDSCAPE,
     /** Ghost mode or the full MX chrome. Persisted, because nobody wants it reset per episode. */
     val viewMode: ViewMode = ViewMode.STANDARD,
+    /**
+     * Whether the operator's `feature_flags.pure_cinema` currently allows Ghost mode at all.
+     * Mirrors the server board; the viewer's saved [viewMode] is left alone, so a switch that
+     * comes back on restores the frame they last asked for instead of having overwritten it.
+     */
+    val pureCinemaAllowed: Boolean = true,
     val audioOnly: Boolean = false,
     val stereoOnly: Boolean = false,
     // failover narration (§5: which print settled, why the others died)
@@ -234,8 +240,13 @@ data class PlayerUiState(
      * comparing the enum at four call sites — the pause scrim, the centre play button and
      * the full-width bars are the three things it switches off, and the edge strip plus the
      * two-finger rewind are the two things it switches on.
+     *
+     * The answer is the viewer's choice ANDed with the operator's switch: with
+     * `pure_cinema` off, no frame of this app hides its controls, whatever a stale DataStore
+     * value says. Deriving it here rather than sanitising [viewMode] is what keeps the
+     * viewer's own preference intact for the moment the switch flips back.
      */
-    val pureCinema: Boolean get() = viewMode == ViewMode.PURE_CINEMA
+    val pureCinema: Boolean get() = pureCinemaAllowed && viewMode == ViewMode.PURE_CINEMA
 
     /** True when something is loaded enough to show transport controls. */
     val hasActivePrint: Boolean get() = activeRendition != null

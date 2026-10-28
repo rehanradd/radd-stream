@@ -17,6 +17,7 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 
@@ -209,9 +210,37 @@ class ServerSettingsRepository @Inject constructor(
     }
 
     /**
+     * Operator switch for Ghost/cinema mode; on unless the server says otherwise. It is the
+     * only one of these that hides chrome rather than a feature, and an operator who turns it
+     * off is saying this build must always show its controls — so the player obeys it even for
+     * a viewer whose own saved choice was cinema.
+     */
+    val pureCinemaFeatureEnabled: Flow<Boolean> = dataStore.data.map { preferences ->
+        preferences[FEATURE_PURE_CINEMA_KEY] ?: true
+    }
+
+    /**
+     * The four feature switches as one snapshot, for anything that has to hide or allow several
+     * entry points at once. See [RemoteFeatures] for why the board travels as one object.
+     */
+    val remoteFeatures: Flow<RemoteFeatures> = combine(
+        downloadsFeatureEnabled,
+        sharingFeatureEnabled,
+        searchFeatureEnabled,
+        pureCinemaFeatureEnabled,
+    ) { downloads, sharing, search, pureCinema ->
+        RemoteFeatures(
+            downloads = downloads,
+            sharing = sharing,
+            search = search,
+            pureCinema = pureCinema,
+        )
+    }
+
+    /**
      * Whether the operator has chosen to charge VIP for 1080p/4K. Off unless the server says
-     * on — the inverse of the four above, because this switch takes content away rather than
-     * offering a feature, and a deployment that never set it must not go dark by default.
+     * on — the inverse of the feature switches above, because this one takes content away rather
+     * than offering a feature, and a deployment that never set it must not go dark by default.
      */
     val qualityGateEnabled: Flow<Boolean> = dataStore.data.map { preferences ->
         preferences[FEATURE_QUALITY_GATE_KEY] ?: false
@@ -227,6 +256,7 @@ class ServerSettingsRepository @Inject constructor(
         downloadsEnabled: Boolean,
         sharingEnabled: Boolean,
         searchEnabled: Boolean,
+        pureCinemaEnabled: Boolean,
         qualityGateEnabled: Boolean,
     ) {
         dataStore.edit { preferences ->
@@ -234,6 +264,7 @@ class ServerSettingsRepository @Inject constructor(
             preferences[FEATURE_DOWNLOADS_KEY] = downloadsEnabled
             preferences[FEATURE_SHARING_KEY] = sharingEnabled
             preferences[FEATURE_SEARCH_KEY] = searchEnabled
+            preferences[FEATURE_PURE_CINEMA_KEY] = pureCinemaEnabled
             preferences[FEATURE_QUALITY_GATE_KEY] = qualityGateEnabled
         }
     }
@@ -428,6 +459,7 @@ class ServerSettingsRepository @Inject constructor(
         private val FEATURE_DOWNLOADS_KEY = booleanPreferencesKey("feature_downloads")
         private val FEATURE_SHARING_KEY = booleanPreferencesKey("feature_sharing")
         private val FEATURE_SEARCH_KEY = booleanPreferencesKey("feature_search")
+    private val FEATURE_PURE_CINEMA_KEY = booleanPreferencesKey("feature_pure_cinema")
         private val FEATURE_QUALITY_GATE_KEY = booleanPreferencesKey("feature_quality_gate")
         private val VIP_ACTIVE_KEY = booleanPreferencesKey("vip_active")
         private val VIP_UNTIL_KEY = doublePreferencesKey("vip_until")

@@ -54,6 +54,7 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.raddstream.app.brand.Brand
 import com.raddstream.app.data.RegionChoices
+import com.raddstream.app.data.RemoteFeatures
 import com.raddstream.app.player.AudioBoost
 import com.raddstream.app.player.AudioBoostUi
 import com.raddstream.app.share.LanShareStatus
@@ -69,6 +70,11 @@ internal val subtitleOptions = listOf("Off", "English", "Hindi", "Tamil", "Telug
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(
+    /**
+     * The operator's board. Two cards on this screen offer a feature it can switch off, and an
+     * "Open Downloads" button that enqueues nothing is worse than no button at all.
+     */
+    features: RemoteFeatures = RemoteFeatures(),
     onOpenDownloads: () -> Unit = {},
     onOpenVipUpgrade: () -> Unit = {},
     onOpenRegionChoice: () -> Unit = {},
@@ -151,14 +157,16 @@ fun SettingsScreen(
             }
 
             // ── Downloads entry ────────────────────────────────────────
-            SettingsCard(title = "Offline", icon = Icons.Default.Download) {
-                Text(
-                    "Manage kept-for-offline titles, view storage use and expiry.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                OutlinedButton(onClick = onOpenDownloads, modifier = Modifier.fillMaxWidth()) {
-                    Text("Open Downloads")
+            if (features.downloads) {
+                SettingsCard(title = "Offline", icon = Icons.Default.Download) {
+                    Text(
+                        "Manage kept-for-offline titles, view storage use and expiry.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    OutlinedButton(onClick = onOpenDownloads, modifier = Modifier.fillMaxWidth()) {
+                        Text("Open Downloads")
+                    }
                 }
             }
 
@@ -177,22 +185,26 @@ fun SettingsScreen(
             }
 
             // ── Share kept files on the local network ──────────────────
-            SettingsCard(title = "Share on your network") {
-                SwitchRow(
-                    checked = state.lanShareEnabled,
-                    onCheckedChange = viewModel::setLanShareEnabled,
-                    label = "Let devices on this network play kept files",
-                )
-                Text(
-                    lanShareStatusLine(state.lanShareStatus),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Text(
-                    "While this is on, anything on your local network can read your kept files.",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+            // Gone, not disabled, when the operator switched sharing off: the row would otherwise
+            // read "on" while LanShareRunner has already closed the socket it promises to open.
+            if (features.sharing) {
+                SettingsCard(title = "Share on your network") {
+                    SwitchRow(
+                        checked = state.lanShareEnabled,
+                        onCheckedChange = viewModel::setLanShareEnabled,
+                        label = "Let devices on this network play kept files",
+                    )
+                    Text(
+                        lanShareStatusLine(state.lanShareStatus),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Text(
+                        "While this is on, anything on your local network can read your kept files.",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
 
             // ── The optional sync account ──────────────────────────────

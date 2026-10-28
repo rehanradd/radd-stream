@@ -1219,8 +1219,12 @@ private fun BottomControls(
                 }
                 // Enters Ghost mode; the edge HUD's own chip is the only way back out, so
                 // this button is deliberately last-ish and clearly labelled, not a bare icon.
-                PlayerControlButton({ vm.toggleViewMode(); onActivity() }, "Cinema mode — hide every control") {
-                    Icon(Icons.Default.LocalMovies, null, tint = Color.White)
+                // Hidden entirely when the operator's `pure_cinema` switch is off — an entry
+                // point to a frame this build refuses to paint is only a button that lies.
+                if (state.pureCinemaAllowed) {
+                    PlayerControlButton({ vm.toggleViewMode(); onActivity() }, "Cinema mode — hide every control") {
+                        Icon(Icons.Default.LocalMovies, null, tint = Color.White)
+                    }
                 }
                 PlayerControlButton(onEnterPip, "Picture-in-picture") {
                     Icon(Icons.Default.PictureInPicture, null, tint = Color.White)

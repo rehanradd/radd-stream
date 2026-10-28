@@ -69,6 +69,8 @@ private const val HERO_LIMIT = 6
 @Composable
 fun HomeScreen(
     onSearchClick: () -> Unit,
+    /** False when the operator's `feature_flags.search` is off: the entry point disappears. */
+    searchEnabled: Boolean = true,
     onPostClick: (Int) -> Unit = {},
     onBrowseType: (String?) -> Unit = {},
     onSetupServerClick: () -> Unit = {},
@@ -83,8 +85,10 @@ fun HomeScreen(
             TopAppBar(
                 title = { Text(Brand.copy("home_title", Brand.name), fontWeight = FontWeight.Bold) },
                 actions = {
-                    IconButton(onClick = onSearchClick) {
-                        Icon(Icons.Default.Search, contentDescription = "Search catalog")
+                    if (searchEnabled) {
+                        IconButton(onClick = onSearchClick) {
+                            Icon(Icons.Default.Search, contentDescription = "Search catalog")
+                        }
                     }
                     IconButton(onClick = viewModel::refresh) {
                         Icon(Icons.Default.Refresh, contentDescription = "Refresh catalog")
