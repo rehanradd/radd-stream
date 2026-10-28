@@ -1294,15 +1294,27 @@ def _link_state_of(src) -> str:
     evidence behind it projects as 'unchecked' — which scores 0 on liveness here and
     is a legal value on the v2 wire (api_v2.py §filters). A row that was measured, or
     explicitly marked dead/expired by a scraper or the healer, keeps its state.
+
+    `cat_links.state` has a closed vocabulary (`unchecked|active|dead|expired|unknown`).
+    `download_sources.status` has a wider one, and 'unverified' is the honest value the
+    writer now stores for a source nobody probed (8c7488e, and test_database's
+    test_an_unprobed_source_is_stored_as_unverified_not_active). Passing it through
+    verbatim invented a fifth state that no reader knows how to score, so 'unverified'
+    is folded into the same meaning as an absent verdict: measured evidence makes it
+    'active', otherwise it is 'unchecked'.
     """
     status = str(_pick_col(src, "status", "") or "").strip().lower()
-    if status not in ("", "active"):
-        return status
-    verified = any(_pick_col(src, name, None) not in (None, "", 0)
-                   for name in ("checked_at", "last_checked_at", "http_status"))
-    if status == "active" and verified:
-        return "active"
-    return "unchecked"
+    if status in ("", "unverified", "active"):
+        # Absent, honestly-unverified, and scraper-default-active all mean the same
+        # thing here: nobody has looked at this endpoint. Only evidence promotes it.
+        verified = any(_pick_col(src, name, None) not in (None, "", 0)
+                       for name in ("checked_at", "last_checked_at", "http_status"))
+        return "active" if verified else "unchecked"
+    if status not in ("dead", "expired", "unknown"):
+        # An out-of-vocabulary verdict must not become a projection state; treat the
+        # row as unmeasured rather than inventing a value the wire contract forbids.
+        return "unchecked"
+    return status
 
 
 def _measured_evidence(src) -> dict:

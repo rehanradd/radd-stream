@@ -165,7 +165,10 @@ class StagingFamilyMergeTests(unittest.TestCase):
                 src = conn.execute(
                     "SELECT service, final_url, playback_type, status FROM download_sources").fetchone()
                 self.assertEqual(src["final_url"], "https://hubcloud.ist/drive/9")
-                self.assertEqual(src["status"], "active")
+                # The staging page carried no verdict for this mirror, so the merge must
+                # store that absence instead of inventing one: 'active' here would claim a
+                # probe that never happened (see 8c7488e and _link_state_of).
+                self.assertEqual(src["status"], "unverified")
 
 
     def test_duplicate_canonical_keys_merge_into_one_record(self):
