@@ -16,11 +16,13 @@ import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Arrangement
@@ -30,6 +32,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -95,11 +98,13 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
@@ -1047,8 +1052,8 @@ private fun EdgeHud(
                 .padding(horizontal = 6.dp, vertical = 2.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            IconButton(onClick = onBack, modifier = Modifier.size(38.dp)) {
-                Icon(Icons.Default.ArrowBack, "Back", tint = Color.White, modifier = Modifier.size(20.dp))
+            ControlTarget(label = "Back", onClick = onBack) {
+                Icon(Icons.Default.ArrowBack, null, tint = Color.White, modifier = Modifier.size(20.dp))
             }
             Text(
                 text = state.pendingTitle ?: state.activeRendition?.displayLabel() ?: Brand.name,
@@ -1073,13 +1078,13 @@ private fun EdgeHud(
                 .padding(horizontal = 6.dp, vertical = 2.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            IconButton(
+            ControlTarget(
+                label = if (state.isPlaying) "Pause" else "Play",
                 onClick = { if (state.isEnded) vm.playFrom(0) else vm.togglePlayPause() },
-                modifier = Modifier.size(38.dp),
             ) {
                 Icon(
                     if (state.isPlaying && !state.isBuffering) Icons.Default.Pause else Icons.Default.PlayArrow,
-                    if (state.isPlaying) "Pause" else "Play",
+                    null,
                     tint = Color.White,
                     modifier = Modifier.size(20.dp),
                 )
@@ -1104,16 +1109,16 @@ private fun EdgeHud(
                 .padding(horizontal = 4.dp, vertical = 2.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            IconButton(onClick = { vm.toggleViewMode() }, modifier = Modifier.size(38.dp)) {
+            ControlTarget(label = "Leave cinema mode", onClick = { vm.toggleViewMode() }) {
                 Icon(
                     Icons.Default.LocalMovies,
-                    "Leave cinema mode",
+                    null,
                     tint = AccentOrange,
                     modifier = Modifier.size(20.dp),
                 )
             }
-            IconButton(onClick = { vm.setLocked(true) }, modifier = Modifier.size(38.dp)) {
-                Icon(Icons.Default.Lock, "Lock controls", tint = Color.White, modifier = Modifier.size(18.dp))
+            ControlTarget(label = "Lock controls", onClick = { vm.setLocked(true) }) {
+                Icon(Icons.Default.Lock, null, tint = Color.White, modifier = Modifier.size(18.dp))
             }
         }
     }
@@ -1247,18 +1252,52 @@ private fun subtitleActive(state: PlayerUiState) =
     state.selectedSubtitleId != null || state.customSubtitleLoaded != null ||
         state.nativeExternals.isNotEmpty()
 
-private fun subtitleStatusLabel(state: PlayerUiState): String =
+/**
+ * The word the subtitles control speaks: which text is loaded, or an honest "off". Internal
+ * so `PlayerControlSemanticsTest` can assert a named control is never rendered nameless.
+ */
+internal fun subtitleStatusLabel(state: PlayerUiState): String =
     state.customSubtitleLoaded
         ?: state.selectedSubtitleId?.let { id -> state.subtitleTracks.firstOrNull { it.id == id }?.label }
         ?: "off"
 
+/** Android's minimum touch target. Every press in this file is at least this wide and tall. */
+private val MinControlTarget = 48.dp
+
+/**
+ * The one press a player control uses: a [MinControlTarget] circle, [label] as the words a
+ * screen reader says, and [Role.Button] so TalkBack offers the press itself as an action.
+ *
+ * Both halves were missing before. The control lane forced a 42 dp slot and the cinema chips
+ * 38 dp — both under the minimum a fingertip is entitled to — and each drew an Icon whose own
+ * description is deliberately null, so the sixteen named lane controls announced nothing at
+ * all. A preference a viewer cannot hear is a preference only sighted users can set.
+ */
+@Composable
+private fun ControlTarget(
+    label: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    content: @Composable () -> Unit,
+) {
+    val spoken = label
+    Box(
+        modifier = modifier
+            .size(MinControlTarget)
+            .clip(CircleShape)
+            .clickable(onClick = onClick, role = Role.Button)
+            .semantics { contentDescription = spoken },
+        contentAlignment = Alignment.Center,
+    ) { content() }
+}
+
 @Composable
 private fun PlayerControlButton(
     onClick: () -> Unit,
-    contentDescription: String,
+    label: String,
     content: @Composable () -> Unit,
 ) {
-    IconButton(onClick = onClick, modifier = Modifier.size(42.dp)) {
+    ControlTarget(label = label, onClick = onClick) {
         Box(Modifier.size(26.dp), contentAlignment = Alignment.Center) { content() }
     }
 }
@@ -1520,24 +1559,23 @@ private fun SubtitleOverlay(state: PlayerUiState, vm: PlayerViewModel) {
 // ── Subtitle colour swatch ────────────────────────────────────────────────────
 
 /**
- * One caption colour as a tappable dot. The dot is the colour, the halo says it is chosen, and
- * the whole thing is named for what pressing it does — a swatch that only a sighted viewer can
- * tell the difference between is a preference half of the audience cannot set.
+ * One caption colour as a tappable dot: the dot is the colour, the halo says it is chosen, and
+ * the press is named for what it does — a swatch that only a sighted viewer can tell the
+ * difference between is a preference half of the audience cannot set.
  */
 @Composable
 private fun SubtitleColourSwatch(colour: SubtitleColor, selected: Boolean, onSelect: () -> Unit) {
     val paint = colour.paint()
-    Box(
-        modifier = Modifier
-            .size(34.dp)
-            .background(if (selected) paint.copy(alpha = 0.26f) else Color.Transparent, CircleShape)
-            .clickableNoRipple(onSelect)
-            .semantics {
-                contentDescription = "${colour.label} subtitles" + if (selected) ", selected" else ""
-            },
-        contentAlignment = Alignment.Center,
-    ) {
-        Box(Modifier.size(18.dp).background(paint, CircleShape))
+    val spoken = "${colour.label} subtitles" + if (selected) ", selected" else ""
+    ControlTarget(label = spoken, onClick = onSelect) {
+        Box(
+            modifier = Modifier
+                .size(34.dp)
+                .background(if (selected) paint.copy(alpha = 0.26f) else Color.Transparent, CircleShape),
+            contentAlignment = Alignment.Center,
+        ) {
+            Box(Modifier.size(18.dp).background(paint, CircleShape))
+        }
     }
 }
 
@@ -1560,7 +1598,9 @@ private fun KeepChip(state: PlayerUiState, vm: PlayerViewModel) {
             .clickableNoRipple(onClick = { vm.keepCurrent() }),
     ) {
         Row(
-            Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+            Modifier
+                .heightIn(min = MinControlTarget)
+                .padding(horizontal = 8.dp, vertical = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Icon(Icons.Default.Download, null, tint = Color.White, modifier = Modifier.size(14.dp))
@@ -1736,12 +1776,18 @@ private fun SpeedSheet(state: PlayerUiState, vm: PlayerViewModel) {
                             .padding(end = 6.dp)
                             .clickableNoRipple { vm.setSpeed(preset) },
                     ) {
-                        Text(
-                            "${preset}×",
-                            color = if (selected) Color.Black else Color.White,
-                            fontSize = 13.sp,
-                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                        )
+                        Box(
+                            Modifier
+                                .heightIn(min = MinControlTarget)
+                                .padding(horizontal = 12.dp),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Text(
+                                "${preset}×",
+                                color = if (selected) Color.Black else Color.White,
+                                fontSize = 13.sp,
+                            )
+                        }
                     }
                 }
             }
@@ -1798,6 +1844,7 @@ private fun QualityRow(title: String, detail: String?, selected: Boolean, onClic
         Modifier
             .fillMaxWidth()
             .clickableNoRipple(onClick)
+            .heightIn(min = MinControlTarget)
             .padding(horizontal = 16.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -2257,6 +2304,22 @@ private fun Context.findActivity(): Activity? {
     return null
 }
 
-/** Borderless press — the overlay standard for the chrome in this file. */
+/**
+ * Borderless press — the overlay standard for the chrome in this file.
+ *
+ * It used to be a raw tap detector, which is invisible to an accessibility service: nothing
+ * downstream of `pointerInput` publishes a click action, so every sheet row, quality rung,
+ * keep chip and play-again button in this screen could be seen by TalkBack but not pressed.
+ * This is a real clickable with a Button role and no indication, so the borderless look is
+ * exactly what it was and the press is now an action a screen reader can take.
+ */
+@Composable
 private fun Modifier.clickableNoRipple(onClick: () -> Unit): Modifier =
-    this.then(Modifier.pointerInput(onClick) { detectTapGestures { onClick() } })
+    this.then(
+        Modifier.clickable(
+            interactionSource = remember { MutableInteractionSource() },
+            indication = null,
+            role = Role.Button,
+            onClick = onClick,
+        ),
+    )
