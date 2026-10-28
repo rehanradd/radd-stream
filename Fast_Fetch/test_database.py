@@ -137,6 +137,36 @@ class DatabaseSaveTests(unittest.TestCase):
             ],
         )
 
+    def test_an_unprobed_source_is_stored_as_unverified_not_active(self):
+        """
+        `status` is a measurement, so the writer may not invent one.
+
+        A staging database that never followed its `dl.php` link stores
+        final_url NULL with status 'unverified'. Inserting 'active' anyway made
+        every merged row claim a probe that did not happen, and a viewer could
+        only discover the truth by clicking.
+        """
+        unprobed = self.media("site_staging", "https://site-c.example/film/")
+        unprobed["releases"][0]["sources"][0]["final_url"] = None
+        unprobed["releases"][0]["sources"][0]["status"] = "unverified"
+        fast_fetch.save_scraped_data(unprobed)
+
+        probed = self.media("site_probe", "https://site-d.example/film/")
+        probed["releases"][0]["sources"][0]["status"] = "js_required"
+        fast_fetch.save_scraped_data(probed)
+
+        silent = self.media("site_silent", "https://site-e.example/film/")
+        silent["releases"][0]["sources"][0].pop("status", None)
+        fast_fetch.save_scraped_data(silent)
+
+        stored = {row[0]: row[1] for row in self.rows(
+            "SELECT source_url, status FROM download_sources")}
+        self.assertEqual(stored["https://site_staging.example/source"], "unverified")
+        self.assertEqual(stored["https://site_probe.example/source"], "js_required",
+                         "a measured verdict must survive the merge, good or bad")
+        self.assertEqual(stored["https://site_silent.example/source"], "unverified",
+                         "no status means no probe, not a successful one")
+
     def test_concurrent_cross_site_ingests_share_one_master_record(self):
         barrier = threading.Barrier(8)
 

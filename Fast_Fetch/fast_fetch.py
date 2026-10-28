@@ -4521,12 +4521,15 @@ def _save_scraped_data(data: dict, *, ensure_db: bool = True) -> int:
             for src in rel.get("sources") or []:
                 if not isinstance(src, dict):
                     continue
+                # The status a scraper measured is the status we store. Hard-coding
+                # 'active' here turned every unprobed staging row into a claim that
+                # a probe happened, and `final_url` NULL beside it proved it did not.
                 conn.execute(
                     """
                     INSERT INTO download_sources
                         (release_id, source_name, service, resource_id, source_url,
                          final_url, playback_type, is_temporary, status)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active');
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
                     """,
                     (
                         rel_id,
@@ -4537,6 +4540,7 @@ def _save_scraped_data(data: dict, *, ensure_db: bool = True) -> int:
                         src.get("final_url"),
                         src.get("playback_type", "url"),
                         src.get("is_temporary", 0),
+                        src.get("status") or "unverified",
                     ),
                 )
 

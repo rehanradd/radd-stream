@@ -111,7 +111,7 @@ def _collect_staging_post(src_conn: sqlite3.Connection, post: sqlite3.Row,
                     "final_url": s["final_url"],
                     "playback_type": _pick(s, "playback_type", default="url"),
                     "is_temporary": _pick(s, "is_temporary", default=0),
-                    "status": _pick(s, "status", default="active"),
+                    "status": _pick(s, "status", default="unverified"),
                 }
                 for s in src_rows
             ],
@@ -175,7 +175,7 @@ def _collect_unified_post(src_conn: sqlite3.Connection, post: sqlite3.Row) -> di
                     "final_url": ds["final_url"],
                     "playback_type": ds["playback_type"] if "playback_type" in ds.keys() else "url",
                     "is_temporary": ds["is_temporary"],
-                    "status": ds["status"] if "status" in ds.keys() else "active",
+                    "status": ds["status"] if "status" in ds.keys() else "unverified",
                 }
                 for ds in ds_rows
             ],
