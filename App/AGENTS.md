@@ -2356,25 +2356,52 @@ ScreenSnapshot is dropped silently.
 **Measured citation drift — and it is not my doing, it is the file moving under everyone.**
 Re-verifying my own numbers took `Fast_Fetch/viewer.py` from a set of lines that no longer resolve:
 the file is now 3,539 lines (the §5 text was measured against 3,447), because this shift's ingest
-work edited it. So the backend citations copied into these docs out of §5 were corrected to where
-the code actually is today — `type=anime` predicate `:2530` (not `:2513`), the same predicate as an
-`industry` facet `:2555` (not `:2539`), `subtitled` appended at `:2636` by `_subtitled_posts()` at
-`:2466` (not `:2620`), `_bucket_for()` `:2957` (not `:2913`), `start_server(host="127.0.0.1")`
-`:3491` (not `:3447`); `redact.py:1163` and `:1278` still land, and `viewer.py:381`/`:389` did not
-move. **§5 of this file and PLAN's Session-6-era numbers (`:1942`, `:1946-1961`, `:2100-2108`) were
-NOT rewritten here** — they are another session's measured text, re-auditing `viewer.py` wholesale is
-not an App-agent's call, and `Fast_Fetch/*.py` is off-limits to me (read-only grep only). The rule
-this session leaves behind: a `viewer.py:NNNN` citation is a *date-stamped* claim; re-grep before
-repeating one.
+work edited it. So the backend citations were corrected to where the code actually is today — in
+these docs *and* in §5 itself, because a broken cite in the file every agent treats as the live
+contract is worse than a broken cite in a README: `type=anime` predicate `:2530` (not `:2513`), the
+same predicate as an `industry` facet `:2555` (not `:2539`), `subtitled` appended at `:2636` by
+`_subtitled_posts()` at `:2466` (not `:2620`), `_bucket_for()` `:2957` (not `:2913`), `send_json()`
+`:2939` (not `:2895`), `start_server(host="127.0.0.1")` `:3491` (not `:3447`),
+`api_v1_get_posts()` `:2507`, the list `SELECT` `:2612-2617`, the adult `WHERE` `:2515`, releases
+`id ASC` `:2696`, the source tier `CASE` `:2702-2712`, the stats answer `:2902-2909` behind
+`_STATS_CACHE` `:2831` (120 s check `:2851`), the projection branch `:2854-2869` and its
+adult-filtered fallback `:2877-2897`. `redact.py:1163`/`:1278` and `viewer.py:381`/`:389`/`:415` did
+not move. **Dated session-log numbers were NOT rewritten** (Session 6's `:1898`/`:1905-1909`/`:1942`,
+the v2-mount `:2464`/`:2700`): a log records what was true when it was measured, that is this file's
+convention, and re-auditing `viewer.py` wholesale is not an App-agent's call — `Fast_Fetch/*.py` is
+off-limits to me, this pass was read-only grep. Two facts about the checking, because they changed
+the answer: resolve citations **by path**, not by basename (a naive index sends
+`app/build.gradle.kts:220-233` to the 9-line root file and reports a correct citation as past EOF),
+and count **continuation cites** too (`:2555`, `:2628/:2636` — a filename-anchored scan skips them).
+With both fixed the scan reports 48 citations checked, 0 unresolved. The rule this session leaves
+behind: a `viewer.py:NNNN` citation is a *date-stamped* claim; re-grep before repeating one.
 
-**Deliberately left alone, and why:** `README.md`'s "no authentication, no API keys, no sessions,
-no rate limiting, CORS `*`, binds `0.0.0.0`" paragraph and root `AGENTS.md`'s
-"BUILD_PLAN.md ← no local Android Studio needed" are stale the same way §5/§1a already retired them,
-but neither was in this task's four defects and I did not re-verify `viewer.py`'s auth lines at the
-lines this session cited — flagged for the next docs pass rather than half-fixed from memory. The
-App tree's Kotlin is untouched, so the standing gate remains **627 / 0 failures / 0 skipped** at
-`b7bc479` + build28; Gradle cannot see a `.md` diff, and running a 12-minute build to re-confirm an
-unchanged tree while two crawlers run is the cost this hold exists to prevent.
+**The stats direction flipped, and that makes a shipped sentence false.** Measured 2026-10-29 on
+both `92.4.95.252` and loopback, three times each: `stats.posts` = `116922`, while
+`/api/v1/posts?limit=1` — which counts the live `posts` table under `redact.adult_clause`
+(`viewer.py:2605`) — answers `total: 131559`. Yesterday the adult-flagged projection made the stored
+figure the *larger* one; the endpoint answers from `cat_projection_meta`'s stamped tally while the
+list route reads the table this shift's merges grew, so the two now differ in the other direction
+and `sources == active_sources == 3783959` with `resumable_sources: 0` shows the stamped count is
+not a playability statement either. **`CatalogScale.connectionNotice` still prints "the catalog you
+can browse here is smaller" and `SCOPE_NOTE` still says "they include works this app must not show"
+— both assert an arrow today's measurement does not support, and `connectionNotice(0)` promises a
+catalog smaller than zero.** The rule that survives is the one Session 27 was actually for: a stats
+field is never a browsable count, in either direction. Retiring the arrow is a `main/` code change
+plus a `StatsHonestyTest` case that refuses a *directional* claim (the present guard bans "Title"
+and "Stream" and went green on this sentence), so it is written into §5 above and waits for the hold
+to lift rather than shipping ungated.
+
+**Deliberately left alone, and why:** root `README.md:170-171` ("no rate limiting; `send_json()` sets
+`Access-Control-Allow-Origin: *` (viewer.py:2037) … binds `0.0.0.0` (viewer.py:2211)") and root
+`AGENTS.md`'s "BUILD_PLAN.md ← no local Android Studio needed" are stale the same way §5/§1a already
+retired them, but neither was in this task's four defects and both files carry another agent's
+uncommitted work today — flagged for the next docs pass rather than half-fixed from memory.
+`App/README.md`'s copy of that claim **was** fixed, because it contradicted the same file's own
+§Backend API two screens later. The App tree's Kotlin is untouched, so the standing gate remains
+**627 / 0 failures / 0 skipped** at `b7bc479` + build28; Gradle cannot see a `.md` diff, and running
+a 12-minute build to re-confirm an unchanged tree while two crawlers run is the cost this hold exists
+to prevent.
 
 **Git hygiene the last build hold taught:** staging was hunk-precise, not file-precise — root
 `AGENTS.md` carries another agent's uncommitted Key-Links rewrite and `docs/SESSION_CHECKPOINT.md`
