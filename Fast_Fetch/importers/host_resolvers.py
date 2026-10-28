@@ -83,6 +83,55 @@ host is gone". The consequence for callers is explicit: **the embed URL is the
 durable identifier; the mp4 URL is a result of this call and must not be
 persisted.** Both resolvers therefore return it to the caller and leave it out
 of every stored shape.
+
+HOSTS DELIBERATELY NOT IMPLEMENTED — THE VERDICT, WITH THE MEASUREMENTS
+-----------------------------------------------------------------------
+Two other players in this catalog were examined on 2026-10-28 and each got the
+same answer: **NEEDS-JS.** No code in this module pretends to resolve them; the
+measurements are recorded here so the verdict is auditable rather than re-argued.
+
+`movieshub.rpmplay.xyz` — a Vite single-page app, not a page.
+
+    GET /                                        200, 1386 bytes: title
+                                                 "Loading...", an empty <body>,
+                                                 one <script type="module">
+    GET /api/v1/player?t=test                   200 {"error": "Token is invalid"}
+    GET /api/v1/video?id=test                   400 {"message": "Request is invalid"}
+    GET /api/v1/log?t=test                      200 {"error": "Token is invalid"}
+    GET /api/v1/info                             200 application/octet-stream,
+                                                 3040 hex chars = 95 16-byte
+                                                 blocks; two calls 12 s apart
+                                                 differ from the first byte
+
+There is no URL to extract: the host answers with an AES-CBC ciphertext that is
+re-randomised per request, and the key is not in the bundle — `index-B82x0F06.js`
+(974,778 bytes) contains no CryptoJS and no static key/IV or hex-decode helper
+outside hls.js. What it does contain is `crypto.subtle.importKey("raw", …,
+"AES-CBC")` beside a minified software-AES fallback, a `capacityToken`
+handshake with server-driven `capacityTokenExpire`/`retryAfter` exponential
+backoff, `crypto.randomUUID()`, and browser-integrity probes (`webdriver`,
+`visibilityState`, `ancestorOrigins`, `adBlock`). Reaching a byte therefore needs
+both a JS engine *and* an imitation of checks whose stated purpose is to keep
+non-browser clients out — that is a headless browser plus anti-bot evasion, not
+a resolver, and this project does not ship either.
+
+`filemoon.to` — the same shape, one tier worse.
+
+    GET /e/<anything>                            200, 1605 bytes: title "Byse
+                                                 Frontend", <body><div
+                                                 id="root"></div></body>, a
+                                                 bootstrap that only adds a CSS
+                                                 class; zero media URLs
+    GET /assets/index-DocunfmE.js                TLS handshake refused by the
+                                                 asset host (curl exit 35 over
+                                                 HTTP/2 and HTTP/1.1 alike)
+    GET https://filemoon.org/e/<unknown id>      302 -> /en, a 282 KB landing
+                                                 page, not a file
+
+So a plain request chain cannot even read the code that would tell it where the
+file is. `filemoon` rows stay `playback_type='iframe'` / `status='unverified'`
+in the catalog: honest evidence that the site published a player, and no claim
+that a client can play it.
 """
 
 from __future__ import annotations

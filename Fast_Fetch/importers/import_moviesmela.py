@@ -520,7 +520,13 @@ def _player_kind(url: str) -> tuple[str, str, bool]:
 
     Every other player host stays `iframe`: the Android client has no WebView,
     so an iframe is catalog evidence about a third-party page and nothing a
-    client can play. Storing one as a stream would be a false promise.
+    client can play. Storing one as a stream would be a false promise. Two of
+    those hosts — `filemoon` and `movieshub.rpmplay.xyz` — were examined for a
+    stdlib path on 2026-10-28; the measurements that settled the NEEDS-JS
+    verdict are recorded in `host_resolvers` under "HOSTS DELIBERATELY NOT
+    IMPLEMENTED". Both are single-page apps whose byte endpoint only a browser
+    reaches, and rpmplay's additionally requires a capacity-token handshake
+    gated on browser-integrity signals, which is not something to imitate.
 
     The row's `source_url` is always the embed URL. mxdrop signs for about six
     hours and pkembed for twelve (`s` + `e`), so a stored copy of either mp4 URL
