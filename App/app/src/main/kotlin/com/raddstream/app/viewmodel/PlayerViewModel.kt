@@ -279,6 +279,14 @@ class PlayerViewModel @Inject constructor(
                 _ui.update { it.copy(viewMode = ViewMode.fromName(name)) }
             }
         }
+        // The stored subtitle look. Nothing is written back: the sync offset belongs to this
+        // viewing, so the live value rides through `withDelay` and a store answer — including
+        // the echo of the viewer's own write — can never reset a delay they dialled in.
+        viewModelScope.launch {
+            settingsRepository.subtitleStyle.collect { style ->
+                _ui.update { it.copy(subtitle = style.withDelay(it.subtitle.delayMs)) }
+            }
+        }
         // …and the operator's answer for that same preference. Nothing is written back: the
         // viewer's stored choice survives, and PlayerUiState.pureCinema is the one place that
         // refuses to honour it while `pure_cinema` is off, so the frame returns on its own.
@@ -1415,8 +1423,15 @@ class PlayerViewModel @Inject constructor(
 
     // ── Subtitles: settings + external files ─────────────────────────────────────
 
+    /**
+     * Change how subtitles look, and remember it. Size, seat, weight, plate and colour are the
+     * viewer's own style and survive a restart, a process kill and the next title; the sync
+     * offset is the one field the store is never told, because it belongs to this viewing.
+     */
     fun setSubtitleSettings(settings: SubtitleUiSettings) {
-        _ui.update { it.copy(subtitle = settings.clamped()) }
+        val style = settings.clamped()
+        _ui.update { it.copy(subtitle = style) }
+        viewModelScope.launch { settingsRepository.saveSubtitleStyle(style) }
     }
 
     /** Bundle-provided or SAF-picked external subtitle. SRT/VTT → our overlay (delay read

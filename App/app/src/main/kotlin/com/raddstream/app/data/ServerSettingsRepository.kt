@@ -13,6 +13,8 @@ import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.raddstream.app.brand.Brand
 import com.raddstream.app.network.models.AccountEntitlement
+import com.raddstream.app.player.SubtitleColor
+import com.raddstream.app.player.SubtitleUiSettings
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -350,6 +352,39 @@ class ServerSettingsRepository @Inject constructor(
         }
     }
 
+    /**
+     * How subtitles look: size, vertical seat, weight, plate, colour — one snapshot of five
+     * keys. Read as one value so a style cannot land on the player half-applied, and so the
+     * sheet's five controls and the two render paths always agree on what the viewer asked for.
+     *
+     * [com.raddstream.app.player.SubtitleUiSettings.delayMs] is deliberately NOT stored. The
+     * sync sheet promises to hold the offset "for the rest of this viewing", and a delay is a
+     * correction to one file's muxing, not a taste: carrying yesterday's +4.2s onto the next
+     * title would make subtitles wrong on a file that never needed it. The player re-applies
+     * its live offset through `withDelay` whenever this flow answers.
+     */
+    val subtitleStyle: Flow<SubtitleUiSettings> = dataStore.data.map { preferences ->
+        subtitleStyleOf(
+            sizePercent = preferences[SUBTITLE_SIZE_KEY],
+            bottomFraction = preferences[SUBTITLE_BOTTOM_FRACTION_KEY],
+            bold = preferences[SUBTITLE_BOLD_KEY],
+            textBackground = preferences[SUBTITLE_BACKGROUND_KEY],
+            colour = preferences[SUBTITLE_COLOUR_KEY],
+        )
+    }
+
+    /** Remember the look. Clamped on the way in, so the store never holds an unusable style. */
+    suspend fun saveSubtitleStyle(style: SubtitleUiSettings) {
+        val safe = style.clamped()
+        dataStore.edit { preferences ->
+            preferences[SUBTITLE_SIZE_KEY] = safe.sizePercent
+            preferences[SUBTITLE_BOTTOM_FRACTION_KEY] = safe.bottomFraction
+            preferences[SUBTITLE_BOLD_KEY] = safe.bold
+            preferences[SUBTITLE_BACKGROUND_KEY] = safe.textBackground
+            preferences[SUBTITLE_COLOUR_KEY] = safe.colour.wireName
+        }
+    }
+
     /** Dynamic colour from the wallpaper: OFF, because the brand scheme is the design. */
     val dynamicColorEnabled: Flow<Boolean> = dataStore.data.map { preferences ->
         preferences[DYNAMIC_COLOR_KEY] ?: false
@@ -459,7 +494,7 @@ class ServerSettingsRepository @Inject constructor(
         private val FEATURE_DOWNLOADS_KEY = booleanPreferencesKey("feature_downloads")
         private val FEATURE_SHARING_KEY = booleanPreferencesKey("feature_sharing")
         private val FEATURE_SEARCH_KEY = booleanPreferencesKey("feature_search")
-    private val FEATURE_PURE_CINEMA_KEY = booleanPreferencesKey("feature_pure_cinema")
+        private val FEATURE_PURE_CINEMA_KEY = booleanPreferencesKey("feature_pure_cinema")
         private val FEATURE_QUALITY_GATE_KEY = booleanPreferencesKey("feature_quality_gate")
         private val VIP_ACTIVE_KEY = booleanPreferencesKey("vip_active")
         private val VIP_UNTIL_KEY = doublePreferencesKey("vip_until")
@@ -470,6 +505,11 @@ class ServerSettingsRepository @Inject constructor(
         private val MOBILE_DATA_KEY = booleanPreferencesKey("mobile_data_allowed")
         private val KEEP_TTL_KEY = intPreferencesKey("keep_ttl_hours")
         private val PREFERRED_SUBTITLE_LANGUAGE_KEY = stringPreferencesKey("preferred_subtitle_language")
+        private val SUBTITLE_SIZE_KEY = intPreferencesKey("subtitle_size_percent")
+        private val SUBTITLE_BOTTOM_FRACTION_KEY = floatPreferencesKey("subtitle_bottom_fraction")
+        private val SUBTITLE_BOLD_KEY = booleanPreferencesKey("subtitle_bold")
+        private val SUBTITLE_BACKGROUND_KEY = booleanPreferencesKey("subtitle_text_background")
+        private val SUBTITLE_COLOUR_KEY = stringPreferencesKey("subtitle_colour")
         private val DYNAMIC_COLOR_KEY = booleanPreferencesKey("dynamic_color")
         private val VIEW_MODE_KEY = stringPreferencesKey("view_mode")
         private val VIP_PENDING_TID_KEY = stringPreferencesKey("vip_pending_tid")
@@ -540,3 +580,25 @@ internal fun decodeSearchRecents(raw: String?): List<String> {
     if (raw.isNullOrEmpty()) return emptyList()
     return normalizeSearchRecents(raw.split(SEARCH_RECENTS_SEPARATOR))
 }
+
+/** The look a first install ships, and the answer for every key this build never wrote. */
+internal val DEFAULT_SUBTITLE_STYLE = SubtitleUiSettings()
+
+/**
+ * The stored subtitle keys as one style. Every absent, unreadable, or out-of-range value falls
+ * back to [DEFAULT_SUBTITLE_STYLE] rather than to a guess, and the result is clamped, so a
+ * number an older build could have written still arrives as something both render paths accept.
+ */
+internal fun subtitleStyleOf(
+    sizePercent: Int?,
+    bottomFraction: Float?,
+    bold: Boolean?,
+    textBackground: Boolean?,
+    colour: String?,
+): SubtitleUiSettings = SubtitleUiSettings(
+    sizePercent = sizePercent ?: DEFAULT_SUBTITLE_STYLE.sizePercent,
+    bottomFraction = bottomFraction?.takeIf { it.isFinite() } ?: DEFAULT_SUBTITLE_STYLE.bottomFraction,
+    bold = bold ?: DEFAULT_SUBTITLE_STYLE.bold,
+    textBackground = textBackground ?: DEFAULT_SUBTITLE_STYLE.textBackground,
+    colour = SubtitleColor.fromWire(colour),
+).clamped()

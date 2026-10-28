@@ -91,10 +91,51 @@ enum class PlayerOrientation(val label: String) {
 }
 
 /**
+ * The caption colours the subtitle sheet offers, in the order it shows them.
+ *
+ * WHY CHANNELS AND NOT A PAINT: one stored value has to reach two renderers that speak
+ * different types — Media3's `CaptionStyleCompat` wants an `android.graphics.Color` int, the
+ * Compose overlay wants a [androidx.compose.ui.graphics.Color] — and neither may invent the
+ * value at the call site. The channels stay plain 0..255 integers so this file keeps no
+ * dependency on a UI toolkit; `ui/theme/Color.kt` owns the single Compose conversion.
+ *
+ * WHY EXACTLY THESE FOUR: every one is bright enough to read against a busy picture with no
+ * plate behind it, and the `textBackground` switch lets a viewer remove that plate. That is a
+ * rule, not taste — `SubtitleStylePersistenceTest` fails if a colour dim enough to need a
+ * plate is added.
+ */
+enum class SubtitleColor(val wireName: String, val label: String, val red: Int, val green: Int, val blue: Int) {
+    WHITE("white", "White", 255, 255, 255),
+    YELLOW("yellow", "Yellow", 255, 238, 122),
+    CYAN("cyan", "Cyan", 137, 232, 255),
+    PINK("pink", "Pink", 255, 154, 203),
+    ;
+
+    /** The same colour packed the way `CaptionStyleCompat` and `android.graphics.Color` take it. */
+    val argb: Int get() = (OPAQUE shl 24) or (red shl 16) or (green shl 8) or blue
+
+    companion object {
+        private const val OPAQUE = 0xFF
+
+        /**
+         * A stored name back to a colour. Unknown, blank, or never-stored is the shipped
+         * default, never a guess: a build that renames a chip leaves every viewer with readable
+         * text rather than a half-applied style.
+         */
+        fun fromWire(name: String?): SubtitleColor =
+            entries.firstOrNull { it.wireName == name?.trim()?.lowercase() } ?: WHITE
+    }
+}
+
+/**
  * Subtitle presentation. [delayMs] is honoured on both render paths: the custom SRT/VTT
  * overlay reads it directly, and native (embedded / Media3-parsed) tracks are retimed by
  * the decoder wrapper the playback service installs. Size/position/style reach the native
  * `SubtitleView` as before (PLAYER_SPEC §2.3).
+ *
+ * Everything here except [delayMs] is the viewer's own look and is persisted; the offset is
+ * a correction made to one viewing, and [withDelay] is what keeps a stored reload from
+ * wiping it mid-film.
  */
 data class SubtitleUiSettings(
     /** 50..200 %; applied as fractional text size for native and sp scale for the overlay. */
@@ -105,12 +146,16 @@ data class SubtitleUiSettings(
     val bottomFraction: Float = 0.05f,
     val bold: Boolean = false,
     val textBackground: Boolean = true,
+    val colour: SubtitleColor = SubtitleColor.WHITE,
 ) {
     fun clamped(): SubtitleUiSettings = copy(
         sizePercent = sizePercent.coerceIn(50, 200),
         delayMs = delayMs.coerceIn(-60_000, 60_000),
         bottomFraction = bottomFraction.coerceIn(0f, 0.4f),
     )
+
+    /** This look wearing the offset the current viewing already dialled in. */
+    fun withDelay(delay: Long): SubtitleUiSettings = copy(delayMs = delay)
 }
 
 /** One selectable audio/text track row in the track sheets. */

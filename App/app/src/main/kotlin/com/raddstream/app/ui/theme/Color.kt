@@ -2,6 +2,7 @@ package com.raddstream.app.ui.theme
 
 import androidx.compose.ui.graphics.Color
 import com.raddstream.app.BuildConfig
+import com.raddstream.app.player.SubtitleColor
 
 // ═════════════════════════════════════════════════════════════════════════════
 //  RADD STREAM — "CURRENT & UNDERTOW" BRAND SYSTEM                    v3.0
@@ -54,6 +55,21 @@ internal fun brandColor(hex: String): Color {
     val blue = (value and 0xFF).toFloat() / 255f
     return Color(red = red, green = green, blue = blue, alpha = alpha)
 }
+
+// ── 0b. CAPTION PAINT — app-local, not a brand ramp ──────────────────────────
+/**
+ * The subtitle colour a viewer picked, as Compose paint. This is the only place the choice
+ * becomes a [Color]: the SRT/VTT overlay and the sheet's own swatches both read it, so no
+ * screen paints a caption value of its own and the native path keeps its separate int.
+ *
+ * These four are functional caption colours, not identity, which is why they are not brand
+ * ramp keys — the same reason the print badges and scrims below are literals here.
+ */
+internal fun SubtitleColor.paint(): Color = Color(
+    red = red / 255f,
+    green = green / 255f,
+    blue = blue / 255f,
+)
 
 // ── 1. UNDERTOW neutrals — dark scheme ──────────────────────────────────────
 // Hue ≈ 195° (teal-shifted), never pure grey, never blue-black "Netflix ink".

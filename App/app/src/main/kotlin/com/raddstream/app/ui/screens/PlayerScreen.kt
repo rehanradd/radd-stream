@@ -6,6 +6,7 @@ import android.content.Context
 import android.content.ContextWrapper
 import android.content.Intent
 import android.content.pm.ActivityInfo
+import android.graphics.Typeface
 import android.net.Uri
 import android.os.Build
 import android.view.ViewGroup
@@ -136,11 +137,13 @@ import com.raddstream.app.player.ScreenZone
 import com.raddstream.app.player.SleepMode
 import com.raddstream.app.player.SleepTimerState
 import com.raddstream.app.player.StartPhase
+import com.raddstream.app.player.SubtitleColor
 import com.raddstream.app.player.TapCommand
 import com.raddstream.app.player.subtitles.SubtitleOffset
 import com.raddstream.app.player.subtitles.SubtitleOffsetSheet
 import com.raddstream.app.player.dragHalfZone
 import com.raddstream.app.player.dominantAxis
+import com.raddstream.app.ui.theme.paint
 import com.raddstream.app.viewmodel.PlayerEvent
 import com.raddstream.app.viewmodel.PlayerViewModel
 import com.raddstream.app.viewmodel.formatTime
@@ -539,6 +542,10 @@ private fun PlayerSurface(vm: PlayerViewModel, state: PlayerUiState) {
  * Native embedded-subtitle rendering (size/position/colors) — every call below was verified
  * public in media3-ui 1.3.1. Sync is applied below this layer by the service's decoder
  * wrapper, so this styling and the custom SRT/VTT overlay ([SubtitleOverlay]) agree.
+ *
+ * Both paths read the ONE [PlayerUiState.subtitle] snapshot, which is why the viewer's picked
+ * colour and weight land on an embedded track exactly as they land on an external SRT: the
+ * sheet never has to say which renderer a file happens to use.
  */
 @OptIn(UnstableApi::class)
 private fun styleNativeSubtitles(view: PlayerView, state: PlayerUiState) {
@@ -551,12 +558,14 @@ private fun styleNativeSubtitles(view: PlayerView, state: PlayerUiState) {
     sv.setBottomPaddingFraction(s.bottomFraction)
     sv.setStyle(
         CaptionStyleCompat(
-            android.graphics.Color.WHITE,
+            s.colour.argb,
             if (s.textBackground) 0xB3000000.toInt() else android.graphics.Color.TRANSPARENT,
             android.graphics.Color.TRANSPARENT,
             CaptionStyleCompat.EDGE_TYPE_NONE,
             android.graphics.Color.BLACK,
-            null, // typeFace = null → platform default (CaptionStyleCompat has no 5-arg overload)
+            // Bold was overlay-only until the sheet persisted the style; the native path has
+            // always had a typeface slot, it was simply never filled.
+            if (s.bold) Typeface.DEFAULT_BOLD else null,
         ),
     )
     sv.setApplyEmbeddedStyles(true)
@@ -1491,7 +1500,7 @@ private fun SubtitleOverlay(state: PlayerUiState, vm: PlayerViewModel) {
             cues.forEach { cue ->
                 Text(
                     cue.text,
-                    color = Color.White,
+                    color = state.subtitle.colour.paint(),
                     fontSize = (16f * state.subtitle.sizePercent / 100f).sp,
                     fontWeight = if (state.subtitle.bold) FontWeight.Bold else FontWeight.Normal,
                     textAlign = TextAlign.Center,
@@ -1505,6 +1514,30 @@ private fun SubtitleOverlay(state: PlayerUiState, vm: PlayerViewModel) {
                 )
             }
         }
+    }
+}
+
+// ── Subtitle colour swatch ────────────────────────────────────────────────────
+
+/**
+ * One caption colour as a tappable dot. The dot is the colour, the halo says it is chosen, and
+ * the whole thing is named for what pressing it does — a swatch that only a sighted viewer can
+ * tell the difference between is a preference half of the audience cannot set.
+ */
+@Composable
+private fun SubtitleColourSwatch(colour: SubtitleColor, selected: Boolean, onSelect: () -> Unit) {
+    val paint = colour.paint()
+    Box(
+        modifier = Modifier
+            .size(34.dp)
+            .background(if (selected) paint.copy(alpha = 0.26f) else Color.Transparent, CircleShape)
+            .clickableNoRipple(onSelect)
+            .semantics {
+                contentDescription = "${colour.label} subtitles" + if (selected) ", selected" else ""
+            },
+        contentAlignment = Alignment.Center,
+    ) {
+        Box(Modifier.size(18.dp).background(paint, CircleShape))
     }
 }
 
@@ -1903,6 +1936,25 @@ private fun SubtitleSettingsSheet(state: PlayerUiState, vm: PlayerViewModel) {
                     checked = state.subtitle.textBackground,
                     onCheckedChange = { vm.setSubtitleSettings(state.subtitle.copy(textBackground = it)) },
                 )
+            }
+
+            Text(
+                "Colour",
+                color = Color.White,
+                fontSize = 13.sp,
+                modifier = Modifier.padding(horizontal = 16.dp),
+            )
+            Row(
+                Modifier.padding(horizontal = 16.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                SubtitleColor.entries.forEach { colour ->
+                    SubtitleColourSwatch(
+                        colour = colour,
+                        selected = colour == state.subtitle.colour,
+                        onSelect = { vm.setSubtitleSettings(state.subtitle.copy(colour = colour)) },
+                    )
+                }
             }
 
             Spacer(Modifier.height(8.dp))
