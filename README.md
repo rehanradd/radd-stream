@@ -207,7 +207,7 @@ Tagged release builds require the signing secrets listed in
 ```
 radd-stream/
 ├── Fast_Fetch/
-│   ├── fast_fetch.py       ← Main engine (3900+ lines: scraper + DB + CLI + API)
+│   ├── fast_fetch.py       ← Main engine (6,370 lines: scraper + DB + CLI + resolver)
 │   ├── viewer.py           ← REST API + dashboard HTTP server (all /api/* routes)
 │   ├── config.py           ← Project config (name, paths, settings)
 │   ├── database_view.html  ← Offline DB browser (auto-generated, open in browser)
@@ -288,7 +288,7 @@ release rows without reliable site attribution remain unattributed.
 ## Deploying on Different Platforms
 
 ### Replit
-1. Import from GitHub: `https://github.com/radddao/radd-stream`
+1. Import from GitHub: `https://github.com/rehanradd/radd-stream`
 2. Replit auto-detects `.replit` config — press **Run** or use the Shell:
    ```bash
    python Fast_Fetch/fast_fetch.py sync --site all
@@ -297,7 +297,7 @@ release rows without reliable site attribution remain unattributed.
 ### Oracle Cloud / Ubuntu VPS
 ```bash
 sudo apt update && sudo apt install python3.11 -y
-git clone https://github.com/radddao/radd-stream.git
+git clone https://github.com/rehanradd/radd-stream.git
 cd radd-stream
 python3 setup_check.py
 bash run.sh sync --site all
@@ -312,7 +312,7 @@ bash run.sh sync --site all
 
 ### Windows (Local)
 ```cmd
-git clone https://github.com/radddao/radd-stream.git
+git clone https://github.com/rehanradd/radd-stream.git
 cd radd-stream
 python setup_check.py
 run.bat sync --site all

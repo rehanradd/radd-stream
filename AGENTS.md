@@ -147,6 +147,14 @@ The current Oracle host and its HTTP-only limitations are documented in
 [`ORACLE_DEPLOYMENT.md`](ORACLE_DEPLOYMENT.md). The backend is **already deployed there and is the
 running system** — do not treat it as hypothetical, and never copy untested or WIP code onto it.
 
+**Do not misread an empty CI run list.** `backend-ci.yml` triggers on `push: branches: ["**"]` with
+`paths: ["Fast_Fetch/**", ".github/workflows/backend-ci.yml"]`, so a **docs-only push legitimately
+produces zero runs** — that is the path filter working, not the account. Measured 2026-10-29:
+`/actions/permissions` → `{"enabled": true, "allowed_actions": "all"}` and `/actions/runs` carries 40+
+runs. This file previously claimed "Actions is disabled at the account level" on the strength of a
+filtered `total_count: 0`; that claim cost a week of unverified pushes and must not be repeated. If
+you need to know whether CI can run, query `/actions/permissions` and print what it says.
+
 ---
 
 ## ⚡ Quick Commands Reference
@@ -161,6 +169,14 @@ running system** — do not treat it as hypothetical, and never copy untested or
 python3 -S Fast_Fetch/test_database.py    # 76 tests
 python3 -S Fast_Fetch/test_vidout.py      # 6 tests
 python3 -S Fast_Fetch/importers/test_host_resolvers.py   # 171 tests
+
+# The REAL gate is what backend-ci.yml runs — all 15 modules, one per invocation:
+#   test_database test_vidout test_catalog_v2 test_release_descriptor test_link_health
+#   test_link_state test_evidence_writeback test_api_v2 test_redact test_tiers
+#   test_catalog_api test_provenance_stamping test_merge_catalogs test_site_scout
+#   test_backup_manager
+# Measured 2026-10-29: the 3-module gate stayed green while CI was red for five pushes,
+# because it omits test_evidence_writeback.py and test_merge_catalogs.py. Run CI's list.
 
 # Live site audit (writes to temp DB)
 python Fast_Fetch/test_all_sites.py
