@@ -1451,7 +1451,7 @@ def export_staging(db_path: Path | str = DEFAULT_DB_PATH, posts=()) -> dict:
                 for c in POST_COLUMNS
                 if c not in ("canonical_key", "title", "clean_title",
                              "url", "slug", "source_site", "raw_meta",
-                             "media_type", "year"))
+                             "media_type", "year", "is_18_plus", "is_animated"))
             conn.execute(
                 f"""
                 INSERT INTO posts ({", ".join(POST_COLUMNS)}) VALUES ({placeholders})

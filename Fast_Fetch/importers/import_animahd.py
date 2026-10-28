@@ -225,9 +225,13 @@ FF_BACKDROP_RE = re.compile(r"""ff-hero-bg[^>]*background-image:\s*url\(["']?(?P
 BADGE_BOX_RE = re.compile(r"class=['\"]badge-box['\"][^>]*>(?P<text>.*?)</span>", re.S | re.I)
 MIN_PER_EP_RE = re.compile(r"(\d{1,3})\s*min per ep", re.I)
 YEAR_PAREN_RE = re.compile(r"\((?P<year>(?:19|20)\d{2})\)")
+# `18+` sits outside the word-boundary group: a trailing \b cannot exist after the
+# plus when the next character is `)` or a space, so the old shape missed
+# "Some Title (18+)" — and an adult row that is never flagged is an adult row that
+# gets displayed.
 MATURE_TOKEN_RE = re.compile(
-    r"\b(hentai|porn|18\+|18\s*\+\s*(?:hd|only)?|xxx|netorare|shota|loli|nc-17|"
-    r"erotic|adult)\b", re.I)
+    r"\b(hentai|porn|xxx|netorare|shota|loli|nc-17|erotic|adult)\b|"
+    r"18\s*\+", re.I)
 LANGUAGE_TOKENS = {
     "hindi": "Hindi", "eng": "English", "english": "English", "jap": "Japanese",
     "japanese": "Japanese", "tamil": "Tamil", "tel": "Telugu", "telugu": "Telugu",
@@ -1055,7 +1059,8 @@ def export_staging(db_path: Path | str = DEFAULT_DB_PATH, posts=()) -> dict:
                 f"{c} = COALESCE(excluded.{c}, posts.{c})"
                 for c in POST_COLUMNS
                 if c not in ("canonical_key", "title", "clean_title", "url", "slug",
-                             "source_site", "raw_meta", "media_type", "year"))
+                             "source_site", "raw_meta", "media_type", "year",
+                             "is_18_plus", "is_animated"))
             conn.execute(
                 f"""
                 INSERT INTO posts ({", ".join(POST_COLUMNS)}) VALUES ({placeholders})

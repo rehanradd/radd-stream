@@ -2,12 +2,14 @@
 """
 test_animahd_import.py — offline unit tests for the AnimaHD staging importer.
 
-No test here reaches the network and no test writes a database: the suite
-exercises the pure readers (`decode_sec_route`, `player_url`, `parse_rows`,
-`build_record`, `sources_for`) against fixtures shaped from the live page the
-importer's own docstring recorded on 2026-10-28, plus the one staging guardrail
-that matters. `socket.socket` is replaced with a raiser for the whole module so
-an accidental live request fails the run instead of passing it.
+No test here reaches the network: the suite exercises the pure readers
+(`decode_sec_route`, `player_url`, `parse_rows`, `build_record`, `sources_for`)
+against fixtures shaped from the live page the importer's own docstring recorded
+on 2026-10-28, plus the staging guardrails that matter. `socket.socket` is
+replaced with a raiser for the whole module so an accidental live request fails
+the run instead of passing it. The grading tests do write a database — always a
+file under `tempfile.mkdtemp()`, removed in `tearDown`, and never a path any
+crawler reads.
 
 The rule this suite exists to keep — the same rule `host_resolvers.py` and every
 sibling importer test keep — is that a durable identifier may be stored and a
@@ -24,8 +26,11 @@ import contextlib
 import io
 import json
 import re
+import shutil
 import socket
+import sqlite3
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -232,6 +237,11 @@ class TestClassification(unittest.TestCase):
         self.assertEqual(ah.looks_adult("Some Hentai Special"), 1)
         self.assertEqual(ah.looks_adult("Naruto Shippuden"), 0)
 
+    def test_the_plus_token_is_found_in_every_shape_the_site_writes_it(self):
+        for label in ("Foo 18+ Cut", "Foo (18+)", "Foo 18 + HD", "Foo 18+"):
+            self.assertEqual(ah.looks_adult(label), 1, label)
+        self.assertEqual(ah.looks_adult("Episode 18 of 24"), 0)
+
     def test_genre_markers_are_preserved_but_not_flagged(self):
         self.assertEqual(ah.looks_adult("Ecchi", "Girls Love"), 0)
         self.assertEqual(ah.maturity_tags(["Ecchi"], ["Girls Love"]), ["Ecchi", "Girls Love"])
@@ -255,6 +265,78 @@ class TestClassification(unittest.TestCase):
             "[ANIMAHD] Naruto [Hindi-Tamil-Tel-Mal-Ben-Eng-Jap]")
         self.assertEqual(langs, ["Hindi", "Tamil", "Telugu", "Malayalam",
                                  "Bengali", "English", "Japanese"])
+
+
+# ---------------------------------------------------------------------------
+# The adult flag is a decision, not a field that a later crawl can undo
+# ---------------------------------------------------------------------------
+
+def _flag_of(db_path, key: str) -> int:
+    conn = sqlite3.connect(db_path)
+    try:
+        return conn.execute("SELECT is_18_plus FROM posts WHERE canonical_key = ?",
+                            (key,)).fetchone()[0]
+    finally:
+        conn.close()
+
+
+class TestAdultFlagSticky(unittest.TestCase):
+    def setUp(self):
+        self.dir = tempfile.mkdtemp(prefix="animahd_flag_")
+        self.db = Path(self.dir) / "animahd.db"
+        self.record = ah.build_record(
+            wp_post(), HEADER + row_html(), "https://animahd.com/naruto-shippuden/")
+
+    def tearDown(self):
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+    def test_a_reexport_with_a_zero_does_not_clear_the_adult_flag(self):
+        """MAX() is the sticky rule; a COALESCE over it would un-flag the series."""
+        graded = dict(self.record, is_18_plus=1)
+        ah.export_staging(self.db, [graded])
+        self.assertEqual(_flag_of(self.db, graded["canonical_key"]), 1)
+        ah.export_staging(self.db, [dict(graded, is_18_plus=0)])
+        self.assertEqual(_flag_of(self.db, graded["canonical_key"]), 1,
+                         "a re-export cleared an adult flag that was already set")
+
+    def test_a_series_first_seen_clean_still_becomes_adult(self):
+        """Sticky means never going backwards, not never going forwards."""
+        clean = dict(self.record, is_18_plus=0)
+        ah.export_staging(self.db, [clean])
+        self.assertEqual(_flag_of(self.db, clean["canonical_key"]), 0)
+        ah.export_staging(self.db, [dict(clean, is_18_plus=1)])
+        self.assertEqual(_flag_of(self.db, clean["canonical_key"]), 1)
+
+    def test_is_animated_follows_the_same_rule(self):
+        graded = dict(self.record, is_animated=1)
+        ah.export_staging(self.db, [graded])
+        ah.export_staging(self.db, [dict(graded, is_animated=0)])
+        conn = sqlite3.connect(self.db)
+        try:
+            stored = conn.execute("SELECT is_animated FROM posts WHERE canonical_key = ?",
+                                  (graded["canonical_key"],)).fetchone()[0]
+        finally:
+            conn.close()
+        self.assertEqual(stored, 1)
+
+    def test_no_importer_puts_the_grade_columns_back_through_coalesce(self):
+        """Fleet guard: the exclusion tuple must name both flags, in every importer."""
+        here = Path(__file__).resolve().parent
+        offenders = []
+        checked = 0
+        for module in sorted(here.glob("import_*.py")):
+            source = module.read_text(encoding="utf-8")
+            for match in re.finditer(r"if c not in \(([^)]*)\)", source):
+                names = match.group(1)
+                if "canonical_key" not in names:
+                    continue
+                checked += 1
+                if "is_18_plus" not in names or "is_animated" not in names:
+                    offenders.append(module.name)
+        self.assertGreaterEqual(checked, 8,
+                                "the guard stopped finding the upsert it guards")
+        self.assertEqual(offenders, [],
+                         f"{offenders} let a re-export overwrite a graded flag")
 
 
 # ---------------------------------------------------------------------------

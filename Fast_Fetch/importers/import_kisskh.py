@@ -1090,7 +1090,8 @@ def export_staging(db_path: Path | str = DEFAULT_DB_PATH, posts=()) -> dict:
                 f"{c} = COALESCE(excluded.{c}, posts.{c})"
                 for c in POST_COLUMNS
                 if c not in ("canonical_key", "title", "clean_title", "media_type",
-                             "url", "slug", "source_site", "raw_meta", "year")
+                             "url", "slug", "source_site", "raw_meta", "year",
+                             "is_18_plus", "is_animated")
             )
             conn.execute(
                 f"""
