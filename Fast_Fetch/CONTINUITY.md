@@ -1583,7 +1583,14 @@ back `removed=120, http-400=7` with zero recoveries — the parked cohort really
 The 7 were not: `…/movie/958/Goal!_the_dream_begins_(2005)…` answers **400** as written and
 **200** once `!` goes out as `%21` (measured live, and the site now answers on
 `pagalmovies.casa`). `http_get` normalises the path it sends while `loc` keeps the site's
-spelling; 15 rows in that database were sitting on this. `http-error` was split into
+spelling. Re-measured row by row, **6 rows** in that whole database carry a path `_requestable`
+rewrites — four with `!` (Goal! twice, Hail Caesar!, Scooby-Doo!), one with `'`
+(Good luck, have fun, don't die) and one with `*` (Out of the f**king Attic); five are still
+pending, and the `*` row was re-driven with the fix and came back `removed`, which is the
+point: correct encoding converts *our* 400 into the *site's* answer, and the site's answer is
+still no. None of the 2,694 rows already stored as `%21` need this. The figure written here
+earlier, "15 rows sitting on this", did not reproduce and is retired.
+`http-error` was split into
 `http-<code>` so "genuinely gone" and "unlucky" are countable, a hard 404/410/451 parks on
 the first sighting while anything else keeps the three-read cap, and `retry-parked` re-sights
 the 7,535 parked rows to answer the owner's 404-versus-retryable question with numbers.
