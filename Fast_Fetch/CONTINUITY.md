@@ -1550,3 +1550,92 @@ client-side episode grid stays unparsed rather than being worked around. No chal
 no Referer on any media request, and upbolt's 403 is stored as `blocked` instead of probed.
 `import_aryplus.py` / `test_aryplus_import.py` are modified in this checkout by another
 account and were left unstaged. Databases stay out of Git.
+
+---
+
+## 2026-10-29 — Session: mp4moviez becomes mergeable, and a fleet-wide false `active` is retired (Qoder3)
+
+Owner directive: finish what is half-built — filmiyin's 1,841 pending URLs, pagalmovies'
+7,535 errored URLs, and the mp4moviez database that `merge_catalogs.py` refuses to read.
+Production was explicitly off-limits (`merged_catalog_20261025.db` was 6.3 GB and being
+written during this session; it was never opened, nor `fast_fetch.db`). No push.
+
+**filmiyin: the queue is closed.** Pass 2 took all 1,841 pending URLs at `--workers 1`,
+`nice -n 15`, `probe=False`: `pages=1841 posts=0 releases=0 sources=0 not-indexable=1841
+failed=0`. Queue now `3,899 indexed + 1,841 parked`, zero pending; the database stands at
+**3,837 posts / 17,541 releases / 17,541 sources / 21 adult rows**. Every one of those
+declines is the same site-side change found in the first pass — the *Download This Movie*
+section is now empty, so `harvest_links` yields nothing to store. Pass 3 re-sights the
+cohort to label each row with its real reason.
+
+**A stop must not be charged to a page's budget.** `import_filmiyin.crawl_pending`'s `work()`
+returned `None` both for "the page declined" and for "we never fetched it because Ctrl-C
+landed first", and the loop counted the second as the first: a graceful stop quietly spent
+pages' three-read budget. `work()` now returns `(post, reason)`, `reason=None` means
+"not attempted", and a test stops a crawl and asserts no row's `error_count` moved.
+`parse_page` gained a `diagnostics` dict so a refusal is reported as `http-404`,
+`not-a-post-page`, `no-title` or `no-playable-links` instead of one blanket
+`not-indexable`, and `_bump_error` merges its note into the row's existing `raw_json`
+rather than overwriting the payload the sitemap stored.
+
+**pagalmovies: 400 was our spelling, not a deleted page.** A 127-row verdict sample came
+back `removed=120, http-400=7` with zero recoveries — the parked cohort really is gone.
+The 7 were not: `…/movie/958/Goal!_the_dream_begins_(2005)…` answers **400** as written and
+**200** once `!` goes out as `%21` (measured live, and the site now answers on
+`pagalmovies.casa`). `http_get` normalises the path it sends while `loc` keeps the site's
+spelling; 15 rows in that database were sitting on this. `http-error` was split into
+`http-<code>` so "genuinely gone" and "unlucky" are countable, a hard 404/410/451 parks on
+the first sighting while anything else keeps the three-read cap, and `retry-parked` re-sights
+the 7,535 parked rows to answer the owner's 404-versus-retryable question with numbers.
+
+**mp4moviez: the largest unmergeable asset now joins the queue.** `import_mp4moviez.py` is a
+converter, not a crawler. Measured plan against the real file: `29,848 legacy pages → 28,066
+works, 54,267 releases, 54,267 sources, 344 duplicate pages merged, 16,168 rows skipped for
+having no release, 9 takedown notices dropped, 88 adult rows carried, 0 null keys`. It ran on
+a **copy** (`/tmp/mp4moviez_copy.db`) and merged through `merge_site_db` into a throwaway
+target in 710 s: `posts_merged=28066 releases_merged=54267 sources_merged=54267
+posts_conflicted=0`. The real `mp4moviez.db` was deliberately left in legacy form — an
+in-flight merge reading it while the converter drops and renames its tables is how a run
+loses rows; `convert` is one command whenever the queue is clear.
+Measured and recorded in the module header: **14,730 of the 29,848 stored pages are titled,
+dated, `c<id>`-anchored works with zero download rows** — fetched when `dl.php` was plain
+HTML, before the site moved those buttons behind a `data-key` script. They convert as
+catalog entries with no sources and are this site's real re-drive cohort. Slug-as-key was
+tested for the collision that would make it unsafe: 336 duplicated slugs across 681 rows,
+only 4 differing on (year, title) — three punctuation variants of the same film and the one
+takedown notice, which is dropped. 13,680 posts hold 54,267 releases at exactly one
+`dl.php` id each, across 240/360/480/720p.
+
+**The bug that merge exposed, fleet-wide.** The converter wrote every source as
+`status='unverified'` with `final_url NULL`, because following `dl.php` is a play-time
+decision this project never made. After the merge probe, all 54,267 unified rows read
+**`active`**. `_save_scraped_data` hard-coded the status in its INSERT — one column from the
+destination, the staging verdict was discarded — and `merge_catalogs` defaulted to `active`
+when a staging table had no status column. Both fixed; a `test_database` case now writes
+unverified / `js_required` / absent and asserts each survives. Every row any site merged
+through that path was labelled active with no probe behind it, so the backfill question
+belongs to the operator, not to a converter that would guess.
+
+**SITES.md now measures instead of advertising.** New *Scraped vs merely documented* table:
+`COUNT(*)` per staging database — posts, releases, sources, adult rows, queue
+parked/pending, mergeable yes/no, all thirty files. It retires two claims: SITES.md
+documented twelve sites while thirty databases exist, and MP4Moviez sat under *Sites To Add
+Next* on `mp4moviez.cloud`, a domain nobody scraped, while 29,848 scraped pages waited on a
+converter. The new § MP4Moviez says what the converter does and what it refuses to invent.
+
+**Tests.** `test_mp4moviez_import.py` 23 (offline, socket-blocked; includes the rollback
+case that breaks the write mid-migration and the `merge_catalogs` read proof), filmiyin
+38→47, pagalmovies 53→59, `test_database` 75→76, `test_vidout` 6. All 14 importer suites
+green.
+
+**Commits (local, no push):** `58c0070` converter + reason diagnostics + verdict split,
+`1e8d3f6` SITES.md measurements + the `%21` fix, `a6ed028` filmiyin `retry-parked` and the
+stop-accounting fix, `8c7488e` the `active` status fix.
+
+**Deliberately not done.** No push. `merged_catalog_20261025.db` and `fast_fetch.db` were
+never opened; the merge proof wrote only to `/tmp`. No headless browser, so the JS-gated
+`dl.php` buttons stay unparsed rather than being worked around. The real `mp4moviez.db` is
+still legacy on purpose, and the 14,730 link-less pages are not filled with invented
+sources. `AGENTS.md`, `docs/PROJECT_MAP.md` and the untracked `*_task.md` /
+`build_mp4moviez.py` / `openrouter_*.py` files in this checkout belong to other accounts and
+were left unstaged.
