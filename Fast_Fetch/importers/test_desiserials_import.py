@@ -46,6 +46,7 @@ socket.socket = _NoLiveSocket  # type: ignore[assignment]
 VK_URL = "//vkspeed.com/embed-8i6f58m6to0g.html"
 VK_ABS = "https://vkspeed.com/embed-8i6f58m6to0g.html"
 UPBOLT_URL = "https://upbolt.to/emb-y1q5jqsfgotr"
+LOC = "https://desiserials.watch/pushpa-impossible-episode-1371/"
 
 EPISODE_PAGE = (
     "<html><head>"
@@ -499,6 +500,134 @@ class TestStagingIsolation(unittest.TestCase):
     def test_the_catalog_is_read_from_the_public_rest_collection(self):
         self.assertTrue(ds.REST_POSTS.startswith(ds.BASE_URL))
         self.assertIn("wp-json/wp/v2/posts", ds.REST_POSTS)
+
+
+class TestFailureRetries(unittest.TestCase):
+    """
+    A first failure is a retry, not a verdict — and it has to say why.
+
+    The queue is the only place an episode's bad day is recorded, so a row that
+    parks on one timeout loses its episode forever and a row that counts errors
+    without naming them cannot be healed by anyone reading the database.
+    """
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp(prefix="desiserials_q_")
+        self.db = Path(self.dir) / "desiserials.db"
+        conn = sqlite3.connect(self.db)
+        ds.ensure_schema(conn)
+        conn.execute("INSERT INTO sitemap_cache (loc, slug, scraped, raw_json) "
+                     "VALUES (?, 'x', 0, '{}');", (LOC,))
+        conn.commit()
+        conn.close()
+
+    def tearDown(self):
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+    def _row(self):
+        conn = sqlite3.connect(self.db)
+        try:
+            return conn.execute("SELECT scraped, error_count, last_error "
+                                "FROM sitemap_cache WHERE loc = ?", (LOC,)).fetchone()
+        finally:
+            conn.close()
+
+    def test_one_failed_attempt_leaves_the_episode_queued(self):
+        ds._bump_error(self.db, LOC, "empty-page")
+        scraped, errors, _ = self._row()
+        self.assertEqual(errors, 1)
+        self.assertIn(scraped, ds.QUEUED_SCRAPE_STATES)
+
+    def test_the_reason_of_every_attempt_is_stored(self):
+        ds._bump_error(self.db, LOC, "HTTP 503")
+        self.assertEqual(self._row()[2], "HTTP 503")
+        ds._bump_error(self.db, LOC, "unattributable-episode")
+        self.assertEqual(self._row()[2], "unattributable-episode")
+
+    def test_the_third_failure_parks_the_row(self):
+        for _ in range(3):
+            ds._bump_error(self.db, LOC, "empty-page")
+        scraped, errors, reason = self._row()
+        self.assertEqual((scraped, errors), (-1, 3))
+        self.assertEqual(reason, "empty-page")
+
+    def test_a_page_the_site_removed_parks_at_once_with_its_status(self):
+        """404 is not a bad day: only a transport failure is allowed to retry."""
+        ds._bump_error(self.db, LOC, "HTTP 404", park_now=True)
+        scraped, errors, reason = self._row()
+        self.assertEqual((scraped, errors, reason), (-1, 1, "HTTP 404"))
+
+    def test_an_older_queue_table_is_migrated_to_carry_the_reason(self):
+        """A staging database built before `last_error` must heal, not crash."""
+        path = Path(self.dir) / "old.db"
+        conn = sqlite3.connect(path)
+        conn.execute("CREATE TABLE sitemap_cache (loc TEXT PRIMARY KEY, lastmod TEXT,"
+                     " slug TEXT, scraped INTEGER DEFAULT 0, raw_json TEXT,"
+                     " error_count INTEGER DEFAULT 0);")
+        conn.execute("INSERT INTO sitemap_cache (loc, scraped) VALUES (?, 0)", (LOC,))
+        conn.commit()
+        ds.ensure_schema(conn)
+        conn.execute("UPDATE sitemap_cache SET error_count = error_count + 1,"
+                     " last_error = 'empty-page' WHERE loc = ?", (LOC,))
+        conn.commit()
+        self.assertEqual(
+            conn.execute("SELECT last_error FROM sitemap_cache WHERE loc = ?",
+                         (LOC,)).fetchone()[0], "empty-page")
+        conn.close()
+
+
+class TestQueueMarking(unittest.TestCase):
+    """
+    A written episode must leave the queue, and the pilot has to survive the write.
+
+    `_flush` used to mark rows from `raw_meta["episode_page"]` — a key the record
+    never carried, because an episode page belongs to its release. The crawl died
+    mid-batch on the first live pilot, and every episode already fetched stayed
+    queued, so the next pass would fetch them again.
+    """
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp(prefix="desiserials_m_")
+        self.db = Path(self.dir) / "desiserials.db"
+        self.loc = wp_post()["link"]
+        conn = sqlite3.connect(self.db)
+        ds.ensure_schema(conn)
+        conn.execute("INSERT INTO sitemap_cache (loc, slug, scraped, raw_json) "
+                     "VALUES (?, ?, 0, ?);",
+                     (self.loc, wp_post()["slug"],
+                      json.dumps(ds._queue_json(wp_post()), ensure_ascii=False)))
+        conn.commit()
+        conn.close()
+
+    def tearDown(self):
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+    def _scraped(self):
+        conn = sqlite3.connect(self.db)
+        try:
+            return conn.execute("SELECT scraped FROM sitemap_cache WHERE loc = ?",
+                                (self.loc,)).fetchone()[0]
+        finally:
+            conn.close()
+
+    def test_a_flushed_episode_is_marked_done_and_writes_its_release(self):
+        record, verdict = ds._parse_queue_row(self.loc, json.dumps(wp_post()),
+                                              EPISODE_PAGE)
+        self.assertEqual(verdict, "")
+        tally = {}
+        ds._flush(self.db, [record], tally)
+        self.assertEqual(self._scraped(), 1)
+        self.assertEqual(tally.get("releases_written"), 1)
+
+    def test_a_record_without_a_queue_row_still_writes_and_raises_nothing(self):
+        record = ds.build_record(wp_post(), EPISODE_PAGE, self.loc)
+        ds._flush(self.db, [record], {})
+        conn = sqlite3.connect(self.db)
+        try:
+            self.assertEqual(conn.execute(
+                "SELECT COUNT(*) FROM releases").fetchone()[0], 1)
+        finally:
+            conn.close()
 
 
 if __name__ == "__main__":

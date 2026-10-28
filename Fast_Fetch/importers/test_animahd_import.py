@@ -504,5 +504,61 @@ class TestRejectedFileId(unittest.TestCase):
                          [ah.SERVICE_PLAYER])
 
 
+class TestFailureRetries(unittest.TestCase):
+    """
+    A requeued row must still run out of attempts, and must say why it failed.
+
+    `/from-old-country-bumpkin-to-master-swordsman/` answers 200 with zero episode
+    rows in the delivered HTML — its grid is built client-side — so it declines
+    every pass. With the cap written after the requeue branch, `scraped = 2` was a
+    queued state it could never leave: an uncapped retry, and no record anywhere of
+    the reason.
+    """
+
+    LOC = "https://animahd.com/from-old-country-bumpkin-to-master-swordsman/"
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp(prefix="animahd_q_")
+        self.db = Path(self.dir) / "animahd.db"
+        conn = sqlite3.connect(self.db)
+        ah.ensure_schema(conn)
+        conn.execute("INSERT INTO sitemap_cache (loc, slug, scraped, raw_json) "
+                     "VALUES (?, ?, 0, ?);",
+                     (self.LOC, "from-old-country-bumpkin-to-master-swordsman",
+                      json.dumps(wp_post())))
+        conn.commit()
+        conn.close()
+
+    def tearDown(self):
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+    def _row(self):
+        conn = sqlite3.connect(self.db)
+        try:
+            return conn.execute("SELECT scraped, error_count, last_error "
+                                "FROM sitemap_cache WHERE loc = ?",
+                                (self.LOC,)).fetchone()
+        finally:
+            conn.close()
+
+    def test_a_declined_page_is_retried_and_its_reason_is_stored(self):
+        ah._bump_error(self.db, self.LOC, "no-episode-rows", requeue=True)
+        scraped, errors, reason = self._row()
+        self.assertEqual(errors, 1)
+        self.assertEqual(reason, "no-episode-rows")
+        self.assertIn(scraped, ah.QUEUED_SCRAPE_STATES)
+
+    def test_requeue_cannot_outlive_the_three_attempt_cap(self):
+        for _ in range(3):
+            ah._bump_error(self.db, self.LOC, "no-episode-rows", requeue=True)
+        scraped, errors, _ = self._row()
+        self.assertEqual(errors, 3)
+        self.assertEqual(scraped, -1)
+
+    def test_a_row_moved_off_the_site_parks_on_its_first_404(self):
+        ah._bump_error(self.db, self.LOC, "http-404", park_now=True)
+        self.assertEqual(self._row(), (-1, 1, "http-404"))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

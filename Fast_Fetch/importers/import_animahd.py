@@ -906,7 +906,8 @@ CREATE TABLE IF NOT EXISTS sitemap_cache (
     slug TEXT,
     scraped INTEGER DEFAULT 0,
     raw_json TEXT,
-    error_count INTEGER DEFAULT 0
+    error_count INTEGER DEFAULT 0,
+    last_error TEXT
 );
 
 CREATE TABLE IF NOT EXISTS posts (
@@ -998,6 +999,9 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
     _add_missing_columns(conn, "posts", POST_COLUMNS + ("scraped_at",))
     _add_missing_columns(conn, "releases", RELEASE_COLUMNS)
     _add_missing_columns(conn, "sources", SOURCE_COLUMNS)
+    _add_missing_columns(conn, "sitemap_cache", ("lastmod", "slug", "scraped",
+                                                "raw_json", "error_count",
+                                                "last_error"))
     conn.executescript(_SCHEMA_INDEXES)
 
 
@@ -1265,20 +1269,28 @@ def _parse_record(loc: str, raw_json: str | None, page_html: str) -> tuple[dict 
     return record, ""
 
 
-def _bump_error(db_path: Path, loc: str, note: str, park_now: bool = False,
+def _bump_error(db_path: Path, loc: str, note: str = "", park_now: bool = False,
                 requeue: bool = False) -> None:
-    """Three strikes park a row; a removed page parks at once."""
+    """
+    Three strikes park a row; a removed page parks at once.
+
+    The cap is checked before the requeue branch, because `scraped = 2` is itself a
+    queued state: a page that is permanently empty — AnimaHD renders some episode
+    grids client-side — would otherwise be re-queued by every pass forever, and an
+    uncapped retry is not a policy, it is a leak. Each attempt also stores the
+    reason it failed, since an `error_count` nobody can read explains nothing.
+    """
     conn = sqlite3.connect(db_path, timeout=60)
     try:
         ensure_schema(conn)
         conn.execute(
-            "UPDATE sitemap_cache SET error_count = error_count + 1 WHERE loc = ?;",
-            (loc,))
+            "UPDATE sitemap_cache SET error_count = error_count + 1, last_error = ? "
+            "WHERE loc = ?;", ((note or "")[:300], loc))
         conn.execute(
             """UPDATE sitemap_cache SET scraped = CASE
                    WHEN ? THEN -1
-                   WHEN ? THEN 2
                    WHEN error_count >= 3 THEN -1
+                   WHEN ? THEN 2
                    ELSE scraped
                END
                WHERE loc = ?;""",

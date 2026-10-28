@@ -698,7 +698,8 @@ CREATE TABLE IF NOT EXISTS sitemap_cache (
     slug TEXT,
     scraped INTEGER DEFAULT 0,
     raw_json TEXT,
-    error_count INTEGER DEFAULT 0
+    error_count INTEGER DEFAULT 0,
+    last_error TEXT
 );
 
 CREATE TABLE IF NOT EXISTS posts (
@@ -795,6 +796,9 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
     _add_missing_columns(conn, "posts", POST_COLUMNS)
     _add_missing_columns(conn, "releases", RELEASE_COLUMNS)
     _add_missing_columns(conn, "sources", SOURCE_COLUMNS)
+    _add_missing_columns(conn, "sitemap_cache", ("lastmod", "slug", "scraped",
+                                                 "raw_json", "error_count",
+                                                 "last_error"))
     conn.executescript(_SCHEMA_INDEXES)
     conn.commit()
 
@@ -1032,17 +1036,24 @@ def sync_catalog(limit: int | None = None, db_path: Path | str = DEFAULT_DB_PATH
 
 def _bump_error(db_path: Path, loc: str, note: str, park_now: bool = False,
                 requeue: bool = False) -> None:
-    """Three strikes park a row; a removed page parks at once."""
+    """
+    Three strikes park a row; a removed page parks at once.
+
+    A first failure is never terminal: the row keeps its queued state and the next
+    pass tries it again, and the reason that attempt failed is stored per row. An
+    `error_count` nobody can read explains nothing about the episode it counted.
+    """
     conn = sqlite3.connect(db_path, timeout=60)
     try:
         ensure_schema(conn)
-        conn.execute("UPDATE sitemap_cache SET error_count = error_count + 1 "
-                     "WHERE loc = ?;", (loc,))
+        conn.execute("UPDATE sitemap_cache SET error_count = error_count + 1, "
+                     "last_error = ? WHERE loc = ?;",
+                     ((note or "")[:300], loc))
         conn.execute(
             """UPDATE sitemap_cache SET scraped = CASE
                    WHEN ? THEN -1
-                   WHEN ? THEN 2
                    WHEN error_count >= 3 THEN -1
+                   WHEN ? THEN 2
                    ELSE scraped
                END WHERE loc = ?;""",
             (1 if park_now else 0, 1 if requeue else 0, loc))
@@ -1067,6 +1078,9 @@ def _parse_queue_row(loc: str, raw_json: str | None, page_html: str) -> tuple[di
     record = build_record(wp_post, page_html, loc)
     if record is None:
         return None, "unattributable-episode"
+    # The queue row, not a field of the episode, is what a finished page is marked
+    # by: the record's own copy of the URL belongs to the release it describes.
+    record["queue_loc"] = loc
     return record, ""
 
 
@@ -1168,8 +1182,10 @@ def _flush(db_path: Path, batch: list[dict], totals: dict) -> None:
     try:
         ensure_schema(conn)
         for record in batch:
-            conn.execute("UPDATE sitemap_cache SET scraped = 1 WHERE loc = ?;",
-                         (record["raw_meta"]["episode_page"],))
+            loc = record.get("queue_loc")
+            if loc:
+                conn.execute("UPDATE sitemap_cache SET scraped = 1 WHERE loc = ?;",
+                             (loc,))
         conn.commit()
     finally:
         conn.close()
