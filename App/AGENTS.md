@@ -123,11 +123,13 @@ Repository root/
 
 ## 5. REST API Contract (Verified Against viewer.py)
 
-⚠️ **Reality (verified against viewer.py 2026-10-22):** this section previously
-described a metadata-only MVP that called two endpoints, and it listed `anime` as
-a valid `type` value. Both were wrong. The app in `App/app/src` today calls
-**four** endpoints, and `?type=anime` returns zero rows. The verified state is
-below.
+⚠️ **Reality (verified against viewer.py 2026-10-22, re-measured against the live server
+2026-10-28):** this section previously described a metadata-only MVP that called two endpoints,
+and it listed `anime` as a valid `type` value. Both were wrong **then**; the `anime` half has
+since been fixed server-side and §5 now says so. The app in `App/app/src` today calls
+**four** endpoints. `App/docs/PARITY_BACKEND_BLOCKED.md` §1 is the measured list of everything
+the deployed host will actually answer, and its §5 is the table of claims in this file that a
+later measurement retired — read that file before trusting any line number here.
 
 The backend is `Fast_Fetch/viewer.py`. The app currently consumes:
 
@@ -149,26 +151,28 @@ public to anyone who can reach the port — never treat it as a private or secur
 surface.
 
 ### `GET /api/v1/posts`
-**Query params** (viewer.py:2110-2117 → `api_v1_get_posts()` viewer.py:1886):
+**Query params** (route dispatch viewer.py:3120-3127 → `api_v1_get_posts()` viewer.py:2491):
 
 | Name | Behaviour |
 |---|---|
 | `q` | `LIKE '%q%'` against `clean_title`, `title`, or `slug`. Omit for no search. |
-| `type` | Exact-equality match on `posts.content_type` (`p.content_type = ?`, viewer.py:1898). **Accepted values are only `movie`, `series`, `complete_season`, `ongoing_season`** — the four values `classify_media()` ever writes (fast_fetch.py:1613-1622). |
+| `type` | Exact-equality match on `posts.content_type` — **plus one special case**: `type=anime` is answered from the flag the data actually carries, `(p.is_animated = 1 OR lower(p.industry) LIKE '%anime%')` (viewer.py:2513). The plain values are only `movie`, `series`, `complete_season`, `ongoing_season` — the four `classify_media()` ever writes. |
+| `industry` / `genre` / `quality` / `sort` | Facet filters added 2026-10-27 (App Session 12's multi-filter pass): fixed SQL clauses per known value, `quality` as an `EXISTS` over the prints, `sort=trending` as `release_count + source_count`. An unknown value is ignored, not guessed at. |
 | `page` | 1-based, default `1`. |
-| `limit` | Default `20`, clamped to `1..100` (viewer.py:2115). |
+| `limit` | Default `20`, clamped to `1..100`. |
 
-> 🚨 **There is no `?type=anime`.** `content_type` is filtered by exact string
-> equality and no writer in the codebase ever stores `'anime'` there.
-> `?type=anime` returns `{"total": 0, "results": []}` — an empty grid, not an
-> error. Anime is carried by the separate `posts.is_animated` and
-> `posts.industry` columns, and **the REST API exposes neither as a filter yet**,
-> so anime filtering needs a new `animated` flag parameter plus backend support
-> before any client chip can offer it. Note also that only
-> `import_ssrmovies.py:470` currently populates `is_animated` at all.
-> `HomeScreen.kt:48` and `SearchScreen.kt:49` still map the "Anime" chip to
-> `type=anime`, so that chip is broken today — that is a Kotlin bug to fix in the
-> app or in the backend, not something to work around in docs.
+> ✅ **`?type=anime` works on the deployed server (measured 2026-10-28):**
+> `GET http://92.4.95.252/api/v1/posts?type=anime&limit=1` returns `total: 5307`, and the row
+> carries `is_animated: 1`. What is still missing is on the **client**: `Post` (the list model)
+> does not decode `is_animated`, so `V1CatalogMapper.animatedFromList` answers `null` and a tile
+> inside an anime-filtered list is typed from `content_type` alone until the detail page
+> corrects it. See `App/docs/PARITY_BACKEND_BLOCKED.md` §4-A.
+>
+> (The old 🚨 note here — "there is no `?type=anime`", "`HomeScreen.kt:48` / `SearchScreen.kt:49`
+> map the chip to an empty grid" — described the 2026-10-22 server and is retired. `HomeScreen`
+> offers the Anime entry at `HomeScreen.kt:237`; `SearchScreen`'s `typeChips` are
+> All/Movies/Series/Seasons and its anime path is the `industry` facet, which
+> `viewer.py:2539` also answers.)
 
 **Response** — `api_v1_get_posts()` selects exactly these keys per result
 (viewer.py:1905-1909). The example below is a real row sampled from
@@ -252,9 +256,13 @@ endpoint on the server you are pointed at to get real numbers.
 }
 ```
 
-> ⚠️ `/api/v1/stats` counts **every** post, including `is_18_plus = 1` rows that
-> `/api/v1/posts` hides (viewer.py:2157-2162 has no adult filter). The stats
-> counts will therefore exceed what the browsable catalog can actually show.
+> ⚠️ **`/api/v1/stats` counts more than the catalog will show — re-measured 2026-10-28.** The
+> route now prefers the Layer-1 projection's own tally (`viewer.py:2826-2836` reads
+> `cat_projection_meta`), and that tally is **not** adult-scoped: the live answer was
+> `posts: 116922` while `SELECT COUNT(*) FROM cat_works WHERE is_18_plus = 1` was `13342`. The
+> fallback `COUNT` queries at `:2838-2845` *are* adult-filtered, so the two paths of one endpoint
+> answer on two different scopes. Either way: the stats counts exceed what `/api/v1/posts` can
+> show, and no UI may present them as "titles you can browse here".
 
 ---
 
@@ -280,9 +288,10 @@ The §5 note above supersedes the "app calls only `/api/v1/stats` and
 Session 2/3 logs, which described a metadata-only MVP that no longer matches
 `App/app/src`. Treat those as historical plan, not current state.
 
-> ⚠️ The "Anime" chip on Home and Search is **known broken** — see the
-> `?type=anime` warning in §5. The type chips should offer only Movie / Series
-> (and, if the backend adds them, Complete Season / Ongoing Season).
+> ⚠️ ~~The "Anime" chip on Home and Search is known broken.~~ **Retired 2026-10-28:** the
+> server answers `type=anime` and the live catalog returns 5,307 rows for it (§5). The remaining
+> anime work is client-side — decode `is_animated` onto `Post` so a tile is typed correctly before
+> its detail page opens (`App/docs/PARITY_BACKEND_BLOCKED.md` §4-A).
 
 > 🚨 **`ReleaseDetail` does not match the backend release rows.** The `releases`
 > table columns returned by `/api/v1/posts/{id}` are `id, post_id, release_title,
@@ -1714,3 +1723,96 @@ a second announcement is a change to test on a device rather than guess at.
 **Next agent should:** take #21 (the backend-blocked parity list, which now includes the ranked
 rail), then the two owner decisions left from #19 — the §13 hue question, and whether
 `DynamicServerDiscovery` and episode-offset calibration get wired or deleted.
+
+---
+
+### Session 23 — The parity backlog, measured against the live server instead of remembered (2026-10-28)
+
+**Goal:** checklist #21 — write down, feature by feature, what this app cannot ship because the
+server contract does not exist, and say who owns each blocker. No Kotlin and no `.py` was touched;
+the whole session is `App/docs/PARITY_BACKEND_BLOCKED.md` plus the four corrections below that
+writing it forced.
+
+**Why the document is mostly measurements.** A parity list copied out of `EndpointGaps.kt` and
+`API_V2.md` would have been a list of 2026-10-22 beliefs, and three of them turned out to be false
+on the deployed box. Every claim in the doc therefore names a file:line or a request taken on
+2026-10-28 against `http://92.4.95.252` and `http://127.0.0.1:8080`, and §6 of it is the read-only
+curl/sqlite recipe so the next reader re-measures instead of trusting prose.
+
+**Four findings that changed the backlog:**
+
+1. **`?type=anime` works on the live server.** `viewer.py:2513` answers it from
+   `(p.is_animated = 1 OR lower(p.industry) LIKE '%anime%')` and `:2539` offers the same predicate
+   as an `industry` facet; the live call returned `total: 5307` with `is_animated: 1` on the row.
+   The Anime entry was never the problem — `Post` (the *list* model) does not decode `is_animated`,
+   so `V1CatalogMapper.animatedFromList:53` still answers `null` and a tile is typed from
+   `content_type` alone until its detail page opens. That is app-side work, not a backend gap.
+2. **The `cat_*` projection IS built on the live database.** `/api/v1/stats` reported
+   `posts: 116922` because it now reads `cat_projection_meta` (`viewer.py:2826-2836`), and opening
+   the file the running service actually holds — found through `/proc/<pid>/fd`, it is
+   `/home/ubuntu/radd-stream-data/merged_catalog_20261025.db`, 6.2 GB, not
+   `Fast_Fetch/fast_fetch.db` — shows the whole Layer-1 set: `cat_works` 116,922, `cat_releases`
+   1,383,752, `cat_links` 3,783,959. So `EndpointGaps.kt`'s header ("the database the public
+   service runs on has none, so the honest answer to a v2 request today is `unavailable`") is
+   false, and so is `Fast_Fetch/API_V2.md:28-32`.
+3. **…and the real v2 blockers are worse than a clean 503.** Measured from loopback: `suggest`
+   200 in **6.97 s**, `manifest` 200 in **52.8 s / 80.4 s / 33.1 s**, while `browse?limit=1`,
+   `search?q=ray` and `stats` returned **zero bytes at 120 s** (curl exit 28). Separately, every
+   public request to `/api/v2/*` except `/api/v2/account*` is an **nginx 403 HTML page**:
+   `/etc/nginx/sites-enabled/` ends with `location ^~ /api/ { return 403; }` and lists the proxied
+   routes by exception. A route that neither answers nor fails, behind a proxy that will not
+   forward it, is the one thing a phone must never be pointed at.
+4. **The paid VIP bypass is reachable and the app never uses it.** `accounts_api.py:322-353` mints
+   a signed pass from `GET /api/v2/account/vip-pass` (bearer key → `{pass, expires_at,
+   membership_until}`, `402` with no live membership), `redact.mint_vip_pass` HMACs the expiry, and
+   `viewer.py:389 request_is_vip()` honours `Authorization` or `?vip=`/`?vip_token=` on the
+   download path — deliberately never a caller-typed `vip=1`. Both routes are in the nginx
+   allow-list, and **no Kotlin file in this app references either**. An entitled viewer today still
+   walks the operator's free-tier shortener. That is a §4 row, not a §3 blocker.
+
+**What the document says the app is genuinely missing** (§3, 20 rows, each with its class): the
+server-ranked play bundle, resolver round-trip, dead-link reporting, season-pack offsets, delta
+sync, stable work manifests, server-authoritative print and link fields, selectable subtitle
+*tracks*, trailers, certifications/parental guidance, an editorial featured rail, a real counted
+Trending with a visible rank, recommendations, real ad breaks, per-title rent/buy offers, casting,
+a rewarded pass the server honours, anonymous cross-device resume, and stats a viewer can believe.
+The NO FIELD rows are not a to-do list for a clever client: there is no `trailer`,
+`certification`, `parental`, `featured` or play-count column anywhere in the ledger —
+`grep -rn "certification\|parental\|content_advis" Fast_Fetch/*.py` returns nothing, and the only
+`trailer` string in the backend is a *rejected* nav label in `import_7starhd.py:360`.
+
+**§4 is the part that matters most**: six capabilities that are already reachable and only
+unwritten on our side — anime typing from the list row, `work_ref`-named favourites from a tile
+(the list row carries `work_ref` now, and `SyncAccountRepository` refuses any other handle), the
+`vip-pass` + `?vip=` path, the public `/api/v1/search/by-media` "which work is this file" route
+that nothing calls, the `subtitled` chip waiting only for a service restart, and the phantom
+`season_number`/`episode_number`/`resolution`/`audio` keys in `ReleaseDetail`.
+
+**Corrected in this file:** §5's opening reality note, the `type`/facet parameter table and the
+🚨 "there is no `?type=anime`" block (now a ✅ note pointing at the client-side remainder), the
+stats warning (it now reads the projection's adult-inclusive tally — `13,342` of those `116,922`
+works are flagged, while the fallback `COUNT`s at `:2838-2845` *are* filtered: two scopes in one
+endpoint), and §6's "Anime chip is known broken" line. `HomeScreen.kt:237` is the Anime entry;
+`SearchScreen`'s `typeChips` are All/Movies/Series/Seasons and its anime path is the `industry`
+facet — the old §6 note blamed a `SearchScreen.kt:49` chip that no longer exists. Session 6's and
+21's dated logs are left as written: they were true when measured.
+
+**Proposed, not done (out of an app session's scope):** the owner should decide on (a) restarting
+`radd-stream.service` so `subtitled` ships, (b) whether nginx gets `location` blocks for the v2
+catalog reads the app would actually use, and (c) the backend's own stale `API_V2.md:28-32` claim.
+The multi-minute `browse`/`search`/`stats` timings belong to whoever tunes Layer 2; nothing here
+should be worked around in Kotlin.
+
+**Gate:** no Kotlin, `.kts` or resource file changed, so the Gradle gate cannot see this session's
+work — and it was run anyway, because the standing rule is a green tree at every task boundary:
+`/tmp/qbuild.sh -Dorg.gradle.jvmargs='-Xmx1536m' :app:compileDebugKotlin :app:testDebugUnitTest`
+reported in the commit message. Backend files were read, never written.
+
+**Deliberately not verified:** no device or emulator, so nothing here is a UX claim; the nginx and
+sqlite evidence is one host on one day, which is why §6 exists; and the v2 timings are single
+un-warmed measurements on a 1-vCPU box, recorded as ranges rather than as a promise about how the
+next deployment will behave.
+
+**Next agent should:** pick from §4 in that order (A then C are the two a viewer would notice),
+leave §3 alone until a row's class changes, and re-run §6 before repeating any number from this
+document in a user-facing string.

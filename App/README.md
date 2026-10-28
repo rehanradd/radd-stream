@@ -73,5 +73,6 @@ GitHub Actions secrets.
 | [`docs/PLAN.md`](docs/PLAN.md) | Current milestone and deferred app roadmap |
 | [`docs/TECH_STACK.md`](docs/TECH_STACK.md) | Android stack and architecture |
 | [`docs/BUILD_PLAN.md`](docs/BUILD_PLAN.md) | GitHub Actions build and release setup |
+| [`docs/PARITY_BACKEND_BLOCKED.md`](docs/PARITY_BACKEND_BLOCKED.md) | Which competitive features the server contract blocks, with the measurement that says so |
 | [`design/SCREENS.md`](design/SCREENS.md) | Screen design references |
 | [`design/DESIGN_SYSTEM.md`](design/DESIGN_SYSTEM.md) | Colors, typography, and spacing |
