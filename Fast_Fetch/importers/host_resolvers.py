@@ -157,17 +157,24 @@ PROBE_READ_BYTES = 200_000
 
 # Hosts whose page holds a packed MDCore config. `mxdrop.to` and `mxdrop.top`
 # both serve it; membership is label-anchored so a look-alike host is not
-# mistaken for this one.
+# mistaken for this one. Unlike pkembed, mxdrop does NOT serve the bare
+# `/<code>` form: `https://mxdrop.to/xo78jxvjagwq9x` answers 200 with a 10,692-byte
+# page titled "MixDrop" and no packed config, so the path rule stays `/e/` and
+# `/embed/` only.
 MXDROP_HOST_RE = re.compile(r"(?:^|\.)mxdrop\.(?:to|top)$", re.I)
 MXDROP_CONTENT_RE = re.compile(r"^/(?:e|embed)/[A-Za-z0-9_-]+/?$", re.I)
 
-# pkembed's own page: `https://pkembed.site/embed-<filecode>.html`. The shape is
-# `/embed-<code>.html`, NOT mxdrop's `/e/<id>` — a matcher that requires `/e/`
-# finds zero pkembeds. `pkembed.online` is a sibling this catalog publishes
-# rarely and has not been re-verified here, so it is recognized but stays
-# honest: an unpack that fails on it reports `unknown`, never `active`.
+# pkembed serves the same page under two paths: `/embed-<filecode>.html` and the
+# bare `<filecode>.html`. Both were verified live on 2026-10-28 — the bare form
+# (`/zp8vd43rpa80.html`) answers 200 with the same packed config and the same
+# two renditions, and it is the URL this catalog writes into a `download` row —
+# so a matcher that requires the `embed-` prefix silently un-resolves real files.
+# The shape is still NOT mxdrop's `/e/<id>`: a matcher that requires `/e/` finds
+# zero pkembeds. `pkembed.online` is a sibling this catalog publishes rarely and
+# has not been re-verified here, so it is recognized but stays honest: an
+# unpack that fails on it reports `unknown`, never `active`.
 PKEMBED_HOST_RE = re.compile(r"(?:^|\.)pkembed\.(?:site|online)$", re.I)
-PKEMBED_CONTENT_RE = re.compile(r"^/embed-[A-Za-z0-9]+\.html$", re.I)
+PKEMBED_CONTENT_RE = re.compile(r"^/(?:embed-)?[A-Za-z0-9]{6,}\.html$", re.I)
 
 # eval(function(p,a,c,k,e,d){…}('<payload>',10,27,'k1|k2|…'.split('|'),0,{}))
 # mxdrop's build ends with the trailing `0,{}` pair; pkembed's ends at

@@ -86,6 +86,7 @@ PK_PACKED_PAGE = """<html><head><title>pkembed</title></head><body>
 </body></html>"""
 
 PK_EMBED = "https://pkembed.site/embed-g64v61whic26.html"
+PK_BARE_EMBED = "https://pkembed.site/zp8vd43rpa80.html"
 PK_L_MP4 = ("https://plus1.vkpluscdn.site/v/01/00002/g64v61whic26_l/l.mp4"
             "?t=KHH6I0tMZ1p4B6gjpVUIrfGYldCDbEHRVS4-fqbbp3Q&s=1793148018&e=43200"
             "&v=77081502&sp=3000&i=0.3")
@@ -604,6 +605,23 @@ class TestPkembedRecognition(unittest.TestCase):
     def test_the_real_embed_shape_is_accepted(self):
         self.assertTrue(hr.is_pkembed_embed(PK_EMBED))
 
+    def test_the_bare_filecode_page_is_a_pkembed_too(self):
+        """`/<code>.html` is the second shape the host serves, measured live.
+
+        `pkembed.site/zp8vd43rpa80.html` answers 200 with the same packed config
+        as `/embed-<code>.html` and probes `206 video/mp4`; it is what this
+        catalog writes into a `download` row. Requiring the `embed-` prefix would
+        leave a resolvable file filed as an iframe.
+        """
+        self.assertTrue(hr.is_pkembed_embed(PK_BARE_EMBED))
+
+    def test_an_ordinary_page_on_the_host_is_not_a_filecode(self):
+        for url in ("https://pkembed.site/index.html",
+                    "https://pkembed.site/embed-x.html",
+                    "https://pkembed.site/",
+                    "https://pkembed.site/embed-g64v61whic26"):
+            self.assertFalse(hr.is_pkembed_embed(url), url)
+
     def test_a_protocol_relative_embed_url_is_accepted(self):
         # MoviesMela publishes some players as `//host/…`; a matcher that
         # requires a scheme would drop them.
@@ -751,6 +769,14 @@ class TestUnwrapPkembed(unittest.TestCase):
         self.assertEqual(verdict["size_bytes"], 201886684)
         self.assertEqual(verdict["subtitles"], [])
         self.assertEqual(verdict["notes"], [])
+
+    def test_the_bare_filecode_page_resolves_through_the_same_chain(self):
+        fetch = self.scripted(**{PK_BARE_EMBED: (200, PK_PACKED_PAGE, {})})
+        verdict = hr.unwrap_pkembed(PK_BARE_EMBED, fetch=fetch)
+        self.assertEqual(verdict["status"], "active", verdict["notes"])
+        self.assertEqual(verdict["embed_url"], PK_BARE_EMBED)
+        self.assertEqual([item["url"] for item in verdict["sources"]],
+                         [PK_L_MP4, PK_N_MP4])
 
     def test_the_signed_url_is_reported_not_stored(self):
         verdict = hr.unwrap_pkembed(PK_EMBED, fetch=self.scripted())

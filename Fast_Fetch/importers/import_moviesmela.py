@@ -1632,9 +1632,10 @@ def sync_catalog(limit: int | None = None, db_path: Path | str = DEFAULT_DB_PATH
     The queue is written while it is read, `batch_size` rows per commit, because
     this site's real collection is 20,888 posts over 1,045 REST pages (measured
     2026-10-28) and every record carries its own `content.rendered`. Collecting
-    the whole catalog before the first INSERT would hold roughly a gigabyte of
-    page HTML in RAM on a host that has 2.5 GB free and is running other people's
-    crawlers — and an interrupted sync would have queued nothing at all.
+    the pass before the first INSERT held 10,460 of those page bodies in RAM at
+    once (57 MB of resident set at 335 s, still climbing) on a host with 2.5 GB
+    free and other agents' crawlers on it — and the old shape committed only at
+    the end, so a stop late in the pass lost every page it had read.
     """
     db_path = Path(db_path)
     db_path.parent.mkdir(parents=True, exist_ok=True)

@@ -349,9 +349,11 @@ class TestPlayerParsing(unittest.TestCase):
 
     def test_a_resolvable_host_is_named_by_service_not_by_its_cdn(self):
         # The media host moves (plusN.vkpluscdn.site one day, stoplus.vkcdn5.com
-        # the next); the embed host does not, and the embed host is what names
-        # the row.
-        self.assertEqual(mm._player_kind("https://pkembed.site/embed-x.html"),
+        # the next, noc.vkpluscdn.site for a bare-code page); the embed host does
+        # not, and the embed host is what names the row.
+        self.assertEqual(mm._player_kind("https://pkembed.site/embed-g64v61whic26.html"),
+                         ("pkembed", "url", True))
+        self.assertEqual(mm._player_kind("https://pkembed.site/zp8vd43rpa80.html"),
                          ("pkembed", "url", True))
         self.assertEqual(mm._player_kind("//mxdrop.to/e/abc"), ("mxdrop", "url", True))
         self.assertEqual(mm._player_kind("https://do7go.com/e/abc"),
@@ -373,7 +375,8 @@ class TestPlayerParsing(unittest.TestCase):
         # pattern already matches any attribute ending in it, so parsing REST
         # content is a choice, not a blind spot.
         rows = mm.parse_players('<iframe data-wpfc-original-src='
-                                '"https://pkembed.site/embed-y.html"></iframe>')
+                                '"https://pkembed.site/embed-eop0bc6zkyjy.html">'
+                                '</iframe>')
         self.assertEqual([r["service"] for r in rows], ["pkembed"])
 
     def test_empty_and_labelless(self):
