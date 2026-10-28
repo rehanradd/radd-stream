@@ -232,6 +232,31 @@ class ModelsTest {
     }
 
     @Test
+    fun `a saved row carries the two facts a tile paints, and invents neither`() {
+        val row = Post(
+            id = 78,
+            title = "Sample Series",
+            contentType = "series",
+            isAnimated = true,
+            subtitled = true,
+        )
+
+        val saved = FavoritePost.fromPost(row)
+        assertEquals(true, saved.isAnimated)
+        assertEquals(true, saved.subtitled)
+
+        val again = saved.toPost()
+        assertEquals(true, again.isAnimated)
+        assertEquals(true, again.subtitled)
+
+        // A row saved by a build that stored neither column stays undetermined: `null` must
+        // not silently become "not animated" or "no subtitles" in a table that cannot tell.
+        val legacy = FavoritePost(id = 79, title = "Old save")
+        assertNull(legacy.toPost().isAnimated)
+        assertNull(legacy.toPost().subtitled)
+    }
+
+    @Test
     fun `empty posts response defaults to an empty result list`() {
         val response = gson.fromJson(
             """{"page":1,"limit":20,"total":0,"total_pages":1,"results":[]}""",

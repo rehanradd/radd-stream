@@ -31,6 +31,12 @@ import com.raddstream.app.data.cache.CacheTaskEntity
  * Version 5 adds `watch_history`, the local Continue watching rows. It is a new table with no
  * prior data, but it is still real DDL: the destructive fallback on this builder would take
  * `favorite_posts` with it.
+ *
+ * Version 6 adds the two per-work presentation facts to `favorite_posts` — `isAnimated` and
+ * `subtitled`. Both are nullable with no default on purpose: an existing row was saved by a
+ * build that never asked, and a saved list may not be made to claim the server told it something
+ * it never sent. This is one more nullable ADD COLUMN on the table a viewer would notice losing,
+ * so it is DDL like 4 and 5 rather than the destructive fallback.
  */
 @Database(
     entities = [
@@ -41,7 +47,7 @@ import com.raddstream.app.data.cache.CacheTaskEntity
         SyncedProgressEntity::class,
         WatchHistoryEntity::class,
     ],
-    version = 5,
+    version = 6,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -112,6 +118,18 @@ abstract class AppDatabase : RoomDatabase() {
                         "durationMs INTEGER NOT NULL, updatedAt INTEGER NOT NULL, " +
                         "PRIMARY KEY(workRef, seasonNumber, episodeNumber))",
                 )
+            }
+        }
+
+        /**
+         * 5 → 6: the two facts a tile needs and this table did not keep. Two statements because
+         * SQLite has never supported adding two columns at once, and no existing row is
+         * touched: a favourite saved last month arrives as undetermined, which is what it was.
+         */
+        val MIGRATION_5_6: Migration = object : Migration(5, 6) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE favorite_posts ADD COLUMN isAnimated INTEGER")
+                db.execSQL("ALTER TABLE favorite_posts ADD COLUMN subtitled INTEGER")
             }
         }
     }

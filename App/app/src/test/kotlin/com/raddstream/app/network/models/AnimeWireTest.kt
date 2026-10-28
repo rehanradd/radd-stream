@@ -1,5 +1,6 @@
 package com.raddstream.app.network.models
 
+import com.raddstream.app.data.local.FavoritePost
 import com.raddstream.app.network.buildRaddGson
 import com.raddstream.app.viewmodel.normalizeTypeLabel
 import com.raddstream.app.viewmodel.typeGroupKey
@@ -138,5 +139,28 @@ class AnimeWireTest {
         // No flag is not a flag of zero: the row keeps the content_type it always had.
         assertEquals("movie", typeGroupKey(post("""{"id": 1, "title": "T", "content_type": "movie"}""")))
         assertEquals("Other", normalizeTypeLabel(typeGroupKey(post("""{"id": 1, "title": "T"}"""))))
+    }
+
+    @Test
+    fun `the flag survives a save to My List, so the saved tile says what the live one said`() {
+        // My List rebuilds its tiles from the local row alone. Before `favorite_posts` carried
+        // this column, an anime saved from an anime-filtered grid came back labelled "Series" —
+        // the same work, two words, depending on which screen asked.
+        val animated = post(listRow(""", "is_animated": 1, "subtitled": true"""))
+        val saved = FavoritePost.fromPost(animated).toPost()
+
+        assertEquals("Anime", animated.typeLabel)
+        assertEquals("Anime", saved.typeLabel)
+        assertEquals(true, saved.subtitled)
+    }
+
+    @Test
+    fun `a favourite saved before the column existed keeps the word it always had`() {
+        // NULL is not FALSE. A row this build never asked about must not be relabelled, or the
+        // migration silently rewrites history the viewer already saw.
+        val legacy = FavoritePost(id = 91, title = "Old save", contentType = "series").toPost()
+
+        assertNull(legacy.isAnimated)
+        assertEquals("Series", legacy.typeLabel)
     }
 }

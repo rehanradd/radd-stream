@@ -32,6 +32,7 @@ object DatabaseModule {
                 AppDatabase.MIGRATION_1_2,
                 AppDatabase.MIGRATION_3_4,
                 AppDatabase.MIGRATION_4_5,
+                AppDatabase.MIGRATION_5_6,
             )
             // Version 3 adds the offline cache tables for the first time. They have never shipped
             // on any device, so a destructive fallback lets Room generate their schema verbatim

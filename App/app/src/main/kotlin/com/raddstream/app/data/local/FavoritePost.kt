@@ -32,6 +32,22 @@ data class FavoritePost(
      * ones already on the library, so a flaky evening costs a retry, not a duplicate.
      */
     val syncedAt: Long? = null,
+    /**
+     * `posts.is_animated`, kept from whatever payload saved this row. My List is the one place
+     * a viewer's anime lives without a catalog row beside it, and `content_type` alone calls an
+     * anime "Series" — this flag is the only word on the wire that says otherwise.
+     *
+     * Null means "a row this build never asked about", not "not animated": a favourite saved by
+     * an older build must keep the label it had rather than be stamped with a fact nobody told
+     * it. That is why the column is nullable and why nothing here may default it.
+     */
+    val isAnimated: Boolean? = null,
+    /**
+     * The server's per-work subtitles answer, carried for the same reason as [isAnimated]: a
+     * tile on My List is rebuilt from this row alone, and dropping the key silently removes the
+     * Subtitled chip the viewer saw when they saved it.
+     */
+    val subtitled: Boolean? = null,
 ) {
     /** True when this row CAN be named on the sync surface — not "true when it should be". */
     val syncable: Boolean get() = !workRef.isNullOrBlank()
@@ -45,6 +61,8 @@ data class FavoritePost(
         posterUrl = posterUrl,
         imdbRating = imdbRating,
         workRef = workRef,
+        isAnimated = isAnimated,
+        subtitled = subtitled,
     )
 
     companion object {
@@ -57,6 +75,8 @@ data class FavoritePost(
             posterUrl = post.posterUrl,
             imdbRating = post.imdbRating,
             workRef = post.workRef,
+            isAnimated = post.isAnimated,
+            subtitled = post.subtitled,
         )
 
         fun fromPostDetail(detail: PostDetail): FavoritePost = FavoritePost(
@@ -68,6 +88,7 @@ data class FavoritePost(
             posterUrl = detail.posterUrl,
             imdbRating = detail.imdbRating,
             workRef = detail.workRef,
+            isAnimated = detail.isAnimated,
         )
     }
 }

@@ -200,9 +200,13 @@ the deferred roadmap items are separate concerns; see §6 and §8.
 > (The old 🚨 note here — "there is no `?type=anime`", "`HomeScreen.kt:48` / `SearchScreen.kt:49`
 > map the chip to an empty grid" — described the 2026-10-22 server and is retired. `HomeScreen`
 > offers the Anime entry at `HomeScreen.kt:237`; the `industry` facet is the second door to the
-> same predicate, which `viewer.py:2539` also answers. What remains open is only the Room
-> consequence: `FavoritePost` stores no `is_animated` column, so a favourite saved from the grid
-> still labels an anime "Series" until a migration carries the flag — recorded, not hidden.)
+> same predicate, which `viewer.py:2539` also answers. The last open piece was the Room
+> consequence — `FavoritePost` stored no `is_animated` column, so a favourite saved from the grid
+> came back labelled "Series" — and **App Session 26 closed it**: database version 6 adds nullable
+> `isAnimated` and `subtitled` to `favorite_posts` with real `MIGRATION_5_6` DDL, and
+> `FavoritePost.toPost()` hands both back to the tile, so My List paints the same words the grid
+> painted. A row saved by an older build gets NULL, which means "this build never asked", not
+> "not animated".)
 
 **Response** — `api_v1_get_posts()` selects these columns per result
 (viewer.py:2596-2603: `id, clean_title, title, year, content_type, seasons, poster_url,
@@ -332,9 +336,10 @@ Session 2/3 logs, which described a metadata-only MVP that no longer matches
 `App/app/src`. Treat those as historical plan, not current state.
 
 > ⚠️ ~~The "Anime" chip on Home and Search is known broken.~~ **Retired 2026-10-28:** the
-> server answers `type=anime` and the live catalog returns 5,307 rows for it (§5). The remaining
-> anime work is client-side — decode `is_animated` onto `Post` so a tile is typed correctly before
-> its detail page opens (`App/docs/PARITY_BACKEND_BLOCKED.md` §4-A).
+> server answers `type=anime` and the live catalog returns 5,307 rows for it (§5). The client-side
+> half that followed — decode `is_animated` onto `Post` so a tile is typed before its detail page
+> opens — shipped in `69b3795`, and App Session 26 carried the same flag into `favorite_posts`, so
+> the row on My List is typed from the wire too (`App/docs/PARITY_BACKEND_BLOCKED.md` §4-A closed).
 
 > ✅ **~~`ReleaseDetail` does not match the backend release rows.~~ Retired by code, not by
 > hope (re-read `Models.kt` 2026-10-28).** The old note claimed the model asked for
@@ -2063,3 +2068,91 @@ re-arguing it; (2) on a real device, check the fullscreen custom-view layering o
 that the progress bar's 1..99 gate never strands a page at 99%; (3) the still-open owner decisions from
 Session 24 are unchanged (§13 hue, `DynamicServerDiscovery`, episode-offset calibration, the `subtitled`
 deploy note).
+
+### Session 26 — A saved anime still says Anime: the animation flag and the subtitles answer join `favorite_posts` (2026-10-28)
+
+**Goal:** the last client-side remainder of `PARITY_BACKEND_BLOCKED.md` §4-A. The wire decode
+shipped in `69b3795`, so a tile in an anime-filtered grid said "Anime" — and the moment a viewer
+saved it, My List said "Series", because `favorite_posts` had no column to remember the fact in.
+One work, two words, depending on which screen asked.
+
+**What the fix is, and where the fact actually lives.** `FavoritePost` gains two nullable columns,
+`isAnimated` and `subtitled`, and `toPost()` gives them back to the tile. Both are read off the
+same row the tile is rebuilt from, and `PosterCard` needed no change: it already paints
+`post.typeLabel` (`:63`) and `TileAudioBadges.forPost(post)` (`:193`), which are exactly the two
+consumers that had been handed `null` by the local mapping. The list row is the only place either
+key exists (`Post:76-77`, `:111`), and `PostDetail` carries no `subtitled` at all — it is a
+per-page existence test the list route appends (`viewer.py:2620`) — so `fromPostDetail` cannot
+supply it and does not pretend to.
+
+**The decision a saved list turns on: NULL is not FALSE.** Every field on this table is something
+the viewer chose to keep, and a migration that writes `0` into `isAnimated` for rows this build
+never asked about would be the app inventing a fact about someone's library and then labelling
+their anime "Series" with more confidence than before. So the columns are nullable with no default,
+the model keeps `Boolean?` end to end, and `WorkTypeLabel.of(contentType, null)` answers the plain
+`content_type` word it always answered. An old row is undetermined, which is what it is.
+
+**Why this is real DDL and not the destructive fallback.** `favorite_posts` is the one table in
+this app a viewer would notice losing, and the builder still carries
+`fallbackToDestructiveMigration()` for the 2 → 3 gap. Version 6 is one more nullable
+`ALTER TABLE … ADD COLUMN`, written out like 4 and 5 and registered beside them in
+`DatabaseModule`, because "a feature was switched on" is not a reason a saved list goes empty.
+Two statements, not one: SQLite has never supported adding two columns at once.
+
+**Created:** `app/src/test/kotlin/com/raddstream/app/tooling/FavoritesSchemaGuardTest.kt` (6).
+**Changed:** `data/local/FavoritePost.kt` (two columns + the three mapping functions),
+`data/local/AppDatabase.kt` (version 6, `MIGRATION_5_6`, the class note that says why it is DDL),
+`di/DatabaseModule.kt` (registers the new step), `network/ModelsTest.kt` (+1),
+`network/models/AnimeWireTest.kt` (+2), this file's §5 and §6 anime notes, and
+`docs/PARITY_BACKEND_BLOCKED.md` §4-A row A.
+
+**Why a text scan is the honest guard here, and what it does not prove.** The failure mode of an
+entity field with no migration is a Room runtime schema-validation throw the first time a device
+opens its own database — and this box cannot produce that evidence, because Robolectric has no
+native runtime on aarch64 and those suites are excluded in `app/build.gradle.kts` (a test that
+never runs is not a gate). So `FavoritesSchemaGuardTest` compares what the two files declare, and
+it is deliberately about the four things that can actually break silently: the entity's property
+names and the columns the DDL history produces are the **same set** (an unparseable file fails the
+positive controls rather than passing empty); the newest migration's target equals the declared
+`version`; every declared `MIGRATION_*` is handed to the builder, because a declared-but-unregistered
+step is a crash nobody sees until a viewer upgrades; and no `ADD COLUMN` on this table is
+`NOT NULL`, which is the mechanical form of the NULL-is-not-FALSE rule above. It does **not**
+prove the migration runs, that SQLite accepts the statement text, or that Room's own generated
+schema matches — those are device/CI evidence and are recorded as missing, not claimed.
+
+**Errors of my own, caught by a real build:** the guard's first compile failed on
+`mapNotNull(Regex(...).find(it)?...)` — a value where a transform lambda belongs, and `it` no
+longer meant the line. Rewritten as `mapNotNull { declaration -> property.find(declaration)?... }`.
+The parse itself I replayed in a throwaway Python copy of both scanners against the two files
+before spending a build cycle on it; entity and DDL agreed at 12 columns and all four migrations
+were registered, so the second run was the only one needed.
+
+**Gate:** `/tmp/qbuild.sh -Dorg.gradle.jvmargs='-Xmx1536m' :app:compileDebugKotlin :app:testDebugUnitTest`
+→ BUILD SUCCESSFUL in 4m 15s, `GRADLE_EXIT=0`, `FOREIGN_BUILD_PIDS_SEEN=` empty, `OVERLAP=NO`,
+`WAITED_FOR_OTHER_BUILDS_S=0`; **78 result XMLs, every one newer than the run, written inside the
+single second 21:46:47–48** (38 actionable tasks, 5 executed — the test task executed, it is not a
+cached report), **621 tests / 0 failures / 0 errors / 0 skipped** across 78 suites. From 612: +6
+`FavoritesSchemaGuardTest`, +2 `AnimeWireTest` (14), +1 `ModelsTest` (18). An earlier run of this
+same work failed at `:app:compileDebugUnitTestKotlin` on the mistake above (`GRADLE_EXIT=1`,
+BUILD FAILED in 3m 43s) and is reported because it was the state of the tree at that moment.
+`PosterCardProvenanceTest` self-skips on aarch64 as it always has.
+
+**Deliberately not verified:** no device or emulator, so the actual 5 → 6 upgrade of a real
+`radd_stream_local.db` — Room's validation, the statement executing, an old row arriving with
+NULL — has never happened anywhere. That is the one claim this session most wants and least can
+make; the next person with a device should install a build over an app that already has favourites
+and confirm the list is still there and the anime row reads "Anime". No push either: `GITHUB_TOKEN`
+is confirmed dead for write (`401 Bad credentials` at `api.github.com/user`) and refreshing it is an
+owner action, so this milestone is a local commit and the `ls-remote` heads stay where they were.
+
+**Rules kept:** no `.py` file touched, no service restart, no nginx change, `/tmp/qbuild.sh` only,
+one build at a time, only App paths staged, no `git add -A`, no credential printed, §13 hue
+untouched, no device claim.
+
+**Next agent should:** (1) when a device exists, run the upgrade check named above — it is the only
+open evidence for this change; (2) note that a work saved from its **detail** page shows no
+Subtitled chip on My List, because the detail route sends no `subtitled` key and the app refuses to
+guess one: if that asymmetry ever matters, the fix is a server-side key on the detail row, not a
+client-side inference; (3) the standing owner decisions are unchanged (§13 hue,
+`DynamicServerDiscovery`, episode-offset calibration, the `subtitled` deploy note, the dead push
+credential).
