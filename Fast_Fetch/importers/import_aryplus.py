@@ -39,6 +39,7 @@ import signal
 import sqlite3
 import ssl
 import sys
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -63,6 +64,8 @@ PAGE_TIMEOUT = 60
 VERIFY_TIMEOUT = 25
 SITEMAP_WORKERS = 4
 QUEUED_SCRAPE_STATES = (0, 2)
+MAX_SCRAPE_ATTEMPTS = 3
+FAILURE_LEDGER_LIMIT = 8
 LEGAL_MEDIA_TYPES = ("movie", "series")
 DEFAULT_SOURCE_STATUS = "unverified"
 SERVICE_HLS = "aryzap-vod"
@@ -72,9 +75,11 @@ PLAYBACK_HLS = "hls"
 ALLOWED_SOURCE_HOST_RE = re.compile(r"^vod\.aryzap\.com$", re.I)
 STOP_REQUESTED = False
 
+# A parked row is not terminal until the attempt cap. The first crawl parked
+# 538 rows at error_count=1 with no recorded reason; those are eligible again.
 PENDING_SELECT = (
     "SELECT loc, lastmod, slug, raw_json, scraped, error_count FROM sitemap_cache "
-    "WHERE scraped IN (?, ?) ORDER BY loc;"
+    "WHERE scraped IN (?, ?) OR (scraped = -1 AND error_count < ?) ORDER BY loc;"
 )
 
 POST_COLUMNS = (
@@ -132,8 +137,29 @@ def _build_ssl_context(insecure: bool = True) -> ssl.SSLContext:
 _SSL_CONTEXT = _build_ssl_context()
 
 
+class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None  # surface the 3xx as HTTPError instead of following it
+
+
+_NO_REDIRECT_OPENER = urllib.request.build_opener(
+    _NoRedirectHandler(),
+    urllib.request.HTTPSHandler(context=_SSL_CONTEXT),
+)
+_TRANSPORT_ERROR = threading.local()
+
+
+def transport_error() -> str:
+    """The last transport error seen by this thread, e.g. 'OSError: ...'."""
+    return getattr(_TRANSPORT_ERROR, "last", "")
+
+
 def _open(request, timeout: int = PAGE_TIMEOUT):
     return urllib.request.urlopen(request, timeout=timeout, context=_SSL_CONTEXT)
+
+
+def _open_no_redirect(request, timeout: int = PAGE_TIMEOUT):
+    return _NO_REDIRECT_OPENER.open(request, timeout=timeout)
 
 
 def _request(url: str, extra_headers: dict | None = None) -> urllib.request.Request:
@@ -143,14 +169,17 @@ def _request(url: str, extra_headers: dict | None = None) -> urllib.request.Requ
     return urllib.request.Request(url, headers=headers)
 
 
-def http_get(url: str, timeout: int = PAGE_TIMEOUT, retries: int = 2):
+def http_get(url: str, timeout: int = PAGE_TIMEOUT, retries: int = 2,
+             follow_redirects: bool = True):
     """GET -> (status, final_url, text, headers). Transport failure -> status 0."""
     last_error = ""
+    _TRANSPORT_ERROR.last = ""
+    opener = _open if follow_redirects else _open_no_redirect
     for attempt in range(retries + 1):
         if STOP_REQUESTED:
             return 0, url, "", {}
         try:
-            with _open(_request(url), timeout=timeout) as resp:
+            with opener(_request(url), timeout=timeout) as resp:
                 body = resp.read()
                 charset = resp.headers.get_content_charset() or "utf-8"
                 return (resp.status, resp.geturl(),
@@ -166,6 +195,7 @@ def http_get(url: str, timeout: int = PAGE_TIMEOUT, retries: int = 2):
             last_error = f"{type(exc).__name__}: {exc}"
             if attempt < retries:
                 time.sleep(1.5 * (attempt + 1))
+    _TRANSPORT_ERROR.last = last_error
     print(f"[!] [{SITE}] {url} -> transport failure ({last_error})", flush=True)
     return 0, url, "", {}
 
@@ -894,7 +924,9 @@ def export_staging(db_path: Path | str = DEFAULT_DB_PATH, posts=()) -> dict:
                     """
                     INSERT INTO sitemap_cache (loc, lastmod, slug, scraped, raw_json, error_count)
                     VALUES (?, NULL, ?, 1, ?, 0)
-                    ON CONFLICT(loc) DO UPDATE SET scraped = 1, slug = excluded.slug;
+                    ON CONFLICT(loc) DO UPDATE SET
+                        scraped = 1, slug = excluded.slug,
+                        raw_json = excluded.raw_json, error_count = 0;
                     """,
                     (page_url, row["slug"],
                      json.dumps(post.get("queue_payload") or {}, ensure_ascii=False)),
@@ -917,29 +949,72 @@ def _parse_record(loc: str, raw_json: str | None, page_html: str) -> tuple[dict 
     if record is None:
         return None, "no-jsonld"
     try:
-        record["queue_payload"] = json.loads(raw_json) if raw_json else {}
+        payload = json.loads(raw_json) if raw_json else {}
     except json.JSONDecodeError:
-        record["queue_payload"] = {}
+        payload = {}
+    if not isinstance(payload, dict):
+        payload = {}
+    payload["status"] = "ok"
+    record["queue_payload"] = payload
     return record, ""
 
 
-def _bump_error(db_path: Path, loc: str, note: str, park_now: bool = False,
-                requeue: bool = False) -> None:
+def _failure(kind: str, http_status: int | None = None, final_url: str | None = None,
+             detail: str = "", exception: str | None = None) -> dict:
+    return {"kind": kind, "http_status": http_status, "final_url": final_url,
+            "detail": detail, "exception": exception}
+
+
+def _bump_error(db_path: Path, loc: str, failure: dict, park_now: bool = False) -> None:
+    """
+    One failed attempt -> one ledger entry in raw_json. Stays retryable (state 2)
+    until the attempt cap, then parks as state -1 with status=dead and the
+    reason kept. park_now is reserved for hard HTTP verdicts (404/410).
+    """
     conn = sqlite3.connect(db_path, timeout=60)
     try:
         ensure_schema(conn)
+        row = conn.execute(
+            "SELECT raw_json, error_count, slug FROM sitemap_cache WHERE loc = ?;",
+            (loc,)).fetchone()
+        attempts = (row[1] if row and row[1] is not None else 0) + 1
+        try:
+            payload = json.loads(row[0]) if row and row[0] else {}
+        except json.JSONDecodeError:
+            payload = {}
+        if not isinstance(payload, dict):
+            payload = {}
+        payload.setdefault("id", (row[2] if row else None) or title_id(loc))
+        history = payload.get("failures")
+        history = history if isinstance(history, list) else []
+        if not history and attempts > 1:
+            # The first crawl parked the row without recording why. Keep the
+            # count honest rather than pretending the attempt never happened.
+            history = [{
+                "at": None, "attempt": 1, "kind": "legacy-unrecorded",
+                "http_status": None, "final_url": None,
+                "detail": "first attempt predates failure logging; reason unavailable",
+            }]
+        attempt = {
+            "at": int(time.time()),
+            "attempt": attempts,
+            "kind": failure.get("kind") or "error",
+            "http_status": failure.get("http_status"),
+            "final_url": failure.get("final_url"),
+            "detail": (failure.get("detail") or "")[:400],
+        }
+        if failure.get("exception"):
+            attempt["exception"] = failure["exception"]
+        payload["failures"] = (history + [attempt])[-FAILURE_LEDGER_LIMIT:]
+        terminal = attempts >= MAX_SCRAPE_ATTEMPTS or park_now
+        payload["status"] = "dead" if terminal else "retrying"
+        payload["attempts"] = attempts
+        payload["last_error"] = attempt["detail"] or attempt["kind"]
         conn.execute(
-            "UPDATE sitemap_cache SET error_count = error_count + 1 WHERE loc = ?;",
-            (loc,))
-        conn.execute(
-            """UPDATE sitemap_cache SET scraped = CASE
-                   WHEN ? THEN -1
-                   WHEN ? THEN 2
-                   WHEN error_count >= 3 THEN -1
-                   ELSE scraped
-               END
-               WHERE loc = ?;""",
-            (1 if park_now else 0, 1 if requeue else 0, loc))
+            "UPDATE sitemap_cache SET error_count = ?, scraped = ?, raw_json = ? "
+            "WHERE loc = ?;",
+            (attempts, -1 if terminal else 2,
+             json.dumps(payload, ensure_ascii=False), loc))
         conn.commit()
     finally:
         conn.close()
@@ -954,7 +1029,8 @@ def crawl_pending(limit: int | None = None, db_path: Path | str = DEFAULT_DB_PAT
     conn.row_factory = sqlite3.Row
     try:
         ensure_schema(conn)
-        rows = conn.execute(PENDING_SELECT, QUEUED_SCRAPE_STATES).fetchall()
+        rows = conn.execute(
+            PENDING_SELECT, (*QUEUED_SCRAPE_STATES, MAX_SCRAPE_ATTEMPTS)).fetchall()
     finally:
         conn.close()
     if limit:
@@ -972,10 +1048,28 @@ def crawl_pending(limit: int | None = None, db_path: Path | str = DEFAULT_DB_PAT
         if STOP_REQUESTED:
             return None
         time.sleep(delay)
-        status, _final, page, _headers = http_get(row["loc"], timeout=PAGE_TIMEOUT)
+        # One request per attempt: retries live in the sitemap_cache state
+        # machine, so a bad row never blocks the queue with hidden sleeps.
+        status, final, page, headers = http_get(
+            row["loc"], timeout=PAGE_TIMEOUT, retries=0, follow_redirects=False)
+        if STOP_REQUESTED and status == 0:
+            return None  # aborted by the stop signal; do not spend an attempt
+        if 300 <= status < 400:
+            location = headers.get("Location") or headers.get("location") or ""
+            return None, _failure("redirect", status, location or final,
+                                  f"http-{status} -> {location or final}")
         if status != 200:
-            return None, f"http-{status}"
-        return _parse_record(row["loc"], row["raw_json"], page)
+            if status == 0:
+                detail = transport_error() or "transport failure"
+                return None, _failure("transport", 0, final, detail,
+                                      exception=detail.split(":", 1)[0])
+            return None, _failure(f"http-{status}", status, final, f"http-{status}")
+        record, verdict = _parse_record(row["loc"], row["raw_json"], page)
+        if record is None:
+            if final and final.rstrip("/") != row["loc"].rstrip("/"):
+                return None, _failure("redirect", status, final, f"landed on {final}")
+            return None, _failure(verdict, status, final, verdict)
+        return record, None
 
     batch: list[dict] = []
     started = time.time()
@@ -989,17 +1083,19 @@ def crawl_pending(limit: int | None = None, db_path: Path | str = DEFAULT_DB_PAT
                 outcome = fut.result()
             except Exception as exc:
                 totals["failed"] += 1
-                _bump_error(db_path, queued["loc"], f"exception: {exc}")
+                _bump_error(db_path, queued["loc"], _failure(
+                    "exception", None, None, f"{type(exc).__name__}: {exc}",
+                    exception=type(exc).__name__))
                 continue
             if outcome is None:
                 continue
             totals["pages"] += 1
-            post, verdict = outcome
+            post, failure = outcome
             if post is None:
                 totals["dead_ids"] += 1
-                _bump_error(db_path, queued["loc"], verdict,
-                            park_now=verdict in ("http-404", "http-410", "no-jsonld"),
-                            requeue=verdict in ("empty-page",))
+                _bump_error(db_path, queued["loc"], failure or _failure("unknown"),
+                            park_now=(failure or {}).get("kind") in
+                            ("http-404", "http-410"))
                 continue
             batch.append(post)
             if len(batch) >= batch_size:
@@ -1185,6 +1281,12 @@ def stats(db_path: Path | str = DEFAULT_DB_PATH) -> dict:
                 "SELECT COUNT(*) FROM sitemap_cache WHERE scraped = 1").fetchone()[0],
             "parked": conn.execute(
                 "SELECT COUNT(*) FROM sitemap_cache WHERE scraped = -1").fetchone()[0],
+            "retryable": conn.execute(
+                "SELECT COUNT(*) FROM sitemap_cache WHERE scraped = -1 "
+                "AND error_count < ?", (MAX_SCRAPE_ATTEMPTS,)).fetchone()[0],
+            "dead": conn.execute(
+                "SELECT COUNT(*) FROM sitemap_cache WHERE scraped = -1 "
+                "AND error_count >= ?", (MAX_SCRAPE_ATTEMPTS,)).fetchone()[0],
             "posts": conn.execute("SELECT COUNT(*) FROM posts").fetchone()[0],
             "adult_flagged": conn.execute(
                 "SELECT COUNT(*) FROM posts WHERE is_18_plus = 1").fetchone()[0],

@@ -17,9 +17,11 @@ exercised against fixtures shaped from the live pages measured on 2026-10-28
 from __future__ import annotations
 
 import contextlib
+import email.message
 import io
 import json
 import socket
+import sqlite3
 import sys
 import tempfile
 import unittest
@@ -431,7 +433,149 @@ class CrawlParseTests(unittest.TestCase):
         html = page(ld_block(), [episode(1)])
         record, verdict = ap._parse_record(TITLE_URL, '{"id":"abc"}', html)
         self.assertEqual(verdict, "")
-        self.assertEqual(record["queue_payload"], {"id": "abc"})
+        self.assertEqual(record["queue_payload"], {"id": "abc", "status": "ok"})
+
+
+def _redirect(location: str = "https://aryplus.tv/", code: int = 307):
+    headers = email.message.Message()
+    headers["Content-Type"] = "text/html; charset=utf-8"
+    headers["Location"] = location
+    return urllib.error.HTTPError(TITLE_URL, code, "redirect", headers,
+                                  io.BytesIO(b"<html>shell</html>"))
+
+
+class RetryLedgerTests(unittest.TestCase):
+    """A parked row is retried until the cap, with the reason kept per attempt."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.db = Path(self.tmp.name) / "aryplus.db"
+        conn = sqlite3.connect(self.db)
+        ap.ensure_schema(conn)
+        conn.execute(
+            "INSERT INTO sitemap_cache (loc, lastmod, slug, scraped, raw_json, error_count) "
+            "VALUES (?, NULL, ?, 0, ?, 0);",
+            (TITLE_URL, TITLE_ID, json.dumps({"id": TITLE_ID})))
+        conn.commit()
+        conn.close()
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def row(self):
+        conn = sqlite3.connect(self.db)
+        try:
+            return conn.execute(
+                "SELECT scraped, error_count, raw_json FROM sitemap_cache WHERE loc = ?;",
+                (TITLE_URL,)).fetchone()
+        finally:
+            conn.close()
+
+    def set_state(self, scraped: int, error_count: int):
+        conn = sqlite3.connect(self.db)
+        try:
+            conn.execute(
+                "UPDATE sitemap_cache SET scraped = ?, error_count = ? WHERE loc = ?;",
+                (scraped, error_count, TITLE_URL))
+            conn.commit()
+        finally:
+            conn.close()
+
+    def crawl(self, effect):
+        def raise_it(*args, **kwargs):
+            result = effect(*args, **kwargs)
+            if isinstance(result, Exception):
+                raise result
+            return result
+
+        with mock.patch.object(ap, "_open_no_redirect", side_effect=raise_it), \
+                mock.patch.object(ap.time, "sleep", lambda *_: None), \
+                silenced():
+            return ap.crawl_pending(db_path=self.db, workers=1, delay=0, verbose=False)
+
+    def test_redirect_keeps_its_real_status_and_location(self):
+        totals = self.crawl(lambda *a, **k: _redirect())
+        scraped, errors, raw = self.row()
+        payload = json.loads(raw)
+        self.assertEqual(totals["dead_ids"], 1)
+        self.assertEqual((scraped, errors), (2, 1))
+        self.assertEqual(payload["status"], "retrying")
+        self.assertEqual(payload["failures"][0]["kind"], "redirect")
+        self.assertEqual(payload["failures"][0]["http_status"], 307)
+        self.assertEqual(payload["failures"][0]["final_url"], "https://aryplus.tv/")
+
+    def test_parked_below_the_cap_is_retried_then_marked_dead(self):
+        self.set_state(-1, 1)
+        self.crawl(lambda *a, **k: _redirect())
+        scraped, errors, raw = self.row()
+        payload = json.loads(raw)
+        self.assertEqual((scraped, errors), (2, 2))
+        self.assertEqual(payload["status"], "retrying")
+        self.assertEqual(payload["failures"][0]["kind"], "legacy-unrecorded")
+        self.assertEqual(len(payload["failures"]), 2)
+
+        self.crawl(lambda *a, **k: _redirect())
+        scraped, errors, raw = self.row()
+        payload = json.loads(raw)
+        self.assertEqual((scraped, errors), (-1, 3))
+        self.assertEqual(payload["status"], "dead")
+        self.assertEqual(payload["attempts"], 3)
+        self.assertEqual(payload["failures"][-1]["http_status"], 307)
+        self.assertIn("aryplus.tv", payload["last_error"])
+        self.assertEqual(len(payload["failures"]), 3)
+
+    def test_parked_at_the_cap_is_not_selected(self):
+        self.set_state(-1, 3)
+        calls = []
+        totals = self.crawl(lambda *a, **k: calls.append(1))
+        self.assertEqual(totals["pages"], 0)
+        self.assertEqual(calls, [])
+        self.assertEqual(self.row()[:2], (-1, 3))
+
+    def test_transport_failure_records_the_exception_class(self):
+        self.crawl(lambda *a, **k: OSError("dns down"))
+        scraped, errors, raw = self.row()
+        payload = json.loads(raw)
+        self.assertEqual((scraped, errors), (2, 1))
+        self.assertEqual(payload["failures"][0]["kind"], "transport")
+        self.assertEqual(payload["failures"][0]["exception"], "OSError")
+        self.assertIn("dns down", payload["failures"][0]["detail"])
+
+    def test_stop_signal_does_not_spend_an_attempt(self):
+        def stop_and_fail(*args, **kwargs):
+            ap.STOP_REQUESTED = True
+            raise OSError("killed")
+
+        try:
+            self.crawl(stop_and_fail)
+        finally:
+            ap.STOP_REQUESTED = False
+        scraped, errors, raw = self.row()
+        self.assertEqual((scraped, errors), (0, 0))
+        self.assertEqual(json.loads(raw), {"id": TITLE_ID})
+
+    def test_empty_page_is_retryable_not_instantly_dead(self):
+        class Response:
+            status = 200
+            headers = email.message.Message()
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def read(self):
+                return b"   "
+
+            def geturl(self):
+                return TITLE_URL
+
+        self.crawl(lambda *a, **k: Response())
+        scraped, errors, raw = self.row()
+        payload = json.loads(raw)
+        self.assertEqual((scraped, errors), (2, 1))
+        self.assertEqual(payload["failures"][0]["kind"], "empty-page")
 
 
 if __name__ == "__main__":
