@@ -34,10 +34,10 @@ radd-stream/                        ← repo root
 │   ├── SITES.md                    ← per-site scraping reference
 │   ├── SETUP.md                    ← setup instructions for backend
 │   ├── ANDROID_INTEGRATION.md      ← how Android app consumes the backend
-│   ├── fast_fetch.py               ← MAIN ENGINE (~4,000 lines, stdlib only)
+│   ├── fast_fetch.py               ← MAIN ENGINE (6,366 lines, stdlib only)
 │   ├── viewer.py                   ← REST API + dashboard HTTP server
 │   ├── config.py                   ← project-level constants
-│   ├── test_database.py            ← 36 offline unit tests
+│   ├── test_database.py            ← 76 offline unit tests (measured 2026-10-29)
 │   ├── test_vidout.py              ← 6 VIDOUT-specific tests
 │   └── test_all_sites.py           ← live 10-site audit
 │
@@ -120,7 +120,7 @@ Verify only whether the two configured variable names are present; never read or
 Every agent — no matter how short the session — MUST do this before ending:
 
 ### For Backend Sessions:
-1. Run `python -S Fast_Fetch/test_database.py` (must be 36+ tests passing)
+1. Run `python -S Fast_Fetch/test_database.py` (must be 76 tests passing; measured 2026-10-29)
 2. Run `python -S Fast_Fetch/test_vidout.py` (must be 6/6)
 3. Append a session log to `Fast_Fetch/CONTINUITY.md`
 4. Push with Git over HTTPS using the temporary askpass helper in [`ORACLE_DEPLOYMENT.md`](ORACLE_DEPLOYMENT.md); do not use the legacy per-file API push scripts
@@ -154,9 +154,12 @@ running system** — do not treat it as hypothetical, and never copy untested or
 ```bash
 # From repo root: /opt/radd-stream  (Oracle VM)
 
-# Run all offline tests — one module per invocation; this runner ignores extra names
-python3 -S Fast_Fetch/test_database.py    # 65 tests
+# Run offline tests — one module per invocation; this runner ignores extra names.
+# There are 60 `test_*.py` modules under Fast_Fetch/ and Fast_Fetch/importers/ (measured 2026-10-28);
+# these three are the standing push gate.
+python3 -S Fast_Fetch/test_database.py    # 76 tests
 python3 -S Fast_Fetch/test_vidout.py      # 6 tests
+python3 -S Fast_Fetch/importers/test_host_resolvers.py   # 171 tests
 
 # Live site audit (writes to temp DB)
 python Fast_Fetch/test_all_sites.py
