@@ -417,14 +417,15 @@ fun SettingsScreen(
                         color = MaterialTheme.colorScheme.primary,
                     )
                     Slider(
-                        value = state.prefs.audioBoost.coerceIn(0f, AudioBoost.MAX),
+                        value = state.prefs.audioBoost.coerceIn(0f, AudioBoostUi.MAX_OFFERED_LEVEL),
                         onValueChange = viewModel::setAudioBoost,
-                        valueRange = 0f..AudioBoost.MAX,
+                        valueRange = 0f..AudioBoostUi.MAX_OFFERED_LEVEL,
                         modifier = Modifier.weight(1f),
                     )
                 }
-                // The honest part: above the player's 100% ceiling this build adds no
-                // software gain, so the caption states what is applied, not what was asked.
+                // Still worth saying: below the ceiling the boost is real, but it rides on the
+                // viewer's own system volume, so the caption states what is applied, not what
+                // was asked. The range above is already the range this build can honour.
                 Text(
                     AudioBoostUi.honestSummary(state.prefs.audioBoost, 1f),
                     style = MaterialTheme.typography.labelSmall,

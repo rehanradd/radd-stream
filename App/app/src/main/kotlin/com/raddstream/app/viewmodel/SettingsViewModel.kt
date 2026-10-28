@@ -9,6 +9,7 @@ import com.raddstream.app.data.UserRegion
 import com.raddstream.app.network.friendlyNetworkError
 import com.raddstream.app.network.models.StatsResponse
 import com.raddstream.app.player.AudioBoost
+import com.raddstream.app.player.AudioBoostUi
 import com.raddstream.app.repository.CatalogRepository
 import com.raddstream.app.share.LanShareRunner
 import com.raddstream.app.share.LanShareStatus
@@ -61,7 +62,7 @@ data class UserPreferences(
     val keepTtl: KeepTtl = KeepTtl.H3,
     val subtitleLang: String = SUBTITLE_DEFAULT,
     val dynamicColor: Boolean = false,
-    /** The audio level 0..2 ([AudioBoost]'s unit); persisted, applied by the player. */
+    /** The audio level in [AudioBoost]'s unit, already reduced to what this build can apply. */
     val audioBoost: Float = AudioBoost.BASELINE,
     /** Preferred audio language, or [AUDIO_LANGUAGE_DEFAULT] = leave it to the player. */
     val audioLanguage: String = AUDIO_LANGUAGE_DEFAULT,
@@ -199,7 +200,7 @@ class SettingsViewModel @Inject constructor(
     private fun loadPersistedPrefs() {
         viewModelScope.launch {
             settingsRepository.audioBoostLevel.collect { level ->
-                _uiState.update { it.copy(prefs = it.prefs.copy(audioBoost = AudioBoost.clampLevel(level))) }
+                _uiState.update { it.copy(prefs = it.prefs.copy(audioBoost = AudioBoostUi.offeredLevel(level))) }
             }
         }
         viewModelScope.launch {
@@ -336,7 +337,7 @@ class SettingsViewModel @Inject constructor(
      * genuinely differ on this build.
      */
     fun setAudioBoost(level: Float) {
-        val safe = AudioBoost.clampLevel(level)
+        val safe = AudioBoostUi.offeredLevel(level)
         updatePrefs { it.copy(audioBoost = safe) }
         viewModelScope.launch { settingsRepository.saveAudioBoostLevel(safe) }
     }

@@ -264,11 +264,30 @@ class AutoQualityDirector(
  * ceiling the boost is completely real (a viewer at 60% who asks for 150% gets 90%); at
  * the ceiling only the part up to 100% applies, and [honestSummary] says which part, so
  * the UI can never claim a boost it did not apply.
+ *
+ * AND THE CONTROL DOES NOT OFFER THE DEAD ZONE: a caption can explain a dead range, but a
+ * thumb the viewer can drag to 170% while the sound cannot change is still a promise the build
+ * breaks on every drag. [MAX_OFFERED_LEVEL] is the ceiling the sliders and setters use, so
+ * what a viewer can ask for is exactly what this build can apply. [AudioBoost.plan] keeps
+ * modelling the 0..2 range and its dB excess untouched — that is the policy a future
+ * software-gain stage plugs into, and raising [SOFTWARE_GAIN_AVAILABLE] to true widens every
+ * control from this one value.
  */
 object AudioBoostUi {
 
     /** False on this build: no software gain stage is available, so dB excess is refused. */
     const val SOFTWARE_GAIN_AVAILABLE: Boolean = false
+
+    /**
+     * The highest level a control may offer. With no software gain that is the player's own
+     * unity ceiling; the 0..2 model above stays reachable only through a build that can act on it.
+     */
+    val MAX_OFFERED_LEVEL: Float =
+        if (SOFTWARE_GAIN_AVAILABLE) AudioBoost.MAX else AudioBoost.BASELINE
+
+    /** A raw request reduced to the offered range: the sanitiser every setter, label and store write uses. */
+    fun offeredLevel(level: Float): Float =
+        AudioBoost.clampLevel(level).coerceAtMost(MAX_OFFERED_LEVEL)
 
     /** The single value that is legal for `Player.setVolume`, always within 0..1. */
     fun effectivePlayerGain(level: Float, userVolume: Float): Float {

@@ -1980,9 +1980,10 @@ private fun TracksSheet(state: PlayerUiState, vm: PlayerViewModel) {
                 label = if (state.audioOnly) "Audio-only mode: ON (screen decoder off)" else "Audio-only mode: off",
             ) { vm.toggleAudioOnly() }
 
-            // ── Audio level. The caption is the applied value, not the requested one:
-            //    Media3's setVolume contract stops at 100% and this build adds no software
-            //    gain, so a request above it is reported as capped. See AudioBoostUi.
+            // ── Audio level. Media3's setVolume contract stops at 100% and this build adds no
+            //    software gain, so the slider stops there too: a thumb the viewer can drag into a
+            //    range nothing can act on is a promise broken on every drag, caption or no caption.
+            //    A build that grows a DynamicsProcessing stage widens this from AudioBoostUi alone.
             Spacer(Modifier.height(14.dp))
             SheetTitle("Audio level")
             Row(
@@ -1997,9 +1998,9 @@ private fun TracksSheet(state: PlayerUiState, vm: PlayerViewModel) {
                     fontWeight = FontWeight.SemiBold,
                 )
                 Slider(
-                    value = state.audioBoostLevel.coerceIn(0f, AudioBoost.MAX),
+                    value = state.audioBoostLevel.coerceIn(0f, AudioBoostUi.MAX_OFFERED_LEVEL),
                     onValueChange = { vm.setAudioBoostLevel(it) },
-                    valueRange = 0f..AudioBoost.MAX,
+                    valueRange = 0f..AudioBoostUi.MAX_OFFERED_LEVEL,
                     modifier = Modifier.weight(1f),
                 )
             }

@@ -20,7 +20,6 @@ import com.raddstream.app.player.AdSlot
 import com.raddstream.app.player.AdSlotPolicy
 import com.raddstream.app.player.AdSlotState
 import com.raddstream.app.player.AspectMode
-import com.raddstream.app.player.AudioBoost
 import com.raddstream.app.player.AudioBoostUi
 import com.raddstream.app.player.AudioTrackPolicy
 import com.raddstream.app.player.AudioTrackRow
@@ -258,7 +257,7 @@ class PlayerViewModel @Inject constructor(
         settingsJob?.cancel()
         settingsJob = viewModelScope.launch {
             settingsRepository.audioBoostLevel.collect { level ->
-                _ui.update { it.copy(audioBoostLevel = AudioBoost.clampLevel(level)) }
+                _ui.update { it.copy(audioBoostLevel = AudioBoostUi.offeredLevel(level)) }
                 applyPlayerVolume()
             }
         }
@@ -881,12 +880,14 @@ class PlayerViewModel @Inject constructor(
     }
 
     /**
-     * The audio level control (1.0 = untouched, [AudioBoost.MAX] = the 200% request). Stored
-     * through the same DataStore the settings screen writes, so a level mixed in the player
+     * The audio level control. 1.0 is the untouched baseline and 1.0 is also the most this
+     * build can apply, so the stored value can never hold a promise the player cannot keep —
+     * including a level an older build wrote above the ceiling, which is sanitised on read too.
+     * Stored through the same DataStore the settings screen writes, so a mix made in the player
      * is the level the next episode starts with and the one the settings screen shows.
      */
     fun setAudioBoostLevel(level: Float) {
-        val clamped = AudioBoost.clampLevel(level)
+        val clamped = AudioBoostUi.offeredLevel(level)
         _ui.update { it.copy(audioBoostLevel = clamped) }
         applyPlayerVolume()
         viewModelScope.launch { settingsRepository.saveAudioBoostLevel(clamped) }
