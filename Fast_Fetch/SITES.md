@@ -734,17 +734,176 @@ python Fast_Fetch/fast_fetch.py stats  # shows domain_config entries
 
 ---
 
-## 15. Sites To Add Next
+## 15. Candidate Status — measured 2026-10-29
 
-| Site | Likely Domain | Method | Notes |
-|------|--------------|--------|-------|
-| Filmywap | filmywap.com (rotates) | XML sitemap | Large catalog |
-| Filmyhit | filmyhit.link | XML sitemap | Punjab + Bollywood |
-| MP4Moviez | ~~mp4moviez.cloud~~ `www.mp4moviez.deal` | already scraped | **Not a to-add site.** 29,848 pages already in `mp4moviez.db`; see § MP4Moviez for the converter that makes it mergeable |
-| World4uFree | world4ufree.biz | XML sitemap | Dual audio |
-| Bolly4u | bolly4u.trade | XML sitemap | Bollywood |
-| watch-movies.com.pk | watch-movies.com.pk | CF challenge | Needs special headers |
-| hdmoviesbd.xyz | NXDOMAIN | Find mirror | Domain dead |
-| Movierulz | movierulz.plz | Cloudflare | Complex JS |
-| 9xmovies | 9xmovies.care | XML sitemap | South + Bolly |
-| Kuttymovies | kuttymovies.cool | XML sitemap | Tamil focus |
+This table used to list already-scraped sites as "to add". Corrected below; only
+the last bucket is real remaining work. "Scraped" means a site-specific staging
+DB already exists under `/home/ubuntu/radd-stream-data/`.
+
+### Already scraped — do not list as to-add
+
+| Site | Staging DB | Status |
+|------|-----------|--------|
+| World4uFree | `world4ufree.db` (840 MB) | scraped |
+| Bolly4u | `bolly4u.db` (226 MB) | scraped |
+| 9xmovies | `9xmovies.db` (549 MB) | scraped |
+| MP4Moviez | `mp4moviez.db` (31 MB) | scraped; needs the § MP4Moviez converter before merge |
+| FilmyZilla | `filmyzilla.db` (34 MB) | scraped |
+| KatMovieHD | `katmoviehd.db` / `katmoviehd_refreshed.db` | scraped |
+| HDHub4u | `hdhub4u.db` (122 MB) | scraped |
+| VegaMovies | `vegamovies.db` (365 MB) | scraped |
+| MultiMovies | `multimovies.db` | scraped |
+| PagalMovies | `pagalmovies.db` (38 MB) | scraped |
+| HindiLinks4u | `hindilinks4u.db` (62 MB) | scraped |
+| ToonWorld4All | `toonworld4all.db` (201 MB) | scraped |
+| AnimaHD | `animahd.db` | scraped |
+| RareAnimes | `rareanimes.db` (126 MB) | scraped |
+| Dramacool | `dramacool.db` | scraped |
+| KissKH | `kisskh.db` (78 MB) | scraped |
+
+### Built this session — importer + staging DB
+
+| Site | Live surface | Importer | Section |
+|------|-------------|----------|---------|
+| Filmywap | `https://filmywap.site` | `importers/import_filmywap.py` | §16 |
+| FilmyHit | `https://filmyhit.mobile` | `importers/import_filmyhit.py` | §17 |
+| KuttyMovies | `https://kuttymovies.wiki` | `importers/import_kuttymovies.py` | §18 |
+
+### Still blocked / dead — do not spend quota unless something changes
+
+| Site | Last measured state |
+|------|---------------------|
+| ApneTV | 403 on every probed surface (recorded 2026-10-28) |
+| watch-movies.com.pk | Cloudflare challenge |
+| hdmoviesbd.xyz | NXDOMAIN |
+| Movierulz (`movierulz.plz`) | Cloudflare JS challenge |
+| AniWatch / HiAnime / 9anime / Kaido (`*.to`) | connection blackholed from this host (timeout, no HTTP) |
+| AnimePahe / WcoStream / AniWave / Viu-style mirrors | Cloudflare 403 or token-wall (`401 …?tkn=`) — never bypassed |
+| Bato.to | owner-closed (`coda-cj.jp/closed.html`) |
+| MelonDrama / Weibo.tv / ViewAsian / 9anime.gs | TCP timeout from this host |
+
+Anime/Asian scouting detail and the endpoints that *do* publish sitemaps are in §19.
+
+
+---
+
+## 16. Filmywap (`filmywap.site`)
+
+**Staging DB:** `/home/ubuntu/radd-stream-data/filmywap.db` · **Importer:** `Fast_Fetch/importers/import_filmywap.py`
+
+- **Domain rotation (measured 2026-10-29):** `.site` is the live surface.
+  `.wiki/.win/.online` land on `wapfilmy.in`, which serves an Airtel court-order
+  iframe (not bypassed); `.cloud/.run/.sbs` land on `filmstopia.com`, a different
+  brand; `.biz` is parked. Only `.site` is scraped.
+- **Discovery:** XML sitemap with 1,522 `/movie/<slug>` URLs. No pagination,
+  no REST API.
+- **Detail page:** schema.org `Movie` / `TVSeries` inside `@graph` — name,
+  description, image, `dateCreated`, `inLanguage`, trailer `VideoObject`.
+- **Links:** `GET /api/stream?slug=<slug>` (plus `&se=<N>&ep=<M>` for series)
+  returns JSON with signed MP4 URLs (`?sign=…&t=<epoch expiry>`). The signature
+  expires, so every source is stored with `is_temporary=1` and
+  `status='unverified'`; the durable route is the API URL kept in
+  `releases.bridge_url` / `sources.source_url`.
+- **Series are the majority** of the catalogue (~80%), average ~22.5 episodes.
+  There is no bulk endpoint: one API call per episode, which makes a full crawl
+  network-bound (measured ≈2.3 titles/min at `--workers 1 --delay 0.15`).
+- **Command:**
+  ```bash
+  python3 -S Fast_Fetch/importers/import_filmywap.py sync
+  python3 -S Fast_Fetch/importers/import_filmywap.py crawl --workers 1 --delay 0.15
+  python3 -S Fast_Fetch/importers/import_filmywap.py stats
+  ```
+
+## 17. FilmyHit (`filmyhit.mobile`)
+
+**Staging DB:** `/home/ubuntu/radd-stream-data/filmyhit.db` · **Importer:** `Fast_Fetch/importers/import_filmyhit.py`
+
+- **Domain rotation:** `filmyhit.link` is NXDOMAIN; `.com` and `.mobile` serve
+  the same catalogue (robots on `.com` points at `.mobile`); `.best` is behind a
+  Cloudflare 403 on every sitemap path. `.mobile` is used.
+- **Discovery:** one 20,997-URL `urlset`; 16,913 are detail pages ending in
+  `-free-download` (16,624 plain, 289 `-<id>-` numbered). The rest are `?page=N`
+  pagination, `/cat/<id>` categories and static pages — not queued.
+- **Detail page:** `@graph` `Movie`/`TVSeries` node — name, description, image[],
+  `dateCreated`, `datePublished`, ISO `duration`, `inLanguage`, `sameAs` (IMDb),
+  `genre[]`, `actor[]`.
+- **Link chain:** release anchor (`480p 522.26 MB · MKV`) →
+  `/all-format-downloads-<slug>-…` bridge page → `/d/<movie>/<file>/server-<n>`
+  endpoints. Sampled endpoints answered Cloudflare 502 or a third-party
+  "Verify to Continue" interstitial, so endpoints are stored **unverified** and
+  unfollowed; the bridge page stays on the release for a later resolver.
+- **Series** are season packs (`S01`) — `season_number` set, no episode split
+  invented.
+
+## 18. KuttyMovies (`kuttymovies.wiki`)
+
+**Staging DB:** `/home/ubuntu/radd-stream-data/kuttymovies.db` · **Importer:** `Fast_Fetch/importers/import_kuttymovies.py`
+
+- **Domain rotation (measured 2026-10-29):** `.wiki` is the live catalogue and
+  the only surface scraped. `.cc` answers 403 on robots and sitemaps; `.com`
+  serves a "Loading" doorway; `.download` is a WordPress landing page with a
+  two-URL `page-sitemap.xml` and one `hello-world` post; `.today/.life/.cyou/
+  .quest/.icu/.top` are NXDOMAIN; `.vip` redirects to `kutty-movie.com`, whose
+  Rank Math index lists only `page-sitemap.xml`.
+- **Discovery:** Yoast `post-sitemap.xml` — 906 `<loc>`: the homepage plus 905
+  post permalinks. Every slug ends in a resolution token
+  (`-1080p-720p-480p`); the homepage is the only filter drop. The WP REST API
+  reports `X-WP-Total: 905`, and the sitemap/REST slug sets are identical.
+- **Per-post read:** `GET /wp-json/wp/v2/posts?slug=<slug>&_fields=id,slug,link,date,title,content,yoast_head_json,categories`
+  — one small JSON body with `content.rendered` and `og_image`, instead of a
+  90 KB HTML page. The HTML carries the same content plus Yoast `@graph`.
+- **Title grammar:** `Name (Year) [SxxEyy[Tzz]] Format Languages Type 1080p |
+  720p | 480p`. All 905 titles carry a parenthesised year (including
+  `WWE Monday Night Raw (26th October 2026)`); 444 are series-shaped.
+- **Metadata:** labelled lines in the body — `IMDB Ratings:`, `Directed:`,
+  `Genres:`, `Languages:`, `Film Stars:`, `Movie Quality:`, `File Size:`,
+  `Storyline :`, `Release date:` / `Released Date:`. Presence measured across
+  all 905: ratings/genres/languages 905, stars/size 826, director 761,
+  storyline 690.
+- **Links:** download section is a sequence of `<h3>` headings, each followed by
+  one anchor per quality (`1080p [2.9GB]`). All 2,548 anchors on all 905 posts
+  point at `linkshub.website/url.php?id=<7-hex>`; no other host appears and no
+  post lacks links. Series headings either repeat the title
+  (`Download Bigg Boss (2026) S20E48 …`) or use a bare range
+  (`Download S01E01T05 Links`, episodes 1–5), so the **heading** decides the
+  range: `episode_number` stores the start, `episodes` end and heading text stay
+  in `releases.raw_meta`.
+- **Bridge gate:** the linkshub page is a 30-second countdown plus a robot
+  check whose unlock target is assembled by page script. Stored **unverified**,
+  never followed, script never executed.
+- **Command:**
+  ```bash
+  python3 -S Fast_Fetch/importers/import_kuttymovies.py sync
+  python3 -S Fast_Fetch/importers/import_kuttymovies.py crawl --workers 1 --delay 0.4
+  python3 -S Fast_Fetch/importers/import_kuttymovies.py stats
+  ```
+
+## 19. Anime / Asian host scout — measured 2026-10-29
+
+Probed from the Oracle host with a stock `curl` user agent, no challenge solving:
+
+| Candidate | Result |
+|-----------|--------|
+| melondrama.com | DNS resolves, TCP timeout on 80/443 — unreachable |
+| doramon.com | 200 but a parked lander (`window.location.href="/lander"`) |
+| animesnow.com / .net | NXDOMAIN |
+| bato.to | 200 → `coda-cj.jp/closed.html` — owner-closed |
+| weibo.tv | TCP timeout |
+| hianime.to / aniwatchtv.to / 9animetv.to / kaido.to / 9anime.gs | TCP timeout — blackholed from this host |
+| animesuge.io / myasiantv.cc | 401 token-wall (`ww547…?tkn=`) — not bypassed |
+| animepahe.com / wcostream.tv / kisskh.co / wco.tv | Cloudflare 403 challenge — not bypassed |
+| aniwave.to | 302 to `ww38.aniwave.to`, loop/gate |
+| gogoanime3.co | HTTP 200 is a 474-byte "Loading…" stub; `.at` is a domain-for-sale page |
+| miruro.tv | 200, real SPA (194 KB) — no sitemap (`/sitemap.xml` 404), data behind app API |
+| anizone.to | 200, Laravel SPA (`/anime`, `/episode`, `/tag`) — no sitemap |
+| asiancrush.co | 200, WordPress stub; `/sitemap.xml` and `/wp-sitemap.xml` 404 |
+| **iq.com** | 200, parseable `sitemapindex` (`index_intl.xml` → `sitemap_intlN.xml.gz`) |
+| **viu.com** | 200, parseable `sitemapindex` (`site-sitemap/sitemapindex.xml` → per-country VOD sitemaps) |
+
+**Verdict.** No unofficial anime/Asian host reachable from this host exposes a
+parseable sitemap; the named candidates are closed, parked, blackholed, or
+behind Cloudflare/token gates that we do not bypass. The two hosts that *do*
+publish clean sitemaps — iQiyi and Viu — are official subscription platforms
+with DRM playback: their sitemaps give metadata only, not source links, so they
+are not a fit for this fleet. Existing anime/Asian coverage stays with
+`animahd.db`, `rareanimes.db`, `toonworld4all.db`, `dramacool.db` and `kisskh.db`.
