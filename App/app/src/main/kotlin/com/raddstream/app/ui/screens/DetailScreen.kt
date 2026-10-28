@@ -105,6 +105,8 @@ import com.raddstream.app.viewmodel.SeasonGroup
 fun DetailScreen(
     onBackClick: () -> Unit,
     onPlayStream: (streamId: String, title: String) -> Unit,
+    /** A link the server calls a page: show the provider's own page rather than fail quietly. */
+    onOpenProviderPage: (streamId: String, title: String) -> Unit = { _, _ -> },
     onOpenDownloads: () -> Unit = {},
     onOpenVipUpgrade: () -> Unit = {},
     viewModel: DetailViewModel = hiltViewModel(),
@@ -166,6 +168,8 @@ fun DetailScreen(
         viewModel.navEvents.collect { event ->
             when (event) {
                 is DetailNavigationEvent.PlayStream -> onPlayStream(event.streamId, event.title)
+                is DetailNavigationEvent.OpenProviderPage ->
+                    onOpenProviderPage(event.streamId, event.title)
                 is DetailNavigationEvent.OpenExternal -> openInExternalPlayer(context, event.playUrl)
                 is DetailNavigationEvent.DownloadStarted -> onOpenDownloads()
                 is DetailNavigationEvent.DownloadNeedsPermission ->
@@ -517,18 +521,33 @@ private fun PrimaryActions(
     Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
         Button(
             onClick = onPlay,
-            enabled = bestPrint?.playableHere == true,
+            enabled = bestPrint?.canStart == true,
             modifier = Modifier.weight(1f).height(52.dp),
             colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
         ) {
             Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(20.dp))
             Spacer(Modifier.width(8.dp))
-            Text(if (bestPrint?.isCam == true) "Play (cam)" else "Play")
+            Text(bestPrint?.playLabel() ?: "Play")
         }
         OutlinedButton(onClick = onKeep, enabled = hasAnyPrint, modifier = Modifier.height(52.dp)) {
             Icon(Icons.Default.Download, contentDescription = "Download video", modifier = Modifier.size(20.dp))
         }
     }
+}
+
+/**
+ * Whether this print gets the viewer somewhere: our player can start a file, or the provider's own
+ * page can be opened. One owner, so the hero button and the release-row button never disagree about
+ * whether a tapped row does something.
+ */
+private val RankedPrint.canStart: Boolean get() = playableHere || opensProviderPage
+
+/** The button's word. A page is OPENED, a file is played, and a cam says so while it does. */
+private fun RankedPrint.playLabel(): String = when {
+    playableHere && isCam -> "Play (cam)"
+    playableHere -> "Play"
+    opensProviderPage -> "Open"
+    else -> "Play"
 }
 
 /**
@@ -994,12 +1013,12 @@ private fun PrintCard(
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
             Button(
                 onClick = { onPlayPrint(print) },
-                enabled = print.playableHere,
+                enabled = print.canStart,
                 modifier = Modifier.weight(1f),
             ) {
                 Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(18.dp))
                 Spacer(Modifier.width(6.dp))
-                Text("Play")
+                Text(print.playLabel())
             }
             OutlinedButton(onClick = { onKeep(print) }) {
                 Icon(Icons.Default.Download, contentDescription = "Download video")

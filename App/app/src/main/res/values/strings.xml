@@ -124,4 +124,15 @@
     <string name="player_pip_unsupported">Picture-in-picture needs Android 8.0+</string>
     <string name="player_chooser">Play with…</string>
     <string name="player_no_external_player">No external video player found</string>
+    <!-- ═══ PROVIDER PAGE ═══
+         The screen that shows a hoster's own page for a link the server calls a page and not a
+         file. Copy the viewer reads while watching somebody else's player. -->
+    <string name="embed_loading">Opening the page…</string>
+    <string name="embed_hosted_notice">This source is hosted by the provider, in their player and under their conditions. We show their page; we do not take their video out of it.</string>
+    <string name="embed_blocked_scheme">The page tried to open %1$s — not a web address, so it stayed here.</string>
+    <string name="embed_retry">Try again</string>
+    <string name="embed_open_in_browser">Open in browser</string>
+    <string name="embed_page_title">Provider page</string>
+    <string name="embed_load_failed">The page did not load: %1$s</string>
+    <string name="embed_load_failed_unknown">The page did not load</string>
 </resources>

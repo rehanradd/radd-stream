@@ -2,6 +2,7 @@ package com.raddstream.app.player
 
 import com.raddstream.app.network.models.LadderTier
 import com.raddstream.app.network.models.OptionGroup
+import com.raddstream.app.network.models.ProviderPageLinks
 
 /**
  * The quality switch and the download card, in one honest shape per rung.
@@ -34,9 +35,15 @@ data class QualityOption(
     val playsHere: Boolean,
     val resumable: Boolean,
     val copies: Int,
+    /**
+     * The rung's winner is a page, not a file: it can be opened, never streamed here and never
+     * kept. No default on purpose — every construction of a rung has to answer for it, so a page
+     * cannot be reclassified as "download only" by a caller that forgot the field.
+     */
+    val isProviderPage: Boolean,
 ) {
     /** A rung you can only keep: the card says it out loud instead of failing quietly. */
-    val downloadOnly: Boolean get() = !playsHere
+    val downloadOnly: Boolean get() = !playsHere && !isProviderPage
 
     /** Netflix-style size hint, "≈ 1.4 GB"; null when the server never measured a size. */
     val sizeLine: String? get() = sizeBytes?.takeIf { it > 0 }?.let { formatBytes(it) }
@@ -45,7 +52,11 @@ data class QualityOption(
     val detailLine: String
         get() = listOfNotNull(
             sizeLine?.let { "≈ $it" },
-            if (playsHere) PLAYABLE_HERE else KEEPS_ONLY,
+            when {
+                playsHere -> PLAYABLE_HERE
+                isProviderPage -> PROVIDER_PAGE_ONLY
+                else -> KEEPS_ONLY
+            },
         ).joinToString(" · ")
 
     companion object {
@@ -174,6 +185,15 @@ object QualityLadder {
             playsHere = playable && winner.playable && !winner.isDead,
             resumable = winner.isResumableLink,
             copies = copies,
+            // The ladder's copy of a link carries `kind` and no `playability` (that is the
+            // `ladder_link` projection, not the full one), so the rung's page verdict comes from
+            // the served kind word alone — the same rule the detail rows use. WORDS only, never
+            // health: a rung whose page is currently down is still not a file to keep, and its
+            // deadness already shows up as `playsHere` being false.
+            isProviderPage = ProviderPageLinks.isPageVerdict(
+                kind = winner.kind,
+                playability = null,
+            ),
         )
     }
 }

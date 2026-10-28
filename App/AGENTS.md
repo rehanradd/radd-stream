@@ -323,7 +323,8 @@ against `App/app/src/main/kotlin/com/raddstream/app/ui/`:
 | My List | `my_list` | Room-backed favorites |
 | Settings | `settings` | Server config + live server diagnostics |
 | Detail | `detail/{postId}` | `getPostDetail`, release/source lists, play action |
-| Player | `player/{url}/{title}` | Media3 ExoPlayer, `resolveStream` |
+| Player | `player/{streamId}/{title}` | Media3 ExoPlayer, `resolveStream`. The argument is the **opaque handle**, never a URL |
+| Provider page | `embed/{streamId}/{title}` | `EmbedWebViewScreen` — the provider's own page, visibly, for a link the server calls a page (`ProviderPageLinks`). Same handle-only rule; see §14 Session 25 and `docs/PARITY_BACKEND_BLOCKED.md` §4-G |
 
 The §5 note above supersedes the "app calls only `/api/v1/stats` and
 `/api/v1/posts`" statement, and the earlier Phase 1 task lists in §8 and the
@@ -1961,3 +1962,104 @@ episode-offset calibration, which I did not delete because this session was not 
 touch Kotlin — they still need the evidence-based keep-or-cut call; the next planned deploy's
 release note (carrying `subtitled`); and the two tuning tickets this session's tables now name —
 `by-media` with the v2 reads, and the 3.4 MB detail payload.
+
+### Session 25 — A provider page is shown, not strip-mined: `Screen.Embed` and the end of "keep an HTML page" (2026-10-28)
+
+**What was asked and what was refused.** A task file in `/tmp` asked for an "Autonomous Sprint —
+Client-Side Headless Stream Interceptor": an off-screen `WebView`, `shouldInterceptRequest` sniffing
+for `.m3u8` / `video/mp4` / `application/x-mpegURL`, a 3.5 s kill timer, and the bare URL handed to
+ExoPlayer. That was **refused**, and the refusal is recorded as `PARITY_BACKEND_BLOCKED.md` §3 row 21
+(**WON'T DO**) rather than left in a chat log: its whole purpose is to defeat a provider's player
+gate, which root `AGENTS.md` ("Not a DRM circumventer", "do not frame work to bypass another
+service's safety rules") and `DISCLAIMER.md` §2 rule out. Its premise was fictional too — there is no
+`needs-js` resolver value; `sources.playback_type` is `TEXT DEFAULT 'url'` (`fast_fetch.py:644`) and
+the importers only ever write `url|iframe|hls|mp4|video|direct` (`:3257-3271`). The owner then
+approved the honest feature the request stood in for: **the provider's page, visibly, in their
+player, under their conditions** (Option 1) plus the parity documentation (Option 2). Nothing was
+built that intercepts traffic; `ProviderPageScreenTest` is a build-breaking guard against ever
+building one.
+
+**The real defect this found, which was already shipping.** `LinkClassification` filed the server's
+`kind="external"` as `Playability.DOWNLOAD`, so a page link was **keepable**: `keep` handed
+DownloadManager an HTML page and the Downloads row reported a film. Two edges, two words for one
+fact — `viewer.py::link_view()` publishes `kind="external", playable=false`, the Layer-1 projection
+publishes `kind="embed", playability="webview", protocol="html"` at `rank_score=280`
+(`GoldenVectors.LinkGoldenVectors`, 8 rows). `ProviderPageLinks` is now the one rule for both.
+
+**Created:** `ui/screens/EmbedWebViewScreen.kt`, `viewmodel/EmbedWebViewModel.kt` (`EmbedPage`
+Resolving / Ready / **Refused** — a refusal with a reason, never a blank spinner),
+`test/…/network/models/ProviderPageLinksTest.kt` (17), `test/…/tooling/ProviderPageScreenTest.kt` (4),
+`test/…/ui/navigation/EmbedRouteTest.kt` (3).
+**Changed:** `network/models/LinkClassification.kt` (`ProviderPageLinks` + `EMBED`/`WEBVIEW`/`HTML`,
+`isPageWord` / `isPageVerdict` / `isProviderPage`), `viewmodel/ReleaseLayoutBuilder.kt`
+(`RankedLink.isPageLink` / `isProviderPage` / `keepable` / `displayLabel`, `RankedPrint.opensProviderPage`),
+`player/QualityLadder.kt` (rung `isProviderPage`, `PROVIDER_PAGE_ONLY` wording),
+`test/…/viewmodel/VipQualityGateTest.kt` (its `option(...)` fixture gained the new required field — the
+compiler asked, nothing was relaxed), `viewmodel/DetailViewModel.kt` (`OpenProviderPage`
+emitted **before** `stageFailover`/`stageAutoLadder`/`stageSyncScope`; `keepRung`/`keepPrint` refuse pages
+with `PAGE_NOT_A_FILE`), `ui/screens/DetailScreen.kt` (`canStart` / `playLabel()` — a page-only print
+says "Open" instead of being a dead button), `ui/navigation/Screen.kt` + `NavGraph.kt` (`embed/{streamId}/{title}`,
+handle-only, encoded like `Player`), `res/values/strings.xml` (8 `embed_*` entries), `docs/PARITY_BACKEND_BLOCKED.md`
+(§3 row 21, §4 row G), §6 of this file (the Player row's route was still written `player/{url}/{title}` — the
+argument has been an opaque handle for sessions now; plus the new Provider-page row).
+
+**The decision worth not re-litigating: two page questions, not one.** `isProviderPage` is the
+*actionable* verdict (word **and** handle **and** our redirector **and** not dead) and decides whether
+an "Open" offer exists. `isPageLink` is the *categorical* verdict — the served word alone — and is what
+`keepable`, `keepPrint` and `QualityOption.downloadOnly` read. Health says nothing about what a link
+**is**: a page that is down today is still not a file, and an offer to "keep" it is the same bug wearing
+a different hat. A dead **file** stays keepable exactly as before, because that is a link the ledger can
+heal, not a wrong category. The ladder carries only the categorical answer, because its three-way
+wording has no dead-signal to lose (`playsHere` already excludes dead).
+
+**Deliberate limits, stated in the screen's own KDoc:** it loads `<server>/api/v1/stream?id=<handle>`
+and nothing else — no address is composed, stored, or displayed by this client; no
+`shouldInterceptRequest`, no `WebResourceResponse`, no `DownloadListener`, no hidden WebView;
+`onReceivedTitle` is unwired because a page title is a hoster name; `failingUrl` is never read (the
+failure line is a behaviour word); "Open in browser" passes **our** redirector, never `webView.url`;
+pop-ups and multiple windows disabled, `allowFileAccess`/`allowContentAccess` off,
+`onPermissionRequest` denied flat; non-web schemes (`intent:`, `market:`, `sms:`, an invented `file:`)
+are refused with a visible reason; HTML5 fullscreen is honoured over our own app bar because that is
+the provider player's control, not ours. `mediaPlaybackRequiresUserGesture = false` is the one
+allowance: the viewer already pressed Play.
+
+**Two test fixes that were mine, not the tree's** — neither weakened a guard:
+`CommentBalanceTest` flagged `ProviderPageLinksTest.kt:45`; `scan()` treats a `'` outside a string as a
+char-literal opening and returns the line if it meets a newline first, so a backticked test name with a
+**lone apostrophe** is indistinguishable from an unterminated `'`. Three names were reworded (the
+existing precedent, `ModelsTest.kt:371`, has two). `ProviderPageScreenTest` failed on its own screen's
+prose: the KDoc *names* the four calls it refuses. The scans now run over `codeOf(text)` — comments
+removed, string literals preserved — and the positive controls (`WebView(ctx)`, `loadUrl(`,
+`shouldOverrideUrlLoading`) are asserted over the same stripped text, so a stripper that ate the code
+cannot make the guard green. Across all 225 Kotlin sources, `/tmp/scan_multi.py` (a faithful copy of
+`scan`, reporting every offender rather than the first) prints nothing.
+
+**Doc-comment truth retired, not deleted:** `PlaybackService`, `RenditionFailover`, `PlaybackRecovery`
+(×3), `CatalogV2` and `LinkKindClassifier` each carried an absolute ("no WebView path exists",
+"unplayable = keep") that qoder2 correctly flagged. Those were stale wording, not a hidden
+implementation — the player truth is unchanged and a page never enters a `MediaItem` — so they now say
+what is actually true: a page is not in the **player**, and the provider-page screen is where it goes.
+
+**Gate:** `/tmp/qbuild.sh -Dorg.gradle.jvmargs='-Xmx1536m' :app:compileDebugKotlin :app:testDebugUnitTest`
+→ BUILD SUCCESSFUL in 1m 39s, `GRADLE_EXIT=0`, `FOREIGN_BUILD_PIDS_SEEN=` empty, `OVERLAP=NO`,
+**77 result XMLs, all written at the single timestamp 20:57:51** against a run started 20:56:12
+(13 tasks executed, 25 up-to-date — the test task itself executed, it is not a cached report),
+**612 tests / 0 failures / 0 errors / 0 skipped**. The prior run of this same work reported 611/4 failed;
+these are those four, diagnosed rather than deleted. `PosterCardProvenanceTest` self-skips on aarch64 as
+it always has, so its 0-skipped figure is a suite that did not execute here.
+
+**Deliberately not verified:** no device or emulator. The screen's rendering, back-through-page-history,
+HTML5 fullscreen, the refusal lines and the browser hand-off are compile- and unit-verified only. And one
+deployment fact applies to this screen as much as to playback: the host is plain HTTP and cleartext is
+permitted in the debug build only, so a **signed release** build cannot open a provider page from
+`92.4.95.252` until the deployment has TLS — recorded in row G, not papered over.
+
+**Rules kept:** no `.py` file touched, no service restart, no nginx change, no push (commits are the
+owner's gate), `/tmp/qbuild.sh` only, one build at a time, no credential printed, §13 hue untouched.
+
+**Next agent should:** (1) the §3 row 21 refusal is a product boundary, not a backlog item — if a
+future brief asks for a sniffer again, point at row 21 and `ProviderPageScreenTest` rather than
+re-arguing it; (2) on a real device, check the fullscreen custom-view layering over the `TopAppBar` and
+that the progress bar's 1..99 gate never strands a page at 99%; (3) the still-open owner decisions from
+Session 24 are unchanged (§13 hue, `DynamicServerDiscovery`, episode-offset calibration, the `subtitled`
+deploy note).

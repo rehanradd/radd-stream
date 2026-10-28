@@ -8,6 +8,7 @@ import com.raddstream.app.network.models.HdrFormat
 import com.raddstream.app.network.models.LinkClassification
 import com.raddstream.app.network.models.LinkState
 import com.raddstream.app.network.models.Playability
+import com.raddstream.app.network.models.ProviderPageLinks
 import com.raddstream.app.network.models.ReleaseDetail
 import com.raddstream.app.network.models.ReleaseLabelParsing
 import com.raddstream.app.network.models.Resolution
@@ -17,6 +18,7 @@ import com.raddstream.app.network.models.SourceTag
 import com.raddstream.app.network.models.WorkType
 import com.raddstream.app.player.NOT_PLAYABLE_HERE
 import com.raddstream.app.player.PLAYABLE_HERE
+import com.raddstream.app.player.PROVIDER_PAGE_ONLY
 
 /*
  * PRESENTATION VIEW STATE — collapses the raw v1 release rows into what the detail screen
@@ -84,13 +86,43 @@ data class RankedLink(
         get() = streamId.isNotBlank() && !playUrl.isNullOrBlank() &&
             playability.isDirectlyPlayable && !health.isDead
 
-    /** Addressable at all — the minimum a keep (download) request needs. */
-    val keepable: Boolean get() = streamId.isNotBlank() && !playUrl.isNullOrBlank()
+    /**
+     * The served WORDS call this link a page. Health says nothing about what a link IS: a dead
+     * page is still not a file, so this — never [isProviderPage] — is what an offer to keep must
+     * refuse. [isProviderPage] is the actionable verdict ("a page we can open right now").
+     */
+    val isPageLink: Boolean
+        get() = ProviderPageLinks.isPageVerdict(kind = kind, playability = playability)
+
+    /**
+     * The server says this link is a page, not a file — it presents in the provider's own
+     * player, opened through our redirector, and never in Media3. One rule owns the words:
+     * [ProviderPageLinks].
+     */
+    val isProviderPage: Boolean
+        get() = ProviderPageLinks.isProviderPage(
+            kind = kind,
+            playability = playability,
+            hasHandle = streamId.isNotBlank(),
+            hasOurRedirector = !playUrl.isNullOrBlank(),
+            isDead = health.isDead,
+        )
+
+    /**
+     * Addressable as a FILE — the minimum a keep request needs. A page is never keepable, alive
+     * or dead: DownloadManager would fetch HTML and the row would claim a film had been kept.
+     */
+    val keepable: Boolean
+        get() = streamId.isNotBlank() && !playUrl.isNullOrBlank() && !isPageLink
 
     /** The row's own sentence: behaviour words, never a name of somebody else. */
     fun displayLabel(): String = listOfNotNull(
         label?.takeIf { it.isNotBlank() },
-        if (playableHere) PLAYABLE_HERE else NOT_PLAYABLE_HERE,
+        when {
+            playableHere -> PLAYABLE_HERE
+            isProviderPage -> PROVIDER_PAGE_ONLY
+            else -> NOT_PLAYABLE_HERE
+        },
     ).distinct().joinToString(" · ").ifBlank { "Link" }
 }
 
@@ -151,6 +183,13 @@ data class RankedPrint(
 
     /** Whether the detail screen's Play button can do anything at all. */
     val playableHere: Boolean get() = bestLink?.playableHere == true
+
+    /**
+     * Whether this print can be watched at all in this app: it has a page the provider's own
+     * player will open. The Play button reads "Open" for such a print instead of going dark,
+     * because the server did answer with something watchable — just not with a file.
+     */
+    val opensProviderPage: Boolean get() = links.any { it.isProviderPage }
 
     /** What the row says beside the badge: behaviour words, never somebody else's name. */
     val bestOptionLabel: String? get() = bestLink?.displayLabel()

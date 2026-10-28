@@ -23,16 +23,21 @@ package com.raddstream.app.player
  *
  * The single remaining rule lives in `LinkClassification.classify()` and every caller uses
  * it directly, so a candidate can never be "playable" to the catalog and "unusable" to the
- * player. What stays here is only the player's vocabulary — the two words it says out loud
- * about a link. A per-caller verdict type was removed once nothing asked for one.
+ * player. What stays here is only the player's vocabulary — the words it says out loud about a
+ * link; the page rule itself is `network/models/ProviderPageLinks`. A per-caller verdict type
+ * was removed once nothing asked for one.
  */
 
 /**
  * What the app says, out loud, about a link it cannot present: a `download` or `none`
- * playability is offered for keeping and named honestly. There is no WebView path to fall
- * back to, and "nothing happened" is never the answer.
+ * playability is offered for keeping and named honestly. Our player is never given a page,
+ * and the app never hands off a third-party address — a link that only presents in a browser
+ * is opened by [PROVIDER_PAGE_ONLY], inside our own screen, through our own redirector.
  */
 const val NOT_PLAYABLE_HERE = "Not playable here"
 
-/** The one presentation this product has. */
+/** The one presentation this product has for a FILE. */
 const val PLAYABLE_HERE = "Plays here"
+
+/** The word a row uses when the link is a page: it plays, but not in our player. */
+const val PROVIDER_PAGE_ONLY = "Opens in the provider's page"

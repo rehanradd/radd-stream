@@ -45,6 +45,8 @@ class VipQualityGateTest {
         playsHere = true,
         resumable = true,
         copies = 1,
+        // These rows exist to exercise the quality gate; every one of them is a file.
+        isProviderPage = false,
     )
 
     @Test

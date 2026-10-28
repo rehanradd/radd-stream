@@ -57,12 +57,29 @@ data class DetailUiState(
     val premiumSourcesLocked: Boolean = false,
 )
 
+/**
+ * What a keep request needs is a file. A page is not one: DownloadManager would fetch HTML and
+ * the Downloads row would then claim a film had been kept. The screen offers the page instead,
+ * and says why it is not in the kept list.
+ */
+private const val PAGE_NOT_A_FILE =
+    "This source is a page on the provider's site, not a file — open it instead of keeping it."
+
 sealed class DetailNavigationEvent {
     /** Navigate by OPAQUE HANDLE only — a URL in a route would live in the back stack. */
     data class PlayStream(val streamId: String, val title: String) : DetailNavigationEvent()
 
     /** The one hand-off this app makes, and it carries OUR OWN address. */
     data class OpenExternal(val streamId: String, val playUrl: String) : DetailNavigationEvent()
+
+    /**
+     * The server says this link is a page, not a file (`ProviderPageLinks`), so our player has
+     * nothing to load. The provider's own page is shown, in the foreground, with its own controls
+     * and its own conditions. It carries the OPAQUE HANDLE for the reason [PlayStream] does: the
+     * screen rebuilds our redirector from the server the viewer connected to, and no upstream
+     * address ever enters a back stack.
+     */
+    data class OpenProviderPage(val streamId: String, val title: String) : DetailNavigationEvent()
 
     /** A download Android accepted: its public file is already moving, so show Downloads. */
     data class DownloadStarted(val label: String) : DetailNavigationEvent()
@@ -342,6 +359,10 @@ class DetailViewModel @Inject constructor(
             _uiState.update { it.copy(actionMessage = VipQualityGate.LOCKED_MESSAGE) }
             return
         }
+        if (option.isProviderPage) {
+            _uiState.update { it.copy(actionMessage = PAGE_NOT_A_FILE) }
+            return
+        }
         _uiState.update { it.copy(selectedBand = option.band) }
         keep(
             handle = option.streamId,
@@ -412,6 +433,16 @@ class DetailViewModel @Inject constructor(
         val title = _uiState.value.post?.let { it.cleanTitle ?: it.title } ?: "Stream"
         if (option.streamId.isBlank()) {
             _uiState.update { it.copy(actionMessage = "Nothing playable on this rung yet.") }
+            return
+        }
+        // A rung that is a page is not staged and not played: nothing starts, so there is no
+        // resume point to write and no position for Auto to hop to. Staging it would put an HTML
+        // page in the failover list the player walks when a CDN refuses.
+        if (option.isProviderPage) {
+            _uiState.update { it.copy(selectedBand = option.band) }
+            viewModelScope.launch {
+                _navEvents.emit(DetailNavigationEvent.OpenProviderPage(option.streamId, title))
+            }
             return
         }
         PlayerSessionStore.Instance.stageFailover(option.streamId, option.backupHandles)
@@ -498,7 +529,9 @@ class DetailViewModel @Inject constructor(
             _uiState.update { it.copy(actionMessage = VipQualityGate.LOCKED_MESSAGE) }
             return
         }
-        val link = print.links.firstOrNull { it.playableHere } ?: print.links.firstOrNull { it.keepable }
+        val link = print.links.firstOrNull { it.playableHere } ?:
+            print.links.firstOrNull { it.isProviderPage } ?:
+            print.links.firstOrNull { it.keepable }
         if (link == null) {
             _uiState.update { it.copy(actionMessage = "Nothing playable on this print yet.") }
             return
@@ -519,6 +552,15 @@ class DetailViewModel @Inject constructor(
         val playUrl = link.playUrl
         if (link.streamId.isBlank() || playUrl.isNullOrBlank()) {
             _uiState.update { it.copy(actionMessage = "This option is download-only.") }
+            return
+        }
+        // Nothing plays here, so nothing is staged: no resume scope, no Continue-watching row,
+        // no position lookup waiting on bytes that will never arrive. The provider's page opens
+        // instead, and the viewer leaves this screen having watched nothing on our side.
+        if (link.isProviderPage) {
+            viewModelScope.launch {
+                _navEvents.emit(DetailNavigationEvent.OpenProviderPage(link.streamId, title))
+            }
             return
         }
         val scope = stageSyncScope(
@@ -577,9 +619,18 @@ class DetailViewModel @Inject constructor(
             _uiState.update { it.copy(actionMessage = VipQualityGate.LOCKED_MESSAGE) }
             return
         }
-        val link = print.links.firstOrNull { !it.streamId.isBlank() }
+        val link = print.links.firstOrNull { !it.streamId.isBlank() && !it.isPageLink }
+        if (link == null) {
+            _uiState.update {
+                it.copy(
+                    actionMessage = if (print.links.any { row -> row.isPageLink }) PAGE_NOT_A_FILE
+                    else "Nothing to download on this print yet.",
+                )
+            }
+            return
+        }
         keep(
-            handle = link?.streamId.orEmpty(),
+            handle = link.streamId,
             printLabel = print.qualityLabel,
         )
     }

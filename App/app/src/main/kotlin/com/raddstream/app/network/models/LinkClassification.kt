@@ -54,11 +54,64 @@ data class LinkAssessment(
     val canStream: Boolean get() = playability.isDirectlyPlayable
 
     /**
-     * The only presentation this app has: a Media3 address. A link the server does not mark
-     * playable is offered for keeping, with an honest "Not playable here" — never a WebView,
-     * never an external hand-off of somebody else's page.
+     * The server's own answer to "is this a page rather than a file?". Kept here rather than at
+     * each call site so the detail screen, the rung card and the failover trail cannot disagree
+     * about the same link.
+     */
+    val isProviderPage: Boolean
+        get() = ProviderPageLinks.isPageVerdict(kind = kind.wire, playability = playability)
+
+    /**
+     * The only presentation this app has for a file: a Media3 address. A link the server does not
+     * mark playable is either offered for keeping or, when it is a page, opened in
+     * [com.raddstream.app.ui.screens.EmbedWebViewScreen] through our own redirector — and never
+     * handed to Media3 and never kept as if it were a file.
      */
     val playableHere: Boolean get() = playability.isDirectlyPlayable
+}
+
+/**
+ * The single rule for "this link is a page, not a file".
+ *
+ * WHY BOTH WORDS ARE NEEDED. `Fast_Fetch/viewer.py::link_view()` publishes a ledger row whose
+ * `playback_type` is `iframe` as `kind = "external"` (deliberately not "embed", which is a real
+ * hoster name and would trip the sentinel scan that protects every response) with
+ * `playable = false`. The Layer-1 projection publishes the same fact as
+ * `kind = "embed", playability = "webview"` — the pair `catalog_v2.classify_link()` writes,
+ * pinned by the generated rows in `GoldenVectors.LinkGoldenVectors`. Two edges, one condition,
+ * two words: a client that understands only one of them silently mis-files a page as a
+ * downloadable file, and `keep` then hands Android's DownloadManager an HTML page and records
+ * the result as a kept film. That was the old behaviour, and it was wrong.
+ *
+ * What the rule deliberately does NOT do: look at a hostname or a URL shape. There is no hoster
+ * table in this app — the verdict comes only from the server's own words, and an unknown word
+ * degrades to "not a page" exactly as an unknown enum value degrades to UNKNOWN elsewhere.
+ */
+object ProviderPageLinks {
+
+    /** The served `kind` words that name a page. Both are ours; neither names who hosts it. */
+    val WIRE_KINDS: Set<String> = setOf("external", "embed")
+
+    fun isPageWord(kind: String?): Boolean = kind?.trim()?.lowercase() in WIRE_KINDS
+
+    /** The server's verdict, in either of its two spellings. */
+    fun isPageVerdict(kind: String?, playability: Playability?): Boolean =
+        isPageWord(kind) || playability == Playability.WEBVIEW
+
+    /**
+     * A page this app can actually open: the server called it a page, it carries our handle and
+     * our own redirector for that handle, and its scrape status does not say it is gone. The
+     * redirector is the whole design — the screen is given `<server>/api/v1/stream?id=<handle>`
+     * and the SERVER's 302 decides where it lands, so no provider address is ever composed,
+     * stored, or displayed by this client.
+     */
+    fun isProviderPage(
+        kind: String?,
+        playability: Playability?,
+        hasHandle: Boolean,
+        hasOurRedirector: Boolean,
+        isDead: Boolean,
+    ): Boolean = !isDead && hasHandle && hasOurRedirector && isPageVerdict(kind, playability)
 }
 
 object LinkClassification {
@@ -87,7 +140,9 @@ object LinkClassification {
             // file endpoint, exactly like "direct".
             "resolve" -> LinkKind.CDN_DIRECT
             "hls", "manifest" -> LinkKind.HLS_MANIFEST
-            "download", "external" -> LinkKind.DOWNLOAD_ONLY
+            // "external" (the v1 edge) and "embed" (the projection) are one condition: a page.
+            "download" -> LinkKind.DOWNLOAD_ONLY
+            "external", "embed" -> LinkKind.EMBED
             "" -> fallbackKind(playability)
             else -> fallbackKind(playability)
         }
@@ -96,15 +151,16 @@ object LinkClassification {
     private fun fallbackKind(playability: Playability): LinkKind = when (playability) {
         Playability.STREAM, Playability.BOTH -> LinkKind.CDN_DIRECT
         Playability.DOWNLOAD -> LinkKind.DOWNLOAD_ONLY
+        Playability.WEBVIEW -> LinkKind.EMBED
         Playability.NONE -> LinkKind.DEAD_END
         else -> LinkKind.UNKNOWN
     }
 
     /**
      * `cat_links.playability` as served, or our derivation of the server's `kind` word and its
-     * own `playable` verdict when the older route does not send one. `external` and `download`
-     * both land on DOWNLOAD: the honest "we cannot present this inside this app", never a
-     * silent failure and never an embed page.
+     * own `playable` verdict when the older route does not send one. `external` and `embed` both
+     * land on WEBVIEW: the honest "this is a page, it presents in the provider's player", never a
+     * silent failure and never a file we would offer for keeping.
      */
     fun playabilityFromWire(
         kind: String?,
@@ -116,24 +172,30 @@ object LinkClassification {
     ): Playability {
         if (!hasHandle) return Playability.NONE
         val word = kind?.trim()?.lowercase().orEmpty()
+        val served = playability?.trim()?.lowercase()?.let { Playability.fromWire(it) }
+            ?.takeIf { it != Playability.UNKNOWN }
+        // A page word wins over every other reading. `link_view()` marks it `playable = false`,
+        // the projection names it `webview`, and neither spelling has ever meant "a file this
+        // player can start" — so believing anything else here produces a kept HTML page.
+        if (served == Playability.WEBVIEW || ProviderPageLinks.isPageWord(word)) {
+            return Playability.WEBVIEW
+        }
         if (playable == false) {
-            // The server already answered "not inside our player". Believe it, and say what
-            // remains: keeping it, or nothing at all.
-            return if (downloadable == true || word == "download" || word == "external") {
+            // The server already answered "not inside our player". Believe it, and say which of
+            // the two things remains: a file that can be kept, or nothing at all.
+            return if (downloadable == true || word == "download") {
                 Playability.DOWNLOAD
             } else {
                 Playability.NONE
             }
         }
-        val served = playability?.trim()?.lowercase()?.let { Playability.fromWire(it) }
-            ?.takeIf { it != Playability.UNKNOWN && it != Playability.WEBVIEW }
         if (served != null) return served
         return when (word) {
             "direct" -> if (resumable) Playability.BOTH else Playability.STREAM
             // "resolve" = the 302 behind OUR handle does the work; Media3 follows it, so the
             // link is directly addressable exactly like "direct".
             "resolve", "hls", "manifest" -> Playability.STREAM
-            "download", "external" -> Playability.DOWNLOAD
+            "download" -> Playability.DOWNLOAD
             else -> Playability.STREAM
         }
     }

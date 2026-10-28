@@ -294,9 +294,10 @@ enum class PlaybackMode {
     DIRECT,
 
     /**
-     * Not presentable in this app: keep it for offline instead, and SAY so. This is what a
-     * link the server marks `external`/`download` lands on — there is no WebView path and no
-     * silent failure any more.
+     * Not presentable in this app's player: keep it for offline instead, and SAY so. This is what a
+     * link the server marks `download` lands on — there is no silent failure any more. A link it
+     * marks `external` is a page and is opened by the provider-page screen, so it never needs a
+     * playback mode at all.
      */
     DOWNLOAD,
 

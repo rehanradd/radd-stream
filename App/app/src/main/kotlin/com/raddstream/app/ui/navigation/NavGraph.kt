@@ -29,6 +29,7 @@ import com.raddstream.app.data.RemoteFeatures
 import com.raddstream.app.ui.screens.BrowseScreen
 import com.raddstream.app.ui.screens.DetailScreen
 import com.raddstream.app.ui.screens.DownloadsScreen
+import com.raddstream.app.ui.screens.EmbedWebViewScreen
 import com.raddstream.app.ui.screens.HomeScreen
 import com.raddstream.app.ui.screens.MyListScreen
 import com.raddstream.app.ui.screens.PlayerScreen
@@ -227,6 +228,9 @@ fun RaddStreamNavGraph(
                     onPlayStream = { streamId, title ->
                         navController.navigate(Screen.Player.createRoute(streamId, title))
                     },
+                    onOpenProviderPage = { streamId, title ->
+                        navController.navigate(Screen.Embed.createRoute(streamId, title))
+                    },
                     onOpenDownloads = { navController.navigate(Screen.Downloads.route) },
                     onOpenVipUpgrade = { navController.navigate(Screen.VipUpgrade.route) },
                 )
@@ -257,6 +261,21 @@ fun RaddStreamNavGraph(
                         }
                     },
                 )
+            }
+
+            /**
+             * The provider's own page, for a link the server says is a page and not a file. The
+             * route carries the OPAQUE HANDLE only — see [Screen.Embed] for why an address never
+             * belongs in a back stack, and `EmbedWebViewScreen` for what this screen does not do.
+             */
+            composable(
+                route = Screen.Embed.route,
+                arguments = listOf(
+                    navArgument(Screen.Embed.ARG_STREAM_ID) { type = NavType.StringType },
+                    navArgument(Screen.Embed.ARG_TITLE) { type = NavType.StringType },
+                ),
+            ) {
+                EmbedWebViewScreen(onBack = { navController.popBackStack() })
             }
 
             composable(

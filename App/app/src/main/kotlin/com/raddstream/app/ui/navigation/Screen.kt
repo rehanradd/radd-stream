@@ -4,6 +4,25 @@ import java.net.URLDecoder
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 
+/**
+ * The one route-argument codec. A handle, a URI or a title is free TEXT that can contain `/`,
+ * `?` and `%`, and a route segment splits on those characters — so every destination carrying
+ * one encodes on the way in and decodes on the way out, identically. Three destinations needed
+ * this and each had its own copy of the same four lines; one owner means a route can never be
+ * built one way and parsed another.
+ */
+private fun encodeRouteArg(raw: String): String =
+    URLEncoder.encode(raw, StandardCharsets.UTF_8.name())
+
+private fun decodeRouteArg(encoded: String): String =
+    try {
+        URLDecoder.decode(encoded, StandardCharsets.UTF_8.name())
+    } catch (_: Exception) {
+        // A malformed escape is not a reason to lose the whole argument: show what the caller
+        // actually typed rather than a percent-sign soup.
+        encoded
+    }
+
 /** All navigation destinations as a sealed class. */
 sealed class Screen(val route: String) {
     object Setup : Screen("setup")
@@ -32,25 +51,33 @@ sealed class Screen(val route: String) {
         const val ARG_STREAM_ID = "streamId"
         const val ARG_TITLE = "title"
 
-        fun createRoute(streamId: String, title: String): String {
-            val encodedHandle = URLEncoder.encode(streamId, StandardCharsets.UTF_8.name())
-            val encodedTitle = URLEncoder.encode(title, StandardCharsets.UTF_8.name())
-            return "player/$encodedHandle/$encodedTitle"
-        }
+        fun createRoute(streamId: String, title: String): String =
+            "player/${encodeRouteArg(streamId)}/${encodeRouteArg(title)}"
 
-        fun decodeStreamId(encoded: String): String =
-            try {
-                URLDecoder.decode(encoded, StandardCharsets.UTF_8.name())
-            } catch (_: Exception) {
-                encoded
-            }
+        fun decodeStreamId(encoded: String): String = decodeRouteArg(encoded)
 
-        fun decodeTitle(encoded: String): String =
-            try {
-                URLDecoder.decode(encoded, StandardCharsets.UTF_8.name())
-            } catch (_: Exception) {
-                encoded
-            }
+        fun decodeTitle(encoded: String): String = decodeRouteArg(encoded)
+    }
+
+    /**
+     * The provider's own page, for a link the server says is a page and not a file
+     * (`ProviderPageLinks`). Addressed by the opaque handle for exactly the reason [Player] is:
+     * the screen loads OUR redirector for that handle and lets the server's 302 decide where it
+     * lands, so no upstream address is ever composed here, saved in a back stack, or painted on
+     * the screen. What opens is the hoster's player — visibly, with its own controls and its own
+     * conditions — because this app has no other way to present that page, and takes no
+     * shortcut around it.
+     */
+    object Embed : Screen("embed/{streamId}/{title}") {
+        const val ARG_STREAM_ID = "streamId"
+        const val ARG_TITLE = "title"
+
+        fun createRoute(streamId: String, title: String): String =
+            "embed/${encodeRouteArg(streamId)}/${encodeRouteArg(title)}"
+
+        fun decodeStreamId(encoded: String): String = decodeRouteArg(encoded)
+
+        fun decodeTitle(encoded: String): String = decodeRouteArg(encoded)
     }
 
     /**
@@ -61,17 +88,9 @@ sealed class Screen(val route: String) {
         const val ARG_URI = "uri"
         const val ARG_TITLE = "title"
 
-        fun createRoute(uri: String, title: String): String {
-            val encodedUri = URLEncoder.encode(uri, StandardCharsets.UTF_8.name())
-            val encodedTitle = URLEncoder.encode(title, StandardCharsets.UTF_8.name())
-            return "player_local/$encodedUri/$encodedTitle"
-        }
+        fun createRoute(uri: String, title: String): String =
+            "player_local/${encodeRouteArg(uri)}/${encodeRouteArg(title)}"
 
-        fun decode(encoded: String): String =
-            try {
-                URLDecoder.decode(encoded, StandardCharsets.UTF_8.name())
-            } catch (_: Exception) {
-                encoded
-            }
+        fun decode(encoded: String): String = decodeRouteArg(encoded)
     }
 }

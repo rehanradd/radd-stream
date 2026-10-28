@@ -36,8 +36,10 @@ enum class RecoveryReason {
     LINK_EXPIRED,
 
     /**
-     * A link that only presents outside this app was asked to be a stream. There is no
-     * WebView presentation any more: the honest answer is "Not playable here" plus a keep.
+     * A link that only presents outside this app was asked to be a stream. The player has no
+     * WebView presentation: the honest answer is "Not playable here" plus a keep. (A page is
+     * opened by the provider-page screen BEFORE playback is ever launched, so reaching this state
+     * means a page arrived as a candidate anyway — a stale bundle, not a feature.)
      */
     WRONG_PRESENTATION,
 
@@ -179,9 +181,9 @@ class PlaybackRecovery(
     }
 
     /**
-     * The presentation this app has, in one place. A candidate that cannot be played here is
-     * offered for keeping — said out loud — and one with no address at all is nothing. There
-     * is no WebView mode and no client-side resolver step to fall back to.
+     * The presentation this app's PLAYER has, in one place. A candidate that cannot be played here
+     * is offered for keeping — said out loud — and one with no address at all is nothing. Inside a
+     * bundle there is no WebView mode and no client-side resolver step to fall back to.
      */
     private fun modeFor(rendition: Rendition): PlaybackMode = when (rendition.playability) {
         Playability.STREAM, Playability.BOTH -> PlaybackMode.DIRECT
@@ -213,9 +215,10 @@ class PlaybackRecovery(
                 )
 
         /**
-         * The bands the §9 order names, minus the presentations this app no longer has: there
-         * is no WebView band and no resolver band, because the client unwraps nothing itself.
-         * A candidate in the top band plays here; anything below it is offered for keeping.
+         * The bands the §9 order names, minus the presentations the player can no longer start:
+         * there is no playable WebView band and no resolver band, because the client unwraps
+         * nothing itself. A candidate in the top band plays here; anything below it is offered for
+         * keeping.
          */
         private fun bandOf(rendition: Rendition): Int = when (rendition.playability) {
             Playability.STREAM, Playability.BOTH -> 0

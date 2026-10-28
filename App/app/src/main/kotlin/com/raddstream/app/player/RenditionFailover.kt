@@ -23,9 +23,10 @@ data class FailoverRecord(
 )
 
 /**
- * Why the player stopped and needs someone else. There is no WebView member: this product has
- * one presentation, so a link that cannot use it is offered for keeping and SAYS so —
- * [DOWNLOAD_ONLY] and [NO_CANDIDATE_LEFT] are the only honest exits.
+ * Why the player stopped and needs someone else. There is no WebView member because a page never
+ * reaches the player: [com.raddstream.app.viewmodel.DetailViewModel] opens the provider-page screen
+ * for it before playback starts. Inside a failover bundle, then, [DOWNLOAD_ONLY] and
+ * [NO_CANDIDATE_LEFT] are the only honest exits — a link that cannot play here is kept, and says so.
  */
 enum class HandoffWhy { DOWNLOAD_ONLY, NO_CANDIDATE_LEFT }
 

@@ -159,7 +159,9 @@ class PlaybackService : MediaSessionService() {
         store.appendFailover(machine.log) // why any lower-ranked candidate was skipped
         if (start == null) {
             // Nothing our player can present. Say so plainly, and offer the keep-only link when
-            // one exists — there is no embed/WebView escape hatch in this app to fall back to.
+            // one exists. A page link is never in this bundle — `DetailViewModel` opens the
+            // provider-page screen for it before playback is launched — so these two exits are
+            // the whole answer here, and there is no in-player escape hatch to fall back to.
             val keepOnly = machine.keepOnlyFallback()
             store.markGaveUp(
                 if (keepOnly != null) {
