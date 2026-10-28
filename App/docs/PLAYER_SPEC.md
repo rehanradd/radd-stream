@@ -33,7 +33,15 @@ Legend: **Native** = Media3 1.3.1 API does it · **Custom** = implemented by us 
 **Dep** = needs a dependency/module we must request in `HANDOFF_appplayer.md` ·
 **No** = not possible on Android/Media3 1.3.1, with the reason.
 
-### 2.1 Gesture surface (`player/ui/GestureLayer.kt` + `player/PlayerGestures.kt`)
+### 2.1 Gesture surface (`player/PlayerGestures.kt` + the pointer lane in `ui/screens/PlayerScreen.kt`)
+
+> Path corrected 2026-10-29: this heading used to cite `player/ui/GestureLayer.kt`, and §2.2 below
+> used to say the overlay was "decomposed in `player/ui/`". **There is no `player/ui/` package in
+> this app** — `ls app/src/main/kotlin/com/raddstream/app/player/` has no `ui` directory, and there
+> is no `GestureLayer.kt` anywhere in `app/src`. The gesture arithmetic (each detector, the
+> arbitration, the clamps, cinema mode, two-finger rewind) is `player/PlayerGestures.kt`, and the
+> composable that installs it plus every HUD element it draws is `ui/screens/PlayerScreen.kt`.
+> The tests follow the code: `player/PlayerGesturesTest.kt`, not a `GestureLayerTest`.
 
 | MX behavior | Verified MX detail | Our implementation | Status |
 |---|---|---|---|
@@ -52,7 +60,18 @@ Legend: **Native** = Media3 1.3.1 API does it · **Custom** = implemented by us 
 | Gesture/sensor auto-rotation + back = rotate | ✔ | cycle `activity.requestedOrientation`: SENSOR ↔ SENSOR_LANDSCAPE ↔ SENSOR_PORTRAIT ↔ LOCKED; landscape flip button included | Custom (plain Activity API) |
 | Screen-off keeps playing (wake lock) | ✔ | `player.setWakeMode(C.WAKE_MODE_LOCAL)` (constant verified in `C.java`) + service FGS `mediaPlayback` | Native |
 
-### 2.2 Controls overlay (layout faithful to MX, decomposed in `player/ui/`)
+### 2.2 Controls overlay (layout faithful to MX, composed in `ui/screens/PlayerScreen.kt`)
+
+> Corrected 2026-10-29: this heading said "decomposed in `player/ui/`", a package that does not
+> exist. The overlay is 41 `@Composable`s living in one file, `ui/screens/PlayerScreen.kt`.
+> **And the component names in the table below are the spec's own vocabulary, not the shipped
+> identifiers** — checked against `grep -n '^@Composable' -A 1` on that file:
+> `PlayerTopBar` → **`TopBar`**, `BottomBar` → **`BottomControls`**, `SeekRipple` →
+> **`DoubleTapRipple`**, plus the names that are real: `CenterControls`, `EdgeHud`,
+> `GestureOverlay`, `PlayerSurface`, `Scrubber`, `HudToast`, `ScrubToast`, `BoostBadge`,
+> `SubtitleOverlay`, `KeepChip`, `QualitySheet`, `TracksSheet`, `SpeedSheet`, `SleepSheet`,
+> `SubtitleSettingsSheet`. A reader looking for a `player/ui/` package or a `PlayerTopBar` symbol
+> would find neither, so treat §2.2 as "what the overlay does", and the file above as where.
 
 | MX element | Implementation | Status |
 |---|---|---|
@@ -126,7 +145,24 @@ Hostile cases modeled: `STORAGE_FULL` (engine must free-then-retry, UI offers cl
 `INTERRUPTED` (auto-retry w/ resume), `APP_PRIVATE_FILE` (UI states “playable in Radd only” + TTL chip),
 preview TTL 3–6 h expiry (`PreviewExpiringSoon` chip + “keep permanently” upgrade path). See PLAYER↔ENGINE table in `HANDOFF_appplayer.md`.
 
-## 5. What we could not verify (no Android SDK in this workspace)
-Everything here is source-verified against Media3 1.3.1 **files**, but **nothing was compiled or run**:
-Compose recomposition edge cases, PiP window layout, real HLS behavior, gesture feel, notification
-appearance, and MediaCodec coverage on target devices all need CI + a device pass. See final report.
+## 5. What we could not verify (there IS an Android SDK here — what is missing is a device)
+
+Corrected 2026-10-29. The heading used to read "**no Android SDK in this workspace** … nothing was
+compiled or run", and that is false on both halves: `local.properties` sets
+`sdk.dir=/home/ubuntu/android-sdk`, and `app/build/outputs/apk/debug/app-debug.apk` (22,738,552
+bytes, dated 2026-10-27) was built on this Oracle VM — the ARM64/AAPT2 incompatibility was cleared
+with `qemu-user-static` (App Session 5). Builds are now gated locally through the one-at-a-time
+queue (`/tmp/qbuild.sh`), most recently **627 JVM unit tests / 0 failures** (build28).
+
+What the sentence was reaching for is still the honest limit, and it is a **device** limit, not an
+SDK limit:
+- Nothing in this player has run on Android. Compose recomposition edge cases, the PiP window,
+  real HLS behaviour, gesture *feel*, the notification/lock-screen appearance and MediaCodec
+  coverage on target devices are all unverified, and no JVM test can verify them.
+- Two Robolectric suites — `PosterCardProvenanceTest` and `ScreenSnapshotTest`, 9 tests between
+  them — are excluded on `aarch64`/`arm64` at `app/build.gradle.kts:220-233` because Robolectric
+  ships no native runtime for ARM, and GitHub Actions is disabled at the account level, so the
+  x86_64 runner that would execute them is not running either. **Those 9 tests currently execute
+  nowhere.** Recorded as a known limitation, not fixed here.
+- The Media3 1.3.1 API claims in §2/§3 were checked against the dependency's sources; they are
+  compile-verified by the build, not behaviour-verified by a player.

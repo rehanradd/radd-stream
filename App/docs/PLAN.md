@@ -46,18 +46,21 @@ historical planning, and see
 
 #### 1.2 Home Screen (Catalog Browser)
 - [x] Load a paginated catalog from `/api/v1/posts`.
-- [ ] Filter by movie, series, and anime. — **not achievable as specified.**
-  `viewer.py` filters `content_type` by exact equality and the backend never
-  stores `'anime'`, so `?type=anime` returns zero rows. Only `movie`, `series`,
-  `complete_season`, and `ongoing_season` return results today. The chip ships in
-  `HomeScreen.kt:48` but is broken; anime needs a new backend `animated` filter.
+- [x] Filter by movie, series, and anime. — **shipped, and the "not achievable as specified"
+  verdict is retired (re-measured 2026-10-29).** `viewer.py:2513` answers `type=anime` from
+  `(p.is_animated = 1 OR lower(p.industry) LIKE '%anime%')` — live `total: 5847` — and the same
+  predicate is offered as the `industry` facet (`:2539`). The entry is at `HomeScreen.kt:237`
+  (`JumpOffRow`, All / Movies / Series / Anime / Seasons); the old citation `HomeScreen.kt:48` and
+  its "broken chip" claim described the 2026-10-22 tree. No new backend flag parameter was needed.
 - [x] Show poster, title, year, type, and rating with loading/error/empty states.
 - [x] Manual refresh and search navigation.
 
 #### 1.3 Search Screen
 - [x] Search titles with a 300 ms debounce.
-- [ ] Filter results by movie, series, and anime. — same defect as 1.2; see the
-  `?type=anime` note in [`../AGENTS.md`](../AGENTS.md) §5.
+- [x] Filter results by movie, series, and anime. — the defect this row pointed at is closed:
+  `typeChips` in `SearchScreen.kt:73-79` is All / Movies / Series / **Anime** / Seasons, and the
+  server answers `type=anime` (`viewer.py:2513`, live `total: 5847`). Search also sends the
+  server-side `industry` / `genre` / `quality` / `sort` facets, which this checklist predates.
 - [x] Show loading, error, and no-match states.
 
 ### Deferred roadmap — historical plan, partially superseded
@@ -71,10 +74,13 @@ historical planning, and see
 
 #### Detail Screen
 - Large poster / backdrop hero image
-- Title, type badge (`Movie` / `Series` / `Complete Season` / `Ongoing Season` —
-  these are the only `content_type` values the backend emits; there is no `Anime`
-  type), year
-- Synopsis / description text
+- Title, type badge (`Movie` / `Series` / `Anime` / `Complete Season` / `Ongoing Season`) — one
+  owner, `WorkTypeLabel.of(contentType, isAnimated)`, painted at `DetailScreen.kt:484` and on the
+  tile (`PosterCard.kt:63`). The parenthetical claim that used to sit here — "these are the only
+  `content_type` values the backend emits; there is no `Anime` type" — was true of `content_type`
+  and misleading about the badge: anime is a **flag** (`is_animated`), not a `content_type`, and a
+  flagged series is labelled Anime and groups into its own rail (`typeGroupKey`).
+- Year, synopsis / description text
 - **Releases section**: list of available releases (quality: 4K / 1080p / 720p / HDRip)
 - Per release: list of sources with server name badge
 - **▶ PLAY** button (big, obvious, centered) — picks best quality source automatically
@@ -110,58 +116,125 @@ historical planning, and see
 - Remember position (resume from last point on reopen)
 - Background playback with notification controls + lock-screen controls
 
-> Of these, only background playback is implemented today — `Media3`
-> `MediaSessionService` lives in `player/PlaybackService.kt`. Auto-next episode,
-> remember-position, subtitles/CC, and mid-play quality switching are not present
-> in `PlayerScreen.kt`.
+> **Reality (re-verified against `App/app/src` 2026-10-29):** the note that used to sit here —
+> "only background playback is implemented today … Auto-next episode, remember-position,
+> subtitles/CC, and mid-play quality switching are not present in `PlayerScreen.kt`" — was a
+> 2026-10-22 reading and is false on four counts. All four shipped:
+> - **Auto-next episode** — `PlaybackService.kt:516-534` `handleEnded()` asks
+>   `EpisodeProgression.computeNext(...)` and either seeks the next episode inside the same file or
+>   hands a next-bundle request up; `PlayerEvent.PlayNextEpisode` reaches
+>   `PlayerScreen.kt:2285` → `NavGraph.kt:255`. A successor's ladder is prefetched at 85 % of the
+>   current episode (App Session 11). **The one wireframe detail that is genuinely missing is the
+>   10 s countdown with a dismiss button** — hand-off is automatic, not cancellable; the only
+>   countdown UI today is the sleep timer (`PlayerScreen.kt:979`, `:1906-1915`).
+> - **Remember position** — `PlaybackService.kt:176` takes `request.resumePositionMs`/`startOverrideMs`
+>   into `pendingResumeMs`, and `:473` seeks it on `STATE_READY`; the rows are written from
+>   `PlayerViewModel`/`DetailViewModel` into the Room `watch_history` table.
+> - **Subtitles / CC** — a track sheet (`PlayerScreen.kt:1962-1966`), a stored selection
+>   (`PlayerViewModel.kt:1383`), an offset sync sheet, and the offset applied at the decoder:
+>   `PlaybackService.kt:93-109` wraps `buildTextRenderers` with `OffsetSubtitleDecoderFactory`.
+> - **Mid-play quality switching** — `armAutoQuality(...)` at `PlaybackService.kt:178` and the
+>   one-decision-per-tick `evaluateAutoQuality()` at `:375`, plus the manual rung switch in
+>   `PlayerViewModel`.
+>
+> Background playback was and remains implemented (`MediaSessionService`).
 
 ---
 
 ### Phase 2 — Quality of Life
 > *Makes the app feel polished and personal.*
 
-⚠️ **Reality (verified against `App/app/src` 2026-10-22):** §2.1 (Room favorites +
-My List tab) and §2.4 (Settings screen with server config and live diagnostics)
-are already implemented and navigable. §2.2, §2.3, and §2.5 are not.
+⚠️ **Reality (re-verified against `App/app/src` 2026-10-29):** all five sub-sections are
+implemented and navigable — §2.1 favorites + My List, §2.2 Continue Watching, §2.3 Downloads,
+§2.4 Settings, and §2.5 deep links (partially: two of the three work, see that row). What the
+2026-10-22 note called "§2.2, §2.3, and §2.5 are not" is retired; the honest remaining gaps are
+named inside each sub-section, not by a blanket ❌.
 
 #### 2.1 Watchlist / Favorites — ✅ implemented
 - ❤️ Heart button on Detail Screen → saves to local Room DB
 - **My List** tab on Home Screen
 - Works fully offline (local data)
 
-#### 2.2 Continue Watching — ❌ not implemented
-- Tracks last-played position per title (Room DB)
-- **Continue Watching** row on Home Screen
-- Tapping → resumes from saved timestamp
-- Auto-clears entries watched to >90%
+#### 2.2 Continue Watching — ✅ implemented (this heading said "❌ not implemented"; retired 2026-10-29)
+- Tracks last-played position per title (Room DB) — `data/local/WatchHistory.kt:20`
+  `WatchHistoryEntity`, table `watch_history` created by real DDL in `AppDatabase.kt:111-122`
+  (migration 4 → 5), primary key `(workRef, seasonNumber, episodeNumber)`.
+- **Continue Watching** row on Home Screen — `HomeViewModel.kt:108/132 observeContinueWatching()`
+  combines the local DAO with the server's synced-progress DAO through `WatchHistoryMerge` and
+  publishes `ResumeTile`s; `viewmodel/ContinueWatchingTile.kt` owns the scope label and progress
+  fraction a card paints (`ContinueWatchingTileTest` pins both).
+- Tapping → resumes from saved timestamp — `PlayerViewModel.kt:465 startStreamHandle(...,
+  startOverrideMs)` → `PlayerSessionStore.requestLoad` → `PlaybackService.kt:176` → `seekTo` on
+  `STATE_READY` (`:473`).
+- **Auto-clears entries watched to >90%** — not the shipped rule, and the shipped rule is the
+  honest one: a row is *offered* while `WatchHistoryEntity.resumable` holds (`positionMs >= 1_000`
+  and `< durationMs - 10_000`, `WatchHistory.kt:34-37`), so a finished scope drops out of the rail
+  by an end-band guard rather than a percentage. The DAO's only deletion is `clear()` (`:95`), which
+  nothing calls from Settings — see §2.4's last bullet.
 
-#### 2.3 Downloads (Offline Playback) — ❌ not implemented
-- Download button on Detail Screen for individual releases
-- Uses `DownloadManager` API for background downloading
-- Downloads stored in app-private storage
-- **Downloads** tab in bottom nav
-- Offline playback from local file via ExoPlayer
+#### 2.3 Downloads (Offline Playback) — ✅ implemented, on two deliberately different choices
+(this heading said "❌ not implemented"; retired 2026-10-29)
+- Download button on Detail Screen for individual releases — `DetailScreen.kt:246` keeps a print and
+  `:251` keeps a ladder rung, both behind the storage-permission gate; a provider-page link is
+  refused with `PAGE_NOT_A_FILE`, because a page is not a file (App Session 25).
+- ~~Uses `DownloadManager` API~~ → **a custom foreground `Service`** is what shipped:
+  `data/downloads/DownloadService.kt:55`, chosen at `:46-51` because the platform's
+  `DownloadManager` has pause/resume-remove only and no pause/resume. Range-resume and the
+  per-task progress card are ours.
+- ~~Downloads stored in app-private storage~~ → **public and user-visible**:
+  `Movies/RaddStream/` through MediaStore on Android 10+, the public directory below it
+  (`DownloadService.kt:51`, `:284`). That is the opposite of the plan's bullet, and it is the
+  decision — a kept file the viewer can see is a kept file they can move off the phone.
+- **Downloads** tab in bottom nav → routed and reachable, but **not** a bottom-nav tab:
+  `NavGraph.kt:203` registers `Screen.Downloads`, reached from Settings' "Offline" card
+  (`ui/screens/DownloadsScreen.kt`, gated by the operator's `downloads` feature flag). The four
+  tabs are Home / Search / My List / Settings (`NavGraph.kt:72-76`).
+- Offline playback from local file via ExoPlayer — a kept copy wins before the network is touched:
+  `PlaybackService.localCopyUrlFor` → `OfflineCacheEngine.playableUri`, served over
+  `data/cache/LocalMediaProxy.kt:33` on `127.0.0.1` (a `file://` URI is not what ExoPlayer is
+  handed), and `NavGraph.kt:212`/`:282-285` route a tap from the list through `Screen.PlayerLocal`.
 
-#### 2.4 Settings Screen — ✅ implemented
+#### 2.4 Settings Screen — ✅ implemented, six bullets re-scored against the screen (2026-10-29)
 - Server URL / connection settings (edit/reset)
-- Default video quality preference (Auto / 4K / 1080p / 720p) — not present
-- Autoplay next episode toggle — not present
-- Continue Watching toggle — not present
-- Clear cache button — not present
-- Clear watch history button — not present
-- App version / about — not present
+- Default video quality preference (Auto / 4K / 1080p / 720p) — **present**: the `ImageQuality`
+  `ChipRow` in the "Playback & Display" card (`SettingsScreen.kt:352`, the rail around `:371`).
+  Subtitle-language and audio-language rails sit beside it, which this plan never asked for.
+- Autoplay next episode toggle — **not present**, and that is a real gap: auto-advance is
+  unconditional (see the §Phase 2 player note), so a viewer cannot turn the hand-off off.
+- Continue Watching toggle — **not present**: the Home rail always shows what the DAO returns.
+- Clear cache button — **present but narrower than asked**: "Clear poster images"
+  (`SettingsScreen.kt:467-470`, `viewModel::clearImageCache`), and its own copy says kept videos
+  are untouched here. There is no cache clearing of kept media or of the HTTP/image disk cache.
+- Clear watch history button — **not present**. `WatchHistoryDao.clear()` exists
+  (`data/local/WatchHistory.kt:95-96`) and has no caller, so a viewer cannot empty their own
+  Continue Watching list from Settings; no screen offers it.
+- App version / about — **present**: the "About" card paints `Brand.versionName` /
+  `Brand.versionCode` and the connection/TLS line (`SettingsScreen.kt:496+`).
 
-#### 2.5 Deep Links — ⚠️ half-wired, effectively broken
-- `radd://stream/{source_id}` → opens Player directly
-- `radd://title/{post_id}` → opens Detail Screen
-- Share button on Detail Screen generates shareable deep link
+#### 2.5 Deep Links — ⚠️ two of three work; the advertised Player link goes nowhere
+- ~~`radd://stream/{source_id}` → opens Player directly~~ **NOT wired — the one real gap in this
+  section.** `AndroidManifest.xml:59-65` registers the VIEW/DEFAULT/BROWSABLE filter and its comment
+  on `:59` advertises exactly `<brand.deeplink.scheme>://stream/12345`, but `NavGraph.kt` declares
+  `navDeepLink` for only two routes — `browse/{type}` (`:168`) and `detail/{postId}` (`:223`) — so
+  there is no Player pattern to match, and `brand.properties:178-181` defines hosts for `browse` and
+  `detail` only. A `…/stream/…` cold start therefore lands on the normal start destination. Do not
+  advertise it until a `player/{handle}` `navDeepLink` exists — and note the argument is an **opaque
+  stream handle**, never a URL (§5 of `../AGENTS.md`), so a shareable Player link has to mint or
+  carry that handle, which is a design decision, not a one-line registration.
+- ✅ `radd://detail/{postId}` → opens Detail Screen — `NavGraph.kt:223`. (`browse/{type}` works too,
+  `:168`; neither was listed here.) The scheme is `${brandScheme}`, generated from
+  `brand.properties` `deeplink.scheme` — `radd` today, not a literal.
+- ✅ Share button on Detail Screen — `DetailScreen.kt:216` (`Icons.Default.Share`, `:219`) calls
+  `shareTitle(...)` at `:1037-1048`. **But it shares words, not a link:** the text is
+  `copy.share_template` from `brand.properties:167` — `Check out "{title}" in RADD Stream.` — with
+  no URI in `EXTRA_TEXT`. So "generates shareable deep link" is still false, and it is false for the
+  same reason as the row above: there is no receivable target to point at. A recipient gets a title
+  they cannot open.
 
-> The manifest does register an intent filter for `android:scheme="radd"`
-> (`App/app/src/main/AndroidManifest.xml:43-48`), but `NavGraph.kt` declares **no
-> `navDeepLink` entries**, so a `radd://` cold start lands on the normal start
-> destination and goes nowhere. Do not advertise deep links as working until the
-> nav graph handles them. There is also no share button: `DetailScreen.kt` contains
-> no share action at all.
+> Retired here (it described the 2026-10-22 tree): "the manifest registers the filter at
+> `AndroidManifest.xml:43-48` but `NavGraph.kt` declares **no** `navDeepLink` entries … there is
+> also no share button". `NavGraph.kt` now declares two, and `DetailScreen.kt` has a share action —
+> the filter moved to `:59-65`.
 
 ---
 

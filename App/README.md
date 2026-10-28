@@ -17,9 +17,14 @@ The app currently supports:
 - First-run server URL setup with a real `GET /api/v1/stats` connection check.
 - Persisting the server URL locally after a successful connection.
 - A poster grid populated by `GET /api/v1/posts`.
-- Type filter chips for **Movie and Series only**. The "Anime" chip in
-  `HomeScreen.kt:48` / `SearchScreen.kt:49` sends `?type=anime`, which the backend
-  does not support and which returns zero results — see the API note below.
+- Type filter chips for **All / Movies / Series / Anime / Seasons**. The Anime entry lives in
+  `HomeScreen.kt:237` (`JumpOffRow`) and `SearchScreen.kt:73-79` (`typeChips`) and sends
+  `?type=anime`, which the server answers from the animation flag the data actually carries —
+  `(p.is_animated = 1 OR lower(p.industry) LIKE '%anime%')` (`Fast_Fetch/viewer.py:2513`).
+  Re-measured read-only on 2026-10-29: `GET /api/v1/posts?type=anime&limit=1` → `200 in 0.24 s`,
+  `total: 5847`, and the row carries `is_animated: 1`. The client decodes that flag onto `Post`
+  (`Models.kt`, via `LenientBooleanAdapter`), so a tile inside an anime-filtered list is typed
+  ANIME from the wire — see the API note below.
 - Debounced title search with the same server-side filters.
 - Loading, empty, retry, and connection-error states.
 - A detail screen (`GET /api/v1/posts/{id}`) and Media3 playback through
@@ -39,7 +44,7 @@ The app expects these endpoints at the configured server base URL:
 
 | Endpoint | Use |
 |---|---|
-| `GET /api/v1/stats` | Verify the server connection and show the title count |
+| `GET /api/v1/stats` | Verify the server connection and show the server's **stored** totals |
 | `GET /api/v1/posts?page=1&limit=30` | Load catalog rows |
 | `GET /api/v1/posts?q={query}&type={type}&page=1&limit=50` | Search/filter catalog rows |
 | `GET /api/v1/posts/{id}` | Detail screen: post + `source_pages[]` + `releases[]` (each release with `sources[]`) |
@@ -51,11 +56,25 @@ Each result carries `id`, `clean_title`, `title`, `year`, `content_type`,
 `source_site`, `industry`, `country`, `language`, `release_count`, and
 `source_count` — `slug` is **not** included in the list payload.
 
-`type` is matched against `content_type` by **exact equality**, so the only values
-that ever return rows are `movie`, `series`, `complete_season`, and
-`ongoing_season`. Anime is stored in `is_animated` / `industry`, which this API
-does not expose as a filter — anime filtering needs a new backend `animated` flag
-parameter before a client can offer it.
+> `GET /api/v1/stats` answers the ledger's own stored totals and they are **not** a browsable
+> count: live `posts: 116922` while the projection holds `13342` works flagged `is_18_plus` that
+> `/api/v1/posts` refuses in its own SQL, and `sources` counts stored link rows dead or alive.
+> The app therefore calls them what they are — `viewmodel/CatalogScale.kt` is the single owner of
+> the three labels and of both connection notices, and `tooling/StatsHonestyTest` fails any surface
+> that renames a stored total into a promise. A real browsable count comes from
+> `/api/v1/posts?limit=1`'s adult-scoped `total` (measured `130795` on 2026-10-29), never from
+> reskinning this endpoint.
+
+`type` is matched against `content_type` by **exact equality** — `movie`, `series`,
+`complete_season`, `ongoing_season` — **plus one special case**: `type=anime` is answered from the
+flag the ledger really holds, `(p.is_animated = 1 OR lower(p.industry) LIKE '%anime%')`
+(`Fast_Fetch/viewer.py:2513`, and the same predicate behind the `industry` facet at `:2539`). It is
+a filter that works today, measured `total: 5847` on 2026-10-29; the old note here claiming anime
+"needs a new backend `animated` flag parameter" described the 2026-10-22 server and is retired.
+The list route also appends `subtitled` per row (`viewer.py:2620`) in the current tree — **the
+deployed service has not been restarted, so the live payload does not carry that key yet**
+(re-measured 2026-10-29: absent from both probe rows), and the app's Subtitled chip stays dark in
+production until the next deploy.
 
 
 ## Build and download

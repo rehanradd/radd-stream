@@ -48,6 +48,17 @@ So, on this host:
   fan-out worker, edit freely and build rarely — each build is minutes of this VM's entire
   CPU.
 
+> **Known limitation, recorded rather than fixed (2026-10-29): nine tests execute nowhere on this
+> host.** `app/build.gradle.kts:220-233` excludes `PosterCardProvenanceTest` (3 `@Test`s) and
+> `ScreenSnapshotTest` (6 `@Test`s) whenever `os.arch` is `aarch64`/`arm64`, because Robolectric has
+> no native runtime for ARM (robolectric/robolectric#9166) and it dies during `@Rule` evaluation, so
+> an in-test `Assume` cannot catch it. The x86_64 runner that would execute them is GitHub Actions,
+> which is disabled at the account level. So a green "627 tests / 0 failures" gate on this box is
+> honestly **618 executed + 9 excluded**, and the `doFirst { logger.lifecycle(...) }` line at `:227`
+> prints only "Skipping PosterCardProvenanceTest" — `ScreenSnapshotTest` is silently dropped from
+> every local run. Anyone reading a gate number on this host should read it as *excluding* both
+> suites; the exclusion itself stays, because an un-excludable Robolectric crash is worse.
+
 ---
 
 ## 2. Build System Architecture
@@ -2268,3 +2279,79 @@ boxes before touching that wording again; (2) install an app that already has fa
 build carrying version 6, and confirm the list survives and an anime row reads "Anime"; (3) leave
 the App tree build-free while the crawls run — documentation, review and reading cost this VM
 almost nothing, compiling does not.
+
+### Session 29 — Four docs that still described 2026-10-22 were re-verified and corrected (2026-10-29)
+
+**Goal:** a read-only audit named four doc defects; every one was re-checked against
+`App/app/src` before being rewritten, because a "correction" that cites the wrong line is the same
+defect with new wording. Documentation only — no `.kt`, `.kts`, `.xml`, resource or `.py` file was
+touched, and **no Gradle was run** (load was 2.5–4.9 all session on this 1-vCPU box; the owner's
+build hold stands until he confirms under 0.5).
+
+**Measured, not copied:** read-only `GET`s on `127.0.0.1:8080` — `?type=anime&limit=1` → `200 in
+0.24 s`, **`total: 5847`** (the owner's merges moved it from 5,307; every number written into these
+files is the 2026-10-29 figure), plain `?limit=1` → `total: 130795`, and **`subtitled` is absent
+from both live rows**, which independently re-confirms Session 19's note that the deployed service
+has not been restarted.
+
+**What was false and is now corrected, file by file:**
+- `README.md` — claimed "Movie and Series only", an Anime chip at `HomeScreen.kt:48`/
+  `SearchScreen.kt:49` that "returns zero results", and that anime "needs a new backend `animated`
+  flag parameter". Anime ships at `HomeScreen.kt:237` and `SearchScreen.kt:73-79`. The stats row of
+  the endpoint table said "show the title count" — that is the exact overclaim `CatalogScale` was
+  created to retire, so it now says *stored totals* and carries the scope note plus the
+  `/api/v1/posts?limit=1` route to a real browsable count.
+- `design/SCREENS.md` — its Reality note and two ⚠️ lines claimed anime is unbuildable, that there
+  is **no hero banner and no per-type rows** and that Home "renders a single filtered grid". All
+  three are shipped: `HeroCarousel` composes at `HomeScreen.kt:126` over the first non-empty rail
+  (`HERO_LIMIT = 6`), rails are `MediaRail` sections at `:142`/`:269`. The block also re-asserted
+  "no authentication, no rate limiting… binds 0.0.0.0, CORS `*`" — since I was rewriting that very
+  block I corrected it too (bearer key `viewer.py:381/:389`, token bucket `:2913`, empty CORS
+  allow-list `redact.py:1278`, loopback default `:3447`), pointing at §5 rather than duplicating it.
+- `docs/PLAN.md` — six claims retired with file:line: the player note "only background playback is
+  implemented" (auto-next `PlaybackService.kt:516-534` via `EpisodeProgression.computeNext`, resume
+  `:176`→`:473`, subtitle tracks `PlayerScreen.kt:1962-1966` + the offset decoder `:93-109`, quality
+  `armAutoQuality`/`evaluateAutoQuality` `:178`/`:375`); §2.2 Continue Watching ❌ (Room
+  `watch_history` + `HomeViewModel.kt:132` + `ContinueWatchingTile`); §2.3 Downloads ❌
+  (`DownloadsScreen.kt`, `NavGraph.kt:203`, `DownloadService.kt:55`); §2.4's six "not present" rows
+  re-scored (three present, three genuinely not); §2.5's "no `navDeepLink` at all / no share button"
+  (`:168` and `:223` exist; `DetailScreen.kt:216`→`shareTitle` at `:1037`). Plus PLAN's own §1.2/§1.3
+  checklist items and the Detail type-badge note, which carried the same anime fallacy.
+  **The one real gap is stated as a gap:** `AndroidManifest.xml:59-65` advertises
+  `<scheme>://stream/12345` while NavGraph registers only `browse/{type}` and `detail/{postId}`, so
+  that URI cold-starts to the normal destination — and `shareTitle` sends
+  `copy.share_template` (`brand.properties:167`, a title sentence) with **no URI at all**, so the
+  share is not a deep link either.
+- `docs/PLAYER_SPEC.md` — §2.1 and §2.2 cited `player/ui/GestureLayer.kt` and "decomposed in
+  `player/ui/`"; that package does not exist (gestures are `player/PlayerGestures.kt` +
+  `PlayerScreen.kt`). **The audit was right but the fix needed going further:** the spec's component
+  names are also partly invented — there is no `PlayerTopBar`, `BottomBar` or `SeekRipple`; the real
+  composables are `TopBar`, `BottomControls`, `DoubleTapRipple` (41 `@Composable`s in one file), so
+  §2.2 now says which names are the spec's vocabulary and which are the shipped identifiers. §5's
+  heading "no Android SDK in this workspace / nothing was compiled or run" is false twice over:
+  `local.properties` → `sdk.dir=/home/ubuntu/android-sdk`, and `app/build/outputs/apk/debug/app-debug.apk`
+  (22,738,552 bytes, 2026-10-27) was built here. §5 now states the actual limit, which is a *device*
+  limit.
+- Root `AGENTS.md` repo map: "wireframes for all 7 screens" → "7 screens (NavGraph registers 13
+  routes)", counted at `NavGraph.kt:123-281`.
+
+**Known limitation recorded, not fixed** (see §1a): `PosterCardProvenanceTest` (3) and
+`ScreenSnapshotTest` (6) are excluded at `app/build.gradle.kts:220-233` on aarch64/arm64, so **9
+tests execute nowhere** while Actions is disabled — a local "627 / 0 failures" is honestly
+618 executed + 9 excluded — and the `logger.lifecycle` at `:227` names only PosterCard, so
+ScreenSnapshot is dropped silently.
+
+**Deliberately left alone, and why:** `README.md`'s "no authentication, no API keys, no sessions,
+no rate limiting, CORS `*`, binds `0.0.0.0`" paragraph and root `AGENTS.md`'s
+"BUILD_PLAN.md ← no local Android Studio needed" are stale the same way §5/§1a already retired them,
+but neither was in this task's four defects and I did not re-verify `viewer.py`'s auth lines at the
+lines this session cited — flagged for the next docs pass rather than half-fixed from memory. The
+App tree's Kotlin is untouched, so the standing gate remains **627 / 0 failures / 0 skipped** at
+`b7bc479` + build28; Gradle cannot see a `.md` diff, and running a 12-minute build to re-confirm an
+unchanged tree while two crawlers run is the cost this hold exists to prevent.
+
+**Git hygiene the last build hold taught:** staging was hunk-precise, not file-precise — root
+`AGENTS.md` carries another agent's uncommitted Key-Links rewrite and `docs/SESSION_CHECKPOINT.md`
+carries 77 lines of crawler entries, so only my hunks went in (`git apply --cached` of a
+single-hunk patch), and `Fast_Fetch/*.py`, `README.md` (root) and `docs/PROJECT_MAP.md` were left
+unstaged and unharmed. No push, no build, no credential printed, §13 hue untouched, no device claim.

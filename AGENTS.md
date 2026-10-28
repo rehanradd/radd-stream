@@ -51,7 +51,7 @@ radd-stream/                        ← repo root
     │   └── BUILD_PLAN.md           ← full CI/CD strategy (no local Android Studio needed)
     ├── design/
     │   ├── DESIGN_SYSTEM.md        ← colors, fonts, spacing, components
-    │   └── SCREENS.md              ← ASCII wireframes for all 7 screens
+    │   └── SCREENS.md              ← ASCII wireframes for 7 screens (NavGraph registers 13 routes)
     └── app/src/                    ← Gradle Android app source (Kotlin)
 ```
 

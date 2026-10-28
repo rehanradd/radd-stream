@@ -2,26 +2,35 @@
 
 > ASCII wireframes + UX notes for every screen. Reference these during implementation.
 
-> ⚠️ **Reality (verified against `Fast_Fetch/viewer.py` and `App/app/src`
-> 2026-10-22).** This file is a *design* spec, so most of it is aspirational by
+> ⚠️ **Reality (re-verified against `Fast_Fetch/viewer.py` and `App/app/src` 2026-10-29).**
+> This file is a *design* spec, so most of it is aspirational by
 > intent — but the following two claims in it are false:
-> 1. **`?type=anime` does not work.** `viewer.py:1898` matches `content_type` by
->    exact equality and nothing ever writes `'anime'` there, so the Anime chip and
->    the Anime home row return an empty grid. The only accepted `type` values are
->    `movie`, `series`, `complete_season`, `ongoing_season`. Anime is expressed via
->    `posts.is_animated` / `posts.industry`, and the API offers **no** filter for
->    either yet — that flag has to be built before these wireframes' Anime
->    surfaces can be implemented. See
->    [`../AGENTS.md`](../AGENTS.md) §5.
+> 1. ~~**`?type=anime` does not work.**~~ **Retired — it works, and the app ships the chip.**
+>    `viewer.py:2513` answers `type=anime` from the flag the data really carries,
+>    `(p.is_animated = 1 OR lower(p.industry) LIKE '%anime%')`, and `:2539` offers the same
+>    predicate as an `industry` facet. Re-measured read-only 2026-10-29:
+>    `GET /api/v1/posts?type=anime&limit=1` → `200 in 0.24 s`, `total: 5847`, row carries
+>    `is_animated: 1`. The Anime entry is live at `HomeScreen.kt:237` (`JumpOffRow`) and
+>    `SearchScreen.kt:73-79` (`typeChips`), and `Post.isAnimated` decodes the flag (INTEGER 0/1 via
+>    `LenientBooleanAdapter`), so a tile is typed ANIME from the list row, on the hero, and on
+>    My List. `../AGENTS.md` §5 and `PARITY_BACKEND_BLOCKED.md` §4-A carry the measured detail.
 > 2. **Screens 4–7 are already built**, not future work. Detail, Player, My List,
 >    and Settings
 >    exist in `App/app/src/.../ui/screens/` and are routed in `NavGraph.kt`. The
 >    wireframes below describe intended polish that the shipped screens do not all
->    reach (e.g. Detail's season filter cannot group — the release JSON carries
->    `season`/`episode`, not `season_number`/`episode_number`).
+>    reach. (The old note here claimed Detail's season filter "cannot group" because the
+>    release JSON carries `season`/`episode`, not `season_number`/`episode_number` — that is
+>    retired too: `ReleaseDetail` now maps the columns the ledger writes and derives the season
+>    and episode numbers through `ReleaseLabelParsing`, so `SeasonChips` paints real groups.)
 >
-> Also note the backend has no authentication, no rate limiting, and no TLS; the
-> Oracle host is plain HTTP. Nothing here is a private surface.
+> What the transport still is: the Oracle host is plain HTTP with no TLS, and the four catalog
+> reads a phone makes (`stats`, `posts`, `posts/{id}`, `stream`) answer anyone who can reach nginx
+> — nothing behind them is private. What is **not** true any more (re-verified in
+> [`../AGENTS.md`](../AGENTS.md) §5): the `api/v2/account*` routes require the sync bearer key
+> (`viewer.py:381`, `:389`), every request lands in a token bucket that carries the IETF
+> `RateLimit-*` headers (`viewer.py:2913`, `redact.py:1163`), CORS is an allow-list that is
+> currently empty (`redact.py:1278`), and the server binds `127.0.0.1` by default
+> (`viewer.py:3447`) behind nginx.
 
 ---
 
@@ -108,12 +117,18 @@
 - "→" / "See All" navigates to Search pre-filtered by that type
 - Skeleton shimmer shown while API loads
 - Pull-to-refresh reloads all rows
-- ⚠️ The **🎌 Anime row above cannot be built today**: `?type=anime` on
-  `/api/v1/posts` matches zero rows, and the list response carries no
-  `is_animated` field to filter on client-side either. Ship Movies/Series rows
-  only until the backend adds an `animated` filter.
-- ⚠️ No hero banner and no per-type horizontal rows are implemented in
-  `HomeScreen.kt` today — it renders a single filtered grid.
+- ✅ The **🎌 Anime row is built** (this note used to say it "cannot be built today" — retired
+  2026-10-29): `?type=anime` answers `total: 5847` live, `Post.isAnimated` decodes the flag off the
+  list row, and `typeGroupKey` gives a flagged series its own rail instead of the Series one, with
+  `WorkTypeLabel.of` the single owner of the word "Anime" on tile, hero badge and detail header.
+- ✅ **The hero banner and the per-type horizontal rows are implemented** in `HomeScreen.kt`
+  (this note used to claim the screen "renders a single filtered grid" — false):
+  `HeroCarousel` is composed at `HomeScreen.kt:126` over the first rail that actually has rows,
+  capped at `HERO_LIMIT = 6` (`:66`), with `HeroSkeleton` holding its footprint while the first
+  rail lands (`ui/components/HeroCarousel.kt`); the rails themselves are `MediaRail` sections
+  (`:142`, `HomeRailSection` at `:269`/`:306`). One honest remainder: the hero is **rail 1 reused**,
+  not a server-curated "featured" projection — there is no `featured` field on the wire to build
+  the wireframe's editorial banner from.
 
 ---
 
@@ -150,9 +165,12 @@
 - **Empty input**: shows "Recent Searches" list
 - **Typing**: shimmer grid → results grid (debounced 300ms)
 - **No results**: centered illustration + "Nothing found for '{query}'"
-- **Filter chip active**: re-queries with `?type=movie|series|complete_season|ongoing_season`.
-  The `[Anime]` chip drawn above is **not implementable against today's API** —
-  see the Reality note at the top of this file.
+- **Filter chip active**: re-queries with `?type=movie|series|complete_season|ongoing_season|anime`.
+  The `[Anime]` chip drawn above **is** implemented and answered by the server — it is in
+  `SearchScreen.kt:73-79` (`typeChips` = All / Movies / Series / **Anime** / Seasons) and
+  `viewer.py:2513` resolves it from `is_animated`/`industry` (live `total: 5847`, 2026-10-29).
+  Search additionally sends the server-side facets `industry`, `genre`, `quality` and `sort`
+  (App Session 12), which this wireframe predates.
 
 ---
 
