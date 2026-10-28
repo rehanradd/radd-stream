@@ -750,7 +750,9 @@ class DatabaseSaveTests(unittest.TestCase):
 
         Two renditions, an `active` verdict and a verdict that did not reach a
         byte endpoint — the only two answers the JIT branch is allowed to act on
-        differently.
+        differently. A verdict may also carry what its own Range probe measured
+        (`expires_in`, `content_type`, `size_bytes`, `http_status`), which is what
+        the JIT path now stores instead of throwing away.
         """
 
         SERVICE_MXDROP = "mxdrop"
@@ -866,6 +868,93 @@ class DatabaseSaveTests(unittest.TestCase):
                 "SELECT final_url FROM download_sources WHERE id = ?",
                 (stored["id"],)).fetchone()
         self.assertEqual(row["final_url"], embed, "the embed page stays stored")
+
+    def test_a_signed_packer_window_is_recorded_and_survives_to_the_cached_answer(self):
+        """The window is in the URL, and before this branch nothing read it.
+
+        The packer CDNs answer with no Cache-Control and no Expires, so
+        `probe_url_ttl` honestly reports `no_directive`. If the lifetime the
+        resolver parsed out of the signed query were thrown away as well, the row
+        fell back to the six-hour temporary-link ceiling — and a token that lives
+        thirty minutes would be served from cache for the last twenty-nine of
+        them. Measured on the committed path: the second call returned
+        `expires_in=None, ttl_source=None` while holding a signed CDN URL.
+        """
+        embed = "https://mxdrop.to/e/6d9c9f6d93dfb18063cbdb697dd4db5d"
+        stored = self._embed_source("moviesmela", "mxdrop", embed)
+        resolvers = self._FakeResolvers(verdict={
+            "status": "active",
+            "final_url": "https://n1sxu2vld.mxcontent.example/v2/f.mp4?s=sig",
+            "expires_in": 1800.0, "content_type": "video/mp4",
+            "size_bytes": 425208621, "http_status": 206})
+        probes = (None, {"observed": False, "reason": "no_directive", "http": 206})
+        with patch.object(fast_fetch, "_embed_resolvers", return_value=resolvers), \
+             patch.object(fast_fetch, "probe_url_ttl", return_value=probes):
+            first = fast_fetch.resolve_live_source(stored["id"])
+            self.assertAlmostEqual(first["expires_in"], 1800.0, delta=5.0)
+            second = fast_fetch.resolve_live_source(stored["id"])
+
+        self.assertTrue(first["refreshed"])
+        self.assertTrue(second["cached"], second)
+        self.assertFalse(second["refreshed"])
+        self.assertEqual(second["url"], first["url"])
+        self.assertAlmostEqual(second["expires_in"], 1800.0, delta=6.0)
+        self.assertEqual(len(resolvers.calls), 1, "a cached answer re-unpacks nothing")
+        with fast_fetch.get_db() as conn:
+            row = conn.execute(
+                "SELECT expires_at, ttl_source, mime_type, file_size_bytes,"
+                " http_status, is_resumable FROM download_sources WHERE id = ?",
+                (stored["id"],)).fetchone()
+        self.assertAlmostEqual(row["expires_at"] - time.time(), 1800.0, delta=6.0)
+        self.assertEqual(row["ttl_source"], "signed_params")
+        self.assertEqual((row["mime_type"], row["file_size_bytes"], row["http_status"]),
+                         ("video/mp4", 425208621, 206))
+        self.assertEqual(row["is_resumable"], 1, "a 206 is evidence the stream seeks")
+
+    def test_a_cached_packer_answer_refreshes_once_its_signed_window_has_passed(self):
+        """The point of recording the window: the cache has to respect it."""
+        embed = "https://pkembed.site/embed-g64v61whic26.html"
+        stored = self._embed_source("moviesmela", "pkembed", embed)
+        resolvers = self._FakeResolvers()
+        probes = (None, {"observed": False, "reason": "no_directive", "http": 206})
+        with patch.object(fast_fetch, "_embed_resolvers", return_value=resolvers), \
+             patch.object(fast_fetch, "probe_url_ttl", return_value=probes):
+            fast_fetch.resolve_live_source(stored["id"])
+            with fast_fetch.get_db() as conn:
+                # Thirty-one minutes on a host whose `s`+`e` window is half an hour:
+                # the stored instant is simply in the past now.
+                conn.execute("UPDATE download_sources SET expires_at = ? WHERE id = ?",
+                             (time.time() - 1.0, stored["id"]))
+                row = conn.execute("SELECT final_url FROM download_sources WHERE id = ?",
+                                   (stored["id"],)).fetchone()
+            self.assertTrue(fast_fetch.is_direct_media_url(row["final_url"]),
+                            row["final_url"])
+            again = fast_fetch.resolve_live_source(stored["id"])
+
+        self.assertTrue(again["refreshed"], again)
+        self.assertFalse(again["cached"], again)
+        self.assertEqual(len(resolvers.calls), 2, again)
+
+    def test_a_window_the_host_declares_in_its_headers_beats_the_signed_number(self):
+        """Two sources of truth exist and the measured one wins: a host that says
+        `Cache-Control: max-age=60` about the URL it just issued is answered by
+        that, not by the lifetime its query string claims."""
+        embed = "https://mxdrop.to/e/6d9c9f6d93dfb18063cbdb697dd4db5d"
+        stored = self._embed_source("moviesmela", "mxdrop", embed)
+        header_expiry = time.time() + 60.0
+        with patch.object(fast_fetch, "_embed_resolvers",
+                          return_value=self._FakeResolvers()), \
+             patch.object(fast_fetch, "probe_url_ttl",
+                          return_value=(60.0, {"observed": True, "ttl": 60.0,
+                                               "expires_at": header_expiry, "http": 200})):
+            res = fast_fetch.resolve_live_source(stored["id"])
+        self.assertAlmostEqual(res["expires_in"], 60.0, delta=5.0)
+        with fast_fetch.get_db() as conn:
+            row = conn.execute(
+                "SELECT expires_at, ttl_source FROM download_sources WHERE id = ?",
+                (stored["id"],)).fetchone()
+        self.assertEqual(row["ttl_source"], "response_headers")
+        self.assertAlmostEqual(row["expires_at"], header_expiry, delta=1.0)
 
     def test_a_row_of_another_service_never_takes_the_embed_branch(self):
         """The branch is chosen by the row's own host, not by what the resolver

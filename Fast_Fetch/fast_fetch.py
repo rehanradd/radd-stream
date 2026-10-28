@@ -5308,6 +5308,7 @@ def resolve_live_source(source_id: int, *, v2: bool = False) -> dict:
     service = src.get("service") or ""
     fresh_url = None
     fresh_temp = src["is_temporary"]
+    embed_verdict = None
 
     def hoster_input(marker):
         """The stored address that actually names this hoster.
@@ -5403,17 +5404,21 @@ def resolve_live_source(source_id: int, *, v2: bool = False) -> dict:
             # The embed URL is the durable identifier and the mp4 is a result of
             # this call: mxdrop signs its `MDCore.wurl` with a ~6-hour window.
             embed = cached_u if hr.is_mxdrop_embed(cached_u) else source_u
-            direct_u = embed_from_verdict(hr.unwrap_mxdrop(embed, verify=True))
+            verdict = hr.unwrap_mxdrop(embed, verify=True)
+            direct_u = embed_from_verdict(verdict)
             if direct_u:
                 fresh_url = direct_u
                 fresh_temp = 1
+                embed_verdict = verdict
         elif hr and (service == hr.SERVICE_PKEMBED or "pkembed" in source_u.lower()
                      or "pkembed" in cached_u.lower()):
             embed = cached_u if hr.is_pkembed_embed(cached_u) else source_u
-            direct_u = embed_from_verdict(hr.unwrap_pkembed(embed, verify=True))
+            verdict = hr.unwrap_pkembed(embed, verify=True)
+            direct_u = embed_from_verdict(verdict)
             if direct_u:
                 fresh_url = direct_u
                 fresh_temp = 1
+                embed_verdict = verdict
         elif "gamerxyt" in source_u.lower() or "gamerxyt" in cached_u.lower():
             gamer = hoster_input("gamerxyt")
             if "link=" in gamer:
@@ -5432,22 +5437,50 @@ def resolve_live_source(source_id: int, *, v2: bool = False) -> dict:
         fresh_url = None
 
     if fresh_url and fresh_url != source_u:
+        # A packer's verdict carries more than a URL. `verify=True` means the
+        # resolver already read the first 512 bytes of the file, so its container,
+        # its length and the status it came back with are measurements we paid
+        # for; storing them saves the next probe and answers the seek question from
+        # evidence. Every other hoster still gets the plain five-column update.
+        measured = [(column, value) for column, value in (
+            ("mime_type", (embed_verdict or {}).get("content_type")),
+            ("file_size_bytes", (embed_verdict or {}).get("size_bytes")),
+            ("http_status", (embed_verdict or {}).get("http_status")),
+            ("is_resumable", 1 if (embed_verdict or {}).get("http_status") == 206 else None),
+        ) if value is not None]
+        for column, value in measured:
+            src[column] = value
         with get_db() as conn:
-            conn.execute("""
+            conn.execute(f"""
                 UPDATE download_sources
                 SET final_url = ?, is_temporary = ?, status = 'active',
                     last_checked_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+                    {"".join(f", {column} = ?" for column, _value in measured)}
                 WHERE id = ?
-            """, (fresh_url, fresh_temp, src["id"]))
+            """, (fresh_url, fresh_temp, *(value for _column, value in measured),
+                  src["id"]))
         # Ask the URL itself how long it lives, instead of assuming. A fresh token
         # whose host declares no freshness window keeps `expires_at` NULL, and the
         # next call then falls back to the documented 6-hour temporary-link
         # ceiling rather than to a number we invented for it.
         observed_ttl, observed_info = probe_url_ttl(fresh_url)
+        signed_ttl = (embed_verdict or {}).get("expires_in")
         expires_at = observed_info.get("expires_at")
         if expires_at is not None:
             record_link_expiry(src["id"], observed_ttl, expires_at=expires_at,
                                observed_via="response_headers")
+            src["expires_at"] = expires_at
+        elif isinstance(signed_ttl, (int, float)):
+            # The packer CDNs answer with no Cache-Control and no Expires, so
+            # `probe_url_ttl` honestly reports `no_directive` — but the lifetime is
+            # not missing, it is signed into the query the packer handed us, and
+            # `host_resolvers` already parsed it (`e` for mxdrop, `s` + `e` for
+            # pkembed). Recording that number is what makes the cached answer
+            # honest: without it a one-hour token would be served stale for five
+            # hours, because the ceiling below is a six-hour guess.
+            expires_at = time.time() + max(0.0, float(signed_ttl))
+            record_link_expiry(src["id"], expires_at=expires_at,
+                               observed_via="signed_params")
             src["expires_at"] = expires_at
         elif observed_info.get("reason") == "no_directive":
             # The host answered and declared nothing: drop any older measurement
