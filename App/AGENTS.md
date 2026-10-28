@@ -143,12 +143,36 @@ The backend is `Fast_Fetch/viewer.py`. The app currently consumes:
 `GET /api/v1/rules` is **not** called by the app. `App/.github/workflows/` and
 the deferred roadmap items are separate concerns; see §6 and §8.
 
-There is **no authentication, no API key, no bearer token, and no rate limiting**
-anywhere in `viewer.py`. `send_json()` adds `Access-Control-Allow-Origin: *` to
-every response (viewer.py:2037) and the server defaults to binding `0.0.0.0`
-(viewer.py:2211). The deployed Oracle host is plain HTTP with no TLS. This API is
-public to anyone who can reach the port — never treat it as a private or secured
-surface.
+> ⚠️ **The four claims this paragraph used to make are now false on the current code —
+> re-measured 2026-10-28.** It used to say there is **no authentication, no API key, no bearer
+> token, and no rate limiting** anywhere in `viewer.py`, that `send_json()` answers every
+> request with `Access-Control-Allow-Origin: *`, and that the server defaults to binding
+> `0.0.0.0`. All three have since changed, so the paragraph is replaced by what the file
+> actually does:
+>
+> - **The four catalog reads stay open, and the account surface does not.** `viewer.py:381
+>   _bearer_token()` / `:389 request_is_vip()` read `Authorization: Bearer …`, and every
+>   `api/v2/account*` route requires the sync key (that is why Session 13's payment call had
+>   to be signed in). A plain `vip=1` is never honoured — only a server-minted pass.
+> - **There is a limiter.** `viewer.py:2913 _bucket_for()` assigns each request a token bucket
+>   (`account`, the `api_v2.ROUTE_BUCKETS` map, `play` for `/api/v1/stream|download|art` and
+>   `/api/m3u`, `reports` for `/api/v1/stats`, `browse` otherwise), and `redact.py:1163` puts
+>   the IETF `RateLimit-Limit/Remaining/Reset` triple on the answer. A phone that polls too
+>   hard gets throttled, so "retry forever" is not a free strategy.
+> - **CORS is an allow-list that is currently empty.** `send_json()` (`viewer.py:2895`) calls
+>   `redact.cors_headers_for(origin)`, which returns the two headers only for an origin in
+>   `redact.CORS_ALLOW_ORIGINS` — a `frozenset()` today (`redact.py:1278`), so no browser
+>   origin is granted and a refused one gets **no header at all**. Nothing sends `*` any more.
+>   This costs the Android client nothing (OkHttp is not a browser and ignores CORS), but it
+>   means a web dashboard cannot read this API until an operator adds its origin.
+> - **The default bind is loopback.** `start_server()` is `host="127.0.0.1"`
+>   (`viewer.py:3446`) and `fast_fetch.py:5857` defaults `--host` to `127.0.0.1` with the help
+>   text "nginx is the public gate". The old `0.0.0.0` default is gone.
+>
+> What did **not** change: the deployed host is plain HTTP with no TLS, the four catalog reads
+> answer anyone who can reach nginx, and nothing behind them is private — a sync key protects a
+> viewer's own bookmarks and resume rows, not the catalog. Never treat the catalog as a private
+> surface, and never treat the account routes as unauthenticated.
 
 ### `GET /api/v1/posts`
 **Query params** (route dispatch viewer.py:3120-3127 → `api_v1_get_posts()` viewer.py:2491):
@@ -163,19 +187,30 @@ surface.
 
 > ✅ **`?type=anime` works on the deployed server (measured 2026-10-28):**
 > `GET http://92.4.95.252/api/v1/posts?type=anime&limit=1` returns `total: 5307`, and the row
-> carries `is_animated: 1`. What is still missing is on the **client**: `Post` (the list model)
-> does not decode `is_animated`, so `V1CatalogMapper.animatedFromList` answers `null` and a tile
-> inside an anime-filtered list is typed from `content_type` alone until the detail page
-> corrects it. See `App/docs/PARITY_BACKEND_BLOCKED.md` §4-A.
+> carries `is_animated: 1`. **The client now reads that flag** (`Post.isAnimated`,
+> `Models.kt:77`, decoded by `LenientBooleanAdapter` because the column is INTEGER 0/1), so a
+> tile inside an anime-filtered list is typed ANIME from the wire the moment it decodes:
+> `V1CatalogMapper.animatedFromList` returns the field instead of `null`, and the one label
+> owner `WorkTypeLabel.of(contentType, isAnimated)` paints "Anime" on the tile, the hero badge
+> and the detail header. Search's own rail and chips gained the same entry
+> (`typeChips` = All/Movies/Series/**Anime**/Seasons), and a flagged series now groups into its
+> own "Anime" rail instead of the Series one (`typeGroupKey`).
+> `App/docs/PARITY_BACKEND_BLOCKED.md` §4-A is closed by `69b3795`.
 >
 > (The old 🚨 note here — "there is no `?type=anime`", "`HomeScreen.kt:48` / `SearchScreen.kt:49`
 > map the chip to an empty grid" — described the 2026-10-22 server and is retired. `HomeScreen`
-> offers the Anime entry at `HomeScreen.kt:237`; `SearchScreen`'s `typeChips` are
-> All/Movies/Series/Seasons and its anime path is the `industry` facet, which
-> `viewer.py:2539` also answers.)
+> offers the Anime entry at `HomeScreen.kt:237`; the `industry` facet is the second door to the
+> same predicate, which `viewer.py:2539` also answers. What remains open is only the Room
+> consequence: `FavoritePost` stores no `is_animated` column, so a favourite saved from the grid
+> still labels an anime "Series" until a migration carries the flag — recorded, not hidden.)
 
-**Response** — `api_v1_get_posts()` selects exactly these keys per result
-(viewer.py:1905-1909). The example below is a real row sampled from
+**Response** — `api_v1_get_posts()` selects these columns per result
+(viewer.py:2596-2603: `id, clean_title, title, year, content_type, seasons, poster_url,
+backdrop_urls, imdb_rating, imdb_id, tmdb_id, genres, is_animated, industry, country,
+language, release_count, source_count`), then `redact.project(row, "post_brief")` trims it,
+`_art_pair()` (viewer.py:415) rewrites the two art fields through the redirector, and the loop
+appends `work_ref` (viewer.py:2619) and `subtitled` (viewer.py:2620). The example below is a
+real row sampled from
 `Fast_Fetch/multimovies.db` on 2026-10-22 (poster URL elided); the totals are that
 staging database's counts, **not** the unified catalog's:
 
@@ -209,10 +244,13 @@ staging database's counts, **not** the unified catalog's:
 }
 ```
 
-`slug` is **not** in the list payload — it is only on the detail response. `year`,
+`slug` is **not** in the list payload — it is only on the detail response, and only when the
+caller asked for the un-redacted `full` view (viewer.py:2594 adds `source_site, url, slug` for
+that path and nothing else). `year`,
 `imdb_rating`, and `seasons` are nullable; `year` and `tmdb_id` arrive as JSON
 **numbers** when present. Results are ordered `p.id DESC` (newest first), and rows
-with `is_18_plus = 1` are excluded by the SQL `WHERE` (viewer.py:1891).
+with `is_18_plus = 1` are excluded by the SQL `WHERE` (viewer.py:2499, one
+`redact.adult_clause("p")` that every branch of the route inherits).
 
 > **Added 2026-10-28 (Session 19):** the list payload now carries one more key,
 > `subtitled` — a JSON **boolean** the server computes per work by
@@ -226,9 +264,11 @@ with `is_18_plus = 1` are excluded by the SQL `WHERE` (viewer.py:1891).
 ### `GET /api/v1/posts/{id}`
 Returns `{"success": true, "data": {...}}`, where `data` is the raw `posts` row
 plus `source_pages[]` and `releases[]`, each release carrying `sources[]`.
-Releases are ordered **`id ASC`** only (viewer.py:1942) — no quality sorting and no
+Releases are ordered **`id ASC`** only (viewer.py:2680) — no quality sorting and no
 season/episode grouping; group them client-side. The tier ordering applies only
-to `sources` inside a release (viewer.py:1946-1961). An unknown id or an
+to `sources` inside a release (viewer.py:2683-2697: `status = 'active' DESC`, then
+`is_temporary ASC`, then a fixed `CASE service` preference — a query, never a field on the
+wire). An unknown id or an
 adult-flagged post returns `404 {"success": false, "error": "Post not found"}`.
 
 ### `GET /api/v1/stream`
@@ -239,7 +279,9 @@ JSON **booleans**, which `StreamResponse` must not model as integers. Failure �
 `404 {"success": false, "error": ...}`.
 
 ### `GET /api/v1/stats`
-Field names are snake_case exactly as below (viewer.py:2156-2174). **The values
+Field names are snake_case exactly as below — the answer is built at viewer.py:2858-2864 and
+cached for 120 s (`_STATS_CACHE`, viewer.py:2821-2823), so a figure a phone sees can lag the
+ledger by two minutes by design. **The values
 are illustrative only** — they were read live from the `multimovies.db` staging
 catalog on 2026-10-22, the old `131 / 1031 / 2017` figures were a 2026-10-13
 milestone snapshot, and the unified catalog grows with every scraper run. Call the
@@ -293,18 +335,24 @@ Session 2/3 logs, which described a metadata-only MVP that no longer matches
 > anime work is client-side — decode `is_animated` onto `Post` so a tile is typed correctly before
 > its detail page opens (`App/docs/PARITY_BACKEND_BLOCKED.md` §4-A).
 
-> 🚨 **`ReleaseDetail` does not match the backend release rows.** The `releases`
-> table columns returned by `/api/v1/posts/{id}` are `id, post_id, release_title,
-> season, episode, quality, codec, size, languages, intermediate_url, created_at,
-> source_site, origin_url` (verified via `PRAGMA table_info`). `Models.kt:68-84`
-> asks instead for `season_number`, `episode_number`, `episode_title`,
-> `resolution`, and `audio` — **none of those keys exist in the response**, so all
-> five are always `null`. `DetailScreen.kt:206-220` builds its whole season filter
-> on `seasonNumber`, and `DetailScreen.kt:426-428` on `episodeNumber`, so series
-> season/episode grouping silently does nothing today. Map `season` / `episode` /
-> `release_title` instead. Likewise `StreamResponse.isTemporary: Int?` cannot hold
-> the JSON **boolean** the resolver returns (`is_temporary` is
-> `bool(...)` in `resolve_live_source()`), so Gson will reject that field.
+> ✅ **~~`ReleaseDetail` does not match the backend release rows.~~ Retired by code, not by
+> hope (re-read `Models.kt` 2026-10-28).** The old note claimed the model asked for
+> `season_number`, `episode_number`, `episode_title`, `resolution` and `audio` — five keys the
+> response never sends — so all five were permanently `null` and season/episode grouping
+> "silently did nothing". That model is gone. `ReleaseDetail` now maps the columns the ledger
+> actually writes (`Models.kt:236-253`: `release_title`, `season`, `episode`, `quality`, `codec`,
+> `size`, `languages`, `sources[]`), and the four values the UI needs are **derivations** of them
+> through one grammar: `seasonNumber`/`episodeNumber`/`resolution`/`sizeBytes` come from
+> `printDescriptor` (`:264-286`, i.e. `ReleaseLabelParsing`, the port of
+> `Fast_Fetch/release_descriptor.py`), `audio` is simply `languages`. `episode_title` has no
+> server counterpart at all, so it does not exist here and `releaseTitle` is the honest label.
+> Consequence in the screen: `SeasonChips` (`DetailScreen.kt:387,660`) paints
+> `SeasonGroup.number`, which `ReleaseLayoutBuilder.kt:300-330` builds from those same derived
+> season numbers — grouping is live, not dead. The provenance columns (`source_site`,
+> `origin_url`, `intermediate_url`, `created_at`) are absent from the model on purpose.
+> Likewise `StreamResponse.isTemporary` is `Boolean?` (`Models.kt:343-345`) decoded by
+> `LenientBooleanAdapter`, which accepts the JSON boolean `/api/v1/stream` sends and the `0/1`
+> number the same field arrives as elsewhere.
 
 
 ---
