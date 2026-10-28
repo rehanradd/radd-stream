@@ -23,6 +23,99 @@
 
 ---
 
+## Scraped vs merely documented — measured 2026-10-29
+
+The table above documents twelve sites; the fleet's staging databases under
+`/home/ubuntu/radd-stream-data/` cover thirty. Those are different claims, and
+`merge_catalogs.py` can only read the second kind. Every row below is a
+`COUNT(*)` against the file, not a note about what a parser could do:
+**posts / releases / sources**, plus the queue (`scraped = -1` parked, `0`/`2`
+pending). A row with `no-key` has no `posts.canonical_key` and no `sources`
+table, so it is **not mergeable as it stands**.
+
+| Staging database | posts | releases | sources | 18+ | queue parked / pending | mergeable |
+|---|---|---|---|---|---|---|
+| 10xflix | 13,775 | 76,923 | 228,397 | 2,665 | 1,189 / 0 | yes |
+| 5movierulz | 442 | 3,262 | 6,491 | 2 | 0 / 0 | yes |
+| 7starhd | 11,791 | 33,369 | 99,627 | 2,296 | 7,938 / 0 | yes |
+| 9xmovies | 12,060 | 30,936 | 337,595 | 2,726 | 5,770 / 1 | yes |
+| animahd | 232 | 4,801 | 9,575 | 0 | 1 / 0 | yes |
+| aryplus | 481 | 10,860 | 10,860 | 0 | 538 / 0 | yes |
+| bolly4u | 15,192 | 41,004 | 22,003 | 972 | 7,735 / 1 | yes |
+| desicinemas | 5,223 | 5,285 | 4,339 | 7 | 0 / 1 | yes |
+| desiserials | 34 | 200 | 359 | 0 | 0 / 0 | yes (200-row pilot only) |
+| dramacool | 544 | 9,675 | 9,675 | 2 | 0 / 0 | yes |
+| filmiyin | 3,837 | 17,541 | 17,541 | 21 | 1,841 / 0 | yes — queue driven to completion |
+| filmyzilla | 15,228 | 46,372 | 80,032 | 423 | 3,462 / 0 | yes |
+| hdhub4u | 11,224 | 129,009 | 250,925 | 826 | 1,147 / 0 | yes |
+| hdtvb | 3,774 | 16,855 | 16,855 | 1,161 | 3,684 / 0 | yes |
+| hindilinks4u | 26,152 | 145,196 | 145,196 | 988 | 3,673 / 0 | yes |
+| katmoviehd | 38,154 | 146,244 | 163,972 | 1,017 | 162 / 3,452 | yes |
+| kisskh | 669 | 11,550 | 140,746 | 10 | 4 / 2 | yes |
+| levidia | 147 | 460 | 2,976 | 0 | 0 / 0 | yes |
+| moviecok | 1,738 | 7,065 | 7,452 | 4 | 0 / 8 | yes |
+| moviesmela | 16,677 | 20,770 | 57,818 | 19 | 0 / 118 | yes |
+| moviezguru | 3,386 | 7,334 | 8,912 | 97 | 4 / 0 | yes |
+| **mp4moviez** | 29,848 | 54,267 | — | 91 | 0 / 3,119 | **no-key** — see § MP4Moviez |
+| multimovies | 10,498 | 532,649 | 595,218 | 30 | 0 / 769 | yes |
+| pagalmovies | 6,842 | 9,447 | 9,447 | 393 | 7,535 / 7 | yes |
+| rareanimes | 1,328 | 17,419 | 53,767 | 7 | 1,295 / 0 | yes |
+| rogmovies | 7,750 | 52,964 | 193,048 | 879 | 0 / 0 | yes |
+| ssrmovies | 13,916 | 46,153 | 665,025 | 924 | 0 / 0 | yes |
+| toonworld4all | 932 | 66,740 | 230,282 | 17 | 1,324 / 0 | yes |
+| vegamovies | 13,370 | 131,658 | 398,253 | 445 | 324 / 5 | yes |
+| world4ufree | 14,768 | 106,972 | 254,340 | 425 | 2,921 / 0 | yes |
+
+Two further claims this table retires:
+
+- **A dedicated importer module exists for**: 5movierulz, animahd, aryplus,
+  desiserials, dramacool, filmiyin, kisskh, levidia, moviecok, moviesmela,
+  mp4moviez (converter, not crawler), pagalmovies — twelve, in
+  `Fast_Fetch/importers/`. Every other site above was written by a parser inside
+  `fast_fetch.py` and has no module of its own.
+- **`mp4moviez.db` is the largest asset the merge queue cannot read.** It holds
+  29,848 pages scraped before the fleet schema existed: no `canonical_key`, no
+  `sources` table, so `_source_family()` raises
+  `ValueError: Source database has neither download_sources nor sources table`.
+  `Fast_Fetch/importers/import_mp4moviez.py` converts it (verified: 28,066 works,
+  54,267 releases, 54,267 sources, and the result reads back through
+  `merge_catalogs._collect_staging_post`). Before this file, SITES.md had
+  MP4Moviez listed under *Sites To Add Next* with a domain nobody scraped —
+  neither half of that was true. See § MP4Moviez.
+
+---
+
+## MP4Moviez (`www.mp4moviez.deal`)
+
+- **Scraped domain:** `https://www.mp4moviez.deal` (the `mp4moviez.cloud` in
+  § Sites To Add Next was never the scraped host; the XML sitemap that filled
+  `mp4moviez.db` is this one's).
+- **State today:** 29,848 pages and 54,267 download rows already in
+  `mp4moviez.db`, scraped by an earlier worker in a schema the merge queue
+  rejects. No live crawl is running against it; `import_mp4moviez.py` is a
+  **converter**, and it converts.
+- **What the conversion does and does not do:** keys every work on the site's own
+  page slug, unions the 336 slugs that a re-post under a new `c<id>` path
+  duplicates, copies the legacy columns into `raw_meta`, then replaces `posts`
+  and `releases` inside one `BEGIN IMMEDIATE` transaction that rolls back whole.
+  It writes one `sources` row per release with `playback_type = download`,
+  `status = unverified`, `final_url = NULL` and `last_checked = NULL`, because
+  the stored link is `dl.php?id=<n>&q=<tier>` and nothing here followed it. A
+  converter that wrote `active` would be claiming a probe that did not happen.
+- **The hole in the asset:** 14,730 of the 29,848 stored pages are titled, dated,
+  `c<id>`-anchored works with **zero download rows**. They were fetched while
+  `dl.php` links were plain HTML; the site has since moved those buttons behind a
+  `data-key` script, so re-fetching them with the legacy parser recovers nothing.
+  They convert as catalog entries with no sources — reachable metadata, no link —
+  and they are the honest re-drive cohort for this site.
+- **Dropped by design:** 1,438 category/listing pages, 9 copyright-takedown
+  notices, 2 `sitemap*.xml` rows, 7 untitled rows.
+- **Queue:** 3,119 URLs were never fetched (1,781 of them listing or pagination
+  rows, many storing a literal `&amp;p=2`). The converter leaves `sitemap_cache`
+  exactly as it found it.
+
+---
+
 ## 1. Vegamovies (`vegamovies.gallery`)
 
 ### Identity
@@ -642,7 +735,7 @@ python Fast_Fetch/fast_fetch.py stats  # shows domain_config entries
 |------|--------------|--------|-------|
 | Filmywap | filmywap.com (rotates) | XML sitemap | Large catalog |
 | Filmyhit | filmyhit.link | XML sitemap | Punjab + Bollywood |
-| MP4Moviez | mp4moviez.cloud | XML sitemap | 480p/720p focus |
+| MP4Moviez | ~~mp4moviez.cloud~~ `www.mp4moviez.deal` | already scraped | **Not a to-add site.** 29,848 pages already in `mp4moviez.db`; see § MP4Moviez for the converter that makes it mergeable |
 | World4uFree | world4ufree.biz | XML sitemap | Dual audio |
 | Bolly4u | bolly4u.trade | XML sitemap | Bollywood |
 | watch-movies.com.pk | watch-movies.com.pk | CF challenge | Needs special headers |

@@ -282,8 +282,25 @@ _NO_REDIRECT_OPENER = urllib.request.build_opener(
 _NO_REDIRECT_OPENER.addheaders = [("User-Agent", USER_AGENT)]
 
 
+def _requestable(url: str) -> str:
+    """
+    Percent-encode the path characters this site's server answers with 400.
+
+    Measured: `Goal!_the_dream_begins_(2005)…` returns 400 as written and 200 once
+    the `!` is sent as `%21`. Those rows looked like deleted pages and were parked;
+    they were our own unencoded request. `loc` in the queue stays the site's
+    spelling — only the bytes we send are normalised.
+    """
+    parts = urllib.parse.urlsplit(url)
+    path = urllib.parse.quote(parts.path, safe="/&=?%()~:,;@$+-")
+    query = urllib.parse.quote(parts.query, safe="&=?%/:;@+$,!")
+    return urllib.parse.urlunsplit((parts.scheme, parts.netloc, path, query,
+                                    parts.fragment))
+
+
 def http_get(url: str, timeout: int = 30, retries: int = 3):
     """Returns (status_code, final_url, body) following redirects. Never raises."""
+    url = _requestable(url)
     last_status, last_url, last_body = 0, url, ""
     for attempt in range(1, retries + 1):
         try:

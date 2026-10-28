@@ -347,6 +347,60 @@ class TestParsePage(unittest.TestCase):
         self.assertNotIn("Hunkkaar", json.dumps(post["raw_meta"], ensure_ascii=False))
 
 
+class TestRequestableUrl(unittest.TestCase):
+    """
+    A 400 from this server is our spelling, not a deleted page.
+
+    Measured against the live site: `/movie/958/Goal!_the_dream_begins_(2005)…`
+    answers 400 as written and 200 once `!` goes out as `%21`. Without this
+    normalisation the row parks as a transport error and the film is lost to a
+    character the URL never needed to keep raw.
+    """
+
+    BANG = ("https://www.pagalmovies.fit/movie/958/Goal!_the_dream_begins_"
+            "(2005)_english_movie.html")
+    STAR = ("https://www.pagalmovies.fit/movie/5663/Stay_out_of_the_f**king_"
+            "attic_(2020)_hollywood_hindi_dubbed_full_movie.html")
+
+    def test_exclamation_and_asterisk_are_percent_encoded(self):
+        self.assertEqual(
+            pm._requestable(self.BANG),
+            "https://www.pagalmovies.fit/movie/958/Goal%21_the_dream_begins_"
+            "(2005)_english_movie.html")
+        self.assertNotIn("*", pm._requestable(self.STAR))
+
+    def test_a_ordinary_path_is_left_byte_for_byte(self):
+        plain = "https://www.pagalmovies.fit/movie/29650/Cocoons_(2026)_movie.html"
+        self.assertEqual(pm._requestable(plain), plain)
+
+    def test_http_get_sends_the_normalised_url(self):
+        seen = []
+
+        class Resp:
+            status = 200
+
+            def __init__(self, url):
+                self._url = url
+
+            def read(self):
+                return b"<html>ok</html>"
+
+            def geturl(self):
+                return self._url
+
+        def fake_open(url, timeout=None):
+            seen.append(url)
+            return Resp(url)
+
+        with mock.patch.object(pm, "_OPENER") as opener:
+            opener.open.side_effect = fake_open
+            status, final, body = pm.http_get(self.BANG)
+        self.assertEqual(status, 200)
+        self.assertEqual(len(seen), 1)
+        self.assertIn("Goal%21_", seen[0])
+        self.assertNotIn("!", seen[0])
+
+
 class TestResolveLinks(unittest.TestCase):
     def _post(self):
         with mock.patch.object(pm, "http_get", return_value=(200, MOVIE_URL, FIXTURE)):
