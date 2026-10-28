@@ -28,7 +28,9 @@ import java.util.Properties
  *  6. AndroidManifest.xml stops using the generated label / ${brandScheme};
  *  7. a [copy] string still names a brand other than identity.name (a re-skin
  *     must not silently leave the old name in prose);
- *  8. the documented "pending migration" lists grow — or shrink without being
+ *  8. a screen writes a raw sp size, so brand.properties' typography.scale
+ *     cannot reach it (a re-skin for a smaller panel leaves that text frozen);
+ *  9. the documented "pending migration" lists grow — or shrink without being
  *     updated. They are a ratchet, not a parking lot.
  */
 class BrandDriftTest {
@@ -249,7 +251,40 @@ class BrandDriftTest {
         assertTrue("copy strings must not be empty", brandKeys().count { it.startsWith("copy.") } >= 5)
     }
 
-    // ── 8. shared reader contract ───────────────────────────────────────────
+    // ── 8. the brand type ramp reaches every screen ──────────────────────────
+
+    /**
+     * `typography.scale` is one number in brand.properties that grows or shrinks the whole
+     * ramp for the target device class, and `brandSp` is its only reader. A screen that writes
+     * `fontSize = 13.sp` is legible and brand-correct on today's scale of 1.0, so nothing
+     * reports it: the re-skin that moves the ramp to 1.15 for a small panel simply skips that
+     * screen. A literal sp is also how the player drifted off the two sanctioned forms —
+     * `brandSp(...)` for a size, `MaterialTheme.typography.<role>` for a whole style.
+     */
+    @Test
+    fun noScreenWritesARawSpSize() {
+        val rawSp = Regex("""[0-9](?:\.[0-9]+)?f?\.sp""")
+        val offenders = kotlinSources()
+            .filter { rawSp.containsMatchIn(it.readText()) }
+            .map { it.relativeToRoot() }
+            .sorted()
+        assertEquals(
+            "raw sp literals bypass brandSp, so typography.scale cannot reach them — write " +
+                "brandSp(n) or use a MaterialTheme.typography role",
+            emptyList<String>(),
+            offenders,
+        )
+        // The scan above is only meaningful while the sanctioned helper still exists.
+        val type = File(mainSrc, "kotlin/com/raddstream/app/ui/theme/Type.kt").readText()
+        assertTrue("Type.kt must still own brandSp", type.contains("fun brandSp(value: Number): TextUnit"))
+        assertTrue("brandSp must read the brand ramp", type.contains("RaddTypeScale"))
+        assertTrue(
+            "the theme must route its own ramp through brandSp, not through bare literals",
+            Regex("""fontSize = brandSp\(""").containsMatchIn(type),
+        )
+    }
+
+    // ── 9. shared reader contract ───────────────────────────────────────────
     @Test
     fun brandFileKeysAreFullyQualifiedAndUnique() {
         val keys = brandKeys()

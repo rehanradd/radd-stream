@@ -111,7 +111,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
@@ -148,6 +147,7 @@ import com.raddstream.app.player.subtitles.SubtitleOffset
 import com.raddstream.app.player.subtitles.SubtitleOffsetSheet
 import com.raddstream.app.player.dragHalfZone
 import com.raddstream.app.player.dominantAxis
+import com.raddstream.app.ui.theme.brandSp
 import com.raddstream.app.ui.theme.paint
 import com.raddstream.app.viewmodel.PlayerEvent
 import com.raddstream.app.viewmodel.PlayerViewModel
@@ -403,7 +403,7 @@ private fun PlayerScreenContent(
                     ) {
                         Icon(Icons.Default.Check, null, tint = Color(0xFF8FD14F), modifier = Modifier.size(16.dp))
                         Spacer(Modifier.width(8.dp))
-                        Text(banner, color = Color.White, fontSize = 13.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                        Text(banner, color = Color.White, fontSize = brandSp(13), maxLines = 2, overflow = TextOverflow.Ellipsis)
                     }
                 }
             }
@@ -493,7 +493,7 @@ private fun PlayerScreenContent(
                         .padding(horizontal = 24.dp)
                         .padding(bottom = 100.dp),
                 ) {
-                    Text(msg, color = Color.White, fontSize = 13.sp, modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp))
+                    Text(msg, color = Color.White, fontSize = brandSp(13), modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp))
                 }
             }
         }
@@ -595,7 +595,7 @@ private fun AudioOnlySurface(title: String, isPlaying: Boolean) {
             Text(
                 if (isPlaying) "Audio only — video decoder off" else "Audio only — paused",
                 color = Color.White.copy(alpha = 0.6f),
-                fontSize = 12.sp,
+                fontSize = brandSp(12),
             )
         }
     }
@@ -817,7 +817,7 @@ private fun DoubleTapRipple(state: PlayerUiState) {
                     modifier = Modifier.size(26.dp),
                 )
                 Spacer(Modifier.width(6.dp))
-                Text(label, color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+                Text(label, color = Color.White, fontSize = brandSp(15), fontWeight = FontWeight.Bold)
             }
         }
     }
@@ -870,7 +870,7 @@ private fun HudToast(hud: Hud) {
                     }
                 }
                 Spacer(Modifier.height(6.dp))
-                Text(label, color = Color.White, fontSize = 12.sp)
+                Text(label, color = Color.White, fontSize = brandSp(12))
             }
         }
     }
@@ -887,7 +887,7 @@ private fun ScrubToast(target: Long, durationMs: Long) {
             Text(
                 "${target.formatTime()} / ${durationMs.formatTime()}",
                 color = Color.White,
-                fontSize = 14.sp,
+                fontSize = brandSp(14),
                 modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp),
             )
         }
@@ -905,7 +905,7 @@ private fun BoostBadge() {
             Row(Modifier.padding(horizontal = 10.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                 Icon(Icons.Default.FastForward, null, tint = Color.Black, modifier = Modifier.size(16.dp))
                 Spacer(Modifier.width(4.dp))
-                Text("Boosting speed", color = Color.Black, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                Text("Boosting speed", color = Color.Black, fontSize = brandSp(12), fontWeight = FontWeight.Bold)
             }
         }
     }
@@ -931,7 +931,7 @@ private fun TopBar(vm: PlayerViewModel, state: PlayerUiState, onBack: () -> Unit
             Text(
                 state.pendingTitle ?: print?.displayLabel() ?: Brand.name,
                 color = Color.White,
-                fontSize = 15.sp,
+                fontSize = brandSp(15),
                 fontWeight = FontWeight.SemiBold,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
@@ -947,7 +947,7 @@ private fun TopBar(vm: PlayerViewModel, state: PlayerUiState, onBack: () -> Unit
                     state.autoQualityBand?.let { band -> append(" · Auto: $band") }
                 },
                     color = Color.White.copy(alpha = 0.72f),
-                    fontSize = 11.sp,
+                    fontSize = brandSp(11),
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
@@ -967,7 +967,7 @@ private fun TopBar(vm: PlayerViewModel, state: PlayerUiState, onBack: () -> Unit
             Text(
                 "${state.speed}×",
                 color = AccentOrange,
-                fontSize = 13.sp,
+                fontSize = brandSp(13),
                 fontWeight = FontWeight.Bold,
                 modifier = Modifier.padding(end = 6.dp),
             )
@@ -1058,7 +1058,7 @@ private fun EdgeHud(
             Text(
                 text = state.pendingTitle ?: state.activeRendition?.displayLabel() ?: Brand.name,
                 color = Color.White.copy(alpha = 0.85f),
-                fontSize = 12.sp,
+                fontSize = brandSp(12),
                 fontWeight = FontWeight.Medium,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
@@ -1095,7 +1095,7 @@ private fun EdgeHud(
                     append(if (state.durationMs > 0) " / ${state.durationMs.formatTime()}" else " / --:--")
                 },
                 color = Color.White.copy(alpha = 0.8f),
-                fontSize = 11.sp,
+                fontSize = brandSp(11),
                 modifier = Modifier.padding(end = 8.dp),
             )
         }
@@ -1151,12 +1151,12 @@ private fun BottomControls(
                     .padding(horizontal = 12.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text(state.positionMs.formatTime(), color = Color.White, fontSize = 12.sp)
+                Text(state.positionMs.formatTime(), color = Color.White, fontSize = brandSp(12))
                 Spacer(Modifier.weight(1f))
                 Text(
                     if (state.durationMs > 0) state.durationMs.formatTime() else "--:--",
                     color = Color.White.copy(alpha = 0.75f),
-                    fontSize = 12.sp,
+                    fontSize = brandSp(12),
                 )
             }
             Row(
@@ -1409,7 +1409,7 @@ private fun PlayAgainButton(onPlayAgain: () -> Unit) {
             ) {
                 Icon(Icons.Default.Replay10, null, tint = Color.White)
                 Spacer(Modifier.width(8.dp))
-                Text("Play again from 0:00", color = Color.White, fontSize = 14.sp)
+                Text("Play again from 0:00", color = Color.White, fontSize = brandSp(14))
             }
         }
     }
@@ -1424,7 +1424,7 @@ private fun ConnectionErrorCard(message: String, onRetry: () -> Unit) {
         ) {
             Icon(Icons.Default.Warning, null, tint = AccentOrange, modifier = Modifier.size(40.dp))
             Spacer(Modifier.height(10.dp))
-            Text(message, color = Color.White, fontSize = 13.sp, textAlign = TextAlign.Center)
+            Text(message, color = Color.White, fontSize = brandSp(13), textAlign = TextAlign.Center)
             Spacer(Modifier.height(12.dp))
             OutlinedButton(onClick = onRetry) { Text("Retry", color = Color.White) }
         }
@@ -1489,12 +1489,12 @@ private fun GiveUpCard(
                     HandoffWhy.NO_CANDIDATE_LEFT -> "Nothing playable here right now"
                 },
                 color = Color.White,
-                fontSize = 16.sp,
+                fontSize = brandSp(16),
             )
         },
         text = {
             Column {
-                Text(message, color = Color.White.copy(alpha = 0.85f), fontSize = 13.sp)
+                Text(message, color = Color.White.copy(alpha = 0.85f), fontSize = brandSp(13))
                 Spacer(Modifier.height(8.dp))
                 Text(
                     when (why) {
@@ -1505,7 +1505,7 @@ private fun GiveUpCard(
                                 "in another player."
                     },
                     color = Color.White.copy(alpha = 0.6f),
-                    fontSize = 12.sp,
+                    fontSize = brandSp(12),
                 )
             }
         },
@@ -1540,7 +1540,7 @@ private fun SubtitleOverlay(state: PlayerUiState, vm: PlayerViewModel) {
                 Text(
                     cue.text,
                     color = state.subtitle.colour.paint(),
-                    fontSize = (16f * state.subtitle.sizePercent / 100f).sp,
+                    fontSize = brandSp(16f * state.subtitle.sizePercent / 100f),
                     fontWeight = if (state.subtitle.bold) FontWeight.Bold else FontWeight.Normal,
                     textAlign = TextAlign.Center,
                     modifier = if (state.subtitle.textBackground) {
@@ -1608,7 +1608,7 @@ private fun KeepChip(state: PlayerUiState, vm: PlayerViewModel) {
             Text(
                 CacheAffordance.chipText(keep),
                 color = Color.White,
-                fontSize = 11.sp,
+                fontSize = brandSp(11),
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.widthIn(max = 160.dp),
@@ -1625,12 +1625,12 @@ private fun ResumeDialog(state: PlayerUiState, vm: PlayerViewModel) {
     AlertDialog(
         onDismissRequest = { vm.resolveResume(false) },
         containerColor = Color(0xFF151A23),
-        title = { Text("Resume playback?", color = Color.White, fontSize = 16.sp) },
+        title = { Text("Resume playback?", color = Color.White, fontSize = brandSp(16)) },
         text = {
             Text(
                 "You stopped at ${ms.formatTime()} on “${state.pendingTitle ?: "this print"}”.",
                 color = Color.White.copy(alpha = 0.8f),
-                fontSize = 13.sp,
+                fontSize = brandSp(13),
             )
         },
         confirmButton = {
@@ -1656,13 +1656,13 @@ private fun SponsorBreakDialog(slot: AdSlot, onDismiss: () -> Unit) {
     AlertDialog(
         onDismissRequest = onDismiss,
         containerColor = Color(0xFF151A23),
-        title = { Text("Sponsor break", color = Color.White, fontSize = 16.sp) },
+        title = { Text("Sponsor break", color = Color.White, fontSize = brandSp(16)) },
         text = {
             Text(
                 "A free-tier break can only appear $moment — never in the middle of a title. " +
                     "Continue whenever you are ready.",
                 color = Color.White.copy(alpha = 0.8f),
-                fontSize = 13.sp,
+                fontSize = brandSp(13),
             )
         },
         confirmButton = {
@@ -1681,14 +1681,14 @@ private fun CalibrationDialog(
     AlertDialog(
         onDismissRequest = onDismiss,
         containerColor = Color(0xFF151A23),
-        title = { Text("Calibrate episode start", color = Color.White, fontSize = 16.sp) },
+        title = { Text("Calibrate episode start", color = Color.White, fontSize = brandSp(16)) },
         text = {
             Column {
                 Text(
                     state.warning
                         ?: "This file packs several episodes. Pause exactly where the target episode starts, then confirm.",
                     color = Color.White.copy(alpha = 0.8f),
-                    fontSize = 13.sp,
+                    fontSize = brandSp(13),
                 )
                 Spacer(Modifier.height(10.dp))
                 OutlinedTextField(
@@ -1719,7 +1719,7 @@ private fun PlayFromDialog(
     AlertDialog(
         onDismissRequest = onDismiss,
         containerColor = Color(0xFF151A23),
-        title = { Text("Play from", color = Color.White, fontSize = 16.sp) },
+        title = { Text("Play from", color = Color.White, fontSize = brandSp(16)) },
         text = {
             OutlinedTextField(
                 value = text,
@@ -1785,7 +1785,7 @@ private fun SpeedSheet(state: PlayerUiState, vm: PlayerViewModel) {
                             Text(
                                 "${preset}×",
                                 color = if (selected) Color.Black else Color.White,
-                                fontSize = 13.sp,
+                                fontSize = brandSp(13),
                             )
                         }
                     }
@@ -1795,7 +1795,7 @@ private fun SpeedSheet(state: PlayerUiState, vm: PlayerViewModel) {
             Text(
                 "Long-press the video any time for a 2× boost — releasing restores this speed.",
                 color = Color.White.copy(alpha = 0.55f),
-                fontSize = 12.sp,
+                fontSize = brandSp(12),
                 modifier = Modifier.padding(horizontal = 16.dp),
             )
         }
@@ -1831,7 +1831,7 @@ private fun QualitySheet(state: PlayerUiState, vm: PlayerViewModel) {
                 "Switching keeps your position. Auto follows your connection and may move " +
                     "between these on its own.",
                 color = Color.White.copy(alpha = 0.55f),
-                fontSize = 12.sp,
+                fontSize = brandSp(12),
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
             )
         }
@@ -1851,12 +1851,12 @@ private fun QualityRow(title: String, detail: String?, selected: Boolean, onClic
         Text(
             title,
             color = if (selected) AccentOrange else Color.White,
-            fontSize = 14.sp,
+            fontSize = brandSp(14),
             fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
         )
         if (detail != null) {
             Spacer(Modifier.width(8.dp))
-            Text(detail, color = Color.White.copy(alpha = 0.5f), fontSize = 12.sp)
+            Text(detail, color = Color.White.copy(alpha = 0.5f), fontSize = brandSp(12))
         }
         Spacer(Modifier.weight(1f))
         if (selected) Icon(Icons.Default.Check, null, tint = AccentOrange, modifier = Modifier.size(18.dp))
@@ -1877,7 +1877,7 @@ private fun SleepSheet(state: PlayerUiState, vm: PlayerViewModel) {
                 Text(
                     "Fading out — ${state.sleep.remainingMs.formatTime()} left",
                     color = AccentOrange,
-                    fontSize = 13.sp,
+                    fontSize = brandSp(13),
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
                 )
             }
@@ -1889,7 +1889,7 @@ private fun SleepSheet(state: PlayerUiState, vm: PlayerViewModel) {
             Text(
                 "Volume fades down over the last ${state.sleep.fadeMs / 1000}s, then playback pauses (MX behaviour).",
                 color = Color.White.copy(alpha = 0.55f),
-                fontSize = 12.sp,
+                fontSize = brandSp(12),
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
             )
         }
@@ -1924,7 +1924,7 @@ private fun SubtitleSettingsSheet(state: PlayerUiState, vm: PlayerViewModel) {
                 Text(
                     "No embedded subtitle tracks in this print — load an external file below.",
                     color = Color.White.copy(alpha = 0.6f),
-                    fontSize = 12.sp,
+                    fontSize = brandSp(12),
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
                 )
             }
@@ -1941,7 +1941,7 @@ private fun SubtitleSettingsSheet(state: PlayerUiState, vm: PlayerViewModel) {
             Text(
                 "Size ${state.subtitle.sizePercent}%",
                 color = Color.White,
-                fontSize = 13.sp,
+                fontSize = brandSp(13),
                 modifier = Modifier.padding(horizontal = 16.dp),
             )
             Slider(
@@ -1954,7 +1954,7 @@ private fun SubtitleSettingsSheet(state: PlayerUiState, vm: PlayerViewModel) {
             Text(
                 "Bottom position ${(state.subtitle.bottomFraction * 100).toInt()}%",
                 color = Color.White,
-                fontSize = 13.sp,
+                fontSize = brandSp(13),
                 modifier = Modifier.padding(horizontal = 16.dp),
             )
             Slider(
@@ -1971,14 +1971,14 @@ private fun SubtitleSettingsSheet(state: PlayerUiState, vm: PlayerViewModel) {
             }
 
             Row(Modifier.padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text("Bold", color = Color.White, fontSize = 13.sp, modifier = Modifier.weight(1f))
+                Text("Bold", color = Color.White, fontSize = brandSp(13), modifier = Modifier.weight(1f))
                 Switch(
                     checked = state.subtitle.bold,
                     onCheckedChange = { vm.setSubtitleSettings(state.subtitle.copy(bold = it)) },
                 )
             }
             Row(Modifier.padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text("Text background", color = Color.White, fontSize = 13.sp, modifier = Modifier.weight(1f))
+                Text("Text background", color = Color.White, fontSize = brandSp(13), modifier = Modifier.weight(1f))
                 Switch(
                     checked = state.subtitle.textBackground,
                     onCheckedChange = { vm.setSubtitleSettings(state.subtitle.copy(textBackground = it)) },
@@ -1988,7 +1988,7 @@ private fun SubtitleSettingsSheet(state: PlayerUiState, vm: PlayerViewModel) {
             Text(
                 "Colour",
                 color = Color.White,
-                fontSize = 13.sp,
+                fontSize = brandSp(13),
                 modifier = Modifier.padding(horizontal = 16.dp),
             )
             Row(
@@ -2014,7 +2014,7 @@ private fun SubtitleSettingsSheet(state: PlayerUiState, vm: PlayerViewModel) {
                     "Subtitle sync applies to this overlay and to every embedded track. " +
                         "Size, position and colour styling still come from the controls above.",
                     color = Color.White.copy(alpha = 0.55f),
-                    fontSize = 11.sp,
+                    fontSize = brandSp(11),
                     modifier = Modifier.padding(horizontal = 16.dp),
                 )
             }
@@ -2040,7 +2040,7 @@ private fun TracksSheet(state: PlayerUiState, vm: PlayerViewModel) {
                 Text(
                     "No track info for this print yet.",
                     color = Color.White.copy(alpha = 0.6f),
-                    fontSize = 12.sp,
+                    fontSize = brandSp(12),
                     modifier = Modifier.padding(horizontal = 16.dp),
                 )
             }
@@ -2059,7 +2059,7 @@ private fun TracksSheet(state: PlayerUiState, vm: PlayerViewModel) {
                         "Preferring ${AudioTrackPolicy.nameFor(state.preferredAudioLanguage)
                             ?: state.preferredAudioLanguage} — set on the Settings screen.",
                         color = Color.White.copy(alpha = 0.55f),
-                        fontSize = 11.sp,
+                        fontSize = brandSp(11),
                         modifier = Modifier.padding(horizontal = 16.dp),
                     )
                 }
@@ -2072,7 +2072,7 @@ private fun TracksSheet(state: PlayerUiState, vm: PlayerViewModel) {
                 "Note: this restricts track SELECTION to ≤2-channel tracks; 1.3.1 cannot downmix " +
                     "5.1/Atmos to stereo.",
                 color = Color.White.copy(alpha = 0.55f),
-                fontSize = 11.sp,
+                fontSize = brandSp(11),
                 modifier = Modifier.padding(horizontal = 16.dp),
             )
             SheetRow(
@@ -2093,7 +2093,7 @@ private fun TracksSheet(state: PlayerUiState, vm: PlayerViewModel) {
                 Text(
                     AudioBoost.labelFor(state.audioBoostLevel),
                     color = AccentOrange,
-                    fontSize = 13.sp,
+                    fontSize = brandSp(13),
                     fontWeight = FontWeight.SemiBold,
                 )
                 Slider(
@@ -2106,7 +2106,7 @@ private fun TracksSheet(state: PlayerUiState, vm: PlayerViewModel) {
             Text(
                 AudioBoostUi.honestSummary(state.audioBoostLevel, state.userVolume),
                 color = Color.White.copy(alpha = 0.55f),
-                fontSize = 11.sp,
+                fontSize = brandSp(11),
                 modifier = Modifier.padding(horizontal = 16.dp),
             )
         }
@@ -2131,7 +2131,7 @@ private fun PrintLogSheet(state: PlayerUiState, vm: PlayerViewModel) {
                 "Ranked candidates — the first playable one wins; switches happen automatically " +
                     "on playback errors, preserving position.",
                 color = Color.White.copy(alpha = 0.6f),
-                fontSize = 12.sp,
+                fontSize = brandSp(12),
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
             )
             state.bundle?.renditions?.forEach { r ->
@@ -2143,7 +2143,7 @@ private fun PrintLogSheet(state: PlayerUiState, vm: PlayerViewModel) {
                         if (active) append("   ← playing")
                     },
                     color = if (active) AccentOrange else Color.White.copy(alpha = 0.8f),
-                    fontSize = 13.sp,
+                    fontSize = brandSp(13),
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 3.dp),
                 )
             }
@@ -2154,7 +2154,7 @@ private fun PrintLogSheet(state: PlayerUiState, vm: PlayerViewModel) {
                     Text(
                         "#${record.rank} ${record.label}: ${record.reason} → ${record.action}",
                         color = Color.White.copy(alpha = 0.7f),
-                        fontSize = 12.sp,
+                        fontSize = brandSp(12),
                         modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp),
                     )
                 }
@@ -2164,7 +2164,7 @@ private fun PrintLogSheet(state: PlayerUiState, vm: PlayerViewModel) {
                     "Policy: retry same ×${p.retrySame}, backoff ${p.backoffMs} ms, then next rank, " +
                         "max ${p.maxRanks} ranks.",
                     color = Color.White.copy(alpha = 0.5f),
-                    fontSize = 11.sp,
+                    fontSize = brandSp(11),
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
                 )
             }
@@ -2188,7 +2188,7 @@ private fun SheetTitle(text: String) {
     Text(
         text,
         color = Color.White,
-        fontSize = 15.sp,
+        fontSize = brandSp(15),
         fontWeight = FontWeight.SemiBold,
         modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
     )
@@ -2205,7 +2205,7 @@ private fun SheetRow(label: String, selected: Boolean = false, enabled: Boolean 
                     !enabled -> Color.White.copy(alpha = 0.4f)
                     else -> Color.White
                 },
-                fontSize = 14.sp,
+                fontSize = brandSp(14),
             )
         },
         leadingContent = if (selected) {
