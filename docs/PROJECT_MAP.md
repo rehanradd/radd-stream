@@ -69,11 +69,13 @@ unchanged by design (API_V2.md §16.9).
 Three facts worth carrying across accounts because they have repeatedly misled
 agents and app developers:
 
-- **`?type=anime` returns zero rows.** `content_type` is matched by exact SQL
-  equality (viewer.py:1898) and the writers only produce `movie`, `series`,
-  `complete_season`, `ongoing_season` (`classify_media()`,
-  fast_fetch.py:1613-1622). Anime is expressed by `posts.is_animated` /
-  `posts.industry`, neither of which the API filters on yet.
+- **`?type=anime` is answered by the server as of 2026-10-28** (this bullet said
+  "zero rows" and is now stale). A loopback check that day returned
+  `GET /api/v1/posts?type=anime&limit=3` → 200, `total` 5,307, first row
+  *Avatar: Seven Havens* with `is_animated=1`. The app consumes the flag through
+  `Post.isAnimated`; `displayTypeLabel` in `CatalogEnums.kt` now distinguishes
+  anime from the `content_type` family in `PosterCard`, `HeroCarousel` and
+  `DetailScreen`.
 - **`/api/heal` is routed but broken.** The handler builds a payload and never
   writes it to the socket (viewer.py:2100-2108); `protocol_version` is `HTTP/1.1`,
   so clients hang. Use the `fast_fetch.py heal` CLI.
@@ -91,6 +93,24 @@ agents and app developers:
 - A read-only check on 2026-10-17 found `radd-stream.service`, Nginx, and Supervisor active; the backend listens on `127.0.0.1:8080` behind Nginx on port 80. `/opt/radd-stream` has no `.git` metadata, and its deployed source does not match the 11 fetched Git revisions compared. See `ORACLE_DEPLOYMENT.md` and `docs/SESSION_CHECKPOINT.md`; its host-key record is TOFU, not OCI Console verified.
 - The runbook describes a planned layout of Nginx on port 80 proxying to the API on loopback port 8080, with SQLite data outside the code checkout. Recheck the host before relying on this layout. Public API routes need the documented allowlist; do not expose the resolver/fetch routes or port 8080.
 - Do not deploy from an agent branch or directly copy untested edits to a live server. A production deployment requires a verified host key, the runbook's setup checklist, a tested deployment process, health checks, and a recovery route.
+
+### Scheduled jobs (re-read 2026-10-28 20:05 PKT)
+
+- `radd-backup-hf.timer` (installed and enabled 2026-10-28) runs daily at 03:40 PKT plus up to
+  10 min random delay: `/usr/local/bin/backup-hf` → `Fast_Fetch/backup_manager.py --dir
+  /home/ubuntu/radd-stream-data --hf` → HF dataset `radddao/radd-stream-backups`. The unit supplies
+  `HF_DATASET_REPO` (the wrapper only prints a default; `backup_manager.py` skips the upload when the
+  variable is empty) and loads `HF_TOKEN` by running under `bash -ic`, because `~/.bashrc` exports it
+  after its non-interactive guard. `Nice=19` + idle IO keep it off the API's back. Archives land in
+  `/home/ubuntu/radd-stream-backups` (~1.8 GB each) and are **not rotated** — 131 GB was free on
+  2026-10-28, so a month of dailies fits with room; revisit retention before that.
+- `radd-autocrawl.timer` (6-hourly fleet sync → `merge_fleet.py` → HF backup) was found installed and
+  **stopped on 2026-10-28 20:01** to keep the frozen production DB untouched and the single vCPU free
+  for agent gates. Its merge target is `merged_catalog_20261025.db` and every site logs
+  "already merged, skipping", but step 1's `fast_fetch.py sync --site all` can write sitemap/domain
+  metadata into `fast_fetch.db`. Re-enable with `sudo systemctl enable --now radd-autocrawl.timer`
+  only after the owner lifts the freeze. A drop-in (`20-hf-env.conf`) now runs it under `bash -ic` so
+  its backup step sees `HF_TOKEN`; a second drop-in adds `Nice=10`.
 
 ## Cross-agent save and resume
 
