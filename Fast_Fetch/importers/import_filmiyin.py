@@ -580,38 +580,47 @@ def _source_from_link(link: dict) -> dict:
 # Public contract: parse_page
 # ---------------------------------------------------------------------------
 
-def parse_page(html_or_url: str, url: str | None = None) -> dict | None:
+def parse_page(html_or_url: str, url: str | None = None,
+               diagnostics: dict | None = None) -> dict | None:
     """
     Extracts clean metadata, watch embeds and download bridges from filmiy.in.
 
     Accepts either a page body or a bare URL (which is then fetched). Returns a
     staging-shaped post_data dict, or None when the page is not a catalog entry.
+    When a `diagnostics` dict is passed, the reason for a refusal is written to
+    `diagnostics["reason"]` — a parked queue row has to say *why* it was parked,
+    or the next operator cannot tell a deleted page from a parse miss.
     """
+    def decline(reason: str):
+        if diagnostics is not None:
+            diagnostics["reason"] = reason
+        return None
+
     body = html_or_url or ""
     page_url = url
     if page_url is None and re.match(r"^https?://", body.strip()):
         page_url, body = body.strip(), ""
     if not body:
         if not page_url:
-            return None
+            return decline("no-url")
         status, final_url, body = http_get(page_url)
         if status != 200:
-            return None
+            return decline(f"http-{status}")
         page_url = final_url or page_url
     if not page_url:
-        return None
+        return decline("no-url")
     body = _unescape(body)
 
     slug = _slug_of(page_url)
     if not page_url.rstrip("/").endswith(".html") or any(n in slug for n in NON_POST_PAGES):
-        return None
+        return decline("not-a-post-page")
 
     h2_m = re.search(r"(?s)<h2\b[^>]*>(.*?)</h2>", body, re.I)
     title_m = re.search(r"(?s)<title[^>]*>(.*?)</title>", body, re.I)
     raw_title = _clean_text(h2_m.group(1)) if h2_m else _clean_text(title_m.group(1) if title_m else "")
     raw_title = re.split(r"\s*[»|]\s*filmy", raw_title, maxsplit=1, flags=re.I)[0].strip()
     if not raw_title:
-        return None
+        return decline("no-title")
 
     metas: dict[str, str] = {}
     for m in META_RE.finditer(body):
@@ -676,7 +685,8 @@ def parse_page(html_or_url: str, url: str | None = None) -> dict | None:
 
     links = harvest_links(page_url, body)
     if not links["bridges"] and not links["embeds"]:
-        return None  # nothing playable — not a catalog entry we can serve
+        # nothing playable — not a catalog entry we can serve
+        return decline("no-playable-links")
 
     releases: list[dict] = []
     for link in links["bridges"]:
@@ -1176,9 +1186,20 @@ def _bump_error(db_path: Path, loc: str, note: str) -> None:
     conn = sqlite3.connect(db_path, timeout=60)
     try:
         ensure_schema(conn)
+        # The note joins whatever the row already carried instead of replacing it:
+        # a queue row that stored a sitemap snippet must not lose it to an error.
+        stored = conn.execute("SELECT raw_json FROM sitemap_cache WHERE loc = ?",
+                              (loc,)).fetchone()
+        try:
+            merged = json.loads(stored[0]) if stored and stored[0] else {}
+        except (json.JSONDecodeError, TypeError):
+            merged = {"previous_raw_json": stored[0] if stored else None}
+        if not isinstance(merged, dict):
+            merged = {"previous_raw_json": merged}
+        merged.update({"last_note": note, "at": int(time.time())})
         conn.execute(
             "UPDATE sitemap_cache SET error_count = error_count + 1, raw_json = ? WHERE loc = ?;",
-            (json.dumps({"last_note": note, "at": int(time.time())}), loc))
+            (json.dumps(merged), loc))
         # Three failed reads means the page is gone or was never a post: park it.
         conn.execute("UPDATE sitemap_cache SET scraped = -1 WHERE loc = ? AND error_count >= 3;",
                      (loc,))
@@ -1212,35 +1233,43 @@ def crawl_pending(limit: int | None = None, db_path: Path | str = DEFAULT_DB_PAT
         return totals
 
     def work(loc: str):
+        # Returns (post, reason). `post is None` is a decline with a reason;
+        # `post is None and reason is None` means the page was never fetched,
+        # which must not be charged to the page's three-strike budget.
         if STOP_REQUESTED:
-            return None
+            return None, None
         time.sleep(delay)
-        post = parse_page(loc)
+        diagnostics: dict = {}
+        post = parse_page(loc, diagnostics=diagnostics)
         if post is None:
-            return None
+            return None, diagnostics.get("reason") or "not-indexable"
         try:
-            return resolve_links(post, probe=probe)
+            return resolve_links(post, probe=probe), ""
         except Exception as exc:  # keep the catalog even if a bridge probe dies
             post["resolve_error"] = str(exc)
-            return post
+            return post, ""
 
     batch: list[dict] = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
         future_to_loc = {pool.submit(work, r["loc"]): r["loc"] for r in rows}
         done = 0
+        declined: dict[str, int] = {}
         for fut in concurrent.futures.as_completed(future_to_loc):
             loc = future_to_loc[fut]
             done += 1
-            totals["pages"] += 1
             try:
-                post = fut.result()
+                post, reason = fut.result()
             except Exception as exc:
                 totals["failed"] += 1
                 _bump_error(db_path, loc, f"exception: {exc}")
                 continue
+            if post is None and reason is None:
+                continue  # stop requested before this page was fetched
+            totals["pages"] += 1
             if post is None:
                 totals["not_indexable"] += 1
-                _bump_error(db_path, loc, "not-indexable")
+                declined[reason] = declined.get(reason, 0) + 1
+                _bump_error(db_path, loc, reason)
                 continue
             batch.append(post)
             if len(batch) >= batch_size:
@@ -1252,6 +1281,7 @@ def crawl_pending(limit: int | None = None, db_path: Path | str = DEFAULT_DB_PAT
             if STOP_REQUESTED:
                 break
         _flush(db_path, batch, totals)
+    totals["declined_by_reason"] = declined
 
     if verbose:
         print(f"[✓] [{SITE}] pages={totals['pages']} posts={totals['posts']} "

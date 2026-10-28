@@ -292,7 +292,9 @@ class TestParsePage(unittest.TestCase):
                                                             HOMEPAGE_FIXTURE)):
             self.assertEqual(pm._parse_page(gone)[1], "removed")
         with mock.patch.object(pm, "http_get", return_value=(500, "", "")):
-            self.assertEqual(pm._parse_page(gone)[1], "http-error")
+            self.assertEqual(pm._parse_page(gone)[1], "http-500")
+        with mock.patch.object(pm, "http_get", return_value=(404, "", "")):
+            self.assertEqual(pm._parse_page(gone)[1], "http-404")
         with mock.patch.object(pm, "http_get",
                                return_value=(200, "https://www.pagalmovies.fit/movielist/24/x.html",
                                              HOMEPAGE_FIXTURE)):
@@ -629,6 +631,23 @@ class TestCrawlQueue(unittest.TestCase):
         with mock.patch.object(pm, "http_get", return_value=(500, "", "")):
             pm.crawl_pending(db_path=db, workers=1, verbose=False)
         self.assertEqual(self._states(db, flaky), (0, 1))
+
+    def test_a_hard_404_is_the_sites_answer_and_parks_at_once(self):
+        gone = f"{pm.BASE_URL}/movie/29652/Gone_(2026)_movie.html"
+        db = self._db_with([gone])
+        with mock.patch.object(pm, "http_get", return_value=(404, "", "")):
+            totals = pm.crawl_pending(db_path=db, workers=1, verbose=False)
+        self.assertEqual(self._states(db, gone), (-1, 1))
+        self.assertEqual(totals["declined_by_reason"], {"http-404": 1})
+
+    def test_the_third_transport_failure_parks_the_row(self):
+        """Retry must be capped, or a permanently 500 page is retried forever."""
+        bad = f"{pm.BASE_URL}/movie/29653/Bad_(2026)_movie.html"
+        db = self._db_with([bad])
+        with mock.patch.object(pm, "http_get", return_value=(503, "", "")):
+            for _ in range(3):
+                pm.crawl_pending(db_path=db, workers=1, verbose=False)
+        self.assertEqual(self._states(db, bad), (-1, 3))
 
 
 if __name__ == "__main__":

@@ -224,6 +224,80 @@ class TestParsePage(unittest.TestCase):
             self.assertIsNone(fi.parse_page(PAGE_URL))
 
 
+class TestDeclineReasons(unittest.TestCase):
+    """
+    A parked queue row has to say why it was parked.
+
+    `not-indexable` on its own cannot tell a deleted page from a parse miss, and
+    the operator re-driving the cohort needs that difference to decide whether a
+    retry is worth a request at all.
+    """
+
+    def test_http_status_is_recorded(self):
+        diag: dict = {}
+        with patch.object(fi, "http_get", return_value=(404, PAGE_URL, "")):
+            self.assertIsNone(fi.parse_page(PAGE_URL, diagnostics=diag))
+        self.assertEqual(diag["reason"], "http-404")
+
+    def test_listing_page_names_its_own_rejection(self):
+        diag: dict = {}
+        self.assertIsNone(fi.parse_page(
+            FIXTURE, url="https://filmiy.in/south-hindi-dubbed-movie/",
+            diagnostics=diag))
+        self.assertEqual(diag["reason"], "not-a-post-page")
+
+    def test_page_without_a_playable_link_says_so(self):
+        html = FIXTURE.replace("dl.php", "nothing-here")
+        diag: dict = {}
+        with patch.object(fi, "harvest_links", return_value={"bridges": [], "embeds": [],
+                                                             "direct": []}):
+            self.assertIsNone(fi.parse_page(html, url=PAGE_URL, diagnostics=diag))
+        self.assertEqual(diag["reason"], "no-playable-links")
+
+    def test_a_successful_parse_leaves_diagnostics_empty(self):
+        diag: dict = {}
+        self.assertIsNotNone(fi.parse_page(FIXTURE, url=PAGE_URL, diagnostics=diag))
+        self.assertNotIn("reason", diag)
+
+
+class TestErrorPersistence(unittest.TestCase):
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="filmiyin-err-"))
+        self.db = self.tmp / "filmiyin.db"
+        conn = sqlite3.connect(self.db)
+        fi.ensure_schema(conn)
+        conn.execute("INSERT INTO sitemap_cache (loc, lastmod, slug, scraped, raw_json,"
+                     " error_count) VALUES (?,?,?,?,?,?);",
+                     ("https://filmiy.in/gone.html", None, "gone", 0,
+                      json.dumps({"sitemap": "sitemap-2026.xml"}), 0))
+        conn.commit()
+        conn.close()
+
+    def tearDown(self):
+        for f in self.tmp.glob("*"):
+            f.unlink()
+        self.tmp.rmdir()
+
+    def test_reason_is_stored_and_the_existing_payload_is_kept(self):
+        fi._bump_error(self.db, "https://filmiy.in/gone.html", "http-404")
+        row = sqlite3.connect(self.db).execute(
+            "SELECT error_count, scraped, raw_json FROM sitemap_cache").fetchone()
+        self.assertEqual((row[0], row[1]), (1, 0))
+        payload = json.loads(row[2])
+        self.assertEqual(payload["last_note"], "http-404")
+        self.assertEqual(payload["sitemap"], "sitemap-2026.xml")
+
+    def test_first_failure_is_never_terminal_and_the_third_parks(self):
+        conn = sqlite3.connect(self.db)
+        for attempt in range(1, 4):
+            fi._bump_error(self.db, "https://filmiy.in/gone.html", "no-playable-links")
+            scraped, count = conn.execute(
+                "SELECT scraped, error_count FROM sitemap_cache").fetchone()
+            self.assertEqual(count, attempt)
+            self.assertEqual(scraped, -1 if attempt == 3 else 0)
+        conn.close()
+
+
 class TestResolveLinks(unittest.TestCase):
     def test_js_challenge_keeps_the_bridge_and_marks_it(self):
         post = parse_fixture()

@@ -78,6 +78,12 @@ PENDING_SELECT = (
 NON_POST_PREFIXES = ("/movielist/", "/genre/", "/starcast/", "/services/",
                      "/pages/", "/contact", "/disclaimer")
 
+# Verdicts that are the site's own answer, not our bad luck: a page it redirected
+# off the post pattern, a shelf URL, or a hard 404/410. Those are terminal on the
+# first sighting. Everything else — 5xx, timeout, connection reset — gets the
+# three-read budget, because a first transport failure must never be terminal.
+GONE_VERDICTS = ("removed", "not-a-post", "http-404", "http-410", "http-451")
+
 STOP_REQUESTED = False
 
 
@@ -772,7 +778,10 @@ def _parse_page(html_or_url: str, url: str | None = None) -> tuple[dict | None, 
             return None, "not-a-post"
         status, final_url, body = http_get(page_url)
         if status != 200:
-            return None, "http-error"
+            # The status code is the measurement the operator asks for — "is this
+            # row gone or merely unlucky" — so it is kept instead of collapsing
+            # into one http-error bucket.
+            return None, f"http-{status}"
         page_url = final_url or page_url
     if not page_url:
         return None, "not-a-post"
@@ -1500,7 +1509,7 @@ def crawl_pending(limit: int | None = None, db_path: Path | str = DEFAULT_DB_PAT
               f"(workers={workers}, probe={probe}, deep={deep}).", flush=True)
 
     totals = {"pages": 0, "posts": 0, "releases": 0, "sources": 0,
-              "not_indexable": 0, "failed": 0}
+              "not_indexable": 0, "failed": 0, "declined_by_reason": {}}
     if not rows:
         return totals
 
@@ -1536,8 +1545,10 @@ def crawl_pending(limit: int | None = None, db_path: Path | str = DEFAULT_DB_PAT
             post, verdict = outcome
             if post is None:
                 totals["not_indexable"] += 1
+                totals["declined_by_reason"][verdict] = \
+                    totals["declined_by_reason"].get(verdict, 0) + 1
                 _bump_error(db_path, loc, verdict,
-                            park_now=verdict in ("removed", "not-a-post"))
+                            park_now=verdict in GONE_VERDICTS)
                 continue
             batch.append(post)
             if len(batch) >= batch_size:
@@ -1554,7 +1565,42 @@ def crawl_pending(limit: int | None = None, db_path: Path | str = DEFAULT_DB_PAT
         print(f"[✓] [{SITE}] pages={totals['pages']} posts={totals['posts']} "
               f"releases={totals['releases']} sources={totals['sources']} "
               f"not-indexable={totals['not_indexable']} failed={totals['failed']}", flush=True)
+        if totals["declined_by_reason"]:
+            print(f"    [{SITE}] declined as: "
+                  + ", ".join(f"{k}={v}" for k, v in
+                              sorted(totals["declined_by_reason"].items(),
+                                     key=lambda kv: -kv[1])), flush=True)
     return totals
+
+
+def requeue_parked(db_path: Path | str = DEFAULT_DB_PATH, limit: int | None = None,
+                   verbose: bool = True) -> int:
+    """
+    Put parked rows back in the queue so a later pass can re-measure them.
+
+    A row is parked because some earlier run decided the page was gone; that
+    decision is a claim about a moment in time, not a fact about the site. The
+    state is written as 2 (queued, previously attempted) rather than 0 so the
+    row keeps its history, and `error_count` is left alone: the three-read budget
+    still applies to whatever this pass finds.
+    """
+    db_path = Path(db_path)
+    conn = sqlite3.connect(db_path, timeout=60)
+    try:
+        ensure_schema(conn)
+        rows = conn.execute("SELECT loc FROM sitemap_cache WHERE scraped = -1"
+                            " ORDER BY rowid ASC").fetchall()
+        if limit:
+            rows = rows[:limit]
+        conn.executemany("UPDATE sitemap_cache SET scraped = 2 WHERE loc = ?;",
+                         [(r[0],) for r in rows])
+        conn.commit()
+    finally:
+        conn.close()
+    if verbose:
+        print(f"[*] [{SITE}] requeued {len(rows)} parked URLs for a fresh verdict.",
+              flush=True)
+    return len(rows)
 
 
 def _flush(db_path: Path, batch: list[dict], totals: dict) -> None:
@@ -1599,7 +1645,8 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description=f"pagalmovies staging importer ({BASE_URL} -> {DEFAULT_DB_PATH})")
     parser.add_argument("command", nargs="?", default="sync",
-                        choices=["sync", "crawl", "parse", "resolve", "stats"])
+                        choices=["sync", "crawl", "parse", "resolve", "stats",
+                                 "retry-parked"])
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--workers", type=int, default=4)
     parser.add_argument("--db", default=str(DEFAULT_DB_PATH))
@@ -1615,6 +1662,10 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "sync":
         sync_catalog(limit=args.limit, db_path=db, verbose=verbose)
+    elif args.command == "retry-parked":
+        requeue_parked(db, limit=args.limit, verbose=verbose)
+        crawl_pending(db_path=db, workers=args.workers, probe=args.probe,
+                      deep=args.deep, verbose=verbose)
     elif args.command == "crawl":
         crawl_pending(limit=args.limit, db_path=db, workers=args.workers,
                       probe=args.probe, deep=args.deep, verbose=verbose)
