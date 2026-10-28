@@ -290,9 +290,32 @@ class RouteShape(Fixture):
         self.ingest(title="Shaped Film")
         by_media = self.call(query="Shaped", duration_s=120 * 60)["results"][0]
         by_word = viewer.api_v1_get_posts(query="Shaped")["results"][0]
-        extra = set(by_media) - set(by_word)
-        self.assertEqual(extra, {"runtime_minutes", "resolutions", "matched_on",
-                                 "mismatched_on", "unknown_on"})
+        # What the by-media route adds is read off `media_search` itself rather
+        # than hand-listed here: ask the module for the same row with no viewer
+        # enrichment, and whatever it alone puts beyond the keyword shape is
+        # exactly what viewer is allowed to put beyond it. A future field on one
+        # side only now fails instead of quietly widening an expected set.
+        bare = self.search(title="Shaped", duration_s=120 * 60)["results"][0]
+        media_only = set(bare) - set(by_word)
+        self.assertTrue(media_only, "the matcher contributes nothing to compare")
+        self.assertEqual(set(by_media) - set(by_word), media_only)
+        self.assertEqual(set(by_word) - set(by_media), set(),
+                         "a display key the by-media route lost")
+
+    def test_both_routes_answer_the_subtitled_question_with_the_same_value(self):
+        self.ingest(title="Subbed Film",
+                    release_title="Subbed Film 120min 1080p Hindi English ESub")
+        self.ingest(title="Plain Film", release_title="Plain Film 120min 1080p")
+        for title, expected in (("Subbed", True), ("Plain", False)):
+            by_media = self.call(query=title, duration_s=120 * 60)["results"][0]
+            by_word = viewer.api_v1_get_posts(query=title)["results"][0]
+            self.assertEqual(by_media["subtitled"], expected, title)
+            self.assertEqual(by_word["subtitled"], by_media["subtitled"], title)
+
+    def test_the_full_projection_is_not_half_a_row_on_either_route(self):
+        self.ingest(title="Full Shape Film")
+        by_media = self.call(query="Full", duration_s=120 * 60, full=True)["results"][0]
+        by_word = viewer.api_v1_get_posts(query="Full", full=True)["results"][0]
         self.assertEqual(set(by_word) - set(by_media), set())
 
     def test_a_request_without_a_title_is_the_refusal_not_a_200_full_of_noise(self):

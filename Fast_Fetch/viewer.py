@@ -2636,9 +2636,11 @@ def api_v1_search_by_media(query: str = "", duration_s=None, resolution: str = "
 
     Thin on purpose: the matching and the three-way honesty report live in
     `media_search`. This function only supplies what that module cannot own — the
-    artwork handles and the account-surface work reference — through the same
-    `_art_pair` / `_work_ref` every other v1 list already uses, so a by-media row
-    and a `q=` row are indistinguishable shapes to the client.
+    artwork handles, the account-surface work reference and the subtitled flag —
+    through the same `_art_pair` / `_work_ref` / `_subtitled_posts` every other v1
+    list already uses, so a by-media row and a `q=` row are indistinguishable
+    shapes to the client. `subtitled` is filled here rather than in `media_search`
+    because it is a display-surface verdict, and that module answers matching.
     """
     _ensure_schema()
 
@@ -2647,9 +2649,14 @@ def api_v1_search_by_media(query: str = "", duration_s=None, resolution: str = "
         item["work_ref"] = _work_ref(row)
 
     with get_db() as conn:
-        return media_search.search_by_media(
+        result = media_search.search_by_media(
             conn, title=query, duration_s=duration_s, resolution=resolution,
             audio_language=audio_language, limit=limit, full=full, enrich=enrich)
+        if not full and result.get("results"):
+            subs = _subtitled_posts(conn, [int(r["id"]) for r in result["results"]])
+            for item in result["results"]:
+                item["subtitled"] = bool(subs.get(int(item["id"]), False))
+        return result
 
 
 def api_v1_get_post_detail(post_id: int, full: bool = False,
