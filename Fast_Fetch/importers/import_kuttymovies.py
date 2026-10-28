@@ -90,6 +90,8 @@ DEFAULT_SOURCE_STATUS = "unverified"
 PLAYBACK_DOWNLOAD = "download"
 SERVICE_BRIDGE = "linkshub"
 STOP_REQUESTED = False
+RATE_LIMIT_STATUS = 429
+_RATE_LIMITED = threading.Event()
 
 PENDING_SELECT = (
     "SELECT loc, lastmod, slug, raw_json, scraped, error_count FROM sitemap_cache "
@@ -898,17 +900,19 @@ def crawl_pending(limit: int | None = None, db_path: Path | str = DEFAULT_DB_PAT
         conn.close()
     if limit:
         rows = rows[:limit]
+    _RATE_LIMITED.clear()
     if verbose:
         print(f"[*] [{SITE}] {len(rows)} titles pending "
               f"(workers={workers}, delay={delay}s).", flush=True)
 
     totals = {"pages": 0, "posts": 0, "releases": 0, "sources": 0,
-              "dead_ids": 0, "failed": 0}
+              "failed_rows": 0, "parked": 0, "failed": 0,
+              "paused_rate_limit": False}
     if not rows:
         return totals
 
     def work(row):
-        if STOP_REQUESTED:
+        if STOP_REQUESTED or _RATE_LIMITED.is_set():
             return None
         time.sleep(delay)
         loc = row["loc"]
@@ -918,6 +922,10 @@ def crawl_pending(limit: int | None = None, db_path: Path | str = DEFAULT_DB_PAT
             url, timeout=PAGE_TIMEOUT, retries=0, follow_redirects=False)
         if STOP_REQUESTED and status == 0:
             return None
+        if status == RATE_LIMIT_STATUS:
+            _RATE_LIMITED.set()
+            return None, _failure("rate-limited", status, final,
+                                  "http-429: site-wide rate limit, crawl paused")
         if 300 <= status < 400:
             location = headers.get("Location") or headers.get("location") or ""
             return None, _failure("redirect", status, location or final,
@@ -970,10 +978,15 @@ def crawl_pending(limit: int | None = None, db_path: Path | str = DEFAULT_DB_PAT
             totals["pages"] += 1
             post, failure = outcome
             if post is None:
-                totals["dead_ids"] += 1
+                totals["failed_rows"] += 1
+                park_now = (failure or {}).get("kind") in (
+                    "http-404", "http-410", "rest-empty")
+                totals["parked"] += int(park_now)
                 _bump_error(db_path, queued["loc"], failure or _failure("unknown"),
-                            park_now=(failure or {}).get("kind") in
-                            ("http-404", "http-410", "rest-empty"))
+                            park_now=park_now)
+                if _RATE_LIMITED.is_set():
+                    totals["paused_rate_limit"] = True
+                    break
                 continue
             batch.append(post)
             if len(batch) >= batch_size:
@@ -988,10 +1001,12 @@ def crawl_pending(limit: int | None = None, db_path: Path | str = DEFAULT_DB_PAT
         _flush(db_path, batch, totals)
 
     if verbose:
+        paused = " paused=rate-limited" if totals["paused_rate_limit"] else ""
         print(f"[✓] [{SITE}] pages={totals['pages']} posts={totals['posts']} "
               f"releases={totals['releases']} sources={totals['sources']} "
-              f"dead={totals['dead_ids']} failed={totals['failed']} "
-              f"in {time.time() - started:.0f}s", flush=True)
+              f"failed_rows={totals['failed_rows']} parked={totals['parked']} "
+              f"failed={totals['failed']} "
+              f"in {time.time() - started:.0f}s{paused}", flush=True)
     return totals
 
 

@@ -496,7 +496,8 @@ class CrawlTests(unittest.TestCase):
                                   return_value=(None, "api-http-500")):
             totals = fw.crawl_pending(db_path=self.db, delay=0)
         self.assertEqual(totals["posts"], 0)
-        self.assertEqual(totals["dead_ids"], 1)
+        self.assertEqual(totals["failed_rows"], 1)
+        self.assertEqual(totals["parked"], 0)
 
     def test_stop_signal_spends_no_attempt(self):
         fw.STOP_REQUESTED = True
@@ -512,6 +513,29 @@ class CrawlTests(unittest.TestCase):
         finally:
             conn.close()
         self.assertEqual((scraped, errors), (0, 0))
+
+    def test_a_429_pauses_the_crawl_without_burning_the_queue(self):
+        second = "https://filmywap.site/movie/second-movie-2025"
+        conn = sqlite3.connect(self.db)
+        conn.execute(
+            "INSERT INTO sitemap_cache (loc, lastmod, slug, scraped, raw_json, "
+            "error_count) VALUES (?, NULL, ?, 0, '{}', 0);",
+            (second, "second-movie-2025"))
+        conn.commit()
+        conn.close()
+        with silenced(), mock.patch.object(
+                fw, "http_get", return_value=(429, MOVIE_URL, "", {})) as get:
+            totals = fw.crawl_pending(db_path=self.db, delay=0)
+        self.assertTrue(totals["paused_rate_limit"])
+        self.assertEqual(get.call_count, 1, "the crawl must stop on the first 429")
+        conn = sqlite3.connect(self.db)
+        try:
+            states = dict(conn.execute(
+                "SELECT loc, scraped FROM sitemap_cache").fetchall())
+        finally:
+            conn.close()
+        self.assertEqual(states[MOVIE_URL], 2)
+        self.assertEqual(states[second], 0)
 
 
 if __name__ == "__main__":

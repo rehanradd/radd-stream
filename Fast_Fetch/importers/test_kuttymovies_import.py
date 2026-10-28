@@ -579,7 +579,8 @@ class CrawlTests(unittest.TestCase):
         with silenced(), mock.patch.object(km, "http_get",
                                            return_value=(200, MOVIE_URL, "[]", {})):
             totals = km.crawl_pending(db_path=self.db, delay=0)
-        self.assertEqual(totals["dead_ids"], 1)
+        self.assertEqual(totals["failed_rows"], 1)
+        self.assertEqual(totals["parked"], 1)
         conn = sqlite3.connect(self.db)
         try:
             scraped, raw = conn.execute(
@@ -594,7 +595,8 @@ class CrawlTests(unittest.TestCase):
         with silenced(), mock.patch.object(km, "http_get",
                                            return_value=(404, MOVIE_URL, "", {})):
             totals = km.crawl_pending(db_path=self.db, delay=0)
-        self.assertEqual(totals["dead_ids"], 1)
+        self.assertEqual(totals["failed_rows"], 1)
+        self.assertEqual(totals["parked"], 1)
         conn = sqlite3.connect(self.db)
         try:
             self.assertEqual(conn.execute(
@@ -607,7 +609,8 @@ class CrawlTests(unittest.TestCase):
         with silenced(), mock.patch.object(km, "http_get",
                                            return_value=(520, MOVIE_URL, "", {})):
             totals = km.crawl_pending(db_path=self.db, delay=0)
-        self.assertEqual(totals["dead_ids"], 1)
+        self.assertEqual(totals["failed_rows"], 1)
+        self.assertEqual(totals["parked"], 0)
         conn = sqlite3.connect(self.db)
         try:
             scraped, errors = conn.execute(
@@ -651,6 +654,29 @@ class CrawlTests(unittest.TestCase):
             totals = km.crawl_pending(db_path=self.db, delay=0)
         self.assertEqual(get.call_count, 0)
         self.assertEqual(totals["posts"], 0)
+
+    def test_a_429_pauses_the_crawl_without_burning_the_queue(self):
+        second = "https://kuttymovies.wiki/zz-second-2026-hindi-movie-1080p/"
+        conn = sqlite3.connect(self.db)
+        conn.execute(
+            "INSERT INTO sitemap_cache (loc, lastmod, slug, scraped, raw_json, "
+            "error_count) VALUES (?, NULL, ?, 0, '{}', 0);",
+            (second, "zz-second-2026-hindi-movie-1080p"))
+        conn.commit()
+        conn.close()
+        with silenced(), mock.patch.object(
+                km, "http_get", return_value=(429, MOVIE_URL, "", {})) as get:
+            totals = km.crawl_pending(db_path=self.db, delay=0)
+        self.assertTrue(totals["paused_rate_limit"])
+        self.assertEqual(get.call_count, 1, "the crawl must stop on the first 429")
+        conn = sqlite3.connect(self.db)
+        try:
+            states = dict(conn.execute(
+                "SELECT loc, scraped FROM sitemap_cache").fetchall())
+        finally:
+            conn.close()
+        self.assertEqual(states[MOVIE_URL], 2)
+        self.assertEqual(states[second], 0)
 
 
 if __name__ == "__main__":
