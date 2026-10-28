@@ -41,19 +41,23 @@ watchable link.
 Two of those hosts, however, answer a pure-stdlib request chain with a real
 byte endpoint, verified live on 2026-10-28 (owner and this agent independently,
 on six posts each): mxdrop (`MDCore.wurl` after unpacking the page's packed
-config) and pkembed/vkcdn5 (`<source src=…l.mp4?t=…>` after its own packer).
+config in base 10) and pkembed (the same packer in base 36, publishing
+`<source src=…/l.mp4?t=…>` renditions on `plusN.vkpluscdn.site` or
+`stoplus.vkcdn5.com`). pkembed is the site's dominant player — 100 of the newest
+100 posts carry one — so this is not a marginal path.
 For those rows only, this importer stores `playback_type='url'` — which
 viewer.py maps to kind 'resolve', i.e. the JIT path — with `is_temporary=1`
 because the endpoint is signed and short-lived. The stored `source_url` is
 still the EMBED URL: mxdrop's signature expires in about six hours and
-pkembed's in twelve (`e=43200` from `s`), so a persisted mp4 URL is a 403 by
-tomorrow and a lie about what the catalog holds. `status='active` is set only
-when an import-time probe actually got `206 video/mp4`; with the default
-(no `--probe`) crawl every resolvable row is `unverified`, and `raw_meta` says
-why. The unpacking lives in importers/host_resolvers.py; nothing in this module
-pretends a filemoon or do7go iframe is playable. `get_stats()` counts
-`iframe_rows`, `resolvable_rows` and `direct_byte_rows` apart so nobody can
-mistake one for another — this site has no stored byte endpoint at all.
+pkembed's in twelve (`s` plus an `e=43200` lifetime), so a persisted mp4 URL is
+a 403 by tomorrow and a lie about what the catalog holds. `status='active` is
+set only when an import-time probe actually got `206 video/mp4`; with the
+default (no `--probe`) crawl every resolvable row is `unverified`, and
+`raw_meta` says why. The unpacking lives in importers/host_resolvers.py;
+nothing in this module pretends a filemoon or do7go iframe is playable.
+`get_stats()` counts `iframe_rows`, `resolvable_rows` and `direct_byte_rows`
+apart so nobody can mistake one for another — this site has no stored byte
+endpoint at all.
 
 SUBTITLES: the site publishes none. Zero `.vtt`/`.srt` URLs appear in
 `content.rendered` for any sampled post, and the embed hosts attach captions at
@@ -137,6 +141,12 @@ LEGAL_MEDIA_TYPES = ("movie", "series", "complete_season")
 # someone else's player, and whether that player serves a byte today is unknown
 # until a resolver says so.
 DEFAULT_SOURCE_STATUS = "unverified"
+
+# The two hosts `host_resolvers` can take from an embed URL to a byte endpoint.
+# A row whose service is here is stored `playback_type='url'`, `is_temporary=1`
+# with the embed URL as its identifier; every other host stays an iframe.
+RESOLVABLE_SERVICES = frozenset({host_resolvers.SERVICE_MXDROP,
+                                 host_resolvers.SERVICE_PKEMBED})
 
 # Patched by the tests: no suite may sleep, and no suite may reach the network.
 _sleep = time.sleep
@@ -499,22 +509,27 @@ def _player_kind(url: str) -> tuple[str, str, bool]:
     """
     (service, playback_type, resolvable) for one embed URL.
 
-    mxdrop is the one host in this catalog where a pure-stdlib chain reaches a
-    byte endpoint — unpack the page's packed MDCore config, `Range: bytes=0-511`
-    with no Referer, `206 video/mp4` — verified live on 2026-10-28 against six
-    posts. Its row is therefore a resolvable URL, which is what `viewer.py` maps
-    to kind `resolve` and what the JIT resolver can serve on demand.
+    Two hosts in this catalog let a pure-stdlib chain reach a byte endpoint,
+    both verified live on 2026-10-28: mxdrop (packed MDCore config in base 10,
+    `MDCore.wurl`) and pkembed (the same packer in base 36, four arguments and
+    no trailing `0,{}`, whose payload publishes `<source>` renditions on
+    `plusN.vkpluscdn.site` or `stoplus.vkcdn5.com`). Both are probed the same
+    way — `Range: bytes=0-511`, no Referer — and both answer `206 video/mp4`, so
+    their rows are resolvable URLs, which is what `viewer.py` maps to kind
+    `resolve` and what the JIT resolver can serve on demand.
 
     Every other player host stays `iframe`: the Android client has no WebView,
     so an iframe is catalog evidence about a third-party page and nothing a
     client can play. Storing one as a stream would be a false promise.
 
-    The row's `source_url` is always the embed URL. mxdrop's mp4 URL is signed
-    and expires in about six hours, so a stored copy of it is a 403 by
-    tomorrow; the embed URL is the durable identifier.
+    The row's `source_url` is always the embed URL. mxdrop signs for about six
+    hours and pkembed for twelve (`s` + `e`), so a stored copy of either mp4 URL
+    is a 403 by morning; the embed URL is the durable identifier.
     """
     if host_resolvers.is_mxdrop_embed(url):
         return host_resolvers.SERVICE_MXDROP, "url", True
+    if host_resolvers.is_pkembed_embed(url):
+        return host_resolvers.SERVICE_PKEMBED, "url", True
     return _host_of(url), "iframe", False
 
 
@@ -1107,25 +1122,36 @@ def resolve_links(post: dict, probe: bool = False, deep: bool = False,
     Probe is opt-in because it is one to three requests per player per page
     (4 players x 20,888 pages is not a polite crawl) and because the default
     crawl is a local transform of what sync already downloaded — no socket at
-    all. A resolvable mxdrop row is unpacked and Range-probed against
-    `host_resolvers`, which never sends this site's Referer (the CDN 403s on
-    it); the signed mp4 it returns is reported, not stored. An iframe row's
-    answer does not change what the row *is*.
+    all. A resolvable row (mxdrop or pkembed) is unpacked and Range-probed
+    against `host_resolvers`, which never sends this site's Referer (mxdrop's
+    CDN 403s on it); the signed mp4 it returns is reported, not stored. An
+    iframe row's answer does not change what the row *is*.
     """
     checked = int(time.time())
     evidence = []
     for release in post.get("releases") or []:
         for source in sources_for(release):
-            if source.get("service") == host_resolvers.SERVICE_MXDROP:
+            service = source.get("service")
+            if service in RESOLVABLE_SERVICES:
                 if not probe:
                     source["status"] = DEFAULT_SOURCE_STATUS
                     continue
-                verdict = host_resolvers.unwrap_mxdrop(source["source_url"])
+                # Looked up per service: pkembed's payload differs in packer
+                # radix, in publishing `<source>` renditions rather than
+                # MDCore.wurl, and in counting its expiry from `s` for `e`
+                # seconds rather than reading `e` as an epoch.
+                unwrap = (host_resolvers.unwrap_pkembed
+                          if service == host_resolvers.SERVICE_PKEMBED
+                          else host_resolvers.unwrap_mxdrop)
+                verdict = unwrap(source["source_url"])
                 source["status"] = verdict["status"]
                 source["last_checked"] = checked
-                evidence.append({
-                    "embed_url": verdict["embed_url"], "vfile": verdict["vfile"],
-                    "vserver": verdict["vserver"], "poster_url": verdict["poster_url"],
+                item = {
+                    "service": service, "embed_url": verdict["embed_url"],
+                    "poster_url": verdict["poster_url"],
+                    "quality": verdict.get("quality", ""),
+                    "renditions": [track["label"] for track in verdict.get("sources") or []
+                                   if track.get("label")],
                     "expires_in": verdict["expires_in"],
                     "signed_params": verdict["signed_params"],
                     "subtitles": verdict["subtitles"], "status": verdict["status"],
@@ -1133,7 +1159,13 @@ def resolve_links(post: dict, probe: bool = False, deep: bool = False,
                     "size_bytes": verdict.get("size_bytes"),
                     "content_type": verdict.get("content_type"),
                     "notes": verdict["notes"],
-                })
+                }
+                if verdict.get("vfile"):
+                    # mxdrop-only fields: the host's own file hash and server
+                    # name. Recorded when the host published them, not invented.
+                    item["vfile"] = verdict["vfile"]
+                    item["vserver"] = verdict["vserver"]
+                evidence.append(item)
                 continue
             if not probe:
                 source.setdefault("status", DEFAULT_SOURCE_STATUS)
@@ -1160,11 +1192,14 @@ def resolve_links(post: dict, probe: bool = False, deep: bool = False,
         raw = post.setdefault("raw_meta", {})
         if not isinstance(raw, dict):
             raw = {}
-        raw["mxdrop"] = evidence
+        for service in sorted({item["service"] for item in evidence}):
+            raw[service] = [item for item in evidence if item["service"] == service]
         subs = sorted({track["language"] for item in evidence
                        for track in item["subtitles"]})
+        published_by = sorted({item["service"] for item in evidence if item["subtitles"]})
         raw["subtitle_note"] = (
-            "mxdrop published subtitle tracks on this page: " + ", ".join(subs)
+            f"{', '.join(published_by)} published subtitle tracks on this page: "
+            + ", ".join(subs)
             if subs else raw.get("subtitle_note"))
     post["resolved"] = {"probe": bool(probe), "deep": bool(deep)}
     return post
@@ -1872,10 +1907,10 @@ def get_stats(db_path: Path | str = DEFAULT_DB_PATH) -> dict:
             "releases": conn.execute("SELECT COUNT(*) c FROM releases").fetchone()["c"],
             "sources": conn.execute("SELECT COUNT(*) c FROM sources").fetchone()["c"],
             # Counted apart so an iframe page count can never be read as
-            # "watchable links". `resolvable_rows` is one host (mxdrop) whose
-            # stored embed URL a stdlib resolver turns into a signed mp4 on
-            # demand; `direct_byte_rows` would be a row that already IS a byte
-            # endpoint, and on this site that is always zero.
+            # "watchable links". `resolvable_rows` is the two hosts (mxdrop,
+            # pkembed) whose stored embed URL a stdlib resolver turns into a
+            # signed mp4 on demand; `direct_byte_rows` would be a row that
+            # already IS a byte endpoint, and on this site that is always zero.
             "iframe_rows": iframe_rows,
             "resolvable_rows": conn.execute(
                 "SELECT COUNT(*) c FROM sources WHERE playback_type = 'url'").fetchone()["c"],

@@ -335,15 +335,46 @@ class TestPlayerParsing(unittest.TestCase):
         self.assertEqual(rows[0]["playback_type"], "iframe")
         self.assertEqual(rows[0]["status"], "unverified")
         self.assertEqual({r["service"] for r in rows},
-                         {"ok.ru", "pkembed.site", "do7go.com", "mxdrop"})
+                         {"ok.ru", "pkembed", "do7go.com", "mxdrop"})
         by_service = {r["service"]: r for r in rows}
-        # mxdrop is the one host this catalog can resolve with pure stdlib, so it
-        # is a URL row; the other three are iframes the client cannot play.
-        self.assertEqual(by_service["mxdrop"]["playback_type"], "url")
-        self.assertEqual(by_service["mxdrop"]["is_temporary"], True)
-        self.assertEqual(by_service["pkembed.site"]["playback_type"], "iframe")
-        self.assertEqual(by_service["do7go.com"]["is_temporary"], False)
-        self.assertEqual(by_service["mxdrop"]["status"], "unverified")
+        # Two hosts resolve to a byte endpoint with pure stdlib, so their rows
+        # are URLs; the other two are iframes the client cannot play.
+        for service in ("mxdrop", "pkembed"):
+            self.assertEqual(by_service[service]["playback_type"], "url", service)
+            self.assertTrue(by_service[service]["is_temporary"], service)
+            self.assertEqual(by_service[service]["status"], "unverified", service)
+        for service in ("ok.ru", "do7go.com"):
+            self.assertEqual(by_service[service]["playback_type"], "iframe", service)
+            self.assertFalse(by_service[service]["is_temporary"], service)
+
+    def test_a_resolvable_host_is_named_by_service_not_by_its_cdn(self):
+        # The media host moves (plusN.vkpluscdn.site one day, stoplus.vkcdn5.com
+        # the next); the embed host does not, and the embed host is what names
+        # the row.
+        self.assertEqual(mm._player_kind("https://pkembed.site/embed-x.html"),
+                         ("pkembed", "url", True))
+        self.assertEqual(mm._player_kind("//mxdrop.to/e/abc"), ("mxdrop", "url", True))
+        self.assertEqual(mm._player_kind("https://do7go.com/e/abc"),
+                         ("do7go.com", "iframe", False))
+
+    def test_src_is_matched_in_any_case_and_may_be_protocol_relative(self):
+        # The site publishes `SRC=` as well as `src=`, and `//host/…` as well as
+        # `https://host/…`; a scanner that requires either would lose players.
+        content = ('<iframe SRC="https://pkembed.site/embed-g64v61whic26.html"'
+                   ' FRAMEBORDER=0></iframe>'
+                   '<iframe src="//mxdrop.to/e/dkkev1xqc94mmp"></iframe>')
+        rows = mm.parse_players(content)
+        self.assertEqual([r["service"] for r in rows], ["pkembed", "mxdrop"])
+        self.assertEqual(rows[1]["source_url"], "https://mxdrop.to/e/dkkev1xqc94mmp")
+
+    def test_a_lazy_attribute_is_read_when_it_carries_the_src(self):
+        # A page-HTML crawl would have to take the rewrite attributes
+        # (`data-wpfc-original-src`, `data-src`) as well as `src`; the `\bsrc`
+        # pattern already matches any attribute ending in it, so parsing REST
+        # content is a choice, not a blind spot.
+        rows = mm.parse_players('<iframe data-wpfc-original-src='
+                                '"https://pkembed.site/embed-y.html"></iframe>')
+        self.assertEqual([r["service"] for r in rows], ["pkembed"])
 
     def test_empty_and_labelless(self):
         self.assertEqual(mm.parse_players(""), [])
@@ -771,10 +802,48 @@ def mxdrop_verdict(**over) -> dict:
                "is_temporary": True, "expires_in": 21600, "status": "active",
                "notes": [], "poster_url": "https://n1sxu2vld.mxcontent.net/thumbs/x.jpg",
                "signed_params": ["_t", "e", "s"], "vfile": "abc.mp4",
-               "vserver": "n1sxu2vld", "subtitles": [], "http_status": 206,
-               "size_bytes": 425208621, "content_type": "video/mp4"}
+               "vserver": "n1sxu2vld", "subtitles": [], "sources": [], "quality": "",
+               "http_status": 206, "size_bytes": 425208621, "content_type": "video/mp4"}
     verdict.update(over)
     return verdict
+
+
+def pkembed_verdict(**over) -> dict:
+    """What host_resolvers.unwrap_pkembed returns for the fixture's embed URL."""
+    media = ("https://plus1.vkpluscdn.site/v/01/00002/eop0bc6zkyjy_{slot}/{slot}.mp4"
+             "?t=sig&s=1793148018&e=43200&v=77078028&sp=3000&i=0.3")
+    verdict = {"service": "pkembed",
+               "embed_url": "https://pkembed.site/embed-eop0bc6zkyjy.html",
+               "final_url": media.format(slot="l"), "is_temporary": True,
+               "expires_in": 43199, "status": "active", "notes": [],
+               "poster_url": "https://plus1.vkpluscdn.site/i/01/00002/eop0bc6zkyjy.jpg",
+               "signed_params": ["e", "s", "t"], "subtitles": [], "quality": "300p 325 kbps",
+               "sources": [{"url": media.format(slot="l"), "mime": "video/mp4",
+                            "label": "300p 325 kbps"},
+                           {"url": media.format(slot="n"), "mime": "video/mp4",
+                            "label": "480p 658 kbps"}],
+               "http_status": 206, "size_bytes": 395883742, "content_type": "video/mp4"}
+    verdict.update(over)
+    return verdict
+
+
+@contextlib.contextmanager
+def stubbed_resolvers(**returns):
+    """
+    Both host resolvers, replaced by fixed verdicts.
+
+    Stubbing only one of them would let the other run for real: mxdrop and
+    pkembed are now both resolvable services, and a probe test that forgot
+    pkembed would take a socket to a CDN — offline the socket raiser turns that
+    into a bogus `unknown` status, which is a silent wrong answer rather than a
+    loud failure.
+    """
+    returns.setdefault("unwrap_mxdrop", mxdrop_verdict())
+    returns.setdefault("unwrap_pkembed", pkembed_verdict())
+    with contextlib.ExitStack() as stack:
+        yield {name: stack.enter_context(mock.patch.object(mm.host_resolvers, name,
+                                                           return_value=value))
+               for name, value in returns.items()}
 
 
 class TestProbeVerdicts(unittest.TestCase):
@@ -851,23 +920,68 @@ class TestProbeVerdicts(unittest.TestCase):
         verdict = mxdrop_verdict(subtitles=[{"language": "English",
                                              "url": "https://h/en.vtt"}])
         with mock.patch.object(mm, "probe_source", return_value=quiet), \
-                mock.patch.object(mm.host_resolvers, "unwrap_mxdrop",
-                                  return_value=verdict), \
-                mock.patch.object(mm, "_sleep"):
+                stubbed_resolvers(unwrap_mxdrop=verdict):
             resolved = mm.resolve_links(post, probe=True)
         self.assertEqual(resolved["raw_meta"]["mxdrop"][0]["subtitles"],
                          verdict["subtitles"])
         self.assertIn("English", resolved["raw_meta"]["subtitle_note"])
+        self.assertIn("mxdrop", resolved["raw_meta"]["subtitle_note"])
         self.assertNotIn("final_url", resolved["raw_meta"]["mxdrop"][0])
+
+    def test_both_resolvable_hosts_are_recorded_under_their_own_service(self):
+        post = mm.build_post(wp_post(), TAXONOMY)
+        quiet = {"status": "unknown", "location": "", "error": "",
+                 "media_urls": [], "subtitle_urls": []}
+        with mock.patch.object(mm, "probe_source", return_value=quiet), \
+                stubbed_resolvers() as resolvers:
+            resolved = mm.resolve_links(post, probe=True)
+        mxdrop, pkembed = resolved["raw_meta"]["mxdrop"], resolved["raw_meta"]["pkembed"]
+        self.assertEqual(mxdrop[0]["service"], "mxdrop")
+        self.assertEqual(pkembed[0]["service"], "pkembed")
+        # Each host's own evidence: mxdrop names its file hash and server,
+        # pkembed names the renditions it published.
+        self.assertEqual(mxdrop[0]["vfile"], "abc.mp4")
+        self.assertEqual(mxdrop[0]["vserver"], "n1sxu2vld")
+        self.assertNotIn("vfile", pkembed[0])
+        self.assertEqual(pkembed[0]["renditions"], ["300p 325 kbps", "480p 658 kbps"])
+        self.assertEqual(pkembed[0]["quality"], "300p 325 kbps")
+        self.assertEqual(pkembed[0]["expires_in"], 43199)
+        self.assertEqual(resolvers["unwrap_mxdrop"].call_count, 1)
+        self.assertEqual(resolvers["unwrap_pkembed"].call_count, 1)
+        for item in mxdrop + pkembed:
+            self.assertNotIn("final_url", json.dumps(item))
+
+    def test_a_resolvable_row_keeps_the_embed_url_and_never_the_signed_file(self):
+        post = mm.build_post(wp_post(), TAXONOMY)
+        quiet = {"status": "unknown", "location": "", "error": "",
+                 "media_urls": [], "subtitle_urls": []}
+        with mock.patch.object(mm, "probe_source", return_value=quiet), \
+                stubbed_resolvers():
+            resolved = mm.resolve_links(post, probe=True)
+        rows = {row["service"]: row for row in resolved["releases"][0]["sources"]}
+        self.assertEqual(rows["pkembed"]["source_url"],
+                         "https://pkembed.site/embed-eop0bc6zkyjy.html")
+        self.assertEqual(rows["pkembed"]["playback_type"], "url")
+        self.assertTrue(rows["pkembed"]["is_temporary"])
+        self.assertEqual(rows["pkembed"]["status"], "active")
+        stored = json.dumps(resolved["releases"][0]["sources"], default=str)
+        self.assertNotIn("vkpluscdn.site", stored)
+
+    def test_a_resolvable_row_is_unverified_without_a_probe(self):
+        post = mm.build_post(wp_post(), TAXONOMY)
+        rows = {row["service"]: row for row in post["releases"][0]["sources"]}
+        self.assertEqual(rows["pkembed"]["playback_type"], "url")
+        self.assertEqual(rows["pkembed"]["status"], "unverified")
+        self.assertEqual(mm.resolve_links(post, probe=False)["resolved"],
+                         {"probe": False, "deep": False})
 
     def test_resolve_links_probe_path_sets_status_and_timestamp(self):
         post = mm.build_post(wp_post(), TAXONOMY)
         verdicts = [{"status": "active", "location": "https://mxdrop.top/e/x",
                      "error": "", "media_urls": ["https://cdn.mxdrop.top/a.m3u8"],
                      "subtitle_urls": ["https://cdn.mxdrop.top/en.vtt"]}]
-        with mock.patch.object(mm, "probe_source", side_effect=verdicts * 3), \
-                mock.patch.object(mm.host_resolvers, "unwrap_mxdrop",
-                                  return_value=mxdrop_verdict()) as unpack:
+        with mock.patch.object(mm, "probe_source", side_effect=verdicts * 2), \
+                stubbed_resolvers() as resolvers:
             resolved = mm.resolve_links(post, probe=True, deep=True)
         sources = resolved["releases"][0]["sources"]
         self.assertEqual(sources[0]["status"], "active")
@@ -875,9 +989,11 @@ class TestProbeVerdicts(unittest.TestCase):
         self.assertTrue(sources[0]["last_checked"])
         self.assertEqual(resolved["raw_meta"]["probed_subtitle_urls"],
                          ["https://cdn.mxdrop.top/en.vtt"])
-        self.assertEqual(resolved["discovered_subtitles"],
-                         ["https://cdn.mxdrop.top/en.vtt"] * 3)
-        self.assertEqual(unpack.call_count, 1)
+        # Two iframe rows (ok.ru, do7go) are probed; the two resolvable rows go
+        # to their own resolvers instead, once each.
+        self.assertEqual(len(resolved["discovered_subtitles"]), 2)
+        self.assertEqual(resolvers["unwrap_mxdrop"].call_count, 1)
+        self.assertEqual(resolvers["unwrap_pkembed"].call_count, 1)
 
     def test_resolve_links_ok_ru_gets_no_site_referer(self):
         seen = []
@@ -888,23 +1004,22 @@ class TestProbeVerdicts(unittest.TestCase):
                     "media_urls": [], "subtitle_urls": []}
         post = mm.build_post(wp_post(), TAXONOMY)
         with mock.patch.object(mm, "probe_source", side_effect=spy), \
-                mock.patch.object(mm.host_resolvers, "unwrap_mxdrop",
-                                  return_value=mxdrop_verdict()) as unpack:
+                stubbed_resolvers() as resolvers:
             mm.resolve_links(post, probe=True)
         self.assertEqual(seen[0][1], None)
         self.assertEqual(seen[1][1], "https://www.moviesmela.com/")
-        self.assertEqual(len(seen), 3)
-        # the resolver is called with its defaults: no referer argument at all
-        self.assertEqual(unpack.call_args.kwargs, {})
+        self.assertEqual(len(seen), 2)
+        # each resolver is called with its defaults: no referer argument at all
+        for mock_obj in resolvers.values():
+            self.assertEqual(mock_obj.call_args.kwargs, {})
 
     def test_resolve_links_probe_error_string_is_stored(self):
         post = mm.build_post(wp_post(), TAXONOMY)
         verdict = {"status": "unknown", "location": "", "error": "OSError: reset",
                    "media_urls": [], "subtitle_urls": []}
         with mock.patch.object(mm, "probe_source", return_value=verdict), \
-                mock.patch.object(mm.host_resolvers, "unwrap_mxdrop",
-                                  return_value=mxdrop_verdict(status="blocked",
-                                                              notes=["stale"])):
+                stubbed_resolvers(
+                    unwrap_mxdrop=mxdrop_verdict(status="blocked", notes=["stale"])):
             resolved = mm.resolve_links(post, probe=True)
         self.assertEqual(resolved["releases"][0]["sources"][0]["probe_error"],
                          "OSError: reset")
@@ -912,6 +1027,7 @@ class TestProbeVerdicts(unittest.TestCase):
                   if s["service"] == "mxdrop"]
         self.assertEqual(mxdrop[0]["status"], "blocked")
         self.assertEqual(resolved["raw_meta"]["mxdrop"][0]["notes"], ["stale"])
+        self.assertEqual(resolved["raw_meta"]["pkembed"][0]["status"], "active")
 
     def test_resolve_links_accepts_string_raw_meta(self):
         post = mm.build_post(wp_post(), TAXONOMY)
@@ -919,8 +1035,7 @@ class TestProbeVerdicts(unittest.TestCase):
         verdict = {"status": "active", "location": "", "error": "",
                    "media_urls": ["https://cdn.test/a.m3u8"], "subtitle_urls": []}
         with mock.patch.object(mm, "probe_source", return_value=verdict), \
-                mock.patch.object(mm.host_resolvers, "unwrap_mxdrop",
-                                  return_value=mxdrop_verdict()):
+                stubbed_resolvers():
             mm.resolve_links(post, probe=True)
         self.assertEqual(post["raw_meta"], "not a dict")
 
@@ -1065,8 +1180,10 @@ class TestStagingDatabase(unittest.TestCase):
         stats = mm.get_stats(self.db)
         self.assertEqual(stats["site"], "moviesmela")
         self.assertEqual(stats["sources"], 4)
-        self.assertEqual(stats["iframe_rows"], 3)
-        self.assertEqual(stats["resolvable_rows"], 1)
+        self.assertEqual(stats["iframe_rows"], 2)
+        self.assertEqual(stats["resolvable_rows"], 2)
+        self.assertEqual(stats["services"]["pkembed"], 1)
+        self.assertEqual(stats["services"]["mxdrop"], 1)
         self.assertEqual(stats["direct_byte_rows"], 0)
         self.assertEqual(stats["subtitle_rows"], 0)
         self.assertEqual(stats["download_rows"], 0)
@@ -1356,8 +1473,8 @@ class TestQueueAndCrawl(unittest.TestCase):
         self.assertIn("pending", buf.getvalue())
         stats = mm.get_stats(self.db)
         self.assertEqual(stats["sources"], 4)
-        self.assertEqual(stats["iframe_rows"], 3)
-        self.assertEqual(stats["resolvable_rows"], 1)
+        self.assertEqual(stats["iframe_rows"], 2)
+        self.assertEqual(stats["resolvable_rows"], 2)
 
     def test_crawl_pending_batches_and_reports_progress(self):
         records = [wp_post(id=n, slug=f"m-{n}", link=f"https://www.moviesmela.com/m-{n}/")
@@ -1417,6 +1534,8 @@ class TestQueueAndCrawl(unittest.TestCase):
         with mock.patch.object(mm, "cached_taxonomy", return_value=TAXONOMY), \
                 mock.patch.object(mm, "probe_source", side_effect=OSError("reset")), \
                 mock.patch.object(mm.host_resolvers, "unwrap_mxdrop",
+                                  side_effect=OSError("reset")), \
+                mock.patch.object(mm.host_resolvers, "unwrap_pkembed",
                                   side_effect=OSError("reset")), \
                 mock.patch.object(mm, "_sleep"), silenced():
             totals = mm.crawl_pending(db_path=self.db, workers=1, delay=0, probe=True)
@@ -1533,8 +1652,7 @@ class TestParsePageAndCLI(unittest.TestCase):
                 wp_post(), TAXONOMY)), mock.patch.object(mm, "probe_source",
                 return_value={"status": "blocked", "location": "", "error": "",
                               "media_urls": [], "subtitle_urls": []}), \
-                mock.patch.object(mm.host_resolvers, "unwrap_mxdrop",
-                                  return_value=mxdrop_verdict()), \
+                stubbed_resolvers(), \
                 silenced(), mock.patch.object(sys, "argv",
                 ["x", "resolve", "--url", LINK, "--deep"]):
             self.assertEqual(mm.main(), 0)

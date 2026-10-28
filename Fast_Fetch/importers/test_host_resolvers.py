@@ -5,8 +5,11 @@ Offline tests for host_resolvers.py — no live socket, no database, no pip.
 The fixtures are real: `PACKED_PAGE` is the mxdrop embed HTML for
 `/e/7kk0mpgdsmoqd4` as fetched from this host on 2026-10-28 (the packer call is
 verbatim, the surrounding markup reduced to what the unpacker has to survive),
-and `UNPACKED_CONFIG` is what the packer's own loop produces for it. The stale
-signature case is the response the CDN actually returns for an expired `e`.
+and `UNPACKED_CONFIG` is what the packer's own loop produces for it.
+`PK_PACKED_PAGE` is the same for `/embed-g64v61whic26.html` on pkembed.site —
+whole, including its base-36 packer call, so the unpacker is tested against the
+bytes the host actually served. The stale signature case is the response the
+CDN actually returns for an expired `e`.
 
 Every request goes through an injected `fetch`, so the network code is covered
 by calling the real functions with a fake transport, never by monkey-patching a
@@ -22,6 +25,7 @@ import runpy
 import socket
 import ssl
 import sys
+import time
 import unittest
 import urllib.error
 import urllib.request
@@ -74,6 +78,30 @@ WURL = ("https://n1sxu2vld.mxcontent.net/v2/7kk0mpgdsmoqd4.mp4"
         "?s=48AjKsiDaW4sYoHGdYvQiA&e=1793165221&_t=1793145991")
 EMBED = "https://mxdrop.to/e/7kk0mpgdsmoqd4"
 POSTER = "https://n1sxu2vld.mxcontent.net/thumbs/7kk0mpgdsmoqd4_4x4.jpg"
+
+PK_PACKED_PAGE = """<html><head><title>pkembed</title></head><body>
+<div id="vplayer" style="width:100%;height:100%;"></div>
+<script type='text/javascript'>eval(function(p,a,c,k,e,d){while(c--)if(k[c])p=p.replace(new RegExp('\\\\b'+c.toString(a)+'\\\\b','g'),k[c]);return p}('$(\\'#1f\\').4g(\\'<q 4f="1t" 4e="11:j%; z:j%;" 4d="4c"><20 x="2://1e.1d.1c/v/1b/1a/4b/l.r?t=4a-49&s=13&e=1z&v=14&1y=1x&i=0.3" 1w="q/r" 1v="48 47 1u"><20 x="2://1e.1d.1c/v/1b/1a/46/n.r?t=45&s=13&e=1z&v=14&1y=1x&i=0.3" 1w="q/r" 1v="44 43 1u"> </q>\\');12 b=42(\\'1t\\',{41:{40:\\'2://1e.1d.1c/i/1b/1a/1i.3z\\',3y:\\'3x\\',3w:a,3v:{3u:a,3t:5,3s:19},3r:{3q:a,3p:[{3o:\\'2://w.u\\',3n:\\'3m\\'}]},3l:a,3k:19,3j:{1r:a},},3i:(1s)=>{1s.3h=19},3g:{3f:a,3e:[{9:\\'3d\\',8:\\'\\'},{9:\\'p\\',8:\\'2://6.g.f/6?d=c\\',o:y},{9:\\'p\\',8:\\'2://6.g.f/6?d=c\\',o:3c},{9:\\'p\\',8:\\'2://6.g.f/6?d=c\\',o:3b},{9:\\'p\\',8:\\'2://6.g.f/6?d=c\\',o:3a},{9:\\'39\\',8:\\'2://6.g.f/6?d=c\\'}]},});12 16,17;b.18(\\'1h\\',7(){1p()});b.18(\\'38\\',7(){$(\\'k.1o\\').1r()});b.18(\\'37\\',7(1q){15(5>0&&1q>=5&&17!=1){17=1;$(\\'k.36\\').35(\\'34\\')}});7 1p(){$(\\'k.1o\\').33();15(16)32;16=1;m=0;15(31.30==1){m=1}$.2z(\\'2://w.u/2y?1j=2x&2w=14&2v=13-2u&2t=1&m=\\'+m,7(1n){$(\\'#2s\\').2r(1n)})}7 2q(){2p(\\'2o\\').2n();12 $h=$("<k />").1m({2m:"2l",11:"j%",z:"j%",2k:0,1k:0,1l:2j,2i:"2h(10%, 10%, 10%, 0.4)","2g-2f":"2e"});$("<2d />").1m({11:"y%",z:"y%",1l:2c,"2b-1k":"2a"}).29({\\'x\\':\\'2://w.u/?1j=28&27=1i\\',\\'26\\':\\'0\\',\\'25\\':\\'24\\'}).1g($h);$h.23(7(){$(22).21();b.1h()});$h.1g($(\\'#1f\\'))}',36,161,'||https||||vast|function|vastTag|roll|true|player|1472528|spot_id||xyz|yomeno|dd||100|div||adb||timer|midRoll|video|mp4|||net||vkplus|src|60|height||width|var|1793148018|77081502|if|vvplay|vvad|on|false|00002|01|site|vkpluscdn|plus1|vplayer|appendTo|play|g64v61whic26|op|top|zIndex|css|data|video_ad|doPlay|currentTime|show|request|fplayer|kbps|title|type|3000|sp|43200|source|remove|this|click|no|scrolling|frameborder|file_code|upload_srt|prop|50px|margin|1000001|iframe|center|align|text|rgba|background|1000000|left|absolute|position|pause|vjsplayer|videojs|showCCform|html|fviews|embed|796a58cbca5e373b628b4f97be6ace2e|hash|view_id|view|dl|get|adbon|window|return|hide|slow|fadeIn|video_ad_fadein|timeupdate|ended|postRoll|1500|900|300|preRoll|adList|allowVPAID|vastOptions|withCredentials|onBeforeXMLHttpRequest|controlForwardBackward|allowTheatre|playbackRateEnabled|VkPlus|label|href|links|controls|contextMenu|animated|autoHideTimeout|autoHide|controlBar|playButtonShowing|auto|preload|jpg|posterImage|layoutControls|fluidPlayer|562|480p|BqXY2lCE5L77IMC9sybLm7pa1NHMqtCctY4RKPSO9ug|g64v61whic26_n|326|360p|fqbbp3Q|KHH6I0tMZ1p4B6gjpVUIrfGYldCDbEHRVS4|g64v61whic26_l|anonymous|crossOrigin|style|id|append'.split('|')))
+</script>
+</body></html>"""
+
+PK_EMBED = "https://pkembed.site/embed-g64v61whic26.html"
+PK_L_MP4 = ("https://plus1.vkpluscdn.site/v/01/00002/g64v61whic26_l/l.mp4"
+            "?t=KHH6I0tMZ1p4B6gjpVUIrfGYldCDbEHRVS4-fqbbp3Q&s=1793148018&e=43200"
+            "&v=77081502&sp=3000&i=0.3")
+PK_N_MP4 = ("https://plus1.vkpluscdn.site/v/01/00002/g64v61whic26_n/n.mp4"
+            "?t=BqXY2lCE5L77IMC9sybLm7pa1NHMqtCctY4RKPSO9ug&s=1793148018&e=43200"
+            "&v=77081502&sp=3000&i=0.3")
+PK_POSTER = "https://plus1.vkpluscdn.site/i/01/00002/g64v61whic26.jpg"
+
+# The other CDN the same host was measured on (owner, 2026-10-28): a rendition
+# list must accept either hostname, because the payload names it and we do not.
+VKCDN5_CONFIG = (
+    '\'<video id="fplayer"><source '
+    'src="https://stoplus.vkcdn5.com/v/01/00002/fi_l/l.mp4'
+    '?t=sig&s=1793147688&e=43200&v=77&sp=3000&i=0.3" '
+    'type="video/mp4" title="480p 658 kbps"> </video>\';')
+
 
 
 class FakeResponse:
@@ -569,6 +597,261 @@ class TestUnwrapMxdrop(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# pkembed — recognition, the base-36 packer, renditions, expiry
+# ---------------------------------------------------------------------------
+
+class TestPkembedRecognition(unittest.TestCase):
+    def test_the_real_embed_shape_is_accepted(self):
+        self.assertTrue(hr.is_pkembed_embed(PK_EMBED))
+
+    def test_a_protocol_relative_embed_url_is_accepted(self):
+        # MoviesMela publishes some players as `//host/…`; a matcher that
+        # requires a scheme would drop them.
+        self.assertTrue(hr.is_pkembed_embed("//pkembed.site/embed-g64v61whic26.html"))
+
+    def test_mxdrop_path_shape_is_not_a_pkembed(self):
+        # The owner's trap in both directions: a matcher written for `/e/<id>`
+        # finds zero pkembeds, and a pkembed matcher must not claim mxdrop's.
+        self.assertFalse(hr.is_pkembed_embed("https://pkembed.site/e/g64v61whic26"))
+        self.assertFalse(hr.is_mxdrop_embed(PK_EMBED))
+
+    def test_a_look_alike_host_is_not_pkembed(self):
+        self.assertFalse(hr.is_pkembed_embed(
+            "https://pkembed.site.evil.test/embed-x.html"))
+        self.assertFalse(hr.is_pkembed_embed("https://notpkembed.site/embed-x.html"))
+
+    def test_an_empty_or_pathless_url_is_nothing(self):
+        self.assertFalse(hr.is_pkembed_embed(""))
+        self.assertFalse(hr.is_pkembed_embed("/embed-x.html"))
+        self.assertFalse(hr.is_mxdrop_embed(""))
+
+
+class TestPkembedPacker(unittest.TestCase):
+    def test_the_four_argument_base_36_call_unpacks_to_the_player(self):
+        config = hr.find_packed_config(PK_PACKED_PAGE)
+        self.assertIn('<source src="https://plus1.vkpluscdn.site/v/01/00002'
+                      '/g64v61whic26_l/l.mp4', config)
+        self.assertIn("posterImage:'" + PK_POSTER + "'", config)
+
+    def test_js_escapes_are_resolved_before_the_substitutions_run(self):
+        # The packer substitutes on the parsed string value, so `\'` is a quote
+        # by the time the indices are walked. Substituting first would leave a
+        # backslash inside every inserted key.
+        config = hr.find_packed_config(PK_PACKED_PAGE)
+        self.assertNotIn("\\", config)
+        self.assertIn("$('#vplayer').append(", config)
+
+    def test_indices_are_written_in_base_36_not_in_decimal(self):
+        keys = [""] * 52
+        keys[10], keys[35], keys[36], keys[51] = "TEN", "THIRTYFIVE", "THIRTYSIX", "FIFTYONE"
+        # 10 -> "a", 35 -> "z", 36 -> "10", 51 -> "1f". A decimal-only unpacker
+        # would leave every one of these four untouched.
+        out = hr.unpack_packed_js("v1=a v2=z v3=10 v4=1f", 36, 52, keys)
+        self.assertEqual(out, "v1=TEN v2=THIRTYFIVE v3=THIRTYSIX v4=FIFTYONE")
+
+    def test_base_36_renderings(self):
+        self.assertEqual(hr.to_base(10, 36), "a")
+        self.assertEqual(hr.to_base(35, 36), "z")
+        self.assertEqual(hr.to_base(36, 36), "10")
+
+    def test_the_empty_first_key_leaves_literal_zeros_alone(self):
+        # Every real pkembed call has k[0] == ''. Replacing "0" with it — even
+        # with the empty string — would eat the zeros out of the file path and
+        # the player settings.
+        payload = "i=0.3;sp=3000;p=01/00002"
+        self.assertEqual(hr.unpack_packed_js(payload, 36, 2, ["", "X"]), payload)
+
+
+class TestPkembedRenditions(unittest.TestCase):
+    def test_both_tags_are_kept_with_the_host_s_own_labels(self):
+        renditions = hr.pkembed_renditions(hr.find_packed_config(PK_PACKED_PAGE))
+        self.assertEqual([item["url"] for item in renditions], [PK_L_MP4, PK_N_MP4])
+        self.assertEqual([item["label"] for item in renditions],
+                         ["360p 326 kbps", "480p 562 kbps"])
+        self.assertEqual([item["mime"] for item in renditions], ["video/mp4", "video/mp4"])
+
+    def test_the_media_host_is_whatever_the_payload_says(self):
+        # plusN.vkpluscdn.site and stoplus.vkcdn5.com were both measured; the
+        # hostname is never pinned, so a rendition on either is accepted.
+        found = hr.pkembed_renditions(VKCDN5_CONFIG)
+        self.assertEqual(len(found), 1)
+        self.assertIn("stoplus.vkcdn5.com", found[0]["url"])
+
+    def test_the_l_rendition_is_preferred(self):
+        renditions = hr.pkembed_renditions(hr.find_packed_config(PK_PACKED_PAGE))
+        self.assertEqual(hr.select_rendition(renditions)["url"], PK_L_MP4)
+
+    def test_the_n_rendition_is_the_fallback(self):
+        only_n = [{"url": PK_N_MP4, "mime": "video/mp4", "label": "480p"}]
+        self.assertEqual(hr.select_rendition(only_n)["url"], PK_N_MP4)
+
+    def test_any_rendition_is_better_than_none(self):
+        other = [{"url": "https://h/v/x.mp4", "mime": "", "label": ""}]
+        self.assertEqual(hr.select_rendition(other)["url"], "https://h/v/x.mp4")
+        self.assertIsNone(hr.select_rendition([]))
+
+    def test_a_media_url_without_a_source_tag_is_still_found(self):
+        found = hr.pkembed_renditions('file:"//c.site/v/a.m3u8",x:1')
+        self.assertEqual(found, [{"url": "https://c.site/v/a.m3u8", "mime": "",
+                                  "label": ""}])
+
+    def test_a_poster_is_never_a_rendition(self):
+        self.assertEqual(
+            hr.pkembed_renditions("posterImage:'https://h/i/x.jpg'"), [])
+
+    def test_a_source_tag_without_a_media_extension_is_ignored(self):
+        self.assertEqual(hr.pkembed_renditions('<source src="https://h/track">'), [])
+
+
+class TestPkembedExpiry(unittest.TestCase):
+    def test_lifetime_expiry_is_the_issue_epoch_plus_the_window(self):
+        expires_at, expires_in = hr.duration_expiry_from_url(PK_L_MP4)
+        self.assertEqual(expires_at, 1793148018 + 43200)
+        self.assertAlmostEqual(expires_in, expires_at - time.time(), delta=5)
+
+    def test_mxdrop_absolute_expiry_is_not_read_as_a_lifetime(self):
+        # mxdrop's `s` is the signature, not a timestamp, so the lifetime reader
+        # refuses it instead of inventing an expiry.
+        self.assertEqual(hr.duration_expiry_from_url(WURL), (None, None))
+
+    def test_pkembed_lifetime_is_not_read_as_an_absolute_expiry(self):
+        # `e=43200` read as an epoch is 1970: a live file would be reported as
+        # long expired. The digit-count guard is what keeps the two hosts apart.
+        self.assertEqual(hr.expiry_from_url(PK_L_MP4), (None, None))
+
+    def test_a_query_without_both_numbers_has_no_expiry(self):
+        self.assertEqual(hr.duration_expiry_from_url(
+            "https://h/x.mp4?s=1793148018"), (None, None))
+        self.assertEqual(hr.duration_expiry_from_url(
+            "https://h/x.mp4?s=123&e=43200"), (None, None))
+
+
+class TestUnwrapPkembed(unittest.TestCase):
+    def scripted(self, **over):
+        script = {PK_EMBED: (200, PK_PACKED_PAGE, {}),
+                  ".mp4": (206, b"\x00\x00\x00 ftypisom",
+                           {"content-type": "video/mp4",
+                            "content-range": "bytes 0-511/201886684"})}
+        script.update(over)
+        return scripted_fetch(script)
+
+    def test_full_chain_active(self):
+        fetch = self.scripted()
+        verdict = hr.unwrap_pkembed(PK_EMBED, fetch=fetch)
+        self.assertEqual(verdict["status"], "active")
+        self.assertEqual(verdict["service"], "pkembed")
+        self.assertTrue(verdict["is_temporary"])
+        self.assertEqual(verdict["embed_url"], PK_EMBED)
+        self.assertEqual(verdict["final_url"], PK_L_MP4)
+        self.assertEqual(verdict["poster_url"], PK_POSTER)
+        self.assertEqual(verdict["quality"], "360p 326 kbps")
+        self.assertEqual([item["url"] for item in verdict["sources"]],
+                         [PK_L_MP4, PK_N_MP4])
+        self.assertEqual(verdict["signed_params"], ["e", "s", "t"])
+        self.assertEqual(verdict["size_bytes"], 201886684)
+        self.assertEqual(verdict["subtitles"], [])
+        self.assertEqual(verdict["notes"], [])
+
+    def test_the_signed_url_is_reported_not_stored(self):
+        verdict = hr.unwrap_pkembed(PK_EMBED, fetch=self.scripted())
+        # The durable field is the embed URL; the media URL is only ever a
+        # return value, so a caller that persists `embed_url` keeps nothing that
+        # expires.
+        self.assertEqual(verdict["embed_url"], PK_EMBED)
+        self.assertTrue(verdict["final_url"].startswith("https://plus1.vkpluscdn.site/"))
+
+    def test_no_media_request_carries_a_referer(self):
+        fetch = self.scripted()
+        hr.unwrap_pkembed(PK_EMBED, fetch=fetch,
+                          referer="https://www.moviesmela.com/watch/x/")
+        for _url, headers, _method in fetch.calls:
+            self.assertNotIn("Referer", headers)
+
+    def test_a_forbidden_referer_is_recorded_as_withheld(self):
+        verdict = hr.unwrap_pkembed(
+            PK_EMBED, fetch=self.scripted(), referer="https://www.moviesmela.com/x")
+        self.assertIn("referrer withheld", verdict["notes"][0])
+
+    def test_verify_off_is_one_request_and_says_so(self):
+        fetch = scripted_fetch({PK_EMBED: (200, PK_PACKED_PAGE, {})})
+        verdict = hr.unwrap_pkembed(PK_EMBED, fetch=fetch, verify=False)
+        self.assertEqual(verdict["status"], "unverified")
+        self.assertEqual(len(fetch.calls), 1)
+        self.assertIn("not probed", json.dumps(verdict["notes"]))
+
+    def test_a_non_pkembed_url_is_refused_before_any_request(self):
+        fetch = scripted_fetch({})
+        verdict = hr.unwrap_pkembed(EMBED, fetch=fetch)
+        self.assertEqual(verdict["status"], "unknown")
+        self.assertIn("not a pkembed embed URL", verdict["notes"])
+        self.assertEqual(fetch.calls, [])
+
+    def test_embed_page_failure_shapes(self):
+        for status, expected in ((404, "dead"), (410, "dead"), (403, "blocked"),
+                                 (429, "blocked"), (500, "unknown"), (204, "unknown")):
+            fetch = scripted_fetch({PK_EMBED: (status, b"", {})})
+            verdict = hr.unwrap_pkembed(PK_EMBED, fetch=fetch)
+            self.assertEqual(verdict["status"], expected, status)
+            self.assertEqual(verdict["notes"], [f"embed page HTTP {status}"])
+
+    def test_a_page_that_publishes_no_media_url_is_unknown(self):
+        # A page that unpacks but names no byte endpoint (a deleted file, a
+        # premium gate) is reported as unknown, not as a dead host.
+        config = "$('#vplayer').append('<div>upgrade to watch</div>');"
+        fetch = scripted_fetch({PK_EMBED: (200, PK_PACKED_PAGE, {})})
+        with mock.patch.object(hr, "find_packed_config", lambda _html: config):
+            verdict = hr.unwrap_pkembed(PK_EMBED, fetch=fetch)
+        self.assertEqual(verdict["status"], "unknown")
+        self.assertEqual(verdict["final_url"], "")
+        self.assertIn("publishes no media URL", json.dumps(verdict["notes"]))
+        self.assertEqual(len(fetch.calls), 1)
+
+    def test_blocked_media_with_a_live_poster_is_an_expired_signature(self):
+        fetch = self.scripted(**{
+            ".mp4": (403, b"<html>no</html>", {"content-type": "text/html"}),
+            ".jpg": (200, b"j", {"content-type": "image/jpeg"})})
+        verdict = hr.unwrap_pkembed(PK_EMBED, fetch=fetch)
+        self.assertEqual(verdict["status"], "blocked")
+        self.assertIn("signature expired", json.dumps(verdict["notes"]))
+
+    def test_blocked_media_with_a_dead_poster_is_dead(self):
+        fetch = self.scripted(**{
+            ".mp4": (403, b"", {"content-type": "text/html"}),
+            ".jpg": (404, b"", {"content-type": "text/html"})})
+        verdict = hr.unwrap_pkembed(PK_EMBED, fetch=fetch)
+        self.assertEqual(verdict["status"], "dead")
+        self.assertIn("host no longer serves", json.dumps(verdict["notes"]))
+
+    def test_media_that_answers_html_is_not_called_active(self):
+        fetch = self.scripted(**{".mp4": (206, b"<html>", {"content-type": "text/html"})})
+        verdict = hr.unwrap_pkembed(PK_EMBED, fetch=fetch)
+        self.assertEqual(verdict["status"], "unknown")
+        self.assertIn("206 text/html", json.dumps(verdict["notes"]))
+
+    def test_a_published_caption_url_becomes_a_track(self):
+        config = ('<source src="//c.site/v/x_l/l.mp4?t=1&s=1793148018&e=43200"'
+                  ' type="video/mp4">tracks:[{file:"//c.site/v/x.en.vtt"}]')
+        with mock.patch.object(hr, "find_packed_config", lambda _html: config):
+            verdict = hr.unwrap_pkembed(PK_EMBED, fetch=self.scripted())
+        self.assertEqual(verdict["subtitles"],
+                         [{"language": "subtitle", "url": "https://c.site/v/x.en.vtt"}])
+
+    def test_the_view_ping_is_not_mistaken_for_a_caption(self):
+        # pkembed's script mentions `upload_srt` as a query parameter on its own
+        # statistics call; a parameter name is not a track.
+        verdict = hr.unwrap_pkembed(PK_EMBED, fetch=self.scripted())
+        self.assertEqual(verdict["subtitles"], [])
+
+    def test_unparsable_expiry_is_recorded(self):
+        config = ('<source src="//c.site/v/x_l/l.mp4?t=1&s=12&e=43200" '
+                  'type="video/mp4">')
+        with mock.patch.object(hr, "find_packed_config", lambda _html: config):
+            verdict = hr.unwrap_pkembed(PK_EMBED, fetch=self.scripted())
+        self.assertIsNone(verdict["expires_in"])
+        self.assertIn("no parsable expiry", json.dumps(verdict["notes"]))
+
+
+# ---------------------------------------------------------------------------
 # Command line
 # ---------------------------------------------------------------------------
 
@@ -595,6 +878,15 @@ class TestMain(unittest.TestCase):
         fetch = scripted_fetch({EMBED: (404, b"", {})})
         with mock.patch.object(hr, "http_request", fetch), silenced():
             self.assertEqual(hr.main([EMBED]), 1)
+
+    def test_a_pkembed_url_dispatches_to_the_pkembed_resolver(self):
+        fetch = scripted_fetch({PK_EMBED: (200, PK_PACKED_PAGE, {}),
+                                ".mp4": (206, b"x", {"content-type": "video/mp4"})})
+        with mock.patch.object(hr, "http_request", fetch), silenced() as buf:
+            self.assertEqual(hr.main([PK_EMBED]), 0)
+        printed = json.loads(buf.getvalue())
+        self.assertEqual(printed["service"], "pkembed")
+        self.assertEqual(printed["status"], "active")
 
     def test_the_module_runs_as_a_script(self):
         """
