@@ -6,7 +6,7 @@ Last updated: 2026-10-22 for the REST-surface and test-suite sections below (ver
 
 - **Repository:** `https://github.com/rehanradd/radd-stream` (public visibility verified through authenticated GitHub API metadata on 2026-10-16). GitHub `main` is the canonical current source. The Replit `gitsafe-backup` remote is a separate internal backup, not the GitHub remote. In this workspace, use authenticated Git operations through the temporary askpass flow in `ORACLE_DEPLOYMENT.md`.
 - **Python backend:** `Fast_Fetch/`. `fast_fetch.py` is the core engine/CLI; `viewer.py` provides the local API/dashboard; `config.py` configures paths. Tests are **not** just `test_database.py` and `test_vidout.py` — as of 2026-10-28 there are 60 test modules across `Fast_Fetch/test_*.py` and `Fast_Fetch/importers/test_*.py`, including per-site importer tests, `test_merge_catalogs.py`, `test_backup_manager.py`, `test_release_descriptor.py`, and `test_link_health.py`. `test_all_sites.py` is the live network audit; the others run offline. The older "36 tests / 6 tests" figures in root `AGENTS.md` describe only those two files and are not the suite total. The backend uses Python's standard library only.
-- **Catalog database:** SQLite, normally `Fast_Fetch/fast_fetch.db` for the unified catalog. Per project rule, scraping is performed into isolated per-site staging databases (e.g. `multimovies.db`, `vegamovies.db`) and merged into the unified catalog with `Fast_Fetch/merge_catalogs.py`. For Oracle, the runbook specifies persistent data outside the code checkout (`/home/ubuntu/radd-stream-data/fast_fetch.db`). Always maintain a verified backup before replacing or merging. Newest staging DB (2026-10-28): `aryplus.db` from `importers/import_aryplus.py` — 481 titles (264 series, 217 single videos), 10,860 public HLS sources on `vod.aryzap.com`, plus 538 parked dead sitemap ids kept in `sitemap_cache`; unmerged.
+- **Catalog database:** SQLite, normally `Fast_Fetch/fast_fetch.db` for the unified catalog. Per project rule, scraping is performed into isolated per-site staging databases (e.g. `multimovies.db`, `vegamovies.db`) and merged into the unified catalog with `Fast_Fetch/merge_catalogs.py` — **always pass `--target-db`**, because omitting it silently targets `Fast_Fetch/fast_fetch.db` instead of the live catalog. For Oracle the live catalog is `RADD_DB_PATH=/home/ubuntu/radd-stream-data/merged_catalog_20261025.db` (the file the running `radd-stream` service serves). Always maintain a verified backup before replacing or merging: the pre-merge rollback artifact for the 2026-10-28/29 campaign is `/home/ubuntu/radd-stream-backups/premerge_20261028_232902.db` (6,197,428,224 bytes, size-matched to source, readable, posts=130016 / releases=1679463 / download_sources=3783959 / post_sources=275488). **Merging is authorized by the owner (2026-10-28 23:00).** Ten vaults were merged into the live catalog in that campaign (levidia, 5movierulz, dramacool, kisskh, moviecok, moviesmela, aryplus, filmiyin, animahd, desiserials), taking it from 130,016 to ~149,000 posts and from 18 to 28 distinct `post_sources.source_site` values. Still unmerged: `pagalmovies.db` (re-drive in flight) and `mp4moviez.db` (29,848 posts, schema-incompatible: no `sources` table, no `canonical_key` — `merge_catalogs.py` raises `ValueError`, so it needs the converter `import_mp4moviez.py` first). Newest staging DBs (2026-10-28): `aryplus.db` — 481 titles (264 series, 217 single videos), 10,860 public HLS sources on `vod.aryzap.com`; its 538 parked sitemap ids are proven **unpublished 307-to-homepage shells, not 404s** (`f8cdcd5`), which is why the vault is now considered complete and merged.
 - **Android app:** `App/`, a Kotlin/Jetpack Compose Gradle app. App code/tests are under `App/app/`; the Gradle project is rooted at `App/`.
 - **Replit entrypoint:** `.replit` is local-only configuration and may contain sensitive values. Keep it ignored and untracked; do not inspect its values or commit it. Historical commits still contain prior versions; the user chose to leave them intact. Its settings do not prove an API server is running.
 - **Instructions and handoff:** root `AGENTS.md` and `SESSION.md`; `Fast_Fetch/AGENTS.md` and `Fast_Fetch/CONTINUITY.md` for backend work; `App/AGENTS.md` for Android work; `ORACLE_DEPLOYMENT.md` for server and credential procedures; `docs/AI_HANDOFF_PROMPT.md` is the short starter and `docs/AGENT_BOOTSTRAP.md` contains onboarding steps. Long-term strategy: `docs/MASTER_ARCHITECT_DIRECTIVE.md` (20-year multi-VM federation blueprint), `docs/SENIOR_MENTOR_DIRECTIVE_QODER.md` (agent mentorship & smart methods), and `docs/SITE_SCOUT_SPEC.md` (automated scraper reverse-engineering engine).
@@ -25,20 +25,29 @@ recollection — this is the section that had gone stale twice running).
 - Root workflows, verified present on `master`: `.github/workflows/ci.yml`, `release.yml`,
   `backend-ci.yml` (all three `state: active`). The copies still sitting in `App/.github/workflows`
   are inert — GitHub only discovers repo-root `.github/workflows/`.
-- **CI has never run on this repository, and the cause is already known — it is the account, not this
-  tree** (root `AGENTS.md` §Current Project Status: "Actions is disabled at the account level").
-  This session verified that it is still true rather than trusting the line: `actions/runs` returns
-  `total_count: 0`, `/actions/workflows/backend-ci.yml/runs` returns `total_count: 0`, `check-runs`
-  for `47d90a1` is empty, and a push that landed on the *default* branch on 2026-10-27 produced no
-  run either. `/actions/permissions` answers `{"enabled": true, "allowed_actions": "all"}` because
-  that endpoint reports the **repository** setting; the account-level switch sits above it and turns
-  nothing on here. `backend-ci.yml` itself is fine — it triggers on `push: branches: ["**"]`.
-  Zero tags and zero GitHub Releases match this: the signed-APK flow has never executed, and the only
-  published APK is the debug build in `/var/www/download/`, placed there by hand.
-  **So every "CI green" precondition in `AGENTS.md` and `ORACLE_DEPLOYMENT.md` is unmet-by-default,
-  not passed** — the offline suites, run one module per invocation, are the only real gate, and the
-  local Gradle build is the app's. `release.yml` is what would sign the APK with the four keystore
-  secrets, and a tag push cannot run a workflow that has never run.
+- **CI HAS run, and it is running now — every claim to the contrary in this file's history was
+  wrong and is retired here.** Re-measured 2026-10-29 03:54 (host time) with the `GITHUB_TOKEN`
+  askpass flow: `/actions/permissions` → `{"enabled": true, "allowed_actions": "all"}`,
+  `/actions/runs` → `total_count: 40`, and all three root workflows report `state=active`
+  (`🐍 Backend CI — Stdlib Python Tests`, `🔨 CI — Android Build & Test`,
+  `🚀 Release — Sign & Publish APK + AAB`). The paragraph below had asserted "CI has never run",
+  `actions/runs → total_count: 0` and "the account-level switch sits above it and turns nothing on
+  here"; that was a stale reading of a repository that had not yet pushed a compliant commit, not a
+  property of the account. Do not repeat it.
+- What is actually true today: **CI is red on both sides.** Backend CI fails on the last five pushes
+  (`11742e0`, `89b5d56`, `a744458`, `b1e16e6`, `a395124`) — nine suites fail from
+  `test_evidence_writeback.py` onward. Android CI reports `636 tests completed, 9 failed`
+  (`ScreenSnapshotTest` ×6 `ComposeTimeoutException` at `ScreenSnapshotTest.kt:75`,
+  `PosterCardProvenanceTest` ×3 `AssertionError` at `PosterCardProvenanceTest.kt:40/50/56`) plus
+  `lintDebug FAILED — Lint found 23 errors, 145 warnings` (first at
+  `app/src/main/kotlin/com/raddstream/app/player/RenditionFailover.kt:137`). Note the trap: the two
+  suites that fail on the hosted x86_64 runner are exactly the two excluded from the local arm64
+  run, so a green local Gradle build proves nothing about them.
+- `tags: 0` and `releases: 0` are still true: no signed APK has ever been published, and the only
+  APK anyone has installed is the hand-placed debug build in `/var/www/download/`.
+- Consequence for gating: a hosted green run is *reachable*, so it is the standard, not a fantasy —
+  but while the tree is red the offline suites (one module per invocation) and the local Gradle build
+  remain the only verification that is actually passing. Restore green before claiming a milestone.
 - Expected Android output *if* CI ever runs: a debug APK as a downloadable artifact; version-tag
   release builds additionally need `KEYSTORE_BASE64`, `KEY_STORE_PASSWORD`, `KEY_ALIAS`,
   `KEY_PASSWORD` present as repository Actions secrets (verified only by name, never by value).
