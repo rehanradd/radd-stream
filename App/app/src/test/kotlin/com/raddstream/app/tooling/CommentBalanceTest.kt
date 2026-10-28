@@ -52,6 +52,10 @@ class CommentBalanceTest {
         assertTrue("a character literal must not start a string", scan(CHAR_LITERAL) == null)
         assertTrue("an apostrophe inside a comment is not a string",
             scan(APOSTROPHE_IN_DOC) == null)
+        assertTrue("a raw string ending in a quote must not leak a phantom opener",
+            scan(RAW_ENDS_IN_QUOTE) == null)
+        assertTrue("the run rule must not blind the scanner to a real nested opener",
+            scan(RAW_THEN_NESTED) != null)
     }
 
     /** Returns the 1-based line where block-comment depth was still open at EOF, else null. */
@@ -67,6 +71,17 @@ class CommentBalanceTest {
             if (quote != null) {
                 if (c == '\\' && quote != TRIPLE) {
                     i += 2
+                    continue
+                }
+                if (quote == TRIPLE && c == '"') {
+                    // A raw string ends at the LAST three quotes of a run, so `}""""` is a
+                    // string whose content ends in a quote. Closing at the first three would
+                    // leave one quote behind to open a phantom string and desynchronise
+                    // every line below it.
+                    var run = 0
+                    while (i + run < text.length && text[i + run] == '"') run++
+                    if (run >= 3) inString = null
+                    i += run
                     continue
                 }
                 if (text.startsWith(quote, i)) {
@@ -140,5 +155,10 @@ class CommentBalanceTest {
         val CHAR_LITERAL = "val c = '" + "/" + "'\nclass Ok"
         val APOSTROPHE_IN_DOC = OPEN + STAR + " doc with an apostrophe: don't do this " +
             CLOSE + "\nclass Ok"
+        // `val s = """{"a": 1}""""` — four closing quotes: content ends in one, Kotlin
+        // closes at the last three, and an opener on the following line is still real code.
+        val RAW_ENDS_IN_QUOTE = "val s = " + TRIPLE + "{\"a\": 1}" + TRIPLE + "\"\nclass Ok"
+        val RAW_THEN_NESTED = RAW_ENDS_IN_QUOTE + "\n" + OPEN + STAR + " doc " +
+            OPEN + STAR + " again " + CLOSE
     }
 }
