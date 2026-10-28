@@ -745,6 +745,180 @@ class DatabaseSaveTests(unittest.TestCase):
         self.assertTrue(res["cached"])
         self.assertEqual(res["url"], source["final_url"])
 
+    class _FakeResolvers:
+        """The shape of `importers/host_resolvers.py`, without its sockets.
+
+        Two renditions, an `active` verdict and a verdict that did not reach a
+        byte endpoint — the only two answers the JIT branch is allowed to act on
+        differently.
+        """
+
+        SERVICE_MXDROP = "mxdrop"
+        SERVICE_PKEMBED = "pkembed"
+
+        def __init__(self, verdict=None):
+            self.verdict = verdict
+            self.calls = []
+
+        @staticmethod
+        def _is(url, host):
+            return url.startswith(f"https://{host}/")
+
+        def is_mxdrop_embed(self, url):
+            return self._is(url, "mxdrop.to")
+
+        def is_pkembed_embed(self, url):
+            return self._is(url, "pkembed.site")
+
+        def unwrap_mxdrop(self, embed_url, fetch=None, verify=True, referer=None):
+            self.calls.append(("mxdrop", embed_url, verify))
+            return self.verdict or {
+                "status": "active", "final_url": "https://cdn.mxdrop.example/f.mp4",
+                "is_temporary": True, "expires_in": 21000.0}
+
+        def unwrap_pkembed(self, embed_url, fetch=None, verify=True, referer=None):
+            self.calls.append(("pkembed", embed_url, verify))
+            return self.verdict or {
+                "status": "active",
+                "final_url": "https://cdn.pkembed.example/1000042_g64v61whic26_l.mp4",
+                "is_temporary": True, "expires_in": 43200.0,
+                "sources": [{"quality": "480p", "url": "x_l.mp4"},
+                            {"quality": "360p", "url": "x_n.mp4"}]}
+
+    def _embed_source(self, site, service, embed):
+        media_data = self.media(site, f"https://{site}.example/film/")
+        media_data["releases"][0]["sources"] = [{
+            "source_name": service,
+            "service": service,
+            "resource_id": "54343",
+            "source_url": embed,
+            "final_url": embed,
+            "is_temporary": 1,
+        }]
+        fast_fetch.save_scraped_data(media_data)
+        with fast_fetch.get_db() as conn:
+            return conn.execute(
+                "SELECT id, final_url FROM download_sources LIMIT 1").fetchone()
+
+    def test_resolve_live_source_unwraps_an_mxdrop_embed_to_its_signed_mp4(self):
+        embed = "https://mxdrop.to/e/6d9c9f6d93dfb18063cbdb697dd4db5d"
+        stored = self._embed_source("moviesmela", "mxdrop", embed)
+        resolvers = self._FakeResolvers()
+        with patch.object(fast_fetch, "_embed_resolvers", return_value=resolvers), \
+             patch.object(fast_fetch, "probe_url_ttl",
+                          return_value=(None, {"observed": False,
+                                               "reason": "no_directive"})):
+            res = fast_fetch.resolve_live_source(stored["id"])
+
+        self.assertTrue(res["success"], res)
+        self.assertEqual(res["url"], "https://cdn.mxdrop.example/f.mp4")
+        self.assertTrue(res["refreshed"])
+        self.assertTrue(res["is_temporary"], "a signed token is never permanent")
+        self.assertEqual(resolvers.calls, [("mxdrop", embed, True)])
+        with fast_fetch.get_db() as conn:
+            row = conn.execute(
+                "SELECT final_url, is_temporary, status FROM download_sources"
+                " WHERE id = ?", (stored["id"],)).fetchone()
+        self.assertEqual(row["final_url"], "https://cdn.mxdrop.example/f.mp4")
+        self.assertEqual((row["is_temporary"], row["status"]), (1, "active"))
+
+    def test_resolve_live_source_unwraps_a_pkembed_embed_to_its_top_rendition(self):
+        embed = "https://pkembed.site/embed-g64v61whic26.html"
+        stored = self._embed_source("moviesmela", "pkembed", embed)
+        resolvers = self._FakeResolvers()
+        with patch.object(fast_fetch, "_embed_resolvers", return_value=resolvers), \
+             patch.object(fast_fetch, "probe_url_ttl",
+                          return_value=(None, {"observed": False,
+                                               "reason": "no_directive"})):
+            res = fast_fetch.resolve_live_source(stored["id"])
+
+        self.assertTrue(res["success"], res)
+        self.assertEqual(res["url"],
+                         "https://cdn.pkembed.example/1000042_g64v61whic26_l.mp4")
+        self.assertTrue(res["is_temporary"])
+        self.assertEqual(resolvers.calls, [("pkembed", embed, True)])
+
+    def test_resolve_live_source_refuses_an_embed_it_could_not_read(self):
+        """`unverified` means the page unpacked and no byte endpoint answered.
+
+        The v1 contract keeps a stale *media* URL for the shipped app, but an
+        embed page is HTML: handing it to ExoPlayer is the failure this guard
+        exists for, so both contracts now answer `no_playable_source`.
+        """
+        embed = "https://mxdrop.to/e/6d9c9f6d93dfb18063cbdb697dd4db5d"
+        stored = self._embed_source("moviesmela", "mxdrop", embed)
+        resolvers = self._FakeResolvers(verdict={
+            "status": "unverified",
+            "final_url": "https://vidbed.example/f.mp4?t=expired&u=1502033903&e=1",
+            "notes": ["byte endpoint answered 403"]})
+        with patch.object(fast_fetch, "_embed_resolvers", return_value=resolvers), \
+             patch.object(fast_fetch, "probe_url_ttl",
+                          return_value=(None, {"observed": False,
+                                               "reason": "unreachable"})):
+            v1 = fast_fetch.resolve_live_source(stored["id"])
+            v2 = fast_fetch.resolve_live_source(stored["id"], v2=True)
+
+        for res in (v1, v2):
+            self.assertFalse(res["success"], res)
+            self.assertEqual(res["code"], "no_playable_source", res)
+        with fast_fetch.get_db() as conn:
+            row = conn.execute(
+                "SELECT final_url FROM download_sources WHERE id = ?",
+                (stored["id"],)).fetchone()
+        self.assertEqual(row["final_url"], embed, "the embed page stays stored")
+
+    def test_a_row_of_another_service_never_takes_the_embed_branch(self):
+        """The branch is chosen by the row's own host, not by what the resolver
+        happens to be able to do: an ok.ru row is never offered to `unwrap_mxdrop`
+        just because the packer hosts are wired up next door."""
+        stored = self._embed_source(
+            "moviesmela", "ok.ru", "https://ok.ru/videoembed/1234567")
+        resolvers = self._FakeResolvers()
+        with patch.object(fast_fetch, "_embed_resolvers", return_value=resolvers):
+            res = fast_fetch.resolve_live_source(stored["id"])
+        self.assertEqual(resolvers.calls, [])
+        self.assertNotEqual(res.get("url"), "https://cdn.mxdrop.example/f.mp4")
+        with fast_fetch.get_db() as conn:
+            row = conn.execute(
+                "SELECT final_url FROM download_sources WHERE id = ?",
+                (stored["id"],)).fetchone()
+        self.assertEqual(row["final_url"], "https://ok.ru/videoembed/1234567")
+
+    def test_the_embed_branch_is_skipped_when_the_module_is_unavailable(self):
+        """No importers directory is a missing feature, not a broken resolver:
+        every other host must keep resolving and this row must simply be refused."""
+        embed = "https://mxdrop.to/e/6d9c9f6d93dfb18063cbdb697dd4db5d"
+        stored = self._embed_source("moviesmela", "mxdrop", embed)
+        with patch.object(fast_fetch, "_embed_resolvers", return_value=None), \
+             patch.object(fast_fetch, "probe_url_ttl",
+                          return_value=(None, {"observed": False,
+                                               "reason": "unreachable"})):
+            res = fast_fetch.resolve_live_source(stored["id"])
+        self.assertFalse(res["success"], res)
+        self.assertEqual(res["code"], "no_playable_source", res)
+
+    def test_the_packer_hosts_answer_as_bridges(self):
+        for url in ("https://mxdrop.to/e/6d9c9f6d93dfb18063cbdb697dd4db5d",
+                    "https://pkembed.site/embed-g64v61whic26.html",
+                    "https://pkembed.site/zp8vd43rpa80.html"):
+            self.assertTrue(fast_fetch.is_bridge_url(url), url)
+            self.assertFalse(fast_fetch.is_direct_media_url(url), url)
+
+    def test_embed_resolvers_imports_lazily_and_caches(self):
+        """The JIT path reaches the unpackers where the importers left them, and a
+        second call does not re-walk the import system."""
+        original = fast_fetch._RESOLVERS
+        fast_fetch._RESOLVERS = None
+        try:
+            first = fast_fetch._embed_resolvers()
+            self.assertIsNotNone(first, "importers/host_resolvers.py must be found")
+            self.assertIs(first, fast_fetch._embed_resolvers())
+            self.assertEqual(first.SERVICE_MXDROP, "mxdrop")
+            self.assertTrue(first.is_pkembed_embed(
+                "https://pkembed.site/embed-g64v61whic26.html"))
+        finally:
+            fast_fetch._RESOLVERS = original
+
     def test_api_v1_posts_and_detail(self):
         post_id = fast_fetch.save_scraped_data(
             self.media("site_a", "https://site-a.example/example-film/", imdb_id="tt9999999")

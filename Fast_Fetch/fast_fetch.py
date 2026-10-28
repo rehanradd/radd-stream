@@ -2028,6 +2028,10 @@ _DIRECT_MEDIA_MARKERS = ("pixeldrain.com/api/file/",)
 _BRIDGE_HOST_MARKERS = (
     "nexdrive", "vcloud", "vegadrive", "linkszilla", "greenmotors",
     "mobilejsr", "10moviesz",
+    # Both packer hosts answer with an HTML page that holds a signed media URL;
+    # only `importers/host_resolvers.py` may turn one into a stream, and a failed
+    # attempt must therefore be refused in the v1 contract too.
+    "mxdrop", "pkembed",
 )
 
 
@@ -5186,6 +5190,34 @@ def _expiry_fields(src: dict, *, now: float | None = None) -> dict:
     return {"expires_at": stamp, "expires_in": max(0.0, round(remaining, 3))}
 
 
+_RESOLVERS = None
+
+
+def _embed_resolvers():
+    """`importers/host_resolvers.py`, imported on first use rather than at import.
+
+    The unpackers for mxdrop and pkembed live with the importers that discovered
+    them. Resolved lazily because the module graph must not be able to cycle:
+    `host_resolvers` imports nothing from here today, and a top-level import would
+    turn any future reverse dependency into a startup failure instead of a
+    resolver call.
+
+    A missing or broken module is `None`, not an exception: the JIT path then
+    simply has no embed branch, and every other host resolves as before.
+    """
+    global _RESOLVERS
+    if _RESOLVERS is None:
+        directory = str(Path(__file__).resolve().parent / "importers")
+        if directory not in sys.path:
+            sys.path.insert(0, directory)
+        try:
+            import host_resolvers
+        except (ImportError, OSError, SyntaxError):
+            return None
+        _RESOLVERS = host_resolvers
+    return _RESOLVERS
+
+
 def resolve_live_source(source_id: int, *, v2: bool = False) -> dict:
     """
     Just-In-Time (JIT) live stream resolver:
@@ -5293,7 +5325,21 @@ def resolve_live_source(source_id: int, *, v2: bool = False) -> dict:
             return cached_u
         return source_u
 
+    def embed_from_verdict(verdict) -> str | None:
+        """A packer's answer is a stream only when it says so itself.
+
+        `verify=True` means the resolver already knocked on the byte endpoint with
+        a 512-byte Range request, so `active` is a measurement rather than an
+        assumption. Every other verdict — `unverified`, `expired`, `unknown`,
+        `js_required` — is a page it could unpack but a file it could not read,
+        and the caller below refuses it instead of persisting it as playable.
+        """
+        if isinstance(verdict, dict) and verdict.get("status") == "active":
+            return verdict.get("final_url") or None
+        return None
+
     try:
+        hr = _embed_resolvers()
         if (service in ("fsl_r2", "hubcloud_10g", "hubcloud")
                 or "hubcloud" in source_u.lower() or "hubcloud" in cached_u.lower()):
             hub = hoster_input("hubcloud")
@@ -5352,6 +5398,22 @@ def resolve_live_source(source_id: int, *, v2: bool = False) -> dict:
             direct_u, _, is_temp = unwrap_vegadrive(hoster_input("vegadrive"))
             fresh_url = direct_u
             fresh_temp = is_temp
+        elif hr and (service == hr.SERVICE_MXDROP or "mxdrop" in source_u.lower()
+                     or "mxdrop" in cached_u.lower()):
+            # The embed URL is the durable identifier and the mp4 is a result of
+            # this call: mxdrop signs its `MDCore.wurl` with a ~6-hour window.
+            embed = cached_u if hr.is_mxdrop_embed(cached_u) else source_u
+            direct_u = embed_from_verdict(hr.unwrap_mxdrop(embed, verify=True))
+            if direct_u:
+                fresh_url = direct_u
+                fresh_temp = 1
+        elif hr and (service == hr.SERVICE_PKEMBED or "pkembed" in source_u.lower()
+                     or "pkembed" in cached_u.lower()):
+            embed = cached_u if hr.is_pkembed_embed(cached_u) else source_u
+            direct_u = embed_from_verdict(hr.unwrap_pkembed(embed, verify=True))
+            if direct_u:
+                fresh_url = direct_u
+                fresh_temp = 1
         elif "gamerxyt" in source_u.lower() or "gamerxyt" in cached_u.lower():
             gamer = hoster_input("gamerxyt")
             if "link=" in gamer:
