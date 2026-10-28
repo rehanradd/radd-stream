@@ -45,12 +45,13 @@ object V1CatalogMapper {
     fun browseItems(response: PostsResponse): List<BrowseItem> = response.results.map { browseItem(it) }
 
     /**
-     * `/api/v1/posts` does not select `is_animated`, so the list cannot tell anime from
-     * series. Honest answer: treat it as unknown and let the DETAIL response (which does
-     * carry the column) decide; `WorkType.fromContentType` then upgrades series -> anime.
-     * Documented rather than guessed, because `?type=anime` returns zero rows.
+     * The list row carries `is_animated` (verified live 2026-10-28: `?type=anime` returns
+     * rows whose `is_animated` is 1), so a browse tile is typed ANIME from the wire the moment
+     * it decodes — it no longer waits for the detail response to correct it. A row from a
+     * server that sends no such key stays null, and [WorkType.fromContentType] then leaves the
+     * `content_type` alone: unknown is never read as "not animated".
      */
-    private fun animatedFromList(post: Post): Boolean? = null
+    private fun animatedFromList(post: Post): Boolean? = post.isAnimated
 
     /**
      * `/api/v1/posts/{id}` -> the v2 domain [Work]. Seasons and episodes are built from the

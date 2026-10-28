@@ -285,9 +285,7 @@ private fun HeroSlide(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 post.yearLabel?.let { HeroBadge(it) }
-                post.contentType?.takeIf { it.isNotBlank() }?.let {
-                    HeroBadge(it.replaceFirstChar { c -> c.uppercase() })
-                }
+                post.typeLabel?.let { HeroBadge(it) }
                 languages.forEach { HeroBadge(it, subdued = true) }
             }
 

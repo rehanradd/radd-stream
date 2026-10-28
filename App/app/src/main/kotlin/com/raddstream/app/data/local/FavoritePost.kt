@@ -19,9 +19,11 @@ data class FavoritePost(
     /**
      * The server-minted handle for this work, exactly as the catalog payload delivered it.
      * It is the ONLY thing this app may name a work with on the sync surface, and it is
-     * null for every row saved by a build that never had one — including every row saved
-     * from today's v1 catalog, which serves no handle at all. A null here means "this
-     * favorite stays on the device", and no code below may guess a value for it.
+     * null for every row saved by a build that never had one, and for a row saved from a
+     * server that sent none — the live v1 catalog does send it (measured 2026-10-28), but a
+     * favourite kept before that, or from an older deployment, has nothing to send. A null
+     * here means "this favorite stays on the device", and no code below may guess a value
+     * for it.
      */
     val workRef: String? = null,
     /**

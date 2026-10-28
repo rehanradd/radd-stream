@@ -6,6 +6,7 @@ import com.raddstream.app.data.ServerSettingsRepository
 import com.raddstream.app.data.normalizeSearchRecents
 import com.raddstream.app.network.friendlyNetworkError
 import com.raddstream.app.network.models.Post
+import com.raddstream.app.network.models.WorkType
 import com.raddstream.app.repository.CatalogRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
@@ -334,12 +335,12 @@ class SearchViewModel @Inject constructor(
         }
 
         val groups = filtered
-            .groupBy { normalizeTypeLabel(it.contentType) }
+            .groupBy { typeGroupKey(it) }
             .toSortedMap(typeComparator)
-            .map { (label, posts) ->
+            .map { (key, posts) ->
                 TypeGroup(
-                    label = label,
-                    typeKey = posts.firstOrNull()?.contentType,
+                    label = normalizeTypeLabel(key),
+                    typeKey = key,
                     items = when (sort) {
                         SearchSort.TITLE -> posts.sortedBy { (it.cleanTitle ?: it.title).lowercase() }
                         SearchSort.HIGHEST_IMDB -> posts.sortedWith(
@@ -388,7 +389,8 @@ class SearchViewModel @Inject constructor(
             "Movies" -> 0
             "Series" -> 1
             "Seasons" -> 2
-            else -> 3
+            "Anime" -> 3
+            else -> 4
         }
     }
 }
@@ -403,6 +405,21 @@ internal fun normalizeTypeLabel(contentType: String?): String = when (contentTyp
     "movie" -> "Movies"
     "series" -> "Series"
     "complete_season", "ongoing_season" -> "Seasons"
+    "anime" -> "Anime"
     null, "" -> "Other"
     else -> "Other"
 }
+
+/**
+ * Which rail a row belongs to. Animation is a flag on the post, never a `content_type`, so a
+ * row the ledger flags as animated keys as the server's own `anime` filter word instead of
+ * sitting in the Series rail — the same [WorkType] answer the tile paints through
+ * [com.raddstream.app.network.models.WorkTypeLabel]. A row from a server that sends no flag
+ * keeps its plain `content_type`: unknown is never read as "not animated".
+ */
+internal fun typeGroupKey(post: Post): String =
+    if (WorkType.fromContentType(post.contentType, post.isAnimated) == WorkType.ANIME) {
+        WorkType.ANIME.wire
+    } else {
+        post.contentType.orEmpty()
+    }

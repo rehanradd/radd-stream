@@ -60,7 +60,7 @@ fun PosterCard(
     progressLabel: String? = null,
 ) {
     val title = post.cleanTitle?.takeIf { it.isNotBlank() } ?: post.title
-    val typeLabel = post.contentType?.takeIf { it.isNotBlank() }?.replaceFirstChar { it.uppercase() }
+    val typeLabel = post.typeLabel
     val details = listOfNotNull(
         post.year?.takeIf { it > 0 }?.toString(),
         typeLabel,

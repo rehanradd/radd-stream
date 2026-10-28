@@ -74,6 +74,8 @@ private val typeChips = listOf(
     "All" to null,
     "Movies" to "movie",
     "Series" to "series",
+    // Not a `content_type`: the server answers `type=anime` from the `is_animated` flag.
+    "Anime" to "anime",
     "Seasons" to "complete_season",
 )
 

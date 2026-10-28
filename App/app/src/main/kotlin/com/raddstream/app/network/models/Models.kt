@@ -56,13 +56,25 @@ data class Post(
     /** `posts.year` — INTEGER affinity, so JSON number or null (a text year decodes to null). */
     val year: Int? = null,
     /**
-     * `posts.content_type` — the ONLY values `classify_media()` ever writes are
-     * `movie | series | complete_season | ongoing_season`. `?type=anime` is accepted by
-     * the route but matches no row, so it must never be offered as a filter (see
-     * [WorkType.fromContentType] for the anime truth: `is_animated`).
+     * `posts.content_type` — the values `classify_media()` ever writes are
+     * `movie | series | complete_season | ongoing_season`. Animation is NOT one of them:
+     * it is the separate [isAnimated] flag, which is also what the server's own `type=anime`
+     * filter answers from (see [WorkType.fromContentType]).
      */
     @SerializedName("content_type")
     val contentType: String? = null,
+    /**
+     * `posts.is_animated` — an INTEGER 0/1 column, so it arrives as the JSON numbers `1`/`0`
+     * on both list and detail rows, and [com.raddstream.app.network.LenientBooleanAdapter]
+     * reads that alongside `true`/`false`. Metadata, not a restricted flag.
+     *
+     * Null means the server sent no key at all — an older projection, or a `full` payload
+     * that omits it — and null must read as "we do not know", never as "not animated": the
+     * tile keeps its plain `content_type` label and [WorkType.fromContentType] keeps the
+     * series/movie it already had.
+     */
+    @SerializedName("is_animated")
+    val isAnimated: Boolean? = null,
     /** `posts.seasons` — free TEXT ("2", "S01–S03"), nullable. */
     val seasons: String? = null,
     @SerializedName("poster_url")
@@ -103,17 +115,19 @@ data class Post(
     val sourceCount: Int? = null,
     /**
      * The server-minted handle for THIS work — the only name the sync account accepts.
-     * Today's v1 projection sends no such key, so this decodes to null and stays null,
-     * which is exactly the right answer: a null here means "this title cannot be named to
-     * the account surface", and nothing may invent a stand-in for it. Decoding it as an
-     * absent field costs the app nothing, and it is modelled (rather than read from a raw
-     * map) so [com.raddstream.app.sync] has one typed place to ask.
+     * The live v1 projection sends it on both the list and the detail row (measured
+     * 2026-10-28), but a row may still carry none: a database that predates the column, or a
+     * `full` payload that omitted it. A null therefore means "this title cannot be named to
+     * the account surface", and nothing may invent a stand-in for it. It is modelled (rather
+     * than read from a raw map) so [com.raddstream.app.sync] has one typed place to ask.
      */
     @SerializedName("work_ref")
     val workRef: String? = null,
 ) {
     /** Display helper so UI never has to know that `year` is numeric on the wire. */
     val yearLabel: String? get() = year?.toString()
+    /** The one type word a tile or banner paints — "Anime" for an animated series. */
+    val typeLabel: String? get() = WorkTypeLabel.of(contentType, isAnimated)
     val genreList: List<String> get() = WireText.listOf(genres)
     val backdropList: List<String> get() = WireText.listOf(backdropUrls)
     /** The widest artwork this row carries: the first backdrop, else the poster, else none. */
@@ -181,6 +195,8 @@ data class PostDetail(
     val seasonArtworkRows: List<SeasonArtwork>? = null,
 ) {
     val yearLabel: String? get() = year?.toString()
+    /** Same rule as [Post.typeLabel], so the detail header cannot disagree with its tile. */
+    val typeLabel: String? get() = WorkTypeLabel.of(contentType, isAnimated)
     val genreList: List<String> get() = WireText.listOf(genres)
     val backdropList: List<String> get() = WireText.listOf(backdropUrls)
     val seasonArtwork: List<SeasonArtwork> get() = seasonArtworkRows.orEmpty()

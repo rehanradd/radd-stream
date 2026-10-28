@@ -69,8 +69,10 @@ enum class WorkType(val wire: String) {
         /**
          * The v1 truth: `content_type` only ever holds movie/series/complete_season/
          * ongoing_season, and anime lives in the separate `is_animated` flag — exactly the
-         * rule `catalog_v2.work_type_for()` applies. `?type=anime` returns zero rows, so
-         * the client derives anime instead of asking for it.
+         * rule `catalog_v2.work_type_for()` applies. The flag is what the server's own
+         * `?type=anime` filter answers from (`viewer.py` matches `is_animated = 1 OR industry
+         * LIKE '%anime%'`), so the client derives the same type rather than trusting a
+         * `content_type` of "anime" that no writer ever stores.
          */
         fun fromContentType(contentType: String?, isAnimated: Boolean?): WorkType {
             val base = fromWire(contentType)
@@ -80,6 +82,30 @@ enum class WorkType(val wire: String) {
                 else -> base
             }
         }
+    }
+}
+
+/**
+ * The one place that turns a work's type into the WORD a viewer reads.
+ *
+ * Three rows used to do this independently — the poster tile, the hero banner and the detail
+ * header each capitalised `content_type` on the spot — so an animated series was labelled
+ * "Series" everywhere the server itself would have called it Anime, and the tile could not
+ * agree with the [WorkType] the mapper had already derived for the same row. The rule now asks
+ * [WorkType.fromContentType] first, which is the single anime owner, and only capitalises for
+ * everything else. A row from a server that sends no `is_animated` therefore keeps exactly the
+ * label it had before: nothing here guesses animation from a genre or an industry string.
+ */
+object WorkTypeLabel {
+
+    /**
+     * "Anime" for a work the ledger flags as animated, otherwise `content_type` capitalised,
+     * otherwise null. Never an invented word, and never "Unknown" painted at a viewer.
+     */
+    fun of(contentType: String?, isAnimated: Boolean?): String? {
+        if (WorkType.fromContentType(contentType, isAnimated) == WorkType.ANIME) return "Anime"
+        return contentType?.trim()?.takeIf { it.isNotEmpty() }
+            ?.replaceFirstChar { it.uppercase() }
     }
 }
 

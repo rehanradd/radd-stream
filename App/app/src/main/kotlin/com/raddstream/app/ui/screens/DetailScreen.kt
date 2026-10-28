@@ -477,7 +477,7 @@ private fun PosterHeader(post: PostDetail, capabilities: List<String>) {
             )
             val meta = listOfNotNull(
                 post.year?.takeIf { it > 0 }?.toString(),
-                post.contentType?.replaceFirstChar { it.uppercase() }?.takeIf(String::isNotBlank),
+                post.typeLabel,
                 post.language?.takeIf(String::isNotBlank),
             )
             if (meta.isNotEmpty()) {

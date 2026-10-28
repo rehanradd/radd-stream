@@ -25,7 +25,7 @@ class CatalogHelpersTest {
         assertEquals("Seasons", normalizeTypeLabel("complete_season"))
         assertEquals("Seasons", normalizeTypeLabel("ongoing_season"))
         assertEquals("Other", normalizeTypeLabel(null))
-        assertEquals("Other", normalizeTypeLabel("anime"))
+        assertEquals("Anime", normalizeTypeLabel("anime"))
     }
 
     @Test
