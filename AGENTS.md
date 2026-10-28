@@ -140,7 +140,8 @@ Every agent — no matter how short the session — MUST do this before ending:
 | Backend: ingestion, SQLite catalog, resolver, REST API | ✅ **Deployed and running on this host** — `systemctl is-active radd-stream` → `active`, `fast_fetch.py serve --host 127.0.0.1:8080` behind Nginx | Complete |
 | Android App: server setup, metadata catalog, search | ✅ Implemented; device verification pending | Phase 1 |
 | Android App: details and playback | ✅ Implemented (Media3 playback, favorites, keeps, VIP screen); device verification pending | Phase 2 |
-| Android GitHub Actions | ⛔ **Actions is disabled at the account level**, so no workflow run is a gate right now. The three workflows are at repo-root `.github/workflows` (`ci.yml`, `release.yml`, `backend-ci.yml`) and are ready; the copies under `App/.github/workflows` are inert. Verification is a **local** offline Gradle run on this VM — see `App/AGENTS.md` §1a for the one-build-at-a-time rule. | Owner action needed |
+| GitHub Actions | ✅ **Enabled and running** — `/repos/rehanradd/radd-stream/actions/permissions` returns `{"enabled": true, "allowed_actions": "all"}` (measured 2026-10-29 03:54 host time; 40 runs recorded). The earlier "⛔ disabled at the account level" line in this file was **wrong** and is retired. All three repo-root workflows are `state=active`: `🐍 Backend CI`, `🔨 CI — Android Build & Test`, `🚀 Release — Sign & Publish APK + AAB`. The copies under `App/.github/workflows` are inert (GitHub only reads repo-root). | Gate is live |
+| CI health (both sides) | 🐍 **Backend CI is GREEN** at `64c0b1b` — `/actions/runs?per_page=4` reports `completed success` on **both** `master` and `main` (verified 2026-10-29 04:12; the five pushes before it were `failure`). 🔨 **Android CI is still RED**: `636 tests completed, 9 failed` (`ScreenSnapshotTest` ×6 `ComposeTimeoutException`, `PosterCardProvenanceTest` ×3 `AssertionError`) plus `lintDebug` — 23 errors, first at `player/RenditionFailover.kt:137`. The trap to remember: those two suites are exactly the ones **excluded from the local arm64 Gradle run**, so a green local build proves nothing about them. `tags: 0`, `releases: 0` — no signed APK has ever been published. | App lane must land green |
 
 The current Oracle host and its HTTP-only limitations are documented in
 [`ORACLE_DEPLOYMENT.md`](ORACLE_DEPLOYMENT.md). The backend is **already deployed there and is the
@@ -207,9 +208,10 @@ git push https://github.com/rehanradd/radd-stream.git v1.0.0
 | GitHub Repo | https://github.com/rehanradd/radd-stream |
 | GitHub Actions | https://github.com/rehanradd/radd-stream/actions |
 | GitHub Releases | https://github.com/rehanradd/radd-stream/releases |
-| Oracle HTTP host (after deployment) | `http://92.4.95.252/` (plain HTTP; see runbook) |
-| Backend REST API (after deployment) | `http://92.4.95.252/api/v1/posts` |
-| Mobile PWA (after deployment) | `http://92.4.95.252/client` |
+| Oracle HTTP host (measured 2026-10-29) | `http://92.4.95.252/` — plain HTTP, and `location /` proxies **code-server** (the web IDE), not the app |
+| Backend REST API (publicly reachable) | `http://92.4.95.252/api/v1/posts` — nginx allow-lists only `/api/v1/posts`, `/api/v1/stream`, `/api/v1/stats`, `/api/v1/download`, `/api/v1/search/by-media`, `/api/v1/app/remote-config`, `/api/v2/account*`, and static `/download/`; `^~ /api/` 403s everything else, including all v2 catalog routes and `/api/data` |
+| Operator panel `/admin` | **not public** — falls through to code-server and answers 401; the dashboard itself is loopback-only on `127.0.0.1:8081` behind `RADD_ADMIN_TOKEN` |
+| Mobile PWA `/client` | **not public** — measured 401 through nginx (same code-server fallthrough). It serves 200 only from `127.0.0.1:8080` |
 
 ---
 
