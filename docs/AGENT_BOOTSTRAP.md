@@ -2,7 +2,7 @@
 
 Use this once in a new workspace/account before taking on a task. Do not make feature changes during bootstrap.
 
-Repository: `https://github.com/radddao/radd-stream`. Authenticated GitHub API metadata verified that the repository is public on 2026-10-16. Unauthenticated GitHub API and raw-file requests from this Replit workspace returned 404, while authenticated reads and a Git clone succeeded. For Git operations, use the temporary askpass flow in `ORACLE_DEPLOYMENT.md`; do not treat an unauthenticated 404 as proof that the repository or file is missing.
+Repository: `https://github.com/rehanradd/radd-stream`. Authenticated GitHub API metadata verified that the repository is public on 2026-10-16. Unauthenticated GitHub API and raw-file requests from this Replit workspace returned 404, while authenticated reads and a Git clone succeeded. For Git operations, use the temporary askpass flow in `ORACLE_DEPLOYMENT.md`; do not treat an unauthenticated 404 as proof that the repository or file is missing.
 
 ## 1. Check the configured variables
 

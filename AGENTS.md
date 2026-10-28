@@ -188,11 +188,11 @@ git tag v1.0.0
 # 2. Push the tag with Git using the temporary askpass helper in ORACLE_DEPLOYMENT.md,
 #    against the explicit clean URL — never `origin`, whose stored remote still
 #    embeds a leaked credential until the owner revokes it:
-git push https://github.com/radddao/radd-stream.git v1.0.0
+git push https://github.com/rehanradd/radd-stream.git v1.0.0
 # → GitHub Actions builds signed APK + creates Release automatically
 
-# Download APK: github.com/radddao/radd-stream/actions (debug)
-#               github.com/radddao/radd-stream/releases (release)
+# Download APK: github.com/rehanradd/radd-stream/actions (debug)
+#               github.com/rehanradd/radd-stream/releases (release)
 ```
 
 ---
@@ -201,9 +201,9 @@ git push https://github.com/radddao/radd-stream.git v1.0.0
 
 | Resource | URL |
 |---|---|
-| GitHub Repo | https://github.com/radddao/radd-stream |
-| GitHub Actions | https://github.com/radddao/radd-stream/actions |
-| GitHub Releases | https://github.com/radddao/radd-stream/releases |
+| GitHub Repo | https://github.com/rehanradd/radd-stream |
+| GitHub Actions | https://github.com/rehanradd/radd-stream/actions |
+| GitHub Releases | https://github.com/rehanradd/radd-stream/releases |
 | Oracle HTTP host (after deployment) | `http://92.4.95.252/` (plain HTTP; see runbook) |
 | Backend REST API (after deployment) | `http://92.4.95.252/api/v1/posts` |
 | Mobile PWA (after deployment) | `http://92.4.95.252/client` |

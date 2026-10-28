@@ -14,7 +14,7 @@ repository and are not guaranteed by this guide.
 
 | Item | Last verified value |
 |---|---|
-| Repository | `https://github.com/radddao/radd-stream` |
+| Repository | `https://github.com/rehanradd/radd-stream` |
 | Default GitHub branch | `main` |
 | Oracle public IP | `92.4.95.252` |
 | Intended HTTP base URL | `http://92.4.95.252/` |
@@ -196,7 +196,7 @@ GIT_TERMINAL_PROMPT=0 \
 GIT_CONFIG_NOSYSTEM=1 \
 HOME="$auth_dir/home" \
 git -c credential.helper= clone \
-  https://github.com/radddao/radd-stream.git
+  https://github.com/rehanradd/radd-stream.git
 ```
 
 For `fetch` or `push`, use the same environment variables and temporary

@@ -38,7 +38,7 @@ the local catalog.
 ### Option A — With Git installed
 ```cmd
 :: Clone the repo
-git clone https://github.com/radddao/radd-stream.git
+git clone https://github.com/rehanradd/radd-stream.git
 cd radd-stream
 
 :: Verify setup
@@ -56,7 +56,7 @@ run.bat export-html
 ```
 
 ### Option B — Without Git (direct download)
-1. Go to: `https://github.com/radddao/radd-stream`
+1. Go to: `https://github.com/rehanradd/radd-stream`
 2. Click **Code** → **Download ZIP**
 3. Extract to `C:\radd-stream\` (or any folder)
 4. Open PowerShell in that folder:
@@ -95,7 +95,7 @@ sudo apt update && sudo apt upgrade -y
 sudo apt install python3.11 python3.11-venv git -y
 
 # Clone repo
-git clone https://github.com/radddao/radd-stream.git
+git clone https://github.com/rehanradd/radd-stream.git
 cd radd-stream
 
 # Verify
@@ -203,7 +203,7 @@ browser/debug testing.
 ### Method 1 — Import from GitHub (Recommended)
 1. Go to **https://replit.com** → New Repl
 2. Click **Import from GitHub**
-3. URL: `https://github.com/radddao/radd-stream`
+3. URL: `https://github.com/rehanradd/radd-stream`
 4. Select **Python** template
 5. Replit reads `.replit` file automatically — press **Run** or use Shell:
 
@@ -243,7 +243,7 @@ python Fast_Fetch/fast_fetch.py stats
 ## GitHub Codespace
 
 ### Setup
-1. Go to: `https://github.com/radddao/radd-stream`
+1. Go to: `https://github.com/rehanradd/radd-stream`
 2. Click **Code** (green button) → **Codespaces** → **New codespace**
 3. Wait ~30 seconds for environment to load (Python 3.11+ pre-installed)
 4. Open Terminal:
@@ -313,10 +313,10 @@ jobs:
 
 ```bash
 # Linux/Mac:
-curl -L https://raw.githubusercontent.com/radddao/radd-stream/main/run.sh | bash -s sync
+curl -L https://raw.githubusercontent.com/rehanradd/radd-stream/main/run.sh | bash -s sync
 
 # Or clone + run:
-git clone https://github.com/radddao/radd-stream && cd radd-stream && python3 setup_check.py && bash run.sh sync --site all
+git clone https://github.com/rehanradd/radd-stream && cd radd-stream && python3 setup_check.py && bash run.sh sync --site all
 ```
 
 ---
