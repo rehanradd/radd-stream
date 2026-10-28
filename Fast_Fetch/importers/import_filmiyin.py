@@ -1287,7 +1287,41 @@ def crawl_pending(limit: int | None = None, db_path: Path | str = DEFAULT_DB_PAT
         print(f"[✓] [{SITE}] pages={totals['pages']} posts={totals['posts']} "
               f"releases={totals['releases']} sources={totals['sources']} "
               f"not-indexable={totals['not_indexable']} failed={totals['failed']}", flush=True)
+        if declined:
+            print(f"    [{SITE}] declined as: "
+                  + ", ".join(f"{k}={v}" for k, v in
+                              sorted(declined.items(), key=lambda kv: -kv[1])),
+                  flush=True)
     return totals
+
+
+def requeue_parked(db_path: Path | str = DEFAULT_DB_PATH, limit: int | None = None,
+                   verbose: bool = True) -> int:
+    """
+    Put parked rows back in the queue so a later pass can name why each is dead.
+
+    A parked row is that earlier run's verdict, not the site's. Re-sighting them
+    costs one request each and buys the only number an operator can act on —
+    which of them are 404s, which are pages that simply stopped publishing a
+    playable link, and whether any of them came back at all.
+    """
+    db_path = Path(db_path)
+    conn = sqlite3.connect(db_path, timeout=60)
+    try:
+        ensure_schema(conn)
+        rows = conn.execute("SELECT loc FROM sitemap_cache WHERE scraped = -1"
+                            " ORDER BY rowid ASC").fetchall()
+        if limit:
+            rows = rows[:limit]
+        conn.executemany("UPDATE sitemap_cache SET scraped = 2 WHERE loc = ?;",
+                         [(r[0],) for r in rows])
+        conn.commit()
+    finally:
+        conn.close()
+    if verbose:
+        print(f"[*] [{SITE}] requeued {len(rows)} parked URLs for a fresh verdict.",
+              flush=True)
+    return len(rows)
 
 
 def _flush(db_path: Path, batch: list[dict], totals: dict) -> None:
@@ -1332,7 +1366,8 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description=f"filmiy.in staging importer ({BASE_URL} -> {DEFAULT_DB_PATH})")
     parser.add_argument("command", nargs="?", default="sync",
-                        choices=["sync", "crawl", "parse", "resolve", "stats"])
+                        choices=["sync", "crawl", "parse", "resolve", "stats",
+                                 "retry-parked"])
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--workers", type=int, default=4)
     parser.add_argument("--db", default=str(DEFAULT_DB_PATH))
@@ -1346,6 +1381,11 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "sync":
         sync_catalog(limit=args.limit, db_path=db, verbose=verbose)
+    elif args.command == "retry-parked":
+        # No probing here: this pass exists to re-measure why a page declined,
+        # and a bridge probe would spend requests the verdict does not need.
+        requeue_parked(db, limit=args.limit, verbose=verbose)
+        crawl_pending(db_path=db, workers=args.workers, probe=False, verbose=verbose)
     elif args.command == "crawl":
         crawl_pending(limit=args.limit, db_path=db, workers=args.workers,
                       probe=not args.no_probe, verbose=verbose)

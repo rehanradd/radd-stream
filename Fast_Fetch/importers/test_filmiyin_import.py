@@ -298,6 +298,22 @@ class TestErrorPersistence(unittest.TestCase):
         conn.close()
 
 
+    def test_a_parked_row_can_be_requeued_for_a_fresh_verdict(self):
+        """A parked row is one run's claim about a moment, not a fact about the site."""
+        conn = sqlite3.connect(self.db)
+        conn.execute("UPDATE sitemap_cache SET scraped = -1, error_count = 3")
+        conn.commit()
+        conn.close()
+        self.assertEqual(fi.requeue_parked(self.db, verbose=False), 1)
+        conn = sqlite3.connect(self.db)
+        scraped, error_count = conn.execute(
+            "SELECT scraped, error_count FROM sitemap_cache").fetchone()
+        conn.close()
+        # queued again (state 2), history kept: the three-read budget still applies
+        self.assertEqual((scraped, error_count), (2, 3))
+        self.assertIn(2, fi.QUEUED_SCRAPE_STATES)
+
+
 class TestResolveLinks(unittest.TestCase):
     def test_js_challenge_keeps_the_bridge_and_marks_it(self):
         post = parse_fixture()
@@ -420,6 +436,50 @@ class TestStagingDatabase(unittest.TestCase):
         self.assertEqual(totals["releases"], 2)
         conn = sqlite3.connect(self.db)
         self.assertEqual(conn.execute("SELECT COUNT(*) FROM sitemap_cache WHERE scraped=1").fetchone()[0], 1)
+        conn.close()
+
+    def _queue(self, loc):
+        conn = sqlite3.connect(self.db)
+        fi.ensure_schema(conn)
+        conn.execute("INSERT INTO sitemap_cache (loc, lastmod, slug, scraped, raw_json,"
+                     " error_count) VALUES (?,?,?,?,?,?);",
+                     (loc, None, loc.split("/")[-1], 0, None, 0))
+        conn.commit()
+        conn.close()
+
+    def test_a_declined_page_is_parked_with_its_real_reason(self):
+        gone = "https://filmiy.in/goes-here-2026.html"
+        self._queue(gone)
+        with patch.object(fi, "http_get", return_value=(410, gone, "")):
+            for _ in range(3):
+                totals = fi.crawl_pending(db_path=self.db, workers=1, delay=0,
+                                          verbose=False)
+        conn = sqlite3.connect(self.db)
+        scraped, note = conn.execute(
+            "SELECT scraped, raw_json FROM sitemap_cache WHERE loc = ?", (gone,)).fetchone()
+        conn.close()
+        self.assertEqual(scraped, -1)
+        self.assertEqual(json.loads(note)["last_note"], "http-410")
+        self.assertEqual(totals["declined_by_reason"], {"http-410": 1})
+
+    def test_a_stop_request_is_not_charged_to_the_pages_budget(self):
+        """Ctrl-C between batches must not fail rows that were never fetched."""
+        locs = [f"https://filmiy.in/film-{i}-2026.html" for i in range(3)]
+        for loc in locs:
+            self._queue(loc)
+        original = fi.STOP_REQUESTED
+        fi.STOP_REQUESTED = True
+        try:
+            with patch.object(fi, "http_get", return_value=(200, "", FIXTURE)) as get:
+                totals = fi.crawl_pending(db_path=self.db, workers=1, delay=0,
+                                          verbose=False)
+        finally:
+            fi.STOP_REQUESTED = original
+        self.assertEqual(totals["not_indexable"], 0)
+        conn = sqlite3.connect(self.db)
+        self.assertEqual(
+            conn.execute("SELECT COUNT(*) FROM sitemap_cache WHERE error_count > 0"
+                        ).fetchone()[0], 0)
         conn.close()
 
 
