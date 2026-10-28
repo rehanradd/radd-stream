@@ -109,10 +109,7 @@ data class SyncReport(
     val favoritesUnnamable: Int = 0,
     /** True when the pass completed both reads; false when it stopped at a refusal. */
     val completed: Boolean = false,
-) {
-    val anythingMoved: Boolean
-        get() = favoritesPushed > 0 || progressRowsPulled > 0
-}
+)
 
 object SyncContract {
 
@@ -331,9 +328,6 @@ object SyncContract {
         )
     }
 }
-
-/** The join of a work and a scope, spelled identically on both sides of every merge. */
-fun scopeKey(workRef: String, season: Int, episode: Int): String = "$workRef|$season|$episode"
 
 /** Output of [SyncContract.favoritePlan]. Counts and rows, no decisions left inside. */
 data class FavoritePlan(

@@ -59,15 +59,11 @@ data class LinkAssessment(
      * never an external hand-off of somebody else's page.
      */
     val playableHere: Boolean get() = playability.isDirectlyPlayable
-    val downloadableOnly: Boolean
-        get() = playability == Playability.DOWNLOAD || playability == Playability.NONE
 }
 
 object LinkClassification {
 
     private val HLS_MIME_MARKERS = listOf("mpegurl", "m3u8", "vnd.apple.mpegurl", "mp2t")
-    private val TEXT_MIME_MARKERS = listOf("text/html", "application/xhtml", "text/plain")
-    private val ARCHIVE_MIME_MARKERS = listOf("zip", "rar", "7z", "gzip", "x-tar")
 
     /**
      * `_protocol_of(kind, playability)`, kept for the projection's own rule: a manifest is
@@ -149,14 +145,6 @@ object LinkClassification {
         val path = playUrl?.lowercase()?.substringBefore("#")?.substringBefore("?").orEmpty()
         return path.endsWith(".m3u8") || path.endsWith(".mpd") ||
             HLS_MIME_MARKERS.any { it in playUrl?.lowercase().orEmpty() && it != "text/html" }
-    }
-
-    /** A mime that is a page or an archive: never something a media player should open. */
-    fun isNonMediaMime(mimeType: String?): Boolean {
-        val mime = mimeType?.trim()?.lowercase().orEmpty()
-        if (mime.isEmpty()) return false
-        return TEXT_MIME_MARKERS.any { mime.startsWith(it) } ||
-            ARCHIVE_MIME_MARKERS.any { mime.contains(it) }
     }
 
     /**

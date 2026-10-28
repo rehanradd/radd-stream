@@ -237,10 +237,6 @@ class PlayerSessionStore(
     /** Read without consuming: re-opening the same rung still gets its runner-ups. */
     fun peekFailover(streamId: String): List<String> = stagedFailovers[streamId].orEmpty()
 
-    fun clearStagedFailovers() {
-        stagedFailovers.clear()
-    }
-
     /**
      * The rung list Auto may move along, staged by the detail screen next to the runner-ups
      * of the launched rung and read by the service when it arms [autoQuality].
@@ -265,10 +261,6 @@ class PlayerSessionStore(
 
     fun peekAutoLadder(streamId: String?): AutoLadderPlan? =
         streamId?.trim()?.takeIf { it.isNotEmpty() }?.let { stagedAutoLadders[it] }
-
-    fun clearStagedAutoLadders() {
-        stagedAutoLadders.clear()
-    }
 
     /** One scope's rung list, the rung playback starts on, and whether Auto owns the choice. */
     data class AutoLadderPlan(
@@ -307,10 +299,6 @@ class PlayerSessionStore(
 
     /** The scope the viewer is currently watching, or null when nothing was staged. */
     fun currentSyncScope(): SyncScope? = peekWorkRef(activeRendition()?.playback?.streamId)
-
-    fun clearStagedWorkRefs() {
-        stagedWorkRefs.clear()
-    }
 
     /** One work, one scope: what a resume point is actually about. */
     data class SyncScope(

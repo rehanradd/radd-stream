@@ -39,9 +39,6 @@ interface SyncedProgressDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun put(row: SyncedProgressEntity)
 
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun putAll(rows: List<SyncedProgressEntity>)
-
     @Query(
         "SELECT * FROM synced_progress WHERE workRef = :workRef" +
             " AND seasonNumber = :season AND episodeNumber = :episode LIMIT 1",

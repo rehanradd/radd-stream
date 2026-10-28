@@ -10,10 +10,7 @@ import com.raddstream.app.data.downloads.DeviceDownloadsRepository
 import com.raddstream.app.data.local.WatchHistoryDao
 import com.raddstream.app.data.local.WatchHistoryEntity
 import com.raddstream.app.network.friendlyNetworkError
-import com.raddstream.app.network.models.LinkClassification
-import com.raddstream.app.network.models.LinkState
 import com.raddstream.app.network.models.PostDetail
-import com.raddstream.app.network.models.SourceDetail
 import com.raddstream.app.player.LadderForScope
 import com.raddstream.app.player.LadderRung
 import com.raddstream.app.player.PlayerSessionStore
@@ -575,11 +572,6 @@ class DetailViewModel @Inject constructor(
         }
     }
 
-    /** Entry point for a bare link model handed over from another screen. */
-    fun playSource(source: SourceDetail, external: Boolean = false) {
-        playLink(linkFrom(source), external)
-    }
-
     fun keepPrint(print: RankedPrint) {
         if (!VipQualityGate.allowsResolution(print.resolution, premiumAccess)) {
             _uiState.update { it.copy(actionMessage = VipQualityGate.LOCKED_MESSAGE) }
@@ -591,17 +583,4 @@ class DetailViewModel @Inject constructor(
             printLabel = print.qualityLabel,
         )
     }
-
-    private fun linkFrom(source: SourceDetail): RankedLink = RankedLink(
-        streamId = source.streamId.orEmpty(),
-        linkId = source.linkId,
-        health = LinkState.ACTIVE,
-        ephemeral = source.isEphemeral,
-        resumable = source.isResumableLink,
-        playUrl = source.bestUrl,
-        label = source.label,
-        kind = source.kind,
-        playability = source.classification.playability,
-        score = LinkClassification.rankOf(source),
-    )
 }

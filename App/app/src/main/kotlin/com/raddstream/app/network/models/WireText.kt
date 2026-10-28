@@ -54,13 +54,6 @@ object WireText {
         return parts.map { it.trim() }.filter { it.isNotEmpty() }.distinct()
     }
 
-    /**
-     * `posts.imdb_rating` is TEXT ("6.9", "8", "", null). This is the only honest way to
-     * show it: null when the server gave nothing usable, so UI never renders "0.0".
-     */
-    fun ratingOrNull(raw: String?): Double? =
-        raw?.trim()?.takeIf { it.isNotEmpty() }?.toDoubleOrNull()
-
     /** True when a v1 URL string is worth handing to any client at all. */
     fun isHttpUrl(raw: String?): Boolean {
         val value = raw?.trim()?.lowercase().orEmpty()

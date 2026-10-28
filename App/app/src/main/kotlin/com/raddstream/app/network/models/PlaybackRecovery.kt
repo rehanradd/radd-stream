@@ -56,46 +56,6 @@ data class ResolveOutcome(
 ) {
     val playable: Boolean
         get() = streamId != null && WireText.isHttpUrl(playUrl) && problem == null
-
-    companion object {
-        /**
-         * Folds a `/api/v1/stream?id=<handle>&redirect=0` answer into an outcome, applying the
-         * false-success rule. [playUrl] is the address the caller already had from the catalog
-         * link — the payload deliberately carries no URL of its own.
-         */
-        fun fromStream(stream: StreamResponse, playUrl: String?): ResolveOutcome = when {
-            stream.streamId != null && WireText.isHttpUrl(playUrl) -> ResolveOutcome(
-                streamId = stream.streamId,
-                playUrl = playUrl,
-                ephemeral = stream.expiresIn != null,
-                expiresAtEpochMillis = stream.expiresAtEpochMillis(System.currentTimeMillis()),
-            )
-            stream.isFalseSuccess -> ResolveOutcome(
-                streamId = null,
-                playUrl = null,
-                ephemeral = stream.expiresIn != null,
-                problem = ProblemDetails(
-                    status = 502,
-                    title = "Bad gateway",
-                    detail = "Our redirector reported success without producing a usable handle",
-                    code = ProblemCode.TARGET_UNRESOLVABLE,
-                ),
-            )
-            else -> ResolveOutcome(
-                streamId = null,
-                playUrl = null,
-                ephemeral = stream.expiresIn != null,
-                problem = ProblemDetails(
-                    status = 404,
-                    title = "Not found",
-                    // The server's own `error` is a machine code ("no_playable_source"), never
-                    // prose about a third party, so echoing it cannot leak provenance.
-                    detail = stream.error ?: "No usable handle for that link",
-                    code = ProblemCode.NO_PLAYABLE_SOURCE,
-                ),
-            )
-        }
-    }
 }
 
 /** One step of the recovery walk. */
@@ -266,31 +226,11 @@ class PlaybackRecovery(
         }
 
         /**
-         * The single rule the UI must obey (§8.5): a link is only ever handed to ExoPlayer as
-         * a MediaItem when its playability says so AND the address is one of OURS. A
-         * `download_only` or `external` link is never silently demoted into a stream — that is
-         * how a CAM page used to end up in the player and look like a broken video; today it
-         * gets an honest "Not playable here" instead.
-         */
-        fun mayHandToPlayer(rendition: Rendition?): Boolean =
-            rendition != null &&
-                (rendition.playability == Playability.STREAM ||
-                    rendition.playability == Playability.BOTH) &&
-                (rendition.protocol == PlayProtocol.HLS ||
-                    rendition.protocol == PlayProtocol.PROGRESSIVE) &&
-                WireText.isHttpUrl(rendition.playUrl)
-
-        /**
          * A bundle whose URLs are ephemeral must be re-fetched, not replayed from cache.
          * 900 s is the contract's TTL for a play bundle (§8.4); v1 reports no TTL at all, so
          * the client uses the contract's number as its own ceiling and treats any ephemeral
          * link as already stale past it.
          */
         const val BUNDLE_TTL_SECONDS = 900
-
-        fun isBundleStale(bundleAgeSeconds: Long, ttlSeconds: Int? = null): Boolean {
-            val limit = ttlSeconds ?: BUNDLE_TTL_SECONDS
-            return bundleAgeSeconds >= limit
-        }
     }
 }

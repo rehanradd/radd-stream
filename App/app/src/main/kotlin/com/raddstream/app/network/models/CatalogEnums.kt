@@ -337,9 +337,6 @@ enum class EntitlementModel(val wire: String, val displayPriority: Int) {
     PURCHASE("purchase", 50),
     UNKNOWN("unknown", 100);
 
-    /** A gated offer: cannot be played on the cleartext host (§8.3), so never offered. */
-    val needsLicence: Boolean get() = this == FLATRATE || this == RENTAL || this == PURCHASE
-
     companion object {
         fun fromWire(raw: String?): EntitlementModel = when (raw?.trim()?.lowercase()) {
             "free" -> FREE
@@ -359,9 +356,6 @@ enum class Ownership(val wire: String) {
     UNTIL_EXPIRY("until_expiry"),
     PERMANENT("permanent"),
     UNKNOWN("unknown");
-
-    /** `until_expiry` ⇒ the app MUST expire its offline copy (API_V2.md §7/§11.3). */
-    val mustExpireOfflineCopy: Boolean get() = this == UNTIL_EXPIRY || this == NEVER
 
     companion object {
         fun fromWire(raw: String?): Ownership =

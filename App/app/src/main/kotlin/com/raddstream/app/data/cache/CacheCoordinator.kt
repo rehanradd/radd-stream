@@ -248,9 +248,6 @@ class CacheCoordinator(
         launchTask(task.id)
     }
 
-    /** True when this resource already has a live pass (used to keep the handoff idempotent). */
-    fun isDriving(taskId: Long): Boolean = jobs[taskId]?.isActive == true
-
     /**
      * Cancel a keep the user aborted: stop its job, drop its held bytes and ledger, and remove the
      * row so it disappears from the list. Safe to call on a completed or already-gone task.

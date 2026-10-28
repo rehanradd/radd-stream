@@ -391,10 +391,6 @@ class SearchViewModel @Inject constructor(
             else -> 3
         }
     }
-
-    // ---- pure helpers (unit-tested) ----
-
-    fun normalizeTypeForTest(contentType: String?): String = normalizeTypeLabel(contentType)
 }
 
 internal fun parseYear(year: String?): Int? {

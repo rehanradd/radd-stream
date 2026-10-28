@@ -24,7 +24,6 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -372,10 +371,6 @@ fun rememberGridEndlessPaging(
         if (total > 0 && lastVisible >= total - buffer) onLoadMore()
     }
 }
-
-/** Convenience: a fresh grid state for callers that don't need to lift it. */
-@Composable
-fun rememberMediaGridState() = rememberLazyGridState()
 
 /** A small text button used as a section "See all" affordance. */
 @Composable

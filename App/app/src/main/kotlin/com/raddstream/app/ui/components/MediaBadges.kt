@@ -11,7 +11,6 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Download
-import androidx.compose.material.icons.filled.OnlinePrediction
 import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material3.Icon
@@ -322,37 +321,5 @@ fun CapabilityChip(text: String, modifier: Modifier = Modifier) {
         modifier = modifier,
         backgroundColor = MaterialTheme.colorScheme.surface,
         contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
-    )
-}
-
-/** Ranked 1..N ordinal badge for the failover plan (API_V2.md §5). */
-@Composable
-fun RankBadge(rank: Int, modifier: Modifier = Modifier) {
-    Box(
-        modifier = modifier
-            .size(22.dp)
-            .clip(CircleShape)
-            .background(
-                if (rank == 1) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant
-            ),
-        contentAlignment = Alignment.Center,
-    ) {
-        Text(
-            text = rank.toString(),
-            style = MaterialTheme.typography.labelSmall,
-            fontWeight = FontWeight.Bold,
-            color = if (rank == 1) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-    }
-}
-
-/** Small streaming/monitoring affordance glyph used by health summaries. */
-@Composable
-fun HealthLegend(modifier: Modifier = Modifier) {
-    Icon(
-        Icons.Default.OnlinePrediction,
-        contentDescription = null,
-        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-        modifier = modifier.size(14.dp),
     )
 }

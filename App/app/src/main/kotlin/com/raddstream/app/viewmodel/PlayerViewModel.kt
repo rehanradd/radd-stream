@@ -22,7 +22,6 @@ import com.raddstream.app.player.AdSlotState
 import com.raddstream.app.player.AspectMode
 import com.raddstream.app.player.AudioBoostUi
 import com.raddstream.app.player.AudioTrackPolicy
-import com.raddstream.app.player.AudioTrackRow
 import com.raddstream.app.player.BingePrefetchPlanner
 import com.raddstream.app.player.BingePreloadDecision
 import com.raddstream.app.player.CacheAffordance
@@ -34,7 +33,6 @@ import com.raddstream.app.player.DeferredOffsetReporter
 import com.raddstream.app.player.EpisodeOffsets
 import com.raddstream.app.player.EpisodeProgression
 import com.raddstream.app.player.ExternalSubtitle
-import com.raddstream.app.player.HandoffWhy
 import com.raddstream.app.player.KeepResult
 import com.raddstream.app.player.KeepUiState
 import com.raddstream.app.player.LadderForScope
@@ -51,12 +49,10 @@ import com.raddstream.app.player.SessionInfo
 import com.raddstream.app.player.PlayerUiState
 import com.raddstream.app.player.QualityLadder
 import com.raddstream.app.player.RippleState
-import com.raddstream.app.player.PlayerOrientation
 import com.raddstream.app.player.ScreenZone
 import com.raddstream.app.player.SleepMode
 import com.raddstream.app.player.SleepTick
 import com.raddstream.app.player.SleepTimer
-import com.raddstream.app.player.StartResolution
 import com.raddstream.app.player.SubtitleTrackDecision
 import com.raddstream.app.player.SubtitleTrackPolicy
 import com.raddstream.app.player.SubtitleUiSettings
@@ -657,39 +653,6 @@ class PlayerViewModel @Inject constructor(
 
     fun hideQualitySheet() {
         _ui.update { it.copy(qualitySheetVisible = false) }
-    }
-
-    /** Full contract path: ordered candidate links (API_V2 §5 PlayBundle). */
-    fun startBundle(bundle: PlaybackBundle, title: String, explicitStartMs: Long? = null) {
-        store.installBundle(bundle)
-        val key = bundle.target.workKey
-            ?: bundle.renditions.firstOrNull()?.playback?.playUrl
-            ?: "b${bundle.session.id}"
-        val resume = explicitStartMs ?: resumeByTarget[key] ?: 0L
-        val first = bundle.renditions.firstOrNull()
-        val offset = if (first == null) null else EpisodeOffsets.resolveStart(first, bundle.target, store.learnedOffsets)
-        val offsetMs = (offset as? StartResolution.At)?.positionMs
-        when {
-            explicitStartMs != null ->
-                loadNow(title, key, resumePosition = 0, override = explicitStartMs)
-
-            offset is StartResolution.NeedsCalibration -> {
-                // Packed season without offsets: show the pack warning UI, start at 0.
-                _ui.update {
-                    it.copy(calibration = CalibrationState(targetEpisode = bundle.target.episode, warning = offset.packWarning))
-                }
-                loadNow(title, key, resumePosition = resume, override = null)
-            }
-
-            offsetMs != null && offsetMs > 0 ->
-                // Packed file: "start Episode 5" == seek into the file at READY.
-                loadNow(title, key, resumePosition = 0, override = offsetMs)
-
-            resume > RESUME_PROMPT_THRESHOLD_MS ->
-                _ui.update { it.copy(resumeOfferMs = resume, pendingResumeKey = key, pendingTitle = title) }
-
-            else -> loadNow(title, key, resumePosition = resume, override = null)
-        }
     }
 
     private fun beginBundle(

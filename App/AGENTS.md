@@ -1521,3 +1521,115 @@ by that run. Backend files were not touched.
 **Not verified:** no device or emulator pass. `ScreenSnapshotTest` and `PosterCardProvenanceTest`
 remain excluded on aarch64 (no Robolectric native runtime here), so those cases execute nowhere
 on this host.
+
+### Session 21 — The player polish block: flags, subtitles, targets, ramp, paints, words, and the dead code behind them (2026-10-28)
+
+**Goal:** work the standing P0–P2 checklist in order with a full green gate after each task —
+#12 feature board, #13 audio boost, #14 subtitle look, #15 TalkBack labels + 48 dp targets,
+#16 brand type ramp, #17 colour tokens, #18 chrome strings, #19 dead code. Commits:
+`3976a0b`, `d598f18`, `67bfe69`, `01f4a8c`, `1f7b41d`, `3037c1b`, `0a867bb`, and this one for #19.
+`3976a0b` and `67bfe69` are pushed; the rest are local awaiting the owner's review.
+
+**Two of my own audit lines were wrong and are corrected here rather than left as folklore:**
+
+- **#16** was filed as "the player ignores the system font scale". False — a bare `13.sp` honours
+  the platform fontScale at render and nothing in this app overrides density or fontScale. What
+  the 53 literals actually bypassed was `brandSp`, the one reader of `brand.properties`
+  `typography.scale`. The consequence is not cosmetic-legibility, it is the single-brand-file
+  promise: a re-skin that moves the ramp to 1.15 grows every screen except the player.
+- **#18** was filed as "the player's prose bypasses resources". Only half true, and the real state
+  was worse: before this block **no screen** painted a prose literal from `res/values/strings.xml`
+  — the file held eleven legacy entries (`app_name`, `setup_title`, `play`, …) that nothing
+  referenced, while every screen hardcoded its own words. The migration was therefore
+  118 new `player_*` entries plus the deletion of those 11, not a mechanical relocation.
+
+**#17's old-to-brand-role remap, which `Color.kt` §13 now carries** (nothing rendered changed;
+the old value is the new value at every site, because a box with no device may move a paint but
+may not look at one). The owner decision the migration surfaced and deliberately did not act on:
+the player's solid plates are blue-grey while `DESIGN_SYSTEM.md` §1 requires teal-shifted
+neutrals and names "blue-black Netflix ink" as the thing to avoid. Brand candidates already
+exist — sheet→`colors.dark.surface_container` `#141D20`, dialog→`surface_container_high`
+`#1E282B`, stage→`background` `#06090B`; the player's accent `#FF8552` matches no
+`colors.dark.*` role at all (closest: `secondary` `#FF7A6B`, `accent_gold` `#FFC85C`);
+its keep-chip greens/red/blue are the Material-800 set rather than the app's own
+`RaddSuccess` `#4FE3A3` / `RaddDanger` `#FF6B6E`. Folding those in is a hue change on the
+most-watched screen of the product, so it is named in §13 and left for the owner.
+
+**Recorded and not settled — the two caption render paths answer to different settings.** The
+Compose overlay inherits the system font scale (`sp`); the native Media3 path asks `SubtitleView`
+for a *fraction of the video viewport*, which by design does not. A viewer who scales text up
+therefore gets bigger overlay captions and unchanged burned-in ones. Real, needs a screen to
+look at, no device here — a question, not a commit claiming to have answered it.
+
+**#18's boundary, stated so the next agent does not mistake it for a half-finished job:** words a
+Composable paints come from `R.string.player_*`; words assembled inside pure non-Compose helpers
+stay in code (`RenditionFailover`'s failover narration, `PlaybackService`'s trail lines,
+`QualityOption.detailLine`). Routing the second kind through resources would need either a
+`Context` in a helper that unit tests drive on the JVM, or a test-only indirection — which is
+exactly what `DeadCodeGuardTest` now forbids. One known cost of that line: `"Download only"`
+currently has two owners, `player_giveup_download_only` in resources and
+`QualityOption.KEEPS_ONLY` in code. `"Plays here"` had two owners in **code**
+(`QualityOption.PLAYS_HERE` and `LinkKindClassifier.PLAYABLE_HERE`) and #19 collapsed them to the
+one const, so a rung row and a detail row can no longer disagree about the only presentation this
+product has.
+
+**#19 — the rule, not the hunt.** A text scan cannot see reflection, kapt, Gson or Room, so the
+bar was set where a scan is actually authoritative: zero references in `src/main` **and**
+`src/test`, no mention in a doc, handoff or design spec, not a serialized field, not a documented
+family. Then the compiler is the proof. Cut: ~300 lines across 26 files —
+`normalizeTypeForTest`, `startBundle`, `playSource` + its private `linkFrom`, the four
+`classifyForPlayer`/`PlayerLinkVerdict`/`toPlayerVerdict` shapes (leaving `LinkKindClassifier.kt`
+as only the two vocabulary consts), `PlayerSessionStore.clearStaged*` ×3, `RankBadge`,
+`HealthLegend`, `findByWorkRef`, `putAll`, `uiRow`, 9 unreferenced raw paints in `Color.kt`,
+`PlayBundle`'s `effectiveSeekable`/`isSameOriginAs`/`kindOrUnknown`/`notPlayableHere`/
+`offerableForKeep`/`hasNothingPlayable` and the duplicate `sameOriginPlayUrl` (the live owner is
+`ApiProvider.isSameOriginAsServer`), `PlaybackRecovery`'s `fromStream`/`mayHandToPlayer`/
+`isBundleStale`, `SyncContract.anythingMoved`/`scopeKey`, `Brand.keysUnder`/`colorHex`,
+`CacheCoordinator.isDriving`, `RenditionFailover.isKeepOnly`, `ReleaseLayoutBuilder.bestOverallPrint`/
+`hasAnyPackedOnly`, `PlayerUiState.hasActivePrint`, `VipViewModel.hasPendingClaim`,
+`WireText.ratingOrNull`, `CommonUi.rememberMediaGridState`, `LinkClassification.downloadableOnly`/
+`isNonMediaMime` + the mime tables it owned, `CatalogEnums.needsLicence`/`mustExpireOfflineCopy`,
+`QualityLadder.isDownloadOnly` — plus the pass-2 fallout each deletion orphaned (unused imports,
+empty bodies, dangling section headers in `Color.kt`).
+
+**Kept on purpose, with the reason:** `DynamicServerDiscovery` (implemented, tested, never
+injected — an owner decision to wire or delete, not dead code to delete silently);
+`EpisodeOffsets.resolveStart` (the packed-season calibration engine, unreachable only because its
+caller `startBundle` was itself already unreachable — wiring episode offsets is a feature
+decision); `RaddStreamApi.removeProgress`, `CacheContract.cancelKeep`/`storagePressure`
+(interface implemented in `OfflineCacheEngine`); `LinkHealthChip` and `RaddBrandLockup` (named in
+`App/docs/HANDOFF_*.md`); `PlayerViewModel.requestAdBreak` (the guarded seam from Session 11);
+every Hilt `@Provides`, Media3 `override`, Gson wire field and Room entity column; the
+test-pinned pure helpers (`AudioBoost.step`, `clampedSpeed`, `forScope`, `isQuickLoginInput`,
+`parseYear`); and the documented seams (`saveUserRegion`, `useSnapshot`, the §15 Brand table,
+`V1CatalogMapper`/`CatalogV2` target-contract code).
+
+**New guards:** `PlayerChromeCopyTest` (10) reads `strings.xml` and `PlayerScreen.kt` as pairs —
+defined == painted both directions, no two entries saying one thing, every placeholder positional,
+each call site passing exactly the arity its string asks for, consistent arity per name,
+whitespace kept quoted, XML well-formed, **no comment-free prose literal left in the screen**,
+`Brand.copy(` absent while `Brand.name` stays, and `subtitleStatusLabel` still answering with the
+off-word it is *given*. `tooling/DeadCodeGuardTest` (3) asserts every declaration in
+`res/values*/` is reachable from Kotlin, another resource or the manifest; that `src/main` exposes
+no `*ForTest` API; and its own positive controls, so a green run cannot mean the scanner looked at
+nothing.
+
+**Tests deliberately not touched:** `SubtitleParsersTest`, `VipWireContractTest`,
+`AdSlotPolicyTest`, `PosterCardProvenanceTest`, `ScreenSnapshotTest`. No `.py` file was edited;
+the `Fast_Fetch/*.py` and `*.md` task files in the tree belong to other workstreams and were not
+staged.
+
+**Gate:** `/tmp/qbuild.sh -Dorg.gradle.jvmargs='-Xmx1536m' :app:compileDebugKotlin
+:app:testDebugUnitTest` → BUILD SUCCESSFUL, `GRADLE_EXIT=0`, `FOREIGN_BUILD_PIDS_SEEN=` empty,
+`OVERLAP=NO`, **567 tests / 71 suites / 0 failures / 0 errors / 0 skipped**, all 71 result XMLs at
+the single timestamp 07:27:08 against a run that started 07:26:28. Earlier passes of the same
+task: 564/70 at 07:22:38.
+
+**Deliberately not verified:** no device or emulator, so the identical-render claim rests on
+literal identity plus review; `ScreenSnapshotTest` and `PosterCardProvenanceTest` still cannot run
+on aarch64.
+
+**Next agent should:** take the #17 hue decision (or leave §13 as the permanent record and stop
+re-flagging it), decide whether `DynamicServerDiscovery` and episode-offset calibration get wired
+or deleted, and note that a parallel session reverted this file's uncommitted log entry at
+≈07:28 — commit docs with the code, not after it.

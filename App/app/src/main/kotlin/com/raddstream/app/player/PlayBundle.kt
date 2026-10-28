@@ -1,12 +1,10 @@
 package com.raddstream.app.player
 
 import com.google.gson.annotations.SerializedName
-import java.net.URI
 import java.net.URLEncoder
 import com.raddstream.app.network.models.CoverageType
 import com.raddstream.app.network.models.LinkAssessment
 import com.raddstream.app.network.models.LinkClassification
-import com.raddstream.app.network.models.LinkKind
 import com.raddstream.app.network.models.Playability
 import com.raddstream.app.network.models.SourceDetail
 
@@ -23,7 +21,7 @@ import com.raddstream.app.network.models.SourceDetail
  * WHAT A URL FIELD ON THESE TYPES MEANS NOW: it is OUR OWN
  * `<server>/api/v1/stream?id=<handle>` redirector, and nothing else. The upstream address is
  * not on any type in this file, so no player, download, share or external hand-off can be
- * pointed at it — the same-origin guard in [sameOriginPlayUrl] is the second lock.
+ * pointed at it — `ApiProvider.kt`'s same-origin guard is the second lock.
  *
  * Gson note (mirrors the Models.kt caveats in App/AGENTS.md §6): fields are nullable/defaulted
  * so a *partial* server payload never crashes the player. Unknown enum wire values decode to
@@ -130,7 +128,6 @@ data class PlaybackInfo(
     @SerializedName("backup_handles")
     val backupStreamIds: List<String> = emptyList(),
 ) {
-    fun kindOrUnknown(): LinkKind = LinkKind.fromWire(kind)
     fun playabilityOrUnknown(): Playability = Playability.fromWire(playabilityWire)
     fun isHls(): Boolean =
         protocol?.lowercase() == "hls" || playUrl?.lowercase()?.contains(".m3u8") == true
@@ -138,47 +135,6 @@ data class PlaybackInfo(
     /** URL rot guard: expires_at is epoch **seconds** in the wire contract. */
     fun isExpired(nowEpochMillis: Long): Boolean =
         expiresAt != null && nowEpochMillis / 1000L >= expiresAt!!
-
-    /**
-     * §8.5: `accepts_ranges:false` (or `seekable:false`) => disable seeking in the UI rather
-     * than let ExoPlayer stall. Null = not probed yet -> treated as seekable; the player then
-     * learns at runtime and failover narrates any death.
-     */
-    val effectiveSeekable: Boolean
-        get() = seekable != false && acceptsRanges != false
-
-    /**
-     * The address is only usable if it is OUR OWN redirector. Every hand-off in the app checks
-     * this, so an upstream URL could not be opened even if one somehow reached this model.
-     */
-    fun isSameOriginAs(baseUrl: String): Boolean = sameOriginPlayUrl(playUrl, baseUrl)
-}
-
-/**
- * True only when [playUrl] is an absolute http(s) address on the SAME host+port as
- * [baseUrl] — the origin the user configured. This is the guard behind every hand-off in the
- * app (external player, download, share): anything else, including a well-meaning upstream
- * URL, is refused.
- */
-internal fun sameOriginPlayUrl(playUrl: String?, baseUrl: String): Boolean {
-    val target = playUrl?.trim()?.takeIf { it.isNotEmpty() } ?: return false
-    val base = baseUrl.trim().takeIf { it.isNotEmpty() } ?: return false
-    val targetUri = runCatching { URI(target) }.getOrNull() ?: return false
-    val baseUri = runCatching { URI(base) }.getOrNull() ?: return false
-    val scheme = targetUri.scheme?.lowercase() ?: return false
-    if (scheme != "http" && scheme != "https") return false
-    val host = targetUri.host?.lowercase() ?: return false
-    val baseHost = baseUri.host?.lowercase() ?: return false
-    if (host != baseHost) return false
-    val basePort = if (baseUri.port >= 0) baseUri.port else defaultPort(baseUri.scheme)
-    val targetPort = if (targetUri.port >= 0) targetUri.port else defaultPort(targetUri.scheme)
-    return basePort == targetPort
-}
-
-private fun defaultPort(scheme: String?): Int = when (scheme?.lowercase()) {
-    "https" -> 443
-    "http" -> 80
-    else -> -1
 }
 
 /**
@@ -284,9 +240,6 @@ data class PlaybackRendition(
             playback.label?.takeIf { it.isNotBlank() },
         ).distinct().joinToString(" · ").ifBlank { "Rank #$rank" }
     }
-
-    /** The honest sentence for a candidate this app cannot present: said out loud, never hidden. */
-    fun notPlayableHere(): Boolean = !playback.playabilityOrUnknown().isDirectlyPlayable
 }
 
 data class PlaybackDownloadOption(
@@ -299,13 +252,7 @@ data class PlaybackDownloadOption(
     @SerializedName("size_bytes") val sizeBytes: Long = 0L,
     @SerializedName("score") val score: Int = 0,
     @SerializedName("expires_at") val expiresAt: Long? = null,
-) {
-    fun kind(): LinkKind = LinkKind.fromWire(kindWire)
-    /** API_V2 §5: only resumable options may be offered for offline save. */
-    fun offerableForKeep(): Boolean =
-        resumable && kind().wire in setOf("cdn_direct", "hls_manifest", "download_only") &&
-            playUrl.isNotBlank()
-}
+)
 
 /** §5 `failure_policy` — client-mandated failover parameters. */
 data class PlaybackFailurePolicy(
@@ -353,9 +300,6 @@ data class PlaybackBundle(
         session.expiresAtEpochMillis(nowEpochMillis)?.let { nowEpochMillis >= it } ?: false
 
     val isEmpty: Boolean get() = renditions.none { !it.playback.playUrl.isNullOrBlank() }
-
-    /** True when nothing in this plan can be presented here — the UI must say so, not stall. */
-    val hasNothingPlayable: Boolean get() = renditions.none { it.playback.playabilityOrUnknown().isDirectlyPlayable }
 
     companion object {
 

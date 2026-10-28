@@ -183,8 +183,6 @@ data class VipUiState(
     /** Server-side membership only. A rewarded device pass is deliberately not VIP here. */
     val isVip: Boolean get() = entitlement?.vip == true
 
-    val hasPendingClaim: Boolean get() = entitlement?.pending == true || pending != null
-
     /** When [AccountEntitlement.vipUntil] is in the future; otherwise no date is shown. */
     val vipUntilMillis: Long
         get() {

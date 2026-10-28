@@ -45,11 +45,13 @@ data class QualityOption(
     val detailLine: String
         get() = listOfNotNull(
             sizeLine?.let { "≈ $it" },
-            if (playsHere) PLAYS_HERE else KEEPS_ONLY,
+            if (playsHere) PLAYABLE_HERE else KEEPS_ONLY,
         ).joinToString(" · ")
 
     companion object {
-        const val PLAYS_HERE = "Plays here"
+        // "Plays here" has exactly ONE owner — PLAYABLE_HERE, in this package's
+        // LinkKindClassifier.kt — so a rung row and a detail-screen link can never say two
+        // different things about the same presentation.
         const val KEEPS_ONLY = "Download only"
 
         /** Human sizes, one place, so the card and the download list never disagree. */

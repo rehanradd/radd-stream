@@ -31,10 +31,6 @@ interface FavoriteDao {
     @Query("SELECT * FROM favorite_posts WHERE id = :id LIMIT 1")
     suspend fun findById(id: Int): FavoritePost?
 
-    /** The row a server handle belongs to, if this device has one. */
-    @Query("SELECT * FROM favorite_posts WHERE workRef = :workRef LIMIT 1")
-    suspend fun findByWorkRef(workRef: String): FavoritePost?
-
     /**
      * Stamp a row as confirmed on the library. Written only after the server accepted the
      * row, so a failed push leaves it eligible for the next sync instead of marking it done.

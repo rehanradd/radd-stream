@@ -67,10 +67,7 @@ data class LadderTier(
     val link: LadderLink? = null,
     @SerializedName("backup_handles")
     val backupHandles: List<String> = emptyList(),
-) {
-    /** Honest for both shapes: a rung that is not `play`, or has no winner, is kept only. */
-    val isDownloadOnly: Boolean get() = mode == "download_only" || !playable || link == null
-}
+)
 
 /** The ladder's own pointer: the rung `Auto` starts at, and the handle it uses. */
 data class LadderAuto(

@@ -111,7 +111,7 @@ class QualityLadderTest {
         val hd = QualityLadder.from(ladder).options.first { it.band == "1080p" }
         assertEquals("≈ 1.3 GB", hd.detailLine.substringBefore(" · "))
         val unknown = QualityLadder.from(ladder.copy(tiers = listOf(tier("720p", "HD", link("h", size = null)))))
-        assertEquals(QualityOption.PLAYS_HERE, unknown.options.single().detailLine)
+        assertEquals(PLAYABLE_HERE, unknown.options.single().detailLine)
         assertEquals("1.0 KB", QualityOption.formatBytes(1024))
         assertEquals("1.0 GB", QualityOption.formatBytes(1024L * 1024 * 1024))
     }

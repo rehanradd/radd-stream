@@ -293,9 +293,6 @@ data class PlayerUiState(
      */
     val pureCinema: Boolean get() = pureCinemaAllowed && viewMode == ViewMode.PURE_CINEMA
 
-    /** True when something is loaded enough to show transport controls. */
-    val hasActivePrint: Boolean get() = activeRendition != null
-
     /**
      * The one question the screen asks to decide whether it owes the viewer a "coming right
      * up" notice. Every card that already explains itself wins over this, and once the file

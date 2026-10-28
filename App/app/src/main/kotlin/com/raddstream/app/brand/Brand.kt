@@ -76,12 +76,6 @@ object Brand {
         else -> fallback
     }
 
-    /** Every loaded key starting with [prefix], with the prefix removed. */
-    fun keysUnder(prefix: String): Map<String, String> {
-        val cut = if (prefix.endsWith(".")) prefix else "$prefix."
-        return runtime.filterKeys { it.startsWith(cut) }.mapKeys { it.key.removePrefix(cut) }
-    }
-
     // ── Identity ─────────────────────────────────────────────────────────────
     val name: String get() = string("identity.name").ifBlank { BuildConfig.BRAND_IDENTITY_NAME }
     val shortName: String get() =
@@ -146,11 +140,6 @@ object Brand {
         "${string("network.user_agent.product").ifBlank { BuildConfig.BRAND_NETWORK_USER_AGENT_PRODUCT }}" +
             "/${versionName} (${string("network.user_agent.version_suffix")
                 .ifBlank { BuildConfig.BRAND_NETWORK_USER_AGENT_VERSION_SUFFIX }})"
-
-    // ── Colours (hex strings; ui/theme/Color.kt turns them into Compose Colours) ──
-    fun colorHex(dark: Boolean, role: String): String =
-        string("colors.${if (dark) "dark" else "light"}.$role")
-            .ifBlank { BuildConfig.BRAND_COLORS_DARK_PRIMARY }
 
     // ── Scheme behaviour + typography (brand [scheme] / [typography]) ────────
     val schemeDefaultDark: Boolean get() =

@@ -37,7 +37,6 @@ import com.raddstream.app.player.SubtitleColor
 //  Color.kt v1 so files outside ui/theme keep compiling while they migrate.
 // ═════════════════════════════════════════════════════════════════════════════
 
-
 // ── 0. BRAND HEX PARSER (single source: brand.properties -> BuildConfig) ─────
 /** Accepts the brand file format only: '#RRGGBB' or '#AARRGGBB'. */
 internal fun brandColor(hex: String): Color {
@@ -143,8 +142,6 @@ val RaddOnTideContainer   = brandColor(BuildConfig.BRAND_COLORS_DARK_ON_TERTIARY
 // ── 5. SIGNAL GOLD — ratings & premium prints ──────────────────────────────
 /** signalGold — IMDb star, HDR/4K print badge. 13.0:1 vs 950, 11.2:1 vs 850. */
 val RaddSignalGold       = brandColor(BuildConfig.BRAND_COLORS_DARK_ACCENT_GOLD)
-/** bullion — "paid/entitlement" badge text on amber pills. 10.8:1 vs SignalPillInk. */
-val RaddBullion          = Color(0xFFFFD57F) // app-local tint (not a brand ramp role)
 
 // ── 6. LINK HEALTH semantics (the app's superpower) ─────────────────────────
 // Source-link lifecycle in a JIT-resolving aggregator. Each has a text color
@@ -164,9 +161,7 @@ val RaddHealthExpiredPill = Color(0xFF33200F)
 val RaddHealthDead       = brandColor(BuildConfig.BRAND_COLORS_DARK_LINK_DEAD)
 val RaddHealthDeadPill   = Color(0xFF3A1417)
 
-// ── 7. ACTION affordances: stream vs download ──────────────────────────────
-/** streamLabel — "Watch now" pill text (current500 paint, own pill 6.9:1). */
-val RaddStreamPill       = RaddCurrentContainerDark
+// ── 7. ACTION affordances: keep-for-offline ─────────────────────────────────
 /** downloadLabel — "Keep offline" pill text on Tide container. 7.8:1. */
 val RaddDownloadPill     = Color(0xFF16233B)
 /** downloadLabel text = RaddTideBlue: 7.8:1 vs RaddDownloadPill. */
@@ -177,28 +172,10 @@ val RaddTideBlue         = Color(0xFF8FB8FF)
 // label-vs-own-pill on solid ink; they only improve on scrim because scrim is
 // darker than any artwork under 70% black.
 
-/** 4K / Dolby-Vision / HDR prints — gold family. 10.8:1 vs RaddHdrPill. */
-val RaddHdrLabel         = Color(0xFFFFD57F)
 val RaddHdrPill          = Color(0xFF33240A)
-/** BluRay / remux — cold silver-blue. 10.3:1 vs RaddBluRayPill. */
-val RaddBluRayLabel      = Color(0xFFC7D6E8)
 val RaddBluRayPill       = Color(0xFF1A2733)
-/** WEB-DL / WEBRip — steel. 7.7:1 vs RaddWebDlPill. */
-val RaddWebDlLabel       = Color(0xFF9FB4C9)
 val RaddWebDlPill        = Color(0xFF16202A)
-/** CAM / SCR / TS / HDTS — DISCOURAGED. Red-family but muted: the app never
- *  celebrates low prints, it warns. 7.9:1 vs RaddCamPill. Pair with a warning
- *  icon — redundancy for color-blind users. */
-val RaddCamLabel         = Color(0xFFF2A0A8)
 val RaddCamPill          = Color(0xFF3A161A)
-
-// ── 9. ENTITLEMENT chips ────────────────────────────────────────────────────
-/** free — "direct play" — reuses HealthOk paint + pill (9.0:1). */
-/** ads — intermediate/redirect links with ad layers. 8.6:1 vs AdPill (#33220D). */
-val RaddAdsLabel         = Color(0xFFFFB45E)
-val RaddAdsPill          = Color(0xFF33220D)
-/** paid/premium host keys — Bullion on HdrPill: 10.8:1. */
-/** ephemeral-link warning — HealthExpired paints; dashed outline variant. */
 
 // ── 10. SCRIMS — the only sanctioned way to put text over artwork ───────────
 // WCAG measures text over images at the WORST case pixel (pure white art).
@@ -217,9 +194,7 @@ val RaddHeroScrim        = Color(0xD9000000)
 /** Full system scrim behind dialogs/bottom sheets. */
 val RaddScrim            = Color(0xFF000000)
 
-// ── 11. STATE layers & misc roles ───────────────────────────────────────────
-/** Ripple/selection wash on ink (≈8% current). */
-val RaddCurrentStateLayer = Color(0x142BC79A)
+// ── 11. PLACEHOLDER layers ───────────────────────────────────────────────────
 /** Poster placeholder shimmer endpoints (use with a sweep gradient). */
 val RaddPlaceholderLow   = Color(0xFF10191C)
 val RaddPlaceholderHigh  = Color(0xFF1C2A2E)

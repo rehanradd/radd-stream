@@ -217,7 +217,6 @@ data class SeasonGroup(
 ) {
     val episodeCount: Int get() = episodes.size
     val bestPrint: RankedPrint? get() = (episodes.flatMap { it.prints } + packedPrints).maxByOrNull { it.rankKey }
-    val hasAnyPackedOnly: Boolean get() = episodes.isNotEmpty() && episodes.all { it.onlyPacked }
 }
 
 /** Everything the detail screen can show honestly about one title's releases. */
@@ -232,9 +231,6 @@ data class ReleaseLayout(
 ) {
     val packedSeasons: List<Int> get() = seasons.filter { it.packedPrints.isNotEmpty() }.map { it.number }
     val hasAnyPrint: Boolean get() = totalPrints > 0
-    val bestOverallPrint: RankedPrint?
-        get() = (workPrints + seasons.flatMap { it.episodes.flatMap { e -> e.prints } } +
-            seasons.flatMap { it.packedPrints }).maxByOrNull { it.rankKey }
 }
 
 /**

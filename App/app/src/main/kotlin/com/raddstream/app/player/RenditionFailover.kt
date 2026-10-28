@@ -202,6 +202,4 @@ class FailoverStateMachine(
     fun keepOnlyFallback(): PlaybackRendition? =
         renditions.firstOrNull { !it.playback.playUrl.isNullOrBlank() }
 
-    /** True when the given candidate, as loaded, cannot be presented here — UI hint helper. */
-    fun isKeepOnly(index: Int): Boolean = !isPlayable(index)
 }

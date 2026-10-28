@@ -321,8 +321,6 @@ class DeviceDownloadsRepository @Inject constructor(
         }
     }
 
-    internal fun uiRow(id: String): DeviceDownload? = entity(id)?.toUi()
-
     private fun update(id: String, transform: (DeviceDownloadEntity) -> DeviceDownloadEntity) {
         val updated = load().map { if (it.id == id) transform(it) else it }
         persist(updated)
