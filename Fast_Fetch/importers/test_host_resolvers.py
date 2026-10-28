@@ -131,6 +131,61 @@ GD_SIGNIN_WALL = """<!DOCTYPE html><html><head><title>Sign in</title></head>
 </form></body></html>"""
 GD_MKV_HEAD = b"\x1a\x45\xdf\xa3\x01\x00\x00\x00\x00\x00\x00\x1f\x42\x82\x45\x9c"
 
+# AnimaHD's own player, as saved from this host on 2026-10-28 into
+# /tmp/animahd_player_194_0.html (84,066 bytes) and
+# /tmp/animahd_secure_194_0.html (57,526 bytes) for file id
+# `10i-vf0OzJqDkR0-a7MpPWKI0qERYAOp1` (Naruto Shippuden S01E01). What is kept
+# below is each page's own markup verbatim, reduced to what the resolver has to
+# read; the redirect literal, the `<source>` tag and the quota wording are the
+# bytes the hosts served. The `eid` is real; the `token` is its first 64
+# characters — the live value runs to 2,732 characters and is this host's
+# per-load secret, which the resolver is not allowed to need. Replaying the
+# saved chain answered 206, `video/x-matroska`,
+# `Content-Range bytes 0-511/253161185`, EBML magic, with no Referer sent.
+AH_FILE_ID = "10i-vf0OzJqDkR0-a7MpPWKI0qERYAOp1"
+AH_PLAYER_URL = f"https://animahd.com/player/?file_id={AH_FILE_ID}&show_id=194&ep=0"
+AH_EID = ("MjAyMTc4M2M2Nzc3MjE1ZTZiNWI2MDU1N2E0MzIxM2M3MDI2NWM2MTQxNDY1YTU4"
+          "MjE2MDU0NDM0ODUwNWU2MTIw")
+AH_TOKEN = "Njg3MDIzMjgzZjcyM2Y3MjIxNTA0YjI1NzM1ZjYxNGIyMDVmMjkyOTdhNzY2MzVjN2E3"
+AH_WORKER_URL = ("https://cdndirectstreamwithoutbreaking.animahd011.workers.dev/"
+                 f"?eid={AH_EID}&token={AH_TOKEN}&v=0&ext=.mp4")
+AH_SECURE_URL = f"https://theultimateanimehub.animahd.fun/?id={AH_FILE_ID}"
+AH_PLAYER_PAGE = """<!DOCTYPE html><html><head><title>ANIMAHD</title></head><body>
+<div class="cinema-deck-frame">
+    <div class="animesuki-loader"><span></span><span></span><span></span></div>
+    <div class="loading-text-anim">Connecting to Secure Player...</div>
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+    const targetStreamUrl = "https://theultimateanimehub.animahd.fun/?id=10i-vf0OzJqDkR0-a7MpPWKI0qERYAOp1";
+
+    if (targetStreamUrl) {
+        // Use location.replace() so users don't get trapped in a back-button loop
+        setTimeout(() => {
+            window.location.replace(targetStreamUrl);
+        }, 800); // 800ms delay to allow the animation to display smoothly
+    }
+});
+</script>
+</body></html>"""
+AH_SECURE_PAGE = """<!DOCTYPE html><html><head>
+<title>[ANIMAHD.COM] S01E01 Naruto Shippuden.mkv</title></head><body>
+<video id="player" playsinline controls preload="metadata">
+    <source src="%(worker)s" type="video/mp4" onerror="window.handleVideoError()" />
+</video>
+<script>
+    function handleVideoError() {
+        container.innerHTML = '<h3>Stream Locked by Google</h3>'
+            + '<p>The API limit has been reached. Auto-switching to the Alternative '
+            + 'Player in 3 seconds...</p>';
+        window.location.href = '?eid=%(eid)s&fallback=1';
+    }
+    window.proxyDownloadUrl = '%(worker)s&filename=%%5BANIMAHD.COM%%5D.mkv&v=0';
+</script>
+</body></html>""" % {"worker": AH_WORKER_URL, "eid": AH_EID}
+AH_WORKER_HEAD = b"\x1a\x45\xdf\xa3\x01\x00\x00\x00\x00\x00\x00\x1f\x42\x82\x45\x9c"
+
 
 
 class FakeResponse:
@@ -1155,6 +1210,281 @@ class TestUnwrapGdrive(unittest.TestCase):
 # ---------------------------------------------------------------------------
 # Command line
 # ---------------------------------------------------------------------------
+
+class TestAnimahdRecognition(unittest.TestCase):
+    def test_the_player_url_is_recognised_in_its_published_shape(self):
+        self.assertTrue(hr.is_animahd_player(AH_PLAYER_URL))
+        self.assertTrue(hr.is_animahd_player("https://animahd.com/player"))
+        self.assertTrue(hr.is_animahd_player("https://animahd.com/player/?file_id=abc123"))
+
+    def test_a_page_that_is_not_the_player_is_not_the_player(self):
+        for url in ("https://animahd.com/naruto-shippuden/",
+                    "https://animahd.com/player-extra/",
+                    "https://animahd.com", EMBED,
+                    GD_DOWNLOAD_PAGE, AH_SECURE_URL, AH_WORKER_URL):
+            self.assertFalse(hr.is_animahd_player(url), url)
+
+    def test_a_look_alike_host_is_refused(self):
+        self.assertFalse(hr.is_animahd_player(
+            "https://animahd.com.evil.test/player/?file_id=" + AH_FILE_ID))
+        self.assertFalse(hr.is_animahd_player("not a url"))
+
+    def test_the_row_file_id_is_read_out_of_the_player_url(self):
+        self.assertEqual(hr.animahd_player_file_id(AH_PLAYER_URL), AH_FILE_ID)
+
+    def test_the_file_id_is_only_read_from_an_animahd_host(self):
+        self.assertEqual(hr.animahd_player_file_id(
+            "https://other.test/player/?file_id=" + AH_FILE_ID), "")
+        self.assertEqual(hr.animahd_player_file_id(
+            "https://animahd.com/player/?file_id=short"), "")
+        self.assertEqual(hr.animahd_player_file_id("https://animahd.com/player/"), "")
+
+
+class TestAnimahdPageReading(unittest.TestCase):
+    def test_the_redirect_literal_is_taken_from_the_page_itself(self):
+        self.assertEqual(hr.animahd_target(AH_PLAYER_PAGE), (AH_SECURE_URL, AH_FILE_ID))
+
+    def test_a_player_page_with_no_target_reports_nothing(self):
+        self.assertEqual(hr.animahd_target("<html><body>loading</body></html>"), ("", ""))
+        self.assertEqual(hr.animahd_target(""), ("", ""))
+
+    def test_the_second_host_is_read_the_same_way(self):
+        # Measured: two files on this site redirect to two different secure hosts,
+        # so the label is data, not a constant.
+        page = AH_PLAYER_PAGE.replace("theultimateanimehub", "animeepisodesandmore")
+        url, file_id = hr.animahd_target(page)
+        self.assertEqual(url, f"https://animeepisodesandmore.animahd.fun/?id={AH_FILE_ID}")
+        self.assertEqual(file_id, AH_FILE_ID)
+
+    def test_the_source_tag_is_found_with_its_declared_type(self):
+        renditions = hr.animahd_renditions(AH_SECURE_PAGE)
+        self.assertEqual([item["url"] for item in renditions], [AH_WORKER_URL])
+        self.assertEqual(renditions[0]["declared_mime"], "video/mp4")
+        self.assertEqual(renditions[0]["mime"], "")
+
+    def test_a_source_that_is_not_a_byte_endpoint_is_not_a_rendition(self):
+        cases = {
+            "no src attribute": '<video><source type="video/mp4"></video>',
+            "plain http": f'<source src="http://a.workers.dev/?eid={AH_EID}&token=t">',
+            "not the worker host": '<source src="https://ads.example.test/e.mp4">',
+            "no signed query": '<source src="https://a.animahd011.workers.dev/x.mp4">',
+            "eid without token": '<source src="https://a.workers.dev/?eid=x">',
+            "protocol relative is upgraded": (
+                f'<source src="//a.workers.dev/?eid={AH_EID}&token=t">'),
+        }
+        self.assertEqual(hr.animahd_renditions(cases["no src attribute"]), [])
+        self.assertEqual(hr.animahd_renditions(cases["not the worker host"]), [])
+        self.assertEqual(hr.animahd_renditions(cases["no signed query"]), [])
+        self.assertEqual(hr.animahd_renditions(cases["plain http"]), [])
+        self.assertEqual([item["url"] for item in
+                          hr.animahd_renditions(cases["protocol relative is upgraded"])],
+                         ["https://a.workers.dev/?" + f"eid={AH_EID}&token=t"])
+        self.assertEqual(hr.animahd_renditions(""), [])
+
+
+class TestUnwrapAnimahd(unittest.TestCase):
+    def scripted(self, **over):
+        script = {
+            "animahd.com/player": (200, AH_PLAYER_PAGE, {"content-type": "text/html"}),
+            "animahd.fun/?id=": (200, AH_SECURE_PAGE, {"content-type": "text/html"}),
+            "workers.dev": (206, AH_WORKER_HEAD,
+                            {"content-type": "video/x-matroska",
+                             "content-range": "bytes 0-511/253161185"}),
+        }
+        script.update(over)
+        return scripted_fetch(script)
+
+    def test_the_chain_ends_at_the_signed_worker_url(self):
+        fetch = self.scripted()
+        verdict = hr.unwrap_animahd(AH_PLAYER_URL, fetch=fetch)
+        self.assertEqual(verdict["status"], "active", verdict["notes"])
+        self.assertEqual(verdict["service"], "animahd-player")
+        self.assertEqual(verdict["embed_url"], AH_PLAYER_URL)
+        self.assertEqual(verdict["file_id"], AH_FILE_ID)
+        self.assertEqual(verdict["bridge_url"], AH_SECURE_URL)
+        self.assertEqual(verdict["final_url"], AH_WORKER_URL)
+        self.assertTrue(verdict["is_temporary"])
+        self.assertEqual(verdict["size_bytes"], 253161185)
+        self.assertEqual(verdict["http_status"], 206)
+        self.assertEqual(verdict["content_type"], "video/x-matroska")
+        self.assertEqual([item["url"] for item in verdict["sources"]], [AH_WORKER_URL])
+        self.assertEqual([item["mime"] for item in verdict["sources"]],
+                         ["video/x-matroska"])
+        self.assertEqual([url for url, _h, _m in fetch.calls],
+                         [AH_PLAYER_URL, AH_SECURE_URL, AH_WORKER_URL])
+
+    def test_three_requests_is_the_whole_bill(self):
+        # Player page, secure page, one Range probe. Nothing is retried, because a
+        # resolver that re-fetched on every refusal is how a host gets blocked.
+        fetch = self.scripted(**{"workers.dev": (403, b"", {})})
+        verdict = hr.unwrap_animahd(AH_PLAYER_URL, fetch=fetch)
+        self.assertEqual(len(fetch.calls), 3)
+        self.assertEqual(verdict["status"], "unverified")
+
+    def test_the_page_that_declares_mp4_while_serving_matroska_says_so(self):
+        verdict = hr.unwrap_animahd(AH_PLAYER_URL, fetch=self.scripted())
+        self.assertIn("the page declares video/mp4", json.dumps(verdict["notes"]))
+
+    def test_every_request_names_a_user_agent_and_no_referer(self):
+        # Measured: the secure host answers 403 to a request with no User-Agent,
+        # and 200 to the same request with a browser UA and no Referer at all.
+        seen = {}
+
+        def fake_open(request, timeout, follow=True):
+            seen.setdefault("headers", []).append(dict(request.header_items()))
+            body = (AH_PLAYER_PAGE if "animahd.com" in request.full_url
+                    else AH_SECURE_PAGE if "animahd.fun" in request.full_url
+                    else AH_WORKER_HEAD)
+            headers = ({"Content-Type": "video/x-matroska",
+                        "Content-Range": "bytes 0-511/253161185"}
+                       if "workers.dev" in request.full_url else {})
+            return FakeResponse(206 if "workers.dev" in request.full_url else 200,
+                                body, headers, request.full_url)
+
+        with mock.patch.object(hr, "_open", fake_open):
+            verdict = hr.unwrap_animahd(AH_PLAYER_URL, referer="https://animahd.com/x")
+        self.assertEqual(verdict["status"], "active", verdict["notes"])
+        self.assertEqual(len(seen["headers"]), 3)
+        for headers in seen["headers"]:
+            self.assertEqual(headers.get("User-agent"), hr.USER_AGENT)
+            self.assertNotIn("Referer", headers)
+
+    def test_the_signed_query_is_named_but_its_token_is_not_an_expiry(self):
+        verdict = hr.unwrap_animahd(AH_PLAYER_URL, fetch=self.scripted())
+        self.assertEqual(verdict["signed_params"], ["token"])
+        self.assertEqual(verdict["expires_in"], hr.ANIMAHD_TOKEN_SECONDS)
+        self.assertIn("carries no expiry of its own", json.dumps(verdict["notes"]))
+
+    def test_a_host_that_does_publish_an_expiry_is_believed_over_the_estimate(self):
+        page = AH_SECURE_PAGE.replace(
+            "&v=0&ext=.mp4", "&v=0&e=2000000000&ext=.mp4", 1)
+        signed = AH_WORKER_URL.replace("&v=0&ext=.mp4", "&v=0&e=2000000000&ext=.mp4")
+        fetch = self.scripted(**{"animahd.fun/?id=": (200, page, {"content-type": "text/html"})})
+        verdict = hr.unwrap_animahd(AH_PLAYER_URL, fetch=fetch)
+        self.assertEqual(verdict["final_url"], signed)
+        self.assertEqual(verdict["expires_in"], 2000000000 - int(time.time()))
+        self.assertNotIn("carries no expiry of its own", json.dumps(verdict["notes"]))
+
+    def test_verify_off_spends_nothing(self):
+        fetch = scripted_fetch({})
+        verdict = hr.unwrap_animahd(AH_PLAYER_URL, fetch=fetch, verify=False)
+        self.assertEqual(fetch.calls, [])
+        self.assertEqual(verdict["status"], "unverified")
+        self.assertEqual(verdict["final_url"], AH_PLAYER_URL)
+        self.assertTrue(verdict["is_temporary"])
+        self.assertIn("without a request", json.dumps(verdict["notes"]))
+
+    def test_a_non_player_url_is_refused_before_any_request(self):
+        fetch = scripted_fetch({})
+        verdict = hr.unwrap_animahd(EMBED, fetch=fetch)
+        self.assertEqual(verdict["status"], "unknown")
+        self.assertIn("not an animahd player URL", verdict["notes"])
+        self.assertEqual(fetch.calls, [])
+
+    def test_a_player_page_that_refuses_is_reported_as_it_answered(self):
+        for status, expected in ((403, "blocked"), (404, "dead"), (500, "unknown"),
+                                 (429, "blocked"), (401, "blocked"), (410, "dead")):
+            fetch = self.scripted(**{"animahd.com/player": (status, b"", {})})
+            verdict = hr.unwrap_animahd(AH_PLAYER_URL, fetch=fetch)
+            self.assertEqual(verdict["status"], expected, status)
+            self.assertIn(f"player page HTTP {status}", verdict["notes"])
+            self.assertEqual(len(fetch.calls), 1)
+
+    def test_a_player_page_with_no_literal_resolves_to_nothing(self):
+        fetch = self.scripted(**{
+            "animahd.com/player": (200, "<html>loading</html>", {"content-type": "text/html"})})
+        verdict = hr.unwrap_animahd(AH_PLAYER_URL, fetch=fetch)
+        self.assertEqual(verdict["status"], "unknown")
+        self.assertIn("no <host>.animahd.fun/?id= target", json.dumps(verdict["notes"]))
+        self.assertEqual(len(fetch.calls), 1)
+
+    def test_a_player_url_that_carries_no_file_id_still_resolves(self):
+        fetch = self.scripted()
+        verdict = hr.unwrap_animahd("https://animahd.com/player/?file_id=" + AH_FILE_ID
+                                    + "&show_id=194", fetch=fetch)
+        self.assertEqual(verdict["status"], "active", verdict["notes"])
+
+    def test_a_page_that_redirects_elsewhere_than_the_row_named_is_reported(self):
+        page = AH_PLAYER_PAGE.replace(AH_FILE_ID, "9zOtherFileIdValue000000000000000")
+        fetch = self.scripted(**{"animahd.com/player": (200, page, {"content-type": "text/html"})})
+        verdict = hr.unwrap_animahd(AH_PLAYER_URL, fetch=fetch)
+        self.assertIn("which is not the", json.dumps(verdict["notes"]))
+        self.assertEqual(verdict["bridge_url"],
+                         "https://theultimateanimehub.animahd.fun/?id=9zOtherFileIdValue000000000000000")
+        self.assertEqual(verdict["status"], "active", verdict["notes"])
+
+    def test_a_secure_page_that_refuses_names_the_user_agent_rule(self):
+        for status, expected in ((403, "blocked"), (404, "dead"), (500, "unknown")):
+            fetch = self.scripted(**{"animahd.fun/?id=": (status, b"", {})})
+            verdict = hr.unwrap_animahd(AH_PLAYER_URL, fetch=fetch)
+            self.assertEqual(verdict["status"], expected, status)
+            self.assertTrue(any(n.startswith(f"secure page HTTP {status}")
+                                for n in verdict["notes"]),
+                            f"no 'secure page HTTP {status}' note in {verdict['notes']}")
+            self.assertEqual(("403" if expected == "blocked" else ""),
+                             "403" if "no User-Agent" in json.dumps(verdict["notes"]) else "")
+
+    def test_the_google_quota_page_is_a_blocked_file_not_a_missing_one(self):
+        page = AH_SECURE_PAGE.replace(
+            f'<source src="{AH_WORKER_URL}"', f'<p data-x="{AH_WORKER_URL}"')
+        fetch = self.scripted(**{"animahd.fun/?id=": (200, page, {"content-type": "text/html"})})
+        verdict = hr.unwrap_animahd(AH_PLAYER_URL, fetch=fetch)
+        self.assertEqual(verdict["status"], "blocked")
+        self.assertIn("the Google quota lock", json.dumps(verdict["notes"]))
+
+    def test_a_secure_page_with_no_endpoint_and_no_quota_words_is_unknown(self):
+        fetch = self.scripted(**{
+            "animahd.fun/?id=": (200, "<html><body>no player here</body></html>",
+                                 {"content-type": "text/html"})})
+        verdict = hr.unwrap_animahd(AH_PLAYER_URL, fetch=fetch)
+        self.assertEqual(verdict["status"], "unknown")
+        self.assertIn("no byte endpoint", json.dumps(verdict["notes"]))
+
+    def test_a_refusal_from_the_byte_host_is_never_a_verdict_about_the_file(self):
+        for status in (403, 429, 503, 0):
+            fetch = self.scripted(**{"workers.dev": (status, b"", {})})
+            verdict = hr.unwrap_animahd(AH_PLAYER_URL, fetch=fetch)
+            self.assertEqual(verdict["status"], "unverified", status)
+            self.assertIn("recorded unverified, not retried",
+                          json.dumps(verdict["notes"]))
+            self.assertEqual(len(fetch.calls), 3)
+
+    def test_a_non_video_content_type_keeps_the_measured_mime_and_says_why(self):
+        fetch = self.scripted(**{
+            "workers.dev": (206, b"<html/>", {"content-type": "text/html"})})
+        verdict = hr.unwrap_animahd(AH_PLAYER_URL, fetch=fetch)
+        self.assertEqual(verdict["status"], "unknown")
+        # `content_type` is the host's literal answer; the measured matroska is
+        # what `sources[].mime` keeps. The name promises the second, the field
+        # records the first — assert both so the pair cannot drift apart again.
+        self.assertEqual(verdict["content_type"], "text/html")
+        self.assertEqual([item["mime"] for item in verdict["sources"]],
+                         [hr.ANIMAHD_MIME])
+        self.assertIn("mime reported as the measured", json.dumps(verdict["notes"]))
+
+    def test_a_plain_200_from_the_byte_host_is_active_and_full_body(self):
+        fetch = self.scripted(**{
+            "workers.dev": (200, AH_WORKER_HEAD, {"content-type": "video/x-matroska"})})
+        verdict = hr.unwrap_animahd(AH_PLAYER_URL, fetch=fetch)
+        self.assertEqual(verdict["status"], "active", verdict["notes"])
+        self.assertIn("full_body", json.dumps(verdict["notes"]))
+
+    def test_a_dead_probe_that_leaves_no_content_type_is_still_labelled(self):
+        fetch = self.scripted(**{"workers.dev": (410, b"", {})}),
+        verdict = hr.unwrap_animahd(AH_PLAYER_URL, fetch=fetch[0])
+        self.assertEqual(verdict["status"], "dead")
+        self.assertEqual(verdict["sources"][0]["mime"], hr.ANIMAHD_MIME)
+
+    def test_a_transport_failure_is_reported_not_raised(self):
+        # A transport failure is `http_request`'s to absorb, not a scripted
+        # fetch's: injecting a raising fetch would bypass the try/except that
+        # turns the socket error into status 0. Inject at `hr._open` (the only
+        # socket call) so the chain runs against the real transport.
+        with mock.patch.object(hr, "_open", side_effect=OSError("dns down")):
+            verdict = hr.unwrap_animahd(AH_PLAYER_URL)
+        self.assertEqual(verdict["status"], "unknown")
+        self.assertIn("player page HTTP 0", verdict["notes"])
+
 
 class TestMain(unittest.TestCase):
     def test_usage_without_arguments(self):

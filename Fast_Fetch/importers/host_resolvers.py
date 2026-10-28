@@ -109,6 +109,35 @@ hammering a rate limit is how one blocked file gets the whole client blocked.
 Unlike the two packer hosts, the durable identifier here is the file id, so
 `verify=False` asks Drive for nothing at all.
 
+ANIMAHD — THE SAME FILE, TWO HOSTS, ONE DURABLE URL
+---------------------------------------------------
+The same `animahd.com` row that carries a Drive file id also carries the site's
+own watch link, and that link turned out to be resolvable without a browser —
+`AGENTS.md`'s "an iframe is never a playable row" rule does not apply to a page
+whose script is one `window.location.replace` of a literal printed in its own HTML.
+Verified live on 2026-10-28, one request per hop:
+
+    GET https://animahd.com/player/?file_id=<id>&show_id=<post>&ep=<n>   200, 84 KB
+        const targetStreamUrl = "https://<varies>.animahd.fun/?id=<id>";
+        window.location.replace(targetStreamUrl);
+    GET https://<varies>.animahd.fun/?id=<id>   200, 57 KB, with a browser UA and
+        NO Referer (the same request with no UA at all answers 403)
+        <video id="player"><source src="https://<sub>.animahdNNN.workers.dev/
+        ?eid=…&token=…&v=0&ext=.mp4" type="video/mp4">
+    GET that URL with Range: bytes=0-511   206, video/x-matroska,
+        Content-Range bytes 0-511/253161185, magic 1A45DFA3, no Referer needed
+
+Three measurements decide the shape of `unwrap_animahd`. The secure host's label
+is not fixed — `theultimateanimehub` and `animeepisodesandmore` were both seen —
+so it is read out of the player page each time and never stored. `token`
+regenerates on every load of the secure page (`eid` stayed put), so the worker
+URL is a result, never catalog data; a URL minted at 17:16 still answered 206 at
+17:48, so `expires_in` claims a deliberately conservative 1800 s against a
+measured window of at least 32 minutes whose ceiling nobody has observed. And the
+page's `<source type="video/mp4">` is contradicted by its own bytes (EBML,
+served as `video/x-matroska`), so the mime a caller receives is the response's,
+not the declaration.
+
 HOSTS DELIBERATELY NOT IMPLEMENTED — THE VERDICT, WITH THE MEASUREMENTS
 -----------------------------------------------------------------------
 Two other players in this catalog were examined on 2026-10-28 and each got the
@@ -257,6 +286,42 @@ GDRIVE_ATTR_RE = re.compile(r"""\b(?P<name>type|name|value)\s*=\s*["'](?P<value>
 SERVICE_MXDROP = "mxdrop"
 SERVICE_PKEMBED = "pkembed"
 SERVICE_GDRIVE = "gdrive"
+SERVICE_ANIMAHD = "animahd-player"
+
+# AnimaHD's own player page. It is not an iframe and it is not a JS puzzle: the
+# page's script is `const targetStreamUrl = "<literal>"; …
+# window.location.replace(targetStreamUrl)`, so the destination is in the HTML
+# and a server-side fetch can follow it. Measured on 2026-10-28 on two
+# different files: the secure host NAME varies per file (`theultimateanimehub`
+# and `animeepisodesandmore` were both served), so it is read out of the page
+# every time and never stored or pinned — only the player URL is durable.
+ANIMAHD_HOST_RE = re.compile(r"(?:^|\.)animahd\.com$", re.I)
+ANIMAHD_PLAYER_PATH_RE = re.compile(r"^/player/?$", re.I)
+ANIMAHD_TARGET_RE = re.compile(
+    r"""["']https://((?:[A-Za-z0-9-]+\.)+)animahd\.fun/\?id=([A-Za-z0-9_-]{6,})["']""",
+    re.I)
+# The secure page's own media tag: <video id="player" …><source src="…workers.dev/
+# ?eid=…&token=…&v=0&ext=.mp4">. One per page (measured), and its `src` is about
+# 2,900 characters long, which is why the value is captured rather than counted.
+ANIMAHD_SOURCE_RE = re.compile(
+    r"""<source\b[^>]*?\bsrc\s*=\s*["']([^"']+)["']""", re.I | re.S)
+# The byte host is Cloudflare Workers under `animahdNNN.workers.dev`, but the
+# name is the deployer's choice, so the guard is structural: an https URL whose
+# host ends in `workers.dev` and whose query carries `eid` and `token`.
+ANIMAHD_WORKER_RE = re.compile(r"(?:^|\.)workers\.dev$", re.I)
+# The page's own words for "Google's per-file quota is spent, so the file is not
+# playing right now". The branch is client-side, so its presence alone does not
+# make the `<source>` a lie — it just names why a probe may fail.
+ANIMAHD_LOCKED_RE = re.compile(r"Stream Locked by Google|API limit has been reached", re.I)
+# `token` regenerates on every load of the secure page (`eid` stayed put). A URL
+# minted at 17:16 still answered 206 at 17:48, so the window is at least ~32
+# minutes and nobody has measured its ceiling: 1800 is what this module claims,
+# deliberately shorter than the shortest observation.
+ANIMAHD_TOKEN_SECONDS = 1800
+# Measured from the live host's own header on a 206 response, twice. The URL ends
+# in `ext=.mp4` and the bytes are EBML, so the extension is the least trustworthy
+# statement on the page and the mime here comes from the response, not the name.
+ANIMAHD_MIME = "video/x-matroska"
 
 
 # ---------------------------------------------------------------------------
@@ -518,6 +583,19 @@ def gdrive_file_id(url: str) -> str:
 
 def is_gdrive_link(url: str) -> bool:
     return bool(gdrive_file_id(url))
+
+
+def is_animahd_player(url: str) -> bool:
+    return _matches(url, ANIMAHD_HOST_RE, ANIMAHD_PLAYER_PATH_RE)
+
+
+def animahd_player_file_id(url: str) -> str:
+    """The `file_id=` a player URL carries, or "" when it carries none."""
+    parts = urllib.parse.urlsplit(absolutize(url))
+    if not ANIMAHD_HOST_RE.search((parts.netloc or "").lower()):
+        return ""
+    candidate = (urllib.parse.parse_qs(parts.query).get("file_id") or [""])[0]
+    return candidate if re.fullmatch(r"[A-Za-z0-9_-]{6,}", candidate or "") else ""
 
 
 def gdrive_download_url(file_id: str) -> str:
@@ -944,6 +1022,178 @@ def unwrap_gdrive(url: str, fetch=None, verify: bool = True,
     return _drive_probe(result, fetch)
 
 
+# ---------------------------------------------------------------------------
+# animahd player — two page GETs and one Range request, no JS engine
+# ---------------------------------------------------------------------------
+
+def _page_text(body) -> str:
+    return body if isinstance(body, str) else (body or b"").decode("utf-8", "replace")
+
+
+def animahd_target(page: str) -> tuple[str, str]:
+    """
+    (`secure page URL`, `file id`) the player page tells its own browser to open.
+
+    The host label is copied out of the page rather than rebuilt: two files on
+    this site were measured and they redirect to different hosts
+    (`theultimateanimehub` and `animeepisodesandmore`), so a constant here would
+    resolve one file and break the next. `?id=` is the same value the catalog row
+    published as `data-fileid`, which is what makes the mismatch check in
+    `unwrap_animahd` worth doing at all.
+    """
+    found = ANIMAHD_TARGET_RE.search(page or "")
+    if not found:
+        return "", ""
+    return f"https://{found.group(1)}animahd.fun/?id={found.group(2)}", found.group(2)
+
+
+def animahd_renditions(page: str) -> list[dict]:
+    """
+    The secure page's `<source>` tags that really are byte endpoints.
+
+    "Really are" is a structural test, not a filename test: https, a host under
+    `workers.dev`, and a query carrying both `eid` and `token`. The tag's own
+    `type="video/mp4"` is kept as `declared_mime` and trusted for nothing — the
+    same tag's URL ends in `ext=.mp4` while the host answers `video/x-matroska`
+    with EBML bytes, so the extension and the declaration are the two least
+    reliable strings on the page.
+    """
+    renditions = []
+    for tag in re.findall(r"<source\b[^>]*>", page or "", re.I | re.S):
+        src = ANIMAHD_SOURCE_RE.search(tag)
+        if not src:
+            continue
+        url = absolutize(src.group(1))
+        parts = urllib.parse.urlsplit(url)
+        query = urllib.parse.parse_qs(parts.query)
+        if not url.lower().startswith("https:"):
+            continue
+        if not ANIMAHD_WORKER_RE.search((parts.netloc or "").lower()):
+            continue
+        if not (query.get("eid") and query.get("token")):
+            continue
+        declared = re.search(r"""\btype\s*=\s*["']([^"']*)["']""", tag, re.I)
+        renditions.append({"url": url, "mime": "", "label": "",
+                           "declared_mime": (declared.group(1) if declared else "").lower()})
+    return renditions
+
+
+def unwrap_animahd(url: str, fetch=None, verify: bool = True,
+                   referer: str | None = None) -> dict:
+    """
+    Player URL -> {final_url, service, is_temporary, expires_in, status, notes, …}.
+
+    Same contract as the other resolvers, with one addition worth naming: the
+    durable identifier is the *player* URL, because the secure host varies per
+    file and the worker URL is re-signed per load. `verify=False` spends nothing
+    — the catalog already holds everything that lasts. `verify=True` spends three
+    requests and never more: player page, secure page, one Range probe.
+
+    Every request here must carry a User-Agent. The secure host was measured
+    answering 403 to a request that had none and 200 to the same request with a
+    normal browser UA and no Referer at all; `http_request` supplies the UA header
+    and this module never attaches a Referer to a media request, so both halves
+    of that measurement are satisfied by the seam rather than by caller care.
+    """
+    fetch = fetch or http_request
+    result = _new_result(SERVICE_ANIMAHD, url)
+    _withheld_referrer(result, referer)
+    if not is_animahd_player(result["embed_url"]):
+        result["status"] = "unknown"
+        result["notes"].append("not an animahd player URL")
+        return result
+    result["file_id"] = animahd_player_file_id(result["embed_url"])
+    if not verify:
+        result["final_url"] = result["embed_url"]
+        result["notes"].append("player URL cataloged without a request: the byte URL "
+                               "is re-signed per play, so this URL is all that lasts")
+        return result
+
+    status, body, _headers, _final = fetch(result["embed_url"])
+    page = _page_text(body)
+    if status != 200:
+        result["status"] = ("dead" if status in (404, 410)
+                            else "blocked" if status in (401, 403, 429) else "unknown")
+        result["notes"].append(f"player page HTTP {status}")
+        return result
+
+    target, target_id = animahd_target(page)
+    if not target:
+        result["status"] = "unknown"
+        result["notes"].append("player page publishes no <host>.animahd.fun/?id= target")
+        return result
+    if result["file_id"] and target_id != result["file_id"]:
+        result["notes"].append(f"player page redirects to file id {target_id}, which is "
+                               f"not the {result['file_id']} the row named")
+    result["bridge_url"] = target
+
+    status, body, _headers, _final = fetch(target)
+    secure = _page_text(body)
+    if status != 200:
+        result["status"] = ("dead" if status in (404, 410)
+                            else "blocked" if status in (401, 403, 429) else "unknown")
+        result["notes"].append(
+            f"secure page HTTP {status}"
+            + (" — this host answers 403 to a request that carries no User-Agent"
+               if status in (401, 403) else ""))
+        return result
+
+    renditions = animahd_renditions(secure)
+    if not renditions:
+        result["status"] = "blocked" if ANIMAHD_LOCKED_RE.search(secure) else "unknown"
+        result["notes"].append(
+            "secure page publishes no byte endpoint"
+            + (" — its own words are the Google quota lock, so this file is "
+               "rate-limited right now, not gone" if ANIMAHD_LOCKED_RE.search(secure) else ""))
+        return result
+    result["final_url"] = renditions[0]["url"]
+    result["sources"] = renditions
+
+    _expires_at, measured = expiry_from_url(result["final_url"])
+    if measured is None:
+        result["expires_in"] = ANIMAHD_TOKEN_SECONDS
+        result["notes"].append(
+            f"the signed query carries no expiry of its own; {ANIMAHD_TOKEN_SECONDS} s "
+            "is claimed from the measured window, which is at least 32 minutes and "
+            "whose ceiling nobody has observed")
+    else:
+        result["expires_in"] = measured
+    result["signed_params"] = sorted(signature_params(result["final_url"]))
+    result = _finish_media(result, fetch, True)
+
+    content_type = (result.get("content_type") or "").lower()
+    if content_type.startswith("video/"):
+        mime = content_type
+    else:
+        mime = ANIMAHD_MIME
+        if result["status"] != "active":
+            result["notes"].append(
+                f"mime reported as the measured {ANIMAHD_MIME}: this call did not get a "
+                "video content type back from the byte host")
+    for item in result["sources"]:
+        item["mime"] = mime
+    # `content_type` stays whatever the host actually answered, even when that
+    # answer is nothing or `text/html`: the caller can then see that the mime in
+    # `sources` is the measured one, not a claim about this particular response.
+
+    # A refusal from this host is a token or a quota answer, never a verdict about
+    # the file: the token is minted per load and the secure page itself explains
+    # that Google's per-file limit can be exhausted. One attempt, no retry — a
+    # resolver that hammered it would spend the client's standing on one episode.
+    if result.get("http_status") in (403, 429, 503, 0):
+        result["status"] = "unverified"
+        result["notes"].append(
+            f"HTTP {result['http_status']} from the byte host: an expired token, a "
+            "Google quota, or a transport failure — recorded unverified, not retried")
+    elif result["status"] == "active":
+        for item in result["sources"]:
+            if item["declared_mime"] and item["declared_mime"] != mime:
+                result["notes"].append(
+                    f"the page declares {item['declared_mime']}, the host answers {mime}")
+                break
+    return result
+
+
 def main(argv: list[str] | None = None) -> int:
     """One URL in, one JSON verdict out — a manual check of the chain."""
     args = argv if argv is not None else sys.argv[1:]
@@ -956,6 +1206,8 @@ def main(argv: list[str] | None = None) -> int:
         unwrap = unwrap_pkembed
     elif is_gdrive_link(url):
         unwrap = unwrap_gdrive
+    elif is_animahd_player(url):
+        unwrap = unwrap_animahd
     else:
         unwrap = unwrap_mxdrop
     verdict = unwrap(url, verify="--no-verify" not in args)

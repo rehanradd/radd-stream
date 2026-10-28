@@ -5419,6 +5419,24 @@ def resolve_live_source(source_id: int, *, v2: bool = False) -> dict:
                 fresh_url = direct_u
                 fresh_temp = 1
                 embed_verdict = verdict
+        elif hr and (service == hr.SERVICE_ANIMAHD or hr.is_animahd_player(source_u)
+                     or hr.is_animahd_player(cached_u)):
+            # Two page GETs and one Range probe: the player page's script is a
+            # `window.location.replace` of a literal printed in its own HTML, so a
+            # server can follow it without a JS engine. The minted byte URL is the
+            # only thing written back here, and the resolver hands up a deliberate
+            # under-estimate of how long it lives (~30 min), so this branch is
+            # entered again when it dies rather than serving a dead token from the
+            # six-hour ceiling below. Recognition is by URL shape, not by an
+            # "animahd" substring: the same site's Drive rows must stay on their
+            # own path.
+            embed = cached_u if hr.is_animahd_player(cached_u) else source_u
+            verdict = hr.unwrap_animahd(embed, verify=True)
+            direct_u = embed_from_verdict(verdict)
+            if direct_u:
+                fresh_url = direct_u
+                fresh_temp = 1
+                embed_verdict = verdict
         elif "gamerxyt" in source_u.lower() or "gamerxyt" in cached_u.lower():
             gamer = hoster_input("gamerxyt")
             if "link=" in gamer:
