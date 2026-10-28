@@ -48,6 +48,12 @@ recollection — this is the section that had gone stale twice running).
   `multimovies-full-import`, `multimovies-import-regression-fix`, `portable-context`,
   `replit-bootstrap-access-fix`, `staging-merge-approval-gate-20261018`). Whether any of them is
   already merged was not checked here, so leave them alone rather than pruning them.
+- **Push credentials, re-checked 2026-10-28 21:40:** `GITHUB_TOKEN` is present but rejected —
+  `api.github.com/user` returns `401 Bad credentials`, and a push through the askpass helper
+  fails with `remote: Invalid username or token`. Remote `master` was `ff912c8` at that check,
+  with local `6a8072a` unpushed behind it. No `gh` CLI and no GitHub SSH key exist on this VM.
+  Anonymous `git ls-remote` still succeeds (public repo) and proves nothing about write access.
+  A fresh owner-issued token is required before the next push.
 
 ## Verified REST surface (2026-10-22, re-read against `Fast_Fetch/viewer.py`)
 
