@@ -165,19 +165,19 @@ the deferred roadmap items are separate concerns; see §6 and §8.
 >   _bearer_token()` / `:389 request_is_vip()` read `Authorization: Bearer …`, and every
 >   `api/v2/account*` route requires the sync key (that is why Session 13's payment call had
 >   to be signed in). A plain `vip=1` is never honoured — only a server-minted pass.
-> - **There is a limiter.** `viewer.py:2913 _bucket_for()` assigns each request a token bucket
+> - **There is a limiter.** `viewer.py:2957 _bucket_for()` assigns each request a token bucket
 >   (`account`, the `api_v2.ROUTE_BUCKETS` map, `play` for `/api/v1/stream|download|art` and
 >   `/api/m3u`, `reports` for `/api/v1/stats`, `browse` otherwise), and `redact.py:1163` puts
 >   the IETF `RateLimit-Limit/Remaining/Reset` triple on the answer. A phone that polls too
 >   hard gets throttled, so "retry forever" is not a free strategy.
-> - **CORS is an allow-list that is currently empty.** `send_json()` (`viewer.py:2895`) calls
+> - **CORS is an allow-list that is currently empty.** `send_json()` (`viewer.py:2939`) calls
 >   `redact.cors_headers_for(origin)`, which returns the two headers only for an origin in
 >   `redact.CORS_ALLOW_ORIGINS` — a `frozenset()` today (`redact.py:1278`), so no browser
 >   origin is granted and a refused one gets **no header at all**. Nothing sends `*` any more.
 >   This costs the Android client nothing (OkHttp is not a browser and ignores CORS), but it
 >   means a web dashboard cannot read this API until an operator adds its origin.
 > - **The default bind is loopback.** `start_server()` is `host="127.0.0.1"`
->   (`viewer.py:3447`) and `fast_fetch.py:5857` defaults `--host` to `127.0.0.1` with the help
+>   (`viewer.py:3491`) and `fast_fetch.py:5857` defaults `--host` to `127.0.0.1` with the help
 >   text "nginx is the public gate". The old `0.0.0.0` default is gone.
 >
 > What did **not** change: the deployed host is plain HTTP with no TLS, the four catalog reads
@@ -186,12 +186,12 @@ the deferred roadmap items are separate concerns; see §6 and §8.
 > surface, and never treat the account routes as unauthenticated.
 
 ### `GET /api/v1/posts`
-**Query params** (route dispatch viewer.py:3120-3127 → `api_v1_get_posts()` viewer.py:2491):
+**Query params** (route dispatch viewer.py:3159-3191 → `api_v1_get_posts()` viewer.py:2507):
 
 | Name | Behaviour |
 |---|---|
 | `q` | `LIKE '%q%'` against `clean_title`, `title`, or `slug`. Omit for no search. |
-| `type` | Exact-equality match on `posts.content_type` — **plus one special case**: `type=anime` is answered from the flag the data actually carries, `(p.is_animated = 1 OR lower(p.industry) LIKE '%anime%')` (viewer.py:2513). The plain values are only `movie`, `series`, `complete_season`, `ongoing_season` — the four `classify_media()` ever writes. |
+| `type` | Exact-equality match on `posts.content_type` — **plus one special case**: `type=anime` is answered from the flag the data actually carries, `(p.is_animated = 1 OR lower(p.industry) LIKE '%anime%')` (viewer.py:2530). The plain values are only `movie`, `series`, `complete_season`, `ongoing_season` — the four `classify_media()` ever writes. |
 | `industry` / `genre` / `quality` / `sort` | Facet filters added 2026-10-27 (App Session 12's multi-filter pass): fixed SQL clauses per known value, `quality` as an `EXISTS` over the prints, `sort=trending` as `release_count + source_count`. An unknown value is ignored, not guessed at. |
 | `page` | 1-based, default `1`. |
 | `limit` | Default `20`, clamped to `1..100`. |
@@ -211,7 +211,7 @@ the deferred roadmap items are separate concerns; see §6 and §8.
 > (The old 🚨 note here — "there is no `?type=anime`", "`HomeScreen.kt:48` / `SearchScreen.kt:49`
 > map the chip to an empty grid" — described the 2026-10-22 server and is retired. `HomeScreen`
 > offers the Anime entry at `HomeScreen.kt:237`; the `industry` facet is the second door to the
-> same predicate, which `viewer.py:2539` also answers. The last open piece was the Room
+> same predicate, which `viewer.py:2555` also answers. The last open piece was the Room
 > consequence — `FavoritePost` stored no `is_animated` column, so a favourite saved from the grid
 > came back labelled "Series" — and **App Session 26 closed it**: database version 6 adds nullable
 > `isAnimated` and `subtitled` to `favorite_posts` with real `MIGRATION_5_6` DDL, and
@@ -220,11 +220,11 @@ the deferred roadmap items are separate concerns; see §6 and §8.
 > "not animated".)
 
 **Response** — `api_v1_get_posts()` selects these columns per result
-(viewer.py:2596-2603: `id, clean_title, title, year, content_type, seasons, poster_url,
+(viewer.py:2612-2617: `id, clean_title, title, year, content_type, seasons, poster_url,
 backdrop_urls, imdb_rating, imdb_id, tmdb_id, genres, is_animated, industry, country,
 language, release_count, source_count`), then `redact.project(row, "post_brief")` trims it,
 `_art_pair()` (viewer.py:415) rewrites the two art fields through the redirector, and the loop
-appends `work_ref` (viewer.py:2619) and `subtitled` (viewer.py:2620). The example below is a
+appends `work_ref` (viewer.py:2635) and `subtitled` (viewer.py:2636). The example below is a
 real row sampled from
 `Fast_Fetch/multimovies.db` on 2026-10-22 (poster URL elided); the totals are that
 staging database's counts, **not** the unified catalog's:
@@ -260,16 +260,16 @@ staging database's counts, **not** the unified catalog's:
 ```
 
 `slug` is **not** in the list payload — it is only on the detail response, and only when the
-caller asked for the un-redacted `full` view (viewer.py:2594 adds `source_site, url, slug` for
+caller asked for the un-redacted `full` view (viewer.py:2610 adds `source_site, url, slug` for
 that path and nothing else). `year`,
 `imdb_rating`, and `seasons` are nullable; `year` and `tmdb_id` arrive as JSON
 **numbers** when present. Results are ordered `p.id DESC` (newest first), and rows
-with `is_18_plus = 1` are excluded by the SQL `WHERE` (viewer.py:2499, one
+with `is_18_plus = 1` are excluded by the SQL `WHERE` (viewer.py:2515, one
 `redact.adult_clause("p")` that every branch of the route inherits).
 
 > **Added 2026-10-28 (Session 19):** the list payload now carries one more key,
 > `subtitled` — a JSON **boolean** the server computes per work by
-> `viewer._subtitled_posts()` (viewer.py:2450, applied at :2612/:2620). It answers
+> `viewer._subtitled_posts()` (viewer.py:2466, applied at :2628/:2636). It answers
 > "does at least one print of this work claim subtitles", using the same
 > `release_descriptor` grammar the detail screen uses, so it is an existence test over
 > the ledger's own labels and never a per-release promise. The sampled row above
@@ -279,9 +279,9 @@ with `is_18_plus = 1` are excluded by the SQL `WHERE` (viewer.py:2499, one
 ### `GET /api/v1/posts/{id}`
 Returns `{"success": true, "data": {...}}`, where `data` is the raw `posts` row
 plus `source_pages[]` and `releases[]`, each release carrying `sources[]`.
-Releases are ordered **`id ASC`** only (viewer.py:2680) — no quality sorting and no
+Releases are ordered **`id ASC`** only (viewer.py:2696) — no quality sorting and no
 season/episode grouping; group them client-side. The tier ordering applies only
-to `sources` inside a release (viewer.py:2683-2697: `status = 'active' DESC`, then
+to `sources` inside a release (viewer.py:2702-2712: `status = 'active' DESC`, then
 `is_temporary ASC`, then a fixed `CASE service` preference — a query, never a field on the
 wire). An unknown id or an
 adult-flagged post returns `404 {"success": false, "error": "Post not found"}`.
@@ -294,8 +294,8 @@ JSON **booleans**, which `StreamResponse` must not model as integers. Failure �
 `404 {"success": false, "error": ...}`.
 
 ### `GET /api/v1/stats`
-Field names are snake_case exactly as below — the answer is built at viewer.py:2858-2864 and
-cached for 120 s (`_STATS_CACHE`, viewer.py:2821-2823), so a figure a phone sees can lag the
+Field names are snake_case exactly as below — the answer is built at viewer.py:2902-2909 and
+cached for 120 s (`_STATS_CACHE`, viewer.py:2831; the 120 s check at :2851), so a figure a phone sees can lag the
 ledger by two minutes by design. **The values
 are illustrative only** — they were read live from the `multimovies.db` staging
 catalog on 2026-10-22, the old `131 / 1031 / 2017` figures were a 2026-10-13
@@ -313,20 +313,32 @@ endpoint on the server you are pointed at to get real numbers.
 }
 ```
 
-> ⚠️ **`/api/v1/stats` counts more than the catalog will show — re-measured 2026-10-28.** The
-> route now prefers the Layer-1 projection's own tally (`viewer.py:2826-2836` reads
-> `cat_projection_meta`), and that tally is **not** adult-scoped: the live answer was
-> `posts: 116922` while `SELECT COUNT(*) FROM cat_works WHERE is_18_plus = 1` was `13342`. The
-> fallback `COUNT` queries at `:2838-2845` *are* adult-filtered, so the two paths of one endpoint
-> answer on two different scopes. Either way: the stats counts exceed what `/api/v1/posts` can
-> show, and no UI may present them as "titles you can browse here".
+> ⚠️ **`/api/v1/stats` answers a different population than `/api/v1/posts` — re-measured
+> 2026-10-29, and the direction flipped.** The route prefers the Layer-1 projection's own stamped
+> tally (`viewer.py:2854-2869` reads `cat_projection_meta`, keys `works_safe / releases_safe /
+> links_safe / …`, all-or-nothing) and otherwise counts `cat_works`/`posts` with
+> `redact.adult_clause` (`:2877-2897`). The list route counts the live `posts` table
+> (`viewer.py:2605`, adult-scoped). Those are two snapshots of two tables, and after the owner's
+> 2026-10-28/29 merges they no longer agree in either direction: measured today `stats.posts` is
+> `116922` while `/api/v1/posts?limit=1` answers `total: 131559` — the browsable catalog is now the
+> **larger** number, where on 2026-10-28 the adult-flagged projection made it the smaller one.
+> `sources` and `active_sources` both answered `3783959` with `resumable_sources: 0`, which is the
+> projection calling every stamped link live. **The rule therefore is not "stats is bigger" — it is
+> that no UI may present any stats field as a browsable count at all**, in either direction.
+>
+> Consequence for the shipped wording: `CatalogScale.connectionNotice` and `SCOPE_NOTE` currently
+> assert the smaller-than direction (`"… the catalog you can browse here is smaller"`, `"they
+> include works this app must not show"`), and today's measurement does not support an arrow in
+> either direction. Retiring the arrow is a **main-code change**, so it waits for the build hold to
+> lift; the proposed line is "This server stores $posts works — its own total, not the count you
+> can browse here", plus a `StatsHonestyTest` case refusing a directional claim, because a test that
+> only bans the word "Title" went green while a sentence like this one was wrong.
 >
 > **The client half of that rule is `viewmodel/CatalogScale.kt`** (App Session 27): the only
 > wording allowed for these three numbers. Settings paints
 > `Works stored / Releases stored / Links stored` over that owner and Setup/Settings connection
-> notices come from `CatalogScale.connectionNotice(posts)`, which says the server *stores* N works
-> and the browsable catalog is smaller. `tooling/StatsHonestyTest` fails if a screen calls a
-> stored total a title or a stream, and — because a refusal is green on an empty file — it also
+> notices come from `CatalogScale.connectionNotice(posts)`. `tooling/StatsHonestyTest` fails if a
+> screen calls a stored total a title or a stream, and — because a refusal is green on an empty file — it also
 > fails if the numbers stop being rendered. A surface that genuinely wants a browsable count must
 > ask the list route for its adult-scoped `total` (`/api/v1/posts?limit=1` answers it), never
 > reskin this one.
@@ -2340,6 +2352,20 @@ has not been restarted.
 tests execute nowhere** while Actions is disabled — a local "627 / 0 failures" is honestly
 618 executed + 9 excluded — and the `logger.lifecycle` at `:227` names only PosterCard, so
 ScreenSnapshot is dropped silently.
+
+**Measured citation drift — and it is not my doing, it is the file moving under everyone.**
+Re-verifying my own numbers took `Fast_Fetch/viewer.py` from a set of lines that no longer resolve:
+the file is now 3,539 lines (the §5 text was measured against 3,447), because this shift's ingest
+work edited it. So the backend citations copied into these docs out of §5 were corrected to where
+the code actually is today — `type=anime` predicate `:2530` (not `:2513`), the same predicate as an
+`industry` facet `:2555` (not `:2539`), `subtitled` appended at `:2636` by `_subtitled_posts()` at
+`:2466` (not `:2620`), `_bucket_for()` `:2957` (not `:2913`), `start_server(host="127.0.0.1")`
+`:3491` (not `:3447`); `redact.py:1163` and `:1278` still land, and `viewer.py:381`/`:389` did not
+move. **§5 of this file and PLAN's Session-6-era numbers (`:1942`, `:1946-1961`, `:2100-2108`) were
+NOT rewritten here** — they are another session's measured text, re-auditing `viewer.py` wholesale is
+not an App-agent's call, and `Fast_Fetch/*.py` is off-limits to me (read-only grep only). The rule
+this session leaves behind: a `viewer.py:NNNN` citation is a *date-stamped* claim; re-grep before
+repeating one.
 
 **Deliberately left alone, and why:** `README.md`'s "no authentication, no API keys, no sessions,
 no rate limiting, CORS `*`, binds `0.0.0.0`" paragraph and root `AGENTS.md`'s

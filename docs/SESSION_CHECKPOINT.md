@@ -18,7 +18,7 @@ so the next deploy's release note owes that chip.
 **Four defects, each re-verified against `App/app/src` before being rewritten:**
 1. `App/README.md` + `App/design/SCREENS.md` claimed the Anime chip returns zero results, that there
    is no hero banner and no per-type rows. False: `HomeScreen.kt:237`, `SearchScreen.kt:73-79`,
-   `viewer.py:2513` (live `5847`), and `HeroCarousel` composed at `HomeScreen.kt:126` with
+   `viewer.py:2530` (live `5847`), and `HeroCarousel` composed at `HomeScreen.kt:126` with
    `MediaRail` sections at `:142`.
 2. `App/docs/PLAN.md` marked Continue Watching, Downloads, auto-advance/resume/subtitles/quality
    switching and deep links + share as not implemented. All are: `WatchHistory.kt:20` +
@@ -42,6 +42,52 @@ so the next deploy's release note owes that chip.
 4. Root `AGENTS.md` repo map: "wireframes for all 7 screens" → "7 screens (NavGraph registers 13
    routes)", counted at `NavGraph.kt:123-281`.
 
+**Two things that moved after the first commit, both caught by re-measuring rather than by reading:**
+
+- **Citation drift is real and it is everyone's problem.** `Fast_Fetch/viewer.py` grew from the
+  3,447 lines §5 was measured against to **3,539** during this shift's ingest work, so the
+  `viewer.py:NNNN` cites copied out of it stopped landing. Every one this session wrote or could
+  verify was re-grepped to where the code actually is now — anime predicate `:2530`, the same
+  predicate as an `industry` facet `:2555`, `subtitled` appended at `:2636` by `_subtitled_posts()`
+  at `:2466`, `_bucket_for()` `:2957`, `send_json()` `:2939`, `start_server()` `:3491`,
+  `api_v1_get_posts()` `:2507`, the list `SELECT` `:2612-2617`, the adult `WHERE` `:2515`, releases
+  `id ASC` `:2696`, the source tier `CASE` `:2702-2712`, the stats answer `:2902-2909` behind
+  `_STATS_CACHE` `:2831`. A resolver that indexes by basename and reports any citation landing on a
+  blank line or past EOF now runs clean over the whole diff — **48 citations checked, including the
+  continuation cites like `:2555` and `:2628/:2636`, 0 unresolved.** Two things it taught, both
+  recorded rather than "fixed": (a) `app/build.gradle.kts:220-233` is a *correct* citation that a
+  naive basename index sends to the 9-line `App/build.gradle.kts` instead of the 357-line
+  `App/app/build.gradle.kts`, so a scan that resolves by filename alone invents defects — resolve by
+  path and fall back to a unique-basename walk; (b) the only cites still pointing at retired line
+  numbers sit in **dated session logs** — Session 6's "verified against code" list
+  (`viewer.py:1898/:1905-1909/:1942/:2037/:2211`) and the v2-mount note (`:2464` GET, `:2700` POST) —
+  and they stay as written, because a log records what was true when it was measured. They are named
+  by content rather than by line number on purpose: appending a log entry shifts every later line in
+  this guide, and they moved +9 while this section was being written. The rule: **a
+  `viewer.py:NNNN` citation is a date-stamped claim — re-grep before repeating one.**
+- **`/api/v1/stats` and `/api/v1/posts` no longer even agree on which one is bigger.** Measured
+  today on both `92.4.95.252` and loopback: `stats.posts 116922` against
+  `/api/v1/posts?limit=1 → total 131559`. They are two snapshots of two tables — the endpoint
+  prefers the projection's stamped tally (`cat_projection_meta`, `viewer.py:2854-2869`) while the
+  list route counts the live `posts` table (`:2605`, adult-scoped), and this shift's merges grew
+  one without rebuilding the other. Yesterday the adult-flagged projection made the stored figure
+  the *larger* one. So `App/README.md`'s stats note and `App/AGENTS.md` §5's warning now say
+  "different populations, no arrow", not "stats overstates". **The consequence is a shipped-code
+  defect, recorded and not fixed under the hold:** `CatalogScale.connectionNotice` and `SCOPE_NOTE`
+  still assert the smaller-than direction in main code. Proposed line — *"This server stores $posts
+  works — its own total, not the count you can browse here"* — plus a `StatsHonestyTest` case that
+  refuses a directional claim, because the current guard bans the words "Title" and "Stream" and
+  went green on a sentence that is now measurably backwards. `connectionNotice(0)` has the same
+  disease in miniature: it promises a catalog smaller than zero.
+
+**Also corrected this pass, in place:** `App/README.md:34-39` claimed the backend has "no
+authentication, no API keys, no sessions, and no rate limiting", answers
+`Access-Control-Allow-Origin: *` and "binds `0.0.0.0` by default" — all four false against the
+lines above, and the file contradicted itself because its §Backend API already carried the
+measured state. It now names the bearer-only account routes, the token bucket, the empty CORS
+allow-list and the loopback bind, and keeps the part that is still true: no TLS, catalog reads
+public, nothing behind them private.
+
 **Known limitation, recorded not fixed:** `PosterCardProvenanceTest` (3 `@Test`s) and
 `ScreenSnapshotTest` (6) are excluded at `App/app/build.gradle.kts:220-233` whenever `os.arch` is
 aarch64/arm64 — Robolectric ships no native runtime for ARM and dies during `@Rule` evaluation, so an
@@ -51,11 +97,13 @@ tests currently execute nowhere**. Report a local green as *618 executed + 9 exc
 `ScreenSnapshotTest` is dropped from every local run **silently**; the honest fix is one extra
 sentence in that log line, which is a build-file edit and therefore waits for the hold to lift.
 
-**Still stale and deliberately untouched (flagged, not half-fixed from memory):** `App/README.md`'s
-"no authentication, no API keys, no rate limiting, CORS `*`, binds `0.0.0.0`" paragraph and root
-`AGENTS.md`'s "BUILD_PLAN.md ← no local Android Studio needed" map line. Both were retired in
-`App/AGENTS.md` §5 and §1a with measured line references; a docs agent should fold them in on the
-next pass, citing those sections rather than re-auditing `viewer.py` from recall.
+**Still stale and deliberately untouched (flagged, not half-fixed from memory):** root
+`AGENTS.md`'s "BUILD_PLAN.md ← no local Android Studio needed" map line and `README.md:170-171`'s
+"no rate limiting; `send_json()` sets `Access-Control-Allow-Origin: *` (viewer.py:2037) and
+`start_server()` binds `0.0.0.0` (viewer.py:2211)" — that one is the *root* README, and both
+numbers point at a file that has since moved. `App/AGENTS.md` §5/§1a carry the measured text to
+fold them into; a docs agent should cite those sections rather than re-auditing `viewer.py` from
+recall. (`App/README.md`'s copy of the same claim is now fixed, above.)
 
 **Two idle JVM daemons on this host, so nobody blames the crawls for load:** a Gradle daemon
 (`pid 756708`, `-Xmx1536m`) and a Kotlin compile daemon (`pid 761442`, `-Xmx1536m`, autoshutdown

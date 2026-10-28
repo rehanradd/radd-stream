@@ -47,7 +47,7 @@ historical planning, and see
 #### 1.2 Home Screen (Catalog Browser)
 - [x] Load a paginated catalog from `/api/v1/posts`.
 - [x] Filter by movie, series, and anime. — **shipped, and the "not achievable as specified"
-  verdict is retired (re-measured 2026-10-29).** `viewer.py:2513` answers `type=anime` from
+  verdict is retired (re-measured 2026-10-29).** `viewer.py:2530` answers `type=anime` from
   `(p.is_animated = 1 OR lower(p.industry) LIKE '%anime%')` — live `total: 5847` — and the same
   predicate is offered as the `industry` facet (`:2539`). The entry is at `HomeScreen.kt:237`
   (`JumpOffRow`, All / Movies / Series / Anime / Seasons); the old citation `HomeScreen.kt:48` and
@@ -59,7 +59,7 @@ historical planning, and see
 - [x] Search titles with a 300 ms debounce.
 - [x] Filter results by movie, series, and anime. — the defect this row pointed at is closed:
   `typeChips` in `SearchScreen.kt:73-79` is All / Movies / Series / **Anime** / Seasons, and the
-  server answers `type=anime` (`viewer.py:2513`, live `total: 5847`). Search also sends the
+  server answers `type=anime` (`viewer.py:2530`, live `total: 5847`). Search also sends the
   server-side `industry` / `genre` / `quality` / `sort` facets, which this checklist predates.
 - [x] Show loading, error, and no-match states.
 

@@ -6,7 +6,7 @@
 > This file is a *design* spec, so most of it is aspirational by
 > intent — but the following two claims in it are false:
 > 1. ~~**`?type=anime` does not work.**~~ **Retired — it works, and the app ships the chip.**
->    `viewer.py:2513` answers `type=anime` from the flag the data really carries,
+>    `viewer.py:2530` answers `type=anime` from the flag the data really carries,
 >    `(p.is_animated = 1 OR lower(p.industry) LIKE '%anime%')`, and `:2539` offers the same
 >    predicate as an `industry` facet. Re-measured read-only 2026-10-29:
 >    `GET /api/v1/posts?type=anime&limit=1` → `200 in 0.24 s`, `total: 5847`, row carries
@@ -28,9 +28,9 @@
 > — nothing behind them is private. What is **not** true any more (re-verified in
 > [`../AGENTS.md`](../AGENTS.md) §5): the `api/v2/account*` routes require the sync bearer key
 > (`viewer.py:381`, `:389`), every request lands in a token bucket that carries the IETF
-> `RateLimit-*` headers (`viewer.py:2913`, `redact.py:1163`), CORS is an allow-list that is
+> `RateLimit-*` headers (`viewer.py:2957`, `redact.py:1163`), CORS is an allow-list that is
 > currently empty (`redact.py:1278`), and the server binds `127.0.0.1` by default
-> (`viewer.py:3447`) behind nginx.
+> (`viewer.py:3491`) behind nginx.
 
 ---
 
@@ -168,7 +168,7 @@
 - **Filter chip active**: re-queries with `?type=movie|series|complete_season|ongoing_season|anime`.
   The `[Anime]` chip drawn above **is** implemented and answered by the server — it is in
   `SearchScreen.kt:73-79` (`typeChips` = All / Movies / Series / **Anime** / Seasons) and
-  `viewer.py:2513` resolves it from `is_animated`/`industry` (live `total: 5847`, 2026-10-29).
+  `viewer.py:2530` resolves it from `is_animated`/`industry` (live `total: 5847`, 2026-10-29).
   Search additionally sends the server-side facets `industry`, `genre`, `quality` and `sort`
   (App Session 12), which this wireframe predates.
 
