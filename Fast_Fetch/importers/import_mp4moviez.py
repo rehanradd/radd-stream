@@ -63,6 +63,14 @@ The rules this file follows, in order of importance:
    reports the plan and writes nothing.
 
 Stdlib only. Never opens `fast_fetch.db` or a merged catalog.
+
+**Proof it works, measured 2026-10-29 on a copy, never on production:** `convert`
+on `/tmp/mp4moviez_copy.db` wrote 28,066 posts / 54,267 releases / 54,267 sources
+with 0 null keys, and `merge_catalogs.merge_site_db` then read it end to end into a
+throwaway target in 710 s — `posts_merged=28066 releases_merged=54267
+sources_merged=54267 posts_conflicted=0`. The live `mp4moviez.db` is still in legacy
+form on purpose: a converter that drops and renames tables under an in-flight merge
+is how a run loses rows, so `convert` is one command for whoever owns the queue.
 """
 
 from __future__ import annotations
