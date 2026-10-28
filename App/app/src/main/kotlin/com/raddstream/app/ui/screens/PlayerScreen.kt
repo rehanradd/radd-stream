@@ -147,6 +147,25 @@ import com.raddstream.app.player.subtitles.SubtitleOffset
 import com.raddstream.app.player.subtitles.SubtitleOffsetSheet
 import com.raddstream.app.player.dragHalfZone
 import com.raddstream.app.player.dominantAxis
+import com.raddstream.app.ui.theme.AccentOrange
+import com.raddstream.app.ui.theme.AccentOrangeToast
+import com.raddstream.app.ui.theme.RaddCaptionPlate
+import com.raddstream.app.ui.theme.RaddCaptionPlateArgb
+import com.raddstream.app.ui.theme.RaddHudBar
+import com.raddstream.app.ui.theme.RaddHudCard
+import com.raddstream.app.ui.theme.RaddHudChip
+import com.raddstream.app.ui.theme.RaddHudPillIdle
+import com.raddstream.app.ui.theme.RaddHudToast
+import com.raddstream.app.ui.theme.RaddHudTrack
+import com.raddstream.app.ui.theme.RaddKeepBlocked
+import com.raddstream.app.ui.theme.RaddKeepKeeping
+import com.raddstream.app.ui.theme.RaddKeepStored
+import com.raddstream.app.ui.theme.RaddNarrationCheck
+import com.raddstream.app.ui.theme.RaddNarrationPlate
+import com.raddstream.app.ui.theme.RaddPlayerDialog
+import com.raddstream.app.ui.theme.RaddPlayerSheet
+import com.raddstream.app.ui.theme.RaddPlayerSnackbarPlate
+import com.raddstream.app.ui.theme.RaddPlayerStage
 import com.raddstream.app.ui.theme.brandSp
 import com.raddstream.app.ui.theme.paint
 import com.raddstream.app.viewmodel.PlayerEvent
@@ -390,7 +409,7 @@ private fun PlayerScreenContent(
         state.settledBanner?.let { banner ->
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
                 Surface(
-                    color = Color(0xCC1F2937),
+                    color = RaddNarrationPlate,
                     shape = MaterialTheme.shapes.small,
                     modifier = Modifier
                         .padding(horizontal = 16.dp)
@@ -401,7 +420,7 @@ private fun PlayerScreenContent(
                         Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        Icon(Icons.Default.Check, null, tint = Color(0xFF8FD14F), modifier = Modifier.size(16.dp))
+                        Icon(Icons.Default.Check, null, tint = RaddNarrationCheck, modifier = Modifier.size(16.dp))
                         Spacer(Modifier.width(8.dp))
                         Text(banner, color = Color.White, fontSize = brandSp(13), maxLines = 2, overflow = TextOverflow.Ellipsis)
                     }
@@ -487,7 +506,7 @@ private fun PlayerScreenContent(
         snackbar?.let { msg ->
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.BottomCenter) {
                 Surface(
-                    color = Color(0xE6323232),
+                    color = RaddPlayerSnackbarPlate,
                     shape = MaterialTheme.shapes.small,
                     modifier = Modifier
                         .padding(horizontal = 24.dp)
@@ -499,8 +518,6 @@ private fun PlayerScreenContent(
         }
     }
 }
-
-private val AccentOrange = Color(0xFFFF8552)
 
 /**
  * How long after a two-finger rewind the single-tap chrome toggle stays suppressed. The
@@ -564,7 +581,7 @@ private fun styleNativeSubtitles(view: PlayerView, state: PlayerUiState) {
     sv.setStyle(
         CaptionStyleCompat(
             s.colour.argb,
-            if (s.textBackground) 0xB3000000.toInt() else android.graphics.Color.TRANSPARENT,
+            if (s.textBackground) RaddCaptionPlateArgb else android.graphics.Color.TRANSPARENT,
             android.graphics.Color.TRANSPARENT,
             CaptionStyleCompat.EDGE_TYPE_NONE,
             android.graphics.Color.BLACK,
@@ -578,7 +595,7 @@ private fun styleNativeSubtitles(view: PlayerView, state: PlayerUiState) {
 
 @Composable
 private fun AudioOnlySurface(title: String, isPlaying: Boolean) {
-    Box(Modifier.fillMaxSize().background(Color(0xFF0B0E14)), contentAlignment = Alignment.Center) {
+    Box(Modifier.fillMaxSize().background(RaddPlayerStage), contentAlignment = Alignment.Center) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Icon(Icons.Default.MusicNote, null, tint = AccentOrange, modifier = Modifier.size(72.dp))
             Spacer(Modifier.height(12.dp))
@@ -802,7 +819,7 @@ private fun DoubleTapRipple(state: PlayerUiState) {
     }
     Box(Modifier.fillMaxSize(), contentAlignment = alignment) {
         Surface(
-            color = Color(0x99000000),
+            color = RaddHudCard,
             shape = MaterialTheme.shapes.medium,
             modifier = Modifier.padding(horizontal = 34.dp),
         ) {
@@ -847,7 +864,7 @@ private fun HudToast(hud: Hud) {
         is Hud.Boost -> -1f
     }
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        Surface(color = Color(0x99000000), shape = MaterialTheme.shapes.medium) {
+        Surface(color = RaddHudCard, shape = MaterialTheme.shapes.medium) {
             Column(
                 Modifier.padding(horizontal = 22.dp, vertical = 14.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
@@ -880,7 +897,7 @@ private fun HudToast(hud: Hud) {
 private fun ScrubToast(target: Long, durationMs: Long) {
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.BottomCenter) {
         Surface(
-            color = Color(0xCC000000),
+            color = RaddHudToast,
             shape = MaterialTheme.shapes.small,
             modifier = Modifier.padding(bottom = 130.dp),
         ) {
@@ -898,7 +915,7 @@ private fun ScrubToast(target: Long, durationMs: Long) {
 private fun BoostBadge() {
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
         Surface(
-            color = Color(0xCCFF8552),
+            color = AccentOrangeToast,
             shape = MaterialTheme.shapes.small,
             modifier = Modifier.padding(top = 92.dp),
         ) {
@@ -919,7 +936,7 @@ private fun TopBar(vm: PlayerViewModel, state: PlayerUiState, onBack: () -> Unit
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .background(Color(0x88000000))
+            .background(RaddHudBar)
             .padding(start = 4.dp, end = 4.dp, top = 6.dp, bottom = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -983,7 +1000,7 @@ private fun TopBar(vm: PlayerViewModel, state: PlayerUiState, onBack: () -> Unit
 private fun CenterControls(state: PlayerUiState, vm: PlayerViewModel) {
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         if (!state.isBuffering) {
-            Surface(color = Color(0x66000000), shape = CircleShape) {
+            Surface(color = RaddHudChip, shape = CircleShape) {
                 IconButton(onClick = { vm.togglePlayPause() }, modifier = Modifier.size(72.dp)) {
                     Icon(
                         if (state.isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
@@ -1033,7 +1050,7 @@ private fun EdgeHud(
                 .fillMaxWidth()
                 .align(Alignment.TopStart)
                 .height(2.dp)
-                .background(Color(0x33FFFFFF)),
+                .background(RaddHudTrack),
         ) {
             Box(
                 Modifier
@@ -1048,7 +1065,7 @@ private fun EdgeHud(
             modifier = Modifier
                 .align(Alignment.TopStart)
                 .padding(start = 6.dp, top = 6.dp)
-                .background(Color(0x66000000), CircleShape)
+                .background(RaddHudChip, CircleShape)
                 .padding(horizontal = 6.dp, vertical = 2.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -1074,7 +1091,7 @@ private fun EdgeHud(
             modifier = Modifier
                 .align(Alignment.BottomStart)
                 .padding(start = 6.dp, bottom = 10.dp)
-                .background(Color(0x66000000), CircleShape)
+                .background(RaddHudChip, CircleShape)
                 .padding(horizontal = 6.dp, vertical = 2.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -1105,7 +1122,7 @@ private fun EdgeHud(
             modifier = Modifier
                 .align(Alignment.BottomEnd)
                 .padding(end = 6.dp, bottom = 10.dp)
-                .background(Color(0x66000000), CircleShape)
+                .background(RaddHudChip, CircleShape)
                 .padding(horizontal = 4.dp, vertical = 2.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -1135,7 +1152,7 @@ private fun BottomControls(
         Column(
             Modifier
                 .fillMaxWidth()
-                .background(Color(0x88000000)),
+                .background(RaddHudBar),
         ) {
             Scrubber(
                 positionMs = state.positionMs,
@@ -1384,7 +1401,7 @@ private fun Scrubber(
 private fun UnlockFab(onUnlock: () -> Unit) {
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.CenterEnd) {
         Surface(
-            color = Color(0x88000000),
+            color = RaddHudBar,
             shape = MaterialTheme.shapes.small,
             modifier = Modifier.padding(16.dp),
         ) {
@@ -1399,7 +1416,7 @@ private fun UnlockFab(onUnlock: () -> Unit) {
 private fun PlayAgainButton(onPlayAgain: () -> Unit) {
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         Surface(
-            color = Color(0x99000000),
+            color = RaddHudCard,
             shape = MaterialTheme.shapes.medium,
             modifier = Modifier.clickableNoRipple(onPlayAgain),
         ) {
@@ -1481,7 +1498,7 @@ private fun GiveUpCard(
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
-        containerColor = Color(0xFF151A23),
+        containerColor = RaddPlayerDialog,
         title = {
             Text(
                 when (why) {
@@ -1545,7 +1562,7 @@ private fun SubtitleOverlay(state: PlayerUiState, vm: PlayerViewModel) {
                     textAlign = TextAlign.Center,
                     modifier = if (state.subtitle.textBackground) {
                         Modifier
-                            .background(Color(0xB3000000), MaterialTheme.shapes.small)
+                            .background(RaddCaptionPlate, MaterialTheme.shapes.small)
                             .padding(horizontal = 8.dp, vertical = 2.dp)
                     } else {
                         Modifier
@@ -1587,10 +1604,10 @@ private fun KeepChip(state: PlayerUiState, vm: PlayerViewModel) {
     if (keep is KeepUiState.Unavailable) return
     Surface(
         color = when (keep) {
-            is KeepUiState.Stored -> Color(0x662E7D32)
-            is KeepUiState.Blocked -> Color(0x668B3A3A)
-            is KeepUiState.Keeping -> Color(0x661565C0)
-            else -> Color(0x88000000)
+            is KeepUiState.Stored -> RaddKeepStored
+            is KeepUiState.Blocked -> RaddKeepBlocked
+            is KeepUiState.Keeping -> RaddKeepKeeping
+            else -> RaddHudBar
         },
         shape = MaterialTheme.shapes.small,
         modifier = Modifier
@@ -1624,7 +1641,7 @@ private fun ResumeDialog(state: PlayerUiState, vm: PlayerViewModel) {
     val ms = state.resumeOfferMs ?: return
     AlertDialog(
         onDismissRequest = { vm.resolveResume(false) },
-        containerColor = Color(0xFF151A23),
+        containerColor = RaddPlayerDialog,
         title = { Text("Resume playback?", color = Color.White, fontSize = brandSp(16)) },
         text = {
             Text(
@@ -1655,7 +1672,7 @@ private fun SponsorBreakDialog(slot: AdSlot, onDismiss: () -> Unit) {
     }
     AlertDialog(
         onDismissRequest = onDismiss,
-        containerColor = Color(0xFF151A23),
+        containerColor = RaddPlayerDialog,
         title = { Text("Sponsor break", color = Color.White, fontSize = brandSp(16)) },
         text = {
             Text(
@@ -1680,7 +1697,7 @@ private fun CalibrationDialog(
     var text by remember { mutableStateOf(state.targetEpisode.coerceAtLeast(1).toString()) }
     AlertDialog(
         onDismissRequest = onDismiss,
-        containerColor = Color(0xFF151A23),
+        containerColor = RaddPlayerDialog,
         title = { Text("Calibrate episode start", color = Color.White, fontSize = brandSp(16)) },
         text = {
             Column {
@@ -1718,7 +1735,7 @@ private fun PlayFromDialog(
     var text by remember { mutableStateOf("0:00") }
     AlertDialog(
         onDismissRequest = onDismiss,
-        containerColor = Color(0xFF151A23),
+        containerColor = RaddPlayerDialog,
         title = { Text("Play from", color = Color.White, fontSize = brandSp(16)) },
         text = {
             OutlinedTextField(
@@ -1758,7 +1775,7 @@ private fun SpeedSheet(state: PlayerUiState, vm: PlayerViewModel) {
     ModalBottomSheet(
         onDismissRequest = { vm.hideSpeedSheet() },
         sheetState = rememberModalBottomSheetState(),
-        containerColor = Color(0xFF12161F),
+        containerColor = RaddPlayerSheet,
     ) {
         Column(Modifier.padding(bottom = 20.dp)) {
             SheetTitle("Playback speed (pitch preserved)")
@@ -1770,7 +1787,7 @@ private fun SpeedSheet(state: PlayerUiState, vm: PlayerViewModel) {
                 GestureMapper.SPEED_PRESETS.forEach { preset ->
                     val selected = state.speed == preset
                     Surface(
-                        color = if (selected) AccentOrange else Color(0x22FFFFFF),
+                        color = if (selected) AccentOrange else RaddHudPillIdle,
                         shape = MaterialTheme.shapes.small,
                         modifier = Modifier
                             .padding(end = 6.dp)
@@ -1808,7 +1825,7 @@ private fun QualitySheet(state: PlayerUiState, vm: PlayerViewModel) {
     ModalBottomSheet(
         onDismissRequest = { vm.hideQualitySheet() },
         sheetState = rememberModalBottomSheetState(),
-        containerColor = Color(0xFF12161F),
+        containerColor = RaddPlayerSheet,
     ) {
         Column(Modifier.padding(bottom = 20.dp)) {
             SheetTitle("Quality")
@@ -1869,7 +1886,7 @@ private fun SleepSheet(state: PlayerUiState, vm: PlayerViewModel) {
     ModalBottomSheet(
         onDismissRequest = { vm.hideSleepSheet() },
         sheetState = rememberModalBottomSheetState(),
-        containerColor = Color(0xFF12161F),
+        containerColor = RaddPlayerSheet,
     ) {
         Column(Modifier.padding(bottom = 20.dp)) {
             SheetTitle("Sleep timer")
@@ -1910,7 +1927,7 @@ private fun SubtitleSettingsSheet(state: PlayerUiState, vm: PlayerViewModel) {
     ModalBottomSheet(
         onDismissRequest = { vm.hideSubtitleSheet() },
         sheetState = rememberModalBottomSheetState(),
-        containerColor = Color(0xFF12161F),
+        containerColor = RaddPlayerSheet,
     ) {
         Column(
             Modifier
@@ -2028,7 +2045,7 @@ private fun TracksSheet(state: PlayerUiState, vm: PlayerViewModel) {
     ModalBottomSheet(
         onDismissRequest = { vm.hideTracksSheet() },
         sheetState = rememberModalBottomSheetState(),
-        containerColor = Color(0xFF12161F),
+        containerColor = RaddPlayerSheet,
     ) {
         Column(
             Modifier
@@ -2119,7 +2136,7 @@ private fun PrintLogSheet(state: PlayerUiState, vm: PlayerViewModel) {
     ModalBottomSheet(
         onDismissRequest = { vm.hidePrintSheet() },
         sheetState = rememberModalBottomSheetState(),
-        containerColor = Color(0xFF12161F),
+        containerColor = RaddPlayerSheet,
     ) {
         Column(
             Modifier

@@ -90,10 +90,12 @@ class BrandDriftTest {
         "App/app/src/main/kotlin/com/raddstream/app/ui/theme/Color.kt",
     )
 
-    /** ~29 raw paints (incl. AccentOrange 0xFFFF8552) awaiting theme-token migration. */
-    private val pendingColorMigration = setOf(
-        "App/app/src/main/kotlin/com/raddstream/app/ui/screens/PlayerScreen.kt",
-    )
+    /**
+     * Empty by design: ui/theme/Color.kt is the only file allowed to write a raw paint, and the
+     * player's chrome migrated into it (its §13). A new entry here means a screen invented a
+     * colour instead of naming a role — add the role to Color.kt and read that.
+     */
+    private val pendingColorMigration = setOf<String>()
 
     private val deepLinkOwners = brandOwners
 

@@ -270,6 +270,68 @@ val RaddOnDangerContainerLight = brandColor(BuildConfig.BRAND_COLORS_LIGHT_ON_DA
  *  and always read as raised ink chips even in light mode — documented in
  *  DESIGN_SYSTEM.md §5), so no light variants are defined for print pills. */
 
+// ── 13. PLAYER CHROME — what the HUD draws over live video ──────────────────
+// These are the only paints in the app that sit on a moving, unknown-bright
+// frame instead of on the ink ramp, so their alpha is the design, not an
+// afterthought: every tier here exists so a white glyph clears 4.5:1 whatever
+// the film is showing behind it. They live in this file because ui/theme/
+// Color.kt is the one owner of raw paint — a screen names the role, never the
+// bytes. Migration note: the solid plates below are blue-grey while the brand
+// neutrals are teal-shifted (§1), and the accent has no brand role at all. The
+// hues were moved here unchanged rather than re-decided blind, because this
+// box has no device; folding them into colors.dark.* is an owner call, and the
+// old-to-brand-role table is recorded in this session's App/AGENTS.md log.
+
+/** Full-bleed backdrop for audio-only playback, where there is no frame. */
+val RaddPlayerStage        = Color(0xFF0B0E14)
+/** Bottom-sheet container in the player (tracks, quality, subtitles, sleep). */
+val RaddPlayerSheet        = Color(0xFF12161F)
+/** Dialog container — one lift above a sheet, same scrim under both. */
+val RaddPlayerDialog       = Color(0xFF151A23)
+
+/** 53% black — the top/bottom HUD bars and any idle chip riding them. */
+val RaddHudBar             = Color(0x88000000)
+/** 40% black — round transport controls and edge pills, over motion. */
+val RaddHudChip            = Color(0x66000000)
+/** 60% black — a card that pauses the frame to be read: gesture, play-again. */
+val RaddHudCard            = Color(0x99000000)
+/** 80% black — the scrub readout, the shortest-lived but busiest text. */
+val RaddHudToast           = Color(0xCC000000)
+/** 20% white — the unplayed remainder of the 2 dp hairline position track. */
+val RaddHudTrack           = Color(0x33FFFFFF)
+/** 13% white — an unselected pill inside a HUD sheet (the speed rail). */
+val RaddHudPillIdle        = Color(0x22FFFFFF)
+
+/** 80% black — the caption plate both subtitle paths put behind text. Written twice
+ *  on purpose: the Compose overlay takes the literal form, CaptionStyleCompat takes an
+ *  ARGB int, and composing one from the other would change which overload the paint
+ *  resolves through on a screen nobody can look at from this box. */
+val RaddCaptionPlate       = Color(0xB3000000)
+val RaddCaptionPlateArgb   = 0xB3000000.toInt()
+
+/** The player's own accent: the selected rung, live speed, buffering, cinema.
+ *  It paints states that CARRY meaning, so DESIGN_SYSTEM.md §9 forbids replacing
+ *  it with an artwork-driven accent. No colors.dark.* role matches this orange;
+ *  it is app-local until the brand file says otherwise. */
+val AccentOrange           = Color(0xFFFF8552)
+/** AccentOrange at 80% — the boost badge, which must read over any frame. */
+val AccentOrangeToast      = Color(0xCCFF8552)
+/** 80% blue-grey — the narration banner that reports a source change. */
+val RaddNarrationPlate     = Color(0xCC1F2937)
+/** The banner's "that worked" check. Not RaddSuccess: this green is the
+ *  player's own, and changing it would restate the meaning of the banner. */
+val RaddNarrationCheck     = Color(0xFF8FD14F)
+/** 90% neutral grey — the player snackbar, deliberately colourless: whatever
+ *  it reports may itself have been an error, so it must not shout. */
+val RaddPlayerSnackbarPlate = Color(0xE6323232)
+
+/** Keep-chip states at 40% so the frame shows through. The hues are the
+ *  player's, not the catalog's badge greens/reds — a chip floating over video
+ *  is measured against video, not against Ink950. */
+val RaddKeepStored         = Color(0x662E7D32)
+val RaddKeepBlocked        = Color(0x668B3A3A)
+val RaddKeepKeeping        = Color(0x661565C0)
+
 // ═════════════════════════════════════════════════════════════════════════════
 //  LEGACY ALIASES — do not use in new code.
 //  These keep files outside ui/theme compiling while screens migrate to
