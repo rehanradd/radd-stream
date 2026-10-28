@@ -1304,6 +1304,44 @@ class TestQueueAndCrawl(unittest.TestCase):
         self.assertTrue(all(scraped == 0 for _, scraped, _ in rows))
         self.assertIn("content", json.loads(rows[0][2]))
 
+    def test_sync_catalog_commits_as_it_pages(self):
+        """A killed sync keeps what it already read, instead of nothing.
+
+        Every queue row carries its own page HTML, so collecting the whole
+        collection before the first INSERT would both hold a gigabyte in RAM and
+        leave an interrupted run with an empty database. Rows must reach the disk
+        in batches, and the batch that was mid-flight is what a kill loses.
+        """
+        posts = [wp_post(id=n, slug=f"movie-{n}",
+                         link=f"https://www.moviesmela.com/movie-{n}/")
+                 for n in range(12)]
+
+        def interrupted():
+            yield from posts[:7]
+            raise RuntimeError("connection reset by peer")
+
+        with mock.patch.object(mm, "load_taxonomy", return_value={2: "Indian Movies"}), \
+                mock.patch.object(mm, "iter_catalog_posts", interrupted):
+            with self.assertRaises(RuntimeError):
+                mm.sync_catalog(db_path=self.db, verbose=False, batch_size=3)
+        conn = sqlite3.connect(self.db)
+        queued = conn.execute("SELECT COUNT(*) FROM sitemap_cache").fetchone()[0]
+        conn.close()
+        self.assertEqual(queued, 6, "two committed batches survived the interrupt")
+
+    def test_sync_catalog_flushes_the_final_partial_batch(self):
+        posts = [wp_post(id=n, slug=f"movie-{n}",
+                         link=f"https://www.moviesmela.com/movie-{n}/")
+                 for n in range(7)]
+        with mock.patch.object(mm, "load_taxonomy", return_value={2: "Indian Movies"}), \
+                mock.patch.object(mm, "iter_catalog_posts", lambda: iter(posts)), \
+                silenced():
+            new = mm.sync_catalog(db_path=self.db, batch_size=3)
+        conn = sqlite3.connect(self.db)
+        queued = conn.execute("SELECT COUNT(*) FROM sitemap_cache").fetchone()[0]
+        conn.close()
+        self.assertEqual((new, queued), (7, 7), "the tail of 3 rows is not left staged")
+
     def test_sync_catalog_limit_and_dedupe_and_foreign_links(self):
         posts = [wp_post(id=1), wp_post(id=2, slug="dup", link=LINK),
                  wp_post(id=3, link="https://elsewhere.test/x/"),

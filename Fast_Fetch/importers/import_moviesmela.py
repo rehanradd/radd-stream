@@ -121,6 +121,8 @@ USER_AGENT = (
 )
 
 PAGE_SIZE = 20
+# Queue rows are committed as they are read, not at the end of the paging pass.
+QUEUE_FLUSH_BATCH = 40
 # per_page=20&_embed=1 answers 200 with content-length: 0 on this host; the
 # taxonomy is resolved from /wp/v2/categories instead, so `_embed` is never sent.
 LISTING_TIMEOUT = 60
@@ -1619,13 +1621,20 @@ def iter_catalog_posts():
 
 
 def sync_catalog(limit: int | None = None, db_path: Path | str = DEFAULT_DB_PATH,
-                 verbose: bool = True) -> int:
+                 verbose: bool = True, batch_size: int = QUEUE_FLUSH_BATCH) -> int:
     """
     Queues every catalog entry with its own REST record attached.
 
     A row the site still lists is always worth another attempt, so an
     already-indexed row whose `modified` moved is set to re-check (2) and a
     parked row (-1) is set back to queued (0).
+
+    The queue is written while it is read, `batch_size` rows per commit, because
+    this site's real collection is 20,888 posts over 1,045 REST pages (measured
+    2026-10-28) and every record carries its own `content.rendered`. Collecting
+    the whole catalog before the first INSERT would hold roughly a gigabyte of
+    page HTML in RAM on a host that has 2.5 GB free and is running other people's
+    crawlers — and an interrupted sync would have queued nothing at all.
     """
     db_path = Path(db_path)
     db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1635,33 +1644,29 @@ def sync_catalog(limit: int | None = None, db_path: Path | str = DEFAULT_DB_PATH
             print(f"[!] [{SITE}] taxonomy unavailable; nothing queued.", flush=True)
         return 0
 
-    records: list[tuple[str, str, str, str, int]] = []
-    seen: set[str] = set()
-    for wp_post in iter_catalog_posts():
-        link = _normalize_http_url(wp_post.get("link") or "")
-        if not link or not _is_site_url(link) or link in seen:
-            continue
-        seen.add(link)
-        records.append((link, wp_post.get("modified") or "",
-                        wp_post.get("slug") or "",
-                        json.dumps(_queue_json(wp_post), ensure_ascii=False), 0))
-        if limit and len(records) >= limit:
-            break
-
     conn = sqlite3.connect(db_path, timeout=60)
+    seen: set[str] = set()
+    count = staged = new_rows = 0
     try:
         ensure_schema(conn)
         prior = {r["loc"]: (r["lastmod"] or "", r["scraped"])
                  for r in conn.execute("SELECT loc, lastmod, scraped FROM sitemap_cache")}
         before = len(prior)
-        for loc, lastmod, slug, payload, _ in records:
+        for wp_post in iter_catalog_posts():
+            link = _normalize_http_url(wp_post.get("link") or "")
+            if not link or not _is_site_url(link) or link in seen:
+                continue
+            seen.add(link)
+            lastmod = wp_post.get("modified") or ""
             scraped = 0
-            if loc in prior:
-                old_lastmod, old_state = prior[loc]
+            if link in prior:
+                old_lastmod, old_state = prior[link]
                 if old_state == 1 and lastmod and lastmod != old_lastmod:
                     scraped = 2          # the site edited the page: re-check it
                 elif old_state == 1:
                     scraped = 1          # already indexed and unchanged
+            else:
+                new_rows += 1
             conn.execute(
                 """
                 INSERT INTO sitemap_cache (loc, lastmod, slug, scraped, raw_json, error_count)
@@ -1670,21 +1675,28 @@ def sync_catalog(limit: int | None = None, db_path: Path | str = DEFAULT_DB_PATH
                     slug = excluded.slug, raw_json = excluded.raw_json,
                     scraped = excluded.scraped;
                 """,
-                (loc, lastmod, slug, scraped, payload),
+                (link, lastmod, wp_post.get("slug") or "", scraped,
+                 json.dumps(_queue_json(wp_post), ensure_ascii=False)),
             )
+            count += 1
+            if limit and count >= limit:
+                break
+            staged += 1
+            if staged >= batch_size:
+                conn.commit()
+                staged = 0
         conn.execute("UPDATE sitemap_cache SET scraped = 0 WHERE scraped = -1;")
         conn.commit()
         queued = conn.execute(
             "SELECT COUNT(*) FROM sitemap_cache WHERE scraped IN (0, 2)").fetchone()[0]
-        new_rows = len(records) - len([1 for loc, *_ in records if loc in prior])
         after = conn.execute("SELECT COUNT(*) FROM sitemap_cache").fetchone()[0]
     finally:
         conn.close()
     if verbose:
-        if not records:
+        if not count:
             print("[!] No catalog entries returned; nothing queued.", flush=True)
         else:
-            print(f"[✓] [{SITE}] Queued {len(records)} pages ({max(new_rows, 0)} new, "
+            print(f"[✓] [{SITE}] Queued {count} pages ({new_rows} new, "
                   f"{after} known, {queued} pending).", flush=True)
     return after - before
 
