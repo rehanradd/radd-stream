@@ -258,6 +258,54 @@ class TestClassification(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# The queue payload the crawl later parses
+# ---------------------------------------------------------------------------
+
+def live_term(name: str, taxonomy: str) -> dict:
+    """A term as the REST collection actually ships it: a dict, not a name."""
+    return {"id": 16, "link": f"https://animahd.com/category/{name}/", "name": name,
+            "slug": name.lower().replace(" ", "-"), "taxonomy": taxonomy,
+            "yoast_head": "<title>Action Archives - A Universe Of Anime</title>",
+            "_links": {"self": [{"href": "https://animahd.com/wp/v2/trees/16"}]}}
+
+
+class TestQueuePayload(unittest.TestCase):
+    def test_a_real_rest_record_survives_the_queue_projection(self):
+        """The live `wp:term` is groups of term dicts; the projection must not walk into them."""
+        post = wp_post(_embedded={"wp:term": [
+            [live_term("Action", "category"), live_term("Adventure", "category")],
+            [live_term("Ongoing", "post_tag")]]})
+        payload = ah._queue_json(post)
+        groups = payload["_embedded"]["wp:term"]
+        self.assertEqual([[t["name"] for t in group] for group in groups],
+                         [["Action", "Adventure"], ["Ongoing"]])
+        self.assertEqual([t["taxonomy"] for group in groups for t in group],
+                         ["category", "category", "post_tag"])
+
+    def test_the_projected_payload_reads_back_as_the_full_record(self):
+        """Nothing is lost between the queue and the crawl that reads it."""
+        flat = ah.terms_from_embed(wp_post())
+        self.assertEqual(ah.terms_from_embed(ah._queue_json(wp_post())), flat)
+        self.assertEqual(flat, (["Action", "Ecchi"], ["Ongoing"]))
+
+    def test_the_projection_keeps_the_cached_mal_fields(self):
+        payload = ah._queue_json(wp_post())
+        self.assertEqual(payload["_mal_cached_year"], "2002-2017")
+        self.assertEqual(payload["_mal_cached_score"], "8.7")
+        self.assertEqual(payload["link"], "https://animahd.com/naruto-shippuden/")
+
+    def test_the_boilerplate_body_stays_out_of_the_queue(self):
+        payload = ah._queue_json(wp_post(content={"rendered": "<p>" + "x" * 5000}))
+        self.assertNotIn("content", payload)
+        self.assertLess(len(json.dumps(payload)), 2000)
+
+    def test_a_post_with_no_terms_projects_an_empty_group_list(self):
+        payload = ah._queue_json({"id": 1, "link": "https://animahd.com/x/"})
+        self.assertEqual(payload["_embedded"], {"wp:term": []})
+        self.assertEqual(ah.terms_from_embed(payload), ([], []))
+
+
+# ---------------------------------------------------------------------------
 # The invariant the whole importer exists to keep
 # ---------------------------------------------------------------------------
 

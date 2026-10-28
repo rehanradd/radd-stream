@@ -1153,9 +1153,8 @@ def _queue_json(wp_post: dict) -> dict:
         "_mal_cached_season": wp_post.get("_mal_cached_season"),
         "_animesuki_lang_badge": wp_post.get("_animesuki_lang_badge"),
         "_embedded": {"wp:term": [
-            [{"name": t.get("name"), "taxonomy": t.get("taxonomy")}
-             for group in terms for t in group]
-            for terms in (wp_post.get("_embedded") or {}).get("wp:term") or []]},
+            [{"name": t.get("name"), "taxonomy": t.get("taxonomy")} for t in group or []]
+            for group in (wp_post.get("_embedded") or {}).get("wp:term") or []]},
     }
 
 
