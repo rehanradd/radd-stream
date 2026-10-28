@@ -601,7 +601,7 @@ def slug_name(slug: str | None) -> tuple[str, int | None]:
 
 IFRAME_SRC_RE = re.compile(r"""<iframe\b[^>]*?\bsrc\s*=\s*["']?([^"'\s>]+)""", re.I)
 PLAYER_HEADING_RE = re.compile(r"From\s+Player\s+(\d+)\s+Below", re.I)
-BLOCK_TAG_RE = re.compile(r"<br\s*/?>|</?(?:p|div|li|h[1-6])>", re.I)
+ANY_TAG_RE = re.compile(r"<[^>]+>", re.I)
 
 
 def parse_players(content: str | None) -> list[dict]:
@@ -771,8 +771,12 @@ def extract_synopsis(content: str | None, raw_title: str, base_title: str) -> st
     joined to a "Watch Online DVD Download" clause — and that is not a synopsis.
     A remainder whose opening names the work again is that restatement, so it is
     dropped; genuinely different prose is kept.
+
+    Markup goes before any of that is judged: a post may wrap its embed in bare
+    `<a href>` tags, and a display string that still carried them would show the
+    Android client its own angle brackets.
     """
-    text = _clean_text(BLOCK_TAG_RE.sub(" ", HEADING_BLOCK_RE.sub(
+    text = _clean_text(ANY_TAG_RE.sub(" ", HEADING_BLOCK_RE.sub(
         " ", IFRAME_BLOCK_RE.sub(" ", content or ""))))
     if not text or len(text) < 20:
         return None
@@ -1507,12 +1511,16 @@ def export_staging(db_path: Path | str = DEFAULT_DB_PATH, posts=()) -> dict:
                     totals["sources_written"] += 1
 
             if page_url:
+                # `raw_json` is only ever written on a fresh insert. The queue
+                # row's REST payload is what makes a re-crawl a local transform;
+                # overwriting it with this page's parse result would leave every
+                # later pass no choice but to ask the site for the post again.
                 conn.execute(
                     """
                     INSERT INTO sitemap_cache (loc, lastmod, slug, scraped, raw_json, error_count)
                     VALUES (?, ?, ?, 1, ?, 0)
                     ON CONFLICT(loc) DO UPDATE SET scraped = 1, slug = excluded.slug,
-                        lastmod = excluded.lastmod, raw_json = excluded.raw_json;
+                        lastmod = excluded.lastmod;
                     """,
                     (page_url, post.get("lastmod"), row["slug"],
                      json.dumps(page_meta, ensure_ascii=False)),

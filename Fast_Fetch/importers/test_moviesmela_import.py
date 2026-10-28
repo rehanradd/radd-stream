@@ -566,6 +566,25 @@ class TestSynopsis(unittest.TestCase):
             "<p>Watch the full movie online in print quality free download "
             "from player 1 below.</p>", "X", "X"))
 
+    def test_link_soup_around_an_embed_leaves_only_the_prose(self):
+        # Measured shape: a news clip post whose body is an embed, three empty
+        # anchors and one sentence. The markup is not prose and must not reach
+        # the client, which would render its own angle brackets.
+        body = ('<p><iframe src="//player.vimeo.com/video/107925038"></iframe></p>\n'
+                '<p><a href="http://vimeo.com/107925038"></a>'
+                '<a href="http://vimeo.com/user32952935"></a></p>'
+                'A lighthouse keeper inherits a journal that describes his '
+                'own death three days in advance.')
+        self.assertEqual(
+            mm.extract_synopsis(body, "Beacon (2024) Hindi Full Movie", "Beacon"),
+            "A lighthouse keeper inherits a journal that describes his "
+            "own death three days in advance.")
+
+    def test_a_body_that_is_only_markup_has_nothing_to_display(self):
+        self.assertIsNone(mm.extract_synopsis(
+            '<p><a href="https://vimeo.com"></a> <a href="https://vimeo.com"></a>'
+            '<a href="https://vimeo.com/user32952935"></a></p>', "Tigers", "Tigers"))
+
 
 class TestTaxonomy(unittest.TestCase):
     def test_industry_and_year_categories(self):
@@ -1175,6 +1194,27 @@ class TestStagingDatabase(unittest.TestCase):
         row = conn.execute("SELECT scraped, slug, lastmod FROM sitemap_cache").fetchone()
         self.assertEqual((row["scraped"], row["slug"], row["lastmod"]),
                          (1, SLUG, "2026-10-28T00:21:20"))
+        conn.close()
+
+    def test_the_queued_rest_payload_outlives_the_write(self):
+        # The local transform depends on this: a page that was queued with its
+        # REST body must still have that body after being indexed, or the next
+        # pass re-fetches 20k posts to recompute what it already had.
+        conn = self.connect()
+        mm.ensure_schema(conn)
+        conn.execute("INSERT INTO sitemap_cache (loc, slug, raw_json, scraped)"
+                     " VALUES (?, ?, ?, 0)",
+                     (LINK, SLUG, json.dumps(wp_post())))
+        conn.commit()
+        conn.close()
+        mm.export_staging(self.db, [mm.build_post(wp_post(), TAXONOMY)])
+        conn = self.connect()
+        stored = json.loads(conn.execute(
+            "SELECT raw_json FROM sitemap_cache").fetchone()[0])
+        self.assertEqual(stored["id"], 439845)
+        self.assertIn("content", stored)
+        self.assertEqual(conn.execute(
+            "SELECT scraped FROM sitemap_cache").fetchone()[0], 1)
         conn.close()
 
     def test_stats_report_iframes_apart_from_bytes(self):
