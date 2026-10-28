@@ -1644,3 +1644,38 @@ still legacy on purpose, and the 14,730 link-less pages are not filled with inve
 sources. `AGENTS.md`, `docs/PROJECT_MAP.md` and the untracked `*_task.md` /
 `build_mp4moviez.py` / `openrouter_*.py` files in this checkout belong to other accounts and
 were left unstaged.
+
+**Queue re-drives, final numbers (same session, later).**
+
+*filmiyin — closed for the second time, now with evidence.* `retry-parked`
+requeued all 1,841 parked URLs and re-judged every one: `pages=1841 posts=0
+releases=0 sources=0 not-indexable=1841 failed=0`, declined as
+`no-playable-links=1841`. The database did not move — 3,837 posts, 17,541
+releases, 17,541 sources (every one `js_required`), 21 adult-flagged — and the
+queue ends at 3,899 indexed + 1,841 parked + 0 pending. What changed is the
+*quality* of the no: pass 2 parked the cohort on a blanket verdict, pass 3
+recorded a per-row reason and zero transport failures, so "this title is gone
+from the site" is now an observation stored on each row rather than an
+inference. Recovery is 0 of 1,841 — the site's catalog has shrunk, and
+3,837 is filmiyin's ceiling with the tools we are willing to use.
+
+*pagalmovies — in flight at the time of writing.* The 7,535-row re-drive had
+re-judged 1,088 rows, every verdict `removed` (the site's own takedown page),
+0 posts recovered, 6,448 still queued at ~62 rows/minute. The final
+`declined as:` histogram splits 404/410 from retryable and is what this row
+must be reported on; it is deliberately not guessed here.
+
+*The measured table is now reproducible.* All twelve importer modules answer
+`stats` (`python3 -S Fast_Fetch/importers/import_<site>.py stats`) and every
+`posts` count printed matched the SITES.md row exactly: 5movierulz 442, animahd
+232, aryplus 481, desiserials 34, dramacool 544, filmiyin 3,837, kisskh 669,
+levidia 147, moviecok 1,738, moviesmela 16,677, mp4moviez 29,848, pagalmovies
+6,842. SITES.md now names that command instead of relying on my ad-hoc queries.
+
+*One more retired claim, my own.* The "download buttons moved behind a
+`data-key` handler" story was wrong: on five frontier mp4moviez pages the
+`data-key` attributes sit on `<ins class=… data-cp-host=…>` ad-SDK elements, the
+pages carry 39 anchors that are all category links, no `<h1>`–`<h4>`, and zero
+`dl.php` references. The 14,730 link-less work rows are emptied pages, not
+gated ones — nothing there is recoverable by crawling, and task #11 is closed
+as answered rather than as finished.

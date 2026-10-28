@@ -31,7 +31,10 @@ The table above documents twelve sites; the fleet's staging databases under
 `COUNT(*)` against the file, not a note about what a parser could do:
 **posts / releases / sources**, plus the queue (`scraped = -1` parked, `0`/`2`
 pending). A row with `no-key` has no `posts.canonical_key` and no `sources`
-table, so it is **not mergeable as it stands**.
+table, so it is **not mergeable as it stands**. For the twelve sites that have a
+module, re-measure with `python3 -S Fast_Fetch/importers/import_<site>.py stats`
+— it prints exactly these columns as JSON; the other eighteen were written by
+`fast_fetch.py` and are counted with a `COUNT(*)` against their file.
 
 | Staging database | posts | releases | sources | 18+ | queue parked / pending | mergeable |
 |---|---|---|---|---|---|---|
@@ -45,7 +48,7 @@ table, so it is **not mergeable as it stands**.
 | desicinemas | 5,223 | 5,285 | 4,339 | 7 | 0 / 1 | yes |
 | desiserials | 34 | 200 | 359 | 0 | 0 / 0 | yes (200-row pilot only) |
 | dramacool | 544 | 9,675 | 9,675 | 2 | 0 / 0 | yes |
-| filmiyin | 3,837 | 17,541 | 17,541 | 21 | 1,841 / 0 | yes — queue driven to completion |
+| filmiyin | 3,837 | 17,541 | 17,541 | 21 | 1,841 / 0 | yes — queue closed twice |
 | filmyzilla | 15,228 | 46,372 | 80,032 | 423 | 3,462 / 0 | yes |
 | hdhub4u | 11,224 | 129,009 | 250,925 | 826 | 1,147 / 0 | yes |
 | hdtvb | 3,774 | 16,855 | 16,855 | 1,161 | 3,684 / 0 | yes |
