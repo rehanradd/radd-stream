@@ -103,6 +103,34 @@ VKCDN5_CONFIG = (
     '?t=sig&s=1793147688&e=43200&v=77&sp=3000&i=0.3" '
     'type="video/mp4" title="480p 658 kbps"> </video>\';')
 
+# Google Drive, as the owner measured it live on 2026-10-28 against a real
+# animahd.com episode id: the download endpoint answers a large file with this
+# "Virus scan warning" page, and the form it publishes is what replayed with a
+# Range header returns 206, `Content-Range bytes 0-511/253161185` and body bytes
+# starting `1A 45 DF A3` under `Content-Type: application/octet-stream`.
+GD_FILE_ID = "1BvFM6gGdKlXkL8d5sJ7hQ9wZ3tR2yP4c"
+GD_DOWNLOAD_PAGE = f"https://drive.google.com/uc?export=download&id={GD_FILE_ID}"
+GD_UUID = "8c9f0d2e-1c4a-4a55-9b23-2a1a2b3c4d5e"
+GD_REPLAY = ("https://drive.usercontent.google.com/download?"
+             f"id={GD_FILE_ID}&export=download&confirm=t&uuid={GD_UUID}")
+GD_INTERSTITIAL = f"""<!DOCTYPE html><html><head><meta charset="utf-8">
+<title>animahd-ep-01.mkv - Google Drive</title></head><body>
+<div class="drive-file-msg-title">Can't view this file in Preview</div>
+<form id="download-form" action="https://drive.usercontent.google.com/download" method="get">
+  <input type="hidden" name="id" value="{GD_FILE_ID}">
+  <input type="hidden" name="export" value="download">
+  <input type="hidden" name="confirm" value="t">
+  <input type="hidden" name="uuid" value="{GD_UUID}">
+  <input id="downloadButton" type="submit" class="ldl43c" value="Download anyway">
+</form></body></html>"""
+# What a private file answers instead: the same endpoint, a sign-in wall, and no
+# form that would ever lead to bytes.
+GD_SIGNIN_WALL = """<!DOCTYPE html><html><head><title>Sign in</title></head>
+<body><form action="https://accounts.google.com/ServiceLogin" method="get">
+<input type="hidden" name="continue" value="https://drive.google.com/uc">
+</form></body></html>"""
+GD_MKV_HEAD = b"\x1a\x45\xdf\xa3\x01\x00\x00\x00\x00\x00\x00\x1f\x42\x82\x45\x9c"
+
 
 
 class FakeResponse:
@@ -386,6 +414,25 @@ class TestRangeProbe(unittest.TestCase):
         fetch = scripted_fetch({"a": (200, b"x", {"content-type": "text/html"})})
         verdict = hr.probe_range("https://h/a", fetch=fetch)
         self.assertEqual((verdict["status"], verdict["reason"]), ("blocked", "200 text/html"))
+
+    def test_206_octet_stream_holding_ebml_is_active_because_of_its_header(self):
+        # Drive's answer: no video content type, a real Matroska stream. Without
+        # the container check this probe could never report a Drive file active.
+        fetch = scripted_fetch({"a": (206, GD_MKV_HEAD, {
+            "content-type": "application/octet-stream",
+            "content-range": "bytes 0-511/253161185"})})
+        verdict = hr.probe_range("https://h/a", fetch=fetch)
+        self.assertEqual((verdict["status"], verdict["size_bytes"]),
+                         ("active", 253161185))
+        self.assertIn("holds a matroska container", verdict["reason"])
+
+    def test_200_octet_stream_holding_ftyp_is_active_and_flagged_full_body(self):
+        fetch = scripted_fetch({"a": (200, b"\x00\x00\x00 ftypisom" + b"z" * 20,
+                                      {"content-type": "application/octet-stream"})})
+        verdict = hr.probe_range("https://h/a", fetch=fetch)
+        self.assertEqual(verdict["status"], "active")
+        self.assertIn("full_body", verdict["reason"])
+        self.assertEqual(verdict["size_bytes"], 32)
 
     def test_403_is_blocked_and_404_is_dead(self):
         fetch = scripted_fetch({"a": (403, b"no", {}), "b": (404, b"", {})})
@@ -878,6 +925,234 @@ class TestUnwrapPkembed(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# Google Drive: recognition, the interstitial, the container header
+# ---------------------------------------------------------------------------
+
+class TestContainerMagic(unittest.TestCase):
+    def test_ebml_is_a_matroska_container(self):
+        self.assertEqual(hr.container_magic(GD_MKV_HEAD), "matroska")
+
+    def test_ftyp_at_offset_four_is_the_iso_base_media_family(self):
+        self.assertEqual(hr.container_magic(b"\x00\x00\x00 ftypisom"), "mp4")
+
+    def test_a_page_or_a_short_slice_names_no_container(self):
+        self.assertEqual(hr.container_magic(b"<html><body>"), "")
+        self.assertEqual(hr.container_magic(b"\x1a\x45"), "")
+
+    def test_a_text_body_is_judged_on_its_bytes(self):
+        self.assertEqual(hr.container_magic("no video here"), "")
+
+
+class TestGdriveRecognition(unittest.TestCase):
+    def test_the_download_endpoint_query_names_the_file(self):
+        self.assertEqual(hr.gdrive_file_id(GD_DOWNLOAD_PAGE), GD_FILE_ID)
+        self.assertTrue(hr.is_gdrive_link(GD_DOWNLOAD_PAGE))
+
+    def test_the_viewer_path_names_the_same_file(self):
+        self.assertEqual(
+            hr.gdrive_file_id(f"https://drive.google.com/file/d/{GD_FILE_ID}/view"),
+            GD_FILE_ID)
+
+    def test_a_protocol_relative_drive_url_is_read_the_same_way(self):
+        self.assertEqual(
+            hr.gdrive_file_id(f"//drive.google.com/uc?id={GD_FILE_ID}"), GD_FILE_ID)
+
+    def test_another_host_is_not_a_drive_file(self):
+        self.assertEqual(hr.gdrive_file_id(f"https://mxdrop.to/uc?id={GD_FILE_ID}"), "")
+        self.assertEqual(hr.gdrive_file_id(""), "")
+
+    def test_a_drive_page_without_an_id_names_no_file(self):
+        self.assertEqual(hr.gdrive_file_id("https://drive.google.com/drive/folders/x"), "")
+
+    def test_an_id_that_is_too_short_or_not_url_safe_is_refused(self):
+        self.assertEqual(hr.gdrive_file_id("https://drive.google.com/uc?id=abc123"), "")
+        self.assertEqual(
+            hr.gdrive_file_id("https://drive.google.com/uc?id=" + "a" * 30 + "%2F.."), "")
+
+    def test_the_stored_identifier_is_the_endpoint_and_the_id(self):
+        self.assertEqual(hr.gdrive_download_url(GD_FILE_ID), GD_DOWNLOAD_PAGE)
+
+
+class TestDriveConfirmForm(unittest.TestCase):
+    def test_the_interstitial_replay_url_is_what_the_page_published(self):
+        self.assertEqual(hr.drive_confirm_form(GD_INTERSTITIAL), GD_REPLAY)
+
+    def test_a_form_on_somebody_else_s_host_is_not_replayed(self):
+        # The action is the page's data, not an instruction about where the next
+        # request goes; a forged interstitial must not become an outbound request
+        # to an attacker's host.
+        page = GD_INTERSTITIAL.replace("https://drive.usercontent.google.com/download",
+                                       "https://evil.test/steal")
+        self.assertEqual(hr.drive_confirm_form(page), "")
+
+    def test_a_page_with_no_form_publishes_no_replay(self):
+        self.assertEqual(hr.drive_confirm_form(GD_SIGNIN_WALL), "")
+        self.assertEqual(hr.drive_confirm_form(""), "")
+
+    def test_a_form_with_no_fields_is_not_turned_into_a_bare_url(self):
+        self.assertEqual(hr.drive_confirm_form(
+            '<form action="https://drive.usercontent.google.com/download"></form>'), "")
+
+    def test_single_quotes_and_an_unnamed_input_are_both_survived(self):
+        page = ("""<form action='https://drive.usercontent.google.com/download'>"""
+                """<input type='hidden' name='id' value='%s'>"""
+                """<input type='submit' value='go'></form>""" % GD_FILE_ID)
+        self.assertEqual(hr.drive_confirm_form(page),
+                         "https://drive.usercontent.google.com/download?"
+                         f"id={GD_FILE_ID}")
+
+    def test_a_relative_action_is_absolute_before_it_is_checked(self):
+        page = ('<form action="//drive.usercontent.google.com/download">'
+                '<input type="hidden" name="id" value="%s"></form>' % GD_FILE_ID)
+        self.assertTrue(hr.drive_confirm_form(page).startswith("https://"))
+
+
+class TestUnwrapGdrive(unittest.TestCase):
+    def scripted(self, **over):
+        script = {
+            "drive.google.com/uc": (200, GD_INTERSTITIAL, {"content-type": "text/html"}),
+            "drive.usercontent.google.com/download": (
+                206, GD_MKV_HEAD, {"content-type": "application/octet-stream",
+                                   "content-range": "bytes 0-511/253161185"}),
+        }
+        script.update(over)
+        return scripted_fetch(script)
+
+    def test_the_two_step_chain_reaches_a_real_matroska_stream(self):
+        fetch = self.scripted()
+        verdict = hr.unwrap_gdrive(GD_DOWNLOAD_PAGE, fetch=fetch)
+        self.assertEqual(verdict["status"], "active", verdict["notes"])
+        self.assertEqual(verdict["service"], "gdrive")
+        self.assertEqual(verdict["file_id"], GD_FILE_ID)
+        self.assertEqual(verdict["embed_url"], GD_DOWNLOAD_PAGE)
+        self.assertEqual(verdict["final_url"], GD_REPLAY)
+        self.assertTrue(verdict["is_temporary"])
+        self.assertEqual(verdict["size_bytes"], 253161185)
+        self.assertEqual([item["url"] for item in verdict["sources"]], [GD_REPLAY])
+        self.assertEqual([url for url, _h, _m in fetch.calls],
+                         [GD_DOWNLOAD_PAGE, GD_REPLAY])
+        self.assertIn("confirmation page, replayed once", json.dumps(verdict["notes"]))
+
+    def test_the_viewer_url_resolves_through_the_same_chain(self):
+        verdict = hr.unwrap_gdrive(
+            f"https://drive.google.com/file/d/{GD_FILE_ID}/view", fetch=self.scripted())
+        self.assertEqual(verdict["embed_url"], GD_DOWNLOAD_PAGE)
+        self.assertEqual(verdict["status"], "active", verdict["notes"])
+
+    def test_the_verdict_is_signed_param_free_and_carries_no_token(self):
+        verdict = hr.unwrap_gdrive(GD_DOWNLOAD_PAGE, fetch=self.scripted())
+        self.assertEqual(verdict["signed_params"], [])
+
+    def test_no_request_this_resolver_makes_carries_a_referer(self):
+        fetch = self.scripted()
+        hr.unwrap_gdrive(GD_DOWNLOAD_PAGE, fetch=fetch, referer="https://animahd.com/x")
+        for _url, headers, _method in fetch.calls:
+            self.assertNotIn("Referer", headers)
+
+    def test_a_forbidden_referer_is_recorded_as_withheld(self):
+        verdict = hr.unwrap_gdrive(GD_DOWNLOAD_PAGE, fetch=self.scripted(),
+                                   referer="https://www.moviesmela.com/x")
+        self.assertIn("referrer withheld", verdict["notes"][0])
+
+    def test_verify_off_asks_drive_for_nothing_at_all(self):
+        fetch = scripted_fetch({})
+        verdict = hr.unwrap_gdrive(GD_DOWNLOAD_PAGE, fetch=fetch, verify=False)
+        self.assertEqual(fetch.calls, [])
+        self.assertEqual(verdict["status"], "unverified")
+        self.assertEqual(verdict["final_url"], GD_DOWNLOAD_PAGE)
+        self.assertFalse(verdict["is_temporary"])
+        self.assertIn("without a request", json.dumps(verdict["notes"]))
+
+    def test_a_non_drive_url_is_refused_before_any_request(self):
+        fetch = scripted_fetch({})
+        verdict = hr.unwrap_gdrive(EMBED, fetch=fetch)
+        self.assertEqual(verdict["status"], "unknown")
+        self.assertIn("not a Google Drive file URL", verdict["notes"])
+        self.assertEqual(fetch.calls, [])
+
+    def test_a_small_public_file_leads_straight_to_its_bytes(self):
+        # The first answer is not a page: the endpoint redirects to the byte host
+        # and serves the file, so the resolver must not go looking for a form that
+        # was never published. The stand-in reports the redirect target as
+        # `http_request` would, which is what the probe then has to be pointed at.
+        byte_url = ("https://drive.usercontent.google.com/download?id="
+                    + GD_FILE_ID + "&export=download&authuser=0")
+        calls = []
+
+        def fetch(url, headers=None, timeout=None, method="GET", follow=True):
+            calls.append((url, headers or {}, method))
+            if "usercontent" in url:
+                return (206, GD_MKV_HEAD, {"content-type": "application/octet-stream",
+                                           "content-range": "bytes 0-511/4096"}, url)
+            return (200, GD_MKV_HEAD,
+                    {"content-type": "application/octet-stream"}, byte_url)
+
+        verdict = hr.unwrap_gdrive(GD_DOWNLOAD_PAGE, fetch=fetch)
+        self.assertEqual(verdict["status"], "active", verdict["notes"])
+        self.assertEqual(verdict["final_url"], byte_url)
+        self.assertFalse(verdict["is_temporary"])
+        self.assertIn("led straight to its bytes", json.dumps(verdict["notes"]))
+        self.assertEqual(verdict["size_bytes"], 4096)
+        self.assertEqual([url for url, _h, _m in calls], [GD_DOWNLOAD_PAGE, byte_url])
+
+    def test_a_deleted_file_is_dead_and_says_which_one(self):
+        for status in (404, 410):
+            fetch = scripted_fetch({"drive.google.com/uc": (status, b"", {})})
+            verdict = hr.unwrap_gdrive(GD_DOWNLOAD_PAGE, fetch=fetch)
+            self.assertEqual(verdict["status"], "dead", status)
+            self.assertIn(GD_FILE_ID, json.dumps(verdict["notes"]))
+
+    def test_a_refused_or_broken_endpoint_is_unverified_not_dead(self):
+        for status in (403, 429, 503, 0):
+            fetch = scripted_fetch({"drive.google.com/uc": (status, b"quota", {})})
+            verdict = hr.unwrap_gdrive(GD_DOWNLOAD_PAGE, fetch=fetch)
+            self.assertEqual(verdict["status"], "unverified", status)
+            self.assertEqual(len(fetch.calls), 1)
+            self.assertIn("not a verdict about the file", json.dumps(verdict["notes"]))
+
+    def test_a_probe_refused_by_the_quota_is_replayed_once_and_stops_unverified(self):
+        # The interstitial parsed fine; only the byte endpoint throttled. One
+        # attempt was spent and the file is left unverified rather than retried
+        # or called dead.
+        fetch = self.scripted(**{
+            "drive.usercontent.google.com/download": (403, b"", {"content-type": "text/html"})})
+        verdict = hr.unwrap_gdrive(GD_DOWNLOAD_PAGE, fetch=fetch)
+        self.assertEqual(verdict["status"], "unverified")
+        self.assertEqual(len(fetch.calls), 2)
+        self.assertIn("per-file download quota", json.dumps(verdict["notes"]))
+
+    def test_a_page_that_offers_no_download_form_is_blocked_not_unverified(self):
+        fetch = scripted_fetch({"drive.google.com/uc": (200, GD_SIGNIN_WALL,
+                                                       {"content-type": "text/html"})})
+        verdict = hr.unwrap_gdrive(GD_DOWNLOAD_PAGE, fetch=fetch)
+        self.assertEqual(verdict["status"], "blocked")
+        self.assertIn("the file is not public", json.dumps(verdict["notes"]))
+        self.assertEqual(len(fetch.calls), 1)
+
+    def test_an_html_answer_under_an_octet_stream_label_is_still_an_interstitial(self):
+        # A mislabelled response must not be mistaken for the file's bytes: the
+        # body, not the header alone, decides which branch runs.
+        fetch = scripted_fetch({
+            "drive.google.com/uc": (200, GD_INTERSTITIAL,
+                                    {"content-type": "application/octet-stream"}),
+            "drive.usercontent": (206, GD_MKV_HEAD,
+                                  {"content-type": "application/octet-stream",
+                                   "content-range": "bytes 0-511/10"}),
+        })
+        verdict = hr.unwrap_gdrive(GD_DOWNLOAD_PAGE, fetch=fetch)
+        self.assertEqual(verdict["final_url"], GD_REPLAY)
+        self.assertEqual(verdict["status"], "active", verdict["notes"])
+
+    def test_bytes_that_are_not_a_video_container_are_not_called_active(self):
+        fetch = self.scripted(**{
+            "drive.usercontent.google.com/download": (
+                206, b"PK\x03\x04 zip data", {"content-type": "application/octet-stream"})})
+        verdict = hr.unwrap_gdrive(GD_DOWNLOAD_PAGE, fetch=fetch)
+        self.assertEqual(verdict["status"], "unknown")
+        self.assertIn("octet-stream", json.dumps(verdict["notes"]))
+
+
+# ---------------------------------------------------------------------------
 # Command line
 # ---------------------------------------------------------------------------
 
@@ -912,6 +1187,18 @@ class TestMain(unittest.TestCase):
             self.assertEqual(hr.main([PK_EMBED]), 0)
         printed = json.loads(buf.getvalue())
         self.assertEqual(printed["service"], "pkembed")
+        self.assertEqual(printed["status"], "active")
+
+    def test_a_drive_url_dispatches_to_the_drive_resolver(self):
+        fetch = scripted_fetch({
+            "drive.google.com/uc": (200, GD_INTERSTITIAL, {"content-type": "text/html"}),
+            "drive.usercontent": (206, GD_MKV_HEAD,
+                                  {"content-type": "application/octet-stream",
+                                   "content-range": "bytes 0-511/253161185"})})
+        with mock.patch.object(hr, "http_request", fetch), silenced() as buf:
+            self.assertEqual(hr.main([GD_DOWNLOAD_PAGE]), 0)
+        printed = json.loads(buf.getvalue())
+        self.assertEqual(printed["service"], "gdrive")
         self.assertEqual(printed["status"], "active")
 
     def test_the_module_runs_as_a_script(self):

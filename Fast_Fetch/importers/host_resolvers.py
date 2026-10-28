@@ -84,6 +84,31 @@ durable identifier; the mp4 URL is a result of this call and must not be
 persisted.** Both resolvers therefore return it to the caller and leave it out
 of every stored shape.
 
+GOOGLE DRIVE — A FILE HOST BEING USED AS A VIDEO HOST
+-----------------------------------------------------
+`animahd.com` publishes one Google Drive file id per episode (`data-fileid`), so
+its "host" is a general file store with no embed page and no packer. One request
+to the download endpoint has three possible answers, all measured live on
+2026-10-28 (owner) against a real episode id:
+
+    GET https://drive.google.com/uc?export=download&id=<id>   200 text/html
+        the "Virus scan warning" interstitial a file over ~100 MB answers with,
+        whose body carries <form action="https://drive.usercontent.google.com/
+        download"> with hidden `id` / `export=download` / `confirm=t` / `uuid`;
+    GET that form action + `Range: bytes=0-511`              206,
+        `Content-Range bytes 0-511/253161185`, magic `1A45DFA3`,
+        `Content-Type: application/octet-stream`;
+    302 straight to the bytes, which is what a small public file does instead.
+
+Two consequences are coded here rather than assumed. Drive labels *every* file
+`application/octet-stream`, so the Range probe cannot recognise video from the
+content type and reads the container header instead (`container_magic`). And a
+refusal is a quota, not a verdict: Drive throttles downloads per file per day,
+so 403/429/503 come back as `unverified` with one attempt spent and no retry —
+hammering a rate limit is how one blocked file gets the whole client blocked.
+Unlike the two packer hosts, the durable identifier here is the file id, so
+`verify=False` asks Drive for nothing at all.
+
 HOSTS DELIBERATELY NOT IMPLEMENTED — THE VERDICT, WITH THE MEASUREMENTS
 -----------------------------------------------------------------------
 Two other players in this catalog were examined on 2026-10-28 and each got the
@@ -212,8 +237,26 @@ PK_SUB_RE = re.compile(r"""['"]((?:https?:)?//[^'"]+?\.(?:vtt|srt)(?:\?[^'"]*)?)
 # in code so a future caller cannot reintroduce the bug.
 FORBIDDEN_REFERRERS = ("moviesmela", "hindidubbedmovies", "moviehax")
 
+# Google Drive names a file two ways: the download endpoint's `?id=`, and the
+# viewer's `/file/d/<id>/view`. Both are the same file, and the id is the only
+# part worth keeping — the rest of either URL is a request shape, not identity.
+GDRIVE_HOST_RE = re.compile(r"(?:^|\.)drive\.google\.com$", re.I)
+GDRIVE_ID_RE = re.compile(r"[0-9A-Za-z_-]{20,}")
+GDRIVE_DOWNLOAD_PAGE = "https://drive.google.com/uc"
+# Only a form pointing at Google's own byte host gets replayed. A page's form
+# action is the page's data, not an instruction for where to send the next
+# request, so an interstitial that named somebody else's host is refused here.
+GDRIVE_BYTE_HOSTS = ("drive.usercontent.google.com", "drive.google.com", "docs.google.com")
+GDRIVE_FORM_RE = re.compile(
+    r"""<form\b[^>]*\baction\s*=\s*["'](?P<action>[^"']*)["'][^>]*>(?P<body>.*?)</form>""",
+    re.I | re.S)
+GDRIVE_INPUT_RE = re.compile(r"<input\b[^>]*>", re.I)
+GDRIVE_ATTR_RE = re.compile(r"""\b(?P<name>type|name|value)\s*=\s*["'](?P<value>[^"']*)["']""",
+                            re.I)
+
 SERVICE_MXDROP = "mxdrop"
 SERVICE_PKEMBED = "pkembed"
+SERVICE_GDRIVE = "gdrive"
 
 
 # ---------------------------------------------------------------------------
@@ -453,6 +496,67 @@ def is_pkembed_embed(url: str) -> bool:
     return _matches(url, PKEMBED_HOST_RE, PKEMBED_CONTENT_RE)
 
 
+def gdrive_file_id(url: str) -> str:
+    """
+    The Drive file id a URL names, or "" when it names none.
+
+    Both published shapes are read — `?id=` on the download endpoint and
+    `/file/d/<id>/view` on the viewer — and the candidate is validated by
+    character class and length before anything uses it, because this is the one
+    field this module copies into a request to google.com.
+    """
+    parts = urllib.parse.urlsplit(absolutize(url))
+    if not GDRIVE_HOST_RE.search((parts.netloc or "").lower()):
+        return ""
+    candidate = (urllib.parse.parse_qs(parts.query).get("id") or [""])[0]
+    if not candidate:
+        bits = [bit for bit in parts.path.split("/") if bit]
+        if len(bits) >= 3 and bits[:2] == ["file", "d"]:
+            candidate = bits[2]
+    return candidate if GDRIVE_ID_RE.fullmatch(candidate or "") else ""
+
+
+def is_gdrive_link(url: str) -> bool:
+    return bool(gdrive_file_id(url))
+
+
+def gdrive_download_url(file_id: str) -> str:
+    """
+    The durable identifier for one Drive file: the download endpoint and its id.
+
+    `file_id` arrives from `gdrive_file_id`, which already rejected anything
+    outside a URL-safe character class, so it is interpolated rather than
+    encoded — a forged id cannot reach here through this module's own parser.
+    """
+    return f"{GDRIVE_DOWNLOAD_PAGE}?export=download&id={file_id}"
+
+
+def drive_confirm_form(html: str) -> str:
+    """
+    The URL a "Virus scan warning" page asks the browser to replay, or "".
+
+    Google hands a large file's bytes over by making the client resubmit a
+    hidden form, so the fields are read as they are published and never
+    invented. The form's own action host is checked against GDRIVE_BYTE_HOSTS
+    first: a page's action is the page's data, not an instruction about where
+    this module sends its next request.
+    """
+    for match in GDRIVE_FORM_RE.finditer(html or ""):
+        action = absolutize(match.group("action") or "")
+        host = (urllib.parse.urlsplit(action).netloc or "").lower()
+        if not any(host == name or host.endswith("." + name) for name in GDRIVE_BYTE_HOSTS):
+            continue
+        fields = {}
+        for tag in GDRIVE_INPUT_RE.findall(match.group("body") or ""):
+            attrs = {found.group("name").lower(): found.group("value")
+                     for found in GDRIVE_ATTR_RE.finditer(tag)}
+            if attrs.get("type", "").lower() == "hidden" and attrs.get("name"):
+                fields[attrs["name"]] = attrs.get("value", "")
+        if fields:
+            return f"{action}?{urllib.parse.urlencode(fields)}"
+    return ""
+
+
 # ---------------------------------------------------------------------------
 # The shared resolve chain: embed page -> config -> media -> probe verdict
 # ---------------------------------------------------------------------------
@@ -577,6 +681,24 @@ def unwrap_mxdrop(embed_url: str, fetch=None, verify: bool = True,
     return _finish_media(result, fetch, verify)
 
 
+def container_magic(body) -> str:
+    """
+    The video container named by a response's first bytes, or "" when they name none.
+
+    Google Drive serves every file as `application/octet-stream`, so a content-type
+    test cannot see the film that is definitely there; what it can see is the
+    container header. EBML covers `.mkv` and `.webm` alike, and `ftyp` at offset 4
+    is the ISO base-media family (`.mp4`, `.m4v`, `.mov`). Anything else stays
+    unrecognised rather than being guessed at from the file name.
+    """
+    data = body if isinstance(body, bytes) else (body or "").encode("utf-8", "ignore")
+    if data[:4] == b"\x1a\x45\xdf\xa3":
+        return "matroska"
+    if data[4:8] == b"ftyp":
+        return "mp4"
+    return ""
+
+
 def probe_range(url: str, size: int = RANGE_PROBE_BYTES,
                 fetch=http_request) -> dict:
     """
@@ -585,7 +707,9 @@ def probe_range(url: str, size: int = RANGE_PROBE_BYTES,
     206 + video/* is the answer that matters: the file exists and the signature
     is live. A plain 200 is recorded as `active` too but flagged `full_body`,
     because a host that ignores Range is telling us something a client should
-    know before it plans a seek.
+    know before it plans a seek. A `video/*` type is not the only proof of video
+    though — see `container_magic`, without which a Drive file can never be
+    probed at all however well it streams.
     """
     status, body, headers, final_url = fetch(
         url, headers={"Range": f"bytes=0-{size - 1}"}, method="GET")
@@ -597,17 +721,27 @@ def probe_range(url: str, size: int = RANGE_PROBE_BYTES,
         total = int(match.group(1))
     verdict = {"status": "unknown", "http_status": status, "content_type": content_type,
                "size_bytes": total, "final_url": final_url, "reason": ""}
+    magic = container_magic(body)
     if status == 0:
         verdict["status"] = "error"
         verdict["reason"] = str(body)[:200]
     elif status == 206:
-        verdict["status"] = "active" if content_type.startswith("video/") else "unknown"
-        verdict["reason"] = "" if content_type.startswith("video/") else f"206 {content_type}"
+        if content_type.startswith("video/") or magic:
+            verdict["status"] = "active"
+            verdict["reason"] = "" if content_type.startswith("video/") \
+                else f"206 {content_type} holds a {magic} container"
+        else:
+            verdict["reason"] = f"206 {content_type}"
     elif status == 200:
-        verdict["status"] = "active" if content_type.startswith("video/") else "blocked"
-        verdict["reason"] = "full_body" if content_type.startswith("video/") else f"200 {content_type}"
-        if verdict["status"] == "active" and total is None:
-            verdict["size_bytes"] = len(body) if isinstance(body, (bytes, str)) else None
+        if content_type.startswith("video/") or magic:
+            verdict["status"] = "active"
+            verdict["reason"] = "full_body" if content_type.startswith("video/") \
+                else f"full_body, {content_type} holds a {magic} container"
+            if total is None:
+                verdict["size_bytes"] = len(body) if isinstance(body, (bytes, str)) else None
+        else:
+            verdict["status"] = "blocked"
+            verdict["reason"] = f"200 {content_type}"
     elif status in (401, 403, 429):
         verdict["status"] = "blocked"
         verdict["reason"] = f"HTTP {status}"
@@ -723,6 +857,93 @@ def unwrap_pkembed(embed_url: str, fetch=None, verify: bool = True,
     return _finish_media(result, fetch, verify)
 
 
+def _drive_probe(result: dict, fetch) -> dict:
+    """
+    One bounded probe of the byte endpoint, with Drive's quota read as a quota.
+
+    A 403/429/503 from Google means this file has hit its per-day download limit
+    — it says nothing about whether the file exists, and a resolver that retried
+    it would spend the whole client's standing on one episode. So the attempt is
+    made once and the verdict stops at `unverified`.
+    """
+    result["signed_params"] = sorted(signature_params(result["final_url"]))
+    result = _finish_media(result, fetch, True)
+    if result.get("http_status") in (403, 429, 503, 0):
+        result["status"] = "unverified"
+        result["notes"].append(
+            f"HTTP {result['http_status']} from Drive: a per-file download quota or a "
+            "transport failure, recorded as unverified rather than retried")
+    return result
+
+
+def unwrap_gdrive(url: str, fetch=None, verify: bool = True,
+                  referer: str | None = None) -> dict:
+    """
+    Drive file URL -> {final_url, service, is_temporary, status, notes, …}.
+
+    The contract is the same as the packer hosts', with two differences that come
+    from Drive being a file store rather than a player: `verify=False` sends
+    **no request at all** (there is no packer to unpack and the file id is
+    already the durable identifier, so a cataloging crawl costs Drive nothing),
+    and `verify=True` never spends more than the two requests the interstitial
+    needs. The replayed form URL carries a per-page `uuid` and is therefore
+    marked temporary; the redirect target of a small public file is not.
+    """
+    fetch = fetch or http_request
+    result = _new_result(SERVICE_GDRIVE, url)
+    _withheld_referrer(result, referer)
+    file_id = gdrive_file_id(result["embed_url"])
+    if not file_id:
+        result["status"] = "unknown"
+        result["notes"].append("not a Google Drive file URL")
+        return result
+    result["file_id"] = file_id
+    result["embed_url"] = gdrive_download_url(file_id)
+    result["final_url"] = result["embed_url"]
+    result["is_temporary"] = False
+    if not verify:
+        result["notes"].append("file id cataloged without a request: Drive's quota is "
+                               "spent by probing, not by storing")
+        return result
+
+    status, body, headers, final_url = fetch(result["embed_url"])
+    content_type = (headers.get("content-type") or "").split(";")[0].strip().lower()
+    if status in (404, 410):
+        result["status"] = "dead"
+        result["notes"].append(f"Drive holds no file {file_id} (HTTP {status})")
+        return result
+    if status in (403, 429, 503) or status == 0:
+        result["status"] = "unverified"
+        result["notes"].append(f"download endpoint HTTP {status}: a per-file quota or a "
+                               "transport failure, not a verdict about the file")
+        return result
+
+    page = body if isinstance(body, str) else (body or b"").decode("utf-8", "replace")
+    if "html" in content_type or "<html" in page[:2000].lower():
+        replay = drive_confirm_form(page)
+        if not replay:
+            result["status"] = "blocked"
+            result["notes"].append("Drive answered with a page that publishes no "
+                                   "download form: the file is not public")
+            return result
+        result["notes"].append("large file: the download endpoint answered with its "
+                               "confirmation page, replayed once")
+        result["final_url"] = replay
+        result["is_temporary"] = True
+        result["sources"] = [{"url": replay, "mime": "application/octet-stream",
+                              "label": ""}]
+        return _drive_probe(result, fetch)
+
+    # A small public file answers with a redirect to its bytes, so no second
+    # request was needed to find the endpoint — the probe below is the one that
+    # proves they are video.
+    byte_url = absolutize(final_url) or result["embed_url"]
+    result["final_url"] = byte_url
+    result["sources"] = [{"url": byte_url, "mime": content_type, "label": ""}]
+    result["notes"].append("public file: the download endpoint led straight to its bytes")
+    return _drive_probe(result, fetch)
+
+
 def main(argv: list[str] | None = None) -> int:
     """One URL in, one JSON verdict out — a manual check of the chain."""
     args = argv if argv is not None else sys.argv[1:]
@@ -731,7 +952,12 @@ def main(argv: list[str] | None = None) -> int:
         print("usage: host_resolvers.py <embed-url> [--no-verify]")
         return 2
     url = args[0]
-    unwrap = unwrap_pkembed if is_pkembed_embed(url) else unwrap_mxdrop
+    if is_pkembed_embed(url):
+        unwrap = unwrap_pkembed
+    elif is_gdrive_link(url):
+        unwrap = unwrap_gdrive
+    else:
+        unwrap = unwrap_mxdrop
     verdict = unwrap(url, verify="--no-verify" not in args)
     print(json.dumps(verdict, indent=2, ensure_ascii=False))
     return 0 if verdict["status"] in ("active", "unverified") else 1
