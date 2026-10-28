@@ -166,7 +166,7 @@ the deferred roadmap items are separate concerns; see §6 and §8.
 >   This costs the Android client nothing (OkHttp is not a browser and ignores CORS), but it
 >   means a web dashboard cannot read this API until an operator adds its origin.
 > - **The default bind is loopback.** `start_server()` is `host="127.0.0.1"`
->   (`viewer.py:3446`) and `fast_fetch.py:5857` defaults `--host` to `127.0.0.1` with the help
+>   (`viewer.py:3447`) and `fast_fetch.py:5857` defaults `--host` to `127.0.0.1` with the help
 >   text "nginx is the public gate". The old `0.0.0.0` default is gone.
 >
 > What did **not** change: the deployed host is plain HTTP with no TLS, the four catalog reads
@@ -1864,3 +1864,100 @@ next deployment will behave.
 **Next agent should:** pick from §4 in that order (A then C are the two a viewer would notice),
 leave §3 alone until a row's class changes, and re-run §6 before repeating any number from this
 document in a user-facing string.
+
+### Session 24 — Doc truth, two measurements that closed backlog rows, and the anime work landing without me touching it (2026-10-28)
+
+**Goal:** the master's three ordered tasks — (A) retire the stale claims in this guide,
+(B) settle §4-C by measurement instead of by implementation, (C) take the next item that is
+verifiable offline. No Kotlin, `.kts`, resource or `.py` file was changed in this session.
+
+**First, the correction that mattered:** my anime pass was **already landed** — `master`
+carried it as `69b3795` inside `daeb3d2`, and the single failure my 16:05 gate reported was
+not my test. `CommentBalanceTest.scan` closed a raw string at the *first* `"""` of a quote
+run, while Kotlin closes at the *last* three, so a legitimate `"""…""""` leaked a quote and
+desynced the depth walk; the master fixed the scanner at `4b939ef` and added two controls.
+(I had separately de-possessed the backtick name at 16:26, which was its own real trigger.)
+Nothing here re-implements or re-creates `AnimeWireTest`. The operative gate on this exact
+tree is the master's: **588 tests / 74 suites / 0 failures / 0 errors / 0 skipped**.
+
+**A — five stale claims retired in this guide (`cf10f03`).** Note honestly that this commit was
+made by a parallel session under the same git identity while my edit sat staged; I verified
+afterwards that it is exactly one file (`App/AGENTS.md`, +81/−33) containing my diff and
+nothing else.
+1. **§6's `ReleaseDetail` 🚨 block** asserted the model still asked for `season_number` /
+   `episode_number` / `episode_title` / `resolution` / `audio` and that season grouping
+   "silently does nothing". False against today's code: `Models.kt:236-253` maps the columns
+   the ledger writes, `:264-286` derives `seasonNumber`/`episodeNumber`/`resolution`/`sizeBytes`
+   through `printDescriptor`, `audio` is `languages`, `episode_title` does not exist because no
+   column backs it — and `DetailScreen.kt:387,660` paints `SeasonGroup.number`, which
+   `ReleaseLayoutBuilder.kt:300-330` builds from those derived numbers. `StreamResponse
+   .isTemporary` is `Boolean?` (`:343-345`) on `LenientBooleanAdapter`.
+2. **The "no auth, no bearer, no rate limiting, wildcard CORS, binds 0.0.0.0" paragraph** was
+   retired the same way Session 23 retired the anime note, with the lines: `_bearer_token()`
+   (`viewer.py:381`) and `request_is_vip()` (`:389`) do exist and every `api/v2/account*` route
+   needs the sync key; `_bucket_for()` (`:2913-2928`) puts every request in a token bucket and
+   `redact.py:1163` writes the `RateLimit-*` triple; `send_json()` (`:2895`) calls
+   `redact.cors_headers_for()`, whose allow-list is `CORS_ALLOW_ORIGINS = frozenset()`
+   (`redact.py:1278`) — so **no** origin is granted and a refused one gets no header (the
+   Android client is unaffected; a web dashboard would be); and `start_server()` is
+   `host="127.0.0.1"` (`:3447`), `fast_fetch.py:5857` defaults `--host` to `127.0.0.1` with
+   "nginx is the public gate" in its help text. What is still true: plain HTTP, and the catalog
+   reads are public.
+3. **§5's anime ✅ note** said the client still does not decode `is_animated`. It does now.
+4. **§5's list-payload claim** ("selects exactly these keys, viewer.py:1905-1909") replaced by
+   the measured projection at `:2596-2603` plus the two keys appended per item
+   (`work_ref` `:2619`, `subtitled` `:2620`), and the adult `WHERE` re-cited to `:2499` — one
+   `redact.adult_clause("p")` every branch inherits.
+5. **§5's detail and stats line refs** re-measured (`id ASC` at `:2680`, the per-release source
+   `CASE service` at `:2683-2697`, the stats answer built at `:2858-2864` behind a 120 s
+   `_STATS_CACHE` at `:2821-2823`).
+
+**B — §4-C recorded as "no client code" (`b945a98`).** The `vip-pass` route is real, but what it
+guards is the operator's download shortener, and live `GET /api/v1/app/remote-config` answers
+`link_shorteners: [{shrinkme, configured: false}, {droplink, configured: false}]`;
+`viewer.shorten_download_url()` returns `None` the moment `shortener_targets()` is empty
+(`viewer.py:362-364`), so free and VIP download identically. The app does not reach
+`/api/v1/download` at all — `ApiProvider.streamRedirectUrl` (`:98`) is the only byte-path
+builder in `App/app/src` and every consumer uses `/api/v1/stream`, which has no shortener in its
+code path. Wiring it today would bypass nothing, would be unverifiable (no behavioural difference
+to test against the live host), and would push a secret-bearing field into the keep pipeline for
+a benefit no viewer could observe. **Reopen when** `/admin` shows a configured network; the note
+records the one trap (`KeepIdentity.handleFromRedirectorUrl` must still recover the handle from a
+URL carrying `?vip=`).
+Rows B, D, E and F got the same treatment: B and F closed against code that already shipped; E
+now carries the owner's no-restart decision and says the `subtitled` line belongs in the next
+deploy's release note; D is below.
+
+**C — by-media measured, and deliberately not wired (`1f75a14`).** The master's condition was
+"only if you can test it offline against the live host read-only". I could — and it fails for a
+different reason than absence. `GET /api/v1/search/by-media?q=naruto&limit=3` answers `200` with
+exactly the honest shape a client wants (`matched_on`/`mismatched_on`/`unknown_on`, plus
+`runtime_minutes`, `resolutions`, `is_animated`, `work_ref`) **in 82.4 s**, and
+`…&duration_s=1400` produced **zero bytes at 45 s**. The client's OkHttp is
+`connectTimeout(10 s)` / `readTimeout(15 s)` (`ApiProvider.kt:51-52`), so the feature would fail
+100 % of presses and say "The server took too long to answer." That is a §2 SLOW row, not an app
+row, and it is now recorded as one with the reopen path.
+The same probe session measured the four routes the app really calls — `stats` 0.004 s,
+`posts?limit=20` 0.209 s, `posts?type=anime` 0.330 s, `remote-config` 0.014 s — and one heavy
+detail page: `/api/v1/posts/40582` (≈1,000 releases) `200 in 10.38 s / 3,454,126 bytes`. That is
+inside the 15 s budget, so **no timeout was changed**: raising one on the strength of a single
+un-warmed probe would be guessing in the other direction. The margin is written down instead, in
+new §2b, because the biggest work in the catalog is not necessarily the row I happened to pick.
+
+**Gate:** the tree the master gated is untouched — `git diff --name-only daeb3d2..HEAD` over
+`*.kt *.kts *.xml *.toml` is **empty**, and the only files changed since are `App/AGENTS.md` and
+`App/docs/PARITY_BACKEND_BLOCKED.md`, which Gradle cannot see. My own 17:02 queued run
+(`/tmp/build25.log`) reported `GRADLE_EXIT=0`, `FOREIGN_BUILD_PIDS_SEEN=` empty, `OVERLAP=NO`,
+`WAITED_FOR_OTHER_BUILDS_S=0` — and `38 actionable tasks: 38 up-to-date`, so **it proves nothing**
+and is reported as such rather than as a green gate. No source change meant no reason to burn a
+12-minute build on this 1-vCPU box to re-confirm an unchanged tree.
+
+**Deliberately not verified:** no device or emulator, and nothing in this session is a UX claim;
+every number above is one host on one day, loopback, un-warmed — re-run `App/docs/
+PARITY_BACKEND_BLOCKED.md` §6 before repeating any of them in a user-facing string.
+
+**Left for the owner:** the §13 hue question (held on instruction); `DynamicServerDiscovery` and
+episode-offset calibration, which I did not delete because this session was not authorised to
+touch Kotlin — they still need the evidence-based keep-or-cut call; the next planned deploy's
+release note (carrying `subtitled`); and the two tuning tickets this session's tables now name —
+`by-media` with the v2 reads, and the 3.4 MB detail payload.
