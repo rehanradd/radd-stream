@@ -29,13 +29,15 @@ Measured on 2026-10-28 against the file itself, not against a sample:
 | queue rows | 32,967: 29,848 processed, 3,119 never fetched |
 
 **The hole in this asset, stated where it cannot be missed:** 14,730 of the 29,848
-stored pages — 3.4x the number that have links at all — are complete work pages
-with a `c<id>` anchor and **zero download rows**. They were fetched in the window
-when `dl.php` links were visible in HTML; the site has since moved its buttons
-behind a `data-key` handler, so a re-fetch with the old parser recovers nothing.
-Those rows convert as catalog entries with no sources and are the re-drive cohort
-(`stats` reports them), not a converter bug — the converter cannot invent links
-that the page no longer publishes.
+stored pages — 3.4x the number that have links at all — are work pages with a
+`c<id>` anchor and **zero download rows**. Re-fetched 2026-10-29, five of them
+answer HTTP 200 with 11-12 kB of HTML containing 39 anchors, **every one a
+category link**, no `<h1>`-`<h4>` at all, and no `dl.php` reference anywhere. The
+site kept the URLs and emptied the pages. (The `data-key` attributes on those
+pages belong to an ad SDK mounted on `<ins class=… data-cp-host=…>` elements —
+not a gated download button, and no decoder recovers a link from them.) So a
+re-drive of this cohort cannot recover rows: there is nothing on the page to
+parse, and inventing one is what the `link_source` note exists to prevent.
 
 The rules this file follows, in order of importance:
 

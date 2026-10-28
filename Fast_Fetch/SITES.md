@@ -103,11 +103,13 @@ Two further claims this table retires:
   the stored link is `dl.php?id=<n>&q=<tier>` and nothing here followed it. A
   converter that wrote `active` would be claiming a probe that did not happen.
 - **The hole in the asset:** 14,730 of the 29,848 stored pages are titled, dated,
-  `c<id>`-anchored works with **zero download rows**. They were fetched while
-  `dl.php` links were plain HTML; the site has since moved those buttons behind a
-  `data-key` script, so re-fetching them with the legacy parser recovers nothing.
-  They convert as catalog entries with no sources — reachable metadata, no link —
-  and they are the honest re-drive cohort for this site.
+  `c<id>`-anchored works with **zero download rows**. Re-fetched 2026-10-29, they
+  answer HTTP 200 with 11-12 kB of HTML whose 39 anchors are *all* category links —
+  no `<h1>`-`<h4>`, no `dl.php` anywhere. The site kept the URLs and emptied the
+  pages, so no re-drive and no parser recovers them; the `data-key` attributes on
+  those pages belong to an ad SDK on `<ins data-cp-host=…>` elements, not to a
+  gated download button. They convert as catalog entries with metadata and no
+  sources, which is reachable-and-known-empty, not missing.
 - **Dropped by design:** 1,438 category/listing pages, 9 copyright-takedown
   notices, 2 `sitemap*.xml` rows, 7 untitled rows.
 - **Queue:** 3,119 URLs were never fetched (1,781 of them listing or pagination

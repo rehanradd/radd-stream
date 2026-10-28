@@ -1596,15 +1596,20 @@ a **copy** (`/tmp/mp4moviez_copy.db`) and merged through `merge_site_db` into a 
 target in 710 s: `posts_merged=28066 releases_merged=54267 sources_merged=54267
 posts_conflicted=0`. The real `mp4moviez.db` was deliberately left in legacy form — an
 in-flight merge reading it while the converter drops and renames its tables is how a run
-loses rows; `convert` is one command whenever the queue is clear.
-Measured and recorded in the module header: **14,730 of the 29,848 stored pages are titled,
-dated, `c<id>`-anchored works with zero download rows** — fetched when `dl.php` was plain
-HTML, before the site moved those buttons behind a `data-key` script. They convert as
-catalog entries with no sources and are this site's real re-drive cohort. Slug-as-key was
-tested for the collision that would make it unsafe: 336 duplicated slugs across 681 rows,
-only 4 differing on (year, title) — three punctuation variants of the same film and the one
-takedown notice, which is dropped. 13,680 posts hold 54,267 releases at exactly one
-`dl.php` id each, across 240/360/480/720p.
+loses rows; `convert` is one command whenever the queue is clear. Slug-as-key was tested for
+the collision that would make it unsafe: 336 duplicated slugs across 681 rows, only 4
+differing on (year, title) — three punctuation variants of the same film and the one takedown
+notice, which is dropped. 13,680 posts hold 54,267 releases at exactly one `dl.php` id each,
+across 240/360/480/720p.
+
+**14,730 of the 29,848 stored pages are titled, dated, `c<id>`-anchored works with zero
+download rows.** Re-fetched five of them: HTTP 200, 11-12 kB of HTML, 39 anchors and
+**every one a category link**, no `<h1>`-`<h4>`, no `dl.php` anywhere — the site kept the
+URLs and emptied the pages. (Their `data-key` attributes belong to an ad SDK mounted on
+`<ins class=… data-cp-host=…>`; it is not a gated download button and no decoder turns a
+UUID into a link.) So they convert as catalog entries with metadata and no sources, and
+*this site has no recoverable re-drive cohort* — which is the answer to the question, not a
+gap in the converter.
 
 **The bug that merge exposed, fleet-wide.** The converter wrote every source as
 `status='unverified'` with `final_url NULL`, because following `dl.php` is a play-time
