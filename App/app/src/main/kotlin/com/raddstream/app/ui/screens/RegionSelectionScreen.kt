@@ -1,7 +1,6 @@
 package com.raddstream.app.ui.screens
 
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -13,6 +12,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -29,6 +29,10 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -102,11 +106,27 @@ fun RegionSelectionScreen(
                 Text("Continue")
             }
         }
+        if (state.saveFailed) {
+            Spacer(Modifier.height(10.dp))
+            // A message that appears under the thumb the viewer just used is invisible to a screen
+            // reader unless it is announced, so this text node is a polite live region.
+            Text(
+                text = "Couldn't save your choice on this device — nothing has been remembered. " +
+                    "Free up space and tap Continue again.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+                modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+            )
+        }
         Spacer(Modifier.height(16.dp))
     }
 }
 
-/** One selectable card. The whole surface is the tap target, and the check marks the choice. */
+/**
+ * One selectable card. The whole surface is the tap target, and it carries a radio-button role
+ * with a real selected state: a screen reader has to say which of the three is the answer, not
+ * read the check mark as a separate picture.
+ */
 @Composable
 private fun RegionChoiceCard(
     choice: RegionChoice,
@@ -117,7 +137,11 @@ private fun RegionChoiceCard(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(16.dp))
-            .clickable(onClick = onSelect),
+            .selectable(
+                selected = selected,
+                role = Role.RadioButton,
+                onClick = onSelect,
+            ),
         shape = RoundedCornerShape(16.dp),
         color = if (selected) MaterialTheme.colorScheme.surfaceVariant else MaterialTheme.colorScheme.surface,
         border = BorderStroke(
@@ -168,7 +192,9 @@ private fun RegionChoiceCard(
                 Spacer(Modifier.width(12.dp))
                 Icon(
                     imageVector = Icons.Default.Check,
-                    contentDescription = "Selected",
+                    // The row's own selected state already says this out loud; a second
+                    // "Selected" from the picture is the same word twice.
+                    contentDescription = null,
                     tint = MaterialTheme.colorScheme.primary,
                     modifier = Modifier.size(22.dp),
                 )

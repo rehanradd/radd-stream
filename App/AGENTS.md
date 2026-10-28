@@ -1340,8 +1340,12 @@ bitmap has dimensions:**
   in both honest states, with a semantics check that "Use a different server" is absent when
   `onChangeServer` is null and present otherwise (the escape hatch Session 15 added).
 - `03_poster_cards` — `PosterCard` with provenance-laden raw title vs clean title, no artwork
-  (branded fallback), a rank, a rating, and a deliberately over-long title to show the 2-line
-  ellipsis; cards get an explicit `width` so `aspectRatio(0.68f)` resolves in the test surface.
+  (branded fallback), a rating, and a deliberately over-long title to show the 2-line ellipsis;
+  cards get an explicit `width` so `aspectRatio(0.68f)` resolves in the test surface.
+  **Corrected by Session 22:** the line above also claimed the capture showed "a rank". The `#N`
+  overlay was passed by this capture and by nothing in the app — `/api/v1/posts` sends no
+  ordering field to rank from — so the parameter and its renderer are deleted, and a ranked rail
+  is a backend-blocked parity item, not an app bug.
 - `04_quality_badges` — `PrintQualityBadge`/`HdrBadge`/`PrintSourceBadge`/`AudioBadge`/
   `SubtitleBadge`, fed by prints from the detail screen's own path
   (`ReleaseLayoutBuilder.build(contentType, List<ReleaseDetail>)`), never a hand-built
@@ -1633,3 +1637,80 @@ on aarch64.
 re-flagging it), decide whether `DynamicServerDiscovery` and episode-offset calibration get wired
 or deleted, and note that a parallel session reverted this file's uncommitted log entry at
 ≈07:28 — commit docs with the code, not after it.
+
+### Session 22 — The placeholder matches the grid, the indicators say what they are, and a save that fails says so (2026-10-28)
+
+**Goal:** checklist #20 — the three things the audit found outside the player: a loading grid
+shaped differently from the content it stands in for, controls a screen reader (or a thumb)
+cannot aim at, and a first-run save that navigated away whether or not storage accepted it.
+
+**One column rule, and a guard so it stays one.** `PosterGridSkeleton` was a fixed three columns
+while `BrowseScreen:78` and `MyListScreen:84` were both adaptive at 120dp — on a wide phone the
+shimmers filled three columns and the posters arrived in four. `ui/components/CommonUi.kt` now
+owns `CatalogGridColumns`, and all three grids draw from it; the skeleton paints a fixed
+`SKELETON_CELLS = 12`, because an adaptive grid cannot know its column count before it is
+measured. New `tooling/CatalogGridRuleTest` (2 cases) fails if any file other than `CommonUi.kt`
+names a column count, or if a `LazyVerticalGrid` is fed anything except the shared value — with
+positive controls, because a scan that matches nothing is green by accident.
+
+**Indicators.**
+- Hero page dots: the 7dp painted dot *was* the touch target, and its only accessible name was a
+  bare description. Each now sits in a 24×44dp hit box (`DOT_TOUCH_WIDTH`/`DOT_TOUCH_HEIGHT`)
+  with an `onClickLabel`, a "Banner n of m" description and a `selected` state. The 24dp is a
+  decision, not an oversight — WCAG 2.2 AA's minimum: six 44dp-wide dots would run into the Watch
+  Now button, and a dot whose hit box covers another control helps nobody. The `widthIn` cap that
+  sized the old row went with it.
+- `PrintQualityBadge` announced "RankedPrint quality 4K" — a Kotlin type name read aloud to a
+  viewer. It now says "Picture quality 4K".
+- The region cards were a clickable box with a check icon labelled "Selected". They are now
+  `selectable(selected, role = Role.RadioButton)` and the icon is decorative, so TalkBack answers
+  which of the three is the choice instead of describing a picture.
+- Two double announcements removed: the hero slide's merged description no longer ends in
+  ", watch now" (the button inside the same merged subtree says it), and the tile's painted star
+  rating is `clearAndSetSemantics { }` because the merged sentence already says "rating 8.1 out of
+  10". `PosterCard`'s doc now states what merging actually announces instead of claiming one label.
+
+**A held tile is a wish.** My List deleted the row on long-press: a slipping thumb cost a synced
+bookmark with nothing on screen warning of it. `viewmodel/MyListRemoval.kt` is the pure truth
+table — `LONG_PRESS` arms, `CONFIRM` deletes the armed row, `CANCEL` deletes nothing, and
+`CONFIRM`/`CANCEL` carry no id, so a caller cannot delete a row the dialog never armed.
+`MyListViewModel` holds the armed id in its own flow, folds it into
+`MyListUiState.armedRemovalId`, and the screen renders an `AlertDialog` naming the title.
+`MyListRemovalTest` (7) pins the table; no ViewModel is instantiated, per this repo's convention.
+
+**A first-run save that fails, fails visibly.** `RegionViewModel.saveAndContinue` called the
+DataStore write and navigated unconditionally, and that call is the only writer of
+`region_choice_recorded` — so a full disk or a torn preferences file sent the viewer to Home
+believing an answer storage never got. The write now runs inside `runCatching`,
+`RegionUiState.saveFailed` records the fact, and `onSaved()` fires only on success. The screen
+shows why, under the button, as a polite live region — a message that appears under a thumb the
+viewer just used is otherwise silent.
+
+**Dead code found on the way:** `ServerSettingsRepository.saveUserRegion` was a second writer of
+`USER_REGION_KEY` with no caller anywhere (the Settings entrance goes through
+`RegionSelectionScreen`, which uses `saveRegionChoice`). Deleted: two owners for one record is how
+the region and the answered-the-question flag start disagreeing.
+
+**The `#N` rank overlay left `PosterCard`.** No screen ever passed `rank`; the list route carries
+no ordering field to rank from, so the parameter, its renderer and the one test that supplied a
+fake rank are gone — `ScreenSnapshotTest` capture 03 now paints the three shapes the app can
+actually build. A ranked rail needs a server-supplied rank first, which is a backend-blocked parity
+item for #21, and Session 17's description of that capture is corrected in place above.
+
+**Gate:** `/tmp/qbuild.sh -Dorg.gradle.jvmargs='-Xmx1536m' :app:compileDebugKotlin
+:app:testDebugUnitTest` → BUILD SUCCESSFUL, `GRADLE_EXIT=0`, `FOREIGN_BUILD_PIDS_SEEN=` empty,
+`OVERLAP=NO`, `WAITED_FOR_OTHER_BUILDS_S=0`, **576 tests / 73 suites / 0 failures / 0 errors /
+0 skipped**, all 73 result XMLs at the single timestamp 07:55:31 against a run that started
+07:54:34.
+
+**Deliberately not verified:** no device or emulator, so the dot hit boxes, the radio semantics,
+the dialog's focus order and the live-region announcement are compile- and unit-verified only;
+`ScreenSnapshotTest` and `PosterCardProvenanceTest` still cannot run on aarch64.
+
+**Deliberately not done:** no `ProgressBarRangeInfo` semantics on the Downloads progress bar — the
+"12.3 MiB / unknown size" line beside it already states the fact in words, and giving a merged row
+a second announcement is a change to test on a device rather than guess at.
+
+**Next agent should:** take #21 (the backend-blocked parity list, which now includes the ranked
+rail), then the two owner decisions left from #19 — the §13 hue question, and whether
+`DynamicServerDiscovery` and episode-offset calibration get wired or deleted.

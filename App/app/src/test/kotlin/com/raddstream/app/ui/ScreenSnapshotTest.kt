@@ -156,7 +156,11 @@ class ScreenSnapshotTest {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
                 Text("Trending Releases", style = MaterialTheme.typography.titleLarge)
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    PosterCard(post = cleaned, modifier = Modifier.width(180.dp), rank = 1)
+                    // Three tiles, three shapes the app can actually build. A "#N" overlay used to
+                    // be here too; no screen ever passed a rank, because the list route sends no
+                    // ordering field to rank from, so the renderer was deleted rather than
+                    // snapshotted. A ranked rail needs a server-supplied rank first.
+                    PosterCard(post = cleaned, modifier = Modifier.width(180.dp))
                     PosterCard(post = noArtwork, modifier = Modifier.width(180.dp))
                 }
                 PosterCard(post = longTitle, modifier = Modifier.width(372.dp))

@@ -18,7 +18,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -43,6 +42,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -222,11 +222,12 @@ private fun HeroSlide(
 ) {
     val title = post.displayTitle
     val languages = remember(post.language) { heroLanguagePills(post.language) }
+    // The slide merges its children, so TalkBack reads this line and then the Watch Now button
+    // inside it. Saying "watch now" here as well would announce the same action twice.
     val a11y = buildString {
         append(title)
         post.yearLabel?.let { append(", ").append(it) }
         if (languages.isNotEmpty()) append(", languages ").append(languages.joinToString())
-        append(", watch now")
     }
 
     Box(
@@ -337,6 +338,14 @@ private fun HeroBadge(text: String, subdued: Boolean = false) {
 /**
  * Page dots that are also buttons: the active one stretches into a short bar, so the state
  * reads at a glance, and each dot jumps the pager to its slide.
+ *
+ * The painted dot is 7dp tall and used to be the only thing a finger could aim at. Each one now
+ * sits inside the [DOT_TOUCH_WIDTH] by [DOT_TOUCH_HEIGHT] box — 44dp of vertical room, which the
+ * artwork has to spare, and 24dp of width, the WCAG 2.2 AA minimum. Wider is not better here:
+ * six of these banners at a 44dp square would run into the Watch Now button, and a dot whose hit
+ * box covers another control does not help anyone. Each dot also says what it is in words and
+ * carries a `selected` state, because the visual stretch was the only thing that used to show
+ * which slide is up.
  */
 @Composable
 private fun HeroIndicator(
@@ -347,20 +356,29 @@ private fun HeroIndicator(
 ) {
     val scheme = MaterialTheme.colorScheme
     Row(
-        modifier = modifier.widthIn(max = 120.dp),
+        modifier = modifier,
         horizontalArrangement = Arrangement.spacedBy(6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         repeat(count) { index ->
             val active = index == current
             Box(
-                Modifier
-                    .size(width = if (active) 18.dp else 7.dp, height = 7.dp)
-                    .clip(RoundedCornerShape(4.dp))
-                    .background(scheme.onBackground.copy(alpha = if (active) 0.95f else 0.45f))
-                    .clickable(onClick = { onSelect(index) })
-                    .semantics { contentDescription = "Banner ${index + 1} of $count" },
-            )
+                modifier = Modifier
+                    .size(width = DOT_TOUCH_WIDTH, height = DOT_TOUCH_HEIGHT)
+                    .clickable(onClickLabel = "Show banner ${index + 1} of $count") { onSelect(index) }
+                    .semantics {
+                        contentDescription = "Banner ${index + 1} of $count"
+                        selected = active
+                    },
+                contentAlignment = Alignment.Center,
+            ) {
+                Box(
+                    Modifier
+                        .size(width = if (active) 18.dp else 7.dp, height = 7.dp)
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(scheme.onBackground.copy(alpha = if (active) 0.95f else 0.45f)),
+                )
+            }
         }
     }
 }
@@ -381,6 +399,13 @@ internal fun heroLanguagePills(raw: String?, max: Int = MAX_LANGUAGE_PILLS): Lis
 private const val MAX_LANGUAGE_PILLS = 3
 private const val MAX_PILL_LENGTH = 18
 private const val AUTO_ADVANCE_MS = 5_000L
+
+/**
+ * The page dot's hit box: 44dp of height is room the artwork can spare, and 24dp of width is
+ * the WCAG 2.2 AA minimum. The painted dot inside it stays 7dp.
+ */
+private val DOT_TOUCH_HEIGHT: Dp = 44.dp
+private val DOT_TOUCH_WIDTH: Dp = 24.dp
 
 /**
  * The banner's height. A rounded, inset hero wants ~16:9 of a phone screen plus the text

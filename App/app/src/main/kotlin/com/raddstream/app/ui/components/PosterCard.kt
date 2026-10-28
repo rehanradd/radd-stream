@@ -1,7 +1,6 @@
 package com.raddstream.app.ui.components
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.layout.Arrangement
@@ -23,6 +22,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
@@ -36,9 +36,11 @@ import com.raddstream.app.network.models.Post
  * always rendered inside a keyed lazy container so Compose can recycle slots cheaply
  * on low-RAM phones (Compose performance guidance).
  *
- * Accessibility: the whole tile exposes a single merged content description
- * ("title, year, type, rating") so TalkBack announces it as one item rather than
- * three, and every tap target fills the tile width (>=48dp tall image).
+ * Accessibility: the tile leads with one merged sentence — title, year and type, the rating out
+ * of ten, and the progress line when the app has one — so the facts arrive in an order that
+ * reads, instead of as bare labels off the artwork. The painted star is decorative to a screen
+ * reader for exactly that reason: the sentence already says it. Every tap target fills the tile
+ * width, and the image is 0.68 of it, so it clears 48dp on any phone.
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -47,7 +49,6 @@ fun PosterCard(
     modifier: Modifier = Modifier,
     onClick: (() -> Unit)? = null,
     onLongClick: (() -> Unit)? = null,
-    rank: Int? = null,
     /**
      * How far a title the viewer already started has run, 0f..1f, or null when the app never
      * learned a duration. Only the Continue watching rail has an honest answer for this: a bar
@@ -115,7 +116,8 @@ fun PosterCard(
                     )
                 }
 
-                // Bottom scrim so overlaid text/rank stays legible over any poster.
+                // Bottom scrim: a poster's lower edge is whatever the artwork happens to be, and
+                // the progress bar below has to stay visible against it.
                 Box(
                     Modifier
                         .fillMaxWidth()
@@ -148,31 +150,19 @@ fun PosterCard(
                     }
                 }
 
-                if (rank != null) {                    Box(
-                        modifier = Modifier
-                            .align(Alignment.TopStart)
-                            .padding(6.dp)
-                            .clip(RoundedCornerShape(6.dp))
-                            .background(MaterialTheme.colorScheme.scrim.copy(alpha = 0.6f))
-                            .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(6.dp))
-                            .padding(horizontal = 6.dp, vertical = 2.dp),
-                    ) {
-                        Text(
-                            text = "#$rank",
-                            color = MaterialTheme.colorScheme.onBackground,
-                            style = MaterialTheme.typography.labelMedium,
-                            fontWeight = FontWeight.Bold,
-                        )
-                    }
-                }
-
                 post.imdbRating?.takeIf { it.isNotBlank() }?.let { rating ->
                     Text(
                         text = "★ $rating",
                         color = MaterialTheme.colorScheme.tertiary,
                         style = MaterialTheme.typography.labelMedium,
                         fontWeight = FontWeight.Bold,
-                        modifier = Modifier.align(Alignment.TopEnd).padding(6.dp),
+                        // Decorative: the merged tile description already says
+                        // "rating 8.1 out of 10", and a node that clears its own semantics is
+                        // how a Compose text stops being read a second time.
+                        modifier = Modifier
+                            .align(Alignment.TopEnd)
+                            .padding(6.dp)
+                            .clearAndSetSemantics { },
                     )
                 }
             }

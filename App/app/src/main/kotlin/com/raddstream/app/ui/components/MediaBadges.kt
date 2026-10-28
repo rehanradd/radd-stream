@@ -95,7 +95,7 @@ fun PrintQualityBadge(print: RankedPrint, modifier: Modifier = Modifier) {
         modifier = modifier,
         backgroundColor = bg,
         contentColor = fg,
-        contentDescription = "RankedPrint quality ${print.qualityLabel}" +
+        contentDescription = "Picture quality ${print.qualityLabel}" +
             if (print.isCam) ", cam recording — low quality" else "",
     )
 }

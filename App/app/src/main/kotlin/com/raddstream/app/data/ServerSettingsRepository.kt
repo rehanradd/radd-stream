@@ -92,12 +92,6 @@ class ServerSettingsRepository @Inject constructor(
         UserRegion.normalize(preferences[USER_REGION_KEY])
     }
 
-    suspend fun saveUserRegion(region: String) {
-        dataStore.edit { preferences ->
-            preferences[USER_REGION_KEY] = UserRegion.normalize(region)
-        }
-    }
-
     /**
      * Whether the viewer has actually been asked. [userRegion] always answers something
      * ([UserRegion.DEFAULT] for a viewer who never chose), so first-run routing cannot tell

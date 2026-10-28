@@ -179,21 +179,31 @@ fun SkeletonBox(
 
 private const val SHIMMER_PERIOD_MS = 1_400
 
+/**
+ * The catalog grid's one column rule: a tile is never narrower than 120dp, so a phone gets
+ * three columns and a tablet gets more without any screen saying so. Every real grid and
+ * [PosterGridSkeleton] draw from this single value — a skeleton with its own column count is
+ * a placeholder whose cells jump sideways the moment the cards replace them.
+ */
+val CatalogGridColumns: GridCells = GridCells.Adaptive(minSize = 120.dp)
+
+/**
+ * The loading stand-in for a poster grid: the same [CatalogGridColumns], the same gutters and
+ * the same tile shape as the cards that replace it, so nothing reflows when data arrives.
+ * [SKELETON_CELLS] is a fixed handful rather than `columns * rows` because an adaptive grid
+ * does not know its column count until it is measured.
+ */
 @Composable
-fun PosterGridSkeleton(
-    modifier: Modifier = Modifier,
-    columns: Int = 3,
-    rows: Int = 3,
-) {
+fun PosterGridSkeleton(modifier: Modifier = Modifier) {
     LazyVerticalGrid(
-        columns = GridCells.Fixed(columns),
+        columns = CatalogGridColumns,
         modifier = modifier.fillMaxSize(),
         contentPadding = PaddingValues(top = 8.dp, bottom = 24.dp, start = 16.dp, end = 16.dp),
         horizontalArrangement = Arrangement.spacedBy(12.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp),
         userScrollEnabled = false,
     ) {
-        items(columns * rows) {
+        items(SKELETON_CELLS) {
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 SkeletonBox(aspectRatioValue = 0.68f)
                 SkeletonBox(Modifier.height(14.dp))
@@ -202,6 +212,8 @@ fun PosterGridSkeleton(
         }
     }
 }
+
+private const val SKELETON_CELLS = 12
 
 @Composable
 fun EmptyState(
