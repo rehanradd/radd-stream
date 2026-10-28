@@ -55,6 +55,14 @@ def silenced():
 AH_FILE_ID = "10i-vf0OzJqDkR0-a7MpPWKI0qERYAOp1"
 PLAYER = f"https://animahd.com/player/?file_id={AH_FILE_ID}&show_id=194&ep=0"
 
+# Measured 2026-10-28 on the saved /tmp/animahd_naruto.html: 27 rows
+# (S16E349..S16E375) publish `r2reid:<long base64>` as their data-fileid — a
+# different id scheme whose colon is outside the Drive id class. The bug this
+# guards: those rows interpolated the unvalidated attribute into
+# drive.google.com/uc?...&id=r2reid:…, inventing 27 download sources.
+R2_PREFIX = "r2reid:" + "NGE1MDVmNTg1YzUwNTk1NTRjMzE0MjIwMjczMTVmNzA2MzY0NjU3" + "ZTMx"
+R2_PLAYER = f"https://animahd.com/player/?file_id={R2_PREFIX}&show_id=194&ep=349"
+
 
 def sec_route_href(player_url: str = PLAYER) -> str:
     """The `?sec_route=1&p=<base64>&s=<hmac>` envelope the site wraps links in."""
@@ -309,6 +317,61 @@ class TestStagingIsolation(unittest.TestCase):
     def test_the_build_parser_advertises_the_staging_target(self):
         parser = ah._build_parser()
         self.assertIn("animahd.db", parser.description)
+
+
+class TestRejectedFileId(unittest.TestCase):
+    """The r2reid: rows: an unvalidated data-fileid must never become a Drive URL.
+
+    Two shapes were measured on 2026-10-28 and both are pinned here: the
+    attribute alone is bad while the envelope still carries a real id (recover it),
+    and both bad (emit no download row, keep the watch row, record the reject).
+    """
+
+    def test_attribute_rejected_but_envelope_recovers_the_real_id(self):
+        # data-fileid is r2reid:, but the href envelope decodes to a real player
+        # URL whose file_id is a valid Drive id: fall back and accept that.
+        rows = ah.parse_rows(row_html(sec_route_href(PLAYER), R2_PREFIX))
+        row = rows[0]
+        self.assertEqual(row["raw_file_id"], R2_PREFIX)     # audit keeps the reject
+        self.assertEqual(row["file_id"], AH_FILE_ID)        # recovered from envelope
+        self.assertNotIn("r2reid", row["file_id"])
+        download = next(s for s in ah.sources_for(row, "Naruto")
+                        if s["service"] == ah.SERVICE_GDRIVE)
+        self.assertIn(AH_FILE_ID, download["source_url"])
+        self.assertNotIn("r2reid", download["source_url"])
+
+    def test_a_rejected_id_builds_no_drive_url_and_keeps_the_player_row(self):
+        # Both the attribute and the envelope carry only the r2reid scheme: no
+        # valid Drive id exists, so there is no download row — but the durable
+        # site watch URL stays, so the episode is not unplayable.
+        rows = ah.parse_rows(row_html(sec_route_href(R2_PLAYER), R2_PREFIX))
+        row = rows[0]
+        self.assertEqual(row["file_id"], "")
+        self.assertEqual(row["raw_file_id"], R2_PREFIX)
+        sources = ah.sources_for(row, "Naruto")
+        self.assertEqual([s["service"] for s in sources], [ah.SERVICE_PLAYER])
+        self.assertFalse(any(s["service"] == ah.SERVICE_GDRIVE for s in sources))
+        self.assertEqual(sources[0]["source_url"], R2_PLAYER)
+
+    def test_sources_for_refuses_an_unvalidated_id_even_if_a_row_forgets_to(self):
+        # The URL-build boundary is the second gate: a bare r2reid file_id passed
+        # straight in still produces no download row.
+        sources = ah.sources_for({"file_id": R2_PREFIX, "player_url": R2_PLAYER}, "X")
+        self.assertEqual([s["service"] for s in sources], [ah.SERVICE_PLAYER])
+
+    def test_build_record_counts_rejects_and_never_interpolates_one(self):
+        page = HEADER + row_html(sec_route_href(R2_PLAYER), R2_PREFIX)
+        record = ah.build_record(wp_post(), page, "https://animahd.com/naruto-shippuden/")
+        rejected = record["raw_meta"]["rejected_file_ids"]
+        self.assertEqual(len(rejected), 1)
+        self.assertTrue(rejected[0]["raw"].startswith("r2reid:"))
+        for release in record["releases"]:
+            for source in release["sources"]:
+                self.assertNotIn("r2reid", source.get("source_url", "")
+                                 if source["service"] == ah.SERVICE_GDRIVE else "")
+        # No drive.google.com download row was invented for the rejected id.
+        self.assertEqual([s["service"] for r in record["releases"] for s in r["sources"]],
+                         [ah.SERVICE_PLAYER])
 
 
 if __name__ == "__main__":

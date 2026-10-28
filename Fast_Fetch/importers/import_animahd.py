@@ -513,11 +513,22 @@ def parse_rows(page: str) -> list[dict]:
         info = row_attribute(tag, body)
         named = EPISODE_NAME_RE.search(body)
         parsed = parse_episode_name(named.group("name") if named else "")
-        drive_id = info["fileid"] or gdrive_file_id(decode_sec_route(info["href"]))
+        # The published attribute is data, not a verdict: on 2026-10-28 the saved
+        # /naruto-shippuden/ page carries 27 rows whose `data-fileid` is
+        # `r2reid:<long base64>` — a different id scheme (all in Season 16,
+        # S16E349..S16E375), not a Drive id. Accepting it unvalidated interpolates
+        # it straight into a drive.google.com URL, which is exactly what
+        # gdrive_file_id's own docstring warns about. So the attribute is only
+        # believed when it matches the Drive id class; otherwise the envelope is
+        # consulted, and the raw value is kept for audit rather than dropped.
+        raw_id = info["fileid"]
+        drive_id = raw_id if GDRIVE_ID_RE.match(raw_id or "") \
+            else gdrive_file_id(decode_sec_route(info["href"]))
         quality = QUALITY_RE.search(body)
         duration = DURATION_RE.search(body)
         rows.append({
             "file_id": drive_id,
+            "raw_file_id": raw_id,
             "season": parsed["season"],
             "episode": parsed["episode"],
             "season_label": info["season_label"],
@@ -709,11 +720,21 @@ def build_record(wp_post: dict, page: str, url: str) -> dict:
         "maturity_tags": maturity_tags(categories, tags),
         "page_synopsis_source": ".ff-synopsis" if header.get("synopsis") else None,
         "player_url_count": sum(1 for row in rows if row.get("player_url")),
+        # An attribute that was published but not believed stays in the ledger:
+        # a future id scheme (the `r2reid:` rows of 2026-10-28) must be
+        # discoverable from the data, not silently dropped by the validator.
+        "rejected_file_ids": [
+            {"season": row.get("season"), "episode": row.get("episode"),
+             "raw": row.get("raw_file_id")}
+            for row in rows
+            if row.get("raw_file_id") and row.get("raw_file_id") != row.get("file_id")
+        ],
         "episodes": [
             {
                 "season": row.get("season"), "episode": row.get("episode"),
                 "season_label": row.get("season_label"),
                 "file_name": row.get("file_name"), "file_id": row.get("file_id"),
+                "raw_file_id": row.get("raw_file_id"),
                 "container": row.get("container"), "quality": row.get("quality"),
                 "size_bytes": row.get("size_bytes"), "duration": row.get("duration"),
                 "is_new": row.get("is_new"), "player_url": row.get("player_url"),
@@ -798,10 +819,13 @@ def releases_for(episodes: list[dict], show_title: str,
 
 
 def sources_for(episode: dict, show_title: str) -> list[dict]:
-    """The download row and the watch row, and no invented third."""
+    """The download row (when the id really is a Drive id) and the watch row."""
     sources: list[dict] = []
     file_id = episode.get("file_id") or ""
-    if file_id:
+    # Defense at the URL-build boundary, not only at the parse: an id this pattern
+    # rejects never reaches a drive.google.com URL, and the episode simply keeps
+    # its one durable row (the player URL) instead of losing playability.
+    if file_id and GDRIVE_ID_RE.match(file_id):
         download_url = host_resolvers.gdrive_download_url(file_id)
         sources.append({
             "source_name": f"{show_title} — original file",
