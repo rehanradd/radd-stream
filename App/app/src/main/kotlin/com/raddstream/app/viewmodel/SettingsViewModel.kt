@@ -289,7 +289,7 @@ class SettingsViewModel @Inject constructor(
                 _uiState.update {
                     it.copy(
                         isTesting = false,
-                        testMessage = "Connected successfully. Found ${stats.posts} titles.",
+                        testMessage = CatalogScale.connectionNotice(stats.posts),
                         testIsError = false,
                         stats = stats,
                     )

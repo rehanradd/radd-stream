@@ -309,6 +309,16 @@ endpoint on the server you are pointed at to get real numbers.
 > fallback `COUNT` queries at `:2838-2845` *are* adult-filtered, so the two paths of one endpoint
 > answer on two different scopes. Either way: the stats counts exceed what `/api/v1/posts` can
 > show, and no UI may present them as "titles you can browse here".
+>
+> **The client half of that rule is `viewmodel/CatalogScale.kt`** (App Session 27): the only
+> wording allowed for these three numbers. Settings paints
+> `Works stored / Releases stored / Links stored` over that owner and Setup/Settings connection
+> notices come from `CatalogScale.connectionNotice(posts)`, which says the server *stores* N works
+> and the browsable catalog is smaller. `tooling/StatsHonestyTest` fails if a screen calls a
+> stored total a title or a stream, and — because a refusal is green on an empty file — it also
+> fails if the numbers stop being rendered. A surface that genuinely wants a browsable count must
+> ask the list route for its adult-scoped `total` (`/api/v1/posts?limit=1` answers it), never
+> reskin this one.
 
 ---
 
@@ -2156,3 +2166,65 @@ guess one: if that asymmetry ever matters, the fix is a server-side key on the d
 client-side inference; (3) the standing owner decisions are unchanged (§13 hue,
 `DynamicServerDiscovery`, episode-offset calibration, the `subtitled` deploy note, the dead push
 credential).
+
+### Session 27 — A stored total is called a stored total: `CatalogScale` owns the words `/api/v1/stats` may be described with (2026-10-28)
+
+**Goal:** the app-side half of `PARITY_BACKEND_BLOCKED.md` §3 row 20 — audit every surface that
+renders a `/api/v1/stats` number and stop any of them promising a browsable catalog. The audit
+found exactly five, and all five overstated.
+
+**What the sweep covered, so the next reader does not repeat it:** `grep` over `app/src/main` for
+`stats.` renders returns the whole truth — `SettingsScreen.kt:150/154/158` (three `StatBox`es),
+`SetupViewModel.kt:57` and `SettingsViewModel.kt:292` (the two connection notices). Nothing else
+paints a stats field: `active_sources`, `resumable_sources` and `temporary_sources` are decoded in
+`StatsResponse` and read by no screen, which is why `ModelsTest` is their only consumer.
+
+**The three claims that were not true as written.** `label = "Titles"` named
+`stats.posts`, and the live answer for that key is `116922` while `13342` of those works are
+`is_18_plus` rows `/api/v1/posts` refuses in its own SQL — the number is not a count of titles a
+viewer can list. `"Streams"` named `stats.sources`, which counts stored link rows **including dead
+ones**; a dead row has never streamed anything. And both notices said the server had that many
+titles **available** / **Found N titles**, which is the promise the endpoint cannot make.
+
+**Created:** `viewmodel/CatalogScale.kt` — `WORKS_LABEL` / `RELEASES_LABEL` / `LINKS_LABEL` (all
+"… stored"), `SCOPE_NOTE`, and pure `connectionNotice(posts)`. **Changed:** the three render sites
+above now go through it, `docs/PARITY_BACKEND_BLOCKED.md` row 20 records the mitigation and what
+still needs the server, and this file's §5 warning names the owner. New
+`tooling/StatsHonestyTest` (6).
+
+**Why a word and not a filter, which is the decision not to re-litigate:** the client cannot make a
+stored total honest by subtraction, because the rows that make it bigger are the rows it is refused
+— hiding them is the point. So the number keeps its real name and the note says what it is not. A
+surface that actually wants "titles you can browse here" must ask the list route for its
+adult-scoped `total` (`/api/v1/posts?limit=1` answers it in 0.2 s measured); inventing a
+`browsableTitles` field on the wire type, or trusting `active_sources` because it sounds live,
+would both be re-skinning the same leak — `StatsHonestyTest` refuses either.
+
+**The guard is paired, not just negative.** A scan whose only assertions are refusals goes green
+when a file is renamed, when the stats block is deleted, or when the screen simply stops printing
+numbers, so every refusal in the test is matched by a fact that must still be true: the three
+labels come from `CatalogScale`, `stats.posts.toString()` is still painted, both ViewModels still
+call `connectionNotice(stats.posts)`, and `StatsResponse` still declares the server's own fields.
+
+**Gate:** `/tmp/qbuild.sh -Dorg.gradle.jvmargs='-Xmx1536m' :app:compileDebugKotlin
+:testDebugUnitTest` → BUILD SUCCESSFUL in 12m 10s (cold daemon), `GRADLE_EXIT=0`,
+`FOREIGN_BUILD_PIDS_SEEN=` empty, `OVERLAP=NO`, `WAITED_FOR_OTHER_BUILDS_S=0`, **79 result XMLs
+all newer than the run**, **627 tests / 0 failures / 0 errors / 0 skipped** — 621 + the 6 new
+`StatsHonestyTest` cases, 79 suites from 78. `PosterCardProvenanceTest` self-skips on aarch64 as
+always. qoder1 then placed a load hold on this VM: no further Gradle invocation this session.
+
+**Deliberately not verified:** no device or emulator, so the rendered Settings row and the Setup
+notice line are compile- and unit-verified only — in particular nobody has looked at how
+`connectionNotice` wraps in a narrow Settings column, or whether the longer `SCOPE_NOTE` pushes the
+three `StatBox`es off-screen on a small phone. That is a layout question for a real screen, not a
+reason to shorten the sentence.
+
+**Rules kept:** no `.py` touched, no service restart, no nginx change, `/tmp/qbuild.sh` only, one
+build at a time then a hard stop on request, only App paths staged, no `git add -A`, no credential
+printed, no push (the token is confirmed dead for write — owner action), §13 hue untouched.
+
+**Next agent should:** (1) if a surface ever needs a browsable count, request
+`/api/v1/posts?limit=1` and use its `total` — do not widen `CatalogScale` with a new word for the
+same stored number; (2) check `connectionNotice` and the three boxes on a real phone for wrapping;
+(3) the standing owner decisions are unchanged (§13 hue, `DynamicServerDiscovery`, episode-offset
+calibration, the `subtitled` deploy note, the dead push credential).

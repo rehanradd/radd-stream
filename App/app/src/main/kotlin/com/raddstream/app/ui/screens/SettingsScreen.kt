@@ -58,6 +58,7 @@ import com.raddstream.app.data.RemoteFeatures
 import com.raddstream.app.player.AudioBoost
 import com.raddstream.app.player.AudioBoostUi
 import com.raddstream.app.share.LanShareStatus
+import com.raddstream.app.viewmodel.CatalogScale
 import com.raddstream.app.viewmodel.ImageQuality
 import com.raddstream.app.viewmodel.KeepTtl
 import com.raddstream.app.viewmodel.SettingsViewModel
@@ -144,12 +145,21 @@ fun SettingsScreen(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceAround,
                     ) {
-                        StatBox(label = "Titles", value = stats.posts.toString())
-                        StatBox(label = "Releases", value = stats.releases.toString())
-                        StatBox(label = "Streams", value = stats.sources.toString())
+                        StatBox(
+                            label = CatalogScale.WORKS_LABEL,
+                            value = stats.posts.toString(),
+                        )
+                        StatBox(
+                            label = CatalogScale.RELEASES_LABEL,
+                            value = stats.releases.toString(),
+                        )
+                        StatBox(
+                            label = CatalogScale.LINKS_LABEL,
+                            value = stats.sources.toString(),
+                        )
                     }
                     Text(
-                        "Server totals include titles the browsable catalog hides for policy. Live counts reflect the connected server only.",
+                        CatalogScale.SCOPE_NOTE,
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )

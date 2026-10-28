@@ -54,7 +54,7 @@ class SetupViewModel @Inject constructor(
                         serverUrl = com.raddstream.app.network.normalizeServerUrl(submittedUrl),
                         isChecking = false,
                         isConnected = true,
-                        message = "Connected. ${stats.posts} catalog titles available.",
+                        message = CatalogScale.connectionNotice(stats.posts),
                         messageIsError = false,
                     )
                 }
