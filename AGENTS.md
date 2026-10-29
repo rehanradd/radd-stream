@@ -106,6 +106,14 @@ Verify only whether the two configured variable names are present; never read or
 ## 🔁 Cross-Agent Checkpoints and Safe Git Pushes
 
 - Read `docs/PROJECT_MAP.md` and `docs/SESSION_CHECKPOINT.md` at the start of every session; update the checkpoint after every independently useful milestone.
+- **`/opt/radd-stream` is the live deployment tree, not a workspace.** The unit runs
+  `WorkingDirectory=/opt/radd-stream` + `ExecStart=/usr/bin/python3 -S /opt/radd-stream/Fast_Fetch/fast_fetch.py
+  serve`, so whatever is checked out there is what the service loads on its next start, and several
+  lanes keep uncommitted work in it at the same time. Work in your own worktree
+  (`git worktree add /tmp/<yourlane> <sha>`) and push that sha; do **not** commit from or reset
+  `/opt/radd-stream`. If you find its tree carrying a superseded draft of code that is already pushed,
+  say so in the checkpoint instead of committing over it — a silent revert of a pushed fix is exactly
+  what this rule exists to prevent.
 - Do not wait for a quota warning. Test, commit, and push each completed milestone to the task/agent branch promptly. If a session may end before tests finish, save a clearly labeled WIP commit to that branch, record unrun checks, and do not merge or deploy it.
 - Stage only reviewed paths (`git add <paths>`), inspect the staged names/diff, and keep secrets, databases, APKs, build outputs, and uploaded chat files out of commits. Never use `git add -A` or force-push. Per owner authorization, agents may push verified, tested milestones directly to `main` so automated CI triggers and autonomous progress is seamless.
 - Treat `.replit` as local-only sensitive configuration: do not inspect its values or stage, commit, or push it. It is ignored and untracked. The user chose to leave historical copies intact; do not rewrite history unless they explicitly change that decision.
