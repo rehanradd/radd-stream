@@ -273,12 +273,18 @@ class ParsePageTests(unittest.TestCase):
         self.assertEqual(mb._image_list([{"url": "https://x/1.jpg"}, "junk",
                                         {"nope": 1}]), ["https://x/1.jpg"])
 
-    def test_tiers_are_recorded_as_evidence_and_not_as_links(self):
+    def test_tiers_are_recorded_as_releases_with_no_sources(self):
+        # Policy change measured 2026-10-30: the vault reported "0 releases" for
+        # works whose pages list their tiers. A declared tier is a release with
+        # an empty source list — never a link, and never silence.
         record = mb.parse_page(
             nuxt_script(devalue(MATCHBOX_WITH_RESOURCE)), DETAIL_URL)[0]
         self.assertEqual(record["raw_meta"]["available_resolutions"],
                          [1080, 480, 360])
-        self.assertEqual(record["releases"], [])
+        self.assertEqual([rel["quality"] for rel in record["releases"]],
+                         ["360p", "480p", "1080p"])
+        self.assertTrue(all(rel["sources"] == [] for rel in record["releases"]),
+                        "a tier with no published URL must not gain one")
 
     def test_a_page_without_the_nuxt_block_yields_nothing(self):
         self.assertEqual(mb.parse_page("<html><body>no payload</body></html>",
@@ -406,7 +412,7 @@ class DiscoveryTests(unittest.TestCase):
             releases = conn.execute("SELECT COUNT(*) FROM releases").fetchone()[0]
             sources = conn.execute("SELECT COUNT(*) FROM sources").fetchone()[0]
             conn.close()
-            self.assertEqual(releases, 0)
+            self.assertEqual(releases, 3, "one row per declared rendition")
             self.assertEqual(sources, 0, "no trailer may reach the sources table")
             self.assertEqual(post["title"], "Matchbox the Movie")
             self.assertEqual(post["media_type"], "movie")

@@ -3011,3 +3011,20 @@ was gating; `54662d2` after the fifth gate was a capacity doc with no Python);
 `master`+`main` were
 fast-forwarded only onto a sha that had come back green, by the heredoc askpass. `/opt/radd-stream` untouched, no live `/api/data`, no `full=True`,
 no `/api/v1/stats` poll, no Gradle, no heavy run, **no service restart**, no production settings write.
+
+### 2026-10-30 02:26–02:45 — MovieBox: `0 releases / 0 sources` explained and the shape loss fixed `[Q2-MOVIEBOX]`
+
+- **Measured, read-only, two reads total:** one detail page (200, 410 KB, captured at
+  `/tmp/moviebox_capture/sample_detail.html`) and one `/wefeed-h5api-bff/detail?subjectId=…` call (200,
+  39.8 KB). Both carry `detailUrl`/`sniffUrl`/`sourceUrl` as empty strings, `dl: null`, and
+  `resource.seasons[].resolutions[]` = 360/480/720/1080 with per-season episode counts. The only
+  mp4 anywhere is the trailer. So the importer *did* fetch and parse (6 rows `scraped=1`, posts
+  carry page-derived `raw_meta`) — the site publishes no playable URL to an unauthenticated
+  client. **(The vault is not mergeable and must not be counted as a playable site.)**
+- **The real defect was shape loss:** declared renditions were kept only as `raw_meta`, so a work
+  listing twenty renditions stored as `0 releases`. Now one release per (season, tier) with an
+  empty source list, mirrors stored with status (`dead` kept), `metadata_only` counted by sources.
+  `test_themoviebox_links.py` (7 tests, 0.02 s, in-memory/devalue fixtures, captured `resource`
+  block verbatim) + `test_themoviebox_import.py` 47/47; CI step added (26 test steps).
+- **Nothing crawled.** Vault on disk untouched at 44/0/0; the bounded re-crawl command, gate and
+  expected cost (≈40 s for 6 pages; expect `sources=0`) are queued in CONTINUITY.md.

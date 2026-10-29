@@ -39,6 +39,10 @@ name: 🐍 Backend CI — Stdlib Python Tests
 #     - Fast_Fetch/test_link_sweep_budget.py    (the link-health sweep's budget maths:
 #       probe cost, why a full 3.7 M sweep is infeasible, sample sizes and margins — pure
 #       arithmetic over link_health's own constants, no sockets, no catalog read)
+#     - Fast_Fetch/importers/test_themoviebox_links.py (the MovieBox rendition/mirror
+#       rules: one release per declared tier with no invented URL, a dead mirror stored
+#       dead, an adult label that survives a linkless page, and the zero-source post
+#       that must stay visible. Offline, devalue-encoded fixtures, in-memory SQLite)
 #     - Fast_Fetch/test_adult_twin_probe.py     (the adult-twin exposure count: works vs
 #       rows, NULL keys are not twins, and the grouping read stays in the key index)
 #     - Fast_Fetch/test_posts_query_plan.py     (/api/v1/posts?q= EXPLAIN QUERY PLAN
@@ -205,6 +209,12 @@ jobs:
       # third-party hosts is a test that fails when the world is healthy.
       - name: 🧪 test_link_sweep_budget.py
         run: python3 -S Fast_Fetch/test_link_sweep_budget.py
+
+      # MovieBox's rendition rules: the site declares 360/480/720/1080 per season and
+      # publishes none of their URLs (measured on one captured detail page), so each
+      # tier is a release with an empty source list and a dead mirror is kept as dead.
+      - name: 🧪 test_themoviebox_links.py
+        run: python3 -S Fast_Fetch/importers/test_themoviebox_links.py
 
       # The admin panel's write gate (6bfbd5c). Timed, because this box measured 65 tests
       # in 266 s and CI's wall time is the open question about running it here at all.
