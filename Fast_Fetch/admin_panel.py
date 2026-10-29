@@ -104,6 +104,7 @@ import json
 import os
 import re
 import secrets
+import shutil
 import sqlite3
 import subprocess
 import sys
@@ -593,6 +594,182 @@ def screen_projection(conn):
         return _unavailable()
 
 
+#: The four numeric keys `catalog_v2.project()` stamps for the stats reader
+#: (`viewer._get_cached_stats`), plus the breakdown parsed separately. That reader
+#: is all-or-nothing, so this screen reports `stamped` the same way rather than
+#: publishing half a snapshot and calling it current.
+_PULSE_COUNT_KEYS = ("works_safe", "releases_safe", "links_resumable_safe",
+                     "links_temporary_safe")
+
+
+def _meta_int(raw):
+    if raw is None or str(raw).strip() == "":
+        return None
+    try:
+        return int(str(raw).strip())
+    except (TypeError, ValueError):
+        return None
+
+
+def _meta_states(raw):
+    """The stamped breakdown as a dict of ints, or `None` when absent.
+
+    A stored `{}` is `None` for the same reason `viewer._meta_by_state` treats it
+    that way: a projection that wrote no links is indistinguishable from a stamp
+    that predates the key, and the second case must say "unstamped", not "0 links".
+    """
+    if raw is None or str(raw).strip() == "":
+        return None
+    try:
+        parsed = json.loads(raw)
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(parsed, dict) or not parsed:
+        return None
+    try:
+        return {str(state): int(count or 0) for state, count in parsed.items()}
+    except (TypeError, ValueError):
+        return None
+
+
+def screen_pulse(conn):
+    """`GET /admin/api/pulse` — the numbers the console may afford to show.
+
+    One SELECT over `cat_projection_meta` (18 rows) and one COUNT over
+    `sitemap_cache`. It never counts `cat_works`, never scans `releases`, and
+    never runs `GROUP BY state` over 3.8 M links: when the projection carries no
+    stamp it returns `stamped: false` and *no* numbers, and the console prints
+    "unstamped — run catalog_v2.py". That is the honest answer, and it is the
+    whole reason this screen exists instead of the console polling
+    `/api/v1/stats`, whose cold path is a 42-second full scan measured on this
+    box (see AGENTS.md).
+
+    `ledger_stamps` are the projection's own record of the ledger it was built
+    from, not a live count; `sitemap_cached` is live because that table is small
+    enough to count on every refresh and is not part of the projection.
+    """
+    try:
+        meta = dict(conn.execute(
+            "SELECT key, value FROM cat_projection_meta").fetchall())
+    except sqlite3.Error:
+        meta = {}
+    try:
+        sitemap = int(conn.execute("SELECT COUNT(*) FROM sitemap_cache")
+                      .fetchone()[0])
+    except (sqlite3.Error, TypeError):
+        sitemap = None
+
+    safe = {key: _meta_int(meta.get(key)) for key in _PULSE_COUNT_KEYS}
+    by_state = _meta_states(meta.get("links_by_state_safe"))
+    stamped = all(value is not None for value in safe.values()) \
+        and by_state is not None
+
+    out = {
+        "available": True,
+        "stamped": bool(stamped),
+        "projected_at": meta.get("projected_at"),
+        "catalog_rev": _meta_int(meta.get("catalog_rev")),
+        "sitemap_cached": sitemap,
+        "ledger_stamps": {
+            "posts": _meta_int(meta.get("posts")),
+            "releases": _meta_int(meta.get("releases")),
+            "links": _meta_int(meta.get("links")),
+        },
+    }
+    if stamped:
+        out.update({
+            "works": safe["works_safe"],
+            "releases": safe["releases_safe"],
+            "sources": sum(by_state.values()),
+            "active_sources": by_state.get("active", 0),
+            "resumable_sources": safe["links_resumable_safe"],
+            "temporary_sources": safe["links_temporary_safe"],
+            "sources_by_state": dict(sorted(by_state.items())),
+        })
+    return out
+
+
+#: A staging database's stem -> the opaque `crawler-NN` handle. The JSON screens
+#: may not print a site name (`_respond_json` refuses a provenance needle), so
+#: `screen_host` reports a roster file as its crawler handle and the loopback HTML
+#: merges the configured name back in at render time, exactly as `screen_fleet`
+#: does. Files outside the roster are omitted rather than guessed at.
+_CRAWLER_BY_SITE = {site: crawler for crawler, site in _CRAWLER_SITES.items()}
+
+
+def _db_bytes(conn):
+    try:
+        pages = int(conn.execute("PRAGMA page_count").fetchone()[0])
+        size = int(conn.execute("PRAGMA page_size").fetchone()[0])
+        return pages * size
+    except (sqlite3.Error, TypeError, ValueError, IndexError):
+        return None
+
+
+def _db_directory(conn):
+    try:
+        row = conn.execute("PRAGMA database_list").fetchone()
+    except sqlite3.Error:
+        return None
+    if not row or len(row) < 3 or not row[2]:
+        return None
+    try:
+        return Path(str(row[2])).resolve().parent
+    except OSError:
+        return None
+
+
+def screen_host(conn):
+    """`GET /admin/api/host` — load, disk and the roster's staging sizes.
+
+    Read-only and bounded: `os.getloadavg`, `PRAGMA page_count`*`page_size`,
+    one `disk_usage`, and one `stat` per roster staging file. No path leaves this
+    body (a site name would fail the module's own provenance scan, and an
+    absolute path is not needed to render a size).
+    """
+    out = {"available": True, "cpu_count": os.cpu_count(),
+           "db_bytes": _db_bytes(conn), "load": None, "disk": None,
+           "staging": None}
+    try:
+        out["load"] = [round(value, 2) for value in os.getloadavg()]
+    except (OSError, AttributeError):
+        pass
+    directory = _db_directory(conn)
+    if directory is None:
+        return out
+    try:
+        usage = shutil.disk_usage(str(directory))
+        out["disk"] = {"total": usage.total, "free": usage.free}
+    except OSError:
+        pass
+    try:
+        staging = []
+        for path in sorted(directory.glob("*.db")):
+            crawler = _CRAWLER_BY_SITE.get(path.stem)
+            if crawler is None:
+                continue
+            try:
+                staging.append({"crawler_id": crawler,
+                                "bytes": path.stat().st_size})
+            except OSError:
+                continue
+        out["staging"] = staging
+    except OSError:
+        pass
+    return out
+
+
+def fleet_roster():
+    """`crawler-NN` -> configured site name, for the loopback HTML only.
+
+    The JSON fleet screen stays opaque (see `screen_fleet`); this is the mapping
+    the operator page and the console embed so a handle can be rendered as the
+    name the operator configured, without a site name ever entering a JSON body.
+    """
+    return [{"crawler_id": crawler, "site": site}
+            for crawler, site in _CRAWLER_SITES.items()]
+
+
 def screen_link_health(conn, n):
     """Counts by state, the N links with the oldest evidence, and dead links per
     quality band. SELECT lists never touch url/final_url/source_site."""
@@ -1048,6 +1225,7 @@ SAVE_MONETIZATION_PATH = "/admin/action/save-monetization"
 SETTINGS_UNAVAILABLE = "the settings row is unavailable"
 
 _TEXT = "text"
+_LONG_TEXT = "longtext"
 _PHONE = "phone"
 _MONEY = "pkr"
 _TOKEN = "token"
@@ -1096,12 +1274,22 @@ MONETIZATION_FIELDS = (
     # anyone the ledger has not confirmed, which is a business decision and not a
     # default. Flip it in /admin when the approval traffic exists to serve it.
     ("feature_quality_gate", "Charge VIP for 1080p/4K", _FLAG, 0),
+    # Broadcast and support: what the app's banner and help sheet print. In the
+    # same row and the same atomic update as the flags above, so a phone reads one
+    # endpoint and cannot see a maintenance flag from one save and a price from
+    # the next. Empty means "nothing to say", which is why these default to "".
+    ("announcement_title", "Broadcast title", _TEXT, ""),
+    ("announcement_message", "Broadcast message", _LONG_TEXT, ""),
+    ("min_app_version", "Minimum app version", _TEXT, ""),
+    ("support_whatsapp", "Support WhatsApp", _PHONE, ""),
+    ("support_telegram", "Support Telegram", _PHONE, ""),
 )
 _FIELD_BY_KEY = {row[0]: row for row in MONETIZATION_FIELDS}
 
 #: Cap the free-text fields short. A 64-character till id is a mistake or an
 #: attempt to park a payload in a display column, and both are refused.
 _MAX_TEXT = 64
+_MAX_MESSAGE = 280
 _MAX_HANDLE = 32
 _MAX_TOKEN = 200
 _MAX_URL = 500
@@ -1334,6 +1522,9 @@ def _validated(key, value):
     elif kind == _TOKEN:
         if len(text) > _MAX_TOKEN:
             return None, label
+    elif kind == _LONG_TEXT:
+        if len(text) > _MAX_MESSAGE:
+            return None, label
     elif len(text) > _MAX_TEXT:
         return None, label
     if text and redact.scrub_text(text) != text:
@@ -1427,6 +1618,19 @@ def remote_config(conn):
         "updated_at": int(values.get("updated_at") or 0),
         "maintenance_mode": flag("maintenance_mode"),
         "apk_update_url": shown("apk_update_url"),
+        "min_app_version": shown("min_app_version"),
+        "announcement": {
+            "title": shown("announcement_title"),
+            "message": shown("announcement_message"),
+            # A phone shows a banner when there is something to say; an empty
+            # title and message are "no announcement", never an empty banner.
+            "active": bool(shown("announcement_title")
+                           or shown("announcement_message")),
+        },
+        "support": {
+            "whatsapp": shown("support_whatsapp"),
+            "telegram": shown("support_telegram"),
+        },
         "feature_flags": {
             "downloads": flag("feature_downloads"),
             "pure_cinema": flag("feature_pure_cinema"),
@@ -1657,6 +1861,14 @@ def _payment_rows(conn, limit: int = _PENDING_LIMIT) -> dict:
     recent = payments.list_payments(conn, status=None, limit=_RECENT_LIMIT)
     for row in pending:
         row["audit"] = payments.audit_for(conn, row["payment_id"], limit=3)
+        # Minted here for the same reason the HTML forms carry one: a POST must
+        # prove it came from a page this process rendered. Bound to
+        # (action, payment id), meaningless on any other row, and it is not a
+        # payment identifier — replaying it after the row closes credits nobody.
+        row["csrf"] = {
+            "approve": _csrf_token(payments.STATUS_APPROVED, row["payment_id"]),
+            "reject": _csrf_token(payments.STATUS_REJECTED, row["payment_id"]),
+        }
     return {
         "available": True,
         "currency": "PKR",
@@ -1975,6 +2187,8 @@ def render_usage_page(data):
 # The screen registry: name → (callable, whether it takes `n`).
 _SCREENS = {
     "projection": (lambda conn, q: screen_projection(conn), False),
+    "pulse": (lambda conn, q: screen_pulse(conn), False),
+    "host": (lambda conn, q: screen_host(conn), False),
     "link-health": (lambda conn, q: screen_link_health(conn, _limit(q)), True),
     "review": (lambda conn, q: screen_review_queue(conn, _limit(q)), True),
     "adult": (lambda conn, q: screen_adult_proof(conn), False),
@@ -2275,6 +2489,9 @@ def render_admin_page(conn, q):
         '<p class="sub"><a href="/admin/usage">Usage</a> — installs, live'
         ' devices, DAU/WAU/MAU, retention, per-geo and per-version counts,'
         ' playback failures, ad and pass money. Aggregates only.</p>',
+        '<p class="sub"><a href="/operator/">⚡ Sovereign Operator Console</a> —'
+        ' the same screens as cards and tabs, plus the payment queue, the app'
+        ' remote controls and a bounded catalog search. Same port, same token.</p>',
         '<p id="ops-status" class="statusline"></p>',
     ]
 

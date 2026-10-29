@@ -28,6 +28,8 @@ name: 🐍 Backend CI — Stdlib Python Tests
 #     - Fast_Fetch/test_usage_stats.py       (operator counters + token gate)
 #     - Fast_Fetch/test_operator_isolation.py(two real loopback servers, socket-level
 #       routing — the layer every other suite calls as a function)
+#     - Fast_Fetch/test_operator_console.py  (/operator console: login form on 401,
+#       byte-identical refusals, bounded pulse/host screens, per-row CSRF, broadcast)
 #
 #   Deliberately EXCLUDED:
 #     - Fast_Fetch/test_all_sites.py  — live 10-site network audit; needs the
@@ -133,3 +135,10 @@ jobs:
       # that can catch the operator-port gate being routed around rather than removed.
       - name: 🧪 test_operator_isolation.py
         run: python3 -S Fast_Fetch/test_operator_isolation.py
+
+      # The /operator console itself: what an unauthenticated client receives, that a
+      # missing and a wrong token are indistinguishable, that every number on the Pulse
+      # pane comes from the projection stamps rather than a catalog scan, and that a
+      # payment row cannot be approved with another row's CSRF token.
+      - name: 🧪 test_operator_console.py
+        run: python3 -S Fast_Fetch/test_operator_console.py

@@ -78,7 +78,7 @@ OPERATOR_ONLY_ROUTES = frozenset({
 #: `/admin` invisible on the public port; the credential makes every other route
 #: on this one answer to a stranger with 401, so the boundary is the token *and*
 #: loopback, not loopback alone.
-OPERATOR_ONLY_PREFIXES = ("/admin",)
+OPERATOR_ONLY_PREFIXES = ("/admin", "/operator")
 
 #: The two byte paths a playback actually travels, counted for the operator's
 #: usage report. `/api/m3u` is deliberately absent: it is an operator route, and
@@ -3089,7 +3089,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
             return "reports"
         return "browse"
 
-    def _operator_gate(self, query_params) -> bool:
+    def _operator_gate(self, query_params, login_form: bool = False) -> bool:
         """The credential every route on the operator port now requires.
 
         Called first, before any SQL and before the panel is consulted, because
@@ -3112,7 +3112,16 @@ class DashboardHandler(BaseHTTPRequestHandler):
             query_token=(query_params or {}).get("token", [""])[0])
         self.operator_cookie = session_cookie or ""
         if refusal is not None:
-            self.send_triple(refusal)
+            if login_form:
+                # The console's own door: a 401 that renders the credential form
+                # instead of the problem body. Same status, same bytes for a
+                # missing and a wrong token, and — by construction — no data: the
+                # login page carries a form and a sentence, nothing else.
+                self.send_bytes(render_operator_login().encode("utf-8"),
+                                status=401,
+                                extra_headers=[("Cache-Control", "no-store")])
+            else:
+                self.send_triple(refusal)
             return False
         return True
 
@@ -3200,8 +3209,16 @@ class DashboardHandler(BaseHTTPRequestHandler):
         # (see start_server), so it cannot be negotiated by a request header or a
         # query parameter — the whole point of a separate loopback port.
         full = bool(getattr(self.server, "operator", False))
-        if full and not self._operator_gate(query_params):
-            return
+        if full:
+            on_console = path in OPERATOR_CONSOLE_PATHS
+            if not self._operator_gate(query_params, login_form=on_console):
+                return
+            if on_console:
+                # A static shell with the roster and no ledger row; every datum it
+                # shows arrives over a gated JSON route with the bearer attached.
+                self.send_bytes(render_operator_console().encode("utf-8"),
+                                extra_headers=[("Cache-Control", "no-store")])
+                return
         base_url = "" if full else _public_base(self)
         if not full and not self._public_gate(path, "GET"):
             return
@@ -3625,6 +3642,725 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
     def log_message(self, format, *args):
         pass
+
+
+#: ── the Sovereign Operator Console ──────────────────────────────────────────
+#:
+#: Served at `/operator` and `/operator/` on the loopback operator port, behind
+#: the same bearer gate as every other route on that port. Two rules shaped it:
+#:
+#:  * **No unbounded reads.** The console never calls `/api/data` (a full-ledger
+#:    materialisation measured at 2.5 MB / 46 s that is not returned to the OS)
+#:    and never calls `/api/v1/stats` (42 s cold on an unstamped projection).
+#:    Pulse reads `screen_pulse`, which is 18 meta rows plus a small COUNT;
+#:    Explorer reads bounded `/api/v1/posts?limit=`, never the ledger dump.
+#:  * **No invented numbers.** Every card is a value the server actually has, and
+#:    an unstamped projection prints that fact instead of a zero. The upstream
+#:    brief's headline figures (130,016 posts / 345,000 "verified active") are
+#:    not constants here: they were a snapshot of a different catalog, and this
+#:    box's measured `active_sources` is 0.
+#:
+#: The page itself is a static shell: it carries the crawler roster (the same
+#: loopback-only names the `/admin` card prints) and no ledger row. Every datum
+#: is fetched with the operator bearer from `localStorage`, so a request that
+#: arrives without one still gets a 401 — see `render_operator_login`.
+OPERATOR_CONSOLE_PATHS = ("/operator", "/operator/")
+
+OPERATOR_CONSOLE_HTML = """<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RADD-STREAM — Sovereign Operator Console</title>
+<style>
+:root {
+  color-scheme: dark;
+  --bg: #090d16; --surface: #111827; --surface-2: #0d1420; --border: #1f2937;
+  --text: #e5e7eb; --dim: #9ca3af; --faint: #6b7280;
+  --emerald: #10b981; --blue: #3b82f6; --orange: #f59e0b; --red: #ef4444;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+body { background: var(--bg); color: var(--text); font: 14px/1.55 system-ui,
+       -apple-system, "Segoe UI", Roboto, sans-serif; font-variant-numeric: tabular-nums; }
+a { color: var(--emerald); text-decoration: none; }
+a:hover { text-decoration: underline; }
+.topbar { display: flex; flex-wrap: wrap; gap: 12px; align-items: center;
+          justify-content: space-between; padding: 14px 22px;
+          border-bottom: 1px solid var(--border); background: rgba(13,20,32,.92); }
+.brand { font-weight: 700; letter-spacing: .04em; font-size: 15px; }
+.brand span { color: var(--emerald); }
+.status { color: var(--dim); font-size: 12px; display: flex; gap: 14px; flex-wrap: wrap; }
+.dot { color: var(--emerald); }
+.pill { border: 1px solid var(--border); background: var(--surface); color: var(--dim);
+        border-radius: 999px; padding: 6px 14px; font: inherit; cursor: pointer; }
+.pill.ok { border-color: var(--emerald); color: var(--emerald); }
+.tabs { display: flex; gap: 4px; overflow-x: auto; padding: 0 22px;
+        border-bottom: 1px solid var(--border); background: var(--surface-2); }
+.tab { border: 0; background: transparent; color: var(--dim); padding: 13px 14px;
+       font: inherit; cursor: pointer; border-bottom: 2px solid transparent; white-space: nowrap; }
+.tab:hover { color: var(--text); }
+.tab.active { color: var(--emerald); border-bottom-color: var(--emerald); }
+main { padding: 22px; max-width: 1180px; margin: 0 auto; }
+.pane { display: none; }
+.pane.active { display: block; }
+h2 { font-size: 15px; margin: 0 0 12px; color: var(--text); }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+        gap: 12px; margin-bottom: 18px; }
+.card { background: var(--surface); border: 1px solid var(--border);
+        border-radius: 12px; padding: 16px 18px; }
+.card .label { color: var(--dim); font-size: 12px; }
+.card .value { font-size: 25px; font-weight: 700; margin-top: 4px; }
+.card .note { color: var(--faint); font-size: 11px; margin-top: 2px; }
+.emerald { color: var(--emerald); } .blue { color: var(--blue); }
+.orange { color: var(--orange); } .red { color: var(--red); }
+.panel { background: var(--surface); border: 1px solid var(--border);
+         border-radius: 12px; padding: 18px; margin-bottom: 18px; }
+.warn { border: 1px solid #7c2d12; background: #1c1006; color: #fdba74;
+        border-radius: 10px; padding: 12px 14px; margin-bottom: 18px; font-size: 13px; }
+.okbar { border: 1px solid #064e3b; background: #052e24; color: #6ee7b7;
+         border-radius: 10px; padding: 10px 14px; margin-bottom: 14px; font-size: 13px; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--border); }
+th { color: var(--dim); font-weight: 600; font-size: 12px; }
+tr:last-child td { border-bottom: 0; }
+code, .mono { font-family: var(--mono); font-size: 12px; }
+input, select, textarea { background: var(--surface-2); color: var(--text);
+  border: 1px solid var(--border); border-radius: 8px; padding: 7px 10px; font: inherit; }
+textarea { width: 100%; min-height: 72px; resize: vertical; }
+.btn { background: #12362c; color: var(--emerald); border: 1px solid #1f6f58;
+       border-radius: 8px; padding: 6px 12px; font: inherit; cursor: pointer; }
+.btn:hover { background: #17483a; }
+.btn.blue { background: #10233d; color: #93c5fd; border-color: #1e3a5f; }
+.btn.warn { background: #2a1a06; color: var(--orange); border-color: #7c4a10; }
+.btn.danger { background: #2a0f10; color: #fca5a5; border-color: #7f1d1d; }
+.btn:disabled { opacity: .45; cursor: default; }
+.row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.field { display: grid; grid-template-columns: 230px 1fr; gap: 8px 14px;
+         align-items: center; margin: 9px 0; }
+.field label { color: var(--dim); }
+.toggle { display: flex; gap: 9px; align-items: center; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.chip { border: 1px solid var(--border); border-radius: 999px; padding: 2px 10px;
+        font-size: 12px; color: var(--dim); background: var(--surface-2); }
+.chip b { color: var(--text); font-weight: 600; }
+.fleet { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 12px; }
+.fleet .card .value { font-size: 18px; }
+.fleet .card .row { margin-top: 10px; }
+.overlay { position: fixed; inset: 0; background: rgba(3,6,12,.82); display: none;
+           align-items: center; justify-content: center; padding: 20px; z-index: 50; }
+.overlay.on { display: flex; }
+.modal { width: 100%; max-width: 420px; background: var(--surface);
+         border: 1px solid var(--border); border-radius: 14px; padding: 24px; }
+.modal h3 { margin: 0 0 6px; font-size: 16px; }
+.modal p { color: var(--dim); font-size: 13px; margin: 0 0 16px; }
+.modal input { width: 100%; margin-bottom: 12px; }
+.err { color: var(--red); font-size: 12px; min-height: 1.3em; margin-top: 8px; }
+.toast { position: fixed; right: 20px; bottom: 20px; background: var(--surface);
+         border: 1px solid var(--border); border-radius: 10px; padding: 11px 16px;
+         font-size: 13px; opacity: 0; transform: translateY(8px);
+         transition: opacity .18s, transform .18s; pointer-events: none; z-index: 60; }
+.toast.on { opacity: 1; transform: translateY(0); }
+.empty { color: var(--faint); font-style: italic; }
+.spin { color: var(--dim); font-size: 13px; }
+</style>
+</head>
+<body>
+<header class="topbar">
+  <div>
+    <div class="brand">⚡ RADD-STREAM <span>SOVEREIGN OPERATOR CONSOLE</span></div>
+    <div class="status">
+      <span><span class="dot">●</span> Engine <span id="engine-state">online</span></span>
+      <span id="bind-host">operator port</span>
+      <span><span class="dot">●</span> loopback only — nginx does not proxy this</span>
+      <span><span class="dot">●</span> plain HTTP, no TLS</span>
+    </div>
+  </div>
+  <button class="pill" id="pill" onclick="openLogin()">🔐 Operator Login</button>
+</header>
+
+<nav class="tabs" id="tabs">
+  <button class="tab active" data-tab="pulse" onclick="showTab('pulse')">📊 Pulse &amp; Metrics</button>
+  <button class="tab" data-tab="payments" onclick="showTab('payments')">💳 Payment Queue</button>
+  <button class="tab" data-tab="remote" onclick="showTab('remote')">📢 Broadcast &amp; Remote Control</button>
+  <button class="tab" data-tab="users" onclick="showTab('users')">👥 Users &amp; Anti-Abuse</button>
+  <button class="tab" data-tab="fleet" onclick="showTab('fleet')">🕷️ Scraper Fleet</button>
+  <button class="tab" data-tab="explorer" onclick="showTab('explorer')">🍿 Link Explorer</button>
+</nav>
+
+<main>
+  <section class="pane active" id="pane-pulse"><div class="spin">loading…</div></section>
+
+  <section class="pane" id="pane-payments"><div class="spin">loading…</div></section>
+
+  <section class="pane" id="pane-remote"><div class="spin">loading…</div></section>
+
+  <section class="pane" id="pane-users"><div class="spin">loading…</div></section>
+
+  <section class="pane" id="pane-fleet"><div class="spin">loading…</div></section>
+
+  <section class="pane" id="pane-explorer">
+    <div class="panel">
+      <h2>Bounded catalog search</h2>
+      <p class="note" style="color:var(--faint);margin-top:-6px">
+        Reads <code>/api/v1/posts?limit=…</code> — never <code>/api/data</code>, whose full
+        payload materialises the whole ledger inside this process.</p>
+      <div class="row">
+        <input id="x-query" placeholder="Search title, slug, industry…" style="flex:1 1 260px"
+               onkeydown="if(event.key==='Enter')searchWorks()">
+        <select id="x-limit"><option>10</option><option selected>25</option><option>50</option></select>
+        <button class="btn" onclick="searchWorks()">Search</button>
+      </div>
+      <div id="x-status" class="err"></div>
+    </div>
+    <div class="panel"><div id="x-results" class="empty">Nothing searched yet.</div></div>
+  </section>
+</main>
+
+<div class="overlay" id="login-overlay">
+  <div class="modal">
+    <h3>🔐 Operator access</h3>
+    <p>The token is <code>RADD_ADMIN_TOKEN</code> from the service environment. It is
+       kept in this browser's <code>localStorage</code> and sent as a bearer header;
+       the transport is plain HTTP, so treat it as a local secret, not a password.</p>
+    <input id="token-input" type="password" placeholder="operator token"
+           autocomplete="current-password" onkeydown="if(event.key==='Enter')unlock()">
+    <div class="row"><button class="btn" onclick="unlock()">Unlock</button>
+      <button class="btn blue" onclick="closeLogin()">Cancel</button></div>
+    <div class="err" id="login-error"></div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+"use strict";
+const ROSTER = __ROSTER_JSON__;
+const SITES = Object.fromEntries(ROSTER.map(r => [r.crawler_id, r.site]));
+const KEY = 'radd_operator_token';
+const $ = s => document.querySelector(s);
+const $$ = s => Array.from(document.querySelectorAll(s));
+const esc = v => String(v === null || v === undefined ? '' : v)
+  .replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const fmt = n => (n === null || n === undefined) ? '—' : Number(n).toLocaleString('en-US');
+const bytes = n => {
+  if (n === null || n === undefined) return '—';
+  if (n < 1024) return n + ' B';
+  if (n < 1048576) return (n / 1024).toFixed(1) + ' KiB';
+  if (n < 1073741824) return (n / 1048576).toFixed(1) + ' MiB';
+  return (n / 1073741824).toFixed(2) + ' GiB';
+};
+
+let TOKEN = '';
+try { TOKEN = localStorage.getItem(KEY) || ''; } catch (e) { TOKEN = ''; }
+(function adoptTokenFromUrl() {
+  const params = new URLSearchParams(location.search);
+  const supplied = params.get('token');
+  if (!supplied) return;
+  TOKEN = supplied;
+  try { localStorage.setItem(KEY, supplied); } catch (e) {}
+  params.delete('token');
+  const rest = params.toString();
+  history.replaceState({}, '', location.pathname + (rest ? '?' + rest : ''));
+})();
+
+function authHeaders() { return TOKEN ? { 'Authorization': 'Bearer ' + TOKEN } : {}; }
+
+async function api(path, opts) {
+  opts = opts || {};
+  const headers = Object.assign({}, opts.headers || {}, authHeaders());
+  if (opts.body && typeof opts.body === 'object') {
+    headers['Content-Type'] = 'application/json';
+    opts = Object.assign({}, opts, { body: JSON.stringify(opts.body) });
+  }
+  const response = await fetch(path, Object.assign({ credentials: 'same-origin' }, opts, { headers: headers }));
+  if (response.status === 401) { openLogin(); throw new Error('unauthorised'); }
+  const type = response.headers.get('content-type') || '';
+  const body = type.indexOf('json') >= 0 ? await response.json() : await response.text();
+  if (!response.ok) throw new Error((body && (body.detail || body.error)) || ('HTTP ' + response.status));
+  return body;
+}
+
+function toast(message) {
+  const node = $('#toast');
+  node.textContent = message;
+  node.classList.add('on');
+  clearTimeout(toast._t);
+  toast._t = setTimeout(() => node.classList.remove('on'), 3200);
+}
+
+function openLogin() { $('#login-overlay').classList.add('on'); $('#token-input').focus(); }
+function closeLogin() { $('#login-overlay').classList.remove('on'); }
+
+async function unlock() {
+  const candidate = $('#token-input').value.trim();
+  if (!candidate) return;
+  TOKEN = candidate;
+  try {
+    await api('/admin/api/pulse');
+    try { localStorage.setItem(KEY, candidate); } catch (e) {}
+    $('#login-error').textContent = '';
+    closeLogin(); syncPill(); loadAll(); toast('Operator access granted');
+  } catch (error) {
+    if (error.message === 'unauthorised') {
+      TOKEN = '';
+      $('#login-error').textContent = 'Refused. A wrong token and no token answer identically.';
+    } else {
+      try { localStorage.setItem(KEY, candidate); } catch (e) {}
+      closeLogin(); syncPill(); loadAll();
+    }
+  }
+}
+
+function syncPill() {
+  const pill = $('#pill');
+  pill.textContent = TOKEN ? '🔒 Operator Access Granted' : '🔐 Operator Login';
+  pill.classList.toggle('ok', !!TOKEN);
+}
+
+const loaded = {};
+const loaders = { pulse: loadPulse, payments: loadPayments, remote: loadRemote,
+                  users: loadUsers, fleet: loadFleet, explorer: loadExplorer };
+const titles = { pulse: 'Pulse', payments: 'Payment queue', remote: 'Remote control',
+                 users: 'Users', fleet: 'Scraper fleet', explorer: 'Explorer' };
+
+function showTab(name) {
+  $$('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === name));
+  $$('.pane').forEach(p => p.classList.toggle('active', p.id === 'pane-' + name));
+  if (!loaded[name]) { loaded[name] = true; loaders[name](); }
+}
+function reload() { const active = $('.tab.active').dataset.tab; loaded[active] = true; loaders[active](); }
+function loadAll() {
+  Object.keys(loaded).forEach(k => { loaded[k] = false; });
+  const active = $('.tab.active').dataset.tab;
+  loaded[active] = true;
+  loaders[active]();
+}
+
+function cardHtml(label, value, note, tone) {
+  return '<div class="card"><div class="label">' + esc(label) + '</div>' +
+    '<div class="value ' + (tone || '') + '">' + esc(value) + '</div>' +
+    (note ? '<div class="note">' + esc(note) + '</div>' : '') + '</div>';
+}
+function objectTable(obj, headers) {
+  if (!obj || typeof obj !== 'object') return '<div class="empty">no data</div>';
+  const head = (headers || ['key', 'value']).map(h => '<th>' + esc(h) + '</th>').join('');
+  const rows = Object.keys(obj).sort().map(k => {
+    let v = obj[k];
+    if (v && typeof v === 'object') v = JSON.stringify(v);
+    return '<tr><td class="mono">' + esc(k) + '</td><td>' + esc(v) + '</td></tr>';
+  }).join('');
+  return '<table><thead><tr>' + head + '</tr></thead><tbody>' + rows + '</tbody></table>';
+}
+
+async function loadPulse() {
+  const pane = $('#pane-pulse');
+  pane.innerHTML = '<div class="spin">reading the projection stamp…</div>';
+  try {
+    const [pulse, host, fleet] = await Promise.all([
+      api('/admin/api/pulse'), api('/admin/api/host'), api('/admin/api/fleet')]);
+    let html = '';
+    if (!pulse.stamped) {
+      html += '<div class="warn"><strong>Projection unstamped.</strong> The five reader ' +
+        'keys are absent, so this page withholds the catalog counts rather than ' +
+        'running the 42-second live scan. Rebuild with ' +
+        '<code>python3 -S Fast_Fetch/catalog_v2.py &lt;db&gt;</code> (default: reset), ' +
+        'then reload. Recorded ledger at build time: ' +
+        esc(fmt((pulse.ledger_stamps || {}).posts)) + ' posts, ' +
+        esc(fmt((pulse.ledger_stamps || {}).releases)) + ' releases, ' +
+        esc(fmt((pulse.ledger_stamps || {}).links)) + ' links.</div>';
+    }
+    const v = k => pulse.stamped ? pulse[k] : null;
+    html += '<div class="grid">' +
+      cardHtml('Indexed works', fmt(v('works')), 'cat_works, 18+ excluded', 'emerald') +
+      cardHtml('Release variants', fmt(v('releases')), 'cat_releases, 18+ excluded', 'blue') +
+      cardHtml('Direct stream mirrors', fmt(v('sources')), 'cat_links, 18+ excluded') +
+      cardHtml('Measured active CDN', fmt(v('active_sources')), 'knocked-on links only', 'emerald') +
+      cardHtml('Resumable (Range 206)', fmt(v('resumable_sources')), 'measured', 'blue') +
+      cardHtml('Sitemap URLs cached', fmt(pulse.sitemap_cached), 'live COUNT, small table') +
+      '</div>';
+    const load = host.load || [];
+    html += '<div class="panel"><h2>Host health</h2><div class="grid">' +
+      cardHtml('Load (1/5/15m)', load.length ? load.join(' / ') : '—',
+               (host.cpu_count || '?') + ' vCPU', (load[0] > 4 ? 'orange' : 'emerald')) +
+      cardHtml('Database file', bytes(host.db_bytes), 'page_count × page_size') +
+      cardHtml('Disk free', host.disk ? bytes(host.disk.free) : '—',
+               host.disk ? bytes(host.disk.total) + ' total' : '') +
+      cardHtml('Crawlers active', fmt(fleet.active) + ' / ' + fmt(fleet.total),
+               'running now', fleet.active ? 'emerald' : 'orange') +
+      '</div>';
+    if (pulse.stamped && pulse.sources_by_state) {
+      html += '<h2>Links by state</h2><div class="chips">' +
+        Object.keys(pulse.sources_by_state).sort().map(k =>
+          '<span class="chip">' + esc(k) + ' <b>' +
+          esc(fmt(pulse.sources_by_state[k])) + '</b></span>').join('') +
+        '</div>';
+    }
+    html += '<p class="note" style="color:var(--faint);margin-top:14px">Projected at ' +
+      esc(pulse.projected_at ? new Date(Number(pulse.projected_at) * 1000).toLocaleString() : '—') +
+      ' · catalog revision ' + esc(pulse.catalog_rev === null ? '—' : pulse.catalog_rev) +
+      ' · stamped keys ' + (pulse.stamped ? 'present' : 'absent') + '</p></div>';
+    pane.innerHTML = html;
+  } catch (error) {
+    pane.innerHTML = '<div class="warn">Pulse unavailable: ' + esc(error.message) + '</div>';
+  }
+}
+
+async function loadPayments() {
+  const pane = $('#pane-payments');
+  pane.innerHTML = '<div class="spin">reading the payment ledger…</div>';
+  try {
+    const [queue, settings] = await Promise.all([
+      api('/admin/api/payments'), api('/admin/api/monetization')]);
+    let html = '<div class="panel"><h2>Pending claims</h2>';
+    if (!queue.available) {
+      html += '<div class="warn">' + esc(queue.detail || 'ledger unavailable') + '</div>';
+    } else if (!queue.pending || queue.pending.length === 0) {
+      html += '<div class="empty">No pending claims. Nothing is credited by looking at this page.</div>';
+    } else {
+      html += '<p class="note" style="color:var(--faint)">' + esc(queue.note || '') + '</p>' +
+        '<table><thead><tr><th>Account</th><th>Method</th><th>TID</th><th>PKR</th>' +
+        '<th>Plan</th><th>Submitted</th><th></th></tr></thead><tbody>' +
+        queue.pending.map(row => {
+          const id = row.payment_id;
+          const csrf = row.csrf || {};
+          return '<tr><td class="mono">' + esc(row.hint || '—') + '</td><td>' + esc(row.method) +
+            '</td><td class="mono">' + esc(row.tid) + '</td><td>' + esc(fmt(row.amount_pkr)) +
+            '</td><td>' + esc(row.plan) + '</td><td>' +
+            esc(row.submitted_at ? new Date(Number(row.submitted_at) * 1000).toLocaleString() : '—') +
+            '</td><td class="row">' +
+            '<button class="btn" data-id="' + esc(id) + '" data-csrf="' + esc(csrf.approve) +
+            '" onclick="reviewApprove(this)">✓ Approve</button>' +
+            '<button class="btn danger" data-id="' + esc(id) + '" data-csrf="' + esc(csrf.reject) +
+            '" onclick="reviewReject(this)">✕ Reject</button></td></tr>';
+        }).join('') + '</tbody></table>';
+    }
+    html += '<p class="note" style="color:var(--faint);margin-top:10px">' +
+      esc(fmt(queue.pending_count || 0)) + ' open claim(s). Plans: ' +
+      esc((queue.plans || []).map(p => p.plan + ' = PKR ' + p.amount_pkr + ' / ' + p.days + 'd').join(' · ')) +
+      '</p></div>';
+
+    const fields = settings.fields || [];
+    const price = key => (fields.find(f => f.key === key) || {}).value || '';
+    html += '<div class="panel"><h2>VIP price list</h2>' +
+      '<div class="row"><label style="color:var(--dim)">Monthly VIP (PKR)</label>' +
+      '<input id="price-monthly" type="number" min="0" value="' + esc(price('vip_monthly_pkr')) + '">' +
+      '<label style="color:var(--dim)">Yearly VIP (PKR)</label>' +
+      '<input id="price-yearly" type="number" min="0" value="' + esc(price('vip_yearly_pkr')) + '">' +
+      '<button class="btn" onclick="savePrices()">Save prices</button></div>' +
+      '<p class="note" style="color:var(--faint)">Saved into the same settings row the app ' +
+      'reads at <code>/api/v1/app/remote-config</code>; the client cannot set an amount.</p></div>';
+
+    html += '<div class="panel"><h2>SMS webhook listener (RaddRelay.apk)</h2>' +
+      '<div class="warn"><strong>Not installed in this build.</strong> There is no ' +
+      '<code>/api/v2/payment/sms-webhook</code> route on this server, so this card cannot ' +
+      'show a listener state. Payments arrive as operator claims; a transaction id is ' +
+      'verified against the payment SMS by a human, never by this page.</div></div>';
+    pane.innerHTML = html;
+  } catch (error) {
+    pane.innerHTML = '<div class="warn">Payment queue unavailable: ' + esc(error.message) + '</div>';
+  }
+}
+
+async function reviewApprove(button) {
+  await reviewPayment(Number(button.dataset.id), 'approve', button.dataset.csrf);
+}
+async function reviewReject(button) {
+  await reviewPayment(Number(button.dataset.id), 'reject', button.dataset.csrf);
+}
+
+async function reviewPayment(id, action, csrf) {
+  let note = '';
+  if (action === 'reject') {
+    note = prompt('Reviewer note (why this is rejected)') || '';
+    if (!note) { toast('A rejection needs a note; nothing was written.'); return; }
+  }
+  try {
+    await api(action === 'approve' ? '/admin/action/approve-payment' : '/admin/action/reject-payment',
+      { method: 'POST', body: { payment_id: id, csrf: csrf, reviewer: 'console', note: note } });
+    toast('Payment ' + id + ' ' + (action === 'approve' ? 'approved' : 'rejected'));
+    loaded.payments = true; loadPayments();
+  } catch (error) { toast('Refused: ' + error.message); }
+}
+
+async function savePrices() {
+  const monthly = Number($('#price-monthly').value);
+  const yearly = Number($('#price-yearly').value);
+  try {
+    await api('/admin/action/save-monetization',
+      { method: 'POST', body: { vip_monthly_pkr: monthly, vip_yearly_pkr: yearly } });
+    toast('Price list saved'); loaded.payments = true; loadPayments();
+  } catch (error) { toast('Refused: ' + error.message); }
+}
+
+async function loadRemote() {
+  const pane = $('#pane-remote');
+  pane.innerHTML = '<div class="spin">reading settings…</div>';
+  try {
+    const [settings, live] = await Promise.all([
+      api('/admin/api/monetization'), api('/api/v1/app/remote-config')]);
+    if (!settings.available) {
+      pane.innerHTML = '<div class="warn">' + esc(settings.detail || 'settings unavailable') + '</div>';
+      return;
+    }
+    const fields = (settings.fields || []).filter(f => !f.secret);
+    let html = '<div class="panel"><h2>Remote controls</h2><div id="remote-fields">';
+    fields.forEach(field => {
+      const key = esc(field.key);
+      if (field.kind === 'flag') {
+        const on = String(field.value) === 'on';
+        html += '<div class="field"><label>' + esc(field.label) + '</label>' +
+          '<div class="toggle"><input type="checkbox" data-key="' + key + '" data-kind="flag"' +
+          (on ? ' checked' : '') + '><span class="mono">' + (on ? 'on' : 'off') + '</span></div></div>';
+      } else if (field.key === 'announcement_message') {
+        html += '<div class="field"><label>' + esc(field.label) + '</label>' +
+          '<textarea data-key="' + key + '" data-kind="text">' + esc(field.value) + '</textarea></div>';
+      } else {
+        html += '<div class="field"><label>' + esc(field.label) + '</label>' +
+          '<input data-key="' + key + '" data-kind="text" value="' + esc(field.value) + '"></div>';
+      }
+    });
+    html += '</div><div class="row" style="margin-top:14px">' +
+      '<button class="btn" onclick="saveRemote()">Save settings</button>' +
+      '<button class="btn blue" onclick="loadRemote()">Reload</button>' +
+      '<span class="note" style="color:var(--faint)">Shortener API tokens are masked and ' +
+      'edited on <a href="/admin">/admin</a>, never printed here.</span></div></div>';
+    html += '<div class="panel"><h2>What the app reads now</h2><pre class="mono" ' +
+      'style="white-space:pre-wrap;margin:0">' + esc(JSON.stringify(live, null, 2)) + '</pre></div>';
+    pane.innerHTML = html;
+  } catch (error) {
+    pane.innerHTML = '<div class="warn">Settings unavailable: ' + esc(error.message) + '</div>';
+  }
+}
+
+async function saveRemote() {
+  const body = {};
+  $$('#remote-fields [data-key]').forEach(node => {
+    const key = node.dataset.key;
+    if (node.type === 'checkbox') { body[key] = node.checked ? 1 : 0; return; }
+    const value = node.value.trim();
+    if (node.dataset.kind === 'text') body[key] = value;
+  });
+  try {
+    const result = await api('/admin/action/save-monetization', { method: 'POST', body: body });
+    toast('Saved: ' + ((result.saved || []).join(', ') || 'nothing'));
+    loaded.remote = true; loadRemote();
+  } catch (error) { toast('Refused: ' + error.message); }
+}
+
+async function loadUsers() {
+  const pane = $('#pane-users');
+  pane.innerHTML = '<div class="spin">reading usage counters…</div>';
+  try {
+    const usage = await api('/admin/api/usage');
+    if (!usage.available) {
+      pane.innerHTML = '<div class="warn">' + esc(usage.detail || 'no usage data yet') +
+        ' — a page of zeros is not a measurement, so none are shown.</div>';
+      return;
+    }
+    const installs = usage.installs || {};
+    const accounts = usage.accounts || {};
+    let html = '<div class="grid">' +
+      cardHtml('Distinct devices', fmt(installs.distinct_devices), 'hardware installs', 'emerald') +
+      cardHtml('New today', fmt(installs.new_today), 'first launch today') +
+      cardHtml('New in window', fmt(installs.new_this_window), (usage.window_days || '?') + '-day window') +
+      cardHtml('Accounts', fmt(accounts.total), 'revoked: ' + fmt(accounts.revoked)) +
+      cardHtml('VIP active', fmt(accounts.vip_active), 'vip_until in the future', 'blue') +
+      '</div>';
+    html += '<div class="panel"><h2>Retention</h2>' + objectTable(usage.retention) + '</div>';
+    html += '<div class="panel"><h2>Playback &amp; errors (' +
+      esc(usage.window_days) + 'd)</h2>' + objectTable(usage.metrics) + '</div>';
+    html += '<div class="panel"><h2>Money</h2>' + objectTable(usage.payments) + '</div>';
+    html += '<div class="warn" style="margin-top:18px"><strong>Not implemented in this build:</strong> ' +
+      'hardware-locked trial counters and coin / rewarded-pass balances have no table or ' +
+      'counter on this server. The cards above are the counters it actually keeps; nothing ' +
+      'here is inferred.</div>';
+    pane.innerHTML = html;
+  } catch (error) {
+    pane.innerHTML = '<div class="warn">Usage unavailable: ' + esc(error.message) + '</div>';
+  }
+}
+
+async function loadFleet() {
+  const pane = $('#pane-fleet');
+  pane.innerHTML = '<div class="spin">reading fleet state…</div>';
+  try {
+    const [fleet, host] = await Promise.all([api('/admin/api/fleet'), api('/admin/api/host')]);
+    const sizes = {};
+    (host.staging || []).forEach(row => { sizes[row.crawler_id] = row.bytes; });
+    const modes = fleet.modes || ['sync'];
+    let html = '<div class="panel"><h2>' + esc(fmt(fleet.active)) + ' of ' +
+      esc(fmt(fleet.total)) + ' crawlers running</h2>' +
+      '<p class="note" style="color:var(--faint)">A run queues one bounded child ' +
+      '(default limit ' + esc(fmt(fleet.default_limit)) + ', max ' +
+      esc(fmt(fleet.max_limit)) + '). This box reports load ' +
+      esc((host.load || []).slice(0, 1).join('') || '—') + '; a fleet run is CPU work.</p></div>';
+    html += '<div class="fleet">' + (fleet.crawlers || []).map(crawler => {
+      const id = crawler.crawler_id;
+      const name = SITES[id] || id;
+      const pct = crawler.percent === null || crawler.percent === undefined
+        ? '—' : (Math.round(Number(crawler.percent) * 100) / 100) + '%';
+      return '<div class="card"><div class="label">' + esc(id) + '</div>' +
+        '<div class="value">' + esc(name) + '</div>' +
+        '<div class="note">' + esc(crawler.state) + ' · ' + esc(pct) + ' · staging ' +
+        esc(bytes(sizes[id])) + '</div>' +
+        '<div class="note">last sync ' +
+        esc(crawler.last_sync_at ? new Date(Number(crawler.last_sync_at) * 1000).toLocaleString() : '—') +
+        ' · done ' + esc(fmt(crawler.done)) + ' · pending ' + esc(fmt(crawler.pending)) + '</div>' +
+        '<div class="row"><select id="mode-' + esc(id) + '">' +
+        modes.map(m => '<option>' + esc(m) + '</option>').join('') + '</select>' +
+        '<button class="btn" data-crawler="' + esc(id) + '" data-limit="' +
+        esc(fleet.default_limit) + '" onclick="runCrawler(this)">▶ Run</button></div></div>';
+    }).join('') + '</div>';
+    pane.innerHTML = html;
+  } catch (error) {
+    pane.innerHTML = '<div class="warn">Fleet unavailable: ' + esc(error.message) + '</div>';
+  }
+}
+
+async function runCrawler(button) {
+  const crawler = button.dataset.crawler;
+  const limit = Number(button.dataset.limit);
+  const mode = $('#mode-' + crawler).value;
+  if (!confirm('Queue ' + (SITES[crawler] || crawler) + ' (' + crawler + ') in ' +
+               mode + ' mode, limit ' + limit + '?')) return;
+  try {
+    const result = await api('/admin/action/run-scraper',
+      { method: 'POST', body: { crawler: crawler, mode: mode, limit: limit } });
+    toast((result.accepted || result.ok) ? 'Queued ' + crawler : 'Refused by the server');
+    loaded.fleet = true; loadFleet();
+  } catch (error) { toast('Refused: ' + error.message); }
+}
+
+async function loadExplorer() {
+  if (!$('#x-results').dataset.ready) {
+    $('#x-results').dataset.ready = '1';
+    $('#x-results').innerHTML = '<span class="empty">Type a query and press Search.</span>';
+  }
+}
+
+async function searchWorks() {
+  const query = $('#x-query').value.trim();
+  const limit = $('#x-limit').value;
+  const status = $('#x-status');
+  const box = $('#x-results');
+  status.textContent = 'searching…';
+  try {
+    const payload = await api('/api/v1/posts?q=' + encodeURIComponent(query) +
+                              '&limit=' + encodeURIComponent(limit));
+    status.textContent = '';
+    const rows = payload.results || [];
+    if (rows.length === 0) {
+      box.innerHTML = '<div class="empty">No works matched. Flagged (18+) rows never ' +
+        'appear on any list, including this one.</div>';
+      return;
+    }
+    box.innerHTML = '<p class="note" style="color:var(--faint)">' + esc(fmt(payload.total)) +
+      ' matching works · showing ' + esc(rows.length) + '</p><table><thead><tr>' +
+      '<th>Title</th><th>Year</th><th>Type</th><th>ID</th><th></th></tr></thead><tbody>' +
+      rows.map(row => '<tr><td>' + esc(row.clean_title || row.title || row.slug) +
+        '</td><td>' + esc(row.year || '—') + '</td><td>' + esc(row.content_type || '—') +
+        '</td><td class="mono">' + esc(row.id) + '</td><td class="row">' +
+        '<button class="btn blue" onclick="openPlaylist(' + esc(row.id) + ')">🎬 Playlist</button>' +
+        '<button class="btn warn" onclick="healPost(' + esc(row.id) + ')">🩺 Heal links</button>' +
+        '</td></tr>').join('') + '</tbody></table>';
+  } catch (error) {
+    status.textContent = 'Search failed: ' + error.message;
+  }
+}
+
+async function openPlaylist(id) {
+  try {
+    const response = await fetch('/api/m3u?id=' + encodeURIComponent(id),
+      { credentials: 'same-origin', headers: authHeaders() });
+    if (response.status === 401) { openLogin(); return; }
+    if (!response.ok) throw new Error('HTTP ' + response.status);
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url; link.download = 'playlist_' + id + '.m3u';
+    document.body.appendChild(link); link.click(); link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 4000);
+    toast('Playlist for work ' + id + ' — open it in VLC or MPV');
+  } catch (error) { toast('Playlist refused: ' + error.message); }
+}
+
+async function healPost(id) {
+  if (!confirm('Run the resolver and health check for work ' + id + '?')) return;
+  try {
+    const result = await api('/api/heal?id=' + encodeURIComponent(id));
+    toast(result.success ? 'Heal finished for work ' + id : 'Heal refused');
+  } catch (error) { toast('Heal failed: ' + error.message); }
+}
+
+function lockedPane() {
+  const active = $('.tab.active');
+  const pane = $('#pane-' + active.dataset.tab);
+  pane.innerHTML = '<div class="okbar">🔐 Locked. Enter the operator token — every ' +
+    'screen is a gated request, so nothing below this line is readable yet.</div>';
+}
+
+document.addEventListener('keydown', event => {
+  if (event.key === 'Escape') closeLogin();
+});
+$('#bind-host').textContent = location.host;
+syncPill();
+loaded.pulse = true;
+if (TOKEN) { loadPulse(); } else { openLogin(); lockedPane(); }
+</script>
+</body>
+</html>
+"""
+
+
+#: The 401 body for `/operator` when the bearer is missing or wrong. A credential
+#: form and nothing else: no roster, no ledger probe, no hint about whether a
+#: token was supplied. The form's GET carries the token in the query, which is the
+#: one mechanism `gate_operator_port` already accepts (`/admin?token=` predates
+#: it); the console then moves it to `localStorage` and strips it from the URL.
+OPERATOR_LOGIN_HTML = """<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Operator login</title>
+<style>
+:root{color-scheme:dark}
+body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;
+ background:#090d16;color:#e5e7eb;font:14px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+.box{width:min(420px,92vw);background:#111827;border:1px solid #1f2937;border-radius:14px;padding:26px}
+h1{font-size:16px;margin:0 0 6px}p{color:#9ca3af;font-size:13px;margin:0 0 18px}
+input{width:100%;background:#0d1420;color:#e5e7eb;border:1px solid #1f2937;border-radius:8px;
+ padding:9px 11px;font:inherit;margin-bottom:12px}
+button{background:#12362c;color:#10b981;border:1px solid #1f6f58;border-radius:8px;
+ padding:8px 14px;font:inherit;cursor:pointer}
+code{background:#0d1420;padding:1px 5px;border-radius:4px;font-family:ui-monospace,monospace}
+</style></head>
+<body><form class="box" method="get" action="/operator/">
+<h1>🔐 Sovereign Operator Console</h1>
+<p>Loopback only, plain HTTP. Enter <code>RADD_ADMIN_TOKEN</code>. A wrong token and
+no token answer identically — this page is the refusal, not a check.</p>
+<input type="password" name="token" placeholder="operator token" autofocus
+ autocomplete="current-password">
+<button type="submit">Unlock</button>
+</form></body></html>
+"""
+
+
+def render_operator_console() -> str:
+    """The console with the crawler roster embedded.
+
+    The roster is the only provenance-bearing content in the page, and it is the
+    same list the `/admin` card prints: loopback-only, never proxied, and the
+    public port answers 404 for the path. `</` is escaped so a site name can never
+    close the script block.
+    """
+    roster = json.dumps(admin_panel.fleet_roster(), ensure_ascii=False)
+    roster = roster.replace("</", "<\\/")
+    return OPERATOR_CONSOLE_HTML.replace("__ROSTER_JSON__", roster)
+
+
+def render_operator_login() -> str:
+    return OPERATOR_LOGIN_HTML
 
 
 def export_standalone_html(output_file: str = "database_view.html") -> str:
