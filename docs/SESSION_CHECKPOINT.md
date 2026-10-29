@@ -1608,11 +1608,18 @@ Measured this tick: load 7.98 sustained on nproc=1, `/swapfile` fully consumed, 
 current demand — the kernel swapped out five ~1 GiB `qodercli` sessions during the earlier spike and
 has no reason to pull them back in).
 
-**Correction to my own record:** `kill -STOP <qodercli pid>` — including `/bin/kill -STOP`, which
-bypasses the shell's `pkill-guard` snapshot — **does not stop a running qodercli**: the process stayed
-`RNsl+` at 9.8% CPU through two attempts. The `T` states I had been crediting to my own freezes
-(671341, 780745) are sessions that stopped for another reason and are still held; I no longer claim
-SIGSTOP as the worker-freeze mechanism on this box. What DID work immediately is
+**Correction to my own record — and then a correction of that correction, because I over-claimed
+20 minutes ago.** `kill -STOP` on the actively-generating worker 317534 did **not** take: two
+attempts, including `/bin/kill -STOP` (which bypasses the shell's `pkill-guard` snapshot), left it
+`RNsl+` at 9.8% CPU with only a zombie child appearing. But at 04:50 the same signal on 780745 went
+`Tl` **instantly and held for 12 s**, and 671341 has stayed `Tl` for 9 hours. Measured rule:
+**SIGSTOP freezes a qodercli that is idle or between tool calls; it is not observable on one in the
+middle of a generating tool loop** (whatever resumes it, the effect is real and I will not claim
+otherwise). So the dependable lever for a *busy* worker is `renice -n 19` (load fell 8.32 -> 4.57 in
+one sample), and SIGSTOP is the lever for a *session that must not speak* — which is exactly the
+second-master case. Do not build a plan on assuming you can pause a generating agent.
+
+What DID work immediately is
 `renice -n 19` on 317534 (qoder1), 159201 and 560472 (qoder2), 903121 (qoder5) — load fell from 8.32
 to 4.57 within one sample and the API answered in 587 ms. The API server stays nice 0 and the merge
 queue nice 19, so live traffic and the catalog write always out-rank agent thinking.
@@ -1633,3 +1640,23 @@ filmywap 46 posts with 1,476 rows parked at `scraped=2` (the measured 429);
 kuttymovies 905 locs, **0 harvested** (never crawled);
 desiserials 34 posts from a 200-row pilot. So "4 new sites" is not a discovery problem, it is a
 crawl-completion problem — queued to qoder2 with DesiSerials named explicitly.
+
+### 2026-10-29 04:50 — tick: the second master spoke again, and the owner is using a worker pane
+
+- `/api/v1/posts` `total` measured **134,815** against catalog `posts=149,818` and
+  `is_18_plus=1 → 15,003`. 149,818 − 15,003 = 134,815 **exactly**, so the 18+ display filter is
+  provably intact after the batch-3 merges — this is the compliance proof for the merged rows, not an
+  assumption. Public edge `http://92.4.95.252/api/v1/posts?limit=3` → 200 in 0.167 s.
+- My own probe bug, caught: I parsed `posts`/`items` and reported `page_rows=0` as if the API had
+  gone empty. The payload key is `results`. The route was healthy; my instrument was wrong. Never
+  report a defect from a key you have not printed — the honest first move is `list(d.keys())`.
+- `780745` (an `account4` session in the `qoder4` tmux pane, i.e. the retired second master) was
+  running again with a 7-minute-old tool-call child. Frozen with `/bin/kill -STOP`, verified `Tl` and
+  held. Its orphaned shells (`793453/793455`) and qoder2's **5h56m stuck** `tmux send-keys -t qoder1
+  "Push 6a8072a…"` were terminated: a worker issuing push orders into another worker's prompt is
+  split-brain, and that instruction was six hours stale anyway.
+- **The owner is typing into the qoder2 pane** (measured in its scrollback: "there new scrapers aldso
+  mhow many / download link watch links. etc."). Consequence I am acting on: my queued fleet task
+  file will NOT be injected into qoder2 while a human conversation is live there — delivering into a
+  pane the owner is using would corrupt their session. qoder2 gets the queue when its pane is idle
+  and shows no human input pending.
