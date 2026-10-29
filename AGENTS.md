@@ -78,11 +78,57 @@ Describe the code's behavior accurately to users and tools. Do not disguise its 
 - Not a hosting service
 - Not a download manager
 - Not a DRM circumventer
-- Adult (18+) content is **stored but never displayed**: scrapers ingest 100% of each
+- Adult (18+) content is **stored but never displayed to a user**: scrapers ingest 100% of each
   site's catalog including 18+ titles, flagging them via the `is_18_plus` column
-  (`is_18_plus=1`) present in every site staging database. Every presentation surface
-  (REST API, Android app, dashboard, M3U/stream routes) must filter out rows where
-  `is_18_plus=1`. The flag is set at storage time; filtering is enforced at display time.
+  (`is_18_plus=1`) present in every site staging database. The flag is set at storage time and
+  `save_scraped_data` re-derives it from the title as a row becomes a post
+  (`Fast_Fetch/fast_fetch.py:4246`), so an unlabelled adult title still gets flagged.
+  **The invariant, measured against the code and pinned by tests**
+  (`Fast_Fetch/test_redact.py::AdultDenialOnBothPortsTests`,
+  `Fast_Fetch/test_database.py::KeyLevelAdultIdentityTests`): no public surface may list *or play* a
+  flagged row. Enforced today by `redact.adult_clause` (`Fast_Fetch/redact.py:1068`) inside
+  `api_v1_get_posts` (`Fast_Fetch/viewer.py:2516`), by the per-post bail at `viewer.py:676-682` and
+  `:2677`, by `redact.link_is_adult` (`redact.py:1074`) on the stream/download redirectors — which
+  answers True for an unknown link id so a typo cannot play either — and by nginx, which allow-lists
+  only the public routes. To a public client a flagged row is indistinguishable from a row that never
+  existed: the same `not_found`, the same status code, no hint that a flag caused the denial.
+  Proved live on this host: `/api/v1/posts/159` (a flagged post) is 404 on loopback and at the public
+  edge, `/api/m3u?id=159` returns 0 bytes where `/api/m3u?id=158` returns a real playlist, and
+  `/api/m3u` is 403 at the edge.
+  **One exception, deliberately, and it is not a user-facing display surface:** the operator panel.
+  `DASHBOARD_HTML` (`viewer.py:706`) reads `/api/data`, which this process 404s on the public port,
+  is served only on the loopback operator port, and 403s at the public edge; the trust boundary there
+  is the loopback interface, not `RADD_ADMIN_TOKEN` (the token guards `/admin`, and `/` answers 200 on
+  `8081` without it — measured 2026-10-29 05:47, see the table below). `fetch_database_payload`
+  (`viewer.py:482`) documents `full` as "the operator-only mode (loopback port): raw ledger rows", and
+  the panel renders a `18+ ADULT` badge (`viewer.py:1648`) because an operator auditing flag coverage
+  has to see which rows carry the flag. That is the *stored* half of this rule, shown to the person who
+  owns the storage — never a playable link, and never a public list. `/api/v1/stream` and
+  `/api/v1/download` deny a flagged link **on the operator port too**, with the same uniform
+  `not_found`: seeing a flagged row is the panel's job, handing out its bytes is nobody's. If a change
+  ever lets the panel emit a stream or download token for a flagged row, that is a defect, not a
+  policy. `full` is a property of the server instance, never a client-supplied header or query flag.
+  **The flag belongs to the work, not to one row.** The adult law is applied per row while media
+  identity is per `canonical_key`, so one film filed twice — one copy flagged, one not — was hidden at
+  one address and publicly served at the other: 442 keys held both, and 455 unflagged twins were
+  reachable (`4 Play` id 23519, hindilinks4u, answered `/api/v1/posts?q=4+Play` while the same film
+  from filmyhit was correctly hidden). That is fixed here, not by adding another `WHERE` clause:
+  `fast_fetch.inherit_key_adult()` reconciles `MAX(is_18_plus)` across every row sharing the key,
+  inside the write that set the flag, bounded by `idx_posts_canonical_key`; the degenerate `unknown`
+  key is refused so one titleless page cannot hide unrelated titles; and a *new* row is filed under
+  `generate_canonical_key(clean_title, year)` instead of the scraper's page slug, so two sites writing
+  one film now write one key. Stored rows keep the key they were filed under — re-keying them touches
+  ids `releases` reference and is its own reviewed migration.
+  `Fast_Fetch/backfill_adult_key.py` reconciles rows written before the law existed (report, then
+  `--apply`, then `--apply --projection`) and prints the public total before and after, refusing to
+  commit unless the total dropped by exactly the number of rows it flipped.
+  **Residual, measured 2026-10-29 on the production catalog:** 953 works are flagged in the projection
+  while 1,190 distinct ledger rows for the same title and year are still public under a *different*
+  key (`suzume-2022` vs `suzume_2022`, `puli-2015` vs `puli_2015`), concentrated in filmyzilla (437),
+  9xmovies (344), moviezguru (190) and hindilinks4u (151). No key-level law can reach those; they need
+  the re-key migration, which is planned and not attempted here.
+  Nothing in this section weakens the public rule. A test that reaches a flagged row through any public
+  route, or a flagged link through stream or download on either port, is P0.
 
 ---
 
@@ -106,6 +152,14 @@ Verify only whether the two configured variable names are present; never read or
 ## 🔁 Cross-Agent Checkpoints and Safe Git Pushes
 
 - Read `docs/PROJECT_MAP.md` and `docs/SESSION_CHECKPOINT.md` at the start of every session; update the checkpoint after every independently useful milestone.
+- **`/opt/radd-stream` is the live deployment tree, not a workspace.** The unit runs
+  `WorkingDirectory=/opt/radd-stream` + `ExecStart=/usr/bin/python3 -S /opt/radd-stream/Fast_Fetch/fast_fetch.py
+  serve`, so whatever is checked out there is what the service loads on its next start, and several
+  lanes keep uncommitted work in it at the same time. Work in your own worktree
+  (`git worktree add /tmp/<yourlane> <sha>`) and push that sha; do **not** commit from or reset
+  `/opt/radd-stream`. If you find its tree carrying a superseded draft of code that is already pushed,
+  say so in the checkpoint instead of committing over it — a silent revert of a pushed fix is exactly
+  what this rule exists to prevent.
 - Do not wait for a quota warning. Test, commit, and push each completed milestone to the task/agent branch promptly. If a session may end before tests finish, save a clearly labeled WIP commit to that branch, record unrun checks, and do not merge or deploy it.
 - Stage only reviewed paths (`git add <paths>`), inspect the staged names/diff, and keep secrets, databases, APKs, build outputs, and uploaded chat files out of commits. Never use `git add -A` or force-push. Per owner authorization, agents may push verified, tested milestones directly to `main` so automated CI triggers and autonomous progress is seamless.
 - Treat `.replit` as local-only sensitive configuration: do not inspect its values or stage, commit, or push it. It is ignored and untracked. The user chose to leave historical copies intact; do not rewrite history unless they explicitly change that decision.
@@ -226,7 +280,7 @@ git push https://github.com/rehanradd/radd-stream.git v1.0.0
 | GitHub Releases | https://github.com/rehanradd/radd-stream/releases |
 | Oracle HTTP host (measured 2026-10-29) | `http://92.4.95.252/` — plain HTTP, and `location /` proxies **code-server** (the web IDE), not the app |
 | Backend REST API (publicly reachable) | `http://92.4.95.252/api/v1/posts` — nginx allow-lists only `/api/v1/posts`, `/api/v1/stream`, `/api/v1/stats`, `/api/v1/download`, `/api/v1/search/by-media`, `/api/v1/app/remote-config`, `/api/v2/account*`, and static `/download/`; `^~ /api/` 403s everything else, including all v2 catalog routes and `/api/data` |
-| Operator panel `/admin` | **not public** — falls through to code-server and answers 401; the dashboard itself is loopback-only on `127.0.0.1:8081` behind `RADD_ADMIN_TOKEN` |
+| Operator panel — **measured 2026-10-29 05:47 on this host** | One process (pid of `fast_fetch.py serve`) listens on BOTH `127.0.0.1:8080` and `127.0.0.1:8081`; neither is bound beyond loopback and nginx forwards neither. Public `/admin` falls through to code-server and answers 401. On `8081`: `/admin` → **401 without `RADD_ADMIN_TOKEN`** (the gate is `admin_panel.route_get` → `_gate(peer, token)`), but `/` → **200 serving the 46,476-byte dashboard with no token at all**, and `/api/v1/stats` and `/api/v1/rules` also answer **200 on 8081 with a bogus bearer token**. So the trust boundary on the operator port is *the loopback interface*, not the token: the token guards `/admin` only. On `8080` the same paths differ — `/` is a 1,355-byte page, `/client` is the 20,510-byte PWA, `/api/v1/rules` is **404**. Do not describe the dashboard as token-gated; describe it as loopback-only, which is what is true. |
 | Mobile PWA `/client` | **not public** — measured 401 through nginx (same code-server fallthrough). It serves 200 only from `127.0.0.1:8080` |
 
 ---

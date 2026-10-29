@@ -28,6 +28,8 @@ os.environ.setdefault("RADD_SKIP_LIVE_ENRICH", "1")
 import catalog_api
 import catalog_v2
 import fast_fetch
+import link_health
+import redact
 import viewer
 
 
@@ -1546,6 +1548,247 @@ class ContractGuardTests(CatalogApiTestCase):
         after = {table: self.conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
                  for table in ("posts", "releases", "download_sources", "post_sources")}
         self.assertEqual(before, after)
+
+
+#: `cat_links.state`'s closed vocabulary (`catalog_v2._link_state_of`'s range). The
+#: only keys a published link breakdown is allowed to use.
+_LINK_STATES = frozenset({"unchecked", "active", "dead", "expired", "unknown"})
+
+
+class PublicStatsGuardTests(CatalogApiTestCase):
+    """`GET /api/v1/stats` is one of the routes nginx lets the public reach.
+
+    These exist because of the two defects the endpoint shipped with, both measured on
+    the live box: it answered `posts=116922` from `cat_projection_meta.works` — the
+    unfiltered `cat_works` row count, 14,617 rows of which are `is_18_plus=1` and are
+    never displayed anywhere — and it answered `active_sources` from
+    `links_by_state = {"unchecked": 3456460}`, i.e. it called every mirror nobody had
+    ever knocked on a live server.
+
+    So each test here states one of those two claims as a failure condition: a public
+    aggregate must not reach an 18+ work, and an unchecked link must never be counted
+    active. They are written against both code paths — the projection stamp and the
+    ledger-counting fallback — because the stamp is only present after a rebuild, and
+    the fallback is what an un-projected catalog answers from.
+    """
+
+    ADULT_TITLE = "Adult Diary"
+
+    def setUp(self):
+        super().setUp()
+        # Module-global, keyed by DB_PATH; a fresh temp DB would otherwise be answered
+        # from the previous test's snapshot for two minutes.
+        viewer._STATS_CACHE.update({"time": 0.0, "data": None, "db": None})
+
+    # ---- helpers ----------------------------------------------------------- #
+    def stats(self):
+        return viewer._get_cached_stats(self.conn)
+
+    def adult_work_ids(self):
+        return [row["id"] for row in self.conn.execute(
+            "SELECT id FROM cat_works WHERE is_18_plus = 1")]
+
+    def count(self, sql, *params):
+        return int(self.conn.execute(sql, params).fetchone()[0])
+
+    def strip_stamp(self):
+        """Delete every safe counter, simulating a catalog merged before they existed."""
+        self.conn.execute(
+            "DELETE FROM cat_projection_meta WHERE key IN"
+            " ('works_safe', 'releases_safe', 'links_safe', 'links_active_safe',"
+            "  'links_resumable_safe', 'links_temporary_safe', 'links_by_state_safe')")
+        self.conn.commit()
+        viewer._STATS_CACHE.update({"time": 0.0, "data": None, "db": None})
+
+    def measure(self, link_id, *, at=1_700_000_000.0):
+        """One live `ProbeResult` for this projected link, as `link_health.probe` returns it."""
+        url = self.conn.execute("SELECT url FROM cat_links WHERE id = ?",
+                                (link_id,)).fetchone()["url"]
+        return link_health.ProbeResult(
+            url=url, ok=True, http_status=200, protocol="progressive",
+            content_type="video/mp4", size_bytes=5_000_000, accepts_ranges=True,
+            resumable=True, cors_open=False, latency_ms=120, download_speed_mbps=8.5,
+            streamable=True, downloadable=True, redirects_to="", error="",
+            checked_at=at)
+
+    def state_rollups(self):
+        meta = dict(self.conn.execute(
+            "SELECT key, value FROM cat_projection_meta").fetchall())
+        return (json.loads(meta["links_by_state"]),
+                json.loads(meta["links_by_state_safe"]))
+
+    # ---- the projection has to stamp the safe numbers --------------------- #
+    def test_projection_stamps_adult_excluded_counters_alongside_the_totals(self):
+        summary = self.project(rev=2)
+        for key in ("works", "releases", "links", "works_safe", "adult_works",
+                    "releases_safe", "links_safe", "links_active_safe",
+                    "links_resumable_safe", "links_temporary_safe",
+                    "links_by_state_safe"):
+            self.assertIn(key, summary, f"projection no longer publishes {key}")
+        self.assertEqual(summary["works"], summary["works_safe"] + summary["adult_works"])
+        self.assertGreater(summary["adult_works"], 0,
+                           "the corpus lost its 18+ work; every guard below is vacuous")
+        self.assertLess(summary["works_safe"], summary["works"])
+        meta = dict(self.conn.execute(
+            "SELECT key, value FROM cat_projection_meta").fetchall())
+        self.assertEqual(int(meta["works_safe"]), summary["works_safe"],
+                         "the stamp is what /api/v1/stats reads, not the return value")
+
+    def test_the_safe_breakdown_has_no_row_from_the_adult_work(self):
+        """`ADULT-OK` is one of the corpus's links; its verdict may not be published."""
+        dead_before = self.count("SELECT COUNT(*) FROM cat_links WHERE state = 'dead'")
+        self.mark_probe_on_ledger("ADULT-OK", status="dead", http_status=404)
+        summary = self.project(rev=2)
+
+        unfiltered = summary["links_by_state"]
+        safe = summary["links_by_state_safe"]
+        self.assertEqual(unfiltered["dead"], dead_before + 1,
+                         "the adult link's verdict must still reach the operator total")
+        self.assertEqual(safe["dead"], dead_before,
+                         "a public breakdown advertised a verdict that only an 18+ work has")
+        self.assertLess(sum(safe.values()), sum(unfiltered.values()))
+
+    # ---- the endpoint's numbers ------------------------------------------- #
+    def test_posts_excludes_every_adult_work(self):
+        stats = self.stats()
+        total_works = self.count("SELECT COUNT(*) FROM cat_works")
+        adult = len(self.adult_work_ids())
+        self.assertGreater(adult, 0, "the corpus lost its 18+ work")
+        self.assertEqual(stats["posts"], total_works - adult)
+        self.assertLess(stats["posts"], total_works,
+                        "/api/v1/stats advertised titles it will never display")
+
+    def test_sources_and_active_sources_exclude_adult_links(self):
+        stats = self.stats()
+        adult_ids = self.adult_work_ids()
+        marks = ",".join("?" * len(adult_ids))
+        safe_links = self.count(
+            f"SELECT COUNT(*) FROM cat_links WHERE work_id NOT IN ({marks})", *adult_ids)
+        all_links = self.count("SELECT COUNT(*) FROM cat_links")
+        self.assertEqual(stats["sources"], safe_links)
+        self.assertLess(stats["sources"], all_links)
+        # Not one active link in this corpus is measured, so no adult row can hide in
+        # `active_sources` either — the claim and the exclusion checked in one number.
+        self.assertEqual(stats["active_sources"], 0)
+
+    def test_an_unprobed_catalog_never_calls_a_link_active(self):
+        """The live symptom: `unchecked: 3456460` reported as 3,456,460 live servers."""
+        stats = self.stats()
+        by_state = stats["sources_by_state"]
+        self.assertGreater(by_state.get("unchecked", 0), 0,
+                           "the corpus has no unprobed link; this guard is vacuous")
+        self.assertEqual(stats["active_sources"], 0,
+                         "an unchecked link was counted as a verified server")
+        self.assertEqual(by_state.get("active", 0), stats["active_sources"])
+        self.assertLess(stats["active_sources"], stats["sources"])
+
+    def test_only_a_measured_link_is_ever_called_active(self):
+        self.mark_probe_on_ledger("CAFE")
+        self.project(rev=2)
+        stats = self.stats()
+        self.assertEqual(stats["active_sources"], 1)
+        self.assertEqual(stats["sources_by_state"]["active"], 1)
+        self.assertGreater(stats["sources_by_state"]["unchecked"], 0,
+                           "one verified link must not convert the other unprobed ones")
+
+    def test_the_breakdown_adds_up_to_the_published_source_count(self):
+        stats = self.stats()
+        by_state = stats["sources_by_state"]
+        self.assertEqual(sum(by_state.values()), stats["sources"])
+        self.assertEqual(by_state.get("active", 0), stats["active_sources"])
+        self.assertEqual(sorted(by_state), sorted(set(by_state) & _LINK_STATES),
+                         "the published breakdown left the closed state vocabulary")
+
+    def test_the_published_body_is_exactly_what_the_view_allows(self):
+        """Nothing in the safe body is dropped, and the view adds no unfiltered total."""
+        stats = self.stats()
+        published = redact.project(stats, "stats")
+        self.assertEqual(published, stats)
+        for key in ("works", "links", "prints"):
+            self.assertNotIn(key, published,
+                             f"the raw projection counter {key} is the unfiltered number")
+
+    # ---- the fallback path, for a catalog with no stamp ------------------- #
+    def test_the_unstamped_fallback_still_excludes_adult_works(self):
+        self.strip_stamp()
+        stats = self.stats()
+        total_works = self.count("SELECT COUNT(*) FROM cat_works")
+        self.assertEqual(stats["posts"], total_works - len(self.adult_work_ids()))
+        self.assertLess(stats["posts"], total_works)
+        self.assertLess(stats["sources"],
+                        self.count("SELECT COUNT(*) FROM download_sources"))
+
+    def test_the_unstamped_fallback_never_calls_the_scrapers_active_label_verified(self):
+        """`download_sources.status` defaults to 'active' for every ingested row.
+
+        Counting that as liveness is the second half of the defect: this asserts the
+        fallback reads the same evidence rule the projector does.
+        """
+        self.strip_stamp()
+        blanket_active = self.count(
+            "SELECT COUNT(*) FROM download_sources WHERE status = 'active'")
+        self.assertGreater(blanket_active, 0)
+        stats = self.stats()
+        by_state = stats["sources_by_state"]
+        self.assertEqual(stats["active_sources"], 0)
+        self.assertEqual(by_state.get("active", 0), 0)
+        self.assertEqual(by_state.get("unchecked", 0),
+                         stats["sources"] - by_state.get("dead", 0),
+                         "every unprobed ledger row was accounted for somewhere")
+        self.assertGreater(by_state.get("unchecked", 0), 0)
+
+    def test_an_out_of_vocabulary_ledger_status_is_not_published_as_a_state(self):
+        """`cat_links.state` has a closed vocabulary; the fallback must keep it closed.
+
+        `download_sources.status` is wider, so a row written 'paused' would otherwise
+        reach a public caller as a fifth state no reader knows how to score — and an
+        unscorable state is one a client silently treats as live.
+        """
+        self.conn.execute("UPDATE download_sources SET status = 'paused'"
+                          " WHERE resource_id = 'CAFE'")
+        self.conn.commit()
+        self.strip_stamp()
+        by_state = self.stats()["sources_by_state"]
+        self.assertNotIn("paused", by_state)
+        self.assertEqual(sorted(set(by_state) - _LINK_STATES), [])
+
+    def test_a_measured_link_moves_the_fallback_number_too(self):
+        self.mark_probe_on_ledger("CAFE")
+        self.project(rev=2)
+        self.strip_stamp()
+        stats = self.stats()
+        self.assertEqual(stats["active_sources"], 1)
+        self.assertEqual(stats["sources_by_state"]["active"], 1)
+
+    # ---- evidence write-back must not desynchronise the two families ------ #
+    def test_apply_evidence_refreshes_the_safe_breakdown_it_publishes(self):
+        """`links_by_state` moves without a rebuild; the safe mirror has to as well.
+
+        One response carries both families, so a write-back that updated only the
+        unfiltered rollup would ship two snapshots of the same catalog at once.
+        """
+        link_id = self.conn.execute(
+            "SELECT id FROM cat_links WHERE resource_id = 'CAFE'").fetchone()["id"]
+        adult_id = self.conn.execute(
+            "SELECT id FROM cat_links WHERE resource_id = 'ADULT-OK'").fetchone()["id"]
+        before = self.stats()["sources_by_state"]
+        self.assertEqual(before.get("active", 0), 0)
+
+        catalog_v2.apply_evidence(
+            self.conn,
+            results=[self.measure(link_id), self.measure(adult_id, at=1_700_000_001.0)],
+            link_ids=[link_id, adult_id], now=1_700_000_002.0)
+        viewer._STATS_CACHE.update({"time": 0.0, "data": None, "db": None})
+
+        unfiltered, safe = self.state_rollups()
+        self.assertEqual(unfiltered.get("active"), 2,
+                         "both measured links should be live in the operator rollup")
+        after = self.stats()["sources_by_state"]
+        self.assertEqual(after, safe,
+                         "the published breakdown is not the refreshed one")
+        self.assertEqual(after.get("active"), 1,
+                         "the adult link's fresh verdict leaked into the published number")
+        self.assertEqual(sum(after.values()), self.stats()["sources"])
 
 
 if __name__ == "__main__":

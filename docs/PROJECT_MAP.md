@@ -6,7 +6,32 @@ Last updated: 2026-10-22 for the REST-surface and test-suite sections below (ver
 
 - **Repository:** `https://github.com/rehanradd/radd-stream` (public visibility verified through authenticated GitHub API metadata on 2026-10-16). GitHub `main` is the canonical current source. The Replit `gitsafe-backup` remote is a separate internal backup, not the GitHub remote. In this workspace, use authenticated Git operations through the temporary askpass flow in `ORACLE_DEPLOYMENT.md`.
 - **Python backend:** `Fast_Fetch/`. `fast_fetch.py` is the core engine/CLI; `viewer.py` provides the local API/dashboard; `config.py` configures paths. Tests are **not** just `test_database.py` and `test_vidout.py` — as of 2026-10-28 there are 60 test modules across `Fast_Fetch/test_*.py` and `Fast_Fetch/importers/test_*.py`, including per-site importer tests, `test_merge_catalogs.py`, `test_backup_manager.py`, `test_release_descriptor.py`, and `test_link_health.py`. `test_all_sites.py` is the live network audit; the others run offline. The older "36 tests / 6 tests" figures in root `AGENTS.md` describe only those two files and are not the suite total. The backend uses Python's standard library only.
-- **Catalog database:** SQLite, normally `Fast_Fetch/fast_fetch.db` for the unified catalog. Per project rule, scraping is performed into isolated per-site staging databases (e.g. `multimovies.db`, `vegamovies.db`) and merged into the unified catalog with `Fast_Fetch/merge_catalogs.py` — **always pass `--target-db`**, because omitting it silently targets `Fast_Fetch/fast_fetch.db` instead of the live catalog. For Oracle the live catalog is `RADD_DB_PATH=/home/ubuntu/radd-stream-data/merged_catalog_20261025.db` (the file the running `radd-stream` service serves). Always maintain a verified backup before replacing or merging: the pre-merge rollback artifact for the 2026-10-28/29 campaign is `/home/ubuntu/radd-stream-backups/premerge_20261028_232902.db` (6,197,428,224 bytes, size-matched to source, readable, posts=130016 / releases=1679463 / download_sources=3783959 / post_sources=275488). **Merging is authorized by the owner (2026-10-28 23:00).** Ten vaults were merged into the live catalog in that campaign (levidia, 5movierulz, dramacool, kisskh, moviecok, moviesmela, aryplus, filmiyin, animahd, desiserials), taking it from 130,016 to ~149,000 posts and from 18 to 28 distinct `post_sources.source_site` values. Still unmerged: `pagalmovies.db` (re-drive in flight) and `mp4moviez.db` (29,848 posts, schema-incompatible: no `sources` table, no `canonical_key` — `merge_catalogs.py` raises `ValueError`, so it needs the converter `import_mp4moviez.py` first). Newest staging DBs (2026-10-28): `aryplus.db` — 481 titles (264 series, 217 single videos), 10,860 public HLS sources on `vod.aryzap.com`; its 538 parked sitemap ids are proven **unpublished 307-to-homepage shells, not 404s** (`f8cdcd5`), which is why the vault is now considered complete and merged.
+- **Catalog database:** SQLite. `Fast_Fetch/fast_fetch.db` is the development default; the live
+  catalog on Oracle is `RADD_DB_PATH=/home/ubuntu/radd-stream-data/merged_catalog_20261025.db`, the
+  file the running `radd-stream` unit serves (`WorkingDirectory=/opt/radd-stream`,
+  `ExecStart=/usr/bin/python3 -S /opt/radd-stream/Fast_Fetch/fast_fetch.py serve --host 127.0.0.1
+  --port 8080`). Per project rule every site is scraped into its own staging vault and merged with
+  `Fast_Fetch/merge_catalogs.py` — **always pass `--target-db`**, because omitting it silently targets
+  `Fast_Fetch/fast_fetch.db`. Measured 2026-10-29 05:12 with index paths only (never a full scan or
+  `PRAGMA integrity_check` on this 6.4 GB file at `nproc=1`): **150,799 posts / 1,780,121 releases /
+  4,073,865 download_sources / 309,558 post_sources across 31 distinct `source_site`**, of which
+  **15,020 posts carry `is_18_plus = 1`** and the public list route answers `total=135,779` —
+  exactly posts minus flagged.
+  Sixteen vaults have been merged in two campaigns: ten on 2026-10-28/29 (levidia, 5movierulz,
+  dramacool, kisskh, moviecok, moviesmela, aryplus, filmiyin, animahd, desiserials) taking the
+  catalog from 130,016 posts, then batch 3 on 2026-10-29 (pagalmovies +3,642 posts, filmyhit +935,
+  filmywap +46). Rollback artifacts: `/home/ubuntu/radd-stream-backups/premerge_20261028_232902.db`
+  (posts=130,016 — pre-dates batch 3, so it is NOT an acceptable rollback today) and
+  `prebatch4_20261029_051444.db` (6,396,899,328 bytes, online `Connection.backup()` in 394.5 s,
+  verified posts=150,799) which is the current rollback point. **Merging is authorized by the owner
+  (2026-10-28 23:00).** Still unmerged: `mp4moviez.db` (29,848 posts, 54,267 unresolved `dl.php`
+  redirect stubs, schema-incompatible — `merge_catalogs.py` raises `ValueError` because there is no
+  `canonical_key` and no `sources` table, so a converter comes first; qoder2 has it in flight) and
+  `kuttymovies.db` (0 posts). `katmoviehd_refreshed.db` and `multimovies_full_20261022.db` are
+  superseded snapshots of sites already in the catalog, not new sites. Newest staging vault detail:
+  `aryplus.db` — 481 titles (264 series, 217 single videos), 10,860 public HLS sources on
+  `vod.aryzap.com`, its 538 parked sitemap ids proven **unpublished 307-to-homepage shells, not
+  404s** (`f8cdcd5`).
 - **Android app:** `App/`, a Kotlin/Jetpack Compose Gradle app. App code/tests are under `App/app/`; the Gradle project is rooted at `App/`.
 - **Replit entrypoint:** `.replit` is local-only configuration and may contain sensitive values. Keep it ignored and untracked; do not inspect its values or commit it. Historical commits still contain prior versions; the user chose to leave them intact. Its settings do not prove an API server is running.
 - **Instructions and handoff:** root `AGENTS.md` and `SESSION.md`; `Fast_Fetch/AGENTS.md` and `Fast_Fetch/CONTINUITY.md` for backend work; `App/AGENTS.md` for Android work; `ORACLE_DEPLOYMENT.md` for server and credential procedures; `docs/AI_HANDOFF_PROMPT.md` is the short starter and `docs/AGENT_BOOTSTRAP.md` contains onboarding steps. Long-term strategy: `docs/MASTER_ARCHITECT_DIRECTIVE.md` (20-year multi-VM federation blueprint), `docs/SENIOR_MENTOR_DIRECTIVE_QODER.md` (agent mentorship & smart methods), and `docs/SITE_SCOUT_SPEC.md` (automated scraper reverse-engineering engine).
@@ -57,12 +82,20 @@ recollection — this is the section that had gone stale twice running).
   `multimovies-full-import`, `multimovies-import-regression-fix`, `portable-context`,
   `replit-bootstrap-access-fix`, `staging-merge-approval-gate-20261018`). Whether any of them is
   already merged was not checked here, so leave them alone rather than pruning them.
-- **Push credentials, re-checked 2026-10-28 21:40:** `GITHUB_TOKEN` is present but rejected —
-  `api.github.com/user` returns `401 Bad credentials`, and a push through the askpass helper
-  fails with `remote: Invalid username or token`. Remote `master` was `ff912c8` at that check,
-  with local `6a8072a` unpushed behind it. No `gh` CLI and no GitHub SSH key exist on this VM.
-  Anonymous `git ls-remote` still succeeds (public repo) and proves nothing about write access.
-  A fresh owner-issued token is required before the next push.
+- **Push credentials, re-checked 2026-10-29 05:00: they work, and the entry this one replaces was
+  stale.** `GITHUB_TOKEN` is present in the environment and **works**: `ls-remote` over the
+  explicit clean URL through the temporary askpass helper succeeded, `POST`-free REST calls with
+  `Authorization: Bearer $GITHUB_TOKEN` returned `/actions/runs` payloads, qoder5 pushed `34f22c6` to
+  `master` and `main` at ~05:05 with hosted Backend CI going green on both refs, and I pushed `e96bf84`
+  to both refs minutes later. The 2026-10-28 21:40 reading — `401 Bad credentials` on
+  `api.github.com/user` plus `remote: Invalid username or token` — was real at that moment; the token
+  was evidently re-issued or re-enabled between then and now. Two facts that did NOT change and still
+  hold: there is no `gh` CLI and no GitHub SSH key on this VM, so the askpass flow is the only push
+  path, and `origin`'s stored URL still embeds the owner's older leaked credential, so **push to the
+  explicit `https://github.com/rehanradd/radd-stream.git`, never to `origin`**, and never print the
+  value. If a push ever does fail with `Invalid username or token` again, record the failure and the
+  next step in the checkpoint rather than concluding the whole lane is dead — that is exactly the
+  mistake this paragraph previously made.
 
 ## Verified REST surface (2026-10-22, re-read against `Fast_Fetch/viewer.py`)
 
@@ -98,9 +131,20 @@ agents and app developers:
   session, or rate limiting exists anywhere in `viewer.py`; `send_json()` emits
   `Access-Control-Allow-Origin: *` (viewer.py:2037), `start_server()` defaults to
   `0.0.0.0` (viewer.py:2211), and the Oracle host serves plain HTTP with no TLS.
-  Nothing behind this API should be described as private or secured. `/api/v1/stats`
-  additionally counts `is_18_plus = 1` rows that `/api/v1/posts` hides, so stats
-  totals will always exceed the browsable catalog.
+  Nothing behind this API should be described as private or secured. **Two claims in this
+  paragraph were stale and are corrected from the code as it stands at `e96bf84`:** `send_json()` no
+  longer emits `Access-Control-Allow-Origin: *` — it calls `cors_headers_for()` (viewer.py:3009), and
+  `CORS_ALLOW_ORIGINS` is an **empty** `frozenset` (redact.py:1283), so a refused origin gets no
+  header at all; and `start_server()` defaults to `host="127.0.0.1"`, not `0.0.0.0`
+  (viewer.py:3558). What remains true is the exposure that matters: the public edge is plain HTTP
+  with no TLS, no API key, no session and no rate limit. On `/api/v1/stats`, commit `34f22c6` made the
+  projection stamp an adult-excluded family (`works_safe`, `adult_works`, `releases_safe`,
+  `links_safe`, `links_active_safe`, `links_resumable_safe`) beside the unfiltered counters and stopped
+  publishing `active_sources` equal to `sources` while `links_by_state` still said 3,456,460 links were
+  `unchecked`. The **running process still serves the old shape** (`{"posts": 116922, ...,
+  "active_sources": 3783959}` measured 05:12) because that is code, not data, and activation is
+  `systemctl restart radd-stream` — an action the owner reserved. Data changes, by contrast, reach the
+  live API with no restart: I watched `total` move 134,815 → 135,735 → 135,779 as merges landed.
 
 ## Oracle Ubuntu backend
 

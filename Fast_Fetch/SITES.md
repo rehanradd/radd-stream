@@ -740,6 +740,14 @@ This table used to list already-scraped sites as "to add". Corrected below; only
 the last bucket is real remaining work. "Scraped" means a site-specific staging
 DB already exists under `/home/ubuntu/radd-stream-data/`.
 
+**Scraped is not merged.** The unified catalog answers
+**146,176 `posts` / 1,764,686 `releases` / 4,044,659 `download_sources` /
+300,013 `post_sources` across 28 distinct `source_site`**, of which 14,617 posts
+are `is_18_plus=1` (stored, never displayed). The third merge batch —
+**pagalmovies, filmyhit, filmywap** — lands this table at **31 sites**. Before you
+scrape anything on the "already scraped" list, check whether its site name is in
+`source_site` yet; a staging DB that is not merged is merge work, not crawl work.
+
 ### Already scraped — do not list as to-add
 
 | Site | Staging DB | Status |

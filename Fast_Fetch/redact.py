@@ -216,10 +216,15 @@ VIEWS: dict[str, frozenset[str]] = {
         "is_resumable", "is_temporary", "file_size_bytes", "label",
     }),
     # GET /api/v1/stats — scale, no per-site breakdown.
+    #
+    # `sources_by_state` is the honest half of the link count: `unchecked` in it is
+    # the number of mirrors nobody has knocked on, which is what `active_sources`
+    # used to hide by equaling the total. Values are counts, keyed by the projection's
+    # closed state vocabulary — no site, service or URL can ride in on them.
     "stats": frozenset({
         "posts", "releases", "sources", "active_sources", "resumable_sources",
         "temporary_sources", "works", "prints", "links", "streamable",
-        "downloadable",
+        "downloadable", "sources_by_state",
     }),
     # GET /api/data — the dashboard's aggregate panel.
     "dashboard_stats": frozenset({

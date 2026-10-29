@@ -14,7 +14,8 @@
 > disguise code behavior to bypass a platform's safety rules.
 >
 > **Project constraints:** Python standard library only, adult 18+ content stored
-> with an is_18_plus flag and hidden at every presentation surface,
+> with an is_18_plus flag and hidden from every public surface (the loopback-only
+> operator panel may see the flag but never the bytes),
 > strict staging database isolation, pre-push unit tests, and Master-Disciple
 > Local AI law (delegate boilerplate to local Qwen 2.5 Coder via disciple.py to conserve cloud tokens).
 
@@ -439,7 +440,7 @@ GET https://v3-cinemeta.strem.io/meta/movie/tt1234567.json
 ## 6. Critical Rules — NEVER Violate
 
 1. **No pip installs** — only stdlib: `urllib`, `sqlite3`, `re`, `json`, `ssl`, `base64`, `pathlib`, `concurrent.futures`, `argparse`, `html`, `time`, `os`, `sys`
-2. **18+ content: store flagged, never display** — scrapers ingest all titles including adult, setting `is_18_plus=1` in every site staging DB; REST API, dashboard, M3U/stream routes, and the Android app must always filter `is_18_plus=1` out
+2. **18+ content: store flagged, never display** — scrapers ingest all titles including adult, setting `is_18_plus=1` in every site staging DB; every **public** surface (REST API, search, M3U/stream routes, the Android app) must hide a flagged row so completely that it is indistinguishable from a row that never existed. The one exception is the operator panel, reachable only on the loopback operator port and `403`ed by nginx at the public edge — the boundary there is the loopback interface, not `RADD_ADMIN_TOKEN`, which guards `/admin` alone: it may show *that* a flagged row exists and what its flag is, and `/api/v1/stream` and `/api/v1/download` still deny it there — uniform `not_found`, on both ports. The flag is a property of the **work**, not of one row: `fast_fetch.inherit_key_adult` reconciles `MAX(is_18_plus)` across every row sharing a `canonical_key` at write time, because a per-row law over a per-key identity is what leaks (455 unflagged twins of flagged works, 2026-10-29). Tests: `test_redact.py::AdultDenialOnBothPortsTests`, `test_database.py::KeyLevelAdultIdentityTests`.
 3. **Safe media identity** — prefer matching IMDb/TMDB IDs, then a previously indexed site URL, then a unique title/year key of the same content type. Refuse ambiguous matches and conflicting IDs; `canonical_key` is indexed but deliberately not unique.
 4. **Verify import after EVERY edit:**
    ```bash
@@ -637,17 +638,37 @@ separate scores, and adult rows are stored but return 404 on every presentation 
 
 ## 10. Current Status & Stats
 
-### Database (as of Oct 2026)
+### Unified catalog — measured 2026-10-29 on the live host
+
+The previous version of this table described the 2026-10-13 seed database
+(51 titles, 1,662 releases, 4,351 sources). That is not the catalog any more, and
+quoting it makes an agent plan work that is already done.
+
 | Metric | Value |
 |--------|-------|
-| Sitemap URLs cached | 22,255 |
-| Sites covered | 10 |
-| Media entities | 51+ |
-| Release variants | 1,662+ |
-| Direct sources | 4,351+ (🟢 4,097 active, ⚡ 264 resumable) |
+| `posts` (ledger rows) | 146,176 |
+| — of which `is_18_plus = 1` (stored, never displayed) | 14,617 |
+| — displayable to a public caller | 131,559 |
+| `releases` | 1,764,686 |
+| `download_sources` | 4,044,659 |
+| `post_sources` (per-site page links) | 300,013 |
+| Distinct `source_site` | 28 → **31** with the third merge batch |
+| Staging databases merged | 2 batches + `merged_catalog_20261025.db` in place |
+| Third merge batch, landing 2026-10-29 | pagalmovies, filmyhit, filmywap |
 
-### Sitemap breakdown
-| Site | URLs |
+**Link liveness is not a count of `status = 'active'`.** Every ingested row is
+written `active` by the scraper, so before `link_state.propagate()` has knocked on
+an endpoint, `status` proves nothing. `/api/v1/stats` now publishes
+`sources_by_state` alongside the totals, and `active_sources` counts only links
+with measured evidence behind them — a freshly merged catalog honestly reports
+`active_sources: 0` with the whole population under `unchecked`.
+
+### Sitemap breakdown — 2026-10-13 crawl state (superseded)
+
+Kept for history. The current per-site queue is in `sitemap_cache` in the live
+database, and in `SITES.md` §15; read it there rather than trusting this table.
+
+| Site | URLs (Oct 13) |
 |------|------|
 | Vegamovies | 14,025 |
 | FilmyZilla | 5,002 |
