@@ -3028,3 +3028,20 @@ no `/api/v1/stats` poll, no Gradle, no heavy run, **no service restart**, no pro
   block verbatim) + `test_themoviebox_import.py` 47/47; CI step added (26 test steps).
 - **Nothing crawled.** Vault on disk untouched at 44/0/0; the bounded re-crawl command, gate and
   expected cost (≈40 s for 6 pages; expect `sources=0`) are queued in CONTINUITY.md.
+
+### 2026-10-30 02:49–03:12 — site-by-site vault audit `[Q2-AUDIT]`
+
+- All **49** `.db` files under `/home/ubuntu/radd-stream-data/` read once, read-only
+  (`mode=ro`), one at a time, with a per-query progress-handler deadline; the two 6.4 GB
+  production-class copies were **not counted** (their stamped `cat_projection_meta` counters are
+  shown instead). Table in `docs/SITE_COMPLETENESS.md`.
+- **35 distinct sites** hold posts + releases + ≥1 link row inside the 7-day rule; 3 more
+  (rogmovies, ssrmovies, multimovies) carry links but are stale; `themoviebox` is the only
+  catalog-only site (44 posts, 0 links — the site publishes no playable URL). 13 of the 35 go
+  stale on 2026-10-31 without refreshes.
+- The number is **link rows, not playable links**: statuses are mostly `unverified`/`unknown`/
+  `js_required` or the schema predates `status`; only 7starhd, hdtvb and the small production copy
+  show mostly-active sets, and nothing was probed.
+- Pass 2 (18+ / zero-source / status cells) was stopped at 03:12 under the load-8.72 fleet
+  notice; the deferred SQL is in `CONTINUITY.md [Q2-AUDIT]`. Nothing merged, nothing written to
+  any vault, no service touched.

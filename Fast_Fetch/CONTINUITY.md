@@ -3431,3 +3431,79 @@ per captured-shape series, **`sources=0`**, `metadata_only=6`. A full 44-row re-
 by design" is accurate about that run but reads as "done". The vault has never contained a
 playable MovieBox link, and after this session it still does not — what changes is that a work's
 declared tiers are now stored as releases instead of vanishing.
+
+---
+
+## [Q2-AUDIT] 2026-10-30 02:49–03:12 — every staging vault counted read-only
+
+qoder4's task #5 follow-up: measure all 49 `.db` files under
+`/home/ubuntu/radd-stream-data/` and put the honest table in
+`docs/SITE_COMPLETENESS.md` (branch `q2-site-audit`). Nothing was merged, moved
+or written; every connection was `file:…?mode=ro`, one file at a time,
+`nice -n 10 ionice -c3`, and every query carried a progress-handler deadline
+(8 s pass 1, 15 s pass 2). Past the deadline a cell says `deferred` — it is not
+retried harder.
+
+**Answer 1 — sites truly scraped with links: 35 distinct sites.** They hold
+posts + releases + ≥1 link row and were written within the 7-day rule
+(`hindianimeszone, hindidubbedmovies, desiserials, humtv, levidia, moviehax,
+kuttymovies, filmywap, bollyflix, dramacool, aryplus, desicinemas, animahd,
+moviecok, 5movierulz, hdtvb, filmyzilla, mp4moviez(staging2), filmiyin,
+pagalmovies, moviezguru, hindilinks4u, filmyhit, kisskh, 7starhd, hdhub4u,
+katmoviehd(refreshed), rareanimes, moviesmela, toonworld4all, 10xflix, bolly4u,
+vegamovies, 9xmovies, world4ufree`). Three more carry links but are stale:
+rogmovies, ssrmovies, multimovies (10-21; `multimovies_full` 10-22). So 38 site
+vaults have links on disk, 35 are fresh. **Two honest corrections: (a) a link
+row is not a playable link — statuses are overwhelmingly `unverified`/`unknown`/
+`js_required` or the vault predates the status column; only 7starhd (99,627),
+hdtvb (16,855) and the small `fast_fetch` copy (5,578) show a mostly-active
+set, and nothing was probed; (b) 13 of the 35 were last written 2026-10-24
+00:20–02:13 and cross the 7-day line on 2026-10-31, so without refreshes the
+same measurement reads 22 tomorrow.**
+
+**Bucket B (catalog-only):** `themoviebox` only — 44 posts, 0 releases,
+0 sources, all 44 linkless; the site's detail API publishes no URL, so a
+re-crawl gains releases but not links. `mp4moviez` (legacy file) is a shape
+case, not a capture failure: 54,267 URLs live in `releases.url` (13,680 posts;
+16,168 linkless), and `importers/convert_mp4moviez.py` already produces
+`mp4moviez_staging2` with 54,267 `sources`.
+
+**Shortest path to 35+:** already 35 — keep it, then widen. (1) bounded
+refresh of rogmovies / ssrmovies / multimovies (their importers already call
+`fast_fetch.save_scraped_data` and expose `--limit/--workers/--delay`;
+`import_multimovies.py` also has `--refresh`); (2) refresh the 13 that go stale
+on 10-31; (3) re-convert later mp4moviez refreshes with the existing converter.
+No new importer is needed except a *source* for themoviebox, which the site does
+not publish. Merging any bucket-A vault is qoder4's call after he reads the
+table; a fresh production backup must exist first.
+
+**Deferred cells (pass 2 stopped at 03:12 under the load-8.72 fleet notice).**
+Exact SQL, to be run one file at a time when load < 4, all with an 8–15 s
+progress-handler deadline:
+
+```sql
+-- 18+ for filmyzilla, hindilinks4u, katmoviehd_refreshed, moviesmela,
+-- toonworld4all, 10xflix, bolly4u, ssrmovies, multimovies,
+-- multimovies_full, vegamovies, 9xmovies, world4ufree
+SELECT COUNT(*) FROM posts WHERE is_18_plus = 1;
+
+-- zero-source posts for kisskh, rogmovies, ssrmovies, multimovies,
+-- multimovies_full, vegamovies (distinct join over ≥140k link rows)
+SELECT (SELECT COUNT(*) FROM posts)
+     - (SELECT COUNT(DISTINCT r.post_canonical_key) FROM releases r
+        JOIN sources s ON s.release_id = r.id);
+
+-- zero-source posts for the legacy-shape vaults (7starhd, hdtvb): union of
+-- download_sources (via releases.id) and post_sources (direct post_id)
+SELECT (SELECT COUNT(*) FROM posts) - (SELECT COUNT(*) FROM (
+  SELECT r.post_id AS pid FROM releases r
+    JOIN download_sources d ON d.release_id = r.id
+  UNION SELECT post_id FROM post_sources));
+```
+
+`/tmp/q2_audit/pass2.py` already implements all three (the legacy branch has not
+executed yet); the scripts are outside the repo, so the SQL above is the durable
+form. `fast_fetch_old_7mb_backup.db` is root-owned mode 0600 and could not be
+audited. Production counts in the doc are the stamped `cat_projection_meta`
+values (posts 130,016 / releases 1,383,752 / links 3,783,959); neither 6.4 GB
+file was counted.
