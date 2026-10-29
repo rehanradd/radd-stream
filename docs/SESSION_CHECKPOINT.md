@@ -2875,6 +2875,8 @@ branch `q1-ad-cadence` is **red** at `99472e0`). Tasks #28–#32 opened for the 
   quiet window. No after-numbers are reported because none exist**; acceptance stays
   `walked_links == 4,073,865`, zero orphans, every uncarrying source row's URL present, five safe
   stamps written.
+- **Landed:** `db81220`, hosted Backend CI green (run `40953382031`), fast-forwarded to `master` and
+  `main` at 21:01Z; the fleet's next tip `396e476` contains it. The projection half remains queued.
 - **Merge-order warning:** the console branch `q2-dashboard` is not in `master`; both it and this
   branch edit `fetch_database_payload` and `DASHBOARD_HTML`.
 

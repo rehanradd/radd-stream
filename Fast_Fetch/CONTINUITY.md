@@ -2995,6 +2995,12 @@ still needs the reconciliation described in `AGENTS.md`.
 `test_bounded_ledger` 10, `test_project_readonly` 5 — all OK. Both new modules are steps in
 `backend-ci.yml`; hosted **Backend CI green at `b2c102d`**.
 
+**Landed.** After two clean merges of the moving tip (`79d9143`, then `8935d49`) and hosted Backend
+CI green on the final tree at `db81220` (run `40953382031`), `db81220` was fast-forwarded onto
+`master` and `main`. The fleet kept landing (next tip `396e476`), and `db81220` is an ancestor of it,
+so this work is in both branches. Merge commits were used, not rebases: the branch had already been
+pushed and its CI-checked shas are part of the record.
+
 **Not done.** No `full=True` against production, no `/api/v1/stats` polling, no service restart, no
 write to either production database, `/opt/radd-stream` untouched. The console branch `q2-dashboard`
 (`4c18987`, `cfe2e74`) is **not** in `master`; it and this branch both touch `fetch_database_payload`
