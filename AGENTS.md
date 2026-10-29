@@ -34,10 +34,10 @@ radd-stream/                        ← repo root
 │   ├── SITES.md                    ← per-site scraping reference
 │   ├── SETUP.md                    ← setup instructions for backend
 │   ├── ANDROID_INTEGRATION.md      ← how Android app consumes the backend
-│   ├── fast_fetch.py               ← MAIN ENGINE (6,366 lines, stdlib only)
+│   ├── fast_fetch.py               ← MAIN ENGINE (6,513 lines, stdlib only)
 │   ├── viewer.py                   ← REST API + dashboard HTTP server
 │   ├── config.py                   ← project-level constants
-│   ├── test_database.py            ← 76 offline unit tests (measured 2026-10-29)
+│   ├── test_database.py            ← 124 offline unit tests (measured 2026-10-29)
 │   ├── test_vidout.py              ← 6 VIDOUT-specific tests
 │   └── test_all_sites.py           ← live 10-site audit
 │
@@ -142,6 +142,24 @@ Describe the code's behavior accurately to users and tools. Do not disguise its 
   `Fast_Fetch/audit_adult_flags.py` (report-by-default; writes require the owner's `--owner-go`) to
   see what a flag rule actually hides before shipping it. Production still carries the 7,663 until
   the owner runs that un-flag pass.
+  **The 7,663 is the wide measure; the ledger-text measure is narrower, and the difference matters
+  to anyone reading a candidate list.** One read-only pass over `posts` on the production catalog
+  (2026-10-29, `audit_adult_flags.classify`, no vaults) splits the 15,068 flagged rows into
+  **9,069 true-adult in their own stored text, 4,246 version-word-only, 1,753 with no pattern
+  evidence in the ledger at all** across 14,931 distinct `canonical_key`s. Only the 4,246 are
+  un-flag candidates — the rest of the owner's 7,663 count adult words that live outside
+  `title`/`clean_title`/`slug`/`url` (tags, `raw_meta`, site-wide rules), which the ledger alone
+  cannot see. Freeing them leaves **39 mixed keys** (one copy served, one still hidden) and 4 rows
+  are blocked by a true-adult sibling.
+  **Four patterns still hide mainstream works, and none of them was touched** because the standing
+  instruction was to weaken nothing else: `\bhunters\b` (128 rows, 127 matched by nothing else —
+  e.g. *KPop Demon Hunters*, *Transformers Prime: Beast Hunters – Predacons Rising*),
+  `\brabbit\b` (61, 56 — *Wallace & Gromit: The Curse of the Were-Rabbit*, *1001 Rabbit Tales*),
+  `\bnaughty\b` (169, 149) and `\badult\b` (1,480, 82 — *Shin-chan: The Adult Empire Strikes Back*).
+  By the rule above, a version word may not be a pattern; these four are not version words either,
+  but they name a genre noun, not a person, studio, or act, and each has a title in the catalog that
+  proves the false positive. Removing one is the owner's exposure decision, not an agent's — and
+  `audit_adult_flags.py` reports what each one hides before anyone writes.
   Nothing in this section weakens the public rule. A test that reaches a flagged row through any public
   route, or a flagged link through stream or download on either port, is P0.
 
@@ -189,7 +207,7 @@ Verify only whether the two configured variable names are present; never read or
 Every agent — no matter how short the session — MUST do this before ending:
 
 ### For Backend Sessions:
-1. Run `python -S Fast_Fetch/test_database.py` (must be 76 tests passing; measured 2026-10-29)
+1. Run `python -S Fast_Fetch/test_database.py` (must be 124 tests passing; measured 2026-10-29)
 2. Run `python -S Fast_Fetch/test_vidout.py` (must be 6/6)
 3. Append a session log to `Fast_Fetch/CONTINUITY.md`
 4. Push with Git over HTTPS using the temporary askpass helper in [`ORACLE_DEPLOYMENT.md`](ORACLE_DEPLOYMENT.md); do not use the legacy per-file API push scripts
@@ -233,13 +251,15 @@ you need to know whether CI can run, query `/actions/permissions` and print what
 # From repo root: /opt/radd-stream  (Oracle VM)
 
 # Run offline tests — one module per invocation; this runner ignores extra names.
-# There are 60 `test_*.py` modules under Fast_Fetch/ and Fast_Fetch/importers/ (measured 2026-10-28);
+# There are 66 `test_*.py` modules under Fast_Fetch/ and Fast_Fetch/importers/ (measured 2026-10-29);
 # these three are the standing push gate.
-python3 -S Fast_Fetch/test_database.py    # 76 tests
+python3 -S Fast_Fetch/test_database.py    # 124 tests
 python3 -S Fast_Fetch/test_vidout.py      # 6 tests
 python3 -S Fast_Fetch/importers/test_host_resolvers.py   # 171 tests
 
-# The REAL gate is what backend-ci.yml runs — all 15 modules, one per invocation:
+# The REAL gate is what backend-ci.yml runs — all 15 modules, one per invocation, plus the two
+# importer suites the owner's own gate script adds on top (`importers/test_host_resolvers.py`
+# and `importers/test_convert_mp4moviez.py`) — 17 invocations, 843 tests measured 2026-10-29:
 #   test_database test_vidout test_catalog_v2 test_release_descriptor test_link_health
 #   test_link_state test_evidence_writeback test_api_v2 test_redact test_tiers
 #   test_catalog_api test_provenance_stamping test_merge_catalogs test_site_scout
