@@ -255,8 +255,10 @@ bounded prefix query, plus a client-side debounce/minimum-token-length so the ap
 search per keystroke). No index will be built by hand on the live 6.4 GB catalog — that takes a write
 lock under a reading public API; it goes through a reviewed migration with a runtime estimate.
 
-**SECOND CORRECTION — MEASURED 2026-10-29 18:18: the binding constraint is RAM, not the limiter and
-not the CPU.** `fast_fetch.py serve` is the largest process on this 11,925 MiB box:
+**SECOND CORRECTION — MEASURED 2026-10-29 18:18: the constraint that bites first is a transient RAM
+peak, not the limiter and not the CPU.** (Read the third correction below before quoting this one —
+two of its readings were wrong, and I am the one who wrote them.)
+`fast_fetch.py serve` is the largest process on this 11,925 MiB box:
 
 | measurement | value |
 |---|---|
@@ -269,31 +271,73 @@ not the CPU.** `fast_fetch.py serve` is the largest process on this 11,925 MiB b
 | established connections on 127.0.0.1:8080 | **1** |
 | RSS sampled over 36 s | 6,957 → 6,988 → 6,982 MiB (flat) |
 
-Three threads and one live connection, so this is **not** a thread leak and **not** a request storm —
-it is a plateau the process reached over ~2 days and does not hand back. Its memory is spread across
-many large anonymous mappings (the twelve largest hold ~320–520 MiB resident each, with virtual sizes
-in the hundreds of GiB), which is the shape of a long-lived malloc sawtooth: big transient allocations
-that were returned to glibc, not to the OS. I have **not** proved which handler makes them; the route
-that costs 45–60 s per call is `/api/v1/search/by-media`, so that is the candidate, not a conclusion.
+Three threads and one live connection, so this is **not** a thread leak and **not** a request storm.
+Its memory was spread across many large anonymous mappings (the twelve largest held ~320–520 MiB
+resident each, with virtual sizes in the hundreds of GiB), which is the shape of big transient
+allocations returned to glibc rather than to the OS. I had one interpretation wrong, and I am
+correcting it myself below.
 
-What follows, and it matters more than the diagnosis:
-1. Every concurrency and DAU number in §G above silently assumes memory headroom that this box does
-   not have right now. With `MemAvailable` at ~1,000 MiB and `SwapFree` at ~783 MiB, the honest
-   statement is that **the service cannot absorb a traffic increase today**, and a real launch — not
-   1,500 DAU — would end it. Those numbers describe the query cost, not the deployable ceiling.
-2. This is a **release-integrity** hazard, not only an availability one. The unit runs
-   `Restart=on-failure RestartSec=5` with `WorkingDirectory=/opt/radd-stream`, and the live tree
-   currently carries 33 modified files / +1,675 lines of uncommitted lane work. An OOM kill therefore
-   restarts production **from uncommitted code**, and red CI would not stop it. Memory pressure is how
-   ungated code gets promoted without anyone deciding to.
-3. Mitigations taken, all reversible and none of them a restart: the credit-limited `qoder2` lane was
-   suspended with `SIGSTOP` (pid 1242663, ~476 MiB — it cannot accept work, so this costs zero
-   progress), which raised `MemAvailable` from 1,003 to 1,372 MiB. My own production snapshot was
-   already running `nice 19 / ionice -c3`.
-4. Mitigation I will **not** take unilaterally: the only way to release the 6.9 GiB is a controlled
-   restart of `radd-stream`. That is the owner's call, it belongs in a quiet window, and it should
-   happen *after* the live tree is clean — restarting it now would promote the uncommitted lane work,
-   which is precisely what the checkpoint rule exists to prevent.
+**THIRD CORRECTION — MINE, MEASURED 2026-10-29 18:47: the process DOES hand the memory back, so
+"plateau" was wrong. `VmHWM` is the metric; instantaneous `VmRSS` is not.** Same pid `265554`, same
+start time (age 1 d 23 h, never restarted), 29 minutes apart:
+
+| metric | 18:18 | 18:47 |
+|---|---|---|
+| `VmRSS` | 7,169,676 kB (6.9 GiB) | **57,576 kB (56 MiB)** |
+| `RssAnon` | 7,159,992 kB | 47,784 kB |
+| `VmSwap` | 1,101,928 kB | 107,724 kB |
+| `VmHWM` | — | **7,666,280 kB (7.3 GiB)** |
+| `MemAvailable` | ~1,003 MiB | ~6,143 MiB |
+
+So the true shape is a **transient multi-gigabyte peak, released afterwards** (~7.2 GiB returned
+without a restart), not a permanent balloon. Two consequences, and they are worse than the plateau
+story I wrote an hour ago:
+1. The peak is still the hazard, just episodically. The collision that matters is a search-class
+   query running *while* a Gradle build and agent sessions are live — which is exactly the moment
+   `MemAvailable` hit 1,000 MiB and `SwapFree` hit 783 MiB. One bad coincidence on a 1-core box, and
+   the OOM killer's largest target is the production service.
+2. **Cold-cache latency is a direct cost of the peak.** While the service held 6.9 GiB of anonymous
+   memory, the page cache was evicted (`Cached` was 868 MiB against a 6.4 GB catalog). Right after it
+   released that memory, the first `/api/v1/posts?page_size=20` I measured took **3,928 ms**; the next
+   three took **371, 363, 431 ms** as the cache refilled (`Cached` 2,659 MiB). So the honest SLO for
+   that route is *3.9 s cold, ~0.4 s warm*, and every §G throughput number above is a warm-cache
+   number. A real user arriving after a memory spike gets the 3.9 s.
+3. I still have **not** proved which handler makes the peak. `VmHWM` is monotonic per process, so the
+   next tick can attribute growth without re-triggering it — and I am deliberately **not** firing a
+   `q=a` probe at production to reproduce a GiB-scale allocation on a loaded single core. The
+   candidate stays the `by-media` temp B-trees (see the plan above: two `USE TEMP B-TREE FOR
+   count(DISTINCT)` plus one for `ORDER BY`, over a fan-out of 1.78 M releases × ~2.3 sources).
+4. Therefore the restart question changes shape. Releasing the memory is **not** what a restart buys
+   anymore — the process does that itself. What a restart buys is *code currency* (see below), and it
+   still has to wait for a clean live tree.
+
+**AND A DEFECT THE MEMORY DIGGING EXPOSED: the deployed service is serving stats that `main` already
+fixed 33 h ago.** At 18:47 `GET /api/v1/stats` answered:
+
+    {"posts": 116922, "releases": 1383752, "sources": 3783959,
+     "active_sources": 3783959, "resumable_sources": 0, "temporary_sources": 0}
+
+Three things are wrong with that, and all three are explained by process age:
+  - `active_sources` is **numerically identical** to `sources`. That is precisely the retired bug —
+    commit `34f22c6` (2026-10-29 05:09, "fix(stats): publish adult-excluded counts and stop calling
+    unprobed links active") exists to fix it, and `viewer.py:549` still carries the comment saying
+    `active_sources` "used to be the total link count".
+  - The response has **no `sources_by_state` key**, which `viewer.py:2931` unconditionally returns.
+  - It reports `posts: 116,922` while the catalog table holds **150,799** rows, and the adult clause
+    that `34f22c6` added would give 135,731 — so neither the deployed number nor the fixed number is
+    what a reader would assume. Do not quote either as "the size of the catalog"; the measured table
+    count is 150,799 and 15,068 of those rows carry `is_18_plus=1`.
+  - The unit started **Tue Oct 27 19:47:16**, i.e. 33 h 22 m **before** `34f22c6`. So the running
+    system is not the committed system, and anything an agent "verifies" against `/api/v1/stats`
+    today is verifying deleted code. This is the concrete cost of deferring the restart, and it is
+    why task #10 is blocked on the owner, not on me.
+
+Mitigations taken, all reversible and none of them a restart: the credit-limited `qoder2` lane was
+suspended with `SIGSTOP` (pid 1242663, ~476 MiB — it cannot accept work, so this costs zero progress),
+which raised `MemAvailable` from 1,003 to 1,372 MiB at the time. My own production snapshot runs
+`nice 19 / ionice -c3`. I will not restart `radd-stream` unilaterally: `Restart=on-failure` with
+`WorkingDirectory=/opt/radd-stream` means a restart today would promote the live tree's 33 uncommitted
+lane files into production, which is exactly what the checkpoint rule exists to prevent.
 
 ### H. Admin panel: user & device tracking is being built (qoder3, task list) — aggregates only,
 install-scoped pseudonymous id, stated retention, loopback operator port only, never through the
