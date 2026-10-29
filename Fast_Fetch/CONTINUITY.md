@@ -2883,3 +2883,72 @@ step and was not run here — not this lane's file to add.
 parameter (the owner said do not chase it, and it does not bound the work anyway). No
 `q=a` probe against production. `/opt/radd-stream` untouched — the live tree still runs
 its own dirty checkout, so every number above names which tree it came from.
+
+## Session 2026-10-30 (q2 bounded ledger + read-only projection) `[Q2-LEDGER]`
+
+**Half 1 — `/api/data` is bounded twice, and the dashboard uses the bounded form.** The endpoint
+answered 2,533,437 bytes in 46.6 s, and it was never the rows: the list has been `LIMIT 50` since
+`ffc3f5b`. The cost was five `posts` scans, a 1.4 M-row `releases` UNION and — with no safe stamp on
+the file — a 3.8 M-link `GROUP BY state`, on every load. Now:
+
+- Rows: `limit` (default **50**) clamps to `_LEDGER_PAGE_CEILING` (**200**), `page` is bounded, and
+  `has_more` comes from fetching `limit + 1` rows — never a `COUNT`. The dashboard paginates and sends
+  `q`/`limit`/`page`; Prev/Next are real requests, not a client-side slice.
+- Counters: `stats="stamp"` is the default — it reads `cat_projection_meta` and publishes `null` for
+  anything unstamped (the page renders `—`). Only `stats="full"`, an explicit operator button on the
+  loopback port, counts live. A typo in `stats` falls back to the stamp; the expensive branch is
+  chosen, never fallen into.
+- `/api/data` stays in `OPERATOR_ONLY_ROUTES`: 404 on the public port, never proxied by nginx. The
+  full `full=True` ledger remains loopback-only, and the adult rule on this panel is unchanged.
+
+**A correction to this session's own audit numbers.** The timings that justified the work —
+`is_18_plus=1` 93.04 s, `COUNT(*) FROM releases` 112.61 s, `count download_sources` **1012.76 s** —
+were measured under `nice -n 19 ionice -c3` on a saturated 1-vCPU box. Re-measured at normal
+priority with a warm cache: `posts` 0.01 s, `is_18_plus=1` 0.35 s. So those numbers are upper bounds
+produced by starvation, not the queries' intrinsic cost. They still make the case (a dashboard must
+not run *any* table scan per load, and 46.6 s was measured end-to-end on the wire), but a future
+reader should not quote 1012 s as a scan cost.
+
+**Half 2 — the projection rebuild runs read-only, and it is still running.** `Fast_Fetch/project_readonly.py`
+ATTACHes the live catalog `file:...?mode=ro` and binds `posts`/`releases`/`download_sources`/`post_sources`
+to TEMP VIEWs, so `catalog_v2.project()` reads them through the view and writes only into a NEW file.
+It refuses to reuse an output and refuses to project a file onto itself. `test_project_readonly.py`
+hashes the source (main + `-wal`) before and after, proves the source gains no `cat_` table, and
+checks zero link loss on a fixture. Hosted CI gated the code at `b2c102d`.
+
+Measured **before** (read-only, 2026-10-30 00:52):
+`posts` **150,799**, `is_18_plus=1` **15,068**, `releases` **1,780,121**, `download_sources` **4,073,865**.
+The existing projection in the production file is stale and was stamped when it had 130,016 posts:
+`works` **116,922**, `releases` **1,383,752**, `links` **3,783,959**, `links_by_state`
+`{"unchecked": 3456460}`, and **none** of `works_safe`/`releases_safe`/`links_*_safe` — which is why
+`/api/v1/stats` still falls back to counting.
+
+The rebuild itself reached `ledger read: 150,799 posts -> 129,457 works (107 s)` and
+`works written: 129,457 (207 s)`, then entered the page/link pass. **It has not finished.** Measured
+CPU share for the rebuild: **0.4 %** under `nice -n 19 ionice -c3` (8 CPU-seconds in 30 minutes,
+15,995 involuntary preemptions), **~9 %** after relaunching at `nice -n 5 ionice -c2 -n6`. The box is
+one vCPU saturated by five `qodercli` lanes; `/proc/stat` shows ~90 % user time and **0 % idle**.
+At ~9 % of a core the ~5–6 CPU-hours this corpus needs is a 40+ hour wall-clock job. **Deviation
+recorded:** `nice 19` + idle IO class was not "polite", it was nonfunctional; the relaunch keeps the
+process below every interactive lane without starving it. Memory watchdog unchanged
+(stop at MemAvailable < 2500 MB or SwapFree < 800 MB; observed floor 4.4 GB / 2.9 GB).
+
+Acceptance test for the finished run: `walked_links == download_sources`, `orphan_cat_links == 0`,
+every source row not carried by id has its URL in `cat_links`, and `cat_projection_meta` carries the
+five safe stamps. The driver prints exactly those lines as `[✓] verify: {...}`.
+
+**Adult invariant.** The rebuild creates no new path: `catalog_v2` already rolls `is_18_plus` up over
+every page that shares a `canonical_key`, so a flagged page flags the work; the driver only changes
+which file the writes land in. The known per-row twin hole in the public list route is unchanged and
+still needs the reconciliation described in `AGENTS.md`.
+
+**Gate.** `test_database` 133, `test_redact` 61, `test_catalog_api` 127, `test_catalog_v2` 96,
+`test_api_v2` 46, `test_admin_panel` 58, `test_operator_isolation` 28, `test_vidout` 6,
+`test_bounded_ledger` 10, `test_project_readonly` 5 — all OK. Both new modules are steps in
+`backend-ci.yml`; hosted **Backend CI green at `b2c102d`**.
+
+**Not done.** No `full=True` against production, no `/api/v1/stats` polling, no service restart, no
+write to either production database, `/opt/radd-stream` untouched. The console branch `q2-dashboard`
+(`4c18987`, `cfe2e74`) is **not** in `master`; it and this branch both touch `fetch_database_payload`
+and `DASHBOARD_HTML`, so the merge order matters — the console's new page never calls `/api/data`,
+while the old panel now paginates.

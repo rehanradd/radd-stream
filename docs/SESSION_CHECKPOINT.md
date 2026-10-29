@@ -2760,3 +2760,27 @@ Git, verbatim in Appendix A under rulings R1–R9; plus `docs/ADMIN_PANEL_ACCESS
 (`AGENTS.md`/inventory gate numbers corrected: 17 CI modules not 15+2 importers, `test_database` 133
 not 124/76, 68 Python test modules not 66/60/44, and Android green on `master` while the live lane
 branch `q1-ad-cadence` is **red** at `99472e0`). Tasks #28–#32 opened for the recovered plan.
+
+### 2026-10-30 00:40–01:45 — `/api/data` bounded, and the v2 rebuild proved read-only but not yet finished `[Q2-LEDGER]`
+
+- **Half 1 landed and CI-green at `b2c102d`** (branch `q2-bounded-ledger`). `/api/data` now clamps
+  `limit` to 200 (default 50), pages with one-extra-row `has_more` (no COUNT), and answers counters
+  from `cat_projection_meta` by default — `stats=full` is an explicit operator act and a typo falls
+  back to the stamp. The dashboard sends `q`/`limit`/`page` and renders `—` for unstamped counters
+  instead of `0`. Route stays operator-only on both the process and nginx.
+- **Audit correction, recorded so it is not re-quoted:** the 93 s / 112 s / 1012 s timings from the
+  earlier audit were taken at `nice 19` on a saturated box; warm at normal priority the same queries
+  are 0.35 s (adult) and 0.01 s (posts). The 46.6 s end-to-end `/api/data` answer is the number that
+  matters, and it was real.
+- **Half 2:** `Fast_Fetch/project_readonly.py` rebuilds into a new file from an ATTACHed `mode=ro`
+  ledger; `test_project_readonly.py` proves the source is byte-identical afterwards and that no link
+  is dropped. Measured before: **150,799 posts / 1,780,121 releases / 4,073,865 links**, 15,068 adult
+  rows, against a stale stamp of 116,922 works / 1,383,752 releases / 3,783,959 links at 130,016 posts.
+- **The rebuild is running, not finished.** It reached 129,457 works, then entered the link pass. CPU
+  share: 0.4 % at `nice 19`/`ionice -c3`, ~9 % after relaunching at `nice 5`/`ionice -c2 -n6`. The
+  1-vCPU box shows ~90 % user and 0 % idle from five agent lanes; at this share the run is a 40+ hour
+  job. Watchdog unchanged (floor observed 4.4 GB available, 2.9 GB swap free). **No after-numbers are
+  reported because none exist yet**; the acceptance lines are `walked_links == download_sources`,
+  zero orphans, every uncarrying source row's URL present, and the five safe stamps written.
+- **Merge-order warning:** the console branch `q2-dashboard` is not in `master`; both it and this
+  branch edit `fetch_database_payload` and `DASHBOARD_HTML`.
