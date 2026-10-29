@@ -2747,9 +2747,16 @@ self-check green. Both ran in ~5 s each; imports are `accounts` + `engagement` +
 only — no `viewer`/`catalog_v2`/`api_v2`, no HTTP, no `/api/data`, no `/api/v1/stats` call
 this session (rule 1 and 2 observed; the box has been 5–8 load all evening).
 
-**Not yet pushed.** CI's full 17-module list has not been run in this worktree because
-`/proc/loadavg` was 7.41 when the local tests finished; the rule is nothing heavy above 4.
-Once load is under 4 the run goes against `RADD_USER_STATE_DB=/tmp/q5_gate_state/user_state.db`
-and I push `7817918 + <the engagement commit>` to `master` and `main`. If a lane pushes on
-top first, the two commits rebase cleanly — the doc and the module touch no file any other
-lane edits.
+**Gated and landed.** The box stayed above load 4 all evening, so I did **not** run the 17-module
+suite locally. Instead I pushed the branch, which triggered the **hosted** Backend CI (clean
+ubuntu runner) on the identical sha — the authoritative gate — then fast-forwarded `master` and
+`main`. All three runs (`q5-engagement-pillars-20261029`, `master`, `main`, sha `eebdec8`)
+are `completed success`; the master job shows **17/17 suite steps green, 0 non-success**
+(test_database, test_vidout, test_catalog_v2, test_release_descriptor, test_link_health,
+test_link_state, test_evidence_writeback, test_api_v2, test_redact, test_tiers, test_catalog_api,
+test_provenance_stamping, test_merge_catalogs, test_site_scout, test_backup_manager,
+test_usage_stats, test_operator_isolation). My `test_engagement.py` (25 tests) is green locally
+but is **not yet in the CI list** — adding an 18th step edits the shared `backend-ci.yml`, so it
+belongs in deliverable (c) on a fresh worktree once q3 lands, exactly like the MONETIZATION_FIELDS
+knobs. Both files (`engagement.py`, `test_engagement.py`) are additive new modules that no other
+lane imports, so master/main stayed green without them in CI.
