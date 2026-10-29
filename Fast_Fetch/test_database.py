@@ -1960,6 +1960,12 @@ class AuditAdultFlagsToolTests(unittest.TestCase):
         self.db_path = self.root / "audit.db"
         self.vault_dir = self.root / "vaults"
         self.vault_dir.mkdir()
+        #: The tool's default preimage home is the host's backup dir. A test that lets it
+        #: resolve there would write rollback artifacts into /home/ubuntu/radd-stream-backups.
+        self.backup_dir = self.root / "backups"
+        self.backup_patch = patch.dict(os.environ,
+                                       {"RADD_BACKUP_DIR": str(self.backup_dir)})
+        self.backup_patch.start()
         self.db_path_patch = patch.object(fast_fetch, "DB_PATH", self.db_path)
         self.db_path_patch.start()
         fast_fetch.init_db()
@@ -1967,6 +1973,7 @@ class AuditAdultFlagsToolTests(unittest.TestCase):
         self.tool = tool
 
     def tearDown(self):
+        self.backup_patch.stop()
         self.db_path_patch.stop()
         self.temp_dir.cleanup()
 
@@ -2030,6 +2037,77 @@ class AuditAdultFlagsToolTests(unittest.TestCase):
             return {row[0]: int(row[1] or 0) for row in conn.execute(
                 "SELECT url, is_18_plus FROM posts")}
 
+    def backups(self):
+        """The preimage home the tool resolved to — a temp dir here, never the host's."""
+        return Path(os.environ["RADD_BACKUP_DIR"])
+
+    def test_report_mode_cannot_write_even_by_accident(self):
+        self.build()
+        with self.assertRaises(sqlite3.OperationalError) as caught:
+            conn = self.tool.open_ledger(self.db_path, write=False)
+            try:
+                conn.execute("UPDATE posts SET is_18_plus = 0")
+            finally:
+                conn.close()
+        self.assertIn("readonly", str(caught.exception).lower())
+        self.assertEqual(sum(self.flags().values()), 7, "a report left every flag alone")
+
+    def test_the_preimage_defaults_to_the_backup_dir_and_is_named_for_the_audit(self):
+        self.build()
+        code, out = self.run_tool("--apply", "--owner-go", "owner GO",
+                                  "--vault-dir", str(self.vault_dir))
+        self.assertEqual(code, 0, out)
+        landed = sorted(self.backups().glob("adult_audit_preimage_*.json"))
+        self.assertEqual(len(landed), 1, out)
+        self.assertEqual(landed[0].parent.resolve(), self.backups().resolve(),
+                         "rollback artifacts land in the backup dir the operator chose, "
+                         "not in whichever directory holds the ledger")
+        self.assertFalse(list(self.db_path.parent.glob("adult_unflag_preimage_*.json")))
+
+    def test_it_refuses_to_write_when_the_preimage_cannot_be_created(self):
+        if os.geteuid() == 0:
+            self.skipTest("root ignores directory permissions, so the refusal cannot be shown")
+        self.build()
+        self.backup_dir.mkdir(parents=True)
+        os.chmod(self.backup_dir, 0o500)  # r-x: the owner may not create a file in it
+        try:
+            code, out = self.run_tool("--apply", "--owner-go", "owner GO",
+                                      "--vault-dir", str(self.vault_dir))
+        finally:
+            os.chmod(self.backup_dir, 0o700)
+        self.assertEqual(code, 1, out)
+        self.assertIn("no usable preimage", out)
+        self.assertEqual(sum(self.flags().values()), 7,
+                         "a failed preimage must leave every flag exactly where it was")
+
+    def test_no_journal_exists_unless_it_is_asked_for_and_it_holds_no_titles(self):
+        self.build()
+        code, out = self.run_tool("--vault-dir", str(self.vault_dir))
+        self.assertEqual(code, 0, out)
+        self.assertEqual(list(self.root.glob("*.txt")) + list(self.backups().glob("*")), [],
+                         "the report printed and logged nothing behind the caller's back")
+        journal = self.root / "decisions.txt"
+        code, out = self.run_tool("--vault-dir", str(self.vault_dir),
+                                  "--journal", str(journal))
+        self.assertEqual(code, 0, out)
+        text = journal.read_text(encoding="utf-8")
+        self.assertIn("CANDIDATE", text)
+        for title in ("Kanguva", "Hi Nanna", "Chutiyapa", "Gandi Hotti"):
+            self.assertNotIn(title, text,
+                             "a file of adult-row titles is not an artifact to keep")
+
+    def test_a_freed_row_is_re_tested_against_its_own_text(self):
+        self.build()
+        adult = self.row_id("https://c.example/chutiyapa-18plus/")
+        freed = self.row_id("https://a.example/kanguva-2024-hindi-uncut-hd-download/")
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            bad = self.tool.retest_freed(conn, [{"id": freed}, {"id": adult}],
+                                         self.tool.ledger_columns(conn))
+        self.assertEqual(set(bad), {adult},
+                         "the row whose own text is adult must be named; the uncut one may "
+                         "be freed because the re-test is about ITS evidence, not its sibling's")
+
     def test_report_classifies_each_class_from_its_own_evidence(self):
         self.build()
         result = self.audit()
@@ -2083,7 +2161,7 @@ class AuditAdultFlagsToolTests(unittest.TestCase):
         code, out = self.run_tool("--apply", "--owner-go", "owner GO",
                                   "--vault-dir", str(self.vault_dir))
         self.assertEqual(code, 0, out)
-        preimage = sorted(self.root.glob("adult_unflag_preimage_*.json"))
+        preimage = sorted(self.backups().glob("adult_audit_preimage_*.json"))
         self.assertEqual(len(preimage), 1, out)
         payload = json.loads(preimage[0].read_text())
         self.assertEqual(payload["owner_go"], "owner GO")
@@ -2104,7 +2182,7 @@ class AuditAdultFlagsToolTests(unittest.TestCase):
         self.assertEqual(code, 0, out)
         after = self.flags()
         freed = {url for url, flag in before.items() if flag and not after[url]}
-        preimage = json.loads(next(self.root.glob("adult_unflag_preimage_*.json")).read_text())
+        preimage = json.loads(next(self.backups().glob("adult_audit_preimage_*.json")).read_text())
         ids_in_preimage = {row["id"] for row in preimage["rows"]}
         self.assertEqual({self.row_id(url) for url in freed}, ids_in_preimage)
 
@@ -2152,7 +2230,7 @@ class AuditAdultFlagsToolTests(unittest.TestCase):
         code, out = self.run_tool("--apply", "--owner-go", "owner GO",
                                   "--vault-dir", str(self.vault_dir), "--max-rows", "1")
         self.assertEqual(code, 0, out)
-        preimage = json.loads(next(self.root.glob("adult_unflag_preimage_*.json")).read_text())
+        preimage = json.loads(next(self.backups().glob("adult_audit_preimage_*.json")).read_text())
         self.assertEqual(len(preimage["rows"]), 1)
         self.assertEqual(sum(self.flags().values()), 6)
 

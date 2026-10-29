@@ -44,9 +44,27 @@ from the sibling rule — they are the shared bucket every titleless payload lan
 one work.
 
 Before a single row is written, the tool writes a **preimage** — `(id, canonical_key,
-old flag)` for every row it is about to change — to a file, fsyncs it and re-reads it,
-and refuses to proceed if that verification fails. That is the object that made the
-2026-10-29 reversal possible, rebuilt as a precondition instead of a rescue.
+old flag)` for every row it is about to change — to the host's backup directory
+(`$RADD_BACKUP_DIR`, else `<data dir's parent>/radd-stream-backups`, never the repo),
+fsyncs the file *and* its directory entry, re-reads it, and refuses to run the UPDATE if
+any step fails. That is the object that made the 2026-10-29 reversal possible, rebuilt as
+a precondition instead of a rescue.
+
+The write contract, item for item:
+
+* report mode opens the database **read-only** (`file:...?mode=ro`) — a report cannot
+  touch it even by accident, and cannot checkpoint someone else's WAL;
+* nothing is written without `--apply` **and** `--owner-go`, and the live catalog also
+  needs `--prod`;
+* after the transaction it re-reads its own work: `flipped` must equal the rows it
+  intended *and* the change in each of the two totals, every freed row's own stored text
+  must still classify as non-adult, and the flagged count may only ever go down. Any
+  mismatch rolls the transaction back and exits 1;
+* a row is never used as evidence for a sibling it just freed — `siblings_are_clear()`
+  re-tests the source row itself before anything is hidden, and `retest_freed()` proves
+  the same thing after the write;
+* decisions are **printed**, never logged behind the caller's back: a journal file exists
+  only when `--journal` names one, and it holds ids, keys and classes — no title, ever.
 
     python3 -S Fast_Fetch/audit_adult_flags.py <db.path>                     # report
     python3 -S Fast_Fetch/audit_adult_flags.py <db.path> --apply \\
@@ -64,10 +82,15 @@ import re
 import sqlite3
 import sys
 import time
+import urllib.parse
 from datetime import datetime, timezone
 from pathlib import Path
 
 import fast_fetch
+
+
+class PreimageRefused(RuntimeError):
+    """The rollback point could not be created, so no row may be touched."""
 
 #: The two words that hid 7,663 legitimate works. They are edition vocabulary —
 #: `release_descriptor.py` and `catalog_api.py` already file them under `edition` — and
@@ -290,26 +313,82 @@ def public_total(conn) -> int:
         f"SELECT COUNT(*) FROM posts WHERE {redact.adult_clause('posts')}").fetchone()[0] or 0)
 
 
+def open_ledger(path: Path, *, write: bool) -> sqlite3.Connection:
+    """Report mode cannot write, at the connection level rather than by good intentions.
+
+    A `mode=ro` URI is the only SQLite guarantee worth having here: it refuses an UPDATE
+    even if the code below is ever wrong, and it never checkpoints or truncates a WAL
+    that the live service is writing.
+    """
+    uri = ("file:" + urllib.parse.quote(Path(path).resolve().as_posix())
+           + f"?mode={'rw' if write else 'ro'}")
+    conn = sqlite3.connect(uri, uri=True)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def default_preimage_dir() -> Path:
+    """The host's backup dir — beside the data dir, never inside the git checkout."""
+    env = os.environ.get("RADD_BACKUP_DIR")
+    if env:
+        return Path(env)
+    import config
+    return Path(config.DATA_DIR).parent / "radd-stream-backups"
+
+
 def write_preimage(path: Path, result: dict, db_path: Path, owner_go: str) -> list[dict]:
     """Write and verify the preimage, and return the rows it covers.
 
     Verification is not a courtesy: the 2026-10-29 reversal was possible *only* because
     this file existed and was complete. An unverified preimage is not a rollback point,
-    so a mismatch here aborts the whole run before any UPDATE.
+    so every step here is a precondition — create the directory, write, fsync the bytes,
+    fsync the directory entry so the file itself is durable, re-read and compare the id
+    list — and a failure at any of them is a refusal, not a warning.
     """
     rows = [{"id": c["id"], "canonical_key": c["canonical_key"], "is_18_plus": 1}
             for c in result["candidates"]]
     payload = {"created_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
                "db": str(db_path), "owner_go": owner_go, "rows": rows}
-    with open(path, "w", encoding="utf-8") as handle:
-        json.dump(payload, handle, indent=1)
-        handle.flush()
-        os.fsync(handle.fileno())
-    written = json.loads(path.read_text(encoding="utf-8"))
-    if [r["id"] for r in written["rows"]] != [r["id"] for r in rows]:
-        raise SystemExit(f"[!] preimage verification failed: {path} does not hold every "
-                         f"row about to change; nothing was written")
+    path = Path(path)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, indent=1)
+            handle.flush()
+            os.fsync(handle.fileno())
+        dir_fd = os.open(path.parent, os.O_DIRECTORY)
+        try:
+            os.fsync(dir_fd)
+        finally:
+            os.close(dir_fd)
+    except OSError as exc:
+        raise PreimageRefused(f"{path}: {exc}") from exc
+    try:
+        written = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise PreimageRefused(f"{path} cannot be read back: {exc}") from exc
+    if [r["id"] for r in written.get("rows", [])] != [r["id"] for r in rows]:
+        raise PreimageRefused(f"{path} does not hold every row about to change")
     return rows
+
+
+def retest_freed(conn, rows: list[dict], columns: list[str]) -> list[int]:
+    """Re-read each freed row's OWN stored text after the write.
+
+    The rule this enforces: a flag is never propagated from a row this tool just
+    un-flagged without re-testing the source row itself. If a freed row's own text turns
+    out to carry true-adult evidence, the audit that freed it was wrong and the whole
+    transaction has to go back.
+    """
+    select = ", ".join(columns)
+    bad = []
+    for row in conn.execute(
+            f"SELECT {select} FROM posts WHERE id IN ({','.join('?' * len(rows))})",
+            [r["id"] for r in rows]):
+        kind, why = classify(row)
+        if kind == TRUE_ADULT:
+            bad.append(int(row["id"]))
+    return bad
 
 
 def apply_unflags(conn, rows: list[dict]) -> int:
@@ -381,9 +460,14 @@ def main(argv=None) -> int:
     parser.add_argument("--require-clean-siblings", action="store_true",
                         help="free nothing whose key still carries another flagged row, "
                              "even one this audit could not justify")
-    parser.add_argument("--preimage", type=Path, default=None)
+    parser.add_argument("--preimage", type=Path, default=None,
+                        help="where the (id, canonical_key, old flag) preimage goes "
+                             "(default: $RADD_BACKUP_DIR or <data dir's parent>/"
+                             "radd-stream-backups/adult_audit_preimage_<utc>.json)")
     parser.add_argument("--journal", type=Path, default=None,
-                        help="write the per-row decisions next to the preimage")
+                        help="opt-in machine-readable decisions: ids, keys and classes "
+                             "only — never a title. Without it the tool prints and writes "
+                             "no file at all")
     args = parser.parse_args(argv)
 
     if not args.db.exists():
@@ -404,10 +488,11 @@ def main(argv=None) -> int:
         return 2
 
     started = time.time()
-    conn = sqlite3.connect(args.db)
-    conn.row_factory = sqlite3.Row
+    conn = open_ledger(args.db, write=args.apply)
     try:
-        before = public_total(conn)
+        #: `COUNT(*) FROM posts` has no index to help it, so in report mode it would be a
+        #: second full pass over the ledger for a number only --apply arithmetic needs.
+        before = public_total(conn) if args.apply else None
         result = audit(conn, vault_dir=vault_dir,
                        require_clean_siblings=args.require_clean_siblings)
         print(f"[i] {args.db}")
@@ -435,28 +520,45 @@ def main(argv=None) -> int:
                 print(f"      {name:<28} id={example['id']} "
                       f"{example['title']!r} <- {example['why']}")
 
-        journal = args.journal or args.db.with_suffix(".adult_audit_journal.txt")
-        with open(journal, "w", encoding="utf-8") as handle:
-            handle.write(json.dumps({"db": str(args.db), "counts": result["counts"],
-                                     "examples": result["examples"]}, indent=1))
-            for candidate in result["candidates"]:
-                handle.write(f"CANDIDATE {candidate['id']}\t{candidate['canonical_key']}"
-                             f"\t{candidate['why']}\t{candidate['title']}\n")
-        print(f"[i] journal: {journal}")
+        #: Decisions are printed, never logged behind the caller's back. A journal exists
+        #: only when --journal names one, and it carries ids/keys/classes — no title,
+        #: because a file of adult-row titles is exactly the artifact nobody wants kept.
+        if args.journal:
+            with open(args.journal, "w", encoding="utf-8") as handle:
+                handle.write(json.dumps({"db": str(args.db), "counts": result["counts"]},
+                                         indent=1) + "\n")
+                for candidate in result["candidates"]:
+                    handle.write(f"CANDIDATE\t{candidate['id']}\t{candidate['canonical_key']}"
+                                 f"\t{VERSION_WORD_ONLY}\t{candidate['why']}\n")
+                for name in CLASS_ORDER:
+                    for example in result["examples"][name]:
+                        handle.write(f"ROW\t{example['id']}\t{example['key']}\t{name}"
+                                     f"\t{example['why'] or ''}\n")
+            print(f"[i] journal: {args.journal}")
         if not args.apply:
-            print("[i] report only; --apply requires --owner-go and writes a preimage "
-                  "before it touches a row")
+            print("[i] report only — the ledger was opened mode=ro and nothing was written")
             return 0
 
         stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-        preimage = args.preimage or args.db.with_name(
-            f"adult_unflag_preimage_{stamp}.json")
-        rows = write_preimage(preimage, result, args.db, args.owner_go)
-        print(f"[✓] preimage written and verified: {preimage} ({len(rows):,} rows)")
+        preimage = args.preimage or (default_preimage_dir()
+                                     / f"adult_audit_preimage_{stamp}.json")
+        try:
+            rows = write_preimage(preimage, result, args.db, args.owner_go)
+        except PreimageRefused as exc:
+            print(f"[!] refusing to write anything: no usable preimage — {exc}",
+                  file=sys.stderr)
+            return 1
+        print(f"[✓] preimage written, fsynced and verified: {preimage} "
+              f"({len(rows):,} rows)")
 
         flipped = apply_unflags(conn, rows)
         after = public_total(conn)
-        if flipped != len(rows) or after - before != len(rows):
+        #: Two independent identities, because one number can lie about the other: the
+        #: UPDATE must have touched exactly the preimaged rows, and the public total must
+        #: have risen by exactly that many. Un-flagging makes `after - before` positive;
+        #: `flipped == before - after` is the sign for a hiding pass, and this tool is not
+        #: one — it cannot hide anything.
+        if flipped != len(rows) or after - before != flipped:
             print(f"[!] VERIFICATION FAILED: {flipped} rows written, {len(rows)} intended, "
                   f"public total {before:,} -> {after:,}", file=sys.stderr)
             conn.rollback()
@@ -464,15 +566,26 @@ def main(argv=None) -> int:
                   f"describes the state the database is still in: {preimage}",
                   file=sys.stderr)
             return 1
+        retested = retest_freed(conn, rows, ledger_columns(conn))
+        if retested:
+            print(f"[!] VERIFICATION FAILED: {len(retested)} freed rows carry true-adult "
+                  f"evidence in their OWN text ({retested[:5]}), so the audit that "
+                  f"cleared them was wrong", file=sys.stderr)
+            conn.rollback()
+            return 1
+        print(f"[✓] re-tested {len(rows):,} freed rows against their own stored text; "
+              f"none is adult on its own evidence")
         if args.projection:
             changed, dropped = apply_projection(conn, [row["id"] for row in rows])
             print(f"[✓] projection: {changed:,} works re-rolled; {dropped:,} "
                   f"adult-excluded stamps retired")
         conn.commit()
-        with open(journal, "a", encoding="utf-8") as handle:
-            handle.write(f"APPLIED {datetime.now(timezone.utc).isoformat(timespec='seconds')}"
-                         f"\tflipped={flipped}\tpreimage={preimage}\t"
-                         f"public_total={before}->{after}\n")
+        receipt = (f"APPLIED {datetime.now(timezone.utc).isoformat(timespec='seconds')}"
+                   f"\tflipped={flipped}\tpreimage={preimage}\t"
+                   f"public_total={before}->{after}")
+        if args.journal:
+            with open(args.journal, "a", encoding="utf-8") as handle:
+                handle.write(receipt + "\n")
         print(f"[✓] {flipped:,} rows un-flagged; public total {before:,} -> {after:,} "
               f"(exactly the rows freed). Roll back from {preimage}.")
         return 0
