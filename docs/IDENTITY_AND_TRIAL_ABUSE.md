@@ -97,3 +97,45 @@ Ordering that follows from the measurements, not from preference:
 - Whether the anonymous account is recoverable at all when a viewer uninstalls without ever claiming
   it. If the key is the only record and the key dies with the app, "silent account" means "silently
   lost bookmarks" — which is a UX decision with a data-loss tail, not an implementation detail.
+
+## 6. Ruled — the owner answered, and the recovered plan is now the document of record
+
+At **20:34** the owner answered §3's asks and §5's first question directly:
+*"okay **use level 2** and when user install app anymouse account automatically create without
+anything … on install gave user **3 day premium experince** by default and also if possible can we
+identify a device so user can not temper and keep creating accounts randomly … but there option where
+user can enter there info etc and get **1 day premium experince** … and we will store if user enter
+name phone pin etc. and save direct phone number if we need to conatct user so we can."* At **20:59**
+they chose the payment rail: *"**Option 2** so we have complete trust"*.
+
+The Antigravity lane wrote that plan at 21:00 and was logged out at 21:49:47 without committing it; it
+lived only in its own scratch directory. I recovered it and put it, verbatim, with my review, at
+**`docs/RADD_RELAY_AND_AUTH_ARCHITECTURE.md`**. That file is now the document of record for the login
+lifecycle, the trial gate, RaddRelay and the admin-panel settings; this §6 exists so a reader of the
+older document is not left with two questions still hanging.
+
+Both of §5's open questions are now answered, and I am recording the ruling rather than the reasoning
+twice:
+
+1. **`ANDROID_ID` — yes, as a weakened gate, and only under that name.** The owner's device-identification
+   ask is served by `SHA-256(ANDROID_ID|Build.HARDWARE|Build.FINGERPRINT)`, which I will build. It is not
+   a guarantee: `Build.FINGERPRINT` changes on every OTA (so a legitimate update looks like a new device),
+   and all three inputs are client-reported and spoofable on a rooted phone — Play Integrity returns
+   **zero** hits across `App/app/src` today, measured again at 22:5x. So the grant ships labelled
+   `trial_gate='android_id_ota_vulnerable'` and the admin panel reports how many trials came through the
+   weak gate. "Un-farmable" is a word this codebase may not use until `trial_gate='play_integrity'`.
+   Full reasoning: R5 of the architecture doc.
+2. **Recoverability of a never-claimed anonymous account: it is not recoverable, and that is now a stated
+   product fact rather than an accident.** Minting is silent and the key is the only handle, so an
+   uninstall before linking loses the bookmarks — the data-loss tail §5 named. The owner's
+   `+1 day for entering name/phone/PIN` step is exactly the moment that tail closes, which is why the
+   linking banner is a *recovery* affordance and not only a reward, and why the PIN must be a
+   verification factor against a server-minted key (PBKDF2, per-account salt) rather than the source of
+   the key: `base64url(SHA256("radd-stream-v2"+phone+pin))` is one unsalted digest over a 10⁴ space,
+   strictly weaker than the 10⁹ phone-derived defect §1 documents. Full reasoning: R6.
+
+One correction to §2 of this document while I am here: it is written at tip `51f7576`, and since then
+the credential table has gained a second live question — `user_state.db` holds
+`user_accounts`/`payment_transactions` (not the catalog DB), which is why §4's count of `0` rows is the
+right place to fix this in place. And §2's "no name, email or phone column in that table at all" stays
+true; Level 2 adds them deliberately, on a volunteered account only.
