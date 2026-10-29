@@ -224,7 +224,76 @@ expectations) needs either the query cost cut or a second box — not a code tri
 a warm-cache probe at zero agent load, and the running process is 2d15h older than `main`
 (`Restart=on-failure`), so these are numbers for the code as deployed, not as committed.**
 
+**CORRECTION TO THE PARAGRAPH ABOVE, MEASURED 2026-10-29 18:05 — it is true only for `/posts`, and
+search breaks it.** Five probes ran simultaneously on the same loaded box (load 12.8–13.3, a Gradle
+build and a live crawl going) against `GET /api/v1/search/by-media`:
 
+| query | status | latency | bytes |
+|---|---|---|---|
+| `inception` | 200 | 318 ms | 4,295 |
+| `kpop` | 200 | 580 ms | 883 |
+| `don` | 200 | **7,742 ms** | 9,406 |
+| `love` | 200 | **44,992 ms** | 8,271 |
+| `a` | — | **no response, client timeout 60,071 ms** | 0 |
+
+In the same run `/api/v1/posts?page_size=20` took **244 ms** and `/api/v1/stats` **37 ms**, so this
+is not CPU starvation — it is query shape. Payload size does not track it either (8 KB in 45 s vs
+4 KB in 0.3 s), so the cost is in producing the answer, not returning it. Consequences, stated
+plainly because they are bad:
+1. The single-letter and common-word queries that a user types **first** are the expensive ones, and
+   `q=a` returns nothing at all. A search box that hangs on one keystroke is the most visible way
+   this app can fail a person, which is the direct opposite of the owner's zero-friction directive.
+2. One 45-second request pins this box's only core, so any client can self-DoS the service by typing
+   a common letter. The per-IP `browse` bucket limits *volume*; it does nothing about one expensive
+   query.
+3. Therefore the "15–25 concurrent browsers" figure above is a **`/posts`-only** number and must not
+   be quoted for search. Until the search route is fixed, the honest concurrency statement for a
+   search-heavy app is **single digits**, and the honest DAU statement is bounded by that route, not
+   by the browse route.
+The fix is dispatched (diagnose with `EXPLAIN QUERY PLAN` + `PRAGMA index_list`, then FTS5 or a
+bounded prefix query, plus a client-side debounce/minimum-token-length so the app never fires a
+search per keystroke). No index will be built by hand on the live 6.4 GB catalog — that takes a write
+lock under a reading public API; it goes through a reviewed migration with a runtime estimate.
+
+**SECOND CORRECTION — MEASURED 2026-10-29 18:18: the binding constraint is RAM, not the limiter and
+not the CPU.** `fast_fetch.py serve` is the largest process on this 11,925 MiB box:
+
+| measurement | value |
+|---|---|
+| pid / age | `265554`, running 1 d 22 h |
+| `VmRSS` | 7,169,676 kB (**6.9 GiB**) |
+| `RssAnon` | 7,159,992 kB — essentially all of it private heap, not page cache |
+| `VmSwap` | 1,101,928 kB → **~8.2 GiB private total** |
+| `smaps_rollup` `Pss_Dirty` | 6,877,580 kB |
+| threads (`nlwp`) | **3** |
+| established connections on 127.0.0.1:8080 | **1** |
+| RSS sampled over 36 s | 6,957 → 6,988 → 6,982 MiB (flat) |
+
+Three threads and one live connection, so this is **not** a thread leak and **not** a request storm —
+it is a plateau the process reached over ~2 days and does not hand back. Its memory is spread across
+many large anonymous mappings (the twelve largest hold ~320–520 MiB resident each, with virtual sizes
+in the hundreds of GiB), which is the shape of a long-lived malloc sawtooth: big transient allocations
+that were returned to glibc, not to the OS. I have **not** proved which handler makes them; the route
+that costs 45–60 s per call is `/api/v1/search/by-media`, so that is the candidate, not a conclusion.
+
+What follows, and it matters more than the diagnosis:
+1. Every concurrency and DAU number in §G above silently assumes memory headroom that this box does
+   not have right now. With `MemAvailable` at ~1,000 MiB and `SwapFree` at ~783 MiB, the honest
+   statement is that **the service cannot absorb a traffic increase today**, and a real launch — not
+   1,500 DAU — would end it. Those numbers describe the query cost, not the deployable ceiling.
+2. This is a **release-integrity** hazard, not only an availability one. The unit runs
+   `Restart=on-failure RestartSec=5` with `WorkingDirectory=/opt/radd-stream`, and the live tree
+   currently carries 33 modified files / +1,675 lines of uncommitted lane work. An OOM kill therefore
+   restarts production **from uncommitted code**, and red CI would not stop it. Memory pressure is how
+   ungated code gets promoted without anyone deciding to.
+3. Mitigations taken, all reversible and none of them a restart: the credit-limited `qoder2` lane was
+   suspended with `SIGSTOP` (pid 1242663, ~476 MiB — it cannot accept work, so this costs zero
+   progress), which raised `MemAvailable` from 1,003 to 1,372 MiB. My own production snapshot was
+   already running `nice 19 / ionice -c3`.
+4. Mitigation I will **not** take unilaterally: the only way to release the 6.9 GiB is a controlled
+   restart of `radd-stream`. That is the owner's call, it belongs in a quiet window, and it should
+   happen *after* the live tree is clean — restarting it now would promote the uncommitted lane work,
+   which is precisely what the checkpoint rule exists to prevent.
 
 ### H. Admin panel: user & device tracking is being built (qoder3, task list) — aggregates only,
 install-scoped pseudonymous id, stated retention, loopback operator port only, never through the
