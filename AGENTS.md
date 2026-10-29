@@ -219,6 +219,45 @@ Verify only whether the two configured variable names are present; never read or
 
 ---
 
+## 🚦 Fleet Resource Guardrail — measured on this box 2026-10-30
+
+**This host has ONE vCPU** (`nproc` = 1). Measured at 01:30 with five agent lanes running:
+load average 10.2, core 91 % user / 1 % idle / 0 % wait, run queue 8–9. A 6-second
+`/proc/<pid>/stat` utime+stime delta attributed **167.7 % of the entire machine to the five
+`qodercli` lanes plus tmux and `jbd2`**, while `radd-stream` itself consumed **29.8 CPU-seconds
+across 2 h 10 min of uptime — about 0.4 % of a core**. We are the load; production is not.
+Full per-route costs are in [`docs/CAPACITY_MEASURED.md`](docs/CAPACITY_MEASURED.md).
+
+CPU saturation only adds latency. **Memory saturation is what kills this host** — it already has
+one recorded OOM-kill of `radd-stream` (19:14:31, auto-restarted onto an uncommitted tree). So the
+rule is memory-led, not load-led:
+
+1. **HARD FLOOR — stop heavy work at once** if any of: `MemAvailable < 1500 MB`,
+   `SwapFree < 800 MB`, or the service cgroup `MemoryCurrent > 1200 MB`. Check with
+   `awk '/MemAvailable/{print int($2/1024)}' /proc/meminfo` and
+   `systemctl show radd-stream -p MemoryCurrent`. Note tonight: cgroup 528 MB / peak 897 MB,
+   while the **process RSS is only ~58 MB** — the rest is the 6.4 GB catalog in reclaimable page
+   cache, which is not the danger; a climbing RSS is.
+2. **HEAVY WORK is frozen while load > 4**: anything that scans the 6.4 GB catalog, any crawl or
+   scrape loop, any Gradle invocation, any bulk merge. Do not start a new one. If you are mid-run
+   and it is resumable, checkpoint, pause, and say so in your CONTINUITY entry rather than
+   grinding silently.
+3. **LIGHT WORK is always allowed**: editing code and docs, offline unit tests on in-memory or
+   `/tmp` fixtures, short-timeout loopback API reads, git operations.
+4. **Never probe a route or query of unknown cost with a sample size > 1.** Probe once with a
+   short `-m`, then decide. This rule exists because the orchestrator itself sent N=4 serial
+   requests to `/api/v1/stats` on this single core and burned **22.5 server CPU-seconds**, having
+   assumed it was a cheap counter.
+5. **Unchanged absolutes:** never restart/reload/stop `radd-stream.service`; never create or push
+   a git tag (and it cannot succeed anyway — `/actions/secrets` is `[]`); never commit from or
+   reset `/opt/radd-stream`, which is the live deployment tree; no Gradle until the owner confirms
+   load < 0.5; never put a credential in a URL, argv, file or log.
+6. **If your task needs a heavy read, do not run it — queue it.** Write the exact command, the
+   expected cost, and the number you want into your CONTINUITY entry as a quiet-window action.
+   Designing a probe is worth as much as running one when the box is at load 10.
+
+---
+
 ## 📋 Agent Continuity Protocol (BOTH sub-projects)
 
 Every agent — no matter how short the session — MUST do this before ending:
