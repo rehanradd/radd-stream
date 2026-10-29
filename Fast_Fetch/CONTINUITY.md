@@ -2541,3 +2541,14 @@ measured is the never-saved default; the corrected code default fixes the quote,
 on the next save/deploy). Pinned with `test_an_unreadable_or_absent_catalog_falls_back_to_the_documented_price`
 asserting the fallback == 250 with the doc line cited, and annotated `test_a_filed_payment_answers_201`
 so the 250 says *why* (owner directive) and cannot be "corrected" back to 200.
+
+**`test_payments` re-run, full: 85 OK / exit 0.** The `plan doc is authoritative` change surfaced a
+second stale 200 the earlier one-off had not: `test_the_page_lists_the_claim_with_both_actions`
+asserted `assertIn("200", text)` — that "200" was the *server price list* line on the operator page
+(`vip_monthly = PKR <PLAN_DEFAULTS>`), not the claim (which already read 250). With the fallback now
+250, the page renders `PKR 250` and the literal is gone, so the assertion is pinned to 250 with the
+directive cited. Also swept every remaining `200` in the four modules: the live ones are HTTP status
+codes, a `[:200]` note truncation, and `test_one_bad_field_refuses_the_whole_body`'s *explicitly
+saved* 200 (a valid baseline for an atomic-refusal test, deliberately not a default — left as-is).
+`admin_panel.py`/`test_admin_panel.py` are unchanged from `dea1e41` (identical bytes), so their 60/60
+still holds for the head; CI is green on all three pushes (15 modules, clean runner).
