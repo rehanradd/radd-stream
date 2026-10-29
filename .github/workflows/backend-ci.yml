@@ -32,6 +32,8 @@ name: 🐍 Backend CI — Stdlib Python Tests
 #       window, the no-SQL floor on short tokens, EXPLAIN QUERY PLAN assertions)
 #     - Fast_Fetch/test_migrate_search_indexes.py (the reviewed index migration: writes
 #       nothing without --execute, is idempotent, and fails verify on a drifted index)
+#     - Fast_Fetch/test_adult_twin_probe.py     (the adult-twin exposure count: works vs
+#       rows, NULL keys are not twins, and the grouping read stays in the key index)
 #     - Fast_Fetch/test_posts_query_plan.py     (/api/v1/posts?q= EXPLAIN QUERY PLAN
 #       evidence: two SCAN p passes, the join indexes that already exist in production,
 #       and the unescaped/no-floor `q=` correctness half)
@@ -159,3 +161,9 @@ jobs:
       # "missing index" report measure a file that production is not.
       - name: 🧪 test_posts_query_plan.py
         run: python3 -S Fast_Fetch/test_posts_query_plan.py
+
+      # The adult-twin probe from docs/ADULT_TWIN_PROBE.md. In-memory fixture only: the
+      # production count is deliberately NOT taken here, because the file is 6.4 GB and
+      # this runner is not allowed to decide when a heavy read is polite.
+      - name: 🧪 test_adult_twin_probe.py
+        run: python3 -S Fast_Fetch/test_adult_twin_probe.py
