@@ -11,6 +11,7 @@ Supports Windows, Linux, macOS, Replit, VPS, Oracle Cloud.
 from pathlib import Path
 import configparser
 import os
+import ssl
 import sys
 
 # ── Brand File (single source of truth for BOTH app and server) ───────────────
@@ -175,6 +176,70 @@ CINEMETA_ENABLED = os.environ.get("RADD_CINEMETA", "1") != "0"
 # filter ON (features.adult_filter_enforced); a 'false' there is ignored.
 ALLOW_18_PLUS = False
 
+# ── TLS Policy (one knob, one context factory, one per-host allow-list) ───────
+# Every outbound HTTPS fetch used to hand-roll `verify_mode = CERT_NONE`, so
+# catalog metadata, poster URLs and resolved source links accepted ANY certificate:
+# anyone on path could forge them. Two things are wrong with that, and only one of
+# them can be fixed in a single commit.
+#
+# The duplication is fixed here: this is the project's only SSLContext factory, and
+# a request path asks it about the host it is about to contact.
+#
+# The default is deliberately left permissive, because verification is a per-host
+# fact, not a switch: one scraper behind a host with a broken chain turns into a
+# failed crawl, and a live hammer of third-party sites to find out which is not how
+# to learn it. So a host graduates through the allow-list, one at a time, and once
+# it is on that list its path cannot silently fall back.
+#
+#   RADD_TLS_VERIFY         "permissive" (default, today's behaviour) | "strict"
+#   RADD_TLS_VERIFIED_HOSTS comma-separated hostnames that always verify
+#
+# NOT this knob: the `verify=True/False` argument used by link_health and the
+# unwrap_* resolvers is LINK-RESOLUTION verification — a 512-byte Range probe that
+# asks whether a media URL serves bytes. It has nothing to do with TLS, and setting
+# it can neither enable nor disable certificate checking.
+TLS_VERIFY_MODES = ("permissive", "strict")
+TLS_VERIFY = os.environ.get("RADD_TLS_VERIFY", "permissive").strip().lower()
+if TLS_VERIFY not in TLS_VERIFY_MODES:
+    TLS_VERIFY = "permissive"
+
+
+def _tls_verified_hosts() -> frozenset:
+    raw = os.environ.get("RADD_TLS_VERIFIED_HOSTS",
+                         brand("tls.verified_hosts", ""))
+    return frozenset(host.strip().lower() for host in raw.split(",") if host.strip())
+
+
+TLS_VERIFIED_HOSTS = _tls_verified_hosts()
+
+
+def tls_host_verified(host) -> bool:
+    """The one question a request path must ask about the peer it is dialling."""
+    if TLS_VERIFY == "strict":
+        return True
+    return bool(host) and str(host).strip().lower() in TLS_VERIFIED_HOSTS
+
+
+_TLS_CONTEXTS: dict = {}
+
+
+def tls_context(host=None):
+    """The project's only SSLContext factory.
+
+    Cached per policy rather than per host: building a context reloads the system CA
+    store, and the crawl calls this on every request. A verified context is returned
+    untouched — `check_hostname` and `CERT_REQUIRED` are what `create_default_context`
+    already sets, and loosening either here would be the downgrade this prevents.
+    """
+    verified = tls_host_verified(host)
+    if verified not in _TLS_CONTEXTS:
+        context = ssl.create_default_context()
+        if not verified:
+            context.check_hostname = False
+            context.verify_mode = ssl.CERT_NONE
+        _TLS_CONTEXTS[verified] = context
+    return _TLS_CONTEXTS[verified]
+
 
 def print_config():
     """Print current configuration (for debugging)."""
@@ -185,6 +250,8 @@ def print_config():
     print(f"Platform : {'Windows' if IS_WINDOWS else 'Linux' if IS_LINUX else 'macOS' if IS_MACOS else 'Unknown'}"
           f"{' [Replit]' if IS_REPLIT else ''}")
     print(f"Cinemeta : {'enabled' if CINEMETA_ENABLED else 'disabled'}")
+    print(f"TLS      : {TLS_VERIFY}"
+          f"{f' ({len(TLS_VERIFIED_HOSTS)} verified hosts)' if TLS_VERIFIED_HOSTS else ''}")
 
 
 if __name__ == "__main__":

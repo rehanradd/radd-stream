@@ -106,17 +106,18 @@ __all__ = [
     "probe_many",
 ]
 
-# Same posture as fast_fetch.SSL_CONTEXT (public CDNs ship broken chains) and
-# the same tradeoff: certificate / hostname verification is OFF, so a probed
-# endpoint's identity is not authenticated and a network MITM could pose as the
-# CDN. That is acceptable here because probes only ever fetch public media
+# The same posture the engine's TLS policy defaults to (public CDNs ship broken
+# chains) and the same tradeoff: certificate / hostname verification is OFF, so a
+# probed endpoint's identity is not authenticated and a network MITM could pose as
+# the CDN. That is acceptable here because probes only ever fetch public media
 # bytes and the result feeds a ranking score — never credentials, never a
 # trusted identity. Set RADD_LINK_HEALTH_VERIFY_TLS=1 to turn verification on.
+# `config.tls_context` is the project-wide policy (RADD_TLS_VERIFY /
+# RADD_TLS_VERIFIED_HOSTS); this module keeps its own context so it stays loadable
+# without importing the 4k-line engine.
 if os.environ.get("RADD_LINK_HEALTH_VERIFY_TLS") == "1":
     SSL_CONTEXT = ssl.create_default_context()
 else:
-    # mirrors fast_fetch.SSL_CONTEXT, written out instead of imported so this
-    # module stays loadable without the 4k-line engine
     SSL_CONTEXT = ssl.create_default_context()
     SSL_CONTEXT.check_hostname = False
     SSL_CONTEXT.verify_mode = ssl.CERT_NONE

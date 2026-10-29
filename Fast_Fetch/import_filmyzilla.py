@@ -62,7 +62,7 @@ STOP_REQUESTED = False
 _ADULT_TITLE_PATTERNS = [
     r"\b18\+", r"\b18\s*\+", r"\badult\b", r"\berotic\b", r"\bhotshots\b", r"\bullu\b",
     r"\bkooku\b", r"\bprimeplay\b", r"\brabbit\b", r"\bhunters\b",
-    r"\bunrated\b", r"\bnsfw\b", r"\bporn\b", r"\bxxx\b", r"\bboldscene\b",
+    r"\bnsfw\b", r"\bporn\b", r"\bxxx\b", r"\bboldscene\b",
 ]
 
 

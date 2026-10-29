@@ -294,7 +294,7 @@ class NineXMoviesClient:
 ADULT_KEYWORDS = {
     "18+", "erotic", "hotshots", "ullu", "kooku", "primeplay", "rabbit",
     "flizmovies", "hunters", "boommovies", "neonx", "besharams", "gupchup",
-    "sex", "sexy", "porn", "adult", "unrated", "sensual", "lust"
+    "sex", "sexy", "porn", "adult", "sensual", "lust"
 }
 
 

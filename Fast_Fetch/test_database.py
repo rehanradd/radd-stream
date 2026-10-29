@@ -1,14 +1,20 @@
 """Offline regression tests for SQLite identity resolution and multi-site saves."""
 
+import ast
 import base64
 import json
 import io
 import os
+import re
+import socket
+import socketserver
 import sqlite3
-import time
+import ssl
+import subprocess
 import sys
 import tempfile
 import threading
+import time
 import unittest
 from contextlib import redirect_stdout
 from concurrent.futures import ThreadPoolExecutor
@@ -1619,6 +1625,205 @@ class KeyLevelAdultIdentityTests(unittest.TestCase):
         self.assertEqual(self.public()["total"], 1)
 
 
+class AdultVersionWordFalsePositiveTests(unittest.TestCase):
+    """A *version* of a film is not a kind of film, and the key law makes that loud.
+
+    Measured read-only against production on 2026-10-29: of the 15,068 rows carrying
+    `is_18_plus=1`, **7,663 (51%) were justified only by `\\buncut\\b` or `\\bunrated\\b`**
+    in their own stored text. They are mainstream Indian cinema — Kanguva, Hi Nanna,
+    Guntur Kaaram, Junior, Dharmaveer 2, Gangs of Godavari, Election — because
+    desicinemas stamps "Uncut" on its releases the way other sites stamp "HDRip".
+
+    Two words hid them, and the key-level law turned each one into a whole work:
+    `inherit_key_adult()` propagates a flag to every row sharing a `canonical_key`, so
+    one misflagged sibling buries every copy. When the backfill ran, 407 of the 455
+    rows it flipped were this false positive and had to be reversed by hand.
+
+    So a pattern list that feeds a key-level rule needs BOTH directions pinned: the
+    version word must not flag on its own, and a real adult marker must still flag when
+    the same page also says "Uncut". Removing the words without the second half would
+    be a silent downgrade of the adult rule.
+    """
+
+    #: The edition vocabulary — what `release_descriptor.py` and `catalog_api.py`
+    #: already file these under. Describing a cut is not describing an audience.
+    VERSION_WORDS = frozenset({
+        "uncut", "unrated", "extended", "remastered", "remaster", "restored",
+        "restoration", "imax", "theatrical", "fanedit", "fansub", "cut",
+    })
+
+    #: Regex punctuation, so `r"\buncut\b"` yields the word "uncut" and not "buncut":
+    #: a backslash is not a letter, so `[a-z]+` alone runs the boundary marker `b`
+    #: straight into the word it bounds.
+    _REGEX_PUNCTUATION = re.compile(r"\\.|[^\w\s]")
+
+    def version_words_in(self, entry: str) -> set:
+        return set(re.findall(
+            r"[a-z]+", self._REGEX_PUNCTUATION.sub(" ", entry.lower()))) & self.VERSION_WORDS
+
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.db_path = Path(self.temp_dir.name) / "test.db"
+        self.db_path_patch = patch.object(fast_fetch, "DB_PATH", self.db_path)
+        self.db_path_patch.start()
+        self.viewer_db_patch = patch.object(viewer, "DB_PATH", self.db_path)
+        self.viewer_db_patch.start()
+        self.cinemeta_patch = patch.object(fast_fetch, "fetch_cinemeta_metadata", return_value=None)
+        self.cinemeta_patch.start()
+        fast_fetch.init_db()
+
+    def tearDown(self):
+        self.cinemeta_patch.stop()
+        self.viewer_db_patch.stop()
+        self.db_path_patch.stop()
+        self.temp_dir.cleanup()
+
+    def save(self, site="site_a", url="https://site-a.example/x", **overrides):
+        media_kwargs = {k: v for k, v in overrides.items()
+                        if k in ("title", "clean_title", "year", "content_type",
+                                 "imdb_id", "tmdb_id", "quality", "source_name")}
+        data = DatabaseSaveTests.media(site, url, **media_kwargs)
+        data.update(overrides)
+        return fast_fetch.save_scraped_data(data)
+
+    def insert_legacy(self, *, url, key, clean_title="Kanguva", year=2024,
+                      site="site_a", flagged=0, title=None):
+        """A row already in the ledger, written before this rule existed."""
+        with fast_fetch.get_db() as conn:
+            conn.execute(
+                "INSERT INTO posts (url, slug, title, clean_title, year, content_type,"
+                " source_site, is_18_plus, canonical_key)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (url, url.rstrip("/").split("/")[-1],
+                 title or f"{clean_title} ({year})", clean_title, year, "movie",
+                 site, flagged, key))
+
+    def flag(self, post_id):
+        with fast_fetch.get_db() as conn:
+            return conn.execute(
+                "SELECT is_18_plus FROM posts WHERE id = ?", (post_id,)).fetchone()[0]
+
+    def public(self, query=""):
+        return viewer.api_v1_get_posts(query=query, limit=50)
+
+    # --- the direction that was broken: a version word must not flag ---------------
+
+    def test_uncut_in_a_title_is_not_adult(self):
+        self.assertEqual(fast_fetch.is_adult_title("Kanguva (2024) HDRip Uncut HD"), 0)
+
+    def test_unrated_in_a_title_is_not_adult(self):
+        self.assertEqual(fast_fetch.is_adult_title("Hi Nanna 2023 Unrated Director Cut"), 0)
+
+    def test_the_other_works_hidden_by_this_bug_are_not_adult(self):
+        for title in ("Guntur Kaaram 2024 (Hindi) HDRip Unrated",
+                      "Dharmaveer 2 (2024) Uncut",
+                      "Gangs of Godavari 2024 WEB-DL Uncut",
+                      "Junior (2023) Dual Audio Uncut HD",
+                      "Election (2024) Uncut"):
+            self.assertEqual(fast_fetch.is_adult_title(title), 0, title)
+
+    def test_an_uncut_slug_does_not_flag_a_stored_post(self):
+        """The engine derives the flag from the slug too, which is where desicinemas
+        writes it: `save_scraped_data` reads `original_title or slug or url`."""
+        post_id = self.save(
+            title="Kanguva", clean_title="Kanguva", year=2024,
+            slug="kanguva-2024-hindi-uncut-hd-download",
+            url="https://desicinemas.example/movie/13741/",
+        )
+        self.assertEqual(self.flag(post_id), 0)
+        self.assertEqual([row["id"] for row in self.public()["results"]], [post_id])
+
+    def test_an_unrated_title_stored_through_the_api_is_served(self):
+        post_id = self.save(
+            title="Hi Nanna (2023)", clean_title="Hi Nanna", year=2023,
+            url="https://desicinemas.example/hi-nanna-2023-unrated-directors-cut/",
+        )
+        self.assertEqual(self.flag(post_id), 0)
+        self.assertEqual(self.public(query="Hi Nanna")["total"], 1)
+
+    # --- the direction that must NOT regress: real markers still flag ---------------
+
+    def test_true_adult_markers_still_flag(self):
+        self.assertEqual(fast_fetch.is_adult_title("Something 18+ Adult Erotic"), 1)
+        self.assertEqual(fast_fetch.is_adult_title("Ullu"), 1)
+
+    def test_the_collapsed_18_pattern_still_matches_both_spellings(self):
+        r"""\b18\s*\+ subsumes \b18\+, so collapsing the pair must not lose "18 +"."""
+        self.assertEqual(fast_fetch.is_adult_title("Pyaar Mein 18+"), 1)
+        self.assertEqual(fast_fetch.is_adult_title("Pyaar Mein 18 +"), 1)
+        self.assertEqual(sum(1 for p in fast_fetch.ADULT_TITLE_PATTERNS if "18" in p), 1,
+                         "the redundant pair must not come back")
+
+    def test_a_studio_named_alongside_uncut_still_flags(self):
+        """Removing the version words must not blind the rule to a page that says
+        both: the studio is the evidence, "Uncut" is decoration."""
+        for text in ("Kanguva 18+ Uncut", "Chutiyapa Ullu Originals UnCut",
+                     "Hotshots Naughty Unrated"):
+            self.assertEqual(fast_fetch.is_adult_title(text), 1, text)
+
+    def test_a_version_word_never_flags_any_adult_list_alone(self):
+        """Every `*ADULT*` literal in the tree, not just the engine's: the same two
+        words were copied into site scrapers, and each is a separate flag decision."""
+        offenders = []
+        root = Path(fast_fetch.__file__).resolve().parent
+        for path in sorted(root.rglob("*.py")):
+            if path.name.startswith("test_"):
+                continue
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            for node in ast.walk(tree):
+                if not isinstance(node, (ast.Assign, ast.AnnAssign)):
+                    continue
+                targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+                if not any(isinstance(t, ast.Name) and "adult" in t.id.lower()
+                           for t in targets):
+                    continue
+                if not isinstance(node.value, (ast.List, ast.Tuple, ast.Set)):
+                    continue
+                for element in node.value.elts:
+                    if not (isinstance(element, ast.Constant)
+                            and isinstance(element.value, str)):
+                        continue
+                    hit = self.version_words_in(element.value)
+                    if hit:
+                        offenders.append(f"{path.relative_to(root)}: {element.value!r} "
+                                         f"-> {sorted(hit)}")
+        self.assertEqual(offenders, [],
+                         "a version word in an adult list hides mainstream works: "
+                         + "; ".join(offenders))
+
+    # --- the key law, after the pattern change -------------------------------------
+
+    def test_a_flagged_twin_still_hides_the_key(self):
+        adult = self.save(
+            site="site_b", clean_title="Kanguva", title="Kanguva (2024)", year=2024,
+            url="https://site-b.example/kanguva-2024-ullu-original-uncut/",
+            canonical_key="kanguva_2024",
+        )
+        self.assertEqual(self.flag(adult), 1, "the flag comes from the studio, not 'Uncut'")
+        self.insert_legacy(url="https://site-a.example/one", key="kanguva_2024")
+
+        self.assertEqual(fast_fetch.reconcile_key_adult(self.db_path), 1)
+        self.assertEqual(self.public()["total"], 0)
+
+    def test_an_unrelated_key_does_not_leak_across(self):
+        """The bug at scale: one "Uncut" row must not hide a work it is not, and one
+        genuinely adult work must not pull an unrelated key down with it."""
+        kanguva = self.save(
+            site="site_a", clean_title="Kanguva", title="Kanguva (2024) HDRip Uncut HD",
+            year=2024, url="https://site-a.example/kanguva-2024-hindi-uncut-hd-download/",
+        )
+        adult = self.save(
+            site="site_b", clean_title="Chutiyapa", title="Chutiyapa (2023) Ullu Originals",
+            year=2023, url="https://site-b.example/chutiyapa-2023-ullu/",
+        )
+        self.assertEqual(self.flag(kanguva), 0)
+        self.assertEqual(self.flag(adult), 1)
+
+        self.assertEqual(fast_fetch.reconcile_key_adult(self.db_path), 0)
+        self.assertEqual([row["id"] for row in self.public()["results"]], [kanguva])
+        self.assertIsNone(viewer.api_v1_get_post_detail(adult))
+
+
 class BackfillAdultKeyToolTests(unittest.TestCase):
     """The reviewed repair for rows written before the key-level law existed.
 
@@ -1737,6 +1942,417 @@ class BackfillAdultKeyToolTests(unittest.TestCase):
         with sqlite3.connect(self.db_path) as conn:
             return {row[0]: int(row[1] or 0) for row in conn.execute(
                 "SELECT url, is_18_plus FROM posts")}
+
+
+class AuditAdultFlagsToolTests(unittest.TestCase):
+    """The evidence audit that decides which flags may be lowered at all.
+
+    Un-flagging is an exposure event, so the tool is tested on the things that make it
+    safe rather than on its arithmetic: it reports before it writes, it refuses to write
+    without the owner's words, it writes and verifies a preimage before touching a row,
+    it frees only the version-word class, and it never frees a row whose key carries
+    true-adult evidence elsewhere.
+    """
+
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp_dir.name)
+        self.db_path = self.root / "audit.db"
+        self.vault_dir = self.root / "vaults"
+        self.vault_dir.mkdir()
+        self.db_path_patch = patch.object(fast_fetch, "DB_PATH", self.db_path)
+        self.db_path_patch.start()
+        fast_fetch.init_db()
+        import audit_adult_flags as tool
+        self.tool = tool
+
+    def tearDown(self):
+        self.db_path_patch.stop()
+        self.temp_dir.cleanup()
+
+    def insert(self, url, key, title, clean_title, *, year=2024, site="site_a", flagged=1):
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                "INSERT INTO posts (url, slug, title, clean_title, year, content_type,"
+                " source_site, is_18_plus, canonical_key)"
+                " VALUES (?, ?, ?, ?, ?, 'movie', ?, ?, ?)",
+                (url, url.rstrip("/").split("/")[-1], title, clean_title, year,
+                 site, flagged, key))
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_posts_canonical_key"
+                         " ON posts(canonical_key)")
+
+    def vault(self, site, rows):
+        """One site's staging database, in the shape the merge expects."""
+        path = self.vault_dir / f"{site}.db"
+        with sqlite3.connect(path) as conn:
+            conn.execute("CREATE TABLE posts (canonical_key TEXT PRIMARY KEY, title TEXT,"
+                         " synopsis TEXT, url TEXT, slug TEXT, raw_meta TEXT)")
+            conn.executemany("INSERT INTO posts VALUES (?, ?, ?, ?, ?, ?)", rows)
+        return path
+
+    def build(self):
+        self.insert("https://a.example/kanguva-2024-hindi-uncut-hd-download/",
+                    "kanguva_2024", "Kanguva (2024) HDRip Uncut HD", "Kanguva")
+        self.insert("https://b.example/hi-nanna-2023-unrated/", "hi_nanna_2023",
+                    "Hi Nanna (2023) Unrated", "Hi Nanna", year=2023)
+        self.insert("https://c.example/chutiyapa-18plus/", "chutiyapa_2023",
+                    "Chutiyapa (2023) 18+", "Chutiyapa", year=2023, site="ullu")
+        self.insert("https://d.example/gandi-hotti-uncut/", "hotti_2022",
+                    "Gandi Hotti (2022) Uncut", "Gandi Hotti", year=2022)
+        self.insert("https://e.example/gandi-hotti-ullu-originals/", "hotti_2022",
+                    "Gandi Hotti (2022) Ullu Originals", "Gandi Hotti", year=2022,
+                    site="site_b")
+        self.insert("https://f.example/plain-film/", "plain_2021",
+                    "A Plain Film", "A Plain Film", year=2021, site="vaultsite")
+        self.insert("https://g.example/unbucketed-uncut/", "unknown",
+                    "Unbucketed Uncut", "Unbucketed")
+        self.insert("https://h.example/safe/", "safe_2020", "A Safe Film",
+                    "A Safe Film", year=2020, flagged=0)
+        self.vault("vaultsite", [("plain_2021", "A Plain Film",
+                                  "An 18+ erotic web series",
+                                  "https://f.example/plain-film/",
+                                  "plain-film", "{}")])
+
+    def audit(self, **kwargs):
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            return self.tool.audit(conn, vault_dir=self.vault_dir, **kwargs)
+
+    def run_tool(self, *argv):
+        from contextlib import redirect_stderr, redirect_stdout
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            code = self.tool.main([str(self.db_path), *argv])
+        return code, out.getvalue() + err.getvalue()
+
+    def flags(self):
+        with sqlite3.connect(self.db_path) as conn:
+            return {row[0]: int(row[1] or 0) for row in conn.execute(
+                "SELECT url, is_18_plus FROM posts")}
+
+    def test_report_classifies_each_class_from_its_own_evidence(self):
+        self.build()
+        result = self.audit()
+        self.assertEqual(result["flagged"], 7)
+        self.assertEqual(result["counts"][self.tool.TRUE_ADULT], 2)
+        self.assertEqual(result["counts"][self.tool.VERSION_WORD_ONLY], 4)
+        self.assertEqual(result["counts"][self.tool.VAULT_ADULT], 1)
+        self.assertEqual(result["counts"][self.tool.UNRESOLVED], 0)
+        self.assertEqual({c["id"] for c in result["candidates"]},
+                         {self.row_id("https://a.example/"
+                                       "kanguva-2024-hindi-uncut-hd-download/"),
+                          self.row_id("https://b.example/hi-nanna-2023-unrated/"),
+                          self.row_id("https://g.example/unbucketed-uncut/")})
+
+    def row_id(self, url):
+        with sqlite3.connect(self.db_path) as conn:
+            return conn.execute("SELECT id FROM posts WHERE url = ?", (url,)).fetchone()[0]
+
+    def test_a_true_adult_sibling_blocks_the_candidate(self):
+        self.build()
+        result = self.audit()
+        blocked = self.row_id("https://d.example/gandi-hotti-uncut/")
+        self.assertNotIn(blocked, {c["id"] for c in result["candidates"]},
+                         "'Uncut' is no evidence, but its sibling being Ullu is")
+        self.assertEqual(result["blocked_sibling_adult"], 1)
+
+    def test_the_vault_resolves_what_the_ledger_text_cannot(self):
+        """The 2,647: nothing in the ledger's own columns, so the raw row is read."""
+        self.build()
+        result = self.audit()
+        self.assertEqual(result["counts"][self.tool.VAULT_ADULT], 1)
+        self.assertIn(("vaultsite", 1), result["vaults_loaded"])
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            bare = self.tool.audit(conn, vault_dir=None)
+        self.assertEqual(bare["counts"][self.tool.VAULT_ADULT], 0)
+        self.assertEqual(bare["counts"][self.tool.UNRESOLVED], 1,
+                         "an unread vault is an unresolved row, never a candidate")
+        self.assertNotIn(self.row_id("https://f.example/plain-film/"),
+                         {c["id"] for c in bare["candidates"]})
+
+    def test_apply_refuses_without_the_owners_words(self):
+        self.build()
+        code, out = self.run_tool("--apply", "--vault-dir", str(self.vault_dir))
+        self.assertEqual(code, 2)
+        self.assertIn("--owner-go", out)
+        self.assertEqual(sum(self.flags().values()), 7, "nothing moved")
+
+    def test_apply_writes_and_verifies_a_preimage_before_it_writes(self):
+        self.build()
+        code, out = self.run_tool("--apply", "--owner-go", "owner GO",
+                                  "--vault-dir", str(self.vault_dir))
+        self.assertEqual(code, 0, out)
+        preimage = sorted(self.root.glob("adult_unflag_preimage_*.json"))
+        self.assertEqual(len(preimage), 1, out)
+        payload = json.loads(preimage[0].read_text())
+        self.assertEqual(payload["owner_go"], "owner GO")
+        self.assertEqual({row["id"] for row in payload["rows"]},
+                         {self.row_id("https://a.example/kanguva-2024-hindi-uncut-hd-download/"),
+                          self.row_id("https://b.example/hi-nanna-2023-unrated/"),
+                          self.row_id("https://g.example/unbucketed-uncut/")})
+        for row in payload["rows"]:
+            self.assertEqual(row["is_18_plus"], 1,
+                             "the preimage is the PRE state, or it is not a rollback point")
+            self.assertIsNotNone(row["canonical_key"])
+
+    def test_the_rows_it_frees_are_exactly_the_rows_the_preimage_names(self):
+        self.build()
+        before = self.flags()
+        code, out = self.run_tool("--apply", "--owner-go", "owner GO",
+                                  "--vault-dir", str(self.vault_dir))
+        self.assertEqual(code, 0, out)
+        after = self.flags()
+        freed = {url for url, flag in before.items() if flag and not after[url]}
+        preimage = json.loads(next(self.root.glob("adult_unflag_preimage_*.json")).read_text())
+        ids_in_preimage = {row["id"] for row in preimage["rows"]}
+        self.assertEqual({self.row_id(url) for url in freed}, ids_in_preimage)
+
+    def test_it_never_hides_anything(self):
+        self.build()
+        before = self.flags()
+        self.run_tool("--apply", "--owner-go", "owner GO",
+                      "--vault-dir", str(self.vault_dir))
+        after = self.flags()
+        for url, flag in before.items():
+            if flag:
+                continue
+            self.assertEqual(after[url], 0, f"{url} went from public to hidden")
+        still_hidden = [url for url, flag in before.items()
+                        if flag and url.endswith(("chutiyapa-18plus/",
+                                                  "gandi-hotti-ullu-originals/",
+                                                  "plain-film/"))]
+        for url in still_hidden:
+            self.assertEqual(after[url], 1, url)
+
+    def test_require_clean_siblings_holds_a_mixed_key_back(self):
+        self.insert("https://z.example/only-copy-uncut/", "mixed_2022",
+                    "Only Copy (2022) Uncut", "Only Copy", year=2022)
+        self.insert("https://y.example/only-copy-mirror/", "mixed_2022",
+                    "Only Copy (2022)", "Only Copy", year=2022, site="site_b")
+        loose = self.audit()
+        self.assertEqual(loose["mixed_keys_after"], 1)
+        self.assertIn(self.row_id("https://z.example/only-copy-uncut/"),
+                      {c["id"] for c in loose["candidates"]})
+        tight = self.audit(require_clean_siblings=True)
+        self.assertNotIn(self.row_id("https://z.example/only-copy-uncut/"),
+                         {c["id"] for c in tight["candidates"]},
+                         "freeing one copy while its twin stays hidden re-opens the "
+                         "mixed key this whole lane exists to close")
+
+    def test_the_unknown_key_is_a_bucket_not_a_work(self):
+        self.build()
+        result = self.audit()
+        self.assertIn(self.row_id("https://g.example/unbucketed-uncut/"),
+                      {c["id"] for c in result["candidates"]},
+                      "`unknown` never blocks and is never blocked by a sibling")
+
+    def test_max_rows_selects_a_first_tranche_by_id(self):
+        self.build()
+        code, out = self.run_tool("--apply", "--owner-go", "owner GO",
+                                  "--vault-dir", str(self.vault_dir), "--max-rows", "1")
+        self.assertEqual(code, 0, out)
+        preimage = json.loads(next(self.root.glob("adult_unflag_preimage_*.json")).read_text())
+        self.assertEqual(len(preimage["rows"]), 1)
+        self.assertEqual(sum(self.flags().values()), 6)
+
+    def test_projection_rerolls_only_works_with_no_flagged_row_left(self):
+        self.build()
+        import catalog_v2
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            catalog_v2.project(conn, reset=True, verbose=False)
+        code, out = self.run_tool("--apply", "--owner-go", "owner GO", "--projection",
+                                  "--vault-dir", str(self.vault_dir))
+        self.assertEqual(code, 0, out)
+        with sqlite3.connect(self.db_path) as conn:
+            hidden = {row[0] for row in conn.execute(
+                "SELECT title FROM cat_works WHERE is_18_plus = 1")}
+            stamps = {row[0] for row in conn.execute("SELECT key FROM cat_projection_meta")}
+        self.assertIn("Gandi Hotti", hidden, "its sibling is genuinely adult")
+        self.assertIn("Chutiyapa", hidden)
+        self.assertNotIn("Kanguva", hidden, "freed by the pattern fix, so the work is too")
+        for stamp in self.tool.SAFE_STAMP_KEYS:
+            self.assertNotIn(stamp, stamps,
+                             "a safe counter taken before the flip is a stale public number")
+
+
+class TlsPolicyTests(unittest.TestCase):
+    """One TLS policy, one context factory, and a host cannot quietly opt back out.
+
+    The engine used to ship three hand-rolled `CERT_NONE` contexts, so every outbound
+    HTTPS fetch — catalog metadata, poster URLs, resolved source links — accepted any
+    certificate. The default here is deliberately still permissive (flipping it in one
+    commit breaks every scraper behind a host with a bad chain), so what these tests
+    hold is the part that must not regress: the policy has ONE home, and a host named
+    in the allow-list cannot return content over an untrusted chain.
+
+    Loopback and a self-signed certificate only: no third-party site is contacted and
+    no live probe is made.
+    """
+
+    SECRET = "FORGED-BODY-THAT-MUST-NEVER-BE-SERVED"
+
+    def setUp(self):
+        import config
+        self.config = config
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp_dir.name)
+        self._saved_hosts = config.TLS_VERIFIED_HOSTS
+        self._saved_mode = config.TLS_VERIFY
+        config.TLS_VERIFIED_HOSTS = frozenset()
+        config.TLS_VERIFY = "permissive"
+        config._TLS_CONTEXTS.clear()
+
+    def tearDown(self):
+        self.config.TLS_VERIFIED_HOSTS = self._saved_hosts
+        self.config.TLS_VERIFY = self._saved_mode
+        self.config._TLS_CONTEXTS.clear()
+        self.temp_dir.cleanup()
+
+    def make_server(self):
+        """A self-signed HTTPS server on 127.0.0.1, or a skip if openssl is absent."""
+        cert = self.root / "cert.pem"
+        key = self.root / "key.pem"
+        try:
+            subprocess.run(
+                ["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes",
+                 "-keyout", str(key), "-out", str(cert), "-days", "1",
+                 "-subj", "/CN=localhost",
+                 "-addext", "subjectAltName=DNS:localhost,IP:127.0.0.1"],
+                check=True, capture_output=True)
+        except Exception as exc:                                  # pragma: no cover
+            self.skipTest(f"cannot mint a local certificate: {exc}")
+
+        outer = self
+
+        class Handler(socketserver.BaseRequestHandler):
+            def handle(self):
+                try:
+                    self.request.recv(4096)
+                    body = outer.SECRET.encode()
+                    self.request.sendall(
+                        b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n"
+                        b"Content-Length: " + str(len(body)).encode() + b"\r\n\r\n" + body)
+                except (BrokenPipeError, ConnectionResetError):
+                    pass
+
+        class Server(socketserver.ThreadingTCPServer):
+            allow_reuse_address = True
+            daemon_threads = True
+
+        plain = Server(("127.0.0.1", 0), Handler)
+        port = plain.server_address[1]
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.load_cert_chain(str(cert), str(key))
+        plain.socket = context.wrap_socket(plain.socket, server_side=True)
+        thread = threading.Thread(target=plain.serve_forever, daemon=True)
+        thread.start()
+        self.addCleanup(plain.shutdown)
+        self.addCleanup(plain.server_close)
+        return f"https://localhost:{port}/"
+
+    # ── the policy has one home ────────────────────────────────────────────────
+
+    def test_the_engine_no_longer_builds_its_own_ssl_contexts(self):
+        """`The bug is the duplication as much as the default.`
+
+        A prose mention of CERT_NONE in a comment is fine; a second context factory in
+        the engine is not, because it is one more place the posture is decided.
+        """
+        source = Path(fast_fetch.__file__).read_text(encoding="utf-8")
+        self.assertNotIn("ssl.create_default_context()", source)
+        self.assertNotIn("verify_mode = ssl.CERT_NONE", source)
+        self.assertNotIn("SSL_CONTEXT", source)
+
+    def test_every_https_call_site_in_the_engine_asks_the_policy(self):
+        """Every `urlopen`/`HTTPSHandler` in the engine passes a policy context.
+
+        Read from the AST, not the text: the call and its `context=` argument are not
+        always on the same line, and a hand-rolled context that scrolls off the end of
+        a wrapped call is exactly the miss this is here to catch. A call with NO
+        `context=` is accepted — that is urllib's verifying default, the safe
+        direction; what must never come back is a context built by hand.
+        """
+        tree = ast.parse(Path(fast_fetch.__file__).read_text(encoding="utf-8"))
+        unpoliced = []
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            callee = node.func
+            name = callee.attr if isinstance(callee, ast.Attribute) else (
+                callee.id if isinstance(callee, ast.Name) else "")
+            if name not in ("urlopen", "HTTPSHandler"):
+                continue
+            context = next((kw for kw in node.keywords if kw.arg == "context"), None)
+            if context is None:
+                continue
+            value = context.value
+            if not (isinstance(value, ast.Call)
+                    and getattr(value.func, "id", None) == "_tls_context"):
+                unpoliced.append(f"line {node.lineno}: {name} chooses its own context")
+        self.assertEqual(unpoliced, [], "\n".join(unpoliced))
+
+    def test_the_default_is_todays_permissive_handshake(self):
+        context = self.config.tls_context("anything.example")
+        self.assertEqual(context.verify_mode, ssl.CERT_NONE)
+        self.assertFalse(context.check_hostname)
+
+    def test_a_listed_host_is_verified_and_strict_mode_covers_everything(self):
+        self.config.TLS_VERIFIED_HOSTS = frozenset({"api.dandndn.one"})
+        self.assertTrue(self.config.tls_host_verified("API.DandnDN.one"))
+        self.assertFalse(self.config.tls_host_verified("other.example"))
+        self.assertEqual(self.config.tls_context("api.dandndn.one").verify_mode,
+                         ssl.CERT_REQUIRED)
+        self.config.TLS_VERIFY = "strict"
+        self.assertTrue(self.config.tls_host_verified("never.heard.of.it"))
+
+    def test_the_context_is_cached_per_policy_not_rebuilt_per_request(self):
+        self.assertIs(self.config.tls_context("a.example"),
+                      self.config.tls_context("b.example"))
+        self.config.TLS_VERIFIED_HOSTS = frozenset({"a.example"})
+        self.assertIsNot(self.config.tls_context("a.example"),
+                         self.config.tls_context("b.example"))
+
+    # ── a request path cannot silently downgrade ───────────────────────────────
+
+    def test_an_unlisted_host_still_gets_content(self):
+        url = self.make_server()
+        import urllib.request
+        with urllib.request.urlopen(url, context=fast_fetch._tls_context(url),
+                                    timeout=10) as resp:
+            self.assertEqual(resp.read().decode(), self.SECRET)
+
+    def test_a_verified_host_raises_instead_of_returning_an_untrusted_chain(self):
+        """The whole point of the allow-list: listing a host is not advisory."""
+        import urllib.error
+        import urllib.request
+        url = self.make_server()
+        self.config.TLS_VERIFIED_HOSTS = frozenset({"localhost"})
+        with self.assertRaises(urllib.error.URLError) as caught:
+            with urllib.request.urlopen(url, context=fast_fetch._tls_context(url),
+                                        timeout=10) as resp:
+                self.fail(f"an untrusted chain returned content: {resp.read()!r}")
+        self.assertIsInstance(caught.exception.reason, ssl.SSLCertVerificationError,
+                              "a handshake failure on a verified host must be a "
+                              "verification failure, not a timeout or a fallback")
+
+    def test_the_engine_request_path_returns_no_body_for_a_verified_host(self):
+        """`http_get` swallows the exception into (0, url, "ERROR: …"), so the test is
+        that the forged body never reaches the caller — not that Python raises."""
+        url = self.make_server()
+        self.config.TLS_VERIFIED_HOSTS = frozenset({"localhost"})
+        status, _, content = fast_fetch.http_get(url, timeout=10, max_retries=0)
+        self.assertEqual(status, 0)
+        self.assertNotIn(self.SECRET, content)
+        self.assertIn("ERROR", content)
+
+    def test_one_verified_peer_verifies_the_whole_call(self):
+        """Strictness never negotiates downwards when a call knows two hosts."""
+        self.config.TLS_VERIFIED_HOSTS = frozenset({"trusted.example"})
+        context = fast_fetch._tls_context("https://untrusted.example/x",
+                                         "trusted.example")
+        self.assertEqual(context.verify_mode, ssl.CERT_REQUIRED)
 
 
 class CrawlRetryAccountingTests(unittest.TestCase):

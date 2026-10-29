@@ -31,7 +31,6 @@ import argparse
 import threading
 import urllib.request
 import urllib.parse
-import ssl
 import html as html_module
 from contextlib import contextmanager
 from pathlib import Path
@@ -41,17 +40,45 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 if sys.platform.startswith("win"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-# Permissive SSL context for CDN mirrors and edge gateways with custom certs
-SSL_CONTEXT = ssl.create_default_context()
-SSL_CONTEXT.check_hostname = False
-SSL_CONTEXT.verify_mode = ssl.CERT_NONE
-
 try:
     from config import DB_PATH, BASE_DIR, PROJECT_NAME
 except ImportError:
     BASE_DIR = Path(__file__).parent.resolve()
     DB_PATH = Path(os.environ.get("RADD_DB_PATH", str(BASE_DIR / "fast_fetch.db")))
     PROJECT_NAME = "radd-stream"
+
+
+def _tls_context(*targets):
+    """Every HTTPS request in this module asks the ONE TLS policy about its peer.
+
+    Before this, the engine held a module-level `CERT_NONE` context and two resolvers
+    rebuilt the same permissive context by hand, so the posture was three copies of a
+    decision instead of one, and no host could ever be made stricter. The policy lives
+    in `config.tls_context`; its default is still today's permissive handshake, and a
+    host graduates by being named in `RADD_TLS_VERIFIED_HOSTS`.
+
+    Each target is a URL or a bare hostname — whatever the call site already has. When
+    a call knows more than one peer (a bridge and the mirror it hands back) the
+    STRICTEST policy wins: verification is never negotiable downwards.
+
+    Known gap, stated rather than hidden: urllib applies one context to a whole
+    redirect chain, so a permissive host that redirects INTO a verified host still
+    dials that hop permissively. Closing it needs a per-hop HTTPSHandler, which is a
+    change of its own and is reported rather than smuggled in here.
+    """
+    import config
+    hosts = []
+    for target in targets:
+        text = str(target or "")
+        host = urllib.parse.urlparse(text).hostname if "://" in text else text
+        if host:
+            hosts.append(host.lower())
+    # The strictest peer decides the call: verification never negotiates downwards.
+    for host in hosts:
+        if config.tls_host_verified(host):
+            return config.tls_context(host)
+    return config.tls_context(None)
+
 
 ## ── Dynamic Domain Mapping & Configuration ─────────────────────────────────────
 DEFAULT_DOMAINS = {
@@ -141,12 +168,20 @@ USER_AGENT = (
 )
 
 
+#: Words that flag a work 18+. Every entry must name a person, a studio or an act —
+#: not a *version* of a film. "Uncut" and "Unrated" were here until 2026-10-29 and
+#: hid 7,663 mainstream titles (Kanguva, Hi Nanna, Dharmaveer 2, Guntur Kaaram,
+#: Gangs of Godavari, …) because desicinemas labels its releases "Uncut"; with the
+#: flag now reconciled per `canonical_key`, one such word buried every copy of a
+#: work, so do not re-add a version word here without a test that proves it catches
+#: something the remaining patterns miss.
+#: `\b18\s*\+` subsumes `\b18\+`; the redundant duplicate is gone.
 ADULT_TITLE_PATTERNS = [
-    r"\b18\+", r"\b18\s*\+", r"\badult\b", r"\berotic\b", r"\bhotshots\b", r"\bullu\b",
+    r"\b18\s*\+", r"\badult\b", r"\berotic\b", r"\bhotshots\b", r"\bullu\b",
     r"\bkooku\b", r"\bprimeplay\b", r"\brabbit\b", r"\bhunters\b",
-    r"\bunrated\b", r"\bnsfw\b", r"\bporn\b", r"\bxxx\b", r"\bboldscene\b",
+    r"\bnsfw\b", r"\bporn\b", r"\bxxx\b", r"\bboldscene\b",
     r"\brealitykings\b", r"\btushy\b", r"\bvixen\b", r"\bblacked\b", r"\bwankz\b",
-    r"\blustery\b", r"\bnaughty\b", r"\buncut\b", r"\biuliian\b", r"\bmoodyz\b",
+    r"\blustery\b", r"\bnaughty\b", r"\biuliian\b", r"\bmoodyz\b",
 ]
 
 
@@ -917,7 +952,8 @@ def http_get(url: str, timeout: int = 15, max_retries: int = 2, allow_probe: boo
     req = urllib.request.Request(norm_url, headers=headers)
     for attempt in range(max_retries + 1):
         try:
-            with urllib.request.urlopen(req, timeout=timeout, context=SSL_CONTEXT) as resp:
+            with urllib.request.urlopen(req, timeout=timeout,
+                                        context=_tls_context(norm_url)) as resp:
                 final_url = resp.geturl()
                 # Auto-detect domain change/redirect
                 p_orig = urllib.parse.urlparse(norm_url)
@@ -2440,7 +2476,7 @@ def unwrap_direct_cloud(direct_cloud_url: str, timeout: int = 10) -> tuple[str, 
         cj = http.cookiejar.CookieJar()
         opener = urllib.request.build_opener(
             urllib.request.HTTPCookieProcessor(cj),
-            urllib.request.HTTPSHandler(context=SSL_CONTEXT)
+            urllib.request.HTTPSHandler(context=_tls_context(direct_cloud_url))
         )
         req = urllib.request.Request(direct_cloud_url, headers={
             "User-Agent": USER_AGENT,
@@ -2612,11 +2648,8 @@ def fetch_kmhd_bridge(file_id: str, token: str = "") -> list[dict]:
         "Referer": "https://links.kmhd.me/",
     })
     try:
-        import ssl
-        ctx = ssl.create_default_context()
-        ctx.check_hostname = False
-        ctx.verify_mode = ssl.CERT_NONE
-        with urllib.request.urlopen(req, context=ctx, timeout=10) as resp:
+        with urllib.request.urlopen(req, context=_tls_context(api_url),
+                                    timeout=10) as resp:
             data = json.loads(resp.read().decode("utf-8"))
             upload_links = data.get("upload_links", {})
             hub_res = upload_links.get("hubdrive_res")
@@ -2691,7 +2724,7 @@ def unwrap_mobilejsr(jsr_url: str) -> list[dict]:
         cj = http.cookiejar.CookieJar()
         opener = urllib.request.build_opener(
             urllib.request.HTTPCookieProcessor(cj),
-            urllib.request.HTTPSHandler(context=SSL_CONTEXT),
+            urllib.request.HTTPSHandler(context=_tls_context(jsr_url)),
         )
         headers = {
             "User-Agent": USER_AGENT,
@@ -2949,11 +2982,8 @@ def extract_post_data_katmoviehd(post_url: str, html: str, verbose: bool = True)
         fname = fid
         fsize_bytes = 0
         try:
-            import ssl
-            ctx = ssl.create_default_context()
-            ctx.check_hostname = False
-            ctx.verify_mode = ssl.CERT_NONE
-            with urllib.request.urlopen(req_api, context=ctx, timeout=8) as r_api:
+            with urllib.request.urlopen(req_api, context=_tls_context(api_u),
+                                        timeout=8) as r_api:
                 d_api = json.loads(r_api.read().decode('utf-8'))
                 fname = d_api.get("name") or fid
                 fsize_bytes = d_api.get("size") or 0
@@ -3302,7 +3332,7 @@ def extract_post_data_multimovies(
     adult_patterns = [
         r"\b18\+\b", r"\badult\b", r"\berotic\b", r"\bhotshots\b",
         r"\bullu\b", r"\bkooku\b", r"\bprimeplay\b", r"\brabbit\b",
-        r"\bhunters\b", r"\bunrated\b", r"\bnsfw\b",
+        r"\bhunters\b", r"\bnsfw\b",
     ]
     is_18_plus = int(any(
         re.search(pattern, f"{raw_title} {slug}", re.IGNORECASE)
@@ -4123,7 +4153,8 @@ def fetch_cinemeta_metadata(title: str, year: int | None = None, content_type: s
     headers = {"User-Agent": USER_AGENT}
     try:
         req = urllib.request.Request(url, headers=headers)
-        with urllib.request.urlopen(req, timeout=8, context=SSL_CONTEXT) as r:
+        with urllib.request.urlopen(req, timeout=8,
+                                    context=_tls_context(url)) as r:
             data = json.loads(r.read())
         metas = data.get("metas", [])
         if not metas:
@@ -4145,7 +4176,8 @@ def fetch_cinemeta_metadata(title: str, year: int | None = None, content_type: s
         # Fetch full meta details
         detail_url = f"https://v3-cinemeta.strem.io/meta/{c_type}/{imdb_id}.json"
         req_d = urllib.request.Request(detail_url, headers=headers)
-        with urllib.request.urlopen(req_d, timeout=8, context=SSL_CONTEXT) as r_d:
+        with urllib.request.urlopen(req_d, timeout=8,
+                                    context=_tls_context(detail_url)) as r_d:
             d_data = json.loads(r_d.read())
         meta = d_data.get("meta", best)
 
@@ -5220,7 +5252,8 @@ def probe_url_ttl(url: str, *, timeout: int = 6, headers: dict | None = None) ->
     for method, extra in attempts:
         req = urllib.request.Request(url, headers={**base, **extra}, method=method)
         try:
-            with urllib.request.urlopen(req, context=SSL_CONTEXT, timeout=timeout) as resp:
+            with urllib.request.urlopen(req, context=_tls_context(url),
+                                        timeout=timeout) as resp:
                 raw = dict(resp.headers)
                 status = resp.status
                 try:

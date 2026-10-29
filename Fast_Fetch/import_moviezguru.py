@@ -42,7 +42,7 @@ USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTM
 ADULT_KEYWORDS = {
     "18+", "erotic", "hotshots", "ullu", "kooku", "primeplay", "rabbit",
     "flizmovies", "hunters", "boommovies", "neonx", "besharams", "gupchup",
-    "sex", "sexy", "porn", "adult", "unrated", "sensual", "lust"
+    "sex", "sexy", "porn", "adult", "sensual", "lust"
 }
 
 STOP_REQUESTED = False
