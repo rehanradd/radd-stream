@@ -909,6 +909,10 @@ _FLAG = "flag"
 #: Not `"url"`: every admin body is scanned for provenance *keys*, and `"url"`
 #: is one of them. The kind is display metadata, so it takes a neutral spelling.
 _URL = "address"
+#: A plain count — minutes between ads, posters between feed cards, coins per
+#: streak day. Not money (no PKR meaning) and not a flag (it carries a value), so
+#: it gets its own kind and its own validator rather than borrowing `_MONEY`.
+_INT = "count"
 
 #: (key, label, kind, default). A key is the column name *and* the POST-body key
 #: *and* the admin-card field id, so a setting has exactly one spelling here.
@@ -926,10 +930,40 @@ MONETIZATION_FIELDS = (
     ("pak_jazzcash_number", "JazzCash Mobile Account", _PHONE, ""),
     ("pak_easypaisa_number", "EasyPaisa Mobile Number", _PHONE, ""),
     ("pak_raast_id", "Raast Instant ID", _PHONE, ""),
-    ("vip_monthly_pkr", "VIP Monthly PKR", _MONEY, 200),
+    ("vip_monthly_pkr", "VIP Monthly PKR", _MONEY, 250),
     ("vip_yearly_pkr", "VIP Yearly PKR", _MONEY, 1500),
+    # The micro-pass ladder the owner's Pillar 3 asks for. These are price points
+    # only: the app reads them and offers the pass, and nothing here enforces a
+    # gate — `feature_quality_gate` stays the single switch that decides whether an
+    # un paid viewer loses anything. Default OFF, so shipping the ladder changes no
+    # viewer's experience until the operator deliberately turns it on.
+    ("pass_day_pkr", "1-Day Pass PKR", _MONEY, 20),
+    ("pass_weekend_pkr", "Weekend Pass PKR (Fri-Sun)", _MONEY, 50),
     ("monetag_zone_id", "Monetag Rewarded Video zone ID", _TEXT, ""),
     ("adsterra_tag_id", "Adsterra Native banner ID", _TEXT, ""),
+    # The three clean-ad cadences from Pillar 1. These are *caps*, expressed so a
+    # phone cannot serve more than the plan allows even on a stale build: a
+    # minimum gap in minutes between pre-rolls and between app-opens, and a
+    # minimum number of posters between native feed cards. Every default is the
+    # plan's own number, and the effect of an unset row is the least intrusive
+    # behaviour (25 min between ads, one card per 12 posters, 4 h between
+    # app-opens) — never a redirect, a CAPTCHA or a timer.
+    ("ad_preroll_min_gap_minutes", "Pre-roll: min minutes between ads", _INT, 25),
+    ("ad_native_card_every_posters", "Native feed: one card every N posters", _INT, 12),
+    ("ad_app_open_min_gap_minutes", "App-open: min minutes between ads", _INT, 240),
+    # The coin wallet and 7-day streak from Pillar 2, as data a phone can read so
+    # the reward is honest and identical on every device. §A of the plan forbids a
+    # hidden multiplier or an unreachable cash-out: coins buy our own passes and
+    # nothing else. `coin_expiry_days = 0` means "coins never expire" — the safe
+    # default, because the plan states no decay and a silent expiry would be the
+    # deception §A rules out.
+    ("coin_streak_day1", "Streak Day 1 coins", _INT, 10),
+    ("coin_streak_day3", "Streak Day 3 coins", _INT, 30),
+    ("coin_streak_pass_days", "Streak day that pays a 24h pass", _INT, 7),
+    ("coin_rewarded_ads_for_pass", "Rewarded ads to unlock a temp pass", _INT, 3),
+    ("coin_rewarded_pass_hours", "Ad-free hours a rewarded pass pays", _INT, 4),
+    ("coin_rewarded_daily_cap", "Rewarded ads allowed per user per day", _INT, 10),
+    ("coin_expiry_days", "Coin validity in days (0 = never)", _INT, 0),
     ("shrinkme_api_token", "ShrinkMe API token", _TOKEN, ""),
     ("droplink_api_token", "Droplink API token", _TOKEN, ""),
     # Owner's standing directive, verbatim from MONETIZATION_AND_FLEET_PLAN.md §"Pillars":
@@ -960,6 +994,9 @@ _MAX_HANDLE = 32
 _MAX_TOKEN = 200
 _MAX_URL = 500
 _MAX_PKR = 10_000_000
+#: A count field is a cadence or a coin grant, not a fortune; a value this large
+#: is a paste mistake, and an ad gap of a million minutes is not a setting.
+_MAX_INT = 1_000_000
 
 #: A payment *handle*, as the guide writes one: `0300-1234567`, `+92 300 1234567`,
 #: `(0300)1234567`, `0300XXXXXXX`, `@raddstream`. A digits-only validator would
@@ -974,6 +1011,8 @@ def _column_ddl(key, kind, default):
     :func:`_monetization_ddl`). Used by both CREATE and the migration ALTER so a
     fresh row and an upgraded one cannot drift apart."""
     if kind == _MONEY:
+        return f"{key} INTEGER NOT NULL DEFAULT {int(default)}"
+    if kind == _INT:
         return f"{key} INTEGER NOT NULL DEFAULT {int(default)}"
     if kind == _FLAG:
         return f"{key} INTEGER NOT NULL DEFAULT {1 if default else 0}"
@@ -1141,6 +1180,17 @@ def _validated(key, value):
             return None, label
         return number, None
 
+    if kind == _INT:
+        # A cadence or a coin grant: a non-negative whole number, and — like a
+        # price — never a boolean wearing a mask.
+        if isinstance(value, bool):
+            return None, label
+        text = str(value).strip() if not isinstance(value, str) else value.strip()
+        number = _int_or_none(text)
+        if number is None or number < 0 or number > _MAX_INT:
+            return None, label
+        return number, None
+
     if kind == _URL:
         # The update banner is the one field that is an address on purpose. It
         # still has to be an absolute http(s) address: `javascript:`/`file:` in a
@@ -1275,6 +1325,15 @@ def remote_config(conn):
         # `featureFlags.downloads === true` must not depend on SQLite's truthiness.
         return bool(_as_flag(values.get(key, 0)))
 
+    def num(key, default):
+        # A count/cadence/grant as an integer a phone can compare against. Falls
+        # back to the field spec's default rather than 0, so a broken or absent
+        # row still hands the client the plan's cap, not an unlimited-ad setting.
+        try:
+            return int(values.get(key, default))
+        except (TypeError, ValueError):
+            return int(default)
+
     return {
         "success": True,
         "currency": "PKR",
@@ -1294,6 +1353,13 @@ def remote_config(conn):
             "monthly_pkr": int(values.get("vip_monthly_pkr") or 0),
             "yearly_pkr": int(values.get("vip_yearly_pkr") or 0),
         },
+        # The micro-pass ladder, published as price points. Reading them does not
+        # charge anyone and gates nothing — enforcement stays behind
+        # `feature_flags.quality_gate`, which defaults off.
+        "passes": {
+            "day_pkr": int(values.get("pass_day_pkr") or 0),
+            "weekend_pkr": int(values.get("pass_weekend_pkr") or 0),
+        },
         "payments": {
             "jazzcash": {"till_id": shown("pak_till_id"),
                          "mobile_account": shown("pak_jazzcash_number")},
@@ -1303,6 +1369,24 @@ def remote_config(conn):
         "ads": {
             "monetag_rewarded_zone_id": shown("monetag_zone_id"),
             "adsterra_native_banner_id": shown("adsterra_tag_id"),
+            # Cadence caps, so a stale client cannot out-serve the plan even if it
+            # ignores the server. These bound *how often* an ad may show; none of
+            # them introduces a redirect, a CAPTCHA or a timer.
+            "preroll_min_gap_minutes": num("ad_preroll_min_gap_minutes", 25),
+            "native_card_every_posters": num("ad_native_card_every_posters", 12),
+            "app_open_min_gap_minutes": num("ad_app_open_min_gap_minutes", 240),
+        },
+        "wallet": {
+            # The coin rules a phone needs to show an honest streak and a
+            # reachable reward. No multiplier, no cash-out, no hidden decay:
+            # `expiry_days = 0` means the coins do not expire.
+            "streak_day1_coins": num("coin_streak_day1", 10),
+            "streak_day3_coins": num("coin_streak_day3", 30),
+            "streak_pass_day": num("coin_streak_pass_days", 7),
+            "rewarded_ads_for_pass": num("coin_rewarded_ads_for_pass", 3),
+            "rewarded_pass_hours": num("coin_rewarded_pass_hours", 4),
+            "rewarded_daily_cap": num("coin_rewarded_daily_cap", 10),
+            "expiry_days": num("coin_expiry_days", 0),
         },
         "link_shorteners": [
             {"network": "shrinkme",

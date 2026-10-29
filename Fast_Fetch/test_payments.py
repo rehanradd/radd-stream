@@ -570,7 +570,7 @@ class AccountEdge(Fixture):
         self.assertEqual(set(receipt), {"payment_id", "status", "plan",
                                         "amount_pkr", "method", "submitted_at"})
         self.assertEqual(receipt["status"], "pending")
-        self.assertEqual(receipt["amount_pkr"], 200)
+        self.assertEqual(receipt["amount_pkr"], 250)
         self.assert_clean_public_body(filed, "payment receipt", forbid_tid=JAZZ_TID)
 
     def test_the_edge_refuses_a_client_supplied_amount(self):

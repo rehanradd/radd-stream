@@ -2474,3 +2474,60 @@ the owner's verbatim authorization. `--projection` is confirmed to cover BOTH th
 all 8 adult-excluded stats stamps. Item D (per-key `MAX(is_18_plus)` reconciliation with
 title+year agreement) and the 2,684 no-pattern / 1,753 no-stored-evidence rows remain
 vault-resolved, not guessed.
+
+---
+
+## Session — Qoder (Oracle VM, account5) — 2026-10-29 — Q5-MONETIZATION-FIELDS
+
+**Base.** Worktree `/tmp/q5_monet` at `c2d11be` (the owner's `feature_link_shorteners` flag +
+the positional-`_read_monetization` fix), not rebased onto anything older — a rebase onto an
+earlier sha would have undone the owner's reader fix.
+
+**What shipped (Item 2).** `MONETIZATION_FIELDS` gained a `_INT` ("count") kind — `_column_ddl`,
+a bounded non-negative `_validated` branch that refuses bool, and `_MAX_INT = 1_000_000` — and 12
+fields whose defaults are the plan's own numbers, so an operator who never opens `/admin` still
+gets the capped, frictionless behaviour:
+- cadences `ad_preroll_min_gap_minutes`=25, `ad_native_card_every_posters`=12,
+  `ad_app_open_min_gap_minutes`=240;
+- wallet/streak `coin_streak_day1`=10, `coin_streak_day3`=30, `coin_streak_pass_days`=7,
+  `coin_rewarded_ads_for_pass`=3, `coin_rewarded_pass_hours`=4, `coin_rewarded_daily_cap`=10,
+  `coin_expiry_days`=0 (0 = never expire; §A forbids a silent decay);
+- pass ladder `pass_day_pkr`=20, `pass_weekend_pkr`=50, and `vip_monthly_pkr` default
+  **corrected 200 → 250**.
+All published through `remote_config()` — new `passes` and `wallet` blocks and three cadence keys
+in `ads`. Migration is clean: `_ensure_monetization` ALTERs every new column from the field spec
+(verified: the migrated-row test reads the plan defaults, not zeros).
+
+**Hard constraints honoured (Item 3).** `shortener_targets()` untouched and still returns `[]`
+while `feature_link_shorteners` is off — a probe with tokens present confirmed `[]`. No field adds a
+redirect, CAPTCHA or timer; the cadence keys bound ad *frequency* only. Stdlib only. Never touched
+`/opt/radd-stream`, never restarted `radd-stream.service`, never opened the 6.4 GB merged catalog.
+
+**Tests.** `test_admin_panel.py` → **60 OK** in the worktree: extended the reader test (a plain,
+Row-less connection now reads a saved `_INT` cadence back, not the default), extended the
+migration test (asserts each new column arrives via ALTER and the upgraded row answers the phone
+with the capped defaults), corrected the stale `vip_monthly_pkr` "200" card default to "250", and
+added `_INT` validator + fresh-install wallet/cadence/passes projection tests. `test_payments.py`:
+one real failure — `test_a_filed_payment_answers_201…` files a `vip_monthly` claim whose amount
+comes from the `_ensure_monetization` row, now correctly 250; the test encoded the stale 200, so it
+was fixed to 250 (not worked around). `payments.PLAN_DEFAULTS["vip_monthly"]` was left at 200 on
+purpose — see the flagged caveat.
+
+**Flagged for the owner (a decision, not my call).** `payments.py:80` ties its never-configured
+monthly fallback (200) to `PAKISTAN_OPERATOR_GUIDE.md`, while this plan says 250. It only bites when
+there is **no readable `app_remote_config` row at all**; the moment the operator saves once, the row
+(250) wins. So the two documents disagree on the fallback, not the normal path. I did not silently
+rewrite the money path — one `payments.py` line + the `price_for(…, None)` test once the owner says
+which guide is authoritative. Recorded in the plan doc's corrected 20:20 section.
+
+**Gate — honest.** `test_admin_panel.py` 60/60 green locally. The full 15-module list could not be
+run to completion locally: at 20:53–21:05 the box sat at load 8.1 with four other agent CLIs + a
+java/Gradle process on the **single core**, and `test_database.py` had been starved for ~19 min at
+0.4% CPU (not hung). I verified the changed surface with a self-contained functional probe instead
+(29 fields, no dup keys; `remote_config` publishes every default; `_INT` refuses bool/neg/huge/
+garbage; shortener gate closed; quality_gate off). **CI on the branch is the authoritative 15-module
+judge** — a clean hosted runner with no contention. Local numbers for the remaining modules are
+reported as CI-run, not claimed.
+
+**Stopped at the owner's line (Item 4).** Pushed branch `q5-monet-fields-20261029`; NOT merged, NOT
+deployed. "I merge, nobody deploys without the owner."

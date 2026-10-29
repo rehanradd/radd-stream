@@ -377,9 +377,19 @@ class Monetization(Fixture):
         the card needs no `cat_*` projection to answer."""
         data = self.card()
         self.assertTrue(data["available"])
-        self.assertEqual(self.values()["vip_monthly_pkr"], "200")
+        self.assertEqual(self.values()["vip_monthly_pkr"], "250")
         self.assertEqual(self.values()["vip_yearly_pkr"], "1500")
         self.assertFalse(self.values()["pak_till_id"])
+        # The pass ladder and the cadence/wallet counts ship with the plan's own
+        # numbers, so an operator who never opens /admin still gets the capped,
+        # frictionless defaults rather than an empty or unlimited setting.
+        self.assertEqual(self.values()["pass_day_pkr"], "20")
+        self.assertEqual(self.values()["pass_weekend_pkr"], "50")
+        self.assertEqual(self.values()["ad_preroll_min_gap_minutes"], "25")
+        self.assertEqual(self.values()["ad_native_card_every_posters"], "12")
+        self.assertEqual(self.values()["ad_app_open_min_gap_minutes"], "240")
+        self.assertEqual(self.values()["coin_streak_day1"], "10")
+        self.assertEqual(self.values()["coin_expiry_days"], "0")
 
     def test_the_card_is_on_the_html_page(self):
         self.ingest()
@@ -444,6 +454,35 @@ class Monetization(Fixture):
         for bad in ("two hundred", "-1", "1e6", True, [200]):
             self.assertEqual(self.save({"vip_monthly_pkr": bad})[0], 400, bad)
 
+    def test_a_count_field_accepts_only_a_bounded_nonnegative_int(self):
+        """`_INT` is neither money nor a flag: it refuses a boolean and an absurd
+        magnitude, so an ad cadence cannot be parked at a value that means
+        "unlimited" or a coin grant that overflows a phone's display."""
+        self.assertEqual(self.save({"ad_preroll_min_gap_minutes": 90})[0], 200)
+        self.assertEqual(self.values()["ad_preroll_min_gap_minutes"], "90")
+        for bad in ("soon", "-5", "12.5", True, False, [25],
+                    str(admin_panel._MAX_INT + 1)):
+            self.assertEqual(self.save({"ad_native_card_every_posters": bad})[0],
+                             400, bad)
+
+    def test_the_wallet_and_cadence_blocks_publish_safe_defaults(self):
+        """A phone that reads the endpoint on an untouched install gets the plan's
+        caps: pre-roll at most every 25 min, one card per 12 posters, an app-open
+        every 4 h, a 7-day streak, coins that never expire, and a pass ladder that
+        is only prices — no field here turns anything on or redirects anyone."""
+        data = self.public()
+        self.assertEqual(data["ads"]["preroll_min_gap_minutes"], 25)
+        self.assertEqual(data["ads"]["native_card_every_posters"], 12)
+        self.assertEqual(data["ads"]["app_open_min_gap_minutes"], 240)
+        self.assertEqual(data["passes"], {"day_pkr": 20, "weekend_pkr": 50})
+        self.assertEqual(data["wallet"], {
+            "streak_day1_coins": 10, "streak_day3_coins": 30,
+            "streak_pass_day": 7, "rewarded_ads_for_pass": 3,
+            "rewarded_pass_hours": 4, "rewarded_daily_cap": 10,
+            "expiry_days": 0})
+        # Nothing new may smuggle in a detour: the retired flag still reads off.
+        self.assertFalse(data["feature_flags"]["quality_gate"])
+
     def test_the_save_is_gated_like_every_other_admin_route(self):
         self.assertEqual(self.save({"pak_till_id": "1"}, peer="10.0.0.5")[0], 403)
         self.assertEqual(self.save({"pak_till_id": "1"}, header="Bearer wrong")[0], 401)
@@ -476,16 +515,24 @@ class Monetization(Fixture):
         result was an operator who saved `maintenance_mode` and was silently ignored,
         and settings that read differently depending on which module opened the file.
         """
-        self.save({"maintenance_mode": 1, "vip_monthly_pkr": 250})
+        self.save({"maintenance_mode": 1, "vip_monthly_pkr": 250,
+                   "ad_preroll_min_gap_minutes": 90, "coin_streak_day1": 15})
         plain = sqlite3.connect(self.db_path)
         try:
             values = admin_panel._read_monetization(plain)
             self.assertEqual(values["maintenance_mode"], 1,
                              "a plain connection read the default, not the stored value")
             self.assertEqual(values["vip_monthly_pkr"], 250)
+            # The `_INT` kind must survive the same positional read a price does:
+            # a count saved by the operator that a plain connection decoded back to
+            # the default would silently un-cap the ad cadence on every phone.
+            self.assertEqual(values["ad_preroll_min_gap_minutes"], 90)
+            self.assertEqual(values["coin_streak_day1"], 15)
             payload = admin_panel.remote_config(plain)
             self.assertTrue(payload["maintenance_mode"],
                             "the phone was told maintenance was off")
+            self.assertEqual(payload["ads"]["preroll_min_gap_minutes"], 90)
+            self.assertEqual(payload["wallet"]["streak_day1_coins"], 15)
         finally:
             plain.close()
 
@@ -628,6 +675,20 @@ class Monetization(Fixture):
         columns = {row[1] for row in self.conn.execute(
             "PRAGMA table_info(app_remote_config)")}
         self.assertTrue(set(admin_panel._FIELD_BY_KEY) <= columns, columns)
+        # Every field this session added — the cadence counts, the wallet grants,
+        # the pass ladder — must arrive through the ALTER path, not only on a fresh
+        # CREATE, or an already-deployed database silently never gains the columns.
+        for new_column in ("ad_preroll_min_gap_minutes", "coin_streak_day1",
+                           "coin_expiry_days", "pass_day_pkr", "pass_weekend_pkr"):
+            self.assertIn(new_column, columns, new_column)
+        # And the upgraded row answers the phone with the plan's capped defaults,
+        # not zeros, even though the operator never touched the new fields.
+        self.assertEqual(data["ads"]["preroll_min_gap_minutes"], 25)
+        self.assertEqual(data["ads"]["native_card_every_posters"], 12)
+        self.assertEqual(data["ads"]["app_open_min_gap_minutes"], 240)
+        self.assertEqual(data["passes"], {"day_pkr": 20, "weekend_pkr": 50})
+        self.assertEqual(data["wallet"]["streak_pass_day"], 7)
+        self.assertEqual(data["wallet"]["expiry_days"], 0)
 
 
 class Fleet(Fixture):

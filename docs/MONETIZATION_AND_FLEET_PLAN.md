@@ -380,11 +380,32 @@ reversible for an owner who changes this decision on purpose. Proven by
 and `test_a_saved_token_alone_does_not_reenable_the_retired_detour` (the route 302s to the direct URL
 with `Content-Disposition: attachment`, and `call_shortener` raises if ever called).
 
-**What is still NOT implemented, so nobody quotes this file as a shipping state.** The three ad
-cadences this plan promises — pre-roll 1 per 25 min, native feed card 1 per 12 posters, app-open ad 1
-per 4 h — have **no fields in `MONETIZATION_FIELDS`**, so the admin panel cannot set them and the app
-cannot read them; `monetag_zone_id`/`adsterra_tag_id` carry an ID and nothing else. The coin wallet
-and the 7-day streak have no fields either. The pass ladder in this file is ₨20 / ₨50 / ₨250 while
-the schema offers only `vip_monthly_pkr` (default **200**, not 250) and `vip_yearly_pkr` (1500).
-Those are the real gaps between the monetization plan and the monetization surface, and they are
-listed here so the next reader does not have to rediscover them by grepping.
+**~~What is still NOT implemented~~ — CLOSED on branch `q5-monet-fields-20261029` (2026-10-29 ~21:00,
+pending owner merge).** The paragraph below described the gap as of `c2d11be`; the fields now exist, so
+it is corrected rather than left to mislead the next reader. `MONETIZATION_FIELDS` gained a `_INT`
+("count") kind and the following, every default being this file's own number so an operator who never
+opens `/admin` still ships the capped, frictionless behaviour:
+
+- **Ad cadences (caps, in the units a phone cannot mis-read):** `ad_preroll_min_gap_minutes` = 25,
+  `ad_native_card_every_posters` = 12, `ad_app_open_min_gap_minutes` = 240. Published under
+  `remote_config().ads`. None of them is a redirect, a CAPTCHA or a timer — they only bound how often
+  an ad may appear.
+- **Coin wallet / 7-day streak (no hidden multiplier, no cash-out — §A):**
+  `coin_streak_day1` = 10, `coin_streak_day3` = 30, `coin_streak_pass_days` = 7,
+  `coin_rewarded_ads_for_pass` = 3, `coin_rewarded_pass_hours` = 4, `coin_rewarded_daily_cap` = 10,
+  `coin_expiry_days` = 0 (**0 = coins never expire**; the plan states no decay, and a silent expiry
+  would be the deception §A rules out). Published under `remote_config().wallet`.
+- **Pass ladder:** `pass_day_pkr` = 20 and `pass_weekend_pkr` = 50, published under
+  `remote_config().passes` as price points only — enforcement stays behind `feature_quality_gate`,
+  which still defaults off, so shipping the ladder gates nothing on its own.
+- `vip_monthly_pkr` default corrected **200 → 250** to match this file's ₨250 (it was read by
+  `admin_panel._ensure_monetization` into the row, so a phone already charged the operator row's
+  value; the test fixture proved it).
+
+**One honest caveat the owner must decide, not me.** `payments.PLAN_DEFAULTS["vip_monthly"]` is still
+`200`, because `payments.py:80` ties that fallback to a *different* document (`PAKISTAN_OPERATOR_GUIDE.md`)
+than this plan. It only bites when there is **no readable `app_remote_config` row at all** — the moment
+the operator saves once, the row (now defaulting 250) wins and the phone sells at 250. So the two
+documents disagree on the never-configured fallback, not on the normal path. I did not rewrite the money
+path to silently resolve that: it needs the owner to say which guide is authoritative. Fixing it is a
+one-line change in `payments.py` plus the `price_for(..., None)` test, once that call is made.
