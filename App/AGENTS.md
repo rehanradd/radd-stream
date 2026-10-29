@@ -51,8 +51,9 @@ So, on this host:
   fan-out worker, edit freely and build rarely — each build is minutes of this VM's entire
   CPU.
 
-> **Nine tests never run HERE, and they do run — red — on the hosted runner (measured
-> 2026-10-29 from the run-`40771307140` log).** The `tasks.withType<Test>()` arm64 block in
+> **Nine tests never run HERE, and they do run on the hosted runner — GREEN as of 2026-10-30; the
+> "red" in this heading is retired in the correction below (measured 2026-10-29 from the
+> run-`40771307140` log, re-measured against the workflow API on 2026-10-30).** The `tasks.withType<Test>()` arm64 block in
 > `app/build.gradle.kts` excludes `PosterCardProvenanceTest` (3 `@Test`s) and
 > `ScreenSnapshotTest` (6 `@Test`s) whenever `os.arch` is `aarch64`/`arm64`, because Robolectric has
 > no native runtime for ARM (robolectric/robolectric#9166) and it dies during `@Rule` evaluation, so
@@ -64,8 +65,14 @@ So, on this host:
 > `AssertionError` at `PosterCardProvenanceTest.kt:40/50/56`. The arithmetic settles it: the hosted
 > run completed **636** tests, which is exactly this box's **627** plus the **9** excluded here, so
 > every one of those 627 was genuinely executed locally and the 9 were never attempted here at all.
-> The correct reading of a green "627 tests / 0 failures" gate on this box is therefore
-> **627 executed + 9 executed and FAILING on CI**, and the `doFirst { logger.lifecycle(...) }`
+> ⚠️ **SUPERSEDED 2026-10-30.** That sentence read "…is therefore **627 executed + 9 executed and
+> FAILING on CI**". **Re-measured 2026-10-30 01:2x host time by the qoder3 lane**, token read from `os.environ` inside a `python3 -S` heredoc (never in argv, never in a URL), against `/repos/rehanradd/radd-stream/actions/workflows/<id>/runs?per_page=10`; the API prints UTC. Workflow ids: backend `398476976` (93 runs), Android `398476977` (28 runs), Release `398476978`. Backend `398476976` is `completed success` on **both** `master` and `main` at `87b7b6f` (19:42:59Z / 19:43:00Z) and at `1aafddb`. Android `398476977` is `completed success` on `main` and `master` at `9859b8a` (17:00Z), and every app-lane run after it is green: `217e8cd` (17:21:50Z) — the retry that retired the only recent failure, `99472e0` at 17:08:19Z — then `bc2e534`, `e6482e9`, `a3c34ff`, `bd45ba0`, `9a590bb`, and the newest run of any branch, `5e74aa2` on `q1-identity-fix` at 19:22:09Z. **There is no red app lane.** The correct reading of a green "627 / 0" gate on this box today
+> is **627 executed here + 9 executed and PASSING on the hosted runner**. What stays true, and is
+> the reason this note exists at all: the nine are excluded locally because Robolectric ships no ARM
+> runtime (robolectric/robolectric#9166 — it dies during `@Rule` evaluation, so an in-test `Assume`
+> cannot help), they are invisible to any number printed on this host, and only the hosted x86_64
+> runner can judge them. The exclusion stays. Everything else in this block, including the
+> `doFirst { logger.lifecycle(...) }` note and the 636 = 627 + 9 arithmetic, still reads as written:
 > line in that block now names **both** suites, because it used to print only "Skipping
 > PosterCardProvenanceTest" and silently dropped `ScreenSnapshotTest` from
 > every local run. Anyone reading a gate number on this host should read it as *excluding* both

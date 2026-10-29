@@ -36,12 +36,21 @@ the queued-from-sitemap path would have ingested nothing. The site's own catalog
 API is public and paginated and returns the same subject objects:
 
     POST https://h5-api.aoneroom.com/wefeed-h5api-bff/subject/filter
-         {"page": 1, "perPage": 50, "subjectType": 1}
+         {"page": 1, "perPage": 50}
 
-which is what ``sync`` walks now. Note ``subjectType`` is not decoration: the
-unfiltered feed is dominated by type 2 (series) and type 6, which is *music
-mixes* — 2-3 hour "Best of X" compilations that are not films at all. Only
-types 1 and 2 are ingested.
+which is what ``sync`` walks now. ``subjectType`` in the request body is
+decoration, and believing otherwise cost a request loop: measured 2026-10-30,
+{subjectType: 1}, {subjectType: 2}, {subjectTypes: [1]} and {subjectType: 1,
+areaName: "india"} all answer the *same* mixed popularity page. The item's own
+``subjectType`` field is the only classifier, and it matters — the soup is
+dominated by type 2 (series) with type 6 (*music mixes*: 2-3 hour "Best of X"
+compilations that are not films), and ``sort`` swaps in yet other non-works
+(sort=newest -> type 7 concert mixes, sort=hot -> type 9 sports clips). Only
+types 1 and 2 are ingested, and because the endpoint cannot be filtered
+server-side, it cannot be enumerated either: 100 items over 2 pages against a
+44-row vault produced 84 duplicates. ``pager.totalCount: 1000000`` is a pager
+fiction. The endpoint that *does* filter (``/subject/search``) is authenticated,
+and its client-side token is not reverse-engineered here.
 
 Finally, the edge resets roughly two thirds of TLS handshakes from this host
 (measured 8/24 successes, independent of IP and of HTTP version — four CloudFront
@@ -391,6 +400,27 @@ def _lookup_raw(item: dict, ancestors: list, keys):
     return None
 
 
+def _lookup_values(item: dict, ancestors: list, keys) -> list:
+    """Every non-empty value under these keys, across the item and its ancestors.
+
+    ``_lookup_raw`` stops at the first key that is merely *present*, and this
+    site presents empty placeholders beside real data: measured 2026-10-30 a feed
+    item carries ``subtitles: ""`` and ``dubs: []`` as normal members, so a work
+    with three dub languages and an empty subtitles string answered 'no
+    languages'. Collecting every populated key is the only reading that survives
+    both halves of that shape.
+    """
+    found: list = []
+    for node in [item] + list(reversed(ancestors)):
+        if not isinstance(node, dict):
+            continue
+        for key in keys:
+            value = node.get(key)
+            if value not in (None, "", [], {}):
+                found.append(value)
+    return found
+
+
 def _year_of(value) -> int | None:
     text = _as_text(value)
     if not text:
@@ -519,6 +549,15 @@ def _positive_int(raw) -> int | None:
     except (TypeError, ValueError):
         return None
     return value if value > 0 else None
+
+
+def _duration_text(raw) -> str | None:
+    """Duration as the site gives it, or NULL. Measured 2026-10-30: every series
+    item carries ``duration: 0``, so the raw value landed in 40 of 40 staged rows
+    and read as 'this work runs for zero time'. The unit is never stated by the
+    site either, so it is stored verbatim and never converted."""
+    value = _positive_int(raw)
+    return str(value) if value is not None else None
 
 
 def _is_episode(node: dict) -> bool:
@@ -833,9 +872,9 @@ def _build_record(anchor: dict, candidates: list, page_url: str) -> dict | None:
         "genres": _join_labels(_lookup_raw(anchor, all_ancestors, GENRE_KEYS)),
         "director": None,
         "cast_names": _join_labels(_lookup_raw(anchor, all_ancestors, CAST_KEYS)),
-        "duration": _lookup(anchor, [], DURATION_KEYS),
+        "duration": _duration_text(_lookup(anchor, [], DURATION_KEYS)),
         "release_date": release_date,
-        "languages": _join_labels(_lookup_raw(anchor, all_ancestors, DUB_KEYS)),
+        "languages": _join_labels(_lookup_values(anchor, all_ancestors, DUB_KEYS)),
         "industry": _lookup(anchor, all_ancestors, INDUSTRY_KEYS),
         "country": _lookup(anchor, all_ancestors, COUNTRY_KEYS),
         "seasons": json.dumps(seasons) if seasons else None,
@@ -1122,42 +1161,51 @@ def _walk_feed(subject_types=ACCEPTED_SUBJECT_TYPES, pages: int = API_MAX_PAGES,
     the same fields the SSR payload carries, which on a one-core box behind an
     edge that resets two thirds of handshakes is the difference between covering
     the catalog and covering a rounding error of it.
+
+    Measured 2026-10-30 on this host, and it decides the request budget: the
+    ``subjectType`` body key is **ignored**. ``{"subjectType": 1}``,
+    ``{"subjectType": 2}``, ``{"subjectType": "1"}``, ``{"subjectTypes": [1]}``
+    and ``{"subjectType": 1, "areaName": "india"}`` all answer the same mixed
+    popularity page (identical type histogram, items shuffled between calls).
+    ``sort`` is honored and swaps in different non-works entirely: ``sort=newest``
+    returns subjectType 7 (concert mixes) and ``sort=hot`` returns subjectType 9
+    (sports clips). So looping the accepted types would fetch one random soup
+    twice for nothing, and only the item's own ``subjectType`` field classifies.
+    One pass over the pages, whitelist applied where the data actually is.
     """
-    for subject_type in subject_types:
-        page = 1
-        while page <= max(1, pages):
-            if STOP_REQUESTED:
-                return
-            ok, reason = memory_ok()
-            if not ok:
-                log(f"[!] [{SITE}] feed stopped: {reason}")
-                return
-            status, body = _api_request(API_FILTER_PATH, {
-                "page": page, "perPage": per_page,
-                "subjectType": subject_type}, delay=delay)
-            if status == RATE_LIMIT_STATUS:
-                log(f"[!] [{SITE}] feed HTTP 429 (type {subject_type} page {page})")
-                return
-            if status != 200 or not isinstance(body, dict) or body.get("code") != 0:
-                log(f"[!] [{SITE}] feed type {subject_type} page {page} -> "
-                    f"HTTP {status} {(body or {}).get('message', '')!r}")
-                return
-            data = body.get("data") or {}
-            items = data.get("items") or []
-            if not items:
-                break
-            for item in items:
-                if isinstance(item, dict):
-                    url = _detail_url(item)
-                    if url:
-                        yield item, url
-            pager = data.get("pager") or {}
-            if not pager.get("hasMore"):
-                break
-            try:
-                page = int(str(pager.get("nextPage")))
-            except (TypeError, ValueError):
-                break
+    page = 1
+    while page <= max(1, pages):
+        if STOP_REQUESTED:
+            return
+        ok, reason = memory_ok()
+        if not ok:
+            log(f"[!] [{SITE}] feed stopped: {reason}")
+            return
+        status, body = _api_request(API_FILTER_PATH, {
+            "page": page, "perPage": per_page}, delay=delay)
+        if status == RATE_LIMIT_STATUS:
+            log(f"[!] [{SITE}] feed HTTP 429 at page {page}")
+            return
+        if status != 200 or not isinstance(body, dict) or body.get("code") != 0:
+            log(f"[!] [{SITE}] feed page {page} -> "
+                f"HTTP {status} {(body or {}).get('message', '')!r}")
+            return
+        data = body.get("data") or {}
+        items = data.get("items") or []
+        if not items:
+            break
+        for item in items:
+            if isinstance(item, dict):
+                url = _detail_url(item)
+                if url:
+                    yield item, url
+        pager = data.get("pager") or {}
+        if not pager.get("hasMore"):
+            break
+        try:
+            page = int(str(pager.get("nextPage")))
+        except (TypeError, ValueError):
+            break
 
 
 def _existing_keys(conn: sqlite3.Connection) -> set:

@@ -1109,7 +1109,7 @@ broadcaster publishes no download mirror, not because one was dropped.
 
 ## 25. TheMovieBox (`themoviebox.xyz`) — measured 2026-10-29/30
 
-**Staging DB:** `/home/ubuntu/radd-stream-data/themoviebox.db` · **Importer:** `Fast_Fetch/importers/import_themoviebox.py` · **Tests:** `Fast_Fetch/importers/test_themoviebox_import.py` (44, offline) · **Blueprint:** `/home/ubuntu/radd-stream-data/themoviebox_blueprint.json` (revised; the scout's original claims were wrong and are recorded in its `notes`)
+**Staging DB:** `/home/ubuntu/radd-stream-data/themoviebox.db` · **Importer:** `Fast_Fetch/importers/import_themoviebox.py` · **Tests:** `Fast_Fetch/importers/test_themoviebox_import.py` (47, offline) · **Blueprint:** `/home/ubuntu/radd-stream-data/themoviebox_blueprint.json` (revised; the scout's original claims were wrong and are recorded in its `notes`)
 
 **What it actually is.** A Nuxt 3 SSR skin over the Aoneroom/AutoPlay backend
 family. The page payload is not HTML to regex over — it is `__NUXT_DATA__`, a
@@ -1131,6 +1131,25 @@ part was already correct and is verified against live captures.
 - `subjectType`: **1 = movie, 2 = series, 6 = music mixes** ("Best of X — 2 Hour
   Mix"). Measured over 200 unfiltered items: type 2 ×176, type 6 ×24. Type 6 is
   rejected at build time.
+- **Measured 2026-10-30, and it changes the plan:** the server **ignores the
+  `subjectType` body key**. `{subjectType: 1}`, `{subjectType: 2}`,
+  `{subjectType: "1"}`, `{subjectTypes: [1]}` and `{subjectType: 1, areaName:
+  "india"}` all answer the *same* mixed popularity page (identical type
+  histogram, items shuffled between calls). `sort` is honored — and swapping it
+  swaps in different non-works: `sort=newest` → subjectType **7** (concert
+  mixes), `sort=hot` → subjectType **9** (sports clips). So the only classifier
+  is the item's own `subjectType` field, the per-type request loop is pure waste
+  (removed), and **there is no way to enumerate the movie catalog through this
+  endpoint.** `/subject/search`, which does filter, requires a token the site's
+  own bundle computes client-side (`Authorization: Bearer …` /
+  `X-Client-Token`); reverse-engineering it to pull a catalog the site reserves
+  for its authenticated client is their access control and we do not route around
+  it. What is reachable without a token: `GET /subject/trending?page=N&perPage=18`
+  → `data.subjectList[]`, `GET /home?host=themoviebox.xyz` → `platformList` +
+  `operatingList`, `GET /tab/get-bottom-tab-list` → `bottomTabs[]` — all 200.
+- `pager.totalCount: 1000000` is not a reachable catalog size: two pages of 50
+  against a vault of 44 known works produced **84 duplicates and 4 new rows**.
+  The feed is a reshuffled shelf, not a spine.
 - Detail route is `/detail/<detailPath>` (read from `href="/detail/…"` anchors).
   `/web/movie/<slug>` is a 404 that costs 16 connections to prove.
 
@@ -1177,10 +1196,44 @@ must be bounded and must never start above load 4.
    died at its first 20-row batch. `export_staging` now accepts `conn=` and reuses
    the caller's connection.
 
+**Live pilot, measured 2026-10-30 on this host** (bounded, `nice -n 19 ionice -c3`,
+started at load 5.1 / MemAvailable 5,099 MB / SwapFree 3,180 MB — all above the
+importer's own floors — and finished at load 4.2):
+
+- `harvest --pages 2 --limit 40` → 46 items seen, **40 posts written, 6 rejected
+  as music mixes, 0 duplicates**, 40 detail pages queued. Half the requests the
+  per-type loop used to make, and no `database is locked`.
+- `crawl --limit 6 --workers 1 --delay 1.0` → **6 of 6 pages fetched in 39 s,
+  6 metadata-only, 0 failed, 0 parked, 0 releases, 0 sources**. The detail pages
+  carry the same empty `detailUrl`/`sniffUrl`/`sourceUrl`/`dl` the feed does, so
+  the "print is client-side" finding is now measured on both surfaces, not
+  inferred from one.
+- Second harvest (100 items over 2 pages) against the 44-row vault → **84
+  duplicates, 4 new rows, 12 rejected**. This is the proof that the feed cannot
+  enumerate the catalog: `totalCount: 1000000` is a pager fiction.
+- Final vault: **44 works, 0 releases, 0 sources, 44 with genre, 44 with poster,
+  44 with year, 44 with IMDb rating, 10 with a real dub/sub list** (e.g.
+  *Avatar: The Last Airbender S1-S2* — 16 dubbed/subtitled languages), 38 pages
+  still queued, 6 crawled, 0 adult-flagged in the sample. All 44 are series; the
+  soup has served no movie in three passes.
+- Three defects the live run caught that the mocked suite could not: the
+  `duration: 0` sentinel landing as a real running time in 40 of 40 rows, the
+  present-but-empty `subtitles: ""` shadowing the populated `dubs: []` (so a
+  triple-dubbed work stored no languages at all), and the per-type request loop
+  fetching the same random page twice. All three are fixed, each with a test, and
+  the 40 stale `duration='0'` values were cleared in the staging vault with one
+  auditable `UPDATE`.
+
 **Honest verdict.** MovieBox is a **metadata + trailer-evidence** source, not a
-playable-source site, from this host at this time. Its value is real — a
-1,000,000-item feed with cover art, IMDb rating, run time, genre, subtitle and
-dub languages and adult flags, plus a recorded "a 1080p print exists and we
-cannot yet reach it" — but no `sources` row may be written for a print we have
-never resolved. Do not list it as scraped-and-playable anywhere.
+playable-source site, from this host at this time. Its value is real — cover art,
+IMDb rating, run time, genre, subtitle and dub languages, season structure and
+adult flags for whatever the shelf happens to be showing, plus a recorded "a
+1080p print exists and we cannot yet reach it" — but two things cap it, both
+measured rather than assumed: the catalog behind `/subject/filter` is a
+non-enumerable popularity shelf (no type filter server-side, `totalCount`
+fiction, 84 duplicates per 100 items), and the one endpoint that does filter also
+does authentication, whose client-side token we will not reverse-engineer.
+Schedule this site as a **periodic metadata top-up**, never as a bulk crawl.
+No `sources` row may be written for a print we have never resolved.
+Do not list it as scraped-and-playable anywhere.
 

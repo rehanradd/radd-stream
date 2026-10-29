@@ -161,8 +161,14 @@ SDK limit:
   coverage on target devices are all unverified, and no JVM test can verify them.
 - Two Robolectric suites — `PosterCardProvenanceTest` and `ScreenSnapshotTest`, 9 tests between
   them — are excluded on `aarch64`/`arm64` at `app/build.gradle.kts:220-233` because Robolectric
-  ships no native runtime for ARM, and GitHub Actions is disabled at the account level, so the
-  x86_64 runner that would execute them is not running either. **Those 9 tests currently execute
-  nowhere.** Recorded as a known limitation, not fixed here.
+  ships no native runtime for ARM, and ⚠️ **the clause that followed is false as of 2026-10-30**:
+  it read "GitHub Actions is disabled at the account level, so the x86_64 runner that would execute
+  them is not running either. **Those 9 tests currently execute nowhere.**" Actions is enabled, and
+  the hosted x86_64 runner does run them — re-measured 2026-10-30 by the qoder3 lane from
+  `/actions/workflows/398476977/runs` (token read from `os.environ`, never in argv or a URL):
+  `completed success` on `main` and `master` at `9859b8a`, newest run of any branch `5e74aa2` at
+  19:22:09Z, every app-lane run between them green. The exclusion is real (Robolectric #9166) and
+  stays; the "execute nowhere" conclusion is not. What genuinely remains unverified is the
+  sentence above this one: nothing in this player has run on Android.
 - The Media3 1.3.1 API claims in §2/§3 were checked against the dependency's sources; they are
   compile-verified by the build, not behaviour-verified by a player.

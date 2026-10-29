@@ -36,6 +36,11 @@ name: 🐍 Backend CI — Stdlib Python Tests
 #       stats=full, and a scan-free default path proven by a trace callback)
 #     - Fast_Fetch/test_project_readonly.py  (v2 rebuild over an ATTACHed mode=ro ledger:
 #       source sha256 unchanged, zero link loss, safe stamps written)
+#     - Fast_Fetch/test_adult_twin_probe.py     (the adult-twin exposure count: works vs
+#       rows, NULL keys are not twins, and the grouping read stays in the key index)
+#     - Fast_Fetch/test_posts_query_plan.py     (/api/v1/posts?q= EXPLAIN QUERY PLAN
+#       evidence: two SCAN p passes, the join indexes that already exist in production,
+#       and the unescaped/no-floor `q=` correctness half)
 #
 #   Deliberately EXCLUDED:
 #     - Fast_Fetch/test_all_sites.py  — live 10-site network audit; needs the
@@ -165,3 +170,16 @@ jobs:
       # is red here before it can be run against production.
       - name: 🧪 test_project_readonly.py
         run: python3 -S Fast_Fetch/test_project_readonly.py
+
+      # Query-plan evidence for the findings in docs/SEARCH_LATENCY_FINDINGS.md. It
+      # builds its own throwaway catalog because `catalog_v2.ensure_schema` does not
+      # create `releases`/`download_sources` at all — the drift that made an earlier
+      # "missing index" report measure a file that production is not.
+      - name: 🧪 test_posts_query_plan.py
+        run: python3 -S Fast_Fetch/test_posts_query_plan.py
+
+      # The adult-twin probe from docs/ADULT_TWIN_PROBE.md. In-memory fixture only: the
+      # production count is deliberately NOT taken here, because the file is 6.4 GB and
+      # this runner is not allowed to decide when a heavy read is polite.
+      - name: 🧪 test_adult_twin_probe.py
+        run: python3 -S Fast_Fetch/test_adult_twin_probe.py

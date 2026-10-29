@@ -2813,13 +2813,19 @@ committed, never written back):
 | love | 44 992 | 4 481.0 | 796.4 | **89.6** |
 | a | never returned (60 071) | 25 904.8 | 9.1 ms, 0 rows + `hint` | **0.1 ms, no SQL** |
 
-Two honest caveats on that table. Column 2 is the old *statement* alone — the old
-module then ran the evidence lookups on top, so column 2 flatters the old code.
-And columns 3/4 without/with the step-1 index differ because the evidence step
-walks `cat_work_sites` unindexed; `inception` and `kpop` are therefore *not* faster
-than the live edge until the migration runs, and the two catastrophic cases are
-faster by 50–140x with it. Search is not "generally fast"; these are the five
-measurements.
+**CORRECTED 2026-10-30 by the same lane — see
+[`docs/SEARCH_LATENCY_FINDINGS.md`](../docs/SEARCH_LATENCY_FINDINGS.md) §1.** Column 3 of
+that table was measured on a schema I had *degraded by hand* (`probe_bridge.py` dropped
+`idx_cat_work_sites_post` and its comment claimed that made the schema equal production's;
+production has the index, my copy had it before I deleted it). The production-equal column
+is column 4: `inception` 913.5, `kpop` 825.7, `don` 77.9, `love` 89.6, `a` 0.1 ms. So
+**`inception` and `kpop` show no improvement and must not be cited as wins** — the old
+column for them (1 272.7 / 665.9 ms in-process) is not comparable to the live edge's
+318 / 580 ms anyway, being cold page-in of a 6.4 GB file at load ~7 with five lanes.
+Column 2 is also the old *statement* alone, which flatters the old code. What survives
+unchanged: `don` 1 178.4 → 77.9 ms, `love` 4 481.0 → 89.6 ms, and `a` 25 904.8 ms → 0.1 ms
+with no SQL issued at all, plus a bounded shape (≤ 200 candidates, five statements) where
+the old one was unbounded.
 
 **E2 — memory was never the failure mode and is still not.** `VmHWM` flat at
 ~31 MiB across the run, per-query delta ≤ +0.3 MiB. The old shape's problem was
@@ -2839,7 +2845,9 @@ assertions did; a timeout-only test would have passed the bug.
 [--with-fts] [--execute]`, additive, idempotent, `PRAGMA`-guarded, refuses a
 non-file target so it cannot pick its own database, and it prints its own runtime
 estimate from measurements: FTS rebuild **3 260 rows/s** ⇒ ~46 s for 150 799 rows
-at load 7.9; bridge index **0.9 s** for 275 488 rows; FTS on-disk cost **61
+at load 7.9; bridge index **0.9 s** for 275 488 rows — **corrected:** that was rebuilding
+`idx_cat_work_sites_post`, which **already exists on production**, so on
+`merged_catalog_20261025.db` step 1 is a no-op that prints "already present — skipped"; FTS on-disk cost **61
 bytes/row** (~9.2 MB) with a disk-headroom refusal; trigger write cost **5 308 µs
 /row vs 412 µs/row** without, i.e. a bulk scrape of this catalog gains ~13 min.
 Nothing in `Fast_Fetch` reads `posts_fts` yet, so step 2 is a pure capability and
@@ -2852,11 +2860,27 @@ lie. **The owner schedules when it runs.**
 
 **Two findings outside the brief, reported not fixed.**
 1. `/api/v1/posts?q=` — the keystroke route the Android app actually calls — still
-   carries the same cliff: measured **66 322 ms** for `inception` on the copy, and
-   it answers `q=a` with 10 rows instead of refusing the non-query. Fixing it means
-   routing it through `media_search`, which is a different route's contract.
-2. `cat_work_sites.post_id` has no index at all; the fix's evidence path is 7–10x
-   faster with the 0.9-second bridge index, and that is step 1 of the migration.
+   carries a cliff: **66 322 ms** for `inception`. **Corrected on two counts**: that was
+   an *in-process* query against my copy (not a live-edge timing; I took no edge sample,
+   because the route holds a service thread), and its cause is **not** a missing index.
+   `EXPLAIN QUERY PLAN` on production for the two statements `viewer.py:2633-2652` builds
+   reads `SCAN p` for the exact-total `COUNT(*)` **and** `SCAN p` for the page, with both
+   joins already covered by indexes and **no** `USE TEMP B-TREE FOR ORDER BY` at the
+   default sort: the cost is two full scans with three leading-wildcard `LIKE`s, the one
+   predicate a B-tree cannot serve. The fix is `MIN_QUERY_CHARS=2`, `_escape_like`
+   (`viewer.py:2546` interpolates `%`/`_` unescaped, so `q=%` is every row), and dropping
+   the exact `total` in favour of `has_more` for `q=` requests. Also answers `q=a` with 10
+   rows instead of refusing the non-query.
+2. **WRONG, and the error is the lesson.** I wrote "`cat_work_sites.post_id` has no
+   index at all". It does: `idx_cat_work_sites_post`, on
+   `/home/ubuntu/radd-stream-data/merged_catalog_20261025.db` (150 799 posts, 275 488
+   `cat_work_sites` rows), verified from `sqlite_master`. `releases.post_id` and
+   `download_sources.release_id` are indexed too (`idx_releases_post`, `idx_sources_rel`),
+   and `posts` carries `idx_posts_canonical_key`/`_imdb`/`_slug`/`_tmdb`/`_source_ind`.
+   Cause: `catalog_v2.ensure_schema()` creates neither `releases` nor `download_sources`
+   and no join indexes, so a schema-built file plans `SCAN releases` where production
+   plans a covering-index search — and a number off it is that file's number. Now pinned
+   by `test_posts_query_plan.py`.
 
 **C — the app-side guards (debounce ≥300 ms, min token, cancel in flight, never
 retry on timeout) are NOT landed.** The newest dispatch says backend only, no
@@ -2924,14 +2948,38 @@ The existing projection in the production file is stale and was stamped when it 
 `/api/v1/stats` still falls back to counting.
 
 The rebuild itself reached `ledger read: 150,799 posts -> 129,457 works (107 s)` and
-`works written: 129,457 (207 s)`, then entered the page/link pass. **It has not finished.** Measured
-CPU share for the rebuild: **0.4 %** under `nice -n 19 ionice -c3` (8 CPU-seconds in 30 minutes,
-15,995 involuntary preemptions), **~9 %** after relaunching at `nice -n 5 ionice -c2 -n6`. The box is
-one vCPU saturated by five `qodercli` lanes; `/proc/stat` shows ~90 % user time and **0 % idle**.
-At ~9 % of a core the ~5–6 CPU-hours this corpus needs is a 40+ hour wall-clock job. **Deviation
-recorded:** `nice 19` + idle IO class was not "polite", it was nonfunctional; the relaunch keeps the
-process below every interactive lane without starving it. Memory watchdog unchanged
-(stop at MemAvailable < 2500 MB or SwapFree < 800 MB; observed floor 4.4 GB / 2.9 GB).
+`works written: 129,457 (207 s)`, then entered the page/link pass (4,073,865 source rows to walk;
+output 191 MB at the time). **It has not finished, and at 01:45 host time it was stopped, not
+merely paused** — `catalog_v2.project()` is one monolithic pass with no resume point, so a stop
+discards the output. Measured CPU share for the rebuild: **0.4 %** under `nice -n 19 ionice -c3`
+(8 CPU-seconds in 30 minutes, 15,995 involuntary preemptions), **~9 %** after relaunching at
+`nice -n 5 ionice -c2 -n6`. The box is one vCPU saturated by five `qodercli` lanes; `/proc/stat`
+shows ~90 % user time and **0 % idle**. At ~9 % of a core the ~5–6 CPU-hours this corpus needs is a
+40+ hour wall-clock job.
+
+**Why it was stopped (Q4-MASTER guardrail, 2026-10-30 01:30, observed load 8.71–10.2):** heavy work
+is frozen above load 4 on this host, and a 6.4 GB catalog scan is heavy work by definition. Memory
+was never the trigger — MemAvailable 4.8 GB, SwapFree 3.0 GB, `radd-stream` cgroup MemoryCurrent
+60 MB, all far above the 1,500 MB / 800 MB / 1,200 MB floors — the rule is load-led here. The
+partial output `/home/ubuntu/radd-stream-data/cat_projection_20261030.db` (195 MB) and its journal
+were deleted per the wrapper's own semantics: an incomplete projection must not be mistaken for a
+finished one.
+
+**Queued action — the exact command, to be run in a quiet window (load ≤ 4), never at load 8+:**
+
+```bash
+nice -n 5 ionice -c2 -n6 env RADD_PROJECT_PROGRESS=2000 \
+  python3 -S /tmp/q2_bledger/Fast_Fetch/project_readonly.py \
+  /home/ubuntu/radd-stream-data/merged_catalog_20261025.db \
+  /home/ubuntu/radd-stream-data/cat_projection_20261030.db
+# watchdog: stop if MemAvailable < 2500 MB or SwapFree < 800 MB
+```
+
+Expected cost: ~5–6 CPU-hours (~30–40 min wall clock on an idle core; 40+ hours at the observed
+9 % share). Numbers wanted from it, all printed by the driver: `walked_links == 4,073,865`,
+`orphan_cat_links == 0`, every source row not carried by id matched by URL, and the five safe
+stamps in `cat_projection_meta`; the works count is already known at **129,457** from the pass that
+completed. Until that run finishes there are **no after-numbers**, and none are quoted.
 
 Acceptance test for the finished run: `walked_links == download_sources`, `orphan_cat_links == 0`,
 every source row not carried by id has its URL in `cat_links`, and `cat_projection_meta` carries the
@@ -2952,3 +3000,166 @@ write to either production database, `/opt/radd-stream` untouched. The console b
 (`4c18987`, `cfe2e74`) is **not** in `master`; it and this branch both touch `fetch_database_payload`
 and `DASHBOARD_HTML`, so the merge order matters — the console's new page never calls `/api/data`,
 while the old panel now paginates.
+
+## Session 2026-10-30 (qoder4 master orchestrator) — Antigravity's MovieBox importer, finished, tested, and run bounded `[Q4-MASTER]`
+
+**What the owner asked, literally:** "if you have not started moviebox scraper then
+check it and run it". Checked first, and the honest answer was that the scraper
+existed but *could not have produced correct data*: `import_themoviebox.py` sat
+untracked in the live tree at 1,383 lines, `themoviebox.db` was 53 KB and empty,
+and the scout blueprint that seeded it claimed `cms: unknown`,
+`rest_api.usable: false`, `data_source: html_scrape`, `link_patterns: []`,
+`sitemap_url: null`. Three of those four claims are false.
+
+**Measured, not assumed.** `/sitemap.xml` is a real HTTP 404 (12 connections, one
+answering a 130,846-byte HTML page). The catalog is the site's own JSON feed —
+`POST h5-api.aoneroom.com/wefeed-h5api-bff/subject/filter` — which answers 200
+unauthenticated with full subject objects. The playable print is nowhere in it or
+in any detail page: `detailUrl`/`sniffUrl`/`sourceUrl` empty, `dl: null`,
+`resource.seasons[].resolutions[]` names 360/480/1080 with no URLs, and the only
+mp4 anywhere is `trailer.videoAddress.url` on the **same** `macdn.aoneroom.com`
+edge with the **same** `-ld/-sd/-hd.mp4` shape. Graph position is the only thing
+that tells a trailer from a feature, so the media walk prunes by key and drops —
+unconditionally — anything not on the site's own media hosts.
+
+**Five rules the live captures forced**, each now a test: one work per detail page
+(a measured page returned 19 records, 18 of them cast members and banners);
+`subjectType` is the only media-type authority because `season: 0` with
+`seasons[{se:0,maxEp:0}]` is the site's "not a series" sentinel; a dub is a
+**separate subject** with the same title and year, so identity is
+`subjectId → detailPath → title`; artwork is an object (`cover.url`, `blurHash`,
+`avgHue*`) not a string; and a titled subject with no print is **written**, not
+called an error.
+
+**Two defects the mocked suite caught before anything shipped.** The lenient host
+filter staged a foreign ad mp4 as a film's print. And `harvest_catalog` held a
+write transaction while `export_staging` opened a **second** connection to the
+same file — SQLite waited the full 60 s and raised `database is locked`, so every
+live harvest died at its first batch. `export_staging` now takes `conn=`.
+
+**Live pilot (bounded, `nice -n 19 ionice -c3`, started at load 5.1 / MemAvailable
+5,099 MB / SwapFree 3,180 MB, finished at load 4.2).** `harvest --pages 2
+--limit 40` → 46 items, **40 posts, 6 rejected as music mixes, 0 duplicates, 0
+locks**. `crawl --limit 6 --workers 1 --delay 1.0` → **6/6 pages in 39 s, 6
+metadata-only, 0 failed, 0 releases, 0 sources** — the detail pages carry the same
+empty print fields the feed does, so the finding is now measured on both surfaces.
+Final vault: 44 works, 0 releases, 0 sources, 44 with poster/year/genre/rating,
+10 with a real dub list, 0 adult-flagged in the sample.
+
+**The live run then caught three more defects a mocked suite structurally
+could not**, and this is the argument for running things bounded instead of
+trusting green unit tests: `duration: 0` landed as a real running time in 40 of 40
+rows; a present-but-empty `subtitles: ""` shadowed the populated `dubs: []`, so a
+triple-dubbed work stored **no languages at all**; and — the big one — the server
+**ignores the `subjectType` body key**, so the per-type request loop was fetching
+one random soup twice. `{subjectType: 1}`, `{2}`, `"1"}`, `{subjectTypes:[1]}` and
+`{subjectType:1, areaName:"india"}` all return the identical type histogram.
+`sort` is honored and only swaps in different non-works (`sort=newest` → type 7
+concert mixes, `sort=hot` → type 9 sports clips).
+
+**Therefore MovieBox is not a bulk-crawlable catalog and will not be treated as
+one.** 100 items over 2 pages against a 44-row vault produced **84 duplicates and
+4 new rows**; `pager.totalCount: 1000000` is a pager fiction. The one endpoint that
+*does* filter (`/subject/search`) is authenticated, and the site's own bundle
+computes the `X-Client-Token` client-side — that token is their access control and
+this importer does not reverse-engineer it. Everything recorded here comes from
+endpoints answering 200 to an unauthenticated browser request
+(`/subject/trending`, `/home?host=`, `/tab/get-bottom-tab-list` all do).
+Schedule the site as a **periodic metadata top-up**; never list it as
+scraped-and-playable.
+
+**Corrected doc:** the scout blueprint at
+`/home/ubuntu/radd-stream-data/themoviebox_blueprint.json` was rewritten in place
+with the measured values (`data_source: json_feed`, `rest_api.usable: true`, the
+type table, the transport flapping rate, the token boundary) and every superseded
+claim left visible in its `notes`; the pre-revision file is at
+`/tmp/themoviebox_blueprint.pre-revision.json`. `SITES.md` gains §25 and a row in
+the §15 built table carrying the metadata-only caveat in the table itself.
+
+**Numbers.** 47 tests in `test_themoviebox_import.py` (network fully mocked),
+plus CI's real 17-module list re-run locally on the same tree. No Gradle, no
+service restart, no write outside `themoviebox.db`, production catalog untouched.
+
+**Next on this lane:** nothing. The importer is honest about what it can and
+cannot get; the remaining MovieBox work is a different problem (a print resolver
+for a client-side play path we have deliberately not reverse-engineered), and it
+is not worth a fleet slot while the app lane and the projection (#10) are behind.
+
+---
+
+## 2026-10-30 01:15–01:4x — q3 lane, DISHW stale-claim sweep part 2 (docs only)
+
+**Re-measured myself, not copied.** GitHub Actions run lists, via
+`/repos/rehanradd/radd-stream/actions/workflows/<id>/runs?per_page=10` with the token read
+from `os.environ` inside a `python3 -S` heredoc — never in argv, never in a URL, never printed
+(api.github.com flapped; the retry-with-backoff loop absorbed it). Workflow ids: backend
+`398476976` (93 runs), Android `398476977` (28 runs), Release `398476978`.
+- **Backend** `completed success` on **both** `master` and `main` at `87b7b6f`
+  (2026-10-29T19:42:59Z / 19:43:00Z — API prints UTC) and at `1aafddb`.
+- **Android** `completed success` on `main` and `master` at `9859b8a` (17:00Z), then every
+  app-lane run green: `217e8cd` 17:21:50Z (the retry that retired the only recent failure,
+  `99472e0` at 17:08:19Z), `bc2e534`, `e6482e9`, `a3c34ff`, `bd45ba0`, `9a590bb`, newest of any
+  branch `5e74aa2` at 19:22:09Z. **There is no red app lane.**
+This confirms the owner's fact 4 rather than restating it. The authoritative backend gate is
+17 modules / 791 tests; my own search branch additionally ran 19 modules / 845 tests green on
+the box before it was pushed.
+- **Production catalog** re-confirmed read-only by me earlier tonight and again here:
+  `/home/ubuntu/radd-stream-data/merged_catalog_20261025.db`, 6,396,899,328 bytes,
+  `page_size` 4096, WAL, **150,799** `posts`, 275,488 `cat_work_sites`. The `is_18_plus=1` count
+  of 15,068 and the `?limit=1` free read of `total: 135731` are cited from the qoder4 measurement
+  (2026-10-30), not taken by me — I did not run a 26-second scan on a box at load 7, which is the
+  fleet rule. The subtraction is checkable without the file: 150,799 − 15,068 = 135,731, so the
+  per-row filter tonight removes the flagged rows and nothing else. **It does not clear the
+  key-level leak** — a flagged work still reachable through an unflagged twin sharing a
+  `canonical_key` is untouched by this, and that reconciliation is still open (task #44's
+  successor; my probe design for it is the next queue item).
+
+**Corrected (dated inline, nothing deleted — the q4 `ANTIGRAVITY_HANDOFF.md` style).**
+- `docs/PROJECT_MAP.md`: the "**CI is red on both sides**" bullet (backend failing from
+  `test_evidence_writeback.py` onward, Android `636 tests completed, 9 failed`, `23 lint errors`)
+  and the "while the tree is red … restore green before claiming a milestone" consequence. The
+  ARM/Robolectric trap is kept and re-stated, because it is still true and still the reason a
+  local gate number cannot be trusted: `ScreenSnapshotTest` + `PosterCardProvenanceTest` are
+  excluded on arm64 (Robolectric #9166), only the hosted runner judges them, and it now passes them.
+- `App/AGENTS.md`: heading "…they do run — red — on the hosted runner" and the conclusion
+  "627 executed + 9 executed and FAILING on CI" → "627 executed here + 9 executed and **passing**
+  on CI". The exclusion, the 636 = 627 + 9 arithmetic and the `doFirst { logger.lifecycle(...) }`
+  warning stay.
+- `docs/SESSION_CHECKPOINT.md`: the "live API still serves `fast_fetch.db` (~201 posts), swapping
+  `RADD_DB_PATH` … prepared, not executed" blocker → **already swapped** (
+  `RADD_DB_PATH=merged_catalog_20261025.db` in `/proc/<pid>/environ`, unit active, RSS 58 MB —
+  qoder4 2026-10-30) with an explicit warning that an agent following the old instruction restarts
+  a healthy production service for no reason: **restarts and the first release tag are the owner's
+  calls only**. Also the "GitHub Actions is disabled at the account level, so those 9 tests execute
+  nowhere / report 618 + 9 excluded" limitation → executed on the hosted runner and green.
+- `App/docs/PLAYER_SPEC.md`: the same "disabled at the account level … execute nowhere" clause.
+- `docs/API_SURFACE_AUDIT.md`: "`5446771` … has **never been run by CI**, because it was never
+  pushed" → the commit stayed local-only but its content was cherry-picked as `2caadb3` and CI has
+  run it green many times since; the divergence arithmetic around it is left as written.
+- **Not re-edited** (q4 owns those at `079fcbb`): root `AGENTS.md`, `ANTIGRAVITY_HANDOFF.md`,
+  `docs/SENIOR_MENTOR_DIRECTIVE_QODER.md`. My changes agree with them: release blocked on the four
+  absent keystore secrets (`/actions/secrets` → `[]`, `tags: []`, `releases: []`, the one Release
+  run `40876596427` failing at its signing-secrets preflight), and the token is **un-stored here**
+  (`remote.origin.url` is clean, no config matches a token pattern) while remaining **unrevoked
+  upstream** — askpass stays the procedure and revocation stays the owner's.
+
+**Numbers I quote for facts 6 and 7 and why:** the cost of a production read
+(`SELECT COUNT(*) FROM posts` 0.91 s, the same with `WHERE is_18_plus=1` 26.46 s) is cited from
+the qoder4 measurement, not taken by me — the reason is that a 26-second scan on this box at load
+7 violates the fleet's nothing-heavy-above-load-4 rule, and the claim's job here is "admin counters
+must be pre-computed rows, never scans", which the q4 numbers already prove.
+
+**Push.** Docs-only, so `backend-ci.yml`'s `paths: Fast_Fetch/**` filter means **zero backend runs
+for this commit — that is correct**, and I am not claiming CI verified these docs. `CONTINUITY.md`
+is the only `Fast_Fetch/` path touched here, and it is documentation; the suites are untouched.
+Pushed to both `refs/heads/master` and `refs/heads/main` with the heredoc askpass copied verbatim
+from `ORACLE_DEPLOYMENT.md` (built with a heredoc, not `printf`; verified by counting the two
+`%s` lines), one attempt, no force, no tags, explicit clean URL, after `ls-remote`/fetch showed
+the tip had moved to `079fcbb`. `/opt/radd-stream` untouched; no production write; no service
+action; no scraper run; no scan.
+
+**Next, in the owner's queue order:** (a) `docs/ADULT_TWIN_PROBE.md` — the indexed
+`canonical_key` both-flagged-and-unflagged count plus the offline test that pins it, designed but
+**not run** against the 6.4 GB catalog while load is above 4, with the run left as a marked
+quiet-window step. (b) re-scan `App/docs` and `docs/` for any other present-tense claim a
+2026-10-30 measurement contradicts.

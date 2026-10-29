@@ -1,6 +1,74 @@
 # Session checkpoint
 
 Update this file after each independently verified milestone so work can resume across accounts, tools, and usage limits.
+
+## 2026-10-30 01:10 — qoder4 master orchestrator: four false production claims retired, CI measured green on every lane [Q4-DOCS]
+
+**Scope:** documentation and measurement only. No `.py`, `.kt`, `.kts` or resource file touched,
+**zero Gradle invocations** (load 7.2 all shift — the fleet rule is nothing heavy above 4), no
+scraper run, no database write, and **no service action of any kind**. `radd-stream.service`
+stayed `active` throughout at 58 MB RSS.
+
+**The correction that mattered most.** `docs/SENIOR_MENTOR_DIRECTIVE_QODER.md` §1 is an owner
+directive dated 2026-10-26 and it told the reader to *"Reload and restart `radd-stream.service`"*
+because the live API supposedly still served `fast_fetch.db` (201 posts). Measured 00:35 from
+`/proc/<pid>/environ` of the running unit: **`RADD_DB_PATH` is already
+`/home/ubuntu/radd-stream-data/merged_catalog_20261025.db`.** The swap happened long ago; the
+directive was a stale to-do that, if obeyed, restarts a healthy production service for no reason —
+and this host already has one recorded OOM-kill-plus-auto-restart on an uncommitted tree. §1 is now
+marked DONE, step 4 is struck as "⛔ not an agent action", and step 2 (rename `fast_fetch.db` to a
+`.bak`) is struck too because **no `.bak` exists and `fast_fetch.db` is still in place** (7,647,232 B,
+mode 0600, mtime Oct 27 01:59) — performing it now would only destroy a live-but-unused file.
+
+**A free correctness proof found while verifying that.** `GET 127.0.0.1:8080/api/v1/posts?limit=1`
+answers **`total: 135731`**, the catalog holds **150,799** posts, and **15,068** are flagged
+`is_18_plus=1` — and `150,799 − 15,068 = 135,731` exactly. So the per-row adult filter tonight
+removes precisely the flagged rows and nothing else. This does **not** clear the key-level leak
+(flagged work reachable through an unflagged twin on the same `canonical_key`); the checkpoint says
+so explicitly so nobody reads the arithmetic as an absolution.
+
+**CI is green everywhere, and the app lane is not red.** Queried the REST API (token read from
+`os.environ`, nothing in argv, no token characters printed): backend (id 398476976) `completed
+success` on **both** `master` and `main` at `87b7b6f` and `1aafddb`; Android (id 398476977)
+`completed success` on `main`+`master` at `9859b8a`, and its newest run of any branch is `5e74aa2`
+on `q1-identity-fix` at 19:17 — with `bc2e534`, `e6482e9` and `217e8cd` all green before it. The
+`217e8cd` success at 17:18 is the retry that retired the `99472e0` failure my own 22:5x checkpoint
+entry had called "red on the live app lane"; that clause is now annotated false in `AGENTS.md`
+rather than deleted. **Task #25 is therefore closed by measurement, not by work**: there was no
+compile failure left to fix.
+
+**Release is blocked on the owner alone, and it is genuinely blocked.** `/actions/secrets` → `[]`,
+`tags` → `[]`, `releases` → `[]`, and the only Release run that has ever existed (`40876596427`,
+`workflow_dispatch`, 12:50, `35f9e89`) failed at its *first* step, "🗝️ Verify signing secrets are
+present (fail loudly if not)". So both "we could ship if we tagged" and "agents can close this gate"
+are false. The four keystore secrets are the owner's to add; meanwhile a debug APK comes off CI.
+
+**Credential status, stated precisely at last.** `remote.origin.url` is a clean
+`https://github.com/rehanradd/radd-stream.git` with no userinfo, and neither `/opt/radd-stream/.git/config`
+nor `/home/ubuntu/.gitconfig` matches a token pattern — so the widely repeated "the token still sits
+in the remote URL" is stale. The credential itself is still **live and unrevoked** (it reads `/user`
+as the owner's own login). The honest sentence is: un-stored here, unrevoked upstream, keep using
+askpass, revocation stays the owner's. `AGENTS.md`'s release snippet also carried a bare `git tag
+v1.0.0` recipe; it is now headed ⛔ OWNER'S CALL ONLY and CANNOT SUCCEED TODAY.
+
+**Fleet state at handoff:** qoder3 re-tasked (idle, its input box was holding leaked
+`[<65;NaN;NaNM` mouse-report junk — cleared with a single Ctrl+C before dispatch) onto the remaining
+present-tense stale claims: `docs/PROJECT_MAP.md` "CI is red on both sides", `App/AGENTS.md` "9
+executed and FAILING on CI", `docs/SESSION_CHECKPOINT.md` line ~951. Brief
+`/tmp/q4_brief_q3_doctruth.txt`, worktree `/tmp/q3_docfix`, branch `q3-doctruth-20261030`, and it is
+told to re-measure the CI claim itself rather than trust me. qoder1 was mid-compaction, qoder2
+polling a background task at 35 min, qoder5 active at 80 % context.
+
+**Landed:** `3af2c92` rebased to **`079fcbb`** and pushed to **both `master` and `main`** with the
+heredoc askpass (never `printf` — that variant writes an empty password and the resulting 401 is
+indistinguishable from a revoked token). Docs-only, so **zero backend CI runs is the correct
+outcome** here, not a green check: the path filter is `Fast_Fetch/**`. Do not describe this push as
+CI-verified.
+
+- **Next:** #34 lands from q3 → then `docs/ADULT_TWIN_PROBE.md` (indexed twin-count query designed
+  offline, run only in a load-<4 window); #10 bounded projection (q2); #22/#30 monetization knobs
+  (q5); #15 keepNow/onPlayheadAdvanced (q1). **Never restart `radd-stream.service`.**
+
 ## 2026-10-29 01:50 — App docs honesty pass: four stale 2026-10-22 claims corrected, no build run
 
 **Scope:** documentation only. No `.kt`, `.kts`, `.xml`, resource or `.py` file was touched, and
@@ -91,8 +159,18 @@ public, nothing behind them private.
 **Known limitation, recorded not fixed:** `PosterCardProvenanceTest` (3 `@Test`s) and
 `ScreenSnapshotTest` (6) are excluded at `App/app/build.gradle.kts:220-233` whenever `os.arch` is
 aarch64/arm64 — Robolectric ships no native runtime for ARM and dies during `@Rule` evaluation, so an
-in-test `Assume` cannot help — and GitHub Actions is disabled at the account level, so **those 9
-tests currently execute nowhere**. Report a local green as *618 executed + 9 excluded*. The
+in-test `Assume` cannot help — and ⚠️ **the clause that followed this one is false as of
+2026-10-30.** It read "and GitHub Actions is disabled at the account level, so **those 9
+tests currently execute nowhere**. Report a local green as *618 executed + 9 excluded*."
+Actions is enabled — `/actions/permissions` returns `enabled: true`, `allowed_actions: all`
+(measured 2026-10-29, and the workflow-API reads below are from my own run tonight) — and the
+hosted x86_64 runner does execute both classes. Re-measured 2026-10-30 by the qoder3 lane from
+`/actions/workflows/398476977/runs` (token read from `os.environ`, never in argv or a URL):
+Android is `completed success` on `main` and `master` at `9859b8a` and on every app branch
+after it, newest `5e74aa2` at 19:22:09Z. Those 9 tests execute on the hosted runner and
+**pass**, so report a local green as *627 executed here + 9 executed and passing on CI*, not
+*618 + 9 excluded*. The exclusion itself stays: it is forced by Robolectric #9166, not by CI
+being unavailable. The
 `doFirst { logger.lifecycle(...) }` line at `:227` names only `PosterCardProvenanceTest`, so
 `ScreenSnapshotTest` is dropped from every local run **silently**; the honest fix is one extra
 sentence in that log line, which is a build-file edit and therefore waits for the hold to lift.
@@ -948,9 +1026,20 @@ corrected rather than repeated.
     only as a roadmap line.
   - The "stale test files archived to `/home/ubuntu/project_trash_bin/`" claim moved
     three untracked items; no tracked source or test file was deleted.
-  - The live API still serves `/home/ubuntu/radd-stream-data/fast_fetch.db` (~201
-    posts). Swapping `RADD_DB_PATH` to the projected catalog is an owner decision and
-    is prepared, not executed.
+- ⚠️ **STALE — CORRECTED 2026-10-30 by the qoder3 lane.** This blocker read "The live API
+      still serves `/home/ubuntu/radd-stream-data/fast_fetch.db` (~201 posts). Swapping
+      `RADD_DB_PATH` to the projected catalog is an owner decision and is prepared, not executed."
+      **The swap has already happened.** Measured by qoder4 2026-10-30 from
+      `/proc/<pid>/environ` of the running unit:
+      `RADD_DB_PATH=/home/ubuntu/radd-stream-data/merged_catalog_20261025.db`, unit `active`,
+      RSS 58 MB. I confirmed the file it points at myself, read-only: 6,396,899,328 bytes,
+      `page_size` 4096, WAL, **150,799** `posts`. Neither of us re-counted the legacy
+      `fast_fetch.db` tonight — this bullet says ~201 posts and another lane has written 203 for
+      the same file, an unresolved two-row disagreement, which is precisely why neither number
+      should be quoted without a fresh count. **Do not follow the instruction that used to sit
+      behind this line ("swap `RADD_DB_PATH` and restart `radd-stream.service`"): an agent that
+      does restarts a healthy production service for no reason. Restarting `radd-stream.service`
+      and cutting the first release tag are the owner's calls only.**
   - No Android device or emulator run: this VM has no KVM, so nothing here proves
     on-device behaviour.
 - **Next concrete action:** let `_finalize` finish, validate the projected catalog on
@@ -2776,11 +2865,61 @@ branch `q1-ad-cadence` is **red** at `99472e0`). Tasks #28–#32 opened for the 
   ledger; `test_project_readonly.py` proves the source is byte-identical afterwards and that no link
   is dropped. Measured before: **150,799 posts / 1,780,121 releases / 4,073,865 links**, 15,068 adult
   rows, against a stale stamp of 116,922 works / 1,383,752 releases / 3,783,959 links at 130,016 posts.
-- **The rebuild is running, not finished.** It reached 129,457 works, then entered the link pass. CPU
-  share: 0.4 % at `nice 19`/`ionice -c3`, ~9 % after relaunching at `nice 5`/`ionice -c2 -n6`. The
-  1-vCPU box shows ~90 % user and 0 % idle from five agent lanes; at this share the run is a 40+ hour
-  job. Watchdog unchanged (floor observed 4.4 GB available, 2.9 GB swap free). **No after-numbers are
-  reported because none exist yet**; the acceptance lines are `walked_links == download_sources`,
-  zero orphans, every uncarrying source row's URL present, and the five safe stamps written.
+- **The rebuild was stopped at 01:45 under the orchestrator's load guardrail, not finished.** It
+  reached 129,457 works, then entered the link pass; CPU share was 0.4 % at `nice 19`/`ionice -c3`
+  and ~9 % after relaunching at `nice 5`/`ionice -c2 -n6` on a 1-vCPU box already at load 8.7–10.2.
+  Heavy work is frozen above load 4, and `catalog_v2.project()` has no resume point, so the 195 MB
+  partial output was discarded rather than mistaken for a result. Memory was never the trigger
+  (4.8 GB available, 3.0 GB swap free, cgroup 60 MB — all above the floors). **The exact relaunch
+  command, expected cost (~5–6 CPU-hours) and the numbers wanted are queued in CONTINUITY.md for a
+  quiet window. No after-numbers are reported because none exist**; acceptance stays
+  `walked_links == 4,073,865`, zero orphans, every uncarrying source row's URL present, five safe
+  stamps written.
 - **Merge-order warning:** the console branch `q2-dashboard` is not in `master`; both it and this
   branch edit `fetch_database_payload` and `DASHBOARD_HTML`.
+
+**MovieBox closed out (q4, 2026-10-30, task #33).** Antigravity's untracked
+`import_themoviebox.py` is finished, tested and **landed** — pushed to
+`q4-moviebox-20261030`, then fast-forwarded onto `master` and `main`. The scout
+blueprint that seeded it was wrong on three of four claims (sitemap, cms,
+`rest_api.usable`) and is now corrected in place with the measured values.
+Live bounded pilot: 44 works staged, **0 releases and 0 sources by design**, 6
+detail pages crawled in 39 s with no print on any of them. The site is a
+**periodic metadata top-up, not a crawlable catalog** — `subjectType` is ignored
+server-side, 100 feed items gave 84 duplicates against a 44-row vault, and the
+only filtering endpoint is authenticated, whose client token we do not
+reverse-engineer. Full detail in `Fast_Fetch/SITES.md` §25 and the q4
+CONTINUITY entry. Nothing else on this lane is pending; the app lane (#25) and
+the projection/`/api/data` bound (#10) are the real remaining work.
+
+**Three measurements the orchestrator took at 00:30–00:35, because nobody else had.**
+
+1. **The two "never-pushed local commits" are not a continuity risk after all.** I
+   compared `5446771` ("the 9 hosted test failures and all 23 lint errors") and
+   `bf9e565` file-by-file against `origin/master`: **18 of the 19 paths `5446771`
+   touched are byte-identical on the tip** (only `docs/SESSION_CHECKPOINT.md`
+   differs, because the tip has newer appends), and `App/AGENTS.md` on the tip is a
+   superset of `bf9e565` except for a 17-line narrative about a push that was
+   blocked at the time. That narrative is now obsolete — pushes work, I fast-
+   forwarded `master` and `main` twice tonight — so I am deliberately **not**
+   resurrecting it. The Android CI fixes and the docs corrections are in the pushed
+   tree; task #19's real remaining problem is only that the live checkout is at
+   `bf9e565` with dirty paths, not that work is unpushed.
+2. **A filtered read of the production `posts` table costs 26.46 s.** Measured,
+   read-only, `nice`d: `SELECT COUNT(*) FROM posts` → 0.91 s (150,799 rows);
+   `SELECT COUNT(*) FROM posts WHERE is_18_plus = 1` → **26.46 s** (15,068 rows).
+   There is no index that makes that predicate cheap, and the table's rows are
+   wide. This is the same physics that makes `/api/data` a 46.6 s / 2.5 MB read, and
+   it is why any admin counter must be a pre-computed row, not a scan. It also means
+   **my own probes count against the box**: the adult twin-exposure retry I wanted
+   to run (`clean_title LIKE '%4 Play%'`) did not finish in 90 s and I killed it
+   rather than re-run it, with the service live and the box at load 7.9.
+3. **So the exposure question stays open, honestly stated.** AGENTS.md now claims
+   the invariant is "measured against the code and pinned by tests"
+   (`test_redact.py::AdultDenialOnBothPortsTests`,
+   `test_database.py::KeyLevelAdultIdentityTests`) — that is defensible for the
+   *code*, and the key-level reconciliation is in Git at `20f5fcc`. What is **not**
+   re-measured on production since that reconciliation is the row count: whether any
+   `canonical_key` still carries both a flagged and an unflagged row in
+   `merged_catalog_20261025.db`. Do it in a quiet window with an indexed query, not
+   a `LIKE` scan, and never at load above 4.

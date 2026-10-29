@@ -82,13 +82,13 @@ Describe the code's behavior accurately to users and tools. Do not disguise its 
   site's catalog including 18+ titles, flagging them via the `is_18_plus` column
   (`is_18_plus=1`) present in every site staging database. The flag is set at storage time and
   `save_scraped_data` re-derives it from the title as a row becomes a post
-  (`Fast_Fetch/fast_fetch.py:4246`), so an unlabelled adult title still gets flagged.
+  (`Fast_Fetch/fast_fetch.py:4426`), so an unlabelled adult title still gets flagged.
   **The invariant, measured against the code and pinned by tests**
   (`Fast_Fetch/test_redact.py::AdultDenialOnBothPortsTests`,
   `Fast_Fetch/test_database.py::KeyLevelAdultIdentityTests`): no public surface may list *or play* a
-  flagged row. Enforced today by `redact.adult_clause` (`Fast_Fetch/redact.py:1068`) inside
-  `api_v1_get_posts` (`Fast_Fetch/viewer.py:2516`), by the per-post bail at `viewer.py:676-682` and
-  `:2677`, by `redact.link_is_adult` (`redact.py:1074`) on the stream/download redirectors — which
+  flagged row. Enforced today by `redact.adult_clause` (`Fast_Fetch/redact.py:1073`) inside
+  `api_v1_get_posts` (`Fast_Fetch/viewer.py:2534`), by the per-post bail at `viewer.py:709` and
+  `:2710`, by `redact.link_is_adult` (`redact.py:1079`) on the stream/download redirectors — which
   answers True for an unknown link id so a typo cannot play either — and by nginx, which allow-lists
   only the public routes. To a public client a flagged row is indistinguishable from a row that never
   existed: the same `not_found`, the same status code, no hint that a flag caused the denial.
@@ -96,12 +96,12 @@ Describe the code's behavior accurately to users and tools. Do not disguise its 
   edge, `/api/m3u?id=159` returns 0 bytes where `/api/m3u?id=158` returns a real playlist, and
   `/api/m3u` is 403 at the edge.
   **One exception, deliberately, and it is not a user-facing display surface:** the operator panel.
-  `DASHBOARD_HTML` (`viewer.py:706`) reads `/api/data`, which this process 404s on the public port,
+  `DASHBOARD_HTML` (`viewer.py:739`) reads `/api/data`, which this process 404s on the public port,
   is served only on the loopback operator port, and 403s at the public edge; the trust boundary there
   is the loopback interface, not `RADD_ADMIN_TOKEN` (the token guards `/admin`, and `/` answers 200 on
   `8081` without it — measured 2026-10-29 05:47, see the table below). `fetch_database_payload`
-  (`viewer.py:482`) documents `full` as "the operator-only mode (loopback port): raw ledger rows", and
-  the panel renders a `18+ ADULT` badge (`viewer.py:1648`) because an operator auditing flag coverage
+  (`viewer.py:494`) documents `full` as "the operator-only mode (loopback port): raw ledger rows", and
+  the panel renders a `18+ ADULT` badge (`viewer.py:1681`) because an operator auditing flag coverage
   has to see which rows carry the flag. That is the *stored* half of this rule, shown to the person who
   owns the storage — never a playable link, and never a public list. `/api/v1/stream` and
   `/api/v1/download` deny a flagged link **on the operator port too**, with the same uniform
@@ -214,8 +214,47 @@ Verify only whether the two configured variable names are present; never read or
 - Stage only reviewed paths (`git add <paths>`), inspect the staged names/diff, and keep secrets, databases, APKs, build outputs, and uploaded chat files out of commits. Never use `git add -A` or force-push. Per owner authorization, agents may push verified, tested milestones directly to `main` so automated CI triggers and autonomous progress is seamless.
 - Treat `.replit` as local-only sensitive configuration: do not inspect its values or stage, commit, or push it. It is ignored and untracked. The user chose to leave historical copies intact; do not rewrite history unless they explicitly change that decision.
 - Use Git over HTTPS with the temporary askpass procedure in `ORACLE_DEPLOYMENT.md`. Never put credentials in URLs, command arguments, files, or logs.
-- Do **not** recreate or restore `push.py`, `github_push.py`, `emergency_push.py`, `push_github.py`, or `safe_push.sh`. They were GitHub Contents API uploaders that could write broad file sets directly to `main`; `safe_push.sh` additionally staged every path it found (`git add -u` plus all untracked files), committed without a test gate, and pushed through the `origin` remote whose URL still carries the owner's unrevoked token. All five were reduced to no-op warning stubs and have now been deleted from the tree — their history stays in Git, their danger stays retired. A local commit remains recoverable if a normal push fails—record the failure and next step in the checkpoint rather than claiming it synced.
+- Do **not** recreate or restore `push.py`, `github_push.py`, `emergency_push.py`, `push_github.py`, or `safe_push.sh`. They were GitHub Contents API uploaders that could write broad file sets directly to `main`; `safe_push.sh` additionally staged every path it found (`git add -u` plus all untracked files), committed without a test gate, and pushed through the `origin` remote whose URL still carries the owner's unrevoked token **(measured 2026-10-30: that clause is now stale as a description of this box — `remote.origin.url` is a clean `https://github.com/rehanradd/radd-stream.git` with no userinfo, and neither `/opt/radd-stream/.git/config` nor `/home/ubuntu/.gitconfig` matches a token pattern. The token itself is still live: it reads `/user` as the owner's own login. So the credential is unrevoked while being un-stored here — revoke it, and keep using the askpass flow rather than relying on the remote's URL to be clean).** All five were reduced to no-op warning stubs and have now been deleted from the tree — their history stays in Git, their danger stays retired. A local commit remains recoverable if a normal push fails—record the failure and next step in the checkpoint rather than claiming it synced.
 - Oracle deployment is separate from a GitHub branch push. Only deploy through a verified, tested release path after CI passes; do not copy untested or WIP code to the live host.
+
+---
+
+## 🚦 Fleet Resource Guardrail — measured on this box 2026-10-30
+
+**This host has ONE vCPU** (`nproc` = 1). Measured at 01:30 with five agent lanes running:
+load average 10.2, core 91 % user / 1 % idle / 0 % wait, run queue 8–9. A 6-second
+`/proc/<pid>/stat` utime+stime delta attributed **167.7 % of the entire machine to the five
+`qodercli` lanes plus tmux and `jbd2`**, while `radd-stream` itself consumed **29.8 CPU-seconds
+across 2 h 10 min of uptime — about 0.4 % of a core**. We are the load; production is not.
+Full per-route costs are in [`docs/CAPACITY_MEASURED.md`](docs/CAPACITY_MEASURED.md).
+
+CPU saturation only adds latency. **Memory saturation is what kills this host** — it already has
+one recorded OOM-kill of `radd-stream` (19:14:31, auto-restarted onto an uncommitted tree). So the
+rule is memory-led, not load-led:
+
+1. **HARD FLOOR — stop heavy work at once** if any of: `MemAvailable < 1500 MB`,
+   `SwapFree < 800 MB`, or the service cgroup `MemoryCurrent > 1200 MB`. Check with
+   `awk '/MemAvailable/{print int($2/1024)}' /proc/meminfo` and
+   `systemctl show radd-stream -p MemoryCurrent`. Note tonight: cgroup 528 MB / peak 897 MB,
+   while the **process RSS is only ~58 MB** — the rest is the 6.4 GB catalog in reclaimable page
+   cache, which is not the danger; a climbing RSS is.
+2. **HEAVY WORK is frozen while load > 4**: anything that scans the 6.4 GB catalog, any crawl or
+   scrape loop, any Gradle invocation, any bulk merge. Do not start a new one. If you are mid-run
+   and it is resumable, checkpoint, pause, and say so in your CONTINUITY entry rather than
+   grinding silently.
+3. **LIGHT WORK is always allowed**: editing code and docs, offline unit tests on in-memory or
+   `/tmp` fixtures, short-timeout loopback API reads, git operations.
+4. **Never probe a route or query of unknown cost with a sample size > 1.** Probe once with a
+   short `-m`, then decide. This rule exists because the orchestrator itself sent N=4 serial
+   requests to `/api/v1/stats` on this single core and burned **22.5 server CPU-seconds**, having
+   assumed it was a cheap counter.
+5. **Unchanged absolutes:** never restart/reload/stop `radd-stream.service`; never create or push
+   a git tag (and it cannot succeed anyway — `/actions/secrets` is `[]`); never commit from or
+   reset `/opt/radd-stream`, which is the live deployment tree; no Gradle until the owner confirms
+   load < 0.5; never put a credential in a URL, argv, file or log.
+6. **If your task needs a heavy read, do not run it — queue it.** Write the exact command, the
+   expected cost, and the number you want into your CONTINUITY entry as a quiet-window action.
+   Designing a probe is worth as much as running one when the box is at load 10.
 
 ---
 
@@ -252,7 +291,7 @@ CI's, and can silently test deleted code.
 | Android App: server setup, metadata catalog, search | ✅ Implemented; device verification pending | Phase 1 |
 | Android App: details and playback | ✅ Implemented (Media3 playback, favorites, keeps, VIP screen); device verification pending | Phase 2 |
 | GitHub Actions | ✅ **Enabled and running** — `/repos/rehanradd/radd-stream/actions/permissions` returns `{"enabled": true, "allowed_actions": "all"}` (measured 2026-10-29 03:54 host time; 40 runs recorded). The earlier "⛔ disabled at the account level" line in this file was **wrong** and is retired. All three repo-root workflows are `state=active`: `🐍 Backend CI`, `🔨 CI — Android Build & Test`, `🚀 Release — Sign & Publish APK + AAB`. The copies under `App/.github/workflows` are inert (GitHub only reads repo-root). | Gate is live |
-| CI health (both sides) | 🐍 **Backend CI is GREEN** — `completed success` on both `master` and `main` at `f0c1ca3`, and green on every adult-fix commit (`ab78849`, `8ad9862`, `6b28e48`, `f6637c9`, `c4a1302`). 🔨 **Android CI IS NOW GREEN — FIRST TIME EVER** — measured 2026-10-29 at `2caadb3`, `completed success` on **both** `master` and `main` (run `40874380668`); all 14 steps green, including the single combined `./gradlew :app:assembleDebug :app:testDebugUnitTest :app:lintDebug` step, `BUILD SUCCESSFUL in 7m 2s`, `:app:testDebugUnitTest` executed, no lint errors emitted. The previous "still RED: 636 tests / 9 failed / 23 lint errors" line was a **misdiagnosis**: every fix for it existed in `5446771`, but that commit was **local-only on a `master` that had diverged** from `origin/master` (`git merge-base --is-ancestor 5446771 origin/master` → NO; 2 local-only vs 26 remote-only) and `ci.yml` triggers on `App/**`, so nothing had fed it since `11742e0` (2026-10-28T21:21, failure). **It was unfed, not red** — I cherry-picked it onto `f0c1ca3` as `2caadb3` and pushed to both refs. The trap that hid this stays true: `ScreenSnapshotTest` and `PosterCardProvenanceTest` are excluded from every local arm64 run (Robolectric #9166), so only the hosted runner can judge them. `tags: 0`, `releases: 0` still, and signing is genuinely blocked on the four absent keystore secrets (see the measured note in Secrets above) — a debug APK is available from CI meanwhile. **Re-measured 2026-10-29 22:5x via `/actions/runs?per_page=6`** (91 runs total): 🐍 Backend CI is `completed success` on **both** `master` and `main` at `9859b8a` and at `6f7e3a0` — i.e. green on the 17-module list this file now documents, judged by the hosted runner and not only by this box. 🔨 Android is green on `master` (`2caadb3`) but **red on the live app lane**: branch `q1-ad-cadence` failed its combined Gradle step at `99472e0` (run `40917741872`, step `🏗️🧪🔍 Gradle: debug APK + unit tests + lint (single invocation)`, no annotations attached — read the job log, not the summary) with a retry `in_progress` at `217e8cd`. A green `master` does not mean the app lane is safe to merge. | Release blocked on owner secrets only |
+| CI health (both sides) | 🐍 **Backend CI is GREEN** — `completed success` on both `master` and `main` at `f0c1ca3`, and green on every adult-fix commit (`ab78849`, `8ad9862`, `6b28e48`, `f6637c9`, `c4a1302`). 🔨 **Android CI IS NOW GREEN — FIRST TIME EVER** — measured 2026-10-29 at `2caadb3`, `completed success` on **both** `master` and `main` (run `40874380668`); all 14 steps green, including the single combined `./gradlew :app:assembleDebug :app:testDebugUnitTest :app:lintDebug` step, `BUILD SUCCESSFUL in 7m 2s`, `:app:testDebugUnitTest` executed, no lint errors emitted. The previous "still RED: 636 tests / 9 failed / 23 lint errors" line was a **misdiagnosis**: every fix for it existed in `5446771`, but that commit was **local-only on a `master` that had diverged** from `origin/master` (`git merge-base --is-ancestor 5446771 origin/master` → NO; 2 local-only vs 26 remote-only) and `ci.yml` triggers on `App/**`, so nothing had fed it since `11742e0` (2026-10-28T21:21, failure). **It was unfed, not red** — I cherry-picked it onto `f0c1ca3` as `2caadb3` and pushed to both refs. The trap that hid this stays true: `ScreenSnapshotTest` and `PosterCardProvenanceTest` are excluded from every local arm64 run (Robolectric #9166), so only the hosted runner can judge them. `tags: 0`, `releases: 0` still, and signing is genuinely blocked on the four absent keystore secrets (see the measured note in Secrets above) — a debug APK is available from CI meanwhile. **Re-measured 2026-10-29 22:5x via `/actions/runs?per_page=6`** (91 runs total): 🐍 Backend CI is `completed success` on **both** `master` and `main` at `9859b8a` and at `6f7e3a0` — i.e. green on the 17-module list this file now documents, judged by the hosted runner and not only by this box. 🔨 Android is green on `master` (`2caadb3`) but **red on the live app lane**: branch `q1-ad-cadence` failed its combined Gradle step at `99472e0` (run `40917741872`, step `🏗️🧪🔍 Gradle: debug APK + unit tests + lint (single invocation)`, no annotations attached — read the job log, not the summary) with a retry `in_progress` at `217e8cd`. A green `master` does not mean the app lane is safe to merge. **⚠️ That last sentence was true at 22:5x and is now measured false — re-measured 2026-10-30 00:5x from `/actions/workflows/398476977/runs?per_page=12`: the retry `217e8cd` came back `completed success` (17:18), and every Android run after it is green — `bc2e534` on `q1-ad-cadence`, `e6482e9` on `q2-scenarios-fixes`, and `a3c34ff`/`bd45ba0`/`9a590bb`/`5e74aa2` on `q1-identity-fix`, the newest being `5e74aa2` at 19:17. Both trunk refs are green at `9859b8a` (Android) and `87b7b6f` (backend, on both `master` and `main`). There is no red app lane to wait on. `tags: []` and `releases: []` re-measured empty; the only Release run that has ever existed (`40876596427`, `workflow_dispatch`, 12:50, `35f9e89`) failed at its first step, "🗝️ Verify signing secrets are present (fail loudly if not)", and `/actions/secrets` returns `[]` — so signing is blocked on the owner adding the four keystore secrets, which is the only CI gate left that agents cannot close.** | Release blocked on owner secrets only |
 
 The current Oracle host and its HTTP-only limitations are documented in
 [`ORACLE_DEPLOYMENT.md`](ORACLE_DEPLOYMENT.md). The backend is **already deployed there and is the
@@ -326,12 +365,17 @@ python Fast_Fetch/fast_fetch.py search "Inception"
 # Root now carries ci.yml, release.yml and backend-ci.yml; the copies still sitting
 # in App/.github/workflows are inert and are being retired.
 
-# To create a signed release:
+# To create a signed release — ⛔ OWNER'S CALL ONLY, AND IT CANNOT SUCCEED TODAY:
+# tags: [] and releases: [] measured 2026-10-30, and /actions/secrets returns []. The one
+# Release run that has ever existed (40876596427) failed at its signing-secrets gate. No
+# agent may create or push a tag; the owner adds the four keystore secrets and tags.
 # 1. Tag the commit
 git tag v1.0.0
 # 2. Push the tag with Git using the temporary askpass helper in ORACLE_DEPLOYMENT.md,
-#    against the explicit clean URL — never `origin`, whose stored remote still
-#    embeds a leaked credential until the owner revokes it:
+#    against the explicit clean URL. (Measured 2026-10-30: `origin`'s stored URL is
+#    itself clean now, so the stated reason for avoiding it is gone — but keep the
+#    explicit URL and the askpass flow, because the credential is still unrevoked and
+#    a token in a URL is the leak this rule exists to prevent.)
 git push https://github.com/rehanradd/radd-stream.git v1.0.0
 # → GitHub Actions builds signed APK + creates Release automatically
 
