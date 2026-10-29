@@ -5,6 +5,8 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.raddstream.app.network.friendlyNetworkError
 import com.raddstream.app.network.models.Post
+import com.raddstream.app.player.AdCadenceGovernor
+import com.raddstream.app.player.AdSurface
 import com.raddstream.app.repository.CatalogRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
@@ -31,6 +33,8 @@ data class BrowseUiState(
 class BrowseViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle,
     private val catalogRepository: CatalogRepository,
+    private val adCadence: AdCadenceGovernor,
+    private val adFreeReader: AdFreeReader,
 ) : ViewModel() {
 
     private val type: String? = (savedStateHandle.get<String>(ARG_TYPE))?.takeIf { it.isNotBlank() && it != "all" }
@@ -40,6 +44,25 @@ class BrowseViewModel @Inject constructor(
 
     init {
         load()
+    }
+
+    /**
+     * How many posters the viewer has passed since last time. The grid's scroll index is the only
+     * honest measure of that, and it is reported rather than sampled because the cap is one card
+     * per twelve posters: the count has to survive the grid recomposing, paging, and the process
+     * being killed with the viewer mid-scroll, so it lands in Room and not in a composable.
+     *
+     * Crossing the cap asks the governor for the card itself. There is no `loading` state and no
+     * slot reserved for an answer: a surface nothing can fill shows nothing, and the viewer scrolls
+     * through the space where a card would have been exactly as if there had never been one.
+     */
+    fun onPostersScrolled(count: Int) {
+        if (count <= 0) return
+        viewModelScope.launch {
+            val adFree = adFreeReader.isAdFree()
+            adCadence.onPostersScrolled(count, adFree = adFree)
+            adCadence.offer(AdSurface.FEED_CARD, adFree = adFree)
+        }
     }
 
     fun load() {

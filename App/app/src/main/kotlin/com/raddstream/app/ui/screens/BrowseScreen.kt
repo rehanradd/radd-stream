@@ -22,8 +22,12 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -47,6 +51,21 @@ fun BrowseScreen(
     val state by viewModel.uiState.collectAsState()
     val gridState = rememberLazyGridState()
     rememberGridEndlessPaging(gridState = gridState) { viewModel.loadMore() }
+
+    // The native feed card is capped at one per twelve posters, and the grid's own scroll index is
+    // the only honest measure of how many the viewer has passed. Reporting the delta rather than
+    // the index is what keeps a re-composition from double-counting the same row, and nothing on
+    // screen depends on the answer: the governor holds the count, and a card no network filled
+    // renders no row at all.
+    val firstVisibleItem = gridState.firstVisibleItemIndex
+    var lastReportedItem by remember { mutableStateOf(0) }
+    LaunchedEffect(firstVisibleItem) {
+        val delta = firstVisibleItem - lastReportedItem
+        if (delta > 0) {
+            lastReportedItem = firstVisibleItem
+            viewModel.onPostersScrolled(delta)
+        }
+    }
 
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,

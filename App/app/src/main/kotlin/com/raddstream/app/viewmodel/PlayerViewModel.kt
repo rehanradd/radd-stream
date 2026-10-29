@@ -16,9 +16,12 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
 import com.raddstream.app.brand.Brand
+import com.raddstream.app.player.AdCadenceGovernor
+import com.raddstream.app.player.AdDecision
 import com.raddstream.app.player.AdSlot
 import com.raddstream.app.player.AdSlotPolicy
 import com.raddstream.app.player.AdSlotState
+import com.raddstream.app.player.AdSurface
 import com.raddstream.app.player.AspectMode
 import com.raddstream.app.player.AudioBoostUi
 import com.raddstream.app.player.AudioTrackPolicy
@@ -104,6 +107,7 @@ class PlayerViewModel @Inject constructor(
     private val catalogRepository: CatalogRepository,
     private val syncAccountRepository: SyncAccountRepository,
     private val watchHistoryDao: WatchHistoryDao,
+    private val adCadence: AdCadenceGovernor,
 ) : ViewModel() {
 
     private val store: PlayerSessionStore = PlayerSessionStore.Instance
@@ -922,10 +926,18 @@ class PlayerViewModel @Inject constructor(
      * ask this instead of deciding placement itself; a running title always gets
      * [AdSlot.NONE], which is what makes "never mid-scene" structural rather than a promise.
      *
-     * Nothing raises a break on its own today — the app ships no ad SDK or creative — so
-     * this is a guarded seam rather than an automatic ad.
+     * Placement is only the first half. A legal slot still has to clear the operator's cadence —
+     * one interstitial per 25 minutes of wall clock — and a surface no ad network filled answers
+     * [AdSlot.NONE] like any other refusal, so there is no state in which this returns "an ad is
+     * coming". Both interstitial placements draw on that one budget, deliberately: a binge that
+     * treated the between-episodes slot as "not a pre-roll" could otherwise buy a break every
+     * episode with a policy written to allow one.
+     *
+     * Suspending, because the cadence lives in Room and a cap read from memory alone would not
+     * survive the process being killed between episodes. Nothing raises a break on its own today —
+     * the app ships no ad SDK or creative — so this remains a guarded seam rather than an ad.
      */
-    fun requestAdBreak(): AdSlot {
+    suspend fun requestAdBreak(): AdSlot {
         val state = _ui.value
         val target = store.bundle.value?.target
         val scope = store.currentSyncScope()
@@ -941,8 +953,14 @@ class PlayerViewModel @Inject constructor(
                 isEntitled = isAdFree(),
             ),
         )
-        _ui.update { it.copy(adBreak = slot) }
-        return slot
+        if (slot == AdSlot.NONE) {
+            _ui.update { it.copy(adBreak = AdSlot.NONE) }
+            return AdSlot.NONE
+        }
+        val offer = adCadence.offer(AdSurface.PRE_ROLL, adFree = isAdFree())
+        val answer = if (offer is AdDecision.Serve) slot else AdSlot.NONE
+        _ui.update { it.copy(adBreak = answer) }
+        return answer
     }
 
     fun dismissAdBreak() {

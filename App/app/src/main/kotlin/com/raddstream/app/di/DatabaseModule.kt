@@ -5,6 +5,7 @@ import androidx.room.Room
 import com.raddstream.app.data.cache.ByteRangeManifestDao
 import com.raddstream.app.data.cache.CacheFileDao
 import com.raddstream.app.data.cache.CacheTaskDao
+import com.raddstream.app.data.local.AdCadenceDao
 import com.raddstream.app.data.local.AppDatabase
 import com.raddstream.app.data.local.FavoriteDao
 import com.raddstream.app.data.local.SyncedProgressDao
@@ -33,6 +34,7 @@ object DatabaseModule {
                 AppDatabase.MIGRATION_3_4,
                 AppDatabase.MIGRATION_4_5,
                 AppDatabase.MIGRATION_5_6,
+                AppDatabase.MIGRATION_6_7,
             )
             // Version 3 adds the offline cache tables for the first time. They have never shipped
             // on any device, so a destructive fallback lets Room generate their schema verbatim
@@ -70,6 +72,11 @@ object DatabaseModule {
     @Provides
     fun provideWatchHistoryDao(database: AppDatabase): WatchHistoryDao {
         return database.watchHistoryDao()
+    }
+
+    @Provides
+    fun provideAdCadenceDao(database: AppDatabase): AdCadenceDao {
+        return database.adCadenceDao()
     }
 }
 
