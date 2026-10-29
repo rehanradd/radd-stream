@@ -19,6 +19,15 @@
       behavior. That split is also what `lintDebug`'s NewApi check asks for; keeping it in one
       file needs an annotation suppression, which would silence the check for every real case too.
 
+      Only attributes that exist at minSdk 21 belong here. `android:windowLightStatusBar`
+      (API 23) lives in values-v23 and `android:windowLayoutInDisplayCutoutMode` (API 27) in
+      values-v27; below their introduction level the platform ignored them anyway, so the
+      rendered window is unchanged on every device. A version-qualified folder REPLACES this
+      style wholesale rather than merging into it, which is why each override repeats the three
+      items below — trimming them there to avoid the duplication is what would actually change
+      behavior. That split is also what `lintDebug`'s NewApi check asks for; keeping it in one
+      file needs an annotation suppression, which would silence the check for every real case too.
+
       BRAND: @color/radd_ink_950 is NOT declared in res/values/colors.xml any
       more — it is generated at build time from [resources.colors] in
       /brand.properties (see app/build.gradle.kts), and RaddInk950 itself reads
