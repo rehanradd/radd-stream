@@ -1861,3 +1861,37 @@ qoder1 = pre-roll/native ads + 25-min cap + 7-day streak UI; qoder2 = Hum TV/Geo
 qoder3 = green backend CI (**done**, shipped as `64c0b1b`); qoder5 = `safe_link_rollup` +
 `/api/v2/account/wallet`. qoder1's shortener directive arrived **truncated twice** ("must be
 100% direct with" has no ending), which is why its items 2+ never ran.
+
+### The live process is 2 days 15 h older than `main`, and that is why two public surfaces disagree
+
+Measured, not inferred: `systemctl show radd-stream -p ExecMainStartTimestamp` →
+**Tue 2026-10-27 19:47:16 PKT**, still `active`. `/opt/radd-stream/Fast_Fetch/viewer.py` has
+mtime 10-29 05:16 and contains the fixed stats path (`links_by_state_safe` appears twice,
+identical to `main`). Python binds source at import, so the interpreter is executing the
+Oct 27 code and **no edit to the tree changes that**. Consequence, measured through the public
+edge right now:
+
+    GET /api/v1/posts?limit=1   -> total 135,731   (matches my ledger write exactly)
+    GET /api/v1/stats           -> {"posts": 116922, "releases": 1383752,
+                                    "sources": 3783959, "active_sources": 3783959}
+
+`/api/v1/posts` looks current because it re-queries SQLite per request — which is precisely
+how my adult flip and rollback were visible with no restart. `/api/v1/stats` looks wrong
+because its *code* is old: `posts` is the stale projection stamp `works` (116,922, stamped at
+the 9,770 s rebuild), not the ledger (150,799) and not the adult-excluded live count
+(135,731); `releases`/`sources` are stamps too (ledger: 1,780,121 and 4,073,865). And
+`active_sources == sources` is the exact bug `34f22c6` removed from the source, while
+`cat_projection_meta.links_by_state` in the same database already says
+`{"unchecked": 3456460}` with `link_coverage = 0.0`. The endpoint is publishing as "active"
+3.46 M links that its own ledger admits were never probed.
+
+**Do not "fix" this by editing viewer.py again — it is already fixed on `main`.** Two things
+are required, both owner-gated, and I am not restarting the production unit on my own
+authority:
+  1. an owner-approved restart to load the current code (this is the activation step already
+     recorded above for the ingest-path change), and
+  2. a projection rebuild, which must wait for the `uncut`/`unrated` pattern fix (task #12)
+     or it will bake 7,663 false hides into `cat_works.is_18_plus` — the surface the app and
+     the v2 API filter on.
+Until both land, treat `/api/v1/stats` as stale-but-harmless and read the truth from
+`/api/v1/posts?limit=1` (`total`) and from SQLite directly.
