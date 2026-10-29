@@ -29,6 +29,7 @@ were not re-edited either.
 | CORS is an empty allow-list, not `*` | `Fast_Fetch/redact.py:1305`, `:1308` | `CORS_ALLOW_ORIGINS: frozenset[str] = frozenset()` and `cors_headers_for()` emits a header **only** for a listed origin; nothing anywhere assigns to it (grepped `Fast_Fetch/*.py`), and `Access-Control-Allow-Origin` appears **zero** times in `viewer.py` |
 | v2 is dispatched by the server | `Fast_Fetch/viewer.py:3240-3246` | `if api_v2.is_v2(path): … api_v2.route_get(self, path, query_params, db_path=DB_PATH, …)` |
 | The deployed tree has that code too | `git -C /opt/radd-stream show HEAD:…` | HEAD `bf9e565`; `viewer.py` contains `_public_gate` 4×; `redact.py:1278` is the same empty frozenset; `systemctl is-active radd-stream` → `active` |
+| nginx limits too | `/etc/nginx/conf.d/radd-stream-rate-limit.conf:1`, `/etc/nginx/sites-available/radd-stream:19,30,42,53,63,73,84`, enablement at `/etc/nginx/sites-enabled/radd-stream` (symlink, dated Oct 15 22:18) and `/etc/nginx/nginx.conf:67-68` (`include conf.d/*.conf`, `include sites-enabled/*`) | `limit_req_zone $binary_remote_addr zone=radd_stream_api:10m rate=10r/s` and `limit_req zone=radd_stream_api burst=30 nodelay` (burst 20 on two locations) applied per `location`. Read the enabled symlink, not just the available file — `grep -r` skips symlinks, which is why an earlier pass reported "no `limit_req`" and was wrong in the other direction. No `limit_req_status` anywhere, which is what `docs/API_SURFACE_AUDIT.md:228` row 5 is actually about — that row stays true |
 | Downloads and Continue Watching exist in app source | `App/app/src/main/kotlin/com/raddstream/app/` | `ui/navigation/Screen.kt:34` `object Downloads : Screen("downloads")`, `ui/screens/DownloadsScreen.kt`, `data/downloads/DownloadService.kt`, `viewmodel/ContinueWatchingTile.kt`, `viewmodel/PlayerViewModel.kt`, `data/local/WatchHistory.kt` (+ `AppDatabase.kt`, `di/DatabaseModule.kt`) |
 | Cast / DLNA / Android TV do not | same tree, grepped | zero hits for `CastButton`, `com.google.android.gms.cast`, `MediaPlayerSession`, `Dlna` |
 | A per-phone attempt budget does not | grepped `Fast_Fetch/*.py` | no `per_phone` / `device_budget`; `BUCKET_LIMITS` (`redact.py:1108`) is documented in-file as per client IP |
@@ -82,11 +83,15 @@ public allow-list."
 > no API key, no session and no rate limit."
 
 Three of the four are still true (plain HTTP, no TLS, no client session). **"no rate limit" is
-not** — `_public_gate` runs `redact.limiter.check()` on every public GET and POST at the
-checked-out tip *and* at deployed HEAD `bf9e565`. This is the highest-value hit in the file
-because `PROJECT_MAP.md` is what every new lane reads first. **Replacement:** "…plain HTTP with
-no TLS and no client session; per-IP rate limiting is in code (`_public_gate`,
-`viewer.py:3134`) and nginx adds no `limit_req` of its own."
+not** — it is wrong at both layers. In code, `_public_gate` runs `redact.limiter.check()` on
+every public GET and POST at the tip *and* at deployed HEAD `bf9e565`; at the edge, nginx
+applies `limit_req zone=radd_stream_api burst=30 nodelay` (`sites-available/radd-stream:19,30,
+42,53,63,73,84`) against a `10r/s` per-address zone
+(`conf.d/radd-stream-rate-limit.conf:1`). This is the highest-value hit in the file because
+`PROJECT_MAP.md` is what every new lane reads first. **Replacement:** "…plain HTTP with no TLS
+and no client session; the edge limits at 10 r/s per address with burst 30 (`limit_req`,
+`sites-available/radd-stream`) and the app adds its own per-IP token bucket
+(`_public_gate`, `viewer.py:3134`)."
 
 ### H5 · `Fast_Fetch/API_V2.md:1317` (§17 checklist, first item)
 > "- [ ] **All of Layer 2**: every `/api/v2` endpoint; `/manifest` content per §7.1."
