@@ -748,7 +748,11 @@ class OperatorPanel(Fixture):
         self.assertEqual(answered[1], admin_panel.CONTENT_HTML)
         text = answered[2].decode()
         self.assertIn(JAZZ_TID, text, "an operator cannot check a TID they cannot see")
-        self.assertIn("200", text)
+        # The page's server price list must show the authoritative monthly price —
+        # 250, per `MONETIZATION_AND_FLEET_PLAN.md:46` and the owner's 2026-10-29
+        # ruling. It used to read 200 here; that literal was the old `PLAN_DEFAULTS`
+        # value leaking through, so it is asserted at 250 now, not removed.
+        self.assertIn("250", text)
         self.assertIn("vip_monthly", text)
         self.assertIn(payments.account_hint(self.conn.execute(
             "SELECT key_hash FROM user_accounts WHERE id = ?",
