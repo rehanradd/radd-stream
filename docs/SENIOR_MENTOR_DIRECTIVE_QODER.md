@@ -10,12 +10,43 @@ Our live system audit revealed the exact root causes that you must fix immediate
 ---
 
 ### 1. DATABASE POINTER SWAP: RETIRE 7MB STUB, CONNECT REAL 5.7GB CATALOG
+> **⚠️ THIS ENTIRE SECTION IS DONE, AND FOLLOWING IT NOW WOULD BE AN INCIDENT. Read before acting.**
+> Measured on this box 2026-10-30 00:35 from `/proc/<pid>/environ` of the running
+> `radd-stream.service` unit: `RADD_DB_PATH` is **already**
+> `/home/ubuntu/radd-stream-data/merged_catalog_20261025.db`. The unit is `active`, RSS
+> 58 MB. Steps 1–2 below were performed; step 4 ("reload and restart") must **never** be
+> performed by an agent — restarts and the first release tag are the owner's call, and a
+> healthy production service restarted for no reason is exactly the failure this notice
+> exists to prevent (one OOM-kill + auto-restart on an uncommitted tree is already
+> recorded in `docs/SESSION_CHECKPOINT.md`).
+> The size and counts in step 1 were also stale as of this writing: the file measures
+> **6.40 GB (6,396,899,328 B)**, not 5.7 GB, and `posts` is **150,799** (with 15,068 rows
+> flagged `is_18_plus=1`), not 130,016 — later merge batches landed. `COUNT(*) FROM posts`
+> costs 0.91 s on this host; `… WHERE is_18_plus=1` costs **26.46 s**, so a verification
+> curl of `/api/v1/posts` is the cheap check, and a scan is not.
 * **Root Cause**: The live systemd service `radd-stream.service` was still pointing to `/home/ubuntu/radd-stream-data/fast_fetch.db`, which is an old 7.3MB test database containing only **201 posts**.
 * **Action Required**:
   1. Point `RADD_DB_PATH` in `/etc/systemd/system/radd-stream.service` to `/home/ubuntu/radd-stream-data/merged_catalog_20261025.db` (5.7GB, **130,016 posts**, **1,383,752 releases**, **3,456,460 links**).
-  2. Backup old test DB to `/home/ubuntu/radd-stream-data/fast_fetch_old_201_posts.db.bak`.
+  2. ~~Backup old test DB to `/home/ubuntu/radd-stream-data/fast_fetch_old_201_posts.db.bak`~~
+     **NOT DONE, AND DO NOT DO IT NOW.** Measured 2026-10-30: no `.bak` exists, and
+     `fast_fetch.db` is still in place (7,647,232 B, mode `0600`, mtime Oct 27 01:59). The
+     pointer was swapped *without* renaming anything, which is why there is no backup file —
+     and it is also why this step is now a destructive rename of a live-but-unused file for
+     no benefit. The service does not open it; leave it alone.
   3. Ensure `redact.site_needles()` in `Fast_Fetch/redact.py` does not run unindexed sequential scans over 3.7M rows of `download_sources` on startup.
-  4. Reload and restart `radd-stream.service`. Verify `curl http://127.0.0.1:8080/api/v1/posts` returns `total: 130000+`.
+  4. ~~Reload and restart `radd-stream.service`~~ **⛔ WITHDRAWN — not an agent action.**
+     Restarting production is the owner's call; the swap is already live and a restart here
+     buys nothing and risks an outage. The verification half of this step is read-only and
+     is how to check it: `curl -s http://127.0.0.1:8080/api/v1/posts | python3 -c 'import json,sys; print(json.load(sys.stdin)["total"])'`
+     — measured 2026-10-30 against the running unit: `/api/v1/posts?limit=1` returns
+     **`total: 135731`**, so the "130000+" bar in the original text is met and now
+     conservative. Note the arithmetic, because it is a free correctness proof of the
+     adult filter: the catalog holds 150,799 `posts`, of which 15,068 are flagged
+     `is_18_plus=1`, and **150,799 − 15,068 = 135,731** — exactly the public total. The
+     per-row filter is tonight removing precisely the flagged rows and nothing else. (The
+     *work-level* leak recorded in the root `AGENTS.md` — a flagged work reachable through
+     an unflagged twin under the same `canonical_key` — is a different defect and this
+     number does not clear it.)
 
 ---
 
