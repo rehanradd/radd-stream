@@ -118,6 +118,17 @@ Two further claims this table retires:
 - **Queue:** 3,119 URLs were never fetched (1,781 of them listing or pagination
   rows, many storing a literal `&amp;p=2`). The converter leaves `sitemap_cache`
   exactly as it found it.
+- **Mergeable vault (measured 2026-10-29, `convert_mp4moviez.py`).**
+  `/home/ubuntu/radd-stream-data/mp4moviez_staging2.db`, built read-only from
+  `mp4moviez.db`, holds **11,404 posts / 54,267 releases / 54,267 sources** and
+  32,967 `sitemap_cache` rows; 43 posts `is_18_plus=1`, 666 posts are staged
+  release-less, every source `unverified`. The converter prints and enforces a
+  counted identity: 29,848 legacy posts = 11,404 staged + 18,155 collapsed rows
+  + 289 skipped (187 not-a-work, 102 listing), and 54,267 legacy releases =
+  54,267 sources. A full merge into a fresh target landed those three counts in
+  302.7 s with 0 conflicts. Identity is per canonical work (slug title + year),
+  so episode pages of one series collapse into one post whose releases carry
+  season/episode numbers.
 
 ---
 
