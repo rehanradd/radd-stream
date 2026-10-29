@@ -50,9 +50,15 @@ class AdCadenceTest {
 
     @Test
     fun `an app-open ad is refused for three hours and fifty-nine minutes`() {
+        // Both arguments are absolute wall-clock instants, measured from the stamp itself. Written
+        // as bare durations (HOUR_MS * 4) they sit centuries before ZERO, so intervalElapsed's
+        // clock-behind-its-stamp rule refused them and the 3h59m assertFalse passed for a reason
+        // that had nothing to do with the four-hour window.
         val shown = state(appOpen = ZERO)
-        assertFalse(dueAt(HOUR_MS * 4 - 1, AdSurface.APP_OPEN, shown))
-        assertTrue(dueAt(HOUR_MS * 4, AdSurface.APP_OPEN, shown))
+        assertFalse("3h59m59.999s is inside the window", dueAt(ZERO + HOUR_MS * 4 - 1, AdSurface.APP_OPEN, shown))
+        assertFalse("24 minutes in is nowhere near it", dueAt(ZERO + 24 * MINUTE_MS, AdSurface.APP_OPEN, shown))
+        assertTrue(dueAt(ZERO + HOUR_MS * 4, AdSurface.APP_OPEN, shown))
+        assertTrue(dueAt(ZERO + HOUR_MS * 4 + 1, AdSurface.APP_OPEN, shown))
     }
 
     @Test
