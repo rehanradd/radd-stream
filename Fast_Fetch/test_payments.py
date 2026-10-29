@@ -264,9 +264,14 @@ class PlanAndPrice(Fixture):
             "SELECT COUNT(*) FROM payment_transactions").fetchone()[0], 0)
 
     def test_an_unreadable_or_absent_catalog_falls_back_to_the_documented_price(self):
-        self.assertEqual(payments.price_for("vip_monthly", None), 200)
+        # 250 is `MONETIZATION_AND_FLEET_PLAN.md:46` ("Monthly VIP: ₨ 250"), the
+        # authoritative price per the owner's 2026-10-29 ruling; the earlier 200 was
+        # a defect, not a second source. If this ever reads 200 again, a code default
+        # drifted — fix the default, do not "correct" this assertion back to 200.
+        self.assertEqual(payments.price_for("vip_monthly", None), 250,
+                         "the never-configured monthly fallback must match the plan doc")
         self.assertEqual(payments.price_for("vip_monthly",
-                                            Path(self.tmp.name) / "nope.db"), 200)
+                                            Path(self.tmp.name) / "nope.db"), 250)
         self.assertEqual(payments.price_for("vip_yearly", self.state), 1500)
 
     def test_only_the_documented_plans_are_sellable(self):
@@ -570,6 +575,12 @@ class AccountEdge(Fixture):
         self.assertEqual(set(receipt), {"payment_id", "status", "plan",
                                         "amount_pkr", "method", "submitted_at"})
         self.assertEqual(receipt["status"], "pending")
+        # 250, not 200: the fixture's `app_remote_config` row is created by
+        # `admin_panel._ensure_monetization`, whose `vip_monthly_pkr` column default is
+        # 250 — the owner's authoritative Monthly VIP (`MONETIZATION_AND_FLEET_PLAN.md:46`,
+        # ruled 2026-10-29). The server prices the claim from that row, so the receipt is
+        # 250. This is the same number the never-configured fallback test pins; if it
+        # reads 200 again the default drifted — fix the default, not this assertion.
         self.assertEqual(receipt["amount_pkr"], 250)
         self.assert_clean_public_body(filed, "payment receipt", forbid_tid=JAZZ_TID)
 

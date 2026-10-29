@@ -2531,3 +2531,13 @@ reported as CI-run, not claimed.
 
 **Stopped at the owner's line (Item 4).** Pushed branch `q5-monet-fields-20261029`; NOT merged, NOT
 deployed. "I merge, nobody deploys without the owner."
+
+**Follow-up — Q4 decision, 2026-10-29 ~21:45 (same branch, worktree `/tmp/q5_monet`).** The owner
+ruled `MONETIZATION_AND_FLEET_PLAN.md:46` ("Monthly VIP: ₨ 250") authoritative, so *both* 200s are
+defects. `admin_panel.vip_monthly_pkr` default was already 250 (my `dea1e41`); this commit fixes the
+remaining one — `payments.PLAN_DEFAULTS["vip_monthly"] (200,30) → (250,30)` — its `__main__`
+self-check assertion, and its doc comment. No live `app_remote_config` row was touched (the 200 Q4
+measured is the never-saved default; the corrected code default fixes the quote, the row self-heals
+on the next save/deploy). Pinned with `test_an_unreadable_or_absent_catalog_falls_back_to_the_documented_price`
+asserting the fallback == 250 with the doc line cited, and annotated `test_a_filed_payment_answers_201`
+so the 250 says *why* (owner directive) and cannot be "corrected" back to 200.

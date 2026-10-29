@@ -77,12 +77,15 @@ import accounts
 # ── the plan table (the ONLY thing that decides a price) ─────────────────────
 #: plan -> (default PKR, VIP days). Days, not months: `vip_until` is epoch
 #: seconds and a 30-day month is what a renewal arithmetic can actually do.
-#: PKR 200/month and PKR 1,500/year are `PAKISTAN_OPERATOR_GUIDE.md`'s own
-#: numbers; the yearly default is the guide's, the monthly default is the
-#: operator's editable one (`app_remote_config.vip_monthly_pkr`), and a saved
-#: price wins over these figures whenever that row can be read.
+#: PKR 250/month and PKR 1,500/year are `MONETIZATION_AND_FLEET_PLAN.md`'s own
+#: numbers (line 46: "Monthly VIP: ₨ 250"); the owner ruled on 2026-10-29 that
+#: that plan is authoritative, so the earlier 200 in `PAKISTAN_OPERATOR_GUIDE.md`
+#: is a defect, not a second opinion. The yearly default is the guide's, the
+#: monthly default is the operator's editable one
+#: (`app_remote_config.vip_monthly_pkr`), and a saved price wins over these
+#: figures whenever that row can be read. This is the never-configured fallback.
 PLAN_DEFAULTS = {
-    "vip_monthly": (200, 30),
+    "vip_monthly": (250, 30),
     "vip_yearly": (1500, 365),
 }
 
@@ -683,7 +686,7 @@ def _selfcheck() -> int:
             account_id = made["account_id"]
             filed = submit_payment(conn, account_id, plan="vip_monthly",
                                    method="jazzcash", tid="9823145671")
-            assert filed["status"] == STATUS_PENDING and filed["amount_pkr"] == 200
+            assert filed["status"] == STATUS_PENDING and filed["amount_pkr"] == 250
             assert has_pending(conn, account_id)
             approved = approve_payment(conn, filed["payment_id"], reviewer="selfcheck")
             assert approved["changed"] and approved["days"] == 30, approved
