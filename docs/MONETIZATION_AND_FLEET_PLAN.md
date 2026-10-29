@@ -98,6 +98,21 @@ traffic**, and re-derive after two weeks of real data. Anyone quoting the $8–2
 forecast is using a US rate for PK impressions.
 
 ### C. Payment collection — the Merchant Till ID is the worst option on the list, so it is demoted
+
+> **UPDATED 2026-10-29 18:58 — read [`MARKET_AND_PAYMENTS.md`](MARKET_AND_PAYMENTS.md) before acting
+> on this ladder.** Two of its rungs changed under primary-source checking: **Google Play Billing is
+> not reachable by this app** (a storefront-listed, scraped-catalog client is exactly what Play bans,
+> so the §E "real blocker" is not a fee problem but a distribution-existence problem), and **Wise
+> cannot receive for a Pakistan resident** — Wise's own hold-money country list (help article 2813542,
+> table updated 2026-10-05) does not include Pakistan, which voids the "open a Wise account and route
+> ad payouts into it" advice I was handed. The rail worth pursuing is **Raast P2M merchant IDs**, and
+> the honest headline is that *no* collection rail is both free and low-friction for an unregistered
+> PK developer in 2026.
+>
+> Also corrected there: the market draft's India and Tier-1 revenue tables understated their own
+> formula by ~41×, and its "kill the wallet/streak/passes" recommendation is overridden by the owner's
+> directive (coins buy passes; coins are never cash-outable).
+
 Owner's own complaint is correct: typing a Till ID and a reference number is friction nobody in a
 movie app tolerates, and the direct JazzCash/EasyPaisa merchant APIs require a registered business,
 a signed agreement, and an onboarding cycle we cannot promise to survive at $0.
