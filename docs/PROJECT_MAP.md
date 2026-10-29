@@ -16,7 +16,15 @@ Last updated: 2026-10-22 for the REST-surface and test-suite sections below (ver
   `PRAGMA integrity_check` on this 6.4 GB file at `nproc=1`): **150,799 posts / 1,780,121 releases /
   4,073,865 download_sources / 309,558 post_sources across 31 distinct `source_site`**, of which
   **15,020 posts carry `is_18_plus = 1`** and the public list route answers `total=135,779` —
-  exactly posts minus flagged.
+  exactly posts minus flagged. **Re-measured read-only at 21:35 against the same file (its mtime is
+  still 10:52:37): posts 150,799 (unchanged), `is_18_plus=1` 15,068 (+48), browsable `total` 135,731.**
+  The 48-row shift is a *tightening*, not a merge or a leak, and it is fully audited:
+  `/home/ubuntu/radd-stream-backups/adult_flip_rollback_journal.txt` records 10:52:37 "rolled back 407
+  of 455 key-reconciliation flips / kept (true adult evidence): 48 / public total 135324 -> 135731",
+  with the preimage in `adult_flip_preimage_20261029_104859.json` (455 rows) and the named root cause
+  in the journal itself — `ADULT_TITLE_PATTERNS` contains `\buncut\b` and `\bunrated\b`, which are
+  version labels and not adult evidence. So the sequence is 135,779 (05:12) → 135,324 (the 10:48 flip
+  of all 455) → 135,731 (407 undone at 10:52).
   Sixteen vaults have been merged in two campaigns: ten on 2026-10-28/29 (levidia, 5movierulz,
   dramacool, kisskh, moviecok, moviesmela, aryplus, filmiyin, animahd, desiserials) taking the
   catalog from 130,016 posts, then batch 3 on 2026-10-29 (pagalmovies +3,642 posts, filmyhit +935,
@@ -153,7 +161,21 @@ agents and app developers:
   `unchecked`. The **running process still serves the old shape** (`{"posts": 116922, ...,
   "active_sources": 3783959}` measured 05:12) because that is code, not data, and activation is
   `systemctl restart radd-stream` — an action the owner reserved. Data changes, by contrast, reach the
-  live API with no restart: I watched `total` move 134,815 → 135,735 → 135,779 as merges landed.
+  live API with no restart: I watched `total` move 134,815 → 135,779 as merges landed.
+  **Both halves of that paragraph are superseded as of 2026-10-29 19:14:31.** The unit was
+  OOM-killed and systemd's auto-restart brought it back *on the then-dirty `/opt/radd-stream` tree*,
+  which is not a deploy path anyone authorized (see the incident note in
+  `docs/SESSION_CHECKPOINT.md`). Measured on loopback at 21:35 with no restart by me:
+  `/api/v1/stats` → `{"posts": 103580, "releases": 1648807, "sources": 3705474, "active_sources": 0,
+  "resumable_sources": 0, "temporary_sources": 195842, "sources_by_state": {"dead": 21, "unchecked":
+  3696910, "unknown": 8543}}` in 4.9 ms — i.e. the **adult-excluded stamped shape is live now**, and
+  `posts` there is `COUNT(cat_works WHERE adult_clause)` (`_counted_stats` in `viewer.py`), 116,922
+  works minus 13,342 flagged = **103,580**, verified read-only against the catalog at 21:35. That is
+  why `stats.posts` (103,580, works) and `/api/v1/posts` `total` (135,731, posts) are *different
+  numbers on purpose*: one counts canonical works, the other counts post rows. They are not a
+  discrepancy and no filter is missing. The same restart also made the live response carry the
+  `subtitled` field, so production code is currently ahead of, and different from, every sha on
+  `master`/`main` — it cannot be reproduced from the pushed tree.
 
 ## Oracle Ubuntu backend
 

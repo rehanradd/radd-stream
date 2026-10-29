@@ -2457,3 +2457,71 @@ which is the right instinct), q3 on `Q3-SEARCH-LATENCY` A..F, q5 on `Q5-MONETIZA
 touching the production catalog, and merge batch 4 (#9) stays held for exactly that reason.
 Backend CI is green at `c2d11be` on both refs; production still runs the dirty `bf9e565` tree and the
 restart decision (#19) remains the owner's, not mine.
+
+## 2026-10-29 21:20–21:45 — the browsable-total "drift" was a real adult-flag rollback, and it is audited
+
+The open question at the last hand-off was why public `/api/v1/posts` `total` read 135,731 when I had
+recorded 134,815, with the 6.4 GB catalog file untouched since 10:52:37. It is not drift and not a
+filter regression; it is two audited writes, and the arithmetic identity holds exactly.
+
+- **Measured read-only** (`file:...?mode=ro&immutable=1`, no `integrity_check`, one `COUNT` each):
+  `posts` **150,799**, `is_18_plus=1` **15,068**, browsable **135,731** = 150,799 − 15,068. The
+  05:14 rollback copy `prebatch4_20261029_051444.db` gives the same 150,799 posts with **15,020**
+  flagged. So post count never moved; **48 rows gained the flag**.
+- **Who wrote them:** `/home/ubuntu/radd-stream-backups/adult_flip_rollback_journal.txt`, six lines,
+  timestamped 10:52:37 — "rolled back 407 of 455 key-reconciliation flips / kept (true adult
+  evidence): 48 / public total 135324 -> 135731", preimage
+  `adult_flip_preimage_20261029_104859.json` (455 rows, captured 10:48:53). The journal names its own
+  root cause: `ADULT_TITLE_PATTERNS` contains `\buncut\b` and `\bunrated\b`, which are version labels.
+  The sequence is therefore 135,779 (05:12) → 135,324 (all 455 flipped at 10:48) → 135,731 (407
+  undone). Nothing is unexplained, and the direction of the change is *tighter* hiding, not a leak.
+- **`stats.posts` and `total` are different numbers on purpose and I had been reading them as a
+  conflict:** `stats.posts` is `COUNT(cat_works WHERE adult_clause)` (`_counted_stats`), 116,922 works
+  − 13,342 flagged = **103,580**; `/api/v1/posts` `total` counts *post rows*, 135,731. Both verified
+  against the same file at 21:35. Canonical works are fewer than posts because merges dedupe.
+- **What the 19:14 crash-restart actually deployed** (this is the part of #19 that changes the facts,
+  not just the risk): production now answers the **adult-excluded stamped stats shape**
+  (`active_sources 0`, `sources_by_state {dead 21, unchecked 3696910, unknown 8543}`, 4.9 ms) and its
+  list rows carry `subtitled`. Both were false on `bf9e565`, which was the last sha anyone reviewed.
+  `docs/PROJECT_MAP.md` claimed "the running process still serves the old shape" — corrected in place,
+  with the caveat that the running code cannot be reproduced from any pushed ref.
+- **Production has never had an account or a payment.** The live catalog has 31 tables and *none* of
+  `user_accounts`, `user_favorites`, `user_progress`, `payment_transactions` is among them — so
+  "0 accounts" is stronger than a row count: the schema has never been created there.
+  `app_remote_config` holds exactly 1 row with `updated_at = 0`: every payment handle column empty,
+  both shortener tokens empty, `vip_monthly_pkr 200` / `vip_yearly_pkr 1500` at defaults,
+  `maintenance_mode 0`, `feature_quality_gate 0`. `cat_shortened_links` = 0 rows. **The flag column
+  `feature_link_shorteners` is absent from that table (18 columns where the pushed code declares 19),
+  and `/opt/radd-stream/Fast_Fetch/admin_panel.py` (mtime 10-27 17:25) contains no occurrence of it.**
+  So on production the "shorteners permanently retired" directive is currently enforced only by the
+  tokens being empty — which is precisely the fragility the pushed guard in
+  `admin_panel.py:1327-1346` exists to remove, and one more reason #19's deploy is worth deciding on.
+- **Doc corrections shipped this window** (all measured, each row keeps its old value visible):
+  `FULL_MASTER_FEATURE_INVENTORY.md` B-SEC-08 said "PBKDF2-style hash" — `accounts.py:593-624` stores
+  one **unsalted SHA-256, prefix-tagged `sha256:`**, with `AttemptTracker` at `:658` on the failure
+  path only; admin settings are **17** fields, not 15, and none of them encodes the engagement
+  pillars (ad cadences, coin wallet, streak, ₨20/50/250 ladder) — that is gap M-MON (#22), restated
+  here rather than invented as a doc error; Android test files/annotations are **81 (80 with
+  `@Test`) / 637**, not 47/381; and the shortener row no longer says "server ✅" without saying the
+  policy retired it. A dated header tells the reader the rest of the appendix is still a 10-27
+  measurement.
+- **Live-tree warning, recorded rather than acted on:** `/opt/radd-stream` carries uncommitted edits
+  to `docs/PROJECT_MAP.md` (+54/−10) plus ~29 code/doc paths from the App and backend lanes (the
+  cache/`keepNow` wiring, `catalog_v2.py`, `redact.py`, `CONTINUITY.md`). I did not commit from,
+  reset, or clean it. My corrections were made in `/tmp/q4_ipfix` on the pushed tip, so the live
+  draft and the pushed doc now differ; whoever resolves #19 should expect that doc collision.
+- **This closes the open question `2c217d5` left standing at 18:56** ("two flagged-row counts disagree
+  by 48", 15,020 vs 15,068). It was never a measurement error on either side: both were true, of two
+  different moments, and the 10:52:37 rollback journal is the event between them. No re-derive, no
+  re-flag, no reconciliation needed for those 48 rows — the audit trail already explains them, and the
+  pattern bug it names (`\buncut\b`, `\bunrated\b` in `ADULT_TITLE_PATTERNS`) is task #12's subject,
+  which is still blocked on the owner's verbatim `--owner-go`.
+- **Gate re-run at this tip, in the worktree (never in the live tree), per `2c217d5`:** `test_database.py`
+  **133 tests OK** in 30.7 s, `test_vidout.py` **6 OK**, `importers/test_host_resolvers.py` **171 OK**.
+  `AGENTS.md` still advertises "76 tests (measured 2026-10-29)", which is the live tree's stale count,
+  and I am *not* editing it: the live tree holds uncommitted `AGENTS.md` edits, and the previous note
+  in this file already decided that line belongs to whoever owns that changeset. The number a lane
+  should expect at the tip today is 133.
+- **Fleet/SLO:** load 5.22 falling to 2.34 (one core), 8,608 MiB available, swap unchanged, all five
+  worker panes `in_mode=0` and generating; no Gradle run (load gate 0.5 far away), merge batch 4 (#9)
+  still held.

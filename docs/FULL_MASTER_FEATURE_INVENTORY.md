@@ -2,6 +2,14 @@
 
 **Project:** `radd-stream` (Python/stdlib backend + Kotlin/Compose/Media3 Android client)
 **Compiled:** 2026-10-27 · **Amended:** 2026-10-27 after a call-site (not just symbol) audit — see §18.1
+· **Re-measured 2026-10-29 21:40.** Four figures in this file were wrong against the code as it stands
+today and are corrected in place, each row marked with its old value: B-SEC-08 called the sync-key
+digest "PBKDF2-style" when `accounts.py:593-624` stores **one unsalted SHA-256, prefix-tagged** (and
+the app derives that key from a phone number — see `docs/IDENTITY_AND_TRIAL_ABUSE.md`); the admin
+setting count is 17, not 15; and the Android test file/annotation counts are 81/637, not 47/381.
+The shortener row was also restated, because "server ✅" is true of the code and false of the policy.
+Everything else in this appendix is still a 2026-10-27 measurement and should be re-checked before
+being quoted.
 **Mandate:** exhaustive archaeology of every feature, mechanism, earning trick, UI requirement and
 search capability ever specified for this project, cross-referenced against the code that exists
 today, with build specifications for everything still missing.
@@ -195,7 +203,7 @@ returns zero rows are no longer true (see §24).
 | B-SEC-05 | Work/link handle minting for public responses | ARCHITECT | `redact.py:818-886`; `_art_pair` `viewer.py:413` | T1 |
 | B-SEC-06 | Adult link suppression by id | root AGENTS | `redact.link_is_adult`; `viewer.py:3076` | T1 |
 | B-SEC-07 | VIP capability parsing (bearer account or signed pass) | MONETIZATION | `viewer.py:388-410`; `redact.py:870` (`parse_vip_pass`) | T1 |
-| B-SEC-08 | Sync key hashing + attempt throttling | accounts spec | `accounts.py:546-758` (PBKDF2-style hash, `AttemptTracker`) | T1 — `test_accounts.py` |
+| B-SEC-08 | Sync key hashing + attempt throttling | accounts spec | `accounts.py:593-624` (**one unsalted SHA-256, prefix-tagged `sha256:`** — not PBKDF2/bcrypt; `AttemptTracker` `accounts.py:658` is consulted on the *failure* path only, per-IP bucket `account (30, 60.0)` `redact.py:1108`) | T1 — `test_accounts.py`; **open defect: the app derives the key from the phone number, see `docs/IDENTITY_AND_TRIAL_ABUSE.md`** |
 | B-SEC-09 | Admin token gate on loopback-only panel | MONETIZATION §admin | `admin_panel.py:19-43,1753-1830` | T1 |
 
 **Two security caveats (do not reproduce values):**
@@ -1104,7 +1112,7 @@ title cleaner and matcher.
 | Night-Owl downloads | archive feature 1 | ❌ missing |
 | SD-card priority | archive feature 3 | ❌ missing |
 | Data meter / saver | archive feature 5 | 🟡 sizes only |
-| Shortener waterfall | MONETIZATION §shorteners | server ✅, app ❌ |
+| Shortener waterfall | MONETIZATION §shorteners | server code present but **retired by the owner's standing directive**; app never calls the route. Measured on the live catalog 2026-10-29 21:40: `app_remote_config` = 1 row, both shortener token columns **empty**, `cat_shortened_links` = **0 rows**. **The retirement is enforced in the pushed code (`admin_panel.py:1327-1346` refuses every target unless `feature_link_shorteners=1`), NOT in what is deployed** — `/opt/radd-stream/Fast_Fetch/admin_panel.py` (mtime 10-27 17:25) contains no occurrence of that flag, and the live `app_remote_config` table has 18 columns, i.e. the flag column is absent. On production today the directive holds only because the token columns happen to be empty |
 | Rewarded VIP | MONETIZATION | local pass only |
 | Payments JazzCash/Easypaisa/Raast | OPERATOR guide | handles ✅, ledger ❌ |
 | Telegram funnel | OPERATOR guide Step 5 | ❌ |
@@ -1155,12 +1163,12 @@ title cleaner and matcher.
 | Backend `def test_` | 1,039 | static count, not re-run here |
 | Backend importers | 18 | per-site |
 | Android Kotlin files | 132 | `app/src/main` |
-| Android test files | 47 | 46 with `@Test` |
-| Android JVM tests | 381 | static count, CI runs them |
+| Android test files | **81** (80 with `@Test`) | re-counted 2026-10-29 under `App/app/src/test`; the row previously said 47/46 |
+| Android JVM tests | **637** `@Test` annotations | static count of the same tree, CI runs them; the row previously said 381 |
 | Android routes | 11 | all wired |
 | Cache test suites | 12 | ledger, TTL, eviction, scheduler, handoff, HLS, wiring |
 | Player test suites | 13 | gestures, audio, sleep, failover, ladder, ads, subtitles |
-| Admin settings fields | 15 | payments, ads, shorteners, flags |
+| Admin settings fields | **17** | re-counted 2026-10-29 from `admin_panel.MONETIZATION_FIELDS` (`:924-953`); the row previously said 15. Payments handles (4), VIP prices (2), ad/shortener ids+tokens (4), `feature_link_shorteners`, `maintenance_mode`, `apk_update_url`, three feature flags, `feature_quality_gate`. **Nothing in it covers the owner's engagement pillars** — no ad-cadence caps (1 pre-roll/25 min, 1 native card/12 posters, 1 app-open/4 h), no coin-wallet balance or ledger, no 7-day streak, no PKR micro-pass ladder (₨20/₨50/₨250). That is gap M-MON, not a doc error |
 
 ---
 
