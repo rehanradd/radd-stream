@@ -814,6 +814,20 @@ Anime/Asian scouting detail and the endpoints that *do* publish sitemaps are in 
   `kind=rate-limited` on that row, sets a module event, and every later queued
   row is skipped without a request or a spent attempt (the run prints
   `paused=rate-limited`). Resume later with a slower delay rather than hammering.
+- **Measured coverage (2026-10-29).** 1,522 sitemap locs = **80 posts harvested
+  + 1,441 locs still queued with zero attempts spent + 1 parked**. 3,966
+  releases / 3,966 sources (3,940 distinct URLs, so 26 rows share a signed
+  URL); 2 of 80 posts are `is_18_plus=1` at write. The parked row is `9-1-1`,
+  three `http-500` attempts. Throughput is episode-bound — series average
+  ~22.5 episodes, one API call each: measured 75 s/page at `--delay 0.5`, so a
+  120-page batch overran the hour; that run then met one `http-429`, wrote
+  `kind=http-429` on the row, paused (`paused=rate-limited`) and left the
+  1,441 queued rows untouched. Resume after the host cools down.
+- **Episode stall (fixed 2026-10-29).** `/api/stream` sometimes stops answering
+  mid-series (60 s read timeout; four consecutive episodes cost ~800 s of one
+  run). Episode fetches now make one attempt, and the walk aborts after three
+  consecutive failures, recording `episode_gaps` and `episode_aborted` in
+  `posts.raw_meta` instead of grinding through the rest of the list.
 - **Command:**
   ```bash
   python3 -S Fast_Fetch/importers/import_filmywap.py sync
