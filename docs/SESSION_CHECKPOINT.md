@@ -1978,6 +1978,19 @@ opened, no full scan or join was run against the 6.37 GB catalog.
   14 / 171. Zero real skips (the `skip` hits at `test_api_v2.py:1376,1409` are keyset-pagination
   docstrings, not `skipTest`). `test_merge_catalogs` is **green at this base**, so its stale
   `status == 'active'` assertion was already corrected upstream.
+- **The `master` ref moved mid-flight and this sha is the cherry-pick onto it.** `main` took the commit
+  at parent `7e5bd05`; `master` had advanced to `8ad9862` ("the un-flag auditor cannot write in report
+  mode"), so the push to `master` was rejected non-fast-forward and is re-committed on top of it
+  rather than forced. The cherry-pick applies with no conflicts and `8ad9862` touches
+  `audit_adult_flags.py` and `test_database.py` only — neither of this commit's five paths. Re-gated on
+  that exact base: **16/16 PASS, 828 tests** (124 / 6 / 96 / 24 / 57 / 28 / 12 / 46 / 58 / 23 / 127 /
+  12 / 5 / 25 / 14 / 171) plus `partner_api.py --self-test` OK. Note the delta is **5** tests, not 84:
+  `8ad9862` adds 84 *lines* to `test_database.py`, and I said "84 tests" when I reported the rebase
+  — the count moved 119 → 124.
+- **Hosted proof on `main`, independent of this box.** Run `40864414373`, `🐍 Backend CI`, branch
+  `main`, sha `6b28e48`: `status=completed`, `conclusion=success`, **all 15 test steps success** on
+  the x86_64 runner — including `test_catalog_api`, which on this single-core box needs a 600s ceiling
+  to show its 127 tests passing in ~130s.
 - **Why this lane initially mis-scoped it, recorded because the failure mode is repeatable:** local
   `master` sits at `bf9e565` and the remote is at `7e5bd05` — **diverged**, with parallel rebased
   copies of the same doc work (`5b96765` remote / `94d40fc` local, identical subject) and 21 remote
