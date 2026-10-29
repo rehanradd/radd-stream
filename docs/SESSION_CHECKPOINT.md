@@ -2774,3 +2774,35 @@ only filtering endpoint is authenticated, whose client token we do not
 reverse-engineer. Full detail in `Fast_Fetch/SITES.md` §25 and the q4
 CONTINUITY entry. Nothing else on this lane is pending; the app lane (#25) and
 the projection/`/api/data` bound (#10) are the real remaining work.
+
+**Three measurements the orchestrator took at 00:30–00:35, because nobody else had.**
+
+1. **The two "never-pushed local commits" are not a continuity risk after all.** I
+   compared `5446771` ("the 9 hosted test failures and all 23 lint errors") and
+   `bf9e565` file-by-file against `origin/master`: **18 of the 19 paths `5446771`
+   touched are byte-identical on the tip** (only `docs/SESSION_CHECKPOINT.md`
+   differs, because the tip has newer appends), and `App/AGENTS.md` on the tip is a
+   superset of `bf9e565` except for a 17-line narrative about a push that was
+   blocked at the time. That narrative is now obsolete — pushes work, I fast-
+   forwarded `master` and `main` twice tonight — so I am deliberately **not**
+   resurrecting it. The Android CI fixes and the docs corrections are in the pushed
+   tree; task #19's real remaining problem is only that the live checkout is at
+   `bf9e565` with dirty paths, not that work is unpushed.
+2. **A filtered read of the production `posts` table costs 26.46 s.** Measured,
+   read-only, `nice`d: `SELECT COUNT(*) FROM posts` → 0.91 s (150,799 rows);
+   `SELECT COUNT(*) FROM posts WHERE is_18_plus = 1` → **26.46 s** (15,068 rows).
+   There is no index that makes that predicate cheap, and the table's rows are
+   wide. This is the same physics that makes `/api/data` a 46.6 s / 2.5 MB read, and
+   it is why any admin counter must be a pre-computed row, not a scan. It also means
+   **my own probes count against the box**: the adult twin-exposure retry I wanted
+   to run (`clean_title LIKE '%4 Play%'`) did not finish in 90 s and I killed it
+   rather than re-run it, with the service live and the box at load 7.9.
+3. **So the exposure question stays open, honestly stated.** AGENTS.md now claims
+   the invariant is "measured against the code and pinned by tests"
+   (`test_redact.py::AdultDenialOnBothPortsTests`,
+   `test_database.py::KeyLevelAdultIdentityTests`) — that is defensible for the
+   *code*, and the key-level reconciliation is in Git at `20f5fcc`. What is **not**
+   re-measured on production since that reconciliation is the row count: whether any
+   `canonical_key` still carries both a flagged and an unflagged row in
+   `merged_catalog_20261025.db`. Do it in a quiet window with an indexed query, not
+   a `LIKE` scan, and never at load above 4.
