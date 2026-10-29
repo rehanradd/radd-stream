@@ -2572,3 +2572,130 @@ inside the App lane; the rest is reported as not-received rather than guessed at
 **Rules kept:** no `.py` touched, no service restart, no nginx change, no `git add -A`, no credential
 printed or logged, `/tmp/qbuild*.sh` only and one build at a time, §13 hue untouched, no device
 claim, and the first tag is cut only after Android CI is green.
+
+---
+
+### Session 31 — The three capped ad surfaces, and the CI verdict that a local box can never produce (2026-10-29)
+
+**Goal:** the owner's monetization pillars, enforced client-side where the surfaces live: a pre-roll
+at most **1 per 25 minutes**, a native feed card at most **1 per 12 posters**, an app-open ad at
+most **1 per 4 hours** — with the non-negotiables welded in: *never* a link shortener, CAPTCHA or
+10-second timer redirect, no ad that cannot be skipped after the first 5 s, no interstitial that
+blocks playback, no retry storm, and **"if an ad cannot be filled, show nothing — never show a
+spinner or a gate."** Branch `q1-ad-cadence` off `c2d11be`; commits `0ff0164` (the feature),
+`0793b4a` + `99472e0` + `217e8cd` (what CI then forced). 25 files, +1932/−27.
+
+**1 — the cadence is a pure time model, and it is one owner.** `player/AdCadence.kt` holds
+`AdCadenceLimits.SHIPPED` (`PRE_ROLL_MINUTES = 25L`, `FEED_CARD_POSTERS = 12`,
+`APP_OPEN_HOURS = 4L`, `MAX_SKIP_MS = 5_000L`), `AdSurface` (PRE_ROLL / FEED_CARD / APP_OPEN),
+`AdCadenceState`, and the three rules `due()`, `shown()`, `intervalElapsed()`. The wire can shorten
+a cap, never lengthen `MAX_SKIP_MS` — `AdCadenceGuardTest`'s `the wire cannot buy a longer skip than
+the ceiling allows` pins that, because a server-published skip length is the exact place a future
+"just make it 15 s" would otherwise land. Every comparison is against **absolute wall-clock ms**, not
+durations; see defect 3 below for why that distinction is load-bearing rather than stylistic.
+
+**2 — persistence is the Room database, not a new store, and the switch resets the windows.**
+`data/local/AdCadence.kt` is three rows (one per surface: `lastShownAtMs`, `postersScrolled`),
+`AppDatabase` version **7** with a real `MIGRATION_6_7`, `di/AdModule.kt` binds the
+`AdSwitch` interface to DataStore, and `AdCadenceGovernor` is the only writer: `refresh()` pulls
+the operator's caps, `offer(surface, adFree)` answers a decision, `onPostersScrolled(count, adFree)`
+counts tiles for the feed card, `clearForDisabledSwitch()` zeroes the stamps when the operator flips
+ads off — a viewer who was opted out then opted in again starts clean rather than inheriting an
+expired grudge. Wall clock (not `elapsedRealtime()`) because a reboot-elapsed value restarts at zero
+and would re-arm every surface on every restart. A switch read that **throws** is a refusal that
+writes nothing (`AdCadenceGovernorTest`'s throwing-`AdSwitch` case), which is also the case that
+broke CI — see defect 1b. `VipRemoteConfig` tolerates the ad block being absent entirely: an older
+deployment decodes to the shipped caps, never to "unlimited ads". `AdFreeReader` is the single
+entitlement reader (server VIP or the device-local rewarded pass), and `NoAdInventory` is the honest
+production binding: **nothing can be filled**, so every offer renders as nothing.
+Wiring: app-open from `HomeViewModel`, the feed card from `BrowseViewModel`/`BrowseScreen` per 12
+posters, pre-roll from `PlayerViewModel`/`PlayerScreen`. Tests are clock-driven
+(`FixedAdWallClock`, zero `Thread.sleep`): `AdCadenceTest` 14, `AdCadenceGovernorTest` 13,
+`AdCadenceGuardTest` 10, `AdCadenceRowsTest` 7, `AdCadenceLimitsTest` 6.
+
+**Three defects CI found, fixed without deleting an assertion.**
+
+**1a — `AdCadenceRowsTest.kt:75 Unresolved reference 'assertFalse'`** (`:app:compileDebugUnitTestKotlin`
+FAILED, run 17, `0ff0164`). `compileDebugUnitTestKotlin` is a whole-source-set compile, so one missing
+import aborts every suite in the module before a single test runs — which is why CI knew before any
+local run could. Fixed by adding the import in the file's own one-name-per-line style (`assertEquals`,
+`assertFalse`, `assertTrue`), not by switching to `Assert.assertFalse` and not by weakening the
+assertion. The instruction "a missing import is never isolated" was taken literally: all 86 test
+sources were scanned for used-but-unimported `org.junit.Assert` names, and this was the only one.
+
+**1b — `AdCadenceGovernorTest.kt:265 Argument type mismatch: '<anonymous>' vs FakeSwitch`.** The
+*call site was right and the helper was wrong*: `governor(dao, clock, switch: FakeSwitch, inventory)`
+over-narrowed a parameter that `AdCadenceGovernor` itself declares as the `AdSwitch` interface
+(`:52-57`), and the test installs an anonymous `AdSwitch` whose `adsEnabled()` throws — a fake
+structurally cannot be. Widened the helper to `AdSwitch`, so the "torn preferences is a refusal, not a
+crash" case still runs. Nothing deleted; no `as` cast; the compiler's own type became the parameter's.
+
+**2 — `99472e0`: the client shipped a price, and the price moved under it.** The directive said the
+VIP monthly is ₨**250** (`docs/MONETIZATION_AND_FLEET_PLAN.md:46`) and to stop baking 200 in. Changing
+`200` to `250` would have been the wrong fix, because `AccountWire` sends **no amount field at all**
+(`payments.submit_payment` looks the amount up server-side and 400s a body that carries one) — so any
+number this app renders is a claim it can never verify, and q5 was editing both server defaults while
+I looked. `VipViewModel.DEFAULT_MONTHLY_PKR`/`DEFAULT_YEARLY_PKR` are therefore **deleted** and
+replaced by `NO_PRICE_PUBLISHED = 0`; `amountLabel()` renders `Not published by the server` and
+`yearlyBadge()` returns null (no "Save …" computed from a number that isn't there). The two fixtures
+that legitimately *supply* a price as render input (`ScreenSnapshotTest.vipState`, two bodies in
+`VipRemoteConfigTest`) now say 250/1800 and are commented as input, not defaults. `VipWireContractTest`
+lost `the quoted fallback prices are the documented server defaults` (it pinned 200 and would have gone
+red the instant q5 landed 250) and gained `this app carries no price of its own` — a regex that finds
+exactly the two `Int =` defaults and refuses a numeric literal — plus the positive control
+`the detector does report a price baked into the client`, whose own fixture asserts
+`listOf("monthlyPkr = 200", "yearlyPkr = 1_500")`, so a scanner that stopped matching cannot go green.
+
+**3 — `217e8cd`: a test that passed for the wrong reason, and CI caught it, not me.** Run 21
+(`99472e0`) compiled and reported one behavioural failure at `AdCadenceTest.kt:55`. The app-open case
+called `dueAt(HOUR_MS * 4 - 1, APP_OPEN, state(appOpen = ZERO))` — passing a bare **duration** as a
+wall-clock instant. `4·3600000 − 1` sits centuries before `ZERO = 1_730_000_000_000L`, so
+`nowMs - shownAtMs` went negative and `intervalElapsed`'s clock-behind-its-own-stamp rule refused it.
+The `assertFalse` therefore passed **vacuously**: it would have passed for a 1-minute window and for a
+10-hour one, and it was the only bound in the file not anchored to the stamp. All four bounds are now
+`ZERO + HOUR_MS * 4 − 1 / + 24·MINUTE_MS / + HOUR_MS * 4 / + HOUR_MS * 4 + 1`, with the reasoning in
+the comment so the next reader does not "simplify" an argument back into a duration. I replayed all 19
+asserted cadence rows through a Python port of `due`/`intervalElapsed` before spending the CI cycle —
+and my first port guessed the wrong fixture for the future-stamp case and printed a false FAIL, so the
+file was re-read and the replay re-run; the correction is in the report, not a invented pass.
+
+**Gate — and it is not this box's.** `cat /proc/loadavg` read 7.32, then 8.0, then 9.61 for the entire
+window (three to five lanes live on one vCPU), so the standing rule **under 0.5** was never satisfied
+and **zero Gradle invocations** happened here: nothing in this entry is a local build claim. What the
+hosted runner says, read off run **40920036712** (run #22, `q1-ad-cadence` at
+**`217e8cd9620269e60f78e0bf731f89ea4e367980`**): `completed / success`, all 14 steps success,
+`BUILD SUCCESSFUL in 2m 50s`. The `ci-reports` artifact (id 12918495769) was downloaded and counted
+rather than trusted: **86 result XMLs, 694 tests, 0 failures, 0 errors, 0 skipped** — including
+`ScreenSnapshotTest` **6 executed / 0 failed** and `PosterCardProvenanceTest` **3 executed / 0
+failed**, the two suites that cannot run on aarch64 at all (§1a). That is the first time in this
+repository's history that those nine have been green on a sha carrying my work, which is precisely the
+evidence a local "green" was never allowed to stand in for. Progression as measured, not smoothed:
+run 17 at `0ff0164` = compile failure, **no test executed anywhere**; run 21 at `99472e0` = compiled,
+1 behavioural failure; run 22 at `217e8cd` = clean. Pushed by fast-forward only
+(`0ff0164..99472e0`, `99472e0..217e8cd`), no force-push, only reviewed paths staged.
+
+**Deliberately not verified — the honest gap list, unchanged by a green CI:** no device or emulator
+was used, so no ad surface has been *seen*. `MIGRATION_6_7` has executed **nowhere** — not here (the
+Robolectric exclusion), not on a device that does not exist. The app-open surface is asked from
+`HomeViewModel.init` only, so a background→foreground resume of a live process does not re-ask it —
+that is a decision made at a seam, not the 4-hour rule tested. `AdSlotPolicy` is untouched, so a
+pre-roll and a between-episodes break still draw on **one** 25-minute budget rather than two.
+`NoAdInventory` means this build can never fill an ad — the cadence is real and enforced against an
+offer set that is always empty, which is the literal reading of "show nothing", not a placeholder for
+an SDK nobody has integrated. `PlayerViewModel.requestAdBreak()` still has no caller. The coin wallet
+and the 7-day streak are decoded from remote config and displayed by **no screen**, on purpose: there
+is no server-side wallet or streak record, and `Fast_Fetch/**` is the backend lane's.
+`wrapWithShortener` remains nonexistent in Kotlin (searched before and after) and the backend
+shortener half is left to its owner.
+
+**Rules kept:** no `.py` touched, no service restart, no nginx change, no `git add -A`, no credential
+printed or logged, no Gradle invoked at load ≥ 0.5, §13 hue untouched, no device claim, the first tag
+still gated on green Android CI **and** the four keystore secrets that are measured absent.
+
+**Next agent should:** (1) on a device, confirm the 6→7 upgrade leaves an existing install's
+favourites intact and that the three cadence rows exist; (2) decide whether app-open should re-ask on
+an `ON_START` lifecycle observer rather than only at `init` — the cadence will cap it, so this is a
+product question, not a leak; (3) if an ad SDK ever lands, replace `NoAdInventory` in `di/AdModule.kt`
+and keep `AdCadenceGuardTest`'s five-second ceiling and no-spinner refusals, which are the parts the
+owner ruled on; (4) do not re-add a price constant to `VipViewModel` — `this app carries no price of
+its own` will fail, and it is failing on purpose.
