@@ -25,6 +25,11 @@ name: 🐍 Backend CI — Stdlib Python Tests
 #     - Fast_Fetch/test_merge_catalogs.py    (staging → unified merge)
 #     - Fast_Fetch/test_site_scout.py        (site discovery / spec phases)
 #     - Fast_Fetch/test_backup_manager.py    (offsite backup tooling)
+#     - Fast_Fetch/test_public_edge_scenarios.py (A–G scenario matrix on BOTH
+#                                             policies: boots operator=False and
+#                                             operator=True on ephemeral 127.0.0.1
+#                                             ports against a temp ledger — NO
+#                                             external network, NO production DB)
 #
 #   Deliberately EXCLUDED:
 #     - Fast_Fetch/test_all_sites.py  — live 10-site network audit; needs the
@@ -120,3 +125,9 @@ jobs:
 
       - name: 🧪 test_backup_manager.py
         run: python3 -S Fast_Fetch/test_backup_manager.py
+
+      # The whole A–G matrix over real HTTP on both server policies. It binds
+      # only ephemeral loopback ports and builds its own temp ledger, so like
+      # test_link_health it needs no internet and reads no production database.
+      - name: 🧪 test_public_edge_scenarios.py
+        run: python3 -S Fast_Fetch/test_public_edge_scenarios.py
