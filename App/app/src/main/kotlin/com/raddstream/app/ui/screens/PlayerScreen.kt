@@ -528,12 +528,21 @@ private fun PlayerScreenContent(
  */
 private const val TWO_FINGER_TAP_GUARD_NS = 250_000_000L
 
-/** True when any blocking dialog/sheet is up — pauses the controls auto-hide. */
+/**
+ * True when a sheet the viewer opened is up — pauses the controls auto-hide.
+ *
+ * `adBreak` is deliberately NOT one of these. An ad is not a modal: it never holds the chrome
+ * still, and nothing here can make the tape wait on a creative the viewer did not ask for. A
+ * sponsor slot renders as a dismissible card over a player that keeps playing, and the owner's
+ * rule — no interstitial that blocks playback, and if an ad cannot be filled show nothing — is
+ * enforced by this line not containing it. `AdSlotPolicyTest` and `AdCadenceGuardTest` are the
+ * proofs; a future edit that adds it back fails both.
+ */
 private val PlayerUiState.dialogBlocking: Boolean
     get() = resumeOfferMs != null || calibration != null || giveUp != null ||
         speedSheetVisible || tracksSheetVisible || subtitleSheetVisible ||
         subtitleOffsetSheetVisible || printSheetVisible || sleepSheetVisible ||
-        playFromDialogVisible || qualitySheetVisible || adBreak != AdSlot.NONE
+        playFromDialogVisible || qualitySheetVisible
 
 // ── 1. Surface ─────────────────────────────────────────────────────────────────
 

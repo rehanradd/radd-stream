@@ -9,6 +9,8 @@ import com.raddstream.app.network.friendlyNetworkError
 import com.raddstream.app.network.models.Post
 import com.raddstream.app.network.models.VipRemoteConfig
 import com.raddstream.app.network.models.WireText
+import com.raddstream.app.player.AdCadenceGovernor
+import com.raddstream.app.player.AdSurface
 import com.raddstream.app.repository.CatalogRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
@@ -96,6 +98,8 @@ class HomeViewModel @Inject constructor(
     private val catalogRepository: CatalogRepository,
     private val watchHistoryDao: WatchHistoryDao,
     private val syncedProgressDao: SyncedProgressDao,
+    private val adCadence: AdCadenceGovernor,
+    private val adFreeReader: AdFreeReader,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(HomeUiState())
@@ -117,6 +121,24 @@ class HomeViewModel @Inject constructor(
         _uiState.update { it.copy(sections = initial) }
         loadAll(force = true)
         checkForUpdate()
+        askAppOpenAd()
+    }
+
+    /**
+     * The app-open surface, asked once per Home entry and capped at one impression per four hours
+     * of wall clock.
+     *
+     * Nothing is awaited and nothing is rendered from the answer, and that is the whole design: an
+     * app-open ad that the first frame had to wait for *is* the 10-second timer redirect the owner
+     * ruled out, in a different costume. The governor records the impression when a network can fill
+     * the slot and answers `None` when it cannot, and a `None` costs this screen exactly the work of
+     * one suspended call — no placeholder, no spinner, no held catalog.
+     */
+    private fun askAppOpenAd() {
+        viewModelScope.launch {
+            val adFree = adFreeReader.isAdFree()
+            adCadence.offer(AdSurface.APP_OPEN, adFree = adFree)
+        }
     }
 
     /**
