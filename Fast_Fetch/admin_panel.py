@@ -118,6 +118,7 @@ from pathlib import Path
 import accounts
 import catalog_v2
 import config
+import engagement
 import payments
 import redact
 import usage_stats
@@ -1052,6 +1053,11 @@ _PHONE = "phone"
 _MONEY = "pkr"
 _TOKEN = "token"
 _FLAG = "flag"
+#: A whole number that is not money and not a flag: a cadence in minutes, a
+#: poster count, a coin cost, a streak grant, a rollover hour. `"count"` rather
+#: than `"int"` only because the kind string is display metadata and a neutral
+#: spelling keeps it clear of any reserved key the body scan watches for.
+_INT = "count"
 #: Not `"url"`: every admin body is scanned for provenance *keys*, and `"url"`
 #: is one of them. The kind is display metadata, so it takes a neutral spelling.
 _URL = "address"
@@ -1096,6 +1102,48 @@ MONETIZATION_FIELDS = (
     # anyone the ledger has not confirmed, which is a business decision and not a
     # default. Flip it in /admin when the approval traffic exists to serve it.
     ("feature_quality_gate", "Charge VIP for 1080p/4K", _FLAG, 0),
+    # ---- engagement pillars ----------------------------------------------------
+    # The four knobs `docs/MONETIZATION_PILLARS_SCHEMA.md` §2 reserves for the
+    # operator, so an ad cadence, a coin price, a streak grant and the PKR pass
+    # ladder are changed from /admin and not by a code push. `Fast_Fetch/engagement.py`
+    # is the consumer and holds the same numbers as its own constants; the public
+    # block is built *over* `engagement.remote_view()` (see `_engagement_public`),
+    # so a number can only ever be written down once, and a whole-dictionary test
+    # (`test_admin_panel.test_the_engagement_block_is_the_ledgers_own_projection`)
+    # is what makes that a fact rather than an intention.
+    #
+    # A stored 0 is legal and means "use the default" — never "unlimited" and
+    # never "free". `engagement.resolve_caps` clamps a 0 cadence back to the
+    # shipped value, and a 0 coin cost or 0 coin grant is refused at spend by
+    # `engagement._positive_int`; `remote_config` publishes the same resolution, so
+    # a phone is never shown a number the server will not honor. Zero is the one
+    # value an operator should think twice about, so the labels say what it does.
+    ("ad_preroll_min_gap_minutes", "Ad gap: pre-roll (minutes; 0 = default 25)", _INT, 25),
+    ("ad_native_card_every_posters", "Ad slot: native card every N posters (0 = default 12)", _INT, 12),
+    ("ad_app_open_min_gap_minutes", "Ad gap: app open (minutes; 0 = default 240)", _INT, 240),
+    ("coin_per_rewarded_ad", "Coins per rewarded ad view", _INT, 5),
+    ("rewarded_daily_cap", "Rewarded ads counted per local day", _INT, 10),
+    ("coin_redeem_day", "Coins: one-day pass", _INT, 30),
+    ("coin_redeem_weekend", "Coins: weekend pass", _INT, 70),
+    ("coin_redeem_monthly", "Coins: 30-day VIP pass", _INT, 200),
+    ("streak_day1_coins", "Streak: day-1 bonus coins", _INT, 10),
+    ("streak_day3_coins", "Streak: day-3 bonus coins", _INT, 30),
+    ("streak_day7_pass_hours", "Streak: day-7 free pass (hours)", _INT, 24),
+    ("streak_day_boundary_hour", "Streak day rolls over at (local hour)", _INT, 4),
+    # A TEXT column is created `DEFAULT ''` whatever this tuple says, so a row from
+    # before the operator typed anything reads back `''` and `remote_config`
+    # publishes the field's own default for it. The default here is therefore a
+    # display hint plus the honest answer when the settings row is unavailable —
+    # not a value the migration writes.
+    ("streak_tz", "Streak timezone (blank = Asia/Karachi)", _TEXT, "Asia/Karachi"),
+    # The micro-pass ladder. `pass_monthly_vip_pkr` is the ₨250 one-day-to-a-month
+    # *pass* from `docs/MONETIZATION_AND_FLEET_PLAN.md:46`; it is a separate knob
+    # from `vip_monthly_pkr` above, which is the subscription price `payments.py`
+    # reads. Neither is derived from the other and no code may make them share a
+    # value: a pass and a membership are different products.
+    ("pass_day_pkr", "PKR: one-day pass", _MONEY, 20),
+    ("pass_weekend_pkr", "PKR: weekend pass", _MONEY, 50),
+    ("pass_monthly_vip_pkr", "PKR: 30-day VIP pass", _MONEY, 250),
 )
 _FIELD_BY_KEY = {row[0]: row for row in MONETIZATION_FIELDS}
 
@@ -1106,6 +1154,24 @@ _MAX_HANDLE = 32
 _MAX_TOKEN = 200
 _MAX_URL = 500
 _MAX_PKR = 10_000_000
+#: A whole-number setting is bounded absurdly high on purpose — 25 minutes and
+#: 12 posters never approach this. The domain clamp (a cadence of 0 means "use
+#: the default, never unlimited") lives in `engagement.resolve_caps`, which is the
+#: consumer; this only refuses a paste that cannot be a real setting.
+_MAX_INT = 1_000_000
+#: Four count knobs have a domain tighter than that, and the number a phone reads
+#: must be the number the server enforces. `engagement.resolve_caps` clamps an
+#: over-large cadence to its own `CAP_MAX`, and `engagement._clamp_hour` answers a
+#: rollover outside 0..23 with the default: a stored value past either bound would
+#: be silently rewritten by the consumer, which is the one thing a settings row may
+#: not do to its own display. So the consumer's ceiling is refused on the way in
+#: instead. A pinned test compares these numbers to `engagement`'s.
+_INT_MAX = {
+    "ad_preroll_min_gap_minutes": 24 * 60,
+    "ad_native_card_every_posters": 5000,
+    "ad_app_open_min_gap_minutes": 24 * 60,
+    "streak_day_boundary_hour": 23,
+}
 
 #: A payment *handle*, as the guide writes one: `0300-1234567`, `+92 300 1234567`,
 #: `(0300)1234567`, `0300XXXXXXX`, `@raddstream`. A digits-only validator would
@@ -1119,7 +1185,9 @@ def _column_ddl(key, kind, default):
     """One column definition, built only from our own literals (see
     :func:`_monetization_ddl`). Used by both CREATE and the migration ALTER so a
     fresh row and an upgraded one cannot drift apart."""
-    if kind == _MONEY:
+    if kind in (_MONEY, _INT):
+        # A price and a cadence are the same thing to SQLite; the difference
+        # between them is meaning and validation, not storage.
         return f"{key} INTEGER NOT NULL DEFAULT {int(default)}"
     if kind == _FLAG:
         return f"{key} INTEGER NOT NULL DEFAULT {1 if default else 0}"
@@ -1287,6 +1355,21 @@ def _validated(key, value):
             return None, label
         return number, None
 
+    if kind == _INT:
+        if isinstance(value, bool):
+            return None, label          # True is 1 to Python; a count is not a flag
+        text = str(value).strip()
+        number = _int_or_none(text)
+        # 0 is a legal stored value here — the consumer decides what it means
+        # (`resolve_caps` reads a 0 cadence as "use the default", and
+        # `remote_config` publishes the default for it). A negative or
+        # non-numeric paste is refused before it can reach that logic, and so is a
+        # paste above the key's own ceiling, which the consumer would otherwise
+        # clamp behind the operator's back. See :data:`_INT_MAX`.
+        if number is None or number < 0 or number > _INT_MAX.get(key, _MAX_INT):
+            return None, label
+        return number, None
+
     if kind == _URL:
         # The update banner is the one field that is an address on purpose. It
         # still has to be an absolute http(s) address: `javascript:`/`file:` in a
@@ -1389,6 +1472,85 @@ def _save_monetization(conn, payload):
             "fields": _monetization_view(values)}, None
 
 
+def _setting_count(values, key):
+    """One whole-number knob, resolved the way its consumer resolves it.
+
+    A stored 0 is not a number to obey. `engagement.resolve_caps` ignores a
+    non-positive cadence — a 0-minute ad gap is "an ad with no gap at all", and the
+    owner's rule is that it never means unlimited — and `engagement._positive_int`
+    raises on a 0-coin cost, so a 0-coin pass is refused at spend rather than handed
+    out. Answering with the field's own default therefore publishes what the ledger
+    will actually do; the default is the value `engagement` ships, because the
+    projection below is built from `engagement.remote_view()`. A paste above the
+    key's ceiling never gets here: `_validated` refuses it (`_INT_MAX`)."""
+    try:
+        number = int(values.get(key) or 0)
+    except (TypeError, ValueError):
+        number = 0
+    return number if number > 0 else int(_FIELD_BY_KEY[key][3])
+
+
+def _rollover_hour(values, key):
+    """The one zero that means something: hour 0 is midnight, a real streak
+    rollover and not a "use the default" sentinel. `engagement._clamp_hour` accepts
+    0..23 and answers the default outside that range, so this publishes exactly what
+    that clamp honors."""
+    try:
+        number = int(values.get(key) or 0)
+    except (TypeError, ValueError):
+        return int(_FIELD_BY_KEY[key][3])
+    return number if 0 <= number <= 23 else int(_FIELD_BY_KEY[key][3])
+
+
+def _engagement_public(values):
+    """The engagement pillars as a phone reads them: `engagement.remote_view()`
+    with the operator's row applied over it.
+
+    Building on that projection, instead of spelling the block out here, is the
+    point. `engagement.py` owns the wallet, the ladder, the streak and the caps, and
+    its own docstring already promises this body at
+    `/api/v1/app/remote-config.engagement`; a second copy of the shape in the
+    settings module would be two shapes, and the one failure a price body cannot
+    have is disagreeing with the ledger that fills it. A cadence is resolved by the
+    consumer's own `resolve_caps`, and the coin and streak numbers by the same rule
+    its `_positive_int` enforces — so the number a client draws is the number the
+    server enforces.
+
+    Money is the exception, published as stored: nothing clamps a PKR price, so the
+    row is the price. `pass_monthly_vip_pkr` is the 30-day PASS and `vip_monthly_pkr`
+    the MONTHLY SUBSCRIPTION — two products, two knobs, and no code may link them."""
+    view = engagement.remote_view()
+    view["cadence"] = engagement.resolve_caps(
+        {key: _setting_count(values, key) for key in view["cadence"]})
+    costs = view["wallet"]["redeem_coin_costs"]
+    for plan, coin_key, pkr_key in (("day", "coin_redeem_day", "pass_day_pkr"),
+                                    ("weekend", "coin_redeem_weekend",
+                                     "pass_weekend_pkr"),
+                                    ("monthly_vip", "coin_redeem_monthly",
+                                     "pass_monthly_vip_pkr")):
+        cost = _setting_count(values, coin_key)
+        costs[plan] = cost
+        if plan in view["passes"]:
+            # One number per plan, in both places a client may look for it: the
+            # wallet's cost table and the ladder's row. They are the same price.
+            view["passes"][plan]["coins"] = cost
+            view["passes"][plan]["pkr"] = int(values.get(pkr_key) or 0)
+    view["wallet"]["coin_per_rewarded_ad"] = _setting_count(values, "coin_per_rewarded_ad")
+    view["wallet"]["rewarded_daily_cap"] = _setting_count(values, "rewarded_daily_cap")
+    grants = view["streak"]["grants"]
+    grants["day1_coins"] = _setting_count(values, "streak_day1_coins")
+    grants["day3_coins"] = _setting_count(values, "streak_day3_coins")
+    grants["day7_pass_seconds"] = _setting_count(values, "streak_day7_pass_hours") * 3600
+    view["streak"]["day_boundary_hour"] = _rollover_hour(
+        values, "streak_day_boundary_hour")
+    # A TEXT column is created `DEFAULT ''` whatever the spec says, so an operator
+    # who never typed a zone stores `''` and must be answered the zone the ledger
+    # will bucket days with — not an empty string a client would read as UTC.
+    zone = redact.scrub_text(str(values.get("streak_tz") or "").strip())
+    view["streak"]["tz"] = zone or str(_FIELD_BY_KEY["streak_tz"][3])
+    return view
+
+
 def remote_config(conn):
     """The app-facing projection: what a phone needs to take a payment and to
     hang a sponsor card, and nothing that is a credential.
@@ -1402,6 +1564,15 @@ def remote_config(conn):
     the shortened path — and the call itself belongs on the server side, where
     the token stays in the row. Payment handles and ad unit ids *are* display
     content (the app prints them next to a Copy button), so they publish.
+
+    The `engagement` block is a price list, and a price list is only worth
+    publishing if it is the one the server will charge. It is built over
+    `engagement.remote_view()` (`_engagement_public`) rather than spelled out here
+    for that reason: an ad cadence, a coin cost, a streak grant and the PKR pass
+    ladder each reach the phone with the same resolution their consumer applies, so
+    a client drawing the table and the ledger filling it cannot disagree about what
+    a day pass costs. No knob in it can be cashed out — there is no cash-out path in
+    `engagement.py` at all — and no field of it is a credential.
     """
     try:
         _ensure_monetization(conn)
@@ -1450,6 +1621,7 @@ def remote_config(conn):
             "monetag_rewarded_zone_id": shown("monetag_zone_id"),
             "adsterra_native_banner_id": shown("adsterra_tag_id"),
         },
+        "engagement": _engagement_public(values),
         "link_shorteners": [
             {"network": "shrinkme",
              "configured": bool(str(values.get("shrinkme_api_token") or "").strip())},
