@@ -338,5 +338,107 @@ class ConvertTests(unittest.TestCase):
                     stats["sources_written"] + 1)
 
 
+class ConservationTests(unittest.TestCase):
+    def _legacy(self, td, posts, releases):
+        path = Path(td) / "mp4moviez.db"
+        conn = sqlite3.connect(path)
+        conn.executescript(LEGACY_SCHEMA)
+        ids = []
+        for url, title, year in posts:
+            ids.append(conn.execute(
+                "INSERT INTO posts (source_url, clean_title, year)"
+                " VALUES (?, ?, ?)", (url, title, year)).lastrowid)
+        for index, quality, url in releases:
+            conn.execute(
+                "INSERT INTO releases (post_id, quality, url) VALUES (?, ?, ?)",
+                (ids[index - 1], quality, url))
+        conn.commit()
+        conn.close()
+        return path
+
+    def test_a_malformed_year_marker_still_yields_a_work(self):
+        parsed = cv.parse_slug(
+            "https://www.mp4moviez.deal/vijaypath-1(994)-hindi-movie-hdrip-hd-10419.html",
+            1994)
+        self.assertEqual(parsed["title"], "Vijaypath")
+        self.assertEqual(parsed["year"], 1994)
+        self.assertEqual(parsed["media_type"], "movie")
+
+    def test_a_work_with_no_releases_is_still_staged(self):
+        with tempfile.TemporaryDirectory() as td:
+            legacy = self._legacy(td, [
+                ("https://www.mp4moviez.deal/1917-(2019)-hindi-dubbed-movie-hd-45000.html",
+                 "Download 1917 2019 Hindi Dubbed Movie HDRip -", 2019),
+                ("https://www.mp4moviez.deal/the-influencer-project-(2026)-hindi-dubbed-"
+                 "hd-123.html", "Download The Influencer Project 2026 Hindi Dubbed", 2026),
+            ], [(1, "720p", "https://www.mp4moviez.deal/dl.php?id=45000&q=720")])
+            vault = Path(td) / "staging.db"
+            stats = cv.convert(legacy, vault)
+            self.assertEqual(stats["posts_written"], 2)
+            self.assertEqual(stats["staged_without_releases"], 1)
+            conn = sqlite3.connect(vault)
+            try:
+                rows = dict(conn.execute(
+                    "SELECT canonical_key, (SELECT COUNT(*) FROM releases r"
+                    " WHERE r.post_canonical_key = p.canonical_key) FROM posts p"
+                ).fetchall())
+            finally:
+                conn.close()
+            self.assertEqual(rows, {"1917_2019": 1, "the-influencer-project_2026": 0})
+
+    def test_conservation_identity_holds_on_the_fixture(self):
+        with tempfile.TemporaryDirectory() as td:
+            legacy = Path(td) / "mp4moviez.db"
+            _make_legacy(legacy)
+            stats = cv.convert(legacy, Path(td) / "staging.db")
+            self.assertTrue(stats["posts_conserved"])
+            self.assertTrue(stats["releases_conserved"])
+            self.assertEqual(stats["legacy_posts"], 7)
+            self.assertEqual(stats["posts_written"], 3)
+            self.assertEqual(stats["collapsed_posts"], 2)
+            self.assertEqual(stats["skipped_not_a_work"], 2)
+            self.assertEqual(stats["posts_accounted"], stats["legacy_posts"])
+            self.assertEqual(stats["legacy_releases"], 7)
+            self.assertEqual(stats["sources_written"], 6)
+            self.assertEqual(stats["duplicate_releases_dropped"], 1)
+            self.assertEqual(stats["releases_accounted"], stats["legacy_releases"])
+
+    def test_a_slug_with_no_year_marker_is_skipped_and_counted(self):
+        with tempfile.TemporaryDirectory() as td:
+            legacy = self._legacy(td, [
+                ("https://www.mp4moviez.deal/c/contact-us.html", "Contact Us", 2026),
+            ], [])
+            stats = cv.convert(legacy, Path(td) / "staging.db")
+            self.assertEqual(stats["posts_written"], 0)
+            self.assertEqual(stats["skipped_not_a_work"], 1)
+            self.assertTrue(stats["posts_conserved"])
+
+    def test_a_duplicate_release_url_across_two_posts_is_counted_as_deduped(self):
+        with tempfile.TemporaryDirectory() as td:
+            url = "https://www.mp4moviez.deal/dl.php?id=60944&q=720"
+            legacy = self._legacy(td, [
+                ("https://www.mp4moviez.deal/marshals-(2026)-season-2-(episode-2)-"
+                 "hindi-dubbed-tv-series-hd-60944.html", "Download Marshals 2026", 2026),
+                ("https://www.mp4moviez.deal/marshals-(2026)-season-2-(episode-3)-"
+                 "hindi-dubbed-tv-series-hd-60945.html", "Download Marshals 2026", 2026),
+            ], [(1, "720p", url), (2, "720p", url)])
+            vault = Path(td) / "staging.db"
+            stats = cv.convert(legacy, vault)
+            self.assertEqual(stats["posts_written"], 1)
+            self.assertEqual(stats["duplicate_releases_dropped"], 1)
+            self.assertEqual(stats["sources_written"], 1)
+            self.assertTrue(stats["releases_conserved"])
+            conn = sqlite3.connect(vault)
+            try:
+                key, count, source_url = conn.execute(
+                    "SELECT p.canonical_key, COUNT(r.id), MAX(s.source_url)"
+                    " FROM posts p JOIN releases r ON r.post_canonical_key = p.canonical_key"
+                    " JOIN sources s ON s.release_id = r.id GROUP BY p.canonical_key"
+                ).fetchone()
+            finally:
+                conn.close()
+            self.assertEqual((key, count, source_url), ("marshals_2026", 1, url))
+
+
 if __name__ == "__main__":
     unittest.main()

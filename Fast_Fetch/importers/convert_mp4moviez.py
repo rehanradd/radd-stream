@@ -119,6 +119,8 @@ CREATE INDEX idx_mp4moviez_sources_status ON sources(status);
 """
 
 _YEAR_IN_SLUG = re.compile(r"[-\(](19\d{2}|20\d{2})(?=[-\)]|$)")
+# "vijaypath-1(994)" is a real slug on this site; read it as 1994, not a shelf.
+_MALFORMED_YEAR = re.compile(r"(?<!\d)1\((\d{3})\)")
 # The structured marker also cuts the title for pages whose slug carries no year.
 _WORK_MARKER = re.compile(
     r"(?:^|[-\(])(?:all-sea(?:s)?on|sea(?:s)?on-\d+|episode-\d+|s\d{1,2}(?:e\d{1,3})?(?:-|$))"
@@ -170,29 +172,30 @@ def parse_slug(url: str, year: int | None = None) -> dict | None:
     slug = _slug_parts(url)
     if not slug or slug.lower().startswith("latest-"):
         return None
-    span = _find_year_span(slug, year)
+    normalized = _MALFORMED_YEAR.sub(r"1\1", slug)
+    span = _find_year_span(normalized, year)
     if span is not None:
         start, _end, slug_year = span
-        raw_title = slug[:start].strip("-")
-        is_series = bool(_SERIES_MARKER.search(slug))
+        raw_title = normalized[:start].strip("-")
+        is_series = bool(_SERIES_MARKER.search(normalized))
     else:
-        marker = _WORK_MARKER.search(slug)
+        marker = _WORK_MARKER.search(normalized)
         if marker is None:
             return None
-        raw_title = slug[: marker.start()].strip("-")
+        raw_title = normalized[: marker.start()].strip("-")
         slug_year = None
         is_series = True
     if not raw_title:
         return None
     season = episode = None
     if is_series:
-        m = _SEASON.search(slug)
+        m = _SEASON.search(normalized)
         if m:
             season = int(m.group(1))
-        m = _EPISODE.search(slug)
+        m = _EPISODE.search(normalized)
         if m:
             episode = int(m.group(1))
-        m = _SXXEYY.search(slug)
+        m = _SXXEYY.search(normalized)
         if m:
             season = season if season is not None else int(m.group(1))
             if m.group(2):
@@ -229,11 +232,17 @@ def _read_legacy(source: sqlite3.Connection, limit: int | None,
     """Reads the legacy rows and groups published posts by canonical key."""
     stats = {
         "legacy_posts": 0,
+        "legacy_posts_without_releases": 0,
         "skipped_not_a_work": 0,
         "skipped_listing": 0,
         "skipped_unknown_key": 0,
+        "skipped_by_limit": 0,
+        "skipped_require_releases": 0,
         "legacy_releases": 0,
         "releases_without_url": 0,
+        "releases_on_skipped_posts": 0,
+        "releases_on_skipped_groups": 0,
+        "releases_on_limited_groups": 0,
     }
     posts = source.execute("SELECT * FROM posts ORDER BY id ASC").fetchall()
     stats["legacy_posts"] = len(posts)
@@ -243,12 +252,18 @@ def _read_legacy(source: sqlite3.Connection, limit: int | None,
             {"quality": (row["quality"] or "").strip().lower() or "unknown",
              "url": (row["url"] or "").strip()})
     stats["legacy_releases"] = sum(len(v) for v in releases.values())
+    stats["legacy_posts_without_releases"] = sum(
+        1 for post in posts if not releases.get(post["id"]))
 
     groups: dict[str, dict] = {}
     for post in posts:
         url = post["source_url"] or ""
+        rel_rows = releases.get(post["id"], [])
+        rels = [r for r in rel_rows if r["url"]]
+        stats["releases_without_url"] += len(rel_rows) - len(rels)
         parsed = parse_slug(url, post["year"])
         if parsed is None:
+            stats["releases_on_skipped_posts"] += len(rels)
             if "latest" in url.lower():
                 stats["skipped_listing"] += 1
             else:
@@ -256,14 +271,14 @@ def _read_legacy(source: sqlite3.Connection, limit: int | None,
             continue
         title = parsed["raw_title"].strip()
         if not title:
+            stats["releases_on_skipped_posts"] += len(rels)
             stats["skipped_unknown_key"] += 1
             continue
         key = fast_fetch.generate_canonical_key(title, parsed["year"])
         if not key or key == "unknown":
+            stats["releases_on_skipped_posts"] += len(rels)
             stats["skipped_unknown_key"] += 1
             continue
-        rels = [r for r in releases.get(post["id"], []) if r["url"]]
-        stats["releases_without_url"] += len(releases.get(post["id"], [])) - len(rels)
         member = {
             "legacy_id": post["id"],
             "url": url,
@@ -288,10 +303,21 @@ def _read_legacy(source: sqlite3.Connection, limit: int | None,
         group["members"].append(member)
 
     if require_releases:
-        groups = {k: g for k, g in groups.items()
-                  if any(m["releases"] for m in g["members"])}
+        kept = {}
+        for key, group in groups.items():
+            if any(m["releases"] for m in group["members"]):
+                kept[key] = group
+            else:
+                stats["skipped_require_releases"] += len(group["members"])
+                stats["releases_on_skipped_groups"] += sum(
+                    len(m["releases"]) for m in group["members"])
+        groups = kept
     ordered = sorted(groups.values(), key=lambda g: min(m["legacy_id"] for m in g["members"]))
-    if limit:
+    if limit and len(ordered) > limit:
+        for group in ordered[limit:]:
+            stats["skipped_by_limit"] += len(group["members"])
+            stats["releases_on_limited_groups"] += sum(
+                len(m["releases"]) for m in group["members"])
         ordered = ordered[:limit]
     stats["grouped_keys"] = len(groups)
     stats["selected_keys"] = len(ordered)
@@ -352,6 +378,52 @@ def _build_post(group: dict, stats: dict) -> tuple[dict, list[dict]]:
     return post, releases
 
 
+class ConservationError(RuntimeError):
+    def __init__(self, message: str, stats: dict) -> None:
+        super().__init__(message)
+        self.stats = stats
+
+
+def _accounting(stats: dict) -> dict:
+    """Every legacy row and release must be written or carry a counted reason."""
+    stats["posts_accounted"] = (
+        stats["posts_written"] + stats["collapsed_posts"]
+        + stats["skipped_not_a_work"] + stats["skipped_listing"]
+        + stats["skipped_unknown_key"] + stats["skipped_by_limit"]
+        + stats["skipped_require_releases"])
+    stats["releases_accounted"] = (
+        stats["sources_written"] + stats["duplicate_releases_dropped"]
+        + stats["releases_without_url"] + stats["releases_on_skipped_posts"]
+        + stats["releases_on_skipped_groups"] + stats["releases_on_limited_groups"])
+    stats["posts_conserved"] = stats["posts_accounted"] == stats["legacy_posts"]
+    stats["releases_conserved"] = (
+        stats["releases_accounted"] == stats["legacy_releases"])
+    return stats
+
+
+def _identity_lines(stats: dict) -> list[str]:
+    ok = "OK" if stats["posts_conserved"] else "MISMATCH"
+    release_ok = "OK" if stats["releases_conserved"] else "MISMATCH"
+    return [
+        f"[=] posts {stats['legacy_posts']} = staged {stats['posts_written']}"
+        f" + collapsed {stats['collapsed_posts']} + skipped"
+        f" {stats['skipped_not_a_work'] + stats['skipped_listing'] + stats['skipped_unknown_key'] + stats['skipped_by_limit'] + stats['skipped_require_releases']}"
+        f" (not-a-work {stats['skipped_not_a_work']},"
+        f" listing {stats['skipped_listing']},"
+        f" unknown-key {stats['skipped_unknown_key']},"
+        f" by-limit {stats['skipped_by_limit']},"
+        f" require-releases {stats['skipped_require_releases']})"
+        f" [{stats['posts_accounted']}/{stats['legacy_posts']} {ok}]",
+        f"[=] releases {stats['legacy_releases']} = sources {stats['sources_written']}"
+        f" + deduped {stats['duplicate_releases_dropped']}"
+        f" + no-url {stats['releases_without_url']}"
+        f" + on-skipped-posts {stats['releases_on_skipped_posts']}"
+        f" + on-skipped-groups {stats['releases_on_skipped_groups']}"
+        f" + beyond-limit {stats['releases_on_limited_groups']}"
+        f" [{stats['releases_accounted']}/{stats['legacy_releases']} {release_ok}]",
+    ]
+
+
 def convert(source_path: Path, target_path: Path, limit: int | None = None,
             require_releases: bool = False) -> dict:
     source_path = Path(source_path)
@@ -373,6 +445,7 @@ def convert(source_path: Path, target_path: Path, limit: int | None = None,
         "posts_written": 0, "releases_written": 0, "sources_written": 0,
         "sitemap_rows": len(sitemap_rows), "collapsed_posts": 0,
         "duplicate_releases_dropped": 0, "posts_18_plus": 0,
+        "staged_without_releases": 0,
         "skipped_unknown_key": stats.get("skipped_unknown_key", 0),
     })
 
@@ -410,6 +483,8 @@ def convert(source_path: Path, target_path: Path, limit: int | None = None,
                 )
                 stats["posts_written"] += 1
                 stats["posts_18_plus"] += post["is_18_plus"]
+                if not releases:
+                    stats["staged_without_releases"] += 1
                 for rel in releases:
                     cur = conn.execute(
                         """
@@ -436,6 +511,11 @@ def convert(source_path: Path, target_path: Path, limit: int | None = None,
             conn.commit()
         finally:
             conn.close()
+        _accounting(stats)
+        if not (stats["posts_conserved"] and stats["releases_conserved"]):
+            raise ConservationError(
+                "Converted row counts do not match the legacy input: "
+                + " | ".join(_identity_lines(stats)), stats)
         os.replace(tmp_path, target_path)
     except BaseException:
         tmp_path.unlink(missing_ok=True)
@@ -468,9 +548,18 @@ def main(argv: list[str] | None = None) -> int:
     if target.exists() and not args.force:
         print(f"[!] {target} exists; rerun with --force to rebuild it", file=sys.stderr)
         return 2
-    stats = convert(Path(args.source), target, limit=args.limit,
-                    require_releases=args.require_releases)
+    try:
+        stats = convert(Path(args.source), target, limit=args.limit,
+                        require_releases=args.require_releases)
+    except ConservationError as exc:
+        print(json.dumps(exc.stats, indent=2, sort_keys=True))
+        for line in _identity_lines(exc.stats):
+            print(line, file=sys.stderr)
+        print(f"[!] {exc}", file=sys.stderr)
+        return 3
     print(json.dumps(stats, indent=2, sort_keys=True))
+    for line in _identity_lines(stats):
+        print(line)
     return 0
 
 
