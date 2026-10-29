@@ -44,6 +44,15 @@ name: 🐍 Backend CI — Stdlib Python Tests
 #     - Fast_Fetch/test_posts_query_plan.py     (/api/v1/posts?q= EXPLAIN QUERY PLAN
 #       evidence: two SCAN p passes, the join indexes that already exist in production,
 #       and the unescaped/no-floor `q=` correctness half)
+#     - Fast_Fetch/test_admin_panel.py          (the operator panel's write gate: the
+#       loopback/remote peer rule, the closed admin-only verb vocabulary, refusing a
+#       field the edge would rewrite, refusing a non-numeric price, and writing nothing
+#       on refusal. Offline against a temp-file fixture catalog — it passes on this VM,
+#       where the same 65 tests take 266 s at load 6.9 because the assertions block on
+#       I/O rather than compute. On a hosted runner it is expected to be a fraction of
+#       that, but that fraction is NOT yet measured: the run that lands this line is the
+#       measurement, and if its step time is not green-and-fast the answer is to remove
+#       it again, not to declare the point moot.)
 #
 #   Deliberately EXCLUDED:
 #     - Fast_Fetch/test_all_sites.py  — live 10-site network audit; needs the
@@ -193,3 +202,8 @@ jobs:
       # third-party hosts is a test that fails when the world is healthy.
       - name: 🧪 test_link_sweep_budget.py
         run: python3 -S Fast_Fetch/test_link_sweep_budget.py
+
+      # The admin panel's write gate (6bfbd5c). Timed, because this box measured 65 tests
+      # in 266 s and CI's wall time is the open question about running it here at all.
+      - name: 🧪 test_admin_panel.py (timed)
+        run: time python3 -S Fast_Fetch/test_admin_panel.py
