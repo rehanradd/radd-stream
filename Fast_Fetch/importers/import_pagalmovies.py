@@ -155,6 +155,10 @@ BRAND_TOKEN_RE = re.compile(
 # Text lexicons
 # ---------------------------------------------------------------------------
 
+# "adult" stays: 10/12 sampled live titles carrying it are real product, and the two
+# *Shin-chan: The Adult Empire Strikes Back* rows are the documented cost — a bare word is
+# judged by sampling its titles, not by the dictionary. A bracketed age certificate still
+# flags: `AGE_CERT_RE`, a label rather than a word.
 ADULT_KEYWORDS = (
     "18+", "18 plus", "adult", "porn", "pornhub", "pornstar", "erotic", "blue film",
     "bluefilm", "nude", "naked", "hentai", "onlyfans", "charmsukh", "hotshots",

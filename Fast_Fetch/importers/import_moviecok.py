@@ -146,8 +146,13 @@ BRAND_TOKEN_RE = re.compile(
 # Text lexicons
 # ---------------------------------------------------------------------------
 
+# "xxx" left on 2026-10-29 (62 rows hidden by it alone; the catalog holds the *xXx*
+# films) — a single hit is a suggestion, not a hide. "adult" stays: 10/12 sampled live
+# titles carrying it are real product, and the two *Shin-chan: The Adult Empire Strikes
+# Back* rows it also hides are the documented cost. `AGE_CERT_RE` still flags a bracketed
+# certificate, which is a label rather than a word.
 ADULT_KEYWORDS = (
-    "18+", "18 plus", "adult", "porn", "pornhub", "pornstar", "erotic", "xxx",
+    "18+", "18 plus", "adult", "porn", "pornhub", "pornstar", "erotic",
     "blue film", "bluefilm", "nude", "naked", "hentai", "onlyfans", "charmsukh",
     "gandii baat", "gandi baat", "hotshots", "kooku", "moodytapes", "ullu",
     "altbalaji", "alt balaji", "brazzers", "atrangii", "atrangi", "bablutv",

@@ -142,9 +142,14 @@ LANGUAGE_CODES = {
 }
 LANGUAGE_WORDS = tuple(sorted(set(LANGUAGE_CODES.values()), key=len, reverse=True))
 
+# "xxx" left on 2026-10-29 — 62 rows were hidden by it alone and this catalog holds the
+# *xXx* films, so one hit is a suggestion, not a hide. "adult" stays: 10/12 sampled live
+# titles carrying it are real product, and the *Shin-chan: The Adult Empire Strikes Back*
+# rows are the documented cost. A bracketed age certificate is a label, not a word, and is
+# matched separately.
 ADULT_KEYWORDS = (
     "18+", "18 plus", "adult", "porn", "pornstar", "erotic", "hentai",
-    "onlyfans", "nude", "naked", "hardcore", "softcore", "xxx", "brazzers",
+    "onlyfans", "nude", "naked", "hardcore", "softcore", "brazzers",
     "milf", "uncensored", "sex tape", "sexscene",
 )
 AMBIGUOUS_ADULT_KEYWORDS = ("adult", "nude", "naked", "erotic")

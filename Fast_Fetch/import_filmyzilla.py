@@ -59,10 +59,13 @@ USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTM
 
 STOP_REQUESTED = False
 
+# "rabbit" and "hunters" left after sampling 12 live titles each (0/12 adult: *Jojo
+# Rabbit*, *KPop Demon Hunters*); "adult" and "xxx" decisions follow
+# `fast_fetch.ADULT_TITLE_PATTERNS` — adult stays, xxx is a suggestion, not a hide.
 _ADULT_TITLE_PATTERNS = [
-    r"\b18\+", r"\b18\s*\+", r"\badult\b", r"\berotic\b", r"\bhotshots\b", r"\bullu\b",
-    r"\bkooku\b", r"\bprimeplay\b", r"\brabbit\b", r"\bhunters\b",
-    r"\bnsfw\b", r"\bporn\b", r"\bxxx\b", r"\bboldscene\b",
+    r"\b18\+", r"\b18\s*\+", r"\badult\b", r"\berotic\b", r"\bhotshots\b",
+    r"\bullu\b", r"\bkooku\b", r"\bprimeplay\b",
+    r"\bnsfw\b", r"\bporn\b", r"\bboldscene\b",
 ]
 
 

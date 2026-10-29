@@ -1427,10 +1427,14 @@ class AdultContentFilterTests(unittest.TestCase):
         self.assertEqual(self.flag(post_id), 0)
 
     def test_adult_posts_hidden_from_api_detail_m3u_and_resolver(self):
+        # A genuinely adult row, flagged by a strong studio token. The bare "Vixen"
+        # this fixture used to rely on is now a suggestion-tier word (there is a 2017
+        # action film called *Vixen*), so a single suggestion may no longer hide a work;
+        # the studio prefix is what makes this row adult under the revised law.
         adult_id = self.save(
-            title="Vixen Desires (2024)",
-            clean_title="Vixen Desires",
-            url="https://site-a.example/vixen-desires/",
+            title="Tushy Vixen Desires (2024)",
+            clean_title="Tushy Vixen Desires",
+            url="https://site-a.example/tushy-vixen-desires/",
         )
         safe_id = self.save(
             url="https://site-a.example/example-film-2/",
@@ -1456,6 +1460,88 @@ class AdultContentFilterTests(unittest.TestCase):
         resolution = fast_fetch.resolve_live_source(adult_source["id"])
         self.assertFalse(resolution["success"])
         self.assertIn("18+", resolution["error"])
+
+
+class AdultPatternSplitDecisionTests(unittest.TestCase):
+    """The 2026-10-29 decision, and the method behind it.
+
+    Four contested bare words were judged by sampling ~a dozen live rows each, not by the
+    dictionary: `adult` (10/12 real studio releases) and `naughty` (13/14 real) stay;
+    `hunters` (0/12) and `rabbit` (0/12) are removed — every hit was a mainstream title.
+    `xxx`/`blacked`/`vixen` became suggestion-tier: one word may never hide a work alone.
+    See Fast_Fetch/AGENTS.md §6b."""
+
+    def test_removed_tokens_are_absent_from_the_strong_list(self):
+        joined = " ".join(fast_fetch.ADULT_TITLE_PATTERNS).lower()
+        self.assertNotIn("hunters", joined)
+        self.assertNotIn("rabbit", joined)
+
+    def test_kept_tokens_are_present_in_the_strong_list(self):
+        joined = " ".join(fast_fetch.ADULT_TITLE_PATTERNS).lower()
+        self.assertIn("adult", joined)
+        self.assertIn("naughty", joined)
+
+    def test_mainstream_works_the_removed_tokens_were_hiding_are_clean(self):
+        for title in (
+            "KPop Demon Hunters", "KPop Demon Hunters Sing-Along",
+            "Wallace & Gromit Curse of the Were-Rabbit", "1001 Rabbit Tales",
+            "Rabbit School", "Transformers Prime Beast Hunters",
+            "Holy Night Demon Hunters", "Peter Rabbit", "Jojo Rabbit",
+        ):
+            self.assertEqual(fast_fetch.is_adult_title(title), 0, title)
+
+    def test_word_boundary_anchors_are_not_loosened(self):
+        # \badult\b fires on the singular studio word but must not fire on a plural title.
+        self.assertEqual(fast_fetch.is_adult_title("Adult Short Film 1 (2024)"), 1)
+        self.assertEqual(fast_fetch.is_adult_title("Adults"), 0)
+
+    def test_naughty_and_adult_still_flag(self):
+        self.assertEqual(fast_fetch.is_adult_title("Naughty Office (2019)"), 1)
+        self.assertEqual(fast_fetch.is_adult_title("TeamSkeet Adult Short Film"), 1)
+
+    def test_suggestion_token_alone_does_not_hide_a_mainstream_work(self):
+        self.assertEqual(fast_fetch.is_adult_title("Vixen (2017)"), 0)
+        self.assertEqual(fast_fetch.is_adult_title("xXx Return of Xander Cage"), 0)
+        self.assertEqual(fast_fetch.is_adult_title("Blacked Out (2010)"), 0)
+
+    def test_two_independent_suggestions_corroborate(self):
+        self.assertEqual(fast_fetch.is_adult_title("Vixen Blacked Diaries"), 1)
+
+    def test_adult_source_site_authority_is_empty_and_fail_closed(self):
+        # No ingested host reached whole-catalog adult authority (max measured 36.25% on
+        # 10xflix), so provenance alone hides nothing until a measured ~100% host is added.
+        self.assertEqual(len(fast_fetch.ADULT_SOURCE_SITES), 0)
+        self.assertEqual(fast_fetch.site_implies_adult("10xflix"), 0)
+        self.assertEqual(fast_fetch.site_implies_adult(None), 0)
+
+    def test_no_removed_token_survives_in_any_adult_list_in_the_tree(self):
+        """hunters/rabbit were copied into per-site scrapers too; the AST sweep proves the
+        removal is whole-tree, not just the engine list."""
+        root = Path(fast_fetch.__file__).resolve().parent
+        offenders = []
+        for path in sorted(root.rglob("*.py")):
+            if path.name.startswith("test_"):
+                continue
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            for node in ast.walk(tree):
+                if not isinstance(node, (ast.Assign, ast.AnnAssign)):
+                    continue
+                targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+                if not any(isinstance(t, ast.Name) and "adult" in t.id.lower()
+                           for t in targets):
+                    continue
+                if not isinstance(node.value, (ast.List, ast.Tuple, ast.Set)):
+                    continue
+                for element in node.value.elts:
+                    if isinstance(element, ast.Constant) and isinstance(element.value, str):
+                        low = element.value.lower()
+                        for word in ("hunters", "rabbit"):
+                            if word in low:
+                                offenders.append(
+                                    f"{path.relative_to(root)}: {element.value!r} -> {word}")
+        self.assertEqual(offenders, [],
+                         "a mainstream word survived in an adult list and still hides works: "
+                         + "; ".join(offenders))
 
 
 class KeyLevelAdultIdentityTests(unittest.TestCase):

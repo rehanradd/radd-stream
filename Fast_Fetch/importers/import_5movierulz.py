@@ -127,8 +127,13 @@ BRAND_TOKEN_RE = re.compile(
 # Text lexicons
 # ---------------------------------------------------------------------------
 
+# "xxx" left this list on 2026-10-29: 62 rows were hidden by it alone and this catalog holds
+# the *xXx* films, so one hit is a suggestion, not a hide. "adult" stays (in the ambiguous,
+# label-only tier below) — 10/12 sampled live titles carrying it are real product, the
+# "… Adult Short Film" vault format, and the two *Shin-chan: The Adult Empire Strikes Back*
+# rows are the documented cost. A bracketed age certificate still counts: `AGE_CERT_RE`.
 ADULT_KEYWORDS = (
-    "18+", "18 plus", "adult", "porn", "pornhub", "pornstar", "erotic", "xxx",
+    "18+", "18 plus", "adult", "porn", "pornhub", "pornstar", "erotic",
     "blue film", "bluefilm", "nude", "naked", "hentai", "onlyfans", "charmsukh",
     "hotshots", "lust", "sensual", "jalebi", "palang tod", "bhabhi", "milf",
     "uncensored", "softcore", "hardcore", "mms", "brazzers", "atrangi",

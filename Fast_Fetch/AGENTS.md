@@ -482,6 +482,63 @@ GET https://v3-cinemeta.strem.io/meta/movie/tt1234567.json
 
 ---
 
+## 6b. The Adult Title Law — how a bare word is judged
+
+The flag's job is to hide real 18+ works and to *not* hide mainstream ones. The list
+that decides this is `fast_fetch.ADULT_TITLE_PATTERNS` (strong tokens, each flags alone)
+plus `fast_fetch.ADULT_TITLE_SUGGESTIONS` (corroborated-only tokens). The law changed on
+2026-10-29 and the reason it changed is the lesson, not the diff.
+
+**The method lesson — sample live titles, do not read the dictionary.** Every one of the
+four contested tokens (`adult`, `naughty`, `hunters`, `rabbit`) *can* name porn and *can*
+name a children's film. A pattern is not judged by what the word means in the abstract; it
+is judged by pulling ~a dozen real rows that fire on it and looking at them. That sampling
+is what split the four, and it is the only admissible test:
+
+| Token | Live sample (12 rows each) | Verdict | Decision |
+|---|---|---|---|
+| `adult` | 10/12 are real Brazzers/TeamSkeet *"Adult Short Film …"* studio releases; the only false hits are two *Shin-chan* rows | mostly REAL branding | **KEEP** `\badult\b` |
+| `naughty` | 13/14 real (studio "Naughty ..." titles) | overwhelmingly REAL | **KEEP** `\bnaughty\b` |
+| `hunters` | 0/12 adult — every hit is a mainstream title | never a porn brand | **REMOVE** `\bhunters\b` |
+| `rabbit` | 0/12 adult — every hit is a mainstream title | never a porn brand | **REMOVE** `\brabbit\b` |
+
+**Mainstream works the removed tokens were hiding** (real, family/general catalog, must
+come back clean): *KPop Demon Hunters* (and its *Sing-Along* concert), *Wallace & Gromit:
+Curse of the Were-Rabbit*, *1001 Rabbit Tales*, *Rabbit School*, *Transformers Prime: Beast
+Hunters*, *Holy Night: Demon Hunters*, *Peter Rabbit*, *Jojo Rabbit*. *Shin-chan: The Adult
+Empire Strikes Back* stays flagged only because of `\badult\b` — that is accepted (10 of 12
+`adult` hits are genuinely adult), it is the deliberate cost of keeping the token.
+
+**Word-boundary anchors do real work — do not loosen them.** `\bhunters\b` cannot fire
+inside `trollhunters`, and `\brabbit\b` does not fire on `rabbits`. Measured 2026-10-29:
+*Trollhunters* and *Looney Tunes: Rabbits Run* are `is_18_plus=0` precisely because of the
+`\b`. Removing an anchor to "catch more" would flag those and many more mainstream titles;
+the anchors stay exactly where they are.
+
+**The three tiers, in code:**
+- *Strong* (`ADULT_TITLE_PATTERNS`): unambiguous branding or explicit words —
+  `18+ / adult / erotic / porn / nsfw / boldscene / ullu / kooku / primeplay / hotshots /
+  realitykings / tushy / wankz / lustery / iuliian / moodyz / naughty`. Each hides a work on
+  its own.
+- *Suggestion* (`ADULT_TITLE_SUGGESTIONS` = `xxx / blacked / vixen`): a hit here hides a work
+  only with corroboration — an adult `source_site`, or two independent suggestion tokens in
+  the same title. One word alone may never hide a work.
+- *Site authority* (`ADULT_SOURCE_SITES`): a host whose **whole** catalog is adult flags every
+  row by provenance, no title parsing. **Measured 2026-10-29 the set is empty**: no ingested
+  host came near 100% (the max was 10xflix at 36.25%, itself inflated by the release-tag
+  tokens `uncut`/`unrated` that this patch also removed from title matching), and all 31
+  `source_site` values are general pirate catalogs. The studio names above live inside
+  titles, never as a `source_site`. A host is added only when a measured rate justifies it —
+  reputation is not evidence.
+
+**Production apply is the owner's, not any lane's.** Correcting the patterns changes only
+future writes; un-hiding the already-flagged mainstream rows is a data migration that runs
+`audit_adult_flags.py --apply`, and no agent may run `--apply` (or `--projection`) against
+the live ledger without the owner's verbatim authorization. Report mode is safe and is what
+an agent runs.
+
+---
+
 ## 7. How to Add a New Site (8-Step Pattern)
 
 ### Step 1 — DEFAULT_DOMAINS (`line ~48`)

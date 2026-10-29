@@ -159,11 +159,15 @@ PACKAGING_TAIL_RE = re.compile(
 # Text lexicons
 # ---------------------------------------------------------------------------
 
-ADULT_KEYWORDS = ("18+", "18 plus", "adult", "xxx", "erotic", "hentai", "porn",
+# "xxx" left on 2026-10-29: 62 rows were hidden by it alone and the catalog holds the
+# *xXx* films, so one hit is a suggestion, not a hide. "adult" stays — 10/12 sampled live
+# titles carrying it are real product; the two *Shin-chan: The Adult Empire Strikes Back*
+# rows are the documented cost. `AGE_CERT_RE` still flags a bracketed certificate.
+ADULT_KEYWORDS = ("18+", "18 plus", "adult", "erotic", "hentai", "porn",
                   "pornstar", "uncensored", "softcore", "hardcore")
 # Only the unambiguous markers may flag from prose; an 18+ row is hidden at every
 # surface, so a mainstream blurb must not delete a title.
-PROSE_ADULT_KEYWORDS = ("18+", "18 plus", "xxx", "hentai", "erotic", "porn", "pornstar")
+PROSE_ADULT_KEYWORDS = ("18+", "18 plus", "hentai", "erotic", "porn", "pornstar")
 AGE_CERT_RE = re.compile(
     r"[\(\[\{]\s*(?:18\s*\+|18\s*plus|adult|xxx)\s*[\)\]\}]", re.I)
 

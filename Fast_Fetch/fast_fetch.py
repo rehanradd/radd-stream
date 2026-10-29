@@ -168,27 +168,60 @@ USER_AGENT = (
 )
 
 
-#: Words that flag a work 18+. Every entry must name a person, a studio or an act —
-#: not a *version* of a film. "Uncut" and "Unrated" were here until 2026-10-29 and
-#: hid 7,663 mainstream titles (Kanguva, Hi Nanna, Dharmaveer 2, Guntur Kaaram,
-#: Gangs of Godavari, …) because desicinemas labels its releases "Uncut"; with the
-#: flag now reconciled per `canonical_key`, one such word buried every copy of a
-#: work, so do not re-add a version word here without a test that proves it catches
-#: something the remaining patterns miss.
+#: Words that flag a work 18+ **on the title alone**. A token joins this list only when
+#: sampling its own live titles says it is evidence — not when a dictionary says what the
+#: word means. Measured on the production ledger 2026-10-29, 12 live titles per token:
+#: `adult` 10/12 genuine (the Brazzers/TeamSkeet vault format "… Adult Short Film"),
+#: `naughty` 13/14 genuine, so both STAY even though they are ordinary English: 82 rows and
+#: 149 rows hide on them alone, and that documented cost is smaller than pushing real adult
+#: product into a general-audience app. `hunters` 0/12 adult and `rabbit` 0/12 adult, so
+#: both are GONE — they were hiding *KPop Demon Hunters* (id 2947, and its sing-along at
+#: 159), *Transformers Prime: Beast Hunters*, *Hansel & Gretel Witch Hunters*, *Holy Night:
+#: Demon Hunters*, *Wallace & Gromit: The Curse of the Were-Rabbit* (424), *1001 Rabbit
+#: Tales* (787), *Rabbit School* (590), *Peter Rabbit* and *Jojo Rabbit*, an Oscar winner.
+#: `uncut` and `unrated` went the same way earlier: edition vocabulary, 4,246 rows hidden
+#: on the four columns this rule actually reads.
+#: The `\b` anchors are load-bearing and must not be loosened: they are why `Trollhunters`
+#: and *Looney Tunes: Rabbits Run* were never flagged — `\bhunters\b` cannot fire inside
+#: `trollhunters` and `\brabbit\b` does not fire on `rabbits`.
 #: `\b18\s*\+` subsumes `\b18\+`; the redundant duplicate is gone.
 ADULT_TITLE_PATTERNS = [
     r"\b18\s*\+", r"\badult\b", r"\berotic\b", r"\bhotshots\b", r"\bullu\b",
-    r"\bkooku\b", r"\bprimeplay\b", r"\brabbit\b", r"\bhunters\b",
-    r"\bnsfw\b", r"\bporn\b", r"\bxxx\b", r"\bboldscene\b",
-    r"\brealitykings\b", r"\btushy\b", r"\bvixen\b", r"\bblacked\b", r"\bwankz\b",
+    r"\bkooku\b", r"\bprimeplay\b", r"\bnsfw\b", r"\bporn\b", r"\bboldscene\b",
+    r"\brealitykings\b", r"\btushy\b", r"\bwankz\b",
     r"\blustery\b", r"\bnaughty\b", r"\biuliian\b", r"\bmoodyz\b",
 ]
 
+#: Tokens that are adult branding *usually* and a mainstream title *sometimes*: *Vixen*
+#: (2017, the action film) is id 3202 in this catalog, `xXx: Return of Xander Cage` is
+#: ordinary English, and "Blacked" appears as plain prose. A hit here is a **suggestion**:
+#: it may hide a work only when corroborated — the row's own `source_site` is an adult
+#: host, or a second, independent suggestion token agrees. 161 rows matched one of these
+#: alone (blacked 65, xxx 62, vixen 34); none of them is un-flagged by this patch, and
+#: none of them is hidden on one word either.
+ADULT_TITLE_SUGGESTIONS = [r"\bxxx\b", r"\bblacked\b", r"\bvixen\b"]
 
-def is_adult_title(*texts) -> int:
-    """Returns 1 when any title/slug/tag text matches adult patterns."""
+
+def is_adult_title(*texts, source_site=None) -> int:
+    """Returns 1 when the text carries adult evidence strong enough to hide a work.
+
+    Two tiers, because a bare word in a title is not evidence about a film. A strong
+    token flags alone. A suggestion token flags only with corroboration: an adult source
+    site (`ADULT_SOURCE_SITES`, which is evidence about where the file came from rather
+    than a guess at what its title means) or two independent suggestion tokens in the
+    same text. Nothing here may be called "smarter matching" — an ambiguous word that is
+    not on either list cannot flag a row at all.
+    """
     joined = " ".join(t for t in texts if t)
-    return 1 if any(re.search(p, joined, re.IGNORECASE) for p in ADULT_TITLE_PATTERNS) else 0
+    if not joined:
+        return 0
+    if any(re.search(p, joined, re.IGNORECASE) for p in ADULT_TITLE_PATTERNS):
+        return 1
+    if site_implies_adult(source_site):
+        return 1
+    agreed = [p for p in ADULT_TITLE_SUGGESTIONS
+              if re.search(p, joined, re.IGNORECASE)]
+    return 1 if len(agreed) >= 2 else 0
 
 
 #: The animation vocabulary, in one place. `posts.is_animated` is what the app's
@@ -215,6 +248,33 @@ ANIME_ONLY_SITES = frozenset({"rareanimes", "toonworld4all"})
 
 def site_implies_animation(source_site) -> int:
     return 1 if str(source_site or "").strip().lower() in ANIME_ONLY_SITES else 0
+
+
+#: Sites whose **entire catalog** is adult. This is the flag's real authority: a site rule
+#: is evidence about where a file came from, while a title token is only a guess at what it
+#: means. A row from one of these hosts is 18+ by construction, so no title parsing is
+#: needed and none is done; a row from a general catalog can only be flagged by an
+#: unambiguous token (`ADULT_TITLE_PATTERNS`) or by two independent suggestions agreeing.
+#: Filled from the production ledger, not from a hunch — the per-site flag rate is what
+#: separates a site that publishes adult material from a site that publishes titles
+#: containing the word "adult". See `audit_adult_flags.py --site-authority`.
+#: MEASURED 2026-10-29 against `merged_catalog_20261025.db` (one read-only GROUP BY over
+#: `posts.source_site`): no ingested host reaches whole-catalog authority. The highest rate
+#: is 10xflix at 36.25% (hdtvb 32.77%, 7starhd 32.24%, 9xmovies 23.65%), and even those
+#: counts are inflated by the ambiguous release-tag tokens this patch removes (uncut /
+#: unrated), so the true adult share of any of these general pirate catalogs is far lower.
+#: Every one of the 31 source_site values is a general catalog, not an adult studio host —
+#: the real authorities (RealityKings, Tushy, Wankz, Lustery, Moodyz, iuliian, Hotshots)
+#: appear as studio names inside titles, never as a `source_site`. So the set stays empty:
+#: no host earns a blanket 18+ stamp on provenance alone, and adding one later requires a
+#: measured rate near 100%, not a reputation.
+ADULT_SOURCE_SITES = frozenset()
+
+
+def site_implies_adult(source_site) -> int:
+    """1 when the row came from a host whose whole catalog is adult. Same shape as
+    `site_implies_animation()`: ledger-side evidence, never a wire field."""
+    return 1 if str(source_site or "").strip().lower() in ADULT_SOURCE_SITES else 0
 
 
 def normalize_url(url: str) -> str:
@@ -3331,8 +3391,7 @@ def extract_post_data_multimovies(
     cls_meta = classify_media("multimovies", raw_title, slug, html)
     adult_patterns = [
         r"\b18\+\b", r"\badult\b", r"\berotic\b", r"\bhotshots\b",
-        r"\bullu\b", r"\bkooku\b", r"\bprimeplay\b", r"\brabbit\b",
-        r"\bhunters\b", r"\bnsfw\b",
+        r"\bullu\b", r"\bkooku\b", r"\bprimeplay\b", r"\bnsfw\b",
     ]
     is_18_plus = int(any(
         re.search(pattern, f"{raw_title} {slug}", re.IGNORECASE)
@@ -4369,6 +4428,7 @@ def save_scraped_data(
         or is_adult_title(
             data.get("clean_title") or data.get("title") or "",
             data.get("original_title") or data.get("slug") or data.get("url") or "",
+            source_site=data.get("source_site"),
         )
     )
     if enrich_metadata:

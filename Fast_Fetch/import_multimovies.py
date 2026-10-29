@@ -25,8 +25,7 @@ MAX_RESPONSE_BYTES = 20 * 1024 * 1024
 RETRYABLE_STATUSES = {429, 500, 502, 503, 504}
 ADULT_PATTERNS = (
     r"\b18\+\b", r"\badult\b", r"\berotic\b", r"\bhotshots\b",
-    r"\bullu\b", r"\bkooku\b", r"\bprimeplay\b", r"\brabbit\b",
-    r"\bhunters\b", r"\bnsfw\b",
+    r"\bullu\b", r"\bkooku\b", r"\bprimeplay\b", r"\bnsfw\b",
 )
 QUALITY_PATTERN = re.compile(
     r"\b(2160p|1440p|1080p|720p|480p|360p|4k|fhd|hd)\b",

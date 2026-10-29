@@ -56,8 +56,13 @@ _USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like G
 _RATE_LIMITED = threading.Event()
 STOP_REQUESTED = False
 
+# "rabbit" left on 2026-10-29: 0/12 sampled live titles are adult (*Wallace & Gromit: The
+# Curse of the Were-Rabbit*, *1001 Rabbit Tales*, *Jojo Rabbit*). "adult" stays — 10/12 of
+# its sampled rows are real product, and deleting it would surface Brazzers-class material
+# in a general-audience app. A bare word is judged by its live titles, not by the
+# dictionary; `fast_fetch.ADULT_TITLE_PATTERNS` carries the reasoning and the table.
 ADULT_KEYWORDS = {
-    "18+", "erotic", "hotshots", "ullu", "kooku", "rabbit", "primeplay", "hentai",
+    "18+", "erotic", "hotshots", "ullu", "kooku", "primeplay", "hentai",
     "uncensored", "sex", "porn", "adult", "lust", "sensual", "naked", "nude",
     "charmsukh", "palang tod", "rasmalai", "chull", "bhabhi", "jalebi",
 }

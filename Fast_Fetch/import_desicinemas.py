@@ -67,8 +67,13 @@ signal.signal(signal.SIGTERM, _sigint_handler)
 
 
 # --- Adult Content Filter ---
+# "rabbit" left on 2026-10-29 (0/12 sampled live titles are adult — *Wallace & Gromit*,
+# *1001 Rabbit Tales*, *Jojo Rabbit*). "adult" stays: 10/12 of its sampled rows are real
+# product, including this fleet's "… Adult Short Film" format, and the two false positives
+# measured (*Shin-chan: The Adult Empire Strikes Back*) are the documented cost. Sampling
+# live titles is the law; `fast_fetch.ADULT_TITLE_PATTERNS` carries the reasoning.
 ADULT_KEYWORDS = {
-    "18+", "erotic", "hotshots", "ullu", "kooku", "rabbit", "primeplay", "hentai",
+    "18+", "erotic", "hotshots", "ullu", "kooku", "primeplay", "hentai",
     "uncensored", "sex", "porn", "adult", "lust", "sensual", "naked", "nude",
     "charmsukh", "palang tod", "rasmalai", "chull", "bhabhi", "jalebi"
 }

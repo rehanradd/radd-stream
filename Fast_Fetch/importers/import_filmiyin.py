@@ -105,6 +105,10 @@ TRACKER_HOST_RE = re.compile(
 # Site branding that must not survive into a public display string.
 BRAND_TOKEN_RE = re.compile(r"""filmy\s*\w*|filmy4\w*|filmyfly\w*|bolly\s*\w*""", re.I)
 
+# "adult" stays: 10/12 sampled live titles carrying it are real product (this fleet's
+# "… Adult Short Film" vault format), and the measured cost — two *Shin-chan: The Adult
+# Empire Strikes Back* rows — is documented, not silently paid. Judge a bare word by its
+# live titles. `AGE_CERT_RE` separately flags a bracketed certificate.
 ADULT_KEYWORDS = (
     "18+", "18 plus", "adult", "porn", "pornhub", "pornstar", "erotic", "blue film",
     "bluefilm", "nude", "naked", "hentai", "onlyfans", "charmsukh", "hotshots",

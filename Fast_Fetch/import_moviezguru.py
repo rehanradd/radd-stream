@@ -39,9 +39,16 @@ BASE_URL = "https://moviezguru.guru"
 WP_API_URL = "https://moviezguru.guru/wp-json/wp/v2/posts"
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 
+# "rabbit" and "hunters" were removed on 2026-10-29 after sampling 12 live titles each in
+# the production ledger: 0/12 adult for both — *Wallace & Gromit: The Curse of the
+# Were-Rabbit*, *1001 Rabbit Tales*, *Rabbit School*, *Peter Rabbit*, *Jojo Rabbit*,
+# *KPop Demon Hunters*, *Transformers Prime: Beast Hunters*. "adult" STAYED: 10/12 of its
+# sampled rows are real product (the "… Adult Short Film" vault format), and deleting it
+# would push Brazzers and TeamSkeet into a general-audience app. Judge a bare word by its
+# live titles, never by the dictionary. See `fast_fetch.ADULT_TITLE_PATTERNS`.
 ADULT_KEYWORDS = {
-    "18+", "erotic", "hotshots", "ullu", "kooku", "primeplay", "rabbit",
-    "flizmovies", "hunters", "boommovies", "neonx", "besharams", "gupchup",
+    "erotic", "hotshots", "ullu", "kooku", "primeplay",
+    "flizmovies", "boommovies", "neonx", "besharams", "gupchup",
     "sex", "sexy", "porn", "adult", "sensual", "lust"
 }
 

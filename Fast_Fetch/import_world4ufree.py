@@ -105,9 +105,16 @@ MAX_SAFE_WORKERS = 6
 MIN_REQUEST_DELAY = 0.3
 
 # Adult keywords filter to strictly enforce is_18_plus = 0
+# "rabbit" and "hunters" were removed on 2026-10-29 after sampling 12 live titles each in
+# the production ledger: 0/12 adult for both — *Wallace & Gromit: The Curse of the
+# Were-Rabbit*, *1001 Rabbit Tales*, *Rabbit School*, *Peter Rabbit*, *Jojo Rabbit*,
+# *KPop Demon Hunters*, *Transformers Prime: Beast Hunters*. "adult" STAYED: 10/12 of its
+# sampled rows are real product (the "… Adult Short Film" vault format), and deleting it
+# would push Brazzers and TeamSkeet into a general-audience app. Judge a bare word by its
+# live titles, never by the dictionary. See `fast_fetch.ADULT_TITLE_PATTERNS`.
 ADULT_KEYWORDS = {
-    "18+", "erotic", "hotshots", "ullu", "kooku", "primeplay", "rabbit",
-    "flizmovies", "hunters", "boommovies", "neonx", "besharams", "gupchup",
+    "erotic", "hotshots", "ullu", "kooku", "primeplay",
+    "flizmovies", "boommovies", "neonx", "besharams", "gupchup",
     "sex", "sexy", "porn", "adult", "sensual", "lust"
 }
 

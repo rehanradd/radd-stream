@@ -328,7 +328,12 @@ SEASON_CATEGORY_RE = re.compile(r"\b(?:seaosn|season)\s*(\d{1,3})\b", re.I)
 CAST_SUFFIX_RE = re.compile(r"\s*(?:full\s+)?movies?\s+(?:list|lisy)\s*$|\s+movies?\s*$", re.I)
 
 ADULT_RE = re.compile(
-    r"\b(?:xxx|porn(?:ographic)?|erotic|adult(?:\s+only)?|blue\s+film"
+    # `xxx` left this tier on 2026-10-29: 62 rows were hidden by it alone and this catalog
+    # holds the *xXx* films, so one hit is a suggestion, not a hide. `adult` stays — 10/12
+    # sampled live titles carrying it are real product ("… Adult Short Film"), and the two
+    # *Shin-chan: The Adult Empire Strikes Back* rows it also catches are the documented
+    # cost. See `fast_fetch.ADULT_TITLE_PATTERNS` for the law and the sampling method.
+    r"\b(?:porn(?:ographic)?|erotic|adult(?:\s+only)?|blue\s+film"
     r"|aunty\s+sex|bua\s?wa|sex\s+scene|nude|naked|mms|hardcore|blowjob"
     r"|onlyfans|only\s+fans)\b"
     # A trailing \b after "18+" can never match (the next character is a space,
