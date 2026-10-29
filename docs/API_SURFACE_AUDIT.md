@@ -182,8 +182,14 @@ Consequences, all measured after the fact:
   says the live tree and the pushed tip (`7736bcc`) **diverged at `19abff7`**: the tip is 35
   commits ahead, the live tree 2 (`5446771`, `bf9e565`). So production does not contain
   `34f22c6` (the stats fix) or anything after it, and the tip does not contain `5446771` —
-  the fix for the 9 hosted test failures and 23 lint errors, which has **never been run by
-  CI**, because it was never pushed. `5446771` is now preserved at local ref
+  the fix for the 9 hosted test failures and 23 lint errors — ⚠️ **and "which has **never been
+  run by CI**, because it was never pushed" is stale as of 2026-10-30.** `5446771` itself stayed
+  local-only, but its content was cherry-picked onto the tip as `2caadb3` and CI has run it
+  repeatedly since. Re-measured 2026-10-30 by the qoder3 lane from
+  `/actions/workflows/398476977/runs` (token read from `os.environ`, never in argv or a URL):
+  Android is `completed success` on `main` and `master` at `9859b8a` and on every app branch after
+  it, newest `5e74aa2` at 19:22:09Z — so those 9 failures and 23 lint errors are fixed **and
+  green**, not merely written down. The divergence arithmetic around this clause is unaffected. `5446771` is now preserved at local ref
   `salvage/live-tree-ci-fix-5446771` so a `git reset` of the live tree cannot destroy it.
 - **The adult invariant still holds after the restart** (§2.1): flagged post 404, `/api/m3u*`
   403 at the edge. This was the first thing checked, before anything else.

@@ -67,20 +67,24 @@ recollection — this is the section that had gone stale twice running).
   `actions/runs → total_count: 0` and "the account-level switch sits above it and turns nothing on
   here"; that was a stale reading of a repository that had not yet pushed a compliant commit, not a
   property of the account. Do not repeat it.
-- What is actually true today: **CI is red on both sides.** Backend CI fails on the last five pushes
-  (`11742e0`, `89b5d56`, `a744458`, `b1e16e6`, `a395124`) — nine suites fail from
-  `test_evidence_writeback.py` onward. Android CI reports `636 tests completed, 9 failed`
-  (`ScreenSnapshotTest` ×6 `ComposeTimeoutException` at `ScreenSnapshotTest.kt:75`,
-  `PosterCardProvenanceTest` ×3 `AssertionError` at `PosterCardProvenanceTest.kt:40/50/56`) plus
-  `lintDebug FAILED — Lint found 23 errors, 145 warnings` (first at
-  `app/src/main/kotlin/com/raddstream/app/player/RenditionFailover.kt:137`). Note the trap: the two
-  suites that fail on the hosted x86_64 runner are exactly the two excluded from the local arm64
-  run, so a green local Gradle build proves nothing about them.
+- ⚠️ **CORRECTED 2026-10-30 — this bullet was true when written and is now false.** It read
+  "What is actually true today: **CI is red on both sides**", with backend failing from
+  `test_evidence_writeback.py` onward and Android at `636 tests completed, 9 failed` plus
+  `lintDebug — Lint found 23 errors, 145 warnings` (first at `RenditionFailover.kt:137`).
+  Both sides are green. **Re-measured 2026-10-30 01:2x host time by the qoder3 lane**, token read from `os.environ` inside a `python3 -S` heredoc (never in argv, never in a URL), against `/repos/rehanradd/radd-stream/actions/workflows/<id>/runs?per_page=10`; the API prints UTC. Workflow ids: backend `398476976` (93 runs), Android `398476977` (28 runs), Release `398476978`. Backend `398476976` is `completed success` on **both** `master` and `main` at `87b7b6f` (19:42:59Z / 19:43:00Z) and at `1aafddb`. Android `398476977` is `completed success` on `main` and `master` at `9859b8a` (17:00Z), and every app-lane run after it is green: `217e8cd` (17:21:50Z) — the retry that retired the only recent failure, `99472e0` at 17:08:19Z — then `bc2e534`, `e6482e9`, `a3c34ff`, `bd45ba0`, `9a590bb`, and the newest run of any branch, `5e74aa2` on `q1-identity-fix` at 19:22:09Z. **There is no red app lane.** The authoritative backend gate is **17 modules /
+  791 tests**. The trap that bullet described is still true and still matters: `ScreenSnapshotTest`
+  and `PosterCardProvenanceTest` are excluded from every local arm64 run (Robolectric ships no ARM
+  runtime, robolectric/robolectric#9166), so a green local Gradle build proves nothing about those
+  nine — only the hosted runner judges them, and it now passes them.
 - `tags: 0` and `releases: 0` are still true: no signed APK has ever been published, and the only
   APK anyone has installed is the hand-placed debug build in `/var/www/download/`.
-- Consequence for gating: a hosted green run is *reachable*, so it is the standard, not a fantasy —
-  but while the tree is red the offline suites (one module per invocation) and the local Gradle build
-  remain the only verification that is actually passing. Restore green before claiming a milestone.
+- ⚠️ **CORRECTED 2026-10-30** (it read "…while the tree is red the offline suites … remain the only
+  verification that is actually passing. Restore green before claiming a milestone"). The tree is not
+  red: **Re-measured 2026-10-30 01:2x host time by the qoder3 lane**, token read from `os.environ` inside a `python3 -S` heredoc (never in argv, never in a URL), against `/repos/rehanradd/radd-stream/actions/workflows/<id>/runs?per_page=10`; the API prints UTC. Workflow ids: backend `398476976` (93 runs), Android `398476977` (28 runs), Release `398476978`. Backend `398476976` is `completed success` on **both** `master` and `main` at `87b7b6f` (19:42:59Z / 19:43:00Z) and at `1aafddb`. Android `398476977` is `completed success` on `main` and `master` at `9859b8a` (17:00Z), and every app-lane run after it is green: `217e8cd` (17:21:50Z) — the retry that retired the only recent failure, `99472e0` at 17:08:19Z — then `bc2e534`, `e6482e9`, `a3c34ff`, `bd45ba0`, `9a590bb`, and the newest run of any branch, `5e74aa2` on `q1-identity-fix` at 19:22:09Z. **There is no red app lane.** A hosted green run is not merely reachable, it is the current state of both
+  trunk refs. Keep the offline suites as the pre-push gate because they cost this box minutes and a
+  hosted run costs this box nothing — but no lane owes a "restore green" step before landing a
+  milestone, and a docs-only push legitimately triggers zero backend runs (path filter
+  `Fast_Fetch/**`), which is not a red gate.
 - Expected Android output *if* CI ever runs: a debug APK as a downloadable artifact; version-tag
   release builds additionally need `KEYSTORE_BASE64`, `KEY_STORE_PASSWORD`, `KEY_ALIAS`,
   `KEY_PASSWORD` present as repository Actions secrets (verified only by name, never by value).

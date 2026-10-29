@@ -159,8 +159,18 @@ public, nothing behind them private.
 **Known limitation, recorded not fixed:** `PosterCardProvenanceTest` (3 `@Test`s) and
 `ScreenSnapshotTest` (6) are excluded at `App/app/build.gradle.kts:220-233` whenever `os.arch` is
 aarch64/arm64 — Robolectric ships no native runtime for ARM and dies during `@Rule` evaluation, so an
-in-test `Assume` cannot help — and GitHub Actions is disabled at the account level, so **those 9
-tests currently execute nowhere**. Report a local green as *618 executed + 9 excluded*. The
+in-test `Assume` cannot help — and ⚠️ **the clause that followed this one is false as of
+2026-10-30.** It read "and GitHub Actions is disabled at the account level, so **those 9
+tests currently execute nowhere**. Report a local green as *618 executed + 9 excluded*."
+Actions is enabled — `/actions/permissions` returns `enabled: true`, `allowed_actions: all`
+(measured 2026-10-29, and the workflow-API reads below are from my own run tonight) — and the
+hosted x86_64 runner does execute both classes. Re-measured 2026-10-30 by the qoder3 lane from
+`/actions/workflows/398476977/runs` (token read from `os.environ`, never in argv or a URL):
+Android is `completed success` on `main` and `master` at `9859b8a` and on every app branch
+after it, newest `5e74aa2` at 19:22:09Z. Those 9 tests execute on the hosted runner and
+**pass**, so report a local green as *627 executed here + 9 executed and passing on CI*, not
+*618 + 9 excluded*. The exclusion itself stays: it is forced by Robolectric #9166, not by CI
+being unavailable. The
 `doFirst { logger.lifecycle(...) }` line at `:227` names only `PosterCardProvenanceTest`, so
 `ScreenSnapshotTest` is dropped from every local run **silently**; the honest fix is one extra
 sentence in that log line, which is a build-file edit and therefore waits for the hold to lift.
@@ -1016,9 +1026,20 @@ corrected rather than repeated.
     only as a roadmap line.
   - The "stale test files archived to `/home/ubuntu/project_trash_bin/`" claim moved
     three untracked items; no tracked source or test file was deleted.
-  - The live API still serves `/home/ubuntu/radd-stream-data/fast_fetch.db` (~201
-    posts). Swapping `RADD_DB_PATH` to the projected catalog is an owner decision and
-    is prepared, not executed.
+- ⚠️ **STALE — CORRECTED 2026-10-30 by the qoder3 lane.** This blocker read "The live API
+      still serves `/home/ubuntu/radd-stream-data/fast_fetch.db` (~201 posts). Swapping
+      `RADD_DB_PATH` to the projected catalog is an owner decision and is prepared, not executed."
+      **The swap has already happened.** Measured by qoder4 2026-10-30 from
+      `/proc/<pid>/environ` of the running unit:
+      `RADD_DB_PATH=/home/ubuntu/radd-stream-data/merged_catalog_20261025.db`, unit `active`,
+      RSS 58 MB. I confirmed the file it points at myself, read-only: 6,396,899,328 bytes,
+      `page_size` 4096, WAL, **150,799** `posts`. Neither of us re-counted the legacy
+      `fast_fetch.db` tonight — this bullet says ~201 posts and another lane has written 203 for
+      the same file, an unresolved two-row disagreement, which is precisely why neither number
+      should be quoted without a fresh count. **Do not follow the instruction that used to sit
+      behind this line ("swap `RADD_DB_PATH` and restart `radd-stream.service`"): an agent that
+      does restarts a healthy production service for no reason. Restarting `radd-stream.service`
+      and cutting the first release tag are the owner's calls only.**
   - No Android device or emulator run: this VM has no KVM, so nothing here proves
     on-device behaviour.
 - **Next concrete action:** let `_finalize` finish, validate the projected catalog on
