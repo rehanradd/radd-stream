@@ -1081,20 +1081,39 @@ def link_is_adult(source_id: int, db_path) -> bool:
 
     Every list route hides a flagged title, but a redirector addressed by a bare
     link id never sees the list: without this, the play route alone would be an
-    adult viewer. An unknown link answers True too, so a vanished row, a typo and
-    a flagged title are indistinguishable — and none of them plays."""
+    adult viewer. The flag belongs to the work, not to the one row a link points
+    at — `canonical_key` can still carry a flagged copy and an unflagged legacy
+    twin written before `inherit_key_adult` existed — so the answer is the MAX
+    over every row sharing the post's key, with the same `unknown`/empty-key
+    guard the write path uses.
+
+    An unknown link answers True too, so a vanished row, a typo and a flagged
+    title are indistinguishable — and none of them plays."""
     with sqlite3.connect(db_path) as conn:
         try:
             row = conn.execute(
                 """
-                SELECT p.is_18_plus FROM download_sources s
+                SELECT p.is_18_plus, p.canonical_key FROM download_sources s
                 JOIN releases r ON r.id = s.release_id
                 JOIN posts p ON p.id = r.post_id
                 WHERE s.id = ?
                 """, (source_id,)).fetchone()
         except sqlite3.Error:
             return True
-    return bool(row and row[0])
+        if row is None:
+            # Never minted, or expired: indistinguishable from a flagged title.
+            return True
+        if row[0]:
+            return True
+        key = str(row[1] or "").strip().lower()
+        if not key or key == "unknown":
+            return False
+        try:
+            return conn.execute(
+                "SELECT 1 FROM posts WHERE canonical_key = ? AND is_18_plus = 1"
+                " LIMIT 1", (key,)).fetchone() is not None
+        except sqlite3.Error:
+            return True
 
 
 # ── rate limiting: the documented buckets, in-app ────────────────────────────
