@@ -3227,7 +3227,15 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self.send_json(resp_payload)
 
         elif path == "/api/m3u":
-            post_id = int(query_params.get("id", [0])[0])
+            # `?id=abc` used to raise ValueError straight out of do_GET, which
+            # drops the connection with no response at all — the same 502 class
+            # `bounded_int` exists to stop on `?page=abc`. Answer like the detail
+            # route's invalid id: a 400 the caller can read.
+            try:
+                post_id = int(query_params.get("id", [0])[0])
+            except (TypeError, ValueError):
+                self.send_json({"error": "Invalid post ID"}, status=400)
+                return
             playlist_content = generate_m3u_playlist(post_id, full=full, base_url=base_url)
             body = playlist_content.encode("utf-8")
             self.send_bytes(
