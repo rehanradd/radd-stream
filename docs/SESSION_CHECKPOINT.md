@@ -1699,5 +1699,16 @@ crawl-completion problem — queued to qoder2 with DesiSerials named explicitly.
   tally *is*, and `StatsHonestyTest` now refuses a directional word in either sign for a full server
   and for `connectionNotice(0)`. Reason: `stats.posts` 116,922 against a browsable `total` of 131,559
   then 134,815 — the arrow flipped between one measurement and the next.
+- **Push BLOCKED on the credential, not on the code - owner action needed.** Remote `master` and `main`
+  had both advanced to `af68450` (16 commits, **none touching `App/**`**), so the work was cherry-picked
+  onto that sha in `/tmp/q1_ci` and is ready as branch **`q1-ci-20261029` @ `463b986`**, a clean
+  fast-forward for both refs; `App/` in it is byte-identical to the tree the gate was run in. `git push`
+  returned "Invalid username or token", and the API confirms the cause: **401 Bad credentials on `/user`
+  AND on `/repos/rehanradd/radd-stream`**. `ls-remote`/`fetch` succeed only because the repository is
+  public, so a green read was never evidence of write access - worth remembering, because that is exactly
+  how a dead token looks alive. No `gh` CLI, no `credential.helper` on this host. **Therefore Android CI
+  has not run on this fix, `v1.0.0` is NOT cut, and this is reported as blocked, not done** - the tag
+  waits for a green Android run on the pushed sha.
+
 - **Root `AGENTS.md` and `docs/PROJECT_MAP.md` are carrying another agent's uncommitted edits right
   now; this entry and my commit touch neither.** Staging was by explicit path, no `git add -A`.

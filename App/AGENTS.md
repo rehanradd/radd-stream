@@ -2569,6 +2569,22 @@ resource merge, not by a screenshot on API 21/23/27 hardware.
 links must be 100% direct with" has no end, and mission items 2+ never arrived. Item 1 is complete
 inside the App lane; the rest is reported as not-received rather than guessed at.
 
+**Git — pushed as a clean fast-forward? No, and the reason is a credential, not the code.** The
+remote `master` and `main` had both moved to `af68450` (16 commits ahead of this tree, **none of them
+touching `App/**`**), so the commit was cherry-picked onto that sha in an isolated worktree
+(`/tmp/q1_ci`, branch `q1-ci-20261029` at **`1d9e7b6`**) — the only conflict was the tail collision in
+`docs/SESSION_CHECKPOINT.md`, resolved by keeping the other lane's entries and appending this lane's,
+and `diff -r` proves the pushed `App/` tree is byte-identical to the tree that gate was run in. The
+push itself failed: `GET /user` **and** `GET /repos/rehanradd/radd-stream` both answer **401 Bad
+credentials** with the `GITHUB_TOKEN` in this environment, and `git ls-remote` succeeded only because
+the repository is public, so a read ever proved nothing about write access. There is no `gh` CLI and no
+`credential.helper` on this box. Session 28's "the token is alive" was true at 22:05 on 2026-10-28; it
+is dead again today, and refreshing it is an owner action. Consequence, stated rather than glossed:
+**Android CI has not seen this fix, `v1.0.0` is NOT tagged, and this milestone is not done** — the tag
+rule ("only after Android CI is green") and the task rule ("do not report done until that run is
+success") both bind. `1d9e7b6` is a fast-forward for both refs and is ready to push the moment a live
+credential exists.
+
 **Rules kept:** no `.py` touched, no service restart, no nginx change, no `git add -A`, no credential
 printed or logged, `/tmp/qbuild*.sh` only and one build at a time, §13 hue untouched, no device
 claim, and the first tag is cut only after Android CI is green.
