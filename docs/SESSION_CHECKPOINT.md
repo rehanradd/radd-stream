@@ -2568,3 +2568,65 @@ filter regression; it is two audited writes, and the arithmetic identity holds e
   `475e1d4`, never edit/commit/reset `/opt/radd-stream` (task #26). Their next reported sha must come
   from `/tmp/<lane>`; until I see that, #26 stays open and #19's "reproduce production from a ref"
   problem is not actually solved by any restart.
+
+### 22:10–22:35 — my own wrong claim corrected, the real account store measured, and a near-miss revert
+
+- **I published a wrong statement twenty minutes ago and it is corrected here, not deleted:** my
+  21:40 entry said production "has no account or payment tables at all", counted from
+  `merged_catalog_20261025.db`. The substantive conclusion holds — there is not one real account,
+  favourite, progress row or payment anywhere — but the store is a **different file**.
+  `accounts.py:148,179,328` put `user_state.db` outside the checkout, and that file is
+  `/home/ubuntu/radd-stream-data/user_state.db`, mtime **19:33**. Quoting my catalog claim as if it
+  were the account claim would send the next reader to the wrong file.
+- **`user_state.db`, measured read-only at 22:15:** `user_accounts 0`, `user_favorites 0`,
+  `user_progress 0`, `payment_transactions 0`, `payment_review_audit 0`, `sync_key_attempts 3`,
+  `usage_device 0`, `usage_metric` 1 row, `usage_dim_metric` 4 rows, `user_state_meta` =
+  `schema_version 1`. So the owner's "how many users/accounts/money do we have" question has a hard
+  answer today: **zero accounts, zero payments, 42 recorded playback starts** (day 20755), and all
+  four dimensions on those 42 are `unknown` — installs, geo, locale and app_version were never
+  attributed. I am not calling them humans; nothing in the repo proves who pressed play.
+- **The 42 rows and the `usage_*` tables came from unpushed code.** `grep -rln
+  "playback_start|usage_device"` over the pushed tip returns nothing, and over `/opt/radd-stream`
+  returns nothing; the only copy of the module is `/tmp/q3_admin/Fast_Fetch/usage_stats.py` (+
+  `test_usage_stats.py`), q3's, at `d6861bb`, not landed. So the live operator state file now carries
+  schema and counters that no ref can reproduce or read. The design itself is right (salted
+  `dev-` digests, aggregates only, no IP read, incremental UPSERT instead of scanning the 1.7M-row
+  ledger, loopback-only surface) and it is the answer to the owner's admin-panel
+  active/live/devices/accounts/money ask — it just must not be developed against production data.
+  Told q3: prove the resolved path inside its own test, do not delete the rows (that is mine to gate),
+  land the module with tests green.
+- **A near-miss I almost caused, recorded because it is the reason the live-tree rule exists:** I
+  copied `/opt/radd-stream/docs/MONETIZATION_AND_FLEET_PLAN.md` over my worktree's version on the
+  reasonable-looking theory that a file the live tree shows as `??` must be unpushed. It *is* tracked
+  at the tip, and the live copy is **43 lines shorter** — the 18:58 primary-source update block and
+  the entire "Correction 2026-10-29 20:20" shortener-flag section. `git diff --stat` before committing
+  caught it and I restored the pushed version. So the live tree is not merely dirty: on this file it
+  is behind, and the AGENTS.md warning about a silent revert of pushed work is now a measured
+  instance rather than a hypothesis.
+- **Snapshot taken, nothing deleted:** `/home/ubuntu/radd-stream-backups/livetreestate_20261029_2220/`
+  holds `tracked.patch` (2,932 lines), `status.txt` (59 entries, 26 untracked) and copies of the
+  untracked files. Read-only `git diff` plus `cp -a`; the live tree was not committed from, reset, or
+  cleaned. If a future session is tempted to restore it to a ref, the only copy of some in-flight work
+  is now in that directory, not in the tree.
+- **Two directives became tracked at `e9fbd09`+1** (`App/docs/PLAYER_AND_CACHE_DIRECTIVE.md`, 40 lines,
+  and `docs/GITHUB_AUTHORITY_NOTICE.md`, 7 lines) — added verbatim after a secret scan
+  (`ghp_`/`github_pat_`/long-base64/private-key patterns: no hits). Before this commit the
+  owner's universal-player brief and the "only repository agents may push to" notice existed solely
+  inside the deployment tree, so the silently-deployed system was partly built from files no ref
+  contains.
+- **Merge state measured per site (task #5, and the real shape of #9).** Live catalog carries 31
+  `source_site` values over 150,799 posts; top five are hindilinks4u 23,678, filmyzilla 15,228,
+  katmoviehd 12,881, moviesmela 12,489, 9xmovies 11,462. Two things fall out of that list:
+  **`mp4moviez` and `kuttymovies` are absent entirely** — mp4moviez has 29,848 posts in its vault plus
+  11,403/11,404 in two staging copies, kuttymovies 900 — so batch 4 is real unmerged volume, not a
+  duplicate, and it stays held only because the box is busy, not because the work is done. And several
+  merged sites hold far more in their vault than they contribute live (filmyhit 16,943 vs 935,
+  katmoviehd 38,154 vs 12,881, bolly4u 15,192 vs 4,253, world4ufree 14,768 vs 3,382, ssrmovies 13,916
+  vs 6,678, 10xflix 13,775 vs 7,082, hdhub4u 11,224 vs 6,557, multimovies 10,498 vs 3,703, pagalmovies
+  6,846 vs 3,642, filmiyin 3,837 vs 895). Dedup explains part of that; it does not obviously explain
+  a 935-from-16,943 ratio, and `identity_suspect=41432` / `release_dups=295711` in
+  `cat_projection_meta` says the merge has real collision work pending. **Nobody should quote "all
+  sites merged" until that surplus is accounted for** — that is the honest state of #5.
+- Also new since the last entry: `humtv_staging.db` (64 posts), `hindidubbedmovies.db` (40),
+  `bollyflix.db` (38), `hindianimeszone.db` (36), `moviehax.db` (35) and `themoviebox.db` (**0 posts**,
+  created 20:12 tonight) — six more vaults, none of them in the live `source_site` set yet.
