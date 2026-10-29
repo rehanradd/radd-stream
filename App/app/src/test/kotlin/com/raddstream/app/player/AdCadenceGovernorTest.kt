@@ -51,7 +51,7 @@ class AdCadenceGovernorTest {
     private fun governor(
         dao: FakeDao,
         clock: FixedAdWallClock,
-        switch: FakeSwitch,
+        switch: AdSwitch,
         inventory: AdInventory,
     ) = AdCadenceGovernor(dao, clock, inventory, switch)
 

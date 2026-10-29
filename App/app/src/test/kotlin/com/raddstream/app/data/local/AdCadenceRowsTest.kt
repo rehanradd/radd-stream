@@ -3,6 +3,7 @@ package com.raddstream.app.data.local
 import com.raddstream.app.player.AdCadenceState
 import com.raddstream.app.player.AdSurface
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
