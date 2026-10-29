@@ -127,18 +127,23 @@ class SyncAccountRepository @Inject constructor(
     }
 
     /**
-     * One tap: sign in with a Pakistani mobile number or a key the viewer already holds.
+     * One tap: sign in with a sync key the viewer already holds, then pull their library down.
      *
-     * A mobile number is normalized and derived into a 16-character credential on this
-     * device (see [SyncContract.quickLoginKey]); the number itself never leaves the phone.
-     * A 16-character server-minted key, or an older longer key, is sent unchanged — that is
-     * what makes the same key open the same library on a second device. The card's honest
-     * warning about a number's small entropy lives in the screen, not in this call.
+     * The input is a credential and nothing else. A mobile number is not accepted here and is not
+     * converted into one — [SyncContract.quickLoginKey] answers null for it, so this call refuses
+     * with [Refusal.WEAK_KEY] without asking the server anything. That used to be the other half
+     * of this function's job, and it was a defect: deriving the key from the number made knowing a
+     * viewer's number sufficient to open their list. A number a viewer wants shown about themselves
+     * belongs in [com.raddstream.app.data.ServerSettingsRepository.saveAccountLabel], which no
+     * request reads.
+     *
+     * A key this server already mints is sent unchanged, and that is what makes the same key open
+     * the same library on a second device.
      *
      * POST api/v2/account with the key in the body answers `created: false` for a key this
      * server already knows, and opens a library around one it does not. A typo long enough
      * to pass the shape check therefore opens a NEW empty library rather than failing, so
-     * the card says to check the number or key instead of promising a not-found answer.
+     * the card says to check the key instead of promising a not-found answer.
      */
     suspend fun quickSignIn(input: String): AccountMutation {
         val key = SyncContract.quickLoginKey(input)
@@ -147,9 +152,9 @@ class SyncAccountRepository @Inject constructor(
             val answer = apiProvider.current().createAccount(AccountCreateRequest(syncKey = key)).account
             val stored = answer?.syncKey?.trim()?.takeIf { it.isNotEmpty() } ?: key
             settingsRepository.saveSyncKey(stored)
-            // Nothing to reveal: the viewer supplied the credential (or the number it is
-            // derived from), and can do so again on any device. Minting a fresh random key
-            // is the separate "Create account" door, and that is the only reveal path.
+            // Nothing to reveal: the viewer supplied the credential and can do so again on any
+            // device. Minting a fresh random key is the separate "Create account" door, and that
+            // is the only reveal path.
             AccountMutation.SignedIn(revealedKey = null)
         } catch (error: Exception) {
             refusalOf(error, hadWorkRef = false)

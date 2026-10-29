@@ -273,18 +273,28 @@ fun SettingsScreen(
                     OutlinedTextField(
                         value = account.quickInput,
                         onValueChange = viewModel::onQuickInputChanged,
-                        label = { Text("Mobile number or 16-character sync key") },
-                        placeholder = { Text("03XXXXXXXXX or a 16-character key") },
+                        label = { Text("Sync key") },
+                        placeholder = { Text("The 16-character key from your other device") },
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth(),
                     )
+                    // The sentence this card used to print — "anyone who knows it can derive the
+                    // same key" — described a feature that is now deleted, so it is replaced by
+                    // the two facts that are true of what is left: a number cannot open an
+                    // account, and the key is the whole account.
                     Text(
-                        "One tap signs in with the same number on every device. A mobile number " +
-                            "is a convenience, not a secret: anyone who knows it can derive the " +
-                            "same key and open this list. For a credential only you know, create " +
-                            "a random 16-character key instead and keep it somewhere safe.",
+                        "Enter the key this app showed once, when it created the account. A mobile " +
+                            "number is not a key and this app cannot turn one into a key: knowing " +
+                            "someone's number gets them nowhere. An account is only as strong as " +
+                            "its key, so keep the key somewhere safe, and sign out on any device " +
+                            "that is not yours.",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    AccountLabelField(
+                        value = account.labelInput,
+                        onValueChange = viewModel::onAccountLabelChanged,
+                        onSave = null,
                     )
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -306,6 +316,11 @@ fun SettingsScreen(
                         }
                     }
                 } else {
+                    AccountLabelField(
+                        value = if (account.labelInput.isEmpty()) account.accountLabel else account.labelInput,
+                        onValueChange = viewModel::onAccountLabelChanged,
+                        onSave = viewModel::saveAccountLabel,
+                    )
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -548,6 +563,40 @@ private fun BusyLabel(busy: Boolean, label: String) {
         )
     } else {
         Text(label)
+    }
+}
+
+/**
+ * The optional label the viewer types about themselves, and the only place a phone number is
+ * ever asked for in this app.
+ *
+ * It is one field and, when signed in, one button. There is no derivation behind it: the text
+ * goes to `ServerSettingsRepository.saveAccountLabel` and to no endpoint, and no decision about
+ * whether a request is allowed reads it. [onSave] is null in the sign-in block, where pressing
+ * Sign in commits whatever was typed, and non-null once an account is open and the label can be
+ * edited on its own.
+ */
+@Composable
+private fun AccountLabelField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    onSave: (() -> Unit)?,
+) {
+    OutlinedTextField(
+        value = value,
+        onValueChange = onValueChange,
+        label = { Text("Label (optional)") },
+        placeholder = { Text("A name or number, shown on this device only") },
+        singleLine = true,
+        modifier = Modifier.fillMaxWidth(),
+    )
+    Text(
+        "Only so you can tell your own account apart. This stays on the device and is never sent.",
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+    if (onSave != null) {
+        TextButton(onClick = onSave) { Text("Save label") }
     }
 }
 

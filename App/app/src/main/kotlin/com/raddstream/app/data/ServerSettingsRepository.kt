@@ -178,6 +178,29 @@ class ServerSettingsRepository @Inject constructor(
         }
     }
 
+    /**
+     * What the viewer typed about themselves, shown on the account card and nowhere else.
+     *
+     * This is display data, deliberately kept beside the key it describes and kept separate from
+     * it: it is never hashed, never sent, and read by nothing that decides whether a request is
+     * allowed. A mobile number identifies a person to their friends; it authenticates nobody, and
+     * an earlier build of this app treated it as if it did. See
+     * [com.raddstream.app.sync.SyncContract.accountLabel] for the rule that turns typed text into
+     * this value, and [com.raddstream.app.sync.SyncContract.quickLoginKey] for the fact that it is
+     * not an input to it.
+     */
+    val accountLabel: Flow<String?> = dataStore.data.map { preferences ->
+        preferences[ACCOUNT_LABEL_KEY]?.takeIf { it.isNotBlank() }
+    }
+
+    suspend fun saveAccountLabel(label: String?) {
+        val clean = label?.trim()?.takeIf { it.isNotEmpty() }
+        dataStore.edit { preferences ->
+            if (clean == null) preferences.remove(ACCOUNT_LABEL_KEY)
+            else preferences[ACCOUNT_LABEL_KEY] = clean
+        }
+    }
+
     // ── The operator's remote switches ──────────────────────────────────────────
     //
     // Mirrored into DataStore rather than sampled from the network in every screen: the last
@@ -494,6 +517,7 @@ class ServerSettingsRepository @Inject constructor(
         private val VIP_UNTIL_KEY = doublePreferencesKey("vip_until")
         private val VIP_PENDING_CLAIM_KEY = booleanPreferencesKey("vip_pending_claim")
         private val SYNC_KEY_KEY = stringPreferencesKey("sync_key")
+        private val ACCOUNT_LABEL_KEY = stringPreferencesKey("account_label")
         private val SEARCH_RECENTS_KEY = stringPreferencesKey("search_recents")
         private val IMAGE_QUALITY_KEY = stringPreferencesKey("image_quality")
         private val MOBILE_DATA_KEY = booleanPreferencesKey("mobile_data_allowed")
