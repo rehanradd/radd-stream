@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+      API 27+ override of Theme.RaddStream: `android:windowLayoutInDisplayCutoutMode shortEdges`
+      lets the cinematic background run under a notch or punch-hole instead of painting a black
+      band there. The attribute was added in API 27, so it cannot sit in the base file at minSdk
+      21 — lint's NewApi check refuses it there.
+
+      Qualified styles replace lower-configuration files wholesale rather than merging, so this
+      carries everything from values/themes.xml and values-v23 plus the cutout item.
+    -->
+    <style name="Theme.RaddStream" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/radd_ink_950</item>
+        <item name="android:statusBarColor">#00000000</item>
+        <item name="android:navigationBarColor">#00000000</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowLayoutInDisplayCutoutMode">shortEdges</item>
+    </style>
+</resources>

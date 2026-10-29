@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+      API 23+ override of Theme.RaddStream: the one place `android:windowLightStatusBar` may be
+      declared, because the attribute was added in API 23 and this app's minSdk is 21.
+
+      A version-qualified style REPLACES res/values/themes.xml wholesale for devices at or above
+      this level, so the three base items are repeated rather than inherited. Dark background, so
+      light system-bar icons: false. See the base file for why the split beats a suppression.
+    -->
+    <style name="Theme.RaddStream" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/radd_ink_950</item>
+        <item name="android:statusBarColor">#00000000</item>
+        <item name="android:navigationBarColor">#00000000</item>
+        <item name="android:windowLightStatusBar">false</item>
+    </style>
+</resources>

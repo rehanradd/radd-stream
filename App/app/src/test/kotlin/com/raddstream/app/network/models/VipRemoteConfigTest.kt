@@ -24,8 +24,7 @@ class VipRemoteConfigTest {
                 "easypaisa": {"mobile_number": "03331234567"},
                 "raast": {"instant_id": "0300XXXXXXX"}
               },
-              "ads": {"monetag_rewarded_zone_id": "zone"},
-              "link_shorteners": [{"network": "shrinkme", "configured": true}]
+              "ads": {"monetag_rewarded_zone_id": "zone"}
             }
             """.trimIndent(),
             VipRemoteConfig::class.java,
@@ -96,18 +95,14 @@ class VipRemoteConfigTest {
     }
 
     @Test
-    fun `decodes feature flags, ads and configured shorteners`() {
+    fun `decodes feature flags and the ad-network slots`() {
         val config = gson.fromJson(
             """
             {
               "success": true,
               "feature_flags": {"downloads": false, "pure_cinema": true, "chromecast": false},
               "ads": {"monetag_rewarded_zone_id": "zone-1",
-                      "adsterra_native_banner_id": "banner-1"},
-              "link_shorteners": [
-                {"network": "shrinkme", "configured": true},
-                {"network": "droplink", "configured": false}
-              ]
+                      "adsterra_native_banner_id": "banner-1"}
             }
             """.trimIndent(),
             VipRemoteConfig::class.java,
@@ -121,10 +116,36 @@ class VipRemoteConfigTest {
         assertEquals("zone-1", config.ads.monetagRewardedZoneId)
         assertEquals("banner-1", config.ads.adsterraNativeBannerId)
         assertTrue(config.ads.hasRewardedInventory)
-        assertEquals(2, config.linkShorteners.size)
-        assertEquals("shrinkme", config.linkShorteners[0].network)
-        assertTrue(config.linkShorteners[0].configured)
-        assertFalse(config.linkShorteners[1].configured)
+    }
+
+    /**
+     * Link shorteners are retired: the app models no `link_shorteners`, and the byte paths that
+     * would have consumed one are direct (`ApiProvider.streamRedirectUrl` → /api/v1/stream).
+     * A deployment that still publishes the key is therefore not a broken client — this pins
+     * that an unknown section is ignored instead of throwing, so retiring the field here can
+     * never be the reason a phone fails to load pricing.
+     */
+    @Test
+    fun `a body still publishing the retired link_shorteners key decodes unchanged`() {
+        val config = gson.fromJson(
+            """
+            {
+              "success": true,
+              "vip": {"monthly_pkr": 200, "yearly_pkr": 1500},
+              "payments": {"jazzcash": {"till_id": "998877"}},
+              "link_shorteners": [
+                {"network": "shrinkme", "configured": true},
+                {"network": "droplink", "configured": false}
+              ]
+            }
+            """.trimIndent(),
+            VipRemoteConfig::class.java,
+        )
+
+        assertEquals(200, config.vip.monthlyPkr)
+        assertEquals("998877", config.payments.jazzcash.tillId)
+        assertTrue(config.payments.hasAnyHandle)
+        assertTrue(config.success)
     }
 
     @Test
@@ -157,7 +178,6 @@ class VipRemoteConfigTest {
         assertTrue(config.featureFlags.sharing)
         assertTrue(config.featureFlags.search)
         assertFalse(config.ads.hasRewardedInventory)
-        assertTrue(config.linkShorteners.isEmpty())
     }
 
     @Test

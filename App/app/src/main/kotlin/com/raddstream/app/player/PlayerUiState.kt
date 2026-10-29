@@ -1,5 +1,8 @@
 @file:OptIn(UnstableApi::class)
-
+// Kotlin's `@file:OptIn` above satisfies the *compiler*; Media3's opt-in rule is enforced a
+// second time by the lint check `UnsafeOptInUsageError`, which only reads
+// `androidx.annotation.OptIn`. Both are required, and the class-level one below is what clears
+// the five `AspectRatioFrameLayout` constant references in this enum.
 package com.raddstream.app.player
 
 import androidx.media3.common.TrackGroup
@@ -17,6 +20,7 @@ import androidx.media3.ui.AspectRatioFrameLayout
  * verified in 1.3.1 source: FIT=0, FIXED_WIDTH=1, FIXED_HEIGHT=2, FILL=3, ZOOM=4).
  * MX's cycle is fit → stretch → zoom; ours cycles through all five real modes.
  */
+@androidx.annotation.OptIn(UnstableApi::class)
 enum class AspectMode(val label: String, val resizeMode: Int) {
     FIT("Fit", AspectRatioFrameLayout.RESIZE_MODE_FIT),
     FILL("Stretch", AspectRatioFrameLayout.RESIZE_MODE_FILL),

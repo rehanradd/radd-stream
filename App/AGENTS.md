@@ -29,11 +29,14 @@ The user has no powerful PC and cannot run Android Studio. The **entire build pi
 
 ### 1a. Correction: builds DO happen on this VM, and only one at a time
 
-The rule above is stale as written. GitHub Actions is currently disabled at the account
-level, so on the Oracle host the real verification loop is a **local** offline Gradle run —
-that is how every milestone since has been proven. It is also how agents break each other's
-builds: this VM has **one vCPU**, and two concurrent Gradle invocations writing into the same
-`App/app/build` tree fail BOTH of them (`kaptDebugKotlin` aborts with
+The rule above is stale as written in one direction and stale in the other since 2026-10-29:
+GitHub Actions is **enabled and running** (measured through the API — all three root workflows are
+active, 42 runs recorded, and `backend-ci.yml` is **green at `64c0b1b`** on both refs). The Android `ci.yml`
+job is red, so a **local** offline Gradle run is still the fast verification loop on the Oracle
+host and is how every milestone since has been proven — a CI check is now a second opinion
+available to everyone, not an unavailable gate. Local builds are also how agents break each
+other's work: this VM has **one vCPU**, and two concurrent Gradle invocations writing into the
+same `App/app/build` tree fail BOTH of them (`kaptDebugKotlin` aborts with
 `Unable to delete directory .../generated/source/kapt` — a lock race, not a code error).
 
 So, on this host:
@@ -48,16 +51,28 @@ So, on this host:
   fan-out worker, edit freely and build rarely — each build is minutes of this VM's entire
   CPU.
 
-> **Known limitation, recorded rather than fixed (2026-10-29): nine tests execute nowhere on this
-> host.** `app/build.gradle.kts:220-233` excludes `PosterCardProvenanceTest` (3 `@Test`s) and
+> **Nine tests never run HERE, and they do run — red — on the hosted runner (measured
+> 2026-10-29 from the run-`40771307140` log).** The `tasks.withType<Test>()` arm64 block in
+> `app/build.gradle.kts` excludes `PosterCardProvenanceTest` (3 `@Test`s) and
 > `ScreenSnapshotTest` (6 `@Test`s) whenever `os.arch` is `aarch64`/`arm64`, because Robolectric has
 > no native runtime for ARM (robolectric/robolectric#9166) and it dies during `@Rule` evaluation, so
-> an in-test `Assume` cannot catch it. The x86_64 runner that would execute them is GitHub Actions,
-> which is disabled at the account level. So a green "627 tests / 0 failures" gate on this box is
-> honestly **618 executed + 9 excluded**, and the `doFirst { logger.lifecycle(...) }` line at `:227`
-> prints only "Skipping PosterCardProvenanceTest" — `ScreenSnapshotTest` is silently dropped from
+> an in-test `Assume` cannot catch it. An earlier version of this note called that "nine tests
+> execute nowhere"; **that was false** — GitHub Actions is enabled (permissions `enabled`,
+> `allowed_actions: all`, 42 runs, `ci.yml` 14 runs) and its x86_64 runner does execute both
+> classes. What it executed was 9 failures inside Android's "636 tests completed, 9 failed": 6
+> `androidx.compose.ui.test.ComposeTimeoutException` at `ScreenSnapshotTest.kt:75` and 3
+> `AssertionError` at `PosterCardProvenanceTest.kt:40/50/56`. The arithmetic settles it: the hosted
+> run completed **636** tests, which is exactly this box's **627** plus the **9** excluded here, so
+> every one of those 627 was genuinely executed locally and the 9 were never attempted here at all.
+> The correct reading of a green "627 tests / 0 failures" gate on this box is therefore
+> **627 executed + 9 executed and FAILING on CI**, and the `doFirst { logger.lifecycle(...) }`
+> line in that block now names **both** suites, because it used to print only "Skipping
+> PosterCardProvenanceTest" and silently dropped `ScreenSnapshotTest` from
 > every local run. Anyone reading a gate number on this host should read it as *excluding* both
-> suites; the exclusion itself stays, because an un-excludable Robolectric crash is worse.
+> suites; the exclusion itself stays, because an un-excludable Robolectric crash is worse. Both
+> hosted signatures are real behaviour on x86_64, not arm64 artifacts: `captureToImage()` cannot
+> complete under Robolectric at all, and the tile assertions were geometry failures against
+> Robolectric's default 320dp window.
 
 ---
 
@@ -326,13 +341,15 @@ endpoint on the server you are pointed at to get real numbers.
 > projection calling every stamped link live. **The rule therefore is not "stats is bigger" — it is
 > that no UI may present any stats field as a browsable count at all**, in either direction.
 >
-> Consequence for the shipped wording: `CatalogScale.connectionNotice` and `SCOPE_NOTE` currently
+> Consequence for the shipped wording: `CatalogScale.connectionNotice` and `SCOPE_NOTE` used to
 > assert the smaller-than direction (`"… the catalog you can browse here is smaller"`, `"they
 > include works this app must not show"`), and today's measurement does not support an arrow in
-> either direction. Retiring the arrow is a **main-code change**, so it waits for the build hold to
-> lift; the proposed line is "This server stores $posts works — its own total, not the count you
-> can browse here", plus a `StatsHonestyTest` case refusing a directional claim, because a test that
-> only bans the word "Title" went green while a sentence like this one was wrong.
+> either direction. **Retired by App Session 30:** the notice now reads "This server stores $posts
+> works — its own total, not the count you can browse here", the scope note says what a stored tally
+> *can* contain rather than what it *is*, and `StatsHonestyTest` fails on a directional word in
+> either sign (`smaller`, `larger`, `bigger`, `fewer`, `above`, `below`) for both a full server and an
+> empty one — because a test that only banned the word "Title" went green while a sentence like the
+> one above was wrong.
 >
 > **The client half of that rule is `viewmodel/CatalogScale.kt`** (App Session 27): the only
 > wording allowed for these three numbers. Settings paints
@@ -1463,15 +1480,22 @@ and the compiled `ScreenSnapshotTest.class` contains `qualityBadgeStrip` /
 XMLs and `VipUpgradeScreenKt.class` (22:51:34, after my 22:49:37 edit) are both newer than the
 edits, so the green run covers them. `OVERLAP=NO`.
 
-**Finding the owner needs to act on:** no PNG exists on this box and none can. `app/build.gradle.kts`
-excludes this class on aarch64/arm64 (Robolectric ships no native runtime — robolectric/robolectric#9166,
-it dies during `@Rule` evaluation so an in-test `Assume` cannot catch it), and GitHub Actions is
-disabled at the account level, so the x86_64 runner that would render them is not running either.
-`ci.yml`'s `ci-reports` artifact already covers `App/app/build/reports`, so re-enabling Actions is
-the whole remaining step to actually get the images.
+**Finding the owner needs to act on (corrected 2026-10-29, see §1a):** no PNG existed on this box,
+and none can from an ARM host — `app/build.gradle.kts` excludes this class on aarch64/arm64 because
+Robolectric ships no native runtime (robolectric/robolectric#9166; it dies during `@Rule`
+evaluation, so an in-test `Assume` cannot catch it). As written on 2026-10-27 the rest of this note
+claimed GitHub Actions was not running; **it is running** (permissions enabled, all three root
+workflows active, `backend-ci.yml` green at `64c0b1b`), so the x86_64 runner does execute this
+class. What it reported was 6 of Android's 9 test failures — and the cause was never the runner:
+`captureToImage()`
+cannot complete under Robolectric, because androidx's forced-redraw posts a frame to the main
+handler and then blocks the very thread waiting for it. The capture path is now a software
+`view.draw(Canvas(bitmap))` of the view hosting the composition. `ci.yml`'s `ci-reports` artifact
+already covers `App/app/build/reports`, which is where the images land.
 
-**Not verified:** the pixel content itself. Six captures compiled here and have never executed
-anywhere.
+**Not verified:** the pixel content itself. Six captures compiled here and had never executed
+anywhere when this was written; the x86_64 runner has since executed them and failed on the capture
+path above, so the images still have never been looked at by a human.
 
 ### Session 18 — Region preference and Hindi/Urdu-first release ordering (2026-10-27)
 
@@ -2347,11 +2371,14 @@ has not been restarted.
 - Root `AGENTS.md` repo map: "wireframes for all 7 screens" → "7 screens (NavGraph registers 13
   routes)", counted at `NavGraph.kt:123-281`.
 
-**Known limitation recorded, not fixed** (see §1a): `PosterCardProvenanceTest` (3) and
-`ScreenSnapshotTest` (6) are excluded at `app/build.gradle.kts:220-233` on aarch64/arm64, so **9
-tests execute nowhere** while Actions is disabled — a local "627 / 0 failures" is honestly
-618 executed + 9 excluded — and the `logger.lifecycle` at `:227` names only PosterCard, so
-ScreenSnapshot is dropped silently.
+**Known limitation** (see §1a): `PosterCardProvenanceTest` (3) and
+`ScreenSnapshotTest` (6) are excluded by the arm64 block in `app/build.gradle.kts`, so **neither
+ever runs on this host** — a local "627 / 0 failures" means 627 executed here and 9 never
+attempted here. They are NOT unexecuted tests: the hosted x86_64 runner ran all **636** (627 + 9)
+and run `40771307140` reported those 9 as **RED** (6 `ComposeTimeoutException`, 3
+`AssertionError`), which is precisely why "627 local green" was never the whole picture. The
+`logger.lifecycle` line also named only PosterCard, so ScreenSnapshot was dropped silently from
+every local run — it now names both.
 
 **Measured citation drift — and it is not my doing, it is the file moving under everyone.**
 Re-verifying my own numbers took `Fast_Fetch/viewer.py` from a set of lines that no longer resolve:
@@ -2408,3 +2435,140 @@ to prevent.
 carries 77 lines of crawler entries, so only my hunks went in (`git apply --cached` of a
 single-hunk patch), and `Fast_Fetch/*.py`, `README.md` (root) and `docs/PROJECT_MAP.md` were left
 unstaged and unharmed. No push, no build, no credential printed, §13 hue untouched, no device claim.
+
+### Session 30 — The nine hosted failures fixed in code, the 23 lint errors down to zero, the stats arrow retired, and shorteners retired from this side (2026-10-29)
+
+**Goal:** the owner's CI task — make Android CI green, which meant the 9 hosted Robolectric
+failures, the 23 lint errors, the three stale passages in this file, and the rule that a capture
+must *fail in a way CI can show* rather than being deleted. Then, mid-session, the owner's
+directive to retire link shorteners. The merge queue finished and memory cleared, so the builds
+below are the owner-authorized ones, run through `/tmp/qbuild*.sh` one at a time.
+
+**1 — the 6 `ComposeTimeoutException`s were a structurally impossible capture path, not a timing
+bug.** `captureToImage()` (androidx ui-test 1.6.8 `WindowCapture.captureRegionToImage`) asks for a
+fresh frame by `view.handler.post { … }` and then blocks the calling thread in
+`waitUntil(mainClock, 2000ms)`. Under Robolectric the test thread *is* the main looper's thread, so
+the posted frame can never run while the wait holds it — robolectric/robolectric#8071 calls this
+out as unsupported. No timeout length and no idle-wait could ever have fixed it. The capture is now
+`LocalView.current` recorded through `SideEffect` in `shot()`, then
+`Bitmap.createBitmap(view.width, view.height, ARGB_8888)` + `view.draw(Canvas(bitmap))`: the same
+display list through a software canvas, with no frame scheduling. Nothing was deleted and no
+assertion was loosened — all six captures still compose a real app composable (`MaintenanceScreen`,
+`PosterCard`, the badge strip from `ReleaseLayoutBuilder.build`, the VIP sections), and `capture()`
+now refuses three ways: the surface has dimensions, the PNG has bytes, and `paintedSomething()`
+walks the bitmap and fails if every sampled pixel equals pixel (0,0). That third check is what
+makes "fail in a way CI can show" real: a blank software canvas compresses to a non-empty file, so
+bytes-alone proved nothing, and a screen that regressed into painting nothing now fails with the
+name of the shot.
+
+**2 — the 3 `PosterCardProvenanceTest` failures were geometry, and the component was right.** The
+CI log pointed at `:40/50/56`. `PosterCard`'s artwork is `aspectRatio(0.68f)`; Robolectric composes
+into its own default 320 dp-wide window, so an unconstrained `fillMaxWidth` tile gets a ~470 dp-tall
+artwork — taller than the whole window — and both text lines fall below the fold.
+`assertIsDisplayed()` is a viewport assertion, so it failed on layout while being correct about
+content. Verified against the code: `title = post.cleanTitle?.takeIf { it.isNotBlank() } ?: post.title`
+and `details = listOfNotNull(year?.toString(), typeLabel).joinToString(" · ")` really do render
+`"2024 · Movie"` as its own `Text`. **So the test was fixed, not the component, and this is the
+sentence the commit message carries.** The tile is now shown at `Modifier.width(120.dp)` — the
+narrowest cell the app actually hands a card (`CatalogGridColumns` is
+`GridCells.Adaptive(minSize = 120.dp)`) — which makes the test describe a layout the app builds
+instead of a window it never builds. And the middle case stopped asserting a substring: it asserts
+two exact nodes (`hasText("Inception", substring = false)` and the same for `2024 · Movie`), which
+also refuses the wrong fix of merging provenance and metadata into one label.
+
+**3 — 23 lint errors → 0, with no baseline and no suppression.** `RenditionFailover.kt:137` was the
+first one CI printed: `HashMap.merge` is a Java 8 default method that ships in API 24, so lint was
+right to refuse it at `minSdk 21` — replaced with a read-modify-write (the count is only ever read
+on that thread, so the atomicity `merge` would have bought is not a behaviour this class depends
+on). Making lint runnable locally at all took a queue variant without `--offline`
+(`/tmp/qbuild_online.sh`, same `/tmp/qbuild.lock`): `:app:lintDebug` cannot resolve
+`kotlin-stdlib-jdk7:1.8.22` offline, which is why 14 hosted runs printed only the first error. The
+full list was then 22, in exactly two families:
+
+- **`NewApi` ×2** — `res/values/themes.xml` declared `android:windowLightStatusBar` (API 23) and
+  `android:windowLayoutInDisplayCutoutMode` (API 27) in a file compiled against minSdk 21. Each now
+  lives in `res/values-v23/themes.xml` and `res/values-v27/themes.xml`. Below its introduction level
+  the platform ignored the attribute, so the rendered window is identical on every device. The
+  qualified files repeat the three base items because a version-qualified style **replaces** the
+  lower-configuration one rather than merging into it — deduplicating them there would be the real
+  behaviour change. `Theme.RaddStream` stays a literal name (the manifest must reference a real
+  resource) and `@color/radd_ink_950` stays brand-generated.
+- **`UnsafeOptInUsageError` ×20** — `PlayerScreen.kt` (`PlayerSurface`, `styleNativeSubtitles`) and
+  `PlayerUiState.kt` (`enum class AspectMode`, five `AspectRatioFrameLayout.RESIZE_MODE_*`
+  references) carried Kotlin's `@OptIn(UnstableApi::class)`, which satisfies the *compiler* and is
+  invisible to Media3's *lint* check. They now carry
+  `@androidx.annotation.OptIn(UnstableApi::class)` — fully qualified at the call sites because these
+  files also need Kotlin's `@OptIn` for `ExperimentalMaterial3Api`/`ExperimentalLayoutApi`, and one
+  name cannot mean both. `PlaybackMediaItemFactory.kt` was already the in-repo proof of the pattern.
+  No `lint {}` block, no `lint.xml`, no baseline, no `abortOnError false`, no `@SuppressLint`: a
+  suppression would have silenced the check for every future real case too. Measured after the fix:
+  **0 errors, 144 warnings**.
+
+**4 — the owner's shortener retirement, done inside this lane only.** The directive named
+`wrapWithShortener` in `DetailViewModel.kt`; **no such function, and no shortener call, exists in any
+Kotlin file** (verified by grep over `app/src` before and after). `ApiProvider.streamRedirectUrl` is
+the only byte-path builder in the app and it emits `/api/v1/stream?id=<handle>` — already 100 %
+direct. What did exist was a decoded-but-never-read wire field: `VipRemoteConfig.linkShorteners` +
+`data class VipRemoteLinkShortener`, whose only consumer was `VipRemoteConfigTest`. Both are deleted.
+`VipRemoteConfigTest` no longer asserts the key decodes; it gained
+`a body still publishing the retired link_shorteners key decodes unchanged`, so a server that has not
+cleaned up its own remote config is proven to be *not an error* for this client (Gson ignores the
+key and the rest of the body still lands). Stale "the shortener tokens" prose in
+`RaddStreamApi.kt` and the two `isAdFree` KDocs (which credited VIP with a download the shortener
+used to shorten) were corrected in the same pass. `PARITY_BACKEND_BLOCKED.md` row C is **CLOSED** and
+row 17 lost its shortener clause. **Not touched, because it is not mine:** the backend half
+(`viewer.shorten_download_url`, `admin_panel.shortener_targets`, the `/admin` toggles) lives in
+`Fast_Fetch/*.py`, which root `AGENTS.md` assigns to the backend lane.
+
+**5 — the stats arrow is retired, which is what Session 29 said was waiting for the hold to lift.**
+`CatalogScale.connectionNotice` printed "… the catalog you can browse here is smaller" and
+`SCOPE_NOTE` printed "they include works this app must not show". Both assert a direction the
+measurement no longer supports: `stats.posts` `116922` against a browsable `/api/v1/posts?limit=1`
+`total` of `131559`, then `134815` the same day (and `149818 − 15003 = 134815` exactly, per the root
+checkpoint — the adult filter is provably intact, which is the *compliance* half of that number).
+The notice now says `its own total, not the count you can browse here`, the scope note says what a
+stored tally *can* contain (adult rows, dead links, and lag) rather than what it *is*, and
+`StatsHonestyTest`'s two wording cases were rewritten to enforce that: the notice is checked for a
+full server **and an empty one** (`connectionNotice(0)` promising a catalog smaller than zero was
+the sharpest form of the bug), and it now fails on `smaller / larger / bigger / fewer / more works /
+above / below` in either sign. A guard that only banned the word "Title" had gone green while this
+sentence was wrong; that is why the refusal is directional now.
+
+**6 — this file's own three stale passages, as the CI task required.** §1a and the Session 17/29
+notes no longer say "9 tests execute nowhere": Actions is enabled (permissions `enabled`,
+`allowed_actions: all`, 40+ runs, backend CI green at `64c0b1b`), the x86_64 runner *does* execute
+both classes, and the hosted run reported **636 = 627 local + 9 excluded**, with those 9 RED. The
+`doFirst` line in `app/build.gradle.kts` that printed only "Skipping PosterCardProvenanceTest" now
+names **both** suites, because silently dropping `ScreenSnapshotTest` from every local run is how
+this stayed invisible for 14 hosted failures. §5's pending-arrow paragraph now records the shipped
+replacement.
+
+**Gate:** `/tmp/qbuild_online.sh -Dorg.gradle.jvmargs='-Xmx1536m' :app:compileDebugKotlin
+:testDebugUnitTest :app:lintDebug` → BUILD SUCCESSFUL in 7m 25s, `GRADLE_EXIT=0`,
+`FOREIGN_BUILD_PIDS_SEEN=` empty, `OVERLAP=NO`, `WAITED_FOR_OTHER_BUILDS_S=0`; **628 tests /
+79 suites / 0 failures / 0 errors / 0 skipped**, all 79 result XMLs newer than the run's start file
+(627 + the 1 new `VipRemoteConfigTest` case; `StatsHonestyTest` stays at 6, two of them rewritten),
+and `lint-results-debug.txt` reports **0 errors, 144 warnings**. `:app:assembleDebug` then queued behind
+it on the same lock (`WAITED_FOR_OTHER_BUILDS_S=360`, `OVERLAP=NO`) → BUILD SUCCESSFUL in 2m 36s,
+`GRADLE_EXIT=0`, `app-debug.apk` **23,536,966 bytes** at 08:10 — so the whole CI task list
+(`assembleDebug + testDebugUnitTest + lintDebug`) is green locally except for the nine arm64-excluded
+tests below. Flagging rather than chasing: that APK size is over this file's own rule 8 ("keep APK
+under 15 MB"), as it has been since Session 8's 22.7 MB build; my diff adds no classes.
+
+**Deliberately not verified — and this is the part a green local run cannot cover:** the 9 patched
+tests **still execute nowhere on this host**, because the aarch64 exclusion is unchanged (an
+un-excludable Robolectric crash is worse than a skip). Their fix is *reasoned and compiled*, not
+observed: `:app:compileDebugUnitTestKotlin` proves both classes build, and only the hosted x86_64
+runner can prove the PNGs are produced and the three tile assertions pass. So the task is not done
+until the CI run on my sha is `success` — including the six PNGs landing in the `ci-reports`
+artifact, which no human has ever looked at. No device or emulator was used, so the theme split is
+verified by "attributes below their introduction level are ignored by the platform" plus a clean
+resource merge, not by a screenshot on API 21/23/27 hardware.
+
+**Open from the directive itself:** it arrived **truncated twice** — "All streaming and download
+links must be 100% direct with" has no end, and mission items 2+ never arrived. Item 1 is complete
+inside the App lane; the rest is reported as not-received rather than guessed at.
+
+**Rules kept:** no `.py` touched, no service restart, no nginx change, no `git add -A`, no credential
+printed or logged, `/tmp/qbuild*.sh` only and one build at a time, §13 hue untouched, no device
+claim, and the first tag is cut only after Android CI is green.

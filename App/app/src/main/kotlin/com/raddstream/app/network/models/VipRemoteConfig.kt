@@ -6,11 +6,18 @@ import com.google.gson.annotations.SerializedName
  * GET /api/v1/app/remote-config — the one public body that carries the payment handles
  * the operator wants printed beside a Copy button.
  *
- * Everything here is display text, not a credential: the shortener API tokens the same
- * row holds are masked at the edge, so this projection has no richer second version to
+ * Everything here is display text, not a credential: the one row the admin panel publishes
+ * has its secrets masked at the edge, so this projection has no richer second version to
  * leak (see `Fast_Fetch/admin_panel.py:remote_config`). A handle the operator has not
  * filled in comes back as an empty string, and the screen says so instead of inventing
  * an account a viewer could pay by mistake.
+ *
+ * **Link shorteners are retired — this app does not model them.** The client used to decode a
+ * `link_shorteners` array off this body and asked nothing of it, and the owner has since
+ * retired shortening from the project outright, so every byte path here is direct
+ * (`ApiProvider.streamRedirectUrl` → `/api/v1/stream?id=<handle>`). A deployment whose remote
+ * config still carries `link_shorteners` is not an error and needs no client code: Gson
+ * ignores the key, and `VipRemoteConfigTest` pins that the rest of the body still decodes.
  */
 data class VipRemoteConfig(
     val success: Boolean = false,
@@ -34,13 +41,6 @@ data class VipRemoteConfig(
     val featureFlags: VipRemoteFeatureFlags = VipRemoteFeatureFlags(),
     /** Ad-network ids, displayed nowhere: they only decide whether a slot has real inventory. */
     val ads: VipRemoteAds = VipRemoteAds(),
-    /**
-     * Which download link shorteners the operator has configured. A network whose token is
-     * empty is reported as `configured = false`, so the app never offers a mirror the server
-     * would fail to shorten. The tokens themselves never leave the server.
-     */
-    @SerializedName("link_shorteners")
-    val linkShorteners: List<VipRemoteLinkShortener> = emptyList(),
 )
 
 /**
@@ -82,11 +82,6 @@ data class VipRemoteAds(
     val hasRewardedInventory: Boolean
         get() = monetagRewardedZoneId.isNotBlank()
 }
-
-data class VipRemoteLinkShortener(
-    val network: String = "",
-    val configured: Boolean = false,
-)
 
 data class VipRemotePricing(
     @SerializedName("monthly_pkr")

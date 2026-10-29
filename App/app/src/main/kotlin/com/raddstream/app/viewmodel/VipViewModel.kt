@@ -94,8 +94,9 @@ object RewardedVipPass {
      * silence one. Both promises are already on screen in words — the paid card says VIP is
      * what removes sponsor cards, the rewarded card says four hours ad-free — so honouring
      * either is keeping a sentence the app printed, and deciding it in two places is how one
-     * of them drifts. A server capability (an unshortened link, a higher rung) is NOT decided
-     * here: only `vip` from the ledger can buy that, and this function has no say over it.
+     * of them drifts. A server capability — a higher rung behind the operator's quality gate,
+     * a download marked VIP — is NOT decided here: only `vip` from the ledger can buy that,
+     * and this function has no say over it.
      */
     fun isAdFree(
         serverVip: Boolean,

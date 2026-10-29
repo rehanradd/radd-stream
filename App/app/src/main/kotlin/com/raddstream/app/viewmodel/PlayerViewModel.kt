@@ -239,8 +239,9 @@ class PlayerViewModel @Inject constructor(
      * Whether a sponsor slot may be raised at all right now. Both doors are already promises
      * the app made out loud — paid VIP is sold as "no sponsor cards", and the rewarded card
      * reads "four hours of ad-free" — so either one silences the slot. What VIP alone buys and
-     * a device pass does not is the server-side capability (an unshortened link, a higher
-     * rung), and nothing here pretends a rewarded pass can grant that.
+     * a device pass does not is the server-side capability — a higher rung behind the
+     * operator's quality gate, a download marked VIP — and nothing here pretends a rewarded
+     * pass can grant that.
      */
     fun isAdFree(now: Long = System.currentTimeMillis()): Boolean =
         RewardedVipPass.isAdFree(syncEntitled, rewardedVipExpiresAt, now)

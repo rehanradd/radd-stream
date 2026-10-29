@@ -14,12 +14,11 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.SideEffect
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.asAndroidBitmap
-import androidx.compose.ui.test.captureToImage
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createComposeRule
-import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.unit.dp
 import com.raddstream.app.network.models.Post
 import com.raddstream.app.network.models.ReleaseDetail
@@ -42,6 +41,8 @@ import com.raddstream.app.viewmodel.VipUiState
 import java.io.File
 import java.io.FileOutputStream
 import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.view.View
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -61,6 +62,19 @@ import org.robolectric.annotation.GraphicsMode
  * already uploads. Robolectric's native graphics runtime has no Linux/aarch64 build
  * (robolectric/robolectric#9166) and it dies while the runner boots, so this class is excluded
  * on ARM hosts in `app/build.gradle.kts`: it compiles here, it renders on x86_64 CI.
+ *
+ * **The bitmap comes from a software draw of the view hosting the composition, because
+ * `captureToImage()` cannot ever produce one here.** That call path (androidx ui-test 1.6.8
+ * `WindowCapture.captureRegionToImage`) asks
+ * for a fresh frame by `view.handler.post { … }` and then blocks the calling thread in
+ * `waitUntil(mainClock, 2000ms)` until the redraw lands. Under Robolectric the test thread *is*
+ * the main looper's thread, so the posted frame can never run while that wait holds it, and every
+ * capture died at the same 2000 ms `ComposeTimeoutException` — robolectric/robolectric#8071 calls
+ * this out as unsupported rather than as a timing bug, so no lengthening of the timeout and no
+ * idle-wait would ever fix it. `view.draw(Canvas(bitmap))` runs the same display list through a
+ * software canvas with no frame scheduling at all, which is also what makes these snapshots
+ * independent of wall-clock: the only waiting left is `waitForIdle()`, i.e. composition and
+ * layout having finished, not a duration.
  */
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -71,20 +85,51 @@ class ScreenSnapshotTest {
 
     private val outputDir = File("build/reports/screenshots").absoluteFile
 
+    /** The view hosting the last [shot] composition — the thing a snapshot is taken of. */
+    private var renderSurface: View? = null
+
     private fun capture(name: String) {
-        val bitmap: Bitmap = compose.onRoot().captureToImage().asAndroidBitmap()
+        compose.waitForIdle()
+        val view = renderSurface ?: error("capture($name) ran before any shot() composed a view")
         assertTrue(
-            "$name captured an empty ${bitmap.width}x${bitmap.height} bitmap — nothing was laid out",
-            bitmap.width > 0 && bitmap.height > 0,
+            "$name laid out a ${view.width}x${view.height} surface — nothing to snapshot",
+            view.width > 0 && view.height > 0,
         )
+        val bitmap = Bitmap.createBitmap(view.width, view.height, Bitmap.Config.ARGB_8888)
+        view.draw(Canvas(bitmap))
         outputDir.mkdirs()
         val file = File(outputDir, "$name.png")
         FileOutputStream(file).use { out -> bitmap.compress(Bitmap.CompressFormat.PNG, 100, out) }
         assertTrue("${file.name} was written but holds no bytes", file.length() > 0)
+        // A blank canvas compresses to real bytes, so "the file is non-empty" proves only that
+        // the write worked. Two different paints inside the frame is what proves the tree drew.
+        assertTrue("$name is a flat bitmap — nothing painted itself", bitmap.paintedSomething())
+    }
+
+    /**
+     * Sampled, not exhaustive: a step of 4 keeps this a couple of thousand reads on a
+     * window-sized frame, and any two distinct paints answer the question just as well as a
+     * full scan would.
+     */
+    private fun Bitmap.paintedSomething(): Boolean {
+        val first = getPixel(0, 0)
+        var y = 0
+        while (y < height) {
+            var x = 0
+            while (x < width) {
+                if (getPixel(x, y) != first) return true
+                x += 4
+            }
+            y += 4
+        }
+        return false
     }
 
     private fun shot(content: @Composable () -> Unit) {
+        renderSurface = null
         compose.setContent {
+            val view = LocalView.current
+            SideEffect { renderSurface = view }
             RaddStreamTheme(darkTheme = true) {
                 Surface(modifier = Modifier.fillMaxSize(), color = RaddInk950) {
                     content()

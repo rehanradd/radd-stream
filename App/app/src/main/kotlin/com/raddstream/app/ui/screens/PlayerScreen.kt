@@ -537,7 +537,11 @@ private val PlayerUiState.dialogBlocking: Boolean
 
 // ── 1. Surface ─────────────────────────────────────────────────────────────────
 
-@OptIn(UnstableApi::class)
+// Fully qualified on purpose: this file also uses Kotlin's `@OptIn` for
+// ExperimentalMaterial3Api, and the two annotations answer different checkers. Media3's
+// `UnsafeOptInUsageError` is a *lint* check that reads `androidx.annotation.OptIn` only, so the
+// Kotlin form here compiled clean and left 20 lint errors.
+@androidx.annotation.OptIn(UnstableApi::class)
 @Composable
 private fun PlayerSurface(vm: PlayerViewModel, state: PlayerUiState) {
     val player by vm.player.collectAsState()
@@ -571,7 +575,7 @@ private fun PlayerSurface(vm: PlayerViewModel, state: PlayerUiState) {
  * colour and weight land on an embedded track exactly as they land on an external SRT: the
  * sheet never has to say which renderer a file happens to use.
  */
-@OptIn(UnstableApi::class)
+@androidx.annotation.OptIn(UnstableApi::class)
 private fun styleNativeSubtitles(view: PlayerView, state: PlayerUiState) {
     val sv: SubtitleView = view.subtitleView ?: return
     val s = state.subtitle
