@@ -2669,3 +2669,40 @@ box). CI's real **17-module** gate run with `RADD_USER_STATE_DB=/tmp/q4_gate_sta
 **Held, on purpose.** Merge batch 4 (#9) stays held while five lanes are live; **zero** Gradle runs
 (load 8.21/8.82/7.93); no service restart (#19 is the owner's). Memory 6.3 GiB available, swap
 1.9 GiB used of 6.0. New tasks #28–#32 carry the recovered plan forward.
+
+## Session 2026-10-30 (qoder2 dashboard lane) — the Sovereign Operator Console exists at `/operator`, and every card is a measured value `[Q2-DASHBOARD]`
+
+**What I set out to do.** `/tmp/dashboard_task.md` asked for a dark, tabbed operator console with six
+panes, a login pill, a payment queue and a broadcast editor, replacing the plain-text dashboard in
+`viewer.py`. Built at `/tmp/q2_dashboard` off pushed `c7526ae`; branch `q2-dashboard`, commit
+`4c18987`, pushed and verified (`git ls-remote` on the explicit HTTPS URL equals local HEAD).
+
+**What landed.** `/operator` and `/operator/` on the operator port, under the existing bearer gate:
+a static shell (33 KB) with six tabs and one gated JSON request per screen. `/admin` is untouched
+(four suites pin its content) and now links to the console. New screens `pulse` (18-row
+`cat_projection_meta` + one `sitemap_cache` COUNT) and `host` (`getloadavg`, `PRAGMA page_count` ×
+`page_size`, one `disk_usage`, one `stat` per roster staging file, reported as `crawler-NN` handles).
+Broadcast/min-version/support fields joined the settings row; pending payment rows carry per-row
+approve/reject CSRF; the console's explorer reads bounded `/api/v1/posts?limit=` and the stream
+preview is an authenticated `/api/m3u?id=` fetch.
+
+**Where it departs from the brief, and why.** The headline numbers (130,016 posts, 345,000 "verified
+active") are not constants: they were a snapshot of another catalog and this box's stamped
+`active_sources` is a different value. An unstamped projection shows "unstamped — rebuild" rather
+than a zero. "Cloudflare Active" is not printed because this host has no such edge. The SMS webhook
+card says the `/api/v2/payment/sms-webhook` route does not exist in this build, and the trial-lock /
+coin-balance cards say those counters are not implemented. The brief's `/admin` replacement became a
+new route beside it; nothing the existing tests pin was deleted.
+
+**Gate, measured (all `python3 -S`, one module per invocation).** `test_database` 133 OK (881.7 s
+under `nice 19`), `test_vidout` 6 OK, `test_admin_panel` 58 OK, `test_operator_console` 22 OK (new,
+in the CI list at `backend-ci.yml`), `test_operator_isolation` 28 OK. The first isolation run under
+`nice 19` produced 5 `TimeoutError`s with **2.9 s CPU over 12 min** — starvation, proved by rerunning
+at normal priority: 28/28 in 35.9 s. No browser was available, so the page was verified by
+`node --check` on its script and by asserting fixture HTTP payloads, not by driving a UI.
+
+**Fleet rules observed.** No `/api/data` call (live or fixture), no `/api/v1/stats` poll;
+`RADD_USER_STATE_DB` pointed at temp dirs in every test; production catalog untouched; service never
+signalled; heavy runs deferred while load sat 5–8 and the ones that did run were `nice 19`.
+Not merged to `master`/`main` (owner gate). Production still runs the dirty `bf9e565` tree; this work
+is based on pushed `c7526ae`.

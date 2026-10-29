@@ -2710,3 +2710,28 @@ filter regression; it is two audited writes, and the arithmetic identity holds e
 - Also new since the last entry: `humtv_staging.db` (64 posts), `hindidubbedmovies.db` (40),
   `bollyflix.db` (38), `hindianimeszone.db` (36), `moviehax.db` (35) and `themoviebox.db` (**0 posts**,
   created 20:12 tonight) — six more vaults, none of them in the live `source_site` set yet.
+
+## 2026-10-30 — q2 dashboard lane: `/operator` console landed on a branch, every card is a measured value
+
+**Branch `q2-dashboard`, commit `4c18987` (base `c7526ae`), pushed and sha-verified against the
+remote.** Not merged to `master`/`main` — owner gate. Production still runs the dirty `bf9e565` tree.
+
+- **New surface, not a rewrite.** `/operator` and `/operator/` on the loopback operator port, behind
+  the same bearer gate: a 33 KB static shell, six tabs, a pill on
+  `localStorage['radd_operator_token']`, one gated JSON request per screen. `/admin` is untouched
+  (four suites pin it) and links over. Backing it: `admin_panel.screen_pulse` (18 meta rows + one
+  `sitemap_cache` COUNT) and `screen_host` (`getloadavg`, `PRAGMA page_count`×`page_size`, one
+  `disk_usage`, one `stat` per roster staging file as `crawler-NN`), five new settings fields, and
+  per-row approve/reject CSRF on the payment queue.
+- **Deliberate deviations from the brief, all measured:** the 130,016 / 345,000 headline figures are
+  not constants (this box's stamped `active_sources` differs); "Cloudflare Active" is not printed
+  (no such edge here); the SMS-webhook card states the route does not exist; trial-lock and coin
+  balances are declared not implemented. An unstamped projection says "unstamped", never `0`.
+- **Gate (python3 -S, one module per run):** `test_database` 133 OK · `test_vidout` 6 OK ·
+  `test_admin_panel` 58 OK · `test_operator_console` 22 OK (new, added to `backend-ci.yml`) ·
+  `test_operator_isolation` 28 OK. First isolation run under `nice 19` errored 5× with `TimeoutError`
+  on **2.9 s CPU / 12 min** — starvation; rerun at normal priority was 28/28 in 35.9 s.
+- **Honest gap:** no browser on this box, so the UI was verified through `node --check` on its
+  script plus fixture HTTP payload assertions; nobody has clicked the tabs in a real browser yet.
+- **Rules held:** no `/api/data`, no `/api/v1/stats`; fixture `RADD_USER_STATE_DB` everywhere;
+  production catalog untouched; service never signalled; heavy work deferred/nice'd while load was 5–8.
