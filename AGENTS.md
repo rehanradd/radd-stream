@@ -255,6 +255,12 @@ rule is memory-led, not load-led:
 6. **If your task needs a heavy read, do not run it — queue it.** Write the exact command, the
    expected cost, and the number you want into your CONTINUITY entry as a quiet-window action.
    Designing a probe is worth as much as running one when the box is at load 10.
+7. **A slow local test module is not a slow test module — never exclude one on this box's timing.**
+   Measured 2026-10-30 on the same file (`Fast_Fetch/test_admin_panel.py`, 65 tests): **266.312 s
+   here at load 6.9, while consuming 0.43 CPU-seconds**, and **1 s on the hosted runner** (backend
+   run `40954291359`, step `21:03:47 → 21:03:48`, success). The assertions block on page-cache I/O
+   behind five lanes; they do not compute. So the local number is a symptom of the guardrail, not a
+   property of the code, and only CI's per-step timing decides whether a suite belongs in the gate.
 
 ---
 
@@ -263,7 +269,14 @@ rule is memory-led, not load-led:
 Every agent — no matter how short the session — MUST do this before ending:
 
 ### For Backend Sessions:
-1. Run CI's **17-module** list, one invocation each (791 tests, 0 failures at `9859b8a`).
+1. Run CI's **25 `🧪` steps**, one invocation each — measured from backend run `40954291359`
+   (sha `396e476`, `completed success`): database, vidout, catalog_v2, release_descriptor,
+   link_health, link_state, evidence_writeback, api_v2, redact, tiers, catalog_api,
+   provenance_stamping, merge_catalogs, site_scout, backup_manager, usage_stats,
+   operator_isolation, media_search, migrate_search_indexes, bounded_ledger, project_readonly,
+   posts_query_plan, adult_twin_probe, link_sweep_budget, admin_panel. The older "17 modules /
+   791 tests at `9859b8a`" figure is historical — it was true then and is not the current list,
+   so do not quote it as if it were.
 2. `test_database.py` alone is **133** at the tip and `test_vidout.py` is 6/6 — but do not substitute that 3-module quick gate for item 1.
 3. Append a session log to `Fast_Fetch/CONTINUITY.md`
 4. Push with Git over HTTPS using the temporary askpass helper in [`ORACLE_DEPLOYMENT.md`](ORACLE_DEPLOYMENT.md); do not use the legacy per-file API push scripts
@@ -323,7 +336,9 @@ python3 -S Fast_Fetch/test_database.py    # 133 tests at the tip (was 124, was 7
 python3 -S Fast_Fetch/test_vidout.py      # 6 tests
 python3 -S Fast_Fetch/importers/test_host_resolvers.py   # 171 tests
 
-# The REAL gate is exactly what backend-ci.yml runs — 17 modules, one per invocation. As of
+# The REAL gate is exactly what backend-ci.yml runs — 25 modules, one per invocation (measured
+# from CI run `40954291359` at `396e476`; it was 17 at `9859b8a`, and it will be more again — read
+# the workflow file, this comment is a snapshot). As of
 # `9859b8a` those 17 are CI's own list; the two extra suites the older version of this block
 # described (`importers/test_host_resolvers.py`, `importers/test_convert_mp4moviez.py`) are NOT
 # in CI and the 17th slot is not what this file used to claim:
