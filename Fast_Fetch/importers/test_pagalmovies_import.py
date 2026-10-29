@@ -281,16 +281,21 @@ class TestParsePage(unittest.TestCase):
                                              HOMEPAGE_FIXTURE)):
             self.assertIsNone(pm.parse_page("https://www.pagalmovies.fit/movie/99/x.html"))
 
+    def test_the_homepage_shell_is_named_even_without_a_redirect(self):
+        with mock.patch.object(pm, "http_get",
+                               return_value=(200, MOVIE_URL, HOMEPAGE_FIXTURE)):
+            self.assertEqual(pm._parse_page(MOVIE_URL)[1], pm.SOFT404_SHELL)
+
     def test_a_stale_sitemap_id_that_404s_is_skipped(self):
         with mock.patch.object(pm, "http_get", return_value=(404, "", "")):
             self.assertIsNone(pm.parse_page("https://www.pagalmovies.fit/movie/1/x.html"))
 
     def test_decline_reasons_let_the_crawler_park_a_gone_page_at_once(self):
-        """A 302 to the homepage is final; only a transport error deserves a retry."""
+        """The homepage shell names itself; a 5xx is retried, a 404 is final."""
         gone = "https://www.pagalmovies.fit/movie/29650/Cocoons_(2026)_movie.html"
         with mock.patch.object(pm, "http_get", return_value=(200, "https://www.pagalmovies.fit/",
                                                             HOMEPAGE_FIXTURE)):
-            self.assertEqual(pm._parse_page(gone)[1], "removed")
+            self.assertEqual(pm._parse_page(gone)[1], pm.SOFT404_SHELL)
         with mock.patch.object(pm, "http_get", return_value=(500, "", "")):
             self.assertEqual(pm._parse_page(gone)[1], "http-500")
         with mock.patch.object(pm, "http_get", return_value=(404, "", "")):
@@ -635,6 +640,23 @@ class TestSyncCatalog(unittest.TestCase):
             again = pm.sync_catalog(db_path=tmp)
         self.assertEqual(again, 0)
 
+    def test_the_same_paths_on_a_rotated_host_are_not_new(self):
+        tmp = Path(tempfile.mkdtemp()) / "pagalmovies.db"
+        with mock.patch.object(pm, "http_get", side_effect=lambda u, **k:
+                               (200, u, self.INDEX if u.endswith("/sitemap.xml")
+                                else self.URLSET)):
+            pm.sync_catalog(db_path=tmp)
+        rotated = self.URLSET.replace("pagalmovies.fit", "pagalmovies.casa")
+        with mock.patch.object(pm, "http_get", side_effect=lambda u, **k:
+                               (200, u, self.INDEX if u.endswith("/sitemap.xml")
+                                else rotated)):
+            again = pm.sync_catalog(db_path=tmp)
+        self.assertEqual(again, 0)
+        conn = sqlite3.connect(tmp)
+        self.assertEqual(conn.execute(
+            "SELECT COUNT(*) FROM sitemap_cache").fetchone()[0], 2)
+        conn.close()
+
 
 class TestSignalSafety(unittest.TestCase):
     def test_stop_flag_is_honoured_by_the_worker(self):
@@ -670,6 +692,13 @@ class TestCrawlQueue(unittest.TestCase):
         conn.close()
         return row
 
+    def _payload(self, db, loc):
+        conn = sqlite3.connect(db)
+        raw = conn.execute("SELECT raw_json FROM sitemap_cache WHERE loc = ?",
+                           (loc,)).fetchone()[0]
+        conn.close()
+        return json.loads(raw or "{}")
+
     def test_a_page_the_site_removed_is_parked_on_the_first_sighting(self):
         gone = f"{pm.BASE_URL}/movie/29650/Cocoons_(2026)_movie.html"
         db = self._db_with([gone])
@@ -685,6 +714,19 @@ class TestCrawlQueue(unittest.TestCase):
         with mock.patch.object(pm, "http_get", return_value=(500, "", "")):
             pm.crawl_pending(db_path=db, workers=1, verbose=False)
         self.assertEqual(self._states(db, flaky), (0, 1))
+
+    def test_a_success_on_a_rotated_host_clears_the_original_queue_row(self):
+        """The page answered under another host; the loc we asked for is still done."""
+        queued = f"{pm.BASE_URL}/movie/958/Goal!_the_dream_begins_(2005)_english_movie.html"
+        db = self._db_with([queued])
+        with mock.patch.object(pm, "http_get", return_value=(200, MOVIE_URL, FIXTURE)):
+            post = pm.parse_page(MOVIE_URL)
+        post["url"] = "https://www.pagalmovies.casa" + MOVIE_URL.split(
+            "pagalmovies.fit", 1)[1]
+        with mock.patch.object(pm, "_parse_page", return_value=(post, "ok")):
+            totals = pm.crawl_pending(db_path=db, workers=1, verbose=False)
+        self.assertEqual(totals["posts"], 1)
+        self.assertEqual(self._states(db, queued), (1, 0))
 
     def test_a_hard_404_is_the_sites_answer_and_parks_at_once(self):
         gone = f"{pm.BASE_URL}/movie/29652/Gone_(2026)_movie.html"
@@ -702,6 +744,69 @@ class TestCrawlQueue(unittest.TestCase):
             for _ in range(3):
                 pm.crawl_pending(db_path=db, workers=1, verbose=False)
         self.assertEqual(self._states(db, bad), (-1, 3))
+
+    def test_the_failure_ledger_keeps_the_measured_reason_per_attempt(self):
+        loc = f"{pm.BASE_URL}/movie/29655/Ledger_(2026)_movie.html"
+        db = self._db_with([loc])
+        pm._bump_error(db, loc, "http-502", http_status=502,
+                       final_url=loc + "?x=1")
+        pm._bump_error(db, loc, "transport", http_status=0,
+                       exception="URLError")
+        payload = self._payload(db, loc)
+        self.assertEqual(len(payload["failures"]), 2)
+        self.assertEqual([f["http_status"] for f in payload["failures"]], [502, 0])
+        self.assertEqual(payload["failures"][-1]["exception"], "URLError")
+        self.assertEqual(payload["status"], "retrying")
+        self.assertEqual(self._states(db, loc), (0, 2))
+
+    def test_the_shell_verdict_is_retryable_until_the_cap(self):
+        """A soft-404 shell is a measurement, not proof the title is gone."""
+        gone = f"{pm.BASE_URL}/movie/29654/Shell_(2026)_movie.html"
+        db = self._db_with([gone])
+        with mock.patch.object(pm, "http_get",
+                               return_value=(200, f"{pm.BASE_URL}/",
+                                             HOMEPAGE_FIXTURE)) as get:
+            first = pm.crawl_pending(db_path=db, workers=1, verbose=False)
+            self.assertEqual(first["declined_by_reason"], {pm.SOFT404_SHELL: 1})
+            self.assertEqual(self._states(db, gone), (-1, 1))
+            last = self._payload(db, gone)["failures"][-1]
+            self.assertEqual(last["kind"], pm.SOFT404_SHELL)
+            self.assertEqual(last["http_status"], 200)
+            self.assertEqual(last["final_url"], f"{pm.BASE_URL}/")
+
+            # Parked below the cap: the next pass must re-measure it.
+            pm.crawl_pending(db_path=db, workers=1, verbose=False)
+            self.assertEqual(self._states(db, gone), (-1, 2))
+            pm.crawl_pending(db_path=db, workers=1, verbose=False)
+            self.assertEqual(self._states(db, gone), (-1, 3))
+
+            # At the cap it is terminal and no longer selected.
+            payload = self._payload(db, gone)
+            self.assertEqual(payload["status"], "dead")
+            self.assertEqual(payload["last_note"], pm.SOFT404_SHELL)
+            pm.crawl_pending(db_path=db, workers=1, verbose=False)
+            self.assertEqual(self._states(db, gone), (-1, 3))
+            self.assertEqual(get.call_count, 3)
+
+    def test_relabel_requeues_only_the_removed_cohort(self):
+        gone = f"{pm.BASE_URL}/movie/29656/Relabel_(2026)_movie.html"
+        hard = f"{pm.BASE_URL}/movie/29657/Hard404_(2026)_movie.html"
+        db = self._db_with([gone, hard])
+        conn = sqlite3.connect(db)
+        conn.execute(
+            "UPDATE sitemap_cache SET scraped = -1, error_count = 2, raw_json = ? "
+            "WHERE loc = ?", (json.dumps({"last_note": "removed", "at": 1}), gone))
+        conn.execute(
+            "UPDATE sitemap_cache SET scraped = -1, error_count = 3, raw_json = ? "
+            "WHERE loc = ?", (json.dumps({"last_note": "http-404", "at": 1}), hard))
+        conn.commit()
+        conn.close()
+        self.assertEqual(pm.relabel_homepage_shells(db, verbose=False), 1)
+        self.assertEqual(self._states(db, gone), (2, 0))
+        payload = self._payload(db, gone)
+        self.assertEqual(payload["last_note"], pm.SOFT404_SHELL)
+        self.assertEqual(payload["failures"][-1]["kind"], pm.SOFT404_SHELL)
+        self.assertEqual(self._states(db, hard), (-1, 3))
 
 
 if __name__ == "__main__":

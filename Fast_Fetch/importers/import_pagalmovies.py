@@ -68,10 +68,16 @@ SITE = "pagalmovies"
 LEGAL_MEDIA_TYPES = ("movie", "series", "complete_season")
 # Legacy rows some staging databases still carry a "2" for; keep accepting them.
 QUEUED_SCRAPE_STATES = (0, 2)
+MAX_SCRAPE_ATTEMPTS = 3
+FAILURE_LEDGER_LIMIT = 8
+# A parked row is not permanent until the cap: the shell cohort was parked at
+# attempt 1, and "the site answered the homepage" is a measurement, not proof
+# that the title never existed. Rows below the cap stay selectable.
 PENDING_SELECT = (
     "SELECT loc, lastmod, slug FROM sitemap_cache"
-    " WHERE scraped IN (%s) ORDER BY rowid ASC"
-    % ", ".join(["?"] * len(QUEUED_SCRAPE_STATES))
+    " WHERE scraped IN (%s) OR (scraped = -1 AND error_count < %d)"
+    " ORDER BY rowid ASC"
+    % (", ".join(["?"] * len(QUEUED_SCRAPE_STATES)), MAX_SCRAPE_ATTEMPTS)
 )
 
 # Listing routes that are shelves, not catalog entries.
@@ -82,7 +88,17 @@ NON_POST_PREFIXES = ("/movielist/", "/genre/", "/starcast/", "/services/",
 # off the post pattern, a shelf URL, or a hard 404/410. Those are terminal on the
 # first sighting. Everything else — 5xx, timeout, connection reset — gets the
 # three-read budget, because a first transport failure must never be terminal.
-GONE_VERDICTS = ("removed", "not-a-post", "http-404", "http-410", "http-451")
+GONE_VERDICTS = ("removed", "not-a-post", "http-404", "http-410", "http-451",
+                 "soft404_homepage_shell")
+
+# Measured 2026-10-29: a stale sitemap id and a fabricated one both answer
+# HTTP 200 with the byte-identical 24,953-byte homepage (md5 7a0efe789b1c…),
+# while a live post is ~10 KB of real content. The server soft-404s stale ids;
+# it does not prove the title is gone, so this verdict has its own name and the
+# row stays retryable until the attempt cap.
+SOFT404_SHELL = "soft404_homepage_shell"
+SHELL_TITLE_RE = re.compile(r"pagalmovies\s*20\d{2}\s*-\s*download\s+bollywood", re.I)
+SHELL_H1_RE = re.compile(r"best\s+free\s+movie\s+download\s+site", re.I)
 
 STOP_REQUESTED = False
 
@@ -769,6 +785,16 @@ def harvest_mirrors(html: str) -> list[dict]:
     return out
 
 
+def _is_homepage_shell(body: str) -> bool:
+    """True when the body is the site's own homepage, not a catalog page."""
+    title = re.search(r"<title>(.*?)</title>", body or "", re.S | re.I)
+    h1 = re.search(r"<h1\b[^>]*>(.*?)</h1>", body or "", re.S | re.I)
+    return bool(
+        (title and SHELL_TITLE_RE.search(_clean_text(title.group(1))))
+        or (h1 and SHELL_H1_RE.search(_clean_text(h1.group(1))))
+    )
+
+
 def parse_page(html_or_url: str, url: str | None = None) -> dict | None:
     """
     Extracts clean metadata, files and mirrors from one catalog page.
@@ -780,10 +806,14 @@ def parse_page(html_or_url: str, url: str | None = None) -> dict | None:
     return _parse_page(html_or_url, url)[0]
 
 
-def _parse_page(html_or_url: str, url: str | None = None) -> tuple[dict | None, str]:
+def _parse_page(html_or_url: str, url: str | None = None,
+                diag: dict | None = None) -> tuple[dict | None, str]:
     """
     Same as parse_page, plus why it declined: the crawler parks a page that is
     provably gone on the first sighting, and only retries a transport failure.
+
+    ``diag`` (optional) is filled with what the request actually measured —
+    status, final URL, body size — so the queue row can keep the evidence.
     """
     body = html_or_url or ""
     page_url = url
@@ -794,12 +824,17 @@ def _parse_page(html_or_url: str, url: str | None = None) -> tuple[dict | None, 
         if not page_url:
             return None, "not-a-post"
         status, final_url, body = http_get(page_url)
+        if diag is not None:
+            diag.update(http_status=status, final_url=final_url,
+                        body_bytes=len(body or ""))
         if status != 200:
             # The status code is the measurement the operator asks for — "is this
             # row gone or merely unlucky" — so it is kept instead of collapsing
             # into one http-error bucket.
             return None, f"http-{status}"
         page_url = final_url or page_url
+    elif diag is not None:
+        diag.update(body_bytes=len(body))
     if not page_url:
         return None, "not-a-post"
 
@@ -808,6 +843,8 @@ def _parse_page(html_or_url: str, url: str | None = None) -> tuple[dict | None, 
         return None, "not-a-post"
     post_m = POST_URL_RE.search(page_url)
     if not post_m:
+        if POST_URL_RE.search(requested) and _is_homepage_shell(body):
+            return None, SOFT404_SHELL
         return None, "removed" if POST_URL_RE.search(requested) else "not-a-post"
 
     metas = _meta_tags(body)
@@ -820,7 +857,7 @@ def _parse_page(html_or_url: str, url: str | None = None) -> tuple[dict | None, 
     # filed as a movie called "PagalMovies 2026".
     if not raw_title or re.search(r"download\s+(?:bollywood|hollywood)"
                                   r"|best\s+free\s+movie", raw_title, re.I):
-        return None, "removed"
+        return None, SOFT404_SHELL if _is_homepage_shell(body) else "removed"
 
     info = _info_block(body)
     release_date = info.get("release date", "")
@@ -1445,11 +1482,14 @@ def sync_catalog(limit: int | None = None, db_path: Path | str = DEFAULT_DB_PATH
         path = urllib.parse.urlsplit(loc).path
         if not path.startswith("/movie/") or not path.endswith(".html"):
             continue  # shelves and static pages are listings, not catalog entries
+        # The site rotates hostnames between TLDs; the path is the post's
+        # identity and the host is only the mirror. Keying on the full loc
+        # duplicated the whole queue the day the sitemap switched hosts.
+        if path in seen:
+            continue
+        seen.add(path)
         post_m = POST_URL_RE.search(loc)
         slug = post_m.group(2) if post_m else _slug_title_base(path)
-        if loc in seen:
-            continue
-        seen.add(loc)
         records.append((loc, "", slug))
         if limit and len(records) >= limit:
             break
@@ -1457,6 +1497,10 @@ def sync_catalog(limit: int | None = None, db_path: Path | str = DEFAULT_DB_PATH
     conn = sqlite3.connect(db_path, timeout=60)
     try:
         ensure_schema(conn)
+        cached_paths = {urllib.parse.urlsplit(r[0]).path
+                        for r in conn.execute("SELECT loc FROM sitemap_cache")}
+        fresh = [r for r in records
+                 if urllib.parse.urlsplit(r[0]).path not in cached_paths]
         before = conn.execute("SELECT COUNT(*) FROM sitemap_cache").fetchone()[0]
         conn.executemany(
             """
@@ -1464,7 +1508,7 @@ def sync_catalog(limit: int | None = None, db_path: Path | str = DEFAULT_DB_PATH
             VALUES (?, ?, ?, 0, NULL, 0)
             ON CONFLICT(loc) DO UPDATE SET slug = excluded.slug;
             """,
-            records,
+            fresh,
         )
         conn.commit()
         after = conn.execute("SELECT COUNT(*) FROM sitemap_cache").fetchone()[0]
@@ -1472,28 +1516,64 @@ def sync_catalog(limit: int | None = None, db_path: Path | str = DEFAULT_DB_PATH
         conn.close()
 
     if verbose:
-        if not records:
-            print("[!] Sitemap yielded no catalog entries; nothing queued.", flush=True)
+        if not fresh:
+            print("[!] Sitemap yielded no new catalog entries; nothing queued.",
+                  flush=True)
         else:
-            print(f"[✓] [{SITE}] Queued {len(records)} post URLs "
+            print(f"[✓] [{SITE}] Queued {len(fresh)} post URLs "
                   f"({after - before} new, {after} total).", flush=True)
     return after - before
 
 
-def _bump_error(db_path: Path, loc: str, note: str, park_now: bool = False) -> None:
+def _bump_error(db_path: Path, loc: str, note: str, park_now: bool = False,
+                http_status: int | None = None, final_url: str | None = None,
+                exception: str | None = None) -> None:
+    """
+    Record one failed read, with the measurement that caused it.
+
+    The ledger (`raw_json.failures`) is what makes a parked row auditable:
+    kind, HTTP status, final URL and exception class per attempt, never a bare
+    note that erases the evidence of the previous attempt.
+    """
     if not loc:
         return
     conn = sqlite3.connect(db_path, timeout=60)
     try:
         ensure_schema(conn)
+        row = conn.execute(
+            "SELECT error_count, raw_json FROM sitemap_cache WHERE loc = ?",
+            (loc,)).fetchone()
+        attempts = (row[0] if row else 0) + 1
+        try:
+            payload = json.loads(row[1]) if row and row[1] else {}
+        except (ValueError, TypeError):
+            payload = {}
+        if not isinstance(payload, dict):
+            payload = {}
+        history = payload.get("failures")
+        history = history if isinstance(history, list) else []
+        attempt = {
+            "at": int(time.time()),
+            "attempt": attempts,
+            "kind": note,
+            "http_status": http_status,
+            "final_url": final_url,
+        }
+        if exception:
+            attempt["exception"] = exception
+        payload["failures"] = (history + [attempt])[-FAILURE_LEDGER_LIMIT:]
+        payload["last_note"] = note
+        payload["status"] = ("dead" if attempts >= MAX_SCRAPE_ATTEMPTS
+                             else "parked" if park_now else "retrying")
         conn.execute(
-            "UPDATE sitemap_cache SET error_count = error_count + 1, raw_json = ? WHERE loc = ?;",
-            (json.dumps({"last_note": note, "at": int(time.time())}), loc))
-        # A page the site has removed is known on the first sighting; three failed
-        # reads is the budget for a transport problem, not for a vanished post.
-        conn.execute(
-            "UPDATE sitemap_cache SET scraped = -1 WHERE loc = ? AND (error_count >= 3 OR ?);",
-            (loc, 1 if park_now else 0))
+            "UPDATE sitemap_cache SET error_count = ?, raw_json = ? WHERE loc = ?;",
+            (attempts, json.dumps(payload, ensure_ascii=False), loc))
+        # A page the site has removed is parked on the first sighting; three
+        # failed reads is the budget for a transport problem, not for a vanished
+        # post. Parked rows below the cap stay selectable (see PENDING_SELECT).
+        if attempts >= MAX_SCRAPE_ATTEMPTS or park_now:
+            conn.execute("UPDATE sitemap_cache SET scraped = -1 WHERE loc = ?;",
+                         (loc,))
         conn.commit()
     finally:
         conn.close()
@@ -1534,16 +1614,18 @@ def crawl_pending(limit: int | None = None, db_path: Path | str = DEFAULT_DB_PAT
         if STOP_REQUESTED:
             return None
         time.sleep(delay)
-        post, verdict = _parse_page(loc)
+        diag: dict = {}
+        post, verdict = _parse_page(loc, diag=diag)
         if post is None:
-            return None, verdict
+            return None, verdict, diag
         try:
-            return resolve_links(post, probe=probe, deep=deep), verdict
+            return resolve_links(post, probe=probe, deep=deep), verdict, diag
         except Exception as exc:  # keep the catalog even if a chain walk dies
             post["resolve_error"] = str(exc)
-            return post, verdict
+            return post, verdict, diag
 
     batch: list[dict] = []
+    batch_locs: list[str] = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
         future_to_loc = {pool.submit(work, r["loc"]): r["loc"] for r in rows}
         done = 0
@@ -1555,28 +1637,36 @@ def crawl_pending(limit: int | None = None, db_path: Path | str = DEFAULT_DB_PAT
                 outcome = fut.result()
             except Exception as exc:
                 totals["failed"] += 1
-                _bump_error(db_path, loc, f"exception: {exc}")
+                _bump_error(db_path, loc, f"exception: {exc}",
+                            exception=type(exc).__name__)
                 continue
             if outcome is None:
                 continue
-            post, verdict = outcome
+            post, verdict, diag = outcome
             if post is None:
                 totals["not_indexable"] += 1
                 totals["declined_by_reason"][verdict] = \
                     totals["declined_by_reason"].get(verdict, 0) + 1
                 _bump_error(db_path, loc, verdict,
-                            park_now=verdict in GONE_VERDICTS)
+                            park_now=verdict in GONE_VERDICTS,
+                            http_status=diag.get("http_status"),
+                            final_url=diag.get("final_url"),
+                            exception=diag.get("exception"))
                 continue
             batch.append(post)
+            batch_locs.append(loc)
             if len(batch) >= batch_size:
                 _flush(db_path, batch, totals)
+                _mark_scraped(db_path, batch_locs)
                 batch = []
+                batch_locs = []
             if verbose and done % 100 == 0:
                 print(f"    ... {done}/{len(rows)} pages, {totals['sources']} sources",
                       flush=True)
             if STOP_REQUESTED:
                 break
         _flush(db_path, batch, totals)
+        _mark_scraped(db_path, batch_locs)
 
     if verbose:
         print(f"[✓] [{SITE}] pages={totals['pages']} posts={totals['posts']} "
@@ -1620,6 +1710,59 @@ def requeue_parked(db_path: Path | str = DEFAULT_DB_PATH, limit: int | None = No
     return len(rows)
 
 
+def relabel_homepage_shells(db_path: Path | str = DEFAULT_DB_PATH,
+                            verbose: bool = True) -> int:
+    """
+    Rename the old `removed` cohort to the measured soft-404 shell verdict.
+
+    Control probes on 2026-10-29 (a parked id and a fabricated id) both returned
+    the same 24,953-byte homepage, so "removed" was the site's shell talking,
+    not proof the title vanished. The budget is reset and each row is queued
+    for re-measurement; a row that still answers the shell is parked again up
+    to the cap, with the shell named as its own verdict.
+    """
+    db_path = Path(db_path)
+    conn = sqlite3.connect(db_path, timeout=60)
+    try:
+        ensure_schema(conn)
+        rows = conn.execute(
+            "SELECT loc, raw_json FROM sitemap_cache WHERE scraped = -1").fetchall()
+        updated = 0
+        for loc, raw in rows:
+            try:
+                payload = json.loads(raw) if raw else {}
+            except (ValueError, TypeError):
+                payload = {}
+            if not isinstance(payload, dict) or payload.get("last_note") != "removed":
+                continue
+            history = payload.get("failures")
+            history = history if isinstance(history, list) else []
+            history.append({
+                "at": int(time.time()),
+                "attempt": 0,
+                "kind": SOFT404_SHELL,
+                "http_status": 200,
+                "final_url": None,
+                "detail": ("relabeled from 'removed': control probes returned the "
+                           "homepage shell (200, 24,953 bytes, md5 7a0efe789b1c)"),
+            })
+            payload["failures"] = history[-FAILURE_LEDGER_LIMIT:]
+            payload["last_note"] = SOFT404_SHELL
+            payload["status"] = "retrying"
+            conn.execute(
+                "UPDATE sitemap_cache SET scraped = 2, error_count = 0, "
+                "raw_json = ? WHERE loc = ?;",
+                (json.dumps(payload, ensure_ascii=False), loc))
+            updated += 1
+        conn.commit()
+    finally:
+        conn.close()
+    if verbose:
+        print(f"[✓] [{SITE}] relabeled {updated} parked rows as {SOFT404_SHELL}; "
+              f"error_count reset, queued for re-measurement.", flush=True)
+    return updated
+
+
 def _flush(db_path: Path, batch: list[dict], totals: dict) -> None:
     if not batch:
         return
@@ -1629,6 +1772,26 @@ def _flush(db_path: Path, batch: list[dict], totals: dict) -> None:
     totals["sources"] += written["sources_written"]
     totals["not_indexable"] += written["skipped"]
     batch.clear()
+
+
+def _mark_scraped(db_path: Path, locs: list[str]) -> None:
+    """
+    Clears the queue row that produced a successful page.
+
+    export_staging marks the URL the page ended on. When the site rotated hosts
+    mid-fetch (.fit -> .casa) that is a different row, so the fetched loc would
+    otherwise stay queued and be re-read on every pass.
+    """
+    if not locs:
+        return
+    conn = sqlite3.connect(db_path, timeout=60)
+    try:
+        conn.executemany(
+            "UPDATE sitemap_cache SET scraped = 1, error_count = 0 WHERE loc = ?",
+            [(loc,) for loc in locs])
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def stats(db_path: Path | str = DEFAULT_DB_PATH) -> dict:
@@ -1663,7 +1826,7 @@ def main(argv: list[str] | None = None) -> int:
         description=f"pagalmovies staging importer ({BASE_URL} -> {DEFAULT_DB_PATH})")
     parser.add_argument("command", nargs="?", default="sync",
                         choices=["sync", "crawl", "parse", "resolve", "stats",
-                                 "retry-parked"])
+                                 "retry-parked", "relabel-shell"])
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--workers", type=int, default=4)
     parser.add_argument("--db", default=str(DEFAULT_DB_PATH))
@@ -1683,6 +1846,8 @@ def main(argv: list[str] | None = None) -> int:
         requeue_parked(db, limit=args.limit, verbose=verbose)
         crawl_pending(db_path=db, workers=args.workers, probe=args.probe,
                       deep=args.deep, verbose=verbose)
+    elif args.command == "relabel-shell":
+        relabel_homepage_shells(db, verbose=verbose)
     elif args.command == "crawl":
         crawl_pending(limit=args.limit, db_path=db, workers=args.workers,
                       probe=args.probe, deep=args.deep, verbose=verbose)
