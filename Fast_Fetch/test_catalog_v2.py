@@ -24,6 +24,7 @@ import catalog_v2
 import fast_fetch
 import link_health
 import release_descriptor
+import validate_catalog_full
 import viewer
 
 
@@ -492,6 +493,70 @@ class LinkTruthTests(ProjectionTestCase):
         self.assertTrue(bare, "the source-less 480p print must exist with zero links")
         self.assertEqual(bare[0]["streamable_count"], 0)
         self.assertEqual(bare[0]["downloadable_count"], 0)
+
+
+class LinkStateVocabularyTests(ProjectionTestCase):
+    """`download_sources.status` is wider than `cat_links.state`; the fold is the contract.
+
+    A scraper writes 'unverified' for a source nobody probed, which is honest in the
+    ledger and illegal on the wire. These tests hold the projection to its closed
+    vocabulary and tie it to the same set the full-catalog audit checks, so the two
+    cannot drift apart and grade a leak as passing.
+    """
+
+    def src(self, status, suffix):
+        url = f"https://video-downloads.googleusercontent.com/{suffix}"
+        return {"source_name": "google_cdn", "service": "google_cdn", "resource_id": "x",
+                "source_url": url, "final_url": url, "playback_type": "direct",
+                "is_temporary": 0, "status": status}
+
+    def project_statuses(self, *pairs):
+        """Ingest one work whose sources carry the given ledger words, then project."""
+        sources = [self.src(status, suffix) for status, suffix in pairs]
+        self.add_post("site-a", "https://a.test/vocab-film/", clean_title="Vocab Film",
+                      year=2021, releases=[{"release_title": "Vocab Film 1080p",
+                                             "quality": "1080p", "sources": sources}])
+        self.project()
+        return {row["url"].rsplit("/", 1)[-1]: row["state"] for row in self.conn.execute(
+            "SELECT url, state FROM cat_links WHERE work_id = "
+            "(SELECT id FROM cat_works WHERE title='Vocab Film')")}
+
+    def test_unverified_without_evidence_projects_as_unchecked(self):
+        state = self.project_statuses(("unverified", "UNV"))["UNV"]
+        self.assertEqual(state, "unchecked")
+
+    def test_unverified_with_measured_evidence_is_promoted(self):
+        self.project_statuses(("unverified", "UNV"))
+        self.conn.execute(
+            "UPDATE download_sources SET last_checked_at = '2026-10-29 12:00:00'"
+            " WHERE status = 'unverified'")
+        self.project()
+        row = self.conn.execute(
+            "SELECT state FROM cat_links WHERE work_id = "
+            "(SELECT id FROM cat_works WHERE title='Vocab Film')").fetchone()
+        self.assertEqual(row["state"], "active")
+
+    def test_a_word_outside_both_vocabularies_never_reaches_the_wire(self):
+        """An invented verdict means 'nobody looked', not 'a state the wire can carry'."""
+        state = self.project_statuses(("busted", "BST"))["BST"]
+        self.assertEqual(state, "unchecked")
+
+    def test_verdicts_the_ledger_already_knows_survive_the_fold(self):
+        states = self.project_statuses(("dead", "DED"), ("expired", "EXP"),
+                                        ("unknown", "UNK"))
+        self.assertEqual(states, {"DED": "dead", "EXP": "expired", "UNK": "unknown"})
+
+    def test_projection_carries_only_closed_vocabulary_states(self):
+        self.project_statuses(("unverified", "UNV"), ("active", "ACT"), ("dead", "DED"),
+                              ("busted", "BST"), ("expired", "EXP"), ("unknown", "UNK"))
+        offenders = self.conn.execute(
+            "SELECT state, COUNT(*) AS n FROM cat_links"
+            " WHERE state NOT IN ({}) GROUP BY state"
+            .format(",".join("?" * len(validate_catalog_full.PROJECTION_STATES))),
+            tuple(sorted(validate_catalog_full.PROJECTION_STATES))).fetchall()
+        self.assertEqual(
+            sorted((row["state"], row["n"]) for row in offenders), [],
+            "projection carries a state the full-catalog audit would reject")
 
 
 class RollupAndSafetyTests(ProjectionTestCase):
