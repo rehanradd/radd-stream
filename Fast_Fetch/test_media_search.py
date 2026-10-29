@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Offline tests for `media_search.py` — the by-media matcher.
 
-Three things had to be proven, in this order:
+Four things had to be proven, in this order:
 
 1. **Honesty.** A hint the ledger cannot answer is reported as `unknown_on`, never
    as agreement. That is the whole design: a score that silently rewarded empty
@@ -13,12 +13,20 @@ Three things had to be proven, in this order:
 3. **The edge.** Nothing this endpoint returns may carry provenance, adult rows may
    not appear, and a request with no title is refused rather than answered with a
    list that would mean nothing.
+4. **The shape.** This is the 2026-10-29 production defect: `q=love` answered in
+   45 s and `q=a` never answered, because one statement scanned `posts`, joined the
+   1 780 121-row `releases` and the 4 073 865-row `download_sources` under it,
+   grouped, and then sorted every group to show 10 rows. `QueryShape` asserts on the
+   SQL the module actually executes and on that SQL's `EXPLAIN QUERY PLAN`, and keeps
+   the statement it replaced as the counter-example — so these tests go red the
+   moment the fan-out comes back, at any fixture size.
 
     python3 -S Fast_Fetch/test_media_search.py
 """
 import sqlite3
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -52,6 +60,13 @@ class Fixture(unittest.TestCase):
             self.addCleanup(patcher.stop)
         fast_fetch.init_db(self.db_path)
         self.conn = sqlite3.connect(self.db_path)
+        # The v2 side of the bridge exists before anything is projected into it, so a
+        # fixture that reads `posts` directly does not fail on a missing table. The
+        # commit is not ceremony: DDL here leaves a write transaction open, and
+        # `save_scraped_data` runs on its own connection, which then waits on a lock
+        # this connection will never release.
+        catalog_v2.ensure_schema(self.conn)
+        self.conn.commit()
         self.conn.row_factory = sqlite3.Row
         self.addCleanup(self.conn.close)
 
@@ -323,6 +338,352 @@ class RouteShape(Fixture):
         refused = self.call(duration_s=120 * 60)
         self.assertFalse(refused["success"])
         self.assertEqual(refused["results"], [])
+
+
+#: The statement this module ran until 2026-10-29, kept verbatim from `c2d11be` as
+#: the counter-example the shape tests are measured against. It is what 45 s and a
+#: 504 looked like; the tests below assert that nothing like it is executed anymore,
+#: and assert on *this* text so that claim is checkable rather than rhetorical.
+_OLD_STATEMENT = """
+    SELECT p.id, p.clean_title, p.year, p.content_type,
+           COUNT(DISTINCT r.id) AS release_count,
+           COUNT(DISTINCT s.id) AS source_count
+    FROM posts p
+    LEFT JOIN releases r ON r.post_id = p.id
+    LEFT JOIN download_sources s ON s.release_id = r.id
+    WHERE (p.is_18_plus IS NULL OR p.is_18_plus = 0)
+      AND (p.clean_title LIKE ? OR p.title LIKE ?)
+    GROUP BY p.id
+    ORDER BY (release_count + source_count) DESC, p.id DESC
+    LIMIT ?
+    """
+
+#: The production catalog is 150 799 posts over 1 780 121 releases and 4 073 865
+#: download sources — roughly 12 releases per post and 2 sources per release. These
+#: fixtures keep those *ratios* at 1/125 the size, which is enough for the planner to
+#: choose the plans being asserted on (planning is shape-driven, not size-driven) and
+#: fast enough to build on a one-core box. The wall-clock budget below is therefore
+#: stated for this size; the production-scale numbers are measured against a copy of
+#: the catalog, and reported in CONTINUITY.md, not asserted here.
+SCALE_POSTS = 1200
+SCALE_RELEASES_PER_POST = 12
+SCALE_SOURCES_PER_RELEASE = 2
+
+#: The owner's suggested ceiling for a bounded request. The fixture below answers in
+#: roughly a tenth of it, so this is a regression trap and not a benchmark.
+WALL_CLOCK_BUDGET_S = 1.5
+
+
+class _Spy:
+    """A connection that remembers every statement it was asked to run.
+
+    Asserting on the SQL the module *executed* is the only version of these tests
+    that can fail: a test that re-derived the statement from the source would keep
+    passing after the fan-out came back. This is also how "no SQL at all" is proven.
+    """
+
+    def __init__(self, conn):
+        self._conn = conn
+        self.calls: list = []
+
+    def execute(self, sql, params=()):
+        self.calls.append((" ".join(sql.split()), tuple(params)))
+        return self._conn.execute(sql, params)
+
+    def __getattr__(self, name):
+        return getattr(self._conn, name)
+
+
+class _Refusing:
+    """A connection that must never be asked a question."""
+
+    def execute(self, sql, params=()):
+        raise AssertionError(
+            f"a non-query reached the ledger: {' '.join(str(sql).split())[:120]}")
+
+
+def _plan(conn, sql, params):
+    """`EXPLAIN QUERY PLAN` detail strings — read-only, so this costs nothing to assert on."""
+    return " | ".join(str(row["detail"])
+                      for row in conn.execute("EXPLAIN QUERY PLAN " + sql, params))
+
+
+class _Scaled(unittest.TestCase):
+    """The production ratios, built with raw inserts.
+
+    `Fixture` goes through `save_scraped_data` and the projector because the evidence
+    bridge has to be the real one — that costs seconds per post and is the wrong tool
+    for a test about the shape of the SQL. Same tables, same indexes, same planner.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.TemporaryDirectory()
+        cls.db_path = Path(cls.tmp.name) / "scaled.db"
+        fast_fetch.init_db(cls.db_path)
+        conn = sqlite3.connect(cls.db_path)
+        catalog_v2.ensure_schema(conn)
+        conn.executemany(
+            "INSERT INTO posts (url, slug, title, clean_title, year, content_type)"
+            " VALUES (?, ?, ?, ?, ?, ?)",
+            [(f"https://scaled.test/{i}", f"s-{i}",
+              f"Movie On Number {i} (2024)", f"Movie On Number {i}", 2024, "movie")
+             for i in range(SCALE_POSTS)])
+        conn.executemany(
+            "INSERT INTO releases (post_id, release_title, quality)"
+            " VALUES (?, ?, ?)",
+            [(i + 1, f"r{i}-{k}", "1080p")
+             for i in range(SCALE_POSTS) for k in range(SCALE_RELEASES_PER_POST)])
+        conn.executemany(
+            "INSERT INTO download_sources (release_id, source_url, service, status)"
+            " VALUES (?, ?, ?, ?)",
+            [(rid, f"https://mirror.test/{rid}-{k}.mp4", "hubcloud_10g", "active")
+             for rid in range(1, SCALE_POSTS * SCALE_RELEASES_PER_POST + 1)
+             for k in range(SCALE_SOURCES_PER_RELEASE)])
+        # The v2 side at one work per post. The projector proves the bridge in
+        # `EvidenceBridge`; these rows exist so `_work_evidence` runs against a
+        # populated ledger here and its statements are planned like the real ones.
+        conn.executemany(
+            "INSERT INTO cat_works (id, work_key, title, work_type, runtime_minutes,"
+            " languages, updated_at) VALUES (?, ?, ?, 'movie', 120, '[\"Hindi\"]',"
+            " 1730000000)",
+            [(i + 1, f"imdb:tt{i:07d}", f"Movie On Number {i}")
+             for i in range(SCALE_POSTS)])
+        conn.executemany(
+            "INSERT INTO cat_work_sites (work_id, source_site, post_id, page_url)"
+            " VALUES (?, 'scaled.test', ?, ?)",
+            [(i + 1, i + 1, f"https://scaled.test/{i}")
+             for i in range(SCALE_POSTS)])
+        conn.executemany(
+            "INSERT INTO cat_releases (work_id, label, resolution, audio_languages,"
+            " created_at) VALUES (?, 'print', '1080p', '[\"Hindi\"]', 1730000000)",
+            [(i + 1,) for i in range(SCALE_POSTS)])
+        conn.commit()
+        conn.row_factory = sqlite3.Row
+        cls.conn = conn
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.conn.close()
+        cls.tmp.cleanup()
+
+    def search(self, **kw):
+        spy = _Spy(self.conn)
+        result = media_search.search_by_media(spy, **kw)
+        return result, spy
+
+
+class QueryShape(_Scaled):
+    """Item D: the request shape, asserted on the statements and their plans."""
+
+    def test_a_one_character_token_never_reaches_the_ledger(self):
+        """`q=a` is not a slow query, it is a non-query, and the fix is to not run it.
+
+        The old shape answered this by scanning every post and sorting every group;
+        on the live catalog it never answered at all (client timeout at 60 071 ms).
+        """
+        started = time.perf_counter()
+        for token in ("a", "7", "x"):
+            result = media_search.search_by_media(_Refusing(), title=token,
+                                                  duration_s=7200, resolution="1080p")
+            self.assertTrue(result["success"], token)
+            self.assertEqual(result["results"], [], token)
+            self.assertEqual(result["candidates"], 0, token)
+            self.assertIn("hint", result, token)
+        self.assertLess(time.perf_counter() - started, WALL_CLOCK_BUDGET_S)
+
+    def test_a_blank_title_is_refused_without_a_query_too(self):
+        for blank in ("", "   ", None, "\t\n"):
+            result = media_search.search_by_media(_Refusing(), title=blank)
+            self.assertFalse(result["success"], repr(blank))
+            self.assertEqual(result["candidates"], 0, repr(blank))
+
+    def test_the_floor_is_the_floor_not_an_off_by_one(self):
+        """One character under the floor issues no SQL; on it, the search runs."""
+        media_search.search_by_media(_Refusing(),
+                                     title="x" * (media_search.MIN_QUERY_CHARS - 1))
+        result = media_search.search_by_media(self.conn,
+                                              title="x" * media_search.MIN_QUERY_CHARS)
+        self.assertTrue(result["success"])
+
+    def test_no_statement_it_runs_sorts_a_set_it_did_not_bound_first(self):
+        result, spy = self.search(title="on", limit=10)
+        self.assertGreater(len(spy.calls), 0, "the search ran nothing")
+        self.assertGreater(result["candidates"], 0)
+        for sql, params in spy.calls:
+            details = _plan(self.conn, sql, params)
+            self.assertNotIn("USE TEMP B-TREE FOR ORDER BY", details, sql[:120])
+            if "FROM posts p" in sql:
+                self.assertNotIn("USE TEMP B-TREE", details,
+                                 f"candidates arm sorts an unbounded set: {sql[:120]}")
+
+    def test_it_never_joins_the_catalog_to_the_posts_it_scans(self):
+        """The fan-out is gone as a statement, not merely made faster."""
+        _, spy = self.search(title="on", limit=10)
+        for sql, params in spy.calls:
+            if "FROM posts p" in sql:
+                self.assertNotIn("LEFT JOIN", sql, sql[:120])
+                self.assertNotIn("JOIN releases", sql, sql[:120])
+                self.assertNotIn("JOIN download_sources", sql, sql[:120])
+            self.assertNotIn("COUNT(DISTINCT", sql.upper(), sql[:120])
+            self.assertNotIn("GROUP BY p.id", sql, sql[:120])
+
+    def test_the_statement_this_replaced_sorted_every_group(self):
+        """Red-side proof: the plan the tests above deny is real and measurable.
+
+        The plan names the two joins by their *indexes* (`idx_releases_post`,
+        `idx_sources_rel`), which is exactly the four-million-row walk — so this
+        asserts on those, not on the table names.
+        """
+        details = _plan(self.conn, _OLD_STATEMENT, ("%on%", "%on%", 20))
+        self.assertIn("SCAN p", details, details)
+        self.assertIn("USE TEMP B-TREE FOR ORDER BY", details, details)
+        self.assertEqual(details.count("USE TEMP B-TREE FOR count(DISTINCT)"), 2, details)
+        self.assertEqual(details.count("LEFT-JOIN"), 2, details)
+        self.assertIn("idx_sources_rel", details, details)
+
+    def test_the_window_bounds_the_work_not_just_the_answer(self):
+        """Every post in this fixture matches `on`; the counts must be read back for
+        the capped ids only, which is the difference between 40 probes and 120 000."""
+        limit = 10
+        result, spy = self.search(title="on", limit=limit)
+        self.assertLessEqual(result["candidates"], media_search.CANDIDATE_WINDOW)
+        self.assertLessEqual(result["candidates"], max(limit * 4, limit))
+        matched = self.conn.execute(
+            "SELECT COUNT(*) FROM posts WHERE clean_title LIKE '%on%'").fetchone()[0]
+        self.assertGreater(matched, result["candidates"] * 4,
+                           "the fixture is too small to prove a cap")
+        count_calls = [c for c in spy.calls if "FROM releases" in c[0]
+                       or "FROM download_sources" in c[0]]
+        self.assertEqual(len(count_calls), 2, "the counts must come from two index reads")
+        for sql, params in count_calls:
+            self.assertEqual(len(params), result["candidates"], sql[:120])
+
+    def test_the_number_of_statements_does_not_grow_with_the_request(self):
+        """Three arms, two count reads, one row fetch, two evidence reads. Eight
+        statements whatever the `limit` is: a larger page must not quietly buy work."""
+        small, small_spy = self.search(title="on", limit=1)
+        large, large_spy = self.search(title="on", limit=50)
+        self.assertEqual(len(small_spy.calls), len(large_spy.calls))
+        self.assertLessEqual(len(large_spy.calls), 8)
+        self.assertGreater(large["candidates"], small["candidates"])
+
+    def test_a_bounded_request_lands_inside_the_budget_at_both_ends_of_the_window(self):
+        for limit in (10, 50):
+            started = time.perf_counter()
+            result, _ = self.search(title="on", limit=limit)
+            elapsed = time.perf_counter() - started
+            self.assertTrue(result["success"])
+            self.assertLess(elapsed, WALL_CLOCK_BUDGET_S,
+                            f"limit={limit} took {elapsed * 1000:.0f} ms")
+
+
+class TextIsText(Fixture):
+    """What the shape must not lose on its way to being fast."""
+
+    counter = 0
+
+    def seed(self, title, is_18_plus=0):
+        """Raw rows: `save_scraped_data` cleans titles, and these tests are about
+        titles that are punctuation."""
+        TextIsText.counter += 1
+        slug = f"seed-{TextIsText.counter}"
+        self.conn.execute(
+            "INSERT INTO posts (url, slug, title, clean_title, year, content_type,"
+            " is_18_plus) VALUES (?, ?, ?, ?, 2024, 'movie', ?)",
+            (f"https://text.test/{slug}", slug, f"{title} (2024)", title, is_18_plus))
+        self.conn.commit()
+        return int(self.conn.execute(
+            "SELECT id FROM posts WHERE slug = ?", (slug,)).fetchone()["id"])
+
+    def mirrors(self, post_id, releases=1, sources_per_release=1):
+        for r in range(releases):
+            rid = self.conn.execute(
+                "INSERT INTO releases (post_id, release_title) VALUES (?, ?)",
+                (post_id, f"print-{r}")).lastrowid
+            for s in range(sources_per_release):
+                self.conn.execute(
+                    "INSERT INTO download_sources (release_id, source_url, service)"
+                    " VALUES (?, ?, 'hubcloud_10g')",
+                    (rid, f"https://mirror.test/{post_id}-{r}-{s}.mp4"))
+        self.conn.commit()
+
+    def titles(self, result):
+        return [r["clean_title"] for r in result["results"]]
+
+    def test_a_percent_sign_in_a_title_is_a_percent_sign(self):
+        """`%` is a LIKE wildcard, so an unescaped query of `% Film` asks for every
+        title ending in anything — the `q=a` cliff reached with two keystrokes."""
+        self.seed("Fifty % Film")
+        self.seed("Fifty X Film")
+        self.seed("Alpha Film")
+        self.assertEqual(self.titles(self.search(title="% Film")), ["Fifty % Film"])
+
+    def test_an_underscore_is_not_a_single_character_wildcard(self):
+        self.seed("Under_Score Film")
+        self.seed("UnderXScore Film")
+        self.assertEqual(self.titles(self.search(title="_Score Film")),
+                         ["Under_Score Film"])
+
+    def test_the_escape_survives_a_like_round_trip(self):
+        for text in ("100%", "a_b", "a\\b", "%_%", "_", "50%%"):
+            pattern = media_search._contains_pattern(text)
+            hit = self.conn.execute("SELECT ? LIKE ? ESCAPE '\\'", (text, pattern)).fetchone()[0]
+            self.assertEqual(hit, 1, (text, pattern))
+
+    def test_an_adult_work_cannot_take_the_top_slot_by_being_the_most_popular(self):
+        """The ranking signal is print-and-mirror count; a flagged row would win it
+        outright. The bail is in every arm, not in the projection."""
+        visible = self.seed("Visible Film")
+        self.mirrors(visible, releases=1, sources_per_release=1)
+        hidden = self.seed("Hidden Film", is_18_plus=1)
+        self.mirrors(hidden, releases=20, sources_per_release=5)
+        result = self.search(title="Film", limit=10)
+        self.assertNotIn("Hidden Film", self.titles(result))
+        self.assertEqual(self.titles(result), ["Visible Film"])
+        self.assertGreater(result["results"][0]["release_count"], 0)
+
+    def test_ties_break_on_the_highest_id_and_stay_put_across_a_limit_sweep(self):
+        """A tie with no last-resort key is a real defect: the next page repeats a
+        row or drops one. Every row here has zero prints, so all of them tie."""
+        wanted = [self.seed(f"Tied Film {n}") for n in range(6)]
+        sweep = {}
+        for limit in (1, 2, 3, 6):
+            result = self.search(title="Tied", limit=limit)
+            sweep[limit] = [r["id"] for r in result["results"]]
+        ordered = sorted(wanted, reverse=True)
+        self.assertEqual(sweep[6], ordered)
+        for limit in (1, 2, 3):
+            self.assertEqual(sweep[limit], ordered[:limit], limit)
+
+    def test_the_row_answers_the_count_keys_a_keyword_row_answers(self):
+        post = self.seed("Counted Film")
+        self.mirrors(post, releases=3, sources_per_release=4)
+        item = self.only(self.search(title="Counted"))
+        self.assertEqual(item["release_count"], 3)
+        self.assertEqual(item["source_count"], 12)
+
+
+class PopulationCost(_Scaled):
+    """The one scan left in the path, measured so the migration can price it.
+
+    `_work_evidence` reaches the v2 ledger through `cat_work_sites.post_id`, and that
+    column has no index (`catalog_v2.DDL` indexes `cat_releases.work_id` but not the
+    site bridge), so both evidence statements are `SCAN cs` — over 275 488 rows in
+    production, once per request. This test does not assert a fix; it asserts the
+    cost is *known*, and it is the number `migrations/` is written against.
+    """
+
+    def test_the_evidence_bridge_is_the_unindexed_scan_it_is_reported_as(self):
+        _, spy = self.search(title="on", limit=10)
+        evidence = [call for call in spy.calls if "cat_work_sites" in call[0]]
+        self.assertEqual(len(evidence), 2, "both evidence statements, no more")
+        for sql, params in evidence:
+            details = _plan(self.conn, sql, params)
+            self.assertIn("SCAN cs", details,
+                          "expected the unindexed bridge scan; if this is now an"
+                          " index probe, retire this test and the migration entry")
+
 
 
 if __name__ == "__main__":

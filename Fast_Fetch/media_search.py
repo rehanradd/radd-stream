@@ -20,6 +20,28 @@ whole ledger to say "here are 10 of possibly 10 000". So the endpoint says so
 instead of burning the VM to produce a list that means nothing, and the app asks
 for a title first.
 
+**Why the query is shaped the way it is.** Until 2026-10-29 this module asked SQLite
+for the matches, the print counts and the ranking in one statement:
+
+    FROM posts p
+    LEFT JOIN releases r ON r.post_id = p.id
+    LEFT JOIN download_sources s ON s.release_id = r.id
+    WHERE p.clean_title LIKE '%…%' OR p.title LIKE '%…%'
+    GROUP BY p.id ORDER BY (release_count + source_count) DESC LIMIT ?
+
+`EXPLAIN QUERY PLAN` against the 150 799-post catalog said `SCAN p`, both LEFT-JOINs
+through a covering index, and three `USE TEMP B-TREE` — two for the `COUNT(DISTINCT …)`
+and one for the `ORDER BY`. The LIKE cannot use an index (none exists on `clean_title`
+or `title`), so all 150 799 posts were visited; the catalog holds 1 780 121 releases
+and 4 073 865 download sources, so a common letter materialised on the order of four
+million joined rows *before* `LIMIT` was consulted, and the popularity sort then
+ordered every one of those groups. Measured live at the edge: `q=love` answered in
+45 s, `q=a` never answered at all, and nginx's `proxy_read_timeout 30s` turned both
+into a 504 behind a spinner. The `LIMIT` bounded the *response*, never the *work*.
+
+So the work is bounded where the work actually is: candidates come from `posts` alone
+and are capped before anything is joined, and the counts for that capped window are
+read back through the two foreign-key indexes. Nothing here joins the catalog again.
 Stdlib only, and it never opens a write transaction: the catalog is read as-is.
 """
 
@@ -40,6 +62,17 @@ DURATION_TOLERANCE = 0.15
 #: How many candidates the ledger is asked for before the evidence is scored. The
 #: ranking that matters happens here, over this window, not in SQL over 130k rows.
 CANDIDATE_WINDOW = 200
+
+#: A query shorter than this is not a query. One character matches nearly the whole
+#: catalog, and "nearly the whole catalog, ranked" is the shape that cost 45 s and
+#: then a 504. A search box is never legitimately used at one keystroke, so the
+#: answer is an empty one plus a hint — no SQL at all, not a faster scan. The client
+#: floor must match this value; see `ANDROID_INTEGRATION.md`.
+MIN_QUERY_CHARS = 2
+
+#: LIKE metacharacters are wildcards, so an unescaped `%` in a *user's* query is a
+#: request to match everything: the same cliff as `q=a`, reached with one keystroke.
+_ESCAPE_CHAR = "\\"
 
 #: What a caller may call a rung, in the words the catalog actually stores. The
 #: ladder is walked top-down, so a longer word never loses to a substring of it
@@ -85,6 +118,109 @@ def duration_matches(runtime_minutes, duration_s) -> "bool | None":
         return None
     expected = minutes * 60.0
     return abs(seconds - expected) <= expected * DURATION_TOLERANCE
+
+
+def _escape_like(text: str) -> str:
+    """Quote `%`, `_` and the escape character itself, so user text matches as text."""
+    return (str(text).replace(_ESCAPE_CHAR, _ESCAPE_CHAR + _ESCAPE_CHAR)
+            .replace("%", _ESCAPE_CHAR + "%")
+            .replace("_", _ESCAPE_CHAR + "_"))
+
+
+def _contains_pattern(text: str) -> str:
+    return f"%{_escape_like(text)}%"
+
+
+def _prefix_pattern(text: str) -> str:
+    return f"{_escape_like(text)}%"
+
+
+def _relevance_arms(clean: str) -> list:
+    """The three ways a title can match, most-meant-first.
+
+    Each arm is its own bounded query rather than one `CASE` ranked over the whole
+    matched set, and that choice is the fix: an arm's `LIMIT` stops the walk as soon
+    as the window fills, so an arm costs the window instead of the number of works
+    that contain those letters. A single `ORDER BY tier` over all matches would need
+    the temp B-tree this module exists to avoid.
+
+    Arms only *prioritise*. Every id an exact or a prefix arm can find, the contains
+    arm finds too, so the candidate set is never larger than what the old statement
+    could match — the adult bail and the LIKE pair still decide what exists at all.
+    """
+    return [
+        ("lower(p.clean_title) = ?", [clean.lower()]),
+        ("(p.clean_title LIKE ? ESCAPE '\\' OR p.title LIKE ? ESCAPE '\\')",
+         [_prefix_pattern(clean), _prefix_pattern(clean)]),
+        ("(p.clean_title LIKE ? ESCAPE '\\' OR p.title LIKE ? ESCAPE '\\')",
+         [_contains_pattern(clean), _contains_pattern(clean)]),
+    ]
+
+
+def _candidate_ids(conn, clean: str, window: int) -> list:
+    """Post ids that match, most relevant first, with no join anywhere near it.
+
+    Touches `posts` and nothing else, and returns at most `window` ids. The cost is
+    the window plus however far the walk has to go to fill it — never the
+    four-million-row fan-out the old statement built before it consulted `LIMIT`.
+    """
+    ids: list = []
+    seen = set()
+    for clause, params in _relevance_arms(clean):
+        if len(ids) >= window:
+            break
+        sql = (f"SELECT p.id FROM posts p "
+               f"WHERE {redact.adult_clause('p')} AND {clause} "
+               f"ORDER BY p.id DESC LIMIT ?")
+        for row in conn.execute(sql, list(params) + [window - len(ids)]):
+            pid = int(row[0])
+            if pid not in seen:
+                seen.add(pid)
+                ids.append(pid)
+    return ids
+
+
+def _counts_for(conn, post_ids: list) -> dict:
+    """Print and mirror counts for a *capped* id list, read back through the indexes.
+
+    The same ranking signal the old `COUNT(DISTINCT …)` pair produced, computed after
+    the candidate set was bounded instead of over the entire fan-out: one probe of
+    `idx_releases_post` per candidate, one grouped pass over `idx_sources_rel` for the
+    releases those candidates own. `COUNT(DISTINCT s.id)` counted the same thing,
+    because a source row belongs to exactly one release — so no duplicate can reach a
+    count by this route and no distinct is needed.
+    """
+    if not post_ids:
+        return {}
+    out: dict = {}
+    marks = ",".join("?" * len(post_ids))
+    for row in conn.execute(
+            f"SELECT post_id, COUNT(*) FROM releases WHERE post_id IN ({marks})"
+            f" GROUP BY post_id", post_ids):
+        out[int(row[0])] = [int(row[1]), 0]
+    for row in conn.execute(
+            f"SELECT r.post_id, COUNT(*) FROM download_sources s"
+            f" JOIN releases r ON r.id = s.release_id"
+            f" WHERE r.post_id IN ({marks}) GROUP BY r.post_id", post_ids):
+        out.setdefault(int(row[0]), [0, 0])[1] = int(row[1])
+    return out
+
+
+def _rows_for(conn, post_ids: list, full: bool) -> dict:
+    """The candidate rows themselves, fetched only for the capped window."""
+    if not post_ids:
+        return {}
+    marks = ",".join("?" * len(post_ids))
+    provenance_cols = ", p.source_site, p.url, p.slug" if full else ""
+    sql = f"""
+        SELECT p.id, p.clean_title, p.title, p.year, p.content_type, p.seasons,
+               p.imdb_rating, p.imdb_id, p.tmdb_id, p.genres, p.is_animated,
+               p.industry, p.country, p.language, p.poster_url, p.backdrop_urls
+               {provenance_cols}
+        FROM posts p
+        WHERE p.id IN ({marks})
+        """
+    return {int(row["id"]): row for row in conn.execute(sql, post_ids)}
 
 
 def _empty_evidence() -> dict:
@@ -202,7 +338,22 @@ def search_by_media(conn, title: str = "", duration_s=None, resolution=None,
             "success": False,
             "error": ("A title is required: duration and resolution alone match "
                       "thousands of works in this catalog."),
-            "results": [], "total": 0,
+            "results": [], "total": 0, "candidates": 0,
+        }
+    if len(clean) < MIN_QUERY_CHARS:
+        # Deliberately no SQL at all. This is the request that used to cost the most:
+        # measured at the live edge, `q=love` took 45 s and `q=a` never returned.
+        return {
+            "success": True,
+            "query": {"title": clean, "duration_s": None, "resolution": None,
+                      "audio_language": None},
+            "duration_tolerance": DURATION_TOLERANCE,
+            "candidates": 0,
+            "total": 0,
+            "results": [],
+            "hint": (f"Type at least {MIN_QUERY_CHARS} characters of a title. A single "
+                     f"character matches nearly the whole catalog, and ranking that "
+                     f"many works is not a search."),
         }
     limit = min(50, max(1, int(limit or 10)))
     hints: dict = {}
@@ -220,48 +371,44 @@ def search_by_media(conn, title: str = "", duration_s=None, resolution=None,
     if language:
         hints["audio_language"] = language
 
-    where = [redact.adult_clause("p"), "(p.clean_title LIKE ? OR p.title LIKE ?)"]
-    like = f"%{clean}%"
-    params: list = [like, like]
-    provenance_cols = ", p.source_site, p.url, p.slug" if full else ""
-    rows = conn.execute(
-        f"""
-        SELECT p.id, p.clean_title, p.title, p.year, p.content_type, p.seasons,
-               p.imdb_rating, p.imdb_id, p.tmdb_id, p.genres, p.is_animated,
-               p.industry, p.country, p.language, p.poster_url, p.backdrop_urls
-               {provenance_cols},
-               COUNT(DISTINCT r.id) AS release_count,
-               COUNT(DISTINCT s.id) AS source_count
-        FROM posts p
-        LEFT JOIN releases r ON r.post_id = p.id
-        LEFT JOIN download_sources s ON s.release_id = r.id
-        WHERE {" AND ".join(where)}
-        GROUP BY p.id
-        ORDER BY (release_count + source_count) DESC, p.id DESC
-        LIMIT ?
-        """,
-        params + [min(CANDIDATE_WINDOW, max(limit * 4, limit))],
-    ).fetchall()
+    window = min(CANDIDATE_WINDOW, max(limit * 4, limit))
+    ids = _candidate_ids(conn, clean, window)
+    counts = _counts_for(conn, ids)
+    rows_by_id = _rows_for(conn, ids, full)
+    # The old `ORDER BY (release_count + source_count) DESC, p.id DESC` survives, over
+    # the capped window instead of over the whole matched set. `-pid` last is not
+    # decoration: without a total order a tie repeats a row on the next page or drops
+    # one, and the window is exactly where ties are most likely.
+    ranked = sorted(ids, key=lambda pid: (-sum(counts.get(pid, [0, 0])), -pid))
+    rows = [rows_by_id[pid] for pid in ranked if pid in rows_by_id]
 
     evidence = _work_evidence(conn, [int(r["id"]) for r in rows])
     scored = []
     for r in rows:
-        ev = evidence.get(int(r["id"])) or _empty_evidence()
+        pid = int(r["id"])
+        ev = evidence.get(pid) or _empty_evidence()
         matched, mismatched, unknown = _score(ev, hints)
         scored.append((
             len(matched) - len(mismatched),
-            int(r["release_count"] or 0) + int(r["source_count"] or 0),
-            int(r["id"]), r, ev, matched, mismatched, unknown,
+            sum(counts.get(pid, [0, 0])),
+            pid, r, ev, matched, mismatched, unknown,
         ))
     scored.sort(key=lambda t: (-t[0], -t[1], -t[2]))
 
     results = []
     for _, _, _, r, ev, matched, mismatched, unknown in scored[:limit]:
+        pid = int(r["id"])
+        releases, sources = counts.get(pid, [0, 0])
         item = redact.project(r, "post_brief")
         if full:
             item.update({"source_site": r["source_site"], "url": r["url"],
                          "slug": r["slug"]})
+        # `release_count` and `source_count` were columns of the old statement's row,
+        # so the public projection carried them. The by-media row must answer the same
+        # keys as a `q=` row — `RouteShape` fails the build if it loses either.
         item.update({
+            "release_count": releases,
+            "source_count": sources,
             "runtime_minutes": ev.get("runtime_minutes"),
             "resolutions": sorted(ev.get("resolutions") or ()),
             "matched_on": matched,
