@@ -23,6 +23,7 @@ sys.path.insert(0, str(Path(__file__).parent.resolve()))
 import admin_panel          # noqa: E402
 import api_v2               # noqa: E402
 import catalog_v2           # noqa: E402
+import engagement           # noqa: E402
 import fast_fetch           # noqa: E402
 import redact               # noqa: E402
 import viewer               # noqa: E402
@@ -380,6 +381,13 @@ class Monetization(Fixture):
         self.assertEqual(self.values()["vip_monthly_pkr"], "200")
         self.assertEqual(self.values()["vip_yearly_pkr"], "1500")
         self.assertFalse(self.values()["pak_till_id"])
+        # 250 is `docs/MONETIZATION_AND_FLEET_PLAN.md:46` (owner's decision, and the
+        # plan doc is authoritative). A pinned test, not a comment, because both
+        # `payments.PLAN_DEFAULTS` and this spec's first draft said 200, and the
+        # next person to read a 200 somewhere will be tempted to "fix" this back.
+        self.assertEqual(admin_panel._FIELD_BY_KEY["pass_monthly_vip_pkr"][3], 250,
+                         "the 30-day pass is ₨250 per the owner's plan doc")
+        self.assertEqual(self.values()["pass_monthly_vip_pkr"], "250")
 
     def test_the_card_is_on_the_html_page(self):
         self.ingest()
@@ -628,6 +636,175 @@ class Monetization(Fixture):
         columns = {row[1] for row in self.conn.execute(
             "PRAGMA table_info(app_remote_config)")}
         self.assertTrue(set(admin_panel._FIELD_BY_KEY) <= columns, columns)
+
+    # ── the engagement knobs ──────────────────────────────────────────────
+    def test_the_engagement_block_is_the_ledgers_own_projection(self):
+        """One source of truth for the shape *and* the numbers, on an untouched row.
+
+        `engagement.remote_view()` is what that module itself promises a phone at
+        `/api/v1/app/remote-config.engagement`, and `admin_panel` builds its block
+        by applying the operator's row over it. Asserting the whole dictionary
+        equal, rather than a list of fields, means a number added to the ledger's
+        projection cannot be missed by the settings surface, and a settings default
+        cannot drift from the constant that fills it — one equality, no table."""
+        view = engagement.remote_view()
+        data = self.public()
+        self.assertEqual(data["engagement"], view)
+        # The same claim from the field spec's side: every knob's stored default is
+        # the number the ledger ships.
+        spec = {key: default for key, _label, _kind, default
+                in admin_panel.MONETIZATION_FIELDS}
+        self.assertEqual(spec["ad_preroll_min_gap_minutes"],
+                         view["cadence"]["ad_preroll_min_gap_minutes"])
+        self.assertEqual(spec["ad_native_card_every_posters"],
+                         view["cadence"]["ad_native_card_every_posters"])
+        self.assertEqual(spec["ad_app_open_min_gap_minutes"],
+                         view["cadence"]["ad_app_open_min_gap_minutes"])
+        self.assertEqual(spec["coin_per_rewarded_ad"], view["wallet"]["coin_per_rewarded_ad"])
+        self.assertEqual(spec["rewarded_daily_cap"], view["wallet"]["rewarded_daily_cap"])
+        for plan, coin_key, pkr_key in (("day", "coin_redeem_day", "pass_day_pkr"),
+                                        ("weekend", "coin_redeem_weekend",
+                                         "pass_weekend_pkr"),
+                                        ("monthly_vip", "coin_redeem_monthly",
+                                         "pass_monthly_vip_pkr")):
+            self.assertEqual(spec[coin_key], view["passes"][plan]["coins"], plan)
+            self.assertEqual(spec[pkr_key], view["passes"][plan]["pkr"], plan)
+            self.assertEqual(view["passes"][plan]["coins"],
+                             view["wallet"]["redeem_coin_costs"][plan], plan)
+        self.assertEqual(spec["streak_day1_coins"], view["streak"]["grants"]["day1_coins"])
+        self.assertEqual(spec["streak_day3_coins"], view["streak"]["grants"]["day3_coins"])
+        self.assertEqual(spec["streak_day7_pass_hours"] * 3600,
+                         view["streak"]["grants"]["day7_pass_seconds"],
+                         "the ladder's day-7 pass is the ledger's own STREAK_PASS_SECONDS")
+        self.assertEqual(spec["streak_day_boundary_hour"],
+                         view["streak"]["day_boundary_hour"])
+        self.assertEqual(spec["streak_tz"], view["streak"]["tz"])
+        # The two ceilings that would otherwise let a stored number and an enforced
+        # one differ: `resolve_caps` clamps, `_validated` refuses. Same bounds.
+        self.assertEqual(admin_panel._INT_MAX["ad_preroll_min_gap_minutes"],
+                         engagement.CAP_MAX["ad_preroll_min_gap_minutes"])
+        self.assertEqual(admin_panel._INT_MAX["ad_native_card_every_posters"],
+                         engagement.CAP_MAX["ad_native_card_every_posters"])
+        self.assertEqual(admin_panel._INT_MAX["ad_app_open_min_gap_minutes"],
+                         engagement.CAP_MAX["ad_app_open_min_gap_minutes"])
+
+    def test_a_saved_knob_reaches_the_phone_and_the_card_alike(self):
+        self.save({"ad_preroll_min_gap_minutes": "40",
+                   "coin_redeem_monthly": "150",
+                   "pass_weekend_pkr": 75,
+                   "streak_day_boundary_hour": 0,
+                   "rewarded_daily_cap": 3,
+                   "streak_tz": "Asia/Karachi"})
+        data = self.public()
+        view = data["engagement"]
+        self.assertEqual(view["cadence"]["ad_preroll_min_gap_minutes"], 40)
+        self.assertEqual(view["wallet"]["rewarded_daily_cap"], 3)
+        self.assertEqual(view["passes"]["monthly_vip"]["coins"], 150)
+        self.assertEqual(view["wallet"]["redeem_coin_costs"]["monthly_vip"], 150,
+                         "one price per plan, in both places a client may look")
+        self.assertEqual(view["passes"]["weekend"]["pkr"], 75)
+        # Hour 0 is midnight — a real rollover, not the "use the default" sentinel.
+        self.assertEqual(view["streak"]["day_boundary_hour"], 0)
+        self.assertEqual(self.values()["ad_preroll_min_gap_minutes"], "40")
+        self.assertEqual(self.values()["coin_redeem_monthly"], "150")
+        # Keys the body did not send keep their own values, and the untouched part
+        # of the projection is still the ledger's.
+        base = engagement.remote_view()
+        self.assertEqual(view["cadence"]["ad_app_open_min_gap_minutes"],
+                         base["cadence"]["ad_app_open_min_gap_minutes"])
+        self.assertEqual(view["streak"]["grants"], base["streak"]["grants"])
+        self.assertEqual(view["passes"]["day"], base["passes"]["day"])
+
+    def test_a_zero_override_is_the_default_and_never_unlimited(self):
+        """The owner's rule for every one of these knobs.
+
+        A cadence of 0 minutes would be "an ad break with no gap"; a coin cost of 0
+        would be a free pass. Neither is expressible as a public number: the card
+        stores the 0 the operator typed, and the body answers with the shipped
+        default — the same answer the consumer's own clamp gives, because this
+        project runs the value through `engagement.resolve_caps` rather than a
+        copy of its logic."""
+        self.save({"ad_preroll_min_gap_minutes": 0,
+                   "ad_native_card_every_posters": "0",
+                   "coin_redeem_day": 0,
+                   "streak_day3_coins": 0,
+                   "coin_per_rewarded_ad": 0})
+        view = self.public()["engagement"]
+        base = engagement.remote_view()
+        self.assertEqual(view["cadence"], base["cadence"])
+        self.assertEqual(view["passes"]["day"]["coins"], base["passes"]["day"]["coins"])
+        self.assertEqual(view["streak"]["grants"]["day3_coins"],
+                         base["streak"]["grants"]["day3_coins"])
+        self.assertEqual(view["wallet"]["coin_per_rewarded_ad"],
+                         base["wallet"]["coin_per_rewarded_ad"])
+        # The stored row still holds the operator's 0 — this is a resolution, not a
+        # rewrite of what was typed.
+        self.conn.rollback()               # end this connection's stale snapshot
+        self.assertEqual(int(admin_panel._read_monetization(self.conn)
+                             ["ad_preroll_min_gap_minutes"]), 0)
+
+    def test_an_impossible_count_is_refused_and_writes_nothing(self):
+        """A value the consumer would clamp or reject cannot be stored, so the card,
+        the body and the ledger can never show three different numbers."""
+        for key, bad in (("ad_preroll_min_gap_minutes", "1441"),
+                         ("ad_native_card_every_posters", "5001"),
+                         ("ad_app_open_min_gap_minutes", "-1"),
+                         ("streak_day_boundary_hour", "24"),
+                         ("coin_redeem_day", True),
+                         ("coin_redeem_day", "twelve"),
+                         ("rewarded_daily_cap", "1000001")):
+            status, _type, raw = self.save({key: bad})
+            self.assertEqual(status, 400, (key, bad, raw))
+        self.assertEqual(self.public()["engagement"], engagement.remote_view())
+
+    def test_the_pass_price_is_not_the_subscription_price(self):
+        """Two products, two knobs. `pass_monthly_vip_pkr` is the 30-day pass the
+        ladder sells; `vip_monthly_pkr` is the subscription `payments.py` prices. A
+        save to one must never move the other, and nothing may link them later."""
+        self.save({"pass_monthly_vip_pkr": 300})
+        data = self.public()
+        self.assertEqual(data["engagement"]["passes"]["monthly_vip"]["pkr"], 300)
+        self.assertEqual(data["vip"]["monthly_pkr"], 200)
+        self.save({"vip_monthly_pkr": 250})
+        data = self.public()
+        self.assertEqual(data["vip"]["monthly_pkr"], 250)
+        self.assertEqual(data["engagement"]["passes"]["monthly_vip"]["pkr"], 300)
+
+    def test_an_older_settings_row_gains_the_engagement_columns(self):
+        """The 17-column row a running deployment already holds must pick up the
+        knobs on the next read, with their defaults, without losing what the
+        operator saved."""
+        self.conn.execute("DROP TABLE IF EXISTS app_remote_config")
+        keep = ("pak_till_id", "pak_jazzcash_number", "pak_easypaisa_number",
+                "pak_raast_id", "vip_monthly_pkr", "vip_yearly_pkr", "monetag_zone_id",
+                "adsterra_tag_id", "shrinkme_api_token", "droplink_api_token",
+                "feature_link_shorteners", "maintenance_mode", "apk_update_url",
+                "feature_downloads", "feature_pure_cinema", "feature_chromecast",
+                "feature_quality_gate")
+        self.conn.execute("CREATE TABLE app_remote_config ("
+                          " id INTEGER PRIMARY KEY CHECK (id = 1),"
+                          + ", ".join(f"{name} TEXT NOT NULL DEFAULT ''" for name in keep)
+                          + ", updated_at INTEGER NOT NULL DEFAULT 0)")
+        self.conn.execute("INSERT INTO app_remote_config(id, vip_monthly_pkr)"
+                          " VALUES(1, '425')")
+        self.conn.commit()
+
+        data = self.public()
+        self.assertEqual(data["engagement"], engagement.remote_view())
+        columns = {row[1] for row in self.conn.execute(
+            "PRAGMA table_info(app_remote_config)")}
+        self.assertTrue(set(admin_panel._FIELD_BY_KEY) <= columns, columns)
+
+    def test_the_engagement_block_publishes_no_credential(self):
+        """The knobs are product prices, not secrets — and the row that holds them
+        also holds the operator's payout tokens, so the shape itself is pinned."""
+        self.save({"shrinkme_api_token": self.TOKEN_VALUE,
+                   "monetag_zone_id": "10293847"})
+        body = json.dumps(self.public()["engagement"])
+        self.assertNotIn(self.TOKEN_VALUE, body)
+        for key in ("shrinkme_api_token", "droplink_api_token",
+                    "pak_jazzcash_number", "pak_raast_id"):
+            self.assertNotIn(key, body, key)
 
 
 class Fleet(Fixture):
