@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Fast_Fetch/engagement.py — the engagement pillars `MONETIZATION_FIELDS` does not cover.
+Fast_Fetch/engagement.py — the four engagement pillars behind the knobs the admin panel now carries.
 ════════════════════════════════════════════════════════════════════════════════════════
 WHAT THIS IS, STATED PLAINLY
 --------------------------------------------------------------------------------
@@ -9,8 +9,9 @@ panel but that today are literals in the APK (see
 `docs/MONETIZATION_PILLARS_SCHEMA.md`, the design this file implements):
 
   1. **Ad-cadence caps as data** — pre-roll 1/25 min, native card 1/12 posters,
-     app-open 1/4 h. The caps are config (`CAPS_DEFAULT`, overridable later from
-     `app_remote_config`); `ad_cadence_state` is the server-side *frequency* those
+     app-open 1/4 h. The caps are config (`CAPS_DEFAULT`, overridable from
+     `app_remote_config` via `admin_panel.MONETIZATION_FIELDS`); `ad_cadence_state`
+     is the server-side *frequency* those
      caps are checked against, so a phone that ignores the cap still cannot be
      served a second pre-roll inside the window.
   2. **The coin wallet** — a balance and an **append-only** earn/spend ledger.
@@ -836,11 +837,20 @@ def ad_grant(conn_or_path, account_id, *, slot, now=None, caps=None) -> dict:
 
 def remote_view() -> dict:
     """The shape the phone reads under `/api/v1/app/remote-config.engagement`.
-    Exposed from defaults today so the client can integrate against it now; when
-    the admin columns land in (c), those override these values. Publishes costs and
-    grant sizes as data — the whole point of the no-deception rule is that a user
-    can see the real numbers, and there is no field here a coin could be cashed
-    out through."""
+
+    Deliverable (c) landed: `admin_panel.remote_config()` builds its `engagement`
+    block *over this function* and applies the operator's `app_remote_config` row
+    on top, so the numbers a client sees are the shipped ones until a knob is saved
+    and the saved ones after. Three server-side enforcement sites still read this
+    module's constants rather than the row — `_enforce_rewarded_cap`
+    (`REWARDED_DAILY_CAP`), `record_engagement_day` (`STREAK_GRANTS_COINS`) and
+    `redeem_pass` (`PASS_LADDER[…]["coins"]`). `ad_grant(caps=…)` already takes the
+    overrides. Wiring the other three belongs with the route that owns each spend,
+    and it is not cosmetic: an operator who *lowers* a coin cost today publishes a
+    price more forgiving than the charge, which is the one direction the
+    no-deception rule does not tolerate. Publishes costs and grant sizes as data —
+    the whole point of the rule is that a user can see the real numbers, and there
+    is no field here a coin could be cashed out through."""
     return {
         "wallet": {
             "coin_per_rewarded_ad": COINS_PER_REWARDED_AD,
