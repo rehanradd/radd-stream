@@ -323,14 +323,20 @@ python3 -S Fast_Fetch/test_database.py    # 133 tests at the tip (was 124, was 7
 python3 -S Fast_Fetch/test_vidout.py      # 6 tests
 python3 -S Fast_Fetch/importers/test_host_resolvers.py   # 171 tests
 
-# The REAL gate is exactly what backend-ci.yml runs — 17 modules, one per invocation. As of
-# `9859b8a` those 17 are CI's own list; the two extra suites the older version of this block
+# The REAL gate is exactly what backend-ci.yml runs — 23 modules, one per invocation as of
+# `6bfbd5c`+ the admin/engagement registration. Count them from the workflow itself
+# (`grep -c 'run: python3 -S' .github/workflows/backend-ci.yml`), not from this line; this
+# number has rotted in this file more than once. As of
+# `9859b8a` those modules were CI's own list; the two extra suites the older version of this block
 # described (`importers/test_host_resolvers.py`, `importers/test_convert_mp4moviez.py`) are NOT
-# in CI and the 17th slot is not what this file used to claim:
+# in CI, and neither are the per-site `importers/test_<site>_import.py` suites — see the
+# "Deliberately EXCLUDED" paragraph in `backend-ci.yml` for why:
 #   test_database test_vidout test_catalog_v2 test_release_descriptor test_link_health
 #   test_link_state test_evidence_writeback test_api_v2 test_redact test_tiers
 #   test_catalog_api test_provenance_stamping test_merge_catalogs test_site_scout
-#   test_backup_manager test_usage_stats test_operator_isolation
+#   test_backup_manager test_usage_stats test_operator_isolation test_media_search
+#   test_migrate_search_indexes test_posts_query_plan test_adult_twin_probe
+#   test_admin_panel test_engagement
 # Measured 2026-10-29 at `9859b8a`: 17/17 rc=0, **791 tests, 0 failures**, and GitHub's own
 # `🐍 Backend CI — Stdlib Python` reported `completed success` on both `master` and `main` for
 # that sha and for `6f7e3a0` — so this list and this count are corroborated by the runner, not

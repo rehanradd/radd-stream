@@ -2943,3 +2943,42 @@ was gating; `54662d2` after the fifth gate was a capacity doc with no Python);
 `master`+`main` were
 fast-forwarded only onto a sha that had come back green, by the heredoc askpass. `/opt/radd-stream` untouched, no live `/api/data`, no `full=True`,
 no `/api/v1/stats` poll, no Gradle, no heavy run, **no service restart**, no production settings write.
+
+## q5 lane, 2026-10-30 — RzFlix's upstream is a yomovies JSON API, fzmovies got an importer but no crawl, and CI has 23 steps `[Q5-RZFLIX-FZMOVIES]`
+
+Base `6bfbd5c`, branch `q5-rzflix-fzmovies`, worktree `/tmp/q5_rzflix_lane`. Three relayed tasks, all answered in
+one commit; the honest headline is that **task B's crawl was refused by the gate, not skipped by me**.
+
+**A.** `docs/RZFLIX_APK_ANALYSIS.md` — static-only forensics on `RzFlix_Updated.apk` (119,744,040 bytes,
+`com.rflix.rflix`, Flutter **AOT**: read `lib/*/libapp.so`, the dex has no logic). It is a remote-config shell —
+`api.ringzstudio.com/apis/r.txt` serves 3 white-label profiles × 81 keys, and the catalog is
+`dataapi.yomoviesapk.com` flat JSON per rail (`/public/movies/*.json`, `/mm.json`, `/ss.json`, `/desihub.json`).
+**Not one of our sites** per `SITES.md`/`importers/`, and not importable: one probe → **403 Cloudflare Access**,
+so writing that importer would be credential replay. 17 "they do X, we do Y, adopt Z because…" ideas with the
+file each would land in; 3 refusals named (Honeygain resale, silent `apkUrl` self-update, displaying an
+`Adult.json` rail). 6 network requests total, hosts printed, `-m 15/20`, no credentials sent anywhere;
+`appTkn`/`secKey` recorded as names with values redacted. Nothing executed, no dex loaded, no pip.
+
+**B.** `Fast_Fetch/importers/import_fzmovies.py` + `test_import_fzmovies.py` (**72 OK, 1.3 s, offline**). Q4's
+gate is *code*: `crawl_blocked(load1≥4.0, MemAvailable<4000 MB, other crawlers, no --limit)`. Measured at push:
+`load1=7.70 MemAvailable=4104MB other_crawlers=0` → exit 3, **"crawl deferred, gate conditions not met"**. No
+`fzmovies.db` exists yet; the bounded command, its cost, and the number it answers are queued in
+`Fast_Fetch/CONTINUITY.md`. Per-site staging DB only, `unverified`/`redirect`/`is_temporary=1`, links stored and
+never followed. The site's traps were each measured: `onclick` forges a fake `href` (attribute-aware anchor
+tokenizer), size/hits live in a `<dcounter>` *after* the anchor, the year repeats inside `itemprop='name'`,
+metadata is schema.org **microdata** (no JSON-LD, no `og:*`).
+
+**C.** Chose **(1) — registered**, and it is now true: `test_admin_panel.py` + `test_engagement.py` are CI
+steps, `grep -c "run: python3 -S"` → **23**. They are offline tempfile-fixture suites, so option (2) was simply
+false. `importers/test_import_fzmovies.py` stays excluded *on purpose* and the workflow now says why — the
+parser carve-out is about third-party fixtures drifting, and registering one of six importer suites is not a rule.
+`AGENTS.md` claimed 17 modules; it is 23, with instructions to count from the workflow instead of trusting prose.
+
+**Fleet fact worth knowing before you add a file.** My first full local run was 22 green + `test_database.py`
+**rc=1**: that suite AST-walks *every* `*.py` under `Fast_Fetch/` and fails if any `*ADULT*` list literal in the
+tree holds a version word (`uncut`, `unrated`, `extended`…). A brand-new importer can therefore break a CI module
+it never imports, and the red X names `test_database.py`. Removed `"uncut"` from `ADULT_KEYWORDS`; my own test
+that *expected* "UNRATED uncUT" to flag was asserting the forbidden behavior and now asserts the law.
+
+**Still open / not done:** no crawl, no merge, no yomovies replay, `vip_monthly_pkr` 200 vs Q4's ₨250 ruling
+untouched (payments lane's files). `/opt/radd-stream` untouched, no restart, no tag, no Gradle, stdlib only.
