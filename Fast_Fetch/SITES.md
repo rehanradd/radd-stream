@@ -787,6 +787,7 @@ scrape anything on the "already scraped" list, check whether its site name is in
 | Filmywap | `https://filmywap.site` | `importers/import_filmywap.py` | §16 |
 | FilmyHit | `https://filmyhit.mobile` | `importers/import_filmyhit.py` | §17 |
 | KuttyMovies | `https://kuttymovies.wiki` | `importers/import_kuttymovies.py` | §18 |
+| TheMovieBox | `https://themoviebox.xyz` | `importers/import_themoviebox.py` | §25 — **metadata + trailer evidence only; no playable print is resolvable from this host** |
 
 ### Still blocked / dead — do not spend quota unless something changes
 
@@ -1105,3 +1106,81 @@ collapsed its 7 pilot episodes onto one key with 7 episode releases.
 **Verdict.** Build. The vault answers `works / releases / watch_links /
 download_links / active vs dead`; `download_links` is structurally 0 because the
 broadcaster publishes no download mirror, not because one was dropped.
+
+## 25. TheMovieBox (`themoviebox.xyz`) — measured 2026-10-29/30
+
+**Staging DB:** `/home/ubuntu/radd-stream-data/themoviebox.db` · **Importer:** `Fast_Fetch/importers/import_themoviebox.py` · **Tests:** `Fast_Fetch/importers/test_themoviebox_import.py` (44, offline) · **Blueprint:** `/home/ubuntu/radd-stream-data/themoviebox_blueprint.json` (revised; the scout's original claims were wrong and are recorded in its `notes`)
+
+**What it actually is.** A Nuxt 3 SSR skin over the Aoneroom/AutoPlay backend
+family. The page payload is not HTML to regex over — it is `__NUXT_DATA__`, a
+flat JSON pool where every container occupies an integer slot and every member is
+an index back into that pool (negative indices are out-of-band: `-1` None,
+`-2` hole, `-3` NaN, `-4`/`-5` ±Inf, `-6` −0). `unflatten()` rebuilds it; that
+part was already correct and is verified against live captures.
+
+**Discovery — the scout got this wrong twice.**
+- `/sitemap.xml` is a real **HTTP 404** (12 attempts; one answer was a
+  130,846-byte HTML page). There is no XML path at all.
+- The catalog is a **public unauthenticated JSON feed**:
+  `POST https://h5-api.aoneroom.com/wefeed-h5api-bff/subject/filter`
+  `{"page": N, "perPage": 50, "subjectType": 1}` → 200, `data.items[]` full
+  subject objects (`resource: null`), `data.pager {hasMore, nextPage,
+  totalCount: 1000000}`. Headers: UA + `Content-Type: application/json` +
+  `Origin`/`Referer: https://themoviebox.xyz`. `subject/search` requires a token
+  and is not used.
+- `subjectType`: **1 = movie, 2 = series, 6 = music mixes** ("Best of X — 2 Hour
+  Mix"). Measured over 200 unfiltered items: type 2 ×176, type 6 ×24. Type 6 is
+  rejected at build time.
+- Detail route is `/detail/<detailPath>` (read from `href="/detail/…"` anchors).
+  `/web/movie/<slug>` is a 404 that costs 16 connections to prove.
+
+**Why there are no playable prints.** On every page — feed item and detail page
+alike — `subject.detailUrl`, `sniffUrl`, `sourceUrl` are empty strings, `dl` is
+`null`, and `resource.seasons[].resolutions[]` names 360/480/1080 **without any
+URL** (`postTitle: "Matchbox-1080P"`). The play code lives in a lazy route chunk,
+not the entry bundle (`DmZbB5q6.js`, 579,753 B). The only mp4 in any page is
+`trailer.videoAddress.url`, served from the **same** `macdn.aoneroom.com` edge
+with the **same** `-ld/-sd/-hd.mp4` filename shape — so nothing but graph
+position distinguishes a trailer from a feature. The importer prunes by key
+(`trailer`, `stills`, `gif`, `preview`) and then drops, unconditionally, any URL
+not on the site's own media hosts.
+
+**Transport.** ~31% TLS handshake success to the CloudFront edge (HTTP/2 5/16,
+HTTP/1.1 3/8, independent of the 4 A records and of HTTP version). That, not a
+block, is why a full crawl is not schedulable from this host today; a live run
+must be bounded and must never start above load 4.
+
+**Data model rules the live captures forced:**
+- `season: 0` with `seasons: [{se: 0, maxEp: 0}]` is the site's "not a series"
+  sentinel. Deriving `media_type` from field presence made every film a series;
+  `subjectType` is authoritative.
+- A dubbed print is a **separate subject** with the same title and year
+  (`dubs[].detailPath`), so `canonical_key` collides across dubs — identity is
+  `subjectId → detailPath → title`, and the ~30 repeated subject dicts on one
+  page collapse to one row.
+- Artwork is an object, not a string: `cover.url`, `image.url`, `thumbnail`,
+  `blurHash`, `avgHueLight/Dark`. Ratings are `imdbRatingValue`/`imdbRate`;
+  languages are `subtitles` + `dubs[].lanName`; country is `countryName`.
+- One detail page yields **one** work. A measured page returned 19 records before
+  the fix; 18 were cast members and banners (`staffList`, `cast`).
+- A page with a titled subject and no print is **written** and marked crawled
+  (`metadata_only`); only a page naming no work at all is an error (`no-subject`,
+  retryable). A 429 keeps the row queued without consuming an attempt.
+
+**Two real defects the new suite caught** (both fixed, both would have shipped):
+1. `_direct_media_urls` only narrowed the URL list *if* at least one URL was on
+   the edge, so a page whose only mp4 was an ad or a studio trailer staged that
+   foreign URL as the film's playable print — a 2-minute ad recorded as a feature.
+2. `harvest_catalog` held its own write transaction and called `export_staging`,
+   which opened a **second** connection to the same file; SQLite waited the full
+   `timeout=60` and raised `database is locked` — every live harvest would have
+   died at its first 20-row batch. `export_staging` now accepts `conn=` and reuses
+   the caller's connection.
+
+**Honest verdict.** MovieBox is a **metadata + trailer-evidence** source, not a
+playable-source site, from this host at this time. Its value is real — a
+1,000,000-item feed with cover art, IMDb rating, run time, genre, subtitle and
+dub languages and adult flags, plus a recorded "a 1080p print exists and we
+cannot yet reach it" — but no `sources` row may be written for a print we have
+never resolved. Do not list it as scraped-and-playable anywhere.
+
