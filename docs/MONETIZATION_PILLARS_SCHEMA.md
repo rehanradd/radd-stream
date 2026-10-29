@@ -33,11 +33,12 @@ feed the ledger's earn arithmetic. No double-definition.
 
 ## 1. Grounding — measured facts on tip `62e7eff` (do not re-assume; re-measure)
 
-1. **`MONETIZATION_FIELDS` is 17 fields** (`admin_panel.py:1070`, re-measured on this base; `RADD_RELAY…`
-   R9's `:924-953` was an earlier base) with `vip_monthly_pkr` default **200** (`:1075`);
-   `remote_config()` (`admin_panel.py:1392`) publishes `vip` + `ads` blocks and **no** `wallet`/`streak`/
-   `passes`/cadence keys. So the pillars are genuinely absent on the tip (an earlier `q5-monet-fields`
-   branch added cadence/wallet/pass keys but was **never merged**).
+1. **`MONETIZATION_FIELDS` was 17 fields** at `62e7eff` (`admin_panel.py:1070` on that base;
+   `RADD_RELAY…` R9's `:924-953` was an earlier base) with `vip_monthly_pkr` default **200** (`:1075`);
+   `remote_config()` (`admin_panel.py:1392`) published `vip` + `ads` blocks and **no** `wallet`/`streak`/
+   `passes`/cadence keys. So the pillars were genuinely absent on the tip (an earlier `q5-monet-fields`
+   branch added cadence/wallet/pass keys but was **never merged**). Deliverable (c) took that tip and
+   made the tuple **33 fields** (§11).
 2. **`Fast_Fetch/usage_stats.py` already treats `coin_granted` / `rewarded_completion` as
    client-reported *telemetry*** (`:293`, `:112-113`, `:126-127`). Telemetry is analytics, not money:
    the route that ingests it must **not** create a balance. This is the single reason the wallet here is
@@ -170,8 +171,9 @@ who has never opened `/admin` still ships the capped behaviour:
 `engagement.CAPS_DEFAULT` is the single literal source; `resolve_caps(overrides)` merges a caller's dict
 (the values that will come from `app_remote_config` in (c)) over these defaults and **bounds** them
 (non-negative, sane maximum) so a bad save cannot make the cadence "0 = unlimited" — a cap of 0 is
-interpreted as "use the default," never "serve constantly." The app reads the resolved caps through
-`/api/v1/app/remote-config` under an `ads.cadence` block (see §6).
+interpreted as "use the default," never "serve constantly." The app reads the resolved caps from
+`/api/v1/app/remote-config` under **`engagement.cadence`** — the key `engagement.remote_view()` already
+publishes, which is why (c) did not create a second place for them (§11 has the landed shape).
 
 ---
 
@@ -211,11 +213,14 @@ The ladder lives in **this module** (not `payments.py`), as a published price ta
 
 ## 6. Read path (`/api/v1/app/remote-config`) and write path (admin) — sequencing
 
-- **Read (what a phone gets):** `admin_panel.remote_config()` is extended — **in (c)** — to publish an
-  `engagement` object: `{wallet: {coin_value_pkr, redeem_costs, expiry}, streak: {grants, day_boundary_hour,
-  tz}, passes: {day, weekend, monthly_vip pkr+coins}, ads.cadence: {…25/12/240}}`. Until (c),
-  `engagement.remote_view()` (same module) exposes these **from defaults** so the client can integrate
-  against the shape now; the admin knobs simply override defaults later.
+- **Read (what a phone gets):** `admin_panel.remote_config()` publishes an `engagement` object built
+  **over `engagement.remote_view()`** with the operator's row applied on top — see §11 for the landed
+  shape, key by key. The design note that mattered: (a)'s draft sketched a *new* block (`wallet` /
+  `streak` / `passes` / `ads.cadence`) invented in the settings module. What landed instead reuses the
+  projection `engagement.py` had already promised at `/api/v1/app/remote-config.engagement`, because two
+  copies of the shape is two shapes, and the one failure a price body cannot have is disagreeing with the
+  ledger that fills it. Until the knobs existed, `remote_view()` exposed these **from defaults** so the
+  client could integrate against the shape now.
 - **Write (what the operator does):** the admin *edit* of those caps/grants is the `MONETIZATION_FIELDS`
   addition in (c). Per-account **state** (balance, streak, cadence) is **not** operator-editable except
   through the audited admin grant/refund action (`reason='admin_grant'`, `source='admin'`), which writes
@@ -280,3 +285,88 @@ carries a `python3 -S Fast_Fetch/engagement.py` self-check (temp file, no port) 
 - Do **not** add a redirect, CAPTCHA, or timed path anywhere (shortener law).
 - Do **not** run anything against the live catalog or `/api/data`; shape is measured on fixtures.
 - Do **not** build the withdrawal/"fake currency" scheme the plan §A rejects.
+
+---
+
+## 11. Deliverable (c) as landed — the admin knobs, measured on this base
+
+Line numbers below are on the (c) base tip `1d483ee` plus this diff; re-measure before quoting them.
+
+**`MONETIZATION_FIELDS` is 33 fields** (`admin_panel.py:1076` → `:1147`), and the row gained the 16
+engagement columns additively through the same `_ensure_monetization()` path (`PRAGMA table_info` guarded
+`ALTER TABLE ADD COLUMN`, `admin_panel.py:1184` for the one column builder both CREATE and the migration
+use). A 17-column row already on disk picks every one of them up with its shipped default and keeps what
+the operator saved — `test_admin_panel.test_an_older_settings_row_gains_the_engagement_columns`.
+
+| Key | Kind | Default | Admin label says what 0 does |
+|---|---|---|---|
+| `ad_preroll_min_gap_minutes` | `_INT` `"count"` | 25 | `0 = default 25` |
+| `ad_native_card_every_posters` | `_INT` | 12 | `0 = default 12` |
+| `ad_app_open_min_gap_minutes` | `_INT` | 240 | `0 = default 240` |
+| `coin_per_rewarded_ad` | `_INT` | 5 | 0 → default |
+| `rewarded_daily_cap` | `_INT` | 10 | 0 → default |
+| `coin_redeem_day` / `_weekend` / `_monthly` | `_INT` | 30 / 70 / 200 | 0 → default (never a free pass) |
+| `streak_day1_coins` / `streak_day3_coins` | `_INT` | 10 / 30 | 0 → default |
+| `streak_day7_pass_hours` | `_INT` | 24 | 0 → default; published as `day7_pass_seconds` |
+| `streak_day_boundary_hour` | `_INT` | 4 | **0 is legal — midnight**, not a sentinel |
+| `streak_tz` | `_TEXT` | `Asia/Karachi` | blank → `Asia/Karachi` (see the `DEFAULT ''` note below) |
+| `pass_day_pkr` / `pass_weekend_pkr` / `pass_monthly_vip_pkr` | `_MONEY` | 20 / 50 / **250** | published as stored |
+
+Four things this diff had to decide, and the answer each got:
+
+1. **A new kind, not a re-typed one.** `_INT = "count"` (`:1060`) because a cadence, a poster count, a
+   coin cost and a rollover hour are whole numbers that are neither money (`_MONEY`) nor a flag
+   (`_FLAG`), and the kind string is display metadata. `_column_ddl` emits
+   `INTEGER NOT NULL DEFAULT <n>`, `_validated` refuses a bool, a negative, a non-number, and anything
+   above its ceiling.
+2. **0 means default, and the ceiling is the consumer's.** `_MAX_INT` (`:1161`) refuses a paste that
+   cannot be a real setting; `_INT_MAX` (`:1169`) then refuses, *on the way in*, the four values the
+   consumer would otherwise rewrite behind the operator's back — `engagement.CAP_MAX`'s 1440 minutes and
+   5000 posters, and `_clamp_hour`'s 0..23. Without that, the card, the public body and the ledger could
+   show three different numbers for one setting. A pinned test compares the two ceilings.
+3. **The `TEXT DEFAULT ''` trap.** `_column_ddl` creates every text column `DEFAULT ''` whatever the
+   field spec says, so a fresh row's `streak_tz` stores `''` and a non-empty spec default would be a lie
+   if it were silently substituted. `_engagement_public` answers `zone or <spec default>`: the empty
+   string means "never typed", and the number the client gets is the zone
+   `engagement._day_bucket()` will actually roll days with. No column DDL changed.
+4. **The price asymmetry is deliberate.** A cadence and a coin cost are resolved through the consumer's
+   own functions (`engagement.resolve_caps`) because a consumer clamps them; a PKR price is published
+   exactly as stored, the way `vip.monthly_pkr` already is, because nothing clamps a price. And
+   `pass_monthly_vip_pkr` 250 is **not** `vip_monthly_pkr`: pass and membership are two products with two
+   knobs, and `test_the_pass_price_is_not_the_subscription_price` keeps them that way.
+
+**Shape authority.** `remote_config()["engagement"]` **is** `engagement.remote_view()` with the row
+applied over it (`_engagement_public`, `:1505`), so on an untouched deployment the two dictionaries
+compare equal — one assertion, in
+`test_admin_panel.test_the_engagement_block_is_the_ledgers_own_projection`, that covers the shape *and*
+every number, and fails if either module grows a price the other does not publish. `ads.cadence` was
+dropped from §4/§6's sketch for that reason: `engagement.cadence` is what the ledger module promised
+first.
+
+**Not wired yet, and this is the honest boundary.** Three of the published numbers are still read from
+`engagement`'s own constants on the *server-side enforcement* path, so an operator who changes them gets
+a corrected **display** and an unchanged **enforcement** until the route that spends them passes the row
+through. Measured at `1d483ee` + this diff:
+
+- `engagement.py:534` — `_enforce_rewarded_cap` compares against the `REWARDED_DAILY_CAP` constant, not
+  `rewarded_daily_cap`.
+- `engagement.py:710` — `record_engagement_day` grants `STREAK_GRANTS_COINS[new_current]`, not
+  `streak_day1_coins` / `streak_day3_coins`.
+- `engagement.py:753` — `redeem_pass` charges `PASS_LADDER[plan]["coins"]`, not `coin_redeem_*`.
+
+`ad_grant(caps=…)` already takes the overrides, so the three cadences bind the moment a route hands it
+the row. The fix for the other three is a caller-side parameter (or a settings reader in the route),
+**not** a change to what this diff published — and it must land *with* the route that owns each spend,
+which is why it is a follow-up brief rather than an edit smuggled into a settings commit. **The gap is
+not cosmetic, and the direction matters:** an operator who *lowers* `coin_redeem_day` today shows a phone
+a price more forgiving than the 30 coins the ledger still charges, which is exactly the deception §A
+forbids. Until the spend route reads the row, these three knobs are a **display** surface and the safe
+operator action is to leave them at their defaults.
+
+**Gate.** `test_admin_panel.py` 65/65 (7 of them new), `test_engagement.py` 25/25 on a printed `tempfile`
+fixture, `test_payments.py` 85/85, `test_operator_isolation.py` 28/28 — all offline, `-S`, stdlib, on a
+box at load 6. `test_download_endpoint.py` fails **2 of 20** (`test_operator_port_accepts_a_plain_id_and_returns_the_resolved_url`,
+`test_operator_port_is_never_monetized_by_a_shortener`) — reproduced **identically on the clean base
+`1d483ee` in its own worktree**, so it is not this diff; it is a pre-existing failure in a module that is
+not in CI's 17, and it belongs to the download lane. Neither path reads or writes the live catalog,
+`/api/data`, or `/api/v1/stats`; `radd-stream.service` was not touched.

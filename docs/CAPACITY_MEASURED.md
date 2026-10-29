@@ -94,6 +94,30 @@ accidentally DoS it by hammering `/stats`.
 
 ## 4. The honest answer to "how many users can this VM handle"
 
+### 4a. First, the cold-start tax, because it is the user-facing number
+
+Measured at 01:40, same route `/api/v1/posts?limit=3`, serially, load 7.7:
+
+| Call | Path | Latency |
+|---|---|---|
+| 1 | edge `http://92.4.95.252` | **18.12 s** |
+| 2 | edge `http://92.4.95.252` | **0.71 s** |
+| 1 | loopback `127.0.0.1:8080` | 0.65 s |
+| 2 | loopback `127.0.0.1:8080` | 0.45 s |
+
+The route is identical and the payload is 1,877 B, so the 18 seconds are not the query plan and
+not nginx: they are **cold pages**. The catalog is 6.4 GB on a box with 11.9 GB of RAM, so the
+rows a request needs are only in the page cache if something read them recently. The first
+request after idle pays for pulling them off disk; everything after it is fast.
+
+**What that means for a real user:** the app's very first tile after the box has been quiet is an
+8–18 second wait. Every capacity number below is a *warm* number, and warm numbers flatter a box
+like this. The fix is not a faster query — it is keeping the cache warm (a scheduled cheap read,
+or a smaller working set), and it belongs to whoever owns the deploy, not to an agent to schedule
+unilaterally.
+
+### 4b. Warm throughput arithmetic
+
 Arithmetic, from section 2 and 3 only:
 
 - **Ceiling on list traffic:** 1 core ÷ 0.132 s CPU = **≈7.5 browse requests/second** served
@@ -109,14 +133,16 @@ Arithmetic, from section 2 and 3 only:
   redirects to the hoster, so the VM serves ~11.6 KB per browse and the media bytes never
   touch it. RAM and disk (11.9 GB / 100 GB free) are not binding at this scale either.
 
-**Read the caveat with the number.** These ceilings assume the box is *given to production*.
-Today it is 1.7× oversubscribed by our own agent fleet, so the real current capacity is lower
-than the table above, and the honest status line is:
+**Read the caveat with the number.** These ceilings assume the box is *given to production* and
+that requests arrive **warm**. Today it is 1.7× oversubscribed by our own agent fleet, and the
+cold-start tax in §4a hits the first request after any idle period, so the real current experience
+is worse than the table above. The honest status line is:
 
-> This VM can serve roughly tens of thousands of browse requests per hour of pure list
-> traffic, or roughly 1,500 daily users at a 5 % concurrency assumption — **but not while
-> five agent sessions are running on it, and not with `/api/v1/stats` still scanning.**
-> Send no real users here until task #10 stamps the safe counters and the fleet is idle.
+> This VM can serve roughly tens of thousands of warm browse requests per hour, or roughly 1,500
+> daily users at a 5 % concurrency assumption — **but not while five agent sessions are running on
+> it, not with `/api/v1/stats` still scanning, and not without an answer to the 8–18 second cold
+> first request.** Send no real users here until task #10 stamps the safe counters, the fleet is
+> idle, and the cold-start tax is measured as fixed rather than assumed.
 
 ## 5. What was deliberately NOT measured
 
@@ -181,3 +207,38 @@ This is **not a defect and not the adult leak**; it is two different scopes, exa
 production catalog carry health evidence. `stats` reporting `active_sources: 0` is *accurate*.
 Any quality ladder, speed ranking or "fastest server" promise is currently unmeasured, and a
 bounded probe sweep is the prerequisite for claiming otherwise.
+
+## 8. The two product invariants, re-proved at the public edge tonight
+
+Not from code — from `http://92.4.95.252` at 01:35–01:40, four requests total, load 7.7.
+
+**Provenance: a customer cannot learn where a title came from.** `/api/v1/posts?limit=3` list
+rows and `/api/v1/posts/1` detail were both walked for any key matching `source_site|site|hoster|
+server|provider|origin|upstream|embed|channel` and for any known site name as a substring.
+**Provenance keys: none. Site names: none.** The detail payload's keys are
+`backdrop_urls, clean_title, content_type, country, genres, id, imdb_id, imdb_rating, industry,
+is_animated, language, option_groups, poster_url, releases, season_artwork, seasons, synopsis,
+title, tmdb_id, work_ref, year`, and a release carries only
+`band, codec, episode, id, label, languages, post_id, quality, quality_label, release_title,
+season, size, sources`. Every URL inside the payload resolves to exactly one host:
+
+```
+distinct hosts inside the detail payload: {'92.4.95.252'}
+```
+
+including `poster_url`, which is proxied through our own `/api/v1/art?id=…&k=poster&n=0` rather
+than pointed at a CDN. Playback handles are opaque (`backup_handles: ['AdPyZ_tMJD-TFP-QhA', …]`).
+One substring match on `ary` was my own false positive — the word is `is_temporary`, which is
+health metadata, not provenance. **This is the "one player plays everything, nobody knows which
+site it came from" pillar, measured true on the deployed build.**
+
+**Adult denial: still absolute at the edge.** `/api/v1/posts/159` → **404 (45 B)** while
+`/api/v1/posts/158` → **200 (99,004 B)** on the same call sequence, and `/api/v1/m3u?id=159` →
+**403** — nginx refuses that route entirely rather than distinguishing it, which is the correct
+shape: a flagged row is indistinguishable from a row that never existed.
+
+**One honest gap in this proof:** 99,004 bytes for a single detail payload is *large*, and the
+exposure question this file cannot answer is the key-level one — a flagged work reachable through
+an unflagged twin on the same `canonical_key`. Probing that needs the twin-count scan from
+`docs/ADULT_TWIN_PROBE.md`, and that scan is a heavy read at load 7.7, so it stays queued for a
+quiet window rather than being run to make this section look complete.
