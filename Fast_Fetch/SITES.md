@@ -1050,3 +1050,58 @@ Every row is marked `is_animated=1` because the site is anime-only.
 
 **Verdict.** Build. Series identity collapses per show, episodes stay in
 `releases.season_number/episode_number` where the page states them.
+
+## 24. Hum TV (`hum.tv`) — official broadcaster catalog
+
+**Staging DB:** `/home/ubuntu/radd-stream-data/humtv_staging.db` · **Importer:** `Fast_Fetch/importers/import_humtv.py`
+
+**Licensing — measured 2026-10-29, and it decides this lane.** `hum.tv` is HUM
+TV's own WordPress site, not an aggregator: `robots.txt` disallows only
+`/wp-admin/` and advertises `sitemap_index.xml`, the WP REST catalog is open, and
+every episode page plays from a single embedded iframe pointing at the official
+`@HUMTV` YouTube channel. `youtube.com/oembed` for those embeds returns
+`author_name: "HUM TV"` / `author_url: https://www.youtube.com/@HUMTV`. There are
+**no download mirrors** on the site; the only source rows stored are those
+official embed pointers (`playback_type=iframe`, `service=youtube`). This is the
+rightsholder's own catalog played from the rightsholder's own channel — not a
+second copy of someone else's pirated metadata, which is why it was chosen over
+the ApneTV lineage (ApneTV is a pirated aggregator and additionally answered 403,
+521 and DNS failure during scouting).
+
+- **Discovery:** `https://hum.tv/wp-json/wp/v2/posts?per_page=100&page=N&_fields=date,slug,link,title`
+  — 57 pages, `X-WP-Total: 5625`. The REST `date` is the post date; it is the only
+  year signal on the page (no JSON-LD, no year in `og:title`).
+- **Page shape:** `og:title` (HTML-entity encoded — `&#8211;` is the dash),
+  `og:image`, one `<iframe>`; embeds arrive as
+  `youtube.com/embed/<id>?…`, `youtu.be/<id>?si=…&#038;embed=true` or
+  `youtube.com/watch?v=<id>`. Entity decoding is mandatory or the episode suffix
+  does not split off the title.
+- **Title grammar, all three measured forms:** `Hurmat – Episode 06`,
+  `Aakhir Kab Tak Episode – 01` (dash *after* the word), `Ishq Murshid Episode 07`
+  (no dash at all). Season appears as `… – S1 – Episode 12`.
+- **Identity:** one post per work — `generate_canonical_key(title, series_year)`
+  — with one release per episode page (`season_number`/`episode_number`) and the
+  official embed as its source. `series_year` is the earliest post year for that
+  slug base across the queue, so a drama that starts in December and runs into
+  January stays one work instead of splitting into two canonical keys. 26 of
+  1,474 slug bases cross a calendar year; 5,624 of 5,625 slugs are descriptive
+  (the one numeric-only slug, `831-2`, cannot join the map and keys on its own
+  date).
+- **Discovery side effects:** the sitemap/REST still lists stale pages
+  (`sultan-salahuddin-ayyubi-s1-episode-1` now 404s); a 404/410/451 is parked
+  with its failure ledger, a page with no player stays retryable, and a 429
+  pauses the queue without consuming an attempt.
+- **Adult flag:** `fast_fetch.is_adult_title(title, slug)` only — no local
+  pattern list, and no `unrated`/`uncut` vocabulary (qoder5 owns that term
+  centrally).
+- **Mechanics:** one worker, `nice -n 19 ionice -c3`, memory floor checked at
+  start and after every 20-page flush (stop below 2,500 MB MemAvailable or
+  800 MB SwapFree). Nothing is ever written outside `humtv_staging.db`.
+
+**Pilot (25 pages).** 25 pages → 4 posts, 25 releases, 25 sources, 0 failed,
+0 no-player — the four posts are four distinct shows, and `Aakhir Kab Tak`
+collapsed its 7 pilot episodes onto one key with 7 episode releases.
+
+**Verdict.** Build. The vault answers `works / releases / watch_links /
+download_links / active vs dead`; `download_links` is structurally 0 because the
+broadcaster publishes no download mirror, not because one was dropped.
