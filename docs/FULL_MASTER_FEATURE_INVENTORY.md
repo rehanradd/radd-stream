@@ -1159,8 +1159,9 @@ title cleaner and matcher.
 
 | Item | Count | Notes |
 |---|---|---|
-| Backend test modules | 44 | stdlib-only |
-| Backend `def test_` | 1,039 | static count, not re-run here |
+| Backend test modules | **68** (48 in `Fast_Fetch/`, 20 in `Fast_Fetch/importers/`) | re-counted 2026-10-29 22:5x at `5c331d6` with `find . -name 'test_*.py' -not -path './.git/*' \| wc -l`; the row previously said 44, and `AGENTS.md` separately claimed 60 then 66 on the same day — this count has gone stale twice in one day, so re-measure it rather than trusting any number in a doc |
+| Backend tests **actually executed** by CI's gate | **791, 0 failures** | the only number here that is a measurement of behavior rather than a `grep -c`: CI's 17-module list run at `9859b8a`, locally 17/17 `rc=0` and independently `completed success` on the hosted runner for both `master` and `main`. Not comparable to the static `def test_` count below |
+| Backend `def test_` | 1,039 | static count at `27fc043`, not re-run here, and it counts function definitions across all 44-then-68 modules rather than executed tests |
 | Backend importers | 18 | per-site |
 | Android Kotlin files | 132 | `app/src/main` |
 | Android test files | **81** (80 with `@Test`) | re-counted 2026-10-29 under `App/app/src/test`; the row previously said 47/46 |

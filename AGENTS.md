@@ -224,8 +224,8 @@ Verify only whether the two configured variable names are present; never read or
 Every agent — no matter how short the session — MUST do this before ending:
 
 ### For Backend Sessions:
-1. Run `python -S Fast_Fetch/test_database.py` (must be 124 tests passing; measured 2026-10-29)
-2. Run `python -S Fast_Fetch/test_vidout.py` (must be 6/6)
+1. Run CI's **17-module** list, one invocation each (791 tests, 0 failures at `9859b8a`).
+2. `test_database.py` alone is **133** at the tip and `test_vidout.py` is 6/6 — but do not substitute that 3-module quick gate for item 1.
 3. Append a session log to `Fast_Fetch/CONTINUITY.md`
 4. Push with Git over HTTPS using the temporary askpass helper in [`ORACLE_DEPLOYMENT.md`](ORACLE_DEPLOYMENT.md); do not use the legacy per-file API push scripts
 
@@ -252,7 +252,7 @@ CI's, and can silently test deleted code.
 | Android App: server setup, metadata catalog, search | ✅ Implemented; device verification pending | Phase 1 |
 | Android App: details and playback | ✅ Implemented (Media3 playback, favorites, keeps, VIP screen); device verification pending | Phase 2 |
 | GitHub Actions | ✅ **Enabled and running** — `/repos/rehanradd/radd-stream/actions/permissions` returns `{"enabled": true, "allowed_actions": "all"}` (measured 2026-10-29 03:54 host time; 40 runs recorded). The earlier "⛔ disabled at the account level" line in this file was **wrong** and is retired. All three repo-root workflows are `state=active`: `🐍 Backend CI`, `🔨 CI — Android Build & Test`, `🚀 Release — Sign & Publish APK + AAB`. The copies under `App/.github/workflows` are inert (GitHub only reads repo-root). | Gate is live |
-| CI health (both sides) | 🐍 **Backend CI is GREEN** — `completed success` on both `master` and `main` at `f0c1ca3`, and green on every adult-fix commit (`ab78849`, `8ad9862`, `6b28e48`, `f6637c9`, `c4a1302`). 🔨 **Android CI IS NOW GREEN — FIRST TIME EVER** — measured 2026-10-29 at `2caadb3`, `completed success` on **both** `master` and `main` (run `40874380668`); all 14 steps green, including the single combined `./gradlew :app:assembleDebug :app:testDebugUnitTest :app:lintDebug` step, `BUILD SUCCESSFUL in 7m 2s`, `:app:testDebugUnitTest` executed, no lint errors emitted. The previous "still RED: 636 tests / 9 failed / 23 lint errors" line was a **misdiagnosis**: every fix for it existed in `5446771`, but that commit was **local-only on a `master` that had diverged** from `origin/master` (`git merge-base --is-ancestor 5446771 origin/master` → NO; 2 local-only vs 26 remote-only) and `ci.yml` triggers on `App/**`, so nothing had fed it since `11742e0` (2026-10-28T21:21, failure). **It was unfed, not red** — I cherry-picked it onto `f0c1ca3` as `2caadb3` and pushed to both refs. The trap that hid this stays true: `ScreenSnapshotTest` and `PosterCardProvenanceTest` are excluded from every local arm64 run (Robolectric #9166), so only the hosted runner can judge them. `tags: 0`, `releases: 0` still, and signing is genuinely blocked on the four absent keystore secrets (see the measured note in Secrets above) — a debug APK is available from CI meanwhile. | Release blocked on owner secrets only |
+| CI health (both sides) | 🐍 **Backend CI is GREEN** — `completed success` on both `master` and `main` at `f0c1ca3`, and green on every adult-fix commit (`ab78849`, `8ad9862`, `6b28e48`, `f6637c9`, `c4a1302`). 🔨 **Android CI IS NOW GREEN — FIRST TIME EVER** — measured 2026-10-29 at `2caadb3`, `completed success` on **both** `master` and `main` (run `40874380668`); all 14 steps green, including the single combined `./gradlew :app:assembleDebug :app:testDebugUnitTest :app:lintDebug` step, `BUILD SUCCESSFUL in 7m 2s`, `:app:testDebugUnitTest` executed, no lint errors emitted. The previous "still RED: 636 tests / 9 failed / 23 lint errors" line was a **misdiagnosis**: every fix for it existed in `5446771`, but that commit was **local-only on a `master` that had diverged** from `origin/master` (`git merge-base --is-ancestor 5446771 origin/master` → NO; 2 local-only vs 26 remote-only) and `ci.yml` triggers on `App/**`, so nothing had fed it since `11742e0` (2026-10-28T21:21, failure). **It was unfed, not red** — I cherry-picked it onto `f0c1ca3` as `2caadb3` and pushed to both refs. The trap that hid this stays true: `ScreenSnapshotTest` and `PosterCardProvenanceTest` are excluded from every local arm64 run (Robolectric #9166), so only the hosted runner can judge them. `tags: 0`, `releases: 0` still, and signing is genuinely blocked on the four absent keystore secrets (see the measured note in Secrets above) — a debug APK is available from CI meanwhile. **Re-measured 2026-10-29 22:5x via `/actions/runs?per_page=6`** (91 runs total): 🐍 Backend CI is `completed success` on **both** `master` and `main` at `9859b8a` and at `6f7e3a0` — i.e. green on the 17-module list this file now documents, judged by the hosted runner and not only by this box. 🔨 Android is green on `master` (`2caadb3`) but **red on the live app lane**: branch `q1-ad-cadence` failed its combined Gradle step at `99472e0` (run `40917741872`, step `🏗️🧪🔍 Gradle: debug APK + unit tests + lint (single invocation)`, no annotations attached — read the job log, not the summary) with a retry `in_progress` at `217e8cd`. A green `master` does not mean the app lane is safe to merge. | Release blocked on owner secrets only |
 
 The current Oracle host and its HTTP-only limitations are documented in
 [`ORACLE_DEPLOYMENT.md`](ORACLE_DEPLOYMENT.md). The backend is **already deployed there and is the
@@ -275,21 +275,32 @@ you need to know whether CI can run, query `/actions/permissions` and print what
 # From repo root: /opt/radd-stream  (Oracle VM)
 
 # Run offline tests — one module per invocation; this runner ignores extra names.
-# There are 66 `test_*.py` modules under Fast_Fetch/ and Fast_Fetch/importers/ (measured 2026-10-29);
-# these three are the standing push gate.
-python3 -S Fast_Fetch/test_database.py    # 124 tests
+# There are 68 `test_*.py` modules under Fast_Fetch/ and Fast_Fetch/importers/ — 48 at the
+# Fast_Fetch/ root and 20 in importers/ (measured 2026-10-29 at `5c331d6` with
+# `find . -name 'test_*.py' -not -path './.git/*' | wc -l`; re-measure it, do not trust this
+# number, it has already gone stale twice in one day).
+# These three are the standing *quick* gate — they are NOT what CI judges.
+python3 -S Fast_Fetch/test_database.py    # 133 tests at the tip (was 124, was 76 — re-count)
 python3 -S Fast_Fetch/test_vidout.py      # 6 tests
 python3 -S Fast_Fetch/importers/test_host_resolvers.py   # 171 tests
 
-# The REAL gate is what backend-ci.yml runs — all 15 modules, one per invocation, plus the two
-# importer suites the owner's own gate script adds on top (`importers/test_host_resolvers.py`
-# and `importers/test_convert_mp4moviez.py`) — 17 invocations, 843 tests measured 2026-10-29:
+# The REAL gate is exactly what backend-ci.yml runs — 17 modules, one per invocation. As of
+# `9859b8a` those 17 are CI's own list; the two extra suites the older version of this block
+# described (`importers/test_host_resolvers.py`, `importers/test_convert_mp4moviez.py`) are NOT
+# in CI and the 17th slot is not what this file used to claim:
 #   test_database test_vidout test_catalog_v2 test_release_descriptor test_link_health
 #   test_link_state test_evidence_writeback test_api_v2 test_redact test_tiers
 #   test_catalog_api test_provenance_stamping test_merge_catalogs test_site_scout
-#   test_backup_manager
-# Measured 2026-10-29: the 3-module gate stayed green while CI was red for five pushes,
-# because it omits test_evidence_writeback.py and test_merge_catalogs.py. Run CI's list.
+#   test_backup_manager test_usage_stats test_operator_isolation
+# Measured 2026-10-29 at `9859b8a`: 17/17 rc=0, **791 tests, 0 failures**, and GitHub's own
+# `🐍 Backend CI — Stdlib Python` reported `completed success` on both `master` and `main` for
+# that sha and for `6f7e3a0` — so this list and this count are corroborated by the runner, not
+# just by a local box. `test_usage_stats.py` is 94 tests and `test_operator_isolation.py` is 28;
+# run them with `RADD_USER_STATE_DB` pointed at a fixture, never the live state file.
+# Measured earlier the same day: the 3-module quick gate stayed green while CI was red for five
+# pushes, because it omits test_evidence_writeback.py and test_merge_catalogs.py. Run CI's list.
+# Note `test_all_sites.py` is deliberately excluded from CI (`backend-ci.yml:33`) — it is a live
+# 10-site network audit, not an offline test.
 
 # Live site audit (writes to temp DB)
 python Fast_Fetch/test_all_sites.py
