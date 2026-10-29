@@ -2561,13 +2561,19 @@ filter regression; it is two audited writes, and the arithmetic identity holds e
   live `app_remote_config` row reads 200 with `updated_at = 0`, i.e. the never-saved default, so
   fixing the code fixes the quote and **no production data write is authorized or needed**. q5 has
   the task. If any client code baked 200 in, it must read remote config instead.
-- **The real reason the 19:14 deploy happened, and it is a process change, not an incident:** every
-  worker lane's status line reads `/opt/radd-stream` (q1's reads `/opt/radd-stream/App`). The live
-  deployment tree is the lanes' workspace, so its dirt *is* production and production *is* the lanes'
-  drafts. All four got the same instruction tonight — snapshot the diff, make a worktree from
-  `475e1d4`, never edit/commit/reset `/opt/radd-stream` (task #26). Their next reported sha must come
-  from `/tmp/<lane>`; until I see that, #26 stays open and #19's "reproduce production from a ref"
-  problem is not actually solved by any restart.
+- **The real reason the 19:14 deploy happened, and it is a process change, not an incident — with one
+  claim of mine softened twenty minutes later.** Every worker lane's status line reads
+  `/opt/radd-stream` (q1's reads `/opt/radd-stream/App`), which is the CLI's launch directory; I took
+  that as proof the lanes edit production, and it is not. `git worktree list` shows **27 worktrees**,
+  including `/tmp/q1_ad`, `/tmp/q1_id`, `/tmp/q2_ledger`, `/tmp/q2_scen`, `/tmp/q3_admin`,
+  `/tmp/gate_q5` — so the qoder lanes do keep their commits off the live tree. What the live tree's
+  dirt actually is: drafts whose only copy is there (the App player/cache files match **no** lane
+  worktree I compared them against) plus one file that matches `/tmp/q2_ledger`, plus
+  `MONETIZATION_AND_FLEET_PLAN.md` at 43 lines *behind* the pushed version. The instruction to every
+  lane still stands and for a better reason than I first gave: the launch directory is not the
+  workspace, and the tree that systemd restarts into must be nobody's workspace. Verified state of
+  #26 is therefore "worktree discipline exists, live-tree residue does not belong to a lane we can
+  name" — and the residue is now snapshotted, not assumed.
 
 ### 22:10–22:35 — my own wrong claim corrected, the real account store measured, and a near-miss revert
 
