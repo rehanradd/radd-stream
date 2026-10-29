@@ -47,12 +47,11 @@ name: 🐍 Backend CI — Stdlib Python Tests
 #     - Fast_Fetch/test_admin_panel.py          (the operator panel's write gate: the
 #       loopback/remote peer rule, the closed admin-only verb vocabulary, refusing a
 #       field the edge would rewrite, refusing a non-numeric price, and writing nothing
-#       on refusal. Offline against a temp-file fixture catalog — it passes on this VM,
-#       where the same 65 tests take 266 s at load 6.9 because the assertions block on
-#       I/O rather than compute. On a hosted runner it is expected to be a fraction of
-#       that, but that fraction is NOT yet measured: the run that lands this line is the
-#       measurement, and if its step time is not green-and-fast the answer is to remove
-#       it again, not to declare the point moot.)
+#       on refusal. Offline against a temp-file fixture catalog. MEASURED, and it
+#       settles why this box was the wrong judge: the same 65 tests are 266.312 s here
+#       at load 6.9 and 1 s on the hosted runner (run 40954291359, step 21:03:47 ->
+#       21:03:48, success). The suite blocks on I/O under contention, not on compute —
+#       so a slow local module is not a slow module, and CI's timing is the record.)
 #
 #   Deliberately EXCLUDED:
 #     - Fast_Fetch/test_all_sites.py  — live 10-site network audit; needs the
