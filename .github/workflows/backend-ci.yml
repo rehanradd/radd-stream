@@ -56,13 +56,48 @@ name: 🐍 Backend CI — Stdlib Python Tests
 #       that ran while its host lock was free, two requests to one host in flight
 #       together, a host wedged after an exception, or two hosts serialising as a global
 #       stop all fail this. Offline and deterministic — 18 tests, no stopwatch needed)
+#     - Fast_Fetch/test_engagement.py        (the ad-cadence/coin/streak/pass ledger the
+#       admin knobs write to: the append-only coin ledger, the "0 means default" rule,
+#       and the local-day boundaries. Offline, tempfile fixtures, zero network. It was
+#       the unregistered half of the pair — test_admin_panel.py got its step on
+#       `396e476`; this suite asserts the semantics the panel's knobs hand to that
+#       ledger, so registering one without the other left the write gate gated and the
+#       thing it writes unjudged.)
 #
 #   Deliberately EXCLUDED:
 #     - Fast_Fetch/test_all_sites.py  — live 10-site network audit; needs the
 #       internet and would make CI flaky/non-deterministic.
-#     - test_<site>_import.py / per-site parser tests — several read fixture
-#       files whose layout changes with the site, so they are run by the
-#       scraper's own agent at edit time rather than gating every push.
+#     - importers/test_<site>_import.py and importers/test_host_resolvers.py —
+#       the per-site parser suites. They gate a parser against bytes captured
+#       from someone else's website, so their value is concentrated in the edit
+#       that changes that parser, and running them on every Fast_Fetch push
+#       would tie a green light to third-party page shapes that nobody in that
+#       push touched. They are run by the scraper's own lane at edit time, and
+#       importers/test_import_fzmovies.py (72 tests, measured offline in 1.3 s
+#       on 2026-10-30 — re-count it, do not trust this number) stays in that
+#       class on purpose even though its fixtures are inlined transcriptions and
+#       it needs no network: registering one importer suite and not the other
+#       five would be a rule no one can state.
+#
+#   WHY admin_panel/engagement ARE NOT COVERED BY THAT EXCLUSION: the site-parser
+#   carve-out is about fixtures that drift when *someone else's website* changes.
+#   These two suites assert against our own code and our own row shape, so a red X
+#   here is always a real regression and never a flake. They were unregistered and
+#   undocumented from the day they were written, which is exactly the green-CI-with-
+#   untested-surface state that bit this repo before; if either ever needs the
+#   network, delete the step and leave a sentence here saying why.
+#
+#   ONE CONSEQUENCE OF REGISTERING test_database.py THAT EVERY LANE SHOULD KNOW.
+#   test_database.py does not only test the database: it AST-walks every *.py under
+#   Fast_Fetch/ and fails if any `*ADULT*` list literal anywhere in the tree contains
+#   a version word (uncut/unrated/extended/…), because a version word in an adult list
+#   hides mainstream works behind a flag no public surface can undo. So adding a new
+#   file — an importer, say, in a directory test_database.py never imports — can break
+#   a CI module that has no other relationship to your change, and the red X names
+#   test_database.py. Measured: the fzmovies importer's "uncut" did exactly this on
+#   2026-10-30 — at a base where the workflow had 23 steps, 22 came back green and
+#   test_database.py was the one red, with the failure naming a module the importer
+#   never imports.
 #
 # KNOWN FAILURE MODES THIS FILE FIXES
 #   GitHub never ran any pipeline for this repo because the workflow files lived
@@ -217,4 +252,12 @@ jobs:
       # so a real socket attempt fails the run rather than the internet.
       - name: 🧪 test_host_serialiser.py
         run: python3 -S Fast_Fetch/test_host_serialiser.py
+
+      # The ledger the panel's knobs write to — the other half of `396e476`. The coin
+      # ledger is append-only, a rewarded grant is capped per local day, a streak bucket
+      # rolls at the configured hour in the configured zone, a 0 override means
+      # "default" and never "unlimited", and a pass price resolves from data rather than
+      # a literal. Offline; every database is a tempfile.
+      - name: 🧪 test_engagement.py
+        run: python3 -S Fast_Fetch/test_engagement.py
 

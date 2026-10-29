@@ -3452,3 +3452,93 @@ test execution was not deferred because the 1-min figure stayed under it. Zero w
 `/home/ubuntu/radd-stream-data/`, zero production DDL, no `radd-stream.service` restart, no
 scraper/crawl/merge, no Gradle, no `/api/data` or `full=True`, no repeated production curls.
 Reads of `/opt/radd-stream` were limited to `git rev-parse` / `git show` — never a workspace.
+
+---
+
+## Session 2026-10-30 (q5 account5 — RzFlix APK forensics, an fzmovies importer with no crawl, the engagement suite joins CI) `[Q5-RZFLIX-FZMOVIES]`
+
+Worktree `/tmp/q5_rzflix_lane`, branch `q5-rzflix-fzmovies-on-56e743b`. I based on `6bfbd5c`; master moved to
+`56e743b` while I worked, so this is re-applied onto the tip rather than merged, and two of my claims died in
+the process — recorded below because they are the interesting part.
+
+**TASK A — `RzFlix_Updated.apk`, static only.** Report: `docs/RZFLIX_APK_ANALYSIS.md`. 119,744,040 bytes,
+sha256 `e2b4ea95…546b46`, `com.rflix.rflix`, Flutter **AOT** — so the logic is in `lib/<abi>/libapp.so`, not the
+four dex files; an APK of this shape has no Java/Kotlin business logic to read. `zipfile` + byte regexes + a
+hand-rolled `RES_STRING_POOL` parser for binary AXML, `python3 -S`, zero pip, nothing installed, nothing executed,
+no dex loaded into anything that executes. **Where its links come from:** the app is a remote-config shell.
+`api.ringzstudio.com/apis/r.txt` serves 3 white-label profiles × 81 keys (35 booleans), one of which names the
+catalog host; the catalog is `dataapi.yomoviesapk.com` — flat JSON per rail (`/public/movies/{latest,JustAdded,
+Bollywood,Hollywood,South,Punjabi,Gujarati,Bengali,Marathi,Adult}.json`, `/mm.json`, `/ss.json`, `/desihub.json`,
+`/lstanime.json`, `/cn.json`, `/g.json`, `/lng.json`, `/live.json`). **165 unique URL literals recovered and only
+3 are product endpoints** — the rest are TradPlus/Vungle/Unity/mBridge/Firebase/OneSignal strings, which is why
+this had to be read out of the AOT image instead of counted off a strings dump. Is it one of our sites? **No** —
+neither domain appears in `SITES.md` or `importers/`, and it is not importable: one probe returned **403 Cloudflare
+Access**, so an importer there would be credential replay, not scraping. `appTkn`/`secKey`/`useSecKey` are recorded
+as *names*, values redacted, never replayed. 17 adoption ideas in §8, each one line, naming the file it lands in
+(`MONETIZATION_FIELDS`, `remote_config()`, `tiers.py`, `usage_stats.py`, `SITES.md`, `download_sources.subtitle_url`,
+`/api/m3u`, `apk_sha256`). Three explicit **non**-adoptions: Honeygain bandwidth resale, the `apkUrl` silent
+self-update, and the fact that they *display* an `Adult.json` rail to users — our law is stored-but-never-shown and
+I did not soften it to make their design look symmetric with ours. Network budget for the whole task: **6 requests**,
+each host printed, `-m 15/20`, no credentials sent anywhere but never even to them.
+
+**TASK B — fzmovies.host: importer written, crawl deferred by the gate, not by me.**
+`python3 -S Fast_Fetch/importers/import_fzmovies.py gate` → `load1=7.70 MemAvailable=4104MB other_crawlers=0`,
+exit 3, **"crawl deferred, gate conditions not met"**. Q4's condition is implemented as code — `crawl_blocked()`
+with `LOAD_CEILING=4.0`, `MEM_FLOOR_MB=4000`, the no-other-crawlers check, and an unconditional refusal when
+`--limit` is absent, because an unbounded crawl is never started by default. So there is **no `fzmovies.db` yet**,
+no merge, and no reason to open the 6.4 GB catalog. What landed instead: the importer (18 measured rails;
+`page_cache`/`posts`/`releases`/`sources` staging DDL; `DEFAULT_SOURCE_STATUS='unverified'`,
+`playback_type='redirect'`, `is_temporary=1`; links stored and never followed) and
+`test_import_fzmovies.py` — **72 tests OK, 1.3 s, offline** on inlined transcriptions of the two captured pages.
+Every trap was measured rather than assumed: `onclick='window.location.href="…"'` **forges a fake `href`** unless
+the anchor is tokenized per-attribute (hence `_ANCHOR_RE`/`anchor_attrs`/`anchor_records`); release size and hit
+count live in a `<dcounter>` *after* the anchor, so a label-only parse loses them; the year repeats inside
+`itemprop='name'`, so keying without stripping yields `the-break-up-2006-2006`; the metadata is schema.org
+**microdata**, not JSON-LD, with no `og:*` at all; two item-naming classes (`…--hmp4.htm`, `%20` on listings and
+literal spaces on the item page, plus `movie--Dubbed--The Tiger Rising [Hindi].htm`); `--subtitle.htm` is not a work.
+**Queued heavy action — the exact command, its cost, the number I want, for a quiet window:**
+`python3 -S Fast_Fetch/importers/import_fzmovies.py sync --limit 40` = 1 listing fetch + ≤40 item fetches at
+`PAGE_TIMEOUT=25` (≤ ~41 requests to one host), writing only `/home/ubuntu/radd-stream-data/fzmovies.db`, expected
+~40 posts / a few hundred releases. The number wanted: **how many listed items expose ≥1 downloadable anchor and
+how many carry the microdata block**, because that decides whether `parse_item` needs a fallback before a full run
+is worth anyone's load. First 429 stops the whole run by design.
+
+**TASK C — answered (1), registered; and half of it had already been done while I was writing it.** Master's
+`396e476` added a step for `test_admin_panel.py` (timed, `run: time python3 -S …`). The genuinely unregistered
+suite was **`test_engagement.py`** — 25 tests, offline tempfile fixtures, zero network — and this commit adds it,
+taking CI from 26 steps to **27**. Option (2) ("it needs a live server") was false for both and is now written into
+the workflow's comment block together with the rule the *site-parser* carve-out actually encodes, so the two are not
+confused again. `importers/test_import_fzmovies.py` stays excluded on purpose: registering one of six importer suites
+would be a rule no one can state.
+
+**Two counting defects I found in the docs while re-applying, both now fixed in `AGENTS.md`.**
+(1) `grep -c 'run: python3 -S' .github/workflows/backend-ci.yml` returns **26 for a 27-step workflow**, because the
+admin_panel step's command is `run: time python3 -S …` — a prefix silently drops a step from the naive count. The
+durable count is `grep -c '        - name: 🧪'`. (2) `AGENTS.md` claimed "25 `🧪` steps" **on master itself** and was
+already stale there, because `test_host_serialiser.py` landed a 26th. So this file now says: count the steps, do not
+transcribe them, and treat any transcription here as the least trustworthy thing in it.
+
+**The fleet law that caught me, and every lane should know it.** My first full local run of CI's list was **22 green
++ `test_database.py` rc=1**. My importer was not broken: `test_database.py` AST-walks **every `*.py` under
+`Fast_Fetch/`** and fails if any `*ADULT*` list literal anywhere in the tree holds a version word (`uncut`,
+`unrated`, `extended`, `remastered`, `imax`, `theatrical`, `cut`…), because a version word in an adult list hides
+mainstream works behind a flag no public surface can undo. I had `"uncut"` in `ADULT_KEYWORDS`; it is gone, with a
+comment naming the rule. Then **my own test failed too** — it asserted `"Some Film 4K UNRATED uncUT"` must flag,
+which is precisely the forbidden behavior; it now asserts the opposite, and a new test pins the pair-alone case.
+**Consequence: adding a file under `Fast_Fetch/` can break a CI module that never imports it, and the red X names
+`test_database.py`.** That sentence is now in `AGENTS.md` and in the workflow header.
+
+**Not done, stated plainly.** No fzmovies crawl, no staging DB, no merge (gate refused; merge was never in scope).
+No second probe of the yomovies endpoints — a 403 is an answer, not a challenge. `assets/builddatas.json` is an
+mBridge SDK artifact, not RzFlix's config, and I read it as theirs before checking. §11 of the report is the honest
+edge of what stays inferred. The `vip_monthly_pkr` 200 / `PLAN_DEFAULTS["vip_monthly"] = (200, 30)` defect against
+Q4's ₨250 ruling is still untouched — payments/admin lane's files, pinned by their own tests, not mine to silently
+"fix". And I did **not** re-run all 27 CI modules on the new base: the box sat at load 7.7 and my change can only
+reach `test_database.py` (the AST law — re-run, **133 OK**) and the new importer suite (**72 OK**); the hosted
+runner judges the other 25, which is what it is for and what `396e476` just proved it is good at.
+
+**Fleet rules kept.** `/opt/radd-stream` untouched; worked in `/tmp/q5_rzflix_lane`. Every APK artifact stayed in
+`/tmp/q5_rzflix/` — that directory holds redacted-but-real third-party secrets and must never be committed. No
+service restart/reload/stop, no git tag, no Gradle, no `/api/data`, no `full=True`, no `/api/v1/stats` polling, no
+repeated production curls, stdlib only, nothing installed. Landing by the heredoc askpass in
+`ORACLE_DEPLOYMENT.md` — never `printf`, never a token in argv or a URL, never the `origin` remote.

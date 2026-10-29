@@ -269,14 +269,17 @@ rule is memory-led, not load-led:
 Every agent — no matter how short the session — MUST do this before ending:
 
 ### For Backend Sessions:
-1. Run CI's **25 `🧪` steps**, one invocation each — measured from backend run `40954291359`
-   (sha `396e476`, `completed success`): database, vidout, catalog_v2, release_descriptor,
-   link_health, link_state, evidence_writeback, api_v2, redact, tiers, catalog_api,
-   provenance_stamping, merge_catalogs, site_scout, backup_manager, usage_stats,
-   operator_isolation, media_search, migrate_search_indexes, bounded_ledger, project_readonly,
-   posts_query_plan, adult_twin_probe, link_sweep_budget, admin_panel. The older "17 modules /
-   791 tests at `9859b8a`" figure is historical — it was true then and is not the current list,
-   so do not quote it as if it were.
+1. Run CI's **27 `🧪` steps**, one invocation each — count them from the workflow (see the
+   Backend block below for the command; `grep -c 'run: python3 -S'` says 26 and is wrong
+   because `test_admin_panel.py` is `run: time python3 -S …`). As transcribed at this commit:
+   database, vidout, catalog_v2, release_descriptor, link_health, link_state,
+   evidence_writeback, api_v2, redact, tiers, catalog_api, provenance_stamping,
+   merge_catalogs, site_scout, backup_manager, usage_stats, operator_isolation, media_search,
+   migrate_search_indexes, bounded_ledger, project_readonly, posts_query_plan,
+   adult_twin_probe, link_sweep_budget, admin_panel (timed), host_serialiser, engagement.
+   The older "17 modules / 791 tests at `9859b8a`" figure is historical — it was true then and
+   is not the current list, so do not quote it as if it were. This transcription is the least
+   trustworthy thing in this file: verify it against the workflow before acting on it.
 2. `test_database.py` alone is **133** at the tip and `test_vidout.py` is 6/6 — but do not substitute that 3-module quick gate for item 1.
 3. Append a session log to `Fast_Fetch/CONTINUITY.md`
 4. Push with Git over HTTPS using the temporary askpass helper in [`ORACLE_DEPLOYMENT.md`](ORACLE_DEPLOYMENT.md); do not use the legacy per-file API push scripts
@@ -327,34 +330,42 @@ you need to know whether CI can run, query `/actions/permissions` and print what
 # From repo root: /opt/radd-stream  (Oracle VM)
 
 # Run offline tests — one module per invocation; this runner ignores extra names.
-# There are 68 `test_*.py` modules under Fast_Fetch/ and Fast_Fetch/importers/ — 48 at the
-# Fast_Fetch/ root and 20 in importers/ (measured 2026-10-29 at `5c331d6` with
-# `find . -name 'test_*.py' -not -path './.git/*' | wc -l`; re-measure it, do not trust this
-# number, it has already gone stale twice in one day).
+# Count the suites from the tree, never from this line:
+#   find Fast_Fetch -name 'test_*.py' | wc -l     → 78 measured 2026-10-30 (56 at the
+#   Fast_Fetch/ root, 22 under importers/). The same figure transcribed at `5c331d6` said
+#   68 and was stale within a day, which is why this block now carries the command.
+# Most of those 78 are NOT CI's list; see the next block for how to count what CI judges.
+# These three are the standing *quick* gate — they are NOT what CI judges.
 # These three are the standing *quick* gate — they are NOT what CI judges.
 python3 -S Fast_Fetch/test_database.py    # 133 tests at the tip (was 124, was 76 — re-count)
 python3 -S Fast_Fetch/test_vidout.py      # 6 tests
 python3 -S Fast_Fetch/importers/test_host_resolvers.py   # 171 tests
 
-# The REAL gate is exactly what backend-ci.yml runs — 25 modules, one per invocation (measured
-# from CI run `40954291359` at `396e476`; it was 17 at `9859b8a`, and it will be more again — read
-# the workflow file, this comment is a snapshot). As of
-# `9859b8a` those 17 are CI's own list; the two extra suites the older version of this block
-# described (`importers/test_host_resolvers.py`, `importers/test_convert_mp4moviez.py`) are NOT
-# in CI and the 17th slot is not what this file used to claim:
-#   test_database test_vidout test_catalog_v2 test_release_descriptor test_link_health
-#   test_link_state test_evidence_writeback test_api_v2 test_redact test_tiers
-#   test_catalog_api test_provenance_stamping test_merge_catalogs test_site_scout
-#   test_backup_manager test_usage_stats test_operator_isolation
-# Measured 2026-10-29 at `9859b8a`: 17/17 rc=0, **791 tests, 0 failures**, and GitHub's own
-# `🐍 Backend CI — Stdlib Python` reported `completed success` on both `master` and `main` for
-# that sha and for `6f7e3a0` — so this list and this count are corroborated by the runner, not
-# just by a local box. `test_usage_stats.py` is 94 tests and `test_operator_isolation.py` is 28;
-# run them with `RADD_USER_STATE_DB` pointed at a fixture, never the live state file.
-# Measured earlier the same day: the 3-module quick gate stayed green while CI was red for five
-# pushes, because it omits test_evidence_writeback.py and test_merge_catalogs.py. Run CI's list.
-# Note `test_all_sites.py` is deliberately excluded from CI (`backend-ci.yml:33`) — it is a live
-# 10-site network audit, not an offline test.
+# The REAL gate is exactly what backend-ci.yml runs, and the only durable way to know that
+# list is to COUNT THE STEPS IN THE WORKFLOW:
+#   grep -c '        - name: 🧪' .github/workflows/backend-ci.yml
+# It is **27 steps** at this commit (17 at `9859b8a`, 21 at `c3459b3`, 26 at `396e476` once
+# host_serialiser landed — and the prose in this file said 25, so it was stale on master
+# itself). Count `- name: 🧪`, NOT `grep -c 'run: python3 -S'`: that undercounts by every
+# step that prefixes its command, and `test_admin_panel.py` is run as `run: time python3 -S …`,
+# so the naive grep silently reports 26 for a 27-step workflow. Do not transcribe the list
+# here either — every transcription in this file has gone stale within a day and a stale list
+# gets trusted. The workflow is the thing CI executes; enumerate it with:
+#   grep -oE '^      - name: 🧪 .*' .github/workflows/backend-ci.yml | sed 's/.*🧪 //'
+# Two facts the count does not carry:
+#   - The three suites above are the *quick* gate, not CI's. Measured 2026-10-29: the
+#     quick gate stayed green while CI was red for five pushes.
+#   - `test_usage_stats.py` (94 tests) and `test_operator_isolation.py` (28) need
+#     `RADD_USER_STATE_DB` pointed at a fixture — never the live state file.
+# Deliberately excluded, with the reason written where the exclusion lives
+# (`backend-ci.yml`, "Deliberately EXCLUDED"): `test_all_sites.py` (live network audit) and
+# the `importers/test_*.py` parser suites. Read that block before adding or removing a step.
+# ONE EXCLUSION-ADJACENT TRAP: `test_database.py` AST-walks every *.py under Fast_Fetch/ and
+# fails if any `*ADULT*` list literal anywhere in the tree holds a version word
+# (uncut/unrated/extended/…). Adding a new file — an importer in a directory test_database.py
+# never imports — can therefore break a CI module that has no other relation to your change,
+# and the red X names `test_database.py`. Measured 2026-10-30: it caught `"uncut"` in
+# importers/import_fzmovies.py while the other 26 steps stayed green.
 
 # Live site audit (writes to temp DB)
 python Fast_Fetch/test_all_sites.py

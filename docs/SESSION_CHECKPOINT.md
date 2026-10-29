@@ -3011,3 +3011,54 @@ was gating; `54662d2` after the fifth gate was a capacity doc with no Python);
 `master`+`main` were
 fast-forwarded only onto a sha that had come back green, by the heredoc askpass. `/opt/radd-stream` untouched, no live `/api/data`, no `full=True`,
 no `/api/v1/stats` poll, no Gradle, no heavy run, **no service restart**, no production settings write.
+
+## q5 lane, 2026-10-30 — RzFlix's upstream is a yomovies JSON feed, fzmovies got an importer but no crawl, CI is 27 steps `[Q5-RZFLIX-FZMOVIES]`
+
+Worktree `/tmp/q5_rzflix_lane`, branch `q5-rzflix-fzmovies-on-56e743b` (I based on `6bfbd5c`; master reached
+`56e743b` while I worked, so this is re-applied on the tip). Three relayed tasks; the headline is that
+**task B's crawl was refused by the gate, not skipped by me**.
+
+**A. `docs/RZFLIX_APK_ANALYSIS.md`** — static-only forensics, nothing executed, no pip. `RzFlix_Updated.apk`
+(119,744,040 B, `com.rflix.rflix`) is Flutter **AOT**: the logic is in `lib/*/libapp.so`, the dex has none. It is
+a remote-config shell — `api.ringzstudio.com/apis/r.txt` → 3 white-label profiles × 81 keys, one naming the
+catalog host — and the catalog is `dataapi.yomoviesapk.com` as flat JSON per rail (`/public/movies/*.json`,
+`/mm.json`, `/ss.json`, `/desihub.json`, …). **165 URL literals, only 3 product endpoints**; that ratio is why
+this needed the AOT image and not a strings dump. **Not one of our sites** (`SITES.md`/`importers/` carry neither
+domain) and not importable: one probe → **403 Cloudflare Access**, so writing that importer would be credential
+replay. `appTkn`/`secKey` recorded as names, values redacted, never replayed. 17 "they do X, we do Y, adopt Z
+because…" ideas with the target file for each; 3 refusals named (Honeygain bandwidth resale, silent `apkUrl`
+self-update, displaying an `Adult.json` rail where our law says stored-but-never-shown). Total network budget:
+**6 requests**, hosts printed, `-m 15/20`.
+
+**B. `importers/import_fzmovies.py` + `test_import_fzmovies.py` (72 OK, 1.3 s offline).** The gate is *code*, not
+prose: `crawl_blocked(load1≥4.0, MemAvailable<4000 MB, other crawlers, no --limit)` → measured
+`load1=7.70 MemAvailable=4104MB other_crawlers=0`, exit 3, **"crawl deferred, gate conditions not met"**. **No
+`fzmovies.db` exists yet**; the bounded command (`sync --limit 40`), its expected cost, and the exact number it
+answers are queued in `Fast_Fetch/CONTINUITY.md`. Per-site staging DB only; `unverified`/`redirect`/
+`is_temporary=1`; links stored, never followed. Measured traps: `onclick` forges a fake `href` (attribute-aware
+anchor tokenizer), size/hits live in a `<dcounter>` *after* the anchor, the year repeats inside `itemprop='name'`,
+metadata is schema.org **microdata** (no JSON-LD, no `og:*`).
+
+**C. Answer (1) — registered.** `test_engagement.py` is now a CI step; **26 → 27 steps**. Half of my TASK C was
+already done on master by `396e476` (`test_admin_panel.py`, timed) while I was writing mine, so I did not
+re-register it; the workflow now states why neither belongs to the site-parser carve-out.
+`importers/test_import_fzmovies.py` stays excluded on purpose.
+
+**Two doc defects worth everyone's attention, both fixed in `AGENTS.md`.**
+`grep -c 'run: python3 -S' .github/workflows/backend-ci.yml` reports **26 for a 27-step workflow** — the
+admin_panel step is `run: time python3 -S …`, so a command prefix silently drops a step; count
+`grep -c '        - name: 🧪'` instead. And `AGENTS.md` said "25 steps" **while that was already stale on master**
+(host_serialiser landed a 26th). New rule in the file: count from the workflow, treat any transcription there as the
+least trustworthy line in it.
+
+**Fleet law that caught me.** `test_database.py` AST-walks *every* `*.py` under `Fast_Fetch/` and fails if any
+`*ADULT*` list literal in the tree holds a version word. `"uncut"` in my new importer's `ADULT_KEYWORDS` broke a
+module that never imports it, with the red X naming `test_database.py`. Removed; my own test that expected
+`"UNRATED uncUT"` to flag was asserting the forbidden behavior and now asserts the law. **A new file under
+`Fast_Fetch/` can break an unrelated CI module — check the adult-list law before you add one.**
+
+**Gate on the new base:** `test_database.py` **133 OK** (the only module my change can reach) and
+`test_import_fzmovies.py` **72 OK**; I did not re-run the other 25 locally at load 7.7 — hosted CI is the
+authoritative gate and that is what it is for. **Not done:** no crawl, no merge, no yomovies replay, no re-probe
+after the 403; `vip_monthly_pkr` 200 vs Q4's ₨250 ruling untouched (payments lane's files, pinned by their tests).
+`/opt/radd-stream` untouched, no restart, no tag, no Gradle, stdlib only, no APK artifact in the repo.
