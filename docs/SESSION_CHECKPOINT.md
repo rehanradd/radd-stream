@@ -2760,3 +2760,17 @@ Git, verbatim in Appendix A under rulings R1–R9; plus `docs/ADMIN_PANEL_ACCESS
 (`AGENTS.md`/inventory gate numbers corrected: 17 CI modules not 15+2 importers, `test_database` 133
 not 124/76, 68 Python test modules not 66/60/44, and Android green on `master` while the live lane
 branch `q1-ad-cadence` is **red** at `99472e0`). Tasks #28–#32 opened for the recovered plan.
+
+**MovieBox closed out (q4, 2026-10-30, task #33).** Antigravity's untracked
+`import_themoviebox.py` is finished, tested and **landed** — pushed to
+`q4-moviebox-20261030`, then fast-forwarded onto `master` and `main`. The scout
+blueprint that seeded it was wrong on three of four claims (sitemap, cms,
+`rest_api.usable`) and is now corrected in place with the measured values.
+Live bounded pilot: 44 works staged, **0 releases and 0 sources by design**, 6
+detail pages crawled in 39 s with no print on any of them. The site is a
+**periodic metadata top-up, not a crawlable catalog** — `subjectType` is ignored
+server-side, 100 feed items gave 84 duplicates against a 44-row vault, and the
+only filtering endpoint is authenticated, whose client token we do not
+reverse-engineer. Full detail in `Fast_Fetch/SITES.md` §25 and the q4
+CONTINUITY entry. Nothing else on this lane is pending; the app lane (#25) and
+the projection/`/api/data` bound (#10) are the real remaining work.

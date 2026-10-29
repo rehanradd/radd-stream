@@ -82,13 +82,13 @@ Describe the code's behavior accurately to users and tools. Do not disguise its 
   site's catalog including 18+ titles, flagging them via the `is_18_plus` column
   (`is_18_plus=1`) present in every site staging database. The flag is set at storage time and
   `save_scraped_data` re-derives it from the title as a row becomes a post
-  (`Fast_Fetch/fast_fetch.py:4246`), so an unlabelled adult title still gets flagged.
+  (`Fast_Fetch/fast_fetch.py:4426`), so an unlabelled adult title still gets flagged.
   **The invariant, measured against the code and pinned by tests**
   (`Fast_Fetch/test_redact.py::AdultDenialOnBothPortsTests`,
   `Fast_Fetch/test_database.py::KeyLevelAdultIdentityTests`): no public surface may list *or play* a
-  flagged row. Enforced today by `redact.adult_clause` (`Fast_Fetch/redact.py:1068`) inside
-  `api_v1_get_posts` (`Fast_Fetch/viewer.py:2516`), by the per-post bail at `viewer.py:676-682` and
-  `:2677`, by `redact.link_is_adult` (`redact.py:1074`) on the stream/download redirectors — which
+  flagged row. Enforced today by `redact.adult_clause` (`Fast_Fetch/redact.py:1073`) inside
+  `api_v1_get_posts` (`Fast_Fetch/viewer.py:2534`), by the per-post bail at `viewer.py:709` and
+  `:2710`, by `redact.link_is_adult` (`redact.py:1079`) on the stream/download redirectors — which
   answers True for an unknown link id so a typo cannot play either — and by nginx, which allow-lists
   only the public routes. To a public client a flagged row is indistinguishable from a row that never
   existed: the same `not_found`, the same status code, no hint that a flag caused the denial.
@@ -96,12 +96,12 @@ Describe the code's behavior accurately to users and tools. Do not disguise its 
   edge, `/api/m3u?id=159` returns 0 bytes where `/api/m3u?id=158` returns a real playlist, and
   `/api/m3u` is 403 at the edge.
   **One exception, deliberately, and it is not a user-facing display surface:** the operator panel.
-  `DASHBOARD_HTML` (`viewer.py:706`) reads `/api/data`, which this process 404s on the public port,
+  `DASHBOARD_HTML` (`viewer.py:739`) reads `/api/data`, which this process 404s on the public port,
   is served only on the loopback operator port, and 403s at the public edge; the trust boundary there
   is the loopback interface, not `RADD_ADMIN_TOKEN` (the token guards `/admin`, and `/` answers 200 on
   `8081` without it — measured 2026-10-29 05:47, see the table below). `fetch_database_payload`
-  (`viewer.py:482`) documents `full` as "the operator-only mode (loopback port): raw ledger rows", and
-  the panel renders a `18+ ADULT` badge (`viewer.py:1648`) because an operator auditing flag coverage
+  (`viewer.py:494`) documents `full` as "the operator-only mode (loopback port): raw ledger rows", and
+  the panel renders a `18+ ADULT` badge (`viewer.py:1681`) because an operator auditing flag coverage
   has to see which rows carry the flag. That is the *stored* half of this rule, shown to the person who
   owns the storage — never a playable link, and never a public list. `/api/v1/stream` and
   `/api/v1/download` deny a flagged link **on the operator port too**, with the same uniform

@@ -284,6 +284,31 @@ class ParsePageTests(unittest.TestCase):
         self.assertEqual(mb.parse_page("<html><body>no payload</body></html>",
                                       DETAIL_URL), [])
 
+    def test_zero_duration_is_absent_not_a_running_time(self):
+        # Measured live 2026-10-30: every series item carries duration: 0 and it
+        # landed in 40 of 40 staged rows as a work that runs for no time.
+        series = dict(MATCHBOX, subjectType=2, duration=0)
+        record = mb.parse_page(nuxt_script(devalue(series)), DETAIL_URL)[0]
+        self.assertIsNone(record["duration"])
+        self.assertEqual(mb._duration_text(""), None)
+        self.assertEqual(mb._duration_text("670"), "670")
+
+    def test_empty_subtitles_do_not_hide_the_dub_list(self):
+        # The feed item presents both keys, one of them empty: subtitles "" was
+        # the first hit and answered 'no languages' for a triple-dubbed work.
+        dubbed = dict(MATCHBOX, subtitles="", dubs=[
+            {"lanName": "Original Audio", "original": True},
+            {"lanName": "Hindi dub"}, {"lanName": "Tamil dub"}])
+        record = mb.parse_page(nuxt_script(devalue(dubbed)), DETAIL_URL)[0]
+        self.assertEqual(record["languages"],
+                         "Original Audio, Hindi dub, Tamil dub")
+        self.assertEqual(
+            mb._join_labels(mb._lookup_values(dubbed, [], mb.DUB_KEYS)),
+            "Original Audio, Hindi dub, Tamil dub")
+        self.assertIsNone(
+            mb._join_labels(mb._lookup_values(
+                dict(dubbed, dubs=[]), [], mb.DUB_KEYS)))
+
     def test_an_unroutable_title_alone_is_not_a_work(self):
         self.assertEqual(mb.parse_page(
             nuxt_script(devalue({"title": "Section heading", "description": "x"})),
@@ -298,9 +323,10 @@ class DiscoveryTests(unittest.TestCase):
     def _feed(self, items, pager=None):
         """The first request answers with `items`; every later one ends the catalog.
 
-        The walker visits one page per accepted subject type, so a fake that only
-        answers once makes the second type raise StopIteration inside the code
-        under test and report a discovery bug that is not there.
+        The walker keeps going until a page comes back empty (a feed whose pager
+        lies would otherwise loop forever), so a fake that only answers once makes
+        the next request raise StopIteration inside the code under test and report
+        a discovery bug that is not there.
         """
         first = (200, {"code": 0, "message": "ok", "data": {
             "items": items, "pager": pager or {"hasMore": False,
@@ -330,6 +356,22 @@ class DiscoveryTests(unittest.TestCase):
                 "SELECT loc FROM sitemap_cache")}
             conn.close()
             self.assertIn(DETAIL_URL, locs)
+
+    def test_the_feed_is_walked_once_because_subjecttype_is_ignored(self):
+        # Measured 2026-10-30: {"subjectType": 1} and {"subjectType": 2} and
+        # {"subjectTypes": [1]} all answer the same mixed popularity page, so
+        # asking per type doubles the requests and changes nothing. Classification
+        # happens on the item's own subjectType field, in _build_record.
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Path(tmp) / "v.db"
+            with silenced(), mock.patch.object(mb, "_api_request",
+                                               self._feed([MATCHBOX])) as api:
+                mb.sync_catalog(db)
+            bodies = [c.args[1] for c in api.call_args_list]
+            for body in bodies:
+                self.assertNotIn("subjectType", body, bodies)
+                self.assertNotIn("subjectTypes", body, bodies)
+                self.assertIn("page", body)
 
     def test_a_dub_of_an_already_queued_work_is_not_queued_again(self):
         french = dict(MATCHBOX, subjectId="500",
