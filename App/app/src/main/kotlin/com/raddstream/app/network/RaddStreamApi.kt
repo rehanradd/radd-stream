@@ -102,10 +102,10 @@ interface RaddStreamApi {
     /**
      * GET /api/v1/app/remote-config — VIP pricing and the operator's payment handles.
      *
-     * Public and unauthenticated by design: it is the same body a web client reads, and
-     * the admin panel masks the one thing in its row that must never travel (the
-     * shortener tokens). Handles may legitimately be empty on a server that has not
-     * configured payments yet — an empty value is the honest answer, not an error.
+     * Public and unauthenticated by design: it is the same body a web client reads, and the
+     * admin panel masks the secrets in its row before publishing. A handle may legitimately be
+     * empty on a server that has not configured payments yet — an empty value is the honest
+     * answer, not an error.
      */
     @GET("api/v1/app/remote-config")
     suspend fun getRemoteConfig(): VipRemoteConfig

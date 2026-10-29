@@ -64,24 +64,51 @@ class StatsHonestyTest {
         assertTrue(CatalogScale.LINKS_LABEL.startsWith("Links"))
     }
 
+    /**
+     * The notice must keep the server's figure and refuse to size it against the catalog. The
+     * direction is the load-bearing half: 2026-10-28 measured `stats.posts` as the LARGER number
+     * (the projection carries adult-flagged rows the list route refuses), 2026-10-29 measured it as
+     * the SMALLER one (`116922` against a browsable `total` of `131559`, then `134815`) because the
+     * endpoint answers from `cat_projection_meta` while the list route counts the live table. Both
+     * sentences were confident and one of them was wrong on the day it shipped, so an arrow of either
+     * sign is now a failure rather than a wording preference.
+     */
     @Test
-    fun `the connection notice keeps the server figure and says the catalog is smaller`() {
-        val notice = CatalogScale.connectionNotice(116_922)
+    fun `the connection notice keeps the server figure and never compares its size`() {
+        for (posts in listOf(116_922, 0)) {
+            val notice = CatalogScale.connectionNotice(posts)
 
-        assertTrue(notice.contains("116922"))
-        assertTrue("the number is the server's stored count", notice.contains("stores"))
-        assertTrue("and the viewer is told it is not what they will see", notice.contains("smaller"))
-        assertFalse(notice.contains("available"))
-        assertFalse(notice.contains("title"))
+            assertTrue(notice.contains(posts.toString()))
+            assertTrue("the number is the server's stored count", notice.contains("stores"))
+            assertTrue(
+                "and the viewer is told it is not what the grid answers with",
+                notice.contains("not the count you can browse"),
+            )
+            assertFalse(notice.contains("available"))
+            assertFalse(notice.contains("title"))
+            for (arrow in listOf("smaller", "larger", "bigger", "fewer", "more works", "above", "below")) {
+                assertFalse(
+                    "a $posts-work server must not be described as $arrow the browsable catalog",
+                    notice.contains(arrow),
+                )
+            }
+        }
     }
 
     @Test
-    fun `the scope note states the two ways the totals exceed the catalog`() {
+    fun `the scope note names what a stored tally can contain without claiming a direction`() {
         val note = CatalogScale.SCOPE_NOTE
 
         assertTrue(note.contains("Stored totals"))
         assertTrue("the adult rows the ledger holds and the app hides", note.contains("must not show"))
         assertTrue("the dead link rows", note.contains("no longer play"))
+        // Staleness is the second reason the number is not a browsable count, and the only one
+        // that survived the 2026-10-29 re-measurement, so it has to be said out loud.
+        assertTrue("a projection tally can lag the table the list route counts", note.contains("lag"))
+        // "can", never "does": the note describes possibilities, not an ordering.
+        assertTrue(note.contains("can include"))
+        assertFalse(note.contains("are larger"))
+        assertFalse(note.contains("are smaller"))
     }
 
     // ── the surfaces, which must actually speak with that one owner ───────────
