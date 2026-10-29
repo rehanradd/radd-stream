@@ -32,6 +32,9 @@ name: 🐍 Backend CI — Stdlib Python Tests
 #       window, the no-SQL floor on short tokens, EXPLAIN QUERY PLAN assertions)
 #     - Fast_Fetch/test_migrate_search_indexes.py (the reviewed index migration: writes
 #       nothing without --execute, is idempotent, and fails verify on a drifted index)
+#     - Fast_Fetch/test_posts_query_plan.py     (/api/v1/posts?q= EXPLAIN QUERY PLAN
+#       evidence: two SCAN p passes, the join indexes that already exist in production,
+#       and the unescaped/no-floor `q=` correctness half)
 #
 #   Deliberately EXCLUDED:
 #     - Fast_Fetch/test_all_sites.py  — live 10-site network audit; needs the
@@ -149,3 +152,10 @@ jobs:
       # It never opens a real database; the target path is required on the command line.
       - name: 🧪 test_migrate_search_indexes.py
         run: python3 -S Fast_Fetch/test_migrate_search_indexes.py
+
+      # Query-plan evidence for the findings in docs/SEARCH_LATENCY_FINDINGS.md. It
+      # builds its own throwaway catalog because `catalog_v2.ensure_schema` does not
+      # create `releases`/`download_sources` at all — the drift that made an earlier
+      # "missing index" report measure a file that production is not.
+      - name: 🧪 test_posts_query_plan.py
+        run: python3 -S Fast_Fetch/test_posts_query_plan.py

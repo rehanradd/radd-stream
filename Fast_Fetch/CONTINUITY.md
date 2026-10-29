@@ -2813,13 +2813,19 @@ committed, never written back):
 | love | 44 992 | 4 481.0 | 796.4 | **89.6** |
 | a | never returned (60 071) | 25 904.8 | 9.1 ms, 0 rows + `hint` | **0.1 ms, no SQL** |
 
-Two honest caveats on that table. Column 2 is the old *statement* alone — the old
-module then ran the evidence lookups on top, so column 2 flatters the old code.
-And columns 3/4 without/with the step-1 index differ because the evidence step
-walks `cat_work_sites` unindexed; `inception` and `kpop` are therefore *not* faster
-than the live edge until the migration runs, and the two catastrophic cases are
-faster by 50–140x with it. Search is not "generally fast"; these are the five
-measurements.
+**CORRECTED 2026-10-30 by the same lane — see
+[`docs/SEARCH_LATENCY_FINDINGS.md`](../docs/SEARCH_LATENCY_FINDINGS.md) §1.** Column 3 of
+that table was measured on a schema I had *degraded by hand* (`probe_bridge.py` dropped
+`idx_cat_work_sites_post` and its comment claimed that made the schema equal production's;
+production has the index, my copy had it before I deleted it). The production-equal column
+is column 4: `inception` 913.5, `kpop` 825.7, `don` 77.9, `love` 89.6, `a` 0.1 ms. So
+**`inception` and `kpop` show no improvement and must not be cited as wins** — the old
+column for them (1 272.7 / 665.9 ms in-process) is not comparable to the live edge's
+318 / 580 ms anyway, being cold page-in of a 6.4 GB file at load ~7 with five lanes.
+Column 2 is also the old *statement* alone, which flatters the old code. What survives
+unchanged: `don` 1 178.4 → 77.9 ms, `love` 4 481.0 → 89.6 ms, and `a` 25 904.8 ms → 0.1 ms
+with no SQL issued at all, plus a bounded shape (≤ 200 candidates, five statements) where
+the old one was unbounded.
 
 **E2 — memory was never the failure mode and is still not.** `VmHWM` flat at
 ~31 MiB across the run, per-query delta ≤ +0.3 MiB. The old shape's problem was
@@ -2839,7 +2845,9 @@ assertions did; a timeout-only test would have passed the bug.
 [--with-fts] [--execute]`, additive, idempotent, `PRAGMA`-guarded, refuses a
 non-file target so it cannot pick its own database, and it prints its own runtime
 estimate from measurements: FTS rebuild **3 260 rows/s** ⇒ ~46 s for 150 799 rows
-at load 7.9; bridge index **0.9 s** for 275 488 rows; FTS on-disk cost **61
+at load 7.9; bridge index **0.9 s** for 275 488 rows — **corrected:** that was rebuilding
+`idx_cat_work_sites_post`, which **already exists on production**, so on
+`merged_catalog_20261025.db` step 1 is a no-op that prints "already present — skipped"; FTS on-disk cost **61
 bytes/row** (~9.2 MB) with a disk-headroom refusal; trigger write cost **5 308 µs
 /row vs 412 µs/row** without, i.e. a bulk scrape of this catalog gains ~13 min.
 Nothing in `Fast_Fetch` reads `posts_fts` yet, so step 2 is a pure capability and
@@ -2852,11 +2860,27 @@ lie. **The owner schedules when it runs.**
 
 **Two findings outside the brief, reported not fixed.**
 1. `/api/v1/posts?q=` — the keystroke route the Android app actually calls — still
-   carries the same cliff: measured **66 322 ms** for `inception` on the copy, and
-   it answers `q=a` with 10 rows instead of refusing the non-query. Fixing it means
-   routing it through `media_search`, which is a different route's contract.
-2. `cat_work_sites.post_id` has no index at all; the fix's evidence path is 7–10x
-   faster with the 0.9-second bridge index, and that is step 1 of the migration.
+   carries a cliff: **66 322 ms** for `inception`. **Corrected on two counts**: that was
+   an *in-process* query against my copy (not a live-edge timing; I took no edge sample,
+   because the route holds a service thread), and its cause is **not** a missing index.
+   `EXPLAIN QUERY PLAN` on production for the two statements `viewer.py:2633-2652` builds
+   reads `SCAN p` for the exact-total `COUNT(*)` **and** `SCAN p` for the page, with both
+   joins already covered by indexes and **no** `USE TEMP B-TREE FOR ORDER BY` at the
+   default sort: the cost is two full scans with three leading-wildcard `LIKE`s, the one
+   predicate a B-tree cannot serve. The fix is `MIN_QUERY_CHARS=2`, `_escape_like`
+   (`viewer.py:2546` interpolates `%`/`_` unescaped, so `q=%` is every row), and dropping
+   the exact `total` in favour of `has_more` for `q=` requests. Also answers `q=a` with 10
+   rows instead of refusing the non-query.
+2. **WRONG, and the error is the lesson.** I wrote "`cat_work_sites.post_id` has no
+   index at all". It does: `idx_cat_work_sites_post`, on
+   `/home/ubuntu/radd-stream-data/merged_catalog_20261025.db` (150 799 posts, 275 488
+   `cat_work_sites` rows), verified from `sqlite_master`. `releases.post_id` and
+   `download_sources.release_id` are indexed too (`idx_releases_post`, `idx_sources_rel`),
+   and `posts` carries `idx_posts_canonical_key`/`_imdb`/`_slug`/`_tmdb`/`_source_ind`.
+   Cause: `catalog_v2.ensure_schema()` creates neither `releases` nor `download_sources`
+   and no join indexes, so a schema-built file plans `SCAN releases` where production
+   plans a covering-index search — and a number off it is that file's number. Now pinned
+   by `test_posts_query_plan.py`.
 
 **C — the app-side guards (debounce ≥300 ms, min token, cancel in flight, never
 retry on timeout) are NOT landed.** The newest dispatch says backend only, no
