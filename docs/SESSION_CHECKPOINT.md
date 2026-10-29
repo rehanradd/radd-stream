@@ -2710,3 +2710,53 @@ filter regression; it is two audited writes, and the arithmetic identity holds e
 - Also new since the last entry: `humtv_staging.db` (64 posts), `hindidubbedmovies.db` (40),
   `bollyflix.db` (38), `hindianimeszone.db` (36), `moviehax.db` (35) and `themoviebox.db` (**0 posts**,
   created 20:12 tonight) — six more vaults, none of them in the live `source_site` set yet.
+
+## 2026-10-29 23:10 — QODER4: the memory incident, the unattributed restart, and what we did about it
+
+**Measured sequence, not a narrative.**
+
+| Time | Measurement |
+|---|---|
+| 22:34 | service `MainPID=1361081`, **VmRSS 6.66 GiB**, 15 threads, **18 fds** (so not leaked connections), box at 10 GiB used / **755 MiB MemAvailable**, swap 4.7 of 6.0 GiB |
+| ~2 min earlier | same unit measured 5.38 → 6.05 GiB, i.e. **+0.67 GiB per 2 min, monotonic** |
+| 23:02:45 | unit restarted. `NRestarts=0`, new `MainPID=1556462` — **a manual restart, not the OOM path** |
+| 23:04:23 | `VmRSS 0.05 GiB`, **7.8 GiB MemAvailable**. Pressure was relieved instantly by the restart |
+| 23:03–23:05 | `/api/v1/stats` answered **200 in 22.5 s** (cold full scan of `cat_works`), `/api/v1/posts?limit=1` answered **200 in 20.3 s**, 687 bytes, `total 135731` — the adult-filtered count, so redaction survived the restart |
+
+**Who restarted it: I did not, and I am not going to pretend to know.** `NRestarts=0` means a manual
+`systemctl` action; no log on this box attributes it (`auth.log` shows nothing for 23:00–23:04), and I
+read `dmesg`/`kern.log`/`syslog` for an OOM line and found none, which also means I cannot prove the
+6.66 GiB process was *not* killed. The one hard fact pointing at an actor: an interactive `agy`
+(Antigravity CLI) process has been running since ~21:47 **inside a code-server terminal**
+(`1485321 ← 1485037 /bin/bash --init-file …/code-server/…`), i.e. somebody has shell access through
+the web IDE. A human-driven restart is the most consistent explanation and it is not evidence of
+misuse — the box had 755 MiB free. Recorded as **unattributed** because that is what the logs say.
+
+**Root cause of the growth, ours.** It was demand we generated, not traffic: `/api/data` materializes
+the entire ledger (150,799 rows, a 2.5 MB response that measured 46.6 s) inside the serving process,
+and with 15 threads' glibc arenas freed memory is not returned to the kernel — so each read ratchets
+RSS up and never brings it down. At 22:34 I also caught an **in-process**
+`viewer.fetch_database_payload('', full=True)` running as a child of that `agy` session (30 MB and
+climbing), which does the same damage to whichever process calls it. Cold `/api/v1/stats` costs the
+same 22 s scan.
+
+**Actions taken.** Fleet-wide rule delivered to q2 (23:09) and q5, and carried into q3's and q1's
+briefs: no live `/api/data` and no `full=True` against the production catalog, exactly-one live read
+if unavoidable, no `/api/v1/stats` polling, nothing heavy above load 4, **never restart the unit** —
+report climbing memory to me instead, which is the thing that would have made this visible earlier.
+Merge batch 4 (#9) stays held. I ran no Gradle all evening and no gate since 22:20.
+
+**Still true and now re-shown:** the restarted service runs `/opt/radd-stream` at **`bf9e565` with 60
+dirty paths**, not the pushed tip `c7526ae`. Production code cannot be reproduced from the pushed
+tree; that is task #19 and it remains the owner's call, mine being to keep saying it out loud rather
+than quietly fixing it.
+
+**Recovered and shipped while this was happening** (all pushed to `master` and `main`):
+`9859b8a` (q3's admin/usage landing — CI's real 17-module list, **791 tests, 0 failures**, and GitHub's
+hosted runner independently `completed success` on both refs for `9859b8a` and `6f7e3a0`),
+`6f7e3a0` (`docs/RADD_RELAY_AND_AUTH_ARCHITECTURE.md` — the Antigravity plan recovered from outside
+Git, verbatim in Appendix A under rulings R1–R9; plus `docs/ADMIN_PANEL_ACCESS.md` and §6 of
+`IDENTITY_AND_TRIAL_ABUSE.md`), `5c331d6` (tunnel prerequisites measured), `c7526ae`
+(`AGENTS.md`/inventory gate numbers corrected: 17 CI modules not 15+2 importers, `test_database` 133
+not 124/76, 68 Python test modules not 66/60/44, and Android green on `master` while the live lane
+branch `q1-ad-cadence` is **red** at `99472e0`). Tasks #28–#32 opened for the recovered plan.
