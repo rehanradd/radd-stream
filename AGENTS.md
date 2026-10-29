@@ -171,13 +171,30 @@ Describe the code's behavior accurately to users and tools. Do not disguise its 
 |---|---|---|
 | `GITHUB_TOKEN` | Replit Configurations (environment variable; user says not Secrets) | GitHub access from Replit; use the temporary Git askpass flow in `ORACLE_DEPLOYMENT.md` |
 | `ORACLE_SSH_KEY` | Replit Configurations (environment variable; user says not Secrets) | SSH private key for `ubuntu@92.4.95.252`; use only via a temporary 0600 file |
-| `KEYSTORE_BASE64` | GitHub Repo Secrets | Android signing keystore (base64 encoded) |
-| `KEY_STORE_PASSWORD` | GitHub Repo Secrets | Keystore file password |
-| `KEY_ALIAS` | GitHub Repo Secrets | Key alias inside keystore |
-| `KEY_PASSWORD` | GitHub Repo Secrets | Key password |
+| `KEYSTORE_BASE64` | ⚠️ **NOT CONFIGURED — measured, see note below** | Android signing keystore (base64 encoded) |
+| `KEY_STORE_PASSWORD` | ⚠️ **NOT CONFIGURED** | Keystore file password |
+| `KEY_ALIAS` | ⚠️ **NOT CONFIGURED** | Key alias inside keystore |
+| `KEY_PASSWORD` | ⚠️ **NOT CONFIGURED** | Key password |
+
+**Measured 2026-10-29 17:55 — this retires the claim that the four keystore variables are "GitHub
+Repo Secrets".** `GET /repos/rehanradd/radd-stream/actions/secrets` returns
+`{"total_count": 0, "secrets": []}`, from a lane whose repo `permissions` are
+`{admin: true, push: true}`, so it is a real answer and not a permission artifact. Proof by
+execution: `workflow_dispatch` on `🚀 Release — Sign & Publish APK + AAB` (workflow `398476978`,
+run `40876596427`) ended `failure` after **10 s**, against the **7m 02s** `BUILD SUCCESSFUL` the
+Android build takes (measured on run `40874380668`), so it died at the
+`🗝️ Verify signing secrets are present` preflight (`release.yml:53`) and never reached a build,
+a signature check, or the publish step — nothing was released. That preflight is why exercising this
+is safe. **Consequence:** CI cannot produce a signed release APK/AAB until the owner adds all four
+values under GitHub → Settings → Secrets → Actions. **Do not generate a replacement keystore to work
+around it** — a different signing key makes every later upgrade incompatible with the first install,
+and there is no installed base to protect yet, so the owner's key is the only correct one.
+**Available today with no secret at all:** `🔨 CI — Android Build & Test` uploads a **debug APK** on
+every green run (`📤 Upload debug APK` succeeded at `2caadb3`) — debug-signed and installable for the
+device verification every doc still marks "pending".
 
 **Backend agents**: use `GITHUB_TOKEN` for GitHub operations and `ORACLE_SSH_KEY` only when connecting to Oracle. Read [`ORACLE_DEPLOYMENT.md`](ORACLE_DEPLOYMENT.md) first.
-**App agents**: only need the 4 keystore secrets in GitHub → Settings → Secrets → Actions.
+**App agents**: the debug build needs no secrets; the *signed release* needs the 4 keystore secrets, which are **currently absent** (measured above).
 Verify only whether the two configured variable names are present; never read or print their values, put them in Git URLs or command arguments, commit them, or copy them to Oracle. Do not ask the user to move them to Replit Secrets.
 
 ---
@@ -228,7 +245,7 @@ Every agent — no matter how short the session — MUST do this before ending:
 | Android App: server setup, metadata catalog, search | ✅ Implemented; device verification pending | Phase 1 |
 | Android App: details and playback | ✅ Implemented (Media3 playback, favorites, keeps, VIP screen); device verification pending | Phase 2 |
 | GitHub Actions | ✅ **Enabled and running** — `/repos/rehanradd/radd-stream/actions/permissions` returns `{"enabled": true, "allowed_actions": "all"}` (measured 2026-10-29 03:54 host time; 40 runs recorded). The earlier "⛔ disabled at the account level" line in this file was **wrong** and is retired. All three repo-root workflows are `state=active`: `🐍 Backend CI`, `🔨 CI — Android Build & Test`, `🚀 Release — Sign & Publish APK + AAB`. The copies under `App/.github/workflows` are inert (GitHub only reads repo-root). | Gate is live |
-| CI health (both sides) | 🐍 **Backend CI is GREEN** at `64c0b1b` — `/actions/runs?per_page=4` reports `completed success` on **both** `master` and `main` (verified 2026-10-29 04:12; the five pushes before it were `failure`). 🔨 **Android CI is still RED**: `636 tests completed, 9 failed` (`ScreenSnapshotTest` ×6 `ComposeTimeoutException`, `PosterCardProvenanceTest` ×3 `AssertionError`) plus `lintDebug` — 23 errors, first at `player/RenditionFailover.kt:137`. The trap to remember: those two suites are exactly the ones **excluded from the local arm64 Gradle run**, so a green local build proves nothing about them. `tags: 0`, `releases: 0` — no signed APK has ever been published. | App lane must land green |
+| CI health (both sides) | 🐍 **Backend CI is GREEN** — `completed success` on both `master` and `main` at `f0c1ca3`, and green on every adult-fix commit (`ab78849`, `8ad9862`, `6b28e48`, `f6637c9`, `c4a1302`). 🔨 **Android CI IS NOW GREEN — FIRST TIME EVER** — measured 2026-10-29 at `2caadb3`, `completed success` on **both** `master` and `main` (run `40874380668`); all 14 steps green, including the single combined `./gradlew :app:assembleDebug :app:testDebugUnitTest :app:lintDebug` step, `BUILD SUCCESSFUL in 7m 2s`, `:app:testDebugUnitTest` executed, no lint errors emitted. The previous "still RED: 636 tests / 9 failed / 23 lint errors" line was a **misdiagnosis**: every fix for it existed in `5446771`, but that commit was **local-only on a `master` that had diverged** from `origin/master` (`git merge-base --is-ancestor 5446771 origin/master` → NO; 2 local-only vs 26 remote-only) and `ci.yml` triggers on `App/**`, so nothing had fed it since `11742e0` (2026-10-28T21:21, failure). **It was unfed, not red** — I cherry-picked it onto `f0c1ca3` as `2caadb3` and pushed to both refs. The trap that hid this stays true: `ScreenSnapshotTest` and `PosterCardProvenanceTest` are excluded from every local arm64 run (Robolectric #9166), so only the hosted runner can judge them. `tags: 0`, `releases: 0` still, and signing is genuinely blocked on the four absent keystore secrets (see the measured note in Secrets above) — a debug APK is available from CI meanwhile. | Release blocked on owner secrets only |
 
 The current Oracle host and its HTTP-only limitations are documented in
 [`ORACLE_DEPLOYMENT.md`](ORACLE_DEPLOYMENT.md). The backend is **already deployed there and is the
