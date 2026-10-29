@@ -932,6 +932,14 @@ MONETIZATION_FIELDS = (
     ("adsterra_tag_id", "Adsterra Native banner ID", _TEXT, ""),
     ("shrinkme_api_token", "ShrinkMe API token", _TOKEN, ""),
     ("droplink_api_token", "Droplink API token", _TOKEN, ""),
+    # Owner's standing directive, verbatim from MONETIZATION_AND_FLEET_PLAN.md §"Pillars":
+    # "LINK SHORTENERS ARE PERMANENTLY DROPPED & RETIRED: We will NEVER force users through link
+    # shorteners, CAPTCHAs, or 10-second timer redirects." The two token columns above stay so the
+    # operator's credentials are not destroyed and the plumbing stays testable, but nothing may
+    # detour a download unless this flag is deliberately flipped to 1. Before it existed, the
+    # directive held only because the token columns happened to be empty: one saved token in /admin
+    # would have re-enabled the detour for every free user, silently.
+    ("feature_link_shorteners", "Link-Shortener Download Detour (RETIRED — off)", _FLAG, 0),
     ("maintenance_mode", "Maintenance Mode", _FLAG, 0),
     ("apk_update_url", "APK Update URL banner", _URL, ""),
     ("feature_downloads", "Background Downloads", _FLAG, 1),
@@ -1006,17 +1014,23 @@ def _ensure_monetization(conn):
 
 
 def _read_monetization(conn):
-    columns = ", ".join(row[0] for row in MONETIZATION_FIELDS)
+    keys = [row[0] for row in MONETIZATION_FIELDS]
+    columns = ", ".join(keys)
     row = conn.execute(
         f"SELECT id, updated_at, {columns} FROM {MONETIZATION_TABLE}"
         f" WHERE id = {MONETIZATION_ID}").fetchone()
     if row is None:
         return None
-    values = {key: row[key] for key, _l, _k, default in MONETIZATION_FIELDS
-              if row[key] is not None}
+    # Positional, never row[key]: a caller that passes a connection without the
+    # sqlite3.Row factory used to raise TypeError here, get swallowed by the
+    # `except sqlite3.Error` upstream, and be answered with the *defaults* — so a
+    # saved `maintenance_mode` could be silently ignored and a saved token silently
+    # dropped. The SELECT fixes the column order, so the tuple is the contract and
+    # any connection may be handed to this function.
+    values = {key: row[2 + i] for i, key in enumerate(keys) if row[2 + i] is not None}
     for key, _label, _kind, default in MONETIZATION_FIELDS:
         values.setdefault(key, default)
-    values["updated_at"] = int(row["updated_at"] or 0)
+    values["updated_at"] = int(row[1] or 0)
     return values
 
 
@@ -1313,8 +1327,9 @@ SHORTENER_TOKEN_FIELDS = (
 def shortener_targets(conn):
     """Configured `(network, token)` pairs, rotation order, server side only.
 
-    Empty when the operator has saved no token or the settings row is
-    unavailable — which is the same answer to the caller as "shorteners are
+    Empty when the flag `feature_link_shorteners` is off (the shipped default, and the
+    owner's standing directive), when the operator has saved no token, or when the settings
+    row is unavailable — which is the same answer to the caller as "shorteners are
     off": the download route falls back to the direct URL. Read-only and
     idempotent, like :func:`remote_config`."""
     try:
@@ -1323,6 +1338,11 @@ def shortener_targets(conn):
     except sqlite3.Error:
         return []
     if values is None:
+        return []
+    if not _as_flag(values.get("feature_link_shorteners", 0)):
+        # Retired by the owner's directive; a saved token is not consent to detour a
+        # free user's download. The download route reads this list, so refusing here
+        # is the one place the policy can be enforced for every caller.
         return []
     targets = []
     for network, key in SHORTENER_TOKEN_FIELDS:

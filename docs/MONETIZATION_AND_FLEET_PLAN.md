@@ -360,3 +360,31 @@ public nginx allow-list. And the measured defect stays on the record: on `127.0.
 dashboard serves 200 with **no token at all** (measured 2026-10-29 05:47), so that port's real
 boundary is loopback, not `RADD_ADMIN_TOKEN` — do not describe it as token-gated.
 
+
+## Correction 2026-10-29 20:20 — "link shorteners are permanently dropped" is now a flag, not an empty column
+
+The directive at the top of this file says downloads and streams are 100% direct. Measured against
+the code at the tip, what actually enforced that was **the absence of a saved token**:
+`admin_panel.shortener_targets()` returns [] when both `shrinkme_api_token` and
+`droplink_api_token` are blank, and `/api/v1/download` (the handler at `viewer.py:3393-3412`) detours
+every **free, non-VIP** download through whatever token is there. One careless save in /admin would
+have re-enabled the exact friction this file forbids, silently, with no flag to notice and nothing to
+flip back. The documents that claimed the policy was in force were describing a coincidence.
+
+It is structural now. `MONETIZATION_FIELDS` carries `feature_link_shorteners`, kind `_FLAG`,
+**default 0**, labelled "(RETIRED — off)" in the admin card, and `shortener_targets()` refuses
+unless it is deliberately flipped to 1. The token columns and the rotation/cache/fallback machinery
+stay — deleting the operator's plumbing is not what was asked, and the waterfall remains testable and
+reversible for an owner who changes this decision on purpose. Proven by
+`test_the_retired_detour_is_off_on_a_fresh_install` (a token present, flag at default → no targets)
+and `test_a_saved_token_alone_does_not_reenable_the_retired_detour` (the route 302s to the direct URL
+with `Content-Disposition: attachment`, and `call_shortener` raises if ever called).
+
+**What is still NOT implemented, so nobody quotes this file as a shipping state.** The three ad
+cadences this plan promises — pre-roll 1 per 25 min, native feed card 1 per 12 posters, app-open ad 1
+per 4 h — have **no fields in `MONETIZATION_FIELDS`**, so the admin panel cannot set them and the app
+cannot read them; `monetag_zone_id`/`adsterra_tag_id` carry an ID and nothing else. The coin wallet
+and the 7-day streak have no fields either. The pass ladder in this file is ₨20 / ₨50 / ₨250 while
+the schema offers only `vip_monthly_pkr` (default **200**, not 250) and `vip_yearly_pkr` (1500).
+Those are the real gaps between the monetization plan and the monetization surface, and they are
+listed here so the next reader does not have to rediscover them by grepping.

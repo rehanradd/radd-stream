@@ -467,6 +467,50 @@ class Monetization(Fixture):
         self.assertIn("*", self.values()["shrinkme_api_token"])
         self.assertTrue(self.card()["secrets_masked"])
 
+    def test_a_plain_connection_reads_what_the_operator_actually_saved(self):
+        """The settings reader must not depend on the caller's row factory.
+
+        `_read_monetization` indexed its row by name, so a connection without
+        `sqlite3.Row` raised TypeError inside a `try` that catches only
+        `sqlite3.Error`, and the caller answered with the **defaults**. The visible
+        result was an operator who saved `maintenance_mode` and was silently ignored,
+        and settings that read differently depending on which module opened the file.
+        """
+        self.save({"maintenance_mode": 1, "vip_monthly_pkr": 250})
+        plain = sqlite3.connect(self.db_path)
+        try:
+            values = admin_panel._read_monetization(plain)
+            self.assertEqual(values["maintenance_mode"], 1,
+                             "a plain connection read the default, not the stored value")
+            self.assertEqual(values["vip_monthly_pkr"], 250)
+            payload = admin_panel.remote_config(plain)
+            self.assertTrue(payload["maintenance_mode"],
+                            "the phone was told maintenance was off")
+        finally:
+            plain.close()
+
+    def test_the_retired_detour_is_off_on_a_fresh_install(self):
+        """Nothing has to be typed to keep downloads direct: the flag ships off.
+
+        A token alone must never re-enable the detour — that was the whole defect:
+        the directive held only because the token column happened to be empty.
+        """
+        fresh = sqlite3.connect(self.db_path)
+        try:
+            admin_panel._ensure_monetization(fresh)
+            fresh.execute(
+                "UPDATE app_remote_config SET shrinkme_api_token = ?, "
+                "droplink_api_token = ? WHERE id = 1",
+                (self.TOKEN_VALUE, "droplink-token"))
+            fresh.commit()
+            self.assertEqual(
+                int(admin_panel._read_monetization(fresh)["feature_link_shorteners"]),
+                0, "a fresh install must default the retired detour off")
+            self.assertEqual(admin_panel.shortener_targets(fresh), [],
+                            "configured tokens must not shorten anything while retired")
+        finally:
+            fresh.close()
+
     def test_the_public_projection_publishes_what_a_payment_screen_shows(self):
         self.save({"pak_till_id": "123456", "pak_jazzcash_number": "0300-1234567",
                    "pak_easypaisa_number": "03337654321", "pak_raast_id": "03001234567",

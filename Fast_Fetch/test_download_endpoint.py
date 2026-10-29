@@ -120,11 +120,12 @@ class DownloadEndpointTests(unittest.TestCase):
         except urllib.error.HTTPError as error:
             return error.code, dict(error.headers), error.read()
 
-    def configure_shorteners(self, *, shrinkme="", droplink=""):
+    def configure_shorteners(self, *, shrinkme="", droplink="", enabled=True):
         admin_panel._ensure_monetization(self.conn)
         self.conn.execute(
             "UPDATE app_remote_config SET shrinkme_api_token = ?, "
-            "droplink_api_token = ? WHERE id = 1", (shrinkme, droplink))
+            "droplink_api_token = ?, feature_link_shorteners = ? WHERE id = 1",
+            (shrinkme, droplink, 1 if enabled else 0))
         self.conn.commit()
 
     # ---- public JSON descriptor ------------------------------------------- #
@@ -261,6 +262,41 @@ class DownloadEndpointTests(unittest.TestCase):
         self.assertEqual(status, 302)
         self.assertEqual(headers["Location"], DIRECT_URL)
         self.assertIn("attachment", headers["Content-Disposition"])
+
+    def test_a_saved_token_alone_does_not_reenable_the_retired_detour(self):
+        """The owner's directive is structural now, not an accident of empty columns.
+
+        "LINK SHORTENERS ARE PERMANENTLY DROPPED & RETIRED … All media downloads and
+        streams are 100% direct." Until `feature_link_shorteners` existed the shipped
+        behavior satisfied that only because nobody had typed a token: one save in
+        /admin would have detoured every free download, silently, with no flag to
+        notice and nothing to flip back.
+        """
+        self.configure_shorteners(shrinkme="shrinkme-token", enabled=False)
+        self.assertEqual(admin_panel.shortener_targets(self.conn), [],
+                         "a retired detour must hand the route no targets")
+        # `shortener_targets` migrates the settings schema on a second connection; leave it
+        # no lock, or the handler's own `get_db()` waits on it and the request never lands.
+        self.conn.commit()
+        token = self.token(self.source_id)
+        with mock.patch.object(
+                viewer, "call_shortener",
+                side_effect=AssertionError("the retired detour was called")):
+            status, headers, _body = self.fetch(
+                self.public_url, f"/api/v1/download?id={token}", follow=False)
+        self.assertEqual(status, 302)
+        self.assertEqual(headers["Location"], DIRECT_URL)
+        self.assertIn("attachment", headers["Content-Disposition"],
+                      "a direct file must still download as a file")
+
+    def test_the_detour_runs_only_when_the_retired_flag_is_deliberately_flipped(self):
+        self.configure_shorteners(shrinkme="shrinkme-token", enabled=False)
+        self.assertEqual(admin_panel.shortener_targets(self.conn), [])
+        self.conn.execute(
+            "UPDATE app_remote_config SET feature_link_shorteners = 1 WHERE id = 1")
+        self.conn.commit()
+        self.assertEqual(admin_panel.shortener_targets(self.conn),
+                         [("shrinkme", "shrinkme-token")])
 
     def test_a_live_account_vip_skips_the_shortener(self):
         self.configure_shorteners(shrinkme="shrinkme-token")
