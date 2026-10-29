@@ -28,6 +28,10 @@ name: 🐍 Backend CI — Stdlib Python Tests
 #     - Fast_Fetch/test_usage_stats.py       (operator counters + token gate)
 #     - Fast_Fetch/test_operator_isolation.py(two real loopback servers, socket-level
 #       routing — the layer every other suite calls as a function)
+#     - Fast_Fetch/test_media_search.py      (by-media matcher: the bounded candidate
+#       window, the no-SQL floor on short tokens, EXPLAIN QUERY PLAN assertions)
+#     - Fast_Fetch/test_migrate_search_indexes.py (the reviewed index migration: writes
+#       nothing without --execute, is idempotent, and fails verify on a drifted index)
 #
 #   Deliberately EXCLUDED:
 #     - Fast_Fetch/test_all_sites.py  — live 10-site network audit; needs the
@@ -133,3 +137,15 @@ jobs:
       # that can catch the operator-port gate being routed around rather than removed.
       - name: 🧪 test_operator_isolation.py
         run: python3 -S Fast_Fetch/test_operator_isolation.py
+
+      # The by-media route's shape. The assertions that matter here are the ones that
+      # fail if somebody puts a join or a sort back in front of the candidate cap:
+      # `EXPLAIN QUERY PLAN` is captured inside the test, so a query that would take
+      # 45 s on the production catalog is red on the runner in milliseconds.
+      - name: 🧪 test_media_search.py
+        run: python3 -S Fast_Fetch/test_media_search.py
+
+      # The index migration, against a throwaway fixture catalog in a temp directory.
+      # It never opens a real database; the target path is required on the command line.
+      - name: 🧪 test_migrate_search_indexes.py
+        run: python3 -S Fast_Fetch/test_migrate_search_indexes.py

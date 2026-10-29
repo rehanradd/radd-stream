@@ -131,53 +131,56 @@ def _contains_pattern(text: str) -> str:
     return f"%{_escape_like(text)}%"
 
 
-def _prefix_pattern(text: str) -> str:
-    return f"{_escape_like(text)}%"
+def _row_columns(full: bool) -> str:
+    """The `posts` columns the projection and the evidence step need, in one list.
 
-
-def _relevance_arms(clean: str) -> list:
-    """The three ways a title can match, most-meant-first.
-
-    Each arm is its own bounded query rather than one `CASE` ranked over the whole
-    matched set, and that choice is the fix: an arm's `LIMIT` stops the walk as soon
-    as the window fills, so an arm costs the window instead of the number of works
-    that contain those letters. A single `ORDER BY tier` over all matches would need
-    the temp B-tree this module exists to avoid.
-
-    Arms only *prioritise*. Every id an exact or a prefix arm can find, the contains
-    arm finds too, so the candidate set is never larger than what the old statement
-    could match — the adult bail and the LIKE pair still decide what exists at all.
+    Carried by the candidate scan itself, so the window is read once. A separate
+    `WHERE p.id IN (…)` fetch costs one statement per search and buys nothing: the
+    scan already touches exactly those rows.
     """
-    return [
-        ("lower(p.clean_title) = ?", [clean.lower()]),
-        ("(p.clean_title LIKE ? ESCAPE '\\' OR p.title LIKE ? ESCAPE '\\')",
-         [_prefix_pattern(clean), _prefix_pattern(clean)]),
-        ("(p.clean_title LIKE ? ESCAPE '\\' OR p.title LIKE ? ESCAPE '\\')",
-         [_contains_pattern(clean), _contains_pattern(clean)]),
-    ]
+    provenance = ", p.source_site, p.url, p.slug" if full else ""
+    return (f"p.id, p.clean_title, p.title, p.year, p.content_type, p.seasons,"
+            f" p.imdb_rating, p.imdb_id, p.tmdb_id, p.genres, p.is_animated,"
+            f" p.industry, p.country, p.language, p.poster_url, p.backdrop_urls"
+            f"{provenance}")
 
 
-def _candidate_ids(conn, clean: str, window: int) -> list:
-    """Post ids that match, most relevant first, with no join anywhere near it.
+def _candidates(conn, clean: str, window: int, full: bool) -> tuple:
+    """One newest-first walk of `posts`, returning `(rows, tier)`.
 
-    Touches `posts` and nothing else, and returns at most `window` ids. The cost is
-    the window plus however far the walk has to go to fill it — never the
-    four-million-row fan-out the old statement built before it consulted `LIMIT`.
+    Only the `contains` test is in SQL, because that is the one that decides whether a
+    row exists at all; the *strength* of the match (2 exact, 1 prefix, 0 contains) is
+    computed in Python over the at-most-`window` rows that came back. Putting the tier
+    in the SELECT list instead cost three LIKE/lower() evaluations per examined row —
+    up to 150 799 of them — which measured slower than the statement this replaced for
+    a whole-title query. The scan is one statement, `ORDER BY p.id DESC LIMIT ?` walks
+    the rowid backwards so the plan is `SCAN p` with no temp B-tree at any size, and
+    there is no join anywhere near it.
+
+    The recall boundary is a fact and not an accident: candidates are the *newest*
+    `window` matches, then ranked by title strength, evidence agreement and print
+    count. A film that is popular but old can therefore be missed by a broad query that
+    the old whole-catalog popularity sort would have surfaced — the price of bounding
+    the work before the join instead of after it.
     """
-    ids: list = []
-    seen = set()
-    for clause, params in _relevance_arms(clean):
-        if len(ids) >= window:
-            break
-        sql = (f"SELECT p.id FROM posts p "
-               f"WHERE {redact.adult_clause('p')} AND {clause} "
-               f"ORDER BY p.id DESC LIMIT ?")
-        for row in conn.execute(sql, list(params) + [window - len(ids)]):
-            pid = int(row[0])
-            if pid not in seen:
-                seen.add(pid)
-                ids.append(pid)
-    return ids
+    wanted = clean.lower()
+    sql = (f"SELECT {_row_columns(full)} FROM posts p"
+           f" WHERE {redact.adult_clause('p')}"
+           f" AND (p.clean_title LIKE ? ESCAPE '\\' OR p.title LIKE ? ESCAPE '\\')"
+           f" ORDER BY p.id DESC LIMIT ?")
+    contains = _contains_pattern(clean)
+    rows = conn.execute(sql, [contains, contains, window]).fetchall()
+    tier: dict = {}
+    for row in rows:
+        pid = int(row["id"])
+        title = str(row["clean_title"] or "").lower()
+        if title == wanted:
+            tier[pid] = 2
+        elif title.startswith(wanted) or str(row["title"] or "").lower().startswith(wanted):
+            tier[pid] = 1
+        else:
+            tier[pid] = 0
+    return rows, tier
 
 
 def _counts_for(conn, post_ids: list) -> dict:
@@ -204,23 +207,6 @@ def _counts_for(conn, post_ids: list) -> dict:
             f" WHERE r.post_id IN ({marks}) GROUP BY r.post_id", post_ids):
         out.setdefault(int(row[0]), [0, 0])[1] = int(row[1])
     return out
-
-
-def _rows_for(conn, post_ids: list, full: bool) -> dict:
-    """The candidate rows themselves, fetched only for the capped window."""
-    if not post_ids:
-        return {}
-    marks = ",".join("?" * len(post_ids))
-    provenance_cols = ", p.source_site, p.url, p.slug" if full else ""
-    sql = f"""
-        SELECT p.id, p.clean_title, p.title, p.year, p.content_type, p.seasons,
-               p.imdb_rating, p.imdb_id, p.tmdb_id, p.genres, p.is_animated,
-               p.industry, p.country, p.language, p.poster_url, p.backdrop_urls
-               {provenance_cols}
-        FROM posts p
-        WHERE p.id IN ({marks})
-        """
-    return {int(row["id"]): row for row in conn.execute(sql, post_ids)}
 
 
 def _empty_evidence() -> dict:
@@ -372,31 +358,31 @@ def search_by_media(conn, title: str = "", duration_s=None, resolution=None,
         hints["audio_language"] = language
 
     window = min(CANDIDATE_WINDOW, max(limit * 4, limit))
-    ids = _candidate_ids(conn, clean, window)
+    rows, tier = _candidates(conn, clean, window, full)
+    ids = [int(r["id"]) for r in rows]
     counts = _counts_for(conn, ids)
-    rows_by_id = _rows_for(conn, ids, full)
-    # The old `ORDER BY (release_count + source_count) DESC, p.id DESC` survives, over
-    # the capped window instead of over the whole matched set. `-pid` last is not
-    # decoration: without a total order a tie repeats a row on the next page or drops
-    # one, and the window is exactly where ties are most likely.
-    ranked = sorted(ids, key=lambda pid: (-sum(counts.get(pid, [0, 0])), -pid))
-    rows = [rows_by_id[pid] for pid in ranked if pid in rows_by_id]
 
-    evidence = _work_evidence(conn, [int(r["id"]) for r in rows])
+    evidence = _work_evidence(conn, ids)
     scored = []
     for r in rows:
         pid = int(r["id"])
         ev = evidence.get(pid) or _empty_evidence()
         matched, mismatched, unknown = _score(ev, hints)
         scored.append((
+            tier.get(pid, 0),
             len(matched) - len(mismatched),
             sum(counts.get(pid, [0, 0])),
             pid, r, ev, matched, mismatched, unknown,
         ))
-    scored.sort(key=lambda t: (-t[0], -t[1], -t[2]))
+    # The key is the old `ORDER BY (release_count + source_count) DESC, p.id DESC`
+    # with the title's own strength in front of it, applied to the capped window
+    # instead of to every group the catalog can produce. `pid` last is not
+    # decoration: without a total order a tie repeats a row on the next page or drops
+    # one, and the window is exactly where ties are most likely.
+    scored.sort(key=lambda t: (-t[0], -t[1], -t[2], -t[3]))
 
     results = []
-    for _, _, _, r, ev, matched, mismatched, unknown in scored[:limit]:
+    for _, _, _, _, r, ev, matched, mismatched, unknown in scored[:limit]:
         pid = int(r["id"])
         releases, sources = counts.get(pid, [0, 0])
         item = redact.project(r, "post_brief")

@@ -515,7 +515,7 @@ class QueryShape(_Scaled):
             self.assertNotIn("USE TEMP B-TREE FOR ORDER BY", details, sql[:120])
             if "FROM posts p" in sql:
                 self.assertNotIn("USE TEMP B-TREE", details,
-                                 f"candidates arm sorts an unbounded set: {sql[:120]}")
+                                 f"the candidate scan sorts an unbounded set: {sql[:120]}")
 
     def test_it_never_joins_the_catalog_to_the_posts_it_scans(self):
         """The fan-out is gone as a statement, not merely made faster."""
@@ -560,12 +560,13 @@ class QueryShape(_Scaled):
             self.assertEqual(len(params), result["candidates"], sql[:120])
 
     def test_the_number_of_statements_does_not_grow_with_the_request(self):
-        """Three arms, two count reads, one row fetch, two evidence reads. Eight
-        statements whatever the `limit` is: a larger page must not quietly buy work."""
+        """One candidate scan that carries the row, two count reads, two evidence
+        reads: five statements whatever the `limit` is. A larger page must not quietly
+        buy more work, and a bigger catalog must not buy more statements either."""
         small, small_spy = self.search(title="on", limit=1)
         large, large_spy = self.search(title="on", limit=50)
         self.assertEqual(len(small_spy.calls), len(large_spy.calls))
-        self.assertLessEqual(len(large_spy.calls), 8)
+        self.assertEqual(len(large_spy.calls), 5, [c[0][:60] for c in large_spy.calls])
         self.assertGreater(large["candidates"], small["candidates"])
 
     def test_a_bounded_request_lands_inside_the_budget_at_both_ends_of_the_window(self):
@@ -633,7 +634,7 @@ class TextIsText(Fixture):
 
     def test_an_adult_work_cannot_take_the_top_slot_by_being_the_most_popular(self):
         """The ranking signal is print-and-mirror count; a flagged row would win it
-        outright. The bail is in every arm, not in the projection."""
+        outright. The bail is in the WHERE of the only scan, not in the projection."""
         visible = self.seed("Visible Film")
         self.mirrors(visible, releases=1, sources_per_release=1)
         hidden = self.seed("Hidden Film", is_18_plus=1)
@@ -642,6 +643,32 @@ class TextIsText(Fixture):
         self.assertNotIn("Hidden Film", self.titles(result))
         self.assertEqual(self.titles(result), ["Visible Film"])
         self.assertGreater(result["results"][0]["release_count"], 0)
+
+    def test_the_title_the_viewer_typed_outranks_the_catalog_s_own_popularity(self):
+        """The tier comes from the same scan, so it must be the first sort key.
+
+        Exact, then prefix, then contains — against a *rising* mirror count, so a
+        ranking that let popularity lead would put these three in the opposite order.
+        A viewer who typed the whole title means that title.
+        """
+        exact = self.seed("Inception")
+        self.mirrors(exact, releases=1, sources_per_release=1)
+        prefix = self.seed("Inception 2")
+        self.mirrors(prefix, releases=3, sources_per_release=3)
+        contains = self.seed("Before Inception After")
+        self.mirrors(contains, releases=5, sources_per_release=5)
+        result = self.search(title="Inception", limit=3)
+        self.assertEqual(self.titles(result),
+                         ["Inception", "Inception 2", "Before Inception After"])
+        self.assertLess(result["results"][0]["source_count"],
+                        result["results"][2]["source_count"],
+                        "the popularity order the tier key is supposed to override")
+        # Seeded oldest-first on purpose: the tier order here is the *reverse* of the
+        # id tiebreak, so a sort that dropped the tier key would answer with the
+        # most-mirrored row and this assertion would fail, not accidentally pass.
+        self.assertLess(exact, prefix)
+        self.assertLess(prefix, contains)
+        self.assertEqual([r["id"] for r in result["results"]], [exact, prefix, contains])
 
     def test_ties_break_on_the_highest_id_and_stay_put_across_a_limit_sweep(self):
         """A tie with no last-resort key is a real defect: the next page repeats a
