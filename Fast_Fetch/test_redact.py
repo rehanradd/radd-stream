@@ -405,6 +405,43 @@ class RateLimiterTests(unittest.TestCase):
         self.assertEqual(redact.BUCKET_LIMITS["browse"][0], 60)
         self.assertEqual(redact.BUCKET_LIMITS["reports"][0], 10)
 
+    def test_the_bucket_key_is_the_address_the_edge_saw_not_the_one_claimed(self):
+        # Measured live on the public edge before this existed: three requests
+        # with three invented X-Forwarded-For values each got `Remaining: 59`,
+        # because the limiter keyed on the caller's own string.
+        class _Handler:
+            def __init__(self, peer, **headers):
+                self.client_address = (peer, 41234)
+                self.headers = dict(headers)
+
+        behind_proxy = "203.0.113.7"
+        spoofed = _Handler("127.0.0.1",
+                           **{"X-Real-IP": behind_proxy,
+                              "X-Forwarded-For": "1.2.3.4, 9.9.9.9"})
+        self.assertEqual(redact.client_ip(spoofed), behind_proxy,
+                         "X-Real-IP is what nginx set from $remote_addr; the "
+                         "first XFF entry is what the caller typed")
+        # With no X-Real-IP (a proxy that only appends), the entry our edge
+        # appended is the last one, not the first.
+        appended = _Handler("127.0.0.1",
+                            **{"X-Forwarded-For": "1.2.3.4, 9.9.9.9"})
+        self.assertEqual(redact.client_ip(appended), "9.9.9.9")
+        # A direct hit that did not come through nginx trusts no header at all.
+        direct = _Handler("198.51.100.9",
+                          **{"X-Forwarded-For": "1.2.3.4", "X-Real-IP": "1.2.3.4"})
+        self.assertEqual(redact.client_ip(direct), "198.51.100.9")
+        # And a caller cannot make two spoofed strings look like two strangers:
+        # through our edge they arrive as one bucket, keyed on the real peer.
+        limiter = redact.RateLimiter(limits={"browse": (2, 60.0)})
+        for claim in ("1.2.3.4", "9.9.9.9", "192.0.2.66"):
+            key = redact.client_ip(_Handler("127.0.0.1",
+                                            **{"X-Real-IP": "203.0.113.7",
+                                               "X-Forwarded-For": claim}))
+            self.assertEqual(key, "203.0.113.7")
+        for _ in range(2):
+            self.assertTrue(limiter.check("browse", "203.0.113.7")["allowed"])
+        self.assertFalse(limiter.check("browse", "203.0.113.7")["allowed"])
+
 
 class NeedleVocabularyTests(FixtureMixin):
     def setUp(self):
@@ -733,6 +770,19 @@ class PublicEdgeHttpTests(FixtureMixin):
         for handle in handles:
             status, headers, _ = self.get(f"/api/v1/stream?id={handle}", self.public_port)
             self.assertIn(status, (200, 302), f"{handle} → {status}")
+
+    def test_a_non_numeric_pager_is_answered_not_crashed(self):
+        """`?page=abc` used to raise out of the handler and the edge gave 502."""
+        for path in ("/api/v1/posts?page=abc", "/api/v1/posts?page=",
+                     "/api/v1/posts?page=999999999999999999999",
+                     "/api/v1/posts?limit=abc", "/api/v1/posts?limit=-5",
+                     "/api/v1/posts?limit=100000"):
+            status, _, body = self.get(path, self.public_port)
+            self.assertEqual(status, 200, f"{path} → {status}: {body[:120]}")
+            payload = json.loads(body)
+            self.assertGreaterEqual(payload["page"], 1, path)
+            self.assertLessEqual(payload["limit"], 100, path)
+            self.assertGreaterEqual(payload["limit"], 1, path)
 
 
 # ── 3. zero data loss: hiding must not break healing or the ledger ───────────

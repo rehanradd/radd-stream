@@ -1174,12 +1174,34 @@ limiter = RateLimiter()
 
 
 def client_ip(handler) -> str:
-    """Forwarded-for first, then the socket peer; XFF is only trusted here
-    because the response carries no secret and the limit is advisory."""
-    forwarded = str(handler.headers.get("X-Forwarded-For") or "").split(",")[0].strip()
+    """The address our own edge saw, never the address the caller claims.
+
+    The bucket key used to be the *first* `X-Forwarded-For` entry, and that is a
+    value any client types: three requests with three different made-up entries
+    minted three fresh buckets and all answered `RateLimit-Remaining: 59`, so the
+    application limiter was decoration. nginx sets `X-Real-IP` from `$remote_addr`
+    and overwrites whatever the caller sent, which is exactly the address its own
+    `limit_req` zone counts — so that header and nothing else decides who shares
+    a budget, and only when the socket peer is loopback (i.e. the request really
+    did come through the proxy we ship). A direct hit on :8080 from anywhere else
+    trusts no forwarded header at all.
+
+    This is not a trust decision about the response any more: the same leftmost
+    read meant a Pakistani carrier-NAT user behind a shared proxy could be
+    throttled by a stranger's chosen string, while the stranger went free.
+    """
+    peer = str(getattr(handler, "client_address", ("",))[0] or "")
+    if peer and peer not in ("127.0.0.1", "::1"):
+        return peer
+    real = str(handler.headers.get("X-Real-IP") or "").strip()
+    if real:
+        return real
+    forwarded = [entry.strip() for entry in
+                 str(handler.headers.get("X-Forwarded-For") or "").split(",")]
+    forwarded = [entry for entry in forwarded if entry]
     if forwarded:
-        return forwarded
-    return str(getattr(handler, "client_address", ("",))[0] or "")
+        return forwarded[-1]
+    return peer
 
 
 # ── needles for the tests ────────────────────────────────────────────────────

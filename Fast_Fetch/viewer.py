@@ -3000,6 +3000,21 @@ def _get_cached_stats(conn):
     return res
 
 
+def bounded_int(query_params, name, default, lo, hi):
+    """A public query parameter that is meant to be a number.
+
+    Bare `int()` on caller text was raising out of the handler for `?page=abc`
+    and the edge answered 502 — an unauthenticated caller could make that happen
+    on every request it liked, and each one wrote a traceback. The fallback is
+    the documented default, same as `/api/v1/search/by-media` already did.
+    """
+    try:
+        value = int(str(query_params.get(name, [default])[0]).strip())
+    except (TypeError, ValueError):
+        return default
+    return min(hi, max(lo, value))
+
+
 class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
     daemon_threads = True
     allow_reuse_address = True
@@ -3247,8 +3262,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
         elif path == "/api/v1/posts":
             q = query_params.get("q", [""])[0]
             ctype = query_params.get("type", [""])[0]
-            page = int(query_params.get("page", [1])[0])
-            limit = min(100, max(1, int(query_params.get("limit", [20])[0])))
+            page = bounded_int(query_params, "page", 1, 1, 1_000_000)
+            limit = bounded_int(query_params, "limit", 20, 1, 100)
             data = api_v1_get_posts(
                 query=q, content_type=ctype, page=page, limit=limit,
                 full=full, base_url=base_url,
