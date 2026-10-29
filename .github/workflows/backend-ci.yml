@@ -32,6 +32,10 @@ name: 🐍 Backend CI — Stdlib Python Tests
 #       window, the no-SQL floor on short tokens, EXPLAIN QUERY PLAN assertions)
 #     - Fast_Fetch/test_migrate_search_indexes.py (the reviewed index migration: writes
 #       nothing without --execute, is idempotent, and fails verify on a drifted index)
+#     - Fast_Fetch/test_bounded_ledger.py    (/api/data: page ceiling, operator-only
+#       stats=full, and a scan-free default path proven by a trace callback)
+#     - Fast_Fetch/test_project_readonly.py  (v2 rebuild over an ATTACHed mode=ro ledger:
+#       source sha256 unchanged, zero link loss, safe stamps written)
 #
 #   Deliberately EXCLUDED:
 #     - Fast_Fetch/test_all_sites.py  — live 10-site network audit; needs the
@@ -149,3 +153,15 @@ jobs:
       # It never opens a real database; the target path is required on the command line.
       - name: 🧪 test_migrate_search_indexes.py
         run: python3 -S Fast_Fetch/test_migrate_search_indexes.py
+
+      # `/api/data` is bounded twice: a page/limit with a hard ceiling and an operator
+      # `stats=full` escape, and the default branch is proven scan-free with a SQLite
+      # trace callback. On the production catalog the old shape answered 2.5 MB in 46.6 s.
+      - name: 🧪 test_bounded_ledger.py
+        run: python3 -S Fast_Fetch/test_bounded_ledger.py
+
+      # The v2 rebuild wrapper opens the live ledger `mode=ro` behind TEMP VIEWs. The
+      # suite hashes the source before and after: a rebuild that writes to the catalog
+      # is red here before it can be run against production.
+      - name: 🧪 test_project_readonly.py
+        run: python3 -S Fast_Fetch/test_project_readonly.py

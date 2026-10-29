@@ -231,6 +231,10 @@ VIEWS: dict[str, frozenset[str]] = {
         "sitemap_cached", "posts_count", "industry_counts", "hollywood_count",
         "bollywood_count", "anime_count", "releases_count", "sources_count",
         "active_sources", "resumable_sources", "dead_sources",
+        # Which counters this answer measured and how old the stamp is. No site
+        # identity can hide in a boolean, an ISO timestamp, or a list of counter
+        # names drawn from this same view.
+        "stats_source", "stamped_at", "unavailable",
     }),
     # v2 catalogue shapes (catalog_api.py builds these by hand; scrub enforces).
     "browse_item": frozenset(_IDENTITY | {

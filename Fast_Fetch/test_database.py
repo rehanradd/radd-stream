@@ -468,7 +468,7 @@ class DatabaseSaveTests(unittest.TestCase):
         # Operator mode (loopback port) keeps full provenance; the public
         # projection is asserted in test_redact.py.
         with patch.object(viewer, "DB_PATH", self.db_path):
-            payload = viewer.fetch_database_payload(full=True)
+            payload = viewer.fetch_database_payload(full=True, stats="full")
 
         self.assertEqual(payload["stats"]["posts_count"], 1)
         self.assertEqual(len(payload["posts"]), 1)
@@ -489,7 +489,7 @@ class DatabaseSaveTests(unittest.TestCase):
             )
 
         with patch.object(viewer, "DB_PATH", self.db_path):
-            payload = viewer.fetch_database_payload(full=True)
+            payload = viewer.fetch_database_payload(full=True, stats="full")
 
         self.assertEqual(payload["stats"]["rog_posts"], 1)
 

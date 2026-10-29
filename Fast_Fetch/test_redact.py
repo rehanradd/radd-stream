@@ -973,7 +973,9 @@ class AdultDenialOnBothPortsTests(FixtureMixin):
         self.assertEqual(status, 404, "the panel that shows the flag is not public")
 
     def test_the_operator_panel_lists_the_flagged_row_and_its_badge_data(self):
-        status, body = self.get("/api/data", self.operator_port)
+        # `stats=full` because this test is about the rows and the badge, and the
+        # panel's default counters are the projection's stamp (null without one).
+        status, body = self.get("/api/data?stats=full", self.operator_port)
         self.assertEqual(status, 200, body)
         payload = json.loads(body)
         listed = {row["id"]: row for row in payload["posts"]}

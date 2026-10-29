@@ -491,13 +491,45 @@ def _season_artwork(conn, post_id: int) -> list:
     return out
 
 
+#: `/api/data`'s page size and its ceiling. Measured 2026-10-30 on this catalog
+#: (6.4 GB, 150k posts, 1.38 M releases, 3.8 M links): a 50-post page is ~2.5 MB,
+#: so 200 is as large a page as this box should serialise in one request. The
+#: operator page paginates rather than asking for more; a caller that asks for
+#: more is clamped, never refused into an empty answer it must guess about.
+_LEDGER_PAGE_DEFAULT = 50
+_LEDGER_PAGE_CEILING = 200
+
+#: Which counters may be computed on the request path.
+#:
+#: `stamp` (default) reads the projection's `cat_projection_meta` row and answers
+#: `null` for anything it did not stamp. `full` is the operator's explicit choice
+#: to count the ledger live — measured on 2026-10-30 against the production file:
+#: `COUNT(*) FROM releases` 112.6 s, `is_18_plus = 1` 93.0 s, `Bollywood|India`
+#: 15.2 s, a 3.8 M-link `GROUP BY state` 42.2 s. Those numbers are why the default
+#: may not count: one unauthenticated turn of the dashboard used to spend the only
+#: core for two minutes.
+_LEDGER_STATS_MODES = ("stamp", "full")
+
+
 def fetch_database_payload(search_query: str = "", full: bool = False,
-                           base_url: str = "") -> dict:
+                           base_url: str = "", limit: int = _LEDGER_PAGE_DEFAULT,
+                           page: int = 1, stats: str = "stamp") -> dict:
     """The dashboard/API catalog panel.
 
     `full` is the operator-only mode (loopback port): raw ledger rows, exactly as
     stored, for healing and audit. Public callers get `redact` views instead —
     and the difference is one flag at the edge, never two copies of the query.
+
+    The read is bounded twice over. Rows: `limit` is clamped to
+    `_LEDGER_PAGE_CEILING` and `page` to a sane range, so no caller can ask for the
+    whole ledger however it spells the request. Counters: `stats="stamp"` (the
+    default) reads the projection's recorded numbers and publishes `null` for the
+    ones it did not record; only `stats="full"`, an explicit operator act, counts
+    the ledger live. Before this, every dashboard load ran five `posts` scans, a
+    1.4 M-row `releases` UNION and — with no safe stamp on the file — a 3.8 M-link
+    `GROUP BY`: the 2,533,437-byte / 46.6 s answer this endpoint was audited for.
+    A `null` is "this box has not measured it", which is a different statement
+    from `0`, and the page renders them differently.
 
     The adult rule on this panel, stated once so the code and the docs stop arguing:
     no public surface ever lists or plays a flagged row; this operator panel may show
@@ -506,8 +538,21 @@ def fetch_database_payload(search_query: str = "", full: bool = False,
     — see `/api/v1/stream` and `/api/v1/download`, which call `redact.link_is_adult`
     unconditionally, and `test_redact.AdultDenialOnBothPortsTests`, which proves it
     over real HTTP."""
+    try:
+        limit = min(_LEDGER_PAGE_CEILING, max(1, int(limit)))
+    except (TypeError, ValueError):
+        limit = _LEDGER_PAGE_DEFAULT
+    try:
+        page = max(1, int(page))
+    except (TypeError, ValueError):
+        page = 1
+    offset = (page - 1) * limit
+    live = str(stats).strip().lower() == "full"
     if not DB_PATH.exists():
-        return {"stats": {}, "posts": []}
+        return {"stats": {}, "posts": [],
+                "page": {"limit": limit, "page": page, "offset": offset,
+                         "returned": 0, "has_more": False,
+                         "ceiling": _LEDGER_PAGE_CEILING}}
     _ensure_schema()
 
     with get_db() as conn:
@@ -521,52 +566,70 @@ def fetch_database_payload(search_query: str = "", full: bool = False,
         s_vega = conn.execute("SELECT COUNT(*) FROM sitemap_cache WHERE site = 'vegamovies'").fetchone()[0]
         s_rog = conn.execute("SELECT COUNT(*) FROM sitemap_cache WHERE site = 'rogmovies'").fetchone()[0]
 
-        p_count = int(meta.get("posts", 0)) or conn.execute("SELECT COUNT(*) FROM posts").fetchone()[0]
-        p_adult = conn.execute("SELECT COUNT(*) FROM posts WHERE is_18_plus = 1").fetchone()[0]
+        # Counters: stamped by default, counted only when the operator says "full".
+        # `live` is the one switch that may start a table scan from this function.
+        p_count = p_adult = p_holly = p_bolly = p_anime = None
         page_counts = {}
-        try:
-            # A release may still carry the only attribution an older ledger
-            # recorded; counting both tables keeps that site from disappearing
-            # from the operator totals just because the v2 projection is newer.
-            page_counts = {
-                row[0]: row[1]
-                for row in conn.execute(
-                    """
-                    SELECT source_site, COUNT(DISTINCT post_id) FROM (
-                        SELECT source_site, post_id FROM cat_work_sites
-                        UNION ALL
-                        SELECT source_site, post_id FROM releases
-                        WHERE source_site IS NOT NULL AND source_site != ''
-                    )
-                    GROUP BY source_site
-                    """
-                ).fetchall()
-            }
-        except Exception:
+        r_count = src_count = None
+        by_state = None
+        resumable_count = 0
+        if live:
+            p_count = conn.execute("SELECT COUNT(*) FROM posts").fetchone()[0]
+            p_adult = conn.execute("SELECT COUNT(*) FROM posts WHERE is_18_plus = 1").fetchone()[0]
             try:
+                # A release may still carry the only attribution an older ledger
+                # recorded; counting both tables keeps that site from disappearing
+                # from the operator totals just because the v2 projection is newer.
                 page_counts = {
                     row[0]: row[1]
                     for row in conn.execute(
                         """
-                        SELECT source_site, COUNT(DISTINCT post_id) FROM releases
-                        WHERE source_site IS NOT NULL AND source_site != ''
+                        SELECT source_site, COUNT(DISTINCT post_id) FROM (
+                            SELECT source_site, post_id FROM cat_work_sites
+                            UNION ALL
+                            SELECT source_site, post_id FROM releases
+                            WHERE source_site IS NOT NULL AND source_site != ''
+                        )
                         GROUP BY source_site
                         """
                     ).fetchall()
                 }
             except Exception:
-                pass
-        p_vega = page_counts.get("vegamovies", 0)
-        p_rog = page_counts.get("rogmovies", 0)
-        p_ssr = page_counts.get("ssrmovies", 0)
-        p_kat = page_counts.get("katmoviehd", 0)
-        p_7star = page_counts.get("7starhd", 0)
-        p_holly = conn.execute("SELECT COUNT(*) FROM posts WHERE industry LIKE '%Hollywood%'").fetchone()[0]
-        p_bolly = conn.execute("SELECT COUNT(*) FROM posts WHERE industry LIKE '%Bollywood%' OR country = 'India'").fetchone()[0]
-        p_anime = conn.execute("SELECT COUNT(*) FROM posts WHERE is_animated = 1 OR industry = 'Anime'").fetchone()[0]
+                try:
+                    page_counts = {
+                        row[0]: row[1]
+                        for row in conn.execute(
+                            """
+                            SELECT source_site, COUNT(DISTINCT post_id) FROM releases
+                            WHERE source_site IS NOT NULL AND source_site != ''
+                            GROUP BY source_site
+                            """
+                        ).fetchall()
+                    }
+                except Exception:
+                    pass
+            p_holly = conn.execute("SELECT COUNT(*) FROM posts WHERE industry LIKE '%Hollywood%'").fetchone()[0]
+            p_bolly = conn.execute("SELECT COUNT(*) FROM posts WHERE industry LIKE '%Bollywood%' OR country = 'India'").fetchone()[0]
+            p_anime = conn.execute("SELECT COUNT(*) FROM posts WHERE is_animated = 1 OR industry = 'Anime'").fetchone()[0]
+            r_count = conn.execute("SELECT COUNT(*) FROM releases").fetchone()[0]
+            src_count = conn.execute("SELECT COUNT(*) FROM download_sources").fetchone()[0]
+        else:
+            # A stamp is the ledger as the projection last read it, not a live
+            # count — which is the whole point: it costs a row read, not a scan.
+            p_count = _meta_count(meta.get("posts"))
+            r_count = _meta_count(meta.get("releases"))
+            src_count = _meta_count(meta.get("links"))
 
-        r_count = int(meta.get("releases", 0)) or conn.execute("SELECT COUNT(*) FROM releases").fetchone()[0]
-        src_count = int(meta.get("links", 0)) or conn.execute("SELECT COUNT(*) FROM download_sources").fetchone()[0]
+        if live:
+            p_vega = page_counts.get("vegamovies", 0)
+            p_rog = page_counts.get("rogmovies", 0)
+            p_ssr = page_counts.get("ssrmovies", 0)
+            p_kat = page_counts.get("katmoviehd", 0)
+            p_7star = page_counts.get("7starhd", 0)
+        else:
+            # Not stamped, not guessed: the dashboard renders these as "—".
+            p_vega = p_rog = p_ssr = p_kat = p_7star = None
+
         # `active_sources` here used to be the total link count: with
         # `links_by_state = {"unchecked": 3456460}` it told the dashboard that every
         # mirror in the catalog had been knocked on and answered, when nothing had.
@@ -574,12 +637,14 @@ def fetch_database_payload(search_query: str = "", full: bool = False,
         # so active/dead/resumable are three views of the same counted set instead of
         # two from the safe stamp and one from the unfiltered rows.
         by_state = _meta_by_state(meta.get("links_by_state_safe"))
-        if by_state is None:
+        if by_state is not None:
+            resumable_count = _meta_count(meta.get("links_resumable_safe")) or 0
+        elif live:
             by_state, resumable_count, _ = _ledger_link_breakdown(conn)
         else:
-            resumable_count = _meta_count(meta.get("links_resumable_safe")) or 0
-        active_count = int(by_state.get("active", 0) or 0)
-        dead_count = int(by_state.get("dead", 0) or 0)
+            resumable_count = None
+        active_count = int(by_state.get("active", 0) or 0) if by_state is not None else None
+        dead_count = int(by_state.get("dead", 0) or 0) if by_state is not None else None
 
         stats = {
             "sitemap_cached": s_count,
@@ -603,6 +668,23 @@ def fetch_database_payload(search_query: str = "", full: bool = False,
             "active_sources": active_count,
             "resumable_sources": resumable_count,
             "dead_sources": dead_count,
+            # Which of the numbers above this answer measured, so a `null` is read
+            # as "not measured" rather than "zero". The stamp is the projection's
+            # record of the ledger it last read; `projected_at` says how old it is.
+            "stats_source": "live" if live else "stamp",
+            "stamped_at": meta.get("projected_at"),
+            "unavailable": sorted(
+                key for key, value in (
+                    ("posts_count", p_count), ("posts_adult", p_adult),
+                    ("vega_posts", p_vega), ("rog_posts", p_rog),
+                    ("ssr_posts", p_ssr), ("kat_posts", p_kat),
+                    ("star7_posts", p_7star), ("hollywood_count", p_holly),
+                    ("bollywood_count", p_bolly), ("anime_count", p_anime),
+                    ("releases_count", r_count), ("sources_count", src_count),
+                    ("active_sources", active_count),
+                    ("resumable_sources", resumable_count),
+                    ("dead_sources", dead_count),
+                ) if value is None),
         }
 
         # The one surface allowed to *see* a flagged row is the operator's, and it is
@@ -619,8 +701,13 @@ def fetch_database_payload(search_query: str = "", full: bool = False,
             sql += " AND (clean_title LIKE ? OR title LIKE ? OR slug LIKE ? OR industry LIKE ? OR country LIKE ? OR language LIKE ?)"
             p = f"%{search_query}%"
             params = [p, p, p, p, p, p]
-        sql += " ORDER BY id DESC LIMIT 50"
+        # One row past the page decides `has_more` without a COUNT over the table;
+        # a COUNT here was the other way this route could spend a minute on I/O.
+        sql += " ORDER BY id DESC LIMIT ? OFFSET ?"
+        params = list(params) + [limit + 1, offset]
         post_rows = conn.execute(sql, params).fetchall()
+        has_more = len(post_rows) > limit
+        post_rows = post_rows[:limit]
 
         posts = []
         for p in post_rows:
@@ -666,7 +753,19 @@ def fetch_database_payload(search_query: str = "", full: bool = False,
 
         if not full:
             stats = redact.project(stats, "dashboard_stats")
-        return {"stats": stats, "posts": posts}
+            # The allowlist is the contract, and `unavailable` names counters: keep
+            # it to the counters this view publishes, so a per-site key can never
+            # ride out inside a diagnostic list.
+            published = redact.VIEWS["dashboard_stats"]
+            stats["unavailable"] = [key for key in stats.get("unavailable", [])
+                                    if key in published]
+        return {
+            "stats": stats,
+            "posts": posts,
+            "page": {"limit": limit, "page": page, "offset": offset,
+                     "returned": len(posts), "has_more": has_more,
+                     "ceiling": _LEDGER_PAGE_CEILING},
+        }
 
 
 def search_sitemap_api(query: str, site: str = "", limit: int = 50) -> list[dict]:
@@ -1234,6 +1333,11 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       </div>
     </div>
 
+    <div id="stats-note" style="margin: 8px 2px 0; font-size: 11px; color: var(--text-dim); display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
+      <span id="stats-source">Counters: reading the projection stamp…</span>
+      <button class="filter-btn" id="btn-stats-live" onclick="fetchData(null, currentPage, 'full')">🧮 Count live (slow)</button>
+    </div>
+
     <div class="nav-tabs">
       <button class="tab-btn active" id="tab-db-btn" onclick="switchMainTab('db')">
         💾 Indexed Database Releases
@@ -1266,6 +1370,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           <h3>Loading database records...</h3>
         </div>
       </div>
+      <div id="posts-pager" style="display: flex; gap: 8px; align-items: center; justify-content: center; padding: 16px 0; flex-wrap: wrap;"></div>
     </div>
 
     <!-- TAB 2: SITEMAP EXPLORER -->
@@ -1301,6 +1406,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     let currentMainTab = 'db';
     let currentSitemapSite = 'all';
     let sitemapSearchTimer = null;
+    let currentQuery = '';
+    let currentPage = 1;
+    let currentStats = 'stamp';
 
     function switchMainTab(tab) {
       currentMainTab = tab;
@@ -1321,16 +1429,47 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       fetchSitemapList(q);
     }
 
-    async function fetchData(query = '') {
+    async function fetchData(query, page, statsMode) {
+      // The endpoint is paginated and its counters are stamped; asking for more
+      // than 200 rows or a live count is an explicit choice made here, never a
+      // side effect of typing in the search box.
+      if (query !== undefined && query !== null) currentQuery = query;
+      if (page !== undefined && page !== null) currentPage = Math.max(1, page);
+      if (statsMode) currentStats = statsMode;
       try {
-        const url = API_BASE + '/api/data' + (query ? '?q=' + encodeURIComponent(query) : '');
-        const res = await fetch(url);
+        const params = new URLSearchParams();
+        if (currentQuery) params.set('q', currentQuery);
+        params.set('limit', '50');
+        params.set('page', String(currentPage));
+        if (currentStats === 'full') params.set('stats', 'full');
+        const res = await fetch(API_BASE + '/api/data?' + params.toString());
         dbData = await res.json();
         renderStats();
         renderPosts();
+        renderPager();
       } catch (err) {
         console.error(err);
       }
+    }
+
+    function renderPager() {
+      const box = document.getElementById('posts-pager');
+      if (!box) return;
+      const p = dbData.page || {};
+      if (!p.limit) { box.innerHTML = ''; return; }
+      box.innerHTML =
+        '<button class="filter-btn" onclick="gotoPage(' + (p.page - 1) + ')"' +
+        (p.page <= 1 ? ' disabled' : '') + '>← Prev</button>' +
+        '<span style="font-size:12px;color:var(--text-dim)">page ' + p.page +
+        ' · ' + p.returned + ' rows' + (p.has_more ? ' · more' : ' · end') +
+        ' · max ' + p.ceiling + '/page</span>' +
+        '<button class="filter-btn" onclick="gotoPage(' + (p.page + 1) + ')"' +
+        (p.has_more ? '' : ' disabled') + '>Next →</button>';
+    }
+
+    function gotoPage(n) {
+      if (n < 1) return;
+      fetchData(null, n);
     }
 
     async function runGlobalHealthCheck() {
@@ -1457,24 +1596,40 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
     function renderStats() {
       const s = dbData.stats || {};
-      document.getElementById('stat-posts').innerText = (s.posts_count || 0).toLocaleString();
+      // `null` is "not measured", not "zero": an unstamped catalog must not read
+      // as a catalog with nothing in it.
+      const num = v => (v === null || v === undefined) ? '—' : Number(v).toLocaleString();
+      document.getElementById('stat-posts').innerText = num(s.posts_count);
       if (document.getElementById('stat-posts-sub')) {
-        document.getElementById('stat-posts-sub').innerText = `🎬 ${s.hollywood_count || 0} Holly · 🇮🇳 ${s.bollywood_count || 0} Bolly · 🎨 ${s.anime_count || 0} Anime`;
+        document.getElementById('stat-posts-sub').innerText = `🎬 ${num(s.hollywood_count)} Holly · 🇮🇳 ${num(s.bollywood_count)} Bolly · 🎨 ${num(s.anime_count)} Anime`;
       }
-      document.getElementById('stat-releases').innerText = (s.releases_count || 0).toLocaleString();
-      document.getElementById('stat-sources').innerText = (s.sources_count || 0).toLocaleString();
-      document.getElementById('stat-sitemap').innerText = (s.sitemap_cached || 0).toLocaleString();
+      document.getElementById('stat-releases').innerText = num(s.releases_count);
+      document.getElementById('stat-sources').innerText = num(s.sources_count);
+      document.getElementById('stat-sitemap').innerText = num(s.sitemap_cached);
       if (document.getElementById('stat-sitemap-sub')) {
-        document.getElementById('stat-sitemap-sub').innerText = `Vega: ${(s.sitemap_vega || 0).toLocaleString()} · Rog: ${(s.sitemap_rog || 0).toLocaleString()}`;
+        document.getElementById('stat-sitemap-sub').innerText = `Vega: ${num(s.sitemap_vega)} · Rog: ${num(s.sitemap_rog)}`;
       }
       if (document.getElementById('stat-active')) {
-        document.getElementById('stat-active').innerText = (s.active_sources || 0).toLocaleString();
+        document.getElementById('stat-active').innerText = num(s.active_sources);
       }
       if (document.getElementById('stat-resumable')) {
-        document.getElementById('stat-resumable').innerText = (s.resumable_sources || 0).toLocaleString();
+        document.getElementById('stat-resumable').innerText = num(s.resumable_sources);
       }
       if (document.getElementById('stat-dead')) {
-        document.getElementById('stat-dead').innerText = (s.dead_sources || 0).toLocaleString();
+        document.getElementById('stat-dead').innerText = num(s.dead_sources);
+      }
+      const note = document.getElementById('stats-source');
+      if (note) {
+        const when = s.stamped_at ? new Date(Number(s.stamped_at) * 1000).toLocaleString() : '';
+        if (s.stats_source === 'live') {
+          note.innerText = 'Counters: counted live just now';
+        } else if (s.posts_count === undefined) {
+          note.innerText = 'Counters: —';
+        } else {
+          note.innerText = 'Counters: projection stamp' + (when ? ' from ' + when : (s.stamped_at === null ? ' — never stamped' : ''));
+        }
+        const missing = (s.unavailable || []).length;
+        if (missing) note.innerText += ' · ' + missing + ' key(s) need "Count live"';
       }
     }
 
@@ -1487,7 +1642,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
     function handleSearch() {
       const q = document.getElementById('search-box').value.trim();
-      fetchData(q);
+      // A search starts a new page 1 and drops back to stamped counters — a live
+      // count per keystroke would be one full scan per character.
+      fetchData(q, 1, 'stamp');
     }
 
     function copyToClipboard(text) {
@@ -3250,7 +3407,18 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
         if path == "/api/data":
             search_q = query_params.get("q", [""])[0]
-            data = fetch_database_payload(search_q, full=full, base_url=base_url)
+            # `stats=full` is the operator's explicit "count it live, I know what
+            # it costs". Anything else — including a typo — is the stamped answer,
+            # because the expensive branch must be chosen, never fallen into.
+            mode = query_params.get("stats", ["stamp"])[0].strip().lower()
+            if mode not in _LEDGER_STATS_MODES:
+                mode = "stamp"
+            data = fetch_database_payload(
+                search_q, full=full, base_url=base_url,
+                limit=bounded_int(query_params, "limit", _LEDGER_PAGE_DEFAULT,
+                                  1, _LEDGER_PAGE_CEILING),
+                page=bounded_int(query_params, "page", 1, 1, 100000),
+                stats=mode)
             self.send_json(data)
 
         elif path == "/api/sitemap":
@@ -3632,16 +3800,21 @@ def export_standalone_html(output_file: str = "database_view.html") -> str:
 
     Always `full`: the badges and copy-the-upstream-URL buttons are the reason to
     open this file, and it never leaves the box — the server has no static route
-    that could hand it to a client, and it is gitignored."""
-    payload = fetch_database_payload(full=True, base_url=PUBLIC_BASE_URL)
+    that could hand it to a client, and it is gitignored.
+
+    Counters are `stats="full"` here — this is the one caller allowed to ask for
+    the live scan, because it is an explicit CLI snapshot an operator waits for,
+    not a page that reloads itself."""
+    payload = fetch_database_payload(full=True, base_url=PUBLIC_BASE_URL,
+                                     stats="full")
     json_str = json.dumps(payload, ensure_ascii=False).replace("</script>", "<\\/script>")
 
     standalone = DASHBOARD_HTML.replace(
         "fetchData();",
-        f"dbData = {json_str}; renderStats(); renderPosts();"
+        f"dbData = {json_str}; renderStats(); renderPosts(); renderPager();"
     ).replace(
-        "async function fetchData(query = '') {",
-        "async function fetchData(query = '') { return; "
+        "async function fetchData(query, page, statsMode) {",
+        "async function fetchData(query, page, statsMode) { return; "
     )
 
     out_path = BASE_DIR / output_file
