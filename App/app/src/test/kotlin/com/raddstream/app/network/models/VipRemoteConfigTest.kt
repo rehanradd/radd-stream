@@ -132,7 +132,7 @@ class VipRemoteConfigTest {
             """
             {
               "success": true,
-              "vip": {"monthly_pkr": 200, "yearly_pkr": 1500},
+              "vip": {"monthly_pkr": 250, "yearly_pkr": 1800},
               "payments": {"jazzcash": {"till_id": "998877"}},
               "link_shorteners": [
                 {"network": "shrinkme", "configured": true},
@@ -143,7 +143,7 @@ class VipRemoteConfigTest {
             VipRemoteConfig::class.java,
         )
 
-        assertEquals(200, config.vip.monthlyPkr)
+        assertEquals("an arbitrary wire price, passed through — this client holds none of its own", 250, config.vip.monthlyPkr)
         assertEquals("998877", config.payments.jazzcash.tillId)
         assertTrue(config.payments.hasAnyHandle)
         assertTrue(config.success)
@@ -340,7 +340,7 @@ class VipRemoteConfigTest {
               "success": true,
               "currency": "PKR",
               "updated_at": 1730000000,
-              "vip": {"monthly_pkr": 200, "yearly_pkr": 1500},
+              "vip": {"monthly_pkr": 250, "yearly_pkr": 1800},
               "payments": {"jazzcash": {"till_id": "998877", "mobile_account": "03001234567"}},
               "feature_flags": {"downloads": true, "pure_cinema": true},
               "ads": {"monetag_rewarded_zone_id": "zone-1"}
@@ -350,7 +350,7 @@ class VipRemoteConfigTest {
         )
 
         assertTrue(config.success)
-        assertEquals(200, config.vip.monthlyPkr)
+        assertEquals("an arbitrary wire price, passed through — this client holds none of its own", 250, config.vip.monthlyPkr)
         assertTrue(config.payments.hasAnyHandle)
         assertEquals("zone-1", config.ads.monetagRewardedZoneId)
         // Present but inert: the old body has no cadence, so the client's own caps stand.
