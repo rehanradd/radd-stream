@@ -238,6 +238,74 @@ class AdminOnTheOperatorPort(TwoPortFixture):
         self.assertTrue(json.loads(raw)["ok"])
 
 
+class EveryRouteOnTheOperatorPortIsGated(TwoPortFixture):
+    """The defect the owner measured at 05:47 and nobody fixed: on `127.0.0.1:8081`
+    the dashboard at `/` was served to whoever reached the socket, and
+    `/api/v1/stats` and `/api/v1/rules` answered 200 to a bogus bearer token,
+    because `RADD_ADMIN_TOKEN` was checked only by `admin_panel._gate` — which
+    guards `/admin` and nothing else. Loopback was being read as a credential.
+
+    These are the assertions that make closing it permanent: every route on this
+    port refuses a missing credential and a nonsense one with the same 401, the
+    real token serves them, and the public port is untouched by any of it.
+    """
+
+    GATED = ("/", "/client", "/api/data", "/api/v1/rules", "/api/v1/stats", "/admin")
+
+    def test_no_credential_is_refused_on_every_route_not_just_on_admin(self):
+        with mock.patch.dict("os.environ", {"RADD_ADMIN_TOKEN": TOKEN}):
+            for path in self.GATED:
+                status, _headers, raw = self.operator_fetch(path)
+                self.assertEqual(status, 401, f"{path} served {status} to nobody: "
+                                               f"{raw[:160]!r}")
+                self.assertNotIn(b"<!DOCTYPE", raw, f"{path} leaked the dashboard")
+                self.assertNotIn(b"vegamovies", raw, f"{path} leaked provenance")
+
+    def test_a_bogus_token_is_refused_on_every_route(self):
+        with mock.patch.dict("os.environ", {"RADD_ADMIN_TOKEN": TOKEN}):
+            for path in self.GATED:
+                status, _headers, raw = self.operator_fetch(
+                    path, headers={"Authorization": "Bearer definitely-not-it"})
+                self.assertEqual(status, 401, f"{path} accepted a forged token")
+
+    def test_a_refusal_without_and_with_a_wrong_token_says_the_same_thing(self):
+        """A gate that explains itself to a guesser is an oracle; one that answers
+        identically tells the prober nothing about which routes exist here."""
+        with mock.patch.dict("os.environ", {"RADD_ADMIN_TOKEN": TOKEN}):
+            for path in self.GATED:
+                _s1, _h1, absent = self.operator_fetch(path)
+                _s2, _h2, wrong = self.operator_fetch(
+                    path, headers={"Authorization": "Bearer nope"})
+                self.assertEqual(_without_request_id(absent),
+                                 _without_request_id(wrong), path)
+
+    def test_the_real_token_serves_the_routes_it_used_to_hand_out_freely(self):
+        """Closing the hole must not close the panel: `/` is how the operator sees
+        the badges, and it still works when they prove who they are."""
+        with mock.patch.dict("os.environ", {"RADD_ADMIN_TOKEN": TOKEN}):
+            for path in self.GATED:
+                status, _headers, raw = self.operator_fetch(
+                    path, headers={"Authorization": f"Bearer {TOKEN}"})
+                self.assertEqual(status, 200, f"{path} → {status} {raw[:160]!r}")
+
+    def test_an_unset_token_failscloses_the_whole_port(self):
+        with mock.patch.dict("os.environ", {}, clear=False):
+            import os
+            os.environ.pop("RADD_ADMIN_TOKEN", None)
+            for path in self.GATED:
+                status, _headers, _raw = self.operator_fetch(
+                    path, headers={"Authorization": "Bearer x"})
+                self.assertEqual(status, 401, path)
+
+    def test_the_public_port_still_answers_without_any_credential(self):
+        """The gate is a property of the operator instance, not of the handler: a
+        phone that has never heard of `RADD_ADMIN_TOKEN` must not start seeing 401."""
+        status, _headers, raw = self.public_fetch("/")
+        self.assertEqual(status, 200, raw[:160])
+        status, _headers, raw = self.public_fetch("/api/v1/stats")
+        self.assertEqual(status, 200, raw[:160])
+
+
 class AccountRoundTrip(TwoPortFixture):
     def test_a_key_is_issued_once_and_the_favorite_round_trips(self):
         status, headers, raw = self.public_fetch("/api/v2/account", method="POST",

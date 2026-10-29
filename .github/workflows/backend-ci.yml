@@ -25,6 +25,9 @@ name: 🐍 Backend CI — Stdlib Python Tests
 #     - Fast_Fetch/test_merge_catalogs.py    (staging → unified merge)
 #     - Fast_Fetch/test_site_scout.py        (site discovery / spec phases)
 #     - Fast_Fetch/test_backup_manager.py    (offsite backup tooling)
+#     - Fast_Fetch/test_usage_stats.py       (operator counters + token gate)
+#     - Fast_Fetch/test_operator_isolation.py(two real loopback servers, socket-level
+#       routing — the layer every other suite calls as a function)
 #
 #   Deliberately EXCLUDED:
 #     - Fast_Fetch/test_all_sites.py  — live 10-site network audit; needs the
@@ -120,3 +123,13 @@ jobs:
 
       - name: 🧪 test_backup_manager.py
         run: python3 -S Fast_Fetch/test_backup_manager.py
+
+      # The operator counters: aggregates-only schema proofs, the increment-on-write
+      # rule, and the fail-closed token gate. Offline, stdlib, no network.
+      - name: 🧪 test_usage_stats.py
+        run: python3 -S Fast_Fetch/test_usage_stats.py
+
+      # Two real servers on loopback and a real socket between them — the only suite
+      # that can catch the operator-port gate being routed around rather than removed.
+      - name: 🧪 test_operator_isolation.py
+        run: python3 -S Fast_Fetch/test_operator_isolation.py

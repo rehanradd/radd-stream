@@ -882,6 +882,23 @@ def vip_status(conn_or_path, key, *, now: float | None = None) -> dict:
     return {"vip": until > moment, "vip_until": until}
 
 
+def key_is_known(conn_or_path, key, *, now: float | None = None) -> bool:
+    """Whether this exact sync key is an account this server issued and has not
+    revoked. Read-only, no attempt budget charged, no `last_seen_at` written.
+
+    Deliberately not :func:`authenticate`: a caller that only needs to know
+    "should I count this device" must not charge a stranger's guesses against a
+    real viewer's lockout budget, and must not write on a request that failed.
+    """
+    if not isinstance(key, str) or not key.strip():
+        return False
+    wanted = _hash_key(key.strip())
+    with _borrow(conn_or_path) as conn:
+        row = conn.execute("SELECT revoked_at FROM user_accounts WHERE key_hash = ?",
+                           (wanted,)).fetchone()
+    return row is not None and row["revoked_at"] is None
+
+
 def resolve_account(conn_or_path, key, *, now: float | None = None,
                     tracker: AttemptTracker | None = None) -> dict:
     """Alias of :func:`authenticate`, for the caller that just wants to know which

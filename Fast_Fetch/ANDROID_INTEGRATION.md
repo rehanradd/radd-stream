@@ -504,3 +504,72 @@ more than a day ahead of this server's clock is clamped to the receipt time, so 
 showing 2035 cannot freeze a row. And the caveat that matters most is the one on the account
 card in the app: this host is plain HTTP, so `Authorization: Bearer …` travels in the clear
 (§"Security posture"). Turn on TLS on the host before telling anyone an account is safe.
+
+### 7.4 Usage analytics headers — what the app may send, and what becomes of it
+
+The operator's install/device/monetization counters (`Fast_Fetch/usage_stats.py`, shown on the
+loopback panel at `/admin/usage`) are earned entirely on the routes in §7.1. **There is no
+analytics endpoint, no analytics SDK, and nothing the client has to opt into to make the app
+keep working.** The app may add four request headers and one optional body block; every one of
+them is ignored, not rejected, when absent or malformed.
+
+Send on every `/api/v2/account*` request:
+
+| Header | Value the app should send | What it becomes |
+|---|---|---|
+| `X-Install-Id` | a random id generated once at first launch and kept in app-private storage, e.g. a UUID; never derived from ANDID, `Build.SERIAL`, `Settings.Secure.ANDROID_ID` or any hardware id | the device bucket: `"dev-" + sha256(salt + id)[:16]`, salt from `RADD_USAGE_SALT`. The raw id is never stored, and without the salt it cannot be reversed or joined to anything |
+| `X-App-Version` | `BuildConfig.VERSION_NAME` (or `versionName` from `packageManager`) | the per-version count on the panel |
+| `X-Device-Class` | one of `phone-low` / `phone` / `tablet` / `tv` — the app's own tier from RAM/SDK, not a model string | the denominator for the per-class crash / error / buffer-failure rates |
+| `Accept-Language` | `Locale.getDefault().toLanguageTag()` (e.g. `en-PK`); OkHttp does **not** add this header on its own, so nothing is reported until the app sends it | `locale` = primary tag, `geo` = its region subtag (`en-PK` → `PK`). This is a *stated preference*, deliberately not an IP lookup |
+
+`User-Agent` is not read. A device model string is a fingerprint and a tracking vector, and this
+table has no business holding one. Any header value that is not `[A-Za-z0-9._+-]{1,32}` — or that
+looks like a dotted-quad IP — folds to the literal `unknown` instead of being stored (`usage_stats.clean_value`).
+
+Mechanically, the account lane is Retrofit (`App/app/src/main/kotlin/com/raddstream/app/network/RaddStreamApi.kt`),
+which passes credentials as `@Header("Authorization")` arguments rather than through an interceptor.
+Two ways to add these three, in order of how much they cost to keep correct: one OkHttp
+`Interceptor` that stamps `X-Install-Id` / `X-App-Version` / `X-Device-Class` / `Accept-Language` on
+every request (four headers, one place, and a signed-out browse already reports them), or a
+`@Header(…)` parameter on each of the ~12 account methods if the lane insists on staying
+interceptor-free. Either way the server treats a missing header as "not reported", so this is not a
+blocking change and no request fails while it is in review.
+
+Progress totals ride on the existing `POST /api/v2/account/progress` body as one optional block,
+using these exact field names, each a whole number the phone counted since its last successful
+sync. Names outside this list are dropped, and a single submission is clamped to 1,000 per metric:
+
+```json
+{"work_ref": "…", "position_seconds": 412, "usage": {
+  "playback_attempts": 4, "playback_buffer_failures": 1, "playback_errors": 0,
+  "crashes": 0, "errors": 2,
+  "ad_requests": 6, "ads_filled": 5, "ad_impressions": 5, "ad_clicks": 1,
+  "rewarded_completions": 2, "coins_granted": 120}}
+```
+
+Three rules the client can rely on, each pinned by a test in
+`Fast_Fetch/test_usage_stats.py`:
+
+- **Analytics never fails a save.** If the counter write raises, locks, or the ledger is
+  unreadable, the progress POST still answers `201`. A favorite that did not save because a
+  counter table was busy is a worse outcome than a missing count. So: never retry a request
+  because its `usage` block might not have landed, and never block the UI on it.
+- **A count the app has not sent is an absence, not a zero.** The panel prints metrics in
+  `usage_stats.REPORTED_ONLY` as *not yet reported* until the app starts sending them, because a
+  server cannot see a buffer stall that happened on the phone. Shipping the block is what turns
+  those rows into numbers; until then a zero on the dashboard would be a lie.
+- **Writes are rate-limited per device.** A device is recorded at most once per
+  `SEEN_WRITE_INTERVAL` (900 s) no matter how many requests it makes, so a browse-heavy session
+  does not become one write per tap on a single-core box.
+
+A pre-change build that sends no `X-Install-Id` is still counted: its bucket falls back to the
+salted digest of the bearer sync key, so today's installs and accounts read equal — and the panel
+says so in its `identity` note rather than pretending the two are distinct. The consequence for
+the app lane is the reason to send the header at all: with a stable install id, one device that
+signs out and creates a second account is still **one** device.
+
+What is never stored, in any column, on any port: an IP address, a device model, the sync key
+itself, the raw install id, and any per-request timeline. The tables hold a salted bucket, a day
+number, and sums (`usage_device`, `usage_metric`, `usage_dim_metric`) — aggregates only, by the
+owner's instruction, and `AggregateOnlySchemaTests` fails the build if a column that could hold
+something else appears.

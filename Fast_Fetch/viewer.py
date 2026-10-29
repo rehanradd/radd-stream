@@ -31,6 +31,7 @@ import catalog_v2
 import accounts_api
 import admin_panel
 import media_search
+import usage_stats
 
 if sys.platform.startswith("win"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -71,7 +72,18 @@ OPERATOR_ONLY_ROUTES = frozenset({
 #: gets forgotten when the panel grows. Reachability is this prefix plus the
 #: loopback bind plus nginx never proxying `/admin`; `admin_panel._gate` is the
 #: token lock on that already-localhost-only door, not a login.
+#:
+#: Every route on this port also requires the operator bearer token — see
+#: `_operator_gate` and `admin_panel.gate_operator_port`. The prefix rule makes
+#: `/admin` invisible on the public port; the credential makes every other route
+#: on this one answer to a stranger with 401, so the boundary is the token *and*
+#: loopback, not loopback alone.
 OPERATOR_ONLY_PREFIXES = ("/admin",)
+
+#: The two byte paths a playback actually travels, counted for the operator's
+#: usage report. `/api/m3u` is deliberately absent: it is an operator route, and
+#: a panel's own smoke test is not a user pressing play.
+PLAYBACK_ROUTES = frozenset({"/api/v1/stream", "/api/v1/download"})
 
 #: CORS lives in redact so the v1 and v2 edges share one allow-list (§16.7).
 cors_headers_for = redact.cors_headers_for
@@ -3031,6 +3043,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self.send_header("Connection", "close")
             headers = list(extra_headers or [])
             headers.extend(getattr(self, "rate_headers", []))
+            cookie = getattr(self, "operator_cookie", "")
+            if cookie:
+                headers.append(("Set-Cookie", cookie))
             if headers:
                 for k, v in headers:
                     self.send_header(k, v)
@@ -3073,6 +3088,48 @@ class DashboardHandler(BaseHTTPRequestHandler):
         if path == "/api/v1/stats":
             return "reports"
         return "browse"
+
+    def _operator_gate(self, query_params) -> bool:
+        """The credential every route on the operator port now requires.
+
+        Called first, before any SQL and before the panel is consulted, because
+        this is the whole point: `/`, `/client`, `/api/v1/stats` and
+        `/api/v1/rules` are not `/admin` and were never routed through
+        `admin_panel._gate`, so on this port they answered whoever reached the
+        socket. Loopback is a boundary — nginx forwards neither port, which
+        `test_operator_isolation.py` and the sweep both assert — but it is not a
+        credential, and this box runs a web IDE as root on the same interface.
+
+        Returns True when the caller may proceed. A proven bearer token also
+        mints the short-lived session cookie the dashboard needs to fetch
+        `/api/data`; a session alone is accepted, and refusal is the same
+        byte-for-byte body whether the caller presented nothing or nonsense.
+        """
+        refusal, session_cookie = admin_panel.gate_operator_port(
+            self.client_address[0],
+            authorization=self.headers.get("Authorization", ""),
+            cookie=self.headers.get("Cookie", ""),
+            query_token=(query_params or {}).get("token", [""])[0])
+        self.operator_cookie = session_cookie or ""
+        if refusal is not None:
+            self.send_triple(refusal)
+            return False
+        return True
+
+    def _count_playback(self, path: str) -> None:
+        """One server-observed play, into the operator's usage counters.
+
+        Counted on the public port only: an operator's own smoke test through
+        the panel is not a user pressing play, and letting it inflate the
+        playback totals would make the dashboard's headline number a lie about
+        traffic that no human generated. A write is one UPSERT on a rate-limited
+        route, and `usage_stats` swallows every failure — analytics never gets
+        to be the reason playback was slow.
+        """
+        if path in PLAYBACK_ROUTES and not getattr(self.server, "operator", False):
+            usage_stats.record_event(
+                accounts_api.state_db(), metric="playback_start", count=1,
+                dims=usage_stats.attributes_from_headers(self.headers))
 
     def _public_gate(self, path: str, method: str = "GET") -> bool:
         """The edge every public request passes: no operator route, one token
@@ -3143,9 +3200,12 @@ class DashboardHandler(BaseHTTPRequestHandler):
         # (see start_server), so it cannot be negotiated by a request header or a
         # query parameter — the whole point of a separate loopback port.
         full = bool(getattr(self.server, "operator", False))
+        if full and not self._operator_gate(query_params):
+            return
         base_url = "" if full else _public_base(self)
         if not full and not self._public_gate(path, "GET"):
             return
+        self._count_playback(path)
 
         if path.startswith(OPERATOR_ONLY_PREFIXES):
             # Reached only on the loopback instance: `_public_gate` 404s this
@@ -3158,7 +3218,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 path, query_params, db_path=DB_PATH,
                 peer_address=self.client_address[0],
                 token_header=self.headers.get("Authorization", ""),
-                state_db_path=accounts_api.state_db())
+                state_db_path=accounts_api.state_db(),
+                cookie_header=self.headers.get("Cookie", ""))
             if answered is not None:
                 self.send_triple(answered)
                 return
@@ -3503,6 +3564,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
         path = parsed.path
         query_params = urllib.parse.parse_qs(parsed.query)
         full = bool(getattr(self.server, "operator", False))
+        if full and not self._operator_gate(query_params):
+            return
         if not full and not self._public_gate(path, "POST"):
             return
         if path.startswith(OPERATOR_ONLY_PREFIXES):
@@ -3534,7 +3597,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 path, query_params, db_path=DB_PATH,
                 peer_address=self.client_address[0],
                 token_header=self.headers.get("Authorization", ""),
-                body=body, state_db_path=accounts_api.state_db())
+                body=body, state_db_path=accounts_api.state_db(),
+                cookie_header=self.headers.get("Cookie", ""))
             if answered is not None:
                 self.send_triple(answered)
                 return

@@ -264,6 +264,46 @@ def check_rate(conn: sqlite3.Connection, tenant: dict, *, now: float | None = No
     return {"headers": headers, "problem": None, "counted": True}
 
 
+def usage_for(conn: sqlite3.Connection, tenant: dict,
+              *, now: float | None = None) -> dict:
+    """This tenant's own metering: today, trailing 7 and 30 days, peak minute.
+
+    There is no tenant argument a caller can supply. The identity is the credential that
+    already passed `authorize()`, and every query below binds `tenant_id` from it, so
+    `/me/usage` cannot be pointed at another customer's numbers even by a bug in a future
+    handler that forwards a query parameter. That is `PARTNER_API.md` §2's isolation
+    claim made structural: cross-tenant metering reads are not forbidden by policy, they
+    are unexpressible in this function's signature.
+    """
+    tenant_id = str(tenant["tenant_id"])
+    stamp = time.time() if now is None else now
+    day = utc_day(stamp)
+    week_start = utc_day(stamp - 7 * 86400)
+    month_start = utc_day(stamp - 30 * 86400)
+
+    def total(since: str) -> int:
+        row = conn.execute(
+            "SELECT COALESCE(SUM(requests), 0) FROM api_usage"
+            " WHERE tenant_id = ? AND day >= ?", (tenant_id, since)).fetchone()
+        return int(row[0] or 0)
+
+    today = conn.execute(
+        "SELECT requests, refused FROM api_usage WHERE tenant_id = ? AND day = ?",
+        (tenant_id, day)).fetchone()
+    peak = conn.execute(
+        "SELECT COALESCE(MAX(peak_rpm), 0) FROM api_usage"
+        " WHERE tenant_id = ? AND day >= ?", (tenant_id, week_start)).fetchone()
+    return {
+        "tenant_id": tenant_id,
+        "day": day,
+        "requests_today": int(today["requests"]) if today else 0,
+        "refused_today": int(today["refused"]) if today else 0,
+        "requests_7d": total(week_start),
+        "requests_30d": total(month_start),
+        "peak_rpm": int(peak[0] or 0),
+    }
+
+
 def audit(conn: sqlite3.Connection, tenant_id: str, kind: str, *, work_id=None,
           detail: dict | None = None) -> None:
     """Refusals are audited too; see PARTNER_API.md §6.3. Never a key, never a request URL."""
@@ -309,6 +349,13 @@ def handle(conn: sqlite3.Connection, *, method: str, path: str, key: str | None,
                        " data owner. Tier A metadata is unaffected.")
         return {"status": PROBLEMS[code][0], "headers": metered["headers"],
                 "body": problem(code, detail_text)}
+    if template == "/me/usage":
+        # Served here rather than left to a future handler, because the whole point of the
+        # route is that nothing it reads comes from the request. `query` is ignored.
+        return {"status": 200, "headers": metered["headers"],
+                "body": {"data": usage_for(conn, tenant), "tier": tier,
+                         "contract": CONTRACT_REVISION, "route": template},
+                "tier": tier, "tenant": tenant}
     return {"status": 200, "headers": metered["headers"],
             "body": {"data": [], "tier": tier, "contract": CONTRACT_REVISION,
                      "route": template},
@@ -318,7 +365,7 @@ def handle(conn: sqlite3.Connection, *, method: str, path: str, key: str | None,
 # ── self-test ────────────────────────────────────────────────────────────────
 
 def self_test() -> int:
-    """The four assertions that must not regress, per PARTNER_API.md §10."""
+    """The contract assertions that must not regress, per PARTNER_API.md §10."""
     failures: list[str] = []
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row
@@ -417,10 +464,32 @@ def self_test() -> int:
                   body_bytes=MAX_BODY_BYTES + 1)
     expect("oversized body is refused at the gate", size["status"] == 413, str(size["body"]))
 
+    # Cross-tenant metering: a customer's own numbers, and nothing else. Another tenant is
+    # given a loud usage row, then this tenant asks for `/me/usage` while naming that
+    # tenant in the query string — the way a buggy handler would forward a parameter and
+    # the way a curious customer would try to look. Both halves must hold: the identity in
+    # the answer is the credential's, and the other tenant's number is not in it.
+    conn.execute(
+        "INSERT INTO api_usage (tenant_id, day, requests, refused, peak_rpm)"
+        " VALUES (?, ?, 4000, 9, 55) ON CONFLICT(tenant_id, day) DO UPDATE SET"
+        " requests = requests + 4000", (other["tenant_id"], utc_day(base)))
+    conn.commit()
+    peek = handle(conn, method="GET", path=NAMESPACE + "/me/usage", key=key,
+                  query={"tenant_id": other["tenant_id"], "tenant": other["tenant_id"]},
+                  now=base + 600)
+    data = peek["body"].get("data") or {}
+    expect("the metering read answers for the credential, not for a named tenant",
+           peek["status"] == 200 and data.get("tenant_id") == tenant["tenant_id"],
+           json.dumps(peek["body"], sort_keys=True, default=str))
+    expect("another tenant's metering is not reachable through this one",
+           int(data.get("requests_30d") or 0) < 4000,
+           json.dumps(data, sort_keys=True, default=str))
+
     for name in failures:
         print("FAIL " + name)
     print(("SELF-TEST FAILED (%d)" % len(failures)) if failures else
-          "SELF-TEST OK — schema defaults, double-fence, header-only credential, limiter roll")
+          "SELF-TEST OK — schema defaults, double-fence, header-only credential, "
+          "limiter roll, tenant-scoped metering")
     conn.close()
     return 1 if failures else 0
 
