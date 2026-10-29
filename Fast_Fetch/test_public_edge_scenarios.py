@@ -8,6 +8,13 @@ fixture and both servers come from `test_redact.py` (`FixtureMixin` and the
 `make_server(...)` pattern in `PublicEdgeHttpTests`); nothing here invents a
 second server or touches the production catalog.
 
+Since 9859b8a the loopback interface is not a credential: every operator-port
+route needs the bearer token, so `setUpClass` sets `RADD_ADMIN_TOKEN` exactly
+as the reused harness does, and only the gate assertion omits it. It also pins
+`RADD_USER_STATE_DB` to this test's own file, because public playback and
+stats now increment the operator's usage counters — a suite must never write
+them into the host's real state store.
+
     python3 -S Fast_Fetch/test_public_edge_scenarios.py
 
 Scenarios
@@ -58,8 +65,10 @@ from __future__ import annotations
 
 import http.client
 import json
+import os
 import sqlite3
 import sys
+import tempfile
 import threading
 import unittest
 import urllib.error
@@ -90,6 +99,15 @@ class ScenarioMatrix(test_redact.FixtureMixin):
     # -- servers: the two policies, exactly as `viewer.start_server` builds them #
     @classmethod
     def setUpClass(cls):
+        # The operator port is no longer authenticated by the loopback interface
+        # (9859b8a): every route there needs the bearer token, and the public
+        # playback counters write into a state DB that must be this test's own.
+        cls.saved_token = os.environ.get(test_redact.TOKEN_ENV)
+        os.environ[test_redact.TOKEN_ENV] = test_redact.OPERATOR_TOKEN
+        cls.saved_state = os.environ.get(test_redact.STATE_DB_ENV)
+        cls.state_tmp = tempfile.TemporaryDirectory()
+        os.environ[test_redact.STATE_DB_ENV] = str(
+            Path(cls.state_tmp.name) / "user_state.db")
         cls.public_server = viewer.make_server("127.0.0.1", 0, operator=False)
         cls.operator_server = viewer.make_server("127.0.0.1", 0, operator=True)
         for server in (cls.public_server, cls.operator_server):
@@ -102,6 +120,15 @@ class ScenarioMatrix(test_redact.FixtureMixin):
         for server in (cls.public_server, cls.operator_server):
             server.shutdown()
             server.server_close()
+        if cls.saved_token is None:
+            os.environ.pop(test_redact.TOKEN_ENV, None)
+        else:
+            os.environ[test_redact.TOKEN_ENV] = cls.saved_token
+        if cls.saved_state is None:
+            os.environ.pop(test_redact.STATE_DB_ENV, None)
+        else:
+            os.environ[test_redact.STATE_DB_ENV] = cls.saved_state
+        cls.state_tmp.cleanup()
 
     def setUp(self):
         self.make_ledger()
@@ -113,14 +140,21 @@ class ScenarioMatrix(test_redact.FixtureMixin):
         super().tearDown()
 
     # -- transport ---------------------------------------------------------- #
-    def request(self, path, port=None, headers=None, follow=False):
+    def request(self, path, port=None, headers=None, follow=False, token=True):
         """One loopback request. A dropped connection is reported as status 0 —
-        a loud, readable failure instead of a stack trace from the client."""
+        a loud, readable failure instead of a stack trace from the client.
+
+        Operator-port requests carry the bearer token the port now requires;
+        `token=False` is how a test asks what an unauthenticated caller sees."""
         port = port or self.public_port
+        headers = dict(headers or {})
+        if port == self.operator_port and token:
+            headers.setdefault("Authorization",
+                               "Bearer " + test_redact.OPERATOR_TOKEN)
         opener = urllib.request.build_opener() if follow else \
             urllib.request.build_opener(test_redact._NoRedirect)
         req = urllib.request.Request(f"http://127.0.0.1:{port}{path}",
-                                     headers=headers or {})
+                                     headers=headers)
         try:
             with opener.open(req, timeout=10) as response:
                 return response.status, dict(response.headers), response.read()
@@ -217,6 +251,13 @@ class ScenarioMatrix(test_redact.FixtureMixin):
     # A. the adult invariant
     # ------------------------------------------------------------------ #
     def test_a_a_flagged_post_is_absent_on_both_ports(self):
+        # 9859b8a: the loopback interface is not a credential, so the operator
+        # port answers 401 before it answers anything else. Authenticated, the
+        # flag still hides the row there; unauthenticated, it is never reached.
+        status, _, body = self.request(
+            f"/api/v1/posts/{self.adult_id}", self.operator_port, token=False)
+        self.assertEqual(status, 401, body[:200])
+        self.assertEqual(json.loads(body)["code"], "unauthorised")
         for label, port in (("public", self.public_port),
                             ("operator", self.operator_port)):
             status, _, body = self.request(f"/api/v1/posts/{self.adult_id}", port)

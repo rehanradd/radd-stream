@@ -85,6 +85,7 @@ corrected in §B.
 | Data | Reads the same SQLite catalog through `catalog_api`; **writes only** to `api_tenants`, `api_usage`, `api_audit`. A partner request can never mutate catalog rows. |
 | Adult content | Every Tier A read passes through `redact`/`catalog_api._adult_clause`, so an `is_18_plus = 1` row is never listed. **See the caveat in §2.1 — this is currently true for rows and not yet true for works.** |
 | Provenance | Every response goes through `catalog_api.public_edge` → `redact.scrub`. Internal fields (`source_site`, page URLs, bridge service names) are denied by default and are not obtainable by any request parameter. |
+| Metering | A tenant reads only its own `api_usage` rows, and the read takes no tenant argument — §2.2. |
 
 ### 2.1 The adult-filtering caveat that belongs in a sales document
 
@@ -98,6 +99,28 @@ states it: filtering is **row-level today, work-level after the `MAX(is_18_plus)
 across shared `canonical_key` lands with a test**. Partners building a store listing or a
 brand-safe product need to know that before they build, not after. We do not get to be surprised
 by this in a support ticket.
+
+### 2.2 One tenant cannot read another's metering
+
+`GET /me/usage` is the only metering read in the contract, and there is no `/tenants/{id}/usage`
+to accidentally build later. The reason is structural, not a `WHERE` clause someone has to remember:
+
+* the tenant identity comes from the credential alone (`authorize()` looks the row up by
+  `sha256(X-Partner-Key)`), and the answer echoes `X-Partner-Tenant` from that row;
+* `partner_api.usage_for(conn, tenant)` takes the **authenticated tenant row**, not an id. There is
+  no parameter through which a request — or a future handler that forwards query strings — can name
+  a different customer;
+* every aggregate it computes binds `tenant_id` from that row, so a request that does name another
+  tenant in `?tenant_id=` still gets its own numbers and no other.
+
+`partner_api.py --self-test` proves it the way a customer would probe it: a second tenant is given a
+loud usage row, the first asks `/me/usage?tenant_id=<the other one>`, and the assertion is that the
+response names the requester and does not contain the other tenant's number. If a handler is ever
+written that forwards a tenant parameter, that test is where it dies.
+
+Metering *writes* are per-tenant too (`api_usage` is keyed `(tenant_id, day)`), and the operator's
+own roll-up across tenants is a dashboard concern on the loopback port (§2, row "Data"), never a
+partner route.
 
 ---
 
@@ -192,7 +215,7 @@ counted — refused requests are still load.
 | `GET` | `/api/partner/v1/updates` | Change feed by projection revision — the cheap way to stay in sync |
 | `GET` | `/api/partner/v1/health/aggregate` | Our link-availability measurements, **aggregate only** |
 | `GET` | `/api/partner/v1/me` | Tenant identity, plan, tier flags, key prefix, `revoked_at` |
-| `GET` | `/api/partner/v1/me/usage` | Own metering: today, trailing 7 and 30 days, peak rpm |
+| `GET` | `/api/partner/v1/me/usage` | Own metering: today, trailing 7 and 30 days, peak rpm. Takes no tenant argument (§2.2). |
 
 Request:
 
@@ -402,10 +425,10 @@ a different price and a written answer about the fields in §1.2.
 
 `Fast_Fetch/partner_api.py` — stdlib only, no new dependency, **not registered on any live
 server**. It contains the schema in §3/§5/§6.3, the auth and gate logic (`authorize()`,
-`check_rate()`, `release_allowed()`), the route table, and the refusal shapes. It is deliberately
-inert: `viewer.py` does not import it, `fast_fetch.py serve` does not route to it, and enabling it
-is a deliberate, reviewable change — which is the same fence §1.1 asks for, applied to the code
-rather than the data.
+`check_rate()`, `release_allowed()`), the tenant-scoped metering read (`usage_for()`, §2.2), the
+route table, and the refusal shapes. It is deliberately inert: `viewer.py` does not import it,
+`fast_fetch.py serve` does not route to it, and enabling it is a deliberate, reviewable change —
+which is the same fence §1.1 asks for, applied to the code rather than the data.
 
 Self-check:
 
@@ -413,9 +436,10 @@ Self-check:
 python3 -S Fast_Fetch/partner_api.py --self-test     # schema, gate, limiter, query-string refusal
 ```
 
-The self-test asserts the four things that must not regress: a tenant row defaults
+The self-test asserts the five things that must not regress: a tenant row defaults
 `allow_tier_b = 0`; `release_allowed()` is false when the global switch is false even with the
-per-tenant flag set; a key arriving in the query string is refused; and the minute bucket rolls.
+per-tenant flag set; a key arriving in the query string is refused; the minute bucket rolls; and
+`/me/usage` answers only for the credential that asked (§2.2).
 
 Rollout, in order, with no step skipped: ① resolve §1.2 licensing or scope Tier A to the
 rights-clean subset → ② TLS on a real hostname → ③ register the read-only Tier A routes with a

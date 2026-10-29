@@ -2408,6 +2408,80 @@ that is not mine. (4) q3 must not be given another task until `Q3-SEARCH-LATENCY
 A..F, and its context is at 79% — expect it to run out mid-brief. (5) `salvage/live-tree-ci-fix-5446771`
 needs q1's eyes before the next live-tree commit or reset buries it.
 
+## q3 lane, 2026-10-29 ~19:4x host time — the operator port stops trusting loopback, the counters exist, and my own test suite was writing the production ledger `[Q3-ADMIN-DEVICE-TRACKING]`
+
+Worktree `/tmp/q3_admin` off **`f0c1ca3`**; the work was rebased twice while in flight — onto the
+then-current `master`/`main` tip **`2164cce`** (ten commits ahead of `f0c1ca3`), and again onto
+**`092bc35`**, which had landed while the 17-module gate was running (both refs moved again while the
+gate ran; the doc-append conflict was resolved by keeping every lane's entry, and `viewer.py`,
+`test_redact.py`, `test_database.py` auto-merged against the rate-bucket fix and the adult-token
+change). The rebased tree was then re-gated: **17 modules, 782 tests, all OK** (`/tmp/q3_gate2.log`).
+Owner's four items, in order; full session log in `Fast_Fetch/CONTINUITY.md`.
+
+- **B — the operator-port defect is closed, not documented.** `viewer._operator_gate` runs
+  `admin_panel.gate_operator_port()` first, before any SQL, on every GET/POST of an `operator=True`
+  server: off-loopback peer → 403, no or wrong credential → 401 with a byte-identical body, a proven
+  bearer mints the stateless HMAC `radd_admin_session` cookie so the panel's own polling keeps
+  working. Previously `RADD_ADMIN_TOKEN` guarded `/admin` only, so `/` served the 46,476-byte dashboard
+  to anyone who reached the socket and `/api/v1/stats` + `/api/v1/rules` answered 200 to a bogus token.
+  Proof 1: 21 live socket checks against a two-port service started from **this worktree's code**
+  (refused / served / expired / forged / cross-token, public port unchanged). Proof 2: `ss -ltnp`
+  binds 8080+8081 to `127.0.0.1` only and `/etc/nginx/sites-available/radd-stream` proxies 8080 and
+  code-server 8443 — never 8081. Proof 3 — read this one: the *deployed* unit is **not** fixed yet.
+  Re-measured ~20:0x on this host against pid 1361081 (started 19:14:36, running a pre-fix tree):
+  `GET /` on `127.0.0.1:8081` with no credential → 200 / 46,476 B, and with a deliberately bogus
+  bearer → the same 200 / 46,476 B; `/api/v1/rules` with no credential → 200 / 1,129 B. The hole
+  closes one restart later, and restarting is the owner's call; `docs/API_SURFACE_AUDIT.md` §2.2 now
+  carries that correction so its (accurate) table is not mistaken for current-code behavior.
+- **A — aggregates-only device + monetization counters.** New `Fast_Fetch/usage_stats.py`
+  (`usage_device` / `usage_metric` / `usage_dim_metric`, all UPSERT-on-write, salted truncated device
+  bucket, 900 s seen-write floor) plus `/admin/usage` on the operator port: installs, live 5/30/60 m,
+  DAU/WAU/MAU, D1/D7/D30 cohort retention, per-geo/locale/version/class, crash/error/buffer rates per
+  class with a printed denominator, the ad funnel, coins, purchases by tier with the pending queue
+  beside the money, and a revenue estimate whose assumptions ship in the payload. Wired **only** into
+  the already-authenticated `/api/v2/account*` surface and the existing progress POST — no new public
+  route, no nginx change, no `posts` scan. New `Fast_Fetch/test_usage_stats.py`: **94 tests**, which
+  found five real defects (500 on the empty panel, an uncommitted anonymous counter, a double `day_of`,
+  a **guessed-key-creates-a-device** amplifier now gated by new read-only `accounts.key_is_known`, and
+  an analytics hook that could have failed a user's save).
+- **C — partner contract gained the one property it only claimed.** `PARTNER_API.md`/`partner_api.py`
+  were already in the base (`c4a1302` merge); §2.2 + `usage_for(conn, tenant)` now make cross-tenant
+  metering reads unexpressible rather than merely forbidden, proven by a `--self-test` assertion (five
+  now). `ANDROID_INTEGRATION.md` §7.4 documents the `X-Install-Id` / `X-App-Version` /
+  `X-Device-Class` / `Accept-Language` headers and the optional `usage` block — previously code-only.
+- **Gate (measured at this sha, one module per invocation): 17 invocations, 780 tests, failures=0** —
+  `test_database` 124, `test_vidout` 6, `test_catalog_v2` 96, `test_release_descriptor` 24,
+  `test_link_health` 57, `test_link_state` 28, `test_evidence_writeback` 12, `test_api_v2` 46,
+  `test_redact` **59**, `test_tiers` 23, `test_catalog_api` 127, `test_provenance_stamping` 12,
+  `test_merge_catalogs` 5, `test_site_scout` 25, `test_backup_manager` 14, `test_usage_stats` **94**,
+  `test_operator_isolation` **28**. `backend-ci.yml` now runs the last two as steps (it was 15 modules;
+  the file header list and both new steps were added in this push). The 7 `test_redact` failures seen
+  mid-session were item B's correct fallout — fixed by giving those fixtures a real operator credential,
+  not by relaxing the gate.
+- **Live numbers, from a backup copy of `user_state.db` (read-only, aggregates only): the account lane
+  has no traffic yet** — accounts 0, favorites 0, progress 0, `payment_transactions` 0,
+  `payment_review_audit` 0, `sync_key_attempts` 3 probes (none created a device, which is the abuse
+  gate holding on live data). So "active, live, accounts, how much" today is **zero, and the panel
+  prints it as an absence, not a zero** — say this before anyone misreads a fresh dashboard as broken.
+- **Defect I caused and then pinned: `test_redact.py` was writing into the production ledger.**
+  `viewer._count_playback` counts at `accounts_api.state_db()` — the live path unless a test pins
+  `RADD_USER_STATE_DB` — and the redact HTTP fixtures never did, so **42 `playback_start` rows and 4
+  `usage_dim_metric` rows for day 20755 are sitting in `/home/ubuntu/radd-stream-data/user_state.db`**
+  as this lane's test traffic. Both fixtures now sandbox the state DB and
+  `test_the_playback_counters_cannot_reach_the_production_ledger` asserts it; re-measured live counters
+  42.0 before and 42.0 after a full 59-test run. **Owner's call, not mine:** those 5 rows are inert
+  until this ships and will read as 42 plays nobody made; deleting them is a write to the live ledger.
+  `test_download_endpoint.py` / `test_operator_isolation.py` already pinned the path; `test_api_v2.py`
+  builds no server and touches no account route.
+- **Untouched, on purpose:** `/opt/radd-stream` was not committed from, reset or cleaned; `radd-stream`
+  was not restarted; no nginx file was edited; no secret was read, printed or copied (the token env
+  file `/etc/radd-stream/admin.env` is not readable by this account and was never attempted).
+- **Next in this lane:** (1) the owner lands the sha and deploys it, then `RADD_ADMIN_TOKEN` +
+  `RADD_USAGE_SALT` become load-bearing on the unit; (2) the app lane implements §7.4 — an install id
+  and the four headers, or the panel keeps printing installs-equal-accounts and an honest
+  "not yet reported" for every phone-side metric; (3) per-tenant `allow_tier_b` stays 0 and
+  `PARTNER_TIER_B_ENABLED` stays False until the owner's written decision.
+
 ## 2026-10-29 20:40–21:05 — the fleet delivery bug was tmux copy-mode, not the submit key
 
 **Two retractions and one root cause, all about my own monitoring, not about the code.**
@@ -2525,3 +2599,114 @@ filter regression; it is two audited writes, and the arithmetic identity holds e
 - **Fleet/SLO:** load 5.22 falling to 2.34 (one core), 8,608 MiB available, swap unchanged, all five
   worker panes `in_mode=0` and generating; no Gradle run (load gate 0.5 far away), merge batch 4 (#9)
   still held.
+
+### 21:50–22:10 — the cold `/api/v1/stats` path is the capacity defect, and the projection is why
+
+- `/api/v1/stats` on loopback measured **22.1 s**, then **42.2 s**, then **0.008 s**. Not noise:
+  `_get_cached_stats` (`viewer.py:2956`) caches for 120 s per process, and on a miss it calls
+  `_counted_stats`, which is a `COUNT(*)` over `cat_works`, a join-scan over `releases`, and a
+  `GROUP BY state` across 3.78 M links.
+- **The miss is structural, not occasional.** `cat_projection_meta` carries 18 keys and **none** of
+  `works_safe`, `releases_safe`, `links_resumable_safe`, `links_temporary_safe`,
+  `links_by_state_safe` is present — and the function is deliberately all-or-nothing ("a partial
+  stamp falls back to counting"). The projection itself is also stale: `posts=130016`,
+  `releases=1383752`, `links=3783959` — the pre-batch-3 catalog, against 150,799 posts live. So every
+  120 s, whether or not anyone asks, the public `^~ /api/` allow-listed stats route re-runs three big
+  scans.
+- **Bounded accurately, because I checked:** the server is `ThreadedHTTPServer(ThreadingMixIn,
+  HTTPServer)` (`viewer.py:3018`), so a slow stats request does not block the accept loop; but it is
+  CPython work under the GIL on a **1-vCPU** box, so a 42 s scan starves every other handler's Python
+  for its duration. For the owner's "how many users can this VM serve" question the honest sentence is
+  *not* a requests-per-second figure — it is that one unauthenticated public endpoint can cost 42 s of
+  the only core, and the fix is a stamp, not a cache layer.
+- Dispatched into q2's job with these numbers (task #10). Told it explicitly not to add a second
+  cache: the 120 s cache already exists, the defect is the missing stamp.
+- **Android CI regressed to red at `0ff0164`** (run 40909885234, job 123574653479):
+  `:app:compileDebugUnitTestKotlin FAILED`, BUILD FAILED in 2 m 17 s, on two errors in the
+  ad-cadence test sources — `AdCadenceRowsTest.kt:75:9` unresolved `assertFalse`, and
+  `AdCadenceGovernorTest.kt:265:44` passing an anonymous object where `FakeSwitch` was expected.
+  Green at `2caadb3` was real and this is a newer commit, so the app lane is red again; queued the
+  exact two lines to q1 with the standing rules attached (fix, do not delete assertions; load < 0.5
+  before any Gradle; `/tmp/qbuild.sh`; report the CI conclusion, not a local build). Backend CI is
+  independently green at `dea1e41` and `66f8edd`. Total runs now 79.
+- **VIP price authority decided by me, per the owner's standing "decide everything yourself":**
+  `docs/MONETIZATION_AND_FLEET_PLAN.md:46` says Monthly VIP ₨250, and *two* code defaults say 200
+  (`payments.py:85`, `admin_panel.py:929`). Both 200s are defects, not a document disagreement. The
+  live `app_remote_config` row reads 200 with `updated_at = 0`, i.e. the never-saved default, so
+  fixing the code fixes the quote and **no production data write is authorized or needed**. q5 has
+  the task. If any client code baked 200 in, it must read remote config instead.
+- **The real reason the 19:14 deploy happened, and it is a process change, not an incident — with one
+  claim of mine softened twenty minutes later.** Every worker lane's status line reads
+  `/opt/radd-stream` (q1's reads `/opt/radd-stream/App`), which is the CLI's launch directory; I took
+  that as proof the lanes edit production, and it is not. `git worktree list` shows **27 worktrees**,
+  including `/tmp/q1_ad`, `/tmp/q1_id`, `/tmp/q2_ledger`, `/tmp/q2_scen`, `/tmp/q3_admin`,
+  `/tmp/gate_q5` — so the qoder lanes do keep their commits off the live tree. What the live tree's
+  dirt actually is: drafts whose only copy is there (the App player/cache files match **no** lane
+  worktree I compared them against) plus one file that matches `/tmp/q2_ledger`, plus
+  `MONETIZATION_AND_FLEET_PLAN.md` at 43 lines *behind* the pushed version. The instruction to every
+  lane still stands and for a better reason than I first gave: the launch directory is not the
+  workspace, and the tree that systemd restarts into must be nobody's workspace. Verified state of
+  #26 is therefore "worktree discipline exists, live-tree residue does not belong to a lane we can
+  name" — and the residue is now snapshotted, not assumed.
+
+### 22:10–22:35 — my own wrong claim corrected, the real account store measured, and a near-miss revert
+
+- **I published a wrong statement twenty minutes ago and it is corrected here, not deleted:** my
+  21:40 entry said production "has no account or payment tables at all", counted from
+  `merged_catalog_20261025.db`. The substantive conclusion holds — there is not one real account,
+  favourite, progress row or payment anywhere — but the store is a **different file**.
+  `accounts.py:148,179,328` put `user_state.db` outside the checkout, and that file is
+  `/home/ubuntu/radd-stream-data/user_state.db`, mtime **19:33**. Quoting my catalog claim as if it
+  were the account claim would send the next reader to the wrong file.
+- **`user_state.db`, measured read-only at 22:15:** `user_accounts 0`, `user_favorites 0`,
+  `user_progress 0`, `payment_transactions 0`, `payment_review_audit 0`, `sync_key_attempts 3`,
+  `usage_device 0`, `usage_metric` 1 row, `usage_dim_metric` 4 rows, `user_state_meta` =
+  `schema_version 1`. So the owner's "how many users/accounts/money do we have" question has a hard
+  answer today: **zero accounts, zero payments, 42 recorded playback starts** (day 20755), and all
+  four dimensions on those 42 are `unknown` — installs, geo, locale and app_version were never
+  attributed. I am not calling them humans; nothing in the repo proves who pressed play.
+- **The 42 rows and the `usage_*` tables came from unpushed code.** `grep -rln
+  "playback_start|usage_device"` over the pushed tip returns nothing, and over `/opt/radd-stream`
+  returns nothing; the only copy of the module is `/tmp/q3_admin/Fast_Fetch/usage_stats.py` (+
+  `test_usage_stats.py`), q3's, at `d6861bb`, not landed. So the live operator state file now carries
+  schema and counters that no ref can reproduce or read. The design itself is right (salted
+  `dev-` digests, aggregates only, no IP read, incremental UPSERT instead of scanning the 1.7M-row
+  ledger, loopback-only surface) and it is the answer to the owner's admin-panel
+  active/live/devices/accounts/money ask — it just must not be developed against production data.
+  Told q3: prove the resolved path inside its own test, do not delete the rows (that is mine to gate),
+  land the module with tests green.
+- **A near-miss I almost caused, recorded because it is the reason the live-tree rule exists:** I
+  copied `/opt/radd-stream/docs/MONETIZATION_AND_FLEET_PLAN.md` over my worktree's version on the
+  reasonable-looking theory that a file the live tree shows as `??` must be unpushed. It *is* tracked
+  at the tip, and the live copy is **43 lines shorter** — the 18:58 primary-source update block and
+  the entire "Correction 2026-10-29 20:20" shortener-flag section. `git diff --stat` before committing
+  caught it and I restored the pushed version. So the live tree is not merely dirty: on this file it
+  is behind, and the AGENTS.md warning about a silent revert of pushed work is now a measured
+  instance rather than a hypothesis.
+- **Snapshot taken, nothing deleted:** `/home/ubuntu/radd-stream-backups/livetreestate_20261029_2220/`
+  holds `tracked.patch` (2,932 lines), `status.txt` (59 entries, 26 untracked) and copies of the
+  untracked files. Read-only `git diff` plus `cp -a`; the live tree was not committed from, reset, or
+  cleaned. If a future session is tempted to restore it to a ref, the only copy of some in-flight work
+  is now in that directory, not in the tree.
+- **Two directives became tracked at `e9fbd09`+1** (`App/docs/PLAYER_AND_CACHE_DIRECTIVE.md`, 40 lines,
+  and `docs/GITHUB_AUTHORITY_NOTICE.md`, 7 lines) — added verbatim after a secret scan
+  (`ghp_`/`github_pat_`/long-base64/private-key patterns: no hits). Before this commit the
+  owner's universal-player brief and the "only repository agents may push to" notice existed solely
+  inside the deployment tree, so the silently-deployed system was partly built from files no ref
+  contains.
+- **Merge state measured per site (task #5, and the real shape of #9).** Live catalog carries 31
+  `source_site` values over 150,799 posts; top five are hindilinks4u 23,678, filmyzilla 15,228,
+  katmoviehd 12,881, moviesmela 12,489, 9xmovies 11,462. Two things fall out of that list:
+  **`mp4moviez` and `kuttymovies` are absent entirely** — mp4moviez has 29,848 posts in its vault plus
+  11,403/11,404 in two staging copies, kuttymovies 900 — so batch 4 is real unmerged volume, not a
+  duplicate, and it stays held only because the box is busy, not because the work is done. And several
+  merged sites hold far more in their vault than they contribute live (filmyhit 16,943 vs 935,
+  katmoviehd 38,154 vs 12,881, bolly4u 15,192 vs 4,253, world4ufree 14,768 vs 3,382, ssrmovies 13,916
+  vs 6,678, 10xflix 13,775 vs 7,082, hdhub4u 11,224 vs 6,557, multimovies 10,498 vs 3,703, pagalmovies
+  6,846 vs 3,642, filmiyin 3,837 vs 895). Dedup explains part of that; it does not obviously explain
+  a 935-from-16,943 ratio, and `identity_suspect=41432` / `release_dups=295711` in
+  `cat_projection_meta` says the merge has real collision work pending. **Nobody should quote "all
+  sites merged" until that surplus is accounted for** — that is the honest state of #5.
+- Also new since the last entry: `humtv_staging.db` (64 posts), `hindidubbedmovies.db` (40),
+  `bollyflix.db` (38), `hindianimeszone.db` (36), `moviehax.db` (35) and `themoviebox.db` (**0 posts**,
+  created 20:12 tonight) — six more vaults, none of them in the live `source_site` set yet.

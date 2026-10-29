@@ -120,6 +120,7 @@ import catalog_v2
 import config
 import payments
 import redact
+import usage_stats
 
 ADMIN_PREFIX = "/admin"
 API_PREFIX = "/admin/api"
@@ -272,6 +273,20 @@ def _limit(query, default=DEFAULT_N):
     return max(1, min(MAX_N, n))
 
 
+#: The usage window the operator may ask for. 30 days is the answer to "how much
+#: this month"; a year is the answer to "is this working at all". Anything larger
+#: would sum the entire metric history, and a history is a per-device timeline
+#: waiting to be read as one, so the ceiling is the rule, not a performance note.
+USAGE_WINDOW_DAYS = 365
+
+
+def _window_days(query):
+    days = _int_or_none(_q(query, "days") or _q(query, "window_days"))
+    if days is None:
+        return 30
+    return max(1, min(USAGE_WINDOW_DAYS, days))
+
+
 # ── provenance: the fail-closed vocabulary scan every body passes through ─────
 
 def _provenance_offenders(text, allow=frozenset()):
@@ -367,24 +382,155 @@ def _bearer(token_header):
     return text
 
 
-def _gate(peer_address, token_header):
+def _gate(peer_address, token_header, cookie_header="", query_token=""):
     """Return a refusal tuple, or ``None`` when the request may proceed.
 
     Order is fixed and runs before any SQL: loopback first, then the bearer token.
     A missing token and a wrong token yield the *identical* 401 body, so a caller
     learns nothing about whether one is merely absent. If no token is configured
     the gate denies everything — fail closed, never "empty token means open".
+
+    `cookie_header` is the second credential, and it is not a second door: a
+    session value is only ever minted for a caller who already proved the bearer
+    token (`mint_operator_session`), it is keyed by that token's hash, and
+    rotating or unsetting `RADD_ADMIN_TOKEN` invalidates every session with it.
+    It exists so the dashboard at `/` can fetch `/api/data` without pasting a
+    token into a URL that outlives the page.
     """
     if str(peer_address or "").strip() not in _LOOPBACK:
         return _problem("forbidden", ADMIN_PREFIX,
                         "This surface answers on loopback only.", stable=True)
     expected = os.environ.get("RADD_ADMIN_TOKEN", "")
-    provided = _bearer(token_header)
-    if not expected or not hmac.compare_digest(
+    provided = _bearer(token_header) or str(query_token or "").strip()
+    if expected and provided and hmac.compare_digest(
             provided.encode("utf-8"), expected.encode("utf-8")):
-        return _problem("unauthorised", ADMIN_PREFIX,
-                        "A valid operator bearer token is required.", stable=True)
-    return None
+        return None
+    if cookie_header and operator_session_valid(cookie_header, expected):
+        return None
+    return _problem("unauthorised", ADMIN_PREFIX,
+                    "A valid operator bearer token is required.", stable=True)
+
+
+# ── the whole-port credential ────────────────────────────────────────────────
+#
+# Measured on this host: `/` on the operator port served the 46,476-byte
+# dashboard with no token at all, and `/api/v1/stats` and `/api/v1/rules`
+# answered 200 there with a bogus bearer token, because `_gate` was only ever
+# consulted for `/admin`. The boundary was really "you are on loopback", which is
+# not a credential — anything on this box qualifies. `gate_operator_port` below
+# is the fix: on the operator instance every path requires the token, `/`
+# included, and it fails closed when no token is configured.
+
+#: Name of the loopback-only session cookie minted from a proven bearer token.
+OPERATOR_COOKIE = "radd_admin_session"
+#: Eight hours: one working session on the panel, no longer. A cookie that never
+#: expires is a credential in a browser database, and this box cannot protect one.
+OPERATOR_SESSION_TTL = 8 * 3600
+_SESSION_LABEL = b"radd-operator-session:v1:"
+
+
+def _session_key(expected_token):
+    """The HMAC key for session values: the token's hash, never the token."""
+    return hashlib.sha256(_SESSION_LABEL
+                          + str(expected_token or "").encode("utf-8")).digest()
+
+
+def cookie_value(cookie_header, name):
+    """One cookie's value from a `Cookie:` header, or ``""``.
+
+    `http.cookies.SimpleCookie` is not used because it rejects real-world
+    quoting on the first malformed pair and drops the rest of the header; this
+    header is a search for one name, and a caller's unrelated cookies are none of
+    our business.
+    """
+    for chunk in str(cookie_header or "").split(";"):
+        piece = chunk.strip()
+        if piece.startswith(name + "="):
+            return piece[len(name) + 1:].strip()
+    return ""
+
+
+def _session_signature(expected_token, expiry):
+    """The HMAC of one expiry value under the token's key. One definition, so a
+    minted value and a presented value are signed by the same expression."""
+    return hmac.new(_session_key(expected_token), str(int(expiry)).encode("utf-8"),
+                    hashlib.sha256).hexdigest()[:32]
+
+
+def mint_operator_session(expected_token, *, now=None):
+    """A signed `expiry.hmac` session value, keyed by the operator token.
+
+    The token itself is never sent to the browser. The value carries an expiry
+    and an HMAC over it, so a client cannot extend its own session and the server
+    needs no session table to check one — on a single-core box that also means a
+    restart cannot strand a live cookie store.
+    """
+    if not expected_token:
+        return ""
+    expiry = int((now if now is not None else time.time()) + OPERATOR_SESSION_TTL)
+    return f"{expiry}.{_session_signature(expected_token, expiry)}"
+
+
+def operator_session_valid(cookie_header_or_value, expected_token, *, now=None):
+    """True when this is a session value we minted and it has not expired.
+
+    The signature is checked over the expiry the caller *presented*, never over
+    one re-derived from the current clock — minting a fresh value to compare
+    against would make every session expire one second after it was issued,
+    because the expiry is a float of the present instant. Fail closed on every
+    other oddity: no token configured (nothing can be minted, so nothing can
+    validate), a short value, a non-numeric expiry, a past expiry, a signature
+    that does not match. Comparison is constant-time.
+    """
+    if not expected_token:
+        return False
+    value = cookie_value(cookie_header_or_value, OPERATOR_COOKIE) \
+        if "=" in str(cookie_header_or_value or "") else str(cookie_header_or_value or "")
+    expiry, _, signature = value.partition(".")
+    if not expiry.isdigit() or not signature:
+        return False
+    stamp = now if now is not None else time.time()
+    if int(expiry) <= int(stamp):
+        return False
+    return hmac.compare_digest(signature,
+                               _session_signature(expected_token, int(expiry)))
+
+
+def operator_session_cookie(expected_token, *, now=None):
+    """The full `Set-Cookie` string for a minted session, or ``None``.
+
+    `HttpOnly` so a script on the panel cannot read it back, `SameSite=Strict` so
+    another page on this box cannot spend it, and no `Secure` flag because this
+    deployment is plain HTTP on loopback — the port is not bound beyond 127.0.0.1
+    and nginx forwards neither port, so there is no path on which the cookie
+    could travel in the clear to anyone who is not already root on this machine.
+    """
+    value = mint_operator_session(expected_token, now=now)
+    if not value:
+        return None
+    remaining = max(1, int(OPERATOR_SESSION_TTL))
+    return (f"{OPERATOR_COOKIE}={value}; Path=/; Max-Age={remaining};"
+            " HttpOnly; SameSite=Strict")
+
+
+def gate_operator_port(peer_address, *, authorization="", cookie="", query_token=""):
+    """The credential every operator-port route now requires.
+
+    Returns `(refusal, set_cookie)`. `refusal` is a `(status, content_type, body)`
+    tuple to answer with, or ``None`` when the caller may proceed; `set_cookie` is
+    a header value to emit when a proven bearer token should hand out a session —
+    issued once per authenticated request, never on a refusal.
+    """
+    refusal = _gate(peer_address, authorization, cookie_header=cookie,
+                    query_token=query_token)
+    if refusal is not None:
+        return refusal, None
+    token = os.environ.get("RADD_ADMIN_TOKEN", "")
+    presented = _bearer(authorization) or str(query_token or "").strip()
+    if token and presented and hmac.compare_digest(
+            presented.encode("utf-8"), token.encode("utf-8")):
+        return None, operator_session_cookie(token)
+    return None, None
 
 
 # ── small read helpers ───────────────────────────────────────────────────────
@@ -1686,6 +1832,146 @@ def render_payments_page(data, query, banner=""):
     return "".join(parts)
 
 
+# ── the usage report: how many, not who ───────────────────────────────────────
+
+#: The screens that read the accounts ledger instead of the catalog. `usage_*`
+#: tables live in `user_state.db` beside `user_accounts` and `payment_transactions`
+#: because that is the file the writes that earn the counters already touch;
+#: listing them here rather than in `_SCREENS` is what stops a state screen being
+#: handed a catalog connection and answering 200 with nothing in it.
+_STATE_SCREENS = frozenset({"usage"})
+
+
+def screen_usage(state_db_path=None, *, window_days: int = 30, now=None) -> dict:
+    """`GET /admin/api/usage` — installs, live devices, retention, money.
+
+    Aggregates only, and that is the design rather than a limitation: see
+    `usage_stats`'s module docstring for the three rules (no per-person
+    timeline, no device-to-name join, no IP) and for why every number here is
+    incremented on the write that earned it instead of being scanned out of a
+    150,799-post table when the operator hits refresh on a single core.
+
+    Fails to an honest empty state like every other screen. `window_days` is
+    clamped by `usage_stats.summary` itself, so a caller cannot ask for a
+    thirty-thousand-day window and read the whole metric history.
+    """
+    try:
+        return usage_stats.summary(state_db_path or accounts.default_db_path(),
+                                   now=now, window_days=window_days)
+    except Exception:                                  # noqa: BLE001 — a screen never raises
+        return {"available": False, "detail": LEDGER_UNAVAILABLE}
+
+
+def render_usage_page(data):
+    """The usage report as a plain operator page, from the payload alone.
+
+    Every value passes `_e()` because a dimension label arrives from a client
+    header; the shape check in `usage_stats.clean_value` is the first gate and
+    escaping is the second, and a display surface takes both. No number is
+    coloured or phrased as a trend: the window is printed, the reader decides.
+    """
+    if not data.get("available"):
+        return (
+            "<!DOCTYPE html><html lang=\"en\"><head><meta charset=\"UTF-8\">"
+            "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
+            "<title>Usage — operator</title>"
+            f"<style>{_STYLE}</style></head><body>"
+            "<div class=\"wrap\"><h1>Usage</h1><p class=\"sub\">"
+            + _e(str(data.get("detail") or "no_usage_data_yet"))
+            + " — nothing has been counted yet, and a page of zeros is not a"
+            " measurement.</p></div></body></html>")
+    installs = data.get("installs", {})
+    active = data.get("active_users", {})
+    live = data.get("live_sessions", {})
+    accounts_row = data.get("accounts", {})
+    parts = [
+        "<!DOCTYPE html><html lang=\"en\"><head><meta charset=\"UTF-8\">",
+        "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">",
+        "<title>Usage — operator</title>",
+        f"<style>{_STYLE}</style></head><body><div class=\"wrap\">",
+        "<h1>Usage</h1>",
+        f'<p class="sub">Aggregates only — no per-device timeline, no IP, no'
+        f' name join. Window: {_e(str(data.get("window_days")))} days.</p>',
+    ]
+
+    def card(title, pairs):
+        parts.append(f'<section class="card"><h2>{_e(title)}</h2><dl>')
+        for key, value in pairs:
+            parts.append(f"<dt>{_e(str(key))}</dt><dd>{_e(str(value))}</dd>")
+        parts.append("</dl></section>")
+
+    card("Devices", [
+        ("distinct installs", installs.get("distinct_devices")),
+        ("new today", installs.get("new_today")),
+        ("new this window", installs.get("new_this_window")),
+        ("live last 5 min", live.get("5m")),
+        ("live last 30 min", live.get("30m")),
+        ("live last 60 min", live.get("60m")),
+        ("DAU", active.get("dau")),
+        ("WAU", active.get("wau")),
+        ("MAU", active.get("mau")),
+    ])
+    card("Accounts", [
+        ("total", accounts_row.get("total")),
+        ("vip active", accounts_row.get("vip_active")),
+        ("revoked", accounts_row.get("revoked")),
+    ])
+    retention = data.get("retention", {})
+    card("Retention (returned on or after D+n)", [
+        (name, "%s / %s (%s)" % (row.get("returned"), row.get("cohort_installs"),
+                                 row.get("rate")))
+        for name, row in retention.items()
+    ])
+    playback = data.get("playback", {})
+    card("Playback", [
+        ("server stream starts", playback.get("server_stream_starts")),
+        ("client playback attempts", playback.get("client_playback_attempts")),
+        ("buffer failures", playback.get("buffer_failures")),
+        ("buffer failure rate", playback.get("buffer_failure_rate")),
+        ("rate denominator", playback.get("rate_denominator")),
+    ])
+    for title, key in (("crash by device class", "crash_by_class"),
+                       ("error by device class", "error_by_class"),
+                       ("buffer failure by device class", "buffer_failure_by_class")):
+        card(title, sorted((data.get(key) or {}).items()))
+    # The owner's "how many, from where, on what build" question. Both halves are
+    # `usage_device` group-bys: installed is every bucket, active is the buckets
+    # seen in the last day. A label here came from a client header, so it is
+    # escaped on the way out as well as shape-checked on the way in.
+    installed = data.get("per_dimension_installed") or {}
+    active = data.get("per_dimension_active") or {}
+    for dim in usage_stats.DIMS:
+        pairs = []
+        for value in sorted(set(installed.get(dim) or {}) | set(active.get(dim) or {})):
+            pairs.append((value, "%s installed / %s active"
+                          % ((installed.get(dim) or {}).get(value, 0),
+                             (active.get(dim) or {}).get(value, 0))))
+        card(dim, pairs)
+    payments_row = data.get("payments", {})
+    card("Pass purchases (approved)", list(
+        (tier, "%s × PKR %s" % (row.get("purchases"), row.get("amount_pkr")))
+        for tier, row in (payments_row.get("by_tier") or {}).items()
+    ) + [("total PKR", payments_row.get("total_pkr")),
+         ("pending queue", payments_row.get("pending"))])
+    estimate = data.get("revenue_estimate", {})
+    card("Revenue estimate (assumptions printed)", [
+        ("ad USD in window", estimate.get("ad_usd_in_window")),
+        ("ad USD per 1,000 users", estimate.get("ad_usd_per_1000_users")),
+        ("rewarded per 1,000 users", estimate.get("rewarded_per_1000_users")),
+        ("click-through rate", estimate.get("ctr")),
+        ("assumptions", json.dumps(estimate.get("assumptions") or {},
+                                   sort_keys=True)),
+        ("estimate", estimate.get("estimate")),
+    ])
+    pending = (data.get("sources") or {}).get("reported_by_client_pending") or []
+    if pending:
+        parts.append('<div class="warn"><strong>Not yet reported by the app:</strong> '
+                     + _e(", ".join(sorted(str(name) for name in pending)))
+                     + " — these are absences, not zeros.</div>")
+    parts.append("</div></body></html>")
+    return "".join(parts)
+
+
 # The screen registry: name → (callable, whether it takes `n`).
 _SCREENS = {
     "projection": (lambda conn, q: screen_projection(conn), False),
@@ -1976,14 +2262,19 @@ def render_admin_page(conn, q):
         f"<title>{_e(brand)} — admin</title>",
         f"<style>{_STYLE}</style></head><body><div class=\"wrap\">",
         f"<h1>{_e(brand)}</h1>",
-        '<p class="sub">Operator surface. Loopback only, no TLS — this is not'
-        ' real web auth; see the module docstring before changing the gate.</p>',
+        '<p class="sub">Operator surface. Loopback only, no TLS, and every route'
+        ' on this port now needs the bearer token — see the module docstring'
+        ' before changing the gate. It is a credential boundary, not an encrypted'
+        ' one: the transport is still plain HTTP.</p>',
         '<div class="warn"><strong>Fleet names stay here.</strong> This page is'
         ' mounted on the loopback port only and never prints a scraped upstream'
         ' URL. The scraper card names the 18 engines you configured; the public'
         ' port answers 404 for <code>/admin</code> and all of its routes.</div>',
         '<p class="sub"><a href="/admin/payments">Payment queue</a> — pending'
         ' JazzCash / EasyPaisa / Raast claims, approve or reject.</p>',
+        '<p class="sub"><a href="/admin/usage">Usage</a> — installs, live'
+        ' devices, DAU/WAU/MAU, retention, per-geo and per-version counts,'
+        ' playback failures, ad and pass money. Aggregates only.</p>',
         '<p id="ops-status" class="statusline"></p>',
     ]
 
@@ -2077,7 +2368,7 @@ def _segments(path):
 
 
 def route_get(path, query, *, db_path, peer_address, token_header,
-              state_db_path=None):
+              state_db_path=None, cookie_header=""):
 
     """Serve one admin GET. Returns ``(status, content_type, body_bytes)`` when
     answered, or ``None`` when ``path`` is not under ``/admin`` (the caller falls
@@ -2090,8 +2381,8 @@ def route_get(path, query, *, db_path, peer_address, token_header,
     one."""
     if not _is_admin(path):
         return None
-    effective_token = token_header or (query.get("token", [""])[0] if query else "")
-    refusal = _gate(peer_address, effective_token)
+    refusal = _gate(peer_address, token_header, cookie_header=cookie_header,
+                    query_token=(query or {}).get("token", [""])[0])
     if refusal is not None:
         return refusal
     try:
@@ -2106,6 +2397,13 @@ def route_get(path, query, *, db_path, peer_address, token_header,
                 and segments[2] == "payments"):
             return _respond_json(200, screen_payments(
                 state_db_path, limit=_limit(query, _PENDING_LIMIT)))
+        if segments == ["admin", "usage"]:
+            return _respond_html(render_usage_page(screen_usage(
+                state_db_path, window_days=_window_days(query))))
+        if (len(segments) == 3 and segments[1] == "api"
+                and segments[2] in _STATE_SCREENS):
+            return _respond_json(200, screen_usage(
+                state_db_path, window_days=_window_days(query)))
         with _session(db_path) as conn:
             if segments == ["admin"]:
                 return _respond_html(render_admin_page(conn, query),
@@ -2175,7 +2473,7 @@ def refuse_bad_body(path):
 
 
 def route_post(path, query, *, db_path, peer_address, token_header, body=None,
-               state_db_path=None):
+               state_db_path=None, cookie_header=""):
     """Serve one admin POST. Same tuple/``None`` contract as :func:`route_get`.
 
     Five writes, no more. ``POST /admin/api/links/{id}/evidence`` takes no body:
@@ -2192,8 +2490,8 @@ def route_post(path, query, *, db_path, peer_address, token_header, body=None,
     No screen gains a setter that ``payments.py`` does not already expose."""
     if not _is_admin(path):
         return None
-    effective_token = token_header or (query.get("token", [""])[0] if query else "")
-    refusal = _gate(peer_address, effective_token)
+    refusal = _gate(peer_address, token_header, cookie_header=cookie_header,
+                    query_token=(query or {}).get("token", [""])[0])
     if refusal is not None:
         return refusal
     segments = _segments(path)

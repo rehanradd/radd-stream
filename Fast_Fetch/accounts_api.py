@@ -64,6 +64,7 @@ import accounts
 import api_v2
 import payments
 import redact
+import usage_stats
 
 PREFIX = "/api/v2/account"
 JSON = "application/json; charset=utf-8"
@@ -253,6 +254,52 @@ def _account_view(created: dict) -> dict:
     return {"created_at": created["created_at"], "created": bool(created["created"])}
 
 
+def _note_usage(db_path, key, headers, count_request=True):
+    """Mark the calling device live, from the credential and headers already here.
+
+    The account surface is the only place a caller has identified itself, so it
+    is where the operator's install/device counters get earned — no new route,
+    no new bucket, nothing a client has to opt into. The device bucket is the
+    client's `X-Install-Id` when the app lane sends one and the salted digest of
+    the sync key otherwise (`usage_stats.record_seen`), so a revoked key simply
+    stops being seen; the key itself is never stored and no IP is read.
+
+    A device row appears only for a key this server actually issued
+    (`accounts.key_is_known`, read-only and never chargeable against a real
+    viewer's lockout budget). Without that gate a stranger could grow the install
+    table one row per guess, and a counter that anyone can inflate is not a
+    counter — so an unknown credential raises `account_request` at most and marks
+    no device. `count_request` is False for an unauthenticated GET for the same
+    reason: a probe with no key at all should buy no write whatsoever.
+
+    Analytics is never allowed to break a user's request, so this swallows
+    everything and returns quietly: a favorite that failed to save because a
+    counter table was locked is a worse outcome than a missing count.
+    """
+    try:
+        return usage_stats.record_seen(
+            db_path,
+            install_id=usage_stats.install_id_from_headers(headers),
+            credential=key, headers=headers, count_request=count_request,
+            credential_is_known=bool(key) and accounts.key_is_known(db_path, key))
+    except Exception:                                # noqa: BLE001 — counting never fails a request
+        return None
+
+
+def _note_client_usage(db_path, payload, key, headers):
+    """Fold the optional `usage` block of an existing POST into the counters.
+
+    Rides on `POST /api/v2/account/progress`, which already exists, already
+    authenticates and already accepts a JSON object. Ads, coins, crashes and
+    buffering happen on the phone; this is the only way their totals reach a
+    server that is not permitted to open a new public route for them.
+    """
+    try:
+        return usage_stats.record_client_usage(db_path, payload, headers=headers)
+    except Exception:                                # noqa: BLE001 — counting never fails a request
+        return {}
+
+
 # ── refusal wrapping ─────────────────────────────────────────────────────────
 
 def _refused(error: Exception, path: str) -> tuple:
@@ -289,6 +336,7 @@ def route_get(path, query, *, db_path, catalog_path, secret, headers) -> tuple |
     key = _bearer(headers)
     tail = _segments(path)[len(_segments(PREFIX)):]
     catalog = None
+    _note_usage(db_path, key, headers, count_request=bool(key))
     try:
         catalog = _catalog_handle(catalog_path)
         if tail == []:
@@ -371,6 +419,9 @@ def route_post(path, body, *, db_path, catalog_path, secret, headers) -> tuple |
     payload = body if isinstance(body, dict) else {}
     tail = _segments(path)[len(_segments(PREFIX)):]
     key = _bearer(headers)
+    # Creation is the one unauthenticated call: it earns a request count and no
+    # device, because there is nothing to identify it by.
+    _note_usage(db_path, key, headers, count_request=True)
     catalog = None
     try:
         catalog = _catalog_handle(catalog_path)
@@ -420,6 +471,7 @@ def route_post(path, body, *, db_path, catalog_path, secret, headers) -> tuple |
                                         client_updated_at=_number(payload, "client_updated_at", 0.0) or None,
                                         catalog=catalog,
                                         tracker=LIMITER)
+            _note_client_usage(db_path, payload, key, headers)
             return _respond({"progress": accounts.to_public(row, mint)}, status=201)
         if tail == ["progress", "remove"]:
             work, refusal = _target(payload, mint, path)

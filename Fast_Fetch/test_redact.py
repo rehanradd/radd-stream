@@ -50,6 +50,20 @@ SENTINELS = (
     "gamerxyt", "direct-cloud", "greenmotors",
 )
 
+#: The operator port is fail-closed: every route on it now answers 401 without a
+#: bearer token, because loopback is a boundary and not a credential. An HTTP test
+#: that means to *be* the operator has to say so, which is the honest version of
+#: the old fixture's silent assumption that reaching the socket was enough.
+OPERATOR_TOKEN = "redact-suite-operator-credential"
+TOKEN_ENV = "RADD_ADMIN_TOKEN"
+
+#: Where the public handler writes the operator's playback counters. It counts at
+#: `accounts_api.state_db()`, which is the production ledger unless a test says
+#: otherwise — measured: an unpatched run of this suite put 42 `playback_start`
+#: rows into `/home/ubuntu/radd-stream-data/user_state.db`. A test that writes into
+#: the numbers it is supposed to be protecting is not a test.
+STATE_DB_ENV = "RADD_USER_STATE_DB"
+
 
 def media(site, url, *, title=None, clean_title="Example Film", year=2024,
           quality="1080p", source_name="⚡ PixelDrain [Direct CDN]", service="pixeldrain",
@@ -539,6 +553,11 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
 class PublicEdgeHttpTests(FixtureMixin):
     @classmethod
     def setUpClass(cls):
+        cls.saved_token = os.environ.get(TOKEN_ENV)
+        os.environ[TOKEN_ENV] = OPERATOR_TOKEN
+        cls.saved_state = os.environ.get(STATE_DB_ENV)
+        cls.state_tmp = tempfile.TemporaryDirectory()
+        os.environ[STATE_DB_ENV] = str(Path(cls.state_tmp.name) / "user_state.db")
         cls.public_server = viewer.make_server("127.0.0.1", 0, operator=False)
         cls.operator_server = viewer.make_server("127.0.0.1", 0, operator=True)
         for server in (cls.public_server, cls.operator_server):
@@ -551,6 +570,15 @@ class PublicEdgeHttpTests(FixtureMixin):
         for server in (cls.public_server, cls.operator_server):
             server.shutdown()
             server.server_close()
+        if cls.saved_token is None:
+            os.environ.pop(TOKEN_ENV, None)
+        else:
+            os.environ[TOKEN_ENV] = cls.saved_token
+        if cls.saved_state is None:
+            os.environ.pop(STATE_DB_ENV, None)
+        else:
+            os.environ[STATE_DB_ENV] = cls.saved_state
+        cls.state_tmp.cleanup()
 
     def setUp(self):
         self.make_ledger()
@@ -562,10 +590,13 @@ class PublicEdgeHttpTests(FixtureMixin):
 
     def get(self, path, port, follow=False):
         url = f"http://127.0.0.1:{port}{path}"
+        request = urllib.request.Request(url)
+        if port == self.operator_port:
+            request.add_header("Authorization", "Bearer " + OPERATOR_TOKEN)
         opener = urllib.request.build_opener() if follow else \
             urllib.request.build_opener(_NoRedirect)
         try:
-            with opener.open(url, timeout=10) as response:
+            with opener.open(request, timeout=10) as response:
                 return response.status, dict(response.headers), response.read().decode("utf-8")
         except urllib.error.HTTPError as error:
             return error.code, dict(error.headers), error.read().decode("utf-8")
@@ -590,6 +621,25 @@ class PublicEdgeHttpTests(FixtureMixin):
         status, _, body = self.get(f"/api/v1/posts/{post_id}", self.operator_port)
         self.assertEqual(status, 200, body)
         return json.loads(body)["data"]
+
+    def test_the_playback_counters_cannot_reach_the_production_ledger(self):
+        """Every play this suite makes is counted by the real handler, into
+        `accounts_api.state_db()`. If that ever resolves to the host's data disk
+        again, the operator's playback totals become test traffic — so the pin is
+        asserted, not assumed."""
+        import accounts_api
+        served = accounts_api.state_db()
+        self.assertTrue(str(served).startswith(self.state_tmp.name),
+                        "analytics wrote outside the test sandbox: " + str(served))
+        self.get("/api/v1/stats", self.public_port)
+        handle = redact.mint_token(self.source_id(self.post_id),
+                                   viewer.signing_secret())
+        self.get(f"/api/v1/stream?id={handle}&redirect=0", self.public_port)
+        self.assertTrue(Path(self.state_tmp.name).exists())
+        days = [row[0] for row in sqlite3.connect(str(served)).execute(
+            "SELECT metric FROM usage_metric")]
+        self.assertEqual(days, ["playback_start"],
+                         "the sandbox ledger, and only it, carries the counts")
 
     def test_the_bulk_dump_is_operator_only(self):
         """`/api/data` returns every post in one response. Projected or not, that
@@ -804,6 +854,11 @@ class AdultDenialOnBothPortsTests(FixtureMixin):
 
     @classmethod
     def setUpClass(cls):
+        cls.saved_token = os.environ.get(TOKEN_ENV)
+        os.environ[TOKEN_ENV] = OPERATOR_TOKEN
+        cls.saved_state = os.environ.get(STATE_DB_ENV)
+        cls.state_tmp = tempfile.TemporaryDirectory()
+        os.environ[STATE_DB_ENV] = str(Path(cls.state_tmp.name) / "user_state.db")
         cls.public_server = viewer.make_server("127.0.0.1", 0, operator=False)
         cls.operator_server = viewer.make_server("127.0.0.1", 0, operator=True)
         for server in (cls.public_server, cls.operator_server):
@@ -816,6 +871,15 @@ class AdultDenialOnBothPortsTests(FixtureMixin):
         for server in (cls.public_server, cls.operator_server):
             server.shutdown()
             server.server_close()
+        if cls.saved_token is None:
+            os.environ.pop(TOKEN_ENV, None)
+        else:
+            os.environ[TOKEN_ENV] = cls.saved_token
+        if cls.saved_state is None:
+            os.environ.pop(STATE_DB_ENV, None)
+        else:
+            os.environ[STATE_DB_ENV] = cls.saved_state
+        cls.state_tmp.cleanup()
 
     def setUp(self):
         self.make_ledger()
@@ -827,9 +891,12 @@ class AdultDenialOnBothPortsTests(FixtureMixin):
 
     def get(self, path, port):
         url = f"http://127.0.0.1:{port}{path}"
+        request = urllib.request.Request(url)
+        if port == self.operator_port:
+            request.add_header("Authorization", "Bearer " + OPERATOR_TOKEN)
         opener = urllib.request.build_opener(_NoRedirect)
         try:
-            with opener.open(url, timeout=10) as response:
+            with opener.open(request, timeout=10) as response:
                 return response.status, response.read().decode("utf-8")
         except urllib.error.HTTPError as error:
             return error.code, error.read().decode("utf-8")

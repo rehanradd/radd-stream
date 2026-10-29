@@ -49,6 +49,11 @@ class Sweep:
     def __init__(self, public: int, operator: int):
         self.public = public
         self.operator = operator
+        #: Every route on the operator port now requires a credential, so a sweep that
+        #: means to read it as the operator has to present the token the server was
+        #: started with. Reuse the operator's own if it is configured, else mint one
+        #: for this run — it is generated, never logged, and dies with the process.
+        self.admin_token = os.environ.get("RADD_ADMIN_TOKEN") or os.urandom(18).hex()
         self.failures: list[str] = []
         self.notes: list[str] = []
         self.soft: list[str] = []
@@ -87,10 +92,11 @@ class Sweep:
 
     # ── transport ────────────────────────────────────────────────────────────
     @staticmethod
-    def _get(port: int, path: str):
+    def _get(port: int, path: str, headers: dict | None = None):
         conn = http.client.HTTPConnection("127.0.0.1", port, timeout=180)
         try:
-            conn.request("GET", path, headers={"Host": f"127.0.0.1:{port}"})
+            conn.request("GET", path, headers={"Host": f"127.0.0.1:{port}",
+                                               **(headers or {})})
             response = conn.getresponse()
             return (response.status, dict(response.getheaders()),
                     response.read().decode("utf-8", "replace"))
@@ -102,9 +108,11 @@ class Sweep:
     def get(self, port: int, path: str):
         """This sweep is the traffic that trips our own limiter, so a 429 here
         means the route was never looked at — wait it out instead of passing it."""
+        sent = ({"Authorization": "Bearer " + self.admin_token}
+                if port == self.operator else None)
         status, headers, body = 429, {}, ""
         for attempt in range(4):
-            status, headers, body = self._get(port, path)
+            status, headers, body = self._get(port, path, sent)
             if status != 429:
                 return status, headers, body
             time.sleep(min(10 * (attempt + 1), 45))
@@ -234,7 +242,8 @@ class Sweep:
         raw_link = raw_link_row[0] if raw_link_row else 1
 
         env = dict(os.environ, RADD_DB_PATH=db,
-                   RADD_INTERNAL_PORT=str(self.operator), RADD_STREAM_SECRET=secret)
+                   RADD_INTERNAL_PORT=str(self.operator), RADD_STREAM_SECRET=secret,
+                   RADD_ADMIN_TOKEN=self.admin_token)
         server = subprocess.Popen(
             [sys.executable, "-S", "Fast_Fetch/fast_fetch.py", "serve",
              "--host", "127.0.0.1", "--port", str(self.public)],
@@ -341,6 +350,16 @@ class Sweep:
             _, _, op_rules = self.get(self.operator, "/api/v1/rules")
             if "pixeldrain" not in op_rules:
                 self.flag("operator /api/v1/rules is empty")
+
+            # And the negative control for the same port. Reaching the socket is not
+            # a credential: `/` used to serve the whole dashboard to whoever connected
+            # on loopback, and a sweep that only proved the positive half would let
+            # that come back unnoticed.
+            for path in ("/", "/client", "/api/data", "/api/v1/rules",
+                         "/api/v1/stats"):
+                status, _, _ = self._get(self.operator, path)
+                if status != 401:
+                    self.flag(f"operator {path} answered {status} with no credential")
         finally:
             server.terminate()
             try:
