@@ -546,9 +546,19 @@ def fetch_database_payload(search_query: str = "", full: bool = False,
 
         r_count = int(meta.get("releases", 0)) or conn.execute("SELECT COUNT(*) FROM releases").fetchone()[0]
         src_count = int(meta.get("links", 0)) or conn.execute("SELECT COUNT(*) FROM download_sources").fetchone()[0]
-        active_count = int(meta.get("links", 0))
-        resumable_count = 0
-        dead_count = 0
+        # `active_sources` here used to be the total link count: with
+        # `links_by_state = {"unchecked": 3456460}` it told the dashboard that every
+        # mirror in the catalog had been knocked on and answered, when nothing had.
+        # The link family on this panel is the projection's adult-excluded breakdown,
+        # so active/dead/resumable are three views of the same counted set instead of
+        # two from the safe stamp and one from the unfiltered rows.
+        by_state = _meta_by_state(meta.get("links_by_state_safe"))
+        if by_state is None:
+            by_state, resumable_count, _ = _ledger_link_breakdown(conn)
+        else:
+            resumable_count = _meta_count(meta.get("links_resumable_safe")) or 0
+        active_count = int(by_state.get("active", 0) or 0)
+        dead_count = int(by_state.get("dead", 0) or 0)
 
         stats = {
             "sitemap_cached": s_count,
@@ -2812,13 +2822,124 @@ def api_v1_rules() -> dict:
     }
 
 
-_STATS_CACHE = {"time": 0.0, "data": None}
+_STATS_CACHE = {"time": 0.0, "data": None, "db": None}
+
+
+def _meta_count(raw):
+    """A stamped projection counter as an int, or `None` when the key is absent.
+
+    `0` is a real answer here — a catalog nobody has knocked on has zero live links —
+    so a missing key must not collapse into it.
+    """
+    if raw is None or str(raw).strip() == "":
+        return None
+    try:
+        return int(str(raw).strip())
+    except (TypeError, ValueError):
+        return None
+
+
+def _meta_by_state(raw):
+    """The stamped adult-excluded link breakdown, or `None` when there is none.
+
+    A stored `{}` is `None` here: a projection that wrote no `cat_links` rows at all
+    is indistinguishable from a stamp that predates the key, and the second case must
+    fall back to counting rather than publish a catalog with no links in it."""
+    if raw is None or str(raw).strip() == "":
+        return None
+    try:
+        parsed = json.loads(raw)
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(parsed, dict) or not parsed:
+        return None
+    return {str(state): int(count or 0) for state, count in parsed.items()}
+
+
+#: `download_sources.status` -> projection vocabulary, as SQL.
+#:
+#: A scraper writes 'active' into every row at ingest and only `link_state.propagate()`
+#: retires that claim, so `status = 'active'` alone says nothing about whether anybody
+#: knocked. This is `_link_state_of()`'s rule (`catalog_v2.py`) told to SQLite: an
+#: absent or unprobed 'active' is 'unchecked', and only measured evidence — a
+#: `last_checked_at` or a real `http_status` — makes one 'active'.
+_LEDGER_STATE_SQL = """
+    CASE
+      WHEN d.status IS NULL OR d.status = '' OR d.status = 'unverified' THEN 'unchecked'
+      WHEN d.status = 'active' THEN
+        CASE WHEN d.last_checked_at IS NULL
+                  AND (d.http_status IS NULL OR d.http_status = 0)
+             THEN 'unchecked' ELSE 'active' END
+      WHEN d.status IN ('dead', 'expired', 'unknown') THEN d.status
+      ELSE 'unchecked'
+    END
+"""
+
+
+def _ledger_link_breakdown(conn):
+    """(by_state, resumable, temporary) for the displayable ledger, counted live.
+
+    The fallback for a catalog with no safe stamp on it. Uses `_LEDGER_STATE_SQL`, so
+    a scraper's blanket 'active' lands in 'unchecked' here exactly as it does in the
+    projection, and the adult clause, so no number below can be reached by an 18+ row.
+    """
+    by_state, resumable_c, temp_c = {}, 0, 0
+    for row in conn.execute(
+            f"SELECT {_LEDGER_STATE_SQL} AS state,"
+            " COUNT(*) AS n,"
+            " SUM(CASE WHEN d.is_resumable = 1 THEN 1 ELSE 0 END) AS resumable,"
+            " SUM(CASE WHEN d.is_temporary = 1 THEN 1 ELSE 0 END) AS temporary"
+            " FROM download_sources d"
+            " JOIN releases r ON r.id = d.release_id"
+            " JOIN posts p ON p.id = r.post_id"
+            f" WHERE {redact.adult_clause('p')}"
+            " GROUP BY state").fetchall():
+        name = str(row["state"] or "unchecked")
+        count = int(row["n"] or 0)
+        by_state[name] = by_state.get(name, 0) + count
+        resumable_c += int(row["resumable"] or 0)
+        temp_c += int(row["temporary"] or 0)
+    return dict(sorted(by_state.items())), resumable_c, temp_c
+
+
+def _counted_stats(conn):
+    """The whole stats body, counted live from the ledger with the adult rule applied.
+
+    Used when the projection carries no safe stamp yet (a catalog merged before these
+    counters existed, or one that was never projected at all).
+    """
+    try:
+        posts_c = conn.execute(
+            "SELECT COUNT(*) FROM cat_works WHERE " + redact.adult_clause("cat_works")
+        ).fetchone()[0]
+    except Exception:
+        posts_c = conn.execute(
+            "SELECT COUNT(*) FROM posts WHERE " + redact.adult_clause("posts")
+        ).fetchone()[0]
+    rels_c = conn.execute(
+        f"SELECT COUNT(*) FROM releases r JOIN posts p ON p.id = r.post_id"
+        f" WHERE {redact.adult_clause('p')}"
+    ).fetchone()[0]
+    by_state, resumable_c, temp_c = _ledger_link_breakdown(conn)
+    return {
+        "posts": posts_c,
+        "releases": rels_c,
+        "sources": sum(by_state.values()),
+        "active_sources": by_state.get("active", 0),
+        "resumable_sources": resumable_c,
+        "temporary_sources": temp_c,
+        "sources_by_state": by_state,
+    }
 
 
 def _get_cached_stats(conn):
     import time
     now = time.time()
-    if _STATS_CACHE["data"] is not None and (now - _STATS_CACHE["time"]) < 120.0:
+    # Keyed by DB_PATH, the way `_ensure_schema` keys its readiness flag: `get_db()`
+    # hands every request a fresh connection, so a `conn` identity would never match
+    # and the cache would answer the previous database for two minutes after a switch.
+    if (_STATS_CACHE["data"] is not None and _STATS_CACHE["db"] == DB_PATH
+            and (now - _STATS_CACHE["time"]) < 120.0):
         return _STATS_CACHE["data"]
 
     meta = {}
@@ -2827,44 +2948,34 @@ def _get_cached_stats(conn):
     except Exception:
         pass
 
-    if meta.get("works") and meta.get("releases") and meta.get("links"):
-        posts_c = int(meta["works"])
-        rels_c = int(meta["releases"])
-        srcs_c = int(meta["links"])
-        active_c = srcs_c
-        resumable_c = 0
-        temp_c = 0
-    else:
-        posts_c = conn.execute(
-            "SELECT COUNT(*) FROM posts WHERE is_18_plus IS NULL OR is_18_plus = 0"
-        ).fetchone()[0]
-        rels_c = conn.execute(
-            "SELECT COUNT(*) FROM releases r JOIN posts p ON p.id = r.post_id"
-            " WHERE p.is_18_plus IS NULL OR p.is_18_plus = 0"
-        ).fetchone()[0]
-        src_row = conn.execute(
-            "SELECT COUNT(*),"
-            " SUM(CASE WHEN d.status = 'active' THEN 1 ELSE 0 END),"
-            " SUM(CASE WHEN d.is_resumable = 1 THEN 1 ELSE 0 END),"
-            " SUM(CASE WHEN d.is_temporary = 1 THEN 1 ELSE 0 END)"
-            " FROM download_sources d"
-            " JOIN releases r ON r.id = d.release_id"
-            " JOIN posts p ON p.id = r.post_id"
-            " WHERE p.is_18_plus IS NULL OR p.is_18_plus = 0"
-        ).fetchone()
-        srcs_c, active_c, resumable_c, temp_c = (src_row[0] or 0, src_row[1] or 0,
-                                                  src_row[2] or 0, src_row[3] or 0)
+    # The numbers this endpoint publishes, in the adult-excluded form the projection
+    # stamped for them. All or nothing: mixing a stamp with a live count would publish
+    # two snapshots taken at different times, so a partial stamp falls back to counting.
+    safe_keys = ("works_safe", "releases_safe", "links_resumable_safe",
+                 "links_temporary_safe")
+    safe = {name: _meta_count(meta.get(name)) for name in safe_keys}
+    by_state = _meta_by_state(meta.get("links_by_state_safe"))
 
-    res = {
-        "posts": posts_c,
-        "releases": rels_c,
-        "sources": srcs_c,
-        "active_sources": active_c,
-        "resumable_sources": resumable_c,
-        "temporary_sources": temp_c,
-    }
+    if None in safe.values() or by_state is None:
+        res = _counted_stats(conn)
+    else:
+        # `sources` and `active_sources` are read out of the breakdown rather than
+        # taken beside the `links_safe`/`links_active_safe` stamps: one is derived from
+        # the other here, so the response can never publish a total and a distribution
+        # of it that disagree — the mistake this whole function started making was
+        # printing `active_sources` equal to `sources`.
+        res = {
+            "posts": safe["works_safe"],
+            "releases": safe["releases_safe"],
+            "sources": sum(by_state.values()),
+            "active_sources": by_state.get("active", 0),
+            "resumable_sources": safe["links_resumable_safe"],
+            "temporary_sources": safe["links_temporary_safe"],
+            "sources_by_state": by_state,
+        }
     _STATS_CACHE["time"] = now
     _STATS_CACHE["data"] = res
+    _STATS_CACHE["db"] = DB_PATH
     return res
 
 

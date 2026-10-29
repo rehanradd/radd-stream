@@ -945,6 +945,7 @@ def project(conn: sqlite3.Connection, *, rev: int | None = None, reset: bool = T
               f"({time.time() - started:.0f}s)")
 
     work_ids: dict[str, int] = {}
+    adult_keys: set[str] = set()
     for key, acc in works.items():
         head = acc.posts[0]
         title = _post_column(head, "clean_title", default="") or _post_column(head, "title", "Unknown")
@@ -961,6 +962,17 @@ def project(conn: sqlite3.Connection, *, rev: int | None = None, reset: bool = T
             title,
         )
         year = _post_column(head, "year")
+        # One roll-up over the work's pages decides three things at once: the column,
+        # whether this work may be counted in a public aggregate, and how many of its
+        # prints/links are public. `/api/v1/stats` read the unfiltered totals from the
+        # projection — measured 2026-10-29 it answered `posts=116922` out of a catalog
+        # holding 146,176 ledger posts and 14,617 `is_18_plus=1` rows — and advertised
+        # works it will never display. The answer has to be stamped here, where the
+        # flag is already known, because a per-request join over 3.4M `cat_links` rows
+        # is not something this one-core box serves.
+        adult = any(int(_post_column(p, "is_18_plus", default=0) or 0) for p in acc.posts)
+        if adult:
+            adult_keys.add(key)
         rating = acc.best.get("imdb_rating")
         try:
             rating = float(rating) if rating not in (None, "") else None
@@ -977,7 +989,7 @@ def project(conn: sqlite3.Connection, *, rev: int | None = None, reset: bool = T
             (
                 key, title, _post_column(head, "title", default=title), year, wtype,
                 is_animated,
-                1 if any(int(_post_column(p, "is_18_plus", default=0) or 0) for p in acc.posts) else 0,
+                1 if adult else 0,
                 acc.best.get("synopsis"), acc.best.get("genres"),
                 _post_column(head, "language", default=""), _post_column(head, "country", default="Unknown"),
                 _post_column(head, "industry", default="Unknown"), rating,
@@ -999,17 +1011,30 @@ def project(conn: sqlite3.Connection, *, rev: int | None = None, reset: bool = T
 
     conn.commit()
     _progress(f"works written: {len(work_ids)} ({time.time() - started:.0f}s)")
-    counters = _project_pages(conn, works, work_ids, release_descriptor, now)
+    counters = _project_pages(conn, works, work_ids, release_descriptor, now, adult_keys)
     _progress(f"pages/prints done: {counters['releases']} prints, {counters['links']} links "
               f"({time.time() - started:.0f}s)")
     _finalize(conn, works, work_ids, now, counters)
     _progress(f"finalized ({time.time() - started:.0f}s)")
 
     mapped = _record_id_map(conn, before, catalog_rev) if before else 0
+    safe = safe_link_rollup(conn) or {}
     summary = {
         "works": len(work_ids),
         "releases": counters["releases"],
         "links": counters["links"],
+        # The same numbers with every `is_18_plus` work removed, plus the verified
+        # share of the public links. `/api/v1/stats` reads these instead of counting
+        # `cat_*` rows per request: the public surface must not advertise a catalog
+        # scale that includes titles it will never display, and it must not call a
+        # link it has never knocked on live.
+        "works_safe": len(work_ids) - len(adult_keys),
+        "adult_works": len(adult_keys),
+        "releases_safe": counters["releases_safe"],
+        "links_safe": safe.get("links_safe", 0),
+        "links_active_safe": safe.get("links_active_safe", 0),
+        "links_resumable_safe": safe.get("links_resumable_safe", 0),
+        "links_temporary_safe": safe.get("links_temporary_safe", 0),
         "episodes": counters["episodes"],
         "seasons": counters["seasons"],
         "parts": counters["parts"],
@@ -1042,15 +1067,30 @@ def project(conn: sqlite3.Connection, *, rev: int | None = None, reset: bool = T
         (str(round(by_state.get("active", 0) / sum(by_state.values()), 4)
              if by_state else 0.0),))
     summary["links_by_state"] = by_state
+    # The same breakdown with every 18+ work removed. `/api/v1/stats` publishes it, and
+    # a public surface may not answer "3.4M links, 34k of them dead" out of a number
+    # that silently includes what it will never show.
+    safe_by_state = safe.get("links_by_state_safe") or {}
+    conn.execute(
+        "INSERT OR REPLACE INTO cat_projection_meta (key, value)"
+        " VALUES ('links_by_state_safe', ?)",
+        (json.dumps(safe_by_state, sort_keys=True),))
+    summary["links_by_state_safe"] = safe_by_state
     conn.commit()
     if verbose:
         print(f"[✓] catalog v2 projected: {summary}", flush=True)
     return summary
 
 
-def _project_pages(conn, works, work_ids, release_descriptor, now) -> dict:
+def _project_pages(conn, works, work_ids, release_descriptor, now,
+                   adult_keys: frozenset[str] | set[str] = frozenset()) -> dict:
     counters = {"releases": 0, "links": 0, "episodes": 0, "seasons": 0, "suspect": 0,
-                "unattributed": 0, "release_dups": 0, "parts": 0}
+                "unattributed": 0, "release_dups": 0, "parts": 0,
+                # The adult-excluded mirror of `releases`, accumulated in the same pass
+                # so a public aggregate never has to re-derive it with a join. The link
+                # family is NOT mirrored here: those numbers come from
+                # `safe_link_rollup()`, off the rows that survived `INSERT OR IGNORE`.
+                "releases_safe": 0}
     episode_index: dict[tuple[int, int, int], int] = {}
     # (work_id, natural print key) -> release_id, so the same print mirrored by a
     # scraper that re-emitted a page collapses onto one row instead of two siblings.
@@ -1063,6 +1103,7 @@ def _project_pages(conn, works, work_ids, release_descriptor, now) -> dict:
             _progress(f"projects {seen}/{len(works)} works: {counters['releases']} prints, "
                       f"{counters['links']} links")
         work_id = work_ids[key]
+        displayable = key not in adult_keys
         family = work_family(str(conn.execute(
             "SELECT work_type FROM cat_works WHERE id = ?", (work_id,)).fetchone()[0]))
         pages = {}
@@ -1163,6 +1204,8 @@ def _project_pages(conn, works, work_ids, release_descriptor, now) -> dict:
                                              "season": raw_season})
                     print_index[pkey] = release_id
                     counters["releases"] += 1
+                    if displayable:
+                        counters["releases_safe"] += 1
 
                     season_id = _season_id(conn, work_id, season_number, counters,
                                            season_type="special" if is_special else "regular")
@@ -2131,6 +2174,60 @@ def _link_health():
     return link_health
 
 
+def _redact():
+    """Lazy sibling import, so the projector stays loadable without the wire layer."""
+    try:
+        import redact
+    except ImportError:  # pragma: no cover - package-relative fallback
+        from Fast_Fetch import redact  # type: ignore
+    return redact
+
+
+def safe_link_rollup(conn) -> dict | None:
+    """The adult-excluded link numbers, read off the `cat_links` rows that exist.
+
+    `project()` and `_refresh_state_rollup()` both stamp these five keys and
+    `/api/v1/stats` publishes them, so they have exactly one definition here: the
+    projector's state per link, joined to the work that owns it, under the one adult
+    rule every public emitter shares (`redact.adult_clause`).
+
+    Reading rows rather than the projector's in-pass counters is not pedantry — a
+    scraper that re-emitted one page can put two ledger rows on the same print with
+    the same URL, and `INSERT OR IGNORE` keeps one. A counter would publish the
+    second as a link the catalog does not have, and the breakdown would no longer add
+    up to the total printed next to it.
+
+    Returns `None` when there is no `cat_works` to scope against, which is how a
+    caller tells "no projection yet" from "a projection with zero public links".
+    """
+    if not _has_table(conn, "cat_links") or not _has_table(conn, "cat_works"):
+        return None
+    by_state: dict[str, int] = {}
+    total = resumable = temporary = 0
+    for row in conn.execute(
+            f"""
+            SELECT l.state AS state, COUNT(*) AS n,
+                   SUM(CASE WHEN l.resumable = 1 OR l.accepts_ranges = 1
+                            THEN 1 ELSE 0 END) AS resumable,
+                   SUM(CASE WHEN l.ephemeral = 1 THEN 1 ELSE 0 END) AS ephemeral
+              FROM cat_links l JOIN cat_works w ON w.id = l.work_id
+             WHERE {_redact().adult_clause("w")}
+             GROUP BY l.state"""):
+        name = str(row["state"] or "unchecked")
+        count = int(row["n"] or 0)
+        by_state[name] = by_state.get(name, 0) + count
+        total += count
+        resumable += int(row["resumable"] or 0)
+        temporary += int(row["ephemeral"] or 0)
+    return {
+        "links_by_state_safe": dict(sorted(by_state.items())),
+        "links_safe": total,
+        "links_active_safe": int(by_state.get("active", 0) or 0),
+        "links_resumable_safe": resumable,
+        "links_temporary_safe": temporary,
+    }
+
+
 def _result_to_journal(item) -> dict:
     """One measurement (ProbeResult or dict) -> journal column values.
 
@@ -2341,7 +2438,13 @@ def _blend_link(link, rows, *, weight: float = EVIDENCE_EWMA_WEIGHT, cors_fact=N
 
 
 def _refresh_state_rollup(conn, now: float) -> dict:
-    """Recompute the coverage counters `project()` writes, after a state change."""
+    """Recompute the coverage counters `project()` writes, after a state change.
+
+    The safe (adult-excluded) mirrors are refreshed here too, not left at whatever
+    the last full projection stamped. `/api/v1/stats` publishes both families in one
+    response, so a probe writeback that moved `links_by_state` without moving
+    `links_by_state_safe` would ship two different snapshots of the same catalog.
+    """
     if not _has_table(conn, "cat_projection_meta") or not _has_table(conn, "cat_links"):
         return {}
     by_state = {str(row[0]): int(row[1]) for row in
@@ -2351,6 +2454,18 @@ def _refresh_state_rollup(conn, now: float) -> dict:
                  (json.dumps(by_state, sort_keys=True),))
     conn.execute("INSERT OR REPLACE INTO cat_projection_meta (key, value) VALUES ('link_coverage', ?)",
                  (str(round(by_state.get("active", 0) / total, 4) if total else 0.0),))
+    if _has_table(conn, "cat_works"):
+        safe = safe_link_rollup(conn) or {}
+        for key, value in (
+                ("links_by_state_safe",
+                 json.dumps(safe.get("links_by_state_safe") or {}, sort_keys=True)),
+                ("links_safe", str(safe.get("links_safe", 0))),
+                ("links_active_safe", str(safe.get("links_active_safe", 0))),
+                ("links_resumable_safe", str(safe.get("links_resumable_safe", 0))),
+                ("links_temporary_safe", str(safe.get("links_temporary_safe", 0)))):
+            conn.execute(
+                "INSERT OR REPLACE INTO cat_projection_meta (key, value) VALUES (?, ?)",
+                (key, value))
     return by_state
 
 
