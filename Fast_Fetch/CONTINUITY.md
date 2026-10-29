@@ -2031,6 +2031,13 @@ that was committed — the earlier pass was stopped because I edited `backfill_a
 (`backfill_adult_key.py`: `COUNT(DISTINCT p.id)` for the residual and a required `keys` argument on
 `apply_ledger`), so nothing validated a stale file. Log: `/tmp/q5_scratch/gate_adult.log`.
 
+**Hosted proof.** `6978167` pushed to `master` and `main` (fast-forward from `ac638ca`, askpass flow, token
+never in a URL or argument): 🐍 Backend CI **`completed / success`** on both —
+run **40798264109** (master) and **40798264323** (main). The live edge still answers
+`/api/v1/posts?q=4+Play` → `total=1`, id **23519**, and `total=135,779` overall (measured over HTTP at
+this moment): the deployed checkout is not this code and the 455 rows are not yet flipped, so the endpoint
+is **not** fixed in production yet.
+
 **Boundaries respected.** The production catalog was opened in `?mode=ro` and read through covering-index
 and primary-key paths only; no statement of mine wrote it, no `PRAGMA integrity_check`, no full scan, and
 the `EXPOSED_KEYS_SQL` grouped pass over `posts` was **not** re-run there — MASTER already spent it. Stdlib
