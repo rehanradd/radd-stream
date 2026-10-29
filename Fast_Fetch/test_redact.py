@@ -737,6 +737,192 @@ class PublicEdgeHttpTests(FixtureMixin):
 
 # ── 3. zero data loss: hiding must not break healing or the ledger ───────────
 
+class AdultDenialOnBothPortsTests(FixtureMixin):
+    """The invariant, walked over real HTTP on both ports.
+
+    Stated once, because the code and `AGENTS.md` disagreed about it: **no public
+    surface ever lists or plays a flagged row; the authenticated, loopback-only
+    operator panel may show that a flagged row exists and what its flag is; and
+    stream and download deny a flagged row even there.**
+
+    Measured in production, the leak was not a missing guard — `redact.adult_clause`
+    filtered every row it was given. It was a *second* row for the same work that
+    nobody had flagged, so every guard answered "allowed" truthfully. These tests
+    therefore pin both halves: the deny must be uniform, and the row-level law must
+    be reconciled at the work's key.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.public_server = viewer.make_server("127.0.0.1", 0, operator=False)
+        cls.operator_server = viewer.make_server("127.0.0.1", 0, operator=True)
+        for server in (cls.public_server, cls.operator_server):
+            threading.Thread(target=server.serve_forever, daemon=True).start()
+        cls.public_port = cls.public_server.server_address[1]
+        cls.operator_port = cls.operator_server.server_address[1]
+
+    @classmethod
+    def tearDownClass(cls):
+        for server in (cls.public_server, cls.operator_server):
+            server.shutdown()
+            server.server_close()
+
+    def setUp(self):
+        self.make_ledger()
+        redact.limiter._buckets.clear()
+
+    def tearDown(self):
+        super().tearDown()
+        redact.limiter._buckets.clear()
+
+    def get(self, path, port):
+        url = f"http://127.0.0.1:{port}{path}"
+        opener = urllib.request.build_opener(_NoRedirect)
+        try:
+            with opener.open(url, timeout=10) as response:
+                return response.status, response.read().decode("utf-8")
+        except urllib.error.HTTPError as error:
+            return error.code, error.read().decode("utf-8")
+
+    def insert_twin(self, key, *, clean_title, year=2024, site="bolly4u",
+                    url="https://bolly4u.example/adult-diary-hindi-download/"):
+        """A ledger row that shares a work's key and was never flagged — the exact
+        production shape: hindilinks4u's `4-play_2021` served while filmyhit's
+        flagged copy of the same film was hidden."""
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                "INSERT INTO posts (url, slug, title, clean_title, year, content_type,"
+                " source_site, is_18_plus, canonical_key)"
+                " VALUES (?, ?, ?, ?, ?, 'movie', ?, 0, ?)",
+                (url, url.rstrip("/").split("/")[-1], f"{clean_title} ({year})",
+                 clean_title, year, site, key))
+        return url
+
+    def public_titles(self, query=""):
+        path = "/api/v1/posts?limit=50"
+        if query:
+            path += "&q=" + urllib.parse.quote(query)
+        status, body = self.get(path, self.public_port)
+        self.assertEqual(status, 200, body)
+        payload = json.loads(body)
+        return payload["total"], [row["id"] for row in payload["results"]]
+
+    # ── the deny must be uniform ────────────────────────────────────────────
+
+    def test_stream_and_download_deny_a_flagged_link_on_the_operator_port_too(self):
+        hidden_link = self.source_id(self.adult_id)
+        handle = redact.mint_token(hidden_link, viewer.signing_secret())
+        # A bare row id is not an address the public port accepts at all (400), so the
+        # uniform-404 claim is made about handles on both ports and about the raw id on
+        # the port that does take it.
+        for path in (f"/api/v1/stream?id={handle}", f"/api/v1/download?id={handle}"):
+            for label, port in (("public", self.public_port),
+                                ("operator", self.operator_port)):
+                status, body = self.get(path, port)
+                self.assertEqual(status, 404, f"{label} {path} -> {status} {body}")
+                self.assertEqual(json.loads(body), {"success": False, "error": "not_found"},
+                                 f"{label} {path} explained the denial")
+                self.assertNotIn("18+", body)
+                self.assertNotIn("Adult Diary", body)
+                self.assertNotIn("gamerxyt", body, f"{label} {path} named the hoster")
+
+        status, body = self.get(f"/api/v1/stream?id={hidden_link}", self.operator_port)
+        self.assertEqual(status, 404, body)
+        self.assertEqual(json.loads(body), {"success": False, "error": "not_found"})
+
+    def test_a_safe_link_still_plays_on_the_operator_port(self):
+        """The denial is the adult rule, not a broken route: prove the same call
+        succeeds for an unflagged link, or a regression that 404s everything would
+        pass every test above."""
+        link = self.source_id(self.post_id)
+        status, _ = self.get(f"/api/v1/stream?id={link}", self.operator_port)
+        self.assertIn(status, (200, 302), "operator debugging handle still works")
+
+    def test_the_flagged_work_is_indistinguishable_from_absent_everywhere_public(self):
+        total, ids = self.public_titles()
+        self.assertNotIn(self.adult_id, ids)
+        self.assertNotIn("Adult Diary", json.dumps(self.get("/api/v1/posts?limit=50",
+                                                             self.public_port)[1]))
+        status, body = self.get(f"/api/v1/posts/{self.adult_id}", self.public_port)
+        self.assertEqual(status, 404, body)
+        status, body = self.get(f"/api/m3u?id={self.adult_id}", self.public_port)
+        self.assertEqual(status, 200)
+        self.assertNotIn("#EXTINF", body, "a playlist may not carry one playable entry")
+
+    # ── the operator panel may see the flag, and only the operator ───────────
+
+    def test_the_bulk_dump_is_unreachable_from_the_public_port(self):
+        status, _ = self.get("/api/data", self.public_port)
+        self.assertEqual(status, 404, "the panel that shows the flag is not public")
+
+    def test_the_operator_panel_lists_the_flagged_row_and_its_badge_data(self):
+        status, body = self.get("/api/data", self.operator_port)
+        self.assertEqual(status, 200, body)
+        payload = json.loads(body)
+        listed = {row["id"]: row for row in payload["posts"]}
+        self.assertIn(self.adult_id, listed,
+                      "the audit surface must not pretend the row does not exist")
+        self.assertEqual(int(listed[self.adult_id]["is_18_plus"]), 1)
+        self.assertEqual(int(payload["stats"]["posts_adult"]), 1)
+        self.assertEqual(int(payload["stats"]["posts_count"]),
+                         self.one("SELECT COUNT(*) AS n FROM posts")["n"],
+                         "the operator's scale counts every row it owns, flagged or not")
+
+    def test_the_non_operator_payload_still_excludes_the_flagged_row(self):
+        payload = viewer.fetch_database_payload(full=False)
+        self.assertNotIn(self.adult_id, [row["id"] for row in payload["posts"]])
+
+    # ── the row-level law reconciled at the work's key ──────────────────────
+
+    def test_the_search_route_stops_serving_the_unflagged_twin_once_reconciled(self):
+        key = self.one("SELECT canonical_key FROM posts WHERE id = ?",
+                       (self.adult_id,))["canonical_key"]
+        self.insert_twin(key, clean_title="Adult Diary")
+
+        # The exposure, reproduced: every guard answers truthfully, because the row
+        # the list filters was legitimately never flagged.
+        total, ids = self.public_titles(query="Adult Diary")
+        self.assertEqual(total, 1, "fixture failed to reproduce the measured leak")
+
+        flipped = fast_fetch.reconcile_key_adult(self.db_path)
+        self.assertEqual(flipped, 1)
+
+        total, ids = self.public_titles(query="Adult Diary")
+        self.assertEqual(total, 0)
+        self.assertEqual(ids, [])
+        total, _ = self.public_titles()
+        self.assertEqual(total, self.one(
+            "SELECT COUNT(*) AS n FROM posts WHERE COALESCE(is_18_plus, 0) = 0")["n"],
+            "the unflagged fixture films stay listed")
+
+    def test_a_second_site_cannot_write_a_public_copy_of_a_hidden_work(self):
+        """The same film from another site lands on the flagged row, so the ingest
+        path cannot re-create the exposure the backfill closed."""
+        post_id = fast_fetch.save_scraped_data(
+            media("moviesmela", "https://moviesmela.example/adult-diary-episodes/",
+                  clean_title="Adult Diary", adult=0))
+        self.assertEqual(post_id, self.adult_id,
+                         "one work identity, one row — a page slug is not the identity")
+        self.assertEqual(int(self.one(
+            "SELECT is_18_plus FROM posts WHERE id = ?", (post_id,))["is_18_plus"]), 1,
+            "an unflagged page cannot clear the flag the work already carries")
+        self.assertEqual(self.public_titles(query="Adult Diary")[0], 0)
+
+    def test_a_key_with_two_rows_refuses_an_arbitrary_merge(self):
+        """The safety rule that predates this fix, kept honest: two rows sharing a
+        key is an ambiguous identity, so the ingest raises instead of picking one and
+        quietly making a third public copy."""
+        key = self.one("SELECT canonical_key FROM posts WHERE id = ?",
+                       (self.adult_id,))["canonical_key"]
+        self.insert_twin(key, clean_title="Adult Diary")
+        with self.assertRaises(ValueError):
+            fast_fetch.save_scraped_data(
+                media("moviesmela", "https://moviesmela.example/adult-diary-episodes/",
+                      clean_title="Adult Diary", adult=0))
+        rows = self.one("SELECT COUNT(*) AS n FROM posts")["n"]
+        self.assertEqual(rows, 3, "the refused write added no row")
+
+
 class ZeroDataLossTests(FixtureMixin):
     def setUp(self):
         self.make_ledger()

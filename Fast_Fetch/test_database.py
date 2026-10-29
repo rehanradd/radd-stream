@@ -1452,6 +1452,293 @@ class AdultContentFilterTests(unittest.TestCase):
         self.assertIn("18+", resolution["error"])
 
 
+class KeyLevelAdultIdentityTests(unittest.TestCase):
+    """The adult law is applied per ROW while a work's identity is per KEY.
+
+    Two measured defects in the production catalog:
+
+    * 455 unflagged `posts` rows shared their exact `canonical_key` with a flagged
+      row — one work, one identity, one copy hidden and one copy served.
+      `save_scraped_data` folded the flag with `is_18_plus = MAX(is_18_plus, ?)` on
+      the *single row it touched*, so a key that already carried several rows never
+      reconciled.
+    * `canonical_key` came from the page slug, so most rows carried a site's SEO
+      sentence (`4-play-2021-hindi-movie-free-download`) instead of the work's
+      identity (`4-play_2021`), and two sites writing one film were not even
+      recognised as one work. `clean_title` is populated on every row and
+      `generate_canonical_key()` already existed — it was just never used here.
+    """
+
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.db_path = Path(self.temp_dir.name) / "test.db"
+        self.db_path_patch = patch.object(fast_fetch, "DB_PATH", self.db_path)
+        self.db_path_patch.start()
+        self.viewer_db_patch = patch.object(viewer, "DB_PATH", self.db_path)
+        self.viewer_db_patch.start()
+        self.cinemeta_patch = patch.object(fast_fetch, "fetch_cinemeta_metadata", return_value=None)
+        self.cinemeta_patch.start()
+        fast_fetch.init_db()
+
+    def tearDown(self):
+        self.cinemeta_patch.stop()
+        self.viewer_db_patch.stop()
+        self.db_path_patch.stop()
+        self.temp_dir.cleanup()
+
+    def save(self, site="site_a", url="https://site-a.example/x", **overrides):
+        media_kwargs = {k: v for k, v in overrides.items()
+                        if k in ("title", "clean_title", "year", "content_type",
+                                 "imdb_id", "tmdb_id", "quality", "source_name")}
+        data = DatabaseSaveTests.media(site, url, **media_kwargs)
+        data.update(overrides)
+        return fast_fetch.save_scraped_data(data)
+
+    def insert_legacy(self, *, url, key, clean_title="4 Play", year=2021,
+                      site="site_a", flagged=0, content_type="movie"):
+        """A row already in the ledger, written before this law existed."""
+        with fast_fetch.get_db() as conn:
+            conn.execute(
+                "INSERT INTO posts (url, slug, title, clean_title, year, content_type,"
+                " source_site, is_18_plus, canonical_key)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (url, url.rstrip("/").split("/")[-1], f"{clean_title} ({year})",
+                 clean_title, year, content_type, site, flagged, key))
+
+    def flags(self):
+        with fast_fetch.get_db() as conn:
+            return {row["url"]: int(row["is_18_plus"] or 0) for row in
+                    conn.execute("SELECT url, is_18_plus FROM posts")}
+
+    def public(self, query=""):
+        return viewer.api_v1_get_posts(query=query, limit=50)
+
+    def test_a_flagged_write_reconciles_every_row_sharing_the_key(self):
+        self.insert_legacy(url="https://site-a.example/one", key="4-play_2021")
+        self.insert_legacy(url="https://site-b.example/two", key="4-play_2021",
+                           site="site_b")
+
+        # Site B's page is re-crawled and arrives flagged this time. The write matches
+        # its OWN row by URL, so the MAX lands on one row only — the law has to reach
+        # the sibling that already carries the same key.
+        self.save(site="site_b", url="https://site-b.example/two",
+                  clean_title="4 Play", title="4 Play (2021)", year=2021,
+                  is_18_plus=1, canonical_key="4-play_2021")
+
+        self.assertEqual(self.flags(), {
+            "https://site-a.example/one": 1,
+            "https://site-b.example/two": 1,
+        })
+
+    def test_the_public_list_and_search_hide_both_copies(self):
+        self.insert_legacy(url="https://site-a.example/one", key="4-play_2021")
+        self.insert_legacy(url="https://site-b.example/two", key="4-play_2021",
+                           site="site_b", flagged=1)
+
+        # The exposed state, with nothing written: the backfill is what closes it.
+        self.assertEqual(self.public()["total"], 1)
+        self.assertEqual(self.public(query="4 Play")["total"], 1)
+
+        flipped = fast_fetch.reconcile_key_adult(self.db_path)
+        self.assertEqual(flipped, 1)
+        self.assertEqual(self.public()["total"], 0)
+        self.assertEqual(self.public(query="4 Play")["total"], 0)
+
+    def test_the_unknown_key_never_spreads_a_flag(self):
+        self.insert_legacy(url="https://site-a.example/one", key="unknown",
+                           clean_title="Unrelated Film", year=1998)
+        self.insert_legacy(url="https://site-b.example/two", key="unknown",
+                           clean_title="Another Film", year=1999, flagged=1)
+
+        # `unknown` is what `generate_canonical_key` answers for a titleless payload,
+        # so it is a shared bucket of unrelated works, not one work. Propagating from
+        # it would hide titles on the strength of one bad page.
+        flipped = fast_fetch.reconcile_key_adult(self.db_path)
+        self.assertEqual(flipped, 0)
+        self.assertEqual(self.flags(), {
+            "https://site-a.example/one": 0,
+            "https://site-b.example/two": 1,
+        })
+        with fast_fetch.get_db() as conn:
+            self.assertEqual(fast_fetch.inherit_key_adult(conn, "unknown"), 0)
+            self.assertEqual(fast_fetch.inherit_key_adult(conn, ""), 0)
+
+    def test_an_existing_row_is_not_re_keyed_by_an_ingest(self):
+        self.insert_legacy(url="https://site-a.example/one",
+                           key="4-play-2021-hindi-movie-free-download")
+
+        self.save(site="site_a", url="https://site-a.example/one",
+                  clean_title="4 Play", title="4 Play (2021)", year=2021)
+
+        with fast_fetch.get_db() as conn:
+            stored = conn.execute("SELECT canonical_key FROM posts WHERE url = ?",
+                                  ("https://site-a.example/one",)).fetchone()[0]
+        self.assertEqual(
+            stored, "4-play-2021-hindi-movie-free-download",
+            "re-keying stored rows is a reviewed migration of its own, not a side "
+            "effect of ingesting one page")
+
+    def test_two_sites_writing_one_film_collapse_into_one_post(self):
+        first = self.save(site="site_a", url="https://site-a.example/4-play-2021-hindi/",
+                          clean_title="4 Play", title="4 Play (2021)", year=2021,
+                          canonical_key="4-play-2021-hindi")
+        second = self.save(site="site_b", url="https://site-b.example/4-play-watch-3/",
+                           clean_title="4 Play", title="4 Play (2021)", year=2021,
+                           canonical_key="4_play_2021")
+
+        self.assertEqual(first, second,
+                         "a page slug must not decide whether two sites are one work")
+        with fast_fetch.get_db() as conn:
+            sites = sorted(row["source_site"] for row in conn.execute(
+                "SELECT source_site FROM post_sources WHERE post_id = ?", (first,)))
+            key = conn.execute("SELECT canonical_key FROM posts WHERE id = ?",
+                               (first,)).fetchone()[0]
+        self.assertEqual(sites, ["site_a", "site_b"])
+        self.assertEqual(key, "4-play_2021")
+
+    def test_a_reconciled_key_projects_as_one_hidden_work(self):
+        self.insert_legacy(url="https://site-a.example/one", key="4-play_2021")
+        self.insert_legacy(url="https://site-b.example/two", key="4-play_2021",
+                           site="site_b", flagged=1)
+        fast_fetch.reconcile_key_adult(self.db_path)
+
+        import catalog_v2
+        with fast_fetch.get_db() as conn:
+            catalog_v2.project(conn, reset=True, verbose=False)
+            works = conn.execute(
+                "SELECT is_18_plus, COUNT(*) AS n FROM cat_works GROUP BY is_18_plus"
+            ).fetchall()
+        self.assertEqual({row["is_18_plus"]: row["n"] for row in works}, {1: 1},
+                         "both copies fold into one hidden work, not two answers")
+
+    def test_reconciling_a_clean_catalog_flips_nothing(self):
+        self.insert_legacy(url="https://site-a.example/one", key="safe-film_2021")
+        self.insert_legacy(url="https://site-b.example/two", key="other-adult_2022",
+                           site="site_b", flagged=1)
+        self.assertEqual(fast_fetch.reconcile_key_adult(self.db_path), 0)
+        self.assertEqual(self.public()["total"], 1)
+
+
+class BackfillAdultKeyToolTests(unittest.TestCase):
+    """The reviewed repair for rows written before the key-level law existed.
+
+    `--apply` must drop the public total by EXACTLY the number of rows it flips, and
+    must say so; the residual (same work, different key) must be reported and left
+    alone, because closing it is the re-key migration this task forbids.
+    """
+
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.db_path = Path(self.temp_dir.name) / "test.db"
+        self.db_path_patch = patch.object(fast_fetch, "DB_PATH", self.db_path)
+        self.db_path_patch.start()
+        self.cinemeta_patch = patch.object(fast_fetch, "fetch_cinemeta_metadata", return_value=None)
+        self.cinemeta_patch.start()
+        fast_fetch.init_db()
+        import catalog_v2
+        self.catalog_v2 = catalog_v2
+
+    def tearDown(self):
+        self.cinemeta_patch.stop()
+        self.db_path_patch.stop()
+        self.temp_dir.cleanup()
+
+    def insert(self, *, url, key, clean_title, year=2021, site="site_a", flagged=0):
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                "INSERT INTO posts (url, slug, title, clean_title, year, content_type,"
+                " source_site, is_18_plus, canonical_key)"
+                " VALUES (?, ?, ?, ?, ?, 'movie', ?, ?, ?)",
+                (url, url.rstrip("/").split("/")[-1], f"{clean_title} ({year})",
+                 clean_title, year, site, flagged, key))
+
+    def build_catalog(self):
+        # One exposed twin (same key) and one residual (different key).
+        self.insert(url="https://a.example/one", key="4-play_2021", clean_title="4 Play")
+        self.insert(url="https://b.example/two", key="4-play_2021",
+                    clean_title="4 Play", site="site_b", flagged=1)
+        self.insert(url="https://c.example/three",
+                    key="3g-gaali-galoch-girls-episodes",
+                    clean_title="3G Gaali Galoch Girls", year=2019)
+        self.insert(url="https://d.example/four",
+                    key="3g-gaali-galoch-girls_2019",
+                    clean_title="3G Gaali Galoch Girls", year=2019,
+                    site="site_b", flagged=1)
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            self.catalog_v2.project(conn, reset=True, verbose=False)
+
+    def meta_keys(self):
+        with sqlite3.connect(self.db_path) as conn:
+            return {row[0] for row in
+                    conn.execute("SELECT key FROM cat_projection_meta")}
+
+    def test_the_tool_reports_without_writing(self):
+        self.build_catalog()
+        import backfill_adult_key as tool
+        summary = tool.report(self.db_path)
+        self.assertEqual(summary["exposed_keys"], 1)
+        self.assertEqual(summary["exposed_rows"], 1)
+        self.assertEqual(summary["flipped"], 0)
+        self.assertEqual(summary["public_total_after"], summary["public_total_before"])
+        self.assertEqual(self.flags(), {
+            "https://a.example/one": 0, "https://b.example/two": 1,
+            "https://c.example/three": 0, "https://d.example/four": 1,
+        })
+
+    def test_apply_drops_the_public_total_by_exactly_the_rows_flipped(self):
+        self.build_catalog()
+        import backfill_adult_key as tool
+        before = tool.public_total(sqlite3.connect(self.db_path))
+        summary = tool.report(self.db_path, apply=True)
+        self.assertEqual(summary["flipped"], 1)
+        self.assertEqual(summary["public_total_before"], before)
+        self.assertEqual(summary["public_total_after"], before - summary["flipped"])
+        self.assertEqual(self.flags()["https://a.example/one"], 1)
+
+    def test_the_projection_step_hides_the_work_and_retires_the_safe_stamp(self):
+        self.build_catalog()
+        import backfill_adult_key as tool
+        self.assertIn("works_safe", self.meta_keys())
+        tool.report(self.db_path, apply=True, projection=True)
+        keys = self.meta_keys()
+        for stamp in tool.SAFE_STAMP_KEYS:
+            self.assertNotIn(stamp, keys,
+                             "a stamp taken before the flip must not survive it")
+        with sqlite3.connect(self.db_path) as conn:
+            flagged = conn.execute(
+                "SELECT is_18_plus FROM cat_works WHERE title = '4 Play'").fetchone()[0]
+        self.assertEqual(int(flagged), 1)
+
+    def test_the_residual_is_reported_and_never_written(self):
+        self.build_catalog()
+        import backfill_adult_key as tool
+        summary = tool.report(self.db_path, apply=True)
+        # Before the flip the metric counts both exposed rows, because the projection
+        # folds each pair into one hidden work. After it, only the pair the key law
+        # cannot see remains: `3G Gaali Galoch Girls`, one work under two keys.
+        self.assertEqual(summary["residual_other_key"], 2)
+        self.assertEqual(summary["residual_after"], 1)
+        with sqlite3.connect(self.db_path) as conn:
+            still_public = conn.execute(
+                "SELECT is_18_plus FROM posts WHERE url = ?",
+                ("https://c.example/three",)).fetchone()[0]
+        self.assertEqual(int(still_public), 0)
+
+    def test_unknown_keys_are_never_offered_for_backfill(self):
+        self.insert(url="https://a.example/one", key="unknown", clean_title="One")
+        self.insert(url="https://b.example/two", key="unknown", clean_title="Two",
+                    flagged=1)
+        import backfill_adult_key as tool
+        with sqlite3.connect(self.db_path) as conn:
+            self.assertEqual(tool.exposed_keys(conn), [])
+
+    def flags(self):
+        with sqlite3.connect(self.db_path) as conn:
+            return {row[0]: int(row[1] or 0) for row in conn.execute(
+                "SELECT url, is_18_plus FROM posts")}
+
+
 class CrawlRetryAccountingTests(unittest.TestCase):
     """A failed page must be retried a bounded number of times, never abandoned."""
 

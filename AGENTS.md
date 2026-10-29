@@ -83,31 +83,52 @@ Describe the code's behavior accurately to users and tools. Do not disguise its 
   (`is_18_plus=1`) present in every site staging database. The flag is set at storage time and
   `save_scraped_data` re-derives it from the title as a row becomes a post
   (`Fast_Fetch/fast_fetch.py:4246`), so an unlabelled adult title still gets flagged.
-  **The invariant, measured against the code at `09058ef`:** no public surface may list *or play* a
+  **The invariant, measured against the code and pinned by tests**
+  (`Fast_Fetch/test_redact.py::AdultDenialOnBothPortsTests`,
+  `Fast_Fetch/test_database.py::KeyLevelAdultIdentityTests`): no public surface may list *or play* a
   flagged row. Enforced today by `redact.adult_clause` (`Fast_Fetch/redact.py:1068`) inside
   `api_v1_get_posts` (`Fast_Fetch/viewer.py:2516`), by the per-post bail at `viewer.py:676-682` and
   `:2677`, by `redact.link_is_adult` (`redact.py:1074`) on the stream/download redirectors — which
   answers True for an unknown link id so a typo cannot play either — and by nginx, which allow-lists
-  only the public routes. Proved live on this host: `/api/v1/posts/159` (a flagged post) is 404 on
-  loopback and at the public edge, `/api/m3u?id=159` returns 0 bytes where `/api/m3u?id=158` returns a
-  real playlist, and `/api/m3u` is 403 at the edge.
-  **One exception, deliberately, and it is not a user-facing display surface:** the authenticated
-  operator panel. `DASHBOARD_HTML` (`viewer.py:706`) reads `/api/data`, which is reachable only on the
-  loopback operator port behind `RADD_ADMIN_TOKEN` and 403s at the public edge, and
-  `fetch_database_payload` (`viewer.py:482`) documents `full` as "the operator-only mode (loopback
-  port): raw ledger rows". It renders a `18+ ADULT` badge (`viewer.py:1648`) because an operator
-  auditing flag coverage has to see which rows carry the flag. That is the *stored* half of this rule,
-  shown to the person who owns the storage — never a playable link, and never a public list. If a
-  change ever lets the panel emit a stream or download token for a flagged row, that is a defect, not
-  a policy.
-  **Compliance is not yet complete, and here is the known hole:** the adult law is applied per *row*
-  while media identity is per *key*. 442 distinct `canonical_key` values contain both a flagged row and
-  an unflagged one, so 455 flagged works are still reachable through the public list/search route under
-  their unflagged twin — e.g. `4 Play` id 23519 (hindilinks4u, `is_18_plus=0`) answers
-  `/api/v1/posts?q=4+Play` while the same film from filmyhit is correctly hidden. Fixing it means
-  reconciling `MAX(is_18_plus)` across every row that shares a `canonical_key`, not adding another
-  `WHERE` clause. Until that reconciliation lands with a test, treat "the API filters 18+" as
-  **true for flagged rows and false for the works they name**.
+  only the public routes. To a public client a flagged row is indistinguishable from a row that never
+  existed: the same `not_found`, the same status code, no hint that a flag caused the denial.
+  Proved live on this host: `/api/v1/posts/159` (a flagged post) is 404 on loopback and at the public
+  edge, `/api/m3u?id=159` returns 0 bytes where `/api/m3u?id=158` returns a real playlist, and
+  `/api/m3u` is 403 at the edge.
+  **One exception, deliberately, and it is not a user-facing display surface:** the operator panel.
+  `DASHBOARD_HTML` (`viewer.py:706`) reads `/api/data`, which this process 404s on the public port,
+  is served only on the loopback operator port, and 403s at the public edge; the trust boundary there
+  is the loopback interface, not `RADD_ADMIN_TOKEN` (the token guards `/admin`, and `/` answers 200 on
+  `8081` without it — measured 2026-10-29 05:47, see the table below). `fetch_database_payload`
+  (`viewer.py:482`) documents `full` as "the operator-only mode (loopback port): raw ledger rows", and
+  the panel renders a `18+ ADULT` badge (`viewer.py:1648`) because an operator auditing flag coverage
+  has to see which rows carry the flag. That is the *stored* half of this rule, shown to the person who
+  owns the storage — never a playable link, and never a public list. `/api/v1/stream` and
+  `/api/v1/download` deny a flagged link **on the operator port too**, with the same uniform
+  `not_found`: seeing a flagged row is the panel's job, handing out its bytes is nobody's. If a change
+  ever lets the panel emit a stream or download token for a flagged row, that is a defect, not a
+  policy. `full` is a property of the server instance, never a client-supplied header or query flag.
+  **The flag belongs to the work, not to one row.** The adult law is applied per row while media
+  identity is per `canonical_key`, so one film filed twice — one copy flagged, one not — was hidden at
+  one address and publicly served at the other: 442 keys held both, and 455 unflagged twins were
+  reachable (`4 Play` id 23519, hindilinks4u, answered `/api/v1/posts?q=4+Play` while the same film
+  from filmyhit was correctly hidden). That is fixed here, not by adding another `WHERE` clause:
+  `fast_fetch.inherit_key_adult()` reconciles `MAX(is_18_plus)` across every row sharing the key,
+  inside the write that set the flag, bounded by `idx_posts_canonical_key`; the degenerate `unknown`
+  key is refused so one titleless page cannot hide unrelated titles; and a *new* row is filed under
+  `generate_canonical_key(clean_title, year)` instead of the scraper's page slug, so two sites writing
+  one film now write one key. Stored rows keep the key they were filed under — re-keying them touches
+  ids `releases` reference and is its own reviewed migration.
+  `Fast_Fetch/backfill_adult_key.py` reconciles rows written before the law existed (report, then
+  `--apply`, then `--apply --projection`) and prints the public total before and after, refusing to
+  commit unless the total dropped by exactly the number of rows it flipped.
+  **Residual, measured 2026-10-29 on the production catalog:** 953 works are flagged in the projection
+  while 1,190 distinct ledger rows for the same title and year are still public under a *different*
+  key (`suzume-2022` vs `suzume_2022`, `puli-2015` vs `puli_2015`), concentrated in filmyzilla (437),
+  9xmovies (344), moviezguru (190) and hindilinks4u (151). No key-level law can reach those; they need
+  the re-key migration, which is planned and not attempted here.
+  Nothing in this section weakens the public rule. A test that reaches a flagged row through any public
+  route, or a flagged link through stream or download on either port, is P0.
 
 ---
 

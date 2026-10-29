@@ -485,7 +485,15 @@ def fetch_database_payload(search_query: str = "", full: bool = False,
 
     `full` is the operator-only mode (loopback port): raw ledger rows, exactly as
     stored, for healing and audit. Public callers get `redact` views instead —
-    and the difference is one flag at the edge, never two copies of the query."""
+    and the difference is one flag at the edge, never two copies of the query.
+
+    The adult rule on this panel, stated once so the code and the docs stop arguing:
+    no public surface ever lists or plays a flagged row; this operator panel may show
+    that a flagged row exists and what its flag is; and stream and download deny a
+    flagged row on *both* ports. `full` therefore widens visibility, never playability
+    — see `/api/v1/stream` and `/api/v1/download`, which call `redact.link_is_adult`
+    unconditionally, and `test_redact.AdultDenialOnBothPortsTests`, which proves it
+    over real HTTP."""
     if not DB_PATH.exists():
         return {"stats": {}, "posts": []}
     _ensure_schema()
@@ -502,6 +510,7 @@ def fetch_database_payload(search_query: str = "", full: bool = False,
         s_rog = conn.execute("SELECT COUNT(*) FROM sitemap_cache WHERE site = 'rogmovies'").fetchone()[0]
 
         p_count = int(meta.get("posts", 0)) or conn.execute("SELECT COUNT(*) FROM posts").fetchone()[0]
+        p_adult = conn.execute("SELECT COUNT(*) FROM posts WHERE is_18_plus = 1").fetchone()[0]
         page_counts = {}
         try:
             # A release may still carry the only attribution an older ledger
@@ -565,6 +574,10 @@ def fetch_database_payload(search_query: str = "", full: bool = False,
             "sitemap_vega": s_vega,
             "sitemap_rog": s_rog,
             "posts_count": p_count,
+            # The operator's own scale: how much of `posts_count` the public surfaces
+            # are not allowed to list. Only this panel answers it, and the answer is a
+            # count, never a row.
+            "posts_adult": p_adult,
             "vega_posts": p_vega,
             "rog_posts": p_rog,
             "ssr_posts": p_ssr,
@@ -580,7 +593,15 @@ def fetch_database_payload(search_query: str = "", full: bool = False,
             "dead_sources": dead_count,
         }
 
-        sql = f"SELECT * FROM posts WHERE {redact.adult_clause('posts')}"
+        # The one surface allowed to *see* a flagged row is the operator's, and it is
+        # unreachable from the network twice over: `/api/data` is in
+        # OPERATOR_ONLY_ROUTES (this process 404s it on the public port) and nginx
+        # never proxies it. Listing the row is what makes the dashboard's
+        # `🔞 18+ ADULT` badge true — an audit needs the flag, not the fiction that
+        # the catalog holds no adult titles, which is also what `posts_count` above
+        # already counted. Playing one is denied on both ports.
+        adult_rule = "1=1" if full else redact.adult_clause("posts")
+        sql = f"SELECT * FROM posts WHERE {adult_rule}"
         params = []
         if search_query:
             sql += " AND (clean_title LIKE ? OR title LIKE ? OR slug LIKE ? OR industry LIKE ? OR country LIKE ? OR language LIKE ?)"
@@ -3278,9 +3299,11 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self.send_json({"error": "Missing or invalid source id parameter 'id'"}, status=400)
                 return
 
-            if not full and redact.link_is_adult(int(source_id), DB_PATH):
+            if redact.link_is_adult(int(source_id), DB_PATH):
                 # Same answer as a link that does not exist: hidden, not deleted,
-                # and never played by an address we did not hand out.
+                # and never played by an address we did not hand out. Unconditional,
+                # on the operator port too — the panel may show that a flagged row
+                # exists and what its flag is, and must still not play it.
                 self.send_json({"success": False, "error": "not_found"}, status=404)
                 return
 
@@ -3338,8 +3361,10 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self.send_json({"error": "Missing or invalid source id parameter 'id'"}, status=400)
                 return
 
-            if not full and redact.link_is_adult(int(source_id), DB_PATH):
-                # Identical to a link that was never minted.
+            if redact.link_is_adult(int(source_id), DB_PATH):
+                # Identical to a link that was never minted. Denied on the operator
+                # port as well: seeing a flagged row is the panel's job, handing out
+                # its bytes is nobody's.
                 self.send_json({"success": False, "error": "not_found"}, status=404)
                 return
 

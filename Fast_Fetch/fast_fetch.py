@@ -498,6 +498,94 @@ def generate_canonical_key(title: str, year: int | None = None) -> str:
     return t or "unknown"
 
 
+def ledger_canonical_key(clean_title: str, year, supplied=None) -> str:
+    """The key a *new* ledger row is filed under: title and year, not a page slug.
+
+    `supplied` is whatever a scraper or a merge carried — for all 21 importers that
+    is a slug — and it is only a fallback for a payload with no usable title. It is
+    never preferred: a slug makes the work's identity site-specific, so the same
+    film written by three sites writes three keys, and the row-level adult law then
+    applies to only one of them.
+    """
+    derived = str(generate_canonical_key(clean_title, year) or "").strip().lower()
+    if derived and derived != "unknown":
+        return derived
+    fallback = str(supplied or "").strip().lower()
+    return fallback or "unknown"
+
+
+def inherit_key_adult(conn, canonical_key) -> int:
+    """Flag every row that shares `canonical_key` (MAX of `is_18_plus` over the key).
+
+    The adult law (`redact.adult_clause`) is applied per row while a work's identity
+    here is per key, so one film filed twice — one copy flagged, one not — is hidden
+    in one address and publicly served in the other. This closes that gap at the only
+    moment it is cheap: inside the write that just flagged a row, for the single key
+    that row carries, bounded by `idx_posts_canonical_key`.
+
+    The degenerate `unknown` key is refused deliberately. It is the shared bucket for
+    every titleless payload, so propagating from it would flag unrelated works across
+    the catalog on the strength of one bad page.
+
+    Returns the number of *other* rows the key just reconciled.
+    """
+    key = str(canonical_key or "").strip().lower()
+    if not key or key == "unknown":
+        return 0
+    return conn.execute(
+        "UPDATE posts SET is_18_plus = 1"
+        " WHERE canonical_key = ? AND is_18_plus IS NOT 1",
+        (key,),
+    ).rowcount
+
+
+#: Every key that carries both a flagged row and an unflagged one, and how many rows
+#: are exposed under it. `MIN` over the group is the served copy: 0 means at least one
+#: row of the work is public, 1 means the whole key is hidden.
+ADULT_KEY_EXPOSURES_SQL = """
+    SELECT canonical_key,
+           SUM(CASE WHEN COALESCE(is_18_plus, 0) = 0 THEN 1 ELSE 0 END) AS exposed
+      FROM posts
+     WHERE canonical_key IS NOT NULL AND canonical_key <> '' AND canonical_key <> 'unknown'
+     GROUP BY canonical_key
+    HAVING MAX(COALESCE(is_18_plus, 0)) = 1
+       AND MIN(COALESCE(is_18_plus, 0)) = 0
+     ORDER BY exposed DESC
+"""
+
+
+def adult_key_exposures(conn) -> list[tuple[str, int]]:
+    """(key, exposed_row_count) for every key that hides one copy and serves another.
+
+    Read-only. This is the audit, not the fix: it costs one grouped pass over
+    `posts`' key and flag columns, which on a catalog the size of production is a
+    decision for whoever owns that database, not something a write path runs.
+    """
+    return [(str(row[0]), int(row[1] or 0)) for row in
+            conn.execute(ADULT_KEY_EXPOSURES_SQL)]
+
+
+def reconcile_key_adult(db_path=None, keys=None) -> int:
+    """Backfill `inherit_key_adult` across rows written before the law existed.
+
+    One bounded UPDATE per key — the same statement the ingest path runs, so the
+    repair and the rule cannot disagree — each one resolved by `idx_posts_canonical_key`
+    rather than by scanning the table. `keys` lets a caller narrow the work to the
+    keys it has already reviewed; with none, every exposed key is reconciled.
+    Returns the number of rows flipped.
+    """
+    target = db_path if db_path is not None else DB_PATH
+    if keys is None:
+        with sqlite3.connect(target) as conn:
+            keys = [key for key, _ in adult_key_exposures(conn)]
+    flipped = 0
+    with get_db(target) as conn:
+        for key in keys:
+            flipped += inherit_key_adult(conn, key)
+        conn.commit()
+    return flipped
+
+
 def get_poster_quality_rank(url: str | None) -> int:
     """
     Returns an artwork quality score to prevent high-res TMDB artwork from
@@ -4327,11 +4415,15 @@ def _save_scraped_data(data: dict, *, ensure_db: bool = True) -> int:
     year = data.get("year")
     tmdb_id = data.get("tmdb_id")
     imdb_id = data.get("imdb_id")
-    canonical_key = str(
-        data.get("canonical_key") or generate_canonical_key(clean_title, year)
-    ).strip().lower()
-    if not canonical_key or canonical_key == "unknown":
-        canonical_key = generate_canonical_key(clean_title, year)
+    # A row is filed under the work's title and year, never under the page slug a
+    # scraper happened to be reading. `clean_title` is populated on every row the
+    # catalog holds; a slug is a site's SEO sentence about that work, so the same
+    # film arriving from three sites wrote three keys and `_find_existing_post`
+    # matched none of them. That is what made the adult law and the identity
+    # disagree: the law is per row, the identity was per slug, and 455 unflagged
+    # rows shared a work with a flagged one. An existing row keeps the key it was
+    # filed under (see below) — re-keying stored rows is its own reviewed migration.
+    canonical_key = ledger_canonical_key(clean_title, year, data.get("canonical_key"))
 
     if ensure_db:
         init_db()
@@ -4352,6 +4444,16 @@ def _save_scraped_data(data: dict, *, ensure_db: bool = True) -> int:
 
         if existing:
             post_id = existing["id"]
+
+            # A stored row keeps the key it was filed under. Writing the derived key
+            # here would re-key rows that `releases` and `post_sources` already point
+            # at as a side effect of an ingest; that migration is its own reviewed
+            # change with its own snapshot. The adult reconciliation below runs on
+            # whichever key the row actually carries, which is the only key its
+            # siblings can be found by.
+            stored_key = str(existing["canonical_key"] or "").strip().lower()
+            if stored_key and stored_key != "unknown":
+                canonical_key = stored_key
 
             # 1. Poster Quality Hierarchy: TMDB original (10) > TMDB w500 (8) > TMDB (7) > CatImages/ImgBB (5) > Blog Upload (3)
             new_poster = data.get("poster_url")
@@ -4468,6 +4570,14 @@ def _save_scraped_data(data: dict, *, ensure_db: bool = True) -> int:
                 ),
             )
             post_id = cur.fetchone()[0]
+
+        # The adult law reconciled at key level, in the transaction that just wrote
+        # the flag — so a page that arrives already-flagged cannot leave an
+        # unflagged twin of the same work being served to the public list.
+        incoming_flag = int(data.get("is_18_plus") or 0)
+        stored_flag = int(existing["is_18_plus"] or 0) if existing else 0
+        if incoming_flag or stored_flag:
+            inherit_key_adult(conn, canonical_key)
 
         source_cursor = conn.execute(
             """
