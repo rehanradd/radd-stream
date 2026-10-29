@@ -208,6 +208,23 @@ that the Replit Secret exists and has the required repository permissions;
 never print the token to diagnose it. Respect branch protection and push to a
 feature branch or use a pull request when direct pushes are not allowed.
 
+Before concluding that a `remote: Invalid username or token` failure means the
+credential is dead, check that the askpass helper actually emitted one. This
+failure is easy to cause yourself: building the helper with `printf` instead of
+the heredoc above substitutes the *outer* `printf` into the script body, so the
+inner `printf '%s\n' "${GITHUB_TOKEN}"` is written out as `printf '\n'` and Git
+authenticates with an empty password. The error message is indistinguishable
+from a revoked token, and the token is fine. I produced exactly this 401 at
+18:49 on 2026-10-29 with a token that had pushed successfully 25 minutes earlier
+and returned `200` on `/user`, `/repos/.../commits/<sha>` and
+`/actions/permissions` minutes later. Copy the heredoc verbatim; do not
+regenerate it with `printf`, `echo`, or a templating language. If a push still
+fails, verify with a non-argv-exposing check (read the variable from
+`os.environ` in a short `python3 -S` call and print only the HTTP status and the
+token's character count), never with `curl -H "Authorization: Bearer $TOKEN"`,
+which puts the secret in the process arguments where any local user can read it
+from `ps`.
+
 The legacy `push.py`, `github_push.py`, and `emergency_push.py` uploaders are
 retired, and the disabled warning stubs that replaced them have been deleted from
 the repo root. They used broad

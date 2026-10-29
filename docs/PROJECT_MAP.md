@@ -96,6 +96,15 @@ recollection — this is the section that had gone stale twice running).
   value. If a push ever does fail with `Invalid username or token` again, record the failure and the
   next step in the checkpoint rather than concluding the whole lane is dead — that is exactly the
   mistake this paragraph previously made.
+- **Push credentials, re-checked again 2026-10-29 18:51: still alive, and I learned *why* the last
+  false alarm was possible.** `GITHUB_TOKEN` (40 characters, never printed) returned **200** on
+  `api.github.com/user`, on `/repos/rehanradd/radd-stream/commits/e2fe36a`, and on
+  `/actions/permissions`, and `e2fe36a` is on both `master` and `main`. Twelve minutes earlier that
+  same token produced `remote: Invalid username or token` on a push — because I had generated the
+  askpass helper with `printf` instead of the documented heredoc, which expands the inner `%s` away
+  and sends an empty password. So the sentence above is now backed by a named, reproducible cause:
+  **an `Invalid username or token` from a `printf`-built helper is a bug in the helper, not news
+  about the token.** The heredoc in `ORACLE_DEPLOYMENT.md` is the only approved form.
 
 ## Verified REST surface (2026-10-22, re-read against `Fast_Fetch/viewer.py`)
 
