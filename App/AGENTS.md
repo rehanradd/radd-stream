@@ -2725,18 +2725,25 @@ system under test as broken** — and a token that reads 200 on `/user` while gi
 malformed credential, not a dead one. Values were never printed: only lengths, digests' first 8 hex
 chars, and scope names were read.
 
-**8 — the gate: the hosted conclusion, pasted for the pushed shas (not a local build).**
-`26d0b57..a3c34ff..bd45ba0` on `q1-identity-fix`, every head verified server-side with
-`git ls-remote`. Run **40934084735** at `a3c34ff` — `🔨 CI — Android Build & Test`,
-`status=completed`, **`conclusion=success`**, 3m32s — and run **40937031605** at this branch's current
-head **`bd45ba0`** (the docs commit carrying this entry), `status=completed`, **`conclusion=success`**,
-job 19:06:28 → 19:10:48 (260 s), **all 12 steps green** including the single combined
-`./gradlew :app:assembleDebug :app:testDebugUnitTest :app:lintDebug` and both `if: always()` upload
-steps. Parsed out of that run's own `ci-reports-26` artifact (395,819 bytes, against the hung run's 212
-bytes): **650 tests / 0 failures / 0 errors / 0 skipped across 83 suites**, with
-`PhoneCredentialGuardTest` **11 executed / 0 failed** (all eleven case names read back from its XML),
-`SyncContractTest` 10, `StatsHonestyTest` 6, `BrandDriftTest` 10, `CommentBalanceTest` 2, and lint
-**0 errors / 145 warnings**. `app-debug-24` is 22,126,818 bytes.
+**8 — the gate: the hosted conclusion, pasted from the runner (not a local build).**
+Every pushed head of `q1-identity-fix` since the hang was fixed is `completed / success`, measured on
+the API and re-verifiable at `…/actions?branch=q1-identity-fix` — read the *head's own* run rather than
+inferring it from this list, because a docs push re-triggers the workflow and lands a new sha:
+
+| sha | run | verdict | duration |
+|---|---|---|---|
+| `a3c34ff` (the scanner fix) | 40934084735 | `completed / success` | 3m32s |
+| `bd45ba0` (this entry) | 40937031605 | `completed / success` | 260 s, all 12 steps green |
+| the entry's own follow-up docs commit | read it | — | — |
+
+Run 40937031605's job is the single combined `./gradlew :app:assembleDebug :app:testDebugUnitTest
+:app:lintDebug` invocation (step 7) and all twelve steps, including both `if: always()` uploads, report
+`success`. From that run's own
+`ci-reports-26` artifact (395,819 bytes — against the hung run's **212 bytes**, which is what "no test
+ever executed" looks like in an artifact listing): **650 tests / 0 failures / 0 errors / 0 skipped
+across 83 suites**, with `PhoneCredentialGuardTest` **11 executed / 0 failed** (all eleven case names
+read back from its XML), `SyncContractTest` 10, `StatsHonestyTest` 6, `BrandDriftTest` 10,
+`CommentBalanceTest` 2, and lint **0 errors / 145 warnings**; `app-debug-24` is 22,126,818 bytes.
 Load stayed at 4.82–8.90 on one vCPU for the whole window, so **zero Gradle invocations happened on
 this box** — every number above is the runner's, and the standing under-0.5 rule is the reason.
 
