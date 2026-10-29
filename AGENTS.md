@@ -126,7 +126,22 @@ Describe the code's behavior accurately to users and tools. Do not disguise its 
   while 1,190 distinct ledger rows for the same title and year are still public under a *different*
   key (`suzume-2022` vs `suzume_2022`, `puli-2015` vs `puli_2015`), concentrated in filmyzilla (437),
   9xmovies (344), moviezguru (190) and hindilinks4u (151). No key-level law can reach those; they need
-  the re-key migration, which is planned and not attempted here.
+  the re-key migration, which is planned and not attempted here. Under the correct identity
+  (`generate_canonical_key(clean_title, year)`) that residual is **2,600 keys carrying both a flagged
+  and an unflagged row, 3,486 publicly served rows under those keys, and a 69,773-row re-key blast
+  radius** (measured 2026-10-29); the earlier 442-keys / 455-rows figures describe the slug-keyed
+  catalog before that reconciliation.
+  **The pattern list is a policy, and it was wrong once.** `\buncut\b` and `\bunrated\b` sat in
+  `ADULT_TITLE_PATTERNS` and seven per-site lists until 2026-10-29: they are *edition* labels, not
+  adult markers, and desicinemas puts them on mainstream releases — 7,663 of the 15,068 flagged rows
+  (51%) were justified only by them. Under a key-level law a false row-flag hides an entire work, so
+  the cost of one bad pattern multiplied. Both words are gone from every list, and the rule for
+  adding one is now enforced by a test, not by opinion: **a pattern belongs here only if it names a
+  person, a studio, or an act — never a version, a quality, a rating, or a release format — and only
+  if you can write a test that proves it catches a case the other patterns miss.** Use
+  `Fast_Fetch/audit_adult_flags.py` (report-by-default; writes require the owner's `--owner-go`) to
+  see what a flag rule actually hides before shipping it. Production still carries the 7,663 until
+  the owner runs that un-flag pass.
   Nothing in this section weakens the public rule. A test that reaches a flagged row through any public
   route, or a flagged link through stream or download on either port, is P0.
 
