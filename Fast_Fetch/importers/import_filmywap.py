@@ -73,6 +73,9 @@ USER_AGENT = (
 
 SITEMAP_TIMEOUT = 45
 PAGE_TIMEOUT = 60
+# A stalled /api/stream costs a 60 s socket timeout per episode; stop walking
+# the episode list once this many in a row fail and record the abort.
+EPISODE_FAILURE_STREAK = 3
 QUEUED_SCRAPE_STATES = (0, 2)
 MAX_SCRAPE_ATTEMPTS = 3
 FAILURE_LEDGER_LIMIT = 8
@@ -387,10 +390,11 @@ def stream_api_url(slug: str, season: int | None = None,
 
 
 def fetch_stream(slug: str, season: int | None = None,
-                 episode: int | None = None) -> tuple[dict | None, str]:
+                 episode: int | None = None,
+                 retries: int = 1) -> tuple[dict | None, str]:
     """Returns (payload, failure_kind). The endpoint is public JSON; no tokens."""
     status, final, text, _headers = http_get(
-        stream_api_url(slug, season, episode), timeout=PAGE_TIMEOUT, retries=1)
+        stream_api_url(slug, season, episode), timeout=PAGE_TIMEOUT, retries=retries)
     if status != 200:
         return None, f"api-http-{status}" if status else "api-transport"
     try:
@@ -917,9 +921,13 @@ def crawl_pending(limit: int | None = None, db_path: Path | str = DEFAULT_DB_PAT
                                   f"stream API failed: {kind}")
         episode_streams: dict[tuple[int, int], dict] = {}
         gaps = 0
+        streak = 0
+        aborted = ""
         if stream.get("isSeries") or stream.get("seasons"):
             planned = 0
             for season_row in stream.get("seasons") or []:
+                if aborted or STOP_REQUESTED:
+                    break
                 season = int(season_row.get("se") or 0)
                 for ep in season_row.get("episodes") or []:
                     episode = int(ep)
@@ -931,16 +939,23 @@ def crawl_pending(limit: int | None = None, db_path: Path | str = DEFAULT_DB_PAT
                     if STOP_REQUESTED:
                         break
                     time.sleep(delay)
-                    payload, ep_kind = fetch_stream(slug, season, episode)
+                    payload, ep_kind = fetch_stream(slug, season, episode, retries=0)
                     if payload is None:
                         gaps += 1
+                        streak += 1
+                        if streak >= EPISODE_FAILURE_STREAK:
+                            aborted = ep_kind or "api-transport"
+                            break
                     else:
+                        streak = 0
                         episode_streams[(season, episode)] = payload
         record = build_record(loc, page, stream, episode_streams)
         if record is None:
             return None, _failure("no-record", status, final, "record build failed")
         if gaps:
             record["raw_meta"]["episode_gaps"] = gaps
+        if aborted:
+            record["raw_meta"]["episode_aborted"] = aborted
         return record, None
 
     batch: list[dict] = []

@@ -537,6 +537,32 @@ class CrawlTests(unittest.TestCase):
         self.assertEqual(states[MOVIE_URL], 2)
         self.assertEqual(states[second], 0)
 
+    def test_stalled_episode_api_stops_after_three_in_a_row(self):
+        conn = sqlite3.connect(self.db)
+        conn.execute("DELETE FROM sitemap_cache")
+        conn.execute(
+            "INSERT INTO sitemap_cache (loc, lastmod, slug, scraped, raw_json, "
+            "error_count) VALUES (?, NULL, ?, 0, '{}', 0);",
+            (SERIES_URL, SERIES_SLUG))
+        conn.commit()
+        conn.close()
+        episodes = series_stream(seasons=[{"se": 2, "episodes": [1, 2, 3, 4, 5, 6]}])
+        answers = [(episodes, "")] + [(None, "api-transport")] * 6
+        with silenced(), mock.patch.object(
+                fw, "http_get", return_value=(200, SERIES_URL, page(ld_series()), {})), \
+                mock.patch.object(fw, "fetch_stream", side_effect=answers) as fetch:
+            totals = fw.crawl_pending(db_path=self.db, delay=0)
+        self.assertEqual(fetch.call_count, 1 + fw.EPISODE_FAILURE_STREAK)
+        self.assertEqual(totals["posts"], 1)
+        self.assertEqual(totals["episode_gaps"], fw.EPISODE_FAILURE_STREAK)
+        conn = sqlite3.connect(self.db)
+        try:
+            raw = json.loads(conn.execute(
+                "SELECT raw_meta FROM posts").fetchone()[0])
+        finally:
+            conn.close()
+        self.assertEqual(raw["episode_aborted"], "api-transport")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
