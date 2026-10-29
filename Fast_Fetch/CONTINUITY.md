@@ -3354,6 +3354,8 @@ nothing in that player has run on Android); `active` may only ever mean "answere
 protocol properties, at `last_evidence_at`" and must never be rendered as "playable".
 And the one code change this design needs before it can run at all is **a per-host serialiser in
 front of `probe_many()`** — today nothing stops two workers touching one host in the same second.
+*(Superseded by the next q3 entry in this file: `link_health.host_gate()` now exists, is wired
+into `_chain()`, and is proven offline. Read that line as the state at `54662d2`, not as today.)*
 
 **Push.** Docs + one offline test module + the CI step. `backend-ci.yml` filters on
 `Fast_Fetch/**`, and this push *does* touch `Fast_Fetch/` (the new test and `CONTINUITY.md`), so

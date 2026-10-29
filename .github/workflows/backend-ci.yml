@@ -52,6 +52,10 @@ name: 🐍 Backend CI — Stdlib Python Tests
 #       at load 6.9 and 1 s on the hosted runner (run 40954291359, step 21:03:47 ->
 #       21:03:48, success). The suite blocks on I/O under contention, not on compute —
 #       so a slow local module is not a slow module, and CI's timing is the record.)
+#     - Fast_Fetch/test_host_serialiser.py      (the per-host politeness gate: a fetch
+#       that ran while its host lock was free, two requests to one host in flight
+#       together, a host wedged after an exception, or two hosts serialising as a global
+#       stop all fail this. Offline and deterministic — 18 tests, no stopwatch needed)
 #
 #   Deliberately EXCLUDED:
 #     - Fast_Fetch/test_all_sites.py  — live 10-site network audit; needs the
@@ -206,3 +210,11 @@ jobs:
       # in 266 s and CI's wall time is the open question about running it here at all.
       - name: 🧪 test_admin_panel.py (timed)
         run: time python3 -S Fast_Fetch/test_admin_panel.py
+
+      # The per-host serialiser that `docs/LINK_HEALTH_SWEEP.md` §8 names as the
+      # precondition for any sweep. Offline: every fetch is a monkeypatched
+      # `_raw_request` and `http.client.HTTPConnection` is replaced by a tripwire,
+      # so a real socket attempt fails the run rather than the internet.
+      - name: 🧪 test_host_serialiser.py
+        run: python3 -S Fast_Fetch/test_host_serialiser.py
+

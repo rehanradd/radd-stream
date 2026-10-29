@@ -22,6 +22,21 @@ Public surface
     evidence_result()      adapt one stored `cat_link_evidence` row to ProbeResult
     merge_evidence_journal() fold a link's whole evidence journal into one record
     probe_many()           ordered ThreadPoolExecutor batch probe
+    host_key()             normalise a URL to the host a rate limit is charged to
+    host_gate()            hold one host for the duration of a single request
+
+Per-host politeness
+-------------------
+``probe_many()`` runs a pool, and a pool of eight workers pointed at one file
+hoster is not eight polite clients — it is a burst that gets our IP rate-limited
+and the catalog lost. ``_chain()`` therefore issues every hop inside
+``host_gate()``, a ``threading.RLock`` keyed by :func:`host_key` (scheme
+dropped, host lowercased, port kept except the default 80/443). One request per
+host at a time, ``DEFAULT_HOST_SPACING_S`` idle before the next, released in a
+``finally`` so an exception cannot wedge a host. A worker whose host is busy
+**waits** — a link is never skipped, because a skipped link is how a dead
+catalog hides. The gate wraps the socket only, never a database write, and
+``allow_private=True`` (test-suite loopback) drops the wait but not the lock.
 
 Error codes (``ProbeResult.error`` — stable strings, safe to GROUP BY)
 ----------------------------------------------------------------------
@@ -74,12 +89,15 @@ in the scraper, the API, or the heal CLI should ever pass True.
 from __future__ import annotations
 
 import concurrent.futures
+import contextlib
 import http.client
 import ipaddress
 import os
+import random
 import re
 import socket
 import ssl
+import threading
 import time
 import urllib.parse
 from dataclasses import dataclass
@@ -104,6 +122,8 @@ __all__ = [
     "merge_evidence_journal",
     "EVIDENCE_NO_VERDICT",
     "probe_many",
+    "host_key",
+    "host_gate",
 ]
 
 # The same posture the engine's TLS policy defaults to (public CDNs ship broken
@@ -127,6 +147,18 @@ DEFAULT_SAMPLE_BYTES = 524288  # 512 KiB bounded body sample
 DEFAULT_MAX_REDIRECTS = 5
 MIN_SAMPLE_FOR_SPEED = 4096  # below this the speed number is a fantasy
 DEFAULT_EWMA_WEIGHT = 0.4    # newest sample's share in merge_health_history()
+
+#: Minimum idle gap between two requests to the *same host*, whatever thread
+#: asked for them. One vCPU can issue far more requests than a file hoster's
+#: edge will answer politely, and a 429 storm costs us the whole catalog from
+#: that host (`docs/LINK_HEALTH_SWEEP.md` §3). Override with RADD_HOST_SPACING_S:
+#: a negative value is clamped to 0.0 (serialised, unhurried) and a non-numeric
+#: value raises at import rather than being quietly ignored — this dial is read
+#: by every probe, so silently falling back to the default is the worse failure.
+DEFAULT_HOST_SPACING_S = max(0.0, float(os.environ.get("RADD_HOST_SPACING_S") or 1.0))
+#: Extra random delay on top of the spacing so a pool of workers does not
+#: synchronise into one periodic burst the host reads as a flood.
+DEFAULT_HOST_JITTER_S = 0.2
 
 #: Errors that say something about *us*, not about the endpoint. A probe we
 #: refused to make (SSRF guard, blocklist, unparseable URL) is not a verdict on
@@ -275,6 +307,85 @@ def _request_target(parts) -> str:
     return target
 
 
+# ── per-host politeness serialiser ───────────────────────────────────────────
+
+_HOST_LOCKS: dict[str, threading.RLock] = {}
+_LAST_RELEASE: dict[str, float] = {}
+_HOST_REGISTRY_GUARD = threading.Lock()
+
+
+def host_key(url) -> str:
+    """Normalise *url* to the unit a host actually rate-limits: one edge.
+
+    The scheme is dropped (``http`` and ``https`` to one host are the same front
+    door), the hostname is lowercased, and an IPv6 literal keeps its brackets.
+    The port is kept — except 80 and 443, which are just the two default web
+    ports: ``HTTP://Example.COM:443``, ``http://example.com`` and
+    ``https://example.com`` are served by one fleet, so they must serialise
+    together, while ``http://example.com:8080`` is a different listener and
+    stays separate.
+
+    An unparseable or host-less URL returns ``""`` and is still gated (under the
+    shared empty key) instead of slipping past: silently skipping a link is how
+    a dead catalog hides.
+    """
+    if not isinstance(url, str):
+        return ""
+    try:
+        parts = urllib.parse.urlsplit(url)
+        host = (parts.hostname or "").lower()
+        port = parts.port
+    except ValueError:
+        return ""
+    if not host:
+        return ""
+    if host.count(":") > 1:
+        host = f"[{host}]"
+    if port not in (None, 80, 443):
+        host = f"{host}:{port}"
+    return host
+
+
+@contextlib.contextmanager
+def host_gate(url, *, spacing_s: float = DEFAULT_HOST_SPACING_S,
+              jitter_s: float = DEFAULT_HOST_JITTER_S):
+    """Serialise one host: hold it while its request is in flight, then idle.
+
+    Usage is one call per socket, wrapping *only* the request — never a database
+    write — which is why it lives in :func:`_chain` around
+    :func:`_raw_request` and nowhere else.
+
+    A caller whose host has no idle slot **waits**; nothing is skipped. The lock
+    is an :class:`threading.RLock` so a caller that gates a whole probe cannot
+    deadlock against the per-hop gate (re-entrant nesting is same-thread, hence
+    already sequential), and the release is in ``finally``, so a probe that
+    raises cannot wedge a host forever. The spacing is measured from the
+    previous request's release, and ``jitter_s`` keeps a pool of workers from
+    synchronising into one burst the host reads as a flood.
+    """
+    key = host_key(url)
+    with _HOST_REGISTRY_GUARD:
+        gate = _HOST_LOCKS.get(key)
+        if gate is None:
+            gate = threading.RLock()
+            _HOST_LOCKS[key] = gate
+    gate.acquire()
+    try:
+        budget = max(0.0, float(spacing_s))
+        if budget > 0 and jitter_s:
+            budget += random.uniform(0.0, abs(float(jitter_s)))
+        if budget > 0:
+            with _HOST_REGISTRY_GUARD:
+                idle = time.monotonic() - _LAST_RELEASE.get(key, 0.0)
+            if budget > idle:
+                time.sleep(budget - idle)
+        yield key
+    finally:
+        with _HOST_REGISTRY_GUARD:
+            _LAST_RELEASE[key] = time.monotonic()
+        gate.release()
+
+
 def _raw_request(url: str, method: str, headers: dict, timeout: float,
                  sample_bytes: int) -> _Exchange:
     """Perform exactly one request/response, never following redirects."""
@@ -327,16 +438,23 @@ def _raw_request(url: str, method: str, headers: dict, timeout: float,
 
 
 def _chain(url: str, method: str, headers: dict, timeout: float,
-           sample_bytes: int, max_redirects: int):
+           sample_bytes: int, max_redirects: int, *,
+           host_spacing_s: float = DEFAULT_HOST_SPACING_S,
+           host_jitter_s: float = DEFAULT_HOST_JITTER_S):
     """Follow redirects manually so cycles and hop counts are observable.
 
     Returns ``(exchange, final_url, error)``. ``exchange`` is ``None`` when the
     chain died on transport errors before any response.
+
+    Every hop is issued inside :func:`host_gate` for *its own* host, so a
+    redirect from A to B releases A before B is knocked on — the gate is one
+    request wide, never one chain wide.
     """
     current = url
     seen = {current}
     for hop in range(max_redirects + 1):
-        exch = _raw_request(current, method, headers, timeout, sample_bytes)
+        with host_gate(current, spacing_s=host_spacing_s, jitter_s=host_jitter_s):
+            exch = _raw_request(current, method, headers, timeout, sample_bytes)
         if exch.error:
             return exch, current, exch.error
         if 300 <= exch.status < 400:
@@ -515,6 +633,11 @@ def probe(url: str, *, final_url: str = "", timeout: float = DEFAULT_TIMEOUT,
 
     parts = urllib.parse.urlsplit(url)
     origin = f"{parts.scheme.lower()}://{parts.netloc.lower()}"
+    # Politeness is owed to somebody else's edge. `allow_private` exists only so
+    # the offline suite can knock on its own loopback stub, so it drops the
+    # spacing to zero — the per-host serialisation still applies, only the wait
+    # does not. Every production probe keeps DEFAULT_HOST_SPACING_S.
+    spacing_kw = {"host_spacing_s": 0.0 if allow_private else DEFAULT_HOST_SPACING_S}
     req_headers = {
         "User-Agent": USER_AGENT,
         "Accept": "*/*",
@@ -534,7 +657,7 @@ def probe(url: str, *, final_url: str = "", timeout: float = DEFAULT_TIMEOUT,
 
     # ── phase 1: HEAD (cheap), fall through to GET when unsupported
     head, head_final, head_err = _chain(url, "HEAD", req_headers, timeout,
-                                        0, max_redirects)
+                                        0, max_redirects, **spacing_kw)
     latency_ms = head.header_ms if head is not None else 0
     # need_get: HEAD answered nothing useful (405 / 400 / 501 / no HEAD at all)
     need_get = True
@@ -569,7 +692,7 @@ def probe(url: str, *, final_url: str = "", timeout: float = DEFAULT_TIMEOUT,
     get_headers = dict(req_headers)
     get_headers["Range"] = f"bytes=0-{max(int(sample_bytes) - 1, 0)}"
     exch, chain_final, chain_err = _chain(url, "GET", get_headers, timeout,
-                                          sample_bytes, max_redirects)
+                                          sample_bytes, max_redirects, **spacing_kw)
     if exch is None:
         return ProbeResult(url=url, ok=False, http_status=0, protocol="unusable",
                            latency_ms=latency_ms, error=chain_err or "conn_error",
@@ -1023,8 +1146,11 @@ def probe_many(links: list[dict], *, workers: int = 8,
          "allow_private": bool}
 
     Only the worker's own arguments and an immutable :class:`ProbeResult` ever
-    cross thread boundaries — no shared mutable state, so the pool is safe to
-    call from the API server. A worker that explodes (killed server, half-open
+    cross thread boundaries — no probe *result* state is shared, so the pool is
+    safe to call from the API server. The one thing the workers do share is the
+    per-host gate (see the module docstring): a registry of locks keyed by
+    host, guarded by its own lock, which is what keeps eight workers from
+    bursting one hoster. A worker that explodes (killed server, half-open
     socket) still yields an ``ok=False`` result rather than raising out of the
     batch. ``url_blocklist`` names hosts (``"dropgalaxy.vip"``, ``".tk"``) or
     substrings to skip for known-hostile services; skipped links report

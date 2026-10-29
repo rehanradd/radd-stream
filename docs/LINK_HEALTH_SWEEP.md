@@ -1,11 +1,14 @@
 # Link-health sweep — how to knock on 3.7 M doors on one vCPU
 
-Status: **design + arithmetic only.** Nothing in this file was probed against a hoster and
-nothing was read out of the 6.4 GB catalog. Every code-derived number below was taken from
-the source at `54662d2` (cited by line), and every arithmetic consequence is pinned by
+Status: **design + arithmetic, plus one landed prerequisite.** §1–§7 are still design: nothing
+in this file was probed against a hoster and nothing was read out of the 6.4 GB catalog.
+Every code-derived number below was taken from the source at `54662d2` (cited by line), and
+every arithmetic consequence is pinned by
 `Fast_Fetch/test_link_sweep_budget.py` (`python3 -S Fast_Fetch/test_link_sweep_budget.py`,
-in-memory, ~1 s). Written at host load **10.2 on one vCPU**, which is itself the reason the
-design is a sample and not a sweep.
+in-memory, ~1 s). What *has* since been built is §8 item 1 — the per-host serialiser
+`link_health.host_gate()`, proven offline by `Fast_Fetch/test_host_serialiser.py` — because
+this document's own §3 said the sweep could not start without it. Written at host load
+**10.2 on one vCPU**, which is itself the reason the design is a sample and not a sweep.
 
 ## 0. The gap, as measured by the qoder4 master tonight (cited, not repeated)
 
@@ -63,6 +66,9 @@ under a load average of 10, and the service itself needs that core.
   top of the live term `0.9 × 3,705,474 × 0.6 s / 8 = 69 h`. **Thread-bound total ≈ 7.2 days;**
   the politeness ceiling alone (§3) is `3,705,474 × 1 s / 8 = 128.6 h ≈ 5.4 days`. The larger
   governs, so the honest estimate is **≈ 7 days of the box's only core doing nothing else.**
+  Re-priced at the implemented 1.0–1.2 s gap (§3), the politeness ceiling is 5.4–6.5 days —
+  still under the thread-bound cost, so the threads govern and the conclusion does not move.
+  `test_link_sweep_budget.py` pins the 1.0 s floor version of both numbers.
 - Politeness is the actual binding constraint (§3). At 1 in-flight request per host and 1 s
   between requests to the same host, the achievable rate is set by the number of *distinct
   hosts*, not by `workers`: with 8 hosts you cannot exceed 8 links/s however many threads you
@@ -124,12 +130,25 @@ with error bars, and `rank_score` starts having a distribution to calibrate agai
 
 ## 3. POLITENESS AND BLAST RADIUS
 
-- **Concurrency: 1 in-flight request per host**, never per link. `probe_many(workers=8)`
-  parallelises *across* hosts; a host key must never be touched by two workers at once
-  (`_one()` is per-thread but nothing today serialises per host — this is the one code change
-  the sweep needs, and it is a queue, not a rewrite).
-- **Spacing: ≥ 1.0 s between requests to the same host**, jittered 0.7–1.6 s so the run does not
-  look like a metronome. 8 hosts max in flight ⇒ ≤ 8 links/s globally, which is also the answer
+- **Concurrency: 1 in-flight request per host**, never per link. **Implemented** (2026-10-30,
+  q3): `link_health.host_gate()` (per-host `threading.RLock`, registered in
+  `_HOST_LOCKS`) wraps every hop of `_chain()` around `_raw_request()`, so `probe_many(workers=8)`
+  parallelises *across* hosts and queues *within* one. A worker whose host is busy waits —
+  nothing is skipped, because a skipped link is how a dead catalog hides. Key normalisation is
+  `host_key()`: scheme dropped, host lowercased, port kept except the default 80/443, so
+  `HTTP://Example.COM:443` and `http://example.com` serialise together while `:8080` stays its
+  own listener. `test_host_serialiser.py` proves all four halves offline (18 tests, ~0.2 s,
+  no socket: the fetch is monkeypatched and `http.client.HTTPConnection` is a tripwire).
+  Before this, `_one()` was per-thread and nothing serialised per host — that was the one code
+  change the sweep needed, and it was a lock, not a rewrite.
+- **Spacing: ≥ 1.0 s between requests to the same host**, as
+  `DEFAULT_HOST_SPACING_S = 1.0` (`RADD_HOST_SPACING_S` is the operator dial) plus
+  `DEFAULT_HOST_JITTER_S = 0.2` drawn uniformly, so a gap lands in 1.0–1.2 s rather than ticking
+  like a metronome. The design here previously asked for 0.7–1.6 s; the implemented floor is the
+  1.0 s lower bound and the jitter is smaller, which costs almost nothing — see the re-priced
+  politeness ceiling in §1. `allow_private=True` (the offline suite's loopback stub) drops the
+  wait but keeps the lock: politeness is owed to somebody else's edge, not to our own test server.
+  8 hosts max in flight ⇒ ≤ 8 links/s globally, which is also the answer
   to "why not 64 workers": the ceiling is per-host, and extra threads only deepen the queue.
 - **Hard host rule, already in the code and to be respected, not re-invented:**
   `_blocked_host_reason()` (`link_health.py:191`) and `_block_reason()` (`:226`) refuse the
@@ -271,8 +290,12 @@ sentence in §2, plus per-host tables at 384 samples each.
 
 ## 8. What to build, in order, and the cost of each
 
-1. **A per-host serialiser in front of `probe_many()`** — the only code change the sweep needs
-   (§3). Days of work: small. Without it the politeness story is a comment, not a guarantee.
+1. **A per-host serialiser in front of `probe_many()`** — **DONE, 2026-10-30 q3.** It is
+   `link_health.host_gate()` + `host_key()`, wired into `_chain()` per hop and proven by
+   `Fast_Fetch/test_host_serialiser.py` (in CI). The sweep can therefore rely on 1 in-flight
+   request per host and a 1.0–1.2 s gap as *enforced*, not as a comment. Still open in this
+   list: the 429 host-parking and the per-run request cap are sweep-side policy, not gate
+   behaviour — `link_sweep.py` owns them (§3, §4).
 2. **`link_sweep.py`** with `plan | run --limit N | status`, following
    `migrate_search_indexes.py`'s shape (a required `--target`, a refusal to write anywhere
    else, `plan` printing the cost before anything runs). Cost: modest; the arithmetic is done.
