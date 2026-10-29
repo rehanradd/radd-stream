@@ -270,8 +270,11 @@ class ScreenSnapshotTest {
     ) = VipUiState(
         isLoading = false,
         currency = "PKR",
-        monthlyPkr = 200,
-        yearlyPkr = 1500,
+        // What a server that HAS published prices looks like on screen. These are render input, not
+        // defaults: this client ships no figure of its own, and the price of record belongs to the
+        // operator — see VipViewModel.NO_PRICE_PUBLISHED and docs/MONETIZATION_AND_FLEET_PLAN.md.
+        monthlyPkr = 250,
+        yearlyPkr = 1800,
         jazzCashTillId = till,
         jazzCashMobileAccount = mobile,
         easyPaisaMobile = easyPaisa,

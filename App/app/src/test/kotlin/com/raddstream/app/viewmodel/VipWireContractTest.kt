@@ -44,6 +44,25 @@ class VipWireContractTest {
         ).readText()
     }
 
+    /** `val monthlyPkr: Int = …` — the two places a price could be baked into this client. */
+    private val priceDefaults = Regex(
+        """val\s+(monthlyPkr|yearlyPkr)\s*:\s*Int\s*=\s*([A-Za-z0-9_.\-]+)""",
+    )
+
+    private val vipViewModelSource: String by lazy {
+        File(
+            File(repoRoot, "App/app/src/main/kotlin/com/raddstream/app/viewmodel"),
+            "VipViewModel.kt",
+        ).readText()
+    }
+
+    /** Every price default that is not the no-price marker, described so a failure reads. */
+    private fun bakedPrices(source: String): List<String> =
+        priceDefaults.findAll(source)
+            .filterNot { it.groupValues[2] == "VipViewModel.NO_PRICE_PUBLISHED" }
+            .map { "${it.groupValues[1]} = ${it.groupValues[2]}" }
+            .toList()
+
     /** `PLAN_DEFAULTS = { "vip_monthly": (200, 30), … }` → name to (amount, days). */
     private fun serverPlans(): Map<String, Pair<Int, Int>> {
         val block = paymentsSource.substringAfter("PLAN_DEFAULTS = {").substringBefore("}")
@@ -109,10 +128,35 @@ class VipWireContractTest {
     }
 
     @Test
-    fun `the quoted fallback prices are the documented server defaults`() {
-        val server = serverPlans()
-        assertEquals(server.getValue("vip_monthly").first, VipViewModel.DEFAULT_MONTHLY_PKR)
-        assertEquals(server.getValue("vip_yearly").first, VipViewModel.DEFAULT_YEARLY_PKR)
+    fun `this app carries no price of its own`() {
+        assertEquals(
+            "the reader saw no price defaults — it broke, not the app",
+            2,
+            priceDefaults.findAll(vipViewModelSource).count(),
+        )
+        assertEquals(
+            "the server prices the plan and sends no amount to the phone; a number this client " +
+                "invents is a quote nobody authorized",
+            emptyList<String>(),
+            bakedPrices(vipViewModelSource),
+        )
+        assertEquals(VipViewModel.NO_PRICE_PUBLISHED, VipUiState().monthlyPkr)
+        assertEquals(VipViewModel.NO_PRICE_PUBLISHED, VipUiState().yearlyPkr)
+        assertEquals(
+            "the marker is the absence itself, so no screen can arithmetic it into a saving",
+            0,
+            VipViewModel.NO_PRICE_PUBLISHED,
+        )
+    }
+
+    /** Positive control: the same detector, pointed at the shape this task deleted. */
+    @Test
+    fun `the detector does report a price baked into the client`() {
+        val retired = "data class VipUiState(\n" +
+            "    val monthlyPkr: Int = 200,\n" +
+            "    val yearlyPkr: Int = 1_500,\n" +
+            ")"
+        assertEquals(listOf("monthlyPkr = 200", "yearlyPkr = 1_500"), bakedPrices(retired))
     }
 
     @Test
