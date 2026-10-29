@@ -2283,3 +2283,16 @@ Load came down 11.6 → 8.2. My consistent snapshot is still running (`nice 19 i
 python child, which is why it kept going; the file is still incomplete and is **not** a backup until
 the process prints its `done …` line. Merge batch 4 stays held on a finished snapshot and a quieter
 box.
+
+**Two published flagged-row counts disagree, and I am recording it instead of re-measuring under
+load.** `docs/PROJECT_MAP.md` (written 05:12) says **15,020** posts carry `is_18_plus = 1` and the
+public list route answers `total = 135,779` (= 150,799 − 15,020, internally consistent). My own
+measurement in this window's earlier snapshot pass says **15,068**. The gap is 48 rows, which is the
+size of the thing the audit is about, so it is not noise to wave at. I did **not** re-run
+`SELECT COUNT(*) … WHERE is_18_plus=1` to settle it: `is_18_plus` is unindexed on a 6.4 GB catalog, so
+that count reads every page and on this box — `nproc=1`, load 8–11, three lanes compiling and
+crawling — it is exactly the self-inflicted stall I have been telling the fleet not to create. It
+belongs to the adult audit already running (`/tmp/gate_q5`, task #12), which holds the preimage and
+will produce the authoritative number against a fixed pattern set. Until then: do not quote either
+15,020 or 15,068 as settled, and never quote `/api/v1/stats`'s `posts=116,922` at all (see above —
+that is a 33-h-old process answering with deleted code).

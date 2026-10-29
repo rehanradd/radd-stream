@@ -229,6 +229,13 @@ Every agent — no matter how short the session — MUST do this before ending:
 3. Append a session log to `Fast_Fetch/CONTINUITY.md`
 4. Push with Git over HTTPS using the temporary askpass helper in [`ORACLE_DEPLOYMENT.md`](ORACLE_DEPLOYMENT.md); do not use the legacy per-file API push scripts
 
+**Run the gate in a worktree at the tip, not in `/opt/radd-stream`.** Measured 2026-10-29 18:55: the
+live tree is checked out at its own `bf9e565` and its `Fast_Fetch/test_database.py` contains **76**
+`def test_` methods, while the pushed tip (`6e54909`) contains **124**. Same command, two different
+gates, because `/opt/radd-stream` is a diverged older draft carrying other lanes' uncommitted edits
+(56 dirty paths right now, `AGENTS.md` staged). A "green" from the live tree is a weaker claim than
+CI's, and can silently test deleted code.
+
 ### For App Sessions:
 1. Ensure Gradle builds pass locally OR wait for GitHub Actions green check
 2. Append a session log to `App/AGENTS.md` (Session History section)
