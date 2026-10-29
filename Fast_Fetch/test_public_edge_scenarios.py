@@ -16,16 +16,18 @@ A. The adult invariant — a flagged post is 404 on both ports, its links never
    play, the playlist carries no entry, and a *typo'd* link id refuses too
    (`redact.link_is_adult` answers True for unknown ids on purpose).
 B. The twin leak — one canonical key carried by a flagged and an unflagged row.
-   Today v1 serves the twin; v2's projection already rolls the flag up over the
-   work. The v1 test is
-   `@unittest.expectedFailure` until task #13 reconciles the ledger at the key.
-   It is written as the invariant, so it turns into an "unexpected success" the
-   moment the fix lands, which is the signal to drop the marker.
+   Task #13 landed the key-level law (`inherit_key_adult` inside the write that
+   sets the flag, `reconcile_key_adult`/`backfill_adult_key.py` for rows written
+   before it), so the scenario asserts that documented lifecycle: a pre-law twin
+   is served until the bounded repair, the play route already refuses its link
+   (`link_is_adult` asks the work's key), the repair lowers the public total by
+   exactly what it flipped, and a flagged re-crawl reconciles the sibling through
+   the ingest path. v2's projection folds both copies into one hidden work.
 C. Pagination bounds — `?limit=`, `?page=`, non-numeric, negative, huge — on
    v1 posts, v2 browse/search/suggest, and `/api/m3u?id=`. Each answers a
-   documented band, never a 502-class answer. **One case is red on purpose:**
-   `/api/m3u?id=abc` raises out of the handler and the connection is dropped —
-   the exact class `viewer.bounded_int` was written to end for `?page=abc`.
+   documented band or our own 4xx, never a 502-class answer. `/api/m3u?id=abc`
+   used to raise out of the handler and drop the connection; it now answers the
+   detail route's 400 (regression guard).
 D. Rate limiting — the bucket keys on `X-Real-IP` (or the last `X-Forwarded-For`
    hop when that header is absent), so a spoofed leftmost XFF cannot mint a
    bucket; over budget is the app's 429. (Behind the shipped nginx an over-limit
@@ -163,11 +165,30 @@ class ScenarioMatrix(test_redact.FixtureMixin):
 
     def add_twin(self):
         """The production shape from AGENTS.md: an unflagged second row for a
-        work whose other row is flagged (hindilinks4u `4-play_2021`)."""
+        work whose other row is flagged (hindilinks4u `4-play_2021`).
+
+        Written directly, i.e. as a row from before the key law existed; the
+        documented repair is `reconcile_key_adult` / `backfill_adult_key.py`."""
         key = self.one("SELECT canonical_key FROM posts WHERE id = ?",
                        (self.adult_id,))[0]
         return self.add_row(clean_title="Adult Diary", key=key, site="bolly4u",
                             slug="adult-diary-hindi-download")
+
+    def add_source(self, post_id, *, site="bolly4u", slug="legacy"):
+        """One playable link on a post, the shape a pre-law row carried."""
+        with sqlite3.connect(self.db_path) as conn:
+            release = conn.execute(
+                "INSERT INTO releases (post_id, release_title, quality,"
+                " intermediate_url, origin_url, source_site)"
+                " VALUES (?, 'HD', '720p', ?, ?, ?)",
+                (post_id, DIRECT_URL,
+                 f"https://{site}.example/{slug}/", site)).lastrowid
+            return conn.execute(
+                "INSERT INTO download_sources (release_id, source_name, service,"
+                " source_url, final_url, status, is_temporary, mime_type)"
+                " VALUES (?, 'Direct Mirror', 'direct', ?, ?, 'active', 0,"
+                " 'video/mp4')",
+                (release, DIRECT_URL, DIRECT_URL)).lastrowid
 
     def project(self):
         """Rebuild the v2 `cat_*` tables the same way production does."""
@@ -239,14 +260,14 @@ class ScenarioMatrix(test_redact.FixtureMixin):
                           f"operator /api/v1/{route} → {status} {body[:200]}")
 
     def test_a_link_is_adult_answers_true_for_an_unknown_id(self):
-        """RED BY DESIGN — a genuine contract defect found by this suite.
+        """Regression guard for the documented contract.
 
         `redact.link_is_adult` documents (and AGENTS.md repeats) that "an
         unknown link answers True too, so a vanished row, a typo and a flagged
-        title are indistinguishable". The implementation ends with
-        `return bool(row and row[0])`, which is False when the row is absent —
-        the guard only holds because the resolver happens to 404 afterwards.
-        The HTTP outcome above is safe; the documented defence-in-depth is not.
+        title are indistinguishable". It used to end `return bool(row and
+        row[0])`, i.e. False for an absent row, and the guard only held because
+        the resolver happened to 404 afterwards. Absence now answers True, and
+        the key roll-up means a legacy twin's link answers for the work.
         """
         self.assertTrue(redact.link_is_adult(999999, self.db_path),
                         "an unknown link id must answer True, not False")
@@ -269,36 +290,81 @@ class ScenarioMatrix(test_redact.FixtureMixin):
             self.assertTrue(headers["Location"].startswith("https://pixeldrain.com/"))
 
     # ------------------------------------------------------------------ #
-    # B. the twin leak (task #13)
+    # B. the twin leak (task #13, landed at 20f5fcc)
     # ------------------------------------------------------------------ #
-    @unittest.expectedFailure
-    def test_b_a_flagged_work_is_hidden_under_every_row_that_carries_its_key(self):
-        """INVARIANT (AGENTS.md): no public surface lists a work that any row
-        flags. `redact.adult_clause` is per row, so today v1 serves the twin.
-
-        Marked `expectedFailure` because this is the documented, tracked hole —
-        task #13 reconciles `MAX(is_18_plus)` across `canonical_key`. When that
-        lands this test passes and reports *unexpected success*: remove the
-        marker then.
-        """
+    def test_b_a_legacy_twin_is_closed_by_the_documented_repair(self):
+        """AGENTS.md: rows written before the key law stay public until
+        `backfill_adult_key.py` (here its `reconcile_key_adult` core) closes
+        them. The play route is already safe before the repair, because
+        `link_is_adult` answers for the work's key, not the one row."""
         twin = self.add_twin()
-        listed = self.fetch_json("/api/v1/posts?q=Adult+Diary&limit=50")[0]
-        ids = [row["id"] for row in listed["results"]]
-        self.assertNotIn(twin, ids,
-                         "today the unflagged twin of a flagged work is listed")
-        status, _, _ = self.request(f"/api/v1/posts/{twin}")
-        self.assertEqual(status, 404,
-                         "today the unflagged twin answers as a detail page")
+        link = self.add_source(twin)
+        key = self.one("SELECT canonical_key FROM posts WHERE id = ?",
+                       (self.adult_id,))[0]
 
-    def test_b_the_v2_projection_already_reconciles_the_key(self):
-        """Why #13 is a ledger-path fix: `catalog_v2.project` flags a work when
-        *any* row under its key is flagged (catalog_v2.py:973), so the same
-        question through v2 is already correct."""
+        with fast_fetch.get_db() as conn:
+            exposures = dict(fast_fetch.adult_key_exposures(conn))
+        self.assertEqual(exposures.get(key), 1,
+                         "the audit must see exactly the exposed row")
+
+        before = self.fetch_json("/api/v1/posts?limit=50")[0]["total"]
+        self.assertEqual(before, 2,
+                         "the unflagged legacy twin is the served copy until repaired")
+        self.assertTrue(redact.link_is_adult(link, self.db_path),
+                        "a link on the twin must be adult by the work's key")
+        status, _, body = self.request(f"/api/v1/stream?id={self.handle(link)}")
+        self.assertEqual(status, 404)
+        self.assertEqual(json.loads(body),
+                         {"success": False, "error": "not_found"})
+
+        flipped = fast_fetch.reconcile_key_adult(self.db_path)
+        self.assertEqual(flipped, 1)
+        after = self.fetch_json("/api/v1/posts?limit=50")[0]["total"]
+        self.assertEqual(before - after, flipped,
+                         "the repair lowers the public total by exactly what it flipped")
+
+        listed = self.fetch_json("/api/v1/posts?q=Adult+Diary&limit=50")[0]
+        self.assertEqual(listed["total"], 0)
+        self.assertNotIn(twin, [row["id"] for row in listed["results"]])
+        status, _, _ = self.request(f"/api/v1/posts/{twin}")
+        self.assertEqual(status, 404, "the repaired twin must stop answering")
+        with fast_fetch.get_db() as conn:
+            flags = {row["id"]: row["is_18_plus"] for row in
+                     conn.execute("SELECT id, is_18_plus FROM posts")}
+        self.assertEqual((flags[self.adult_id], flags[twin]), (1, 1))
+
+    def test_b_a_flagged_write_reconciles_the_sibling_through_the_ingest_path(self):
+        """Task #13's actual fix: the write that sets the flag flips every row
+        that already carries the key, so a re-crawl closes a pre-law twin with
+        no audit or repair step."""
+        twin = self.add_twin()
+        fast_fetch.save_scraped_data(test_redact.media(
+            "gamerxyt", "https://gamerxyt.example/adult-title/",
+            clean_title="Adult Diary", source_name="Gamerxyt Mirror",
+            service="gamerxyt", final_url="https://gamerxyt.click/f/9", adult=1))
+        with fast_fetch.get_db() as conn:
+            flags = {row["id"]: row["is_18_plus"] for row in
+                     conn.execute("SELECT id, is_18_plus FROM posts")}
+        self.assertEqual((flags[self.adult_id], flags[twin]), (1, 1))
+        listed = self.fetch_json("/api/v1/posts?q=Adult+Diary&limit=50")[0]
+        self.assertEqual(listed["total"], 0)
+        status, _, _ = self.request(f"/api/v1/posts/{twin}")
+        self.assertEqual(status, 404)
+
+    def test_b_the_v2_projection_folds_both_copies_into_one_hidden_work(self):
+        """The projection uses the same any-row rule, so the reconciled key is
+        one hidden work, not two answers."""
         self.add_twin()
+        fast_fetch.reconcile_key_adult(self.db_path)
         self.project()
         payload = self.fetch_json("/api/v2/search?q=Adult+Diary")[0]
         self.assertEqual(payload["items"], [])
         self.assertEqual(payload["total_estimate"], 0)
+        with fast_fetch.get_db() as conn:
+            hidden = conn.execute(
+                "SELECT COUNT(*) FROM cat_works WHERE is_18_plus = 1"
+            ).fetchone()[0]
+        self.assertEqual(hidden, 1, "both copies fold into one hidden work")
 
     # ------------------------------------------------------------------ #
     # C. pagination bounds
@@ -353,13 +419,13 @@ class ScenarioMatrix(test_redact.FixtureMixin):
                 self.assertEqual(json.loads(body)["code"], "cursor_invalid")
 
     def test_c_a_non_numeric_m3u_id_must_not_drop_the_connection(self):
-        """RED BY DESIGN — a genuine defect found by this suite.
+        """Regression guard for the class `bounded_int` exists to stop.
 
-        `viewer.bounded_int` exists because "bare `int()` on caller text [raises]
-        out of the handler and the edge [answers] 502". `/api/m3u` still casts
-        its `id` with a bare `int()` (viewer.py:3230), so caller text drops the
-        socket on the app's own port. Documented answer: our own 4xx or an empty
-        playlist — never a dropped connection.
+        `viewer.bounded_int` documents that a bare `int()` on caller text raises
+        out of the handler and the edge answers 502. `/api/m3u` used to cast its
+        `id` with one, so `?id=abc` closed the socket with no response at all.
+        The route now answers the same 400 as the detail route's invalid id;
+        either our own 4xx or an empty playlist is acceptable, never a drop.
         """
         for raw in ("abc", "1.5", "  ", "9e9"):
             with self.subTest(id=raw):
