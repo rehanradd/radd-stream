@@ -65,7 +65,7 @@ ADULT_KEYWORDS = {
 QUALITY_RE = re.compile(r"\b(2160p|1440p|1080p|720p|480p|360p|240p|4k)\b", re.I)
 SIZE_RE = re.compile(r"\b\d+(?:\.\d+)?\s?(?:mb|gb)\b", re.I)
 DOWNLOAD_WORD_RE = re.compile(r"\bdownload\b", re.I)
-BRACKET_RE = re.compile(r"\[[^\]]*\]")
+BRACKET_RE = re.compile(r"\[[^\]]*\]?")
 PAREN_PACKAGING_RE = re.compile(
     r"\((?:[^)]*\b(?:\d{3,4}p|4k|hd|uhd|web-?dl|bluray|hevc|10bit|esub|dual|multi)\b[^)]*)\)",
     re.I)
@@ -98,19 +98,14 @@ AD_HOSTS = ("doubleclick.net", "googlesyndication.com", "googleadservices.com",
             "googletagservices.com", "google-analytics.com")
 
 SITES = {
-    "moviesmela": {
-        "base": "https://www.moviesmela.com",
-        "db": DATA_DIR / "moviesmela.db",
-        "sitemaps": ["https://www.moviesmela.com/sitemap_index.xml"],
-        "display_names": ["Watch Online Movies", "MoviesMela"],
-        "exclude": r"/(?:category|tag|author|page|genre|about|contact|dmca|"
-                   r"privacy|disclaimer|request|how-to|feed|wp-json|sitemap)",
-    },
     "moviehax": {
         "base": "https://moviehax.run",
         "db": DATA_DIR / "moviehax.db",
         "sitemaps": ["https://moviehax.run/sitemap_index.xml"],
         "display_names": ["Moviehax"],
+        # Dooplay prints server buttons, not embeds; each button answers through
+        # the theme's own POST action (measured: doo_player_ajax -> embed_url).
+        "dooplay": True,
         "exclude": r"/(?:category|tag|author|page|genre|about|contact|dmca|"
                    r"privacy|disclaimer|request|how-to|feed|wp-json|sitemap|"
                    r"movies|tv-shows)/?$",
@@ -155,6 +150,7 @@ SITES = {
         "display_names": ["Hindi Anime Zone"],
         # The theme prints the abscloud player URL as text, not inside <iframe>.
         "player_hosts": ["abscloud.org"],
+        "always_animated": True,
         "exclude": r"/(?:category|tag|author|page|about|contact|dmca|privacy|"
                    r"disclaimer|feed|wp-json|sitemap)",
     },
@@ -268,6 +264,80 @@ def _http_get_full(url: str, timeout: int = PAGE_TIMEOUT, retries: int = 2):
 def http_get(url: str, timeout: int = PAGE_TIMEOUT, retries: int = 2):
     """GET -> (status, final_url, text). Transport failure -> status 0."""
     return _http_get_full(url, timeout=timeout, retries=retries)[:3]
+
+
+class RateLimited(Exception):
+    """Raised mid-page when the site starts answering 429."""
+
+
+def _http_post(url: str, data: dict, referer: str = "",
+               timeout: int = PAGE_TIMEOUT) -> tuple[int, str]:
+    body = urllib.parse.urlencode(data).encode()
+    req = urllib.request.Request(url, data=body, headers={
+        "User-Agent": _USER_AGENT,
+        "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+        "X-Requested-With": "XMLHttpRequest",
+        "Referer": referer,
+    })
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return resp.status, resp.read().decode("utf-8", "replace")
+    except urllib.error.HTTPError as exc:
+        return exc.code, "" if exc.code == RATE_LIMIT_STATUS else str(exc)
+    except Exception as exc:
+        return 0, f"{type(exc).__name__}: {exc}"
+
+
+DOOPLAY_OPTION_RE = re.compile(r"<li\b[^>]*dooplay_player_option[^>]*>", re.I)
+DOOPLAY_ATTR_RE = re.compile(r"data-([a-z]+)=[\"']?([^\"'\s>]+)", re.I)
+TRAILER_HOSTS = ("youtube.com", "youtu.be", "dailymotion.com")
+
+
+def _dooplay_player_sources(html: str, page_url: str, cfg: dict) -> list[dict]:
+    """Asks the theme's own player action for each server button it printed."""
+    options = []
+    for tag in DOOPLAY_OPTION_RE.findall(html):
+        attrs = dict(DOOPLAY_ATTR_RE.findall(tag))
+        if attrs.get("post") and attrs.get("nume") and attrs.get("type"):
+            options.append(attrs)
+    host = urllib.parse.urlsplit(cfg.get("base") or page_url).hostname
+    out: list[dict] = []
+    for attrs in options[:6]:
+        status, body = _http_post(
+            f"https://{host}/wp-admin/admin-ajax.php",
+            {"action": "doo_player_ajax", "post": attrs["post"],
+             "nume": attrs["nume"], "type": attrs["type"]},
+            referer=page_url,
+        )
+        if status == RATE_LIMIT_STATUS:
+            raise RateLimited()
+        if status != 200 or not body.strip():
+            continue
+        try:
+            payload = json.loads(body)
+        except json.JSONDecodeError:
+            continue
+        embed = payload.get("embed_url") or ""
+        if "<iframe" in embed:
+            m = SRC_ATTR_RE.search(embed)
+            embed = m.group(1) if m else ""
+        embed = html_mod.unescape(embed).strip()
+        if not embed.startswith(("http://", "https://")):
+            continue
+        if any(h in embed for h in AD_HOSTS + TRAILER_HOSTS):
+            continue
+        service = urllib.parse.urlsplit(embed).hostname or "embed"
+        out.append({
+            "release_title": "Watch online",
+            "quality": None,
+            "playback_type": "iframe",
+            "source_name": service,
+            "service": service,
+            "resource_id": attrs.get("nume"),
+            "source_url": embed,
+            "final_url": None,
+        })
+    return out
 
 
 def _meta(html: str, pattern: str) -> str:
@@ -481,6 +551,10 @@ def parse_page(html: str, page_url: str, site: str) -> dict | None:
     languages = [w.title() for w in LANGUAGE_WORDS
                  if re.search(rf"\b{w}\b", searchable, re.I)]
     sources = _sources_from_html(html, page_url, cfg)
+    if cfg.get("dooplay"):
+        known = {s["source_url"] for s in sources}
+        sources.extend(s for s in _dooplay_player_sources(html, page_url, cfg)
+                       if s["source_url"] not in known)
     if not sources:
         return None
     releases: dict[tuple, dict] = {}
@@ -524,7 +598,8 @@ def parse_page(html: str, page_url: str, site: str) -> dict | None:
         "industry": "Unknown",
         "country": "Unknown",
         "is_18_plus": 1 if _is_adult(title, slug, synopsis) else 0,
-        "is_animated": 1 if any(w in searchable.lower() for w in ANIMATED_WORDS) else 0,
+        "is_animated": 1 if cfg.get("always_animated") or
+        any(w in searchable.lower() for w in ANIMATED_WORDS) else 0,
         "source_site": site,
         "canonical_key": canonical_key,
         "releases": [dict(rel) for rel in releases.values()],
@@ -804,7 +879,13 @@ def crawl(site: str, db_path: Path | str, limit: int | None = None,
             _bump(db_path, loc, f"http-{status}")
             totals["failed"] += 1
             continue
-        post = parse_page(body, final or loc, site)
+        try:
+            post = parse_page(body, final or loc, site)
+        except RateLimited:
+            _RATE_LIMITED.set()
+            _bump(db_path, loc, "rate-limited")
+            totals["failed"] += 1
+            continue
         if post is None:
             _bump(db_path, loc, "no-playable-object", park=True)
             totals["not_indexable"] += 1

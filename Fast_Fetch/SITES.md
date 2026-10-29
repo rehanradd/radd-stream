@@ -878,6 +878,10 @@ Anime/Asian scouting detail and the endpoints that *do* publish sitemaps are in 
 - **Bridge gate:** the linkshub page is a 30-second countdown plus a robot
   check whose unlock target is assembled by page script. Stored **unverified**,
   never followed, script never executed.
+- **Measured coverage (run finished 2026-10-29).** 905 sitemap locs = **900
+  posts harvested + 5 locs left queued after a transport failure** (retryable,
+  0 parked); 2,530 releases / 2,530 sources; 3 posts `is_18_plus=1` at write.
+  One worker, 0.5 s delay, 1,262 s, no 429.
 - **Command:**
   ```bash
   python3 -S Fast_Fetch/importers/import_kuttymovies.py sync
@@ -914,3 +918,102 @@ publish clean sitemaps — iQiyi and Viu — are official subscription platforms
 with DRM playback: their sitemaps give metadata only, not source links, so they
 are not a fit for this fleet. Existing anime/Asian coverage stays with
 `animahd.db`, `rareanimes.db`, `toonworld4all.db`, `dramacool.db` and `kisskh.db`.
+
+## 20. Moviehax (`moviehax.run`) — measured 2026-10-29
+
+**Entry points.** `sitemap_index.xml` 200 (3,133 B) → 16 `movies-sitemap*`
+children; `movies-sitemap.xml` 200 (298,337 B) = 1,001 locs including the
+`/movies/` shelf. After exclusions the queue holds **15,174 locs**.
+
+**Page shape (Dooplay).** No `<iframe>` in the server-rendered post. The page
+prints `li.dooplay_player_option` buttons (`data-post`, `data-nume`,
+`data-type`) and `dtAjax.play_method = admin_ajax`. Measured:
+`POST /wp-admin/admin-ajax.php` with
+`action=doo_player_ajax&post=3678&nume=1&type=movie` answers
+`200 {"embed_url":"https://openload.co/embed/NiLbbkCBBVw","type":"iframe"}`.
+The look-alike `action=dooplay_player_ajax` answers `400` with body `0`;
+`/wp-json/dooplayer/v2/<id>/movie/<nume>` answers `200` with an empty body.
+The importer uses the working action, up to six buttons per page, one POST each.
+
+**Pilot (40 queued pages).** 35 posts / 35 releases / 62 sources;
+5 declined `no-playable-object` (no buttons or empty answer); 0 failed; no 429.
+Source hosts observed: verystream 13, openload 9, streamango 8, thevideobee 8,
+onlystream 7 — legacy hosts, stored `status='unverified'`, none probed.
+
+**Adult.** 17 of 35 pilot posts carry `is_18_plus=1` at write time
+("Sex and Breakfast", "18+ The Naked Detective", "A History of Sex … Adult
+Documentary"). Display surfaces must filter them; the staging rows keep the flag.
+
+**Verdict.** Build. Playability depends on the theme's POST action, so a page
+counts as a post only after at least one button answers with an embed URL.
+
+## 21. Bollyflix (`thebollyflix.gen.in`) — measured 2026-10-29
+
+**Entry points.** The published sitemaps are taxonomy only: `sitemap.xml` 200
+(All-in-One CDATA index) lists `addl-sitemap.xml`, `page-sitemap.xml`,
+`category-sitemap.xml`; `post-sitemap.xml` 404 and `wp-sitemap.xml` is an empty
+index. The catalog is exposed by WP REST: `wp-json/wp/v2/posts?per_page=1`
+→ 200 with `X-WP-Total: 17860`. Seeding walked 179 pages of 100 and queued
+**17,837 locs** (category/author/page excluded).
+
+**Page shape.** The title tag and `og:title` are the site name ("Bollyflix");
+the real title opens `og:description` and ends at the first `Title:` label. The
+only iframe on a post is the GTM container (filtered as an ad host). Mirrors are
+shortener anchors labelled with quality and size (`720p [318MB]` →
+`mobilejsr.com/view/…`); internal and `bollyflix.co.za` navigation links never
+become sources.
+
+**Pilot (40 queued pages).** 38 posts / 91 releases / 91 sources;
+2 declined `no-playable-object`; 0 failed. Every source host is `mobilejsr.com`
+(shortener), stored `unverified`.
+
+**Adult.** 9 of 38 pilot posts flagged at write ("Brazzers … Adult Video",
+"18+ …", "… Bhabhi … Hot Short"). The first page in the REST list is adult.
+
+**Verdict.** Build; REST-only seeding is the catalog path, not a sitemap.
+
+## 22. Hindi Dubbed Movies (`hindidubbedmovies.pk`) — measured 2026-10-29
+
+**Entry points.** `sitemap.xml` 200 → `wp-sitemap.xml` with 24 children; only
+`wp-sitemap-posts-movies-1.xml` (223,498 B) and `wp-sitemap-posts-series-1.xml`
+are catalog; taxonomy/users/page children are excluded. Queue holds
+**2,117 locs**.
+
+**Page shape.** LiteSpeed lazy iframe: `src="about:blank"` plus
+`data-litespeed-src="https://hindidubbedmovies.pk/?trembed=0&trid=8&trtype=1"`,
+and a first-party `?trdownload=1&trid=8` "Download" button. Both are stored;
+the lazy attribute is read because the `src` is deliberately blank.
+
+**Pilot (40 queued pages).** 40 posts / 49 releases / 57 sources; 0 declined;
+0 failed. Sources: first-party `trembed`/`trdownload` 56, one YouTube embed.
+
+**Merge proof.** Bounded merge of the whole pilot into an empty target:
+40 posts → 40 `posts` / 49 `releases` / 57 `download_sources` / 40
+`post_sources`, 0 identity conflicts. The staging shape is accepted as-is.
+
+**Adult.** 0 of 40 pilot posts flagged. The keyword rule still runs on every
+page, so adult rows would be flagged at write if the catalog carries them.
+
+**Verdict.** Build. Identity is title+year from the page; a page with no year
+keys without one (Maidaan), which is the known merge limitation.
+
+## 23. Hindi Anime Zone (`hindianimeszone.com`) — measured 2026-10-29
+
+**Entry points.** Open WP REST: `wp-json/wp/v2/posts?per_page=3` 200 with
+`X-WP-Total: 818`. REST seeding queued **821 locs** (10 pages of 100).
+
+**Page shape.** The theme prints the player URL as text, not inside an iframe:
+`https://abscloud.org/1/<hash>` is matched by a configured player host.
+Download anchors point at `002.hindianimeszone.com/download1.php?code=…&q=480p+x264`
+with the quality in the label, so they are stored per quality tier. Internal
+links to sibling posts are rejected (same host, not a download route).
+
+**Pilot (40 queued pages).** 40 pages → 36 posts (4 pages collapse onto
+existing canonical keys: multi-season pages of the same show), 40 releases,
+40 sources; 0 declined; 0 failed.
+
+**Adult / anime.** One post flagged at write: its slug says `…-uncensored`.
+Every row is marked `is_animated=1` because the site is anime-only.
+
+**Verdict.** Build. Series identity collapses per show, episodes stay in
+`releases.season_number/episode_number` where the page states them.

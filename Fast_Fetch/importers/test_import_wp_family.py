@@ -59,7 +59,7 @@ PAGE_NO_PLAYER = """<html><head>
 
 class ParsePageTests(unittest.TestCase):
     def test_movie_page_splits_iframe_and_quality_anchors(self):
-        post = wp.parse_page(MOVIE_PAGE, "https://www.moviesmela.com/jawan-2023/", "moviesmela")
+        post = wp.parse_page(MOVIE_PAGE, "https://www.moviesmela.com/jawan-2023/", "hindidubbedmovies")
         self.assertIsNotNone(post)
         self.assertEqual(post["clean_title"], "Jawan")
         self.assertEqual(post["year"], 2023)
@@ -72,7 +72,7 @@ class ParsePageTests(unittest.TestCase):
         self.assertEqual(kinds.count("download"), 2, "each quality is its own release")
 
     def test_ad_network_iframe_is_dropped(self):
-        post = wp.parse_page(MOVIE_PAGE, "https://www.moviesmela.com/jawan-2023/", "moviesmela")
+        post = wp.parse_page(MOVIE_PAGE, "https://www.moviesmela.com/jawan-2023/", "hindidubbedmovies")
         urls = [s["source_url"] for rel in post["releases"] for s in rel["sources"]]
         self.assertFalse(any("doubleclick" in u for u in urls))
 
@@ -148,6 +148,32 @@ class ParsePageTests(unittest.TestCase):
         self.assertEqual(post["is_18_plus"], 1)
 
 
+class DooplayTests(unittest.TestCase):
+    PAGE = ('<html><head><meta property="og:title" content="Generation Iron 2 (2017)">'
+            '</head><body><ul id="playeroptionsul" class="ajax_mode">'
+            '<li class="dooplay_player_option" data-type=movie data-post=3678 data-nume=1>'
+            '<span class=title>Openload</span></li>'
+            '<li class="dooplay_player_option" data-type=movie data-post=3678 data-nume=2>'
+            '<span class=title>Trailer</span></li></ul></body></html>')
+
+    def test_player_button_answer_becomes_an_iframe_source(self):
+        replies = iter([
+            (200, '{"embed_url":"https://openload.co/embed/NiLbbkCBBVw","type":"iframe"}'),
+            (200, '{"embed_url":"https://www.youtube.com/embed/trailer1","type":"iframe"}'),
+        ])
+        with mock.patch.object(wp, "_http_post", side_effect=lambda *a, **k: next(replies)):
+            got = wp._dooplay_player_sources(
+                self.PAGE, "https://moviehax.run/movies/x/", wp.SITES["moviehax"])
+        self.assertEqual([s["source_url"] for s in got],
+                         ["https://openload.co/embed/NiLbbkCBBVw"])
+
+    def test_a_429_from_the_player_route_pauses_the_run(self):
+        with mock.patch.object(wp, "_http_post", return_value=(429, "")):
+            with self.assertRaises(wp.RateLimited):
+                wp._dooplay_player_sources(
+                    self.PAGE, "https://moviehax.run/movies/x/", wp.SITES["moviehax"])
+
+
 class ExportStagingTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -157,8 +183,8 @@ class ExportStagingTests(unittest.TestCase):
         self.tmp.cleanup()
 
     def test_export_writes_post_release_source_and_sitemap_row(self):
-        post = wp.parse_page(MOVIE_PAGE, "https://www.moviesmela.com/jawan-2023/", "moviesmela")
-        out = wp.export_staging(self.db, "moviesmela", [post])
+        post = wp.parse_page(MOVIE_PAGE, "https://www.moviesmela.com/jawan-2023/", "hindidubbedmovies")
+        out = wp.export_staging(self.db, "hindidubbedmovies", [post])
         self.assertEqual(out["posts_written"], 1)
         self.assertGreaterEqual(out["releases_written"], 2)
         self.assertGreaterEqual(out["sources_written"], 3)
@@ -168,7 +194,7 @@ class ExportStagingTests(unittest.TestCase):
                                " FROM posts").fetchone()
             self.assertEqual(row[1], "movie")
             self.assertEqual(row[2], 0)
-            self.assertEqual(row[3], "moviesmela")
+            self.assertEqual(row[3], "hindidubbedmovies")
             src = conn.execute("SELECT status, is_temporary FROM sources").fetchone()
             self.assertEqual(src, ("unverified", 0))
             sm = conn.execute("SELECT scraped FROM sitemap_cache").fetchone()
@@ -177,12 +203,12 @@ class ExportStagingTests(unittest.TestCase):
             conn.close()
 
     def test_reexport_replaces_this_pages_releases_not_the_posts(self):
-        post = wp.parse_page(MOVIE_PAGE, "https://www.moviesmela.com/jawan-2023/", "moviesmela")
-        wp.export_staging(self.db, "moviesmela", [post])
+        post = wp.parse_page(MOVIE_PAGE, "https://www.moviesmela.com/jawan-2023/", "hindidubbedmovies")
+        wp.export_staging(self.db, "hindidubbedmovies", [post])
         conn = sqlite3.connect(self.db)
         first = conn.execute("SELECT COUNT(*) FROM releases").fetchone()[0]
         conn.close()
-        wp.export_staging(self.db, "moviesmela", [post])
+        wp.export_staging(self.db, "hindidubbedmovies", [post])
         conn = sqlite3.connect(self.db)
         try:
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM releases").fetchone()[0], first)
@@ -260,7 +286,7 @@ class SyncAndCrawlTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp, \
                 mock.patch.object(wp, "http_get", side_effect=fake_get):
             db = Path(tmp) / "x.db"
-            fresh = wp.sync_catalog("moviesmela", db, config=cfg, verbose=False)
+            fresh = wp.sync_catalog("hindidubbedmovies", db, config=cfg, verbose=False)
             self.assertEqual(fresh, 1)
             conn = sqlite3.connect(db)
             try:
@@ -286,7 +312,7 @@ class SyncAndCrawlTests(unittest.TestCase):
             finally:
                 conn.close()
             with mock.patch.object(wp, "http_get", side_effect=fake_get):
-                totals = wp.crawl("moviesmela", db, delay=0, verbose=False)
+                totals = wp.crawl("hindidubbedmovies", db, delay=0, verbose=False)
             self.assertEqual(totals["pages"], 1, "later rows are skipped, not fetched")
             self.assertEqual(totals["paused_rate_limit"], 2)
             self.assertTrue(wp._RATE_LIMITED.is_set())
@@ -313,7 +339,7 @@ class SyncAndCrawlTests(unittest.TestCase):
             finally:
                 conn.close()
             with mock.patch.object(wp, "http_get", side_effect=fake_get):
-                totals = wp.crawl("moviesmela", db, delay=0, verbose=False)
+                totals = wp.crawl("hindidubbedmovies", db, delay=0, verbose=False)
             self.assertEqual(totals["declined_by_reason"], {"http-404": 1})
             conn = sqlite3.connect(db)
             try:
