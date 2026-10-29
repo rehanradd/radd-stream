@@ -44,6 +44,11 @@ G. v1 vs v2 — the same catalog question through both, and every v2 catalog
    route answered by this app on :8080 (the edge's 403 is nginx's `^~ /api/`
    catch-all; the documented install allows only `/api/v2/account`, which the
    last test pins in ORACLE_DEPLOYMENT.md).
+H. Cold stats — after a projection, `/api/v1/stats` answers from the five
+   stamped `cat_projection_meta` keys, not from `_counted_stats`' `COUNT(*)`
+   and `GROUP BY state` over the whole ledger. The measured production defect
+   was 42 s of GIL time per 120 s cache expiry on a public allow-listed route,
+   because the stale projection carried none of those keys.
 
 Offline and stdlib-only. `RADD_SKIP_LIVE_ENRICH=1` (set by `test_redact`) keeps
 ingest off the network; every URL the tests follow is loopback.
@@ -101,6 +106,7 @@ class ScenarioMatrix(test_redact.FixtureMixin):
     def setUp(self):
         self.make_ledger()
         redact.limiter._buckets.clear()
+        viewer._STATS_CACHE.update({"time": 0.0, "data": None, "db": None})
 
     def tearDown(self):
         redact.limiter._buckets.clear()
@@ -625,6 +631,40 @@ class ScenarioMatrix(test_redact.FixtureMixin):
         self.assertIn("location ^~ /api/ { return 403; }", installed,
                       "every other /api/ path is refused at the edge")
         self.assertIn("a `^~ /api/v2/account` block", installed)
+
+    # ------------------------------------------------------------------ #
+    # H. cold stats: stamps, not a ledger scan
+    # ------------------------------------------------------------------ #
+    def test_h_a_cold_stats_request_reads_stamps_not_the_ledger(self):
+        """The capacity defect measured 2026-10-29: every 120 s cache expiry fell
+        through to `_counted_stats` — `COUNT(*)` over `cat_works`, a join-scan
+        over `releases`, and `GROUP BY state` over 3.7 M `download_sources` rows
+        (42 s of GIL time on a 1-vCPU box) — because the projection stamped none
+        of the five keys the reader needs. `project()` stamps them now, and the
+        reader is all-or-nothing: with all five present a cold request touches
+        `cat_projection_meta` only. No second cache layer is involved."""
+        self.project()
+        with fast_fetch.get_db() as conn:
+            meta = dict(conn.execute(
+                "SELECT key, value FROM cat_projection_meta").fetchall())
+        for key in ("works_safe", "releases_safe", "links_resumable_safe",
+                    "links_temporary_safe", "links_by_state_safe"):
+            self.assertIn(key, meta, f"the projection did not stamp {key}")
+        stamped_states = json.loads(meta["links_by_state_safe"])
+        self.assertTrue(stamped_states,
+                        "an empty breakdown sends the reader back to counting")
+
+        viewer._STATS_CACHE.update({"time": 0.0, "data": None, "db": None})
+        with mock.patch.object(
+                viewer, "_counted_stats",
+                side_effect=AssertionError("cold stats ran the live count")):
+            status, _, body = self.request("/api/v1/stats")
+        self.assertEqual(status, 200, body[:300])
+        payload = json.loads(body)
+        self.assertEqual(payload["posts"], int(meta["works_safe"]))
+        self.assertEqual(payload["releases"], int(meta["releases_safe"]))
+        self.assertEqual(payload["sources"], sum(stamped_states.values()))
+        self.assertEqual(payload["sources_by_state"], stamped_states)
 
 
 if __name__ == "__main__":
