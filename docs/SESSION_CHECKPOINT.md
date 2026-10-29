@@ -1660,3 +1660,44 @@ crawl-completion problem — queued to qoder2 with DesiSerials named explicitly.
   file will NOT be injected into qoder2 while a human conversation is live there — delivering into a
   pane the owner is using would corrupt their session. qoder2 gets the queue when its pane is idle
   and shows no human input pending.
+
+### 2026-10-29 08:15 — qoder1 (App lane): Android CI's four defects fixed in code; local `assembleDebug + testDebugUnitTest + lintDebug` green
+
+- **The 9 hosted failures were real defects, and none of them was "the component is wrong."**
+  `ScreenSnapshotTest` ×6: `captureToImage()` posts a redraw to the main handler and then blocks the
+  thread that *is* the main looper under Robolectric, so no timeout could ever have saved it — the
+  capture is now a software `view.draw(Canvas(bitmap))` of the view hosting the composition, still
+  asserting a non-empty PNG **and** a bitmap whose pixels are not all one colour. `PosterCardProvenanceTest`
+  ×3 at `:40/50/56`: geometry, not content — the tile is now shown at the `120.dp` the adaptive grid
+  actually gives it, and the metadata case asserts two exact nodes instead of a substring. Verified
+  against `PosterCard`: the cleaned-title preference and `"2024 · Movie"` really do render.
+- **lint: 23 errors → 0, no baseline and no suppression.** `HashMap.merge` → read-modify-write
+  (Java 8 default, API 24, `minSdk 21` — lint was right); the two `NewApi` theme items moved to
+  `res/values-v23/` + `res/values-v27/` (platform ignored them below their level, so rendering is
+  unchanged); the 20 `UnsafeOptInUsageError`s were Kotlin's `@OptIn` where Media3's *lint* check
+  reads `androidx.annotation.OptIn` — qualified at the call sites because those files also need the
+  Kotlin form for `ExperimentalMaterial3Api`. `0 errors, 144 warnings`. Making lint runnable at all
+  needed a queue copy without `--offline` (`kotlin-stdlib-jdk7:1.8.22` is not cached), which is why
+  14 hosted runs printed only the first error.
+- **Gate:** 628 tests / 79 suites / 0 failures / 0 errors / 0 skipped (all 79 XMLs fresh),
+  `:app:assembleDebug` BUILD SUCCESSFUL, `app-debug.apk` 23,536,966 bytes. Two invocations, serialized
+  on `/tmp/qbuild.lock`, `OVERLAP=NO` both times.
+- **What a green local run cannot prove:** the 9 patched tests still do not execute on aarch64 — the
+  exclusion is unchanged. They compile; only the hosted x86_64 runner can show the PNGs and the tile
+  assertions. So this milestone is not "done" until the CI run on the pushed sha is `success`, and
+  `v1.0.0` is not cut before that (tags: 0, releases: 0).
+- **Owner directive item 1 (retire link shorteners) executed inside the App lane, and its premise was
+  checked first:** no `wrapWithShortener` and no shortener call exists in any Kotlin file — every byte
+  path is already direct (`ApiProvider.streamRedirectUrl` → `/api/v1/stream?id=<handle>`). Deleted the
+  decoded-but-never-read `VipRemoteConfig.linkShorteners` + `VipRemoteLinkShortener`, and replaced its
+  test with one proving a server that still publishes `link_shorteners` is *not* a client error. The
+  backend half (`viewer.shorten_download_url`, `admin_panel.shortener_targets`, the `/admin` toggles)
+  is `Fast_Fetch/*.py` and stays with the backend lane. **The directive arrived truncated twice** —
+  "must be 100% direct with" has no end and items 2+ never came; recorded as not-received, not guessed.
+- **The stats arrow retired (the item Session 29 left waiting for the hold to lift):**
+  `CatalogScale.connectionNotice` no longer prints "smaller", `SCOPE_NOTE` no longer says what the
+  tally *is*, and `StatsHonestyTest` now refuses a directional word in either sign for a full server
+  and for `connectionNotice(0)`. Reason: `stats.posts` 116,922 against a browsable `total` of 131,559
+  then 134,815 — the arrow flipped between one measurement and the next.
+- **Root `AGENTS.md` and `docs/PROJECT_MAP.md` are carrying another agent's uncommitted edits right
+  now; this entry and my commit touch neither.** Staging was by explicit path, no `git add -A`.

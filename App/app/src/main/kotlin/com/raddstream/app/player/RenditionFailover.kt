@@ -132,9 +132,12 @@ class FailoverStateMachine(
         val index = activeIndex
         val current = renditions.getOrNull(index)
             ?: return FailoverDecision.Handoff(HandoffWhy.NO_CANDIDATE_LEFT, errorSummary, null)
-        // Map.merge returns the new value; Int::plus never yields null, so the elvis is a
-        // provability guard for the nullable Java signature, not a behaviour change.
-        val usedSoFar = attemptsByIndex.merge(index, 1, Int::plus) ?: 1
+        // Read-modify-write instead of `HashMap.merge`: `merge` is a Java 8 default method and
+        // lint correctly refuses it against minSdk 21 (it ships in API 24). The count below is
+        // only ever read on this thread, so the atomicity `merge` would have bought is not a
+        // behaviour this class depends on.
+        val usedSoFar = (attemptsByIndex[index] ?: 0) + 1
+        attemptsByIndex[index] = usedSoFar
         val record = FailoverRecord(current.rank, current.releaseId, current.displayLabel(), errorSummary, "")
 
         return when {
