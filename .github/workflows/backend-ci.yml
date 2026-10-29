@@ -36,6 +36,9 @@ name: 🐍 Backend CI — Stdlib Python Tests
 #       stats=full, and a scan-free default path proven by a trace callback)
 #     - Fast_Fetch/test_project_readonly.py  (v2 rebuild over an ATTACHed mode=ro ledger:
 #       source sha256 unchanged, zero link loss, safe stamps written)
+#     - Fast_Fetch/test_link_sweep_budget.py    (the link-health sweep's budget maths:
+#       probe cost, why a full 3.7 M sweep is infeasible, sample sizes and margins — pure
+#       arithmetic over link_health's own constants, no sockets, no catalog read)
 #     - Fast_Fetch/test_adult_twin_probe.py     (the adult-twin exposure count: works vs
 #       rows, NULL keys are not twins, and the grouping read stays in the key index)
 #     - Fast_Fetch/test_posts_query_plan.py     (/api/v1/posts?q= EXPLAIN QUERY PLAN
@@ -183,3 +186,10 @@ jobs:
       # this runner is not allowed to decide when a heavy read is polite.
       - name: 🧪 test_adult_twin_probe.py
         run: python3 -S Fast_Fetch/test_adult_twin_probe.py
+
+      # The sweep design's arithmetic (docs/LINK_HEALTH_SWEEP.md). It reads
+      # link_health's constants so a timeout change re-prices the estimate and turns this
+      # red. The SWEEP itself is deliberately not in CI: a suite that opens 384 sockets to
+      # third-party hosts is a test that fails when the world is healthy.
+      - name: 🧪 test_link_sweep_budget.py
+        run: python3 -S Fast_Fetch/test_link_sweep_budget.py
