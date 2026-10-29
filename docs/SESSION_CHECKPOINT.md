@@ -2525,3 +2525,46 @@ filter regression; it is two audited writes, and the arithmetic identity holds e
 - **Fleet/SLO:** load 5.22 falling to 2.34 (one core), 8,608 MiB available, swap unchanged, all five
   worker panes `in_mode=0` and generating; no Gradle run (load gate 0.5 far away), merge batch 4 (#9)
   still held.
+
+### 21:50–22:10 — the cold `/api/v1/stats` path is the capacity defect, and the projection is why
+
+- `/api/v1/stats` on loopback measured **22.1 s**, then **42.2 s**, then **0.008 s**. Not noise:
+  `_get_cached_stats` (`viewer.py:2956`) caches for 120 s per process, and on a miss it calls
+  `_counted_stats`, which is a `COUNT(*)` over `cat_works`, a join-scan over `releases`, and a
+  `GROUP BY state` across 3.78 M links.
+- **The miss is structural, not occasional.** `cat_projection_meta` carries 18 keys and **none** of
+  `works_safe`, `releases_safe`, `links_resumable_safe`, `links_temporary_safe`,
+  `links_by_state_safe` is present — and the function is deliberately all-or-nothing ("a partial
+  stamp falls back to counting"). The projection itself is also stale: `posts=130016`,
+  `releases=1383752`, `links=3783959` — the pre-batch-3 catalog, against 150,799 posts live. So every
+  120 s, whether or not anyone asks, the public `^~ /api/` allow-listed stats route re-runs three big
+  scans.
+- **Bounded accurately, because I checked:** the server is `ThreadedHTTPServer(ThreadingMixIn,
+  HTTPServer)` (`viewer.py:3018`), so a slow stats request does not block the accept loop; but it is
+  CPython work under the GIL on a **1-vCPU** box, so a 42 s scan starves every other handler's Python
+  for its duration. For the owner's "how many users can this VM serve" question the honest sentence is
+  *not* a requests-per-second figure — it is that one unauthenticated public endpoint can cost 42 s of
+  the only core, and the fix is a stamp, not a cache layer.
+- Dispatched into q2's job with these numbers (task #10). Told it explicitly not to add a second
+  cache: the 120 s cache already exists, the defect is the missing stamp.
+- **Android CI regressed to red at `0ff0164`** (run 40909885234, job 123574653479):
+  `:app:compileDebugUnitTestKotlin FAILED`, BUILD FAILED in 2 m 17 s, on two errors in the
+  ad-cadence test sources — `AdCadenceRowsTest.kt:75:9` unresolved `assertFalse`, and
+  `AdCadenceGovernorTest.kt:265:44` passing an anonymous object where `FakeSwitch` was expected.
+  Green at `2caadb3` was real and this is a newer commit, so the app lane is red again; queued the
+  exact two lines to q1 with the standing rules attached (fix, do not delete assertions; load < 0.5
+  before any Gradle; `/tmp/qbuild.sh`; report the CI conclusion, not a local build). Backend CI is
+  independently green at `dea1e41` and `66f8edd`. Total runs now 79.
+- **VIP price authority decided by me, per the owner's standing "decide everything yourself":**
+  `docs/MONETIZATION_AND_FLEET_PLAN.md:46` says Monthly VIP ₨250, and *two* code defaults say 200
+  (`payments.py:85`, `admin_panel.py:929`). Both 200s are defects, not a document disagreement. The
+  live `app_remote_config` row reads 200 with `updated_at = 0`, i.e. the never-saved default, so
+  fixing the code fixes the quote and **no production data write is authorized or needed**. q5 has
+  the task. If any client code baked 200 in, it must read remote config instead.
+- **The real reason the 19:14 deploy happened, and it is a process change, not an incident:** every
+  worker lane's status line reads `/opt/radd-stream` (q1's reads `/opt/radd-stream/App`). The live
+  deployment tree is the lanes' workspace, so its dirt *is* production and production *is* the lanes'
+  drafts. All four got the same instruction tonight — snapshot the diff, make a worktree from
+  `475e1d4`, never edit/commit/reset `/opt/radd-stream` (task #26). Their next reported sha must come
+  from `/tmp/<lane>`; until I see that, #26 stays open and #19's "reproduce production from a ref"
+  problem is not actually solved by any restart.
