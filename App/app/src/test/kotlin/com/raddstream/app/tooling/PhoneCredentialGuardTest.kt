@@ -240,6 +240,92 @@ class PhoneCredentialGuardTest {
     // ── the scanner ───────────────────────────────────────────────────────────
 
     /**
+     * Termination, asserted at the primitive. The first version of `literalEnd` could return the
+     * index it was given — a `"` is legal *inside* a Kotlin string, so an interpolated
+     * `"…${ string("x") }…` desynced the walk into a phantom string that reached a newline and
+     * advanced nothing. Every caller is a `while`, so the symptom was a test task that never
+     * finished, and the only thing CI had to say about it was the job timeout: two runs of this
+     * branch died at 45 minutes with zero tests executed. A hang is indistinguishable from a slow
+     * build, so the guard has to be a return value rather than a passing test.
+     */
+    @Test
+    fun `the literal scanner strictly advances on every quote in every real source`() {
+        val offenders = mutableListOf<String>()
+        mainSources.forEach { file ->
+            val text = file.readText()
+            for (i in text.indices) {
+                val c = text[i]
+                if (c != '"' && c != '\'') continue
+                val end = literalEnd(text, i, c)
+                if (end <= i) offenders += "${file.name}:$i made no progress"
+            }
+        }
+        assertEquals(
+            "literalEnd must consume at least one character or every walk over it can spin:\n" +
+                offenders.take(20).joinToString("\n"),
+            0,
+            offenders.size,
+        )
+        // Positive control for the control: the scan is only meaningful if real sources were
+        // actually scanned and they really do contain quotes.
+        assertTrue(
+            "no source contained a single quote — the scan above proved nothing",
+            mainSources.any { it.readText().contains('"') },
+        )
+    }
+
+    @Test
+    fun `an unterminated double quote closes at the newline rather than at the end of the file`() {
+        val line = "val suffix = \"network.user_agent"
+        val text = line + "\nfun quickLoginKey(raw: String?): String? {\n    return raw\n}\n"
+        val at = text.indexOf('"')
+        val end = literalEnd(text, at, '"')
+        assertTrue("the scan must advance", end > at)
+        assertTrue(
+            "and it must stop at the line break, not swallow the rest of the file",
+            end <= line.length + 1,
+        )
+        // The declaration on the following lines must still be walked. A scanner that ate to EOF
+        // would leave the stripped text intact but attribute nothing to anybody — a guard that
+        // quietly stops seeing functions reports zero violations on a file full of them.
+        val found = functions(withoutComments(text)).map { it.first }
+        assertTrue("the declarations after that line were not walked: $found", found.contains("quickLoginKey"))
+    }
+
+    @Test
+    fun `a raw string closes at the last three quotes of the run, not the first three`() {
+        // Kotlin: three opening quotes, x, then FOUR closing quotes is a raw string whose content
+        // is x plus one quote. Closing at the first three returns control to code context one
+        // quote early, and that stray quote opens the next phantom literal — the same class of bug
+        // CommentBalanceTest documents for the stripper.
+        val src = TRIPLE + "x" + TRIPLE + "\""
+        assertEquals(src.length, literalEnd(src, 0, '"'))
+        // One and two quotes inside a raw string are content, not a terminator.
+        val inner = TRIPLE + "a" + "\"" + "b" + TRIPLE
+        assertEquals(inner.length, literalEnd(inner, 0, '"'))
+    }
+
+    @Test
+    fun `the scanner walks the interpolated quoting shape that hung the runner`() {
+        // Brand.kt lines 140-142 are the construct that hung both runs: a double-quoted string
+        // whose interpolation calls string("…") and closes on the NEXT line, so line 141 carries an
+        // odd number of quotes and the naive walk opens a phantom literal there. Scanning the real
+        // file must return — and return with code left in it, not with the file eaten as a string.
+        val brand = File(repoRoot, "App/app/src/main/kotlin/com/raddstream/app/brand/Brand.kt")
+        assertTrue("Brand.kt moved — the regression this case guards is no longer represented", brand.isFile)
+        val stripped = withoutComments(brand.readText())
+        val declared = functions(stripped).map { it.first }
+        assertTrue(
+            "the walk lost Brand.kt's own declarations, so it mis-scanned its literals: $declared",
+            declared.contains("load"),
+        )
+        assertTrue(
+            "only comments may be removed; a code token must still be present",
+            stripped.contains("BuildConfig"),
+        )
+    }
+
+    /**
      * Every place in [code] where a digest is computed inside a function that also handles a
      * phone, plus every live use of the public namespace. Reported as `file: function: evidence`.
      *
@@ -308,21 +394,57 @@ class PhoneCredentialGuardTest {
         return out.toString()
     }
 
-    /** Index just past the literal starting at [start]; tolerant of an unterminated one. */
+    /**
+     * Index just past the literal starting at [start], tolerant of an unterminated one.
+     *
+     * Two properties, both load-bearing, and neither was true of the first version of this
+     * function — which cost two hosted CI runs their entire 45-minute budget:
+     *  - **It always advances.** `end > start` for every input, so no caller's `while` can spin.
+     *    The old version returned `j` unchanged for a `"` that reached a newline, and a double
+     *    quote is *legal* inside a Kotlin string, so an interpolated `…"${ string("x") }…`
+     *    desynced the walk into a phantom string at end of line and hung the test task forever.
+     *  - **A single-quoted literal never crosses a newline.** Kotlin will not compile a `"…` with
+     *    a raw break in it, so stopping at the newline is at worst one line of mis-scan; the
+     *    alternative is swallowing the rest of the file, and after it, every function boundary.
+     *    This is the same terminating shape `ProviderPageScreenTest.codeOf` already uses.
+     */
     private fun literalEnd(text: String, start: Int, quote: Char): Int {
+        val end = scanLiteralEnd(text, start, quote)
+        check(end > start) {
+            "literal scanner made no progress at index $start of " +
+                text.substring(start, minOf(start + 40, text.length))
+        }
+        return end
+    }
+
+    private fun scanLiteralEnd(text: String, start: Int, quote: Char): Int {
         if (quote == '"' && text.startsWith(TRIPLE, start)) {
             var j = start + TRIPLE.length
-            while (j < text.length && !text.startsWith(TRIPLE, j)) j++
-            return minOf(j + TRIPLE.length, text.length)
+            while (j < text.length) {
+                if (text[j] != '"') {
+                    j++
+                    continue
+                }
+                // Kotlin closes a raw string at the LAST three quotes of a maximal run, so
+                // """x"""" is a raw string holding `x"`. Closing at the first three leaks a quote
+                // back into "code" context — the exact bug `CommentBalanceTest` records — and one
+                // or two quotes are content, not a terminator.
+                var run = j
+                while (run < text.length && text[run] == '"') run++
+                if (run - j >= TRIPLE.length) return run
+                j = run
+            }
+            return text.length
         }
         var j = start + 1
         while (j < text.length) {
-            when (text[j]) {
-                '\\' -> j += 2
-                quote -> return j + 1
-                '\n' -> if (quote == '\'') return j
-                else -> j++
+            val c = text[j]
+            if (c == '\\') {
+                j += 2
+                continue
             }
+            if (c == quote || c == '\n') return minOf(j + 1, text.length)
+            j++
         }
         return text.length
     }
