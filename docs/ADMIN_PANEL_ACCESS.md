@@ -31,6 +31,14 @@ Neither is bound beyond loopback and nginx forwards neither.
    ssh -N -L 8081:127.0.0.1:8081 ubuntu@92.4.95.252
    ```
 
+   Prerequisites, measured on this box rather than assumed: `AllowTcpForwarding` is **not set** in
+   `/etc/ssh/sshd_config` or in `sshd_config.d/` (the only drop-in,
+   `60-cloudimg-settings.conf`, sets `PasswordAuthentication no`), so it is at OpenSSH's default of
+   `yes` and the forward is permitted. But key authentication is the **only** method — the owner must
+   connect with the same private key the box was provisioned with; a password will not work. And
+   `ss -Hltnp` confirms both ports are bound to `127.0.0.1` only, from one `python3` process
+   (pid 1361081, fds 9 and 10), which is why the tunnel is required at all.
+
    Then in your browser: `http://127.0.0.1:8081/` for the dashboard, `http://127.0.0.1:8081/admin`
    for the token-gated operator panel. **Do not** try `http://92.4.95.252/admin` — that is the
    code-server login, and it is not our panel.
