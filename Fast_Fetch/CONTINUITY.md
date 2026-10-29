@@ -2422,3 +2422,55 @@ processes had taken the box under 2,500 MB. Vault at that point:
 205 watch_links / 0 download_links / 205 unverified. The queue keeps the
 remaining 5,420 pages untouched; the crawl resumes when MemAvailable is back
 above the floor, and the five fleet numbers are reported only when it is drained.
+
+---
+
+### Session — Qoder (Oracle VM, account5) — 2026-10-29 — Q5-PATTERN-SPLIT
+
+**Token.** Q5-PATTERN-SPLIT-DECISION. Executed the owner's per-word decision and shipped
+it to both refs. `092bc35` is live on `refs/heads/master` and `refs/heads/main`; **Backend
+CI is `completed success`** on that sha (the authoritative gate).
+
+**The change.** A bare word in a title is judged by sampling its live rows, not the
+dictionary. Sampled 12 each: `adult` 10/12 real (studio "Adult Short Film"), `naughty`
+13/14 real → KEEP. `hunters` 0/12 and `rabbit` 0/12 → every hit was a mainstream work
+(KPop Demon Hunters, Were-Rabbit, 1001 Rabbit Tales, Rabbit School, Beast Hunters, Holy
+Night) → REMOVE. `xxx`/`blacked`/`vixen` became `ADULT_TITLE_SUGGESTIONS`: a single
+suggestion may never hide a work; it flags only with an adult `source_site` or two
+independent suggestions agreeing. Removed the two tokens across the engine list and every
+per-site scraper list (18 files). Word-boundary `\b` anchors untouched — `Adults` and the
+removed words never fired on Trollhunters / Rabbits Run precisely because of them.
+
+**Site authority stays empty and measured.** `ADULT_SOURCE_SITES` is a `frozenset()` of
+size 0: one read-only `GROUP BY source_site` over `merged_catalog_20261025.db` (confirmed
+150,799 posts / 15,068 flagged) put the highest per-site rate at 10xflix 36.25%, hdtvb
+32.77%, 7starhd 32.24% — no host approaches a whole-catalog 100%, and all 31 `source_site`
+values are general pirate catalogs. The studio authorities (RealityKings/Tushy/Wankz/…)
+live inside titles, never as a `source_site`. So provenance hides nothing until a measured
+~100% host is added; reputation is not evidence.
+
+**Tests.** Corrected `AdultContentFilterTests` (its "Vixen Desires" hiding fixture relied
+on a now-suggestion word; it uses a strong studio token instead). Added
+`AdultPatternSplitDecisionTests` (samples the clean/flagged titles, the two-suggestion
+corroboration, the empty fail-closed site set, and a whole-tree AST sweep proving
+`hunters`/`rabbit` survive in no `*adult*` list). Written the split + method into
+`Fast_Fetch/AGENTS.md` §6b.
+
+**Gate.** Ran CI's 15 modules + `importers/test_host_resolvers.py` from the clean
+worktree. The host was saturated by a *foreign* lane (a 6.4 GB `preapply_*.db` backup that
+ran ~5,945 s, plus a `--yolo` agent and a Gradle build), so the heavy projection suites
+could not finish inside wall-clock bounds locally. Banked green with zero failures:
+vidout 6, release_descriptor 24, link_health 57, link_state 28, evidence_writeback 12,
+redact 58, tiers 23, site_scout 25, provenance_stamping 12, backup_manager 14,
+host_resolvers 171, merge_catalogs 5. `test_database.py` completed exit 0 standalone;
+`catalog_v2` reached 225 passes / 0 errors before a contention timeout (rc=124, not a test
+failure). `api_v2` / `catalog_api` / `catalog_v2` set `is_18_plus=1` explicitly and use
+"Adult …" titles, so this patch cannot alter them — and CI proved all of them green anyway.
+
+**Blocked, reported honestly.** No `--apply` run. This changes future writes only; un-
+hiding the already-flagged mainstream rows is `audit_adult_flags.py --apply` and belongs to
+the owner's verbatim authorization. `--projection` is confirmed to cover BOTH the
+`cat_works.is_18_plus` roll-up (bounded by the `audit_freed` temp table) AND retirement of
+all 8 adult-excluded stats stamps. Item D (per-key `MAX(is_18_plus)` reconciliation with
+title+year agreement) and the 2,684 no-pattern / 1,753 no-stored-evidence rows remain
+vault-resolved, not guessed.
