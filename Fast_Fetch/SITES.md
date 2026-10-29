@@ -1237,3 +1237,37 @@ Schedule this site as a **periodic metadata top-up**, never as a bulk crawl.
 No `sources` row may be written for a print we have never resolved.
 Do not list it as scraped-and-playable anywhere.
 
+**Re-measured 2026-10-30 02:26, because the vault read "44 works / 0 releases /
+0 sources" and that had to be explained rather than assumed.** Two bounded reads:
+one `GET /detail/prison-break-mdR9oayBqn3` (200, 409,998 B) and one
+`GET /wefeed-h5api-bff/detail?subjectId=2835060171381039112` (200, 39,788 B).
+Both surfaces say the same thing: `detailUrl`, `sniffUrl` and `sourceUrl` are
+empty strings, `dl` is `null`, the only `.mp4` is `trailer.videoAddress.url`
+(126 s, 848×476), and `resource` carries `seasons[].resolutions[]` (360/480/
+720/1080 with per-season `epNum`) plus `"source": "ailok.pe"` and no URL.
+So the pipeline does **fetch** the page and **parse** it — the 44 posted rows
+carry page-derived `raw_meta` (`trailer_url`, `subjectId`), and 6 rows are
+`scraped=1` — and the media regex matches the only mp4 present, which is the
+trailer that `NONPLAYABLE_KEYS` prunes. Nothing playable was fetched and
+discarded; none was served.
+
+**The defect was shape loss, not a missed link.** The parser kept the tiers only
+as `raw_meta.available_resolutions`, so a work whose page lists twenty declared
+renditions was stored as `0 releases` — indistinguishable from a site with no
+structure at all. Fixed in `import_themoviebox.py`: one release per declared
+(season, tier) with an **empty** source list and `raw_meta.episodes`;
+a populated `dl`-shaped mirror field is stored with its status (`dead` kept, per
+Zero Data Loss); `metadata_only` is now counted by absent **sources**, not absent
+releases. `Fast_Fetch/importers/test_themoviebox_links.py` (7 tests, offline,
+0.02 s) pins all four rules, and its `CAPTURED_RESOURCE` is the `resource` block
+copied verbatim from the page above. The 410 KB HTML is not committed (size and
+third-party content); it lives at `/tmp/moviebox_capture/sample_detail.html` on this
+host.
+
+**What this does and does not change on disk.** Nothing yet: the staging vault
+still holds the 44 rows written by the old code, so its `0 releases, 0 sources`
+describes that file, not the new parser. A bounded re-crawl under the gate
+(load < 4, MemAvailable > 4000 MB, no other crawler, explicit `--limit`) is
+queued in CONTINUITY.md. Even then, expect releases > 0 and **sources = 0** —
+this site has published no playable URL on either surface measured, and a
+resolver for the authenticated player is a different problem.

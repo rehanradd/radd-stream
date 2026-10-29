@@ -30,6 +30,15 @@ and calls the row ``active``. That is the defect this file's media rules exist
 to prevent: the trailer subtree is pruned from the media walk, and a work with no
 print is recorded as **metadata-only**, never as a playable source.
 
+Metadata-only does not mean structureless, and that distinction was the defect
+measured 2026-10-30: 44 staged works reported ``0 releases / 0 sources`` while
+every detail page listed its renditions (``resource.seasons[].resolutions[]``,
+360/480/720/1080 with per-season episode counts). Those tiers are now stored as
+releases with **empty source lists** — a declared print whose URL is not public
+— and any populated ``dl``-shaped mirror field is stored with its status
+(``dead`` included). Nothing is invented: a tier with no URL has no source row,
+and a page whose payload has neither still yields the post with zero sources.
+
 Discovery does not use a sitemap either. ``/sitemap.xml`` is a real HTTP 404 on
 this site (measured: 12 connections, one answered 404 with a full HTML page), so
 the queued-from-sitemap path would have ingested nothing. The site's own catalog
@@ -169,6 +178,17 @@ ART_HOST_HINTS = ("aoneroom.com",)
 #: Payload subtrees that name an image or a preview rather than the work's print.
 #: A media URL found under one of these is never a playable source.
 NONPLAYABLE_KEYS = frozenset({"trailer", "stills", "gif", "preview"})
+
+#: Mirrors the payload can name instead of a stream. Measured 2026-10-30 on both
+#: surfaces (item page and `/wefeed-h5api-bff/detail`): `dl` is present and
+#: ``null``, so no populated example has been captured — but the field is the
+#: site's own, and dropping a populated one silently is what the Zero Data Loss
+#: rule forbids. A mirror is stored with its status, dead or alive.
+MIRROR_KEYS = ("dl", "downloads", "downloadList", "mirrors")
+MIRROR_URL_KEYS = ("url", "downUrl", "link", "downloadUrl", "src")
+PLAYBACK_DOWNLOAD = "download"
+DEAD_STATUS_TOKENS = frozenset({"dead", "down", "expired", "invalid", "removed",
+                                "unavailable", "offline", "0", "false"})
 
 STOP_REQUESTED = False
 _RATE_LIMITED = threading.Event()
@@ -630,6 +650,186 @@ def _resource_resolutions(node) -> list[int]:
     return sorted(tiers, reverse=True)
 
 
+def _resource_renditions(root) -> list[dict]:
+    """Every print tier the payload declares: season, resolution, episode count.
+
+    Measured 2026-10-30 on both surfaces: `resource.seasons[].resolutions[]`
+    names 360/480/720/1080 with a per-season ``epNum``, while
+    ``detailUrl``/``sniffUrl``/``sourceUrl`` are empty strings and ``dl`` is
+    null. Dropping the tiers left the vault reporting ``0 releases`` for a work
+    whose four renditions the page had just listed, which reads as "this site
+    has nothing" instead of "four prints exist and none of their URLs is
+    published". Each tier therefore becomes a release with an empty source list.
+    """
+    out: list[dict] = []
+    seen = set()
+
+    def walk(node):
+        if isinstance(node, dict):
+            seasons = node.get("seasons")
+            if isinstance(seasons, list):
+                host = _as_text(node.get("source"))
+                for season in seasons:
+                    if not isinstance(season, dict):
+                        continue
+                    se = _positive_int(season.get("se"))
+                    for entry in season.get("resolutions") or []:
+                        if not isinstance(entry, dict):
+                            continue
+                        resolution = _positive_int(entry.get("resolution"))
+                        if resolution is None:
+                            continue
+                        episodes = _positive_int(entry.get("epNum"))
+                        key = (se, resolution, episodes)
+                        if key in seen:
+                            continue
+                        seen.add(key)
+                        out.append({"season": se, "resolution": resolution,
+                                    "episodes": episodes, "source_host": host})
+            for value in node.values():
+                if isinstance(value, (dict, list)):
+                    walk(value)
+        elif isinstance(node, list):
+            for value in node:
+                if isinstance(value, (dict, list)):
+                    walk(value)
+
+    walk(root)
+    return out
+
+
+def _declared_releases(renditions: list[dict], title: str,
+                       audio: str | None) -> list[dict]:
+    """One release per declared rendition, with no source: the URL is not public."""
+    releases = []
+    for item in renditions:
+        quality = f"{item['resolution']}p"
+        label = title
+        if item["season"] is not None:
+            label += f" S{item['season']:02d}"
+        releases.append({
+            "label": f"{label} {quality}".strip(),
+            "quality": quality,
+            "resolution": str(item["resolution"]),
+            "size_bytes": None,
+            "codec": None,
+            "season": item["season"],
+            "episode": None,
+            "audio": audio,
+            "bridge_url": None,
+            "raw_meta": {"declared": True, "episodes": item["episodes"],
+                         "source_host": item["source_host"], "play_url": None},
+            "sources": [],
+        })
+    return releases
+
+
+def _mirror_source(url: str, entry: dict) -> dict:
+    raw_status = entry.get("status") or entry.get("state")
+    available = entry.get("available")
+    dead = available is False or (
+        isinstance(raw_status, str)
+        and raw_status.strip().lower() in DEAD_STATUS_TOKENS)
+    name = url.rsplit("/", 1)[-1].split("?", 1)[0] or url
+    return {
+        "source_name": SERVICE,
+        "service": SERVICE,
+        "service_tier": SERVICE_TIER,
+        "resource_id": name,
+        "source_url": url,
+        "final_url": url,
+        "playback_type": PLAYBACK_DOWNLOAD,
+        "status": "dead" if dead else "active",
+        "is_temporary": 0,
+        "quality": _quality_from_url(url),
+        "mime_type": _mime_type(url),
+        "last_checked": None,
+        "raw_meta": {"url": url, "declared_status": raw_status,
+                      "available": available},
+    }
+
+
+def _mirror_sources(root) -> list[dict]:
+    """Download mirrors under the site's own ``dl``-shaped fields, dead or alive."""
+    out: list[dict] = []
+
+    def add(value):
+        entries = value if isinstance(value, list) else [value]
+        for entry in entries:
+            if isinstance(entry, str):
+                if entry.startswith(("http://", "https://")):
+                    out.append(_mirror_source(entry, {}))
+            elif isinstance(entry, dict):
+                url = next((_as_text(entry.get(k)) for k in MIRROR_URL_KEYS
+                            if _as_text(entry.get(k))), None)
+                if url and url.startswith(("http://", "https://")):
+                    out.append(_mirror_source(url, entry))
+
+    def walk(node):
+        if isinstance(node, dict):
+            for key in MIRROR_KEYS:
+                if key in node:
+                    add(node[key])
+            for value in node.values():
+                if isinstance(value, (dict, list)):
+                    walk(value)
+        elif isinstance(node, list):
+            for value in node:
+                if isinstance(value, (dict, list)):
+                    walk(value)
+
+    walk(root)
+    seen, ordered = set(), []
+    for src in out:
+        key = (src["source_url"], src["status"])
+        if key not in seen:
+            seen.add(key)
+            ordered.append(src)
+    return ordered
+
+
+def _attach_mirrors(record: dict, mirrors: list[dict]) -> None:
+    """Bind each mirror to the release of its quality; never invent a quality."""
+    by_quality: dict = {}
+    for rel in record["releases"]:
+        if rel.get("quality"):
+            by_quality.setdefault(rel["quality"], rel)
+    for src in mirrors:
+        target = by_quality.get(src.get("quality"))
+        if target is None and record["releases"]:
+            target = record["releases"][0]
+        if target is None:
+            target = {
+                "label": f"{record['title']} download",
+                "quality": src.get("quality"), "resolution": None,
+                "size_bytes": None, "codec": None, "season": None,
+                "episode": None, "audio": None, "bridge_url": None,
+                "raw_meta": {"declared": True}, "sources": [],
+            }
+            record["releases"].append(target)
+        target["sources"].append(src)
+
+
+def _enrich_with_declared_media(record: dict, root) -> None:
+    """Add declared renditions and mirrors when the record has no playable print.
+
+    Used by both ingest paths: ``parse_page`` for a detail page (only when the
+    payload names one work, so a sibling card's tiers cannot leak in) and
+    ``harvest_catalog`` for a single feed subject.
+    """
+    tiers = _resource_resolutions(root)
+    if tiers:
+        record["raw_meta"]["available_resolutions"] = tiers
+    if not record["releases"]:
+        renditions = _resource_renditions(root)
+        if renditions:
+            record["releases"] = _declared_releases(
+                renditions, record["title"], record["languages"])
+    mirrors = _mirror_sources(root)
+    if mirrors:
+        _attach_mirrors(record, mirrors)
+
+
 def _work_anchor(item: dict, ancestors: list) -> dict:
     """The nearest dict that names a work, skipping episode/season containers.
 
@@ -954,9 +1154,10 @@ def parse_page(html: str, page_url: str) -> list[dict]:
 
     A normal detail page yields exactly one; a listing payload that happens to
     carry several works yields one per work. Returns an empty list on a page with
-    no ``__NUXT_DATA__`` and no titled subject. A record with an empty ``releases``
-    list is a valid outcome and means *metadata only, no playable print found* —
-    it is never a trailer wearing a print.
+    no ``__NUXT_DATA__`` and no titled subject. A record with empty release
+    ``sources`` is a valid outcome and means *no playable URL was published* — the
+    declared renditions are still listed as releases, and it is never a trailer
+    wearing a print.
     """
     data = extract_nuxt_payload(html)
     if data is None:
@@ -990,9 +1191,10 @@ def parse_page(html: str, page_url: str) -> list[dict]:
     # honest when the page describes one work; on a multi-work payload a sibling
     # card's tiers would be claimed as this title's capability.
     if len(records) == 1:
-        tiers = _resource_resolutions(data)
-        if tiers:
-            records[0]["raw_meta"]["available_resolutions"] = tiers
+        # A page with no playable URL still declares its renditions; storing them
+        # as releases with empty sources keeps that gap visible (the owner's
+        # complaint was a vault reading "0 releases" for works that list four).
+        _enrich_with_declared_media(records[0], data)
     return records
 
 
@@ -1285,10 +1487,10 @@ def harvest_catalog(db_path: Path | str = DEFAULT_DB_PATH, limit: int | None = N
     This is the ingest that MovieBox can honestly support today: the feed carries
     the full subject (title, year, run time, genre, cover, rating, subtitles,
     dub list, adult flags) and the playable print is nowhere in it. So a harvest
-    produces **metadata-only** rows — no ``releases``, no ``sources``, and no
-    trailer recorded as if it were the film. ``crawl`` remains for the detail
-    pages, which add season/episode structure and any print the site later
-    exposes in HTML.
+    produces **metadata-only** rows — no ``sources``, no trailer recorded as if it
+    were the film — plus one release per rendition the subject declares. ``crawl``
+    remains for the detail pages, which add season/episode structure and any
+    print the site later exposes in HTML.
     """
     db_path = Path(db_path)
     db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1308,6 +1510,7 @@ def harvest_catalog(db_path: Path | str = DEFAULT_DB_PATH, limit: int | None = N
             if not record:
                 totals["skipped_type"] += 1
                 continue
+            _enrich_with_declared_media(record, item)
             if record["canonical_key"] in known:
                 totals["duplicates"] += 1
                 continue
@@ -1729,7 +1932,10 @@ def crawl_pending(limit: int | None = None, db_path: Path | str = DEFAULT_DB_PAT
         # failure: the play URL is resolved client-side. It is written as a
         # metadata row and marked crawled, so a re-run does not keep spending
         # connections on it looking for a stream the page never contains.
-        if all(not rec["releases"] for rec in records):
+        # "No media" is decided by sources, not releases: declared renditions
+        # carry no URL and are still metadata-only.
+        if all(not any(rel["sources"] for rel in rec["releases"])
+               for rec in records):
             totals["metadata_only"] += 1
         else:
             totals["with_media"] += 1
@@ -1880,13 +2086,15 @@ def stats(db_path: Path | str = DEFAULT_DB_PATH) -> dict:
             "parked": q("SELECT COUNT(*) FROM sitemap_cache WHERE scraped = -1"),
             "crawled": q("SELECT COUNT(*) FROM sitemap_cache WHERE scraped = 1"),
             "sitemap_rows": q("SELECT COUNT(*) FROM sitemap_cache"),
-            # A work with no release is this site's normal shape, not a broken row:
-            # its print exists but is resolved by a client-side call. Counting them
-            # separately is what stops a merge from treating "no URL yet" as
-            # "nothing here" — or as a playable title.
+            # A work with no *source* is this site's normal shape, not a broken
+            # row: its prints are declared by tier but their URLs are resolved by
+            # a client-side call. Counting by sources rather than releases is
+            # what stops a merge from treating "four tiers, no URL" as a
+            # playable title — or as a work that does not exist.
             "metadata_only_posts": q(
                 "SELECT COUNT(*) FROM posts p WHERE NOT EXISTS ("
-                " SELECT 1 FROM releases r WHERE r.post_canonical_key = p.canonical_key)"),
+                " SELECT 1 FROM sources s JOIN releases r ON s.release_id = r.id"
+                " WHERE r.post_canonical_key = p.canonical_key)"),
             "trailer_evidence_posts": q(
                 "SELECT COUNT(*) FROM posts WHERE raw_meta LIKE '%trailer_url%'"),
         }
