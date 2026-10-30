@@ -117,3 +117,40 @@ The newest 14 are listed here; the complete index (all 52) is in `Fast_Fetch/che
 - 🎯 Current Operational State → [`checkpoints/20261030-pre-diet-state-and-roadmap.md`](checkpoints/20261030-pre-diet-state-and-roadmap.md)
 
 - 📌 Next Action Items (Production & App Layer Roadmap) → [`checkpoints/20261030-pre-diet-state-and-roadmap.md`](checkpoints/20261030-pre-diet-state-and-roadmap.md)
+
+## 2026-10-31 — qoder1 (supervisor): fleet dispatch, the live-tree hazard census, and two rescues
+
+- **Load discipline.** The box went 0.85 → 12.5 in under ten minutes with four worker sessions 
+  generating at once; no test, crawl or Gradle was responsible — the contention was nine 
+  concurrent `qodercli` processes on one vCPU. An execution hold was broadcast to qoder2-qoder5 
+  at that peak and no worker has run a module since. Nothing in this entry is a green gate: 
+  **no test was executed by this session.**
+- **Branches awaiting review, all one commit ahead of `6a441ec`:** `q2-dub-collision` `b37b74c\ 
+  (read-only index-only census, 13 offline tests), `q3-adultkey-net` `765f297` (WIP: the key net 
+  and every ledger emitter converted, self-declared zero verification), `q4-deeplink-20261030` 
+  `6881570` (re-measurement and plan only), `q5-ci-20261030` `639e126` (CI inventory + doc claims).
+- **Rescued (this branch, `1c83e1c` + `a2cbd7c`, pushed).** Six App sources and two guard-test 
+  files plus `build_mp4moviez.py` and the whole `RaddRelay/` project existed only as untracked 
+  files inside `/opt/radd-stream`; Session 31's instant-start / `setSeekParameters` / 
+  `manifestMimeType` implementation existed there as uncommitted edits and is on no pushed 
+  branch, so it is stored as `docs/rescue/20261031-live-tree-player-cache.patch` rather than 
+  applied. `import_themoviebox.py` was **not** rescued: the live copy is a superseded draft 
+  (195/1258 against trunk) and committing it would have reverted the pushed importer.
+- **Hazards recorded, not silently repaired.** (1) `/opt/radd-stream` carries 61 uncommitted 
+  paths, its `viewer.py` sits 473 lines behind trunk, and `AdCadence.kt` plus 
+  `AdCadenceGovernor.kt` are absent there while trunk has them — that tree cannot build the app 
+  and the service loads it on its next start. (2) `RaddRelay/` was created **inside** the live 
+  tree by qoder2 at 00:14; it has been told to move it to `/tmp/q2_relay`. (3) Two session logs 
+  in `App/AGENTS.md` (Session 39 `Q4-PLAYER-ZERO-BUFFER`, Session 40 `Q4-DEEPLINK-HONESTY`) name 
+  test sources — `QualityTierProbe.kt`, `BufferGuardTest.kt`, `GestureBudgetTest.kt`, 
+  `PlayerPerfProbeTest.kt`, `ShareLinkHonestyTest.kt`, `DeepLinkCensusTest.kt`, 
+  `AdultDeepLinkGuardTest.kt` — that exist nowhere on this host, and one of them reports a 
+  691/90 gate; a log written from a plan rather than a result. (4) qoder4's session was stuck in 
+  a model-refusal loop and was cleared. (5) qoder5's pane emits corrupted escape sequences and 
+  needs a relaunch. (6) An orphaned background agent, pid 1845966, runs with cwd inside the live 
+  tree. (7) The owner's dispatch named `/tmp/q3_backend_work` and `/tmp/q4_player_work`: both 
+  exist and both are at zero commits, because those two lanes were mid-flight on other briefs.
+- **Next.** Review the four branch diffs; run `test_database.py` and `test_vidout.py` against 
+  `q3-adultkey-net` only once load is under 3.5 and one worker at a time; decide whether the 
+  Session 39/40 logs are retracted or the code behind them is recovered; land nothing that has 
+  not been executed.
