@@ -61,12 +61,12 @@ Do not merge, do not touch production, do not delete any historical text — mov
 
 | file | before (`dc73ac7`) | after (rebased onto trunk `4fe6f65`) | target |
 |---|---|---|---|
-| `Fast_Fetch/CONTINUITY.md` | 277,009 | **8,819** | ≤ 20-line index ✅ |
+| `Fast_Fetch/CONTINUITY.md` | 277,009 | **8,846** | ≤ 20-line index ✅ |
 | `docs/SESSION_CHECKPOINT.md` | 248,840 | **5,426** | ≤ 20-line index ✅ |
 | `App/AGENTS.md` | 177,371 | **11,993** | ≤ 10 KB — missed by 2 KB |
 | `Fast_Fetch/AGENTS.md` | 38,909 | **13,668** | ≤ 8 KB — missed |
 | root `AGENTS.md` | 37,670 | **28,746** | ≤ 8 KB — missed |
-| **the five, total** | **779,799** | **68,652 (−91.2 %)** | |
+| **the five, total** | **779,799** | **68,679 (−91.2 %)** | |
 
 (The two logs are bigger here than at `42464cb` — 65,714 B — because the rebase absorbed trunk's
 three post-rotation doc edits into the index layout: q4's `[Q4-SAFETY]` halt-band entry, q2's
@@ -128,8 +128,8 @@ either rewording law (forbidden) or relocating it out of the auto-loaded file (a
 brief's own LAW rule). So I kept law verbatim, moved everything that is evidence, and set the guard
 test's ceilings at the measured floor + headroom (root 32 KB, `Fast_Fetch/` 18 KB, `App/` 15 KB).
 
-**What the fleet actually got:** the five files a lane auto-loads went **779,799 B → 68,652 B
-(−91.2 %)**, ≈ 45 k tokens → ≈ 17 k (68,652 B of the 1.92 MB of Markdown). The remaining reduction
+**What the fleet actually got:** the five files a lane auto-loads went **779,799 B → 68,679 B
+(−91.2 %)**, ≈ 45 k tokens → ≈ 17 k (68,679 B of the 1.92 MB of Markdown). The remaining reduction
 available is *de-duplication*, not trimming: root
 `AGENTS.md` §"Important Rules" is restated in `Fast_Fetch/AGENTS.md` §11 and `App/AGENTS.md`, and
 `Fast_Fetch/AGENTS.md` §6 repeats the adult law. Say the word and I'll make root the single home for
