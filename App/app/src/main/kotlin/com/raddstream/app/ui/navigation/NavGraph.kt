@@ -13,6 +13,7 @@ import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -59,15 +60,32 @@ private data class BottomNavItem(
  * themselves stay registered even for a switched-off feature — a back stack that already holds
  * that screen must not name a destination the graph cannot resolve, and a kept file stays
  * playable no matter what the board says about making new ones.
+ *
+ * [openRequest] is a video file another app asked us to play, already judged by
+ * [LocalVideoOpen]; [onOpenConsumed] reports that it has been put on the back stack. The graph
+ * does not decide anything about the file — it routes what the activity handed over, on the same
+ * `player_local` route a finished download uses.
  */
 @Composable
 fun RaddStreamNavGraph(
     navController: NavHostController = rememberNavController(),
     startDestination: String,
     features: RemoteFeatures = RemoteFeatures(),
+    openRequest: LocalVideoOpen? = null,
+    onOpenConsumed: () -> Unit = {},
 ) {
     val navBackStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = navBackStackEntry?.destination?.route
+
+    // Exactly once per request: the nonce is what makes the same file tapped twice a second
+    // request, and clearing it here is what stops a later recomposition from pushing a duplicate
+    // copy of the player onto the stack. Single-top for the same reason — a viewer who opens the
+    // file that is already playing should stay on it, not stack a second one behind the first.
+    LaunchedEffect(openRequest) {
+        val request = openRequest ?: return@LaunchedEffect
+        navController.navigate(request.route) { launchSingleTop = true }
+        onOpenConsumed()
+    }
 
     val bottomNavItems = buildList {
         add(BottomNavItem("Home", Screen.Home.route, Icons.Default.Home))

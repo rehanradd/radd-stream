@@ -393,3 +393,93 @@ untouched, no device claim, nothing applied to production.
 - Verified secrets presence via GitHub API `GET /repos/rehanradd/radd-stream/actions/secrets` (returns `total_count: 4`).
 - Created and pushed Git tag `v1.0.0` to trigger `.github/workflows/release.yml` (`🚀 Release — Sign & Publish APK + AAB`).
 - Updated `AGENTS.md` and `App/AGENTS.md` to reflect that release signing is no longer blocked.
+
+---
+
+### Session 27 — Zero-Buffering Load Control, Universal Manifest Typing, Local File Playback (2026-10-31)
+
+**Agent:** Qoder (q4 player lane, worktree `/tmp/q4_player_work` off `origin/master` tip `6a441ec`)
+**Status:** ⚠️ WRITTEN AND STATICALLY CHECKED — not compiled. Branch `q4-player-zero-buffer-20261031`; CI is this milestone's first judge.
+**Key Milestones:**
+- **Buffering policy has one owner.** New `player/PlayerBuffering.kt` holds the five numbers
+  (`MIN_BUFFER_MS=15_000`, `MAX_BUFFER_MS=50_000`, `BUFFER_FOR_PLAYBACK_MS=500`,
+  `BUFFER_FOR_PLAYBACK_AFTER_REBUFFER_MS=1_000`, `PRIORITIZE_TIME_OVER_SIZE=true`). They are one
+  file because `DefaultLoadControl.build()` *asserts their relationship at runtime* — a swapped
+  or mistyped pair is a crash at the first play on a phone, not a compile error.
+- `PlaybackService.kt` now builds that load control and installs it
+  (`.setLoadControl(loadControl())`), reading every duration from the owner and passing them to
+  the positional `setBufferDurationsMs(min, max, forPlayback, afterRebuffer)` in that order.
+  `setPrioritizeTimeOverSizeThresholds` is the owner's value, not a second literal.
+- **The real universal-source hole, found by measurement.** Our play addresses are extensionless
+  redirector URLs and `MediaItem` never declared a manifest type, so
+  `Util.inferContentTypeForUriAndMimeType` had nothing to match and HLS/DASH bytes reached the
+  *progressive* reader — `UnrecognizedInputFormatException`, no picture. New
+  `PlaybackMediaItemFactory.manifestMimeType(playback)` normalises the alias set (six HLS spellings
+  incl. `application/vnd.apple.mpegurl; charset=utf-8`, three DASH) to the two constants Media3
+  dispatches on, driven by `PlayBundle.isHls()`/the new `isDash()`; it is applied to the builder in
+  `build()`. Progressive mp4/mkv/webm are **deliberately not declared** — their extractors sniff
+  the bytes, and dictating a container there would be a worse second guess.
+- **Local file playback through the existing route.** `AndroidManifest.xml` gained a second VIEW
+  filter (`content` + `file`, `video/*`, no BROWSABLE); `MainActivity` reads the intent on both the
+  cold start and `onNewIntent` (the activity is already `singleTop`) and hands the four *string*
+  parts to the new pure rule `ui/navigation/LocalVideoOpen.kt`; `NavGraph` navigates the resulting
+  request exactly once per request via `LaunchedEffect(openRequest)` + `onOpenConsumed`. It reuses
+  `player_local/{uri}/{title}`, which `PlayerViewModel.startLocalUri` already plays.
+- Two refusals in that rule, both deliberate: **only `content`/`file` schemes**, because a manifest
+  MIME wildcard is an invitation and an app that could name `https://…` here would be pushing a
+  remote address past the server's stream handle — past the adult redaction, provenance and failover
+  that handle is the enforcement point for; and **the thing must be a video** by declared `video/`
+  type or a container the progressive readers know.
+- **Item 3 was already shipped** and this pass proved it rather than rebuilding it:
+  `GestureSettings(skipMs = 10_000L)`, `GestureMapper.onDoubleTap` → `SeekWithRipple`, PlayerScreen
+  lane A → `vm.seekBy` + `vm.showRipple`, lane C vertical drag → brightness on the left edge and
+  volume on the right, `DoubleTapRipple` pill with `Forward10`/`Replay10` and "±10s", 900 ms
+  nonce-keyed lifetime. The one unmet word in the request was *animation*: the pill now fades in
+  (`fadeIn(tween(120))`) and out (`fadeOut(tween(220))`) through `AnimatedVisibility`, holding the
+  last snapshot so the fading pill still names the side it was for, and reading the live value first
+  so a new tap never paints the previous pill.
+- **27 tests in 4 JVM suites**, each carrying positive controls so a scan that matches nothing
+  cannot go green: `PlayerBufferingTest` (4 — the Media3 inequalities, the 500 ms promise, the
+  owner/builder/order census over `src/main`, wired-vs-swapped-vs-prose fixtures),
+  `UniversalSourceTest` (7 — the alias truth table, the refusal to guess at
+  `application/x-mpegurls`/`video/vnd.mpegurl`, progressive → null, the applied-declaration scan and
+  the one-`MediaItem.Builder()` census), `LocalVideoOpenTest` (12 — accepts, refusals,
+  `%3A`/`%2F` decoding and the malformed-escape fallback, "Local video" for all-digit MediaStore
+  ids, the route round-trip that a slash in a URI must not turn into three route arguments, nonce
+  carriage, the 80-char cap, and the activity/graph wiring scans), `LocalVideoIntentCensusTest`
+  (4 — manifest schemes ↔ rule schemes compared in both directions with non-empty guards, no
+  network scheme on either side, and the route-registration census).
+- Diff: 7 files modified (+220/−18), 2 production files added (140 lines), 4 test files added
+  (765 lines).
+
+**What this session could NOT prove, stated plainly:**
+- **No build, no test run — nothing in this diff has been through a compiler.** `PlayerBuffering`'s
+  numbers are unvalidated on a device; Media3 constant spellings
+  (`MimeTypes.APPLICATION_M3U8`/`APPLICATION_MPD`) and the `androidx.compose.animation` imports are
+  assumed from what is already on the classpath elsewhere in this module (`HeroCarousel.kt`,
+  `CommonUi.kt`), not verified here. `:app:testDebugUnitTest`, `:app:lintDebug` and the
+  `UniversalSourceTest`/`LocalVideoOpenTest` scans are what will tell.
+- The wiring checks in `LocalVideoOpenTest` are **text scans of `MainActivity.kt` and `NavGraph.kt`**
+  with bounded-distance regexes and fixture controls. They prove the call shape exists; they do not
+  prove an Intent delivered on a phone plays a frame. `takeLocalVideoFrom` is never executed by a
+  JVM test — `Intent`/`Uri` are Android types and Robolectric cannot run on this arm64 host.
+- A local open is *queued*, not jumped to: `MainActivity`'s maintenance/spinner `when` block was left
+  untouched on purpose, so a file opened while the operator notice is up waits for the graph to
+  compose. Changing that pre-empts the pending deep-link/warm-start decision in the same files.
+- MediaStore URIs that carry no name in their path (`content://media/external/video/media/42`) open
+  as "Local video": reading the real display name is a provider query on the thread showing the
+  first frame, and the name is not worth that.
+- `ScreenSnapshotTest` and `PosterCardProvenanceTest` still run only on the hosted x86_64 runner, so
+  only CI can judge this branch's Compose surface.
+
+**Static checks run instead of a build:** a grep pass for mid-line block-comment openers in every
+touched file (none), and an odd-apostrophe scan over the diff — every flagged line is an English
+possessive inside a `//` or ` * ` comment, which `CommentBalanceTest` ignores; no code line and no
+backticked test name carries an unbalanced quote. The video-star sequence was never written inside a
+Kotlin block comment (the manifest note and the test fixtures say "video/star" or prose), which is
+the trap that fake-nests a comment there.
+
+**Rules kept:** no `Fast_Fetch/*.py` touched, no Gradle, no test module executed, no service
+restart, no nginx change, no tag, no `git add -A`, no merge, no credential in argv/URL/file/log,
+`/opt/radd-stream` never used as a workspace and never written, nothing pushed to `master`/`main`,
+branch push only.
