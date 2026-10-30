@@ -10,50 +10,13 @@
 ## 🗺️ Repo Map
 
 ```
-radd-stream/                        ← repo root
-│
-├── AGENTS.md                       ← THIS FILE — start here
-├── README.md                       ← public-facing project description
-├── DISCLAIMER.md                   ← legal / framing notice
-├── setup_check.py                  ← system sanity check for backend
-├── run.sh / run.bat                ← one-command launchers (backend)
-├── requirements.txt                ← empty (zero pip deps)
-├── .gitignore                      ← excludes local .replit, databases, build and cache files
-├── ORACLE_DEPLOYMENT.md             ← Oracle access, GitHub auth, and deployment runbook
-├── docs/
-│   ├── AI_HANDOFF_PROMPT.md         ← short prompt to resume in another AI tool/account
-│   ├── AGENT_BOOTSTRAP.md           ← project context and safe onboarding steps
-│   ├── PROJECT_MAP.md               ← verified locations, branches, CI, and server status
-│   └── SESSION_CHECKPOINT.md        ← concise cross-agent progress and next action
-│
-├── Fast_Fetch/                     ← 🐍 PYTHON BACKEND (data engine + REST API)
-│   ├── AGENTS.md                   ← deep backend-specific agent guide (read this for backend work)
-│   ├── DAO.md                      ← eternal mission directive
-│   ├── CONTINUITY.md               ← session log + milestone tracker (update every session)
-│   ├── API_V2.md                   ← catalog v2 data model + REST contract (read before designing any endpoint)
-│   ├── SITES.md                    ← per-site scraping reference
-│   ├── SETUP.md                    ← setup instructions for backend
-│   ├── ANDROID_INTEGRATION.md      ← how Android app consumes the backend
-│   ├── fast_fetch.py               ← MAIN ENGINE (6,513 lines, stdlib only)
-│   ├── viewer.py                   ← REST API + dashboard HTTP server
-│   ├── config.py                   ← project-level constants
-│   ├── test_database.py            ← 124 offline unit tests (measured 2026-10-29)
-│   ├── test_vidout.py              ← 6 VIDOUT-specific tests
-│   └── test_all_sites.py           ← live 10-site audit
-│
-└── App/                            ← 📱 ANDROID APP (Kotlin + Jetpack Compose)
-    ├── AGENTS.md                   ← deep app-specific agent guide (read this for app work)
-    ├── README.md                   ← app architecture overview
-    ├── .github/workflows/          ← nested here; GitHub requires repo-root .github/workflows
-    ├── docs/
-    │   ├── PLAN.md                 ← 3-phase feature roadmap
-    │   ├── TECH_STACK.md           ← Kotlin/Compose/Media3 rationale
-    │   └── BUILD_PLAN.md           ← full CI/CD strategy (no local Android Studio needed)
-    ├── design/
-    │   ├── DESIGN_SYSTEM.md        ← colors, fonts, spacing, components
-    │   └── SCREENS.md              ← ASCII wireframes for 7 screens (NavGraph registers 13 routes)
-    └── app/src/                    ← Gradle Android app source (Kotlin)
+AGENTS.md          ← THIS FILE: the law. Fast_Fetch/ ← 🐍 Python backend. App/ ← 📱 Android (Kotlin/Compose).
+docs/              ← SPEC + rotated LOG (SPEC_*.md, checkpoints/). Fast_Fetch/CONTINUITY.md and
+                     docs/SESSION_CHECKPOINT.md are now ≤ 20-line open-items indexes, not logs.
 ```
+
+The annotated inventory (every file, every doc, with what it holds) moved to
+[`docs/SPEC_REPO_MAP.md`](docs/SPEC_REPO_MAP.md). Read it when you need to know *where* something lives.
 
 ---
 
@@ -92,9 +55,6 @@ Describe the code's behavior accurately to users and tools. Do not disguise its 
   answers True for an unknown link id so a typo cannot play either — and by nginx, which allow-lists
   only the public routes. To a public client a flagged row is indistinguishable from a row that never
   existed: the same `not_found`, the same status code, no hint that a flag caused the denial.
-  Proved live on this host: `/api/v1/posts/159` (a flagged post) is 404 on loopback and at the public
-  edge, `/api/m3u?id=159` returns 0 bytes where `/api/m3u?id=158` returns a real playlist, and
-  `/api/m3u` is 403 at the edge.
   **One exception, deliberately, and it is not a user-facing display surface:** the operator panel.
   `DASHBOARD_HTML` (`viewer.py:739`) reads `/api/data`, which this process 404s on the public port,
   is served only on the loopback operator port, and 403s at the public edge; the trust boundary there
@@ -119,9 +79,6 @@ Describe the code's behavior accurately to users and tools. Do not disguise its 
   `generate_canonical_key(clean_title, year)` instead of the scraper's page slug, so two sites writing
   one film now write one key. Stored rows keep the key they were filed under — re-keying them touches
   ids `releases` reference and is its own reviewed migration.
-  `Fast_Fetch/backfill_adult_key.py` reconciles rows written before the law existed (report, then
-  `--apply`, then `--apply --projection`) and prints the public total before and after, refusing to
-  commit unless the total dropped by exactly the number of rows it flipped.
   **Residual, measured 2026-10-29 on the production catalog:** 953 works are flagged in the projection
   while 1,190 distinct ledger rows for the same title and year are still public under a *different*
   key (`suzume-2022` vs `suzume_2022`, `puli-2015` vs `puli_2015`), concentrated in filmyzilla (437),
@@ -142,26 +99,11 @@ Describe the code's behavior accurately to users and tools. Do not disguise its 
   `Fast_Fetch/audit_adult_flags.py` (report-by-default; writes require the owner's `--owner-go`) to
   see what a flag rule actually hides before shipping it. Production still carries the 7,663 until
   the owner runs that un-flag pass.
-  **The 7,663 is the wide measure; the ledger-text measure is narrower, and the difference matters
-  to anyone reading a candidate list.** One read-only pass over `posts` on the production catalog
-  (2026-10-29, `audit_adult_flags.classify`, no vaults) splits the 15,068 flagged rows into
-  **9,069 true-adult in their own stored text, 4,246 version-word-only, 1,753 with no pattern
-  evidence in the ledger at all** across 14,931 distinct `canonical_key`s. Only the 4,246 are
-  un-flag candidates — the rest of the owner's 7,663 count adult words that live outside
-  `title`/`clean_title`/`slug`/`url` (tags, `raw_meta`, site-wide rules), which the ledger alone
-  cannot see. Freeing them leaves **39 mixed keys** (one copy served, one still hidden) and 4 rows
-  are blocked by a true-adult sibling.
-  **Four patterns still hide mainstream works, and none of them was touched** because the standing
-  instruction was to weaken nothing else: `\bhunters\b` (128 rows, 127 matched by nothing else —
-  e.g. *KPop Demon Hunters*, *Transformers Prime: Beast Hunters – Predacons Rising*),
-  `\brabbit\b` (61, 56 — *Wallace & Gromit: The Curse of the Were-Rabbit*, *1001 Rabbit Tales*),
-  `\bnaughty\b` (169, 149) and `\badult\b` (1,480, 82 — *Shin-chan: The Adult Empire Strikes Back*).
-  By the rule above, a version word may not be a pattern; these four are not version words either,
-  but they name a genre noun, not a person, studio, or act, and each has a title in the catalog that
-  proves the false positive. Removing one is the owner's exposure decision, not an agent's — and
-  `audit_adult_flags.py` reports what each one hides before anyone writes.
   Nothing in this section weakens the public rule. A test that reaches a flagged row through any public
   route, or a flagged link through stream or download on either port, is P0.
+  The *evidence* behind this law — the live-host proof rows, `backfill_adult_key.py`'s apply procedure,
+  the wide-vs-ledger flag measures and the four contested tokens — moved to
+  [`docs/SPEC_ADULT_FLAG_EVIDENCE.md`](docs/SPEC_ADULT_FLAG_EVIDENCE.md). The law is above; the receipts are there.
 
 ---
 
@@ -221,11 +163,9 @@ Verify only whether the two configured variable names are present; never read or
 
 ## 🚦 Fleet Resource Guardrail — measured on this box 2026-10-30
 
-**This host has ONE vCPU** (`nproc` = 1). Measured at 01:30 with five agent lanes running:
-load average 10.2, core 91 % user / 1 % idle / 0 % wait, run queue 8–9. A 6-second
-`/proc/<pid>/stat` utime+stime delta attributed **167.7 % of the entire machine to the five
-`qodercli` lanes plus tmux and `jbd2`**, while `radd-stream` itself consumed **29.8 CPU-seconds
-across 2 h 10 min of uptime — about 0.4 % of a core**. We are the load; production is not.
+**This host has ONE vCPU** (`nproc` = 1) and the agent lanes are the load, not production. The 01:30
+measurement behind that sentence (load 10.2, 167.7 % of the machine attributed to five `qodercli` lanes
+while `radd-stream` used 0.4 % of a core) moved to [`docs/SPEC_AGENTS_MEASURED_NOTES.md`](docs/SPEC_AGENTS_MEASURED_NOTES.md).
 Full per-route costs are in [`docs/CAPACITY_MEASURED.md`](docs/CAPACITY_MEASURED.md).
 
 CPU saturation only adds latency. **Memory saturation is what kills this host** — it already has
@@ -269,30 +209,29 @@ rule is memory-led, not load-led:
 Every agent — no matter how short the session — MUST do this before ending:
 
 ### For Backend Sessions:
-1. Run CI's **25 `🧪` steps**, one invocation each — measured from backend run `40954291359`
-   (sha `396e476`, `completed success`): database, vidout, catalog_v2, release_descriptor,
-   link_health, link_state, evidence_writeback, api_v2, redact, tiers, catalog_api,
-   provenance_stamping, merge_catalogs, site_scout, backup_manager, usage_stats,
-   operator_isolation, media_search, migrate_search_indexes, bounded_ledger, project_readonly,
-   posts_query_plan, adult_twin_probe, link_sweep_budget, admin_panel. The older "17 modules /
-   791 tests at `9859b8a`" figure is historical — it was true then and is not the current list,
-   so do not quote it as if it were.
+1. **Run exactly the gate `.github/workflows/backend-ci.yml` runs — and count it correctly.**
+   Count the suites with `grep -c 'name: 🧪' .github/workflows/backend-ci.yml`, **never** with
+   `grep 'run: python3 -S'`: the latter silently undercounts, because a step written
+   `run: time python3 -S …` is still a suite (measured 2026-10-30 at `56e743b`: 26 `🧪` steps, 25
+   `python3 -S` matches — the missing one is `test_admin_panel.py`). The list itself is a snapshot
+   that grows; the workflow file is the only source of truth, so read it instead of quoting a number
+   from this file. The historical per-run module lists and test counts moved to
+   [`docs/SPEC_AGENTS_MEASURED_NOTES.md`](docs/SPEC_AGENTS_MEASURED_NOTES.md).
 2. `test_database.py` alone is **133** at the tip and `test_vidout.py` is 6/6 — but do not substitute that 3-module quick gate for item 1.
 3. Append a session log to `Fast_Fetch/CONTINUITY.md`
 4. Push with Git over HTTPS using the temporary askpass helper in [`ORACLE_DEPLOYMENT.md`](ORACLE_DEPLOYMENT.md); do not use the legacy per-file API push scripts
 
-**Run the gate in a worktree at the tip, not in `/opt/radd-stream`.** Measured 2026-10-29 18:55: the
-live tree is checked out at its own `bf9e565` and its `Fast_Fetch/test_database.py` contains **76**
-`def test_` methods, while the pushed tip (`6e54909`) contains **124**. Same command, two different
-gates, because `/opt/radd-stream` is a diverged older draft carrying other lanes' uncommitted edits
-(56 dirty paths right now, `AGENTS.md` staged). A "green" from the live tree is a weaker claim than
-CI's, and can silently test deleted code.
+**Run the gate in a worktree at the tip, never in `/opt/radd-stream`** — the live tree is a diverged
+older draft and a "green" from it is a weaker claim than CI's. The measurement that proved it is in
+[`docs/SPEC_AGENTS_MEASURED_NOTES.md`](docs/SPEC_AGENTS_MEASURED_NOTES.md).
 
 ### For App Sessions:
 1. Ensure Gradle builds pass locally OR wait for GitHub Actions green check
 2. Append a session log to `App/AGENTS.md` (Session History section)
 3. Push with Git over HTTPS using the temporary askpass helper in [`ORACLE_DEPLOYMENT.md`](ORACLE_DEPLOYMENT.md)
 4. Tag a release with `git tag vX.Y.Z && ...` if a milestone is complete
+   — **superseded by the Fleet Resource Guardrail rule 5: this is the owner's call alone, no agent
+   may create or push a tag, and CI cannot sign one today anyway (`/actions/secrets` is `[]`).**
 
 ---
 
@@ -303,8 +242,8 @@ CI's, and can silently test deleted code.
 | Backend: ingestion, SQLite catalog, resolver, REST API | ✅ **Deployed and running on this host** — `systemctl is-active radd-stream` → `active`, `fast_fetch.py serve --host 127.0.0.1:8080` behind Nginx | Complete |
 | Android App: server setup, metadata catalog, search | ✅ Implemented; device verification pending | Phase 1 |
 | Android App: details and playback | ✅ Implemented (Media3 playback, favorites, keeps, VIP screen); device verification pending | Phase 2 |
-| GitHub Actions | ✅ **Enabled and running** — `/repos/rehanradd/radd-stream/actions/permissions` returns `{"enabled": true, "allowed_actions": "all"}` (measured 2026-10-29 03:54 host time; 40 runs recorded). The earlier "⛔ disabled at the account level" line in this file was **wrong** and is retired. All three repo-root workflows are `state=active`: `🐍 Backend CI`, `🔨 CI — Android Build & Test`, `🚀 Release — Sign & Publish APK + AAB`. The copies under `App/.github/workflows` are inert (GitHub only reads repo-root). | Gate is live |
-| CI health (both sides) | 🐍 **Backend CI is GREEN** — `completed success` on both `master` and `main` at `f0c1ca3`, and green on every adult-fix commit (`ab78849`, `8ad9862`, `6b28e48`, `f6637c9`, `c4a1302`). 🔨 **Android CI IS NOW GREEN — FIRST TIME EVER** — measured 2026-10-29 at `2caadb3`, `completed success` on **both** `master` and `main` (run `40874380668`); all 14 steps green, including the single combined `./gradlew :app:assembleDebug :app:testDebugUnitTest :app:lintDebug` step, `BUILD SUCCESSFUL in 7m 2s`, `:app:testDebugUnitTest` executed, no lint errors emitted. The previous "still RED: 636 tests / 9 failed / 23 lint errors" line was a **misdiagnosis**: every fix for it existed in `5446771`, but that commit was **local-only on a `master` that had diverged** from `origin/master` (`git merge-base --is-ancestor 5446771 origin/master` → NO; 2 local-only vs 26 remote-only) and `ci.yml` triggers on `App/**`, so nothing had fed it since `11742e0` (2026-10-28T21:21, failure). **It was unfed, not red** — I cherry-picked it onto `f0c1ca3` as `2caadb3` and pushed to both refs. The trap that hid this stays true: `ScreenSnapshotTest` and `PosterCardProvenanceTest` are excluded from every local arm64 run (Robolectric #9166), so only the hosted runner can judge them. `tags: 0`, `releases: 0` still, and signing is genuinely blocked on the four absent keystore secrets (see the measured note in Secrets above) — a debug APK is available from CI meanwhile. **Re-measured 2026-10-29 22:5x via `/actions/runs?per_page=6`** (91 runs total): 🐍 Backend CI is `completed success` on **both** `master` and `main` at `9859b8a` and at `6f7e3a0` — i.e. green on the 17-module list this file now documents, judged by the hosted runner and not only by this box. 🔨 Android is green on `master` (`2caadb3`) but **red on the live app lane**: branch `q1-ad-cadence` failed its combined Gradle step at `99472e0` (run `40917741872`, step `🏗️🧪🔍 Gradle: debug APK + unit tests + lint (single invocation)`, no annotations attached — read the job log, not the summary) with a retry `in_progress` at `217e8cd`. A green `master` does not mean the app lane is safe to merge. **⚠️ That last sentence was true at 22:5x and is now measured false — re-measured 2026-10-30 00:5x from `/actions/workflows/398476977/runs?per_page=12`: the retry `217e8cd` came back `completed success` (17:18), and every Android run after it is green — `bc2e534` on `q1-ad-cadence`, `e6482e9` on `q2-scenarios-fixes`, and `a3c34ff`/`bd45ba0`/`9a590bb`/`5e74aa2` on `q1-identity-fix`, the newest being `5e74aa2` at 19:17. Both trunk refs are green at `9859b8a` (Android) and `87b7b6f` (backend, on both `master` and `main`). There is no red app lane to wait on. `tags: []` and `releases: []` re-measured empty; the only Release run that has ever existed (`40876596427`, `workflow_dispatch`, 12:50, `35f9e89`) failed at its first step, "🗝️ Verify signing secrets are present (fail loudly if not)", and `/actions/secrets` returns `[]` — so signing is blocked on the owner adding the four keystore secrets, which is the only CI gate left that agents cannot close.** | Release blocked on owner secrets only |
+| GitHub Actions | ✅ **Enabled and running** — `/actions/permissions` → `{"enabled": true, "allowed_actions": "all"}`; all three repo-root workflows are `state=active`, and the copies under `App/.github/workflows` are inert (GitHub only reads repo-root). The retired "disabled at the account level" claim and the full CI-health measurement history (per-sha run verdicts on both trunk refs, the Android `unfed-not-red` misdiagnosis, the Robolectric #9166 trap) are in [`docs/SPEC_AGENTS_MEASURED_NOTES.md`](docs/SPEC_AGENTS_MEASURED_NOTES.md). | Gate is live |
+| Release signing | ⛔ **Blocked on the owner's four keystore secrets** — `/actions/secrets` returns `[]` and the only Release run that has ever existed died at its signing-secrets preflight. Debug APK from CI is available; see Secrets above. | Owner's call |
 
 The current Oracle host and its HTTP-only limitations are documented in
 [`ORACLE_DEPLOYMENT.md`](ORACLE_DEPLOYMENT.md). The backend is **already deployed there and is the
@@ -318,6 +257,20 @@ runs. This file previously claimed "Actions is disabled at the account level" on
 filtered `total_count: 0`; that claim cost a week of unverified pushes and must not be repeated. If
 you need to know whether CI can run, query `/actions/permissions` and print what it says.
 
+**⚠️ Re-measured 2026-10-30 at `dc73ac7`, and this is what the filter is today:**
+`backend-ci.yml`'s push trigger is `branches: ["**"]` with
+`paths: ["Fast_Fetch/**", ".github/workflows/backend-ci.yml"]` (md5 of the file matches
+`git show dc73ac7:.github/workflows/backend-ci.yml`). Consequence for a docs-only change: editing
+root `AGENTS.md` or `docs/**` alone feeds **nothing**, but the diet touches `Fast_Fetch/**`
+(`Fast_Fetch/AGENTS.md`, `Fast_Fetch/CONTINUITY.md`, `Fast_Fetch/checkpoints/`,
+`Fast_Fetch/test_docs_invariants.py`) so it does feed CI. `.github/workflows/ci.yml` triggers on
+`App/**`, so a push that edits `App/AGENTS.md` also starts the ~7-minute hosted Android build. That
+is CI's cost on a hosted runner, not this box's. **The rule is the method, not the shape: read the
+workflow's own trigger block before predicting whether CI will run** — a `total_count: 0` run list is
+evidence about the filter, never about the account. (A `paths-ignore` variant of this file was
+quoted once tonight and could not be reproduced against the tree or the object store; treat it as
+never having existed, which is precisely why the method above is the law and not a quoted shape.)
+
 ---
 
 ## ⚡ Quick Commands Reference
@@ -325,36 +278,14 @@ you need to know whether CI can run, query `/actions/permissions` and print what
 ### Backend
 ```bash
 # From repo root: /opt/radd-stream  (Oracle VM)
+# But run gates in your own worktree (`git worktree add /tmp/<yourlane> <sha>`), never in the live tree.
 
-# Run offline tests — one module per invocation; this runner ignores extra names.
-# There are 68 `test_*.py` modules under Fast_Fetch/ and Fast_Fetch/importers/ — 48 at the
-# Fast_Fetch/ root and 20 in importers/ (measured 2026-10-29 at `5c331d6` with
-# `find . -name 'test_*.py' -not -path './.git/*' | wc -l`; re-measure it, do not trust this
-# number, it has already gone stale twice in one day).
-# These three are the standing *quick* gate — they are NOT what CI judges.
-python3 -S Fast_Fetch/test_database.py    # 133 tests at the tip (was 124, was 76 — re-count)
-python3 -S Fast_Fetch/test_vidout.py      # 6 tests
-python3 -S Fast_Fetch/importers/test_host_resolvers.py   # 171 tests
-
-# The REAL gate is exactly what backend-ci.yml runs — 25 modules, one per invocation (measured
-# from CI run `40954291359` at `396e476`; it was 17 at `9859b8a`, and it will be more again — read
-# the workflow file, this comment is a snapshot). As of
-# `9859b8a` those 17 are CI's own list; the two extra suites the older version of this block
-# described (`importers/test_host_resolvers.py`, `importers/test_convert_mp4moviez.py`) are NOT
-# in CI and the 17th slot is not what this file used to claim:
-#   test_database test_vidout test_catalog_v2 test_release_descriptor test_link_health
-#   test_link_state test_evidence_writeback test_api_v2 test_redact test_tiers
-#   test_catalog_api test_provenance_stamping test_merge_catalogs test_site_scout
-#   test_backup_manager test_usage_stats test_operator_isolation
-# Measured 2026-10-29 at `9859b8a`: 17/17 rc=0, **791 tests, 0 failures**, and GitHub's own
-# `🐍 Backend CI — Stdlib Python` reported `completed success` on both `master` and `main` for
-# that sha and for `6f7e3a0` — so this list and this count are corroborated by the runner, not
-# just by a local box. `test_usage_stats.py` is 94 tests and `test_operator_isolation.py` is 28;
-# run them with `RADD_USER_STATE_DB` pointed at a fixture, never the live state file.
-# Measured earlier the same day: the 3-module quick gate stayed green while CI was red for five
-# pushes, because it omits test_evidence_writeback.py and test_merge_catalogs.py. Run CI's list.
-# Note `test_all_sites.py` is deliberately excluded from CI (`backend-ci.yml:33`) — it is a live
-# 10-site network audit, not an offline test.
+# The gate is the module list in .github/workflows/backend-ci.yml — one `python3 -S` invocation per
+# suite. Count it with `grep -c 'name: 🧪' .github/workflows/backend-ci.yml`, NOT with
+# `grep 'run: python3 -S'` (a `run: time python3 -S …` step is still a suite and is missed).
+# Run one at a time, under `nice -n 19`, per the Fleet Resource Guardrail.
+python3 -S Fast_Fetch/test_database.py     # quick gate only — not what CI judges
+python3 -S Fast_Fetch/test_vidout.py
 
 # Live site audit (writes to temp DB)
 python Fast_Fetch/test_all_sites.py
@@ -376,23 +307,13 @@ python Fast_Fetch/fast_fetch.py search "Inception"
 
 ### App (no local Android Studio needed)
 ```bash
-# GitHub only discovers workflows under the repository-root .github/workflows/.
-# Root now carries ci.yml, release.yml and backend-ci.yml; the copies still sitting
-# in App/.github/workflows are inert and are being retired.
-
-# To create a signed release — ⛔ OWNER'S CALL ONLY, AND IT CANNOT SUCCEED TODAY:
-# tags: [] and releases: [] measured 2026-10-30, and /actions/secrets returns []. The one
-# Release run that has ever existed (40876596427) failed at its signing-secrets gate. No
-# agent may create or push a tag; the owner adds the four keystore secrets and tags.
-# 1. Tag the commit
-git tag v1.0.0
-# 2. Push the tag with Git using the temporary askpass helper in ORACLE_DEPLOYMENT.md,
-#    against the explicit clean URL. (Measured 2026-10-30: `origin`'s stored URL is
-#    itself clean now, so the stated reason for avoiding it is gone — but keep the
-#    explicit URL and the askpass flow, because the credential is still unrevoked and
-#    a token in a URL is the leak this rule exists to prevent.)
-git push https://github.com/rehanradd/radd-stream.git v1.0.0
-# → GitHub Actions builds signed APK + creates Release automatically
+# GitHub only discovers workflows under the repository-root .github/workflows/; the copies under
+# App/.github/workflows are inert.
+#
+# ⛔ NO AGENT CREATES OR PUSHES A TAG. tags: [] and releases: [] are measured empty and
+# /actions/secrets returns [], so a release run cannot succeed today — the owner adds the four
+# keystore secrets and tags. The historical tag procedure and why `origin`'s URL is no longer the
+# reason to avoid it: docs/SPEC_AGENTS_MEASURED_NOTES.md.
 
 # Download APK: github.com/rehanradd/radd-stream/actions (debug)
 #               github.com/rehanradd/radd-stream/releases (release)

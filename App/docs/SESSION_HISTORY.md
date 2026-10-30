@@ -1,0 +1,261 @@
+# moved verbatim out of `App/AGENTS.md` by the 2026-10-30 documentation diet; text unchanged.
+
+## 12. Session Log — Append Here
+
+### Session 1 — Antigravity — Oct 2026
+**Built:**
+- Created `App/` folder structure in repo
+- [`App/README.md`](../README.md): architecture overview + Oracle VPS capacity notes (12 GB RAM → 800–1,200 concurrent sessions)
+- [`App/docs/PLAN.md`](../docs/PLAN.md): full 3-phase feature roadmap with screen map, API map, and MVP success criteria
+- [`App/docs/TECH_STACK.md`](../docs/TECH_STACK.md): Kotlin selected over Flutter/RN/Java with detailed rationale
+- [`App/docs/BUILD_PLAN.md`](../docs/BUILD_PLAN.md): complete GitHub Actions CI/CD strategy (no local Android Studio needed)
+- [`App/design/DESIGN_SYSTEM.md`](../design/DESIGN_SYSTEM.md): full design system (dark cinematic theme, colors, typography, spacing, animations)
+- [`App/design/SCREENS.md`](../design/SCREENS.md): ASCII wireframes for all 7 screens + navigation flow
+- [`.github/workflows/ci.yml`](../../.github/workflows/ci.yml): test, lint, and debug APK build on push/PR
+- [`.github/workflows/release.yml`](../../.github/workflows/release.yml): signed APK + GitHub Release on version tag
+- [`App/AGENTS.md`](AGENTS.md): this file — comprehensive agent guide for app development
+- All files pushed to GitHub via direct API
+
+**Next agent should:** Follow the current Phase 1 status and update this guide after app changes.
+
+---
+
+
+---
+
+## 14. Session Log
+
+### Session 2 — Phase 0: Gradle Skeleton Complete (2026-10-14)
+
+**Agent:** Antigravity (Google Deepmind)  
+**Status:** ✅ COMPLETE — All files pushed to GitHub  
+**Commit Range:** b6751b4 → (see CHANGELOG.md)
+
+#### What Was Done
+
+**Files Created & Pushed (43 total):**
+
+| Category | Files |
+|---|---|
+| Gradle build | `build.gradle.kts` (root), `app/build.gradle.kts`, `settings.gradle.kts`, `gradle.properties`, `gradle/libs.versions.toml` |
+| Gradle wrapper | `gradlew`, `gradlew.bat`, `gradle/wrapper/gradle-wrapper.jar`, `gradle/wrapper/gradle-wrapper.properties` |
+| App manifest | `app/src/main/AndroidManifest.xml` (INTERNET, FOREGROUND_SERVICE, PiP, deep links `radd://`) |
+| Kotlin source | `MainActivity.kt`, `RaddStreamApplication.kt` |
+| UI theme | `Color.kt`, `Type.kt`, `Theme.kt` (dark cinematic: bg `#0A0A0F`, accent `#6C63FF`) |
+| Navigation | `Screen.kt`, `NavGraph.kt` |
+| Screens | `HomeScreen.kt`, `SetupScreen.kt`, `SearchScreen.kt`, `MyListScreen.kt`, `SettingsScreen.kt` |
+| Player | `PlaybackService.kt` (Media3 MediaSessionService) |
+| Network | `RaddStreamApi.kt` (Retrofit), `models/Models.kt` (Post, PostsResponse, Release, Source, StreamResponse, StatsResponse) |
+| Resources | `values/strings.xml`, `values/themes.xml` |
+| Launcher icons | `mipmap-anydpi-v26/ic_launcher.xml` + `ic_launcher_round.xml` (adaptive, API 26+) |
+| Icon drawables | `drawable/ic_launcher_background.xml` (`#0A0A0F`), `drawable/ic_launcher_foreground.xml` (purple play button) |
+| Mipmap PNGs | `ic_launcher.png` + `ic_launcher_round.png` in mdpi/hdpi/xhdpi/xxhdpi/xxxhdpi (fallback for pre-API-26) |
+| Tests | `app/src/test/kotlin/.../network/ModelsTest.kt` (12 JVM unit tests for all model classes) |
+| Push system | `push.py` (added `.jar` to INCLUDE_EXTENSIONS) |
+
+#### Key Decisions
+
+- `gradle-wrapper.jar` pushed as binary via GitHub API (base64) — `push.py` now includes `.jar`
+- Launcher icons use adaptive XML for API 26+ + solid-color PNG fallbacks for older devices
+- Icons styled to match design system: background `#0A0A0F`, foreground purple play triangle `#6C63FF`
+- Unit tests use actual model classes from `Models.kt` — 12 tests covering all data classes
+- `gradlew` script is standard Gradle 8.7 POSIX shell (not downloaded, created from spec)
+
+#### GitHub Actions Status After Push
+
+The `ci.yml` workflow will trigger on this push. Expected outcome:
+- ✅ JDK 17 setup
+- ✅ Gradle wrapper downloads Gradle 8.7
+- ✅ `./gradlew test` — 12 unit tests pass
+- ✅ `./gradlew lint` — runs (continue-on-error)
+- ✅ `./gradlew assembleDebug` — produces `app-debug.apk`
+- ✅ APK uploaded as artifact (7-day retention)
+
+#### Current Status and Next Agent Notes
+
+The task list above this section is historical. As verified in October 2026,
+the MVP includes server setup, catalog metadata, search/filter, Retrofit
+networking, repositories, and DataStore. Details/playback and a signed release
+remain incomplete; the Android build has not been verified on a device. The
+latest observed Actions run failed during Android SDK setup, and workflows
+nested under `App/.github/workflows/` are not discovered by GitHub.
+
+Before choosing work, inspect the current source and [`docs/PLAN.md`](docs/PLAN.md)
+rather than relying on the historical Phase 1 task list. For backend host and
+secret-safe GitHub instructions, read [`../ORACLE_DEPLOYMENT.md`](../ORACLE_DEPLOYMENT.md).
+
+1. Read this guide and `Fast_Fetch/ANDROID_INTEGRATION.md`.
+2. Confirm the current build/workflow status before relying on Actions.
+3. Use Git over HTTPS with the temporary askpass helper in
+   `../ORACLE_DEPLOYMENT.md`; do not use the legacy per-file API uploader.
+
+**Architecture Pattern (must follow):**
+```
+Screen.kt (Compose UI)
+    ↓ collectAsStateWithLifecycle()
+ViewModel.kt (StateFlow, coroutines)
+    ↓ repository calls
+Repository.kt (single source of truth)
+    ↓ Retrofit API / Room DB
+```
+
+---
+
+### Session 3 — Metadata Client MVP (2026-10-15)
+
+**Status:** Implementation and documentation complete; GitHub Actions build pending.
+
+**Completed:**
+- Replaced the Android API models with the backend's actual paginated `results` response and snake-case statistics fields.
+- Added server URL validation/persistence, `/api/v1/stats` connection testing, API provider, and catalog repository.
+- Implemented first-run setup, filtered catalog grid, and debounced filtered search.
+- Added JSON mapping and server URL validation unit tests.
+- Added the missing Unix Gradle wrapper launcher and root GitHub Actions CI/release workflows.
+- Updated the root README and Android docs to mark detail/playback as deferred.
+
+**Verification:** Python database and video-output tests plus `setup_check.py` pass. This workspace has no local JDK, so Android compilation is pending GitHub Actions.
+
+---
+
+### Session 4 — Complete App UI, Room Favorites & CI Pipeline (2026-10-16)
+
+**Status:** Implementation complete; ready for GitHub Actions CI verification.
+
+**Completed:**
+- Added repository-root `.github/workflows/ci.yml` and `.github/workflows/release.yml` with `setup-android` action and Gradle caching.
+- Created executable Unix `App/gradlew` launcher wrapper script.
+- Built 4-tab Material3 Bottom Navigation Bar in `NavGraph.kt` (Home, Search, My List, Settings).
+- Built `DetailScreen.kt` and `DetailViewModel.kt` with poster header, season chips, quality releases, direct stream sources, and external video player fallback.
+- Built full-screen `PlayerScreen.kt` with Media3 / ExoPlayer, screen-on lock, and error recovery.
+- Implemented Room local SQLite database (`AppDatabase`, `FavoritePost`, `FavoriteDao`, `DatabaseModule`, `FavoritesRepository`).
+- Built `MyListScreen.kt` and `MyListViewModel.kt` to view and manage saved favorite titles.
+- Built `SettingsScreen.kt` and `SettingsViewModel.kt` with server configuration and live server diagnostics.
+- Expanded `Models.kt` (`PostDetail`, `ReleaseDetail`, `SourceDetail`, `StreamResponse`) and added comprehensive test cases in `ModelsTest.kt`.
+
+**Verification:** Backend tests (36/36 DB tests, 6/6 VIDOUT tests) continue to pass. Android compilation is verified via GitHub Actions CI pipeline.
+
+---
+
+### Session 5 — Native APK Compilation on Oracle & Public Deployment (2026-10-16)
+
+**Status:** ✅ COMPLETE — `app-debug.apk` compiled and deployed live.
+
+**Completed:**
+- Set up Android SDK command-line tools (`platforms;android-35`, `build-tools;35.0.0`) and OpenJDK 21 on the Oracle Ubuntu ARM64 server (`92.4.95.252`).
+- Fixed Google's AAPT2 ARM64 binary incompatibility by installing `qemu-user-static` and extracting AMD64 dynamic libraries (`libc6`, `libstdc++6`, `zlib1g`) to enable execution of x86_64 AAPT2 on ARM64.
+- Resolved minor Gradle and Android resource build issues (theme parent attribute).
+- Successfully compiled `assembleDebug` with full Jetpack Compose UI, Room SQLite database, Media3 ExoPlayer, and D8/R8 DEX packaging (`BUILD SUCCESSFUL in 6m 41s`).
+- Deployed resulting 21.5 MB `app-debug.apk` to `/var/www/download/radd-stream.apk`.
+- Configured and verified public download endpoint at `http://92.4.95.252/download/radd-stream.apk` returning HTTP 200 OK.
+
+---
+
+### Session 6 — Documentation truth-audit against viewer.py (2026-10-22)
+
+**Status:** ✅ Docs corrected. No `.kt`, `.kts`, or `.py` file was touched, and nothing was committed or pushed.
+
+**What changed in this guide:** §0, §3, §4, §5, §6, §8, and §11 were rewritten to
+the state actually present in `App/app/src` and `Fast_Fetch/viewer.py`. The prior
+§5 claimed `?type=anime` was a supported filter and that the app called only
+`/api/v1/stats` and `/api/v1/posts`; §6 claimed Detail/Player/MyList/Settings were
+"not navigable". All three statements were false.
+
+**Verified against code:**
+- `viewer.py:1898` filters `content_type` with `p.content_type = ?` (exact
+  equality) and `classify_media()` (`fast_fetch.py:1613-1622`) only emits
+  `movie` / `series` / `complete_season` / `ongoing_season` — a live
+  `api_v1_get_posts(content_type='anime')` call returned `total: 0`.
+- `viewer.py:1905-1909` is the exact list-route `SELECT` (17 keys; `slug` absent).
+- `viewer.py:1942` orders releases `id ASC` with no grouping; `viewer.py:1946-1961`
+  applies the tier `CASE` to `sources` inside a release only.
+- `viewer.py:2037` wildcard CORS, `viewer.py:2211` binds `0.0.0.0`, and grepping
+  `viewer.py` for `Authorization` / `api_key` / `Bearer` / `rate_limit` returned
+  zero hits — there is no auth, no key, no rate limiting, and no TLS.
+- `RaddStreamApi.kt` + `CatalogRepository.kt:38,46` + `DetailViewModel.kt:69,130` +
+  `NavGraph.kt:139-165` prove the app calls four endpoints.
+
+**Known-broken items recorded but NOT fixed (out of scope, code):**
+1. `HomeScreen.kt:48` / `SearchScreen.kt:49` still send `type=anime` → empty grid.
+2. `Models.kt:68-84` `ReleaseDetail` maps `season_number` / `episode_number` /
+   `episode_title` / `resolution` / `audio`, none of which the API returns;
+   `DetailScreen.kt:206-220,426-428` season/episode grouping is therefore dead.
+3. `StreamResponse.isTemporary: Int?` vs the JSON boolean `resolve_live_source()`
+   returns.
+4. `AndroidManifest.xml:43-48` registers a `radd://` filter but `NavGraph.kt` has
+   no `navDeepLink` entries.
+5. `viewer.py:2100-2108` — `/api/heal` never writes a response, so clients hang.
+
+**Next agent should:** pick one of (1)/(2)/(3) as real work, then re-verify these
+sections against the code again rather than trusting prose.
+
+### 2026-10-25 — Task #23: collapse the duplicated model layer (compile + JVM tests green)
+
+**Concept → surviving owner → deleted/relocated copies** (rule 1, one owner per concept):
+- *quality-ladder view state* → kept `viewmodel/QualityLadder.kt`'s view types
+  (`QualityOption`/`LadderForScope`/`object QualityLadder`) **relocated** to
+  `player/QualityLadder.kt` (genuinely player-local view state), with `LadderTier.toOptionOrNull`
+  the single crossing from the wire. Wire owner `network/models/QualityLadder.kt`
+  (`LadderLink`/`LadderTier`/`LadderAuto`/`OptionGroup`, `@SerializedName`) stays the sole wire
+  owner. **Deleted** `viewmodel/QualityLadder.kt` (+ its test → `player/QualityLadderTest.kt`).
+- *release-label grammar* → surviving owner `network/models/ReleaseLabelParsing.kt`
+  (`PrintDescriptor`/`PrintScope`/`ReleaseLabelParsing`, a faithful port of
+  `Fast_Fetch/release_descriptor.py`) + `network/models/CatalogEnums.kt`. **Deleted**
+  `viewmodel/ReleaseParser.kt` (the 528-line duplicate: `V1Resolution`/`V1SourceTag`/
+  `V1HdrFormat`/`V1Codec`/`V1Edition`, `LinkHealth`, `parseSizeBytes`/`parseScope`/`parseLanguages`,
+  `wordMatch`) and `viewmodel/ReleaseParserTest.kt`.
+- *detail-screen view state* → NEW `viewmodel/ReleaseLayoutBuilder.kt` owns ONLY presentation
+  (`RankedLink`/`RankedPrint` wrapping a `PrintDescriptor`, `EpisodeGroup`/`SeasonGroup`/
+  `ReleaseLayout`, enum→string display maps, grouping). It imports the network enums — no second
+  grammar, no `typealias`/re-export/`@Deprecated` shim (rule 1). `RankedPrint.resolution/sourceTag/
+  hdr/codec/edition/coverage/season` are all read off `release.printDescriptor`.
+
+**Grammar rules that MOVED** (file:line in the deleted `ReleaseParser.kt` → survivor):
+`V1Resolution.fromText:46-55`, `V1SourceTag.fromText:76-90`, `V1HdrFormat.fromText:101-110`,
+`V1Codec.fromText:120-128`, `V1Edition.fromText:141-151`, `parseScope:482-504`,
+`parseSizeBytes:338-350`, `parseLanguages:352-366`, `wordMatch:35-36` → all replaced by
+`ReleaseLabelParsing.describe()`/`detect*()` + `CatalogEnums.*.fromWire` (documented in the
+builder's header port-table). `LinkHealth` (3 states) → richer `LinkState` (`network/models/
+CatalogEnums.kt:291`, adds EXPIRED/UNCHECKED).
+
+**Deliberate, server-faithful deltas** (asserted in `ReleaseLayoutBuilderTest`):
+size DECIMAL(1000)→BINARY(1024) (`2.4GB`→`2_576_980_378`); no synthetic `"Multi-audio"` language
+(real `dualAudio` flag instead); a bare `"HD"`/`"576"`/`"sd"` quality word no longer fabricates a
+resolution rung (stays `Resolution.UNKNOWN`, keeps the honest `"HD"` **label** — matches
+`release_descriptor._quality_label`); ranking is the single `qualityScore*10+availableLinks`
+print scale (CAM capped at 250 → a CAM can never outrank any official print).
+
+**C17** — verified already correct in the survivor and now pinned by tests in `ModelsTest.kt`:
+`is_temporary` is `Boolean?` via `LenientBooleanAdapter` (decodes `1`/`true`/`"1"`, junk→null,
+never `Int?`); every server-string enum has `UNKNOWN` + a non-crashing `fromWire`
+(`a link status the app has never seen degrades to UNKNOWN`,
+`every fromWire table answers UNKNOWN ...` — 19 enums). No snake_case↔structured field mismatch
+survived in the collapsed types (they read `printDescriptor`).
+
+**Bug fixed during collapse:** a whole-work film (`CoverageType.WHOLE_WORK`) set `isPacked=true`,
+which made `looksLikeSeries()` route movies into the (empty) series branch and blank `workPrints`.
+Fixed by triggering the series branch only on `SEASON_PACK`/season/episode, never `WHOLE_WORK`.
+`ReleaseLayout.isSeriesLike` kept its name so `DetailScreen`/`DetailViewModel` are unchanged.
+
+**Build:** `./gradlew --offline :app:compileDebugKotlin :app:testDebugUnitTest` → BUILD SUCCESSFUL.
+284 JVM unit tests, 0 failures/errors/skipped (ReleaseLayoutBuilderTest 16, player.QualityLadderTest 8,
+ModelsTest 11, ProvenanceWireTest 4). One transient unrelated `hiltJavaCompileDebugUnitTest`
+"cyclic inheritance" stale-codegen error cleared by removing `build/generated/hilt/*/debugUnitTest`.
+
+**NOT done (honest scope):** concepts 3 & 4 (player↔v2-domain `CatalogV2`, `Models.kt`↔`CatalogV2`)
+were NOT merged. **Correction, same day:** the claim that `/api/v2` is "documented but not
+served" was verified against a 2026-10-22 read of `viewer.py` and is no longer true — the v2
+edge is mounted (`viewer.py:2464` GET, `:2700` POST via `api_v2.route_get`/`route_post`) and
+serves `manifest`, `browse`, `search`, `suggest`, `works/{id}`, `works/{id}/seasons/{n}`,
+`POST /play`, `POST /links/{id}/report`, `resolve`, `offset`, `sync`, `stats`, `collections`,
+`feed.m3u`. What is actually true is narrower: **the app cannot use any of it yet**, because
+every v2 route answers `unavailable` ("The catalog projection has not been built yet") until
+the live database is swapped to the projected catalog (task #38). So the LIVE app path stays
+v1(`Models.kt`)+viewmodel+player, `CatalogV2`/`V2Wire`/`V1CatalogMapper` remain
+target-contract code, and `EndpointGaps` now means "unreachable for this install", not
+"unimplemented on the server". Migrating the player/UI onto the v2 domain types would be a
+behaviour change that cannot be verified on this no-device, 1-CPU box, so it was left intact
+rather than silently rewritten; v1 fallback `Models.kt` is retained per rule 3 (its DTOs are
+the ones actually parsed).
+
+---
+

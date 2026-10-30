@@ -60,6 +60,9 @@ name: 🐍 Backend CI — Stdlib Python Tests
 #       that ran while its host lock was free, two requests to one host in flight
 #       together, a host wedged after an exception, or two hosts serialising as a global
 #       stop all fail this. Offline and deterministic — 18 tests, no stopwatch needed)
+#     - Fast_Fetch/test_docs_invariants.py   (the documentation diet's guard: every law sentence is
+#       still in the file every agent auto-loads, the rotated history and SPEC destinations exist,
+#       no relative link in a trimmed doc dangles, and the byte ceilings hold. Offline, markdown only)
 #
 #   Deliberately EXCLUDED:
 #     - Fast_Fetch/test_all_sites.py  — live 10-site network audit; needs the
@@ -227,4 +230,12 @@ jobs:
       # so a real socket attempt fails the run rather than the internet.
       - name: 🧪 test_host_serialiser.py
         run: python3 -S Fast_Fetch/test_host_serialiser.py
+
+      # The documentation diet's guard (2026-10-30). The diet moved ~690 KB of LOG and SPEC out of
+      # the files every agent auto-loads; this suite is what proves no LAW sentence was lost in the
+      # move — it greps the trimmed AGENTS.md files for each invariant phrase, checks the rotated
+      # destinations exist and every relative link still resolves, and holds the byte ceilings.
+      # Offline: five markdown files and a directory listing, no network, no catalog read.
+      - name: 🧪 test_docs_invariants.py
+        run: python3 -S Fast_Fetch/test_docs_invariants.py
 
