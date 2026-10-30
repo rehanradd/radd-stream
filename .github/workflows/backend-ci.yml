@@ -68,6 +68,17 @@ name: 🐍 Backend CI — Stdlib Python Tests
 #     - Fast_Fetch/test_docs_invariants.py   (the documentation diet's guard: every law sentence is
 #       still in the file every agent auto-loads, the rotated history and SPEC destinations exist,
 #       no relative link in a trimmed doc dangles, and the byte ceilings hold. Offline, markdown only)
+#     - Fast_Fetch/test_engagement_ladder.py (the pass ladder is data: a tier names its own expiry
+#       rule, no code compares a plan to a tier name (checked by `ast`), a malformed tier refuses
+#       and writes NOTHING rather than spending coins and minting nothing, a fourth tier is an edit
+#       to `PASS_LADDER` alone, the price the panel publishes is the price the wallet is debited,
+#       and every money and coin field is an `int`. Offline against a temp user-state DB)
+#     - Fast_Fetch/test_operator_adult_projection.py (the adult rule on the operator's own read: a
+#       flagged row's ledger JSON carries no `source_url`/`final_url`/`resource_id`/
+#       `intermediate_url` and no upstream file address reaches the wire, while the flag, the hoster
+#       name, the status and the health stay for the audit; an unflagged row loses nothing; the badge
+#       stays operator-only; and over a real loopback socket a flagged source id is refused before
+#       the resolver runs. Offline — temp catalog, 127.0.0.1 port 0, no network)
 #
 #   Deliberately EXCLUDED:
 #     - Fast_Fetch/test_all_sites.py  — live 10-site network audit; needs the
@@ -251,4 +262,26 @@ jobs:
       # Offline: five markdown files and a directory listing, no network, no catalog read.
       - name: 🧪 test_docs_invariants.py
         run: python3 -S Fast_Fetch/test_docs_invariants.py
+
+      # The pass ladder as data (q3, JOB B). `redeem_pass` used to branch on the plan
+      # name AFTER `spend_coins`, so a tier the branch did not know cost coins and
+      # minted nothing; and the panel published a price from its own tuple list while
+      # the spender read `PASS_LADDER` directly. 27 tests: every tier resolves its own
+      # expiry, a fourth tier is a data edit, a malformed tier refuses and writes
+      # NOTHING, the `ast` walk that forbids a comparison against a tier name, and the
+      # published price equal to the debited one. Offline — temp user-state DB, no
+      # socket, no network.
+      - name: 🧪 test_engagement_ladder.py
+        run: python3 -S Fast_Fetch/test_engagement_ladder.py
+
+      # The adult rule on the operator's own read. `fetch_database_payload(full=True)`
+      # published `final_url`/`source_url`/`resource_id`/`intermediate_url` for a
+      # flagged row and the dashboard rendered Copy-Direct-URL, Play-JIT, Stream/DL and
+      # a VLC playlist anchor for it. 17 tests: the withheld projection, the audit that
+      # survives it, an unflagged row that loses nothing, the badge staying
+      # operator-only, and over a real loopback socket that a flagged source id is
+      # refused before `resolve_live_source` is ever called. Offline — temp catalog,
+      # 127.0.0.1 port 0, the resolver mocked to a recorder.
+      - name: 🧪 test_operator_adult_projection.py
+        run: python3 -S Fast_Fetch/test_operator_adult_projection.py
 

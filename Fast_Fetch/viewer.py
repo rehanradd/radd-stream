@@ -211,6 +211,35 @@ def link_view(row, base_url: str = "") -> dict:
     return link
 
 
+#: What the operator's ledger view publishes instead of a playable field on a
+#: flagged work. Spelled out so the panel says what happened rather than showing
+#: an empty button the operator has to debug.
+WITHHELD_NOTE = "18+ — stored, never played here"
+
+#: The columns that ARE a way to watch or pull a work without asking this service
+#: anything: the hoster page we scraped, the URL it resolved to, the hoster's own
+#: file id (`service` is kept, and `service` + `resource_id` is how a pixeldrain
+#: or hubcloud link is rebuilt by hand), and the intermediate bridge a player
+#: follows. Root `AGENTS.md` allows the operator to *see* a flagged row — the
+#: `🔞 18+ ADULT` badge is the audit of the flag — and forbids the panel emitting
+#: a stream or download handle for it. `/api/v1/stream` and `/api/v1/download`
+#: already refuse (`redact.link_is_adult`, unknown id ⇒ refuse), so this is not
+#: the enforcement; it is the projection not putting a raw upstream URL on a page
+#: when the refusal behind it is the only thing between that URL and a play.
+#: The stored rows are untouched — this edits the JSON, never the ledger.
+_WITHHELD_PLAYABLE = ("source_url", "final_url", "resource_id", "intermediate_url")
+
+
+def _withhold_playable(row) -> dict:
+    """One ledger row as the operator sees it when the row is flagged: everything
+    except what could be pasted into a browser. Health, status, size, mime, the
+    hoster's name and the row's own id stay, so the audit still works."""
+    clean = {key: value for key, value in dict(row).items()
+             if key not in _WITHHELD_PLAYABLE}
+    clean["playback_withheld"] = WITHHELD_NOTE
+    return clean
+
+
 #: Extensions a download may be named with. The mime comes from a hoster and a
 #: filename built from it ends up in a `Content-Disposition` header, so only a
 #: fixed table may contribute characters — never the value itself.
@@ -694,6 +723,10 @@ def fetch_database_payload(search_query: str = "", full: bool = False,
         # `🔞 18+ ADULT` badge true — an audit needs the flag, not the fiction that
         # the catalog holds no adult titles, which is also what `posts_count` above
         # already counted. Playing one is denied on both ports.
+        #
+        # Denied on both ports is not the same as absent from the panel, and the law
+        # is the stricter of the two: the panel must not emit a playable handle for a
+        # flagged row at all. See `_withhold_playable`.
         adult_rule = "1=1" if full else redact.adult_clause("posts")
         sql = f"SELECT * FROM posts WHERE {adult_rule}"
         params = []
@@ -712,6 +745,9 @@ def fetch_database_payload(search_query: str = "", full: bool = False,
         posts = []
         for p in post_rows:
             pid = p["id"]
+            # Only ever true in `full` mode: the public branch never returns a
+            # flagged row in the first place (`adult_clause` excludes it in SQL).
+            flagged = bool(p["is_18_plus"])
             rel_rows = conn.execute(
                 "SELECT * FROM releases WHERE post_id = ? ORDER BY season ASC, episode ASC, quality DESC, id ASC",
                 (pid,),
@@ -724,11 +760,14 @@ def fetch_database_payload(search_query: str = "", full: bool = False,
                     "SELECT * FROM download_sources WHERE release_id = ? ORDER BY id ASC",
                     (rid,),
                 ).fetchall()
-                sources = ([dict(s) for s in src_rows] if full else
-                           [link_view(s, base_url) for s in src_rows])
+                if full:
+                    sources = [dict(s) if not flagged else _withhold_playable(s)
+                               for s in src_rows]
+                else:
+                    sources = [link_view(s, base_url) for s in src_rows]
 
                 if full:
-                    r_dict = dict(r)
+                    r_dict = dict(r) if not flagged else _withhold_playable(r)
                 else:
                     r_dict = redact.project(r, "release")
                     r_dict["label"] = redact.public_label(r)
@@ -1848,7 +1887,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
               <div class="media-actions">
                 <button class="btn-check" onclick="checkHealthPost(${p.id})">🩺 Probe Links</button>
                 <button class="btn-heal" onclick="healPost(${p.id})">🔄 Auto-Heal</button>
-                <a href="/api/m3u?id=${p.id}" class="btn-m3u" download="${p.slug}.m3u">📺 VLC Playlist</a>
+                ${p.is_18_plus
+                  ? `<span class="media-badge badge-18" title="The endpoints refuse this work on both ports and the ledger view publishes no upstream URL for it">🔞 no playlist</span>`
+                  : `<a href="/api/m3u?id=${p.id}" class="btn-m3u" download="${p.slug}.m3u">📺 VLC Playlist</a>`}
                 ${originalPageLink}
               </div>
             </div>
@@ -1897,6 +1938,14 @@ DASHBOARD_HTML = """<!DOCTYPE html>
                 ? `<span class="pill-resumable" title="HTTP Range 206 supported: Resume, Fast seek, IDM/aria2 multi-part acceleration">⚡ Resumable</span>`
                 : '';
               const sizeStr = s.file_size_bytes ? `<span style="font-size: 11px; color: var(--text-dim);">${formatBytes(s.file_size_bytes)}</span>` : '';
+              // A flagged work's sources arrive with no URL to copy and no id to
+              // stream — `_withhold_playable` removed them server-side, and this
+              // renders the refusal instead of a button that would call it.
+              const withheld = s.playback_withheld
+                ? `<span class="pill-resumable" title="Stored for the audit, withheld from the panel">${s.playback_withheld}</span>`
+                : `<button class="btn-action" style="background:#2563eb; color:white; border-color:#3b82f6;" onclick="openStreamPlayer(${s.id}, '${escapeHtml(s.source_name || 'Direct Stream')}', '${escapeHtml(p.clean_title || 'Media Stream')}')">▶ Play JIT</button>
+                    <button class="btn-action" onclick="copyToClipboard('${s.final_url}')">📋 Copy Direct URL</button>
+                    <a href="/api/v1/stream?id=${s.id}&redirect=1" target="_blank" class="btn-action btn-open" title="Instant Live JIT Stream with 302 Redirect">⚡ Stream / DL</a>`;
 
               html += `
                 <div class="source-item ${isDead ? 'source-dead' : ''}">
@@ -1907,9 +1956,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
                     ${sizeStr}
                   </div>
                   <div class="source-actions">
-                    <button class="btn-action" style="background:#2563eb; color:white; border-color:#3b82f6;" onclick="openStreamPlayer(${s.id}, '${escapeHtml(s.source_name || 'Direct Stream')}', '${escapeHtml(p.clean_title || 'Media Stream')}')">▶ Play JIT</button>
-                    <button class="btn-action" onclick="copyToClipboard('${s.final_url}')">📋 Copy Direct URL</button>
-                    <a href="/api/v1/stream?id=${s.id}&redirect=1" target="_blank" class="btn-action btn-open" title="Instant Live JIT Stream with 302 Redirect">⚡ Stream / DL</a>
+                    ${withheld}
                   </div>
                 </div>
               `;

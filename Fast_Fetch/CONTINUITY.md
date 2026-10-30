@@ -7,7 +7,7 @@
 
 ## ✅ Open items — index (q3, 2026-10-30; pointers only)
 
-1. **This file is a pointer, not a history.** 48 session files (47 dated + 1 undated ledger) cover
+1. **This file is a pointer, not a history.** 49 session files (48 dated + 1 undated ledger) cover
    2026-10-23 → 2026-10-30,
    every one of them verbatim: [`checkpoints/README.md`](checkpoints/README.md). Nothing was
    deleted, reworded, or summarized. The count is `ls Fast_Fetch/checkpoints/*.md` minus `README.md`,
@@ -33,15 +33,38 @@
 8. Landed tonight (docs): the documentation diet — the five auto-loaded files 779,799 →
    68,679 B (−91.2 %, `wc -c` on the rebased tree) as a conservation-checked SPLIT (nothing
    deleted), guarded by
-   `Fast_Fetch/test_docs_invariants.py` (17 tests OK; CI's last `🧪` step, of 29 on this branch).
+   `Fast_Fetch/test_docs_invariants.py` (17 tests OK; `🧪` step 29 as numbered at that commit, and
+   `grep -c 'name: 🧪'` is the count of the moment — item 10 added two more).
    `checkpoints/20261030-04xx-q3-lane-the-documentation-diet-split-not-delet.md`.
 9. **Trunk moved while the diet was open, and the rebase absorbed it rather than dropping it.**
    `q3-docs-diet` was rebased onto `4fe6f65`; the three doc edits written after the rotation are
    verbatim in `checkpoints/`, indexed above — q2's MovieBox detail-API session, and in
    `docs/checkpoints/` q4's `[Q4-SAFETY]` halt-band entry and q2's checkpoint entry. `SITES.md` §25
    was never rotated by this lane, so q2's corrected site notes are live in place. The merged CI is
-   now **29 `🧪` steps / 28 `python3 -S` matches** — the diet's guard runs last, and q2's
-   `test_themoviebox_detail_api.py` sits where trunk put it.
+   now **29 `🧪` steps / 28 `python3 -S` matches at that commit** — the diet's guard ran last then, and
+   q2's `test_themoviebox_detail_api.py` sits where trunk put it.
+10. **JOB B (tasks #22/#30) landed on branch `q3-engagement-ladder`, and the brief's premise was already
+   false on trunk.** The wallet/streak/ad-cadence schema (`coin_ledger`, `streak_state`,
+   `ad_cadence_state`) and all 16 engagement knobs in `MONETIZATION_FIELDS` already existed, and money
+   is stored as an **integer in whole rupees** (`_MONEY` refuses decimals, `amount_pkr` is an `INTEGER`
+   column) — not paise; migrating the wire was another lane's contract to change. What the four rules
+   actually caught, and what that branch fixes: `redeem_pass` branched on the tier's *name* **after**
+   `spend_coins`, so an unknown tier cost coins and minted nothing (now: cost and expiry both resolve
+   from the tier's own `expiry_rule` before the debit, and `test_no_computation_in_this_module_branches_on_a_tier_name`
+   enforces the law as an AST walk); `_engagement_public` priced the ladder from its own tuple list while
+   the spender read `PASS_LADDER` (now one `resolve_ladder(values)` feeds both, tested under a reprice);
+   `usage_stats._payments` was the one money field cast with `float()` (now `int`, matching `payments`);
+   and `fetch_database_payload(full=True)` published `source_url`/`final_url`/`resource_id`/
+   `intermediate_url` for a flagged work, which the dashboard turned into Play/Copy/Stream/m3u controls
+   (`_withhold_playable` withholds them from the JSON and names the refusal; the ledger keeps every
+   column, the badge stays operator-only). 27 + 17 new tests, registered as CI `🧪` steps 30 and 31 **on
+   that branch** (31 `🧪` total there; JOB A's `q3-launch-reads` adds a third module, so the merged count
+   is 32 — always re-count with `grep -c 'name: 🧪'`).
+   `checkpoints/20261030-09xx-q3-lane-job-b-the-pass-ladder-is-data-and-a.md` — including one measurement
+   that contradicts two documents: `redact.link_is_adult` returns **False** for an unknown link id, not
+   the True its own docstring and root `AGENTS.md` claim, so a typo reaches `resolve_live_source` and is
+   stopped there rather than at the adult gate. Reported, not fixed — that return value is the play path
+   on both ports.
 
 ---
 
@@ -67,8 +90,10 @@
 ## Rotated session history
 
 Session blocks moved verbatim to [`Fast_Fetch/checkpoints/`](checkpoints/README.md); nothing was deleted or reworded.
-The newest 12 are listed here; the complete index (all 47) is in `Fast_Fetch/checkpoints/README.md`.
+The newest 12 are listed here; the complete index (all 48 dated entries plus the undated ledger) is in
+`Fast_Fetch/checkpoints/README.md`.
 
+- [Session 2026-10-30 (q3 JOB B) `[Q3-LADDER]`: the pass ladder is data, a refusal writes nothing, and a flagged row publishes no playable handle](checkpoints/20261030-09xx-q3-lane-job-b-the-pass-ladder-is-data-and-a.md) — 191 lines
 - [Session 2026-10-30 — q2 `[Q2-MOVIEBOX-CRAWL]`: parser fixes + detail-API preference; crawl gate closed](checkpoints/20261030-q2-themoviebox-crawl-2026-10-30-parser-fixes-detail-api-preference.md) — 110 lines (absorbed from trunk `4fe6f65` during the rebase)
 - [2026-10-30 04:0x→ — q3 lane, THE DOCUMENTATION DIET: split, not delete](checkpoints/20261030-04xx-q3-lane-the-documentation-diet-split-not-delet.md)
 - [📜 Session History & Commit Ledger](checkpoints/undated-session-history-commit-ledger.md) — 22 lines
