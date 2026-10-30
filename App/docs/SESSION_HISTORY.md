@@ -517,6 +517,12 @@ The lesson worth keeping: two of the five were caught by the positive controls s
 test as the scan they police. A guard with no control of its own would have gone green over a
 pattern that could not tell `"content"` from `, `.
 
+**CI round 2 on `888738b` (run 41124506152): `completed success`** — every one of the 742
+`testDebugUnitTest` cases passed, `lintDebug` reported no errors, and the run published
+`app-debug-46`, a 22,165,287-byte debug APK built from this branch. So the player code has now been
+compiled, tested and packaged by CI on the first attempt, and it is the four guards above that took
+the second.
+
 **Rules kept:** no `Fast_Fetch/*.py` touched, no Gradle, no test module executed, no service
 restart, no nginx change, no tag, no `git add -A`, no merge, no credential in argv/URL/file/log,
 `/opt/radd-stream` never used as a workspace and never written, nothing pushed to `master`/`main`,
