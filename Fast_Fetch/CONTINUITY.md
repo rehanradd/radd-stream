@@ -3525,3 +3525,67 @@ per captured-shape series, **`sources=0`**, `metadata_only=6`. A full 44-row re-
 by design" is accurate about that run but reads as "done". The vault has never contained a
 playable MovieBox link, and after this session it still does not — what changes is that a work's
 declared tiers are now stored as releases instead of vanishing.
+
+## 2026-10-30 07:05 — missav.live: the site refused the client, so the parser half is absent and the compliance half is tested [Q5-MISSAV]
+
+**Branch `q5-missav` off `dc73ac7`. Nothing merged, nothing crawled, no trunk landing, no service
+action.** Three new files: `docs/SITE_MISSAV.md`, `Fast_Fetch/importers/import_missav.py`,
+`Fast_Fetch/importers/test_import_missav.py`. Plus one registered CI step and one narrowed bullet.
+
+**The measurement that ended the recon, after two of the six allowed requests.**
+`GET https://missav.live/robots.txt` → **403, 5,485 B, 0.63 s**; `GET https://missav.live/` →
+**403, 5,434 B, 0.49 s**. Both bodies are the Cloudflare managed JS challenge
+(`<title>Just a moment...</title>`, "Enable JavaScript and cookies to continue"). There is no
+`429`, no `Retry-After`, no geo page with an explanation. The challenge covers **every path on the
+vhost, `/robots.txt` included** — so the site publishes no crawl policy to an unauthenticated
+automated client at all.
+
+**Why that is an answer, not an obstacle.** A challenged `robots.txt` is the strongest available
+statement of "do not crawl me automatically". Solving the JS challenge, spoofing a UA, replaying a
+`cf_clearance`, rotating egress, or reading the same pages from an archive are all ways around the
+control, and rule 4 forbids exactly that. The lane stopped at request 2 and wrote the refusals down
+in `docs/SITE_MISSAV.md` §3. **No parser was written against pages nobody has seen** — an invented
+parser that passes its own invented tests fails on the first real byte, which is worse than a loud
+refusal. `extract_record()` raises `CaptureRequired` and names the unblock (one human browser save
+to `/tmp/q5_missav/item.html`).
+
+**What IS implemented, because it is the compliance-critical half and it does not need the HTML.**
+1. `posts.is_18_plus INTEGER NOT NULL DEFAULT 1 CHECK (is_18_plus = 1)` and
+   `source_site TEXT NOT NULL DEFAULT 'missav' CHECK (source_site = 'missav')` — the flag is a
+   property of the source, so an unflagged missav row is *unrepresentable*, not a bug to fix later.
+   `write_record()` never reads `is_18_plus` from its input. Tested with an unlabelled title (lands
+   flagged), a direct `INSERT … is_18_plus=0` (`IntegrityError`), and a passed-in `is_18_plus=0`
+   (ignored).
+2. `canonical_key = "missav-" + code`, so `STARS-123` → `missav-stars-123`. The namespace is the
+   point: `docs/ADULT_TWIN_PROBE.md` measured 442 keys holding both a flagged and an unflagged row,
+   and this source must never be the clean twin of anything.
+3. Every declared tier is a `releases` row; a URL-less tier gets **no** `sources` row; a dead
+   mirror is stored `status='dead'` and kept; `posts.url` is stored verbatim or NULL, never
+   composed from the code.
+4. Subtitle-language tags kept verbatim in their own column and in `raw_meta.tags`.
+5. `crawl_blocked(load, mem, other_crawlers, limit)` with load ≥ 4.0, MemAvailable ≤ 4000 MB,
+   another importer, or no `--limit`; `sync` then refuses a *second* time for the site reason with
+   a distinct exit code (3 = box, 4 = site) so the two never blur in a log.
+
+**Suite: `Ran 42 tests in 9.670s`, OK.** All under `nice -n 19`, one at a time, per the fleet
+notice.
+
+**The hang I chased, and what it actually was.** An earlier local run of the same suite sat at test
+40 for over four minutes at 0.1 % CPU. `faulthandler.dump_traceback_later(25)` showed the stack
+blocked inside `importlib`'s `get_data` reading a **stdlib source file** — I/O starvation on a box
+at load 8.86, not a test waiting on anything. Nothing in the suite opens a socket, spawns, or takes
+a lock. Recorded because "the suite hangs" is the kind of claim the next lane inherits.
+
+**CI registration — the rule, and why it registers.** `backend-ci.yml` now has **28** `🧪` steps
+(`grep -c 'name: 🧪'`; `grep -c 'run: python3 -S'` says 27, because `test_admin_panel` is prefixed
+with `time`). This suite is **not** excluded: the file's exclusion is about suites that open
+**on-disk captured fixtures**, and this one creates its own temp SQLite DB with every fixture
+inline. I narrowed that bullet so "import" in a filename cannot be read as the reason.
+
+**What was NOT done, plainly.** No crawl (the site refuses at any load — this is not a queued quiet
+window like fzmovies), no merge, no database other than `tempfile` ones, no `/opt/radd-stream`, no
+service restart, no Gradle, no secrets in argv/URL/log, no new cron. The `vip_monthly_pkr` 200 vs
+Q4's ₨250 ruling is still the payments lane's to fix. **Unverified, and stated as such:** every
+page-level fact about missav — rails, item layout, tier markup, poster/thumb markup, the
+subtitle-tag vocabulary, the download-anchor shape, and the real content-code format. `CODE_RE`
+validates the *class* the owner described (`ABC-123`), not a measured vocabulary.

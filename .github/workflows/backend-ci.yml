@@ -67,6 +67,10 @@ name: 🐍 Backend CI — Stdlib Python Tests
 #     - test_<site>_import.py / per-site parser tests — several read fixture
 #       files whose layout changes with the site, so they are run by the
 #       scraper's own agent at edit time rather than gating every push.
+#       MEASURED 2026-10-30, and this narrows the bullet: the exclusion is about
+#       ON-DISK fixtures, not about the word "import". A parser suite whose
+#       fixtures are inlined is registered above (test_themoviebox_links.py,
+#       test_import_missav.py); a suite that opens a saved page from a path is not.
 #
 # KNOWN FAILURE MODES THIS FILE FIXES
 #   GitHub never ran any pipeline for this repo because the workflow files lived
@@ -227,4 +231,16 @@ jobs:
       # so a real socket attempt fails the run rather than the internet.
       - name: 🧪 test_host_serialiser.py
         run: python3 -S Fast_Fetch/test_host_serialiser.py
+
+      # The missav staging importer (docs/SITE_MISSAV.md). No page has been captured —
+      # the vhost answers an unauthenticated automated client with a Cloudflare JS
+      # challenge on every path, /robots.txt included — so there is no HTML parser here
+      # and the suite does not pretend otherwise (`extract_record` refuses by design).
+      # What it gates is the compliance half, which must be right BEFORE any byte is
+      # fetched: a row that is 18+ by SOURCE and cannot be written unflagged
+      # (NOT NULL DEFAULT 1 CHECK), a namespaced content-code key that cannot twin with
+      # a clean row, every declared tier stored as a release, a dead mirror kept dead,
+      # and subtitle-language tags preserved. Offline, temp-file SQLite, no fixture files.
+      - name: 🧪 importers/test_import_missav.py
+        run: python3 -S Fast_Fetch/importers/test_import_missav.py
 

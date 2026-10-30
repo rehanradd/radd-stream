@@ -2,6 +2,40 @@
 
 Update this file after each independently verified milestone so work can resume across accounts, tools, and usage limits.
 
+## 2026-10-30 07:05 — q5: missav.live refuses unauthenticated automation, so the parser half is absent and the compliance half is tested [Q5-MISSAV]
+
+**Branch `q5-missav` off `dc73ac7`; staging only, nothing merged, nothing crawled, no service action.**
+
+**What the site publishes to an unauthenticated client: a challenge, and nothing else.**
+Two of six allowed requests, `curl -sS -m 15`, honest bot UA:
+`GET /robots.txt` → **403, 5,485 B, 0.63 s**; `GET /` → **403, 5,434 B, 0.49 s**. Both are the
+Cloudflare managed JS interstitial (`Just a moment...`). It fires on **every path, `/robots.txt`
+included** — i.e. the site publishes no crawl policy to an automated client at all.
+
+**What needs auth, and is therefore refused: everything.** Every page-level fact is behind that
+challenge, so this lane did not solve it, spoof a UA, replay a `cf_clearance`, rotate egress, or
+read the pages from an archive. It also did not guess an API hostname. `extract_record()` raises
+`CaptureRequired` and names the only unblock: one **human** browser save of an item page to
+`/tmp/q5_missav/item.html`. No parser was written against pages nobody has seen.
+
+**What was built anyway, because it is the half that must be right before any byte is fetched:**
+`Fast_Fetch/importers/import_missav.py` (+ `test_import_missav.py`, **42 tests, OK**, and
+`docs/SITE_MISSAV.md`). `is_18_plus INTEGER NOT NULL DEFAULT 1 CHECK (is_18_plus = 1)` and
+`source_site … CHECK (source_site='missav')` make an unflagged missav row unrepresentable;
+`canonical_key` is the content code namespaced `missav-…` so it cannot twin with a clean row; every
+declared tier is a release, a URL-less tier gets no source, a dead mirror is stored dead; subtitle
+tags verbatim; the box gate (load ≥ 4.0, mem ≤ 4000 MB, another crawler, no `--limit`) is code, and
+`sync` refuses a second time for the site reason with a separate exit code.
+
+**Registered in CI** as step **28** (`grep -c 'name: 🧪'`), not excluded: that file's exclusion is
+about on-disk captured fixtures, and this suite is temp-SQLite with inline fixtures.
+
+**Not verified, listed so nobody inherits a guess:** rails/pagination, item layout, tier markup,
+poster/thumb markup, subtitle vocabulary, download-anchor shape, and the real content-code format.
+`CODE_RE` accepts the *class* the owner described (`ABC-123`). Local timing (42 tests / 9.67 s at
+load 8.86) is contention, not a benchmark — an earlier "hang" was `importlib` blocked reading a
+stdlib file, proven with `faulthandler`.
+
 ## 2026-10-30 02:20 — qoder4 master: the admin-panel gate verdict, and the measurement that flipped its meaning [Q4-GATE]
 
 **Scope:** one CI-registration commit (`396e476`, already green in CI) and this comment-only

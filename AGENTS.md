@@ -336,9 +336,11 @@ python3 -S Fast_Fetch/test_database.py    # 133 tests at the tip (was 124, was 7
 python3 -S Fast_Fetch/test_vidout.py      # 6 tests
 python3 -S Fast_Fetch/importers/test_host_resolvers.py   # 171 tests
 
-# The REAL gate is exactly what backend-ci.yml runs — 25 modules, one per invocation (measured
-# from CI run `40954291359` at `396e476`; it was 17 at `9859b8a`, and it will be more again — read
-# the workflow file, this comment is a snapshot). As of
+# The REAL gate is exactly what backend-ci.yml runs — 28 modules, one per invocation (counted
+# at `q5-missav` with `grep -c 'name: 🧪' .github/workflows/backend-ci.yml`; a hard-coded
+# 8-space pattern returns 0 and `grep -c 'run: python3 -S'` returns 27 because test_admin_panel
+# is prefixed with `time`. Measured 25 from CI run `40954291359` at `396e476`; it was 17 at
+# `9859b8a`, and it will be more again — read the workflow file, this comment is a snapshot). As of
 # `9859b8a` those 17 are CI's own list; the two extra suites the older version of this block
 # described (`importers/test_host_resolvers.py`, `importers/test_convert_mp4moviez.py`) are NOT
 # in CI and the 17th slot is not what this file used to claim:
