@@ -674,6 +674,121 @@ class SchemaAndMemoryTests(unittest.TestCase):
             self.assertEqual(totals["checked"], 0)
 
 
+class MemoryGateTests(unittest.TestCase):
+    """A refused run must never look like a finished one.
+
+    Measured 2026-10-30: ``harvest --pages 1 --limit 10`` under the memory floor
+    made zero requests and still printed ``[✓] ... items=0`` with
+    ``stopped_for_memory: false`` and rc 0, so a caller reading the summary could
+    not tell a refusal from a completed crawl. Every test here drives the real
+    ``main()`` offline — the flag, the reason, the log symbol and the exit code
+    are one contract, and asserting them separately is how they drift apart.
+    """
+
+    FLOOR = "MemAvailable 2216 MB < 2500 MB"
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.db = Path(self.tmp.name) / "v.db"
+
+    def _seed_pending(self):
+        conn = sqlite3.connect(self.db)
+        mb.ensure_schema(conn)
+        conn.execute("INSERT INTO sitemap_cache (loc, scraped, raw_json,"
+                     " error_count) VALUES (?, 0, '{}', 0)", (DETAIL_URL,))
+        conn.commit()
+        conn.close()
+
+    def _feed(self, items):
+        first = (200, {"code": 0, "message": "ok", "data": {
+            "items": items, "pager": {"hasMore": False}}})
+        done = (200, {"code": 0, "message": "ok",
+                      "data": {"items": [], "pager": {"hasMore": False}}})
+        return mock.MagicMock(side_effect=[first, done])
+
+    def _main(self, argv, memory):
+        """Run ``main(argv)`` and return ``(rc, parsed summary, log text)``."""
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), \
+                mock.patch.object(mb, "memory_ok", return_value=memory), \
+                mock.patch.object(mb, "_install_signals", lambda: None):
+            rc = mb.main(argv)
+        text = out.getvalue()
+        return rc, json.loads(text[text.index("{"):]), text
+
+    def test_a_refused_harvest_makes_no_request_and_exits_3(self):
+        api = mock.MagicMock()
+        with mock.patch.object(mb, "_api_request", api):
+            rc, summary, text = self._main(
+                ["harvest", "--db", str(self.db), "--pages", "1",
+                 "--limit", "10"], (False, self.FLOOR))
+        self.assertEqual(api.call_count, 0, "a refused run makes no request")
+        self.assertTrue(summary["stopped_for_memory"], summary)
+        self.assertEqual(summary["stop_reason"], self.FLOOR, summary)
+        self.assertEqual(rc, 3)
+        self.assertNotIn("[✓]", text, "a refusal must not wear the success mark")
+
+    def test_a_refused_sync_reports_the_generator_state_and_exits_3(self):
+        # sync learns the stop through _walk_feed's state dict, because a
+        # generator cannot return a value to the caller that abandoned it.
+        api = mock.MagicMock()
+        with mock.patch.object(mb, "_api_request", api):
+            rc, summary, _text = self._main(
+                ["sync", "--db", str(self.db), "--pages", "1"],
+                (False, self.FLOOR))
+        self.assertEqual(api.call_count, 0)
+        self.assertTrue(summary["stopped_for_memory"], summary)
+        self.assertEqual(summary["stop_reason"], self.FLOOR, summary)
+        self.assertEqual(summary["queued"], 0)
+        self.assertEqual(rc, 3)
+
+    def test_a_refused_crawl_makes_no_request_and_exits_3(self):
+        self._seed_pending()
+        fetch = mock.MagicMock()
+        with mock.patch.object(mb, "http_get", fetch):
+            rc, summary, text = self._main(
+                ["crawl", "--db", str(self.db), "--workers", "1", "--delay", "0"],
+                (False, self.FLOOR))
+        self.assertEqual(fetch.call_count, 0, "the gate sits before the pool")
+        self.assertTrue(summary["stopped_for_memory"], summary)
+        self.assertEqual(summary["stop_reason"], self.FLOOR, summary)
+        self.assertEqual(rc, 3)
+        self.assertNotIn("[✓]", text)
+        conn = sqlite3.connect(self.db)
+        state = conn.execute("SELECT scraped FROM sitemap_cache WHERE loc = ?",
+                             (DETAIL_URL,)).fetchone()[0]
+        conn.close()
+        self.assertEqual(state, 0, "a refused run consumes nothing")
+
+    def test_a_finished_harvest_reports_completion_and_exits_0(self):
+        with mock.patch.object(
+                mb, "_api_request",
+                self._feed([MATCHBOX_WITH_RESOURCE])):
+            rc, summary, text = self._main(
+                ["harvest", "--db", str(self.db), "--pages", "1"],
+                (True, "ok"))
+        self.assertFalse(summary["stopped_for_memory"], summary)
+        self.assertIsNone(summary["stop_reason"], summary)
+        self.assertEqual(summary["posts"], 1, summary)
+        self.assertEqual(rc, 0)
+        self.assertIn("[✓]", text)
+
+    def test_a_finished_crawl_reports_completion_and_exits_0(self):
+        self._seed_pending()
+        html = nuxt_script(devalue(MATCHBOX_WITH_RESOURCE))
+        with mock.patch.object(mb, "http_get",
+                               return_value=(200, DETAIL_URL, html)):
+            rc, summary, text = self._main(
+                ["crawl", "--db", str(self.db), "--workers", "1", "--delay", "0"],
+                (True, "ok"))
+        self.assertFalse(summary["stopped_for_memory"], summary)
+        self.assertIsNone(summary["stop_reason"], summary)
+        self.assertEqual(summary["posts"], 1, summary)
+        self.assertEqual(rc, 0)
+        self.assertIn("[✓]", text)
+
+
 class CliTests(unittest.TestCase):
     def test_harvest_is_reachable_from_the_command_line(self):
         args = mb.parse_args(["harvest", "--pages", "3", "--per-page", "20",

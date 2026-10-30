@@ -1557,8 +1557,14 @@ def _queued_subject_id(row) -> str | None:
 
 
 def _walk_feed(subject_types=ACCEPTED_SUBJECT_TYPES, pages: int = API_MAX_PAGES,
-               per_page: int = API_PAGE_SIZE, delay: float = DEFAULT_DELAY):
+               per_page: int = API_PAGE_SIZE, delay: float = DEFAULT_DELAY,
+               state: dict | None = None):
     """Yield ``(item, detail_url)`` for every work the feed names.
+
+    ``state`` receives ``stopped_for_memory``/``stop_reason`` when the memory
+    floor ends the walk. A generator cannot return a value to its caller, and a
+    refusal that reports nothing is how a run that made zero requests once looked
+    exactly like a completed one.
 
     Paginated instead of page-scraped: one request here describes 50 works with
     the same fields the SSR payload carries, which on a one-core box behind an
@@ -1583,6 +1589,9 @@ def _walk_feed(subject_types=ACCEPTED_SUBJECT_TYPES, pages: int = API_MAX_PAGES,
         ok, reason = memory_ok()
         if not ok:
             log(f"[!] [{SITE}] feed stopped: {reason}")
+            if state is not None:
+                state["stopped_for_memory"] = True
+                state.setdefault("stop_reason", reason)
             return
         status, body = _api_request(API_FILTER_PATH, {
             "page": page, "perPage": per_page}, delay=delay)
@@ -1629,7 +1638,9 @@ def sync_catalog(db_path: Path | str = DEFAULT_DB_PATH, limit: int | None = None
     """
     db_path = Path(db_path)
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    totals = {"pages": 0, "queued": 0, "duplicates": 0, "errors": 0, "items": 0}
+    totals = {"pages": 0, "queued": 0, "duplicates": 0, "errors": 0, "items": 0,
+              "stopped_for_memory": False, "stop_reason": None}
+    feed_state: dict = {}
     conn = sqlite3.connect(db_path, timeout=60)
     conn.row_factory = sqlite3.Row
     try:
@@ -1656,7 +1667,8 @@ def sync_catalog(db_path: Path | str = DEFAULT_DB_PATH, limit: int | None = None
             if seed:
                 queue(seed)
 
-        for item, url in _walk_feed(pages=pages, per_page=per_page):
+        for item, url in _walk_feed(pages=pages, per_page=per_page,
+                                    state=feed_state):
             if STOP_REQUESTED:
                 break
             totals["items"] += 1
@@ -1679,9 +1691,16 @@ def sync_catalog(db_path: Path | str = DEFAULT_DB_PATH, limit: int | None = None
         conn.commit()
     finally:
         conn.close()
+    if feed_state.get("stopped_for_memory"):
+        totals["stopped_for_memory"] = True
+        totals["stop_reason"] = feed_state.get("stop_reason")
     if verbose:
-        log(f"[✓] [{SITE}] sync items={totals['items']} queued={totals['queued']} "
-            f"duplicates={totals['duplicates']}")
+        if totals["stopped_for_memory"]:
+            log(f"[!] [{SITE}] sync stopped: {totals['stop_reason']}"
+                f" (items={totals['items']} queued={totals['queued']})")
+        else:
+            log(f"[✓] [{SITE}] sync items={totals['items']} "
+                f"queued={totals['queued']} duplicates={totals['duplicates']}")
     return totals
 
 
@@ -1701,14 +1720,16 @@ def harvest_catalog(db_path: Path | str = DEFAULT_DB_PATH, limit: int | None = N
     db_path = Path(db_path)
     db_path.parent.mkdir(parents=True, exist_ok=True)
     totals = {"items": 0, "posts": 0, "duplicates": 0, "skipped_type": 0,
-              "queued": 0, "stopped_for_memory": False}
+              "queued": 0, "stopped_for_memory": False, "stop_reason": None}
+    feed_state: dict = {}
     conn = sqlite3.connect(db_path, timeout=60)
     conn.row_factory = sqlite3.Row
     batch: list[dict] = []
     try:
         ensure_schema(conn)
         known = _existing_keys(conn)
-        for item, url in _walk_feed(pages=pages, per_page=per_page):
+        for item, url in _walk_feed(pages=pages, per_page=per_page,
+                                    state=feed_state):
             if STOP_REQUESTED:
                 break
             totals["items"] += 1
@@ -1734,9 +1755,11 @@ def harvest_catalog(db_path: Path | str = DEFAULT_DB_PATH, limit: int | None = N
                                                   conn=conn)["posts_written"]
                 conn.commit()
                 batch = []
-                if not memory_ok()[0]:
+                ok, reason = memory_ok()
+                if not ok:
                     totals["stopped_for_memory"] = True
-                    log(f"[!] [{SITE}] harvest STOP: {memory_ok()[1]}")
+                    totals["stop_reason"] = reason
+                    log(f"[!] [{SITE}] harvest stopped: {reason}")
                     break
             if limit and totals["posts"] + len(batch) >= limit:
                 break
@@ -1746,10 +1769,17 @@ def harvest_catalog(db_path: Path | str = DEFAULT_DB_PATH, limit: int | None = N
         conn.commit()
     finally:
         conn.close()
+    if feed_state.get("stopped_for_memory") and not totals["stopped_for_memory"]:
+        totals["stopped_for_memory"] = True
+        totals["stop_reason"] = feed_state.get("stop_reason")
     if verbose:
-        log(f"[✓] [{SITE}] harvest items={totals['items']} posts={totals['posts']} "
-            f"duplicates={totals['duplicates']} skipped_type={totals['skipped_type']}"
-            + (" stopped=memory" if totals["stopped_for_memory"] else ""))
+        if totals["stopped_for_memory"]:
+            log(f"[!] [{SITE}] harvest stopped: {totals['stop_reason']}"
+                f" (items={totals['items']} posts={totals['posts']})")
+        else:
+            log(f"[✓] [{SITE}] harvest items={totals['items']} "
+                f"posts={totals['posts']} duplicates={totals['duplicates']} "
+                f"skipped_type={totals['skipped_type']}")
     return totals
 
 
@@ -2084,7 +2114,7 @@ def crawl_pending(limit: int | None = None, db_path: Path | str = DEFAULT_DB_PAT
               "failed_rows": 0, "parked": 0, "failed": 0, "metadata_only": 0,
               "with_media": 0,
               "paused_rate_limit": False, "stopped_for_memory": False,
-              "skipped_after_stop": 0}
+              "stop_reason": None, "skipped_after_stop": 0}
     if not pending:
         return totals
 
@@ -2093,6 +2123,7 @@ def crawl_pending(limit: int | None = None, db_path: Path | str = DEFAULT_DB_PAT
     if not ok:
         log(f"[!] [{SITE}] refusing to start: {reason}")
         totals["stopped_for_memory"] = True
+        totals["stop_reason"] = reason
         return totals
     if verbose:
         log(f"[*] [{SITE}] {len(pending)} pages pending "
@@ -2169,7 +2200,8 @@ def crawl_pending(limit: int | None = None, db_path: Path | str = DEFAULT_DB_PAT
             ok, reason = memory_ok()
             if not ok:
                 totals["stopped_for_memory"] = True
-                log(f"[!] [{SITE}] STOP: {reason}")
+                totals["stop_reason"] = reason
+                log(f"[!] [{SITE}] stopped: {reason}")
 
     started = time.time()
     submitted = 0
@@ -2214,13 +2246,20 @@ def crawl_pending(limit: int | None = None, db_path: Path | str = DEFAULT_DB_PAT
 
     if verbose:
         paused = " paused=rate-limited" if totals["paused_rate_limit"] else ""
-        stopped = " stopped=memory" if totals["stopped_for_memory"] else ""
-        log(f"[✓] [{SITE}] pages={totals['pages']} posts={totals['posts']} "
-            f"releases={totals['releases']} sources={totals['sources']} "
-            f"metadata_only={totals['metadata_only']} "
-            f"with_media={totals['with_media']} "
-            f"failed_rows={totals['failed_rows']} parked={totals['parked']} "
-            f"in {time.time() - started:.0f}s{paused}{stopped}")
+        if totals["stopped_for_memory"]:
+            log(f"[!] [{SITE}] crawl stopped: {totals['stop_reason']} "
+                f"pages={totals['pages']} posts={totals['posts']} "
+                f"releases={totals['releases']} sources={totals['sources']} "
+                f"failed_rows={totals['failed_rows']} parked={totals['parked']} "
+                f"skipped_after_stop={totals['skipped_after_stop']} "
+                f"in {time.time() - started:.0f}s{paused}")
+        else:
+            log(f"[✓] [{SITE}] pages={totals['pages']} posts={totals['posts']} "
+                f"releases={totals['releases']} sources={totals['sources']} "
+                f"metadata_only={totals['metadata_only']} "
+                f"with_media={totals['with_media']} "
+                f"failed_rows={totals['failed_rows']} parked={totals['parked']} "
+                f"in {time.time() - started:.0f}s{paused}")
     return totals
 
 
@@ -2398,7 +2437,9 @@ def main(argv: list[str] | None = None) -> int:
     else:
         totals = stats(args.db)
     print(json.dumps(totals, indent=2, sort_keys=True))
-    return 0
+    # 3 = a gate refused or ended the run. A caller reading the summary alone
+    # cannot tell a refused crawl from a finished one, so the exit code carries it.
+    return 3 if totals.get("stopped_for_memory") else 0
 
 
 if __name__ == "__main__":
