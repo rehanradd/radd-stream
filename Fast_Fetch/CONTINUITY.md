@@ -28,7 +28,8 @@
    of this box and concludes it is not feasible as one run; the 429-parking and per-run cap are unbuilt.
 7. Queued quiet-window actions (load-gated, nothing run tonight): see "🕒 Queued" below.
 8. Landed tonight (docs): the documentation diet — the five auto-loaded files 779,799 →
-   64,663 B as a conservation-checked SPLIT (nothing deleted), guarded by
+   65,714 B (−91.6 %, `git cat-file -s` on the pushed sha) as a conservation-checked SPLIT (nothing
+   deleted), guarded by
    `Fast_Fetch/test_docs_invariants.py` (12 tests OK, CI's 28th `🧪` step).
    `checkpoints/20261030-04xx-q3-lane-the-documentation-diet-split-not-delet.md`.
 

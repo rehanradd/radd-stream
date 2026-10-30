@@ -61,16 +61,22 @@ Do not merge, do not touch production, do not delete any historical text — mov
 
 | file | before (`dc73ac7`) | after | target |
 |---|---|---|---|
-| `Fast_Fetch/CONTINUITY.md` | 277,009 | **6,511** | ≤ 20-line index ✅ |
+| `Fast_Fetch/CONTINUITY.md` | 277,009 | **7,561** | ≤ 20-line index ✅ |
 | `docs/SESSION_CHECKPOINT.md` | 248,840 | **3,746** | ≤ 20-line index ✅ |
 | `App/AGENTS.md` | 177,371 | **11,993** | ≤ 10 KB — missed by 2 KB |
-| `Fast_Fetch/AGENTS.md` | 38,909 | **13,667** | ≤ 8 KB — missed |
+| `Fast_Fetch/AGENTS.md` | 38,909 | **13,668** | ≤ 8 KB — missed |
 | root `AGENTS.md` | 37,670 | **28,746** | ≤ 8 KB — missed |
-| **the five, total** | **779,799** | **64,663 (−91.7 %)** | |
+| **the five, total** | **779,799** | **65,714 (−91.6 %)** | |
 
-(All Markdown in the repo went 1,844,304 → 1,918,918 B — the diet *adds* 74 KB of headers and
-provenance lines to the moved text. It is a relocation, not a compression: what shrank is what
-every lane auto-loads, which is the defect that was reported.)
+(All Markdown in the repo went 1,844,304 → 1,920,647 B across 68 → 190 files — the diet *adds* 76 KB
+of headers, indexes and provenance lines to the moved text. It is a relocation, not a compression:
+what shrank is what every lane auto-loads, which is the defect that was reported.)
+
+**Every number in this table is `git cat-file -s` on the pushed sha `42464cb`, not a figure taken
+while the files were still being edited.** The first pass at these totals printed 64,663 B and
+CONTINUITY 6,511 B; both were measured mid-work, before the final pointer lines landed, and the
+commit message still carries the 64,663 figure. Corrected here rather than amended in Git — the
+committed message is history, this table is the measurement.
 
 ## The honest finding: the 8 KB target and "verbatim law" are mutually unsatisfiable
 
@@ -83,8 +89,9 @@ either rewording law (forbidden) or relocating it out of the auto-loaded file (a
 brief's own LAW rule). So I kept law verbatim, moved everything that is evidence, and set the guard
 test's ceilings at the measured floor + headroom (root 32 KB, `Fast_Fetch/` 18 KB, `App/` 15 KB).
 
-**What the fleet actually got:** the five files a lane auto-loads went **781,795 B → ~64 KB (−92 %)**,
-≈ 45 k tokens → ≈ 16 k (64,663 B of the 1.92 MB of Markdown). The remaining reduction available is *de-duplication*, not trimming: root
+**What the fleet actually got:** the five files a lane auto-loads went **779,799 B → 65,714 B
+(−91.6 %)**, ≈ 45 k tokens → ≈ 16 k (65,714 B of the 1.92 MB of Markdown). The remaining reduction
+available is *de-duplication*, not trimming: root
 `AGENTS.md` §"Important Rules" is restated in `Fast_Fetch/AGENTS.md` §11 and `App/AGENTS.md`, and
 `Fast_Fetch/AGENTS.md` §6 repeats the adult law. Say the word and I'll make root the single home for
 shared law and have the two sub-guides link it — that gets all three under their targets without
