@@ -254,9 +254,13 @@ named inside each sub-section, not by a blanket ❌.
 #### 3.3 Multi-Server Support
 - Add / switch between multiple radd-stream server profiles
 - Each profile: name, URL, last-connected status. (A `token` field would be
-  pointless today: `viewer.py` implements no authentication — no API key, bearer
-  token, or session — and answers with `Access-Control-Allow-Origin: *`. Add real
-  auth to the backend first. ⚠️ Reality verified against viewer.py 2026-10-22)
+  pointless today for the catalog routes: `viewer.py` accepts no API key, bearer
+  token, or session on them, and `CORS_ALLOW_ORIGINS` is an empty allow-list rather
+  than the wildcard this note used to claim. The server does hold credentials
+  elsewhere — `RADD_ADMIN_TOKEN` on the loopback operator port, account sync keys —
+  and none of them survives an HTTP trip. Add real auth to the backend first, then
+  make a `token` field mean something. ⚠️ Reality verified against
+  `viewer.py`/`redact.py` 2026-10-30.)
 - Quick-switch from Settings or notification shade
 
 #### 3.4 Admin Panel (Power Users)

@@ -140,8 +140,10 @@ Python instead.
 ### Stream resolver response fields
 
 `/api/v1/stream` with `redirect=1` (the default) emits a bare `302` with
-`Location` plus `Access-Control-Allow-Origin: *` and `Connection: close`, and no
-body — that `Location` is the one and only place an upstream host appears, and it is
+`Location`, `Cache-Control: no-store`, `Connection: close`, and no body — and a CORS
+header only if the caller's `Origin` is in `CORS_ALLOW_ORIGINS`, which is an **empty**
+allow-list today, so a browser-shaped client gets none of them and a native client
+never needs one. That `Location` is the one and only place an upstream host appears, and it is
 the player's business, not the UI's. With `redirect=0` on the **public** port the
 answer is the handle's own descriptor, never a target:
 
@@ -177,10 +179,16 @@ port no longer answers with anything worth scraping whole:
 - the operator port is a second bind on `127.0.0.1` (`RADD_INTERNAL_PORT`, default 8081).
   Policy hangs on the *port*, because a request can forge a header but not a port.
 
-`send_json()` still stamps `Access-Control-Allow-Origin: *` (viewer.py), `start_server()`
-still defaults to `0.0.0.0`, and the Oracle host serves plain HTTP with no TLS. Treat
-everything the public port does return as public to anyone who can reach it — which is
-now exactly what a user sees, plus nothing that names where it came from.
+Three claims this paragraph used to make are now false of the code, and one is not:
+`send_json()` no longer stamps `Access-Control-Allow-Origin: *` — it asks
+`cors_headers_for()`, whose allow-list `CORS_ALLOW_ORIGINS` is an empty `frozenset`, so a
+refused origin gets no header; `start_server()` defaults to `host="127.0.0.1"`, not
+`0.0.0.0`; and the API is not un-throttled — every public request passes `_public_gate()`,
+which answers over budget with 429 plus `Retry-After` and stamps the `RateLimit-*` triple
+on every response, so a client should back off on 429 rather than retry immediately.
+**What remains true is the exposure that matters:** the Oracle host serves plain HTTP with
+no TLS. Treat everything the public port does return as public to anyone who can reach it —
+which is now exactly what a user sees, plus nothing that names where it came from.
 
 The one credential this API accepts is a §7 sync key, and it is the reason the missing
 TLS is a real user-facing problem rather than a footnote: on `http://92.4.95.252` the

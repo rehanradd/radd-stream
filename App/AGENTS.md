@@ -197,11 +197,16 @@ the repository.
 - Cleartext HTTP is permitted only in the debug build. The release build must
   use HTTPS; do not relax Android network security globally to make a release
   work over HTTP.
-  ⚠️ **Reality (verified against viewer.py 2026-10-22):** the backend has no TLS
+  ⚠️ **Reality (re-verified against `viewer.py`/`redact.py` 2026-10-30):** the backend has no TLS
   support at all and the Oracle host is plain HTTP, so a release build cannot
   legally point at `http://92.4.95.252/`. That is a deployment gap, not something
-  to paper over by loosening network security. The API is also unauthenticated
-  with wildcard CORS — nothing behind it is private.
+  to paper over by loosening network security. The catalog routes take no API key or
+  session, so nothing behind them is private. Two things this bullet used to assert are
+  now false of the code and must not be repeated: there is no wildcard CORS —
+  `CORS_ALLOW_ORIGINS` is an empty `frozenset`, so a refused origin gets no header — and
+  the API is not un-throttled: `_public_gate()` returns 429 with `Retry-After` and stamps
+  the `RateLimit-*` triple on every response, which is why the client should honour a 429
+  instead of retrying immediately.
 - The user's permanent choice is to configure `ORACLE_SSH_KEY` and
   `GITHUB_TOKEN` as Replit Configurations environment variables, not Secrets.
   Verify presence by name only; never reveal values, ask to move them, or place

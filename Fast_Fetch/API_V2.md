@@ -65,7 +65,7 @@ column is a status, not a wish: ✅ marks what the code does today.
 | 3 | releases `ORDER BY id ASC`; quality is only a `CASE` over `service` inside a release | first-scraped row looks "first" to the UI | computed `quality_score`, a two-axis order (§8) ✅ — `/play` ranks the ladder and re-sorts on the axis the caller named (§9) |
 | 4 | `resolve_live_source()` falls through to `success: true` even when no fresh URL was found | dead links look alive forever | `playability`/`state`/`rank_score` are measured properties (§7); `resolve_live_source(..., v2=True)` returns an honest `no_playable_source` / `not_found` envelope ✅ (`api_v2.resolve_target`) |
 | 5 | `status` written `active` at scrape and never re-checked | ranking cannot use reality | `cat_link_evidence` + `link_health.probe()` ✅ (probe), ✅ (write-back into `cat_links` + `health` rev: `catalog_v2.apply_evidence`, §6.2 — operator-invoked, no route, no loop) |
-| 6 | no auth, no rate limit, `Access-Control-Allow-Origin: *`, binds `0.0.0.0` | anyone can hammer the resolver | §16 contracts: in-app token bucket + `RateLimit-*` on every reply ✅ (§16.5, `viewer._public_gate`), wildcard CORS deleted — the allow-list is empty by default ✅ (§16.7), `radd-stream.service` binds `127.0.0.1` (the module default is still `0.0.0.0` when started without `--host`); auth and nginx `limit_req` remain 📝 |
+| 6 | no auth, no rate limit, `Access-Control-Allow-Origin: *`, binds `0.0.0.0` | anyone can hammer the resolver | §16 contracts: in-app token bucket + `RateLimit-*` on every reply ✅ (§16.5, `viewer._public_gate`), wildcard CORS deleted — the allow-list is empty by default ✅ (§16.7), and the bind default is now loopback ✅ — both `start_server(host="127.0.0.1")` (`viewer.py`) and `serve --host`, which defaults to `127.0.0.1` (`fast_fetch.py`); the "module default is still `0.0.0.0`" caveat in §16.7 and the earlier row of this table were stale and are retired. nginx `limit_req zone=radd_stream_api burst=30 nodelay` is live ✅. Remaining 📝: client credentials on the catalog routes and TLS at the edge — neither exists, and the rate limiter narrows anonymous access without replacing authentication. |
 | 7 | `/api/heal` never writes a response → clients hang | unusable | removed; `POST /api/v2/links/{id}/report` replaces it ✅ (ingest table `client_link_reports`) |
 | 8 | `is_18_plus` filtering implemented but undocumented | an app could accidentally surface it | single adult rule, §13, tested |
 
@@ -1212,9 +1212,11 @@ decodes a payload containing a never-seen enum — carry this from the old contr
   runs `--host 127.0.0.1 --port 8080` behind the proxy (`/api/v2` therefore never faces the
   internet directly), and the operator port is a separate bound server instance
   (`server.operator`), never a header a caller can set — `X-Radd-Admin` is not read anywhere in
-  the codebase and must not be added. `viewer.start_server`'s *default* host is still
-  `0.0.0.0`, so a manual run without `--host` re-opens the old exposure: deployment flags, not
-  code. Plain HTTP (§8.3) still means **all admin/auth features are unreachable by design** —
+  the codebase and must not be added. `viewer.start_server`'s *default* host is
+  `127.0.0.1`, and `fast_fetch.py serve --host` defaults to `127.0.0.1` too, so a manual run
+  without `--host` no longer re-opens the old exposure — this paragraph used to say the module
+  default was still `0.0.0.0` and it was wrong. Plain HTTP (§8.3) still means **all admin/auth
+  features are unreachable by design** —
   the contract's adult-exception and entitlement gates are code-complete rules with no shipped
   privileged caller.
 - `Access-Control-Allow-Origin`: explicit allow-list, never `*` — ✅ done in

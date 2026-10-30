@@ -113,6 +113,10 @@ When you take over this project in a new Replit workspace:
 **Deployment gate:** The Oracle host currently has no listener on TCP 80 or 443.
 The backend still binds to `0.0.0.0` and has unauthenticated resolver/fetch
 routes; restrict the bind and public routes before enabling the public proxy.
+*(Recorded 2026-10-13 against the Replit checkout; both halves are since done — the bind
+default is `127.0.0.1` in `start_server` and in `serve --host`, and the resolver/fetch/health
+routes are operator-only and 404 on the public port behind `viewer._public_gate`. Read this as
+history, not as a gate still open.)*
 
 ### Session 12 — Replit Agent — Oct 2026
 **Built:**

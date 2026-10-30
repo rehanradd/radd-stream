@@ -187,7 +187,16 @@ the fleet guardrail are in [`../AGENTS.md`](../AGENTS.md) and
 6. **Line numbers shift** — the architecture comments in this file show approximate line numbers that drift as code grows. Use `grep` or search to find actual locations.
 7. **Unicode in print()** — always use `sys.stdout.write()` or ensure UTF-8 reconfigure when printing emojis on Windows
 8. **Oracle/GitHub access** — use the secret-safe procedures in `../ORACLE_DEPLOYMENT.md`; never print, commit, or copy `GITHUB_TOKEN` or `ORACLE_SSH_KEY`
-9. **Public API exposure** — the current HTTP API has no authentication and wildcard CORS; secure or restrict fetch/heal/resolve routes before proxying them publicly
+9. **Public API exposure** — the public catalog routes are anonymous (no API key, no session), and
+   the deployment is plain HTTP with no TLS: that is the real risk, and it is unclosed. What is *not*
+   true any more: this API is not un-gated. `_public_gate()` (`viewer.py`) denies operator-only routes,
+   runs a token bucket per client, returns 429 with `Retry-After`, and stamps `RateLimit-*` on every
+   answer; `CORS_ALLOW_ORIGINS` (`redact.py`) is an **empty** allow-list so no response carries
+   `Access-Control-Allow-Origin`; `start_server()` defaults to `127.0.0.1`. Do not re-add the old
+   "wildcard CORS, no rate limiting, binds 0.0.0.0" warning — it describes code that no longer exists,
+   and an agent who believes it will skip the gate when adding a route. The routes that still need
+   care before public proxying are fetch/heal/resolve, and the operator port's trust boundary is
+   loopback, not `RADD_ADMIN_TOKEN` (which guards `/admin` only).
 
 ## Moved out (reference prose, verbatim)
 

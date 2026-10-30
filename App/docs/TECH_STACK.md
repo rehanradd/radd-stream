@@ -45,11 +45,15 @@
 - Type-safe HTTP client for the `radd-stream` REST API
 - Gson / Moshi for JSON deserialization
 - OkHttp interceptor for server URL configuration. There is **no auth token
-  injection to configure** — `viewer.py` implements no authentication, no API key,
-  and no bearer token, and answers every response with
-  `Access-Control-Allow-Origin: *`. The deployed Oracle host is plain HTTP with no
-  TLS. ⚠️ Reality (verified against viewer.py 2026-10-22); add real auth to the
-  backend before writing any token-handling interceptor.
+  injection to configure for the catalog routes** — `viewer.py` accepts no API key
+  or session on `/api/v1/posts`, and `CORS_ALLOW_ORIGINS` is an **empty** allow-list,
+  so responses carry no `Access-Control-Allow-Origin` header at all (the old
+  `Access-Control-Allow-Origin: *` note described code that has since been replaced by
+  `cors_headers_for()`). The deployed Oracle host is plain HTTP with no TLS, so
+  whatever credential does exist — `RADD_ADMIN_TOKEN`, or an account sync key — must
+  never be sent over it. ⚠️ Reality (verified against `viewer.py`/`redact.py`
+  2026-10-30): add real auth to the backend before writing any token-handling
+  interceptor.
 - Automatic retry on network errors
 
 ---

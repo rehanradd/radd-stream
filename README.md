@@ -166,12 +166,30 @@ a current total. Note also that these counts include `is_18_plus = 1` rows that
 
 ### Authentication and transport
 
-There is **none**. `viewer.py` implements no API key, token, session, or rate
-limiting; `send_json()` sets `Access-Control-Allow-Origin: *` on every response
-(viewer.py:2037) and `start_server()` binds `0.0.0.0` by default (viewer.py:2211).
-There is no TLS anywhere in the backend, and the Oracle deployment is plain HTTP.
-Treat every route, the whole catalog, and every resolved stream URL as public to
-anyone who can reach the port.
+The public catalog routes are **anonymous** — no API key and no session — but the older
+claim that `viewer.py` implements no rate limiting and answers with
+`Access-Control-Allow-Origin: *` is no longer true of the code, and each of those
+sentences named a line that has since moved:
+
+- **CORS is an empty allow-list.** `CORS_ALLOW_ORIGINS` is an empty `frozenset`
+  (`redact.py`) and `send_json()` asks `cors_headers_for()` for the header, so today no
+  response — including the `/api/v1/stream` redirect — carries
+  `Access-Control-Allow-Origin` at all. A wildcard would be the dangerous version.
+- **Every public request passes one gate.** `_public_gate()` (`viewer.py`) denies
+  operator-only routes, runs a token bucket per client per route family, stamps the
+  `RateLimit-*` triple on whatever it answers, and returns 429 with `Retry-After` over
+  budget. Nginx adds its own `limit_req ... burst=30 nodelay` in front of it.
+- **The server binds loopback by default.** `start_server()` defaults to
+  `host="127.0.0.1"`, not `0.0.0.0`; the operator port is a second loopback bind.
+- **Two credentials do exist**, just not on the catalog routes: `RADD_ADMIN_TOKEN`
+  guards `/admin` on the loopback operator port, and per-account sync keys
+  (`accounts.py`) guard the account sync surface.
+
+What has not changed is the exposure that matters: **there is no TLS anywhere in the
+backend and the Oracle deployment is plain HTTP.** Treat every public route, the whole
+browsable catalog, and every resolved stream URL as visible to anyone who can reach the
+edge — the rate limiter and the CORS allow-list throttle and scope that access, they do
+not make it private.
 
 The `resolve_live_source()` JIT resolver at `/api/v1/stream` is implemented and is
 used by the Android detail/player screens; the older claim that the app "does not

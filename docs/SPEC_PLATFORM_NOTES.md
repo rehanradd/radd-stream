@@ -21,7 +21,12 @@ changing the server.
   available; no Python packages or Docker are required.
 - Intended public URL is `http://92.4.95.252/`; it has no TLS. Do not send
   credentials over it or use it as a release Android endpoint.
-- The backend defaults to `0.0.0.0` and has unauthenticated routes. For Oracle,
+- The backend binds loopback **by default** — `serve --host` defaults to `127.0.0.1`
+  (`fast_fetch.py`) and `start_server(host=...)` defaults to `127.0.0.1` (`viewer.py`). The
+  older note here claimed it defaults to `0.0.0.0`; that is retired, and the `--host` help
+  text now states nginx is the public gate. Still true: the resolver/fetch/health routes are
+  operator-only and 404 on the public port, and every public request passes
+  `viewer._public_gate` (token bucket, 429 + `Retry-After`, `RateLimit-*`). For Oracle,
   start it with `serve --host 127.0.0.1 --port 8080`; never expose port 8080
   directly. Follow the runbook's public-route restrictions before enabling Nginx.
 - Keep the SQLite database outside the Git checkout and out of Git. The prior
