@@ -378,3 +378,18 @@ branch and stopped; it did not touch `master`/`main`.
 **Rules kept:** no `.py` touched, no service restart, no nginx change, no Gradle, no tag, no
 `git add -A`, no credential in argv/URL/file/log, `/opt/radd-stream` never written, §13 hue
 untouched, no device claim, nothing applied to production.
+
+
+---
+
+### Session 26 — Release Signing Keys Configured & Tag v1.0.0 Triggered (2026-10-30)
+
+**Agent:** Antigravity (Google Deepmind)  
+**Status:** ✅ COMPLETE — All 4 release signing secrets verified on GitHub; tag v1.0.0 live  
+**Key Milestones:**
+- Generated release keystore `/home/ubuntu/raddstream-release.jks` on Oracle host (RSA 2048, validity 10000 days).
+- Extracted clean single-line Base64 representation to `/home/ubuntu/KEYSTORE_BASE64.txt`.
+- Repository owner added all 4 required secrets to GitHub Actions (`KEYSTORE_BASE64`, `KEY_STORE_PASSWORD`, `KEY_ALIAS`, `KEY_PASSWORD`).
+- Verified secrets presence via GitHub API `GET /repos/rehanradd/radd-stream/actions/secrets` (returns `total_count: 4`).
+- Created and pushed Git tag `v1.0.0` to trigger `.github/workflows/release.yml` (`🚀 Release — Sign & Publish APK + AAB`).
+- Updated `AGENTS.md` and `App/AGENTS.md` to reflect that release signing is no longer blocked.

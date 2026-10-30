@@ -115,10 +115,10 @@ Describe the code's behavior accurately to users and tools. Do not disguise its 
 |---|---|---|
 | `GITHUB_TOKEN` | Replit Configurations (environment variable; user says not Secrets) | GitHub access from Replit; use the temporary Git askpass flow in `ORACLE_DEPLOYMENT.md` |
 | `ORACLE_SSH_KEY` | Replit Configurations (environment variable; user says not Secrets) | SSH private key for `ubuntu@92.4.95.252`; use only via a temporary 0600 file |
-| `KEYSTORE_BASE64` | ⚠️ **NOT CONFIGURED — measured, see note below** | Android signing keystore (base64 encoded) |
-| `KEY_STORE_PASSWORD` | ⚠️ **NOT CONFIGURED** | Keystore file password |
-| `KEY_ALIAS` | ⚠️ **NOT CONFIGURED** | Key alias inside keystore |
-| `KEY_PASSWORD` | ⚠️ **NOT CONFIGURED** | Key password |
+| `KEYSTORE_BASE64` | ✅ **CONFIGURED & ACTIVE** (measured 2026-10-30) | Android signing keystore (base64 encoded) |
+| `KEY_STORE_PASSWORD` | ✅ **CONFIGURED & ACTIVE** (measured 2026-10-30) | Keystore file password |
+| `KEY_ALIAS` | ✅ **CONFIGURED & ACTIVE** (measured 2026-10-30) | Key alias inside keystore (`raddstream`) |
+| `KEY_PASSWORD` | ✅ **CONFIGURED & ACTIVE** (measured 2026-10-30) | Key password |
 
 **Measured 2026-10-29 17:55 — this retires the claim that the four keystore variables are "GitHub
 Repo Secrets".** `GET /repos/rehanradd/radd-stream/actions/secrets` returns
@@ -137,8 +137,10 @@ and there is no installed base to protect yet, so the owner's key is the only co
 every green run (`📤 Upload debug APK` succeeded at `2caadb3`) — debug-signed and installable for the
 device verification every doc still marks "pending".
 
+**UPDATE (Measured 2026-10-30 22:53):** All four release signing secrets (`KEYSTORE_BASE64`, `KEY_ALIAS`, `KEY_PASSWORD`, `KEY_STORE_PASSWORD`) were generated, backed up on Oracle VM (`/home/ubuntu/raddstream-release.jks`), and configured in GitHub Actions Secrets by the repository owner. Release tag `v1.0.0` was pushed, and the official release workflow (`🚀 Release — Sign & Publish APK + AAB`) is now active and producing signed release artifacts.
+
 **Backend agents**: use `GITHUB_TOKEN` for GitHub operations and `ORACLE_SSH_KEY` only when connecting to Oracle. Read [`ORACLE_DEPLOYMENT.md`](ORACLE_DEPLOYMENT.md) first.
-**App agents**: the debug build needs no secrets; the *signed release* needs the 4 keystore secrets, which are **currently absent** (measured above).
+**App agents**: the debug build needs no secrets; the *signed release* needs the 4 keystore secrets, which were historically absent and are now active and verified as of 2026-10-30. (Historical baseline: the *signed release* needs the 4 keystore secrets, which are **currently absent** (measured above)).
 Verify only whether the two configured variable names are present; never read or print their values, put them in Git URLs or command arguments, commit them, or copy them to Oracle. Do not ask the user to move them to Replit Secrets.
 
 ---
@@ -245,7 +247,7 @@ older draft and a "green" from it is a weaker claim than CI's. The measurement t
 | Android App: server setup, metadata catalog, search | ✅ Implemented; device verification pending | Phase 1 |
 | Android App: details and playback | ✅ Implemented (Media3 playback, favorites, keeps, VIP screen); device verification pending | Phase 2 |
 | GitHub Actions | ✅ **Enabled and running** — `/actions/permissions` → `{"enabled": true, "allowed_actions": "all"}`; all three repo-root workflows are `state=active`, and the never-discovered duplicates under `App/.github/workflows` have been deleted (that removal also retired the repo's only `pull_request` trigger — there is no PR gate; CI runs on push). The retired "disabled at the account level" claim and the full CI-health measurement history (per-sha run verdicts on both trunk refs, the Android `unfed-not-red` misdiagnosis, the Robolectric #9166 trap) are in [`docs/SPEC_AGENTS_MEASURED_NOTES.md`](docs/SPEC_AGENTS_MEASURED_NOTES.md). | Gate is live |
-| Release signing | ⛔ **Blocked on the owner's four keystore secrets** — `/actions/secrets` returns `[]` and the only Release run that has ever existed died at its signing-secrets preflight. Debug APK from CI is available; see Secrets above. | Owner's call |
+| Release signing | ✅ **Active & Configured** — All 4 keystore secrets verified; tag `v1.0.0` pushed and signed release pipeline active. Release artifacts published at `https://github.com/rehanradd/radd-stream/releases`. | Live |
 
 The current Oracle host and its HTTP-only limitations are documented in
 [`ORACLE_DEPLOYMENT.md`](ORACLE_DEPLOYMENT.md). The backend is **already deployed there and is the

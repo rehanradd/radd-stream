@@ -173,9 +173,11 @@ base64 -w 0 radd-release-key.jks
 # Add to GitHub: Settings → Secrets → Actions:
 #   KEYSTORE_BASE64 = (paste output above)
 #   KEY_STORE_PASSWORD = (the password you chose)
-#   KEY_ALIAS = radd-key
+#   KEY_ALIAS = raddstream
 #   KEY_PASSWORD = (the key password you chose)
 ```
+
+> **Status (Measured 2026-10-30):** All 4 release signing secrets are active in GitHub Actions Secrets. The release keystore is backed up on Oracle VM at `/home/ubuntu/raddstream-release.jks`. Tagging `v*.*.*` automatically triggers `.github/workflows/release.yml` which builds, signs, verifies, and publishes release APKs + AABs to GitHub Releases.
 
 ---
 

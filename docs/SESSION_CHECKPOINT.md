@@ -4,7 +4,7 @@ Update this file after each independently verified milestone so work can resume 
 
 ## ✅ Open items — index (q3, 2026-10-30; pointers only)
 
-1. **This file is a pointer, not a history.** 53 files cover 2026-10-20 → 2026-10-30: 51 dated
+1. **This file is a pointer, not a history.** 54 files cover 2026-10-20 → 2026-10-30: 52 dated
    session blocks, one undated block, the entry template — every one verbatim. Newest first in
    [`checkpoints/README.md`](checkpoints/README.md). The count is `ls docs/checkpoints/*.md` minus
    `README.md`, and `Fast_Fetch/test_docs_invariants.py` checks the number written here against that
@@ -32,8 +32,9 @@ Update this file after each independently verified milestone so work can resume 
 ## Rotated session history
 
 Session blocks moved verbatim to [`docs/checkpoints/`](checkpoints/README.md); nothing was deleted or reworded.
-The newest 13 are listed here; the complete index (all 53) is in `docs/checkpoints/README.md`.
+The newest 14 are listed here; the complete index (all 54) is in `docs/checkpoints/README.md`.
 
+- [2026-10-30 22:55 — Release signing secrets active on GitHub, tag v1.0.0 triggered `[RELEASE-SIGNING-ACTIVE]`](checkpoints/20261030-2255-signing-keys-active-release-triggered.md) — release pipeline live
 - [2026-10-30 10:xx — q6 lane `[Q6-DOC-TRUTH]`: eleven false API-security statements corrected against code, the never-discovered `App/.github/workflows` copies deleted, and two findings that contradict the docs (reported, unfixed)](checkpoints/20261030-10xx-q6-lane-doc-truth-the-api-security-paragraph.md) — written straight into the archive per rule 4
 
 - [2026-10-30 (cont.) — MovieBox: detail-API parser, credits/backdrop/languages fixed, crawl gate refused `[Q2-MOVIEBOX-CRAWL]`](checkpoints/20261030-2026-10-30-cont-moviedbox-detail-api-parser-credits-backdrop.md) — 26 lines (absorbed from trunk `4fe6f65` during the q3 diet rebase)

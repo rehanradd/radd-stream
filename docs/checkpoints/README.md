@@ -5,6 +5,7 @@ Newest first. Each file is a session block moved verbatim out of `docs/SESSION_C
 Entries written here by another lane *after* the rotation are not lost: the rebase onto trunk `4fe6f65`
 moved them into this directory the same way, verbatim, with the trunk line range in the header.
 
+- 2026-10-30 22:55 — Release signing secrets active on GitHub, tag v1.0.0 triggered `[RELEASE-SIGNING-ACTIVE]` — [`20261030-2255-signing-keys-active-release-triggered.md`](20261030-2255-signing-keys-active-release-triggered.md)
 - 2026-10-30 10:xx — q6 lane `[Q6-DOC-TRUTH]`: the API-security paragraph was wrong on four of five points, the dead workflow copies went, and trunk had already shipped the adult fix — [`20261030-10xx-q6-lane-doc-truth-the-api-security-paragraph.md`](20261030-10xx-q6-lane-doc-truth-the-api-security-paragraph.md) *(a new session written straight into this archive, not a rotation out of `SESSION_CHECKPOINT.md` — that file is at 54 lines / 5.4 KB and its own rule 4 says append here, not there)*
 
 <!-- newest-first; the blocks below were rotated verbatim out of docs/SESSION_CHECKPOINT.md -->
