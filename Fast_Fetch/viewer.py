@@ -29,6 +29,7 @@ import tiers
 import api_v2
 import catalog_v2
 import accounts_api
+import payments
 import admin_panel
 import media_search
 import usage_stats
@@ -3402,6 +3403,60 @@ class DashboardHandler(BaseHTTPRequestHandler):
                                                 str(verdict["retry_after"]))])
         return verdict["allowed"]
 
+    def _merchant_relay(self, path: str) -> bool:
+        """`POST /api/v2/payment/sms-webhook` — the bank SMS the merchant's relay
+        forwards here, answered by `payments.sms_webhook`.
+
+        Returns True when this route answered. It is mounted on the public POST
+        chain rather than in `admin_panel`, because the operator surface is loopback
+        plus `RADD_ADMIN_TOKEN` and a merchant's callback can do neither: it cannot
+        reach a socket on this box's loopback, and it has no business holding an
+        operator's token. The credential is the separate `X-Merchant-Secret`, checked
+        before a byte of the body is read — an unauthorized caller spends 401 and no
+        ledger query, and gets the identical 401 whether its body was empty, huge or
+        nonsense.
+
+        The callback pays into the ordinary browse budget (`_bucket_for`'s fall
+        through): a relay forwards a handful of SMS a day, and because
+        `payments.sms_webhook` is replay-safe, a 429 costs the relay a retry rather
+        than a payment.
+
+        NOTE — this path is under `/api/v2/` but NOT under `/api/v2/account`, and
+        nginx allow-lists the account prefix while `^~ /api/` 403s the rest of `/api/`
+        (`ORACLE_DEPLOYMENT.md`, and the measured edge in `AGENTS.md`). That 403 is
+        the control, and it stays (`docs/RADD_RELAY_AND_AUTH_ARCHITECTURE.md` R1-R2):
+        on a plain-HTTP host a static merchant secret that crossed the public edge
+        would be sniffable by anyone on the path, and whoever held it could approve
+        their own VIP indefinitely. The sanctioned transport is the operator phone's
+        OUTBOUND SSH tunnel — `autossh -M 0 -N -L 127.0.0.1:8099:127.0.0.1:8080
+        ubuntu@<host>`, the relay POSTing to `http://127.0.0.1:8099` + this path —
+        which lands on exactly this handler over loopback, needs no edge change, and
+        buys encryption plus device authentication for $0. So this route answers on
+        the loopback ports and nowhere publicly, by design, and nothing here asks
+        the owner for a `location` line.
+        """
+        if not payments.verify_merchant_header(self.headers):
+            api_v2.problem(self, code="unauthorised", rid=api_v2.request_id(),
+                           instance=path,
+                           detail="The callback must carry the merchant secret.")
+            return True
+        payload, code = api_v2.read_body(self)
+        if payload is None:
+            api_v2.problem(self, code=code or "invalid_params",
+                           rid=api_v2.request_id(), instance=path)
+            return True
+        try:
+            answer = payments.sms_webhook(
+                accounts_api.state_db(), gateway=payload.get("gateway"),
+                tid=payload.get("tid"), amount=payload.get("amount"))
+        except payments.PaymentError as error:
+            api_v2.problem(self, code=getattr(error, "code", "invalid_params"),
+                           rid=api_v2.request_id(), instance=path,
+                           detail=str(getattr(error, "detail", "") or ""))
+            return True
+        self.send_json(answer)
+        return True
+
     def _serve_art(self, query_params: dict, full: bool = False) -> None:
         """302 to a work's own artwork, addressed by our handle.
 
@@ -3816,7 +3871,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         """The v2 write surface (§12): `/play`, link reports, learned offsets,
-        and the account writes that put a favorite or a resume point on the server.
+        the account writes that put a favorite or a resume point on the server, and
+        the merchant's payment-SMS callback (`_merchant_relay`).
 
         Same edge as `do_GET` — operator routes 404, one token bucket, the
         `RateLimit-*` triple — because a POST is the same attack surface wearing a
@@ -3864,6 +3920,16 @@ class DashboardHandler(BaseHTTPRequestHandler):
             if answered is not None:
                 self.send_triple(answered)
                 return
+        if path == payments.WEBHOOK_PATH:
+            # Answered here, ahead of both dispatchers, because neither of them
+            # knows this path's shape: `accounts_api` routes only `/api/v2/account*`
+            # and `api_v2` would hand an unknown head to its `not_found`
+            # fall-through. The credential is the merchant secret rather than a sync
+            # key, so this is also the one public POST that is authorized before its
+            # body is read. See `_merchant_relay` for why it is not an `admin_panel`
+            # route.
+            self._merchant_relay(path)
+            return
         if accounts_api.is_account(path):
             _ensure_schema()
             payload, code = api_v2.read_body(self)
