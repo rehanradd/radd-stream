@@ -1518,23 +1518,23 @@ def _engagement_public(values):
 
     Money is the exception, published as stored: nothing clamps a PKR price, so the
     row is the price. `pass_monthly_vip_pkr` is the 30-day PASS and `vip_monthly_pkr`
-    the MONTHLY SUBSCRIPTION — two products, two knobs, and no code may link them."""
+    the MONTHLY SUBSCRIPTION — two products, two knobs, and no code may link them.
+
+    The ladder is not spelled out key by key any more; it is
+    `engagement.resolve_ladder(values)` projected by `engagement` itself. That is
+    what makes the published price and the charged price the same sentence:
+    `redeem_pass(values=…)` reads the identical resolver, so there is no way to
+    reprice a tier in one place and not the other. Before this, this function held
+    its own `(plan, coin knob, pkr knob)` tuple list while the spender read
+    `PASS_LADDER` directly — two mappings of the same row, and the only thing
+    keeping them honest was that nobody had edited one of them."""
     view = engagement.remote_view()
     view["cadence"] = engagement.resolve_caps(
         {key: _setting_count(values, key) for key in view["cadence"]})
-    costs = view["wallet"]["redeem_coin_costs"]
-    for plan, coin_key, pkr_key in (("day", "coin_redeem_day", "pass_day_pkr"),
-                                    ("weekend", "coin_redeem_weekend",
-                                     "pass_weekend_pkr"),
-                                    ("monthly_vip", "coin_redeem_monthly",
-                                     "pass_monthly_vip_pkr")):
-        cost = _setting_count(values, coin_key)
-        costs[plan] = cost
-        if plan in view["passes"]:
-            # One number per plan, in both places a client may look for it: the
-            # wallet's cost table and the ladder's row. They are the same price.
-            view["passes"][plan]["coins"] = cost
-            view["passes"][plan]["pkr"] = int(values.get(pkr_key) or 0)
+    ladder = engagement.resolve_ladder(values)
+    view["passes"] = engagement.passes_projection(ladder)
+    view["wallet"]["redeem_coin_costs"] = {plan: int(spec["coins"])
+                                          for plan, spec in ladder.items()}
     view["wallet"]["coin_per_rewarded_ad"] = _setting_count(values, "coin_per_rewarded_ad")
     view["wallet"]["rewarded_daily_cap"] = _setting_count(values, "rewarded_daily_cap")
     grants = view["streak"]["grants"]

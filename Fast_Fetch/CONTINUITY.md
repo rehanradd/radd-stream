@@ -7,7 +7,7 @@
 
 ## ✅ Open items — index (q3, 2026-10-30; pointers only)
 
-1. **This file is a pointer, not a history.** 51 session files (49 dated + 2 undated) cover
+1. **This file is a pointer, not a history.** 52 session files (50 dated + 2 undated) cover
    2026-10-23 → 2026-10-30,
    every one of them verbatim: [`checkpoints/README.md`](checkpoints/README.md). Nothing was
    deleted, reworded, or summarized. The count is `ls Fast_Fetch/checkpoints/*.md` minus `README.md`,
@@ -33,9 +33,10 @@
 8. Landed tonight (docs): the documentation diet — the five auto-loaded files 779,799 →
    68,679 B (−91.2 %, `wc -c` on the rebased tree) as a conservation-checked SPLIT (nothing
    deleted), guarded by
-   `Fast_Fetch/test_docs_invariants.py` (18 tests OK as of the merge-marker guard added at this
-   push; `grep -c 'name: 🧪' .github/workflows/backend-ci.yml` = 30, the 30th being
-   `test_operator_read_bounds.py`, registered by `[Q3-OPS-READS]`).
+   `Fast_Fetch/test_docs_invariants.py` (18 tests OK as of the merge-marker guard).
+   `grep -c 'name: 🧪' .github/workflows/backend-ci.yml` = **32** at this merge — step 30 is
+   `[Q3-OPS-READS]`'s `test_operator_read_bounds.py`, steps 31-32 are `[Q3-LADDER]`'s
+   `test_engagement_ladder.py` and `test_operator_adult_projection.py`. Re-count it, never remember it.
    `checkpoints/20261030-04xx-q3-lane-the-documentation-diet-split-not-delet.md`.
 9. **Trunk moved while the diet was open, and the rebase absorbed it rather than dropping it.**
    `q3-docs-diet` was rebased onto `4fe6f65`; the three doc edits written after the rotation are
@@ -45,19 +46,28 @@
    **29 `🧪` steps / 28 `python3 -S` matches** — the diet's guard ran last then; item 10 put
    `test_operator_read_bounds.py` after it and q2's `test_themoviebox_detail_api.py` sits where
    trunk put it.
-10. **Launch readiness JOB A `[Q3-OPS-READS]`, branch `q3-launch-reads` off trunk `072158f` —
-    closed in code, not landed, not deployed.** Two of the five measured operator-port bullets were
-    already fixed on trunk (`test_bounded_ledger.py` 10 tests, `test_operator_isolation.py` 28
-    tests); those five numbers describe `/opt/radd-stream`, which `ExecStart` loads and which is
-    behind. What this lane added: `page.truncated` / `page.clamped` / `page.ceiling` on the ledger
-    contract with the raw `limit` passed through so the flag can actually be true;
-    `_SITEMAP_ROW_CEILING = 500` enforced inside `search_sitemap_api` (the sibling that handed
-    `?limit=` straight to SQL) with `bounded_int` at the route so `?limit=abc` answers 200 not 500;
-    the boundary ordering written into `OPERATOR_ONLY_PREFIXES` and into
-    [`docs/ADMIN_PANEL_ACCESS.md`](../docs/ADMIN_PANEL_ACCESS.md) — **loopback is the reachability
-    boundary, the token is checked inside it, second** — and 18 offline tests in
-    `Fast_Fetch/test_operator_read_bounds.py`, registered as CI `🧪` step 30.
-    `checkpoints/20261030-q3-lane-launch-readiness-job-a-the-operators-own-rea.md`.
+10. **Launch readiness JOB A `[Q3-OPS-READS]` — LANDED as trunk `5bf6e59`, CI-green on both refs at
+    `d9d3615` (all 32 steps now), still not deployed** (`/opt/radd-stream` is behind trunk and the
+    service has not been restarted — that is the owner's call). It is the entry that writes the
+    boundary order — **loopback is the reachability boundary, the token is checked inside it,
+    second** — into [`docs/ADMIN_PANEL_ACCESS.md`](../docs/ADMIN_PANEL_ACCESS.md), the panel's own
+    guide, which also separates the running tree from the repository. Full session text, verbatim,
+    rotated into `checkpoints/20261030-q3-lane-launch-readiness-job-a-the-operators-own-rea.md`.
+11. **JOB B (tasks #22/#30), branch `q3-engagement-ladder` — and the brief's premise was already false.**
+   The wallet/streak/ad-cadence tables and all 16 `MONETIZATION_FIELDS` knobs already existed, and money is
+   an **integer in whole rupees** (`_MONEY` refuses decimals; `amount_pkr` is `INTEGER`) — not paise. The four
+   rules caught: `redeem_pass` debited coins *before* branching on the tier name (now cost and expiry both
+   resolve from the tier's own `expiry_rule`, enforced by an AST walk); `_engagement_public` priced the ladder
+   from its own tuples while the spender read `PASS_LADDER` (now one `resolve_ladder` feeds both);
+   `usage_stats._payments` was the last `float()` money field (now `int`); and
+   `fetch_database_payload(full=True)` published `source_url`/`final_url`/`resource_id`/`intermediate_url` for
+   a **flagged** row, which the dashboard turned into Play/Copy/Stream/m3u controls — `_withhold_playable`
+   withholds them and names the refusal, the ledger keeps every column, the badge stays operator-only.
+   27 + 17 tests, `test_engagement_ladder.py` + `test_operator_adult_projection.py`. Full text:
+   `checkpoints/20261030-09xx-q3-lane-job-b-the-pass-ladder-is-data-and-a.md` — which also carries a
+   measurement contradicting two documents: **`redact.link_is_adult` returns False for an unknown link id**,
+   not the True its docstring and root `AGENTS.md` claim, so a typo reaches `resolve_live_source` and is
+   stopped there rather than at the adult gate. Reported, not fixed.
 
 ---
 
@@ -83,9 +93,10 @@
 ## Rotated session history
 
 Session blocks moved verbatim to [`Fast_Fetch/checkpoints/`](checkpoints/README.md); nothing was deleted or reworded.
-The newest 13 are listed here; the complete index (all 49) is in `Fast_Fetch/checkpoints/README.md`.
+The newest 14 are listed here; the complete index (all 52) is in `Fast_Fetch/checkpoints/README.md`.
 
 - [Session 2026-10-30 — q3 `[Q3-OPS-READS]`: JOB A — the operator's own reads are bounded, and the boundary is named in code](checkpoints/20261030-q3-lane-launch-readiness-job-a-the-operators-own-rea.md)
+- [Session 2026-10-30 (q3 JOB B) `[Q3-LADDER]`: the pass ladder is data, a refusal writes nothing, and a flagged row publishes no playable handle](checkpoints/20261030-09xx-q3-lane-job-b-the-pass-ladder-is-data-and-a.md) — 191 lines
 - [Session 2026-10-30 — q2 `[Q2-MOVIEBOX-CRAWL]`: parser fixes + detail-API preference; crawl gate closed](checkpoints/20261030-q2-themoviebox-crawl-2026-10-30-parser-fixes-detail-api-preference.md) — 110 lines (absorbed from trunk `4fe6f65` during the rebase)
 - [2026-10-30 04:0x→ — q3 lane, THE DOCUMENTATION DIET: split, not delete](checkpoints/20261030-04xx-q3-lane-the-documentation-diet-split-not-delet.md)
 - [📜 Session History & Commit Ledger](checkpoints/undated-session-history-commit-ledger.md) — 22 lines

@@ -88,3 +88,24 @@ measuring the box, not the suite (rule 7); CI's timing is the record. Note for w
   `Fast_Fetch/README.md`, `MASTER_AI_RUNBOOK.md`, `DATABASE_SCHEMA.md` and `SITES.md` meaning an
   *upstream site's* token gateway. A regex guard there would be noise, so the two pinned sentences in
   `ADMIN_PANEL_ACCESS.md` are what is tested.
+
+
+---
+
+## Rotated out of `CONTINUITY.md` verbatim (supervisor, 2026-10-30, trunk merge of `[Q3-LADDER]`)
+
+The log's 12,000 B ceiling is what makes it an index; this is the entry it displaced, unchanged:
+
+10. **Launch readiness JOB A `[Q3-OPS-READS]`, branch `q3-launch-reads` off trunk `072158f` —
+    closed in code, not landed, not deployed.** Two of the five measured operator-port bullets were
+    already fixed on trunk (`test_bounded_ledger.py` 10 tests, `test_operator_isolation.py` 28
+    tests); those five numbers describe `/opt/radd-stream`, which `ExecStart` loads and which is
+    behind. What this lane added: `page.truncated` / `page.clamped` / `page.ceiling` on the ledger
+    contract with the raw `limit` passed through so the flag can actually be true;
+    `_SITEMAP_ROW_CEILING = 500` enforced inside `search_sitemap_api` (the sibling that handed
+    `?limit=` straight to SQL) with `bounded_int` at the route so `?limit=abc` answers 200 not 500;
+    the boundary ordering written into `OPERATOR_ONLY_PREFIXES` and into
+    [`docs/ADMIN_PANEL_ACCESS.md`](../docs/ADMIN_PANEL_ACCESS.md) — **loopback is the reachability
+    boundary, the token is checked inside it, second** — and 18 offline tests in
+    `Fast_Fetch/test_operator_read_bounds.py`, registered as CI `🧪` step 30.
+    `checkpoints/20261030-q3-lane-launch-readiness-job-a-the-operators-own-rea.md`.

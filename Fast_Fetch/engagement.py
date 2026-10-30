@@ -137,12 +137,26 @@ STREAK_PASS_SECONDS = DAY_SECONDS
 #: `payments.PLAN_DEFAULTS` keeps its own (200) value untouched and Q4 reconciles.
 REDEEM_COIN_COSTS = {"day": 30, "weekend": 70, "monthly_vip": 200}
 MONTHLY_SECONDS = 30 * DAY_SECONDS
+#: The ladder is data end to end: each tier carries its price, the rule that says
+#: when its pass stops working, and the names of the two `app_remote_config` knobs
+#: that let the operator reprice it. Nothing may branch on a tier's *name* —
+#: `redeem_pass` used to compute the weekend expiry with `if plan == "weekend"`, so
+#: adding a fourth tier meant editing the spender, and a tier whose rule the data
+#: did not declare was only discovered after the coins had already been spent.
+#: An expiry is now resolved before the spend, so a malformed tier refuses and
+#: writes nothing.
 PASS_LADDER = {
     "day": {"pkr": 20, "coins": REDEEM_COIN_COSTS["day"],
-            "duration_seconds": DAY_SECONDS},
+            "coin_setting": "coin_redeem_day", "pkr_setting": "pass_day_pkr",
+            "expiry_rule": "after_seconds", "duration_seconds": DAY_SECONDS},
     "weekend": {"pkr": 50, "coins": REDEEM_COIN_COSTS["weekend"],
-               "duration": "next_local_weekend_end"},
+                "coin_setting": "coin_redeem_weekend",
+                "pkr_setting": "pass_weekend_pkr",
+                "expiry_rule": "local_weekend_end"},
     "monthly_vip": {"pkr": 250, "coins": REDEEM_COIN_COSTS["monthly_vip"],
+                    "coin_setting": "coin_redeem_monthly",
+                    "pkr_setting": "pass_monthly_vip_pkr",
+                    "expiry_rule": "after_seconds",
                     "duration_seconds": MONTHLY_SECONDS},
 }
 AD_SLOTS = frozenset({"preroll", "app_open", "native_card"})
@@ -192,6 +206,12 @@ class RewardedCapReached(EngagementError):
 class UnknownPlan(EngagementError):
     def __init__(self, plan):
         super().__init__(f"unknown pass plan: {plan!r}")
+
+
+class BadLadder(EngagementError):
+    """A tier whose own data cannot say when it expires. Refusing this is the
+    point: it is raised *before* any coin is spent, so the answer to a broken
+    ladder is nothing written, not a debit and no pass."""
 
 
 class BadSlot(EngagementError):
@@ -451,6 +471,112 @@ def _weekend_expiry(now_epoch, tz: str = STREAK_TZ_DEFAULT) -> float:
     target = (local + timedelta(days=days)).replace(
         hour=0, minute=0, second=0, microsecond=0)
     return target.timestamp()
+
+
+# ── the ladder's expiry rules, named by the data that uses them ───────────────
+
+def _expiry_after_seconds(plan: str, spec: dict, moment: float, tz) -> float:
+    seconds = spec.get("duration_seconds")
+    if seconds is None:
+        raise BadLadder(f"tier {plan!r} declares after_seconds with no "
+                        "duration_seconds to count")
+    if isinstance(seconds, bool):
+        # True is 1 to Python, and a pass that lasts one second is not a tier.
+        raise BadLadder(f"tier {plan!r} has a duration_seconds that is a flag, "
+                        f"not a length: {seconds!r}")
+    try:
+        number = int(seconds)
+    except (TypeError, ValueError):
+        raise BadLadder(f"tier {plan!r} has a duration_seconds that is not a whole "
+                        f"number of seconds: {seconds!r}")
+    if number <= 0:
+        # `moment + 0` is an expiry in the past: the pass would mint and read as
+        # already dead, so the coins go and nothing is granted. A tier cannot be
+        # sold with a length that is not a length.
+        raise BadLadder(f"tier {plan!r} has a non-positive duration_seconds: {number}")
+    return moment + number
+
+
+def _expiry_local_weekend_end(plan: str, spec: dict, moment: float, tz) -> float:
+    return _weekend_expiry(moment, tz or STREAK_TZ_DEFAULT)
+
+
+#: The whole vocabulary of expiry a tier may name. A tier that names anything else
+#: is a data mistake, and `BadLadder` is what a data mistake answers with — before
+#: the spend, never after it.
+EXPIRY_RULES = {
+    "after_seconds": _expiry_after_seconds,
+    "local_weekend_end": _expiry_local_weekend_end,
+}
+
+
+def tier_expiry(plan: str, moment=None, tz=None, ladder=None) -> float:
+    """When one tier's pass stops working, resolved from the tier's own data.
+
+    There is no plan name in this function's branches, and that is the point: the
+    ladder says how long a pass runs, so adding a tier is an edit to
+    :data:`PASS_LADDER` and not an edit to the code that spends coins. Whole
+    seconds, because that is the resolution the signed token carries."""
+    table = ladder if ladder is not None else PASS_LADDER
+    try:
+        spec = table[plan]
+    except KeyError:
+        raise UnknownPlan(plan)
+    rule = EXPIRY_RULES.get(str(spec.get("expiry_rule") or ""))
+    if rule is None:
+        raise BadLadder(f"tier {plan!r} names no expiry rule this module knows: "
+                        f"{spec.get('expiry_rule')!r}")
+    moment = _now(moment)
+    return float(int(rule(plan, spec, moment, tz)))
+
+
+def resolve_ladder(values=None) -> dict:
+    """The ladder as the operator priced it, in one place.
+
+    `values` is the `app_remote_config` row. The coin cost follows the rule every
+    other whole-number knob follows: a stored 0 or an unparseable paste is "use
+    the shipped number", never "free" and never unlimited. The PKR price is
+    published as stored, because a price of 0 here is a deliberate act (a free
+    tier) and not a sentinel — but a value that cannot be read at all answers the
+    shipped price rather than raising, because a settings row that 500s the price
+    block is how a phone ends up showing no price at all.
+
+    This is the only function that turns a settings row into a ladder: the panel's
+    public block and `redeem_pass` both read the numbers through it, which is what
+    makes "the price a phone is shown" and "the price the server charges" the same
+    sentence rather than two that happen to agree today.
+    """
+    ladder = {}
+    for name, shipped in PASS_LADDER.items():
+        spec = dict(shipped)
+        if values:
+            try:
+                coins = int(values.get(shipped["coin_setting"]) or 0)
+            except (TypeError, ValueError):
+                coins = 0
+            spec["coins"] = coins if coins > 0 else int(shipped["coins"])
+            raw = values.get(shipped["pkr_setting"])
+            try:
+                spec["pkr"] = int(raw or 0)
+            except (TypeError, ValueError):
+                spec["pkr"] = int(shipped["pkr"])
+        ladder[name] = spec
+    return ladder
+
+
+def passes_projection(ladder) -> dict:
+    """The `passes` block a phone reads, built from an already-resolved ladder.
+
+    One builder for both prices a client can see: `remote_view()` feeds it the
+    shipped ladder, `admin_panel._engagement_public` feeds it the operator's row.
+    A key added to a ladder tier therefore appears in the public body without a
+    second edit, and the two views cannot be different dictionaries."""
+    out = {}
+    for name, spec in ladder.items():
+        out[name] = {"pkr": int(spec["pkr"]), "coins": int(spec["coins"]),
+                     "expiry_rule": str(spec.get("expiry_rule") or ""),
+                     "duration_seconds": spec.get("duration_seconds")}
+    return out
 
 
 # ── caps (Pillar 1) ───────────────────────────────────────────────────────────
@@ -732,40 +858,54 @@ def record_engagement_day(conn_or_path, account_id, *, now=None, tz=None,
 # ── the pass ladder (Pillar 3): redeem coins for a signed pass ────────────────
 
 
-def pass_ladder() -> dict:
+def pass_ladder(values=None) -> dict:
     """The published price ladder — read by the app and (in deliverable c) the
     admin card. Monthly VIP is ₨250 per the plan doc (authoritative), independent
-    of `payments.PLAN_DEFAULTS`, which is left untouched."""
-    return {name: dict(spec) for name, spec in PASS_LADDER.items()}
+    of `payments.PLAN_DEFAULTS`, which is left untouched.
+
+    This is :func:`resolve_ladder` under its older name, not a second table: a
+    ladder with two accessors is a ladder with two answers."""
+    return resolve_ladder(values)
 
 
 def redeem_pass(conn_or_path, account_id, *, plan, pass_secret, now=None,
-                tz=None, idempotency_key=None) -> dict:
+                tz=None, idempotency_key=None, values=None, ladder=None) -> dict:
     """Turn coins into a signed VIP pass. A coin spend first (refusing
     `InsufficientCoins` if the wallet is short), then a capability token minted
     with `redact.mint_vip_pass` — honoured on `/api/v1/download` and unforgeable
     and non-replayable after expiry (M-MON-02). Coins are spendable ONLY on these
-    passes: there is no cash-out path anywhere in this module (§A)."""
-    if plan not in PASS_LADDER:
-        raise UnknownPlan(plan)
+    passes: there is no cash-out path anywhere in this module (§A).
+
+    Everything the pass has to say about itself — its price and the instant it
+    dies — is resolved from the tier's own data *before* the wallet is touched, so
+    a refusal writes nothing. `spend_coins` used to run first and the expiry
+    branch second, which meant a tier the code did not understand cost coins and
+    minted nothing; that is the one failure a spend cannot have, and no ordering
+    of `if plan == …` fixes it, because the bug was the ordering.
+
+    `values` is the `app_remote_config` row and `ladder` a table already resolved
+    by :func:`resolve_ladder` (a caller that resolved it for its own reply passes
+    it here so the two cannot diverge). Both default to the shipped ladder. The
+    price is read from the same table the phone's price list is built from, so a
+    cheapening can only ever be a cheapening of both."""
     if not pass_secret:
         raise EngagementError("a pass must be signed with a secret")
+    table = ladder if ladder is not None else resolve_ladder(values)
+    if plan not in table:
+        raise UnknownPlan(plan)
+    spec = table[plan]
     moment = _now(now)
-    cost = int(PASS_LADDER[plan]["coins"])
+    cost = _positive_int(spec.get("coins"), f"{plan} coin cost")
+    expires = tier_expiry(plan, moment, tz=tz, ladder=table)
     if idempotency_key is None:
         idempotency_key = f"redeem:{account_id}:{plan}:{int(moment)}"
     spend = spend_coins(conn_or_path, account_id, amount=cost, reason="redeem_pass",
                         ref=plan, idempotency_key=idempotency_key, now=moment)
-    spec = PASS_LADDER[plan]
-    if plan == "weekend":
-        expires = _weekend_expiry(moment, tz or STREAK_TZ_DEFAULT)
-    else:
-        expires = moment + int(spec["duration_seconds"])
     expires = float(int(expires))   # the signed token's resolution is whole seconds
     token = redact.mint_vip_pass(expires, pass_secret)
     return {"plan": plan, "cost": cost, "balance": spend["balance"],
             "already_applied": spend["already_applied"], "pass": token,
-            "expires_at": expires}
+            "expires_at": expires, "expiry_rule": str(spec.get("expiry_rule") or "")}
 
 
 # ── ad cadence, server-side (Pillar 1) ────────────────────────────────────────
@@ -841,21 +981,26 @@ def remote_view() -> dict:
     Deliverable (c) landed: `admin_panel.remote_config()` builds its `engagement`
     block *over this function* and applies the operator's `app_remote_config` row
     on top, so the numbers a client sees are the shipped ones until a knob is saved
-    and the saved ones after. Three server-side enforcement sites still read this
+    and the saved ones after. The ad cadence is applied at the enforcement site
+    (`ad_grant(caps=…)`), and the pass ladder is now applied at its enforcement
+    site too: `redeem_pass(values=…)` prices and times a pass through
+    :func:`resolve_ladder`, the same resolver that builds the `passes` block below,
+    so a published price and a charged price are one number read twice rather than
+    two numbers that happen to agree. Two enforcement sites still read this
     module's constants rather than the row — `_enforce_rewarded_cap`
-    (`REWARDED_DAILY_CAP`), `record_engagement_day` (`STREAK_GRANTS_COINS`) and
-    `redeem_pass` (`PASS_LADDER[…]["coins"]`). `ad_grant(caps=…)` already takes the
-    overrides. Wiring the other three belongs with the route that owns each spend,
-    and it is not cosmetic: an operator who *lowers* a coin cost today publishes a
-    price more forgiving than the charge, which is the one direction the
-    no-deception rule does not tolerate. Publishes costs and grant sizes as data —
-    the whole point of the rule is that a user can see the real numbers, and there
-    is no field here a coin could be cashed out through."""
+    (`REWARDED_DAILY_CAP`) and `record_engagement_day` (`STREAK_GRANTS_COINS`) —
+    and wiring those belongs with the route that owns each grant. It is not
+    cosmetic there either, but the mistake runs the other way: a lowered cap would
+    publish a stricter ceiling than the ledger hands out. Publishes costs and grant
+    sizes as data — the whole point of the rule is that a user can see the real
+    numbers, and there is no field here a coin could be cashed out through."""
+    ladder = resolve_ladder()
     return {
         "wallet": {
             "coin_per_rewarded_ad": COINS_PER_REWARDED_AD,
             "rewarded_daily_cap": REWARDED_DAILY_CAP,
-            "redeem_coin_costs": dict(REDEEM_COIN_COSTS),
+            "redeem_coin_costs": {name: int(spec["coins"])
+                                  for name, spec in ladder.items()},
         },
         "streak": {
             "grants": {"day1_coins": STREAK_GRANTS_COINS[1],
@@ -864,9 +1009,7 @@ def remote_view() -> dict:
             "tz": STREAK_TZ_DEFAULT,
             "day_boundary_hour": DAY_BOUNDARY_HOUR_DEFAULT,
         },
-        "passes": {name: {"pkr": int(spec["pkr"]), "coins": int(spec["coins"]),
-                          "duration_seconds": spec.get("duration_seconds")}
-                   for name, spec in PASS_LADDER.items()},
+        "passes": passes_projection(ladder),
         "cadence": dict(CAPS_DEFAULT),
     }
 

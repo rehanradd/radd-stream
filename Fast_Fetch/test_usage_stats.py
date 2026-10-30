@@ -660,6 +660,11 @@ class PaymentsCounterTests(TempLedger):
                                        now=NOW)
 
     def test_approved_purchases_split_by_tier_and_sum_the_money(self):
+        """`amount_pkr` is an `INTEGER` column (`accounts.py:462`), PKR is priced in
+        whole rupees, and every other reader of this queue casts it with `int()`
+        (`payments.payment_detail`). The aggregate therefore leaves this module an
+        `int` too: a `float` here is a whole rupee count that has been put through a
+        binary fraction on the way to being printed as money."""
         approved = self.file("vip_yearly", "a")
         month = self.file("vip_monthly", "b")
         self.file("vip_yearly", "c")           # left pending
@@ -669,8 +674,12 @@ class PaymentsCounterTests(TempLedger):
                                  now=NOW)
         report = usage_stats.summary(self.db, now=NOW)["payments"]
         self.assertEqual(report["by_tier"],
-                         {"vip_yearly": {"purchases": 1, "amount_pkr": 1500.0},
-                          "vip_monthly": {"purchases": 1, "amount_pkr": 200.0}})
+                         {"vip_yearly": {"purchases": 1, "amount_pkr": 1500},
+                          "vip_monthly": {"purchases": 1, "amount_pkr": 200}})
+        for tier in report["by_tier"].values():
+            self.assertIs(type(tier["amount_pkr"]), int,
+                          "money in this projection is whole rupees, never a float")
+        self.assertIs(type(report["total_pkr"]), int)
         self.assertEqual(report["purchases"], 2)      # approved claims, not the queue
         self.assertEqual(report["pending"], 1)
         self.assertEqual(report["total_pkr"],

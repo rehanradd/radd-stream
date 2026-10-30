@@ -596,8 +596,17 @@ def _payments(conn) -> dict:
     forbids. `purchases` and `total_pkr` count the `approved` rows only — the
     money; `pending` is the operator's work queue, printed beside it so the two
     cannot be mistaken for each other. A rejected claim is in neither.
+
+    Money leaves here as `int`, because that is the type the ledger of record
+    reads it as (`payments.payment_detail`/`list_payments` both
+    `int(row["amount_pkr"] or 0)`) and PKR is priced in whole rupees everywhere in
+    this project. A `float` cast in the projection was the one place in the money
+    path that turned a whole number into a number with a decimal point on the way
+    out; `1500.0` prints as money, gets summed as a binary fraction and is the
+    shape from which "off by one paisa" bugs start. This changes no stored value
+    and no wire contract — the same rupee count, now the same type the queue holds.
     """
-    out: dict[str, object] = {"by_tier": {}, "total_pkr": 0.0,
+    out: dict[str, object] = {"by_tier": {}, "total_pkr": 0,
                               "purchases": 0, "pending": 0}
     try:
         rows = conn.execute(
@@ -609,7 +618,7 @@ def _payments(conn) -> dict:
     tiers: dict[str, dict] = {}
     for plan, count, amount in rows:
         tiers[str(plan or UNKNOWN_VALUE)] = {"purchases": int(count),
-                                             "amount_pkr": float(amount or 0)}
+                                             "amount_pkr": int(amount or 0)}
     out["by_tier"] = tiers
     out["total_pkr"] = sum(row["amount_pkr"] for row in tiers.values())
     out["purchases"] = sum(row["purchases"] for row in tiers.values())
