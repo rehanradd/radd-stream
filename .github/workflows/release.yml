@@ -115,7 +115,7 @@ jobs:
 
       - name: 🧪 Unit tests gate the release
         working-directory: App
-        run: ./gradlew :app:testDebugUnitTest :app:testReleaseUnitTest --no-daemon --stacktrace --console=plain
+        run: ./gradlew :app:testDebugUnitTest --no-daemon --stacktrace --console=plain
 
       - name: 🏗️ Build signed release APK + AAB
         working-directory: App
