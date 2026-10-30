@@ -7,7 +7,7 @@
 
 ## ✅ Open items — index (q3, 2026-10-30; pointers only)
 
-1. **This file is a pointer, not a history.** 48 session files (47 dated + 1 undated ledger) cover
+1. **This file is a pointer, not a history.** 49 session files (48 dated + 1 undated ledger) cover
    2026-10-23 → 2026-10-30,
    every one of them verbatim: [`checkpoints/README.md`](checkpoints/README.md). Nothing was
    deleted, reworded, or summarized. The count is `ls Fast_Fetch/checkpoints/*.md` minus `README.md`,
