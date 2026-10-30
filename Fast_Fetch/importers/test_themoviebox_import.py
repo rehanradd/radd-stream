@@ -674,6 +674,111 @@ class SchemaAndMemoryTests(unittest.TestCase):
             self.assertEqual(totals["checked"], 0)
 
 
+class SubjectStampTests(unittest.TestCase):
+    """A page crawl learns the work's own id; the next pass must cash it in.
+
+    Measured 2026-10-30: the 12 crawled rows had ``{}`` in ``sitemap_cache``, so
+    every pass fetched the ~410 KB HTML page while the ~39 KB JSON detail answer
+    sat one ``subjectId`` away. The re-crawl stored the id in ``posts.raw_meta``
+    and never wrote it back, paying the 10x again on every future pass.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.db = Path(self.tmp.name) / "v.db"
+        conn = sqlite3.connect(self.db)
+        mb.ensure_schema(conn)
+        conn.execute("INSERT INTO sitemap_cache (loc, scraped, raw_json,"
+                     " error_count) VALUES (?, 0, '{}', 0)", (DETAIL_URL,))
+        conn.commit()
+        conn.close()
+
+    def _crawl(self, fetch):
+        with silenced(), mock.patch.object(mb, "http_get", fetch), \
+                mock.patch.object(mb, "memory_ok", return_value=(True, "ok")), \
+                mock.patch.object(mb.time, "sleep", lambda *_: None):
+            return mb.crawl_pending(db_path=self.db, workers=1, delay=0)
+
+    def _answer(self):
+        return {"code": 0, "data": {"subject": MATCHBOX_WITH_RESOURCE,
+                                    "stars": [], "resource": None}}
+
+    def test_a_page_crawl_writes_the_id_back_and_the_next_pass_uses_json(self):
+        html = nuxt_script(devalue(MATCHBOX_WITH_RESOURCE))
+        totals = self._crawl(mock.MagicMock(return_value=(200, DETAIL_URL, html)))
+        self.assertEqual(totals["posts"], 1, totals)
+        conn = sqlite3.connect(self.db)
+        ledger = json.loads(conn.execute(
+            "SELECT raw_json FROM sitemap_cache WHERE loc = ?",
+            (DETAIL_URL,)).fetchone()[0])
+        # The row is put back in the queue so the second pass is a real second call.
+        conn.execute("UPDATE sitemap_cache SET scraped = 0 WHERE loc = ?",
+                     (DETAIL_URL,))
+        conn.commit()
+        conn.close()
+        self.assertEqual(ledger.get("subjectId"), MATCHBOX["subjectId"], ledger)
+
+        api = mock.MagicMock(return_value=(200, mb.detail_api_url(
+            MATCHBOX["subjectId"]), json.dumps(self._answer())))
+        totals = self._crawl(api)
+        self.assertEqual(totals["api_pages"], 1, totals)
+        self.assertEqual(totals["posts"], 1, totals)
+        called = api.call_args.args[0]
+        self.assertEqual(called, mb.detail_api_url(MATCHBOX["subjectId"]),
+                         "the second pass must not pay for the HTML page again")
+
+    def test_an_id_already_known_is_not_rewritten(self):
+        conn = sqlite3.connect(self.db)
+        conn.execute("UPDATE sitemap_cache SET raw_json = ? WHERE loc = ?",
+                     (json.dumps({"subjectId": "known", "last_note": "kept"}),
+                      DETAIL_URL))
+        conn.commit()
+        conn.close()
+        mb._stamp_subject_id(self.db, DETAIL_URL, "known")
+        conn = sqlite3.connect(self.db)
+        ledger = json.loads(conn.execute(
+            "SELECT raw_json FROM sitemap_cache WHERE loc = ?",
+            (DETAIL_URL,)).fetchone()[0])
+        conn.close()
+        self.assertEqual(ledger, {"subjectId": "known", "last_note": "kept"},
+                         "the rest of the ledger survives a stamp")
+
+
+class LanguageSplitTests(unittest.TestCase):
+    """Audio and subtitles are different facts on both surfaces.
+
+    ``dubs[]`` and ``subject.subtitles`` are the same keys in the HTML payload
+    and the JSON answer, so the same split has to come out of both — otherwise a
+    row's languages depend on which surface happened to fetch it.
+    """
+
+    def _api_record(self):
+        payload = {"code": 0, "data": {"subject": MATCHBOX_WITH_RESOURCE,
+                                       "stars": [], "resource": None}}
+        return mb.parse_detail_api(payload, DETAIL_URL)[0]
+
+    def test_both_surfaces_split_dubs_from_subtitles_identically(self):
+        html = mb.parse_page(nuxt_script(devalue(MATCHBOX_WITH_RESOURCE)),
+                             DETAIL_URL)[0]
+        api = self._api_record()
+        self.assertEqual(html["languages"], api["languages"])
+        self.assertEqual(html["raw_meta"]["subtitles"],
+                         api["raw_meta"]["subtitles"])
+        self.assertEqual(html["languages"], "Original Audio, French dub")
+        self.assertEqual(html["raw_meta"]["subtitles"], "English, Hindi")
+        self.assertNotIn("English", html["languages"],
+                         "a subtitle track must not read as a spoken language")
+
+    def test_a_page_with_only_a_languages_string_keeps_it(self):
+        # Not every page carries ``dubs[]``; the older key must not be lost.
+        only = dict(MATCHBOX, dubs=[], subtitles="", languages="Spanish,French")
+        record = mb.parse_page(nuxt_script(devalue(only)), DETAIL_URL)[0]
+        self.assertEqual(record["languages"], "Spanish,French",
+                         "the older key joins as one label, as genres do")
+        self.assertNotIn("subtitles", record["raw_meta"])
+
+
 class MemoryGateTests(unittest.TestCase):
     """A refused run must never look like a finished one.
 

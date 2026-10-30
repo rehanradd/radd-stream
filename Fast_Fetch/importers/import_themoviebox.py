@@ -1134,6 +1134,20 @@ def _build_record(anchor: dict, candidates: list, page_url: str) -> dict | None:
         },
         "releases": releases,
     }
+    # The HTML page carries the same ``dubs[]``/``subtitles`` pair the detail
+    # answer does, and merging them into ``languages`` labelled every subtitle a
+    # spoken track. Same split, same keys, on both surfaces.
+    dubs = None
+    for node in [anchor] + list(reversed(all_ancestors)):
+        if isinstance(node, dict) and isinstance(node.get("dubs"), list) \
+                and node["dubs"]:
+            dubs = node["dubs"]
+            break
+    audio, subs = _split_dubs(dubs, _lookup(anchor, all_ancestors, ("subtitles",)))
+    if audio:
+        record["languages"] = audio
+    if subs:
+        record["raw_meta"]["subtitles"] = subs
     _stamp_seasons(record)
     return record
 
@@ -2062,6 +2076,34 @@ def _mark_scraped(db_path: Path, locs) -> None:
         conn.close()
 
 
+def _stamp_subject_id(db_path: Path, loc: str, subject_id: str) -> None:
+    """Write the id a page just revealed back into its queue row.
+
+    Rows queued before the JSON detail surface existed carry ``{}``, so every
+    crawl of them pays the ~410 KB HTML page where the ~39 KB detail answer would
+    do. The page names its own id; recording it here makes the next pass take the
+    cheap surface. The rest of the ledger (failures, notes) is preserved.
+    """
+    conn = sqlite3.connect(db_path, timeout=60)
+    try:
+        row = conn.execute("SELECT raw_json FROM sitemap_cache WHERE loc = ?",
+                           (loc,)).fetchone()
+        try:
+            ledger = json.loads(row[0] or "{}") if row else {}
+        except (TypeError, ValueError):
+            ledger = {}
+        if not isinstance(ledger, dict):
+            ledger = {}
+        if _as_text(ledger.get("subjectId")) == subject_id:
+            return
+        ledger["subjectId"] = subject_id
+        conn.execute("UPDATE sitemap_cache SET raw_json = ? WHERE loc = ?",
+                     (json.dumps(ledger, ensure_ascii=False), loc))
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def memory_ok(meminfo: str | None = None) -> tuple[bool, str]:
     """Reads /proc/meminfo; the floor is 2,500 MB free / 800 MB swap."""
     text = meminfo
@@ -2182,6 +2224,12 @@ def crawl_pending(limit: int | None = None, db_path: Path | str = DEFAULT_DB_PAT
                 "detail answer was not the public subject shape" if subject_id
                 else "page carried no titled subject in its Nuxt payload"))
             return
+        if not subject_id:
+            resolved = next((sid for sid in (
+                _as_text(rec["raw_meta"].get("subjectId"))
+                for rec in records if rec.get("raw_meta")) if sid), None)
+            if resolved:
+                _stamp_subject_id(db_path, loc, resolved)
         # A subject with no print is the expected outcome on this site, not a
         # failure: the play URL is resolved client-side. It is written as a
         # metadata row and marked crawled, so a re-run does not keep spending
