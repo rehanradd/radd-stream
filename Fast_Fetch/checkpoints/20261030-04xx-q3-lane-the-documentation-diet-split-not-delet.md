@@ -59,18 +59,63 @@ Do not merge, do not touch production, do not delete any historical text — mov
 
 ## Sizes — before → after (bytes, measured)
 
-| file | before (`dc73ac7`) | after | target |
+| file | before (`dc73ac7`) | after (rebased onto trunk `4fe6f65`) | target |
 |---|---|---|---|
-| `Fast_Fetch/CONTINUITY.md` | 277,009 | **6,511** | ≤ 20-line index ✅ |
-| `docs/SESSION_CHECKPOINT.md` | 248,840 | **3,746** | ≤ 20-line index ✅ |
+| `Fast_Fetch/CONTINUITY.md` | 277,009 | **8,819** | ≤ 20-line index ✅ |
+| `docs/SESSION_CHECKPOINT.md` | 248,840 | **5,426** | ≤ 20-line index ✅ |
 | `App/AGENTS.md` | 177,371 | **11,993** | ≤ 10 KB — missed by 2 KB |
-| `Fast_Fetch/AGENTS.md` | 38,909 | **13,667** | ≤ 8 KB — missed |
+| `Fast_Fetch/AGENTS.md` | 38,909 | **13,668** | ≤ 8 KB — missed |
 | root `AGENTS.md` | 37,670 | **28,746** | ≤ 8 KB — missed |
-| **the five, total** | **779,799** | **64,663 (−91.7 %)** | |
+| **the five, total** | **779,799** | **68,652 (−91.2 %)** | |
 
-(All Markdown in the repo went 1,844,304 → 1,918,918 B — the diet *adds* 74 KB of headers and
-provenance lines to the moved text. It is a relocation, not a compression: what shrank is what
-every lane auto-loads, which is the defect that was reported.)
+(The two logs are bigger here than at `42464cb` — 65,714 B — because the rebase absorbed trunk's
+three post-rotation doc edits into the index layout: q4's `[Q4-SAFETY]` halt-band entry, q2's
+MovieBox detail-API checkpoint entry, and q2's `[Q2-MOVIEBOX-CRAWL]` CONTINUITY session block. They
+went to `checkpoints/` as dated files and cost the indexes ~3 KB of new pointer lines. Still 91 %
+smaller than what every lane auto-loaded.)
+
+(All Markdown in the repo went 1,844,304 → 1,920,647 B across 68 → 190 files — the diet *adds* 76 KB
+of headers, indexes and provenance lines to the moved text. It is a relocation, not a compression:
+what shrank is what every lane auto-loads, which is the defect that was reported. **Say it plainly
+so nobody later "fixes" it by deleting archives:** tracked Markdown bytes went UP on purpose. An
+archive is not loaded by any agent, so its bytes cost nothing; a law line inside an auto-loaded file
+costs 45 k tokens every session. If a future lane sees the total rise and calls it a regression, this
+paragraph is the answer.)
+
+**Every number in this table is `git cat-file -s` / `wc -c` on the tree being committed, not a figure
+taken while the files were still being edited.** The first pass printed 64,663 B and CONTINUITY
+6,511 B; both were mid-work measurements, before the final pointer lines landed, and the original
+commit message still carries the 64,663 figure. Corrected here rather than amended in Git — the
+committed message is history, this table is the measurement.
+
+## The rebase: trunk moved while the diet was open, and a rotation has to eat that
+
+`q3-docs-diet` was written against `dc73ac7`. Trunk moved to `4fe6f65` (q2's MovieBox detail-API fix
+plus q4's `[Q4-SAFETY]` landing), and three doc edits landed *into the files I had just rotated* —
+which is exactly how a diet silently deletes someone else's history: the append-here habit, one file,
+two lanes, and a rebase that "takes my version" loses theirs.
+
+What this lane did instead, measured and checked:
+
+- `git rebase --onto 4fe6f65 dc73ac7` — conflicts only in `Fast_Fetch/CONTINUITY.md`,
+  `docs/SESSION_CHECKPOINT.md` (both resolved to the index layout, never to "mine").
+- Each trunk insertion extracted by `difflib` opcode (not by hand-copied line numbers), conservation
+  checked as a multiset before any write, then re-verified after the write, and put in one dated file
+  per session with the trunk sha and line range in its header:
+  `Fast_Fetch/checkpoints/20261030-q2-themoviebox-crawl-…` (100 lines),
+  `docs/checkpoints/20261030-2026-10-30-04-15-qoder4-…` (42),
+  `docs/checkpoints/20261030-2026-10-30-cont-…` (16).
+- `Fast_Fetch/SITES.md` — this lane never rotated it, so q2's corrected §25 site notes came through
+  untouched. Recorded so the next reader does not go looking for them in `checkpoints/`.
+- Every new archive is named by both the auto-loaded index and `checkpoints/README.md`; the merged
+  `backend-ci.yml` keeps trunk's `🧪 test_themoviebox_detail_api.py` where trunk put it and the
+  guard step last — **29 `🧪` steps, 28 `run: python3 -S` matches**, the counting law holding.
+- Re-measured against the *new* trunk: `TOTAL VANISHED LINES vs 4fe6f65: 0` across all five files
+  (3,627 CONTINUITY lines and 3,088 SESSION_CHECKPOINT lines checked, not sampled).
+- The guard test grew rather than relaxed: 17 cases now, including q4's halt-band law lines, q2's
+  crawl-gate-refusal lines, `SITES.md`'s "no playable print is resolvable from this host" verdict, a
+  check that every enumerated target file is *reachable from an index* (law nobody can find is law
+  lost), and a check that the archive counts claimed in the two indexes equal the directory listings.
 
 ## The honest finding: the 8 KB target and "verbatim law" are mutually unsatisfiable
 
@@ -83,8 +128,9 @@ either rewording law (forbidden) or relocating it out of the auto-loaded file (a
 brief's own LAW rule). So I kept law verbatim, moved everything that is evidence, and set the guard
 test's ceilings at the measured floor + headroom (root 32 KB, `Fast_Fetch/` 18 KB, `App/` 15 KB).
 
-**What the fleet actually got:** the five files a lane auto-loads went **781,795 B → ~64 KB (−92 %)**,
-≈ 45 k tokens → ≈ 16 k (64,663 B of the 1.92 MB of Markdown). The remaining reduction available is *de-duplication*, not trimming: root
+**What the fleet actually got:** the five files a lane auto-loads went **779,799 B → 68,652 B
+(−91.2 %)**, ≈ 45 k tokens → ≈ 17 k (68,652 B of the 1.92 MB of Markdown). The remaining reduction
+available is *de-duplication*, not trimming: root
 `AGENTS.md` §"Important Rules" is restated in `Fast_Fetch/AGENTS.md` §11 and `App/AGENTS.md`, and
 `Fast_Fetch/AGENTS.md` §6 repeats the adult law. Say the word and I'll make root the single home for
 shared law and have the two sub-guides link it — that gets all three under their targets without
