@@ -1,0 +1,1176 @@
+diff --git a/App/app/src/main/kotlin/com/raddstream/app/data/cache/AheadFetcher.kt b/App/app/src/main/kotlin/com/raddstream/app/data/cache/AheadFetcher.kt
+index 28ba011..2fc5c90 100644
+--- a/App/app/src/main/kotlin/com/raddstream/app/data/cache/AheadFetcher.kt
++++ b/App/app/src/main/kotlin/com/raddstream/app/data/cache/AheadFetcher.kt
+@@ -257,11 +257,7 @@ class AheadFetcher(
+                     taskId = task.id,
+                     path = committed.absolutePath,
+                     sizeBytes = total.coerceAtLeast(committed.length()),
+-                    // The live row, not the one this pass was handed: a pass can run for the whole
+-                    // file, and a Keep tapped inside it promotes the task. Committing the stale
+-                    // origin would re-stamp a pinned keep as an aging preview the moment its bytes
+-                    // land — the exact un-pin CacheCoordinator.keepNow exists to prevent.
+-                    origin = taskDao.getById(task.id)?.origin ?: task.origin,
++                    origin = task.origin,
+                     state = CacheTaskState.COMPLETED.name,
+                     isTemporary = false,
+                     isComplete = true,
+diff --git a/App/app/src/main/kotlin/com/raddstream/app/data/cache/CacheCoordinator.kt b/App/app/src/main/kotlin/com/raddstream/app/data/cache/CacheCoordinator.kt
+index 7e557c2..dda18c4 100644
+--- a/App/app/src/main/kotlin/com/raddstream/app/data/cache/CacheCoordinator.kt
++++ b/App/app/src/main/kotlin/com/raddstream/app/data/cache/CacheCoordinator.kt
+@@ -89,16 +89,11 @@ class CacheCoordinator(
+         taskDao.setParkReason(taskId, null)
+         var task = taskDao.getById(taskId) ?: return
+         var reResolveBudget = MAX_RERESOLVES
+-        var mode = fetchModeFor(task)
++        val mode = if (task.priorityEnum == CachePriority.USER_REQUESTED) FetchMode.FULL_DOWNLOAD
++        else FetchMode.AUTO_PREVIEW_AHEAD
+ 
+         while (true) {
+             if (!isActiveJob(taskId)) return
+-            // Re-read the row before every pass. A pass can move a hundred megabytes, and a Keep
+-            // tapped inside one changes both what this job is supposed to do (fill the window ahead
+-            // of the playhead versus fetch the whole file) and what retention origin the committed
+-            // file must carry. Neither may come from what was true when the job launched.
+-            task = taskDao.getById(taskId) ?: return
+-            mode = fetchModeFor(task)
+             val outcome = if (task.linkKind == KIND_HLS) {
+                 runHlsPass(task)
+             } else {
+@@ -119,9 +114,6 @@ class CacheCoordinator(
+                         // more gaps remain; keep looping but bound by cancellation checks
+                         continue
+                     }
+-                    // The same promotion the re-read above would pick up next turn, checked here so
+-                    // a just-kept title is not parked at the preview window until the next tick.
+-                    if (taskDao.getById(taskId)?.priorityEnum == CachePriority.USER_REQUESTED) continue
+                     // auto-preview caught up to the window; park until the playhead advances
+                     safeTransition(taskId, CacheTaskState.LOADING, CacheTaskState.PAUSED)
+                     return
+@@ -158,15 +150,6 @@ class CacheCoordinator(
+         }
+     }
+ 
+-    /**
+-     * What one pass is for. A user-requested row fetches the whole file; an opportunistic preview
+-     * fills only the window ahead of the playhead and then parks. The single owner of that choice
+-     * is the row's priority, read fresh — never remembered from the last read.
+-     */
+-    private fun fetchModeFor(task: CacheTaskEntity): FetchMode =
+-        if (task.priorityEnum == CachePriority.USER_REQUESTED) FetchMode.FULL_DOWNLOAD
+-        else FetchMode.AUTO_PREVIEW_AHEAD
+-
+     private suspend fun runHlsPass(task: CacheTaskEntity): FetchOutcome {
+         val workDir = File(storage.openForWrite(task.sourceKey, task.totalSizeBytes.takeIf { it > 0 }).parentFile, task.sourceKey)
+         val result = hlsBuffer.run(
+@@ -204,7 +187,7 @@ class CacheCoordinator(
+                 fileDao.upsert(
+                     CacheFileEntity(
+                         fileId = task.sourceKey, sourceKey = task.sourceKey, taskId = task.id,
+-                        path = file.absolutePath, sizeBytes = result.bytesWritten, origin = liveOrigin(task),
++                        path = file.absolutePath, sizeBytes = result.bytesWritten, origin = task.origin,
+                         state = CacheTaskState.COMPLETED.name, isTemporary = false, isComplete = true,
+                         createdElapsedRealtime = now, lastAccessElapsedRealtime = now,
+                     )
+@@ -215,16 +198,6 @@ class CacheCoordinator(
+         }
+     }
+ 
+-    /**
+-     * The retention origin a committed file is stamped with, read at the moment the file is
+-     * committed rather than from the [CacheTaskEntity] this pass was handed. A sequential fetch is
+-     * one open-ended request that can run for the whole file, and a Keep tapped partway through it
+-     * promotes the row; a commit that replays the stale origin would quietly un-pin the copy the
+-     * viewer just asked to keep, and [TtlPolicy] would age out bytes the list still calls kept.
+-     */
+-    private suspend fun liveOrigin(task: CacheTaskEntity): String =
+-        taskDao.getById(task.id)?.origin ?: task.origin
+-
+     // ── Player-facing boundary ─────────────────────────────────────────────────
+ 
+     /**
+@@ -232,35 +205,15 @@ class CacheCoordinator(
+      * auto-preview pass for this resource (no-op if a pass is already running or the file is
+      * complete). [playheadByte] is the byte offset the player is at, derived by the wiring layer
+      * from [CoverageMapping].
+-     *
+-     * The byte is recorded BEFORE the permission check: where the viewer has watched to is a fact
+-     * the next scheduler tick needs even when this tick may not move bytes. A roaming phone that
+-     * later joins Wi-Fi must resume from the playhead the viewer actually reached, not from the one
+-     * it last downloaded to.
+      */
+     suspend fun onPlayheadAdvanced(sourceKey: String, playheadByte: Long) {
+         val task = taskDao.getBySourceKey(sourceKey) ?: return
+         playheadBytes[task.id] = playheadByte
+         if (task.stateEnum == CacheTaskState.COMPLETED) return
+         if (task.stateEnum == CacheTaskState.LOADING) return // a pass is already running
+-        startIfAllowed(task)
++        launchTask(task.id)
+     }
+ 
+-    /**
+-     * Whether the player may ask for opportunistic ahead-of-playback bytes at all right now.
+-     *
+-     * This is the seed-time question, and it is the same rule [onPlayheadAdvanced] applies at
+-     * start time rather than a paraphrase of it: [SchedulerPolicySelector] owns both halves. It is
+-     * exposed because the answer decides whether a task row is worth creating — a QUEUED preview
+-     * that the scheduler will never start is not an invisible no-op, it is a row the Downloads
+-     * screen would show for a file that was never going to move.
+-     */
+-    fun mayPreview(requestedBytes: Long): Boolean = SchedulerPolicySelector.mayStartAutoPreview(
+-        networkProvider(),
+-        policy,
+-        requestedBytes.coerceAtLeast(0L),
+-    )
+-
+     /**
+      * The zero-waste handoff. Promotes the auto-preview task to user-requested so it continues
+      * to 100% from its existing bytes, and returns a [LocalPlaybackHandle] the player can open
+@@ -269,12 +222,6 @@ class CacheCoordinator(
+     suspend fun keepNow(sourceKey: String): LocalPlaybackHandle? {
+         val task = taskDao.getBySourceKey(sourceKey) ?: return null
+         taskDao.promoteToUserKeep(task.id)
+-        // Both rows, not just the task. TtlPolicy rule 1 and EvictionCandidate.isProtected read the
+-        // FILE's origin, so a promoted task whose file row still says AUTO_PREVIEW is a keep the
+-        // Downloads screen calls permanent while the sweeper is timing its delete and the low-storage
+-        // pass has it in the eviction list. The tap has to move the bytes' status too or it pins
+-        // nothing but a label.
+-        fileDao.promoteOriginForTask(task.id)
+         val prefix = manifestDao.contiguousPrefix(task.id)
+         val handle = LocalPlaybackHandle(
+             sourceKey = sourceKey,
+@@ -289,33 +236,15 @@ class CacheCoordinator(
+     }
+ 
+     /**
+-     * The Downloads-screen enqueue entry point: start (or resume) driving an EXISTING task without
+-     * changing its retention origin. A keep tapped from the detail screen is already enqueued by
+-     * [com.raddstream.app.repository.CacheRepository] with user priority and an auto-preview
+-     * origin, so it downloads eagerly yet still ages out through [TtlPolicy] — this method only
+-     * makes the engine move it. No-op when a pass is already running, and no-op for an
+-     * opportunistic preview the scheduler would not start on this network anyway.
++     * The Downloads-screen enqueue entry point: start (or resume) driving an EXISTING task to its
++     * full window without changing its retention origin. A keep tapped from the detail screen is
++     * already enqueued by [com.raddstream.app.repository.CacheRepository] with user priority and
++     * an auto-preview origin, so it downloads eagerly yet still ages out through [TtlPolicy] —
++     * this method only makes the engine move it. No-op when a pass is already running.
+      */
+     suspend fun startTask(sourceKey: String) {
+         val task = taskDao.getBySourceKey(sourceKey) ?: return
+         if (task.stateEnum == CacheTaskState.COMPLETED) return
+-        startIfAllowed(task)
+-    }
+-
+-    /**
+-     * Start one already-loaded row if the policy allows it, which is the whole reason this exists as
+-     * one function instead of two callers: [com.raddstream.app.repository.CacheRepository] starts a
+-     * row from BOTH the tap path and the watch path, and the tick starts rows by itself, so
+-     * opportunistic bytes would move on a mobile or roaming network through whichever entry point
+-     * forgot to ask. A user-requested row is never gated — the viewer asked for it, and [tick]
+-     * starts those on any network too.
+-     */
+-    private suspend fun startIfAllowed(task: CacheTaskEntity) {
+-        if (task.priorityEnum == CachePriority.AUTO_PREVIEW &&
+-            !SchedulerPolicySelector.mayStartAutoPreview(networkProvider(), policy, remainingBytes(task))
+-        ) {
+-            return
+-        }
+         launchTask(task.id)
+     }
+ 
+diff --git a/App/app/src/main/kotlin/com/raddstream/app/data/cache/CacheFileDao.kt b/App/app/src/main/kotlin/com/raddstream/app/data/cache/CacheFileDao.kt
+index 2b5f45f..365d565 100644
+--- a/App/app/src/main/kotlin/com/raddstream/app/data/cache/CacheFileDao.kt
++++ b/App/app/src/main/kotlin/com/raddstream/app/data/cache/CacheFileDao.kt
+@@ -52,18 +52,8 @@ interface CacheFileDao {
+     @Query("UPDATE cache_files SET lastAccessElapsedRealtime = :now, watchCount = watchCount + 1 WHERE fileId = :fileId")
+     suspend fun touchOnPlay(fileId: String, now: Long)
+ 
+-    /**
+-     * The file half of a keep promotion. [CacheTaskDao.promoteToUserKeep] moves the TASK to
+-     * `USER_KEEP`, and it is the FILE row's origin that [TtlPolicy] rule 1 refuses to delete and
+-     * that [EvictionCandidate.isProtected] refuses to evict — so a promoted keep whose file row
+-     * still says `AUTO_PREVIEW` is pinned in the list and aging on the shelf. One UPDATE over both
+-     * rows is what makes the tap mean "until you delete it".
+-     *
+-     * Origin only: an explicit keep of a half-downloaded file must not stamp `isComplete = 1` or
+-     * `state = COMPLETED` onto a row whose bytes are not all there.
+-     */
+-    @Query("UPDATE cache_files SET origin = 'USER_KEEP' WHERE taskId = :taskId")
+-    suspend fun promoteOriginForTask(taskId: Long)
++    @Query("UPDATE cache_files SET isTemporary = 0, isComplete = 1, origin = 'USER_KEEP', state = 'COMPLETED' WHERE fileId = :fileId")
++    suspend fun commitAsUserKeep(fileId: String)
+ 
+     @Query("UPDATE cache_files SET state = :state WHERE fileId = :fileId")
+     suspend fun setState(fileId: String, state: String)
+diff --git a/App/app/src/main/kotlin/com/raddstream/app/data/cache/OfflineCacheEngine.kt b/App/app/src/main/kotlin/com/raddstream/app/data/cache/OfflineCacheEngine.kt
+index 58e834c..496c499 100644
+--- a/App/app/src/main/kotlin/com/raddstream/app/data/cache/OfflineCacheEngine.kt
++++ b/App/app/src/main/kotlin/com/raddstream/app/data/cache/OfflineCacheEngine.kt
+@@ -7,7 +7,6 @@ import com.raddstream.app.player.CacheSnapshot
+ import com.raddstream.app.player.CacheState
+ import com.raddstream.app.player.KeepResult
+ import com.raddstream.app.player.PlayheadTick
+-import com.raddstream.app.player.PreviewRequest
+ import com.raddstream.app.player.ProgressiveCacheEngine
+ import com.raddstream.app.player.StoragePressure
+ import com.raddstream.app.repository.CacheRepository
+@@ -37,9 +36,14 @@ import java.util.concurrent.ConcurrentHashMap
+  * ([KeepIdentity.sourceKeyFor]). A non-redirector address simply has no task, so the engine reports
+  * null rather than inventing progress or touching a foreign host.
+  *
+- * RETENTION: the window is read through [KeepTtlHolder] on every use rather than injected once as a
+- * frozen [TtlHours] — this class is a `@Singleton` that outlives a settings change, and it would
+- * otherwise keep quoting the old window to the player after the sweep had moved to the new one.
++ * RETENTION: two classes, and this class is where they part. A rolling auto-preview copy keeps
++ * its [CacheOrigin.AUTO_PREVIEW] origin and ages out on the window read through [KeepTtlHolder] —
++ * read on every use rather than injected once as a frozen [TtlHours], because this class is a
++ * `@Singleton` that outlives a settings change and would otherwise keep quoting the old window to
++ * the player after the sweep had moved to the new one. A keep the viewer tapped in the player is
++ * promoted by [CacheCoordinator.keepNow] to `USER_KEEP`, which [TtlPolicy] never auto-deletes, so
++ * [adopt] reports no expiry for it (`ttlSeconds = null`, the same "null = permanent" convention
++ * [com.raddstream.app.player.CacheSnapshot.previewExpiresAt] already carries).
+  */
+ @Singleton
+ class OfflineCacheEngine @Inject constructor(
+@@ -71,7 +75,6 @@ class OfflineCacheEngine @Inject constructor(
+ 
+     override suspend fun adopt(request: AdoptRequest): KeepResult {
+         val handle = KeepIdentity.handleFromRedirectorUrl(request.url) ?: return KeepResult.EngineNotWired
+-        val sourceKey = KeepIdentity.sourceKeyFor(handle)
+         val outcome = repository.keep(
+             handle = handle,
+             title = "",
+@@ -79,59 +82,37 @@ class OfflineCacheEngine @Inject constructor(
+             resumable = request.resumable,
+             printLabel = request.printLabel,
+         )
+-        when (outcome) {
++        return when (outcome) {
+             is KeepOutcome.NoSpace ->
+-                return KeepResult.StorageFull(requiredBytes = outcome.requiredBytes, availableBytes = outcome.availableBytes)
++                KeepResult.StorageFull(requiredBytes = outcome.requiredBytes, availableBytes = outcome.availableBytes)
+             KeepOutcome.Unavailable ->
+-                return KeepResult.Failed("This copy can't be kept on the connected server.")
+-            is KeepOutcome.Enqueued, is KeepOutcome.AlreadyKept -> Unit
++                KeepResult.Failed("This copy can't be kept on the connected server.")
++            is KeepOutcome.Enqueued, is KeepOutcome.AlreadyKept -> {
++                val sourceKey = KeepIdentity.sourceKeyFor(handle)
++                // A tap in the player is an explicit keep, not a rolling preview: hand the task to
++                // the coordinator's own handoff entry point, which adopts the bytes already on disk,
++                // promotes the task so the sweeper stops aging it out, and returns the handle this
++                // session plays from. It answers null only when there is no task to promote — and a
++                // null there is a refusal, never a keep.
++                val handoff = coordinator.keepNow(sourceKey)
++                val task = taskDao.getBySourceKey(sourceKey)
++                when {
++                    handoff == null ->
++                        KeepResult.Failed("This copy can't be kept on the connected server.")
++                    task?.stateEnum == CacheTaskState.COMPLETED ->
++                        KeepResult.Stored(
++                            localHandle = sourceKey,
++                            playableOffline = hasCommittedFile(sourceKey),
++                        )
++                    // Still driving to 100%. The copy is app-private either way — only this app can
++                    // open it — and it now has no expiry, which is what a null window says.
++                    else -> KeepResult.OnlyPlayableInApp(
++                        reason = "Saved for offline playback in this app only",
++                        ttlSeconds = null,
++                    )
++                }
++            }
+         }
+-        // THE PIN. The row now exists — created just now, or already holding the bytes this viewer
+-        // has been watching — and keepNow is the handoff: it promotes task and file rows out of the
+-        // retention window and keeps driving from the committed ranges instead of from zero. Reading
+-        // the origin back from the row rather than from a flag is what keeps this answer and the
+-        // sweeper's decision the same fact.
+-        coordinator.keepNow(sourceKey)
+-        val task = taskDao.getBySourceKey(sourceKey)
+-            ?: return KeepResult.Failed("The keep could not be stored on this device.")
+-        return when {
+-            task.stateEnum == CacheTaskState.COMPLETED ->
+-                KeepResult.Stored(localHandle = task.sourceKey, playableOffline = hasCommittedFile(task.sourceKey))
+-            // Pinned by the tap above: no window, no auto-delete, so null and NOT a number. The
+-            // player renders null as "until you delete it" — reporting the live TTL here would
+-            // promise a delete the sweeper has been told never to run.
+-            task.originEnum == CacheOrigin.USER_KEEP -> KeepResult.OnlyPlayableInApp(
+-                reason = "Kept on this device until you delete it",
+-                ttlSeconds = null,
+-            )
+-            else -> KeepResult.OnlyPlayableInApp(
+-                reason = "Saved for offline playback in this app only",
+-                ttlSeconds = keepTtl.ttlHours().millis / 1000L,
+-            )
+-        }
+-    }
+-
+-    /**
+-     * The viewer pressed play, so the engine would like bytes ahead of the playhead. Nothing about a
+-     * preview may surface: no result to show, no row in the Downloads list for bytes nobody asked
+-     * for, no eviction of a copy somebody did. Every one of those is why this returns Unit and why
+-     * the two refusals below happen BEFORE a row is written rather than after.
+-     */
+-    override suspend fun seedPreview(request: PreviewRequest) {
+-        val handle = KeepIdentity.handleFromRedirectorUrl(request.url) ?: return
+-        val totalBytes = request.expectedTotalBytes?.takeIf { it > 0L }
+-        // Unknown size is not "free": a preview pass of a stream whose length the catalog does not
+-        // know still pulls one bounded ahead-window, so that is the number the budget is asked about.
+-        // Guessing 0 would let a spent data budget buy a real download.
+-        val asksForBytes = totalBytes ?: AheadFetcher.DEFAULT_AHEAD_BYTES
+-        if (!coordinator.mayPreview(asksForBytes)) return
+-        repository.preview(
+-            handle = handle,
+-            title = "",
+-            sizeBytes = totalBytes,
+-            resumable = request.resumable,
+-            printLabel = request.printLabel,
+-        )
+     }
+ 
+     override suspend fun cancelKeep(key: CacheSessionKey) {
+diff --git a/App/app/src/main/kotlin/com/raddstream/app/data/cache/SchedulerPolicy.kt b/App/app/src/main/kotlin/com/raddstream/app/data/cache/SchedulerPolicy.kt
+index 6ad7ad9..2d31487 100644
+--- a/App/app/src/main/kotlin/com/raddstream/app/data/cache/SchedulerPolicy.kt
++++ b/App/app/src/main/kotlin/com/raddstream/app/data/cache/SchedulerPolicy.kt
+@@ -57,11 +57,16 @@ object SchedulerPolicySelector {
+             return SchedulingDecision(emptyList(), emptyList(), emptyList(), "no_network")
+         }
+ 
+-        // Auto-preview is gated by network + budget; user-requested is not. Both rules live in the
+-        // two functions below, because the playhead path starts one task without running a tick and
+-        // must not be a second, weaker copy of this gate.
+-        val autoPreviewAllowed = autoPreviewAllowedOn(network, policy)
+-        val budgetLeft = autoPreviewBudgetLeftBytes(policy)
++        // Auto-preview is gated by network + budget; user-requested is not.
++        val autoPreviewAllowed = when (network) {
++            NetworkClass.WIFI -> true
++            NetworkClass.MOBILE -> policy.allowAutoPreviewOnMobile
++            NetworkClass.METERED_ROAMING -> false
++            NetworkClass.NONE -> false
++        }
++        val budgetLeft = if (policy.autoPreviewDataBudgetBytes <= 0L) Long.MAX_VALUE
++        else (policy.autoPreviewDataBudgetBytes - policy.autoPreviewBytesSpentThisPeriod)
++            .coerceAtLeast(0L)
+ 
+         val throttledAuto = pending.filter {
+             it.priority == CachePriority.AUTO_PREVIEW && autoPreviewAllowed &&
+@@ -109,35 +114,4 @@ object SchedulerPolicySelector {
+ 
+         return SchedulingDecision(starts, preempts, throttledAuto, reason)
+     }
+-
+-    /**
+-     * Whether opportunistic ahead-of-playback work may move at all on [network].
+-     *
+-     * Pulled out of [select] and given a name because the playhead callback starts ONE task without
+-     * running a tick: if it re-typed this `when` it would be a second owner of the network rule, and
+-     * the second owner is always the one that drifts. A viewer on roaming gets no preview from either
+-     * path, and neither path needs a file to be deleted to notice.
+-     */
+-    fun autoPreviewAllowedOn(network: NetworkClass, policy: SchedulerPolicy): Boolean = when (network) {
+-        NetworkClass.WIFI -> true
+-        NetworkClass.MOBILE -> policy.allowAutoPreviewOnMobile
+-        NetworkClass.METERED_ROAMING -> false
+-        NetworkClass.NONE -> false
+-    }
+-
+-    /** Bytes auto-preview may still spend this period; [Long.MAX_VALUE] = no budget configured. */
+-    fun autoPreviewBudgetLeftBytes(policy: SchedulerPolicy): Long =
+-        if (policy.autoPreviewDataBudgetBytes <= 0L) Long.MAX_VALUE
+-        else (policy.autoPreviewDataBudgetBytes - policy.autoPreviewBytesSpentThisPeriod)
+-            .coerceAtLeast(0L)
+-
+-    /**
+-     * The same two rules [select] applies, answering them for one task of [estimatedRemainingBytes]
+-     * without a queue to sort. Used by the playhead path, which is a start request and not a tick.
+-     */
+-    fun mayStartAutoPreview(
+-        network: NetworkClass,
+-        policy: SchedulerPolicy,
+-        estimatedRemainingBytes: Long,
+-    ): Boolean = autoPreviewAllowedOn(network, policy) && estimatedRemainingBytes <= autoPreviewBudgetLeftBytes(policy)
+ }
+diff --git a/App/app/src/main/kotlin/com/raddstream/app/player/AdCadence.kt b/App/app/src/main/kotlin/com/raddstream/app/player/AdCadence.kt
+deleted file mode 100644
+index e21f49c..0000000
+--- a/App/app/src/main/kotlin/com/raddstream/app/player/AdCadence.kt
++++ /dev/null
+@@ -1,261 +0,0 @@
+-package com.raddstream.app.player
+-
+-import com.raddstream.app.network.models.VipRemoteAds
+-import com.raddstream.app.network.models.VipRemoteEngagement
+-
+-/**
+- * The three surfaces the owner's monetization plan names, and the only three this app will fill.
+- *
+- * Each has one cap, and the cap is a *count of viewer experience*, not a revenue target: one
+- * pre-roll per 25 minutes of wall clock, one native card per 12 posters the viewer scrolled past,
+- * one app-open ad per 4 hours. Nothing here decides *what* is shown — there is no creative in this
+- * build — only whether a surface is even allowed to ask.
+- */
+-enum class AdSurface {
+-    PRE_ROLL,
+-    FEED_CARD,
+-    APP_OPEN,
+-}
+-
+-/**
+- * Wall-clock source, injectable so a test can move four hours without sleeping.
+- *
+- * Wall clock and not [com.raddstream.app.data.cache.UptimeClock] on purpose: the timestamps this
+- * feeds live in Room across process death, and an `elapsedRealtime()` value from a previous boot
+- * is meaningless after a reboot — it restarts at zero, which would make every viewer eligible
+- * again the moment their device restarted. A device clock can be wrong; the rules below are
+- * written so a wrong clock can only ever *refuse* an ad, never grant an extra one.
+- */
+-fun interface AdWallClock {
+-    fun nowMs(): Long
+-}
+-
+-/** The production clock. */
+-class SystemAdWallClock : AdWallClock {
+-    override fun nowMs(): Long = System.currentTimeMillis()
+-}
+-
+-/** Drives the cadence from a test; the app wires [SystemAdWallClock]. */
+-class FixedAdWallClock(startMillis: Long = 0L) : AdWallClock {
+-    private var now = startMillis
+-    override fun nowMs(): Long = now
+-    fun advanceTo(millis: Long) { now = millis }
+-    fun advance(deltaMillis: Long) { now += deltaMillis }
+-}
+-
+-/**
+- * The caps, already resolved.
+- *
+- * [from] is the only place the shipped numbers appear, which is what makes "an older deployment
+- * must not fall back to unlimited ads" a property of the type rather than of every caller: a
+- * missing or nonsense value becomes the cap, and there is no value the server can send that means
+- * "no limit". `0` minutes is not "an ad every minute" — it is "the operator never said", and the
+- * same is true of a negative.
+- */
+-data class AdCadenceLimits(
+-    val preRollIntervalMs: Long,
+-    val feedCardEveryPosters: Int,
+-    val appOpenIntervalMs: Long,
+-    /** Never larger than [MAX_SKIP_MS], whatever the body asked for. */
+-    val skippableAfterMs: Long,
+-) {
+-    companion object {
+-        const val PRE_ROLL_MINUTES = 25L
+-        const val FEED_CARD_POSTERS = 12
+-        const val APP_OPEN_HOURS = 4L
+-        const val SKIP_SECONDS = 5L
+-
+-        /**
+-         * The owner's words: no ad that cannot be skipped after the first 5 seconds. This is a
+-         * ceiling, not a default — a server that publishes 30 s is answered with 5 s, because the
+-         * alternative lets a body edit undo a rule the owner called non-negotiable.
+-         */
+-        const val MAX_SKIP_MS = 5_000L
+-
+-        /** What this build enforces before any remote config has been read. */
+-        val SHIPPED = AdCadenceLimits(
+-            preRollIntervalMs = PRE_ROLL_MINUTES * 60_000L,
+-            feedCardEveryPosters = FEED_CARD_POSTERS,
+-            appOpenIntervalMs = APP_OPEN_HOURS * 3_600_000L,
+-            skippableAfterMs = SKIP_SECONDS * 1_000L,
+-        )
+-
+-        /**
+-         * The caps as this deployment means them, with the server's own cadence block first.
+-         *
+-         * [engagement] outranks [ads] because it is the body the enforcing side computes from:
+-         * `Fast_Fetch/engagement.py:ad_grant()` compares its own `CAPS_DEFAULT` against its own
+-         * stamps, so a phone obeying a different pair of numbers would either show an ad the server
+-         * had already refused or withhold one it had granted. Both blocks are read tolerantly, so a
+-         * deployment that publishes only the older `ads` keys still gets the caps it named, and one
+-         * that names none gets [SHIPPED] rather than no limit.
+-         */
+-        fun from(ads: VipRemoteAds, engagement: VipRemoteEngagement = VipRemoteEngagement()): AdCadenceLimits {
+-            val server = engagement.cadence
+-            // The `ads` block states app-open in HOURS and the engagement block states it in
+-            // MINUTES, so the conversion happens here and nowhere else, and the two are never
+-            // alternates of one key: the server's `240` read as hours would be a ten-day window.
+-            val appOpenMinutesFromAds =
+-                if (ads.appOpenIntervalHours > 0) ads.appOpenIntervalHours.toLong() * 60L else 0L
+-            return AdCadenceLimits(
+-                preRollIntervalMs =
+-                    gapMinutes(server.prerollGapMinutes.toLong(), ads.prerollIntervalMinutes.toLong(), PRE_ROLL_MINUTES) * 60_000L,
+-                feedCardEveryPosters = positiveOr(
+-                    if (server.feedCardEveryPosters > 0) server.feedCardEveryPosters else ads.feedCardEveryPosters,
+-                    FEED_CARD_POSTERS,
+-                ),
+-                appOpenIntervalMs =
+-                    gapMinutes(server.appOpenGapMinutes.toLong(), appOpenMinutesFromAds, APP_OPEN_HOURS * 60L) * 60_000L,
+-                // The ceiling is applied at the answer as well, so no path can hand back a
+-                // non-skippable ad even if this construction is ever bypassed.
+-                skippableAfterMs = (secondsOr(ads.skippableAfterSeconds) * 1_000L).coerceAtMost(MAX_SKIP_MS),
+-            )
+-        }
+-
+-        /** The first block that actually named a gap, in minutes; neither speaking, the shipped one. */
+-        private fun gapMinutes(serverMinutes: Long, adsMinutes: Long, shippedMinutes: Long): Long = when {
+-            serverMinutes > 0L -> serverMinutes
+-            adsMinutes > 0L -> adsMinutes
+-            else -> shippedMinutes
+-        }
+-
+-        private fun secondsOr(raw: Int): Long = if (raw <= 0) SKIP_SECONDS else raw.toLong()
+-
+-        private fun positiveOr(raw: Int, fallback: Int): Int = if (raw <= 0) fallback else raw
+-    }
+-}
+-
+-/**
+- * The cadence facts, exactly as they are persisted.
+- *
+- * `0` for a `…ShownAtMs` means "never shown", which is what makes a fresh install eligible at once
+- * without a special case: the elapsed test below compares against the epoch, and any real clock is
+- * past it.
+- */
+-data class AdCadenceState(
+-    /** The operator's switch. Off is the default, and off answers every surface with nothing. */
+-    val enabled: Boolean = false,
+-    val preRollShownAtMs: Long = 0L,
+-    val feedCardShownAtMs: Long = 0L,
+-    val postersSinceFeedCard: Int = 0,
+-    val appOpenShownAtMs: Long = 0L,
+-)
+-
+-/**
+- * Pure cadence. Every function takes `nowMs` so the whole rule set runs on the JVM with a clock
+- * the test turns, and no test sleeps.
+- *
+- * Two properties the owner's directive forces, and they are structural rather than a matter of
+- * callers behaving:
+- *  - **Refusal is the only failure mode.** Every branch that cannot prove a surface is due returns
+- *    false. A rolled-back device clock, a torn row, an interval of zero — all of them refuse, and
+- *    nothing here can produce a second ad by being confused.
+- *  - **A surface that is not due shows nothing.** [due] returns false; there is no third state in
+- *    which an ad "loads", so a spinner has no representation to render.
+- */
+-object AdCadence {
+-
+-    /**
+-     * Whether the *interval* part of the rule is satisfied. The feed card is the odd one: its cap
+-     * is a count of posters, not a span of time, so it never reads a clock and cannot be granted
+-     * early or late by a wrong one.
+-     */
+-    fun due(state: AdCadenceState, surface: AdSurface, limits: AdCadenceLimits, nowMs: Long): Boolean {
+-        if (!state.enabled) return false
+-        return when (surface) {
+-            AdSurface.PRE_ROLL -> intervalElapsed(state.preRollShownAtMs, limits.preRollIntervalMs, nowMs)
+-            AdSurface.APP_OPEN -> intervalElapsed(state.appOpenShownAtMs, limits.appOpenIntervalMs, nowMs)
+-            // A cap of zero would otherwise read as "due immediately, forever", which is the one
+-            // answer this file is not allowed to give. [AdCadenceLimits.from] cannot produce it;
+-            // this refuses it anyway, for a limits value assembled by anyone else.
+-            AdSurface.FEED_CARD ->
+-                limits.feedCardEveryPosters > 0 && state.postersSinceFeedCard >= limits.feedCardEveryPosters
+-        }
+-    }
+-
+-    /** A never-shown surface is due; a clock behind its own stamp is not, and never will be. */
+-    private fun intervalElapsed(shownAtMs: Long, intervalMs: Long, nowMs: Long): Boolean {
+-        if (shownAtMs <= 0L) return true
+-        if (intervalMs <= 0L) return false
+-        return nowMs - shownAtMs >= intervalMs
+-    }
+-
+-    /**
+-     * The post at which a creative may answer to a skip control. Capped twice — once by
+-     * [AdCadenceLimits.from] when the body is read, once here at the answer — so no path through
+-     * this file can hand a caller a number above five seconds.
+-     */
+-    fun skippableAtMs(limits: AdCadenceLimits): Long = limits.skippableAfterMs.coerceAtMost(AdCadenceLimits.MAX_SKIP_MS)
+-
+-    /** The state after [surface] was actually shown at [nowMs]. */
+-    fun shown(
+-        state: AdCadenceState,
+-        surface: AdSurface,
+-        nowMs: Long,
+-    ): AdCadenceState = when (surface) {
+-        AdSurface.PRE_ROLL -> state.copy(preRollShownAtMs = nowMs)
+-        AdSurface.APP_OPEN -> state.copy(appOpenShownAtMs = nowMs)
+-        // Showing a card is also the answer to "12 more posters", so the count restarts here.
+-        AdSurface.FEED_CARD -> state.copy(
+-            feedCardShownAtMs = nowMs,
+-            postersSinceFeedCard = 0,
+-        )
+-    }
+-
+-    /**
+-     * Record that the viewer passed [count] more posters. The counter saturates at the cap rather
+-     * than growing: nothing needs to know that 4,000 posters went by, and an unbounded int is one
+-     * overflow away from reading as "no posters yet".
+-     */
+-    fun scrolled(state: AdCadenceState, count: Int, limits: AdCadenceLimits): AdCadenceState {
+-        if (count <= 0) return state
+-        val next = state.postersSinceFeedCard + count
+-        return state.copy(
+-            postersSinceFeedCard = if (next < 0) limits.feedCardEveryPosters else next.coerceAtMost(limits.feedCardEveryPosters),
+-        )
+-    }
+-
+-    /**
+-     * The operator turned the surfaces off. Every stamp and counter goes with the switch, which is
+-     * what the directive asks for: a viewer who was throttled by an ad they will never see again
+-     * should not stay throttled, and a deployment that re-enables later starts clean rather than
+-     * inheriting a window computed under a policy nobody is enforcing any more.
+-     */
+-    fun cleared(): AdCadenceState = AdCadenceState()
+-}
+-
+-/**
+- * What a surface is allowed to do, once.
+- *
+- * [None] is not a state that waits, retries, or spins: it is the absence of an ad, and it is the
+- * only value this build can produce, because no ad SDK exists to fill anything. [Serve] carries the
+- * skip deadline with the slot precisely so that a creative cannot arrive without one.
+- */
+-sealed interface AdDecision {
+-    data object None : AdDecision
+-
+-    data class Serve(
+-        val surface: AdSurface,
+-        /** When the viewer may dismiss it. Always <= 5 s after the first frame. */
+-        val skippableAtMs: Long,
+-    ) : AdDecision
+-}
+-
+-/**
+- * Whether the network can actually fill [surface].
+- *
+- * This build ships no SDK, so the single production binding answers false everywhere and every ask
+- * ends as [AdDecision.None]. That is the deliberate form of "if an ad cannot be filled, show
+- * nothing": the alternative — a placeholder, a shimmer, a spinner held while a zone is queried —
+- * is the gate the owner ruled out, and it would be indistinguishable from one to a viewer on a
+- * dead network. Wiring a real network replaces this binding and inherits every cadence rule above
+- * rather than re-deciding them.
+- */
+-interface AdInventory {
+-    fun canFill(surface: AdSurface): Boolean
+-}
+-
+-/** The production binding until an SDK exists. */
+-class NoAdInventory : AdInventory {
+-    override fun canFill(surface: AdSurface): Boolean = false
+-}
+diff --git a/App/app/src/main/kotlin/com/raddstream/app/player/AdCadenceGovernor.kt b/App/app/src/main/kotlin/com/raddstream/app/player/AdCadenceGovernor.kt
+deleted file mode 100644
+index f729725..0000000
+--- a/App/app/src/main/kotlin/com/raddstream/app/player/AdCadenceGovernor.kt
++++ /dev/null
+@@ -1,157 +0,0 @@
+-package com.raddstream.app.player
+-
+-import com.raddstream.app.data.ServerSettingsRepository
+-import com.raddstream.app.data.local.AdCadenceDao
+-import com.raddstream.app.data.local.AdCadenceRows
+-import com.raddstream.app.network.models.VipRemoteAds
+-import com.raddstream.app.network.models.VipRemoteEngagement
+-import javax.inject.Inject
+-import javax.inject.Singleton
+-import kotlinx.coroutines.CancellationException
+-import kotlinx.coroutines.flow.MutableStateFlow
+-import kotlinx.coroutines.flow.StateFlow
+-import kotlinx.coroutines.flow.asStateFlow
+-import kotlinx.coroutines.flow.first
+-
+-/**
+- * The operator's ad switch, read from wherever the app keeps it.
+- *
+- * A seam rather than a direct [com.raddstream.app.data.ServerSettingsRepository] dependency for
+- * one reason: the governor is the class that decides whether a viewer sees an ad, and a decision
+- * that cannot be driven from a JVM test is a decision that has not been tested. The production
+- * binding reads DataStore, where the remote-config watcher mirrors the body's `ads_enabled`; the
+- * test binding is a boolean. A binding is allowed to fail — a torn preferences file throws — and
+- * [AdCadenceGovernor] is what turns any failure into a refusal, so no future binding can be the
+- * reason an ad shows when nobody could read the switch.
+- */
+-interface AdSwitch {
+-    suspend fun adsEnabled(): Boolean
+-}
+-
+-/** The production binding: the mirrored operator switch, read once per ask. */
+-class DataStoreAdSwitch @Inject constructor(
+-    private val settings: ServerSettingsRepository,
+-) : AdSwitch {
+-    override suspend fun adsEnabled(): Boolean = settings.adsEnabled.first()
+-}
+-
+-/**
+- * The one owner of "may this viewer see an ad, and when did they last see one".
+- *
+- * Three things make this a class rather than a call site: the caps come from the operator's body
+- * and default to the shipped numbers when it says nothing, the timestamps live in Room so a killed
+- * process does not buy the viewer a fresh pre-roll, and every refusal is the same answer as every
+- * other refusal — [AdDecision.None], which renders nothing. A surface cannot tell "not due yet"
+- * from "the switch is off" from "no network filled this", and that is deliberate: the only thing a
+- * caller can do with those three is show something, and showing something is exactly what the
+- * owner ruled out.
+- *
+- * The impression is recorded inside [offer], not handed back for the caller to record. A cap an
+- * ad SDK can forget to log is not a cap.
+- */
+-@Singleton
+-class AdCadenceGovernor @Inject constructor(
+-    private val dao: AdCadenceDao,
+-    private val clock: AdWallClock,
+-    private val inventory: AdInventory,
+-    private val switch: AdSwitch,
+-) {
+-
+-    private val _state = MutableStateFlow(AdCadenceState())
+-
+-    /** Read-only view of the cadence facts, for a diagnostics surface or a test double. */
+-    val state: StateFlow<AdCadenceState> = _state.asStateFlow()
+-
+-    private var limits: AdCadenceLimits = AdCadenceLimits.SHIPPED
+-
+-    /**
+-     * Publish the operator's caps the moment a remote-config body lands. Until this is called —
+-     * a first install, a server that has never answered — [SHIPPED] is what is enforced, so
+-     * absence is the capped behaviour and never the uncapped one.
+-     *
+-     * Both blocks arrive because they can name the same cap in different units and from different
+-     * deploys; [engagement] wins where it speaks, and a body that carries neither leaves this
+-     * enforcing the shipped windows rather than nothing at all.
+-     */
+-    fun publishLimits(ads: VipRemoteAds, engagement: VipRemoteEngagement = VipRemoteEngagement()) {
+-        limits = AdCadenceLimits.from(ads, engagement)
+-    }
+-
+-    /** Reload the persisted stamps. Called on start and whenever the switch or caps change. */
+-    suspend fun refresh() {
+-        _state.value = AdCadenceRows.toState(dao.all(), enabled = currentSwitch())
+-    }
+-
+-    /**
+-     * Ask for [surface]. `Serve` means the slot is legal by cadence, the viewer is not ad-free,
+-     * the network filled it, and the impression is already recorded; anything else means show
+-     * nothing, and there is no third answer that could be mistaken for a loading state.
+-     *
+-     * [adFree] is a parameter rather than something read here because the rule that answers it —
+-     * a server membership or a rewarded device pass — belongs to
+-     * [com.raddstream.app.viewmodel.RewardedVipPass], and this package does not import that layer.
+-     * Making every surface name the viewer's status out loud is also the safer shape: a caller that
+-     * forgets it has to say so, and cannot inherit a silent default that shows a paid viewer an ad.
+-     */
+-    suspend fun offer(surface: AdSurface, adFree: Boolean): AdDecision {
+-        val enabled = currentSwitch() && !adFree
+-        val current = _state.value.copy(enabled = enabled)
+-        if (!enabled) return AdDecision.None
+-        if (!AdCadence.due(current, surface, limits, clock.nowMs())) return AdDecision.None
+-        // An ad that cannot be filled is not an ad; it is a hole in the layout where one waited.
+-        if (!inventory.canFill(surface)) return AdDecision.None
+-
+-        val now = clock.nowMs()
+-        val next = AdCadence.shown(current, surface, now)
+-        _state.value = next
+-        persist(next)
+-        return AdDecision.Serve(surface = surface, skippableAtMs = AdCadence.skippableAtMs(limits))
+-    }
+-
+-    /**
+-     * The feed card's cap counts posters, not minutes, so this is the only way that counter moves.
+-     * A negative or zero report is not a scroll and changes nothing; a screen reporting the same
+-     * index twice is a caller bug this cannot detect, which is why the value saturates at the cap
+-     * instead of accumulating forever.
+-     *
+-     * An ad-free viewer's counter does not advance. Left to fill up during a rewarded four hours,
+-     * it would spend itself the second that pass expired, and a card owed for posters they were
+-     * never eligible to see is a debt this app should not have.
+-     */
+-    suspend fun onPostersScrolled(count: Int, adFree: Boolean) {
+-        if (count <= 0) return
+-        if (!currentSwitch() || adFree) return
+-        val next = AdCadence.scrolled(_state.value, count, limits)
+-        if (next.postersSinceFeedCard == _state.value.postersSinceFeedCard) return
+-        _state.value = next
+-        persist(next)
+-    }
+-
+-    /**
+-     * The operator turned the surfaces off: every stamp and counter goes. Idempotent, because the
+-     * remote-config watcher calls it on each five-minute poll that still reads disabled.
+-     */
+-    suspend fun clearForDisabledSwitch() {
+-        dao.clear()
+-        _state.value = AdCadence.cleared()
+-    }
+-
+-    private suspend fun persist(state: AdCadenceState) {
+-        AdCadenceRows.toRows(state).forEach { dao.put(it) }
+-    }
+-
+-    /**
+-     * The switch is read on every ask rather than cached here. A viewer who turns ads off in
+-     * `/admin` must not stay inside a four-hour window that the app remembered from when the
+-     * surface was on, and one store read is cheaper than a second owner for that fact. A read that
+-     * cannot be answered is a refusal, here and not in the binding, so the rule holds for whatever
+-     * binding a future build installs.
+-     */
+-    private suspend fun currentSwitch(): Boolean = try {
+-        switch.adsEnabled()
+-    } catch (cancelled: CancellationException) {
+-        throw cancelled
+-    } catch (_: Exception) {
+-        false
+-    }
+-}
+diff --git a/App/app/src/main/kotlin/com/raddstream/app/player/CacheContract.kt b/App/app/src/main/kotlin/com/raddstream/app/player/CacheContract.kt
+index 886185f..b1ec5cf 100644
+--- a/App/app/src/main/kotlin/com/raddstream/app/player/CacheContract.kt
++++ b/App/app/src/main/kotlin/com/raddstream/app/player/CacheContract.kt
+@@ -60,17 +60,6 @@ enum class StoragePressure { OK, NEAR_FULL, FULL }
+ /**
+  * What the player hands the engine on *Keep this*. Byte cursor first (if the engine knows
+  * it), time-based estimate second, so the engine can choose its resume strategy honestly.
+- *
+- * WHICH CURSOR IS REAL — and it is not this record's byte fields. [fetchedBytesSoFar],
+- * [isByteCursorKnown], [bufferedMs] and [sharesCacheStorage] are assembled by
+- * [CacheAffordance.buildAdoptRequest] from the player's *buffer-time* estimate and are read by
+- * nothing in the engine: [com.raddstream.app.data.cache.OfflineCacheEngine] resumes from its own
+- * committed-range ledger ([com.raddstream.app.data.cache.ByteRangeManifestDao]), which is exact
+- * where a time-derived figure is only a guess, and a second owner for the resume cursor is exactly
+- * how a byte gets fetched twice. They are disclosed here rather than quietly kept: four fields the
+- * receiving side ignores, left in place because deleting them this pass would also delete
+- * [CacheAffordance.estimateBytesSaved] and its cases, and this pass cannot compile to prove the cut
+- * is clean. Requirement 2 below is satisfied by the ledger, not by them.
+  */
+ data class AdoptRequest(
+     val key: CacheSessionKey,
+@@ -92,28 +81,6 @@ data class AdoptRequest(
+     val sharesCacheStorage: Boolean,
+ )
+ 
+-/**
+- * What the player hands the engine the moment a title STARTS playing. Not a request to keep
+- * anything: nobody asked, so nothing may be promised, evicted, or shown for it.
+- *
+- * This is the seed half of the watch-while-downloading story. Without a row there is nothing for a
+- * progressing playhead to extend — the engine's playhead entry point looks a task up by its key and
+- * returns when the lookup finds nothing — so "the playhead drives the cache" needs one opportunistic
+- * row created by the fact that the viewer pressed play. That is all this is.
+- *
+- * Every field is the same fact [AdoptRequest] carries, and deliberately no position: where the
+- * viewer has got to arrives on the playhead tick, which is the only place that number is fresh.
+- */
+-data class PreviewRequest(
+-    val key: CacheSessionKey,
+-    val url: String,
+-    /** Print `size_bytes` when the catalog knows it; null = unknown, never a guess. */
+-    val expectedTotalBytes: Long?,
+-    val resumable: Boolean,
+-    /** Print label so the engine's library UI can show what this file is. */
+-    val printLabel: String,
+-)
+-
+ /** Keep outcomes the UI must be able to explain (hostile realities from the task brief). */
+ sealed class KeepResult {
+     data class Stored(val localHandle: String, val playableOffline: Boolean) : KeepResult()
+@@ -134,19 +101,10 @@ sealed class KeepResult {
+  *  3. [adopt] is safe to call repeatedly (idempotent per key).
+  *  4. Storage policy (near-full reserve, TTL auto-delete, preview→permanent upgrade) stays
+  *     entirely inside the engine; the player only displays the state you report.
+- *  5. [seedPreview] is silent in BOTH directions: it returns no verdict because a preview that
+- *     could not start must not surface anything — no gate, no spinner, no error text about a file
+- *     the viewer never asked for. It must never delete or displace bytes the viewer *did* ask to
+- *     keep, and it may not move a byte on a network the scheduler would refuse on a tick.
+  */
+ interface ProgressiveCacheEngine {
+     fun observe(key: CacheSessionKey): StateFlow<CacheSnapshot?>
+     suspend fun adopt(request: AdoptRequest): KeepResult
+-    /**
+-     * The viewer pressed play on [request], so opportunistic bytes ahead of the playhead are worth
+-     * having. Called on load, from the player process's own service; safe to call repeatedly.
+-     */
+-    suspend fun seedPreview(request: PreviewRequest)
+     suspend fun cancelKeep(key: CacheSessionKey)
+     suspend fun release(key: CacheSessionKey)
+     fun storagePressure(): StoragePressure
+diff --git a/App/app/src/main/kotlin/com/raddstream/app/player/PlayBundle.kt b/App/app/src/main/kotlin/com/raddstream/app/player/PlayBundle.kt
+index 43d6cb7..d344a6a 100644
+--- a/App/app/src/main/kotlin/com/raddstream/app/player/PlayBundle.kt
++++ b/App/app/src/main/kotlin/com/raddstream/app/player/PlayBundle.kt
+@@ -132,6 +132,14 @@ data class PlaybackInfo(
+     fun isHls(): Boolean =
+         protocol?.lowercase() == "hls" || playUrl?.lowercase()?.contains(".m3u8") == true
+ 
++    /**
++     * The DASH sibling of [isHls], read the same two ways: the server's own `protocol` word, or
++     * the manifest extension in the address. Needed because Media3 chooses the media *source*
++     * before it ever looks at the bytes — see `PlaybackMediaItemFactory.manifestMimeType`.
++     */
++    fun isDash(): Boolean =
++        protocol?.lowercase() == "dash" || playUrl?.lowercase()?.contains(".mpd") == true
++
+     /** URL rot guard: expires_at is epoch **seconds** in the wire contract. */
+     fun isExpired(nowEpochMillis: Long): Boolean =
+         expiresAt != null && nowEpochMillis / 1000L >= expiresAt!!
+diff --git a/App/app/src/main/kotlin/com/raddstream/app/player/PlaybackMediaItemFactory.kt b/App/app/src/main/kotlin/com/raddstream/app/player/PlaybackMediaItemFactory.kt
+index 8176e90..b23a171 100644
+--- a/App/app/src/main/kotlin/com/raddstream/app/player/PlaybackMediaItemFactory.kt
++++ b/App/app/src/main/kotlin/com/raddstream/app/player/PlaybackMediaItemFactory.kt
+@@ -30,6 +30,7 @@ object PlaybackMediaItemFactory {
+         title: String,
+         externalSubtitles: List<ExternalSubtitle> = emptyList(),
+     ): MediaItem {
++        val manifestMime = manifestMimeType(rendition.playback)
+         val builder = MediaItem.Builder()
+             .setUri(rendition.playback.playUrl)
+             .setMediaId("${target.workKey ?: "w${target.id}"}-r${rendition.releaseId}-${rendition.rank}")
+@@ -41,6 +42,9 @@ object PlaybackMediaItemFactory {
+                     }
+                     .build(),
+             )
++        if (manifestMime != null) {
++            builder.setMimeType(manifestMime)
++        }
+ 
+         // Native subtitle configurations for non-custom-render externals (API_V2 tracks.subtitles
+         // and user-picked exotic formats). SRT/VTT we parse ourselves for the overlay; both
+@@ -75,6 +79,51 @@ object PlaybackMediaItemFactory {
+         return "$prefix · $title"
+     }
+ 
++    /**
++     * The Media3 content type this link must be declared as, or null to leave the choice to the
++     * progressive extractors.
++     *
++     * Media3 1.3.1 picks the [androidx.media3.exoplayer.source.MediaSource] from
++     * `Util.inferContentTypeForUriAndMimeType(uri, mimeType)`, which consults exactly two things:
++     * the mime type declared on the `MediaItem`, and the URI's **path** extension. There is no
++     * `SniffingMediaSource` at this version, so nothing re-inspects the bytes to discover a
++     * playlist — an answer of `CONTENT_TYPE_OTHER` is a progressive source, full stop.
++     *
++     * That matters here because a playback address is our own
++     * `<server>/api/v1/stream?id=<handle>`, which carries no extension at all, and a hoster's
++     * playlist often rides inside a query string (`…/watch?f=https://…/index.m3u8`) where
++     * `Uri.getPath()` cannot see it either. Undeclared, both become progressive, read an `#EXTM3U`
++     * text body, find no container magic, and throw `UnrecognizedInputFormatException` before the
++     * first frame. Declaring the manifest type is what makes this one player really play
++     * everything.
++     *
++     * MP4 and MKV are deliberately absent from this rule: they are *containers* selected by
++     * extractor sniffing inside the progressive source, which recognises an MP4 `ftyp` box and an
++     * MKV EBML header on any extensionless address. Declaring a container mime would only add a
++     * way to be wrong when the server mislabels one, so progressive links keep the sniffed path.
++     *
++     * WHY THE MANIFEST EVIDENCE IS ORDERED THIS WAY — measured against `Fast_Fetch/catalog_v2.py`
++     * `_protocol_of()` (:1391), which writes this field: it answers `hls` only for a link stored as
++     * `kind = hls_manifest`, so `protocol = "hls"` is solid evidence and is never a guess. But the
++     * same function returns `progressive` for *anything* whose playability is stream/download/both,
++     * and it has no `dash` branch at all — so a manifest the projection did not name is still a
++     * manifest, and the mime the resolver reported and the extension inside the address both outrank
++     * a coarse `progressive` word here. An unknown word (`http/1.1`, `unknown`, a value this app has
++     * never seen) declares nothing, which is the same answer it gets today.
++     *
++     * The returned constants are the only two strings Media3's own matcher accepts for a manifest;
++     * inventing a mime spelling here would silently fall through to progressive, which is the bug
++     * this exists to fix. `UniversalSourceTest` pins the identity against `MimeTypes`.
++     */
++    fun manifestMimeType(playback: PlaybackInfo): String? {
++        val mime = playback.mimeType?.trim()?.lowercase()
++        return when {
++            playback.isHls() || mime?.contains("mpegurl") == true -> MimeTypes.APPLICATION_M3U8
++            playback.isDash() || mime?.contains("dash+xml") == true -> MimeTypes.APPLICATION_MPD
++            else -> null
++        }
++    }
++
+     private fun ExternalSubtitle.toSubtitleConfiguration(): MediaItem.SubtitleConfiguration =
+         MediaItem.SubtitleConfiguration.Builder(Uri.parse(url))
+             .setMimeType(mimeForFormat(formatHint))
+diff --git a/App/app/src/main/kotlin/com/raddstream/app/player/PlaybackService.kt b/App/app/src/main/kotlin/com/raddstream/app/player/PlaybackService.kt
+index 0f55084..52e11f8 100644
+--- a/App/app/src/main/kotlin/com/raddstream/app/player/PlaybackService.kt
++++ b/App/app/src/main/kotlin/com/raddstream/app/player/PlaybackService.kt
+@@ -12,9 +12,12 @@ import androidx.media3.common.Player
+ import androidx.media3.common.util.UnstableApi
+ import androidx.media3.datasource.DefaultDataSource
+ import androidx.media3.datasource.DefaultHttpDataSource
++import androidx.media3.exoplayer.DefaultLoadControl
+ import androidx.media3.exoplayer.DefaultRenderersFactory
+ import androidx.media3.exoplayer.ExoPlayer
++import androidx.media3.exoplayer.LoadControl
+ import androidx.media3.exoplayer.Renderer
++import androidx.media3.exoplayer.SeekParameters
+ import androidx.media3.exoplayer.analytics.AnalyticsListener
+ import androidx.media3.exoplayer.source.LoadEventInfo
+ import androidx.media3.exoplayer.source.MediaLoadData
+@@ -111,12 +114,17 @@ class PlaybackService : MediaSessionService() {
+         val exo = ExoPlayer.Builder(this)
+             .setRenderersFactory(renderersFactory)
+             .setMediaSourceFactory(DefaultMediaSourceFactory(dataFactory))
++            .setLoadControl(instantStartLoadControl())
+             .setSeekBackIncrementMs(MX_SKIP_MS)
+             .setSeekForwardIncrementMs(MX_SKIP_MS)
+             .setAudioAttributes(AudioAttributes.DEFAULT, /* handleAudioFocus= */ true)
+             .build()
+         // Screen-off playback (MX "keep playing with screen off") — no sensor needed.
+         exo.setWakeMode(C.WAKE_MODE_LOCAL)
++        // Seeking snaps to the nearest sync frame instead of decoding forward from the
++        // previous one, which is what makes dragging the scrub bar feel immediate on a
++        // 1-vCPU-class phone. Costs frame-exact landing; nobody scrubs for that.
++        exo.setSeekParameters(SeekParameters.CLOSEST_SYNC)
+         exo.addListener(playerListener)
+         exo.addAnalyticsListener(autoQualityListener)
+         player = exo
+@@ -132,7 +140,6 @@ class PlaybackService : MediaSessionService() {
+             }
+         }
+         startAutoQualityTicker()
+-        startPlayheadPump()
+     }
+ 
+     private var lastHandledNonce: Long = -1L
+@@ -255,12 +262,6 @@ class PlaybackService : MediaSessionService() {
+         exo.setMediaItem(item)
+         exo.prepare()
+         exo.playWhenReady = true
+-        // Every load of a real address is a title being watched, which is the whole trigger a
+-        // preview has. A hop to a backup of the same print seeds again through the same line, and
+-        // the engine's own idempotence turns that second ask into no second row. A kept copy played
+-        // from disk is not: its address is our loopback proxy, which names no handle of the
+-        // redirector's, so the ask falls through to nothing.
+-        seedPreviewFor(rendition)
+     }
+ 
+     private fun applyDecision(
+@@ -374,77 +375,6 @@ class PlaybackService : MediaSessionService() {
+         }
+     }
+ 
+-    /**
+-     * Feed the offline cache the playhead, from the one place that is alive for the whole of
+-     * playback.
+-     *
+-     * This is the pump the brief's `onPlayheadAdvanced` hook runs on. The engine's entry point looks
+-     * a task up by the key of the address being watched and returns when nothing answers, so a
+-     * progressing playhead only extends retention if SOMETHING is publishing it — and until now the
+-     * only publisher was the player screen's 200 ms UI ticker, which stops the moment the viewer
+-     * leaves the screen. Backgrounding a title to keep listening is the normal way this app is used,
+-     * so the cache was being fed while the poster was on screen and never again. The service owns the
+-     * player, so the service owns the position.
+-     *
+-     * Five seconds, and only on a move: [CacheCoordinator.onPlayheadAdvanced] answers a single
+-     * bounded pass and then parks until the byte it is shown advances further, so a faster feed
+-     * buys nothing but [com.raddstream.app.data.cache.CacheTaskDao] lookups — five a second at the
+-     * old cadence, for a window measured in tens of megabytes.
+-     */
+-    private fun startPlayheadPump() {
+-        scope.launch {
+-            var lastReportedMs = -1L
+-            while (true) {
+-                delay(PLAYHEAD_PUMP_MS)
+-                val exo = player ?: continue
+-                // A paused player has no forward edge to anticipate; a seek still moves the
+-                // position, and that is reported on the next tick exactly like playback does.
+-                if (!exo.isPlaying) continue
+-                val duration = if (exo.duration > 0L) exo.duration else exo.contentDuration
+-                if (duration <= 0L) continue
+-                val position = exo.currentPosition.coerceAtLeast(0L)
+-                if (position == lastReportedMs) continue
+-                lastReportedMs = position
+-                store.reportPlayhead(store.activeRendition()?.playback?.playUrl, position, duration)
+-            }
+-        }
+-    }
+-
+-    /**
+-     * Watching is not keeping, and this says nothing either way. It creates the one opportunistic
+-     * row the playhead pump above needs in order to have anything to extend: the engine's playhead
+-     * entry point resolves a task by the watched address and no-ops when there is none, so a
+-     * preview that is never seeded leaves the whole ahead-of-playback path dead on arrival.
+-     *
+-     * Silent by contract. A preview nobody asked for must not be able to produce a gate, a spinner,
+-     * a toast, a Downloads row it cannot fill, or an evicted copy it did not want — [CacheEngineHolder]
+-     * gives the engine every one of those refusals, and none of them belongs on screen.
+-     */
+-    private fun seedPreviewFor(rendition: PlaybackRendition?) {
+-        val playback = rendition?.playback ?: return
+-        val url = playback.playUrl?.takeIf { it.isNotBlank() } ?: return
+-        val handle = playback.streamId?.takeIf { it.isNotBlank() } ?: return
+-        val engine = CacheEngineHolder.engine ?: return
+-        scope.launch {
+-            try {
+-                engine.seedPreview(
+-                    PreviewRequest(
+-                        key = CacheSessionKey(renditionKey = handle, url = url),
+-                        url = url,
+-                        expectedTotalBytes = rendition.print.sizeBytes.takeIf { it > 0L },
+-                        resumable = playback.resumable || playback.acceptsRanges == true,
+-                        printLabel = rendition.displayLabel(),
+-                    ),
+-                )
+-            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+-                throw cancelled
+-            } catch (_: Exception) {
+-                // The stream plays exactly as it would have. A preview is the only kind of cache
+-                // work that can fail without the viewer ever having a right to know.
+-            }
+-        }
+-    }
+-
+     /**
+      * One Auto decision per [AUTO_QUALITY_TICK_MS]. Only ever while the viewer is actually
+      * watching: while paused or buffering nothing is being fed, so nothing is known, and a
+@@ -636,10 +566,37 @@ class PlaybackService : MediaSessionService() {
+         super.onDestroy()
+     }
+ 
++    /**
++     * The instant-start buffer. Media3's shipped default waits for 2.5 s of media before it
++     * will start playing, which on this backend — a 302 to a hoster, then its own first
++     * bytes — reads as a two-and-a-half-second freeze on every single play. Starting at
++     * 500 ms makes the first frame land as soon as there is anything to show; the wider
++     * after-rebuffer window is what keeps a dying link from stutter-starting instead.
++     * min/max are Media3's own defaults, left alone so only the *start* threshold moved.
++     */
++    private fun instantStartLoadControl(): LoadControl = DefaultLoadControl.Builder()
++        .setBufferDurationsMs(
++            /* minBufferMs = */ DEFAULT_MIN_BUFFER_MS,
++            /* maxBufferMs = */ DEFAULT_MAX_BUFFER_MS,
++            /* bufferForPlaybackMs = */ START_BUFFER_MS,
++            /* bufferForPlaybackAfterRebufferMs = */ REBUFFER_START_BUFFER_MS,
++        )
++        .build()
++
+     companion object {
+         /** MX default double-tap / seek button increment. */
+         const val MX_SKIP_MS = 10_000L
+ 
++        /** `DefaultLoadControl`'s own shipped min/max buffer — not a tuning decision, a non-change. */
++        private const val DEFAULT_MIN_BUFFER_MS = 50_000
++        private const val DEFAULT_MAX_BUFFER_MS = 100_000
++
++        /** Play as soon as half a second of media is buffered. */
++        private const val START_BUFFER_MS = 500
++
++        /** …but be less eager after a stall, or one slow second restarts the buffering loop. */
++        private const val REBUFFER_START_BUFFER_MS = 1_000
++
+         /**
+          * How often Auto is allowed to move a rung. Comfortably longer than the switcher's
+          * own smoothing window matters (a step down still needs five confirmed samples), and
+@@ -648,15 +605,6 @@ class PlaybackService : MediaSessionService() {
+          */
+         const val AUTO_QUALITY_TICK_MS = 2_000L
+ 
+-        /**
+-         * How often the service offers the playhead to the offline cache. Longer than the UI's own
+-         * 200 ms clock on purpose: the engine answers one bounded pass per advance and then parks,
+-         * so anything faster is a database lookup per frame for a window that is tens of megabytes
+-         * wide. Five seconds is short enough that a viewer who seeks onto unbuffered ground has an
+-         * ahead-pass running before the player has re-buffered twice.
+-         */
+-        const val PLAYHEAD_PUMP_MS = 5_000L
+-
+         /** Loads worth measuring: media bytes. Subtitles and metadata would dilute the rate. */
+         val MEASURABLE_TRACK_TYPES = setOf(C.TRACK_TYPE_DEFAULT, C.TRACK_TYPE_VIDEO, C.TRACK_TYPE_AUDIO)
+     }
