@@ -7,7 +7,7 @@
 
 ## ✅ Open items — index (q3, 2026-10-30; pointers only)
 
-1. **This file is a pointer, not a history.** 52 session files (50 dated + 2 undated) cover
+1. **This file is a pointer, not a history.** 53 session files (51 dated + 2 undated) cover
    2026-10-23 → 2026-10-30,
    every one of them verbatim: [`checkpoints/README.md`](checkpoints/README.md). Nothing was
    deleted, reworded, or summarized. The count is `ls Fast_Fetch/checkpoints/*.md` minus `README.md`,
@@ -67,7 +67,25 @@
    `checkpoints/20261030-09xx-q3-lane-job-b-the-pass-ladder-is-data-and-a.md` — which also carries a
    measurement contradicting two documents: **`redact.link_is_adult` returns False for an unknown link id**,
    not the True its docstring and root `AGENTS.md` claim, so a typo reaches `resolve_live_source` and is
-   stopped there rather than at the adult gate. Reported, not fixed.
+   stopped there rather than at the adult gate. Reported, not fixed. *(Item 12 fixes it.)*
+12. **`[Q3-ADULTKEY-NET]` — the adult law applied per row while a work is identified per key. Branch
+    `q3-adultkey-net`, base `6a441ec`, and it is a WIP checkpoint, not a finished gate.** Inherited
+    `/tmp/q1_adultkey_wip.patch` (redact + fast_fetch clean; the viewer line by hand), so
+    `adult_justified_keys` + `key_is_adult` + `row_is_adult` + `adult_clause(keyed=…)` exist, the ten
+    read-path emitters are converted (the `cat_works` and `public_total` sites deliberately are not), and
+    the `link_is_adult` unknown-id flip from item 11 **has now landed**, named in the commit rather than
+    smuggled in. Reviewed — and deliberately did *not* fork — q4's fold engine in
+    `/tmp/q4_adultkey_wip.patch`: one table for one concept means the read path consults
+    `adult_justified_keys` (a *scope*: it hides a twin that does not exist yet) while
+    `adult_fold_journal` stays the *record* that makes `--undo` possible, and both will be fed by q4's
+    `adult_rule_agrees`/`work_identity` and by nothing else. Two review findings are open work: `--undo`
+    honours only the key half of the identity the fold used (so a cross-key fold is silently re-exposed,
+    and their own suite pins that direction), and `--corroborate --apply` writes the production ledger
+    with no `--owner-go` and no file preimage. **No test module, no python and no sqlite query has run on
+    this branch** — the box went into a hard load hold (1-min 12.5) before anything executed, so
+    `test_redact.py`, `test_database.py` and q4's 44 cases are all unverified here, and the 10,816/15,068
+    asserted-only figure is theirs, not re-measured. Queued commands and the full plan:
+    `checkpoints/20261030-23xx-q3-lane-q3-adultkey-net-read-path-net-inheri.md`.
 
 ---
 
@@ -77,8 +95,10 @@
 |---|---|---|---|
 | 1 | `python3 -S Fast_Fetch/site_scout.py https://movibd.com --max-samples 20 --timeout 12 --retries 1` | ~26 requests to one host, minutes, serial at 1 in-flight per host | measured from this box 2026-10-30: `movibd.online` is a parked stub (every path returns the same 370-byte iframe page), `movibd.top` returned `blocked: challenge` on all 10 samples, `movibd.com` answered its homepage with 17,786 bytes of real HTML and the scout recorded `https://movibd.com/sitemap.xml` as the discovered sitemap (blueprints `movibd_blueprint.json`, `movibd_com_blueprint.json`) |
 | 2 | new `Fast_Fetch/importers/import_movibd.py` + `test_movibd_import.py` writing to **`movibd.db` staging only** | unknown N posts; price = `N × 2 pages × 1.1 s / distinct_hosts` — never into `fast_fetch.db` or the merged catalog | repo rule 9 (per-site staging DB) |
-| 3 | the adult-twin count against the live 6.4 GB catalog — **no command exists yet, writing it is the task** | a single `WHERE is_18_plus=1` count measured 26.46 s by qoder4 2026-10-30, so a scan of that size is a load-under-4-only action | the re-key residual in item 5 |
-| 4 | the 3.7 M-link health sweep | ≈ 7 days thread-bound (`docs/LINK_HEALTH_SWEEP.md` §1) | not scheduled; design doc only |
+| 3 | `nice -n 19 python3 -S Fast_Fetch/backfill_adult_key.py /home/ubuntu/radd-stream-data/merged_catalog_20261025.db --audit` | one full ledger pass — no index on `is_18_plus`, and a `WHERE is_18_plus=1` count measured 26.46 s against 0.91 s for bare `COUNT(*)` on the 6.4 GB file; budget ≈ 30–45 s wall, read-only (`mode=ro`) | the re-key residual in item 5, and the re-measurement of q4's 10,816/15,068 asserted-only claim, which `[Q3-ADULTKEY-NET]` refuses to repeat unverified |
+| 4 | `nice -n 19 python3 -S Fast_Fetch/test_redact.py` then `… test_database.py` then `… test_adult_corroborated_fold.py`, one at a time | ~18 s (measured 17.57 s / 61 tests at load 1.3), ~25 s (25.26 s / 133 tests), and q4's 44 cases — never executed by anyone, so unpriced | `[Q3-ADULTKEY-NET]`: `test_redact.py` has opinions about the unknown-id flip and pins the unkeyed clause string at `:243`; nothing on that branch has run because the load hold landed first |
+| 5 | `EXPLAIN QUERY PLAN` + one `LIMIT 20` probe for the keyed `/api/v1/search/by-media` statement, read-only | two statements, but it is a production read | that route was deliberately shaped to `SCAN p … ORDER BY p.id DESC LIMIT ?`; the anti-join over `adult_justified_keys` has to be shown not to change the plan, and the empty table makes the check inert until the net is populated |
+| 6 | the 3.7 M-link health sweep | ≈ 7 days thread-bound (`docs/LINK_HEALTH_SWEEP.md` §1) | not scheduled; design doc only |
 
 ---
 ## 🏛️ Project Quick Summary
@@ -93,8 +113,9 @@
 ## Rotated session history
 
 Session blocks moved verbatim to [`Fast_Fetch/checkpoints/`](checkpoints/README.md); nothing was deleted or reworded.
-The newest 14 are listed here; the complete index (all 52) is in `Fast_Fetch/checkpoints/README.md`.
+The newest 14 are listed here; the complete index (all 53) is in `Fast_Fetch/checkpoints/README.md`.
 
+- [Session 2026-10-30 23:2x→ — q3 `[Q3-ADULTKEY-NET]`: the read-path key net lands, q4's fold engine is reviewed not forked, and the box goes into a load hold](checkpoints/20261030-23xx-q3-lane-q3-adultkey-net-read-path-net-inheri.md)
 - [Session 2026-10-30 — q3 `[Q3-OPS-READS]`: JOB A — the operator's own reads are bounded, and the boundary is named in code](checkpoints/20261030-q3-lane-launch-readiness-job-a-the-operators-own-rea.md)
 - [Session 2026-10-30 (q3 JOB B) `[Q3-LADDER]`: the pass ladder is data, a refusal writes nothing, and a flagged row publishes no playable handle](checkpoints/20261030-09xx-q3-lane-job-b-the-pass-ladder-is-data-and-a.md) — 191 lines
 - [Session 2026-10-30 — q2 `[Q2-MOVIEBOX-CRAWL]`: parser fixes + detail-API preference; crawl gate closed](checkpoints/20261030-q2-themoviebox-crawl-2026-10-30-parser-fixes-detail-api-preference.md) — 110 lines (absorbed from trunk `4fe6f65` during the rebase)
@@ -108,7 +129,6 @@ The newest 14 are listed here; the complete index (all 52) is in `Fast_Fetch/che
 - [2026-10-30 03:0x–03:5x — q3 lane, LINK-HEALTH follow-up: the per-host serialiser is built, and t](checkpoints/20261030-2026-10-30-03-0x-03-5x-q3-lane-link-health-follow-up-the-p.md) — 89 lines
 - [Session 2026-10-30 (q2, MovieBox link-shape defect) `[Q2-MOVIEBOX]`](checkpoints/20261030-session-2026-10-30-q2-moviebox-link-shape-defect-q2-movieb.md) — 69 lines
 - [2026-10-29 — Session: mp4moviez becomes mergeable, and a fleet-wide false `active` is retired (Q](checkpoints/20261029-2026-10-29-session-mp4moviez-becomes-mergeable-and-a-fleet.md) — 133 lines
-- [2026-10-29 — Session: Filmywap, FilmyHit and KuttyMovies get importers; six named anime hosts ar](checkpoints/20261029-2026-10-29-session-filmywap-filmyhit-and-kuttymovies-get-i.md) — 61 lines
 
 ## Moved out (reference prose, verbatim)
 

@@ -754,7 +754,12 @@ def fetch_database_payload(search_query: str = "", full: bool = False,
         # Denied on both ports is not the same as absent from the panel, and the law
         # is the stricter of the two: the panel must not emit a playable handle for a
         # flagged row at all. See `_withhold_playable`.
-        adult_rule = "1=1" if full else redact.adult_clause("posts")
+        #
+        # `keyed=True`, and it is the half that was missing: this feed is filtered per
+        # row while a work's identity is per `canonical_key`, so the unflagged twin of a
+        # justified work used to arrive here with its own badge off. The key net is what
+        # makes the badge describe the work rather than the page that wrote the row.
+        adult_rule = "1=1" if full else redact.adult_clause("posts", keyed=True)
         sql = f"SELECT * FROM posts WHERE {adult_rule}"
         params = []
         if search_query:
@@ -883,7 +888,7 @@ def generate_m3u_playlist(post_id: int, full: bool = False,
     healer needs to see."""
     with get_db() as conn:
         post = conn.execute("SELECT * FROM posts WHERE id = ?", (post_id,)).fetchone()
-        if not post or post["is_18_plus"]:
+        if redact.row_is_adult(conn, post):
             return ""
 
         releases = conn.execute("SELECT * FROM releases WHERE post_id = ? ORDER BY season ASC, episode ASC, quality DESC, id ASC", (post_id,)).fetchall()
@@ -2783,8 +2788,12 @@ def api_v1_get_posts(query: str = "", content_type: str = "", page: int = 1,
     _ensure_schema()
     offset = max(0, (page - 1) * limit)
     with get_db() as conn:
-        # Adult-flagged posts are stored in the DB but never exposed via the API
-        where_clauses = [redact.adult_clause("p")]
+        # Adult-flagged posts are stored in the DB but never exposed via the API.
+        # `keyed=True` is the half this route was missing: the flag is per row while a
+        # work's identity is per `canonical_key`, so one film filed twice — one copy
+        # flagged, one not — was hidden at one address and listed, and played, at the
+        # other. The key net is what makes this clause describe the work.
+        where_clauses = [redact.adult_clause("p", keyed=True)]
         params = []
         if query:
             where_clauses.append("(p.clean_title LIKE ? OR p.title LIKE ? OR p.slug LIKE ?)")
@@ -2952,7 +2961,7 @@ def api_v1_get_post_detail(post_id: int, full: bool = False,
     _ensure_schema()
     with get_db() as conn:
         post = conn.execute("SELECT * FROM posts WHERE id = ?", (post_id,)).fetchone()
-        if not post or post["is_18_plus"]:
+        if redact.row_is_adult(conn, post):
             return None
         if full:
             p_dict = dict(post)
@@ -3170,7 +3179,7 @@ def _ledger_link_breakdown(conn):
             " FROM download_sources d"
             " JOIN releases r ON r.id = d.release_id"
             " JOIN posts p ON p.id = r.post_id"
-            f" WHERE {redact.adult_clause('p')}"
+            f" WHERE {redact.adult_clause('p', keyed=True)}"
             " GROUP BY state").fetchall():
         name = str(row["state"] or "unchecked")
         count = int(row["n"] or 0)
@@ -3192,11 +3201,12 @@ def _counted_stats(conn):
         ).fetchone()[0]
     except Exception:
         posts_c = conn.execute(
-            "SELECT COUNT(*) FROM posts WHERE " + redact.adult_clause("posts")
+            "SELECT COUNT(*) FROM posts WHERE "
+            + redact.adult_clause("posts", keyed=True)
         ).fetchone()[0]
     rels_c = conn.execute(
         f"SELECT COUNT(*) FROM releases r JOIN posts p ON p.id = r.post_id"
-        f" WHERE {redact.adult_clause('p')}"
+        f" WHERE {redact.adult_clause('p', keyed=True)}"
     ).fetchone()[0]
     by_state, resumable_c, temp_c = _ledger_link_breakdown(conn)
     return {

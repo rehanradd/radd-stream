@@ -1062,22 +1062,141 @@ def art_url_for(post_id: int, kind: str, index: int, db_path,
     return None
 
 
+#: The ledger keys the adult law has been *proven* against, one row per key. The
+#: flag on a row says what one page called this file; this table says what the work
+#: is, which is the question a per-row filter cannot answer.
+#:
+#: Populated by exactly one writer, `Fast_Fetch/adult_key_net.py`, and only from the
+#: corroborated rule — `fast_fetch.adult_rule_agrees()` over the row's own stored texts,
+#: grouped by `canonical_key` and by `(clean_title, year)` — never from a raw
+#: `MAX(is_18_plus)` per key, which is what hid 407 mainstream works on 2026-10-29. See
+#: `docs/SPEC_ADULT_FLAG_EVIDENCE.md` and `Fast_Fetch/audit_adult_flags.py`'s docstring.
+#: It is also the *scope* half of the design: `adult_fold_journal` records the rows a fold
+#: already flipped, and this table is what hides a twin that has not been written yet.
+#: Every reader of it (`adult_clause(keyed=True)`, `key_is_adult`) treats an empty table
+#: as "nobody has reconciled this ledger", which hides exactly what the row flag hides.
+ADULT_JUSTIFIED_KEYS = "adult_justified_keys"
+
+_ADULT_KEYS_DDL = f"""
+CREATE TABLE IF NOT EXISTS {ADULT_JUSTIFIED_KEYS} (
+    canonical_key    TEXT PRIMARY KEY NOT NULL,
+    evidence         TEXT NOT NULL,
+    rows_justified   INTEGER NOT NULL DEFAULT 0,
+    decided_at       REAL NOT NULL
+)
+"""
+
+
+def ensure_adult_key_table(conn) -> None:
+    """Create the key table when a database has never had one. Never writes a row.
+
+    One statement, so it does not commit a caller's open transaction the way
+    `executescript` would. An empty table is the honest absence of a reconciliation,
+    not a hole: it hides exactly what the per-row flag already hides.
+    """
+    conn.execute(_ADULT_KEYS_DDL)
+
+
+def key_is_adult(conn, canonical_key) -> bool:
+    """Is the work named by `canonical_key` justified adult on stored evidence?
+
+    One primary-key probe. `unknown` and the empty key answer False on purpose: they
+    are the shared bucket every titleless payload lands in, not one work, and
+    propagating from there would hide unrelated titles on the strength of one bad
+    page. A ledger that predates this table gets it created on the spot rather than an
+    SQL error, because every caller of this function is a public route; if even the
+    create fails, it denies — the same failure direction as `link_is_adult` and
+    `art_is_adult`, which refuse on anything they cannot judge.
+    """
+    key = str(canonical_key or "").strip().lower()
+    if not key or key == "unknown":
+        return False
+    try:
+        return _key_probe(conn, key)
+    except sqlite3.Error:
+        pass
+    try:
+        ensure_adult_key_table(conn)
+        return _key_probe(conn, key)
+    except sqlite3.Error:
+        return True
+
+
+def _key_probe(conn, key: str) -> bool:
+    return conn.execute(
+        f"SELECT 1 FROM {ADULT_JUSTIFIED_KEYS} WHERE canonical_key = ?",
+        (key,)).fetchone() is not None
+
+
+def row_is_adult(conn, row) -> bool:
+    """The adult rule for a ledger row already in hand: its own flag, or its work's.
+
+    `/api/v1/posts/{id}` and `/api/m3u` bail on `row["is_18_plus"]` after their own
+    `SELECT *`, and a bail that reads only the row repeats the leak it exists to
+    guard: the unflagged twin of a justified work walks straight through it. A row
+    with no `canonical_key` column at all falls back to its own flag — an unkeyed row
+    is not a twin of anything.
+    """
+    if row is None:
+        return True
+    try:
+        flagged = bool(row["is_18_plus"])
+    except (IndexError, KeyError):
+        return True                        # a row we cannot read is not a row we may show
+    if flagged:
+        return True
+    try:
+        key = row["canonical_key"]
+    except (IndexError, KeyError):
+        return False                       # no key column: only the row's own flag is knowable
+    return key_is_adult(conn, key)
+
+
+def adult_clause(alias: str = "posts", *, keyed: bool = False) -> str:
+    """The one adult rule, shared by every public emitter (same predicate the
+    v2 read layer and the ledger views already use).
+
+    `keyed=True` adds the work-level half: a row whose *own* flag is clean is still
+    hidden when the key it was filed under is in `adult_justified_keys`. Ledger
+    callers pass it; the `cat_works` callers must not, because the projection's
+    identity is `work_key` (a different value space, `imdb:`/`tmdb:`/`family:`) and
+    `project()` already rolls the flag up with `any()` over every page of the work —
+    asking `cat_works` for a `canonical_key` would be an SQL error, not a wider net.
+    The anti-join is uncorrelated so SQLite builds it once rather than probing per
+    outer row, and a NULL key is left to the row-level rule: an unkeyed row is not a
+    twin of anything, and hiding it would be a different policy than the one here.
+
+    A deployment precondition, because it is a 500 and not a leak if it slips: the
+    clause is raw SQL, so a ledger without the table makes every `keyed=True` query
+    raise. `fast_fetch._init_db` creates it, `viewer._ensure_schema()` runs `_init_db`
+    at the top of every public route that passes `keyed=True`, and the Python probes
+    (`key_is_adult`, `row_is_adult`) create-and-reprobe on their own. A caller that
+    builds its own connection and skips all three gets an error, which is the
+    fail-closed direction — it hides everything rather than serving a flagged work.
+    """
+    row = f"({alias}.is_18_plus IS NULL OR {alias}.is_18_plus = 0)"
+    if not keyed:
+        return row
+    key = f"{alias}.canonical_key"
+    return (f"{row} AND ({key} IS NULL OR {key} = '' OR {key} NOT IN"
+            f" (SELECT canonical_key FROM {ADULT_JUSTIFIED_KEYS}))")
+
+
 def art_is_adult(target_id: int, db_path, table: str = "posts") -> bool:
     """Adult rule for the artwork redirector, in whichever table the art lives."""
     from_table = ART_TABLES.get(str(table or "posts"), "posts")
+    columns = ("is_18_plus, canonical_key" if from_table == "posts" else "is_18_plus")
     with sqlite3.connect(db_path) as conn:
         try:
-            row = conn.execute(f"SELECT is_18_plus FROM {from_table} WHERE id = ?",
+            row = conn.execute(f"SELECT {columns} FROM {from_table} WHERE id = ?",
                                (target_id,)).fetchone()
         except sqlite3.Error:
             return True          # unknown table or vanished row: show nothing
-    return bool(row and row[0])
-
-
-def adult_clause(alias: str = "posts") -> str:
-    """The one adult rule, shared by every public emitter (same predicate the
-    v2 read layer and the ledger views already use)."""
-    return f"({alias}.is_18_plus IS NULL OR {alias}.is_18_plus = 0)"
+        if row is None or row[0]:
+            return True
+        if from_table != "posts":
+            return False             # a projection row has no ledger key to test
+        return key_is_adult(conn, row[1])
 
 
 def link_is_adult(source_id: int, db_path) -> bool:
@@ -1086,19 +1205,26 @@ def link_is_adult(source_id: int, db_path) -> bool:
     Every list route hides a flagged title, but a redirector addressed by a bare
     link id never sees the list: without this, the play route alone would be an
     adult viewer. An unknown link answers True too, so a vanished row, a typo and
-    a flagged title are indistinguishable — and none of them plays."""
+    a flagged title are indistinguishable — and none of them plays.
+
+    The post's own flag is only half the rule: hiding the list while this route
+    still plays the work's unflagged twin would move the leak, not close it. So the
+    same key the list now tests is tested here, one primary-key probe.
+    """
     with sqlite3.connect(db_path) as conn:
         try:
             row = conn.execute(
                 """
-                SELECT p.is_18_plus FROM download_sources s
+                SELECT p.is_18_plus, p.canonical_key FROM download_sources s
                 JOIN releases r ON r.id = s.release_id
                 JOIN posts p ON p.id = r.post_id
                 WHERE s.id = ?
                 """, (source_id,)).fetchone()
         except sqlite3.Error:
             return True
-    return bool(row and row[0])
+        if row is None or row[0]:
+            return True
+        return key_is_adult(conn, row[1])
 
 
 # ── rate limiting: the documented buckets, in-app ────────────────────────────

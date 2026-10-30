@@ -5,6 +5,7 @@ Newest first. Each file is a session block moved verbatim out of `Fast_Fetch/CON
 Entries written to `CONTINUITY.md` by another lane *after* the rotation are not lost: the rebase onto
 trunk `4fe6f65` moved them here the same way, verbatim, with the trunk line range in the header.
 
+- 2026-10-30 23:2x→ — q3 lane `[Q3-ADULTKEY-NET]`, HELD at load 12.5: the read-path key net inherited from q1, ten emitters converted, q4's fold engine reviewed and not forked, one table for the scope and one for the record, and every command queued rather than run — [`20261030-23xx-q3-lane-q3-adultkey-net-read-path-net-inheri.md`](20261030-23xx-q3-lane-q3-adultkey-net-read-path-net-inheri.md)
 - 2026-10-30 — q2 `[Q2-MB-CRAWL-20261030]`: the first real bounded MovieBox crawl (12 rows, 158 releases, 0 sources) — [`20261030-session-2026-10-30-q2-mb-crawl-the-first-real-bounded-crawl.md`](20261030-session-2026-10-30-q2-mb-crawl-the-first-real-bounded-crawl.md)
 - 2026-10-30 — q3 `[Q3-OPS-READS]`: launch readiness JOB A — the operator's own reads are bounded, they say so, and the boundary is named in code — [`20261030-q3-lane-launch-readiness-job-a-the-operators-own-rea.md`](20261030-q3-lane-launch-readiness-job-a-the-operators-own-rea.md)
 - 2026-10-30 — q2 `[Q2-MB-MINT]`: the play grant needs an account; MovieBox stays catalog-only — [`20261030-session-2026-10-30-q2-mb-mint-the-play-grant-needs-an-accou.md`](20261030-session-2026-10-30-q2-mb-mint-the-play-grant-needs-an-accou.md)

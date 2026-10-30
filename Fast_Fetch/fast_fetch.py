@@ -926,6 +926,12 @@ def _init_db(db_path: Path | None = None) -> None:
 
         conn.execute("CREATE INDEX IF NOT EXISTS idx_posts_source_ind ON posts(source_site, industry)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_posts_canonical_key ON posts(canonical_key)")
+        # The read-path adult net (`redact.adult_clause(keyed=True)`) anti-joins this
+        # table, so every database the service opens must have it before any route
+        # queries it. Created empty: a ledger nobody has reconciled yet hides exactly
+        # what the row-level flag hides, which is the state before this table existed.
+        import redact
+        redact.ensure_adult_key_table(conn)
         conn.execute("CREATE INDEX IF NOT EXISTS idx_releases_source_site ON releases(source_site)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_sitemap_site ON sitemap_cache(site, scraped)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_sitemap_retry ON sitemap_cache(scraped, attempts)")

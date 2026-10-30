@@ -165,7 +165,7 @@ def _candidates(conn, clean: str, window: int, full: bool) -> tuple:
     """
     wanted = clean.lower()
     sql = (f"SELECT {_row_columns(full)} FROM posts p"
-           f" WHERE {redact.adult_clause('p')}"
+           f" WHERE {redact.adult_clause('p', keyed=True)}"
            f" AND (p.clean_title LIKE ? ESCAPE '\\' OR p.title LIKE ? ESCAPE '\\')"
            f" ORDER BY p.id DESC LIMIT ?")
     contains = _contains_pattern(clean)
