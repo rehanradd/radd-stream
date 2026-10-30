@@ -498,6 +498,31 @@ class AbsorbedTrunkEditTests(unittest.TestCase):
                              % (rel, len(lost), "\n".join(sorted(lost)[:12])))
 
 
+class ConflictMarkerTests(unittest.TestCase):
+    """A resolved merge must not leave its tooling behind in the file.
+
+    Measured 2026-10-30: landing two lanes' checkpoint entries onto the same index line left a
+    bare `=======` in `Fast_Fetch/checkpoints/README.md`, and it reached trunk. It broke no test,
+    because nothing looked for it, and the index kept claiming to be complete while carrying
+    diff debris — which is worse than an obvious failure, since a lane trusts a pointer file.
+    Stripping markers is a resolution step; a resolved file that still has them is unresolved.
+    """
+
+    #: The files more than one lane appends to, so the files a merge actually collides in.
+    MERGED = AUTO_LOADED + [CONTINUITY, CHECKPOINT, ADMIN_DOC,
+                            FF_CKPT / "README.md", DOC_CKPT / "README.md"]
+
+    def test_no_lane_edited_file_carries_conflict_markers(self):
+        offenders = []
+        for path in self.MERGED:
+            if not path.is_file():
+                continue
+            for n, line in enumerate(load(path).splitlines(), 1):
+                if line.startswith(("<<<<<<< ", ">>>>>>> ")) or line in ("<<<<<<<", "=======", ">>>>>>>"):
+                    offenders.append("%s:%d %r" % (path.relative_to(REPO_ROOT), n, line[:20]))
+        self.assertFalse(offenders, "unresolved merge markers:\n" + "\n".join(offenders))
+
+
 class OpenItemsIndexTests(unittest.TestCase):
     """The brief: each checkpoint file gets a short open-items index at the top."""
 

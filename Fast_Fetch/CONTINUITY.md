@@ -33,8 +33,9 @@
 8. Landed tonight (docs): the documentation diet — the five auto-loaded files 779,799 →
    68,679 B (−91.2 %, `wc -c` on the rebased tree) as a conservation-checked SPLIT (nothing
    deleted), guarded by
-   `Fast_Fetch/test_docs_invariants.py` (17 tests OK; the last of 29 `🧪` CI steps at that push —
-   item 10 adds a 30th and runs after it).
+   `Fast_Fetch/test_docs_invariants.py` (18 tests OK as of the merge-marker guard added at this
+   push; `grep -c 'name: 🧪' .github/workflows/backend-ci.yml` = 30, the 30th being
+   `test_operator_read_bounds.py`, registered by `[Q3-OPS-READS]`).
    `checkpoints/20261030-04xx-q3-lane-the-documentation-diet-split-not-delet.md`.
 9. **Trunk moved while the diet was open, and the rebase absorbed it rather than dropping it.**
    `q3-docs-diet` was rebased onto `4fe6f65`; the three doc edits written after the rotation are
