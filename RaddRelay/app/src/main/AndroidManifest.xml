@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- The relay posts to the catalog server; nothing else needs the network. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
+    <!-- Read merchant SMS. READ_SMS is deliberately NOT requested: the app only
+         consumes the SMS_RECEIVED broadcast, it never opens the inbox. -->
+    <uses-permission android:name="android.permission.RECEIVE_SMS" />
+
+    <!-- Android 13+ asks the user before an app can post its status notification. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!-- Persistent "relay active" notification (Android 14 needs the typed one). -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+
+    <!-- Restart the relay after a reboot when the operator had it enabled. -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+
+    <!-- A tablet without a SIM can still install the app to configure it. -->
+    <uses-feature
+        android:name="android.hardware.telephony"
+        android:required="false" />
+
+    <application
+        android:allowBackup="false"
+        android:icon="@android:drawable/sym_def_app_icon"
+        android:label="RaddRelay"
+        android:usesCleartextTraffic="true"
+        android:theme="@android:style/Theme.Material.Light">
+
+        <!--
+          usesCleartextTraffic is on because the catalog server is HTTP-only
+          (92.4.95.252, port 80; nginx does not terminate TLS). If that ever
+          changes, turn this off and switch the configured URL to https://.
+        -->
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:windowSoftInputMode="adjustResize">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!--
+          SMS_RECEIVED is a protected broadcast: only the telephony stack may send
+          it, which is what android:permission="android.permission.BROADCAST_SMS"
+          enforces. The receiver filters senders itself (SmsParser), so a spoofed
+          body from any other sender is dropped before the service is involved.
+        -->
+        <receiver
+            android:name=".SmsReceiver"
+            android:exported="true"
+            android:permission="android.permission.BROADCAST_SMS">
+            <intent-filter android:priority="999">
+                <action android:name="android.provider.Telephony.SMS_RECEIVED" />
+            </intent-filter>
+        </receiver>
+
+        <receiver
+            android:name=".BootReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
+
+        <service
+            android:name=".RelayService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+
+    </application>
+</manifest>
