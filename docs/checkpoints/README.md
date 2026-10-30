@@ -5,6 +5,9 @@ Newest first. Each file is a session block moved verbatim out of `docs/SESSION_C
 Entries written here by another lane *after* the rotation are not lost: the rebase onto trunk `4fe6f65`
 moved them into this directory the same way, verbatim, with the trunk line range in the header.
 
+- 2026-10-30 10:xx — q6 lane `[Q6-DOC-TRUTH]`: the API-security paragraph was wrong on four of five points, the dead workflow copies went, and trunk had already shipped the adult fix — [`20261030-10xx-q6-lane-doc-truth-the-api-security-paragraph.md`](20261030-10xx-q6-lane-doc-truth-the-api-security-paragraph.md) *(a new session written straight into this archive, not a rotation out of `SESSION_CHECKPOINT.md` — that file is at 54 lines / 5.4 KB and its own rule 4 says append here, not there)*
+
+<!-- newest-first; the blocks below were rotated verbatim out of docs/SESSION_CHECKPOINT.md -->
 - 2026-10-30 (cont.) — MovieBox: detail-API parser, credits/backdrop/languages fixed, crawl gate refused `[Q2-MOVIEBOX-CRAWL]` (absorbed from trunk `4fe6f65`) — [`20261030-2026-10-30-cont-moviedbox-detail-api-parser-credits-backdrop.md`](20261030-2026-10-30-cont-moviedbox-detail-api-parser-credits-backdrop.md)
 - 2026-10-30 04:15 — qoder4 master: the box entered the halt band, and what was actually consuming it `[Q4-SAFETY]` (absorbed from trunk `4fe6f65`) — [`20261030-2026-10-30-04-15-qoder4-master-the-box-entered-the-halt-band.md`](20261030-2026-10-30-04-15-qoder4-master-the-box-entered-the-halt-band.md)
 - 2026-10-30 02:20 — qoder4 master: the admin-panel gate verdict, and the measurement that flipped its meaning [ — [`20261030-2026-10-30-02-20-qoder4-master-the-admin-panel-gate-verdic.md`](20261030-2026-10-30-02-20-qoder4-master-the-admin-panel-gate-verdic.md)
