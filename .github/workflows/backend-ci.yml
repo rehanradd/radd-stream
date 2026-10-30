@@ -85,6 +85,20 @@ name: 🐍 Backend CI — Stdlib Python Tests
 #       name, the status and the health stay for the audit; an unflagged row loses nothing; the badge
 #       stays operator-only; and over a real loopback socket a flagged source id is refused before
 #       the resolver runs. Offline — temp catalog, 127.0.0.1 port 0, no network)
+#     - Fast_Fetch/importers/test_host_resolvers.py (host embed resolvers: the packer
+#       loop, the stale-signature answer, and the signature/decrypt paths, each through
+#       an injected `fetch`. `socket.socket` is replaced by a raiser, so an accidental
+#       live request fails the run. Offline, fixtures captured from the hosts)
+#     - Fast_Fetch/importers/test_stream_resolvers.py (stream resolver table + parsing;
+#       offline fixtures, no socket)
+#     - Fast_Fetch/importers/test_convert_mp4moviez.py (the mp4moviez converter: slug
+#       year detection, already-a-work rows, and the skip counters; in-memory SQLite,
+#       no socket)
+#     - Fast_Fetch/test_ci_inventory.py (the inventory guard for THIS file: every
+#       `test_*.py` under Fast_Fetch/ and Fast_Fetch/importers/ is either a 🧪 step or
+#       an EXCLUDED entry with a reason, every step names a file that exists and runs
+#       the file it names, and an exclusion that has rotted is a failure. Offline —
+#       reads this workflow and two directory listings)
 #
 #   Deliberately EXCLUDED:
 #     - Fast_Fetch/test_all_sites.py  — live 10-site network audit; needs the
@@ -92,6 +106,11 @@ name: 🐍 Backend CI — Stdlib Python Tests
 #     - test_<site>_import.py / per-site parser tests — several read fixture
 #       files whose layout changes with the site, so they are run by the
 #       scraper's own agent at edit time rather than gating every push.
+#       That policy covers the per-site importers ONLY. `test_host_resolvers.py`,
+#       `test_stream_resolvers.py` and `test_convert_mp4moviez.py` sit in the same
+#       directory but are not per-site importers, and until 2026-10-30 they ran
+#       nowhere; they are steps now. `test_ci_inventory.py` is what keeps this list
+#       and the tree in agreement in both directions.
 #
 # KNOWN FAILURE MODES THIS FILE FIXES
 #   GitHub never ran any pipeline for this repo because the workflow files lived
@@ -297,4 +316,22 @@ jobs:
       # 127.0.0.1 port 0, the resolver mocked to a recorder.
       - name: 🧪 test_operator_adult_projection.py
         run: python3 -S Fast_Fetch/test_operator_adult_projection.py
+
+      # Inventory closure (q5, 2026-10-30). Measured at trunk `6a441ec`: 83 test_*.py
+      # modules existed and 32 were steps. Twenty-one were real unittest suites with a
+      # main(); THREE of them were offline resolver/converter suites that the workflow's
+      # own per-site-parser exclusion never covered, and they were simply never wired
+      # up. They are steps now, and the guard below keeps the two lists equal in both
+      # directions so the next module cannot miss CI silently.
+      - name: 🧪 test_host_resolvers.py
+        run: python3 -S Fast_Fetch/importers/test_host_resolvers.py
+
+      - name: 🧪 test_stream_resolvers.py
+        run: python3 -S Fast_Fetch/importers/test_stream_resolvers.py
+
+      - name: 🧪 test_convert_mp4moviez.py
+        run: python3 -S Fast_Fetch/importers/test_convert_mp4moviez.py
+
+      - name: 🧪 test_ci_inventory.py
+        run: python3 -S Fast_Fetch/test_ci_inventory.py
 

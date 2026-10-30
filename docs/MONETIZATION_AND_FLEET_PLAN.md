@@ -54,8 +54,8 @@ Users in Pakistan prefer micro-passes over expensive monthly commitments:
 |---|---|---|
 | **qoder1** *(Android Lead)* | **In-Player Pre-Roll & Native Ads** | 1. Integrate pre-roll ad flow in ExoPlayer (`Media3`) with 5s skip button.<br>2. Cap frequency to 1 per 25 min.<br>3. Add native poster card component to catalog LazyVerticalGrid.<br>4. Implement 7-day login streak UI. |
 | **qoder2** *(Backend Lead)* | **Regional Fleet Expansion** | 1. Target next regional drama site (**Hum TV** / **Geo** / **ApneTV**).<br>2. Maintain 100% staging database isolation in `/home/ubuntu/radd-stream-data/`.<br>3. Zero data loss on redirects/SPA shells. |
-| **qoder3** *(Fleet & Importer QA)* | **Green Backend CI** | 1. Resolve vocabulary mapping in `catalog_v2._link_state_of` (`unverified` vs `unchecked`).<br>2. Ensure all 15 CI test modules pass offline.<br>3. Push to `rehanradd/radd-stream` master & main. |
-| **qoder4** *(Master Orchestrator)* | **Fleet Supervision & Gates** | 1. Monitor VM load, memory headroom, and crawl pacing.<br>2. Inspect PRs and ensure no worker runs Gradle while crawlers run.<br>3. Verify all 15 test suites before giving green light to push. |
+| **qoder3** *(Fleet & Importer QA)* | **Green Backend CI** | 1. Resolve vocabulary mapping in `catalog_v2._link_state_of` (`unverified` vs `unchecked`).<br>2. Ensure every `name: 🧪` suite in `.github/workflows/backend-ci.yml` passes offline (the workflow is the source of truth; the old "15" count was stale by 2026-10-30, when it was 32).<br>3. Push to `rehanradd/radd-stream` master & main. |
+| **qoder4** *(Master Orchestrator)* | **Fleet Supervision & Gates** | 1. Monitor VM load, memory headroom, and crawl pacing.<br>2. Inspect PRs and ensure no worker runs Gradle while crawlers run.<br>3. Verify every suite `.github/workflows/backend-ci.yml` runs before giving green light to push (count with `grep -c 'name: 🧪'`, never quote a remembered number). |
 | **qoder5** *(Catalog & Wallet Backend)* | **Wallet & Pass REST Contract** | 1. Finalize `safe_link_rollup` in `catalog_v2.py`.<br>2. Add `/api/v2/account/wallet` endpoints for coin rewards and pass purchase verification. |
 
 ---

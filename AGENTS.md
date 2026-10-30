@@ -51,19 +51,25 @@ Describe the code's behavior accurately to users and tools. Do not disguise its 
   **The invariant, measured against the code and pinned by tests**
   (`Fast_Fetch/test_redact.py::AdultDenialOnBothPortsTests`,
   `Fast_Fetch/test_database.py::KeyLevelAdultIdentityTests`): no public surface may list *or play* a
-  flagged row. Enforced today by `redact.adult_clause` (`Fast_Fetch/redact.py:1073`) inside
-  `api_v1_get_posts` (`Fast_Fetch/viewer.py:2534`), by the per-post bail at `viewer.py:709` and
-  `:2710`, by `redact.link_is_adult` (`redact.py:1079`) on the stream/download redirectors — which
-  answers True for an unknown link id so a typo cannot play either — and by nginx, which allow-lists
-  only the public routes. To a public client a flagged row is indistinguishable from a row that never
+  flagged row. Enforced today by `redact.adult_clause` (`Fast_Fetch/redact.py:1077`) inside
+  `api_v1_get_posts` (`Fast_Fetch/viewer.py:2779`), by the per-post bail at `viewer.py:886` and
+  `:2955`, by `redact.link_is_adult` (`redact.py:1083`) on the stream/download redirectors, and by
+  nginx, which allow-lists only the public routes. **The law is that an unknown link id must be
+  refused at that gate too**, so a typo and a flagged title are indistinguishable. Measured on trunk
+  `6a441ec` the gate is fail-OPEN for a missing row — its last line is `bool(row and row[0])`, so an
+  unknown id answers **False** and reaches the resolver, whose 404 `no_playable_source` is the only
+  thing stopping a typo from playing (pinned by
+  `test_operator_adult_projection.py::test_an_unrecognized_link_id_reaches_the_resolver_today`).
+  qoder3 owns the fail-closed flip; the docstring and that test flip with it, in the same change.
+  To a public client a flagged row is indistinguishable from a row that never
   existed: the same `not_found`, the same status code, no hint that a flag caused the denial.
   **One exception, deliberately, and it is not a user-facing display surface:** the operator panel.
-  `DASHBOARD_HTML` (`viewer.py:739`) reads `/api/data`, which this process 404s on the public port,
+  `DASHBOARD_HTML` (`viewer.py:916`) reads `/api/data`, which this process 404s on the public port,
   is served only on the loopback operator port, and 403s at the public edge; the trust boundary there
   is the loopback interface, not `RADD_ADMIN_TOKEN` (the token guards `/admin`, and `/` answers 200 on
   `8081` without it — measured 2026-10-29 05:47, see the table below). `fetch_database_payload`
-  (`viewer.py:494`) documents `full` as "the operator-only mode (loopback port): raw ledger rows", and
-  the panel renders a `18+ ADULT` badge (`viewer.py:1681`) because an operator auditing flag coverage
+  (`viewer.py:556`) documents `full` as "the operator-only mode (loopback port): raw ledger rows", and
+  the panel renders a `18+ ADULT` badge (`viewer.py:1918`) because an operator auditing flag coverage
   has to see which rows carry the flag. That is the *stored* half of this rule, shown to the person who
   owns the storage — never a playable link, and never a public list. `/api/v1/stream` and
   `/api/v1/download` deny a flagged link **on the operator port too**, with the same uniform
@@ -120,27 +126,29 @@ Describe the code's behavior accurately to users and tools. Do not disguise its 
 | `KEY_ALIAS` | ✅ **CONFIGURED & ACTIVE** (measured 2026-10-30) | Key alias inside keystore (`raddstream`) |
 | `KEY_PASSWORD` | ✅ **CONFIGURED & ACTIVE** (measured 2026-10-30) | Key password |
 
-**Measured 2026-10-29 17:55 — this retires the claim that the four keystore variables are "GitHub
-Repo Secrets".** `GET /repos/rehanradd/radd-stream/actions/secrets` returns
+**HISTORICAL, superseded 2026-10-30 — measured 2026-10-29 17:55, when GitHub held no signing
+secret.** The four keystore variables were not "GitHub Repo Secrets" then:
+`GET /repos/rehanradd/radd-stream/actions/secrets` returned
 `{"total_count": 0, "secrets": []}`, from a lane whose repo `permissions` are
-`{admin: true, push: true}`, so it is a real answer and not a permission artifact. Proof by
+`{admin: true, push: true}`, so it was a real answer and not a permission artifact. Proof by
 execution: `workflow_dispatch` on `🚀 Release — Sign & Publish APK + AAB` (workflow `398476978`,
 run `40876596427`) ended `failure` after **10 s**, against the **7m 02s** `BUILD SUCCESSFUL` the
 Android build takes (measured on run `40874380668`), so it died at the
 `🗝️ Verify signing secrets are present` preflight (`release.yml:53`) and never reached a build,
 a signature check, or the publish step — nothing was released. That preflight is why exercising this
-is safe. **Consequence:** CI cannot produce a signed release APK/AAB until the owner adds all four
-values under GitHub → Settings → Secrets → Actions. **Do not generate a replacement keystore to work
-around it** — a different signing key makes every later upgrade incompatible with the first install,
-and there is no installed base to protect yet, so the owner's key is the only correct one.
-**Available today with no secret at all:** `🔨 CI — Android Build & Test` uploads a **debug APK** on
+is safe. **Consequence at the time:** CI could not produce a signed release APK/AAB until the owner
+added all four values under GitHub → Settings → Secrets → Actions. **Do not generate a replacement
+keystore to work around it** — a different signing key makes every later upgrade incompatible with
+the first install, and there is no installed base to protect yet, so the owner's key is the only
+correct one.
+**Available with no secret at all:** `🔨 CI — Android Build & Test` uploads a **debug APK** on
 every green run (`📤 Upload debug APK` succeeded at `2caadb3`) — debug-signed and installable for the
 device verification every doc still marks "pending".
 
-**UPDATE (Measured 2026-10-30 22:53):** All four release signing secrets (`KEYSTORE_BASE64`, `KEY_ALIAS`, `KEY_PASSWORD`, `KEY_STORE_PASSWORD`) were generated, backed up on Oracle VM (`/home/ubuntu/raddstream-release.jks`), and configured in GitHub Actions Secrets by the repository owner. Release tag `v1.0.0` was pushed, and the official release workflow (`🚀 Release — Sign & Publish APK + AAB`) is now active and producing signed release artifacts.
+**CURRENT (measured 2026-10-30 22:53, recorded by `63396c1`):** All four release signing secrets (`KEYSTORE_BASE64`, `KEY_ALIAS`, `KEY_PASSWORD`, `KEY_STORE_PASSWORD`) were generated, backed up on Oracle VM (`/home/ubuntu/raddstream-release.jks`), and configured in GitHub Actions Secrets by the repository owner. Release tag `v1.0.0` was pushed, and the official release workflow (`🚀 Release — Sign & Publish APK + AAB`) is active. The empty-list measurement above is history, not the current state: do not re-quote it as a live blocker.
 
 **Backend agents**: use `GITHUB_TOKEN` for GitHub operations and `ORACLE_SSH_KEY` only when connecting to Oracle. Read [`ORACLE_DEPLOYMENT.md`](ORACLE_DEPLOYMENT.md) first.
-**App agents**: the debug build needs no secrets; the *signed release* needs the 4 keystore secrets, which were historically absent and are now active and verified as of 2026-10-30. (Historical baseline: the *signed release* needs the 4 keystore secrets, which are **currently absent** (measured above)).
+**App agents**: the debug build needs no secrets; the *signed release* needs the 4 keystore secrets, and all four were configured and verified on 2026-10-30 (`63396c1`).
 Verify only whether the two configured variable names are present; never read or print their values, put them in Git URLs or command arguments, commit them, or copy them to Oracle. Do not ask the user to move them to Replit Secrets.
 
 ---
@@ -193,7 +201,9 @@ rule is memory-led, not load-led:
    requests to `/api/v1/stats` on this single core and burned **22.5 server CPU-seconds**, having
    assumed it was a cheap counter.
 5. **Unchanged absolutes:** never restart/reload/stop `radd-stream.service`; never create or push
-   a git tag (and it cannot succeed anyway — `/actions/secrets` is `[]`); never commit from or
+   a git tag (it is the owner's release decision, and since 2026-10-30 the four signing secrets are
+   live, so a tag really does publish a signed APK/AAB — that is the reason no agent touches one,
+   not that CI would fail); never commit from or
    reset `/opt/radd-stream`, which is the live deployment tree; no Gradle until the owner confirms
    load < 0.5; never put a credential in a URL, argv, file or log.
 6. **If your task needs a heavy read, do not run it — queue it.** Write the exact command, the
@@ -314,10 +324,10 @@ python Fast_Fetch/fast_fetch.py search "Inception"
 # GitHub only discovers workflows under the repository-root .github/workflows/. The duplicates
 # that used to sit under App/.github/workflows were never discovered and are now deleted.
 #
-# ⛔ NO AGENT CREATES OR PUSHES A TAG. tags: [] and releases: [] are measured empty and
-# /actions/secrets returns [], so a release run cannot succeed today — the owner adds the four
-# keystore secrets and tags. The historical tag procedure and why `origin`'s URL is no longer the
-# reason to avoid it: docs/SPEC_AGENTS_MEASURED_NOTES.md.
+# ⛔ NO AGENT CREATES OR PUSHES A TAG. That was a technical dead end on 2026-10-29
+# (/actions/secrets returned []) and is not one now: the four keystore secrets were configured
+# on 2026-10-30, so a tag triggers a real signed release. Tagging is therefore the owner's call
+# for a stronger reason, not a weaker one. History: docs/SPEC_AGENTS_MEASURED_NOTES.md.
 
 # Download APK: github.com/rehanradd/radd-stream/actions (debug)
 #               github.com/rehanradd/radd-stream/releases (release)
