@@ -368,8 +368,7 @@ agrees, where I changed it to agree, and where it still does not.
 
 ## Next action for whoever picks this up
 
-Push branch `q3-backend-auth-payments`, read the hosted Backend CI verdict for all 33 steps, and do
-not merge or deploy. The owner's remaining actions are **`RADD_MERCHANT_SECRET` on the service and
+The owner's remaining actions are **`RADD_MERCHANT_SECRET` on the service and
 the phone→loopback tunnel** (R2) — explicitly **not** an nginx change, see gap 1. Then, in the order
 `docs/RADD_RELAY_AND_AUTH_ARCHITECTURE.md` §2 already rules: **R7's contact-wipe admin route** (the
 largest unmet ruling here), **R8's provisional-row accounting** (`account_kind`/`activated_at`, so
@@ -377,6 +376,29 @@ the usage panel can tell a mint from a user), **R9's ten admin fields** (which i
 `accounts.TRIAL_DAYS` and `PROFILE_BONUS_SECONDS` into knobs and gives the relay its
 `radd_relay_enabled` switch), then the companion APK against a **test** merchant number. `/opt/radd-stream`
 remains behind trunk and the service has not been restarted by this lane, so none of this is live.
+
+## How this session ended, measured
+
+Four commits on branch `q3-backend-auth-payments`, base `6a441ec`, pushed to the explicit clean URL
+with the heredoc `GIT_ASKPASS` helper (`origin` was never used — its stored remote still carries the
+owner's unrevoked token), and `ls-remote` confirms the tip landed:
+
+| sha | subject |
+|---|---|
+| `f0829f5` | `feat(accounts): a device-gated 3-day trial and a PBKDF2 phone+PIN profile link` |
+| `daa231e` | `feat(payments): an SMS relay that can credit a claim, on one exact match` |
+| `1653efc` | `test(payments,accounts): 83 offline tests … — and CI runs them` |
+| `9df2f62` | `docs(continuity): the [Q3-ONBOARD-PAY] session log, and the indexes recounted` |
+| `ccd9cf3` | `docs(checkpoint): point the cross-account index at [Q3-ONBOARD-PAY] …` (branch tip) |
+
+**Hosted Backend CI: run `41122473554`, `completed success`, job `python3 -S offline suites`** — all
+33 `🧪` steps green on the hosted runner at `9df2f623`, including the new step and the timed
+`test_admin_panel.py` that the two edits to `admin_panel.py` could have broken. (Runner architecture
+was not read from the run, so it is not claimed here — the local box is arm64 and this suite opens no
+socket, which is the only portability surface it has.) `ccd9cf3` is a `docs/`-only commit and
+`backend-ci.yml` filters on `Fast_Fetch/**` + the workflow file, so it correctly started no run; the
+code at the tip is byte-identical to the code CI judged. Nothing was merged, no `master`/`main` ref
+moved, no tag, no deploy, no service restart.
 
 **And one housekeeping fact the next lane inherits from mine:** appending item 12 put
 `Fast_Fetch/CONTINUITY.md` at **120 of 120 lines and 11,996 of 12,000 bytes** — exactly against both
