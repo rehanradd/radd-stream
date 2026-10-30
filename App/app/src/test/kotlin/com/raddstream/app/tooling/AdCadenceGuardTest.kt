@@ -115,11 +115,35 @@ class AdCadenceGuardTest {
 
     @Test
     fun `the wire cannot buy a longer skip than the ceiling allows`() {
-        val from = lines("player/AdCadence.kt").expressionBlock("fun from(ads: VipRemoteAds)")
+        val from = lines("player/AdCadence.kt").expressionBlock("fun from(ads: VipRemoteAds, engagement")
         assertTrue(from.any { "coerceAtMost(MAX_SKIP_MS)" in it })
-        // Positive control: the other three caps are resolved in the same expression.
-        assertTrue(from.any { "minutesOr(ads.prerollIntervalMinutes)" in it })
-        assertTrue(from.any { "positiveOr(ads.feedCardEveryPosters" in it })
+        // Positive controls: the other three caps are resolved in the same expression, each against
+        // the shipped window it falls back to, so an absent body cannot read as an unlimited one.
+        assertTrue(from.any { "PRE_ROLL_MINUTES" in it })
+        assertTrue(from.any { "FEED_CARD_POSTERS" in it })
+        assertTrue(from.any { "APP_OPEN_HOURS" in it })
+    }
+
+    @Test
+    fun `the engagement cadence block outranks the ads block it was written beside`() {
+        val from = lines("player/AdCadence.kt").expressionBlock("fun from(ads: VipRemoteAds, engagement")
+        // One merge point for the two bodies, and it is the policy's — not a call site's opinion.
+        assertTrue(
+            "the engagement caps must be the first candidate at every field",
+            from.count { "gapMinutes(server." in it } == 2,
+        )
+        assertTrue(from.any { "server.feedCardEveryPosters > 0" in it })
+        // The unit trap, stated where it is converted: the server says minutes, the old key says
+        // hours, and a key rename must never be allowed to read 240 minutes as 240 hours.
+        assertTrue(from.any { "ads.appOpenIntervalHours.toLong() * 60L" in it })
+        val cadence = lines("network/models/VipRemoteConfig.kt")
+            .expressionBlock("data class VipRemoteAdCadence")
+        assertTrue(
+            "app-open hours must never be an alternate spelling of the server's minutes key",
+            cadence.none { "app_open_interval_hours" in it },
+        )
+        // Positive control: the server's own spelling really is what this client reads.
+        assertTrue(cadence.any { "\"ad_app_open_min_gap_minutes\"" in it })
     }
 
     // ── rule 3: an unfilled slot is nothing at all ────────────────────────────────
@@ -188,9 +212,28 @@ class AdCadenceGuardTest {
     }
 
     @Test
+    fun `the interstitial seam has a caller, and that caller holds its hand off`() {
+        val player = lines("viewmodel/PlayerViewModel.kt")
+        assertTrue(
+            "the policy is asked somewhere real, not only by a test",
+            player.any { "requestBetweenEpisodesBreak()" in it && "if (" in it },
+        )
+        assertTrue(
+            "a granted break holds the successor instead of dropping it",
+            player.any { "pendingCrossEpisode = action" in it },
+        )
+        val dismiss = player.expressionBlock("fun dismissAdBreak()")
+        assertTrue("dismissal plays the held hand-off", dismiss.any { "advanceCrossEpisode(held)" in it })
+        assertTrue("and takes nothing for a break that was never raised", dismiss.any { "?: return" in it })
+        // Positive control: the hand-off itself is still the same single implementation, shared by
+        // the ad path and the no-ad path.
+        assertTrue(player.any { "private suspend fun advanceCrossEpisode(" in it })
+    }
+
+    @Test
     fun `the config poll publishes the caps and resets the windows when the switch goes off`() {
         val watcher = lines("data/RemoteConfigWatcher.kt")
-        assertTrue("caps travel with the body", watcher.any { "publishLimits(config.ads)" in it })
+        assertTrue("caps travel with the body", watcher.any { "publishLimits(config.ads, config.engagement)" in it })
         assertTrue("a disabled switch clears every stamp", watcher.any { "clearForDisabledSwitch()" in it })
         assertTrue("the switch is mirrored to storage", watcher.any { "adsEnabled = config.ads.enabled" in it })
     }

@@ -1,6 +1,8 @@
 package com.raddstream.app.player
 
 import com.raddstream.app.network.models.VipRemoteAds
+import com.raddstream.app.network.models.VipRemoteAdCadence
+import com.raddstream.app.network.models.VipRemoteEngagement
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
@@ -83,5 +85,51 @@ class AdCadenceLimitsTest {
         assertEquals("the other three were never published", AdCadenceLimits.SHIPPED.preRollIntervalMs, limits.preRollIntervalMs)
         assertEquals(AdCadenceLimits.SHIPPED.appOpenIntervalMs, limits.appOpenIntervalMs)
         assertEquals(AdCadenceLimits.SHIPPED.skippableAfterMs, limits.skippableAfterMs)
+    }
+
+    // ── the engagement block, which is the shape the enforcement side actually publishes ──
+
+    /**
+     * Absence here is the whole test: no route serves `engagement` yet, so every real body this
+     * client can receive carries nothing, and the shipped caps must still be what is enforced.
+     */
+    @Test
+    fun `an absent engagement block changes nothing`() {
+        assertEquals(
+            AdCadenceLimits.from(VipRemoteAds()),
+            AdCadenceLimits.from(VipRemoteAds(), VipRemoteEngagement()),
+        )
+        assertEquals(
+            AdCadenceLimits.SHIPPED,
+            AdCadenceLimits.from(VipRemoteAds(), VipRemoteEngagement(VipRemoteAdCadence(0, 0, 0))),
+        )
+    }
+
+    /**
+     * The two bodies state the same rule in different units — `ads` speaks app-open in HOURS,
+     * `engagement` in MINUTES — so the conversion is pinned at both the value and the precedence.
+     * Six hours stated as `360` minutes must never be read as 360 hours.
+     */
+    @Test
+    fun `the engagement block outranks the ads block and speaks minutes`() {
+        val limits = AdCadenceLimits.from(
+            VipRemoteAds(prerollIntervalMinutes = 5, feedCardEveryPosters = 3, appOpenIntervalHours = 1),
+            VipRemoteEngagement(VipRemoteAdCadence(prerollGapMinutes = 45, feedCardEveryPosters = 18, appOpenGapMinutes = 360)),
+        )
+        assertEquals(45L * 60_000L, limits.preRollIntervalMs)
+        assertEquals(18, limits.feedCardEveryPosters)
+        assertEquals(360L * 60_000L, limits.appOpenIntervalMs)
+        assertEquals("a skip ceiling is not a cadence field, so ads still owns it", 5_000L, limits.skippableAfterMs)
+    }
+
+    @Test
+    fun `an ads-only app-open interval is converted from hours to the same minutes scale`() {
+        val fromAds = AdCadenceLimits.from(VipRemoteAds(appOpenIntervalHours = 6))
+        val fromServer = AdCadenceLimits.from(
+            VipRemoteAds(appOpenIntervalHours = 1),
+            VipRemoteEngagement(VipRemoteAdCadence(appOpenGapMinutes = 360)),
+        )
+        assertEquals(6L * 3_600_000L, fromAds.appOpenIntervalMs)
+        assertEquals(fromAds.appOpenIntervalMs, fromServer.appOpenIntervalMs)
     }
 }

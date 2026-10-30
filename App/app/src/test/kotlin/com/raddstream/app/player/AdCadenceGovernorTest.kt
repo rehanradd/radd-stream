@@ -3,6 +3,8 @@ package com.raddstream.app.player
 import com.raddstream.app.data.local.AdCadenceDao
 import com.raddstream.app.data.local.AdCadenceEntity
 import com.raddstream.app.network.models.VipRemoteAds
+import com.raddstream.app.network.models.VipRemoteAdCadence
+import com.raddstream.app.network.models.VipRemoteEngagement
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -210,6 +212,33 @@ class AdCadenceGovernorTest {
         clock.advance(60 * MINUTE_MS)
         assertEquals("and a later body tightens it without a restart", AdDecision.None,
             subject.offer(AdSurface.PRE_ROLL, adFree = false))
+    }
+
+    /**
+     * The same publish through the two bodies the server writes: `ads` and `engagement`. Which one
+     * wins is not academic — the enforcement side reads `engagement`, so a client that let the
+     * older block decide would enforce a window the operator has since changed.
+     */
+    @Test
+    fun `the engagement block is the window the governor enforces`() = runBlocking {
+        val dao = FakeDao()
+        val clock = FixedAdWallClock(START)
+        val subject = governor(dao, clock, FakeSwitch(), FakeInventory(setOf(AdSurface.PRE_ROLL)))
+        subject.publishLimits(
+            VipRemoteAds(prerollIntervalMinutes = 5),
+            VipRemoteEngagement(VipRemoteAdCadence(prerollGapMinutes = 30)),
+        )
+        subject.refresh()
+
+        subject.offer(AdSurface.PRE_ROLL, adFree = false)
+        clock.advance(5 * MINUTE_MS)
+        assertEquals(
+            "the five-minute `ads` window is not the one in force",
+            AdDecision.None,
+            subject.offer(AdSurface.PRE_ROLL, adFree = false),
+        )
+        clock.advance(25 * MINUTE_MS)
+        assertTrue(subject.offer(AdSurface.PRE_ROLL, adFree = false) is AdDecision.Serve)
     }
 
     @Test

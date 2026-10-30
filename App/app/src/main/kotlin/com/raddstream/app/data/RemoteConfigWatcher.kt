@@ -72,11 +72,16 @@ class RemoteConfigWatcher @Inject constructor(
         // build already enforces — a partial body leaves the shipped 25/12/4 windows in force
         // rather than resetting them to something the operator never asked for.
         //
+        // Two bodies can name a cap: the `ads` block this app has always read, and the server's own
+        // `engagement.cadence`, which is what `engagement.ad_grant()` enforces server-side. Both
+        // are handed over so the policy has one merge point for them rather than every call site
+        // picking a favourite.
+        //
         // The whole cadence block is guarded because it is the only part of a poll that writes to
         // Room: a locked or half-migrated database must cost the viewer an ad window, not the app.
         // An uncaught throw here would kill the process on the next five-minute tick.
         try {
-            adCadence.publishLimits(config.ads)
+            adCadence.publishLimits(config.ads, config.engagement)
             if (!config.ads.enabled) {
                 // The operator turned the surfaces off, so every window they were enforcing goes
                 // with them. Idempotent: a deployment that has never enabled ads costs one DELETE

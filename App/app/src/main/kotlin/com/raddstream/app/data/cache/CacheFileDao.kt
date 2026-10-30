@@ -52,8 +52,18 @@ interface CacheFileDao {
     @Query("UPDATE cache_files SET lastAccessElapsedRealtime = :now, watchCount = watchCount + 1 WHERE fileId = :fileId")
     suspend fun touchOnPlay(fileId: String, now: Long)
 
-    @Query("UPDATE cache_files SET isTemporary = 0, isComplete = 1, origin = 'USER_KEEP', state = 'COMPLETED' WHERE fileId = :fileId")
-    suspend fun commitAsUserKeep(fileId: String)
+    /**
+     * The file half of a keep promotion. [CacheTaskDao.promoteToUserKeep] moves the TASK to
+     * `USER_KEEP`, and it is the FILE row's origin that [TtlPolicy] rule 1 refuses to delete and
+     * that [EvictionCandidate.isProtected] refuses to evict — so a promoted keep whose file row
+     * still says `AUTO_PREVIEW` is pinned in the list and aging on the shelf. One UPDATE over both
+     * rows is what makes the tap mean "until you delete it".
+     *
+     * Origin only: an explicit keep of a half-downloaded file must not stamp `isComplete = 1` or
+     * `state = COMPLETED` onto a row whose bytes are not all there.
+     */
+    @Query("UPDATE cache_files SET origin = 'USER_KEEP' WHERE taskId = :taskId")
+    suspend fun promoteOriginForTask(taskId: Long)
 
     @Query("UPDATE cache_files SET state = :state WHERE fileId = :fileId")
     suspend fun setState(fileId: String, state: String)

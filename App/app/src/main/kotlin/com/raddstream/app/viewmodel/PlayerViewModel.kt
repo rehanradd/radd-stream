@@ -156,6 +156,14 @@ class PlayerViewModel @Inject constructor(
 
     private var preparedNextEpisode: PreparedNextEpisode? = null
 
+    /**
+     * The one hand-off waiting on a sponsor break. A between-episodes slot is the only placement
+     * this build raises, and it is raised *at* the moment the successor would otherwise open, so
+     * the advance has to be held rather than reordered. Nothing is invented here: a null action is
+     * "no break was granted", and the successor opens exactly as it did before this field existed.
+     */
+    private var pendingCrossEpisode: NextEpisodeAction.NextBundleRequest? = null
+
     /** In-run resume memory; cross-launch persistence is a data-agent request (handoff). */
     private val resumeByTarget = HashMap<String, Long>()
 
@@ -391,6 +399,9 @@ class PlayerViewModel @Inject constructor(
                     bingePlanner.reset()
                     nextEpisodeHandle = null
                     preparedNextEpisode = null
+                    // A new file is a new lifecycle: a hand-off held for a break belongs to the
+                    // episode that ended, and must not fire against this one.
+                    pendingCrossEpisode = null
                     bingeResolveJob?.cancel()
                     bingePrefetchJob?.cancel()
                     if (b != null) prepareBingePrefetch(b)
@@ -446,7 +457,11 @@ class PlayerViewModel @Inject constructor(
                         applySleep(tick)
                     }
                     tickBingePreload(_ui.value.positionMs, _ui.value.durationMs)
-                    store.reportPlayhead(store.activeRendition()?.playback?.playUrl, _ui.value.positionMs, _ui.value.durationMs)
+                    // The playhead is NOT reported from here. This ticker only runs while the player
+                    // screen is composed, so pumping the cache from it stops the moment the viewer
+                    // backgrounds the app — and at this clock it would ask the engine for a task
+                    // lookup five times a second. PlaybackService owns the feed: it lives as long as
+                    // the audio does, and it ticks the cache on the cache's own cadence.
                     // The account's own heartbeat: one report per fifteen seconds at most, and
                     // the gate is a boolean read, so this tick costs nothing when it is not due.
                     if (c.isPlaying) reportResume(c, c.currentPosition, forced = false)
@@ -934,29 +949,71 @@ class PlayerViewModel @Inject constructor(
      * episode with a policy written to allow one.
      *
      * Suspending, because the cadence lives in Room and a cap read from memory alone would not
-     * survive the process being killed between episodes. Nothing raises a break on its own today —
-     * the app ships no ad SDK or creative — so this remains a guarded seam rather than an ad.
+     * survive the process being killed between episodes. Its caller is the cross-episode hand-off
+     * below: the app still ships no ad SDK or creative, so the seam is asked and answers
+     * [AdSlot.NONE], which is the same behaviour this file had before anything called it.
      */
-    suspend fun requestAdBreak(): AdSlot {
-        val state = _ui.value
-        val target = store.bundle.value?.target
-        val scope = store.currentSyncScope()
-        val episode = target?.episode?.takeIf { it > 0 } ?: scope?.episode ?: 0
-        val slot = AdSlotPolicy.decide(
+    suspend fun requestAdBreak(): AdSlot = grantCadence(
+        AdSlotPolicy.decide(
             AdSlotState(
-                isSeriesEpisode = episode > 0,
-                isEnded = state.isEnded,
-                isPlaying = state.isPlaying,
-                positionMs = state.positionMs,
-                durationMs = state.durationMs,
-                hasNextEpisode = state.isEnded && hasSuccessorAtEnd(state),
+                isSeriesEpisode = currentEpisodeNumber() > 0,
+                isEnded = _ui.value.isEnded,
+                isPlaying = _ui.value.isPlaying,
+                positionMs = _ui.value.positionMs,
+                durationMs = _ui.value.durationMs,
+                hasNextEpisode = _ui.value.isEnded && hasSuccessorAtEnd(_ui.value),
                 isEntitled = isAdFree(),
             ),
-        )
+        ),
+    )
+
+    /**
+     * The between-episodes question, asked from the facts the hand-off itself carries rather than
+     * from the UI snapshot.
+     *
+     * The difference is not cosmetic: a [NextEpisodeAction.NextBundleRequest] is published by the
+     * service on its own ended signal, and the ViewModel's `isEnded` arrives through a player
+     * listener on a different path, so reading the state here could ask the question one tick too
+     * early and get [AdSlot.NONE] for a reason that has nothing to do with the policy. The action
+     * is the evidence — the file ended, and a numbered successor exists, because that is what this
+     * action means.
+     */
+    private suspend fun requestBetweenEpisodesBreak(): AdSlot = grantCadence(
+        AdSlotPolicy.decide(
+            AdSlotState(
+                isSeriesEpisode = true,
+                isEnded = true,
+                isPlaying = false,
+                positionMs = _ui.value.durationMs,
+                durationMs = _ui.value.durationMs,
+                hasNextEpisode = true,
+                isEntitled = isAdFree(),
+            ),
+        ),
+    )
+
+    /** The episode number the running bundle names, or 0 when nothing on screen says one. */
+    private fun currentEpisodeNumber(): Int {
+        val target = store.bundle.value?.target
+        val scope = store.currentSyncScope()
+        return target?.episode?.takeIf { it > 0 } ?: scope?.episode ?: 0
+    }
+
+    /**
+     * Cadence for a placement the policy already allowed. One budget, one write to the UI state,
+     * and one answer that is either a slot the screen may show or nothing at all: a surface the
+     * network did not fill is [AdSlot.NONE] exactly like a surface that is not due yet, so a
+     * caller has no third state to build a spinner around.
+     */
+    private suspend fun grantCadence(slot: AdSlot): AdSlot {
         if (slot == AdSlot.NONE) {
             _ui.update { it.copy(adBreak = AdSlot.NONE) }
             return AdSlot.NONE
         }
+        // Both placements this seam can raise are billed to the pre-roll budget on purpose: the
+        // server's AD_SLOTS has exactly three names and none of them is "between episodes", and a
+        // hand-off break plays immediately before the next episode starts, which is what a pre-roll
+        // IS. Inventing a fourth surface would be an ad the server cannot grant.
         val offer = adCadence.offer(AdSurface.PRE_ROLL, adFree = isAdFree())
         val answer = if (offer is AdDecision.Serve) slot else AdSlot.NONE
         _ui.update { it.copy(adBreak = answer) }
@@ -965,6 +1022,9 @@ class PlayerViewModel @Inject constructor(
 
     fun dismissAdBreak() {
         _ui.update { it.copy(adBreak = AdSlot.NONE) }
+        val held = pendingCrossEpisode ?: return
+        pendingCrossEpisode = null
+        viewModelScope.launch { advanceCrossEpisode(held) }
     }
 
     /**
@@ -1531,17 +1591,15 @@ class PlayerViewModel @Inject constructor(
         store.clearNextEpisode()
         when (action) {
             is NextEpisodeAction.NextBundleRequest -> viewModelScope.launch {
-                // The prepared successor (resolved at 85%) opens without a catalog lookup;
-                // a cold END still resolves on demand before falling back to the app route.
-                if (openNextEpisode(action.season, action.nextEpisode, action.postId)) return@launch
-                _events.emit(
-                    PlayerEvent.PlayNextEpisode(
-                        workKey = action.workKey,
-                        postId = action.postId,
-                        season = action.season,
-                        episode = action.nextEpisode,
-                    ),
-                )
+                // The one placement raised without being asked: the file ended and a successor
+                // exists, which is the only moment the policy allows a break and the viewer was
+                // already about to be handed to the next episode. A refusal — cadence off, not due,
+                // no network to fill it — takes the held branch never and the advance runs now.
+                if (requestBetweenEpisodesBreak() != AdSlot.NONE) {
+                    pendingCrossEpisode = action
+                    return@launch
+                }
+                advanceCrossEpisode(action)
             }
 
             is NextEpisodeAction.CalibrationNeeded -> _ui.update {
@@ -1556,6 +1614,26 @@ class PlayerViewModel @Inject constructor(
 
             else -> Unit
         }
+    }
+
+    /**
+     * The successor hand-off itself: the prepared bundle opened at 85% wins, then a cold resolve,
+     * and only then the app route. Extracted because a granted between-episodes break holds this
+     * until the viewer dismisses it — the hand-off is the same work either way, and a second copy
+     * of it is how an ad path and a no-ad path start advancing to different episodes.
+     */
+    private suspend fun advanceCrossEpisode(action: NextEpisodeAction.NextBundleRequest) {
+        // The prepared successor (resolved at 85%) opens without a catalog lookup;
+        // a cold END still resolves on demand before falling back to the app route.
+        if (openNextEpisode(action.season, action.nextEpisode, action.postId)) return
+        _events.emit(
+            PlayerEvent.PlayNextEpisode(
+                workKey = action.workKey,
+                postId = action.postId,
+                season = action.season,
+                episode = action.nextEpisode,
+            ),
+        )
     }
 
     /** "Mark current position as Episode N start" — calibrates the pack offset. */
@@ -1679,7 +1757,11 @@ class PlayerViewModel @Inject constructor(
         is KeepResult.Stored -> KeepUiState.Stored(result.playableOffline, null)
         is KeepResult.OnlyPlayableInApp -> KeepUiState.Blocked(
             CacheState.APP_PRIVATE_ONLY,
-            "Kept — playable in ${Brand.shortName} only (${result.ttlSeconds?.let { "${it / 3600} h" } ?: "TTL unknown"})",
+            // A null window is the pinned answer the tap above produced — no auto-delete — so it
+            // gets the words that are true for it. "TTL unknown" would describe a missing number
+            // with the vocabulary of a promise kept forever.
+            "Kept — playable in ${Brand.shortName} only" +
+                (result.ttlSeconds?.let { " (${it / 3600} h)" } ?: " until you delete it"),
         )
         is KeepResult.StorageFull -> KeepUiState.Blocked(
             CacheState.STORAGE_FULL,

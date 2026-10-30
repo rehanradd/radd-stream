@@ -89,11 +89,16 @@ class CacheCoordinator(
         taskDao.setParkReason(taskId, null)
         var task = taskDao.getById(taskId) ?: return
         var reResolveBudget = MAX_RERESOLVES
-        val mode = if (task.priorityEnum == CachePriority.USER_REQUESTED) FetchMode.FULL_DOWNLOAD
-        else FetchMode.AUTO_PREVIEW_AHEAD
+        var mode = fetchModeFor(task)
 
         while (true) {
             if (!isActiveJob(taskId)) return
+            // Re-read the row before every pass. A pass can move a hundred megabytes, and a Keep
+            // tapped inside one changes both what this job is supposed to do (fill the window ahead
+            // of the playhead versus fetch the whole file) and what retention origin the committed
+            // file must carry. Neither may come from what was true when the job launched.
+            task = taskDao.getById(taskId) ?: return
+            mode = fetchModeFor(task)
             val outcome = if (task.linkKind == KIND_HLS) {
                 runHlsPass(task)
             } else {
@@ -114,6 +119,9 @@ class CacheCoordinator(
                         // more gaps remain; keep looping but bound by cancellation checks
                         continue
                     }
+                    // The same promotion the re-read above would pick up next turn, checked here so
+                    // a just-kept title is not parked at the preview window until the next tick.
+                    if (taskDao.getById(taskId)?.priorityEnum == CachePriority.USER_REQUESTED) continue
                     // auto-preview caught up to the window; park until the playhead advances
                     safeTransition(taskId, CacheTaskState.LOADING, CacheTaskState.PAUSED)
                     return
@@ -149,6 +157,15 @@ class CacheCoordinator(
             }
         }
     }
+
+    /**
+     * What one pass is for. A user-requested row fetches the whole file; an opportunistic preview
+     * fills only the window ahead of the playhead and then parks. The single owner of that choice
+     * is the row's priority, read fresh — never remembered from the last read.
+     */
+    private fun fetchModeFor(task: CacheTaskEntity): FetchMode =
+        if (task.priorityEnum == CachePriority.USER_REQUESTED) FetchMode.FULL_DOWNLOAD
+        else FetchMode.AUTO_PREVIEW_AHEAD
 
     private suspend fun runHlsPass(task: CacheTaskEntity): FetchOutcome {
         val workDir = File(storage.openForWrite(task.sourceKey, task.totalSizeBytes.takeIf { it > 0 }).parentFile, task.sourceKey)
@@ -187,7 +204,7 @@ class CacheCoordinator(
                 fileDao.upsert(
                     CacheFileEntity(
                         fileId = task.sourceKey, sourceKey = task.sourceKey, taskId = task.id,
-                        path = file.absolutePath, sizeBytes = result.bytesWritten, origin = task.origin,
+                        path = file.absolutePath, sizeBytes = result.bytesWritten, origin = liveOrigin(task),
                         state = CacheTaskState.COMPLETED.name, isTemporary = false, isComplete = true,
                         createdElapsedRealtime = now, lastAccessElapsedRealtime = now,
                     )
@@ -198,6 +215,16 @@ class CacheCoordinator(
         }
     }
 
+    /**
+     * The retention origin a committed file is stamped with, read at the moment the file is
+     * committed rather than from the [CacheTaskEntity] this pass was handed. A sequential fetch is
+     * one open-ended request that can run for the whole file, and a Keep tapped partway through it
+     * promotes the row; a commit that replays the stale origin would quietly un-pin the copy the
+     * viewer just asked to keep, and [TtlPolicy] would age out bytes the list still calls kept.
+     */
+    private suspend fun liveOrigin(task: CacheTaskEntity): String =
+        taskDao.getById(task.id)?.origin ?: task.origin
+
     // ── Player-facing boundary ─────────────────────────────────────────────────
 
     /**
@@ -205,14 +232,34 @@ class CacheCoordinator(
      * auto-preview pass for this resource (no-op if a pass is already running or the file is
      * complete). [playheadByte] is the byte offset the player is at, derived by the wiring layer
      * from [CoverageMapping].
+     *
+     * The byte is recorded BEFORE the permission check: where the viewer has watched to is a fact
+     * the next scheduler tick needs even when this tick may not move bytes. A roaming phone that
+     * later joins Wi-Fi must resume from the playhead the viewer actually reached, not from the one
+     * it last downloaded to.
      */
     suspend fun onPlayheadAdvanced(sourceKey: String, playheadByte: Long) {
         val task = taskDao.getBySourceKey(sourceKey) ?: return
         playheadBytes[task.id] = playheadByte
         if (task.stateEnum == CacheTaskState.COMPLETED) return
         if (task.stateEnum == CacheTaskState.LOADING) return // a pass is already running
-        launchTask(task.id)
+        startIfAllowed(task)
     }
+
+    /**
+     * Whether the player may ask for opportunistic ahead-of-playback bytes at all right now.
+     *
+     * This is the seed-time question, and it is the same rule [onPlayheadAdvanced] applies at
+     * start time rather than a paraphrase of it: [SchedulerPolicySelector] owns both halves. It is
+     * exposed because the answer decides whether a task row is worth creating — a QUEUED preview
+     * that the scheduler will never start is not an invisible no-op, it is a row the Downloads
+     * screen would show for a file that was never going to move.
+     */
+    fun mayPreview(requestedBytes: Long): Boolean = SchedulerPolicySelector.mayStartAutoPreview(
+        networkProvider(),
+        policy,
+        requestedBytes.coerceAtLeast(0L),
+    )
 
     /**
      * The zero-waste handoff. Promotes the auto-preview task to user-requested so it continues
@@ -222,6 +269,12 @@ class CacheCoordinator(
     suspend fun keepNow(sourceKey: String): LocalPlaybackHandle? {
         val task = taskDao.getBySourceKey(sourceKey) ?: return null
         taskDao.promoteToUserKeep(task.id)
+        // Both rows, not just the task. TtlPolicy rule 1 and EvictionCandidate.isProtected read the
+        // FILE's origin, so a promoted task whose file row still says AUTO_PREVIEW is a keep the
+        // Downloads screen calls permanent while the sweeper is timing its delete and the low-storage
+        // pass has it in the eviction list. The tap has to move the bytes' status too or it pins
+        // nothing but a label.
+        fileDao.promoteOriginForTask(task.id)
         val prefix = manifestDao.contiguousPrefix(task.id)
         val handle = LocalPlaybackHandle(
             sourceKey = sourceKey,
@@ -236,15 +289,33 @@ class CacheCoordinator(
     }
 
     /**
-     * The Downloads-screen enqueue entry point: start (or resume) driving an EXISTING task to its
-     * full window without changing its retention origin. A keep tapped from the detail screen is
-     * already enqueued by [com.raddstream.app.repository.CacheRepository] with user priority and
-     * an auto-preview origin, so it downloads eagerly yet still ages out through [TtlPolicy] —
-     * this method only makes the engine move it. No-op when a pass is already running.
+     * The Downloads-screen enqueue entry point: start (or resume) driving an EXISTING task without
+     * changing its retention origin. A keep tapped from the detail screen is already enqueued by
+     * [com.raddstream.app.repository.CacheRepository] with user priority and an auto-preview
+     * origin, so it downloads eagerly yet still ages out through [TtlPolicy] — this method only
+     * makes the engine move it. No-op when a pass is already running, and no-op for an
+     * opportunistic preview the scheduler would not start on this network anyway.
      */
     suspend fun startTask(sourceKey: String) {
         val task = taskDao.getBySourceKey(sourceKey) ?: return
         if (task.stateEnum == CacheTaskState.COMPLETED) return
+        startIfAllowed(task)
+    }
+
+    /**
+     * Start one already-loaded row if the policy allows it, which is the whole reason this exists as
+     * one function instead of two callers: [com.raddstream.app.repository.CacheRepository] starts a
+     * row from BOTH the tap path and the watch path, and the tick starts rows by itself, so
+     * opportunistic bytes would move on a mobile or roaming network through whichever entry point
+     * forgot to ask. A user-requested row is never gated — the viewer asked for it, and [tick]
+     * starts those on any network too.
+     */
+    private suspend fun startIfAllowed(task: CacheTaskEntity) {
+        if (task.priorityEnum == CachePriority.AUTO_PREVIEW &&
+            !SchedulerPolicySelector.mayStartAutoPreview(networkProvider(), policy, remainingBytes(task))
+        ) {
+            return
+        }
         launchTask(task.id)
     }
 

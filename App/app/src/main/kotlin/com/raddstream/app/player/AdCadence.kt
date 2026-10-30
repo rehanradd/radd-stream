@@ -1,6 +1,7 @@
 package com.raddstream.app.player
 
 import com.raddstream.app.network.models.VipRemoteAds
+import com.raddstream.app.network.models.VipRemoteEngagement
 
 /**
  * The three surfaces the owner's monetization plan names, and the only three this app will fill.
@@ -79,18 +80,44 @@ data class AdCadenceLimits(
             skippableAfterMs = SKIP_SECONDS * 1_000L,
         )
 
-        fun from(ads: VipRemoteAds): AdCadenceLimits = AdCadenceLimits(
-            preRollIntervalMs = minutesOr(ads.prerollIntervalMinutes) * 60_000L,
-            feedCardEveryPosters = positiveOr(ads.feedCardEveryPosters, FEED_CARD_POSTERS),
-            appOpenIntervalMs = hoursOr(ads.appOpenIntervalHours) * 3_600_000L,
-            // The ceiling is applied at the answer as well, so no path can hand back a
-            // non-skippable ad even if this construction is ever bypassed.
-            skippableAfterMs = (secondsOr(ads.skippableAfterSeconds) * 1_000L).coerceAtMost(MAX_SKIP_MS),
-        )
+        /**
+         * The caps as this deployment means them, with the server's own cadence block first.
+         *
+         * [engagement] outranks [ads] because it is the body the enforcing side computes from:
+         * `Fast_Fetch/engagement.py:ad_grant()` compares its own `CAPS_DEFAULT` against its own
+         * stamps, so a phone obeying a different pair of numbers would either show an ad the server
+         * had already refused or withhold one it had granted. Both blocks are read tolerantly, so a
+         * deployment that publishes only the older `ads` keys still gets the caps it named, and one
+         * that names none gets [SHIPPED] rather than no limit.
+         */
+        fun from(ads: VipRemoteAds, engagement: VipRemoteEngagement = VipRemoteEngagement()): AdCadenceLimits {
+            val server = engagement.cadence
+            // The `ads` block states app-open in HOURS and the engagement block states it in
+            // MINUTES, so the conversion happens here and nowhere else, and the two are never
+            // alternates of one key: the server's `240` read as hours would be a ten-day window.
+            val appOpenMinutesFromAds =
+                if (ads.appOpenIntervalHours > 0) ads.appOpenIntervalHours.toLong() * 60L else 0L
+            return AdCadenceLimits(
+                preRollIntervalMs =
+                    gapMinutes(server.prerollGapMinutes.toLong(), ads.prerollIntervalMinutes.toLong(), PRE_ROLL_MINUTES) * 60_000L,
+                feedCardEveryPosters = positiveOr(
+                    if (server.feedCardEveryPosters > 0) server.feedCardEveryPosters else ads.feedCardEveryPosters,
+                    FEED_CARD_POSTERS,
+                ),
+                appOpenIntervalMs =
+                    gapMinutes(server.appOpenGapMinutes.toLong(), appOpenMinutesFromAds, APP_OPEN_HOURS * 60L) * 60_000L,
+                // The ceiling is applied at the answer as well, so no path can hand back a
+                // non-skippable ad even if this construction is ever bypassed.
+                skippableAfterMs = (secondsOr(ads.skippableAfterSeconds) * 1_000L).coerceAtMost(MAX_SKIP_MS),
+            )
+        }
 
-        private fun minutesOr(raw: Int): Long = if (raw <= 0) PRE_ROLL_MINUTES else raw.toLong()
-
-        private fun hoursOr(raw: Int): Long = if (raw <= 0) APP_OPEN_HOURS else raw.toLong()
+        /** The first block that actually named a gap, in minutes; neither speaking, the shipped one. */
+        private fun gapMinutes(serverMinutes: Long, adsMinutes: Long, shippedMinutes: Long): Long = when {
+            serverMinutes > 0L -> serverMinutes
+            adsMinutes > 0L -> adsMinutes
+            else -> shippedMinutes
+        }
 
         private fun secondsOr(raw: Int): Long = if (raw <= 0) SKIP_SECONDS else raw.toLong()
 

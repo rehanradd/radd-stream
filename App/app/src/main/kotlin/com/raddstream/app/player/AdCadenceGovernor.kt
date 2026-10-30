@@ -4,6 +4,7 @@ import com.raddstream.app.data.ServerSettingsRepository
 import com.raddstream.app.data.local.AdCadenceDao
 import com.raddstream.app.data.local.AdCadenceRows
 import com.raddstream.app.network.models.VipRemoteAds
+import com.raddstream.app.network.models.VipRemoteEngagement
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.CancellationException
@@ -67,9 +68,13 @@ class AdCadenceGovernor @Inject constructor(
      * Publish the operator's caps the moment a remote-config body lands. Until this is called —
      * a first install, a server that has never answered — [SHIPPED] is what is enforced, so
      * absence is the capped behaviour and never the uncapped one.
+     *
+     * Both blocks arrive because they can name the same cap in different units and from different
+     * deploys; [engagement] wins where it speaks, and a body that carries neither leaves this
+     * enforcing the shipped windows rather than nothing at all.
      */
-    fun publishLimits(ads: VipRemoteAds) {
-        limits = AdCadenceLimits.from(ads)
+    fun publishLimits(ads: VipRemoteAds, engagement: VipRemoteEngagement = VipRemoteEngagement()) {
+        limits = AdCadenceLimits.from(ads, engagement)
     }
 
     /** Reload the persisted stamps. Called on start and whenever the switch or caps change. */

@@ -60,6 +60,17 @@ enum class StoragePressure { OK, NEAR_FULL, FULL }
 /**
  * What the player hands the engine on *Keep this*. Byte cursor first (if the engine knows
  * it), time-based estimate second, so the engine can choose its resume strategy honestly.
+ *
+ * WHICH CURSOR IS REAL — and it is not this record's byte fields. [fetchedBytesSoFar],
+ * [isByteCursorKnown], [bufferedMs] and [sharesCacheStorage] are assembled by
+ * [CacheAffordance.buildAdoptRequest] from the player's *buffer-time* estimate and are read by
+ * nothing in the engine: [com.raddstream.app.data.cache.OfflineCacheEngine] resumes from its own
+ * committed-range ledger ([com.raddstream.app.data.cache.ByteRangeManifestDao]), which is exact
+ * where a time-derived figure is only a guess, and a second owner for the resume cursor is exactly
+ * how a byte gets fetched twice. They are disclosed here rather than quietly kept: four fields the
+ * receiving side ignores, left in place because deleting them this pass would also delete
+ * [CacheAffordance.estimateBytesSaved] and its cases, and this pass cannot compile to prove the cut
+ * is clean. Requirement 2 below is satisfied by the ledger, not by them.
  */
 data class AdoptRequest(
     val key: CacheSessionKey,
@@ -79,6 +90,28 @@ data class AdoptRequest(
     val printLabel: String,
     /** True when this URL was already downloaded through the shared cache data source. */
     val sharesCacheStorage: Boolean,
+)
+
+/**
+ * What the player hands the engine the moment a title STARTS playing. Not a request to keep
+ * anything: nobody asked, so nothing may be promised, evicted, or shown for it.
+ *
+ * This is the seed half of the watch-while-downloading story. Without a row there is nothing for a
+ * progressing playhead to extend — the engine's playhead entry point looks a task up by its key and
+ * returns when the lookup finds nothing — so "the playhead drives the cache" needs one opportunistic
+ * row created by the fact that the viewer pressed play. That is all this is.
+ *
+ * Every field is the same fact [AdoptRequest] carries, and deliberately no position: where the
+ * viewer has got to arrives on the playhead tick, which is the only place that number is fresh.
+ */
+data class PreviewRequest(
+    val key: CacheSessionKey,
+    val url: String,
+    /** Print `size_bytes` when the catalog knows it; null = unknown, never a guess. */
+    val expectedTotalBytes: Long?,
+    val resumable: Boolean,
+    /** Print label so the engine's library UI can show what this file is. */
+    val printLabel: String,
 )
 
 /** Keep outcomes the UI must be able to explain (hostile realities from the task brief). */
@@ -101,10 +134,19 @@ sealed class KeepResult {
  *  3. [adopt] is safe to call repeatedly (idempotent per key).
  *  4. Storage policy (near-full reserve, TTL auto-delete, preview→permanent upgrade) stays
  *     entirely inside the engine; the player only displays the state you report.
+ *  5. [seedPreview] is silent in BOTH directions: it returns no verdict because a preview that
+ *     could not start must not surface anything — no gate, no spinner, no error text about a file
+ *     the viewer never asked for. It must never delete or displace bytes the viewer *did* ask to
+ *     keep, and it may not move a byte on a network the scheduler would refuse on a tick.
  */
 interface ProgressiveCacheEngine {
     fun observe(key: CacheSessionKey): StateFlow<CacheSnapshot?>
     suspend fun adopt(request: AdoptRequest): KeepResult
+    /**
+     * The viewer pressed play on [request], so opportunistic bytes ahead of the playhead are worth
+     * having. Called on load, from the player process's own service; safe to call repeatedly.
+     */
+    suspend fun seedPreview(request: PreviewRequest)
     suspend fun cancelKeep(key: CacheSessionKey)
     suspend fun release(key: CacheSessionKey)
     fun storagePressure(): StoragePressure

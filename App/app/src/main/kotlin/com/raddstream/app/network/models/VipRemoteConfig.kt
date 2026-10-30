@@ -45,6 +45,12 @@ data class VipRemoteConfig(
     val wallet: VipRemoteWallet = VipRemoteWallet(),
     /** The login-streak length and reward. Parsed, not displayed: no screen shows a streak yet. */
     val streak: VipRemoteStreak = VipRemoteStreak(),
+    /**
+     * The server's own ad cadence, which outranks [ads] for the three caps because it is the
+     * number the enforcement side reads. Absent from every deployment today, and an absent block
+     * changes nothing: see [VipRemoteAdCadence].
+     */
+    val engagement: VipRemoteEngagement = VipRemoteEngagement(),
 )
 
 /**
@@ -176,6 +182,44 @@ data class VipRemoteStreak(
     val isConfigured: Boolean
         get() = enabled && days > 0
 }
+
+/**
+ * The engagement pillar's read projection — `Fast_Fetch/engagement.py:remote_view()`, published
+ * under `/api/v1/app/remote-config` as `engagement`.
+ *
+ * Only `cadence` is decoded, and only because it is the one part of that body that changes what a
+ * viewer sees: the caps on how often an ad may fire. The `wallet`, `streak` and `passes` shapes in
+ * the same server object are not decoded *here* — this file's [wallet] and [streak] are the older
+ * top-level keys, and a field decoded and then dropped is exactly the `maintenanceMode` mistake
+ * this file's own watcher log records. When a screen draws a balance or a streak, it decodes what
+ * it draws, from the body it is actually pointed at.
+ */
+data class VipRemoteEngagement(
+    val cadence: VipRemoteAdCadence = VipRemoteAdCadence(),
+)
+
+/**
+ * The server's own ad caps, in the server's own units.
+ *
+ * [appOpenGapMinutes] is MINUTES (`240`), while [VipRemoteAds.appOpenIntervalHours] is HOURS (`4`).
+ * The two keys are therefore never alternates of each other — accepting `240` where `4` was meant
+ * would be a ten-day app-open window bought with a rename — and
+ * [com.raddstream.app.player.AdCadenceLimits] converts at one place, in the direction the names state.
+ *
+ * Every field defaults to zero, which means "this server said nothing" and lands on the shipped
+ * cap, the same rule the `ads` block already follows. That makes the block safe to read before it
+ * exists: no route serves `engagement` today, and every deployment still gets
+ * 1-per-25-minutes, 1-per-12-posters and 1-per-4-hours, because the caps have one owner in the
+ * policy and this file holds none of its own.
+ */
+data class VipRemoteAdCadence(
+    @SerializedName(value = "ad_preroll_min_gap_minutes", alternate = ["preroll_min_gap_minutes"])
+    val prerollGapMinutes: Int = 0,
+    @SerializedName(value = "ad_native_card_every_posters", alternate = ["native_card_every_posters"])
+    val feedCardEveryPosters: Int = 0,
+    @SerializedName(value = "ad_app_open_min_gap_minutes", alternate = ["app_open_min_gap_minutes"])
+    val appOpenGapMinutes: Int = 0,
+)
 
 data class VipRemotePricing(
     @SerializedName("monthly_pkr")
