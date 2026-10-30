@@ -1273,8 +1273,8 @@ still holds the 44 rows written by the old code, so its `0 releases, 0 sources`
 describes that file, not the new parser. A bounded re-crawl under the gate
 (load < 4, MemAvailable > 4000 MB, no other crawler, explicit `--limit`) is
 queued in CONTINUITY.md. Even then, expect releases > 0 and **sources = 0** —
-this site has published no playable URL on either surface measured, and a
-resolver for the authenticated player is a different problem.
+neither public surface carries a playable URL, and the mint that does is
+account-gated (measured 2026-10-30, "Play-info mint" below).
 
 **Re-measured 2026-10-30 (second pass): the JSON detail answer is the cheaper
 surface, and it is now preferred.** `GET {API_BASE}/detail?subjectId=…` answers
@@ -1309,7 +1309,41 @@ Field-by-field on the one work captured from both surfaces (Prison Break,
 `Fast_Fetch/importers/test_themoviebox_detail_api.py` (18 tests, offline, fixture
 from the captured answer) pins every row of that table plus the crawl-surface
 choice. **The verdict is unchanged and this is a FAIL by the owner's rule:** the
-vault has posts and zero sources, and the site publishes no playable URL on
-either surface. The re-derive makes the declared tiers visible as releases;
-it cannot make them playable. The 20-item probe and 10-title sample need the
-network and are queued behind the load gate.
+vault has posts and zero sources, and neither public surface carries a playable
+URL. The re-derive makes the declared tiers visible as releases; it cannot make
+them playable. The 20-item probe and 10-title sample need the network and are
+queued behind the load gate.
+
+**Play-info mint probe — measured 2026-10-30 (task #43), verdict
+CREDENTIAL-GATED.** This retires the claim that the site publishes nothing
+playable: the owner captured real URLs from the 1DM+ app for *Five Friends 2:
+Mount Klawih* (`subjectId 7295930638539411024`) — a DASH manifest at
+`sbcdnw.hakunaymatata.com/dash/<subjectId>_0_0_1080_h265_600/index_web.mpd` and a
+CloudFront-signed `.srt` on `cacdn.hakunaymatata.com` (`Key-Pair-Id`,
+`DateLessThan` ≈ a week out). The bare `.mpd` answers **403 "ERROR: ACCESS
+DENIED"**, so the file is real and the grant is signed server-side. What the
+*public* web surface does with that is the question this probe answered.
+
+12 requests, `nice -n 19`, all under `/tmp/q2_mint/` (never committed):
+
+1. The page and its entry bundle name no play URL. The player calls
+   `GET {API_BASE}/wefeed-h5api-bff/subject/play?subjectId=…&se=…&ep=…&detailPath=…&streamSignType=…`,
+   found in `_nuxt/6BbZTDSB.js` (the source is quoted in
+   `/tmp/q2_mint/mint_call_source.txt`). The call adds `Authorization: Bearer`
+   **only when an `mb_token` cookie exists**, so it is designed to be answerable
+   anonymously.
+2. Calling it unauthenticated for the owner's exact subject answers **HTTP 200,
+   `code: 0`** — and
+   `{"streams":[], "dash":[], "hls":[], "hasResource":false, "limited":false,
+   "freeNum":999, "vipLocked":false, "playConfig":{"maxResolution":480}}`.
+   Identical with `streamSignType=0`, and with `se=1&ep=1`. Every call sets a
+   fresh anonymous token: `{"atp":3,"uid":"<new per call>","ext":<iat+300>}` —
+   auth type 3 is a guest session, and a guest session is handed no resource.
+
+So the *path* is public and needs no credential; the *grant* is not. Getting one
+requires a signed-in (or VIP) session — an account, not a header — and the
+owner's 1DM+ grant must not be replayed. **MovieBox stays catalog-only:** it
+must not be presented as playable, and no signed URL may ever be written to the
+vault, because a week later it is a dead link wearing `status="active"`. If the
+mint ever becomes public, store the *recipe* (template, height, codec, bitrate,
+subtitle track id) with `is_temporary=1` and resolve JIT — never the URL.

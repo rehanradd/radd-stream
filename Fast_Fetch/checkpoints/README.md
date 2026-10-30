@@ -6,6 +6,8 @@ Entries written to `CONTINUITY.md` by another lane *after* the rotation are not 
 trunk `4fe6f65` moved them here the same way, verbatim, with the trunk line range in the header.
 
 - 2026-10-30 — q3 `[Q3-OPS-READS]`: launch readiness JOB A — the operator's own reads are bounded, they say so, and the boundary is named in code — [`20261030-q3-lane-launch-readiness-job-a-the-operators-own-rea.md`](20261030-q3-lane-launch-readiness-job-a-the-operators-own-rea.md)
+=======
+- 2026-10-30 — q2 `[Q2-MB-MINT]`: the play grant needs an account; MovieBox stays catalog-only — [`20261030-session-2026-10-30-q2-mb-mint-the-play-grant-needs-an-accou.md`](20261030-session-2026-10-30-q2-mb-mint-the-play-grant-needs-an-accou.md)
 - 2026-10-30 — q2 `[Q2-MB-STOPFLAG]`: a refused MovieBox run records `stop_reason`, logs `[!]`, and exits 3 — [`20261030-session-2026-10-30-q2-mb-stopflag-a-refused-run-is-now-a.md`](20261030-session-2026-10-30-q2-mb-stopflag-a-refused-run-is-now-a.md)
 - 2026-10-30 — q2 `[Q2-MOVIEBOX-CRAWL]`: parser fixes + detail-API preference, crawl gate closed (absorbed from trunk `4fe6f65`) — [`20261030-q2-themoviebox-crawl-2026-10-30-parser-fixes-detail-api-preference.md`](20261030-q2-themoviebox-crawl-2026-10-30-parser-fixes-detail-api-preference.md)
 - 2026-10-30 04:0x→ — q3 lane: the documentation diet — [`20261030-04xx-q3-lane-the-documentation-diet-split-not-delet.md`](20261030-04xx-q3-lane-the-documentation-diet-split-not-delet.md)
