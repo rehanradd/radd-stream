@@ -95,7 +95,9 @@ import sys
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
+from collections import deque
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from pathlib import Path
 
@@ -548,7 +550,14 @@ def _lookup_image(item: dict, ancestors: list, keys) -> str | None:
 
 
 def _image_list(value) -> list[str]:
-    """``stills`` is a list of image objects; empty/None must not become ['None']."""
+    """``stills`` is one image object or a list of them; empty/None is no image.
+
+    Measured 2026-10-30 on the detail page and its API answer: ``subject.stills``
+    is a single ``{"url", "width", ...}`` object there, not a list. Accepting only
+    a list dropped the one still the page publishes, leaving ``backdrop_url`` NULL.
+    """
+    if isinstance(value, dict):
+        value = [value]
     if not isinstance(value, list):
         return []
     out = []
@@ -817,14 +826,16 @@ def _enrich_with_declared_media(record: dict, root) -> None:
     payload names one work, so a sibling card's tiers cannot leak in) and
     ``harvest_catalog`` for a single feed subject.
     """
-    tiers = _resource_resolutions(root)
-    if tiers:
+    renditions = _resource_renditions(root)
+    if renditions:
+        tiers = sorted({r["resolution"] for r in renditions}, reverse=True)
         record["raw_meta"]["available_resolutions"] = tiers
-    if not record["releases"]:
-        renditions = _resource_renditions(root)
-        if renditions:
-            record["releases"] = _declared_releases(
-                renditions, record["title"], record["languages"])
+        # The per-season episode counts are the only place this site states how
+        # long a season is; keep them on the post, not only inside each release.
+        record["raw_meta"]["declared_renditions"] = renditions
+    if not record["releases"] and renditions:
+        record["releases"] = _declared_releases(
+            renditions, record["title"], record["languages"])
     mirrors = _mirror_sources(root)
     if mirrors:
         _attach_mirrors(record, mirrors)
@@ -1015,6 +1026,19 @@ def _iter_releases(candidates: list, work_title: str):
             yield release
 
 
+def _stamp_seasons(record: dict) -> None:
+    """Write ``seasons`` from whatever releases exist *now*.
+
+    ``_build_record`` used to compute this before ``_enrich_with_declared_media``
+    added the declared renditions, so a series whose only releases are the ones
+    the site declares (the normal shape here) stored ``seasons = NULL`` while its
+    twenty releases each named a season. Stamping after enrichment is the fix.
+    """
+    seasons = sorted({r["season"] for r in record.get("releases") or []
+                      if r.get("season") is not None})
+    record["seasons"] = json.dumps(seasons) if seasons else None
+
+
 def _build_record(anchor: dict, candidates: list, page_url: str) -> dict | None:
     title = _first_text(anchor, TITLE_KEYS) or ""
     if not title:
@@ -1051,11 +1075,14 @@ def _build_record(anchor: dict, candidates: list, page_url: str) -> dict | None:
         if isinstance(node, dict):
             stills.extend(_image_list(node.get("stills")))
     stills = [s for s in dict.fromkeys(stills) if s != backdrop]
+    # The site names no backdrop field at all on the measured payloads; the one
+    # wide image it publishes is ``stills``. Without this fallback the backdrop
+    # column stays NULL on every row while the URL sits in ``backdrop_urls``.
+    backdrop = backdrop or (stills[0] if stills else None)
     backdrop_urls = [s for s in ([backdrop] + stills) if s]
     evidence = _trailer_evidence(candidates[0][0] if candidates else anchor,
                                  candidates[0][1] if candidates else [])
 
-    seasons = sorted({r["season"] for r in releases if r["season"] is not None})
     record = {
         "canonical_key": fast_fetch.generate_canonical_key(title, year),
         "title": title,
@@ -1077,7 +1104,7 @@ def _build_record(anchor: dict, candidates: list, page_url: str) -> dict | None:
         "languages": _join_labels(_lookup_values(anchor, all_ancestors, DUB_KEYS)),
         "industry": _lookup(anchor, all_ancestors, INDUSTRY_KEYS),
         "country": _lookup(anchor, all_ancestors, COUNTRY_KEYS),
-        "seasons": json.dumps(seasons) if seasons else None,
+        "seasons": None,
         "url": page_url,
         "slug": slug,
         "is_18_plus": 1 if is_adult else 0,
@@ -1103,6 +1130,7 @@ def _build_record(anchor: dict, candidates: list, page_url: str) -> dict | None:
         },
         "releases": releases,
     }
+    _stamp_seasons(record)
     return record
 
 
@@ -1195,7 +1223,150 @@ def parse_page(html: str, page_url: str) -> list[dict]:
         # as releases with empty sources keeps that gap visible (the owner's
         # complaint was a vault reading "0 releases" for works that list four).
         _enrich_with_declared_media(records[0], data)
+        container = _detail_container(data)
+        if container is not None:
+            _apply_detail_evidence(records[0], container)
+        else:
+            _stamp_seasons(records[0])
     return records
+
+
+def _detail_container(root, budget: int = 20000):
+    """First dict holding ``subject``, ``stars`` and ``metadata`` together.
+
+    A Nuxt detail page hydrates the detail answer under two keys (``data`` and
+    ``state``); either carries the credits and keywords, which sit beside
+    ``subject`` and are therefore invisible to the per-anchor lookups. Bounded
+    breadth-first, because the graph is shared and cyclic.
+    """
+    queue = deque([root])
+    seen = set()
+    while queue and budget > 0:
+        node = queue.popleft()
+        budget -= 1
+        if isinstance(node, dict):
+            if (isinstance(node.get("subject"), dict)
+                    and isinstance(node.get("stars"), list)
+                    and isinstance(node.get("metadata"), dict)):
+                return node
+            children = node.values()
+        elif isinstance(node, list):
+            children = node
+        else:
+            continue
+        if id(node) in seen:
+            continue
+        seen.add(id(node))
+        for child in children:
+            if isinstance(child, (dict, list)):
+                queue.append(child)
+    return None
+
+
+def _credits_from_stars(stars):
+    """``(cast, directors, writers)`` from ``stars[]``, one entry per person.
+
+    Measured 2026-10-30: crew carry ``character`` "Director" (staffType 2) or
+    "Writer" (staffType 3); actors carry the role played (staffType 1). A person
+    repeats once per season, so entries are de-duplicated by ``staffId``.
+    """
+    cast, directors, writers = [], [], []
+    seen = {"cast": set(), "director": set(), "writer": set()}
+    for entry in stars if isinstance(stars, list) else []:
+        if not isinstance(entry, dict):
+            continue
+        name = _as_text(entry.get("name"))
+        if not name:
+            continue
+        ident = _as_text(entry.get("staffId")) or name.casefold()
+        role = (_as_text(entry.get("character")) or "").strip().casefold()
+        staff_type = _positive_int(entry.get("staffType"))
+        if role == "director" or staff_type == 2:
+            bucket, target = "director", directors
+        elif role == "writer" or staff_type == 3:
+            bucket, target = "writer", writers
+        else:
+            bucket, target = "cast", cast
+        if ident not in seen[bucket]:
+            seen[bucket].add(ident)
+            target.append(name)
+    return cast, directors, writers
+
+
+def _split_dubs(dubs, subtitles):
+    """Audio languages and subtitle languages, kept apart.
+
+    ``dubs[]`` mixes both, distinguished only by ``type`` (0 = audio, 1 =
+    subtitle) with free text in ``lanName`` ("French dub", "Arabic sub"), and
+    ``subject.subtitles`` is a separate comma-separated blob. Joining them into
+    one column erased which was which.
+    """
+    audio, subs = [], []
+    for entry in dubs if isinstance(dubs, list) else []:
+        if isinstance(entry, dict):
+            name = _as_text(entry.get("lanName")) or _as_text(entry.get("lanCode"))
+            if not name:
+                continue
+            if str(entry.get("type")).strip() == "1":
+                subs.append(name)
+            else:
+                audio.append(name)
+        elif isinstance(entry, str) and entry.strip():
+            audio.append(entry.strip())
+    blob = _as_text(subtitles)
+    if blob:
+        subs.extend(part.strip() for part in blob.split(",") if part.strip())
+    audio, subs = list(dict.fromkeys(audio)), list(dict.fromkeys(subs))
+    return (", ".join(audio) or None, ", ".join(subs) or None)
+
+
+def _apply_detail_evidence(record: dict, container: dict) -> None:
+    """Fill fields that live beside ``subject`` in a detail payload."""
+    subject = container.get("subject")
+    if not isinstance(subject, dict):
+        subject = {}
+    cast, directors, writers = _credits_from_stars(container.get("stars"))
+    if cast:
+        record["cast_names"] = ", ".join(cast)
+    if directors:
+        record["director"] = ", ".join(directors)
+    if writers:
+        record["raw_meta"]["writers"] = ", ".join(writers)
+    audio, subs = _split_dubs(subject.get("dubs"), subject.get("subtitles"))
+    if audio:
+        record["languages"] = audio
+    if subs:
+        record["raw_meta"]["subtitles"] = subs
+    metadata = container.get("metadata")
+    if isinstance(metadata, dict):
+        keywords = _as_text(metadata.get("keyWords"))
+        if keywords:
+            record["raw_meta"]["keywords"] = keywords
+    _stamp_seasons(record)
+
+
+def parse_detail_api(payload, page_url: str) -> list[dict]:
+    """One record from the site's own JSON detail answer, or ``[]``.
+
+    Measured 2026-10-30: ``GET {API_BASE}/detail?subjectId=…`` answers 200 with
+    ~39 KB of JSON and no credential, where the same work's HTML page is ~410 KB.
+    The payload repeats ``subject``/``stars``/``resource``/``metadata`` in the
+    shape the page hydrates, so it feeds the same builders — fewer bytes and less
+    parse work for identical data. This never replays a credential: an answer
+    that is not this public shape yields ``[]`` and the caller should stop, not
+    send a token.
+    """
+    data = payload.get("data") if isinstance(payload, dict) else None
+    if not isinstance(data, dict) or not isinstance(data.get("subject"), dict):
+        return []
+    record = _build_record(data["subject"], _collect_candidates(data), page_url)
+    if not record:
+        return []
+    # A detail answer names exactly one work, so its renditions cannot belong to
+    # a sibling the way a listing page's could.
+    _enrich_with_declared_media(record, data)
+    _apply_detail_evidence(record, data)
+    return [record]
 
 
 # ---------------------------------------------------------------------------
@@ -1355,6 +1526,32 @@ def _detail_url(item: dict) -> str | None:
     return f"{BASE_URL}{DETAIL_PREFIX}{path.strip('/')}"
 
 
+def detail_api_url(subject_id) -> str:
+    return f"{API_BASE}/detail?subjectId={urllib.parse.quote(str(subject_id))}"
+
+
+def _queued_subject_id(row) -> str | None:
+    """The ``subjectId`` a queue row carries, or None for an HTML-only row.
+
+    Rows queued before 2026-10-30 carry ``{}``; they crawl from their page, which
+    the parser handles. Rows queued by ``sync``/``harvest`` carry the id so the
+    crawl can read the 39 KB JSON answer instead of the 410 KB HTML one.
+    """
+    try:
+        raw = row["raw_json"]
+    except (KeyError, IndexError, TypeError):
+        return None
+    if not raw:
+        return None
+    try:
+        ledger = json.loads(raw)
+    except (TypeError, ValueError):
+        return None
+    if isinstance(ledger, dict):
+        return _as_text(ledger.get("subjectId"))
+    return None
+
+
 def _walk_feed(subject_types=ACCEPTED_SUBJECT_TYPES, pages: int = API_MAX_PAGES,
                per_page: int = API_PAGE_SIZE, delay: float = DEFAULT_DELAY):
     """Yield ``(item, detail_url)`` for every work the feed names.
@@ -1435,14 +1632,17 @@ def sync_catalog(db_path: Path | str = DEFAULT_DB_PATH, limit: int | None = None
         ensure_schema(conn)
         known = _existing_keys(conn)
 
-        def queue(loc, lastmod=None, slug=None):
+        def queue(loc, lastmod=None, slug=None, subject_id=None):
             if not loc:
                 return
+            # Keep the id the feed already gave us: the crawl can then ask the
+            # JSON detail endpoint (39 KB) instead of the HTML page (410 KB).
+            raw = json.dumps({"subjectId": subject_id}) if subject_id else "{}"
             cur = conn.execute(
                 "INSERT OR IGNORE INTO sitemap_cache (loc, lastmod, slug, scraped,"
-                " raw_json, error_count) VALUES (?, ?, ?, 0, '{}', 0)",
+                " raw_json, error_count) VALUES (?, ?, ?, 0, ?, 0)",
                 (loc, lastmod, slug or (loc.rstrip("/").rsplit("/", 1)[-1]
-                                        or None)))
+                                        or None), raw))
             if cur.rowcount:
                 totals["queued"] += 1
             else:
@@ -1467,7 +1667,9 @@ def sync_catalog(db_path: Path | str = DEFAULT_DB_PATH, limit: int | None = None
                 continue
             known.add(key)
             totals["pages"] += 1
-            queue(url, _lookup(item, [], DATE_KEYS), _as_text(item.get("detailPath")))
+            queue(url, _lookup(item, [], DATE_KEYS),
+                  _as_text(item.get("detailPath")),
+                  _as_text(item.get("subjectId")))
             if limit and totals["queued"] >= limit:
                 break
         conn.commit()
@@ -1517,8 +1719,10 @@ def harvest_catalog(db_path: Path | str = DEFAULT_DB_PATH, limit: int | None = N
             known.add(record["canonical_key"])
             conn.execute(
                 "INSERT OR IGNORE INTO sitemap_cache (loc, lastmod, slug, scraped,"
-                " raw_json, error_count) VALUES (?, ?, ?, 0, '{}', 0)",
-                (url, record.get("release_date"), record["slug"]))
+                " raw_json, error_count) VALUES (?, ?, ?, 0, ?, 0)",
+                (url, record.get("release_date"), record["slug"],
+                 json.dumps({"subjectId": _as_text(item.get("subjectId"))})
+                 if _as_text(item.get("subjectId")) else "{}"))
             totals["queued"] += 1
             batch.append(record)
             if len(batch) >= BATCH_SIZE:
@@ -1872,7 +2076,7 @@ def crawl_pending(limit: int | None = None, db_path: Path | str = DEFAULT_DB_PAT
     if limit:
         pending = pending[:limit]
 
-    totals = {"pages": 0, "posts": 0, "releases": 0, "sources": 0,
+    totals = {"pages": 0, "api_pages": 0, "posts": 0, "releases": 0, "sources": 0,
               "failed_rows": 0, "parked": 0, "failed": 0, "metadata_only": 0,
               "with_media": 0,
               "paused_rate_limit": False, "stopped_for_memory": False,
@@ -1903,6 +2107,11 @@ def crawl_pending(limit: int | None = None, db_path: Path | str = DEFAULT_DB_PAT
         batch_locs.clear()
 
     def fetch(row):
+        subject_id = _queued_subject_id(row)
+        if subject_id:
+            # Same work, a tenth of the bytes, no Nuxt unflatten.
+            return http_get(detail_api_url(subject_id), timeout=API_TIMEOUT,
+                            delay=delay)
         return http_get(row["loc"], timeout=PAGE_TIMEOUT, delay=delay)
 
     def handle(row, status, final, body):
@@ -1921,12 +2130,22 @@ def crawl_pending(limit: int | None = None, db_path: Path | str = DEFAULT_DB_PAT
             _bump_error(db_path, loc, _failure(kind, status, final, kind),
                         park_now=park_now)
             return
-        records = parse_page(body, loc)
+        subject_id = _queued_subject_id(row)
+        if subject_id:
+            totals["api_pages"] += 1
+            try:
+                payload = json.loads(body)
+            except (TypeError, ValueError):
+                payload = None
+            records = parse_detail_api(payload, loc)
+        else:
+            records = parse_page(body, loc)
         if not records:
             totals["failed_rows"] += 1
             _bump_error(db_path, loc, _failure(
-                "no-subject", status, final,
-                "page carried no titled subject in its Nuxt payload"))
+                "detail-api-shape" if subject_id else "no-subject", status, final,
+                "detail answer was not the public subject shape" if subject_id
+                else "page carried no titled subject in its Nuxt payload"))
             return
         # A subject with no print is the expected outcome on this site, not a
         # failure: the play URL is resolved client-side. It is written as a

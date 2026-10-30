@@ -1271,3 +1271,41 @@ describes that file, not the new parser. A bounded re-crawl under the gate
 queued in CONTINUITY.md. Even then, expect releases > 0 and **sources = 0** —
 this site has published no playable URL on either surface measured, and a
 resolver for the authenticated player is a different problem.
+
+**Re-measured 2026-10-30 (second pass): the JSON detail answer is the cheaper
+surface, and it is now preferred.** `GET {API_BASE}/detail?subjectId=…` answers
+200 with **39,788 B** where the same work's HTML page is **409,998 B** — a tenth
+of the bytes, no Nuxt devalue unflatten, no credential. It is a plain GET: no
+token, no app key replayed, and none will be. `parse_detail_api()` feeds its
+`data` object (`subject`/`stars`/`resource`/`metadata`) through the same
+builders, and `crawl` now calls it whenever the queued row carries a
+`subjectId` (stamped by `sync`/`harvest`); rows queued before this carry `{}`
+and still crawl from their page, which the parser handles. A non-detail answer
+(e.g. an auth wall) is recorded as a retryable failure and **never** answered
+with a token.
+
+Field-by-field on the one work captured from both surfaces (Prison Break,
+`subjectId 2835060171381039112`), declared vs what the old parser stored:
+
+| Field | Declared by the answer | Old parser stored | Now stores |
+|---|---|---|---|
+| seasons | 5 (`resource.seasons[].se`) | `NULL` | `[1,2,3,4,5]` |
+| tiers per season | 4 × 360/480/720/1080 | 0 releases | 20 releases, each with `season`, `quality`, `raw_meta.episodes` |
+| episode counts | per season/tier `epNum` (e.g. S2 720p = 20) | only in `raw_meta` of each release | same, plus `raw_meta.declared_renditions` on the post |
+| mirrors | `dl: null`, no URL anywhere | 0 sources | 0 sources (none exist) |
+| poster | `cover.url` | stored | stored |
+| backdrop | `stills` — **one object**, not a list | `NULL` (list-only reader) | `stills.url`, also in `backdrop_urls` |
+| cast | `stars[]`, 25 actors | `NULL` (`cast`/`actors` keys absent) | deduped by `staffId` |
+| director | 33 `character: "Director"` | `NULL` (hard-coded) | 33 names |
+| writers | 16 `character: "Writer"` | not read | `raw_meta.writers` |
+| audio vs subtitles | `dubs[].type` 0/1 + `subject.subtitles` | merged into `languages` | audio in `languages`, subtitles in `raw_meta.subtitles` |
+| year / synopsis / genres / adult | present | stored correctly | unchanged |
+| keywords | `metadata.keyWords` (empty here) | dropped | `raw_meta.keywords` when populated |
+
+`Fast_Fetch/importers/test_themoviebox_detail_api.py` (18 tests, offline, fixture
+from the captured answer) pins every row of that table plus the crawl-surface
+choice. **The verdict is unchanged and this is a FAIL by the owner's rule:** the
+vault has posts and zero sources, and the site publishes no playable URL on
+either surface. The re-derive makes the declared tiers visible as releases;
+it cannot make them playable. The 20-item probe and 10-title sample need the
+network and are queued behind the load gate.
