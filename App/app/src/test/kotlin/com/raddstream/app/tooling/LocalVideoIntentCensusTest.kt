@@ -43,7 +43,11 @@ class LocalVideoIntentCensusTest {
             .find(text)
             ?.groupValues
             ?.get(1)
-            ?.let { body -> Regex(""""([^"]+)""").findAll(body).map { it.groupValues[1] }.toList() }
+            // Four quotes on each side: a raw string closes at the LAST three of a run, so the
+            // content here is the pattern `"([^"]+)"` and a three-quote close silently eats the
+            // closing quote out of it. Measured in CI — the broken form matched `content`, `, `,
+            // `file` and this guard's own positive control is what caught it.
+            ?.let { body -> Regex(""""([^"]+)"""").findAll(body).map { it.groupValues[1] }.toList() }
             ?: emptyList()
 
     @Test

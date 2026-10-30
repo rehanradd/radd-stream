@@ -227,13 +227,43 @@ class BrandDriftTest {
         val manifest = File(mainSrc, "AndroidManifest.xml").readText()
         assertTrue("android:label must be @string/brand_app_name (generated)", manifest.contains("@string/brand_app_name"))
         val placeholder = "$" + "{brandScheme}"
-        val schemes = Regex("""android:scheme="([^"]*)"""").findAll(manifest).map { it.groupValues[1] }.toList()
+        // The claim is about the deep link, so it is read filter by filter rather than over every
+        // scheme in the file: the app also declares a VIEW filter for local video files, whose two
+        // schemes are owned by LocalVideoOpen and compared with the manifest by
+        // LocalVideoIntentCensusTest. A brand scheme written out in full, or a network scheme
+        // handed to the player, still fails here exactly as it did when this scanned the whole file.
+        val filters = Regex("""<intent-filter\b[\s\S]*?</intent-filter>""").findAll(manifest).toList()
+        val brand = filters.filter { it.value.contains("brandScheme") }
+        assertEquals("exactly one intent-filter may carry the brand scheme", 1, brand.size)
         assertEquals(
             "the deep-link <data android:scheme> must be the generated placeholder; the value " +
                 "itself comes from deeplink.scheme in brand.properties",
-            listOf(placeholder), schemes,
+            listOf(placeholder), schemeValues(brand.single().value),
+        )
+        val literal = brandValue("deeplink.scheme")
+        assertTrue(
+            "deeplink.scheme must resolve, or the empty string it would otherwise be matches " +
+                "every scheme in the file and this check passes by accident",
+            literal.isNotEmpty(),
+        )
+        val hardcoded = filters.filterNot { it.value.contains("brandScheme") }
+            .flatMap { schemeValues(it.value) }
+            .filter { it.contains(literal) || it.lowercase() in setOf("http", "https") }
+        assertTrue(
+            "no other filter may hardcode the brand scheme or offer a network scheme: $hardcoded",
+            hardcoded.isEmpty(),
+        )
+        assertTrue(
+            "and the scan is shown to read the attribute it claims to read — an empty result here " +
+                "would make every assertion above pass over nothing",
+            schemeValues("""<data android:scheme="$placeholder" android:host="x" />""") ==
+                listOf(placeholder),
         )
     }
+
+    /** Every `android:scheme` value inside one XML block, in the order they are written. */
+    private fun schemeValues(block: String): List<String> =
+        Regex("""android:scheme="([^"]*)"""").findAll(block).map { it.groupValues[1] }.toList()
 
     // ── 7. copy strings follow the name ─────────────────────────────────────
     @Test

@@ -399,7 +399,9 @@ untouched, no device claim, nothing applied to production.
 ### Session 27 — Zero-Buffering Load Control, Universal Manifest Typing, Local File Playback (2026-10-31)
 
 **Agent:** Qoder (q4 player lane, worktree `/tmp/q4_player_work` off `origin/master` tip `6a441ec`)
-**Status:** ⚠️ WRITTEN AND STATICALLY CHECKED — not compiled. Branch `q4-player-zero-buffer-20261031`; CI is this milestone's first judge.
+**Status:** ⚠️ CI-TESTED — `assembleDebug` and `lintDebug` green on the first hosted run; 5 of 742
+unit tests failed and are fixed in the follow-up commit on this branch. No device, so nothing here
+is proven to *play* yet. Branch `q4-player-zero-buffer-20261031`.
 **Key Milestones:**
 - **Buffering policy has one owner.** New `player/PlayerBuffering.kt` holds the five numbers
   (`MIN_BUFFER_MS=15_000`, `MAX_BUFFER_MS=50_000`, `BUFFER_FOR_PLAYBACK_MS=500`,
@@ -453,12 +455,14 @@ untouched, no device claim, nothing applied to production.
   (765 lines).
 
 **What this session could NOT prove, stated plainly:**
-- **No build, no test run — nothing in this diff has been through a compiler.** `PlayerBuffering`'s
-  numbers are unvalidated on a device; Media3 constant spellings
-  (`MimeTypes.APPLICATION_M3U8`/`APPLICATION_MPD`) and the `androidx.compose.animation` imports are
-  assumed from what is already on the classpath elsewhere in this module (`HeroCarousel.kt`,
-  `CommonUi.kt`), not verified here. `:app:testDebugUnitTest`, `:app:lintDebug` and the
-  `UniversalSourceTest`/`LocalVideoOpenTest` scans are what will tell.
+- Nothing was executed locally: no `:app:compileDebugKotlin`, no `testDebugUnitTest`, no
+  `lintDebug` — the build hold stood, so CI did the measuring (its result is below). What it settled:
+  the Media3 constant spellings (`MimeTypes.APPLICATION_M3U8`/`APPLICATION_MPD`) and the
+  `androidx.compose.animation` imports, which I had assumed from what other files in this module
+  already import, are real — production compiled and packaged. What it did not settle:
+  `PlayerBuffering`'s numbers on a device. The load control is constructed by `PlaybackService` on
+  the phone, and a JVM test can only hold the relationship between the four values, not hear the
+  first frame.
 - The wiring checks in `LocalVideoOpenTest` are **text scans of `MainActivity.kt` and `NavGraph.kt`**
   with bounded-distance regexes and fixture controls. They prove the call shape exists; they do not
   prove an Intent delivered on a phone plays a frame. `takeLocalVideoFrom` is never executed by a
@@ -478,6 +482,40 @@ possessive inside a `//` or ` * ` comment, which `CommentBalanceTest` ignores; n
 backticked test name carries an unbalanced quote. The video-star sequence was never written inside a
 Kotlin block comment (the manifest note and the test fixtures say "video/star" or prose), which is
 the trap that fake-nests a comment there.
+
+**CI round 1, measured on `54e4aca` (run 41117413295):** `:app:assembleDebug` **succeeded** — the
+`app-debug-45` artifact is a 22,165,116-byte APK built from this diff. `:app:lintDebug` reported
+**0 errors** (148 warnings), so the 23 lint errors that made trunk red in October are not back.
+`:app:testDebugUnitTest` ran **742 tests, 5 failed** — and every one of the five was this session's
+own test code being wrong about its own scan, not the player:
+
+1. `UniversalSourceTest.theFactoryBuildsTheTypeIntoTheItemItReturns` — the census ended in
+   `.map { it.path }`, which on `walkTopDown()` is still a `Sequence`, so
+   `assertEquals(listOf(path), census)` compared a List to a lazy view and failed on the *shape*
+   (`was:<kotlin.sequences.TransformingSequence@…>`). A grep over `src/main/kotlin` confirms exactly
+   one `MediaItem.Builder()`: the guard's claim was true and its comparison was broken. → `.toList()`.
+2. `LocalVideoIntentCensusTest`, both failures, one cause — `Regex(""""([^"]+)""")`. A Kotlin raw
+   string closes at the **last** three quotes of a run, so three trailing quotes swallowed the
+   pattern's closing quote and the pattern was `"([^"]+)`. Reading `setOf("content", "file")`
+   therefore returned `content`, `, `, `file` — the middle element being the separator between the
+   two literals. `CommentBalanceTest` documents exactly this run rule and my scanner fell into it
+   anyway. → four quotes on each side, with the trap written down at the call site.
+3. `LocalVideoOpenTest.theExtensionAloneIsEnoughEvidenceWhenTheSenderSaidNothingAboutType` — the
+   fixture list passed bare extensions (`"mp4"`, `"MOV"`) as if they were file names. A file
+   *called* `mp4` has no extension, and `LocalVideoOpen` refused it correctly. → real names
+   (`clip.mp4`, `CLIP.MOV`, …), and the bare-name refusal is now asserted on purpose in the same test.
+4. `BrandDriftTest.manifestUsesGeneratedLabelAndScheme` — a pre-existing guard that scans **every**
+   `android:scheme` in the manifest and required the list to be the single deep-link placeholder.
+   The local-file filter's `content`/`file` made it three. Narrowed to the filter that actually
+   carries the brand scheme, and made stricter in two places it did not previously look: no other
+   filter may hardcode the literal `deeplink.scheme` value (with a guard that the value resolved at
+   all — an empty string would match every scheme and pass by accident), and no filter may offer
+   `http`/`https`. The manifest↔rule pairing stays owned by `LocalVideoIntentCensusTest`, so
+   narrowing the scope did not loosen the brand claim.
+
+The lesson worth keeping: two of the five were caught by the positive controls sitting in the same
+test as the scan they police. A guard with no control of its own would have gone green over a
+pattern that could not tell `"content"` from `, `.
 
 **Rules kept:** no `Fast_Fetch/*.py` touched, no Gradle, no test module executed, no service
 restart, no nginx change, no tag, no `git add -A`, no merge, no credential in argv/URL/file/log,

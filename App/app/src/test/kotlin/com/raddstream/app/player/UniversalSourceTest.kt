@@ -116,10 +116,14 @@ class UniversalSourceTest {
             Regex("""manifestMimeType\(rendition\.playback\)\?\.let\s*\{\s*builder\.setMimeType\(it\)""")
                 .containsMatchIn(source),
         )
+        // toList() is not decoration: walkTopDown() hands back a Sequence, and assertEquals on a
+        // Sequence compares an unbounded lazy view to a List and fails on the shape, not the
+        // content — which is how this census read as a second composer when there is none.
         val census = File("src/main/kotlin").walkTopDown()
             .filter { it.isFile && it.extension == "kt" }
             .filter { Regex("""MediaItem\.Builder\(\)""").containsMatchIn(it.readText()) }
             .map { it.path }
+            .toList()
         assertEquals(
             "a second MediaItem composer is a second answer to what a link contains: $census",
             listOf(FACTORY_PATH),
