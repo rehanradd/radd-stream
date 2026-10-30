@@ -12,6 +12,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.yield
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -168,9 +169,11 @@ class OfflineCacheWiringTest {
         override suspend fun touchOnPlay(fileId: String, now: Long) {
             rows[fileId]?.let { rows[fileId] = it.copy(lastAccessElapsedRealtime = now, watchCount = it.watchCount + 1) }
         }
-        override suspend fun commitAsUserKeep(fileId: String) {
-            rows[fileId]?.let {
-                rows[fileId] = it.copy(isTemporary = false, isComplete = true, origin = CacheOrigin.USER_KEEP.name, state = CacheTaskState.COMPLETED.name)
+        override suspend fun promoteOriginForTask(taskId: Long) {
+            // Mirrors the real query exactly: origin and nothing else. A promotion that also stamped
+            // isComplete/state would be the lie the deleted commitAsUserKeep used to tell.
+            rows.values.filter { it.taskId == taskId }.forEach {
+                rows[it.fileId] = it.copy(origin = CacheOrigin.USER_KEEP.name)
             }
         }
         override suspend fun setState(fileId: String, state: String) {
@@ -242,12 +245,14 @@ class OfflineCacheWiringTest {
 
     // ── fake byte mover ─────────────────────────────────────────────────────────
 
-    /** Returns the scripted [FetchOutcome]s in order, capturing the task it saw each time. */
+    /** Returns the scripted [FetchOutcome]s in order, capturing the task and the mode it saw. */
     private class FakeAhead(private vararg val outcomes: FetchOutcome) : AheadExecutor {
         val seenTasks = mutableListOf<CacheTaskEntity>()
+        val seenModes = mutableListOf<FetchMode>()
         var index = 0
         override suspend fun run(task: CacheTaskEntity, mode: FetchMode, playhead: PlayheadProvider): FetchOutcome {
             seenTasks.add(task)
+            seenModes.add(mode)
             val outcome = outcomes.getOrElse(index) { outcomes.last() }
             index++
             return outcome
@@ -287,7 +292,12 @@ class OfflineCacheWiringTest {
         val repository: CacheRepository,
     )
 
-    private fun wiring(ctx: CoroutineContext, ahead: FakeAhead, storage: FakeStorage = FakeStorage()): Wiring {
+    private fun wiring(
+        ctx: CoroutineContext,
+        ahead: FakeAhead,
+        storage: FakeStorage = FakeStorage(),
+        network: NetworkClass = NetworkClass.WIFI,
+    ): Wiring {
         val taskDao = FakeTaskDao()
         val fileDao = FakeFileDao(taskDao)
         val manifestDao = FakeManifestDao()
@@ -309,7 +319,7 @@ class OfflineCacheWiringTest {
             resolver = resolver,
             clock = clock,
             policy = SchedulerPolicy(maxConcurrent = 2, allowAutoPreviewOnMobile = false),
-            networkProvider = { NetworkClass.WIFI },
+            networkProvider = { network },
         )
         val factory = FakeFactory("https://catalog.test")
         val repository = CacheRepository(coordinator, taskDao, factory, storage, clock)
@@ -320,6 +330,17 @@ class OfflineCacheWiringTest {
     private suspend fun awaitState(dao: FakeTaskDao, id: Long, expected: CacheTaskState) {
         var guard = 0
         while (dao.getById(id)?.stateEnum != expected && guard++ < MAX_EVENT_LOOP_PUMPS) yield()
+    }
+
+    /** Let the engine run until the byte mover has seen [count] passes. */
+    private suspend fun awaitPasses(ahead: FakeAhead, count: Int) {
+        var guard = 0
+        while (ahead.seenTasks.size < count && guard++ < MAX_EVENT_LOOP_PUMPS) yield()
+    }
+
+    /** Drain the event loop a fixed number of times: proof that nothing further was started. */
+    private suspend fun pump(times: Int = 20) {
+        repeat(times) { yield() }
     }
 
     // ── (a) enqueue → task → progresses through the real state machine ──────────
@@ -446,6 +467,195 @@ class OfflineCacheWiringTest {
         assertEquals(1, result.deferredHeldByTasks)
         assertTrue(result.expiredDeleted.isEmpty())
         assertEquals(CacheTaskState.LOADING.name, w.taskDao.getById(300L)?.state)
+    }
+
+    // ── (e) the watch path: an opportunistic row, and the playhead that moves it ──
+
+    @Test
+    fun `watching a title creates an opportunistic row whose pass is bounded to the window`() = runBlocking {
+        val w = wiring(coroutineContext, FakeAhead(FetchOutcome.WINDOW_FILLED))
+
+        val outcome = w.repository.preview("HDL-7", "Work", 2000, resumable = true)
+        val taskId = (outcome as KeepOutcome.Enqueued).taskId
+        awaitState(w.taskDao, taskId, CacheTaskState.PAUSED)
+
+        val row = w.taskDao.getById(taskId)!!
+        assertEquals("watching is not keeping: the row is pre-emptible", CachePriority.AUTO_PREVIEW.name, row.priority)
+        assertEquals("and it still ages out", CacheOrigin.AUTO_PREVIEW.name, row.origin)
+        assertEquals("a preview fills the window ahead of the playhead, never the whole file",
+            listOf(FetchMode.AUTO_PREVIEW_AHEAD), w.ahead.seenModes)
+        assertEquals("a filled window parks instead of looping", CacheTaskState.PAUSED.name, row.state)
+    }
+
+    @Test
+    fun `one playhead move buys exactly one more bounded pass`() = runBlocking {
+        val handle = "HDL-8"
+        val sourceKey = KeepIdentity.sourceKeyFor(handle)
+        val w = wiring(coroutineContext, FakeAhead(FetchOutcome.WINDOW_FILLED, FetchOutcome.WINDOW_FILLED))
+        val taskId = (w.repository.preview(handle, "Work", 2000, resumable = true) as KeepOutcome.Enqueued).taskId
+        awaitState(w.taskDao, taskId, CacheTaskState.PAUSED)
+        assertEquals(1, w.ahead.seenTasks.size)
+
+        // Two callbacks before the loop turns over: the second must find the pass already launched.
+        w.coordinator.onPlayheadAdvanced(sourceKey, 500L)
+        w.coordinator.onPlayheadAdvanced(sourceKey, 900L)
+        awaitPasses(w.ahead, 2)
+        pump()
+
+        assertEquals("a progressing playhead moves bytes, and does not double-stack them",
+            2, w.ahead.seenTasks.size)
+        assertEquals("every pass a preview starts stays bounded to the window",
+            listOf(FetchMode.AUTO_PREVIEW_AHEAD, FetchMode.AUTO_PREVIEW_AHEAD), w.ahead.seenModes)
+        assertEquals(CacheTaskState.PAUSED.name, w.taskDao.getById(taskId)?.state)
+    }
+
+    @Test
+    fun `a playhead move on a finished row fetches nothing`() = runBlocking {
+        val handle = "HDL-9"
+        val sourceKey = KeepIdentity.sourceKeyFor(handle)
+        val w = wiring(coroutineContext, FakeAhead(FetchOutcome.COMPLETED))
+        val taskId = (w.repository.preview(handle, "Work", 2000, resumable = true) as KeepOutcome.Enqueued).taskId
+        awaitState(w.taskDao, taskId, CacheTaskState.COMPLETED)
+        val passes = w.ahead.seenTasks.size
+
+        w.coordinator.onPlayheadAdvanced(sourceKey, 1000L)
+        pump()
+
+        assertEquals("a complete file is never re-fetched by a watching viewer", passes, w.ahead.seenTasks.size)
+        assertEquals(CacheTaskState.COMPLETED.name, w.taskDao.getById(taskId)?.state)
+    }
+
+    @Test
+    fun `mobile data refuses opportunistic bytes and never a viewer keep`() = runBlocking {
+        val handle = "HDL-10"
+        val sourceKey = KeepIdentity.sourceKeyFor(handle)
+        val w = wiring(coroutineContext, FakeAhead(FetchOutcome.COMPLETED), network = NetworkClass.MOBILE)
+
+        assertFalse("the seed-time question the player asks before writing a row", w.coordinator.mayPreview(1000L))
+
+        val taskId = (w.repository.preview(handle, "Work", 2000, resumable = true) as KeepOutcome.Enqueued).taskId
+        w.coordinator.onPlayheadAdvanced(sourceKey, 500L)
+        pump()
+        assertTrue("no preview bytes move on mobile data", w.ahead.seenTasks.isEmpty())
+        assertEquals(CacheTaskState.QUEUED.name, w.taskDao.getById(taskId)?.state)
+
+        // The same refusal must never fall on something the viewer actually asked for.
+        val kept = w.repository.keep("HDL-11", "Work", 2000, resumable = true)
+        awaitState(w.taskDao, (kept as KeepOutcome.Enqueued).taskId, CacheTaskState.COMPLETED)
+        assertEquals("an explicit keep downloads on any network", 1, w.ahead.seenTasks.size)
+        assertEquals(FetchMode.FULL_DOWNLOAD, w.ahead.seenModes.single())
+    }
+
+    @Test
+    fun `a keep tapped while a preview is parked switches the very next pass to the full download`() = runBlocking {
+        val handle = "HDL-12"
+        val sourceKey = KeepIdentity.sourceKeyFor(handle)
+        val w = wiring(
+            coroutineContext,
+            FakeAhead(FetchOutcome.WINDOW_FILLED, FetchOutcome.WINDOW_FILLED, FetchOutcome.COMPLETED),
+        )
+        val taskId = (w.repository.preview(handle, "Work", 2000, resumable = true) as KeepOutcome.Enqueued).taskId
+        awaitState(w.taskDao, taskId, CacheTaskState.PAUSED)
+
+        w.coordinator.keepNow(sourceKey)
+        awaitState(w.taskDao, taskId, CacheTaskState.COMPLETED)
+
+        assertEquals("the mode is re-read every pass, so the tap is honoured without waiting for a tick",
+            listOf(FetchMode.AUTO_PREVIEW_AHEAD, FetchMode.FULL_DOWNLOAD, FetchMode.FULL_DOWNLOAD), w.ahead.seenModes)
+        assertEquals("the tap adopts the row that already holds the bytes; it never seeds a second copy",
+            1, w.taskDao.rows.size)
+        assertEquals("and the row is no longer opportunistic",
+            CachePriority.USER_REQUESTED.name, w.taskDao.getById(taskId)?.priority)
+    }
+
+    // ── (f) retention: what a tap pins, and what a preview may never touch ──────
+
+    @Test
+    fun `a preview is refused when it would evict what the viewer kept`() = runBlocking {
+        val tight = FakeStorage(
+            limits = StorageLimits(
+                hardCeilingBytes = 10L * 1024 * 1024 * 1024,
+                lowStorageFloorBytes = 5_000L,
+                perFileMaxBytes = 10L * 1024 * 1024 * 1024,
+            ),
+            osFree = 1_000L,
+            candidates = listOf(
+                EvictionCandidate(
+                    fileId = "someone-elses-preview", sizeBytes = 10_000L, origin = CacheOrigin.AUTO_PREVIEW,
+                    lastAccessElapsedRealtime = 0L, watchCount = 0, referencedByRunningTask = false,
+                    isTemporary = true, isComplete = false,
+                )
+            ),
+        )
+        val w = wiring(coroutineContext, FakeAhead(FetchOutcome.COMPLETED), storage = tight)
+
+        // The gate answers EvictThenAdmit: enough could be freed, so only the caller's intent decides.
+        assertTrue("an unrequested preview never deletes anything",
+            w.repository.preview("HDL-13", "Work", 2000, resumable = true) is KeepOutcome.NoSpace)
+        assertEquals("and an invisible refusal writes no row at all", 0, w.taskDao.rows.size)
+        assertTrue("no bytes were planned away", tight.deleted.isEmpty())
+
+        val kept = w.repository.keep("HDL-14", "Work", 2000, resumable = true)
+        assertTrue("the same numbers admit an explicit ask — the eviction planner's ranking decides what goes",
+            kept is KeepOutcome.Enqueued)
+    }
+
+    @Test
+    fun `keepNow pins both the task and the file row, and an aged sweep then refuses`() = runBlocking {
+        val handle = "HDL-15"
+        val sourceKey = KeepIdentity.sourceKeyFor(handle)
+        val w = wiring(coroutineContext, FakeAhead(FetchOutcome.COMPLETED))
+        w.taskDao.insertIfAbsent(
+            newTask(handle, id = 400L, state = CacheTaskState.COMPLETED, url = "x", downloaded = 1000, total = 1000)
+                .copy(priority = CachePriority.AUTO_PREVIEW.name)
+        )
+        w.fileDao.upsert(
+            CacheFileEntity(
+                fileId = sourceKey, sourceKey = sourceKey, taskId = 400L, path = "/private/$sourceKey",
+                sizeBytes = 1000, origin = CacheOrigin.AUTO_PREVIEW.name, state = CacheTaskState.COMPLETED.name,
+                isTemporary = false, isComplete = true, createdElapsedRealtime = 0L, lastAccessElapsedRealtime = 0L,
+            )
+        )
+
+        w.coordinator.keepNow(sourceKey)
+        awaitState(w.taskDao, 400L, CacheTaskState.COMPLETED)
+
+        assertEquals(CacheOrigin.USER_KEEP.name, w.taskDao.getBySourceKey(sourceKey)?.origin)
+        assertEquals(
+            "TtlPolicy rule 1 and the eviction list read the FILE row, so a pin that moved only the " +
+                "task would be pinned in the list and aging on the shelf",
+            CacheOrigin.USER_KEEP.name, w.fileDao.getById(sourceKey)?.origin,
+        )
+
+        val store = RoomCacheSweepStore(w.fileDao, w.taskDao, w.storage, Provider { TtlHours.THREE })
+        val result = CacheSweeper(store, FixedUptimeClock(TtlHours.THREE.millis + 1)).sweep()
+
+        assertTrue("a watched-and-kept title is never auto-deleted", result.expiredDeleted.isEmpty())
+        assertTrue("its bytes stay on disk", w.fileDao.deleted.isEmpty())
+        assertEquals(CacheTaskState.COMPLETED.name, w.taskDao.getById(400L)?.state)
+    }
+
+    @Test
+    fun `a promotion moves the origin only - it never stamps a partial file complete`() = runBlocking {
+        val handle = "HDL-16"
+        val sourceKey = KeepIdentity.sourceKeyFor(handle)
+        val w = wiring(coroutineContext, FakeAhead(FetchOutcome.COMPLETED))
+        w.taskDao.insertIfAbsent(newTask(handle, id = 500L, state = CacheTaskState.LOADING, url = "x", downloaded = 10, total = 1000))
+        val before = CacheFileEntity(
+            fileId = sourceKey, sourceKey = sourceKey, taskId = 500L, path = "/private/$sourceKey",
+            sizeBytes = 10, origin = CacheOrigin.AUTO_PREVIEW.name, state = CacheTaskState.LOADING.name,
+            isTemporary = true, isComplete = false, createdElapsedRealtime = 0L, lastAccessElapsedRealtime = 0L,
+        )
+        w.fileDao.upsert(before)
+
+        w.coordinator.keepNow(sourceKey)
+
+        val after = w.fileDao.getById(sourceKey)!!
+        assertEquals(CacheOrigin.USER_KEEP.name, after.origin)
+        assertEquals("a retention word says nothing about completeness, so it may not change it", before.state, after.state)
+        assertEquals(before.isComplete, after.isComplete)
+        assertEquals(before.isTemporary, after.isTemporary)
+        assertEquals(before.sizeBytes, after.sizeBytes)
     }
 
     private companion object {

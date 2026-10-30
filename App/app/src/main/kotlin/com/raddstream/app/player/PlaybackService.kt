@@ -132,6 +132,7 @@ class PlaybackService : MediaSessionService() {
             }
         }
         startAutoQualityTicker()
+        startPlayheadPump()
     }
 
     private var lastHandledNonce: Long = -1L
@@ -254,6 +255,12 @@ class PlaybackService : MediaSessionService() {
         exo.setMediaItem(item)
         exo.prepare()
         exo.playWhenReady = true
+        // Every load of a real address is a title being watched, which is the whole trigger a
+        // preview has. A hop to a backup of the same print seeds again through the same line, and
+        // the engine's own idempotence turns that second ask into no second row. A kept copy played
+        // from disk is not: its address is our loopback proxy, which names no handle of the
+        // redirector's, so the ask falls through to nothing.
+        seedPreviewFor(rendition)
     }
 
     private fun applyDecision(
@@ -363,6 +370,77 @@ class PlaybackService : MediaSessionService() {
             while (true) {
                 delay(AUTO_QUALITY_TICK_MS)
                 evaluateAutoQuality()
+            }
+        }
+    }
+
+    /**
+     * Feed the offline cache the playhead, from the one place that is alive for the whole of
+     * playback.
+     *
+     * This is the pump the brief's `onPlayheadAdvanced` hook runs on. The engine's entry point looks
+     * a task up by the key of the address being watched and returns when nothing answers, so a
+     * progressing playhead only extends retention if SOMETHING is publishing it — and until now the
+     * only publisher was the player screen's 200 ms UI ticker, which stops the moment the viewer
+     * leaves the screen. Backgrounding a title to keep listening is the normal way this app is used,
+     * so the cache was being fed while the poster was on screen and never again. The service owns the
+     * player, so the service owns the position.
+     *
+     * Five seconds, and only on a move: [CacheCoordinator.onPlayheadAdvanced] answers a single
+     * bounded pass and then parks until the byte it is shown advances further, so a faster feed
+     * buys nothing but [com.raddstream.app.data.cache.CacheTaskDao] lookups — five a second at the
+     * old cadence, for a window measured in tens of megabytes.
+     */
+    private fun startPlayheadPump() {
+        scope.launch {
+            var lastReportedMs = -1L
+            while (true) {
+                delay(PLAYHEAD_PUMP_MS)
+                val exo = player ?: continue
+                // A paused player has no forward edge to anticipate; a seek still moves the
+                // position, and that is reported on the next tick exactly like playback does.
+                if (!exo.isPlaying) continue
+                val duration = if (exo.duration > 0L) exo.duration else exo.contentDuration
+                if (duration <= 0L) continue
+                val position = exo.currentPosition.coerceAtLeast(0L)
+                if (position == lastReportedMs) continue
+                lastReportedMs = position
+                store.reportPlayhead(store.activeRendition()?.playback?.playUrl, position, duration)
+            }
+        }
+    }
+
+    /**
+     * Watching is not keeping, and this says nothing either way. It creates the one opportunistic
+     * row the playhead pump above needs in order to have anything to extend: the engine's playhead
+     * entry point resolves a task by the watched address and no-ops when there is none, so a
+     * preview that is never seeded leaves the whole ahead-of-playback path dead on arrival.
+     *
+     * Silent by contract. A preview nobody asked for must not be able to produce a gate, a spinner,
+     * a toast, a Downloads row it cannot fill, or an evicted copy it did not want — [CacheEngineHolder]
+     * gives the engine every one of those refusals, and none of them belongs on screen.
+     */
+    private fun seedPreviewFor(rendition: PlaybackRendition?) {
+        val playback = rendition?.playback ?: return
+        val url = playback.playUrl?.takeIf { it.isNotBlank() } ?: return
+        val handle = playback.streamId?.takeIf { it.isNotBlank() } ?: return
+        val engine = CacheEngineHolder.engine ?: return
+        scope.launch {
+            try {
+                engine.seedPreview(
+                    PreviewRequest(
+                        key = CacheSessionKey(renditionKey = handle, url = url),
+                        url = url,
+                        expectedTotalBytes = rendition.print.sizeBytes.takeIf { it > 0L },
+                        resumable = playback.resumable || playback.acceptsRanges == true,
+                        printLabel = rendition.displayLabel(),
+                    ),
+                )
+            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                // The stream plays exactly as it would have. A preview is the only kind of cache
+                // work that can fail without the viewer ever having a right to know.
             }
         }
     }
@@ -569,6 +647,15 @@ class PlaybackService : MediaSessionService() {
          * re-buffer rather than within a scene.
          */
         const val AUTO_QUALITY_TICK_MS = 2_000L
+
+        /**
+         * How often the service offers the playhead to the offline cache. Longer than the UI's own
+         * 200 ms clock on purpose: the engine answers one bounded pass per advance and then parks,
+         * so anything faster is a database lookup per frame for a window that is tens of megabytes
+         * wide. Five seconds is short enough that a viewer who seeks onto unbuffered ground has an
+         * ahead-pass running before the player has re-buffered twice.
+         */
+        const val PLAYHEAD_PUMP_MS = 5_000L
 
         /** Loads worth measuring: media bytes. Subtitles and metadata would dilute the rate. */
         val MEASURABLE_TRACK_TYPES = setOf(C.TRACK_TYPE_DEFAULT, C.TRACK_TYPE_VIDEO, C.TRACK_TYPE_AUDIO)

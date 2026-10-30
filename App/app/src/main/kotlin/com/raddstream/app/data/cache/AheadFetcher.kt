@@ -257,7 +257,11 @@ class AheadFetcher(
                     taskId = task.id,
                     path = committed.absolutePath,
                     sizeBytes = total.coerceAtLeast(committed.length()),
-                    origin = task.origin,
+                    // The live row, not the one this pass was handed: a pass can run for the whole
+                    // file, and a Keep tapped inside it promotes the task. Committing the stale
+                    // origin would re-stamp a pinned keep as an aging preview the moment its bytes
+                    // land — the exact un-pin CacheCoordinator.keepNow exists to prevent.
+                    origin = taskDao.getById(task.id)?.origin ?: task.origin,
                     state = CacheTaskState.COMPLETED.name,
                     isTemporary = false,
                     isComplete = true,

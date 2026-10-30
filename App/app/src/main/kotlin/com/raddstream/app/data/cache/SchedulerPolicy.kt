@@ -57,16 +57,11 @@ object SchedulerPolicySelector {
             return SchedulingDecision(emptyList(), emptyList(), emptyList(), "no_network")
         }
 
-        // Auto-preview is gated by network + budget; user-requested is not.
-        val autoPreviewAllowed = when (network) {
-            NetworkClass.WIFI -> true
-            NetworkClass.MOBILE -> policy.allowAutoPreviewOnMobile
-            NetworkClass.METERED_ROAMING -> false
-            NetworkClass.NONE -> false
-        }
-        val budgetLeft = if (policy.autoPreviewDataBudgetBytes <= 0L) Long.MAX_VALUE
-        else (policy.autoPreviewDataBudgetBytes - policy.autoPreviewBytesSpentThisPeriod)
-            .coerceAtLeast(0L)
+        // Auto-preview is gated by network + budget; user-requested is not. Both rules live in the
+        // two functions below, because the playhead path starts one task without running a tick and
+        // must not be a second, weaker copy of this gate.
+        val autoPreviewAllowed = autoPreviewAllowedOn(network, policy)
+        val budgetLeft = autoPreviewBudgetLeftBytes(policy)
 
         val throttledAuto = pending.filter {
             it.priority == CachePriority.AUTO_PREVIEW && autoPreviewAllowed &&
@@ -114,4 +109,35 @@ object SchedulerPolicySelector {
 
         return SchedulingDecision(starts, preempts, throttledAuto, reason)
     }
+
+    /**
+     * Whether opportunistic ahead-of-playback work may move at all on [network].
+     *
+     * Pulled out of [select] and given a name because the playhead callback starts ONE task without
+     * running a tick: if it re-typed this `when` it would be a second owner of the network rule, and
+     * the second owner is always the one that drifts. A viewer on roaming gets no preview from either
+     * path, and neither path needs a file to be deleted to notice.
+     */
+    fun autoPreviewAllowedOn(network: NetworkClass, policy: SchedulerPolicy): Boolean = when (network) {
+        NetworkClass.WIFI -> true
+        NetworkClass.MOBILE -> policy.allowAutoPreviewOnMobile
+        NetworkClass.METERED_ROAMING -> false
+        NetworkClass.NONE -> false
+    }
+
+    /** Bytes auto-preview may still spend this period; [Long.MAX_VALUE] = no budget configured. */
+    fun autoPreviewBudgetLeftBytes(policy: SchedulerPolicy): Long =
+        if (policy.autoPreviewDataBudgetBytes <= 0L) Long.MAX_VALUE
+        else (policy.autoPreviewDataBudgetBytes - policy.autoPreviewBytesSpentThisPeriod)
+            .coerceAtLeast(0L)
+
+    /**
+     * The same two rules [select] applies, answering them for one task of [estimatedRemainingBytes]
+     * without a queue to sort. Used by the playhead path, which is a start request and not a tick.
+     */
+    fun mayStartAutoPreview(
+        network: NetworkClass,
+        policy: SchedulerPolicy,
+        estimatedRemainingBytes: Long,
+    ): Boolean = autoPreviewAllowedOn(network, policy) && estimatedRemainingBytes <= autoPreviewBudgetLeftBytes(policy)
 }

@@ -259,3 +259,122 @@ the ones actually parsed).
 
 ---
 
+
+---
+
+<!-- Appended 2026-10-30 by the trunk merge of q1-cache-wiring-20261030 (68f0def), not by the diet.
+     It was written into App/AGENTS.md on a branch based before the diet; the merge moved it here
+     verbatim because test_docs_invariants.py caps App/AGENTS.md at 15,000 B and this entry is 8,936 B. -->
+
+### Session 32 — The cache has a caller and the ad seam has a question to answer (2026-10-30)
+
+**Goal:** Q1-CACHE-WIRING (task #15): the ad-cadence and cache classes documented in Sessions
+30–31 existed, but nothing in the running app called `keepNow`, `onPlayheadAdvanced`,
+`requestAdBreak()` or `AdSlotPolicy`. This session gave the player callbacks real callers and gave
+the ad seam one real caller, with the unit tests written beside them.
+
+**No Gradle was run, by order.** The build hold is active and the fleet notice froze heavy work at
+load > 4 (this box measured 8.72 on one vCPU at the time this work was written, and one radd-stream
+OOM-kill is on record). So this session's correctness evidence is static, and it is named as such
+below rather than dressed up as a gate. **Nothing here is compile-verified, let alone
+device-verified.**
+
+**1 — the playhead is fed by the thing that outlives the screen.** `PlaybackService.startPlayheadPump()`
+(5 s, only on a real position move, only while `isPlaying`) now reports through
+`store.reportPlayhead(...)` → `PlayerSessionStore.playhead` → `CacheEngineRunner` →
+`OfflineCacheEngine.pumpPlayhead` → `CacheCoordinator.onPlayheadAdvanced`. The line the 200 ms UI
+ticker used to call was **deleted**, not duplicated: `PlayerScreen` stops composing when the viewer
+backgrounds the app, so a screen-owned pump stops the retention signal exactly when a viewer leaves
+to keep watching from a notification — and at 5 Hz it asked the engine for a task lookup twenty
+times a second. The service lives as long as the audio and ticks on the cache's own cadence.
+
+**2 — a Keep tapped while a preview is running pins the bytes, not just the row.**
+`keepNow` now moves **both** rows: `taskDao.promoteToUserKeep` (priority + origin) and the new
+`fileDao.promoteOriginForTask(taskId)` — origin only, never `isComplete`/`state`, which is why the
+dead `commitAsUserKeep` is deleted instead of being kept as a second owner. `TtlPolicy` rule 1 and
+`EvictionCandidate.isProtected` read the FILE row, so a promotion that touched only the task pinned
+the Downloads screen and left the sweeper timing a delete. The pass loop re-reads the row every pass
+(`fetchModeFor(task)`) and the commit stamps `liveOrigin(task)`, so a Keep tapped mid-pass is neither
+re-fetched from zero nor un-pinned by a stale origin.
+
+**3 — watching is a different retention promise from keeping, and it is now enforced in one place.**
+`CacheRepository.preview()` and `.keep()` share one private `enqueue(..., priority,
+mayEvictForAdmission)`; `AdmitDecision.EvictThenAdmit` **refuses** for a preview (an unrequested
+pass may never delete anything a viewer kept) and is allowed for an explicit ask. `SchedulerPolicy`
+gained `mayStartAutoPreview(network, policy, remainingBytes)`, which `select()` and
+`CacheCoordinator.startIfAllowed()` both call — so the enqueue path, the playhead path and the tick
+cannot disagree about mobile data or the preview budget. `mayPreview(bytes)` is exposed for the
+seed-time question, because a QUEUED preview the scheduler will never start is a Downloads row for a
+file that was never going to move, not an invisible no-op.
+
+**4 — the ad seam finally has a caller, and one placement is still deliberately unwired.**
+`handleCrossEpisodeAction` now asks `requestBetweenEpisodesBreak()` — from the facts the hand-off
+itself carries (the service published a `NextBundleRequest`, which *means* ended-plus-successor)
+rather than from a UI snapshot that arrives on a different listener path. A grant holds the action in
+`pendingCrossEpisode`; `dismissAdBreak()` replays it through `advanceCrossEpisode`, extracted so the
+ad path and the no-ad path cannot drift into advancing to different episodes. Both placements are
+billed to `AdSurface.PRE_ROLL` because the server's `AD_SLOTS` names exactly three surfaces and a
+break played immediately before the next episode *is* that episode's pre-roll — inventing a fourth
+would be an ad the server cannot grant. `FEED_CARD` and `APP_OPEN` already had callers (`BrowseViewModel`,
+`HomeViewModel`). **`requestAdBreak()` still has no caller and is left in place, not stubbed:** the
+policy requires paused-at-start inside a 2 s grace, there is no ad SDK behind `NoAdInventory`, and a
+pre-roll raise point invented here would be a gate this build cannot fill. It is named in the commit
+message as the brief's rule requires.
+
+**5 — cadence numbers now come from the server that enforces them.** `VipRemoteConfig` decodes the
+`engagement.cadence` block, `AdCadenceLimits.from(ads, engagement)` ranks it above the older `ads`
+block, and the hours-vs-minutes difference is converted at exactly one place. New
+`AdCadenceWireContractTest` reads `Fast_Fetch/engagement.py` off disk (the `BrandDriftTest` pattern)
+and pins the three key names, the shipped defaults, the unit arithmetic and the `AD_SLOTS` set, so a
+rename on either side fails a build instead of silently un-enforcing a cap.
+
+**Tests:** `OfflineCacheWiringTest` +8 cases (the watch path: a preview row is bounded and parks, one
+playhead move buys exactly one more pass, a finished row fetches nothing, mobile refuses preview bytes
+and never a viewer keep, a mid-pass tap switches the very next pass to the full download; retention:
+a preview cannot evict a kept file, a pin moves both rows and an aged sweep then refuses, a promotion
+touches origin only). `AdCadenceWireContractTest` (7, new), `AdCadenceLimitsTest` +3,
+`AdCadenceGovernorTest` +2.
+
+**What this session could NOT prove, stated plainly:**
+- No `:app:compileDebugKotlin`, no `testDebugUnitTest`, no `lintDebug`. **930 added lines have never
+  been through a compiler.** CI is the only gate this milestone has.
+- No engine-level test drives `OfflineCacheEngine.adopt`/`seedPreview`: `KeepTtlHolder` is final and
+  Context-bound, so a JVM test would need Robolectric, which cannot run here at all. Those two
+  methods are covered by the coordinator/repository wiring tests that exercise the same transitions
+  underneath them, and by nothing above them.
+- No Room migration was executed; no device or emulator exists; `ScreenSnapshotTest` and
+  `PosterCardProvenanceTest` still execute only on the hosted runner.
+- Adult invariant re-checked by reading, not by running: nothing in this pass lists or plays a
+  flagged row — the cache is keyed by an opaque handle the server already refused for an
+  `is_18_plus` link, and the ad offer carries no work identity at all.
+
+**The static checks run instead of a build** (Python ports of this repo's own guards, over the real
+sources): a faithful `CommentBalanceTest.scan()` over all 239 `.kt` files — **zero offenders**, after
+this pass renamed one backticked test name that carried a lone apostrophe (`AdCadenceGuardTest`, the
+Session 25 trap); the `AdCadenceGuardTest` block-parser + every assertion that touches the diff; every
+`AdCadenceWireContractTest` anchor re-measured in `engagement.py` (`CAPS_DEFAULT` :90 = 25/12/240,
+`CAP_MAX` :98, `AD_SLOTS` :147, `remote_view` :837→:864, `"cadence"` :860); the `BrandDriftTest`
+brand-name ratchet (its `pendingBrandNameMigration` list is empty, so the tolerance is zero); a
+member-set diff of every fake DAO against its interface; and a comment-stripped cross-package import
+audit that found the one real compile-break in this diff — `OfflineCacheEngine.kt` overrode
+`seedPreview(PreviewRequest)` with no import for the type.
+
+**Landing state, for whoever reviews the merge:** branch `q1-cache-wiring-20261030`, based on
+`1aafddb`, carrying this session's commit **on top of four commits that are still branch-only**
+(`9172809` the ad surfaces, `d28af57`/`1d4f46f` the two CI fixes, `022ea3b` the price deletion).
+`origin/master` has moved ~20 commits since the base, and several touch the same files this diff
+does (`RemoteConfigWatcher.kt`, `VipRemoteConfig.kt`, `PlayerViewModel.kt`, `App/AGENTS.md`), so
+trunk landing is a reviewed merge, not a fast-forward. Per the fleet notice this session pushed the
+branch and stopped; it did not touch `master`/`main`.
+
+**Queued quiet-window actions (not run here, per the notice):**
+- `QBUILD_TIMEOUT=3000 /tmp/qbuild_online.sh -Dorg.gradle.jvmargs='-Xmx1536m' :app:compileDebugKotlin
+  :app:testDebugUnitTest :app:lintDebug :app:assembleDebug` — expected cost ~12 min of one vCPU, and
+  it is the only thing that can turn "written" into "compiles". Wanted: the pass/fail line and the
+  `lint-results-debug.txt` error count.
+- `git merge --no-commit --no-ff origin/master` in a throwaway worktree off this branch's head —
+  expected cost seconds — to name the conflicting files before anyone proposes a trunk landing.
+
+**Rules kept:** no `.py` touched, no service restart, no nginx change, no Gradle, no tag, no
+`git add -A`, no credential in argv/URL/file/log, `/opt/radd-stream` never written, §13 hue
+untouched, no device claim, nothing applied to production.

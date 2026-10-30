@@ -243,6 +243,19 @@ class ServerSettingsRepository @Inject constructor(
     }
 
     /**
+     * Operator switch for the three capped ad surfaces. Off unless the server says on, for the
+     * same reason [qualityGateEnabled] is: an ad is not a feature a viewer already had, so a
+     * deployment that never published the key must keep showing them nothing rather than
+     * discovering a surface this app only knows how to cap.
+     *
+     * [com.raddstream.app.player.AdCadenceGovernor] reads this on every ask, which is what makes
+     * flipping it off take effect inside the current window instead of after it expires.
+     */
+    val adsEnabled: Flow<Boolean> = dataStore.data.map { preferences ->
+        preferences[FEATURE_ADS_KEY] ?: false
+    }
+
+    /**
      * Record one received remote-config body. A single write keeps the switches from a
      * torn refresh; the caller ([com.raddstream.app.data.RemoteConfigWatcher]) writes only
      * after a successful, fully decoded response.
@@ -254,6 +267,7 @@ class ServerSettingsRepository @Inject constructor(
         searchEnabled: Boolean,
         pureCinemaEnabled: Boolean,
         qualityGateEnabled: Boolean,
+        adsEnabled: Boolean,
     ) {
         dataStore.edit { preferences ->
             preferences[MAINTENANCE_MODE_KEY] = maintenanceMode
@@ -262,6 +276,7 @@ class ServerSettingsRepository @Inject constructor(
             preferences[FEATURE_SEARCH_KEY] = searchEnabled
             preferences[FEATURE_PURE_CINEMA_KEY] = pureCinemaEnabled
             preferences[FEATURE_QUALITY_GATE_KEY] = qualityGateEnabled
+            preferences[FEATURE_ADS_KEY] = adsEnabled
         }
     }
 
@@ -490,6 +505,7 @@ class ServerSettingsRepository @Inject constructor(
         private val FEATURE_SEARCH_KEY = booleanPreferencesKey("feature_search")
         private val FEATURE_PURE_CINEMA_KEY = booleanPreferencesKey("feature_pure_cinema")
         private val FEATURE_QUALITY_GATE_KEY = booleanPreferencesKey("feature_quality_gate")
+        private val FEATURE_ADS_KEY = booleanPreferencesKey("feature_ads")
         private val VIP_ACTIVE_KEY = booleanPreferencesKey("vip_active")
         private val VIP_UNTIL_KEY = doublePreferencesKey("vip_until")
         private val VIP_PENDING_CLAIM_KEY = booleanPreferencesKey("vip_pending_claim")

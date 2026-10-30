@@ -37,6 +37,12 @@ import com.raddstream.app.data.cache.CacheTaskEntity
  * build that never asked, and a saved list may not be made to claim the server told it something
  * it never sent. This is one more nullable ADD COLUMN on the table a viewer would notice losing,
  * so it is DDL like 4 and 5 rather than the destructive fallback.
+ *
+ * Version 7 adds `ad_cadence`, the three rows that make an ad cap survive a process death. It is
+ * a new table with no prior data and no nullable column: every field is written by this build the
+ * moment it is meaningful, and an absent stamp is expressed as zero rather than as NULL so
+ * [com.raddstream.app.data.local.AdCadenceRows] has one shape to read. Real DDL again, because the
+ * destructive fallback on this builder would still take `favorite_posts` with it.
  */
 @Database(
     entities = [
@@ -46,8 +52,9 @@ import com.raddstream.app.data.cache.CacheTaskEntity
         ByteRangeManifestEntity::class,
         SyncedProgressEntity::class,
         WatchHistoryEntity::class,
+        AdCadenceEntity::class,
     ],
-    version = 6,
+    version = 7,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -57,6 +64,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun byteRangeManifestDao(): ByteRangeManifestDao
     abstract fun syncedProgressDao(): SyncedProgressDao
     abstract fun watchHistoryDao(): WatchHistoryDao
+    abstract fun adCadenceDao(): AdCadenceDao
 
     companion object {
         /**
@@ -130,6 +138,22 @@ abstract class AppDatabase : RoomDatabase() {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("ALTER TABLE favorite_posts ADD COLUMN isAnimated INTEGER")
                 db.execSQL("ALTER TABLE favorite_posts ADD COLUMN subtitled INTEGER")
+            }
+        }
+
+        /**
+         * 6 → 7: the ad cadence table. Three rows, one per surface, and the column names and
+         * nullability are Room's own for [AdCadenceEntity] — the entities declare `TEXT NOT NULL`
+         * / `INTEGER NOT NULL` for all three, so a `surface TEXT` here would throw Room's runtime
+         * schema validation the first time a device opened its own database.
+         */
+        val MIGRATION_6_7: Migration = object : Migration(6, 7) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS ad_cadence (" +
+                        "surface TEXT NOT NULL, lastShownAtMs INTEGER NOT NULL, " +
+                        "postersScrolled INTEGER NOT NULL, PRIMARY KEY(surface))",
+                )
             }
         }
     }
