@@ -26,6 +26,9 @@ FF_AGENTS = BASE_DIR / "AGENTS.md"
 APP_AGENTS = REPO_ROOT / "App" / "AGENTS.md"
 CONTINUITY = BASE_DIR / "CONTINUITY.md"
 CHECKPOINT = REPO_ROOT / "docs" / "SESSION_CHECKPOINT.md"
+#: The one file a lane reads to learn how to reach the panel, and the one that
+#: carried the wording root AGENTS.md forbids.
+ADMIN_DOC = REPO_ROOT / "docs" / "ADMIN_PANEL_ACCESS.md"
 
 FF_CKPT = BASE_DIR / "checkpoints"
 DOC_CKPT = REPO_ROOT / "docs" / "checkpoints"
@@ -189,6 +192,10 @@ INVARIANTS = [
     # --- edge truth ------------------------------------------------------------------
     ("operator panel is loopback-only, not token-gated", ROOT_AGENTS,
      "Do not describe the dashboard as token-gated; describe it as loopback-only, which is what is true."),
+    ("the panel's own guide states the ordering, not the credential", ADMIN_DOC,
+     "Never describe the dashboard as token-gated: holding `RADD_ADMIN_TOKEN` does not make it reachable"),
+    ("the panel guide separates the running tree from the repository", ADMIN_DOC,
+     "Read that table as the state of the *running tree*, not of the repository."),
     ("nginx allow-lists the public routes", ROOT_AGENTS,
      "nginx allow-lists only `/api/v1/posts`, `/api/v1/stream`, `/api/v1/stats`"),
     ("backend is the running system", ROOT_AGENTS,
