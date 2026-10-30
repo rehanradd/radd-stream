@@ -68,6 +68,12 @@ name: 🐍 Backend CI — Stdlib Python Tests
 #     - Fast_Fetch/test_docs_invariants.py   (the documentation diet's guard: every law sentence is
 #       still in the file every agent auto-loads, the rotated history and SPEC destinations exist,
 #       no relative link in a trimmed doc dangles, and the byte ceilings hold. Offline, markdown only)
+#     - Fast_Fetch/test_operator_read_bounds.py (the operator's own reads: the ledger page is capped
+#       and says so (`page.truncated` / `page.clamped`), /api/sitemap's row cap is enforced in the
+#       function that touches SQL and a nonsense `?limit=` answers 200 not 500, a bogus bearer token
+#       gets 401 on every route of the operator port and no credential gets the identical body, and
+#       the public allow-list is byte-for-byte unchanged. Offline: temp SQLite + two real loopback
+#       servers on port 0 — no network, no production catalog)
 #
 #   Deliberately EXCLUDED:
 #     - Fast_Fetch/test_all_sites.py  — live 10-site network audit; needs the
@@ -251,4 +257,12 @@ jobs:
       # Offline: five markdown files and a directory listing, no network, no catalog read.
       - name: 🧪 test_docs_invariants.py
         run: python3 -S Fast_Fetch/test_docs_invariants.py
+
+      # Launch readiness JOB A (q3, 2026-10-30). Two failures with the same shape: an operator
+      # read that is unbounded can OOM the box that owns it, and an operator read that needs no
+      # credential hands the ledger to any process on that box. Both are proven here over real
+      # loopback sockets, so a green run means the CODE refuses — not the edge, which forwards
+      # neither port. Offline, temp catalog, no production read.
+      - name: 🧪 test_operator_read_bounds.py
+        run: python3 -S Fast_Fetch/test_operator_read_bounds.py
 

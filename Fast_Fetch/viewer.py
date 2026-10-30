@@ -74,10 +74,14 @@ OPERATOR_ONLY_ROUTES = frozenset({
 #: token lock on that already-localhost-only door, not a login.
 #:
 #: Every route on this port also requires the operator bearer token — see
-#: `_operator_gate` and `admin_panel.gate_operator_port`. The prefix rule makes
-#: `/admin` invisible on the public port; the credential makes every other route
-#: on this one answer to a stranger with 401, so the boundary is the token *and*
-#: loopback, not loopback alone.
+#: `_operator_gate` and `admin_panel.gate_operator_port`, fail-closed when
+#: `RADD_ADMIN_TOKEN` is unset. Say the order, because getting it backwards is how
+#: this surface gets mis-described: **loopback is the boundary** (both ports bind
+#: to 127.0.0.1 and nginx forwards neither, so nothing outside this VM can reach
+#: any of it), and the token is the credential checked *inside* that boundary,
+#: second and after the peer address. A token does not make the dashboard
+#: reachable, so the dashboard is not "token-gated" — see root AGENTS.md, which
+#: forbids that wording, and `docs/ADMIN_PANEL_ACCESS.md` for the measurement.
 OPERATOR_ONLY_PREFIXES = ("/admin",)
 
 #: The two byte paths a playback actually travels, counted for the operator's
@@ -495,9 +499,18 @@ def _season_artwork(conn, post_id: int) -> list:
 #: (6.4 GB, 150k posts, 1.38 M releases, 3.8 M links): a 50-post page is ~2.5 MB,
 #: so 200 is as large a page as this box should serialise in one request. The
 #: operator page paginates rather than asking for more; a caller that asks for
-#: more is clamped, never refused into an empty answer it must guess about.
+#: more is clamped, never refused into an empty answer it must guess about — and
+#: the clamp is *reported* (`page.clamped`), so the operator is never shown 200
+#: rows and left to assume that was what they asked for.
 _LEDGER_PAGE_DEFAULT = 50
 _LEDGER_PAGE_CEILING = 200
+
+#: `/api/sitemap`'s ceiling, for the same reason in a smaller file: the sitemap
+#: cache is the one operator table whose row count is measured in millions
+#: (3.8 M links, and the sitemap family is the same order), and its old reader
+#: passed `?limit=` straight into SQL with a bare `int()` — so `?limit=99999999`
+#: was an unbounded read on this box and `?limit=abc` was a traceback.
+_SITEMAP_ROW_CEILING = 500
 
 #: Which counters may be computed on the request path.
 #:
@@ -522,7 +535,12 @@ def fetch_database_payload(search_query: str = "", full: bool = False,
 
     The read is bounded twice over. Rows: `limit` is clamped to
     `_LEDGER_PAGE_CEILING` and `page` to a sane range, so no caller can ask for the
-    whole ledger however it spells the request. Counters: `stats="stamp"` (the
+    whole ledger however it spells the request — and the answer says so: `page`
+    always carries `truncated` (rows remain after this page) and `clamped` (the
+    requested page size was reduced to the ceiling). An operator looking at a full
+    page must be able to tell "this is the ledger" from "this is what one request
+    is allowed to be", because the second one mistaken for the first is how an
+    audit concludes a table is empty. Counters: `stats="stamp"` (the
     default) reads the projection's recorded numbers and publishes `null` for the
     ones it did not record; only `stats="full"`, an explicit operator act, counts
     the ledger live. Before this, every dashboard load ran five `posts` scans, a
@@ -539,9 +557,17 @@ def fetch_database_payload(search_query: str = "", full: bool = False,
     unconditionally, and `test_redact.AdultDenialOnBothPortsTests`, which proves it
     over real HTTP."""
     try:
+        asked = int(limit)
+    except (TypeError, ValueError):
+        asked = None
+    try:
         limit = min(_LEDGER_PAGE_CEILING, max(1, int(limit)))
     except (TypeError, ValueError):
         limit = _LEDGER_PAGE_DEFAULT
+    #: True when the caller spelled a page size this box will not serialise. The
+    #: route hands the raw parameter down precisely so this can be answered; if it
+    #: clamped first, `clamped` could only ever lie.
+    clamped = asked is not None and asked != limit
     try:
         page = max(1, int(page))
     except (TypeError, ValueError):
@@ -551,7 +577,8 @@ def fetch_database_payload(search_query: str = "", full: bool = False,
     if not DB_PATH.exists():
         return {"stats": {}, "posts": [],
                 "page": {"limit": limit, "page": page, "offset": offset,
-                         "returned": 0, "has_more": False,
+                         "returned": 0, "has_more": False, "truncated": False,
+                         "clamped": clamped,
                          "ceiling": _LEDGER_PAGE_CEILING}}
     _ensure_schema()
 
@@ -764,6 +791,7 @@ def fetch_database_payload(search_query: str = "", full: bool = False,
             "posts": posts,
             "page": {"limit": limit, "page": page, "offset": offset,
                      "returned": len(posts), "has_more": has_more,
+                     "truncated": has_more, "clamped": clamped,
                      "ceiling": _LEDGER_PAGE_CEILING},
         }
 
@@ -772,7 +800,18 @@ def search_sitemap_api(query: str, site: str = "", limit: int = 50) -> list[dict
     """Operator-only: the upstream sitemap index, with its page URLs and sites.
 
     Served on the loopback port and nowhere else — there is no public reading of
-    it that would not be a list of upstream pages."""
+    it that would not be a list of upstream pages.
+
+    The row cap lives here, not only in the route, because this is the function
+    that touches SQL: a caller that reached it from anywhere else used to be able
+    to hand `?limit=100000000` straight to SQLite and materialise the answer as a
+    list of dicts on a box with one vCPU and 11.9 GB of RAM. A non-numeric or
+    absent limit falls back to the page default rather than raising.
+    """
+    try:
+        limit = min(_SITEMAP_ROW_CEILING, max(1, int(limit)))
+    except (TypeError, ValueError):
+        limit = _LEDGER_PAGE_DEFAULT
     words = [w.strip().lower() for w in query.split() if w.strip()]
     with get_db() as conn:
         conditions = []
@@ -1462,7 +1501,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         (p.page <= 1 ? ' disabled' : '') + '>← Prev</button>' +
         '<span style="font-size:12px;color:var(--text-dim)">page ' + p.page +
         ' · ' + p.returned + ' rows' + (p.has_more ? ' · more' : ' · end') +
-        ' · max ' + p.ceiling + '/page</span>' +
+        ' · max ' + p.ceiling + '/page' +
+        (p.clamped ? ' · <b style="color:var(--warn,#f5a623)">CLAMPED</b>' : '') +
+        '</span>' +
         '<button class="filter-btn" onclick="gotoPage(' + (p.page + 1) + ')"' +
         (p.has_more ? '' : ' disabled') + '>Next →</button>';
     }
@@ -3415,8 +3456,10 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 mode = "stamp"
             data = fetch_database_payload(
                 search_q, full=full, base_url=base_url,
-                limit=bounded_int(query_params, "limit", _LEDGER_PAGE_DEFAULT,
-                                  1, _LEDGER_PAGE_CEILING),
+                # The raw parameter, deliberately: the clamp lives in the payload
+                # builder so it can report `page.clamped`. Clamping here would make
+                # that flag structurally unable to ever be true.
+                limit=query_params.get("limit", [""])[0],
                 page=bounded_int(query_params, "page", 1, 1, 100000),
                 stats=mode)
             self.send_json(data)
@@ -3427,7 +3470,11 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 return
             search_q = query_params.get("q", [""])[0]
             site = query_params.get("site", [""])[0]
-            limit = int(query_params.get("limit", [50])[0])
+            # `bounded_int`, not a bare `int()`: the old spelling let `?limit=abc`
+            # raise out of the handler, and an unclamped number let `?limit=99999999`
+            # read the whole sitemap table on a one-vCPU box. The dashboard consumes
+            # a bare list here, so the bound is applied and the shape is untouched.
+            limit = bounded_int(query_params, "limit", 50, 1, _SITEMAP_ROW_CEILING)
             rows = search_sitemap_api(search_q, site=site, limit=limit)
             self.send_json(rows)
 

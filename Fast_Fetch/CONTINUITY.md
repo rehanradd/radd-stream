@@ -7,7 +7,7 @@
 
 ## ✅ Open items — index (q3, 2026-10-30; pointers only)
 
-1. **This file is a pointer, not a history.** 48 session files (47 dated + 1 undated ledger) cover
+1. **This file is a pointer, not a history.** 49 session files (48 dated + 1 undated ledger) cover
    2026-10-23 → 2026-10-30,
    every one of them verbatim: [`checkpoints/README.md`](checkpoints/README.md). Nothing was
    deleted, reworded, or summarized. The count is `ls Fast_Fetch/checkpoints/*.md` minus `README.md`,
@@ -33,15 +33,30 @@
 8. Landed tonight (docs): the documentation diet — the five auto-loaded files 779,799 →
    68,679 B (−91.2 %, `wc -c` on the rebased tree) as a conservation-checked SPLIT (nothing
    deleted), guarded by
-   `Fast_Fetch/test_docs_invariants.py` (17 tests OK; CI's last `🧪` step, of 29 on this branch).
+   `Fast_Fetch/test_docs_invariants.py` (17 tests OK; the last of 29 `🧪` CI steps at that push —
+   item 10 adds a 30th and runs after it).
    `checkpoints/20261030-04xx-q3-lane-the-documentation-diet-split-not-delet.md`.
 9. **Trunk moved while the diet was open, and the rebase absorbed it rather than dropping it.**
    `q3-docs-diet` was rebased onto `4fe6f65`; the three doc edits written after the rotation are
    verbatim in `checkpoints/`, indexed above — q2's MovieBox detail-API session, and in
    `docs/checkpoints/` q4's `[Q4-SAFETY]` halt-band entry and q2's checkpoint entry. `SITES.md` §25
-   was never rotated by this lane, so q2's corrected site notes are live in place. The merged CI is
-   now **29 `🧪` steps / 28 `python3 -S` matches** — the diet's guard runs last, and q2's
-   `test_themoviebox_detail_api.py` sits where trunk put it.
+   was never rotated by this lane, so q2's corrected site notes are live in place. The merged CI was
+   **29 `🧪` steps / 28 `python3 -S` matches** — the diet's guard ran last then; item 10 put
+   `test_operator_read_bounds.py` after it and q2's `test_themoviebox_detail_api.py` sits where
+   trunk put it.
+10. **Launch readiness JOB A `[Q3-OPS-READS]`, branch `q3-launch-reads` off trunk `072158f` —
+    closed in code, not landed, not deployed.** Two of the five measured operator-port bullets were
+    already fixed on trunk (`test_bounded_ledger.py` 10 tests, `test_operator_isolation.py` 28
+    tests); those five numbers describe `/opt/radd-stream`, which `ExecStart` loads and which is
+    behind. What this lane added: `page.truncated` / `page.clamped` / `page.ceiling` on the ledger
+    contract with the raw `limit` passed through so the flag can actually be true;
+    `_SITEMAP_ROW_CEILING = 500` enforced inside `search_sitemap_api` (the sibling that handed
+    `?limit=` straight to SQL) with `bounded_int` at the route so `?limit=abc` answers 200 not 500;
+    the boundary ordering written into `OPERATOR_ONLY_PREFIXES` and into
+    [`docs/ADMIN_PANEL_ACCESS.md`](../docs/ADMIN_PANEL_ACCESS.md) — **loopback is the reachability
+    boundary, the token is checked inside it, second** — and 18 offline tests in
+    `Fast_Fetch/test_operator_read_bounds.py`, registered as CI `🧪` step 30.
+    `checkpoints/20261030-q3-lane-launch-readiness-job-a-the-operators-own-rea.md`.
 
 ---
 
@@ -67,8 +82,9 @@
 ## Rotated session history
 
 Session blocks moved verbatim to [`Fast_Fetch/checkpoints/`](checkpoints/README.md); nothing was deleted or reworded.
-The newest 12 are listed here; the complete index (all 47) is in `Fast_Fetch/checkpoints/README.md`.
+The newest 13 are listed here; the complete index (all 49) is in `Fast_Fetch/checkpoints/README.md`.
 
+- [Session 2026-10-30 — q3 `[Q3-OPS-READS]`: JOB A — the operator's own reads are bounded, and the boundary is named in code](checkpoints/20261030-q3-lane-launch-readiness-job-a-the-operators-own-rea.md)
 - [Session 2026-10-30 — q2 `[Q2-MOVIEBOX-CRAWL]`: parser fixes + detail-API preference; crawl gate closed](checkpoints/20261030-q2-themoviebox-crawl-2026-10-30-parser-fixes-detail-api-preference.md) — 110 lines (absorbed from trunk `4fe6f65` during the rebase)
 - [2026-10-30 04:0x→ — q3 lane, THE DOCUMENTATION DIET: split, not delete](checkpoints/20261030-04xx-q3-lane-the-documentation-diet-split-not-delet.md)
 - [📜 Session History & Commit Ledger](checkpoints/undated-session-history-commit-ledger.md) — 22 lines
