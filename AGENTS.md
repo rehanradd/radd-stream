@@ -12,7 +12,9 @@
 ```
 AGENTS.md          ← THIS FILE: the law. Fast_Fetch/ ← 🐍 Python backend. App/ ← 📱 Android (Kotlin/Compose).
 docs/              ← SPEC + rotated LOG (SPEC_*.md, checkpoints/). Fast_Fetch/CONTINUITY.md and
-                     docs/SESSION_CHECKPOINT.md are now ≤ 20-line open-items indexes, not logs.
+                     docs/SESSION_CHECKPOINT.md are open-items indexes, not logs — but they are
+                     119 and 54 lines, not the ≤20 this file used to claim. The guard enforces
+                     ≤120 lines / ≤12 KB each; grow them deliberately, never by accretion.
 ```
 
 The annotated inventory (every file, every doc, with what it holds) moved to
@@ -242,7 +244,7 @@ older draft and a "green" from it is a weaker claim than CI's. The measurement t
 | Backend: ingestion, SQLite catalog, resolver, REST API | ✅ **Deployed and running on this host** — `systemctl is-active radd-stream` → `active`, `fast_fetch.py serve --host 127.0.0.1:8080` behind Nginx | Complete |
 | Android App: server setup, metadata catalog, search | ✅ Implemented; device verification pending | Phase 1 |
 | Android App: details and playback | ✅ Implemented (Media3 playback, favorites, keeps, VIP screen); device verification pending | Phase 2 |
-| GitHub Actions | ✅ **Enabled and running** — `/actions/permissions` → `{"enabled": true, "allowed_actions": "all"}`; all three repo-root workflows are `state=active`, and the copies under `App/.github/workflows` are inert (GitHub only reads repo-root). The retired "disabled at the account level" claim and the full CI-health measurement history (per-sha run verdicts on both trunk refs, the Android `unfed-not-red` misdiagnosis, the Robolectric #9166 trap) are in [`docs/SPEC_AGENTS_MEASURED_NOTES.md`](docs/SPEC_AGENTS_MEASURED_NOTES.md). | Gate is live |
+| GitHub Actions | ✅ **Enabled and running** — `/actions/permissions` → `{"enabled": true, "allowed_actions": "all"}`; all three repo-root workflows are `state=active`, and the never-discovered duplicates under `App/.github/workflows` have been deleted (that removal also retired the repo's only `pull_request` trigger — there is no PR gate; CI runs on push). The retired "disabled at the account level" claim and the full CI-health measurement history (per-sha run verdicts on both trunk refs, the Android `unfed-not-red` misdiagnosis, the Robolectric #9166 trap) are in [`docs/SPEC_AGENTS_MEASURED_NOTES.md`](docs/SPEC_AGENTS_MEASURED_NOTES.md). | Gate is live |
 | Release signing | ⛔ **Blocked on the owner's four keystore secrets** — `/actions/secrets` returns `[]` and the only Release run that has ever existed died at its signing-secrets preflight. Debug APK from CI is available; see Secrets above. | Owner's call |
 
 The current Oracle host and its HTTP-only limitations are documented in
@@ -307,8 +309,8 @@ python Fast_Fetch/fast_fetch.py search "Inception"
 
 ### App (no local Android Studio needed)
 ```bash
-# GitHub only discovers workflows under the repository-root .github/workflows/; the copies under
-# App/.github/workflows are inert.
+# GitHub only discovers workflows under the repository-root .github/workflows/. The duplicates
+# that used to sit under App/.github/workflows were never discovered and are now deleted.
 #
 # ⛔ NO AGENT CREATES OR PUSHES A TAG. tags: [] and releases: [] are measured empty and
 # /actions/secrets returns [], so a release run cannot succeed today — the owner adds the four

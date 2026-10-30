@@ -22,7 +22,7 @@ Inspect the current Git branch, remotes, and working-tree status; notes may be s
 
 - Radd Stream is a Python standard-library backend and REST API in `Fast_Fetch/`, with a SQLite catalog.
 - The Android client is Kotlin/Jetpack Compose in `App/`. Android APKs are built by GitHub Actions, not on Oracle.
-- GitHub discovers workflows under repository-root `.github/workflows/`. `main` currently has root `ci.yml` and `release.yml`, as well as additional workflows under `App/.github/workflows/`; verify the latest Actions run before relying on CI. `radddao-work` is divergent. Review changes carefully; do not merge that branch wholesale.
+- GitHub discovers workflows under repository-root `.github/workflows/` only. `master`/`main` carry `ci.yml`, `release.yml` and `backend-ci.yml`, all `state: active`; the duplicates that used to sit under `App/.github/workflows/` were never discovered and are deleted, so nothing there should be assumed to trigger CI. There is no `pull_request` workflow today — CI runs on push. Verify the latest Actions run before relying on CI. `radddao-work` is divergent. Review changes carefully; do not merge that branch wholesale.
 - Treat `Fast_Fetch/DAO.md` as the project manifesto and preserve it unless the user explicitly asks for edits.
 - The user expects the Dao Partner to handle routine setup, implementation, testing, and handoffs when access allows. This does not grant account/server permissions or override platform rules.
 

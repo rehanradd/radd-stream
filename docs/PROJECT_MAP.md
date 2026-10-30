@@ -56,8 +56,12 @@ recollection — this is the section that had gone stale twice running).
   `master` is not retired and is not to be deleted; keep it pointing at the same commit as `main`
   when you push, and never let the two drift again without saying so here.
 - Root workflows, verified present on `master`: `.github/workflows/ci.yml`, `release.yml`,
-  `backend-ci.yml` (all three `state: active`). The copies still sitting in `App/.github/workflows`
-  are inert — GitHub only discovers repo-root `.github/workflows/`.
+  `backend-ci.yml` (all three `state: active`). The nested duplicates that used to sit in
+  `App/.github/workflows/` (`ci.yml`, `release.yml`, `pr-check.yml`) were never discovered by
+  GitHub and have now been **deleted** — repo-root `.github/workflows/` is the only location
+  that can trigger a run. Note what went with them: `pr-check.yml` was the only file in the repo
+  with a `pull_request` trigger, so **there is no PR gate at all today** — CI runs on push. If
+  PR gating is ever wanted it must be authored fresh at the root, not restored from `App/`.
 - **CI HAS run, and it is running now — every claim to the contrary in this file's history was
   wrong and is retired here.** Re-measured 2026-10-29 03:54 (host time) with the `GITHUB_TOKEN`
   askpass flow: `/actions/permissions` → `{"enabled": true, "allowed_actions": "all"}`,
@@ -157,11 +161,18 @@ agents and app developers:
   `0.0.0.0` (viewer.py:2211), and the Oracle host serves plain HTTP with no TLS.
   Nothing behind this API should be described as private or secured. **Two claims in this
   paragraph were stale and are corrected from the code as it stands at `e96bf84`:** `send_json()` no
-  longer emits `Access-Control-Allow-Origin: *` — it calls `cors_headers_for()` (viewer.py:3009), and
-  `CORS_ALLOW_ORIGINS` is an **empty** `frozenset` (redact.py:1283), so a refused origin gets no
+  longer emits `Access-Control-Allow-Origin: *` — it calls `cors_headers_for()` (`viewer.py`), and
+  `CORS_ALLOW_ORIGINS` is an **empty** `frozenset` (`redact.py`), so a refused origin gets no
   header at all; and `start_server()` defaults to `host="127.0.0.1"`, not `0.0.0.0`
-  (viewer.py:3558). What remains true is the exposure that matters: the public edge is plain HTTP
-  with no TLS, no API key, no session and no rate limit. On `/api/v1/stats`, commit `34f22c6` made the
+  (`viewer.py`). **And the third stale claim in this paragraph — "no rate limit" — is now false too:**
+  every public request passes `_public_gate()` (`viewer.py`), which refuses operator-only routes, runs
+  one token bucket per client per route family via `redact.limiter`, stamps the `RateLimit-*` triple on
+  every answer and returns 429 with `Retry-After` over budget (v2 gets an RFC-7807 `rate_limited`
+  problem document); nginx layers `limit_req zone=radd_stream_api burst=30 nodelay` in front of it, and
+  two credentials exist even though the catalog routes take neither — `RADD_ADMIN_TOKEN` on `/admin`
+  (loopback port only) and account sync keys from `accounts.py`.
+  **What remains true is the exposure that matters:** the public edge is plain HTTP
+  with no TLS, and `/api/v1/posts` answers anonymously. On `/api/v1/stats`, commit `34f22c6` made the
   projection stamp an adult-excluded family (`works_safe`, `adult_works`, `releases_safe`,
   `links_safe`, `links_active_safe`, `links_resumable_safe`) beside the unfiltered counters and stopped
   publishing `active_sources` equal to `sources` while `links_by_state` still said 3,456,460 links were
