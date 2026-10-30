@@ -61,10 +61,14 @@ server-side, it cannot be enumerated either: 100 items over 2 pages against a
 fiction. The endpoint that *does* filter (``/subject/search``) is authenticated,
 and its client-side token is not reverse-engineered here.
 
-Finally, the edge resets roughly two thirds of TLS handshakes from this host
-(measured 8/24 successes, independent of IP and of HTTP version — four CloudFront
-addresses all flap). Transport failure is therefore retried far harder than an
-HTTP error is, and every retry passes through the shared politeness throttle.
+Finally, the edge reset roughly two thirds of TLS handshakes from this host
+(8/24 successes, independent of IP and of HTTP version — four CloudFront
+addresses all flap). **That measurement was taken under heavy local load and is
+not the site's alone:** at load 8.2 the failures included a TLS reset after a
+0.99 s TCP connect and a SYN that never connected, while at load 1.9 one request
+answered in 1.1 s. Attribute a transport failure to the site only below load 4.
+Transport failure is therefore retried far harder than an HTTP error is, and
+every retry passes through the shared politeness throttle.
 
 Isolation is the whole point: this writes only to the vault named by ``--db``,
 which defaults to ``/home/ubuntu/radd-stream-data/themoviebox.db``. It never

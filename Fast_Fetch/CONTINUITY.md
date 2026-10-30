@@ -3599,3 +3599,29 @@ safe — rows already `scraped=1`, the rest stay `0`, and the command resumes. T
 `raw_meta.declared_renditions` vs `COUNT(*) FROM releases` per post + a 10-title dump of declared
 tiers/mirrors vs stored releases/sources. **The vault stays a FAIL until some surface publishes a
 playable URL; nothing here changes that.**
+
+### [Q2-MOVIEBOX-CRAWL] 2026-10-30 — q4 gate: DiscoveryTests were memory-floor failures, not feed regressions
+
+q4 gated `32d928b` and saw 4 failures in `test_themoviebox_import.py` (DiscoveryTests) on a quiet
+box. **Cause measured here: the memory floor, not the feed contract.** `/proc/meminfo` read
+`MemAvailable 2,078,168 kB (≈2029 MB)`, below `MIN_MEM_AVAILABLE_MB = 2500`, so `_walk_feed`
+returns after logging before its first request — every one of the four failed with `items: 0` and
+`api.call_count: 0`. The feed-walk code was not changed by this commit; the tests simply ran on a
+box whose lanes were swapped out. `test_the_feed_is_walked_once…` was passing *vacuously* for the
+same reason.
+
+Fix: the five DiscoveryTests that walk the feed now patch `mb.memory_ok` to `(True, "ok")`, exactly
+as `CrawlTests` already did. **No assertion was changed** — the feed/sitemap/dub/error/metadata
+contracts are asserted verbatim as before, and the walked-once test now actually inspects request
+bodies instead of an empty list. The memory floor itself is untouched and remains a test of its own
+(`test_memory_floor_reads_real_meminfo`).
+
+Also corrected q4's edge note: the ~31% TLS figure was measured under heavy local load. At load 8.2
+q4 saw a TLS reset after a 0.99 s TCP connect and a SYN that never connected; at load 1.9 one
+request answered in 1.1 s. `SITES.md` §25 and the module docstring now say to attribute a transport
+failure to the site only below load 4.
+
+**Gate run on this box (load 1.4–1.8, amber memory — no crawl, no live request):**
+`test_themoviebox_import.py` **47/47**, `test_themoviebox_links.py` **7/7**,
+`test_themoviebox_detail_api.py` **18/18**, `test_database.py` **133/133**. Rebased onto trunk
+`7b01f46`. The 44-row re-derive remains queued: start only when load1 < 4 AND SwapFree > 2048 MB.

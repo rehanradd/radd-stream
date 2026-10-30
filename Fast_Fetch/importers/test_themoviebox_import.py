@@ -351,8 +351,10 @@ class DiscoveryTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             db = Path(tmp) / "v.db"
             with silenced(), mock.patch.object(
-                    mb, "_api_request",
-                    self._feed([MATCHBOX, PAWANI])) as api:
+                    mb, "memory_ok", return_value=(True, "ok")), \
+                    mock.patch.object(
+                        mb, "_api_request",
+                        self._feed([MATCHBOX, PAWANI])) as api:
                 totals = mb.sync_catalog(db)
             self.assertEqual(totals["queued"], 2, totals)
             self.assertNotIn("sitemap.xml", json.dumps(api.call_args_list),
@@ -370,8 +372,10 @@ class DiscoveryTests(unittest.TestCase):
         # happens on the item's own subjectType field, in _build_record.
         with tempfile.TemporaryDirectory() as tmp:
             db = Path(tmp) / "v.db"
-            with silenced(), mock.patch.object(mb, "_api_request",
-                                               self._feed([MATCHBOX])) as api:
+            with silenced(), mock.patch.object(
+                    mb, "memory_ok", return_value=(True, "ok")), \
+                    mock.patch.object(mb, "_api_request",
+                                      self._feed([MATCHBOX])) as api:
                 mb.sync_catalog(db)
             bodies = [c.args[1] for c in api.call_args_list]
             for body in bodies:
@@ -384,8 +388,10 @@ class DiscoveryTests(unittest.TestCase):
                       detailPath="matchbox-the-movie-Emxcdo4ZHj8")
         with tempfile.TemporaryDirectory() as tmp:
             db = Path(tmp) / "v.db"
-            with silenced(), mock.patch.object(mb, "_api_request",
-                                               self._feed([MATCHBOX, french])):
+            with silenced(), mock.patch.object(
+                    mb, "memory_ok", return_value=(True, "ok")), \
+                    mock.patch.object(mb, "_api_request",
+                                      self._feed([MATCHBOX, french])):
                 totals = mb.sync_catalog(db)
             self.assertEqual(totals["queued"], 1, totals)
             self.assertEqual(totals["duplicates"], 1, totals)
@@ -394,7 +400,9 @@ class DiscoveryTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             db = Path(tmp) / "v.db"
             api = mock.MagicMock(return_value=(400, None))
-            with silenced(), mock.patch.object(mb, "_api_request", api):
+            with silenced(), mock.patch.object(
+                    mb, "memory_ok", return_value=(True, "ok")), \
+                    mock.patch.object(mb, "_api_request", api):
                 totals = mb.sync_catalog(db)
             self.assertEqual(totals["queued"], 0)
             self.assertEqual(api.call_count, 1, "one failure per type, no retry storm")
@@ -403,7 +411,10 @@ class DiscoveryTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             db = Path(tmp) / "v.db"
             with silenced(), mock.patch.object(
-                    mb, "_api_request", self._feed([MATCHBOX_WITH_RESOURCE])):
+                    mb, "memory_ok", return_value=(True, "ok")), \
+                    mock.patch.object(
+                        mb, "_api_request",
+                        self._feed([MATCHBOX_WITH_RESOURCE])):
                 totals = mb.harvest_catalog(db)
             self.assertEqual(totals["posts"], 1, totals)
             conn = sqlite3.connect(db)

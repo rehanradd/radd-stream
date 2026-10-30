@@ -1164,10 +1164,14 @@ position distinguishes a trailer from a feature. The importer prunes by key
 (`trailer`, `stills`, `gif`, `preview`) and then drops, unconditionally, any URL
 not on the site's own media hosts.
 
-**Transport.** ~31% TLS handshake success to the CloudFront edge (HTTP/2 5/16,
-HTTP/1.1 3/8, independent of the 4 A records and of HTTP version). That, not a
-block, is why a full crawl is not schedulable from this host today; a live run
-must be bounded and must never start above load 4.
+**Transport.** ~31% TLS handshake success to the CloudFront edge was measured
+while this box was heavily loaded (HTTP/2 5/16, HTTP/1.1 3/8, independent of the
+4 A records and of HTTP version). **That figure is not the site's alone:** q4
+re-measured at load 8.2 (3 failures — one TLS reset after a 0.99 s TCP connect,
+one SYN that never connected) and at load 1.9 (one request answered in 1.1 s), so
+a large part of the failure rate was our own contention. Attribute a transport
+failure to the site only when load1 is below 4; a live run must be bounded and
+must never start above load 4 regardless.
 
 **Data model rules the live captures forced:**
 - `season: 0` with `seasons: [{se: 0, maxEp: 0}]` is the site's "not a series"
