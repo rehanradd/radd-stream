@@ -161,4 +161,79 @@ class SyncContractTest {
         assertTrue(SyncContract.isUsableSyncKey("a".repeat(16)))
         assertFalse(SyncContract.isUsableSyncKey("a".repeat(15)))
     }
+
+    /**
+     * The card paints a fingerprint of a stored key, not a piece of it.
+     *
+     * This is the SEC-2 pin, and the form it replaces is the reason it is written as
+     * structure rather than as a golden string. The old `keyPreview` returned
+     * `key.take(6) + "…" + key.takeLast(4)`, which on the 16-character key the server mints
+     * (`Fast_Fetch/accounts.py:768`, `secrets.token_urlsafe(12)` — 16 base64url characters,
+     * 96 bits, six bits per character) put 60 of those 96 bits into a static text field: a
+     * screenshot, a forwarded phone or a glance across a bus seat left 2^36 candidates to
+     * search against a live bearer that opens a payable VIP account. A digest discloses none.
+     *
+     * The key below is chosen so its own characters cannot appear in a lowercase-hex answer:
+     * the leak assertions are then structural, not lucky.
+     */
+    @Test
+    fun `the key preview discloses no characters of the key it stands for`() {
+        val key = "zK9mQ7xR2pL5vN8t"
+        val preview = SyncContract.keyPreview(key)
+        assertTrue("not a fingerprint: $preview",
+            Regex("^[0-9a-f]{4}-[0-9a-f]{4}$").matches(preview))
+        assertEquals(9, preview.length)
+        assertFalse(preview.contains(key))
+        assertFalse(preview.contains(key.take(6)))
+        assertFalse(preview.contains(key.takeLast(4)))
+    }
+
+    @Test
+    fun `the preview is stable across calls and separates two accounts`() {
+        val first = "zK9mQ7xR2pL5vN8t"
+        val second = "zK9mQ7xR2pL5vN8u"
+        assertEquals(SyncContract.keyPreview(first), SyncContract.keyPreview(first))
+        assertNotEquals(SyncContract.keyPreview(first), SyncContract.keyPreview(second))
+    }
+
+    /**
+     * The other half of the old form: `if (key.length <= 12) key` echoed a short string
+     * whole. It was unreachable for a key this server would accept — the band starts at 16 —
+     * which is exactly why it survived review, and exactly the shape a fail-open has: correct
+     * while the store is well-formed, and silent about everything else. Anything outside
+     * [SyncContract.isUsableSyncKey] now previews as nothing.
+     */
+    @Test
+    fun `nothing that is not a usable key is painted, whole or in part`() {
+        assertEquals("", SyncContract.keyPreview(null))
+        assertEquals("", SyncContract.keyPreview(""))
+        assertEquals("", SyncContract.keyPreview("   "))
+        assertEquals("", SyncContract.keyPreview("short"))
+        assertEquals("", SyncContract.keyPreview("a".repeat(12)))
+        assertEquals("", SyncContract.keyPreview("a".repeat(15)))
+        assertEquals("", SyncContract.keyPreview("has spaces in it and is long enough"))
+    }
+
+    @Test
+    fun `a legacy forty-three-character key previews in the same band as a minted one`() {
+        // Deployments minted 43-character keys before `SHORT_SYNC_KEY_CHARS`, and a viewer who
+        // wrote one down keeps their library, so the preview must not treat it as corrupt. The
+        // length comes from the constant rather than from a literal typed here, which is the
+        // only reason this line can still be true next release.
+        val legacy = "a".repeat(SyncContract.LEGACY_SYNC_KEY_CHARS)
+        assertTrue(SyncContract.isUsableSyncKey(legacy))
+        assertTrue(Regex("^[0-9a-f]{4}-[0-9a-f]{4}$")
+            .matches(SyncContract.keyPreview(legacy)))
+    }
+
+    /**
+     * Domain separation, pinned. Changing `KEY_PREVIEW_NAMESPACE` re-fingerprints every key on
+     * every screen at once, so a viewer's "is this my account?" answer changes with no visible
+     * cause; it has to be a deliberate act, and this is the line that makes it one.
+     */
+    @Test
+    fun `the preview namespace is the string the digest is salted with`() {
+        assertEquals("key-preview/v1", SyncContract.KEY_PREVIEW_NAMESPACE)
+        assertEquals(8, SyncContract.KEY_PREVIEW_HEX_CHARS)
+    }
 }

@@ -15,16 +15,21 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import com.raddstream.app.brand.Brand
 import com.raddstream.app.data.RemoteFeatures
 import com.raddstream.app.data.ServerSettingsRepository
+import com.raddstream.app.sync.DeviceTrial
+import com.raddstream.app.sync.SyncAccountRepository
+import com.raddstream.app.sync.SyncContract
 import com.raddstream.app.ui.navigation.LocalVideoOpen
 import com.raddstream.app.ui.navigation.Screen
 import com.raddstream.app.ui.navigation.RaddStreamNavGraph
 import com.raddstream.app.ui.screens.MaintenanceScreen
+import com.raddstream.app.ui.screens.TrialKeyRevealDialog
 import com.raddstream.app.ui.theme.RaddStreamTheme
 import com.raddstream.app.ui.theme.BackgroundDark
 import dagger.hilt.android.AndroidEntryPoint
@@ -32,6 +37,7 @@ import javax.inject.Inject
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 
 /**
  * Single-activity host.
@@ -46,11 +52,25 @@ import kotlinx.coroutines.flow.first
  * warm start alike. Which intent that counts as, and what the file gets called, is
  * [LocalVideoOpen]'s rule, not this activity's; what lives here is the reading of the Intent and
  * the holding of the request until there is a back stack to put it on.
+ *
+ * It is also where a minted sync key is shown. The nav graph is the catalog's, and a credential
+ * that exists once must not wait for the viewer to find the screen that prints it.
  */
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
     @Inject
     lateinit var serverSettingsRepository: ServerSettingsRepository
+
+    /**
+     * Injected for one reason: the silent trial mints its key on this class's process, at
+     * launch, while no screen exists to show it — and a credential that is shown exactly once
+     * by a server that cannot show it again needs a door the viewer cannot walk past. That
+     * door is here, above the nav graph, because a reveal that lives on one screen is a reveal
+     * the viewer has to navigate to. [DeviceTrial.keyToRevealAtLaunch] decides whether it is
+     * showing; [TrialKeyRevealDialog] is the only thing that dismisses it.
+     */
+    @Inject
+    lateinit var syncAccountRepository: SyncAccountRepository
 
     /**
      * A file another app asked us to play, waiting for the graph that can route it. It is
@@ -112,6 +132,23 @@ class MainActivity : ComponentActivity() {
             }
             val operatorFeatures by featuresPreference.collectAsState(initial = RemoteFeatures())
 
+            // The minted key the viewer has not been shown, and the flag that says so. Both are
+            // read as composition state for the same reason the two above are: the mint lands
+            // while this activity is already painting, so a value snapshotted at cold start
+            // would be the frame *before* the credential existed.
+            //
+            // A store that cannot answer emits "nothing to reveal", like every other catch here
+            // — the failure mode that must never happen is a broken read producing a blocking
+            // screen the viewer cannot get past.
+            val unseenMint: Flow<Boolean> = remember(syncAccountRepository) {
+                syncAccountRepository.trialKeyUnseen.catch { emit(false) }
+            }
+            val keyUnseen by unseenMint.collectAsState(initial = false)
+            val mintedKey: Flow<String?> = remember(syncAccountRepository) {
+                syncAccountRepository.syncKey.catch { emit(null) }
+            }
+            val storedKey by mintedKey.collectAsState(initial = null)
+
             RaddStreamTheme(dynamicColor = effectiveDynamicColor(dynamicColorRequested)) {
                 var startDestination by remember { mutableStateOf<String?>(null) }
                 LaunchedEffect(Unit) {
@@ -141,6 +178,24 @@ class MainActivity : ComponentActivity() {
                         if (!underMaintenance) changingServer = false
                     }
                     val destination = startDestination
+                    // The reveal outranks routing, and it is one shot: acknowledging clears the
+                    // stored flag, so this leaves the composition and the same mint never asks a
+                    // second time. Nothing above it can be reached while it is up — which is the
+                    // point, and the reason the key may be a fingerprint everywhere else.
+                    val revealKey = DeviceTrial.keyToRevealAtLaunch(
+                        trialKeyUnseen = keyUnseen,
+                        storedKey = storedKey,
+                        usableKey = SyncContract::isUsableSyncKey,
+                    )
+                    if (revealKey != null) {
+                        val uiScope = rememberCoroutineScope()
+                        TrialKeyRevealDialog(
+                            key = revealKey,
+                            onAcknowledge = {
+                                uiScope.launch { syncAccountRepository.acknowledgeTrialKeyShown() }
+                            },
+                        )
+                    }
                     when {
                         // The notice outranks routing — but it must not outrank the address field.
                         // The inventory (M-MON-06) asks for navigation blocked "except Settings",

@@ -152,6 +152,32 @@ object DeviceTrial {
     }
 
     /**
+     * The key this install must put in front of the viewer before anything else, or null when
+     * there is nothing to reveal.
+     *
+     * The trial mints on the process scope in [SyncAccountRepository.startDeviceTrial] — a
+     * launch that can finish while the viewer is already browsing, long before they think to
+     * open the Account card. That window is the only moment the plaintext exists anywhere:
+     * `Fast_Fetch/accounts.py:1200-1208` states the server stores the key one-way and cannot
+     * hand it back on the strength of a `device_id`, and there is no recovery route to
+     * contradict it. A reveal that waits for the viewer to find the card is therefore a
+     * reveal most viewers miss, and what they lose by missing it is the list they had just
+     * started building.
+     *
+     * So the answer is a blocking card, and a blocking card needs its rule here rather than
+     * in a `Box`: null with no stored key, null with a key this server would not accept, null
+     * once the viewer has acknowledged the mint. What is deliberately NOT here is a timeout,
+     * a "later", or a dismiss path — a gate a viewer can walk past is the card they already
+     * ignore, and the flag would stay set until the next cold start, when they would walk
+     * past it again.
+     */
+    fun keyToRevealAtLaunch(
+        trialKeyUnseen: Boolean,
+        storedKey: String?,
+        usableKey: (String?) -> Boolean,
+    ): String? = storedKey?.takeIf { trialKeyUnseen && usableKey(it) }
+
+    /**
      * Would this string survive `accounts._check_device_id`? Bounded, no whitespace, and only the
      * characters an installation id actually contains. Checked before the request so a broken
      * build fails here instead of 400-ing on a viewer's phone.

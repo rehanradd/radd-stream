@@ -1,5 +1,7 @@
 package com.raddstream.app.sync
 
+import java.security.MessageDigest
+
 /**
  * SyncContract — the pure decisions behind the optional sync account.
  *
@@ -39,6 +41,15 @@ package com.raddstream.app.sync
  *  7. **Nothing here may name a source.** No value this file returns is a display string,
  *     and the server's `detail` text never leaves [SyncFailure] — it is a sentence about a
  *     handle, not a message for a viewer.
+ *  8. **What the screen paints of a key is a fingerprint, not a slice.** [keyPreview] is
+ *     the only place a stored key reaches the UI at rest, and it used to show the first six
+ *     characters and the last four. The server mints 16 base64url characters — 96 bits, six
+ *     of them per character — so that "preview" disclosed 60 of the 96 bits it was masking
+ *     and left a screenshot holding a 2^36 search over a live bearer credential. A one-way
+ *     digest discloses none of them and still does the one job the hint has: telling two
+ *     accounts apart. The full key is shown only inside the unseen-mint window
+ *     ([DeviceTrial.keyToRevealAtLaunch] and `SyncAccountRepository.startDeviceTrial`), and
+ *     nothing about that window changes here.
  */
 
 /** The four answers a refusal can force, named so a caller cannot mix them up. */
@@ -147,10 +158,37 @@ object SyncContract {
         return trimmed.none { it.code < 33 || it.code == 127 || it == '"' || it == '\\' }
     }
 
-    /** A key for the screen: never the whole thing, so a screenshot is not a credential. */
+    /**
+     * Domain separation for [keyPreview], mirroring `DeviceTrial.DEVICE_ID_NAMESPACE`. It
+     * ships in the APK and guards nothing on its own; its only job is to keep this digest
+     * from being the same string as some other SHA-256 of the same key taken elsewhere.
+     */
+    const val KEY_PREVIEW_NAMESPACE = "key-preview/v1"
+
+    /** Hex characters of the digest the card paints — four, a dash, four. */
+    const val KEY_PREVIEW_HEX_CHARS = 8
+
+    /**
+     * A key for the screen: a one-way fingerprint, never a slice of the secret.
+     *
+     * The old form returned the first six characters and the last four, which on a
+     * 16-character mint was 60 of the credential's 96 bits sitting in a static text field
+     * on a card the viewer screenshots, forwards, or leaves visible over a shoulder — and
+     * its `length <= 12` branch returned a short string whole, which is the shape a
+     * fail-open has. Both are gone. This returns eight hex digits of
+     * `SHA-256(namespace, newline, key)` and nothing else, so the only thing a viewer can
+     * learn from it is "is this the account I think it is".
+     *
+     * `""` for anything that is not a usable key, including a value too short to be one:
+     * the band check is [isUsableSyncKey], the same rule the sign-in path uses, so a
+     * corrupt or hand-edited store cannot make this paint a fragment of a credential.
+     */
     fun keyPreview(syncKey: String?): String {
-        val key = syncKey?.takeIf { it.isNotBlank() } ?: return ""
-        return if (key.length <= 12) key else "${key.take(6)}…${key.takeLast(4)}"
+        val key = syncKey?.trim()?.takeIf { isUsableSyncKey(it) } ?: return ""
+        val digest = MessageDigest.getInstance("SHA-256")
+            .digest((KEY_PREVIEW_NAMESPACE + "\n" + key).toByteArray(Charsets.UTF_8))
+        val hex = digest.take(KEY_PREVIEW_HEX_CHARS / 2).joinToString("") { "%02x".format(it) }
+        return "${hex.take(4)}-${hex.takeLast(4)}"
     }
 
     /**

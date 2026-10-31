@@ -305,6 +305,43 @@ class DeviceTrialTest {
         return out.toString()
     }
 
+    // ── the blocking reveal at launch ────────────────────────────────────────────
+
+    /**
+     * The rule behind the card that cannot be walked past, in the four cases that decide it.
+     *
+     * `SyncContractTest` pins what the key looks like on a screen at rest — a fingerprint. This
+     * pins when the plaintext may appear at all, which is the half that makes the mask honest:
+     * the mint happens on the process scope while no card is open, the server stores the key
+     * one-way (`Fast_Fetch/accounts.py:1200-1208`) and there is no recovery route, so a reveal
+     * the viewer can miss costs them the account. Anything other than exactly these four rows
+     * is either a credential shown twice or a gate that can be ignored.
+     */
+    @Test
+    fun `a minted key the viewer has not seen must be revealed, and nothing else may be`() {
+        val usable = "zK9mQ7xR2pL5vN8t"
+        val usableKey = { text: String? -> SyncContract.isUsableSyncKey(text) }
+
+        // The case the gate exists for: the trial minted, the flag is set, the key is on device.
+        assertEquals(usable, DeviceTrial.keyToRevealAtLaunch(true, usable, usableKey))
+
+        // Acknowledged: the same mint never asks a second time, because the plaintext is gone
+        // from every other surface and showing it again would be a second copy nobody promised.
+        assertNull(DeviceTrial.keyToRevealAtLaunch(false, usable, usableKey))
+
+        // Nothing on this device to reveal — signed out, or a store that never got a key.
+        assertNull(DeviceTrial.keyToRevealAtLaunch(true, null, usableKey))
+
+        // A stored value that is not a key the server would accept: no request, no reveal, and
+        // above all no blocking card built around a string that cannot open anything. A gate
+        // showing a useless credential is worse than no gate, because the viewer will dismiss
+        // the next real one.
+        assertNull(DeviceTrial.keyToRevealAtLaunch(true, "short", usableKey))
+        assertNull(DeviceTrial.keyToRevealAtLaunch(true, "   ", usableKey))
+        assertNull(DeviceTrial.keyToRevealAtLaunch(true, "has spaces and is long enough here",
+            usableKey))
+    }
+
     /** JUnit's Assert.assertNotEquals takes objects, and Kotlin's smart cast wants the call here. */
     private fun assertNotEquals(unexpected: String?, actual: String?) {
         assertFalse("the two values must differ: $actual", unexpected == actual)
