@@ -527,3 +527,99 @@ the second.
 restart, no nginx change, no tag, no `git add -A`, no merge, no credential in argv/URL/file/log,
 `/opt/radd-stream` never used as a workspace and never written, nothing pushed to `master`/`main`,
 branch push only.
+
+### Session 29 — The silent three days, and a phone+PIN card that says what the wire really is (2026-10-31)
+
+**Agent:** Qoder (q4 onboarding lane, worktree `/tmp/q4_trial_ui` off trunk, branch `q4-onboard-trial-ui`)
+**Status:** ⚠️ WRITTEN, NOT COMPILED. No Gradle, no test module, no python run on this host — the
+load held all day and the supervisor ruled the local build instruction out in terms ("never run
+`./gradlew` on this box. Not now, not later, not 'just the test task'"). The hosted Android runner
+is the only judge of this session, and its run id and state are reported to the supervisor rather
+than inferred.
+**Key milestones:**
+- **One new rule owner, one new Android reader.** `sync/DeviceTrial.kt` holds every decision
+  (device-id derivation and storability, the countdown arithmetic, the display rounding, the
+  name/phone/PIN grammar, the profile-link refusal table) and imports nothing but
+  `java.security.MessageDigest`; `data/DeviceIdentity.kt` is the only file that touches
+  `Settings.Secure.ANDROID_ID`, `Build.HARDWARE`, `Build.FINGERPRINT`, and it hands the hash to
+  `DeviceTrial.deviceId(...)` and nothing else. Same split `SyncContract` already uses, so the
+  rules are testable on this repository's only JVM.
+- **The endpoints are the two that actually landed**, not the two the mission named. The brief asked
+  for a `device-trial` route and a `link-profile` route; `accounts_api.py:486-529` carries
+  `POST /api/v2/account/anonymous` (body `{"device_id": …}` and only that) and
+  `POST /api/v2/account/profile-link` (bearer always, body `{name, phone, pin}`). Both are now in
+  `RaddStreamApi` + `AccountWire`, and the wire models are the server's own view shapes read off
+  `_trial_view`/`_profile_view`.
+- **Three measured divergences from the contract I was handed**, all written into the code that
+  depends on them:
+  1. `§1b` said a resumed `200` carries no `sync_key`. `accounts_api.py:501-502` adds the key
+     whenever the ledger's `sync_key` is non-null, and `grant_or_resume_device_trial`'s *reissue*
+     branch (the account a trial row pointed at was revoked or pruned) is exactly a `200` that
+     carries one. So the app reads the key off the **body**, never infers it from the status code —
+     which is also the only safe direction: a resume with no key stores nothing new.
+  2. The modal was specced as phone + PIN. `accounts._check_profile_name` refuses an empty name, so
+     a two-field form would 400 on every send. The dialog collects a name too, and its KDoc says
+     why in terms of the server function that requires it.
+  3. `§1b`'s warning list is honoured verbatim: no sentence about the trial or the link says
+     secure, encrypted, private, "only you", "device locked", verified or unforgeable, because the
+     PIN and the number cross this host in the clear and the attempt limiter is the only thing
+     between a 4-digit PIN and a guesser. What the modal says instead is in `AccountCardCopy`.
+- **A 401 on `profile-link` is the PIN, not the key** — and this is the one place in the app that
+  must not reuse `SyncContract.verdictOf`. `PINMismatch` is `unauthorised`/401
+  (`accounts.py:433-442`) while a wrong, revoked or never-issued key is `UnknownAccount` 404
+  (`accounts.py:329-337`), so the generic table would sign a viewer out of a working account for
+  typing four wrong digits. `DeviceTrial.profileLinkVerdict` is that separate table, and
+  `DeviceTrialTest` keeps the control that proves the generic one really does answer `SIGN_OUT` for
+  the same bytes — without it, the second table looks like a duplication mistake.
+- **The countdown is a subtraction, not a clock.** `trial_seconds_remaining` is stored together with
+  the instant it was read; `trial_expires_at` is carried in the model and deliberately never read,
+  because turning it into "days left" would be arithmetic against a wall clock the viewer controls.
+  A clock that jumped backwards counts as no elapsed time rather than as borrowed time.
+- **A minted key is shown or it is gone.** The trial mints while no screen is open, so the key is
+  stored with a `trial_key_unseen` flag and the Account card reveals it once, on the first open,
+  and clears the flag when the viewer taps "Done showing this key". That is what keeps the card's
+  pre-existing sentence — "the full key was shown once, when it was created" — actually true.
+- **No third poller.** The trial is asked by `RaddStreamApplication` through
+  `SyncAccountRepository.ensureDeviceTrialAtLaunch`, on the scope that class already owns, guarded
+  twice: a device holding a key and a device with any trial record (even an expired one) both
+  return without a request. The +1 day is not computed locally — a granted bonus goes through the
+  existing `refreshEntitlement(force = true)`, the same step a filed payment takes.
+- **Bounds are read from the server file, not copied from it.** `DeviceTrialTest` parses
+  `MIN/MAX_DEVICE_ID_CHARS`, `MIN/MAX_PIN_DIGITS`, `MIN/MAX_PHONE_DIGITS`,
+  `MAX_PROFILE_NAME_CHARS` and `DAY_SECONDS` out of `Fast_Fetch/accounts.py:243-289` and compares
+  them to the Kotlin constants, so a lane that re-prices the PIN on one side cannot drift past the
+  other silently. The PIN rule is an explicit ASCII class, never `Char.isDigit()`, matching
+  `_PIN_RE` — `٣٣٣٣` and `²³²³` are both refused by us before they can be hashed by them.
+- Two suites added: `DeviceTrialTest` (15 cases: derivation stability and uniqueness, hex shape and
+  storability, the server-bound census, countdown arithmetic, display rounding, a source census that
+  nothing multiplies days into a grant, `trialAnswer` null/NaN/zero rules, the three field grammars,
+  the 401 table plus its control, and the two sentence groups) and `OnboardHonestyTest` (9 cases over
+  the wire bodies, the bearer placement, the copy law, the log census, the stored-countdown pin, the
+  sign-out teardown, and the purity of the rule file).
+
+**What the census scopes to, and why not wider:** the banned-word scan reads `AccountCardCopy` and
+the link dialog, not every string in `SettingsScreen.kt`. That file already says
+`Connection: … "secured with TLS."` on the branch that only composes when the server address begins
+with `https` — a true sentence about a different subject. A guard that flags true copy is a guard
+the next lane deletes, so the scope is the copy the contract governs, and the scanner itself is
+policed by a tripwire case that shows it catching the word in a literal and ignoring it in a
+comment.
+
+**Known gaps, unhidden:**
+1. Nothing was compiled. Every statement above is about source text I read, not about a build.
+2. No device. The trial request, the key reveal and the link send are unwitnessed on hardware;
+   `DeviceIdentity` in particular has never run — a ROM with no `ANDROID_ID` gets null and the app
+   correctly starts no trial, but that path is argued from `accounts.py` and the guards, not tested.
+3. The badge is in the Account card only. The mission asked for it in the top bar too; `HomeScreen`
+   and `VipUpgradeScreen` still say nothing about a running trial, so a viewer who never opens
+   Settings never sees their own free days.
+4. `OnboardHonestyTest` reads `src/main/kotlin` relative to the Gradle module directory and walks up
+   to `Fast_Fetch/accounts.py`; both are hosted-runner assumptions, consistent with every other
+   source census in this module but unproven here.
+5. `tooling/InstantStartGuardTest.kt` is still not landed for its owner; the real owners are named
+   and the follow-up guard is written against them in `PlayerBufferingTest`, in the player lane.
+
+**Rules kept:** no `./gradlew`, no test module, no python, no crawl, no merge, no service restart,
+no nginx change, no tag, no release, no keystore work, no `git add -A`, no force-push, nothing
+pushed to `main`/`master` — branch push only, no identifier/phone/PIN in any log, fixture or
+command argument, `/opt/radd-stream` used as nothing.
