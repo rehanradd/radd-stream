@@ -412,3 +412,16 @@ jobs:
       # constants with `ast`, no server, no catalog.
       - name: 🧪 test_html_escape_guard.py
         run: python3 -S Fast_Fetch/test_html_escape_guard.py
+
+      # THE PROBE THAT COULD KILL A RUN WITHOUT TESTING ANYTHING (q5, 2026-11-01).
+      # `config.py` asked `_ORACLE_DATA_DIR.exists()` at import time. `Path.exists()` swallows
+      # ENOENT/ENOTDIR/EBADF/ELOOP and RE-RAISES EACCES, so on a worker whose image mounts
+      # /home/ubuntu without letting the job stat it, importing anything that reads `config` ends the
+      # job before its first assertion — the failure measured at q2's `eb4c0ee`: PermissionError at
+      # 0.2 s, every later step skipped, while the identical line on trunk was green an hour earlier
+      # on a different worker. This suite is registered WITHOUT a local offline verdict, and that is
+      # a deliberate exception to the note above: the supervisor refroze local suites at load1 5.05
+      # mid-task, and the property under test (an unreadable mount) cannot be produced on this box at
+      # all — it is manufactured by `mock.patch`. This run is its first execution.
+      - name: 🧪 test_config_data_dir.py
+        run: python3 -S Fast_Fetch/test_config_data_dir.py
