@@ -7,7 +7,7 @@
 
 ## ✅ Open items — index (q3, 2026-10-30; pointers only)
 
-1. **This file is a pointer, not a history.** 63 session files (61 dated + 2 undated) cover
+1. **This file is a pointer, not a history.** 64 session files (62 dated + 2 undated) cover
    2026-10-23 → 2026-11-01,
    every one of them verbatim: [`checkpoints/README.md`](checkpoints/README.md). Nothing was
    deleted, reworded, or summarized. The count is `ls Fast_Fetch/checkpoints/*.md` minus `README.md`,
@@ -73,7 +73,7 @@
 ## Rotated session history
 
 Session blocks moved verbatim to [`Fast_Fetch/checkpoints/`](checkpoints/README.md); nothing was deleted or reworded.
-The newest 14 are listed here; the complete index (all 52) is in `Fast_Fetch/checkpoints/README.md`.
+The newest are listed here; `Fast_Fetch/checkpoints/README.md` is the complete index.
 
 - [Session 2026-10-30 — q3 `[Q3-OPS-READS]`: JOB A — the operator's own reads are bounded, and the boundary is named in code](checkpoints/20261030-q3-lane-launch-readiness-job-a-the-operators-own-rea.md)
 - [Session 2026-10-30 (q3 JOB B) `[Q3-LADDER]`: the pass ladder is data, a refusal writes nothing, and a flagged row publishes no playable handle](checkpoints/20261030-09xx-q3-lane-job-b-the-pass-ladder-is-data-and-a.md) — 191 lines
@@ -87,8 +87,7 @@ The newest 14 are listed here; the complete index (all 52) is in `Fast_Fetch/che
 - [2026-10-30 01:50–02:2x — q3 lane, LINK-HEALTH SWEEP: design + budget arithmetic only](checkpoints/20261030-2026-10-30-01-50-02-2x-q3-lane-link-health-sweep-design-bu.md) — 70 lines
 - [2026-10-30 03:0x–03:5x — q3 lane, LINK-HEALTH follow-up: the per-host serialiser is built, and t](checkpoints/20261030-2026-10-30-03-0x-03-5x-q3-lane-link-health-follow-up-the-p.md) — 89 lines
 - [Session 2026-10-30 (q2, MovieBox link-shape defect) `[Q2-MOVIEBOX]`](checkpoints/20261030-session-2026-10-30-q2-moviebox-link-shape-defect-q2-movieb.md) — 69 lines
-- [2026-10-29 — Session: mp4moviez becomes mergeable, and a fleet-wide false `active` is retired (Q](checkpoints/20261029-2026-10-29-session-mp4moviez-becomes-mergeable-and-a-fleet.md) — 133 lines
-- [2026-10-29 — Session: Filmywap, FilmyHit and KuttyMovies get importers; six named anime hosts ar](checkpoints/20261029-2026-10-29-session-filmywap-filmyhit-and-kuttymovies-get-i.md) — 61 lines
+- 2026-11-01 q5 `[Q5-PROBE-TOTAL]` RECORD: this branch had no commit and no push before `11c1008` (02:54); Backend CI run `41245756423` at that sha is completed success, 45 steps, none non-green, step 43 being the new suite. The identifiers `226737e`, `41245142329`, `q5-config-probe-20261101` and a 35-test `test_database` figure appear in none of this lane's turns; the true set is above.
 
 ## Moved out (reference prose, verbatim)
 
