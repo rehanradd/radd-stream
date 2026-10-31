@@ -1,7 +1,5 @@
 package com.raddstream.app.sync
 
-import java.security.MessageDigest
-
 /**
  * SyncContract — the pure decisions behind the optional sync account.
  *
@@ -127,13 +125,11 @@ object SyncContract {
     const val LEGACY_SYNC_KEY_CHARS = 43
 
     /**
-     * Domain separation for a key derived from a mobile number. It is PUBLIC by design — it
-     * ships in the APK and provides no secrecy. Its only job is to keep this derivation from
-     * colliding with some other hash of the same digits. The number is the only secret, and
-     * it is a weak one: anyone who knows it can derive the same key. The card says exactly
-     * that rather than calling the result a protected credential.
+     * How much of a self-typed account label the card can paint. A label is display data, so the
+     * cap is a layout limit and nothing else — it is not a credential band, and unlike the key
+     * above it is not mirrored from the server, which never receives one.
      */
-    const val PHONE_KEY_NAMESPACE = "phone-sync/v1"
+    const val MAX_LABEL_CHARS = 32
 
     /** Rule 1: only a non-blank minted handle may go on the wire. */
     fun canNameOnServer(workRef: String?): Boolean = !workRef.isNullOrBlank()
@@ -162,6 +158,11 @@ object SyncContract {
      * `3XXXXXXXXX`, `+923XXXXXXXXX`, `923XXXXXXXXX` or `00923XXXXXXXXX`, with spaces,
      * dashes or brackets. Returns the canonical `03XXXXXXXXX` form, or null when the
      * input is not a complete Pakistani mobile number.
+     *
+     * This is a display rule and nothing else. It exists so a label a viewer typed once reads
+     * the same on every row of the card; it is NOT a step on any path to a credential. See
+     * [accountLabel] for what a number is allowed to become, and [quickLoginKey] for the only
+     * thing this screen will send to the server.
      */
     fun normalizePakistaniMobile(raw: String?): String? {
         val compact = raw?.trim()?.replace(Regex("[\\s()\\-]"), "") ?: return null
@@ -192,29 +193,26 @@ object SyncContract {
     }
 
     /**
-     * The credential to send for one quick-login input.
+     * The credential to send for a sign-in the viewer typed themselves: a key this server (or
+     * an older release of it) minted, presented unchanged.
      *
-     *  - a Pakistani mobile number → a 16-character key derived with SHA-256, so the same
-     *    number opens the same library on every device and the number itself never reaches
-     *    the wire or the server's database;
-     *  - a key the viewer already holds (the server's 16 characters, or the 43-character
-     *    key older releases minted) → that key unchanged. Re-deriving a credential the
-     *    viewer already has would open a different, empty library.
+     *  - the server's 16 characters, or the 43-character key older releases minted → that key
+     *    exactly. Re-deriving a credential the viewer already has would open a different, empty
+     *    library, so a key is never normalized, re-hashed or case-folded on its way here.
+     *  - anything else, including a mobile number → null. A number is not a credential and this
+     *    build derives nothing from one. It used to: `base64url(SHA-256("phone-sync/v1|…"))[:16]`
+     *    turned the whole Pakistani mobile space into a password that anyone could compute
+     *    offline, and `POST /api/v2/account` would happily reopen the account a presented key
+     *    names. That derivation is deleted, not disabled — see [accountLabel] for the one thing
+     *    a number may now become, and `tooling/PhoneCredentialGuardTest` for the build-breaking
+     *    refusal that keeps it from coming back.
      *
-     * Null means "not something this card can send". The number-derived key inherits the
-     * phone space's small entropy, not 96 bits; [PHONE_KEY_NAMESPACE] is where that fact is
-     * written down instead of being papered over by this function.
+     * A near-miss key (a character dropped or added) is refused here rather than sent, because
+     * the server creates a NEW empty library for any well-shaped key it has never seen; the
+     * honest typo answer is a message, not a blank list.
      */
     fun quickLoginKey(raw: String?): String? {
         val text = raw?.trim() ?: return null
-        normalizePakistaniMobile(text)?.let { phone ->
-            val digest = MessageDigest.getInstance("SHA-256")
-                .digest("$PHONE_KEY_NAMESPACE|$phone".toByteArray(Charsets.UTF_8))
-            return base64Url(digest.copyOf(12))
-        }
-        // Exactly the two shapes the account surface has ever minted. A near-miss (a key
-        // with a character dropped or added) is refused here instead of opening a new,
-        // empty library on the server — the honest typo answer is a message, not a blank list.
         if (isShortSyncKey(text)) return text
         if (text.length == LEGACY_SYNC_KEY_CHARS && isUsableSyncKey(text)) return text
         return null
@@ -223,39 +221,18 @@ object SyncContract {
     fun isQuickLoginInput(raw: String?): Boolean = quickLoginKey(raw) != null
 
     /**
-     * base64url without padding, written out because `java.util.Base64` is API 26 and this
-     * app still installs on API 21. Twelve bytes render as exactly sixteen characters, which
-     * is the whole reason the derived key fits the card's promise.
+     * What the viewer typed about themselves, as display data: canonicalized when it is a
+     * Pakistani mobile number, kept as written otherwise, trimmed, and capped at a length a
+     * card row can actually paint. Null means "no label".
+     *
+     * The result is stored in this app's own preferences, painted on the account card, and sent
+     * to no endpoint. It is deliberately NOT an input to [quickLoginKey] or to anything else
+     * that decides whether a request is allowed: a number is public, guessable information about
+     * a person, and the whole point of this function is that it is the only place one goes.
      */
-    private fun base64Url(bytes: ByteArray): String {
-        val alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
-        val out = StringBuilder((bytes.size * 4 + 2) / 3)
-        var i = 0
-        while (i + 2 < bytes.size) {
-            val chunk = ((bytes[i].toInt() and 0xFF) shl 16) or
-                ((bytes[i + 1].toInt() and 0xFF) shl 8) or
-                (bytes[i + 2].toInt() and 0xFF)
-            out.append(alphabet[(chunk ushr 18) and 63])
-            out.append(alphabet[(chunk ushr 12) and 63])
-            out.append(alphabet[(chunk ushr 6) and 63])
-            out.append(alphabet[chunk and 63])
-            i += 3
-        }
-        when (bytes.size - i) {
-            1 -> {
-                val chunk = (bytes[i].toInt() and 0xFF) shl 16
-                out.append(alphabet[(chunk ushr 18) and 63])
-                out.append(alphabet[(chunk ushr 12) and 63])
-            }
-            2 -> {
-                val chunk = ((bytes[i].toInt() and 0xFF) shl 16) or
-                    ((bytes[i + 1].toInt() and 0xFF) shl 8)
-                out.append(alphabet[(chunk ushr 18) and 63])
-                out.append(alphabet[(chunk ushr 12) and 63])
-                out.append(alphabet[(chunk ushr 6) and 63])
-            }
-        }
-        return out.toString()
+    fun accountLabel(raw: String?): String? {
+        val text = raw?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+        return (normalizePakistaniMobile(text) ?: text).take(MAX_LABEL_CHARS)
     }
 
     /**

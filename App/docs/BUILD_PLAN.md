@@ -104,6 +104,76 @@ base64 -w 0 radd-release-key.jks > keystore_base64.txt
 # Copy the content of keystore_base64.txt into the KEYSTORE_BASE64 secret
 ```
 
+### Release signing — the one measured blocker, and its one-line remedy
+
+**Symptom, read from the API on 2026-10-31 (not inferred from the docs):** `GET /releases` returns
+`[]`, and every one of the four runs in the history of
+`🚀 Release — Sign & Publish APK + AAB` is `completed / failure` — `40876596427`, `41102348096`,
+`41104217171`, `41104231187`. In the newest one the failing step is
+`🏗️ Build signed release APK + AAB`; `🧪 Unit tests gate the release` passed, and everything after the
+build (`apksigner` verify, checksums, staging, publish) is `skipped`. **No signed APK or AAB has ever
+existed for this product.** The tag `v1.0.0` exists in the repo, and resolves to `6a441ec77` — a
+trunk point that predates the adult merge-time fold `4a8c163`, so re-running *that* tag would ship
+pre-law code.
+
+**Cause, from the run log:** `java.lang.IllegalArgumentException: Last unit does not have enough valid
+bits` at `App/app/build.gradle.kts:120`, `BUILD FAILED in 4s`. Gradle dies during
+**configuration**, inside `signingConfigs`, before a single Kotlin file compiles. Line 120 is
+`keystoreFile.writeBytes(Base64.getDecoder().decode(keystoreBase64))`, and
+`java.util.Base64.getDecoder()` is the strict *basic* codec: it accepts no line breaks and throws on a
+value whose length is not a whole base64 quantum. The stored `KEYSTORE_BASE64` is such a value —
+padding lost between the terminal and the secret field.
+
+**Why the debug CI is green while the release is red, on the same commit:** the four secrets are
+mapped into `env:` on exactly two steps — the preflight (`release.yml:53-58`) and the release build
+(`release.yml:122-126`). The unit-test step (`release.yml:116-118`) carries no `env:`, so there
+`System.getenv("KEYSTORE_BASE64") ?: ""` is empty, the `if (keystoreBase64.isNotEmpty() && …)` guard
+skips the decode entirely, and configuration succeeds. A green test run therefore says nothing about
+the keystore, and a red release run says nothing about the tests.
+
+**The remedy is owner-side and is one line:** re-set
+GitHub → Settings → Secrets → Actions → `KEYSTORE_BASE64` to the output of
+
+```bash
+base64 -w 0 /home/ubuntu/raddstream-release.jks
+```
+
+pasted **straight from the terminal into the secret field** — no intermediate file, no editor, no
+chat message, because each of those is a place trailing `=` padding gets trimmed. Then re-run the
+release workflow: `release.yml:34` accepts `workflow_dispatch`, so **no new tag is needed**, and
+re-dispatching is better than re-tagging anyway — `v1.0.0` (`6a441ec`) predates the adult
+reconciliation fold and `v1.0.1` (`0a1894d`) is already behind trunk, so both are stale as release
+points. The proof is a published Release carrying a
+real `.apk` and `.aab`; a green build step alone is not the proof, and moving or re-cutting a tag is an
+owner action that no agent may take. Verified on this host: that keystore is 2,752 bytes,
+`base64 -w 0` renders 3,672 characters ending `==`, and a strict decode returns 2,752 bytes
+byte-identical to the file — so **the keystore is sound and only the stored string is damaged.**
+
+**Do not relax the decoder — that is the one change this failure rules out.** The tempting swap,
+`Base64.getMimeDecoder()` for `getDecoder()`, was measured on this host against a single JVM and does
+not even address the symptom: our error is `Last unit does not have enough valid bits`, which means the
+stored value's final base64 group is malformed, and the tolerant decoder **throws the identical message
+on that exact input**. What the swap does change is the case the strict decoder currently tolerates — a
+secret that is one character short decodes fine under either decoder — so adopting it would accept a
+truncated keystore, after which the app either fails to load as a keystore or, worst case, signs with a
+damaged key whose consequence is that every later upgrade is rejected by the first install. A
+whitespace filter (`filter { !it.isWhitespace() }`) is the same weakening in another form: it makes a
+wrapped secret look valid instead of telling the operator to re-paste it. The strict decoder refusing a
+malformed input is the code working as designed.
+
+What the run lacked was not a looser decoder but a sentence an operator could act on, so
+`App/app/build.gradle.kts` was changed in the opposite direction: the signing block now refuses loudly
+*before* it decodes and *before* it writes — length must be a multiple of four, the value must contain
+only the base64 alphabet (the first offender reported by index and code point), `KEY_ALIAS` and
+`KEY_PASSWORD` must be present, then the strict decode, then the bytes must parse as a `JKS` or
+`PKCS12` keystore under the stored store password, then the alias must exist, must be a private-key
+entry, and must actually be unlocked by `KEY_PASSWORD`. Each message prints the **shape** of the
+credential — length, index, decoded byte count — and never the credential itself, because a build log
+is read by more people than the secret is. Against the real 2,752-byte keystore: an extra trailing
+character now reads `3673 chars, not a multiple of 4` instead of a stack trace, a missing character is
+refused (which the decoder alone did not do), and a 76-column wrap is refused at `index 76 (0xa)`.
+`KeystorePreflightGuardTest` pins the strict decoder's presence, the ordering, and the no-value rule.
+
 ---
 
 ## Folder Structure (what we build in App/src/)
@@ -174,14 +244,17 @@ GitHub Free plan gives **2,000 minutes/month** on Linux runners. At 6 min/build,
 
 ## How to Test the APK on Your Phone
 
-1. Go to `github.com/radddao/radd-stream/actions`
-2. Click the latest successful build
+1. Go to `github.com/rehanradd/radd-stream/actions`
+2. Click the latest successful `🔨 CI — Android Build & Test` run
 3. Download `app-debug.apk` from the Artifacts section
 4. Send to phone via WhatsApp / Telegram / email / Google Drive
 5. On phone: enable **"Install from unknown sources"** in settings
 6. Open the APK file and install
 
-For releases: go to **Releases** tab → click **app-release.apk** → download directly on phone browser
+There is nothing to download from the **Releases** tab: it is empty (measured
+2026-10-31), because the release workflow has never published an artifact. Until
+"Release signing" above is executed by the owner, the debug APK from the Actions
+tab is the only build this pipeline produces.
 
 ---
 
@@ -197,9 +270,13 @@ GitHub Actions caches the Gradle build cache and Android SDK between runs:
 
 ```
 The Android project and root-level CI workflow are in place. CI runs
-`test`, `lint`, and `assembleDebug` for pushes and pull requests. The release
-workflow builds and publishes a signed APK for version tags, once the signing
-secrets are configured.
+`test`, `lint`, and `assembleDebug` for pushes and pull requests, and uploads a
+debug APK on every green run — that APK needs no secrets and is what to install
+today. The release workflow does **not** publish a signed artifact: measured
+2026-10-31 it has failed all four times it has ever run, for the reason in
+"Release signing" above. That section is the remedy; until it is executed,
+"publishes a signed APK for version tags" is a description of intent, not of
+behaviour.
 ```
 
 ---
@@ -210,7 +287,9 @@ secrets are configured.
 Push app changes → CI tests and builds the debug APK
 Download the CI artifact → install and test on an Android device
 ...
-v1.0.0 tag → signed release APK (after signing secrets are configured)
+v1.0.0 tag → intended: signed release APK. Measured: no Release has ever been
+published (see "Release signing"), so today the last step is the owner re-setting
+KEYSTORE_BASE64, not a tag push.
 ```
 
 ---

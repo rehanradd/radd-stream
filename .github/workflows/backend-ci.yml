@@ -371,6 +371,35 @@ jobs:
       - name: 🧪 test_coins_engine.py
         run: python3 -S Fast_Fetch/test_coins_engine.py
 
+      # THE MONEY AND THE KEYS (q5, 2026-10-31, re-based onto `7b7f040` on 2026-11-01). These three
+      # passed offline for weeks while sitting in the guard's UNREGISTERED debt ledger, so the
+      # account layer, its API and the payment relay had no hosted gate on anyone's push — the same
+      # class of hole as the 5-module gate that let Android CI sit red for five pushes. Registered
+      # after a measured verdict on this box (load 2.10, `nice -n 19`), not an inference from the
+      # imports:
+      #   test_accounts.py        61 tests OK — every DB is a `tempfile.TemporaryDirectory()`
+      #                           (`user_state.db`, `catalog_fixture.db`); no socket, no token
+      #   test_accounts_api.py    38 tests OK — calls `accounts_api.route_get/route_post` with an
+      #                           explicit `db_path`/`catalog_path`, in-process; SECRET and auth
+      #                           tokens are literal test strings
+      #   test_payments.py        85 tests OK — `RADD_USER_STATE_DB`/`RADD_ADMIN_TOKEN` are
+      #                           `mock.patch.dict`-scoped to a temp file and
+      #                           "operator-token-for-tests", and the operator panel is invoked as a
+      #                           function with `peer_address="127.0.0.1"` — an argument, never a
+      #                           connection.
+      # Offline all three: no network, no live catalog, no real token. `test_accounts_api.py` also
+      # carries the cross-hand proof the coins engine cannot make: `:423-437` mints a vip-pass and
+      # asserts `viewer.request_is_vip` accepts it, so the minting half and the consuming half are
+      # tested against each other rather than each against itself.
+      - name: 🧪 test_accounts.py
+        run: python3 -S Fast_Fetch/test_accounts.py
+
+      - name: 🧪 test_accounts_api.py
+        run: python3 -S Fast_Fetch/test_accounts_api.py
+
+      - name: 🧪 test_payments.py
+        run: python3 -S Fast_Fetch/test_payments.py
+
       # The escaping law, as a scan (q2, 2026-11-01). Nine `innerHTML` sinks in
       # `DASHBOARD_HTML` took a caller's string straight into markup; they are fixed, and a fix
       # in a 1,700-line f-string page is worth exactly as much as the next author remembers.

@@ -56,6 +56,10 @@ class CommentBalanceTest {
             scan(RAW_ENDS_IN_QUOTE) == null)
         assertTrue("the run rule must not blind the scanner to a real nested opener",
             scan(RAW_THEN_NESTED) != null)
+        assertTrue("an apostrophe inside a backticked name is not a character literal",
+            scan(SINGLE_APOSTROPHE_IN_NAME) == null)
+        assertTrue("two backticked names on one line must not hide the comment between them",
+            scan(APOSTROPHE_PAIR_ACROSS_OPENER) != null)
     }
 
     /** Returns the 1-based line where block-comment depth was still open at EOF, else null. */
@@ -123,6 +127,20 @@ class CommentBalanceTest {
                     inString = "\""
                     i++
                 }
+                c == '`' -> {
+                    // A backticked name is one lexical token: it may hold apostrophes and it
+                    // stops at the line end, so the whole run is opaque to this scanner.
+                    // Without this rule an apostrophe inside `the server's own copy` is read as
+                    // the start of a character literal, and the char-literal rule below returns
+                    // its line as an unbalanced comment when no second apostrophe appears before
+                    // the newline. Two such names on one line are worse: the skip runs from the
+                    // first apostrophe to the second and swallows everything between them,
+                    // including a real nested opener. An unterminated backtick advances by one
+                    // character so a stray one cannot blind the rest of the line.
+                    var j = i + 1
+                    while (j < text.length && text[j] != '`' && text[j] != '\n') j++
+                    i = if (j < text.length && text[j] == '`') j + 1 else i + 1
+                }
                 c == '\'' -> {
                     var j = i + 1
                     while (j < text.length && text[j] != '\'') {
@@ -160,5 +178,17 @@ class CommentBalanceTest {
         val RAW_ENDS_IN_QUOTE = "val s = " + TRIPLE + "{\"a\": 1}" + TRIPLE + "\"\nclass Ok"
         val RAW_THEN_NESTED = RAW_ENDS_IN_QUOTE + "\n" + OPEN + STAR + " doc " +
             OPEN + STAR + " again " + CLOSE
+        // What made this guard cry wolf: a test method named with a possessive. Kotlin lexes a
+        // whole backticked run as one identifier — the suite on trunk carries an apostrophe-named
+        // test and the hosted run passes it — so nothing inside it opens a literal or a comment.
+        val SINGLE_APOSTROPHE_IN_NAME =
+            "fun `the server's own copy is the honest one`() = 0\nclass Ok"
+        // And the dangerous direction, which the old rule hid rather than flagged: two such names
+        // on one line, where the first apostrophe's character-literal scan runs to the second.
+        // Everything between them vanished — including a nested opener — and the file still read
+        // as balanced. An unpaired opener must be named, not swallowed by an identifier.
+        val APOSTROPHE_PAIR_ACROSS_OPENER =
+            "val `won't one` = 0; " + OPEN + STAR + " outer " + OPEN + STAR +
+            " inner " + CLOSE + " val `won't two` = 0"
     }
 }

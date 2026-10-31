@@ -739,3 +739,315 @@ pattern it extends, in `UniversalSourceTest`, and it needs the same marker-match
 above.
 **Rules kept:** no Gradle, no test module run, no python, no merge, no tag, no `git add -A`, nothing
 pushed to `main`/`master`, `/opt/radd-stream` opened read-only at worst and never written.
+
+---
+
+### Session 33 — A phone number is a label, never a credential: the derivation is deleted and a guard refuses its return (2026-10-29)
+
+*(Numbering: **31 is deliberately skipped on this branch.** Session 31 — the player-and-cache
+directive — is another lane's entry on `master` and is not in this branch's history; taking its number
+here would put two different "Session 31" in the same file at merge time.)*
+
+**Goal:** TOKEN `Q1-IDENTITY-FIX`, against `docs/IDENTITY_AND_TRIAL_ABUSE.md` at tip `2b7873d`. The
+defect in one sentence: `SyncContract.quickLoginKey()` turned a Pakistani mobile number into the
+bearer credential with `base64url(SHA-256("phone-sync/v1|03XXXXXXXXX"))[:16]`, the namespace was
+**public** (it is in this file's own source), and `POST /api/v2/account` honours a caller-supplied
+`sync_key` by reopening the account it names — so knowing someone's number was sufficient to open
+their library, and the 16-character output landed exactly on `MIN_SYNC_KEY_CHARS = 16`, which is why
+nothing on the server rejected it. App lane only; `Fast_Fetch/*.py` was not touched and is not mine.
+Branch `q1-identity-fix`: `26d0b57` (the fix) + `a3c34ff` (the scanner hang, §6), 7 files
++845/−106 against `2b7873d`.
+
+**1 — deleted, not disabled.** `PHONE_KEY_NAMESPACE`, the phone branch of `quickLoginKey`, the manual
+`base64Url(bytes)` encoder (it existed only for this path; `java.util.Base64` is API 26 and this app
+ships minSdk 21), and `import java.security.MessageDigest` are gone from `sync/SyncContract.kt`. A
+flag would have left a code path that produces a credential from digits, reachable by one remote
+switch; the only thing that may not be reachable is this. `normalizePakistaniMobile` (`:167`) **stays**
+— it is now a display rule and nothing else. The one remaining mention of the retired formula is the
+KDoc at `:203` recording what was removed, which is also the case that proves the guard's comment
+stripper works.
+
+**2 — the two paths that were always safe, and the third that is now a label.**
+(a) *create*: the server mints a key and the app shows it **once**;
+(b) *sign in by holding a key*: `quickLoginKey` (`:214`) returns a 16-char short key or a
+43-char legacy key **unchanged** — re-deriving a stored credential would open a different, empty
+library, so this path must never touch the bytes, and `SyncContractTest`'s
+`a key the viewer already holds is sent unchanged, never re-derived` pins it.
+The instruction "do not silently drop (b)" is enforced mechanically, not by a comment:
+`PhoneCredentialGuardTest`'s `the sync key is only ever a key the server minted` **requires**
+`isShortSyncKey` and `LEGACY_SYNC_KEY_CHARS` to still be present inside `quickLoginKey`'s body, so
+deleting path (b) fails the build rather than passing quietly. A typed mobile number now answers
+`Refusal.WEAK_KEY` locally, without asking the server anything, and the refusal text says what to do
+instead (`SettingsViewModel.kt:633`): *"Enter the 16-character sync key from the other device. A
+mobile number is not a key."*
+The number became what the directive asked for: an **optional label**. `SyncContract.accountLabel`
+(`:233`) normalizes then truncates to `MAX_LABEL_CHARS = 32`; `ServerSettingsRepository` is its only
+home (`accountLabel: Flow<String?>` `:192`, `saveAccountLabel` `:196`, `ACCOUNT_LABEL_KEY` `:520`, one
+private writer `persistAccountLabel` in the ViewModel `:516`, cleared first in `signOut()`), and the
+KDoc states the invariant: never hashed, never sent, read by nothing that decides whether a request
+is allowed.
+
+**3 — the copy now matches the code.** `SettingsScreen.kt` field relabelled to "Sync key" with the
+placeholder "The 16-character key from your other device"; the sentence the task named as obsolete —
+"anyone who knows it can derive the same key", which advertised the deleted vulnerability as a
+warning — is replaced at `:285-290` by *"Enter the key this app showed once, when it created the
+account. A mobile number is not a key and this app cannot turn one into a key: knowing someone's
+number gets them nowhere. An account is only as strong as its key, so keep the key somewhere safe,
+and sign out on any device that is not yours."* A new `AccountLabelField` says the label "stays on the
+device and is never sent". `REVEAL_WARNING` (the plain-HTTP bearer warning) is unchanged, because it
+is still true: this deployment is cleartext, so a key crosses in the clear.
+
+**4 — not built, on instruction, with the reason recorded.** No 3-day trial, no device fingerprint,
+no `Settings.Secure.ANDROID_ID`. A fingerprint would be a *second* credential this app mintes from
+data the viewer never chose and cannot rotate, on a box whose catalog is served over plain HTTP —
+and a trial gated on it is only as strong as an ID that a rooted device can change and a factory
+reset erases, so it would add an abuse vector for honest viewers while adding nothing against the
+abuse it claims to stop. It is also a server-side decision: the app cannot verify that the device
+answering is the device that installed. If this is ever wanted, it belongs in
+`Fast_Fetch/accounts_api.py` as an operator-controlled rule, not in Kotlin.
+
+**5 — `PhoneCredentialGuardTest` (7 cases at `26d0b57`; 11 today, §6), in the `StatsHonestyTest`
+house style.** Reads
+`app/src/main/kotlin/**/*.kt` off disk, strips line and block comments while leaving string and char
+literals alone, walks brace-matched function bodies, and refuses any function that mentions a digest
+primitive (`MessageDigest`, `getDigestInstance`, `SHA-256`, `SHA-1`) **and** a phone word
+(`normalizePakistaniMobile`, `PHONE_KEY_NAMESPACE`, `phone-sync/v1`, `phone`, `mobile`) in the same
+body — per-function rather than per-file, because a file may legitimately hash a cache key and
+mention a phone in a label; what is forbidden is the two meeting inside one decision, which is exactly
+the shape the retired code had. Four of the seven are positive controls, and the sharpest is
+`the detector does report the derivation this task deleted`: the retired function body, replayed as a
+fixture, **must** be reported by name — so a guard that has silently stopped matching anything cannot
+go green. `the detector does not report a comment that only names the derivation` is its mirror: the
+same formula written as prose must not be counted, which is what proves the stripper is doing real
+work rather than blanking the file.
+
+**Measured offline, because nothing was compiled here.** A Python port of the same rule (comment
+stripper, brace walk, both marker lists) run over this branch's tree reported **147 main sources
+scanned, 0 violations, all four positive controls true, `MessageDigest` absent from
+`SyncContract.kt`.** That first port was **unfaithful and therefore worthless as evidence**: where the
+Kotlin `when` matched a `'\n'` and advanced nothing for a double quote, my port wrote `else: j += 1` —
+it reproduced my *intent*, not the code, and I passed its "0 violations, fine" into a report. Load was
+5.86–9.61 the whole window with three to five lanes on one vCPU, so the standing under-0.5 rule was
+never met and **no Gradle ran on this box** — no local compile claim exists in this entry.
+
+**6 — the guard hung CI twice, and the offline replay above is why it was not caught.** Android CI at
+`26d0b57` reported `cancelled`, which I first read as "never judged". It was judged, and the judge was
+my own code: `ci.yml:74` is `timeout-minutes: 45`, run 40913074495 started 17:25:03 and was killed
+18:10:29 — **45m26s** — with `##[error]The operation was canceled.` landing immediately after
+`:app:testDebugUnitTest` had printed nothing for 41 minutes. Attempt 1 shows the same shape. The
+artifacts say what that run proved and did not: `app-debug-18` is 22,126,902 bytes (main sources, kapt,
+dexing and packaging all fine) and `ci-reports-18` is 212 bytes (**zero test XMLs — no test ever
+executed**). `:app:compileDebugUnitTestKotlin` was green, so the new suite compiles; everything after
+it hung.
+
+The cause is one branch of `literalEnd`, and it is a class of bug this file has already documented
+twice (`CommentBalanceTest`'s raw-string close, Session 25's lone apostrophe):
+
+```kotlin
+'\\n' -> if (quote == '\\'') return j   // when quote is '"', this matches and advances NOTHING
+```
+
+A `"` is legal *inside* a Kotlin string, so `brand/Brand.kt:141` —
+`"${ … } (${ string("network.user_agent.version_suffix")` closing on line 142 — left the walk out of
+step: it closed the outer literal at the inner `string(` quote, then re-opened a phantom one that
+reached a newline and stalled forever. Every caller of `literalEnd` is a `while`, so the primitive's
+non-progress became the test task's deadlock, and a deadlock on a hosted runner looks exactly like a
+slow build.
+
+Fixed in the primitive rather than by special-casing the file: a single-quoted literal now closes at a
+newline for **both** quote kinds and always advances by at least one — the terminating shape
+`ProviderPageScreenTest.codeOf` already uses, chosen deliberately instead of inventing a third
+stripper grammar in this repo; a raw string closes at the **last** three quotes of a maximal run, with
+one or two quotes treated as content; and `literalEnd` wraps the scan in `check(end > start)` so a
+future regression fails in milliseconds instead of spending a runner's whole budget. Four new cases
+(→ 11 total), every one of them replayed offline against a **faithful** port of the fixed control flow
+before commit: strict progress over all **8,130 quote indices in all 147 main sources** (0 regressions,
+1.2 s of Python), `Brand.kt` now scans with **0 stalls** where the old branch stalled twice, its `load`
+declaration and `BuildConfig` token survive the strip, the unterminated-quote shape stops at the line
+break and still walks the declarations under it, the three-quotes-then-a-fourth raw string returns the
+full length, and the two original controls are unchanged and still report the retired derivation while
+ignoring prose about it. `CommentBalanceTest`'s own scanner, ported and run over `src/main` **and**
+`src/test` with these edits in place, finds 0 unbalanced files.
+
+**7 — the push credential is live, and this lane's earlier "dead token" line was my typo.** Session 30
+recorded `git push` failing with "Invalid username or token / Password authentication is not supported"
+five times and concluded the token was refused. The failure reproduced today, and the cause was the
+helper I generate, not GitHub: the script was written with an outer `printf` whose format string
+contained the inner `%s`, so the shell substituted an empty argument and the helper became
+`printf "\n" "$GITHUB_TOKEN"` — it handed git an **empty password**. Measured with the same
+environment: `GET /user` → **200**, `X-OAuth-Scopes` carries `repo` and `workflow`, and
+`/repos/rehanradd/radd-stream` answers `permissions: {admin: true, push: true}`. Written from a quoted
+heredoc, the identical push succeeded on the first try. **The lesson for the next lane is the same one
+this session keeps learning in a different costume: check your own instrument before you report the
+system under test as broken** — and a token that reads 200 on `/user` while git refuses it is a
+malformed credential, not a dead one. Values were never printed: only lengths, digests' first 8 hex
+chars, and scope names were read.
+
+**8 — the gate: the hosted conclusion, pasted from the runner (not a local build).**
+Every pushed head of `q1-identity-fix` since the hang was fixed is `completed / success`, measured on
+the API and re-verifiable at `…/actions?branch=q1-identity-fix` — read the *head's own* run rather than
+inferring it from this list, because a docs push re-triggers the workflow and lands a new sha:
+
+| sha | run | verdict | duration |
+|---|---|---|---|
+| `a3c34ff` (the scanner fix) | 40934084735 | `completed / success` | 3m32s |
+| `bd45ba0` (this entry) | 40937031605 | `completed / success` | 260 s, all 12 steps green |
+| the entry's own follow-up docs commit | read it | — | — |
+
+Run 40937031605's job is the single combined `./gradlew :app:assembleDebug :app:testDebugUnitTest
+:app:lintDebug` invocation (step 7) and all twelve steps, including both `if: always()` uploads, report
+`success`. From that run's own
+`ci-reports-26` artifact (395,819 bytes — against the hung run's **212 bytes**, which is what "no test
+ever executed" looks like in an artifact listing): **650 tests / 0 failures / 0 errors / 0 skipped
+across 83 suites**, with `PhoneCredentialGuardTest` **11 executed / 0 failed** (all eleven case names
+read back from its XML), `SyncContractTest` 10, `StatsHonestyTest` 6, `BrandDriftTest` 10,
+`CommentBalanceTest` 2, and lint **0 errors / 145 warnings**; `app-debug-24` is 22,126,818 bytes.
+Load stayed at 4.82–8.90 on one vCPU for the whole window, so **zero Gradle invocations happened on
+this box** — every number above is the runner's, and the standing under-0.5 rule is the reason.
+
+**The repo's oldest blind spot closed, and the six PNGs were looked at by a human for the first
+time.** `ScreenSnapshotTest` **6 executed / 0 failed** and `PosterCardProvenanceTest` **3 executed / 0
+failed** on the runner — the nine arm64-excluded cases that §1a has described as unverifiable since
+Session 17. All six captures render real app UI: the maintenance notice with and without the "Use a
+different server" escape, poster cards showing fallback initials, a star rating, `"2023 · Movie"` and a
+Dual Audio chip, the badge strip (4K UHD / DV + HDR10+ / UHD BluRay / Dual Audio Hindi + English /
+External subs), and the VIP plan-and-payment sections.
+
+**That first look found a price bug, and it is exactly the one the owner pre-warned about.** The
+identity branch's `05_vip_payment_instructions.png` paints **PKR 200 / Save PKR 900**, because its base
+predates the unbaking and `ScreenSnapshotTest.kt:273-274` still bakes `monthlyPkr = 200, yearlyPkr =
+1500` into the fixture. The ad-cadence branch — where `99472e0` removed the bake and made
+`VipUpgradeScreen` guard `if (state.monthlyPkr <= 0 || state.yearlyPkr <= 0) return null` — reports the
+same suites green at `bc2e534` (run 40934298862, `completed/success`; ScreenSnapshotTest 6/0,
+PosterCardProvenanceTest 3/0, VipRemoteConfigTest 17/0, VipWireContractTest 10/0, `app-debug-25`
+22,148,558 bytes) and paints **PKR 250 / PKR 1,800 / Save PKR 1,200**: the owner's ₨250, with no `200`
+left in that branch's client code or fixtures. So the honest statement is scoped: **the ₨250 directive
+is satisfied on `q1-ad-cadence`, and `q1-identity-fix` still carries the baked 200 in one test fixture**
+because the two branches are independent and neither has been merged. `q1-identity-fix` is not a
+release candidate while a snapshot paints a price the server does not publish; the fix belongs to
+whichever branch lands first, and the other must pick it up rather than re-bake it.
+
+**Rules kept:** no `.py` touched, no service restart, no nginx change, no `git add -A`, no credential
+printed or logged (read from the environment by the askpass helper only, and never echoed),
+`/tmp/qbuild*.sh` only and none invoked at load ≥ 0.5, §13 hue untouched, no device claim, no tag, and
+nothing merged — `q1-identity-fix` is a branch for the owner's review, not a deploy.
+
+**Next agent should:** (1) read the backend half as still open — `POST /api/v2/account` accepting a
+caller-supplied `sync_key` is the other 50 % of this defect and this lane was told not to touch it;
+until that route only ever *mints*, a key found in a backup opens the library it names; (2) if the
+operator wants trials, ask for a server-side rule with an explicit entropy floor on minted keys, not a
+client fingerprint; (3) on a device, check the label field's 32-char truncation reads sensibly next to
+the key card, and that the new refusal line is legible in the narrow Settings column; (4) **take
+`99472e0`'s unbaking into this branch** — `ScreenSnapshotTest.kt:273-274` still writes
+`monthlyPkr = 200, yearlyPkr = 1500`, so this branch's own snapshot advertises a price the server does
+not publish, and the owner's directive is ₨250 read from remote config, never baked; (5) if you touch
+any comment/string scanner in this repo, reuse `ProviderPageScreenTest.codeOf`'s terminating shape or
+this session's `check(end > start)` watchdog — a non-advancing literal scanner is invisible in a JVM
+test and costs a hosted runner 45 minutes.
+
+**Measured at merge time (`q4-identity-remerge-babb06f`, 2026-10-31, read-only — nothing compiled):**
+item (4) is closed — trunk's `ScreenSnapshotTest.kt` now passes `currency = "PKR"` with
+`monthlyPkr = 250` (`:272-276`), so the snapshot no longer paints a price the server does not publish;
+nothing to pick up from `99472e0`. Item (1) is **still true and still open** on the server:
+`accounts.ensure_account` does `plaintext = new_sync_key() if key is None else
+_check_sync_key_shape(key)` (`accounts.py:1103`), so `POST /api/v2/account` honours a caller-supplied
+`sync_key`, and `test_operator_isolation.py:335-341` pins exactly that (present a key → `created
+=False`, no key echoed). With the app-side derivation deleted the practical exposure is a key that
+leaks, not a key that can be computed — `accounts.py:133` records the same reading ("a minted key is
+96 bits, so guessing a live key is not a threat model at all"). Item (2) has since gone the other way
+from this entry's preference: trunk mints a client device id (`data/DeviceIdentity.kt:40` reads
+`ANDROID_ID`, `sync/DeviceTrial.deviceId` hashes it) and `accounts.grant_or_resume_device_trial` keys
+the trial on it — while refusing to hand a stored key back on the strength of that id
+(`sync_key: None`, "would be an account takeover for anyone who guessed one").
+
+*(Renumbered from this branch's "Session 32" when `q1-identity-fix` was re-merged onto trunk at
+`babb06f`: trunk already carries a **Session 32** — "The cache has a caller and the ad seam has a
+question to answer" (2026-10-30) — so the entry kept its text and took the next free number. The
+paragraph it also carried about the nine arm64-excluded Robolectric tests was NOT copied here:
+`docs/SPEC_APP_ROBOLECTRIC_ARM64.md` already records those runs, including `a3c34ff` and `5e74aa2`
+green, so keeping the branch's duplicate would have put two versions of the same measurement in the
+tree. The one claim unique to the branch's copy — that this app contains no device identifier — is
+false against trunk and is corrected in `PhoneCredentialGuardTest`'s own header, not quietly dropped.)*
+
+### Session 34 — The decoder swap that would not have fixed the release, and the preflight that does (2026-11-01)
+
+The instruction arriving at 00:5x was: replace `Base64.getDecoder()` with
+`Base64.getMimeDecoder().decode(keystoreBase64.filter { !it.isWhitespace() })` at
+`App/app/build.gradle.kts:120`, because "the secret has newlines from browser copy-paste and the
+standard decoder crashes on whitespace". It was not landed, and the reason is measurable rather than
+a matter of taste.
+
+The failing release run `41233720264` (tag `v1.0.1` → `0a1894d`) died at step 10 in **8 seconds** —
+after step 3 (`Verify signing secrets are present`) and step 9 (`Unit tests gate the release`, 135 s)
+had both passed. Eight seconds is Gradle *configuration*, not signing: the app's own test step needed
+135 s with a warm cache and a full CI run is ~7 m, so no Kotlin had been read when it threw. Steps 11-14
+(including `Publish GitHub Release`) were skipped and `GET /releases` still returns `[]`.
+
+The proposed diagnosis was right about the file and wrong about the decoder. Measured on this host by
+q1 with a single JVM (`nice -n 19`), basic decoder vs MIME decoder:
+
+```
+clean secret                    -> basic OK      | mime OK
+wrapped at 76 columns (\n)      -> basic throws  | mime OK
+trailing newline                 -> basic throws  | mime OK
+space inside                     -> basic throws  | mime OK
+ONE CHAR SHORT (truncated)      -> basic OK      | mime OK       <-- both accept it
+ONE CHAR EXTRA (bad final group)-> basic "Last unit does not have enough valid bits"
+                               -> mime THROWS THE IDENTICAL ERROR <-- the swap changes nothing
+```
+
+Our error is the last line. The tolerant decoder does not hide it, so the swap could not have fixed
+the run — and it *does* silently accept the truncated case, which is the fifth row: a keystore missing
+its tail decodes to bytes that are still not a keystore, and if the build tolerated it the app would
+ship signed with an identity nobody can reproduce. A whitespace filter is the same weakening in
+another form: it makes a damaged secret look valid instead of telling the operator to re-paste it.
+
+What the run actually lacked was a sentence an operator could act on. So `signingConfigs` now refuses
+loudly, in this order, before anything is written: length is a multiple of four; the value contains
+only the base64 alphabet (the first offender is reported by index and code point); `KEY_ALIAS` and
+`KEY_PASSWORD` are present; then the strict decode; then the bytes must parse as a `JKS` or `PKCS12`
+keystore under the stored store password; then the configured alias must exist, must be a private-key
+entry, and must actually be unlocked by `KEY_PASSWORD`. Every message prints the **shape** of the
+credential — length, index, code point, decoded byte count — and never the credential, because a build
+log is read by more people than the secret is. `Base64.getDecoder()` stays strict.
+
+Ported to a runnable check against the real keystore (`/home/ubuntu/raddstream-release.jks`, 2,752
+bytes; `base64 -w 0` is 3,672 chars ending `==`):
+
+```
+correct secret                       PASS: 3672 chars -> 2752 bytes
+one EXTRA trailing char              REFUSE: 3673 chars, not a multiple of 4   <- our exact crash, as a sentence
+one char SHORT                       REFUSE: 3671 chars, not a multiple of 4   <- the strict decoder ACCEPTS this; the preflight catches it
+76-column wrapped                    REFUSE: non-base64 char at index 76 of 3720 (0xa)
+trailing newline                     REFUSE: 3673 chars, not a multiple of 4
+space pasted inside                  REFUSE: non-base64 char at index 100 of 3672 (0x20)
+```
+
+The fourth row is the one that was not known before this change: q1's probe shows the *strict* decoder
+accepts a truncated secret, so the preflight is not merely a nicer message — it refuses a case the old
+line would have written to disk.
+
+`KeystorePreflightGuardTest` pins all of it from the test sources: the strict decoder present,
+`getMimeDecoder` absent in any form, no whitespace filter, the structure checks ordered *before* the
+decode (a check after the throw cannot fire), the integrity probes before the file is handed to the
+signing config, no inline re-decode at `writeBytes`, and no string template that expands a secret
+value — including the `${name}` form, which a `$name`-only scan would have missed while looking safe.
+Its control test feeds the detector the block this replaced, so a guard that has gone blind fails.
+
+Unverified, and honestly so: **no Gradle was run** (load1 measured 4.0-5.9 against the owner's 0.5
+build line, and the service cgroup read 1,523 MB against the 1,200 MB halt), so the block has never
+been executed by a JVM here. The structural half was verified by porting it and running the port; the
+`KeyStore.getInstance` half cannot be exercised on this box without reading a credential value, which
+is refused — it will be exercised by the next release run, which is the only place it matters. If the
+hosted runner reports a configuration-time compile error in this block, the likely suspects are the
+local `fun refuse(...)` inside the DSL lambda and the `firstNotNullOfOrNull` chain, and the fix belongs
+in this file, not in a relaxed decoder.
+
+The owner's remedy is unchanged and is still the only thing that can make a release: re-export with
+`base64 -w 0 <keystore-file>` and paste the terminal output **straight** into
+Settings → Secrets and variables → Actions, replacing the stored value — no file, editor or chat
+message in between, which is where a single-line string gains newlines or loses its `==`. Then
+`workflow_dispatch` against `v1.0.1` is enough; `release.yml:34` accepts it, so **no new tag is
+required** and none will be cut by an agent. Both `v1.0.0` (`6a441ec`, predating the adult fold) and
+`v1.0.1` (`0a1894d`, now three merges behind trunk) are stale as release points, which is a second
+reason the retag proposed at the start of this session was refused.
