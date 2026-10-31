@@ -64,3 +64,11 @@ byte ceilings and `>= 10` / `>= 20` file counts are bounds. Not state claims.
 
 Nothing here was re-pinned: the guard is the supervisor's surface this turn. The list is the
 deliverable, and each item names the law to pin instead.
+
+## E. Push status — blocked, recorded not worked around
+
+`git push origin q5-adultkey-pin-audit` failed `Invalid username or token`; the same
+`GITHUB_TOKEN` answers **401** on `GET /user` (read-only one-request check, value never printed).
+No other credential exists on this box (`gh` absent, no credential helper, no `~/.git-credentials`).
+The branch is committed locally (`6a36a86` here, plus this note) and unpushed; the next lane with a
+live credential pushes it unchanged. Nothing was force-pushed or rerouted through an API uploader.
