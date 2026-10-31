@@ -21,8 +21,8 @@ import java.net.HttpURLConnection
 import java.net.URL
 
 /**
- * The operator's one screen: status, server settings, start/stop, a read-only
- * connection test, and the live relay log.
+ * The operator's one screen: status, server settings, start/stop, a webhook
+ * probe, dead-letter replay, and the live relay log.
  *
  * Deliberately plain framework views — no AndroidX, no Compose — because this
  * app exists to be small, cheap on a low-end phone, and easy to audit.
@@ -88,9 +88,15 @@ class MainActivity : Activity() {
         urlInput = EditText(this).apply {
             inputType = InputType.TYPE_TEXT_VARIATION_URI
             setSingleLine()
-            hint = "http://92.4.95.252"
+            hint = "http://127.0.0.1:8099"
         }
         column.addView(urlInput)
+        column.addView(TextView(this).apply {
+            text = "Use the SSH tunnel endpoint (127.0.0.1:8099). A public IP is " +
+                "wrong until the host has TLS — the edge refuses this route by design."
+            textSize = 11f
+            setPadding(0, dp(2), 0, 0)
+        })
 
         column.addView(label("Merchant secret (X-Merchant-Secret)"))
         secretInput = EditText(this).apply {
@@ -102,12 +108,16 @@ class MainActivity : Activity() {
 
         column.addView(buttonRow(
             button("Save") { saveConfig() },
-            button("Test connection") { testConnection() },
+            button("Send test") { testConnection() },
         ))
 
         column.addView(buttonRow(
             button("Start relay") { startRelay() },
             button("Stop relay") { stopRelay() },
+        ))
+
+        column.addView(buttonRow(
+            button("Replay dead letter") { replayDeadLetter() },
         ))
 
         column.addView(label("Relay log"))
@@ -194,9 +204,15 @@ class MainActivity : Activity() {
     }
 
     /**
-     * Read-only reachability check against a public catalog route. It proves the
-     * URL and the network without writing anything and without touching the
-     * merchant secret — the webhook itself is exercised by a real payment.
+     * Probes the real webhook with a deliberately invalid body.
+     *
+     * The server verifies X-Merchant-Secret before it reads a byte of the body,
+     * so the answer separates the causes the app can actually observe:
+     * 401 = the secret, 403 = a proxy refused the route (i.e. the URL is the
+     * public edge, not the tunnel), 404 = the route is not deployed on whatever
+     * answered, and any 4xx from the handler itself means the route was reached
+     * and the secret accepted. An unparseable payload cannot become a payment,
+     * and the probe never touches the queue.
      */
     private fun testConnection() {
         val config = RelayPrefs.config(this)
@@ -207,20 +223,50 @@ class MainActivity : Activity() {
         Thread {
             var connection: HttpURLConnection? = null
             try {
-                val url = URL(config.baseUrl.trimEnd('/') + "/api/v1/stats")
+                val url = URL(config.baseUrl.trimEnd('/') + RelayService.WEBHOOK_PATH)
                 val conn = (url.openConnection() as HttpURLConnection).apply {
-                    requestMethod = "GET"
+                    requestMethod = "POST"
                     connectTimeout = 8_000
                     readTimeout = 8_000
+                    doOutput = true
+                    setRequestProperty("Content-Type", "application/json; charset=utf-8")
+                    setRequestProperty("X-Merchant-Secret", config.secret)
+                    setRequestProperty("User-Agent", "RaddRelay/1.0")
                 }
                 connection = conn
-                RelayLog.add("test: HTTP ${conn.responseCode} from ${url.host}")
+                conn.outputStream.use { it.write("{}".toByteArray(Charsets.UTF_8)) }
+                val code = conn.responseCode
+                val note = when (code) {
+                    401 -> "the merchant secret was rejected"
+                    403 -> "a proxy refused the route — this URL is not the tunnel endpoint"
+                    404 -> "route not deployed on whatever answered"
+                    in 200..299 -> "the endpoint accepted the probe — check the ledger"
+                    in 400..499 -> "route reached, secret accepted; the probe body was refused"
+                    else -> "unexpected answer from ${url.host}"
+                }
+                RelayLog.add("test: HTTP $code — $note")
             } catch (e: Exception) {
                 RelayLog.add("test failed: ${e.message ?: e.javaClass.simpleName}")
             } finally {
                 connection?.disconnect()
             }
         }.start()
+    }
+
+    private fun replayDeadLetter() {
+        val moved = RelayPrefs.replayDeadLetter(this)
+        if (moved == 0) {
+            RelayLog.add("replay: no dead-lettered payments to move")
+            return
+        }
+        RelayLog.add("replay: $moved payment(s) back on the queue")
+        runCatching {
+            startForegroundService(
+                Intent(this, RelayService::class.java).setAction(RelayService.ACTION_START),
+            )
+        }.onFailure {
+            RelayLog.add("replay: service start refused (${it.javaClass.simpleName})")
+        }
     }
 
     override fun onRequestPermissionsResult(
@@ -244,10 +290,12 @@ class MainActivity : Activity() {
     private fun renderStatus() {
         val config = RelayPrefs.config(this)
         val queued = RelayPrefs.loadQueue(this).size
+        val dead = RelayPrefs.loadDeadLetter(this).size
         val state = if (RelayService.isRunning) "running" else "stopped"
         val secret = if (config.secret.isBlank()) "not set" else "set"
-        statusView.text = "Service: $state · queued: $queued · secret: $secret\n" +
-            "Server: ${config.baseUrl.ifBlank { "(not set)" }}"
+        statusView.text =
+            "Service: $state · queued: $queued · dead: $dead · secret: $secret\n" +
+                "Server: ${config.baseUrl.ifBlank { "(not set)" }}"
     }
 
     companion object {

@@ -18,14 +18,22 @@ inbox, personal numbers, bank SMS — is untouched.
 > `.github/workflows/raddrelay-ci.yml` at the repository root (`RaddRelay/**`
 > is a separate Gradle project, outside `App/**`).
 
-> **Status, measured 2026-10-31:** the catalog backend does **not** implement
-> `POST /api/v2/payment/sms-webhook` yet. `Fast_Fetch/accounts_api.py` exposes
-> only the authenticated claim route `POST /api/v2/account/payment`
-> (`{plan, method, tid}` from the app itself). This companion app is the client
-> half; the webhook route, its `X-Merchant-Secret` check and its idempotency on
-> `tid` still have to be added server-side before the relay can complete a
-> payment in production. Until then the app will queue and retry (a 404 is
-> treated as retryable), and the log will show `retry … HTTP 404`.
+> **Server contract, measured 2026-10-31:** the route now exists on trunk
+> (`viewer.py:3406` `_merchant_relay`, landed `0e5ae28`; mounted on the public
+> POST chain after `payments.verify_merchant_header`). `payments.WEBHOOK_PATH`
+> and `RelayService.WEBHOOK_PATH` are the **same literal**
+> `/api/v2/payment/sms-webhook` — if either line moves, they must move together.
+> The route answers on the **loopback** ports only: nginx allow-lists
+> `/api/v2/account` and `^~ /api/` answers 403 for everything else, **by design**
+> (a static merchant secret must not cross a plain-HTTP public edge). The
+> sanctioned transport is the operator phone's outbound SSH tunnel:
+>
+> ```bash
+> autossh -M 0 -N -L 127.0.0.1:8099:127.0.0.1:8080 ubuntu@<host>
+> ```
+>
+> so the app's default URL is `http://127.0.0.1:8099`. **A public-IP base URL is
+> wrong** until the host has TLS: it reaches nginx, which 403s the route.
 
 ---
 
@@ -62,13 +70,21 @@ before sending), otherwise as a string.
 |---|---|
 | `2xx` | TID marked relayed, removed from the queue |
 | `409` | Treated as already recorded (idempotent), removed |
-| `401` / `403` | **Dropped** and logged as `REJECTED … merchant secret rejected` — a wrong secret is a configuration error, retrying hides it |
+| `401` | **Dead-lettered** (kept, visible, replayable) and logged — this is the only status that means the secret was checked and rejected |
+| `403` | **Retried**, logged as *a proxy refused the route* — a proxy never checked the credential, so this is a URL/transport problem, not a secret problem |
+| `404` | Retried — the route is not deployed on whatever answered |
 | `408` / `429` / `5xx` / no network | Kept, retried with backoff (30 s → 2 min → 10 min) |
-| other `4xx` | Dropped and logged as `REJECTED` |
+| other `4xx` | **Dead-lettered** (kept, replayable) and logged — the request itself is wrong (malformed payload, bad TID shape) |
 
-The server should treat `tid` as the idempotency key. RaddRelay already refuses
-to send the same TID twice while it is in the queue or within its last 500
-relayed TIDs.
+`Reject` never deletes a payment. The item moves to a separate **dead-letter**
+list (capped at 100, newest first), counted on the status line, shown in the
+log, and moved back onto the queue by **Replay dead letter**. The server is
+replay-safe (it dedupes on gateway + TID + amount), so keeping a refused item
+can only help; deleting it would destroy the only record that money arrived.
+
+The server treats `tid` as the idempotency key. RaddRelay already refuses to
+send the same TID twice while it is queued, dead-lettered, or within its last
+500 relayed TIDs.
 
 ---
 
@@ -77,10 +93,14 @@ relayed TIDs.
 1. Build or install the APK (see §5). It is a normal sideloaded app; there is no
    Play Store distribution.
 2. Open **RaddRelay**.
-3. Set **Server URL** (e.g. `http://92.4.95.252`) and the **Merchant secret**
-   the server operator generated. Tap **Save**.
-4. Tap **Test connection**. It performs a read-only `GET /api/v1/stats` — a
-   `HTTP 200` proves the URL and the network; it does not test the secret.
+3. Set **Server URL** (default `http://127.0.0.1:8099`, the tunnel endpoint) and
+   the **Merchant secret** the server operator generated. Tap **Save**.
+4. Tap **Send test**. It POSTs an intentionally invalid body to the real
+   webhook with the real secret header. The status tells you which cause you
+   have: `401` = wrong secret, `403` = a proxy refused the route (the URL is
+   the public edge, not the tunnel), `404` = route not deployed, `4xx` from the
+   handler = route reached and secret accepted. An invalid body can never be
+   recorded as a payment, and the test never touches the queue.
 5. Tap **Start relay** and grant:
    - **SMS** — required, otherwise no payment is ever seen;
    - **Notifications** (Android 13+) — required for the persistent status
@@ -105,17 +125,24 @@ battery managers still kill them. On the operator's phone:
 
 The main screen shows:
 
-- **Service** — running/stopped, queued count, whether a secret is set;
+- **Service** — running/stopped, queued count, dead-letter count, whether a
+  secret is set;
 - **Server** — the configured URL;
-- **Relay log** — every queued, relayed, retried and rejected TID with a
-  timestamp (last 300 lines, in memory).
+- **Relay log** — every queued, relayed, retried, dead-lettered and replayed
+  TID with a timestamp (last 300 lines, in memory).
+- **Replay dead letter** — moves refused payments back onto the queue, for
+  after the cause (secret, URL, payload) is fixed.
 
-Failures are visible, not silent: a wrong secret shows `REJECTED`, a dead
+Failures are visible, not silent: a wrong secret shows `DEAD … HTTP 401`, a
+public-edge URL shows `retry … HTTP 403 — a proxy refused the route`, a dead
 network shows `offline — N queued`, and the queue survives a process restart.
 
-### Replaying a test message without sending money
+### Exercising the path without sending money
 
-Debug builds accept an injected SMS through the receiver:
+Use **Send test** (above): it hits the real URL and secret and cannot record a
+payment.
+
+Debug builds additionally accept an injected SMS through the receiver:
 
 ```bash
 adb shell am broadcast -n com.raddstream.relay/.SmsReceiver \
@@ -124,9 +151,10 @@ adb shell am broadcast -n com.raddstream.relay/.SmsReceiver \
   --es body "Rs.1 received. TID: 1234567890."
 ```
 
-Release builds ignore the action. Note that a debug injection **is relayed like
-a real payment** — point the app at a staging server, or use a TID the operator
-will delete afterwards.
+**Expect this to fail.** The receiver requires `android.permission.BROADCAST_SMS`
+(only the telephony stack holds it), so the adb shell is very likely refused —
+use the in-app button instead. If it does get through, the injection is relayed
+like a real payment.
 
 ---
 
@@ -142,7 +170,7 @@ cd RaddRelay
 gradle wrapper --gradle-version 8.7
 
 ./gradlew :app:assembleDebug          # app/build/outputs/apk/debug/app-debug.apk
-./gradlew :app:testDebugUnitTest      # SmsParserTest — 12 tests, no device needed
+./gradlew :app:testDebugUnitTest      # SmsParserTest (12) + RelayVerdictTest (9)
 ```
 
 On the Oracle box no Android SDK is installed, so both commands belong on a
@@ -156,10 +184,13 @@ JUnit and needs no emulator.
 - The merchant secret is stored in the app's private `SharedPreferences`; it is
   readable on a rooted phone. Treat it like a password and rotate it if the
   phone is lost.
-- The server is HTTP-only today, and the manifest enables cleartext traffic for
-  that reason. On hostile networks the secret and TIDs are visible on the wire;
-  if HTTPS becomes available, point the URL at `https://` and remove
-  `android:usesCleartextTraffic` from the manifest.
+- The server is HTTP-only today, and the manifest enables cleartext traffic
+  because the **default URL is the local end of an SSH tunnel**
+  (`127.0.0.1:8099`). Inside the tunnel nothing is on the wire in clear; a
+  public-IP base URL would put the secret and TIDs on the wire, which is why it
+  is not the default and is refused by the edge anyway. If HTTPS becomes
+  available on the host, point the URL at `https://` and remove
+  `android:usesCleartextTraffic`.
 - SMS bodies are parsed in memory and discarded. Nothing is written to disk
   except the TID/amount/gateway of a pending or relayed payment.
 - `READ_SMS` is not requested. The app never opens the inbox.
@@ -173,8 +204,10 @@ JUnit and needs no emulator.
 | No notification after Start | Notifications permission denied (Android 13+). Grant it in Settings → Apps → RaddRelay → Notifications. |
 | Payments never appear in the log | SMS permission not granted, or the SMS came from a different sender id (check the phone's message details; only `8558`/`3737` are read). |
 | `not configured — N queued` | Server URL or merchant secret is empty. |
-| `retry … HTTP 404` | The webhook route is not implemented on the server yet (see the status note at the top). |
-| `REJECTED … merchant secret rejected` | Secret mismatch; regenerate/agree the secret with the server operator. |
+| `retry … HTTP 404` | The route is not deployed on whatever answered — check that the tunnel is up and points at the server's loopback port. |
+| `retry … HTTP 403 — a proxy refused the route` | The URL is the **public edge**, which 403s this route by design. Use the tunnel endpoint (`http://127.0.0.1:8099`). This is not a secret problem. |
+| `DEAD … HTTP 401` | Secret mismatch, checked before the body was read. Fix the secret, then **Replay dead letter**. |
+| `DEAD … HTTP 4xx` (not 401) | The payload was refused (bad TID shape or amount). The item is kept; replay after fixing the app. |
 | App stops after some hours | Battery optimisation. Set the app to Unrestricted and re-start the relay. |
 | `service start refused (…NotAllowedException)` in the log | Android 12+ refused a background foreground-service start (the service had been killed). The TID is already queued; open the app (or wait for the next start) and it is sent. Keep the relay running to avoid it. |
 
@@ -183,6 +216,7 @@ JUnit and needs no emulator.
 ## 8. Provenance
 
 Built 2026-10-31 for the Radd Stream fleet under task `RADDRELAY-COMPANION`.
-Parser tests were written but **not executed** in this session: the box was under
-a load hold (no builds during it). Run `./gradlew :app:testDebugUnitTest` before
-shipping.
+The first hosted run (`raddrelay-ci.yml`, run 41153481156) executed the Gradle
+step, so `SmsParserTest`'s 12 tests have run. `RelayVerdictTest` (9 tests) was
+added after that run and has **not** executed locally — the box was under a load
+freeze — so its first CI run is its execution record.

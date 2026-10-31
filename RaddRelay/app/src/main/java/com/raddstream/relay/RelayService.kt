@@ -39,9 +39,10 @@ data class QueueItem(val gateway: String, val tid: String, val amount: String)
  * the network comes back.
  *
  * The endpoint is POST {server}/api/v2/payment/sms-webhook with the
- * X-Merchant-Secret header and {"gateway", "tid", "amount"}. Measured 2026-10-31:
- * that route does not exist in Fast_Fetch yet — the catalog server only has the
- * authenticated /api/v2/account/payment claim. See README §"Server contract".
+ * X-Merchant-Secret header and {"gateway", "tid", "amount"}. The route exists on
+ * trunk (`viewer.py:_merchant_relay`, landed 0e5ae28) and answers on the loopback
+ * ports only; the shipped default URL is therefore the SSH tunnel endpoint, and a
+ * public-IP base URL is wrong until the host has TLS.
  */
 class RelayService : Service() {
 
@@ -113,23 +114,30 @@ class RelayService : Service() {
                 }
                 val item = queue.first()
                 when (val result = post(config, item)) {
-                    is PostResult.Ok -> {
+                    is PostVerdict.Ok -> {
                         failures = 0
                         queue.removeAt(0)
                         RelayPrefs.saveQueue(this, queue)
                         RelayPrefs.markRelayed(this, item.tid)
                         RelayLog.add("relayed ${item.gateway} ${item.tid} · Rs ${item.amount}")
                     }
-                    is PostResult.Reject -> {
-                        // A 4xx means the request itself is wrong (bad secret,
-                        // malformed payload). Retrying cannot fix it, and the
-                        // operator must see it, so the item leaves the queue
-                        // with a permanent-failure log line, never silently.
+                    is PostVerdict.Reject -> {
+                        // Reject means "retrying this exact request cannot help"
+                        // (bad secret, malformed payload) — it does NOT mean the
+                        // money did not arrive. The item leaves the active queue
+                        // for the dead-letter list: still on the device, visible
+                        // in the log, replayable after the operator fixes the
+                        // cause. Deleting it would destroy the only record that a
+                        // payment happened.
                         queue.removeAt(0)
                         RelayPrefs.saveQueue(this, queue)
-                        RelayLog.add("REJECTED ${item.tid} — ${result.reason}")
+                        RelayPrefs.addDeadLetter(this, item)
+                        RelayLog.add(
+                            "DEAD ${item.gateway} ${item.tid} · Rs ${item.amount} — " +
+                                "${result.reason}; kept for replay",
+                        )
                     }
-                    is PostResult.Retry -> {
+                    is PostVerdict.Retry -> {
                         failures += 1
                         RelayLog.add("retry ${item.tid} — ${result.reason}")
                         break
@@ -154,20 +162,14 @@ class RelayService : Service() {
 
     // ------------------------------------------------------------- networking
 
-    private sealed class PostResult {
-        object Ok : PostResult()
-        data class Reject(val reason: String) : PostResult()
-        data class Retry(val reason: String) : PostResult()
-    }
-
-    private fun post(config: RelayPrefs.Config, item: QueueItem): PostResult {
+    private fun post(config: RelayPrefs.Config, item: QueueItem): PostVerdict {
         // Parsed before the transport try: MalformedURLException extends
         // IOException, and a typo'd URL must be a permanent configuration error,
         // not a retry that hides it.
         val url = try {
             URL(config.baseUrl.trimEnd('/') + WEBHOOK_PATH)
         } catch (e: MalformedURLException) {
-            return PostResult.Reject("bad URL: ${e.message}")
+            return PostVerdict.Reject("bad URL: ${e.message}")
         }
         var connection: HttpURLConnection? = null
         return try {
@@ -188,22 +190,14 @@ class RelayService : Service() {
                 .toString()
             conn.outputStream.use { it.write(payload.toByteArray(Charsets.UTF_8)) }
 
-            when (val code = conn.responseCode) {
-                in 200..299 -> PostResult.Ok
-                409 -> PostResult.Ok            // idempotent duplicate
-                401, 403 -> PostResult.Reject("HTTP $code — merchant secret rejected")
-                408, 429 -> PostResult.Retry("HTTP $code")
-                // 404 keeps the TID: the webhook route may simply not be deployed
-                // yet, and a payment record is worth more than a quiet queue. One
-                // retry every backoff step is cheap; a wrong path also shows here.
-                404 -> PostResult.Retry("HTTP $code — route not deployed yet")
-                in 400..499 -> PostResult.Reject("HTTP $code")
-                else -> PostResult.Retry("HTTP $code")
-            }
+            // The rule lives in PostVerdict so the JVM suite can table-test it;
+            // 403 in particular is a proxy refusing the route, not a verdict on
+            // the merchant secret.
+            PostVerdict.of(conn.responseCode)
         } catch (io: IOException) {
-            PostResult.Retry(io.message ?: "network error")
+            PostVerdict.Retry(io.message ?: "network error")
         } catch (e: Exception) {
-            PostResult.Reject(e.message ?: e.javaClass.simpleName)
+            PostVerdict.Reject(e.message ?: e.javaClass.simpleName)
         } finally {
             connection?.disconnect()
         }
@@ -291,13 +285,19 @@ class RelayService : Service() {
          * payment is already safe and the next start — the operator opening the
          * app, or the service's own retry — sends it.
          *
-         * Duplicates are dropped by TID: an already-relayed id, or one already
-         * waiting in the queue, is logged and ignored.
+         * Duplicates are dropped by TID: an already-relayed id, one already
+         * waiting in the queue, or one already dead-lettered is logged and
+         * ignored (a dead-lettered id is replayed from the app, not re-queued
+         * by a redelivered SMS).
          */
         fun accept(context: Context, payment: SmsParser.Payment) {
             val tid = payment.tid
             if (RelayPrefs.isRelayed(context, tid)) {
                 RelayLog.add("skip ${payment.gateway} $tid — already relayed")
+                return
+            }
+            if (RelayPrefs.loadDeadLetter(context).any { it.tid == tid }) {
+                RelayLog.add("skip ${payment.gateway} $tid — dead-lettered; replay after a fix")
                 return
             }
             val queue = RelayPrefs.loadQueue(context)
@@ -342,8 +342,14 @@ object RelayPrefs {
     private const val KEY_ENABLED = "enabled"
     private const val KEY_QUEUE = "queue"
     private const val KEY_RELAYED = "relayed_tids"
-    private const val DEFAULT_URL = "http://92.4.95.252"
+    private const val KEY_DEAD = "dead_letter"
+    // The sanctioned transport is the operator phone's outbound SSH tunnel to the
+    // server's loopback port. The public edge cannot reach the webhook by design
+    // (nginx 403s /api/v2/payment), so a public-IP base URL is wrong until the
+    // host has TLS.
+    private const val DEFAULT_URL = "http://127.0.0.1:8099"
     private const val RELAYED_CAP = 500
+    private const val DEAD_CAP = 100
 
     data class Config(val baseUrl: String, val secret: String)
 
@@ -371,28 +377,72 @@ object RelayPrefs {
     }
 
     @Synchronized
-    fun loadQueue(context: Context): MutableList<QueueItem> {
-        val raw = prefs(context).getString(KEY_QUEUE, "[]") ?: "[]"
-        return runCatching {
-            val array = JSONArray(raw)
-            MutableList(array.length()) { index ->
-                val item = array.getJSONObject(index)
-                QueueItem(
-                    item.optString("gateway"),
-                    item.optString("tid"),
-                    item.optString("amount"),
-                )
-            }
-        }.getOrElse {
-            Log.w("RaddRelay", "unreadable queue, starting empty", it)
-            mutableListOf<QueueItem>()
-        }
-    }
+    fun loadQueue(context: Context): MutableList<QueueItem> =
+        readItems(prefs(context).getString(KEY_QUEUE, "[]"))
 
     @Synchronized
     fun saveQueue(context: Context, queue: List<QueueItem>) {
+        prefs(context).edit().putString(KEY_QUEUE, writeItems(queue)).apply()
+    }
+
+    /**
+     * Payments the server refused in a way retrying cannot fix (bad secret,
+     * malformed payload). They are kept, not deleted: the server dedupes on
+     * gateway+TID+amount, so replaying one can only help, while losing it
+     * destroys the only record that money arrived.
+     */
+    @Synchronized
+    fun loadDeadLetter(context: Context): MutableList<QueueItem> =
+        readItems(prefs(context).getString(KEY_DEAD, "[]"))
+
+    @Synchronized
+    fun saveDeadLetter(context: Context, items: List<QueueItem>) {
+        prefs(context).edit().putString(KEY_DEAD, writeItems(items)).apply()
+    }
+
+    @Synchronized
+    fun addDeadLetter(context: Context, item: QueueItem) {
+        val items = loadDeadLetter(context)
+        if (items.none { it.tid == item.tid }) items.add(0, item)
+        saveDeadLetter(context, items.take(DEAD_CAP))
+    }
+
+    /** Moves every dead-lettered payment back onto the active queue. */
+    @Synchronized
+    fun replayDeadLetter(context: Context): Int {
+        val dead = loadDeadLetter(context)
+        if (dead.isEmpty()) return 0
+        val queue = loadQueue(context)
+        var moved = 0
+        for (item in dead.asReversed()) {
+            if (isRelayed(context, item.tid)) continue
+            if (queue.any { it.tid == item.tid }) continue
+            queue.add(item)
+            moved += 1
+        }
+        saveQueue(context, queue)
+        saveDeadLetter(context, emptyList())
+        return moved
+    }
+
+    private fun readItems(raw: String?): MutableList<QueueItem> = runCatching {
+        val array = JSONArray(raw ?: "[]")
+        MutableList(array.length()) { index ->
+            val item = array.getJSONObject(index)
+            QueueItem(
+                item.optString("gateway"),
+                item.optString("tid"),
+                item.optString("amount"),
+            )
+        }
+    }.getOrElse {
+        Log.w("RaddRelay", "unreadable payment list, starting empty", it)
+        mutableListOf()
+    }
+
+    private fun writeItems(items: List<QueueItem>): String {
         val array = JSONArray()
-        for (item in queue) {
+        for (item in items) {
             array.put(
                 JSONObject()
                     .put("gateway", item.gateway)
@@ -400,7 +450,7 @@ object RelayPrefs {
                     .put("amount", item.amount),
             )
         }
-        prefs(context).edit().putString(KEY_QUEUE, array.toString()).apply()
+        return array.toString()
     }
 
     @Synchronized

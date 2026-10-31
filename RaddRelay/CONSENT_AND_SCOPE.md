@@ -70,8 +70,8 @@ needs the raw text, that is a change the supervisor must ask for — the brief's
 |---|---|---|---|
 | Message body | **no** | **no** | **no** |
 | Sender number | no (mapped to `gateway`) | as `gateway` label | no |
-| TID | yes | yes (in the in-memory log) | yes — queue + relayed-TID set (capped at 500) |
-| Amount | yes | yes | yes — while queued |
+| TID | yes | yes (in the in-memory log) | yes — active queue, dead-letter list, relayed-TID set (capped at 500) |
+| Amount | yes | yes | yes — while queued or dead-lettered |
 | Merchant secret | as a header only | **never** | yes — private SharedPreferences, see §8 |
 
 The in-memory relay log (`RelayLog`) holds up to 300 lines of `queued/skip/rejected` events with
@@ -92,6 +92,12 @@ There is no "looks like money" fallback. The two patterns are the whole extracti
 wording change produces silence, not a guessed TID. That is deliberate: a wrong TID is worse than
 a missed one, because the server treats a re-sent TID as idempotent but a made-up TID as a new
 payment.
+
+When the server refuses a payment in a way retrying cannot fix (most often a wrong secret, or a
+payload the ledger will not accept), the item moves to a **dead-letter** list rather than being
+deleted: still on the device, counted on the status line, visible in the log, and replayable from
+the app. The server dedupes on gateway + TID + amount, so replaying can only ever help; deleting
+would destroy the only record that the money arrived.
 
 ## 7. Consent and control are explicit
 
@@ -122,21 +128,29 @@ it is a small change in `RelayPrefs` / `MainActivity`.
 
 ## 9. Limits and open points for the supervisor
 
-1. **Body handling is answered above as "never sent, never stored".** Confirm that matches the
-   webhook contract you want reviewed; the route does not exist in `Fast_Fetch` yet.
-2. **Cleartext HTTP.** The catalog host is HTTP-only, so the manifest sets
-   `usesCleartextTraffic="true"`. Until the operator runs it over a private tunnel, the secret and
-   payment events cross the network in clear text. This is a deployment precondition, not an app
-   setting.
-3. **Device compromise.** Anyone with the unlocked phone can read the secret from private storage.
-   The secret's power is limited to posting payment events (per the server contract); a
-   per-device-revocable secret would be the right mitigation if the server grows that feature.
-4. **Debug replay is unverified.** Debug builds accept an `adb` broadcast
-   (`com.raddstream.relay.DEBUG_SMS`) to exercise the path without a real payment; release builds
-   ignore it. But the debug action arrives at the same receiver that requires
-   `BROADCAST_SMS`, so the shell UID may be refused — this has not been run on a device, and it is
-   not claimed to work until it is.
-5. **What has and has not been executed.** `SmsParserTest` (12 JUnit tests over sample SMS) is
-   written and runs in `raddrelay-ci.yml` (assemble + unit test on every push touching
-   `RaddRelay/**`). No test has been executed yet: every run so far was under a load hold. The
-   first CI run is the execution record.
+1. **The webhook exists on trunk.** `viewer.py:3406 _merchant_relay`, landed as
+   `0e5ae28`, is mounted on the public POST chain and calls
+   `payments.verify_merchant_header` before reading the body. `payments.WEBHOOK_PATH` and
+   `RelayService.WEBHOOK_PATH` are the **same literal** `/api/v2/payment/sms-webhook`; quote that
+   equality wherever either is edited so the two cannot drift.
+2. **The default URL is the tunnel**, `http://127.0.0.1:8099`, because the route answers on the
+   loopback ports only (nginx `^~ /api/` 403s the rest by design). A public-IP base URL is wrong
+   until the host has TLS. `usesCleartextTraffic="true"` therefore means "the local end of an SSH
+   tunnel is HTTP", not "the secret crosses the public internet".
+3. **Cleartext + device compromise.** Inside the tunnel nothing is clear on the wire; anyone with
+   the unlocked phone can still read the secret from private storage. The secret's power is limited
+   to posting payment events; a per-device-revocable secret is the right mitigation if the server
+   grows that feature.
+4. **Use the in-app "Send test" button, not adb.** The button POSTs an intentionally invalid body
+   to the real webhook with the real secret header, so 401 / 403 / 404 / 4xx-from-handler each name
+   a distinct cause, and an invalid body can never be recorded as a payment. The debug `adb`
+   broadcast route is expected to fail: the receiver requires `BROADCAST_SMS`, which the shell UID
+   does not hold (not run on a device; not claimed to work).
+5. **`BootReceiver` is exported with no permission — deliberately.** It is bounded by two checks on
+   the action itself: it returns unless the intent is exactly `BOOT_COMPLETED` and the operator had
+   enabled the relay. `BOOT_COMPLETED` is a system-protected broadcast, so no ordinary app can
+   spoof it. If a future change adds any other action to that receiver, the bound is gone.
+6. **What has and has not been executed.** `raddrelay-ci.yml` run 41153481156 executed the Gradle
+   step, so `SmsParserTest`'s 12 tests have run on the runner. `RelayVerdictTest` (9 tests, the
+   status→verdict table and its positive control) was added after that run and has not executed
+   locally — the box was under a load freeze — so its first CI run is its execution record.
