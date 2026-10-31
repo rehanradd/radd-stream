@@ -560,16 +560,15 @@ class WorkflowSuiteCoverageTests(unittest.TestCase):
     RUN = re.compile(r"^\s*run:\s+(?:time\s+)?python3\s+-S\s+(\S*test_[a-z0-9_]+\.py)\s*$", re.M)
 
     #: Modules on disk that exist and are NOT in the gate. This is a DEFECT INVENTORY, not a
-    #: policy: the gate runs 35 of the 86 test modules that exist, and an unregistered suite does
-    #: not run on anyone's push (`test_accounts.py`, `test_accounts_api.py`, `test_payments.py`
-    #: are the money-and-keys ones the fleet already knows about). The list is a ratchet, not a
+    #: policy: an unregistered suite does not run on anyone's push, so every name here is a
+    #: known gap rather than a choice. The list is a ratchet, not a
     #: count: a NEW module must be registered in the workflow or added here with the reason it
     #: cannot run; registering one means deleting it here; deleting or renaming one fails too.
     #: What it enforces is `in_gate | UNREGISTERED == on_disk` — exact set equality, modulo the
     #: debt — which becomes plain equality the moment the debt is paid.
     UNREGISTERED = frozenset({
         "test_10xflix_import.py", "test_5movierulz_import.py", "test_7starhd_import.py",
-        "test_9xmovies.py", "test_accounts.py", "test_accounts_api.py",
+        "test_9xmovies.py",
         "test_all_sites.py", "test_animahd_import.py", "test_aryplus_import.py",
         "test_audit_staging.py", "test_backfill_animated_flag.py", "test_backfill_tmdb.py",
         "test_bolly4u_import.py", "test_convert_mp4moviez.py", "test_desicinemas.py",
@@ -582,7 +581,7 @@ class WorkflowSuiteCoverageTests(unittest.TestCase):
         "test_kisskh_import.py", "test_kuttymovies_import.py", "test_levidia_import.py",
         "test_moviecok_import.py", "test_moviesmela_import.py", "test_moviezguru.py",
         "test_mp4moviez_import.py", "test_multimovies_import.py", "test_pagalmovies_import.py",
-        "test_payments.py", "test_rareanimes_import.py", "test_rogmovies_import.py",
+        "test_rareanimes_import.py", "test_rogmovies_import.py",
         "test_ssrmovies_import.py", "test_stream_resolvers.py", "test_themoviebox_import.py",
         "test_toonworld4all.py", "test_vegamovies_import.py", "test_world4ufree_import.py",
     })
