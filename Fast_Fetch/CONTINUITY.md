@@ -7,7 +7,7 @@
 
 ## ✅ Open items — index (q3, 2026-10-30; pointers only)
 
-1. **This file is a pointer, not a history.** 57 session files (55 dated + 2 undated) cover
+1. **This file is a pointer, not a history.** 58 session files (56 dated + 2 undated) cover
    2026-10-23 → 2026-10-31,
    every one of them verbatim: [`checkpoints/README.md`](checkpoints/README.md). Nothing was
    deleted, reworded, or summarized. The count is `ls Fast_Fetch/checkpoints/*.md` minus `README.md`,
@@ -30,22 +30,10 @@
 6. Still open, design only: the link-health sweep — `docs/LINK_HEALTH_SWEEP.md` prices it at ≈ 7 days
    of this box and concludes it is not feasible as one run; the 429-parking and per-run cap are unbuilt.
 7. Queued quiet-window actions (load-gated, nothing run tonight): see "🕒 Queued" below.
-8. Landed tonight (docs): the documentation diet — the five auto-loaded files 779,799 →
-   68,679 B (−91.2 %, `wc -c` on the rebased tree) as a conservation-checked SPLIT (nothing
-   deleted), guarded by
-   `Fast_Fetch/test_docs_invariants.py` (18 tests OK as of the merge-marker guard).
-   `grep -c 'name: 🧪' .github/workflows/backend-ci.yml` = **32** at this merge — step 30 is
-   `[Q3-OPS-READS]`'s `test_operator_read_bounds.py`, steps 31-32 are `[Q3-LADDER]`'s
-   `test_engagement_ladder.py` and `test_operator_adult_projection.py`. Re-count it, never remember it.
-   `checkpoints/20261030-04xx-q3-lane-the-documentation-diet-split-not-delet.md`.
-9. **Trunk moved while the diet was open, and the rebase absorbed it rather than dropping it.**
-   `q3-docs-diet` was rebased onto `4fe6f65`; the three doc edits written after the rotation are
-   verbatim in `checkpoints/`, indexed above — q2's MovieBox detail-API session, and in
-   `docs/checkpoints/` q4's `[Q4-SAFETY]` halt-band entry and q2's checkpoint entry. `SITES.md` §25
-   was never rotated by this lane, so q2's corrected site notes are live in place. The merged CI was
-   **29 `🧪` steps / 28 `python3 -S` matches** — the diet's guard ran last then; item 10 put
-   `test_operator_read_bounds.py` after it and q2's `test_themoviebox_detail_api.py` sits where
-   trunk put it.
+8. The documentation-diet notes that were items 8–9 here are rotated verbatim into
+   [`checkpoints/20261031-q2-humtv-status-and-rotated-diet-notes.md`](checkpoints/20261031-q2-humtv-status-and-rotated-diet-notes.md).
+9. `[Q2-HUMTV-STATUS]` — the Hum TV importer exists on trunk, is import-clean, and is byte-identical
+   to `296ac5e`; the crawl is queued in "🕒" row 5. Evidence in that same file.
 10. **Launch readiness JOB A `[Q3-OPS-READS]` — LANDED as trunk `5bf6e59`, CI-green on both refs at
     `d9d3615` (all 32 steps now), still not deployed** (`/opt/radd-stream` is behind trunk and the
     service has not been restarted — that is the owner's call). It is the entry that writes the
@@ -69,6 +57,8 @@
 | 2 | new `Fast_Fetch/importers/import_movibd.py` + `test_movibd_import.py` writing to **`movibd.db` staging only** | unknown N posts; price = `N × 2 pages × 1.1 s / distinct_hosts` — never into `fast_fetch.db` or the merged catalog | repo rule 9 (per-site staging DB) |
 | 3 | the adult-twin count against the live 6.4 GB catalog — **no command exists yet, writing it is the task** | a single `WHERE is_18_plus=1` count measured 26.46 s by qoder4 2026-10-30, so a scan of that size is a load-under-4-only action | the re-key residual in item 5 |
 | 4 | the 3.7 M-link health sweep | ≈ 7 days thread-bound (`docs/LINK_HEALTH_SWEEP.md` §1) | not scheduled; design doc only |
+| 5 | `nice -n 19 python3 -S Fast_Fetch/importers/import_humtv.py sync --db /home/ubuntu/radd-stream-data/humtv.db` then `nice -n 19 python3 -S Fast_Fetch/importers/import_humtv.py crawl --db /home/ubuntu/radd-stream-data/humtv.db --workers 1 --delay 0.5` | sync ≈ 1–2 min (57 REST pages); crawl ≈ 2.5–4.5 h serial for 5,625 pages (`workers != 1` refused in code); verify `--limit 200` ≈ 5 min | **Start only at load1 < 3.5; stop (Ctrl-C) at 4.0.** Self-stops too: MemAvailable < 2,500 MB or SwapFree < 800 MB refuses, a 429 pauses and the row stays queued, Ctrl-C leaves the rest `scraped=0` and resumable. Staging vault only |
+| 6 | `nice -n 19 python3 -S Fast_Fetch/importers/test_dub_collision_census.py --census > /tmp/q2_census_20261031.json` | 1–3 min estimated; nearest comparable measured 12.0 s at load 0.91 | fills the three headline numbers in the census checkpoint; the script exits 2 above `LOAD_CEILING = 4.0` |
 
 ---
 ## 🏛️ Project Quick Summary
