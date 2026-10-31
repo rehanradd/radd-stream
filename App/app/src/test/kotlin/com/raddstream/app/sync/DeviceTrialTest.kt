@@ -1,5 +1,6 @@
 package com.raddstream.app.sync
 
+import com.raddstream.app.viewmodel.AccountCardCopy
 import java.io.File
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -153,6 +154,7 @@ class DeviceTrialTest {
                     Regex("""secondsRemaining\s*=\s*[0-9_]+\s*\*""").containsMatchIn(text)
             }
             .map { it.name }
+            .toList()
         assertTrue("a locally-granted day is a day nobody issued: $offenders", offenders.isEmpty())
     }
 

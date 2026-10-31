@@ -606,7 +606,15 @@ policed by a tripwire case that shows it catching the word in a literal and igno
 comment.
 
 **Known gaps, unhidden:**
-1. Nothing was compiled. Every statement above is about source text I read, not about a build.
+1. Nothing was compiled here. Every statement above is about source text I read, not about a build.
+   Measured afterwards from the hosted runner, run `41157483215` at `ab8d4d5`: `:app:compileDebugKotlin`
+   — the production half of this mission — passed, and the run died one task later at
+   `:app:compileDebugUnitTestKotlin` with 7 errors, all of them in `DeviceTrialTest.kt`. Two causes:
+   `AccountCardCopy` is in `com.raddstream.app.viewmodel` and the test never imported it (6 errors),
+   and the local-grant census ends `.map { it.name }`, which is a `Sequence` on Kotlin/JVM and so has
+   no `isEmpty()` (1 error). Both fixed in the follow-up commit. The same lazy-sequence trap that
+   `UniversalSourceTest` documents had caught me again in my own file, which is the argument for
+   writing the positive control into the census rather than trusting it.
 2. No device. The trial request, the key reveal and the link send are unwitnessed on hardware;
    `DeviceIdentity` in particular has never run — a ROM with no `ANDROID_ID` gets null and the app
    correctly starts no trial, but that path is argued from `accounts.py` and the guards, not tested.
