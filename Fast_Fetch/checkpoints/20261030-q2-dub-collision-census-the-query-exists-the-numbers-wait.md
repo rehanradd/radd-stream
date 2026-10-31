@@ -1,7 +1,8 @@
 # [Q2-DUB-COLLISION-CENSUS] The query is built and measured; the numbers wait on the hold
 
 **Date:** 2026-10-30 (late) · **Lane:** q2 (`/home/ubuntu/.qoder_account2`) · **Branch:** `q2-dub-collision`
-· **Base:** `6a441ec` · **Supervisor token:** Q2-DUB-COLLISION-CENSUS · **Status: BLOCKED by the HOLD.**
+· **Base:** `6a441ec` · **Supervisor token:** Q2-DUB-COLLISION-CENSUS · **Status: LANDED as `a424ffc`;
+the numbers are a queued quiet-window action (see the 2026-10-31 section at the end).**
 
 ## What was asked, and what this session did
 
@@ -115,3 +116,107 @@ end-to-end figure will be measured when the hold lifts (estimate 1–3 min, sing
 | mid-design | 6.35 | — | — | stopped scans |
 | before live pass | 9.81 | 4,688 MB | 3,152 MB | refused; wrote module and report |
 | HOLD from qoder1 | 12.5 | — | — | no execution; commit + push only |
+| supervisor pass, first check | 3.25 | 5,228 MB avail | 2,723 MB | under 4.0 but above the 3.5 rule → edits only |
+| one minute later | 4.83 | — | — | census refused; queued |
+| supervisor sets 3.5 ceiling | 3.82 | — | — | edits only, no python |
+| hard freeze | 8.74 | — | — | nothing run; table written instead |
+
+## Supervisor pass, 2026-10-31 — landed, CI-gated, numbers queued
+
+qoder1 landed this branch on trunk as **`a424ffc`** (merge of `b37b74c`; 13 tests OK, read-only,
+stdlib only) and asked for three things: a backend-CI step for the module, the three headline
+numbers, and the merge-step recommendation stated plainly. The step and the recommendation are in
+this commit. **The numbers were not taken.**
+
+### Why the numbers are still missing
+
+The ceiling moved down while the box was busy: the first check this session read **3.25**, the
+next read one minute later was **4.83**, and the supervisor's standing rule for this pass is
+"no test suite, python run or build while load ≥ 3.5". The module's own gate refuses at load ≥ 4
+(`run_census`, exit 2) and that refusal is correct; the supervisor's rule is stricter. Nothing was
+run — no python, no sqlite, no test suite, no build. Editing and reading only.
+
+### The queued action — exact command, cost, and the numbers wanted
+
+```bash
+cd /tmp/q2_collide        # any worktree at trunk; never /opt/radd-stream
+nice -n 19 python3 -S Fast_Fetch/importers/test_dub_collision_census.py --census \
+  > /tmp/q2_census_20261031.json
+# exit 0: whole corpus read. exit 2: the load gate stopped it and
+# `stopped` names the databases it did not reach — a partial run, not a result.
+```
+
+Cost: 39 one-per-site vaults, ≈340k keys read through the covering index on `canonical_key`, then
+point lookups of `languages`/`is_18_plus` only for keys present in two or more databases. The nearest
+measured comparable is a 12.0 s full-scan `GROUP BY canonical_key` over the 16,943-row filmyhit
+vault at load 0.91 — this design does strictly less work per row, so the estimate is **1–3 minutes,
+single core, one database at a time, `nice -n 19`**; the run itself reports `wall_seconds`.
+
+Numbers wanted, by their keys in the JSON report:
+
+### Queued quiet-window table
+
+One executor, `nice -n 19`, one database at a time. Gate: proceed only when the supervisor has
+posted load1 **< 3.5**; the module's own refusal is load1 ≥ 4.0 (exit 2). At the time of writing,
+load1 was **8.74** under a hard freeze, so nothing below has been run.
+
+```bash
+cd /tmp/q2_collide        # any worktree at trunk; never /opt/radd-stream
+nice -n 19 python3 -S Fast_Fetch/importers/test_dub_collision_census.py --census \
+  > /tmp/q2_census_20261031.json
+echo "exit=$?"            # 0 = whole corpus; 2 = load gate stopped it (partial, not a result)
+```
+
+| # | Number wanted | JSON key(s) in the report | Exact command | Measured cost |
+|---|---|---|---|---|
+| 1 | keys carrying rows from more than one vault, with divergent audio | `keys_across_more_than_one_site`, `divergent_keys_across_sites` | the block above | covering-index reads of ≈340k keys over 39 vaults + point lookups for cross-DB keys only; nearest comparable measured **12.0 s** (16,943-row full-scan `GROUP BY canonical_key`, load 0.91) → estimate **1–3 min** single core; the run reports `wall_seconds` |
+| 2 | of those, keys with ≥1 `is_18_plus=1` row (adult-twin share = this ÷ `divergent_keys`) | `divergent_keys_with_flagged_and_clean_rows`, `divergent_keys` | the block above | same pass — no second read; free with #1 |
+| 3 | 15 concrete examples (key, sites, language sets, flagged/unflagged counts) | `examples[]` (already ordered divergent-then-flagged, `flag[0]`, `-rows`) | the block above | same pass — no second read; free with #1 |
+
+A number is quotable only when `stopped` is `null`. `databases_skipped` must be read: `mp4moviez.db`
+(29,850 rows) predates `canonical_key` and is skipped, so the corpus is the key-carrying vaults only.
+
+
+### The merge-step recommendation, stated once and plainly (for qoder3)
+
+This is the finding that retires the staging-time framing of the launch gate.
+
+1. **`canonical_key` is a work key, not a print key — and that is not a defect.** Title+year names
+   the work; the public URL space, every importer and all 69,773 ledger rows are derived from it.
+   Re-keying would be a migration across the whole catalog to fix a collision that is not at the key.
+2. **A dub twin cannot exist inside a staging vault.** Measured DDL: themoviebox and filmyhit declare
+   `canonical_key TEXT PRIMARY KEY`; hindilinks4u and world4ufree declare `UNIQUE`. A second subject
+   with the same title+year is refused or collapses onto the first row. So "the scraper mis-keyed the
+   dub print" is the wrong frame — the vault physically cannot hold both prints.
+3. **The collision is therefore a merge-time and read-time phenomenon**, appearing exactly when two
+   vaults contribute rows for one key — the 442-key shape already documented in root `AGENTS.md`.
+   The question for the merge is not "should title+year change" but "what happens when a second vault
+   brings a different print under an existing key".
+4. **The adult half of the rule is in code, not just on paper.** `inherit_key_adult`
+   (`Fast_Fetch/fast_fetch.py:612`) flags every row sharing a key and runs inside the write
+   transaction that sets a flag (`fast_fetch.py:4666`); `merge_catalogs.py:337` writes through
+   `save_scraped_data`, so a twin merging under a flagged print is flagged by the same statement.
+   `adult_key_exposures` is the read-only audit and `reconcile_key_adult` the backfill, and
+   `test_redact.py:996` proves the search route stops serving the unflagged twin after reconcile.
+   No staging schema change, no new column, no re-key.
+5. **What already separates the prints, without a new ledger field:** `posts.url` / `slug` (one row
+   per print per site), `post_sources` (the merge records every page that fed a post, so a twin's
+   URL survives as a source row instead of overwriting), `raw_meta.subjectId` / `detailPath`
+   (themoviebox; task #44 now stamps the id), and per-release audio — `merge_catalogs.py:100` maps
+   `audio_languages` into `releases.languages`. **One concrete merge recommendation:** a same-key row
+   whose audio set differs must contribute its audio at release granularity, because the post-level
+   `posts.language` is COALESCE-first (a non-empty value is never overwritten), so a dub absorbed into
+   an existing post row would otherwise lose its only print-level discriminator.
+6. **What the counts still decide — exactly one thing:** whether hiding by `MAX(is_18_plus)` per key
+   hides *works* (correct when the twin is the same film) or must stay per-print (wrong if an
+   unrelated adult title shares a key with a clean family film). The query is built to answer that;
+   the quiet window is the only thing outstanding.
+
+### CI
+
+`.github/workflows/backend-ci.yml` now runs the module's offline suite (header list + `🧪` step, in
+the file's existing style). The workflow's `paths:` filter is `Fast_Fetch/**`, which covers
+`Fast_Fetch/importers/` — the step is fed. `--census` is deliberately not in CI, same reason as
+`test_adult_twin_probe.py`: the hosted runner is not allowed to decide when a heavy staging read is
+polite.
+
