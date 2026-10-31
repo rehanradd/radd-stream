@@ -1,0 +1,97 @@
+name: 📲 CI — RaddRelay Build & Test
+
+# WHAT THIS DOES
+#   Assembles and unit-tests the RaddRelay companion app (a separate Gradle
+#   project at the repo root, NOT under App/, so ci.yml's `App/**` filter never
+#   saw it). Runs on every push touching RaddRelay/** or this file.
+#
+# WHAT IT NEEDS
+#   Nothing secret. JDK 17 (AGP 8.5.2 requires 17+), Android SDK platform 34 +
+#   build-tools 34.0.0 (compileSdk=34 in RaddRelay/app/build.gradle.kts).
+#
+# DESIGN DECISIONS
+#   * No Gradle wrapper in the project: RaddRelay is deliberately kept to the
+#     two Kotlin files that matter plus build scripts, and a wrapper jar is a
+#     binary the fleet cannot review in a diff. `gradle/actions/setup-gradle`
+#     provisions Gradle 8.7 (the AGP 8.5.2 pairing) and puts `gradle` on PATH;
+#     a local developer can still run `gradle wrapper` if they prefer.
+#   * SDK packages are installed explicitly after setup-java, for the same
+#     reason ci.yml does it: a JDK problem then fails in a named step, not in a
+#     generic AGP auto-provision error mid-build.
+#   * Actions are pinned to full commit SHAs, matching the repo convention.
+#   * The unit tests are pure JVM (SmsParser only): no emulator, no device, no
+#     telephony permission needed on the runner.
+#
+# WHAT THIS DOES NOT DO
+#   It never sends SMS, never runs the service, and never touches the merchant
+#   secret — the secret is entered on the operator's device at runtime and is
+#   not present in CI.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ["**"]
+    paths:
+      - "RaddRelay/**"
+      - ".github/workflows/raddrelay-ci.yml"
+  pull_request:
+    paths:
+      - "RaddRelay/**"
+      - ".github/workflows/raddrelay-ci.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: raddrelay-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: testDebugUnitTest + assembleDebug
+    runs-on: ubuntu-24.04   # pinned, not `ubuntu-latest`, so runner drift is visible
+    timeout-minutes: 30     # first cold run downloads Gradle + AGP + SDK deps
+
+    steps:
+      - name: 📥 Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - name: ☕ Set up JDK 17 (temurin)
+        uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad  # v6.1.0
+        with:
+          distribution: temurin
+          java-version: "17"   # matches compileOptions VERSION_17 / jvmTarget 17
+
+      - name: 📱 Install Android SDK (platform-tools, android-34, build-tools 34.0.0)
+        uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd  # v4.0.4
+        with:
+          packages: "platform-tools platforms;android-34 build-tools;34.0.0"
+
+      - name: ⚙️ Set up Gradle 8.7
+        uses: gradle/actions/setup-gradle@ed408507eac070d1f99cc633dbcf757c94c7933a  # v4.4.3
+        with:
+          gradle-version: "8.7"
+
+      - name: "🧪🏗️ Gradle: unit tests + debug APK (single invocation)"
+        working-directory: RaddRelay
+        # --continue: report both tasks' failures in one run.
+        # --console=plain: unadorned file:line Kotlin errors, no ANSI noise.
+        run: |
+          gradle :app:testDebugUnitTest :app:assembleDebug \
+            --no-daemon --stacktrace --continue --console=plain
+
+      - name: 📤 Upload debug APK
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: raddrelay-debug-${{ github.run_number }}
+          path: RaddRelay/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: warn
+
+      - name: 🧾 Upload test report on failure
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: raddrelay-test-results-${{ github.run_number }}
+          path: RaddRelay/app/build/test-results/testDebugUnitTest
+          if-no-files-found: warn

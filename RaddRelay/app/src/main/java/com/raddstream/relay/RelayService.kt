@@ -193,6 +193,10 @@ class RelayService : Service() {
                 409 -> PostResult.Ok            // idempotent duplicate
                 401, 403 -> PostResult.Reject("HTTP $code — merchant secret rejected")
                 408, 429 -> PostResult.Retry("HTTP $code")
+                // 404 keeps the TID: the webhook route may simply not be deployed
+                // yet, and a payment record is worth more than a quiet queue. One
+                // retry every backoff step is cheap; a wrong path also shows here.
+                404 -> PostResult.Retry("HTTP $code — route not deployed yet")
                 in 400..499 -> PostResult.Reject("HTTP $code")
                 else -> PostResult.Retry("HTTP $code")
             }

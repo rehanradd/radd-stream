@@ -13,6 +13,11 @@ inbox, personal numbers, bank SMS — is untouched.
 - Target size: a few hundred KB. No AndroidX, no Compose, no third-party HTTP
   client, no analytics.
 
+> **Reviewer entry point:** `CONSENT_AND_SCOPE.md` answers the permission,
+> allow-list, body-handling and secret-storage questions in prose. CI lives in
+> `.github/workflows/raddrelay-ci.yml` at the repository root (`RaddRelay/**`
+> is a separate Gradle project, outside `App/**`).
+
 > **Status, measured 2026-10-31:** the catalog backend does **not** implement
 > `POST /api/v2/payment/sms-webhook` yet. `Fast_Fetch/accounts_api.py` exposes
 > only the authenticated claim route `POST /api/v2/account/payment`
