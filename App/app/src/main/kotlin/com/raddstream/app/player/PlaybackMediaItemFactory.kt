@@ -30,6 +30,7 @@ object PlaybackMediaItemFactory {
         title: String,
         externalSubtitles: List<ExternalSubtitle> = emptyList(),
     ): MediaItem {
+        val manifestMime = manifestMimeType(rendition.playback)
         val builder = MediaItem.Builder()
             .setUri(rendition.playback.playUrl)
             .setMediaId("${target.workKey ?: "w${target.id}"}-r${rendition.releaseId}-${rendition.rank}")
@@ -41,9 +42,9 @@ object PlaybackMediaItemFactory {
                     }
                     .build(),
             )
-
-        // A manifest must be told what it is before the reader is chosen: see manifestMimeType.
-        manifestMimeType(rendition.playback)?.let { builder.setMimeType(it) }
+        if (manifestMime != null) {
+            builder.setMimeType(manifestMime)
+        }
 
         // Native subtitle configurations for non-custom-render externals (API_V2 tracks.subtitles
         // and user-picked exotic formats). SRT/VTT we parse ourselves for the overlay; both
@@ -79,46 +80,49 @@ object PlaybackMediaItemFactory {
     }
 
     /**
-     * The manifest container this link's bytes are, as the one MIME string Media3 recognises —
-     * or null to leave the choice to Media3's own inference.
+     * The Media3 content type this link must be declared as, or null to leave the choice to the
+     * progressive extractors.
      *
-     * Inference reads a URI's path extension and a declared type; it never sniffs bytes, and
-     * every address this app plays is our own `/api/v1/stream?id=<handle>`, which has no
-     * extension and is redirected long after the reader has been picked. So an HLS link left
-     * undeclared is opened by the progressive reader, which meets `#EXTM3U` where an MP4 box
-     * should be and fails with `UnrecognizedInputFormatException` before the first frame. The
-     * server already knows which protocol it recorded for the link; this is where that
-     * knowledge crosses into Media3.
+     * Media3 1.3.1 picks the [androidx.media3.exoplayer.source.MediaSource] from
+     * `Util.inferContentTypeForUriAndMimeType(uri, mimeType)`, which consults exactly two things:
+     * the mime type declared on the `MediaItem`, and the URI's **path** extension. There is no
+     * `SniffingMediaSource` at this version, so nothing re-inspects the bytes to discover a
+     * playlist — an answer of `CONTENT_TYPE_OTHER` is a progressive source, full stop.
      *
-     * The wire spelling is normalised, not trusted: a CDN answers `application/vnd.apple.mpegurl`
-     * as often as the Media3 constant's own text, and the content type the backend stores is the
-     * header verbatim. An alias Media3 does not know is the silent progressive reader again, so
-     * every match here is against a known set and the value handed back is always the constant.
+     * That matters here because a playback address is our own
+     * `<server>/api/v1/stream?id=<handle>`, which carries no extension at all, and a hoster's
+     * playlist often rides inside a query string (`…/watch?f=https://…/index.m3u8`) where
+     * `Uri.getPath()` cannot see it either. Undeclared, both become progressive, read an `#EXTM3U`
+     * text body, find no container magic, and throw `UnrecognizedInputFormatException` before the
+     * first frame. Declaring the manifest type is what makes this one player really play
+     * everything.
      *
-     * Progressive MP4, MKV and WebM are deliberately NOT declared: their readers do sniff the
-     * container from the bytes, which is the one thing an extensionless address cannot break.
+     * MP4 and MKV are deliberately absent from this rule: they are *containers* selected by
+     * extractor sniffing inside the progressive source, which recognises an MP4 `ftyp` box and an
+     * MKV EBML header on any extensionless address. Declaring a container mime would only add a
+     * way to be wrong when the server mislabels one, so progressive links keep the sniffed path.
+     *
+     * WHY THE MANIFEST EVIDENCE IS ORDERED THIS WAY — measured against `Fast_Fetch/catalog_v2.py`
+     * `_protocol_of()` (:1391), which writes this field: it answers `hls` only for a link stored as
+     * `kind = hls_manifest`, so `protocol = "hls"` is solid evidence and is never a guess. But the
+     * same function returns `progressive` for *anything* whose playability is stream/download/both,
+     * and it has no `dash` branch at all — so a manifest the projection did not name is still a
+     * manifest, and the mime the resolver reported and the extension inside the address both outrank
+     * a coarse `progressive` word here. An unknown word (`http/1.1`, `unknown`, a value this app has
+     * never seen) declares nothing, which is the same answer it gets today.
+     *
+     * The returned constants are the only two strings Media3's own matcher accepts for a manifest;
+     * inventing a mime spelling here would silently fall through to progressive, which is the bug
+     * this exists to fix. `UniversalSourceTest` pins the identity against `MimeTypes`.
      */
     fun manifestMimeType(playback: PlaybackInfo): String? {
-        val declared = playback.mimeType?.lowercase()?.trim()?.substringBefore(';')?.trim().orEmpty()
+        val mime = playback.mimeType?.trim()?.lowercase()
         return when {
-            playback.isHls() || declared in hlsManifestMimes -> MimeTypes.APPLICATION_M3U8
-            playback.isDash() || declared in dashManifestMimes -> MimeTypes.APPLICATION_MPD
+            playback.isHls() || mime?.contains("mpegurl") == true -> MimeTypes.APPLICATION_M3U8
+            playback.isDash() || mime?.contains("dash+xml") == true -> MimeTypes.APPLICATION_MPD
             else -> null
         }
     }
-
-    private val hlsManifestMimes: Set<String> = setOf(
-        MimeTypes.APPLICATION_M3U8.lowercase(),
-        "application/vnd.apple.mpegurl",
-        "application/vnd.mpegurl",
-        "application/mpegurl",
-        "audio/mpegurl",
-    )
-
-    private val dashManifestMimes: Set<String> = setOf(
-        MimeTypes.APPLICATION_MPD.lowercase(),
-        "application/mpd",
-    )
 
     private fun ExternalSubtitle.toSubtitleConfiguration(): MediaItem.SubtitleConfiguration =
         MediaItem.SubtitleConfiguration.Builder(Uri.parse(url))

@@ -133,9 +133,9 @@ data class PlaybackInfo(
         protocol?.lowercase() == "hls" || playUrl?.lowercase()?.contains(".m3u8") == true
 
     /**
-     * The same question for the other manifest protocol. Mirrors [isHls] exactly — the server's
-     * `protocol` word first, the address as corroboration second — because a rank can carry one
-     * and not the other, and either alone is enough to know what reader the bytes need.
+     * The DASH sibling of [isHls], read the same two ways: the server's own `protocol` word, or
+     * the manifest extension in the address. Needed because Media3 chooses the media *source*
+     * before it ever looks at the bytes — see `PlaybackMediaItemFactory.manifestMimeType`.
      */
     fun isDash(): Boolean =
         protocol?.lowercase() == "dash" || playUrl?.lowercase()?.contains(".mpd") == true

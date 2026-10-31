@@ -9,9 +9,8 @@ import com.raddstream.app.network.friendlyNetworkError
 import com.raddstream.app.network.models.Post
 import com.raddstream.app.network.models.VipRemoteConfig
 import com.raddstream.app.network.models.WireText
-import com.raddstream.app.player.AdCadenceGovernor
-import com.raddstream.app.player.AdSurface
 import com.raddstream.app.repository.CatalogRepository
+import com.raddstream.app.repository.FavoritesRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
 import kotlinx.coroutines.CancellationException
@@ -98,8 +97,7 @@ class HomeViewModel @Inject constructor(
     private val catalogRepository: CatalogRepository,
     private val watchHistoryDao: WatchHistoryDao,
     private val syncedProgressDao: SyncedProgressDao,
-    private val adCadence: AdCadenceGovernor,
-    private val adFreeReader: AdFreeReader,
+    private val favoritesRepository: FavoritesRepository,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(HomeUiState())
@@ -121,24 +119,6 @@ class HomeViewModel @Inject constructor(
         _uiState.update { it.copy(sections = initial) }
         loadAll(force = true)
         checkForUpdate()
-        askAppOpenAd()
-    }
-
-    /**
-     * The app-open surface, asked once per Home entry and capped at one impression per four hours
-     * of wall clock.
-     *
-     * Nothing is awaited and nothing is rendered from the answer, and that is the whole design: an
-     * app-open ad that the first frame had to wait for *is* the 10-second timer redirect the owner
-     * ruled out, in a different costume. The governor records the impression when a network can fill
-     * the slot and answers `None` when it cannot, and a `None` costs this screen exactly the work of
-     * one suspended call — no placeholder, no spinner, no held catalog.
-     */
-    private fun askAppOpenAd() {
-        viewModelScope.launch {
-            val adFree = adFreeReader.isAdFree()
-            adCadence.offer(AdSurface.APP_OPEN, adFree = adFree)
-        }
     }
 
     /**
@@ -156,7 +136,18 @@ class HomeViewModel @Inject constructor(
             combine(
                 watchHistoryDao.observeRecent(WatchHistoryMerge.DEFAULT_LIMIT * 2),
                 syncedProgressDao.observeRecent(WatchHistoryMerge.DEFAULT_LIMIT * 2),
-            ) { local, synced -> WatchHistoryMerge.merge(local, synced) }
+                favoritesRepository.observeRefusedIds(),
+            ) { local, synced, refusedIds ->
+                val merged = WatchHistoryMerge.merge(local, synced)
+                // A resume row is a cached surface like any other: it names a work this device
+                // watched, and the ledger may have been refused since. No flag is stored on it, so
+                // the refusal is the whole check here — and an answer, not a guess.
+                AdultPolicy.listableRows(
+                    rows = merged,
+                    flagOf = { null },
+                    refusedOf = { it.postId in refusedIds },
+                )
+            }
                 .collect { rows ->
                     val items = rows.mapNotNull { ResumeTile.of(it) }
                     _uiState.update { it.copy(continueWatching = items) }

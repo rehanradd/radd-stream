@@ -2,6 +2,7 @@ package com.raddstream.app.brand
 
 import android.content.Context
 import com.raddstream.app.BuildConfig
+import com.raddstream.app.viewmodel.AdultPolicy
 
 /**
  * Brand — the thin typed view over the ONE brand file, `/brand.properties`.
@@ -172,10 +173,19 @@ object Brand {
     val pipEnabled: Boolean get() = bool("features.pip", BuildConfig.BRAND_FEATURES_PIP.toBoolean())
 
     /**
-     * Adult filtering is a project policy, not a brand knob: it can only ever be
-     * ON. A `false` in brand.properties is ignored on purpose.
+     * Adult filtering is a project policy, not a brand knob: a `false` in brand.properties is
+     * ignored on purpose. What changed is HOW this answers. It used to `return true` without
+     * looking at anything, which made it a claim in the code rather than a fact about it — and a
+     * claim of that specific kind is a compliance problem, because root `AGENTS.md` states the
+     * invariant as "no public surface may LIST or PLAY a flagged row" and a reader reasonably
+     * takes a method named `adultFilterEnforced` as evidence.
+     *
+     * It is now read off [AdultPolicy.enforcesAdultListing], which asks the app's one listing rule
+     * the three questions the invariant has to survive and reports whether it actually answers
+     * them. So this can be false: weaken the rule and the claim fails with it, which is the only
+     * way a flag like this is worth having.
      */
-    val adultFilterEnforced: Boolean get() = true
+    val adultFilterEnforced: Boolean get() = AdultPolicy.enforcesAdultListing
 
     // ── TTLs + storage limits ────────────────────────────────────────────────
     val catalogTtlSeconds: Long get() =

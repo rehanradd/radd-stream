@@ -31,10 +31,14 @@ import com.google.gson.annotations.SerializedName
  *     boolean on another).
  *  3. Unknown keys are ignored by Gson, so an additive server change can never crash
  *     decoding (API_V2.md §16.6).
- *  4. Adult policy (App/AGENTS.md, API_V2.md §13): `is_18_plus` is deliberately NOT
- *     modelled anywhere in this app. The server filters at the SQL level and answers
- *     404 for a flagged id; the client neither reads, stores, renders nor requests the
- *     flag. `is_animated` is unrestricted metadata and IS modelled.
+ *  4. Adult policy (App/AGENTS.md): `is_18_plus` IS modelled, as `is18Plus` on both rows, and
+ *     it is the strict half of a two-part rule. The server filters in SQL and answers 404 for a
+ *     flagged id, so on today's public edge this key never arrives — which is exactly why the
+ *     field is nullable and why the refusal ledger in `data/local/UnavailableWork.kt` is the
+ *     half that fires: a cached row can outlive its own clearance, and no server-side `WHERE`
+ *     can reach a row this device already stored. Reading the key is legal; RENDERING a row it
+ *     marks true is not — see `viewmodel/AdultPolicy.kt` for the one listing rule.
+ *     `is_animated` is unrestricted metadata and IS modelled.
  */
 
 /** Exact response of GET /api/v1/posts. `page`/`limit`/`total`/`total_pages` are always JSON ints. */
@@ -75,6 +79,20 @@ data class Post(
      */
     @SerializedName("is_animated")
     val isAnimated: Boolean? = null,
+    /**
+     * `posts.is_18_plus` INTEGER 0/1 — the restricted flag. Modelled so a payload that ever
+     * does carry it (an operator-port probe, a future projection that publishes the field) is
+     * recorded rather than dropped on the floor; the public edge is measured NOT to send it
+     * (`redact.project(row, "post_brief")` whitelists it away and `api_v1_get_posts` excludes
+     * flagged rows in SQL), so on a normal read this is null.
+     *
+     * Null is "the server never told us", never "this is safe". What makes a *cached* row safe
+     * to list is the answer it got from `POST/GET /api/v1/posts/{id}` or `/api/v1/stream`, not
+     * the absence of this key — see `viewmodel/AdultPolicy.kt`. A row read `true` here must
+     * never reach a list, a badge, a hero frame or a play affordance.
+     */
+    @SerializedName("is_18_plus")
+    val is18Plus: Boolean? = null,
     /** `posts.seasons` — free TEXT ("2", "S01–S03"), nullable. */
     val seasons: String? = null,
     @SerializedName("poster_url")
@@ -168,6 +186,14 @@ data class PostDetail(
     /** `posts.is_animated` INTEGER 0/1 — metadata, not a restricted flag. */
     @SerializedName("is_animated")
     val isAnimated: Boolean? = null,
+    /**
+     * `posts.is_18_plus` INTEGER 0/1 — see [Post.is18Plus] for what null and true each mean.
+     * The public route 404s before it could ever send a `true` here
+     * (`api_v1_get_post_detail` bails on the flag), so a `true` can only arrive from a payload
+     * this app was not routed to; it is still the stricter fact and still wins.
+     */
+    @SerializedName("is_18_plus")
+    val is18Plus: Boolean? = null,
     val industry: String? = null,
     val country: String? = null,
     val language: String? = null,

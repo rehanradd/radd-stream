@@ -170,6 +170,67 @@ class FavoritesSchemaGuardTest {
     }
 
     @Test
+    fun `version 7 is the adult step and it only ever adds`() {
+        val flat = flattenedDdl()
+        assertTrue(
+            "a saved list may not be rebuilt to close the adult hole — 6 -> 7 must exist as DDL",
+            flat.contains("object : Migration(6, 7)"),
+        )
+        // Bounded at the next declared step, so a later 7 -> 8 that legitimately rebuilds the
+        // table cannot be charged to this one — and a scan that read to end-of-file would be.
+        val body = flat.substringAfter("object : Migration(6, 7)")
+            .substringBefore("object : Migration(")
+        assertTrue(
+            "the flag column must be added, not assumed",
+            body.contains("ALTER TABLE favorite_posts ADD COLUMN is18Plus INTEGER"),
+        )
+        assertTrue(
+            "and the answer stamp alongside it",
+            body.contains("ALTER TABLE favorite_posts ADD COLUMN checkedAt INTEGER"),
+        )
+        listOf("DROP TABLE", "DELETE FROM", "RENAME TO").forEach { verb ->
+            assertFalse(
+                "6 -> 7 would discard the viewer's own rows if it contained $verb",
+                body.contains(verb),
+            )
+        }
+    }
+
+    @Test
+    fun `the refusal ledger is declared once, in both files, with the same columns`() {
+        val ledger = File(
+            repoRoot,
+            "App/app/src/main/kotlin/com/raddstream/app/data/local/UnavailableWork.kt",
+        )
+        assertTrue("the refusal entity file vanished", ledger.isFile)
+        val text = ledger.readText()
+        val start = text.indexOf("data class UnavailableWorkEntity(").takeIf { it >= 0 }
+            ?: error("the refusal entity is not where this test thinks it is")
+        val end = text.indexOf("\n)", start)
+        val columns = text.substring(start, end).lines()
+            .map { it.trim() }
+            .filterNot { it.startsWith("*") || it.startsWith("/*") || it.startsWith("//") }
+            .mapNotNull { declaration -> property.find(declaration)?.groupValues?.get(1) }
+        assertTrue("positive control: no refusal column parsed", columns.contains("postId"))
+        assertTrue(columns.containsAll(listOf("refusedAt", "reason")))
+
+        val flat = flattenedDdl()
+        val create = flat.substringAfter("CREATE TABLE IF NOT EXISTS unavailable_works")
+            .substringBefore("PRIMARY KEY")
+        listOf("postId", "refusedAt", "reason").forEach { column ->
+            assertTrue(
+                "$column is on the entity but not in the DDL, which throws at database open",
+                create.contains(column),
+            )
+        }
+        assertTrue(
+            "a refusal is keyed by the id it refuses, or a second 404 stacks rows",
+            flat.substringAfter("CREATE TABLE IF NOT EXISTS unavailable_works")
+                .contains("PRIMARY KEY(postId)"),
+        )
+    }
+
+    @Test
     fun `every migration the database declares is registered on the builder`() {
         val declared = Regex("""val (MIGRATION_\d+_\d+)""").findAll(database.readText())
             .map { it.groupValues[1] }

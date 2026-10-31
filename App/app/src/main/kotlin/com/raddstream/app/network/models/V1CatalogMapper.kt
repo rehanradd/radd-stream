@@ -13,10 +13,15 @@ package com.raddstream.app.network.models
  * each derivation names the rule it copies. Nothing is invented: a field with no v1
  * counterpart stays null/empty and is listed in [EndpointGaps].
  *
- * ADULT POLICY: this mapper neither reads nor propagates `is_18_plus` (App/AGENTS.md,
- * API_V2.md §13). The server already filtered it out of the list, answers 404 for a flagged
- * id, and never sends the flag; the app has no field for it, so there is no way to display
- * or request a flagged work through this layer.
+ * ADULT POLICY: this layer is a door, not a judge. [browseItems] drops any row a payload
+ * positively flagged (`is_18_plus == true`) before it can become a tile, and nothing here
+ * propagates the flag into [Work] — the v2 domain type has no adult field, by the rule at
+ * [CatalogV2] ("an adult-flagged resource answers 404, and the flag is never in the payload").
+ * That is why the enforcement that actually protects a *cached* row lives in
+ * `viewmodel/AdultPolicy.kt` and `data/local/UnavailableWork.kt`: the server already filters
+ * the live list, but a favourite this device stored can outlive its own clearance, and no
+ * mapper can see that from a payload. Dropping a flagged row here is defence in depth, never
+ * the whole rule.
  */
 object V1CatalogMapper {
 
@@ -42,7 +47,13 @@ object V1CatalogMapper {
         )
     }
 
-    fun browseItems(response: PostsResponse): List<BrowseItem> = response.results.map { browseItem(it) }
+    /**
+     * A page of list rows -> tiles. A row whose payload positively says adult is dropped here
+     * rather than mapped: [browseItem] cannot express "hidden", so a mapper that let one through
+     * would hand a flagged work to a grid. `null` is not dropped — see [Post.is18Plus].
+     */
+    fun browseItems(response: PostsResponse): List<BrowseItem> =
+        response.results.filter { it.is18Plus != true }.map { browseItem(it) }
 
     /**
      * The list row carries `is_animated` (verified live 2026-10-28: `?type=anime` returns

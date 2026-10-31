@@ -15,10 +15,6 @@ import android.widget.FrameLayout
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.core.tween
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
@@ -532,21 +528,12 @@ private fun PlayerScreenContent(
  */
 private const val TWO_FINGER_TAP_GUARD_NS = 250_000_000L
 
-/**
- * True when a sheet the viewer opened is up — pauses the controls auto-hide.
- *
- * `adBreak` is deliberately NOT one of these. An ad is not a modal: it never holds the chrome
- * still, and nothing here can make the tape wait on a creative the viewer did not ask for. A
- * sponsor slot renders as a dismissible card over a player that keeps playing, and the owner's
- * rule — no interstitial that blocks playback, and if an ad cannot be filled show nothing — is
- * enforced by this line not containing it. `AdSlotPolicyTest` and `AdCadenceGuardTest` are the
- * proofs; a future edit that adds it back fails both.
- */
+/** True when any blocking dialog/sheet is up — pauses the controls auto-hide. */
 private val PlayerUiState.dialogBlocking: Boolean
     get() = resumeOfferMs != null || calibration != null || giveUp != null ||
         speedSheetVisible || tracksSheetVisible || subtitleSheetVisible ||
         subtitleOffsetSheetVisible || printSheetVisible || sleepSheetVisible ||
-        playFromDialogVisible || qualitySheetVisible
+        playFromDialogVisible || qualitySheetVisible || adBreak != AdSlot.NONE
 
 // ── 1. Surface ─────────────────────────────────────────────────────────────────
 
@@ -829,12 +816,7 @@ private fun GestureOverlay(
 
 @Composable
 private fun DoubleTapRipple(state: PlayerUiState) {
-    // A held copy, not the live state: the 900 ms lifetime ends by setting the ripple to null,
-    // and the pill that is fading out still has to name the side and the seconds it was showing.
-    // Reading the live value first means the frame a tap lands on is never the previous pill's.
-    var held by remember { mutableStateOf(state.ripple) }
-    val ripple = state.ripple ?: held ?: return
-    state.ripple?.let { held = it }
+    val ripple = state.ripple ?: return
     val forward = ripple.deltaMs >= 0
     val label = (if (forward) "+" else "−") + (kotlin.math.abs(ripple.deltaMs) / 1000L) + "s"
     val alignment = when (ripple.zone) {
@@ -843,33 +825,23 @@ private fun DoubleTapRipple(state: PlayerUiState) {
         ScreenZone.CENTER -> Alignment.Center
     }
     Box(Modifier.fillMaxSize(), contentAlignment = alignment) {
-        // The acknowledgement appears rather than arrives: a pill that snaps onto the screen and
-        // then vanishes reads as a glitch in the picture, and this one is meant to read as an
-        // answer to the tap. Quick in, slow out, so a double-tap over a dark scene is never a
-        // flash.
-        AnimatedVisibility(
-            visible = state.ripple != null,
-            enter = fadeIn(tween(120)),
-            exit = fadeOut(tween(220)),
+        Surface(
+            color = RaddHudCard,
+            shape = MaterialTheme.shapes.medium,
+            modifier = Modifier.padding(horizontal = 34.dp),
         ) {
-            Surface(
-                color = RaddHudCard,
-                shape = MaterialTheme.shapes.medium,
-                modifier = Modifier.padding(horizontal = 34.dp),
+            Row(
+                Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                Row(
-                    Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Icon(
-                        if (forward) Icons.Default.Forward10 else Icons.Default.Replay10,
-                        contentDescription = null,
-                        tint = Color.White,
-                        modifier = Modifier.size(26.dp),
-                    )
-                    Spacer(Modifier.width(6.dp))
-                    Text(label, color = Color.White, fontSize = brandSp(15), fontWeight = FontWeight.Bold)
-                }
+                Icon(
+                    if (forward) Icons.Default.Forward10 else Icons.Default.Replay10,
+                    contentDescription = null,
+                    tint = Color.White,
+                    modifier = Modifier.size(26.dp),
+                )
+                Spacer(Modifier.width(6.dp))
+                Text(label, color = Color.White, fontSize = brandSp(15), fontWeight = FontWeight.Bold)
             }
         }
     }

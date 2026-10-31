@@ -136,8 +136,8 @@ data class VipUiState(
     val isLoading: Boolean = true,
     val loadError: String? = null,
     val currency: String = "PKR",
-    val monthlyPkr: Int = VipViewModel.NO_PRICE_PUBLISHED,
-    val yearlyPkr: Int = VipViewModel.NO_PRICE_PUBLISHED,
+    val monthlyPkr: Int = VipViewModel.DEFAULT_MONTHLY_PKR,
+    val yearlyPkr: Int = VipViewModel.DEFAULT_YEARLY_PKR,
     val jazzCashTillId: String = "",
     val jazzCashMobileAccount: String = "",
     val easyPaisaMobile: String = "",
@@ -419,14 +419,9 @@ class VipViewModel @Inject constructor(
     )
 
     companion object {
-        /**
-         * This client ships no price. It used to carry PKR 200 monthly and PKR 1,500 yearly as a
-         * fallback for a server that published neither, which quietly made the app the authority on
-         * what a membership costs — and the server had already moved on (the monthly plan is
-         * PKR 250 today). A number that can only be wrong in silence is not a fallback, so the
-         * absence is now what the state holds, and `amountLabel` says so out loud.
-         */
-        const val NO_PRICE_PUBLISHED = 0
+        /** The prices the operator specification ships; the server may price them differently. */
+        const val DEFAULT_MONTHLY_PKR = 200
+        const val DEFAULT_YEARLY_PKR = 1_500
     }
 }
 
@@ -486,19 +481,16 @@ object VipSubmission {
 }
 
 /**
- * Fold the wire body into state. A price of zero means the operator never set one, and nothing
- * here replaces it: the server prices the plan (`payments.submit_payment` looks the amount up and
- * refuses a body that carries one), so a number this screen invented would be a quote nobody
- * authorized. An unpublished price renders as the words "Not published by the server", not as a
- * figure.
+ * Fold the wire body into state. A price of zero means the operator never set one, so the
+ * documented PKR defaults stand rather than printing a free plan.
  */
 private fun VipUiState.withConfig(config: VipRemoteConfig): VipUiState {
     val folded = copy(
         isLoading = false,
         loadError = null,
         currency = config.currency.trim().ifBlank { "PKR" },
-        monthlyPkr = config.vip.monthlyPkr.takeIf { it > 0 } ?: VipViewModel.NO_PRICE_PUBLISHED,
-        yearlyPkr = config.vip.yearlyPkr.takeIf { it > 0 } ?: VipViewModel.NO_PRICE_PUBLISHED,
+        monthlyPkr = config.vip.monthlyPkr.takeIf { it > 0 } ?: VipViewModel.DEFAULT_MONTHLY_PKR,
+        yearlyPkr = config.vip.yearlyPkr.takeIf { it > 0 } ?: VipViewModel.DEFAULT_YEARLY_PKR,
         jazzCashTillId = config.payments.jazzcash.tillId.trim(),
         jazzCashMobileAccount = config.payments.jazzcash.mobileAccount.trim(),
         easyPaisaMobile = config.payments.easypaisa.mobileNumber.trim(),

@@ -15,6 +15,7 @@ import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.LoadControl
 import androidx.media3.exoplayer.Renderer
 import androidx.media3.exoplayer.SeekParameters
 import androidx.media3.exoplayer.analytics.AnalyticsListener
@@ -55,11 +56,8 @@ import kotlinx.coroutines.launch
  *    redirector — see [evaluateAutoQuality].
  *
  * The UI-side commands arrive through the shared [PlayerSessionStore] (same process) — no
- * Intent serialization. Which container a link is gets declared per item by
- * [PlaybackMediaItemFactory] (our play addresses carry no file extension, so Media3 cannot
- * infer one); everything below that stays Media3's own — the default media source factory picks
- * the HLS, DASH and progressive readers from the declared type, and `media3-exoplayer-hls` plus
- * `media3-exoplayer-dash` are already dependencies.
+ * Intent serialization. HLS/progressive source selection stays with Media3's default media
+ * source factory (media3-exoplayer-hls is already a dependency).
  */
 @OptIn(UnstableApi::class)
 class PlaybackService : MediaSessionService() {
@@ -116,17 +114,16 @@ class PlaybackService : MediaSessionService() {
         val exo = ExoPlayer.Builder(this)
             .setRenderersFactory(renderersFactory)
             .setMediaSourceFactory(DefaultMediaSourceFactory(dataFactory))
-            .setLoadControl(loadControl())
+            .setLoadControl(instantStartLoadControl())
             .setSeekBackIncrementMs(MX_SKIP_MS)
             .setSeekForwardIncrementMs(MX_SKIP_MS)
             .setAudioAttributes(AudioAttributes.DEFAULT, /* handleAudioFocus= */ true)
             .build()
         // Screen-off playback (MX "keep playing with screen off") — no sensor needed.
         exo.setWakeMode(C.WAKE_MODE_LOCAL)
-        // Seeking snaps to the nearest sync frame instead of decoding forward from the previous
-        // one, which is what makes dragging the scrub bar feel immediate. Costs frame-exact
-        // landing; nobody scrubs for that. A `val` reassignment would not compile here — ExoPlayer
-        // exposes this as a setter whose getter returns a different type.
+        // Seeking snaps to the nearest sync frame instead of decoding forward from the
+        // previous one, which is what makes dragging the scrub bar feel immediate on a
+        // 1-vCPU-class phone. Costs frame-exact landing; nobody scrubs for that.
         exo.setSeekParameters(SeekParameters.CLOSEST_SYNC)
         exo.addListener(playerListener)
         exo.addAnalyticsListener(autoQualityListener)
@@ -143,27 +140,9 @@ class PlaybackService : MediaSessionService() {
             }
         }
         startAutoQualityTicker()
-        startPlayheadPump()
     }
 
     private var lastHandledNonce: Long = -1L
-
-    /**
-     * The buffering policy, in one call. [PlayerBuffering] owns the four numbers and the reason
-     * for each; this is the only place they are handed to Media3, in the order
-     * `setBufferDurationsMs` takes them — minimum, maximum, to start, to start again after a
-     * stall — because the method is positional and a swap of two of them compiles happily.
-     */
-    private fun loadControl(): DefaultLoadControl =
-        DefaultLoadControl.Builder()
-            .setPrioritizeTimeOverSizeThresholds(PlayerBuffering.PRIORITIZE_TIME_OVER_SIZE)
-            .setBufferDurationsMs(
-                PlayerBuffering.MIN_BUFFER_MS,
-                PlayerBuffering.MAX_BUFFER_MS,
-                PlayerBuffering.BUFFER_FOR_PLAYBACK_MS,
-                PlayerBuffering.BUFFER_FOR_PLAYBACK_AFTER_REBUFFER_MS,
-            )
-            .build()
 
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaSession? =
         mediaSession
@@ -283,12 +262,6 @@ class PlaybackService : MediaSessionService() {
         exo.setMediaItem(item)
         exo.prepare()
         exo.playWhenReady = true
-        // Every load of a real address is a title being watched, which is the whole trigger a
-        // preview has. A hop to a backup of the same print seeds again through the same line, and
-        // the engine's own idempotence turns that second ask into no second row. A kept copy played
-        // from disk is not: its address is our loopback proxy, which names no handle of the
-        // redirector's, so the ask falls through to nothing.
-        seedPreviewFor(rendition)
     }
 
     private fun applyDecision(
@@ -398,77 +371,6 @@ class PlaybackService : MediaSessionService() {
             while (true) {
                 delay(AUTO_QUALITY_TICK_MS)
                 evaluateAutoQuality()
-            }
-        }
-    }
-
-    /**
-     * Feed the offline cache the playhead, from the one place that is alive for the whole of
-     * playback.
-     *
-     * This is the pump the brief's `onPlayheadAdvanced` hook runs on. The engine's entry point looks
-     * a task up by the key of the address being watched and returns when nothing answers, so a
-     * progressing playhead only extends retention if SOMETHING is publishing it — and until now the
-     * only publisher was the player screen's 200 ms UI ticker, which stops the moment the viewer
-     * leaves the screen. Backgrounding a title to keep listening is the normal way this app is used,
-     * so the cache was being fed while the poster was on screen and never again. The service owns the
-     * player, so the service owns the position.
-     *
-     * Five seconds, and only on a move: [CacheCoordinator.onPlayheadAdvanced] answers a single
-     * bounded pass and then parks until the byte it is shown advances further, so a faster feed
-     * buys nothing but [com.raddstream.app.data.cache.CacheTaskDao] lookups — five a second at the
-     * old cadence, for a window measured in tens of megabytes.
-     */
-    private fun startPlayheadPump() {
-        scope.launch {
-            var lastReportedMs = -1L
-            while (true) {
-                delay(PLAYHEAD_PUMP_MS)
-                val exo = player ?: continue
-                // A paused player has no forward edge to anticipate; a seek still moves the
-                // position, and that is reported on the next tick exactly like playback does.
-                if (!exo.isPlaying) continue
-                val duration = if (exo.duration > 0L) exo.duration else exo.contentDuration
-                if (duration <= 0L) continue
-                val position = exo.currentPosition.coerceAtLeast(0L)
-                if (position == lastReportedMs) continue
-                lastReportedMs = position
-                store.reportPlayhead(store.activeRendition()?.playback?.playUrl, position, duration)
-            }
-        }
-    }
-
-    /**
-     * Watching is not keeping, and this says nothing either way. It creates the one opportunistic
-     * row the playhead pump above needs in order to have anything to extend: the engine's playhead
-     * entry point resolves a task by the watched address and no-ops when there is none, so a
-     * preview that is never seeded leaves the whole ahead-of-playback path dead on arrival.
-     *
-     * Silent by contract. A preview nobody asked for must not be able to produce a gate, a spinner,
-     * a toast, a Downloads row it cannot fill, or an evicted copy it did not want — [CacheEngineHolder]
-     * gives the engine every one of those refusals, and none of them belongs on screen.
-     */
-    private fun seedPreviewFor(rendition: PlaybackRendition?) {
-        val playback = rendition?.playback ?: return
-        val url = playback.playUrl?.takeIf { it.isNotBlank() } ?: return
-        val handle = playback.streamId?.takeIf { it.isNotBlank() } ?: return
-        val engine = CacheEngineHolder.engine ?: return
-        scope.launch {
-            try {
-                engine.seedPreview(
-                    PreviewRequest(
-                        key = CacheSessionKey(renditionKey = handle, url = url),
-                        url = url,
-                        expectedTotalBytes = rendition.print.sizeBytes.takeIf { it > 0L },
-                        resumable = playback.resumable || playback.acceptsRanges == true,
-                        printLabel = rendition.displayLabel(),
-                    ),
-                )
-            } catch (cancelled: kotlinx.coroutines.CancellationException) {
-                throw cancelled
-            } catch (_: Exception) {
-                // The stream plays exactly as it would have. A preview is the only kind of cache
-                // work that can fail without the viewer ever having a right to know.
             }
         }
     }
@@ -664,9 +566,36 @@ class PlaybackService : MediaSessionService() {
         super.onDestroy()
     }
 
+    /**
+     * The instant-start buffer. Media3's shipped default waits for 2.5 s of media before it
+     * will start playing, which on this backend — a 302 to a hoster, then its own first
+     * bytes — reads as a two-and-a-half-second freeze on every single play. Starting at
+     * 500 ms makes the first frame land as soon as there is anything to show; the wider
+     * after-rebuffer window is what keeps a dying link from stutter-starting instead.
+     * min/max are Media3's own defaults, left alone so only the *start* threshold moved.
+     */
+    private fun instantStartLoadControl(): LoadControl = DefaultLoadControl.Builder()
+        .setBufferDurationsMs(
+            /* minBufferMs = */ DEFAULT_MIN_BUFFER_MS,
+            /* maxBufferMs = */ DEFAULT_MAX_BUFFER_MS,
+            /* bufferForPlaybackMs = */ START_BUFFER_MS,
+            /* bufferForPlaybackAfterRebufferMs = */ REBUFFER_START_BUFFER_MS,
+        )
+        .build()
+
     companion object {
         /** MX default double-tap / seek button increment. */
         const val MX_SKIP_MS = 10_000L
+
+        /** `DefaultLoadControl`'s own shipped min/max buffer — not a tuning decision, a non-change. */
+        private const val DEFAULT_MIN_BUFFER_MS = 50_000
+        private const val DEFAULT_MAX_BUFFER_MS = 100_000
+
+        /** Play as soon as half a second of media is buffered. */
+        private const val START_BUFFER_MS = 500
+
+        /** …but be less eager after a stall, or one slow second restarts the buffering loop. */
+        private const val REBUFFER_START_BUFFER_MS = 1_000
 
         /**
          * How often Auto is allowed to move a rung. Comfortably longer than the switcher's
@@ -675,15 +604,6 @@ class PlaybackService : MediaSessionService() {
          * re-buffer rather than within a scene.
          */
         const val AUTO_QUALITY_TICK_MS = 2_000L
-
-        /**
-         * How often the service offers the playhead to the offline cache. Longer than the UI's own
-         * 200 ms clock on purpose: the engine answers one bounded pass per advance and then parks,
-         * so anything faster is a database lookup per frame for a window that is tens of megabytes
-         * wide. Five seconds is short enough that a viewer who seeks onto unbuffered ground has an
-         * ahead-pass running before the player has re-buffered twice.
-         */
-        const val PLAYHEAD_PUMP_MS = 5_000L
 
         /** Loads worth measuring: media bytes. Subtitles and metadata would dilute the rate. */
         val MEASURABLE_TRACK_TYPES = setOf(C.TRACK_TYPE_DEFAULT, C.TRACK_TYPE_VIDEO, C.TRACK_TYPE_AUDIO)

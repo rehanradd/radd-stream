@@ -7,7 +7,6 @@ import com.raddstream.app.player.CacheSnapshot
 import com.raddstream.app.player.CacheState
 import com.raddstream.app.player.KeepResult
 import com.raddstream.app.player.PlayheadTick
-import com.raddstream.app.player.PreviewRequest
 import com.raddstream.app.player.ProgressiveCacheEngine
 import com.raddstream.app.player.StoragePressure
 import com.raddstream.app.repository.CacheRepository
@@ -37,9 +36,14 @@ import java.util.concurrent.ConcurrentHashMap
  * ([KeepIdentity.sourceKeyFor]). A non-redirector address simply has no task, so the engine reports
  * null rather than inventing progress or touching a foreign host.
  *
- * RETENTION: the window is read through [KeepTtlHolder] on every use rather than injected once as a
- * frozen [TtlHours] — this class is a `@Singleton` that outlives a settings change, and it would
- * otherwise keep quoting the old window to the player after the sweep had moved to the new one.
+ * RETENTION: two classes, and this class is where they part. A rolling auto-preview copy keeps
+ * its [CacheOrigin.AUTO_PREVIEW] origin and ages out on the window read through [KeepTtlHolder] —
+ * read on every use rather than injected once as a frozen [TtlHours], because this class is a
+ * `@Singleton` that outlives a settings change and would otherwise keep quoting the old window to
+ * the player after the sweep had moved to the new one. A keep the viewer tapped in the player is
+ * promoted by [CacheCoordinator.keepNow] to `USER_KEEP`, which [TtlPolicy] never auto-deletes, so
+ * [adopt] reports no expiry for it (`ttlSeconds = null`, the same "null = permanent" convention
+ * [com.raddstream.app.player.CacheSnapshot.previewExpiresAt] already carries).
  */
 @Singleton
 class OfflineCacheEngine @Inject constructor(
@@ -71,7 +75,6 @@ class OfflineCacheEngine @Inject constructor(
 
     override suspend fun adopt(request: AdoptRequest): KeepResult {
         val handle = KeepIdentity.handleFromRedirectorUrl(request.url) ?: return KeepResult.EngineNotWired
-        val sourceKey = KeepIdentity.sourceKeyFor(handle)
         val outcome = repository.keep(
             handle = handle,
             title = "",
@@ -79,59 +82,37 @@ class OfflineCacheEngine @Inject constructor(
             resumable = request.resumable,
             printLabel = request.printLabel,
         )
-        when (outcome) {
+        return when (outcome) {
             is KeepOutcome.NoSpace ->
-                return KeepResult.StorageFull(requiredBytes = outcome.requiredBytes, availableBytes = outcome.availableBytes)
+                KeepResult.StorageFull(requiredBytes = outcome.requiredBytes, availableBytes = outcome.availableBytes)
             KeepOutcome.Unavailable ->
-                return KeepResult.Failed("This copy can't be kept on the connected server.")
-            is KeepOutcome.Enqueued, is KeepOutcome.AlreadyKept -> Unit
+                KeepResult.Failed("This copy can't be kept on the connected server.")
+            is KeepOutcome.Enqueued, is KeepOutcome.AlreadyKept -> {
+                val sourceKey = KeepIdentity.sourceKeyFor(handle)
+                // A tap in the player is an explicit keep, not a rolling preview: hand the task to
+                // the coordinator's own handoff entry point, which adopts the bytes already on disk,
+                // promotes the task so the sweeper stops aging it out, and returns the handle this
+                // session plays from. It answers null only when there is no task to promote — and a
+                // null there is a refusal, never a keep.
+                val handoff = coordinator.keepNow(sourceKey)
+                val task = taskDao.getBySourceKey(sourceKey)
+                when {
+                    handoff == null ->
+                        KeepResult.Failed("This copy can't be kept on the connected server.")
+                    task?.stateEnum == CacheTaskState.COMPLETED ->
+                        KeepResult.Stored(
+                            localHandle = sourceKey,
+                            playableOffline = hasCommittedFile(sourceKey),
+                        )
+                    // Still driving to 100%. The copy is app-private either way — only this app can
+                    // open it — and it now has no expiry, which is what a null window says.
+                    else -> KeepResult.OnlyPlayableInApp(
+                        reason = "Saved for offline playback in this app only",
+                        ttlSeconds = null,
+                    )
+                }
+            }
         }
-        // THE PIN. The row now exists — created just now, or already holding the bytes this viewer
-        // has been watching — and keepNow is the handoff: it promotes task and file rows out of the
-        // retention window and keeps driving from the committed ranges instead of from zero. Reading
-        // the origin back from the row rather than from a flag is what keeps this answer and the
-        // sweeper's decision the same fact.
-        coordinator.keepNow(sourceKey)
-        val task = taskDao.getBySourceKey(sourceKey)
-            ?: return KeepResult.Failed("The keep could not be stored on this device.")
-        return when {
-            task.stateEnum == CacheTaskState.COMPLETED ->
-                KeepResult.Stored(localHandle = task.sourceKey, playableOffline = hasCommittedFile(task.sourceKey))
-            // Pinned by the tap above: no window, no auto-delete, so null and NOT a number. The
-            // player renders null as "until you delete it" — reporting the live TTL here would
-            // promise a delete the sweeper has been told never to run.
-            task.originEnum == CacheOrigin.USER_KEEP -> KeepResult.OnlyPlayableInApp(
-                reason = "Kept on this device until you delete it",
-                ttlSeconds = null,
-            )
-            else -> KeepResult.OnlyPlayableInApp(
-                reason = "Saved for offline playback in this app only",
-                ttlSeconds = keepTtl.ttlHours().millis / 1000L,
-            )
-        }
-    }
-
-    /**
-     * The viewer pressed play, so the engine would like bytes ahead of the playhead. Nothing about a
-     * preview may surface: no result to show, no row in the Downloads list for bytes nobody asked
-     * for, no eviction of a copy somebody did. Every one of those is why this returns Unit and why
-     * the two refusals below happen BEFORE a row is written rather than after.
-     */
-    override suspend fun seedPreview(request: PreviewRequest) {
-        val handle = KeepIdentity.handleFromRedirectorUrl(request.url) ?: return
-        val totalBytes = request.expectedTotalBytes?.takeIf { it > 0L }
-        // Unknown size is not "free": a preview pass of a stream whose length the catalog does not
-        // know still pulls one bounded ahead-window, so that is the number the budget is asked about.
-        // Guessing 0 would let a spent data budget buy a real download.
-        val asksForBytes = totalBytes ?: AheadFetcher.DEFAULT_AHEAD_BYTES
-        if (!coordinator.mayPreview(asksForBytes)) return
-        repository.preview(
-            handle = handle,
-            title = "",
-            sizeBytes = totalBytes,
-            resumable = request.resumable,
-            printLabel = request.printLabel,
-        )
     }
 
     override suspend fun cancelKeep(key: CacheSessionKey) {

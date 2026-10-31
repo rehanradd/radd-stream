@@ -38,11 +38,11 @@ import com.raddstream.app.data.cache.CacheTaskEntity
  * it never sent. This is one more nullable ADD COLUMN on the table a viewer would notice losing,
  * so it is DDL like 4 and 5 rather than the destructive fallback.
  *
- * Version 7 adds `ad_cadence`, the three rows that make an ad cap survive a process death. It is
- * a new table with no prior data and no nullable column: every field is written by this build the
- * moment it is meaningful, and an absent stamp is expressed as zero rather than as NULL so
- * [com.raddstream.app.data.local.AdCadenceRows] has one shape to read. Real DDL again, because the
- * destructive fallback on this builder would still take `favorite_posts` with it.
+ * Version 7 is the app half of the adult invariant. `favorite_posts` gains the restricted flag
+ * itself and the stamp of the last server answer, and the new `unavailable_works` table records
+ * the ids the server has refused by name. All three are additive and every existing row survives
+ * unchanged — which is the point of writing it as DDL: the row that must stop *showing* is still
+ * a row the viewer chose to keep, and a compliance fix that empties a saved list is a second bug.
  */
 @Database(
     entities = [
@@ -52,7 +52,7 @@ import com.raddstream.app.data.cache.CacheTaskEntity
         ByteRangeManifestEntity::class,
         SyncedProgressEntity::class,
         WatchHistoryEntity::class,
-        AdCadenceEntity::class,
+        UnavailableWorkEntity::class,
     ],
     version = 7,
     exportSchema = false,
@@ -64,7 +64,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun byteRangeManifestDao(): ByteRangeManifestDao
     abstract fun syncedProgressDao(): SyncedProgressDao
     abstract fun watchHistoryDao(): WatchHistoryDao
-    abstract fun adCadenceDao(): AdCadenceDao
+    abstract fun unavailableWorkDao(): UnavailableWorkDao
 
     companion object {
         /**
@@ -142,17 +142,25 @@ abstract class AppDatabase : RoomDatabase() {
         }
 
         /**
-         * 6 → 7: the ad cadence table. Three rows, one per surface, and the column names and
-         * nullability are Room's own for [AdCadenceEntity] — the entities declare `TEXT NOT NULL`
-         * / `INTEGER NOT NULL` for all three, so a `surface TEXT` here would throw Room's runtime
-         * schema validation the first time a device opened its own database.
+         * 6 → 7: the adult half. Two nullable columns on `favorite_posts` (the flag when a
+         * payload ever carried it, and the stamp of the last server answer) plus the refusal
+         * ledger, and exactly as in 5 → 6 no existing row is touched: a favourite saved by an
+         * older build arrives undetermined and unanswered, which is what it is, and the first
+         * revalidation pass is what turns that into an answer.
+         *
+         * `unavailable_works` is created rather than rebuilt, so the whole step is additive.
+         * Three statements because SQLite has never supported more than one ADD COLUMN per
+         * statement, and a table's DDL must match the entity Room generated from or open
+         * throws a schema-mismatch the viewer sees as a crash on upgrade.
          */
         val MIGRATION_6_7: Migration = object : Migration(6, 7) {
             override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE favorite_posts ADD COLUMN is18Plus INTEGER")
+                db.execSQL("ALTER TABLE favorite_posts ADD COLUMN checkedAt INTEGER")
                 db.execSQL(
-                    "CREATE TABLE IF NOT EXISTS ad_cadence (" +
-                        "surface TEXT NOT NULL, lastShownAtMs INTEGER NOT NULL, " +
-                        "postersScrolled INTEGER NOT NULL, PRIMARY KEY(surface))",
+                    "CREATE TABLE IF NOT EXISTS unavailable_works (" +
+                        "postId INTEGER NOT NULL, refusedAt INTEGER NOT NULL, " +
+                        "reason TEXT NOT NULL, PRIMARY KEY(postId))",
                 )
             }
         }

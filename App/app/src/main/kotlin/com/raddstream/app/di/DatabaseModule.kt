@@ -5,10 +5,10 @@ import androidx.room.Room
 import com.raddstream.app.data.cache.ByteRangeManifestDao
 import com.raddstream.app.data.cache.CacheFileDao
 import com.raddstream.app.data.cache.CacheTaskDao
-import com.raddstream.app.data.local.AdCadenceDao
 import com.raddstream.app.data.local.AppDatabase
 import com.raddstream.app.data.local.FavoriteDao
 import com.raddstream.app.data.local.SyncedProgressDao
+import com.raddstream.app.data.local.UnavailableWorkDao
 import com.raddstream.app.data.local.WatchHistoryDao
 import dagger.Module
 import dagger.Provides
@@ -75,8 +75,8 @@ object DatabaseModule {
     }
 
     @Provides
-    fun provideAdCadenceDao(database: AppDatabase): AdCadenceDao {
-        return database.adCadenceDao()
+    fun provideUnavailableWorkDao(database: AppDatabase): UnavailableWorkDao {
+        return database.unavailableWorkDao()
     }
 }
 

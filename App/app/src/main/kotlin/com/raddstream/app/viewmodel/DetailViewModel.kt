@@ -29,6 +29,7 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import retrofit2.HttpException
 
 data class DetailUiState(
     val post: PostDetail? = null,
@@ -62,6 +63,14 @@ data class DetailUiState(
  * the Downloads row would then claim a film had been kept. The screen offers the page instead,
  * and says why it is not in the kept list.
  */
+/**
+ * The only sentence this screen may say about an id the server refuses. It names no title, because
+ * a refusal that prints "unavailable: <title>" is a list of one — which is the thing the adult
+ * invariant forbids, and the reason a 404 is answered here instead of with a poster.
+ */
+private const val TITLE_NOT_AVAILABLE =
+    "This title is not available on the connected server."
+
 private const val PAGE_NOT_A_FILE =
     "This source is a page on the provider's site, not a file — open it instead of keeping it."
 
@@ -248,6 +257,28 @@ class DetailViewModel @Inject constructor(
             try {
                 val detail = catalogRepository.getPostDetail(postId)
                 if (detail != null) {
+                    // This round-trip IS an answer about a row the viewer may have saved: record
+                    // it, so a favourite that was hidden by an older 404 comes back on its own when
+                    // the ledger flips the row public again.
+                    favoritesRepository.recordAnswer(
+                        postId,
+                        detail.is18Plus,
+                        AdultPolicy.ServerAnswer.LISTED,
+                    )
+                    if (detail.is18Plus == true) {
+                        // It should not have arrived. The public route 404s a flagged id before it
+                        // can build a body, so this is either an operator-port server or a projection
+                        // that started publishing the flag — and either way the invariant is decided
+                        // here, not by whichever endpoint happened to answer.
+                        _uiState.update {
+                            it.copy(
+                                post = null,
+                                isLoading = false,
+                                error = TITLE_NOT_AVAILABLE,
+                            )
+                        }
+                        return@launch
+                    }
                     // Wide art only: a portrait poster cropped into a 16:9 still looks broken,
                     // so it is used just when the catalog has no backdrop at all.
                     val artwork = detail.backdropList.ifEmpty {
@@ -277,7 +308,20 @@ class DetailViewModel @Inject constructor(
                     syncAccountRepository.adoptWorkRef(postId, detail.workRef)
                 } else {
                     _uiState.update {
-                        it.copy(isLoading = false, error = "This title is not available on the connected server.")
+                        it.copy(isLoading = false, error = TITLE_NOT_AVAILABLE)
+                    }
+                }
+            } catch (ex: HttpException) {
+                // A 404/410 is an ANSWER about this id, and the only one a flagged row ever gives
+                // the public edge. Anything else (401, 429, 500) says nothing about clearance, so it
+                // must not hide a saved row: see AdultPolicy.serverAnswerFor.
+                val answer = AdultPolicy.serverAnswerFor(ex.code(), bodyClaimsSuccess = null)
+                if (answer == AdultPolicy.ServerAnswer.GONE) {
+                    favoritesRepository.recordAnswer(postId, flag = null, answer = answer)
+                    _uiState.update { it.copy(isLoading = false, error = TITLE_NOT_AVAILABLE) }
+                } else {
+                    _uiState.update {
+                        it.copy(isLoading = false, error = friendlyNetworkError(ex, "Failed to load details. Check connection."))
                     }
                 }
             } catch (ex: Exception) {

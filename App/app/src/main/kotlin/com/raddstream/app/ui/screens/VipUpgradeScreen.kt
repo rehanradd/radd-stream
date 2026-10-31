@@ -762,16 +762,12 @@ private fun SectionLabel(text: String) {
     )
 }
 
-/** `PKR 1,500`, or the words for a server that has not priced the plan; never an invented figure. */
+/** `PKR 1,500`; the currency comes from the server, never assumed here. */
 private fun amountLabel(currency: String, amount: Int): String =
-    if (amount <= 0) "Not published by the server" else
-        "$currency " + String.format(Locale.US, "%,d", amount)
+    "$currency " + String.format(Locale.US, "%,d", amount)
 
 /** The yearly card's savings, shown only when the server's two prices actually differ. */
 private fun yearlyBadge(state: VipUiState): String? {
-    // A missing price is not a cheap one: subtracting an unpublished zero from a published figure
-    // would print a saving the server never offered.
-    if (state.monthlyPkr <= 0 || state.yearlyPkr <= 0) return null
     val saving = state.monthlyPkr * 12 - state.yearlyPkr
     return if (saving > 0) "Save ${amountLabel(state.currency, saving)}" else null
 }

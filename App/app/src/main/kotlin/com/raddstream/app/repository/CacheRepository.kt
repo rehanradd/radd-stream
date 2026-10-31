@@ -43,10 +43,12 @@ sealed class KeepOutcome {
  * transition to [CacheCoordinator]. It invents no policy of its own.
  *
  * WHAT A KEEP IS HERE: priority [CachePriority.USER_REQUESTED] (an explicit ask downloads eagerly
- * and is never pre-empted by opportunistic preview work) with origin [CacheOrigin.AUTO_PREVIEW],
- * so it still ages out through the injected retention window after it finishes — exactly what the
- * owner asked for ("auto-delete after the configured window"), and deliberately NOT
- * [com.raddstream.app.data.cache.CacheCoordinator.keepNow], which would make it permanent.
+ * and is never pre-empted by opportunistic preview work) with origin [CacheOrigin.AUTO_PREVIEW], so
+ * this layer never decides permanence of its own accord — a seeded keep ages out through the
+ * injected retention window under [TtlPolicy]. The upgrade is the caller's decision and happens one
+ * layer up: [com.raddstream.app.data.cache.OfflineCacheEngine.adopt] promotes a keep the viewer
+ * tapped in the *player* through [com.raddstream.app.data.cache.CacheCoordinator.keepNow], which is
+ * the "preview → permanent" step rule 4 of the player/cache contract leaves to the engine.
  *
  * NO PROVENANCE LEAKS THROUGH: a keep is keyed by our own opaque handle. The only address ever
  * stored is [CacheTaskEntity.currentUrl], and the factory that produced it
@@ -72,15 +74,6 @@ class CacheRepository @Inject constructor(
      * Keep one opaque handle for offline playback. Seeds it through our redirector, asks the
      * storage gate whether the device can absorb it, and only then inserts a task and hands it to
      * the engine. A refusal returns [KeepOutcome.NoSpace] instead of quietly doing nothing.
-     *
-     * The row this creates is NOT yet permanent: like a preview it is inserted with an
-     * `AUTO_PREVIEW` origin and only [CachePriority.USER_REQUESTED] priority, and it is
-     * [com.raddstream.app.data.cache.CacheCoordinator.keepNow] that moves both the task and its file
-     * row to `USER_KEEP` — the origin [TtlPolicy] rule 1 refuses to delete and
-     * [com.raddstream.app.data.cache.EvictionCandidate] refuses to evict. That is why
-     * [com.raddstream.app.data.cache.OfflineCacheEngine.adopt] calls the two in one sequence: a
-     * caller that enqueued through this method and never pinned would download a file the sweeper
-     * ages out on schedule while the Downloads list calls it kept.
      */
     suspend fun keep(
         handle: String,
@@ -88,59 +81,6 @@ class CacheRepository @Inject constructor(
         sizeBytes: Long?,
         resumable: Boolean,
         printLabel: String = "",
-    ): KeepOutcome = enqueue(
-        handle = handle,
-        title = title,
-        sizeBytes = sizeBytes,
-        resumable = resumable,
-        printLabel = printLabel,
-        priority = CachePriority.USER_REQUESTED,
-        // An explicit ask may displace other work: that is what the viewer asked for, and the
-        // eviction planner's own ranking decides what goes.
-        mayEvictForAdmission = true,
-    )
-
-    /**
-     * The player is watching [handle], so the engine would like bytes ahead of the playhead.
-     *
-     * Same row, same identity, two deliberate differences from [keep], and both are the reason this
-     * is a separate call rather than a flag on it:
-     *  - priority [CachePriority.AUTO_PREVIEW], which is what makes the work pre-emptible by a real
-     *    keep and what the scheduler's network + budget gate applies to at all;
-     *  - admission only ever [AdmitDecision.Admit]. A preview must never delete something the viewer
-     *    asked to keep in order to make room for bytes nobody requested, so an `EvictThenAdmit`
-     *    answer is a refusal here and a green light for [keep]. The caller shows nothing either way:
-     *    an opportunistic pass that did not start is invisible by design, and the alternative —
-     *    telling a viewer their watch failed for storage reasons — would be a gate dressed as an
-     *    error message.
-     *
-     * An existing row is never downgraded: a task already enqueued as an explicit keep stays an
-     * explicit keep no matter who asks next.
-     */
-    suspend fun preview(
-        handle: String,
-        title: String,
-        sizeBytes: Long?,
-        resumable: Boolean,
-        printLabel: String = "",
-    ): KeepOutcome = enqueue(
-        handle = handle,
-        title = title,
-        sizeBytes = sizeBytes,
-        resumable = resumable,
-        printLabel = printLabel,
-        priority = CachePriority.AUTO_PREVIEW,
-        mayEvictForAdmission = false,
-    )
-
-    private suspend fun enqueue(
-        handle: String,
-        title: String,
-        sizeBytes: Long?,
-        resumable: Boolean,
-        printLabel: String,
-        priority: CachePriority,
-        mayEvictForAdmission: Boolean,
     ): KeepOutcome {
         val seed = factory.seedForKeep(handle, sizeBytes, resumable) ?: return KeepOutcome.Unavailable
 
@@ -151,20 +91,17 @@ class CacheRepository @Inject constructor(
             return KeepOutcome.AlreadyKept(existing.id)
         }
 
-        val osFree = storage.osFreeBytes()
         when (val decision = admitGate(seed.totalSizeBytes)) {
-            is AdmitDecision.Admit -> Unit
+            is AdmitDecision.Admit, is AdmitDecision.EvictThenAdmit -> Unit
             // `availableBytes` is the device's genuine free space, never the rule that
             // refused: the caller's sentence is "needs X, Y free", and a per-file cap or
             // a ceiling headroom is not free space.
             is AdmitDecision.RejectPerFileCap ->
-                return KeepOutcome.NoSpace(decision.requestedBytes, osFree)
+                return KeepOutcome.NoSpace(decision.requestedBytes, storage.osFreeBytes())
             is AdmitDecision.RejectTooBigForCeiling ->
-                return KeepOutcome.NoSpace(decision.requestedBytes, osFree)
+                return KeepOutcome.NoSpace(decision.requestedBytes, storage.osFreeBytes())
             is AdmitDecision.RejectNoEvictableHeadroom ->
-                return KeepOutcome.NoSpace(seed.totalSizeBytes, osFree)
-            is AdmitDecision.EvictThenAdmit ->
-                if (!mayEvictForAdmission) return KeepOutcome.NoSpace(seed.totalSizeBytes, osFree)
+                return KeepOutcome.NoSpace(seed.totalSizeBytes, storage.osFreeBytes())
         }
 
         val entity = CacheTaskEntity(
@@ -176,7 +113,7 @@ class CacheRepository @Inject constructor(
             title = title.trim(),
             printLabel = printLabel.trim(),
             origin = CacheOrigin.AUTO_PREVIEW.name,
-            priority = priority.name,
+            priority = CachePriority.USER_REQUESTED.name,
             state = CacheTaskState.QUEUED.name,
             totalSizeBytes = seed.totalSizeBytes,
             enqueueElapsedRealtime = clock.nowElapsedRealtime(),
