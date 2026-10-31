@@ -574,3 +574,42 @@ crawl, no scan of the live tree beyond read-only greps; both runaway host-wide g
 killed when load hit 8.74. Kotlin only, no new dependency, `App/**` paths staged by name, no tag, no
 release, no merge, no service restart, no nginx change, no device claim, nothing that could make a
 flagged `is_18_plus` row listable or playable, `/opt/radd-stream` never written.
+
+### Session 30 — The guard for the guards: wiring scans that refuse an empty subject (Q4-PLAYER-GUARD-FOLLOWUP) (2026-10-31)
+
+**Agent:** Qoder (q4 player lane, worktree `/tmp/q4_player_guards` off trunk, branch
+`q4-player-guard-followup`). The supervisor numbered the onboarding lane's work Session 29 in its
+own branch; this entry takes 30 and says so rather than guessing at the merge.
+**Status:** test-only change, written under the load rule — no Gradle, no build, no test executed.
+The hosted runner judges it.
+**What landed, in `PlayerBufferingTest.kt` only:**
+- The two wiring assertions that used to scan the whole of `PlaybackService.kt` are now slice-scoped
+  and name the real owners: `.setLoadControl(loadControl())` must be inside the builder block
+  between `ExoPlayer.Builder(this)` and `player = exo` (`PlaybackService.kt:116-133`), and
+  `setBufferDurationsMs(...)` plus `setPrioritizeTimeOverSizeThresholds(PlayerBuffering.PRIORITIZE_TIME_OVER_SIZE)`
+  must be inside `private fun loadControl(): DefaultLoadControl =` … `override fun onGetSession`
+  (`:157-166`). A whole-file `contains` is satisfied by a comment, an import, or the value left in
+  the wrong function; a slice is not. The 500 ms stays pinned as a value and now also as a slot.
+- `requireSlice` is the new rule, and it is the reason this session exists: Kotlin's `substringAfter`
+  hands back the **entire string** when its delimiter is absent. Every slice written with those calls
+  therefore keeps scoring a file whose subject has been renamed or deleted, and a leftover `.build()`
+  elsewhere makes the positive assertion pass over a policy that is gone. The helper takes both
+  markers plus the shape the slice must have, refuses when either marker is missing or the slice does
+  not contain the shape, and only then returns the slice.
+- `a scan whose subject moved is refused instead of scoring what is left` is the positive control for
+  that helper: it scores a well-formed sample first (proving the helper is not simply always
+  refusing), then shows a renamed builder, a moved assignment, a deleted `.build()` and an
+  un-installed load control each refused or distinguished — the last one deliberately *scored* by the
+  helper and refused by the assertion on its contents, because "the slice is fine, the wiring is not"
+  is the case a guard has to tell apart from "the slice is gone".
+**Deliberately not duplicated:** the manifest-MIME wiring is already guarded against its real owner in
+`UniversalSourceTest.theFactoryBuildsTheTypeIntoTheItemItReturns` (the
+`manifestMimeType(rendition.playback)?.let { builder.setMimeType(it) }` pattern, with its own
+dead-helper control). What that guard does **not** do is prove the declaration lands *before*
+`builder.build()` — a reordering is legal Kotlin, keeps the pattern intact, and silently stops
+declaring anything, while every behavioural case in the suite keeps passing because it calls the rule
+directly. Left as a named gap rather than half-fixed in the wrong suite: the fix belongs next to the
+pattern it extends, in `UniversalSourceTest`, and it needs the same marker-matched slice treatment as
+above.
+**Rules kept:** no Gradle, no test module run, no python, no merge, no tag, no `git add -A`, nothing
+pushed to `main`/`master`, `/opt/radd-stream` opened read-only at worst and never written.
