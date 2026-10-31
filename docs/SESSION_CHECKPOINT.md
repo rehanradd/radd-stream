@@ -40,6 +40,33 @@ Update this file after each independently verified milestone so work can resume 
    not in `backend-ci.yml` at all**, so `accounts.py` and `payments.py` — the money and the keys —
    have no hosted gate on any lane's push. Owner's call to register them; this lane reported and did
    not silently widen everyone's gate.
+9. **`[Q3-PREMERGE-P]` — the pre-merge catalog copy and four-site merge are GATED, NOT OPEN.** qoder1
+   approved the plan at `ef91096` with four corrections, landed into
+   [`../Fast_Fetch/checkpoints/20261101-01xx-q3-lane-premerge-copy-plan-queued-not-run.md`](../Fast_Fetch/checkpoints/20261101-01xx-q3-lane-premerge-copy-plan-queued-not-run.md):
+   **C1** the source-side `wal_checkpoint(TRUNCATE)` is withdrawn — a read-write open checkpoints and
+   rewrites the file it touches, so the instruction would have written into five databases that are not the
+   lane's, and `.backup` from `-readonly` folds the WAL by construction; **C2** `fuser` is informational only
+   — the service holds **zero** `.db` fds between requests, so an empty `fuser` is the healthy state and my
+   abort fired on it every time; the load-bearing guard is the source mtime+size pair taken immediately
+   before *and* after the read; **C3 excluded `mp4moviez` and C3R reversed it inside the hour — merge all
+   FIVE, mp4moviez last**, through `Fast_Fetch/importers/convert_mp4moviez.py`, which is already on trunk
+   (`81cdff8`, `eac15bb`), opens the legacy db with `mode=ro`, and `os.replace`s a `mkstemp` build onto its
+   target, so no schema code had to be written at 2 am after all; **C4** new Step 3.5
+   baselines the verified copy so a failed merge never costs a second production read. Two defects this
+   exchange produced, one on each side: qoder1's dispatched `--target` named `mp4moviez_staging.db`, which
+   **already exists** and is refused without `--force` (`:548-549`) — and, counted read-only, is a **stale
+   pre-`81cdff8` vault holding 11,403 posts / 43 flagged where the measured conversion is 28,066 / 88**, so
+   merging the file at that path would have merged the exact surprise the stop-condition forbids; and my
+   Step 7 kept the retired exclusion wording while Step 5.5 already merged five sites, which would have made
+   the report misstate the database it describes. Fix approved: a fresh target name
+   `mp4moviez_staging_20261101.db` (C3R-final) and no `--force` outside my own vault. Start signal:
+   qoder1's `SUSTAINED-UNDER4` post **and** `MemAvailable > 1,500 MB` / `SwapFree > 800 MB` — and tonight's
+   arithmetic does not fund the plan: the 01:52 sub-4 window (load1 3.48) closed at 01:55 (load1 4.85) after
+   ~3 minutes, shorter than the 3–10 minute estimate for the 6.4 GB copy read. **Nothing has run against the
+   catalog and this lane stops at the sha.** It is
+   recorded here rather than in `Fast_Fetch/CONTINUITY.md` because that file is at 11,983 of its own
+   12,000-byte archive guard: item 16 would not fit, and I trimmed nothing to make room rather than silently
+   drop another lane's facts.
 
 ---
 ## Rotated session history
