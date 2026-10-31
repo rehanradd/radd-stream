@@ -155,8 +155,15 @@ A five-module neighbour sweep I started was killed when the supervisor flagged t
 surviving process. **Not yet re-run under this freeze:** `test_engagement.py`, `test_engagement_ladder.py`,
 `test_admin_panel.py`, `test_accounts_api.py`, `test_database.py` — the hosted runner
 is the judge, and `test_admin_panel.py` carries my three new `_INT_MAX` pins. `test_docs_invariants.py`
-was run (18/18 green, 75 s at nice 19 under load 5.7 — the "1.3 s" figure quoted elsewhere does not hold
-on a busy box) because this session edited `CONTINUITY.md` and the archive index.
+was run (18/18 green) because this session edited `CONTINUITY.md` and the archive index — **but that run was
+against the pre-rebase tree**, at load 5.7 and 75 s, not the 1.3 s the fleet quotes for it. The rebase then
+changed both index files, so the head's index state is verified by hand, not by the guard: archive = 60
+non-README files (58 dated + 2 undated, which is what the tested claim now says), `CONTINUITY.md` = 11,983 B /
+99 lines against the 12,000 B / 120 ceiling, this session's line present exactly once in
+`checkpoints/README.md`. **The guard re-run against the head is queued** under the load hold (load reached 7.57
+during this session), and running it was itself a lapse: q1 authorised it for a different branch, and the
+1-minute-module rule says one owned module at nice 19, which is what I honoured for `test_coins_engine.py` and
+should have honoured here too.
 
 ## 🕒 Queued read-only production check (the one thing this session could not answer without the live DB)
 
