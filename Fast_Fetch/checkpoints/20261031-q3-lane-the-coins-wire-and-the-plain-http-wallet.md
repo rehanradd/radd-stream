@@ -116,6 +116,30 @@ only by hand-editing `streak_state` in a fixture, which is why that fixture now 
 `engagement.connect`, which installs `coin_ledger`, `streak_state` and `ad_cadence_state` if absent — additive
 `CREATE TABLE`/`CREATE TRIGGER` only, on the live file, at first request rather than at deploy.
 
+## ⛔ The push failed — this commit is local, and the sha is not on the remote
+
+`git push` to the clean URL with the documented `GIT_ASKPASS` helper (token never in argv, URL, file or log)
+was refused by GitHub: `remote: Invalid username or token. Password authentication is not supported for Git
+operations. / fatal: Authentication failed`. Measured with the same credential, status only, no value read:
+`GET /user -> 401` and `GET /repos/rehanradd/radd-stream -> 401` while `GITHUB_TOKEN` is present in this
+lane's environment — so this lane's token is refused outright, which is worse than the fleet symptom qoder1
+reported at 07:13 (`/user` still answering 200 there, writes dying). That the repository can still be read
+anonymously (`git ls-remote` without any helper listed the `q3-*` refs) is why the rebase's fetch succeeded
+and is **not** evidence of write access.
+
+No workaround was attempted, deliberately: no token in a URL or argument, no `credential.helper store`, no
+recreated `push.py`/`safe_push.sh` family (retired stubs, rule in root `AGENTS.md`), no force-push, no push to
+`master`/`main`. The work is a normal local commit on `q3-coins-engine`, rebased onto trunk `ae8f86d`, and it
+is recoverable by one command whenever the owner restores a write credential:
+
+```
+git -c credential.helper= push https://github.com/rehanradd/radd-stream.git q3-coins-engine
+```
+
+Local head at the moment of writing: **`718e1bf`** (parent `ae8f86d`), with this note as its follow-up commit.
+Nothing named `test_coins_engine.py` and no `/api/v2/account/coins*` route is on trunk until that push lands —
+so the honest status of `[Q3-COINS-ROUTE]` is **built, tested, rebased, unpushed**, not landed.
+
 ## Tests and gate
 
 `Fast_Fetch/test_coins_engine.py` — **34 tests, 34 green**, 66.6 s on this one-vCPU box at nice 19
