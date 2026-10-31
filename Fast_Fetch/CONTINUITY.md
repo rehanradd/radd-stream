@@ -7,7 +7,7 @@
 
 ## ✅ Open items — index (q3, 2026-10-30; pointers only)
 
-1. **This file is a pointer, not a history.** 54 session files (52 dated + 2 undated) cover
+1. **This file is a pointer, not a history.** 55 session files (53 dated + 2 undated) cover
    2026-10-23 → 2026-10-31,
    every one of them verbatim: [`checkpoints/README.md`](checkpoints/README.md). Nothing was
    deleted, reworded, or summarized. The count is `ls Fast_Fetch/checkpoints/*.md` minus `README.md`,
@@ -53,22 +53,9 @@
     second** — into [`docs/ADMIN_PANEL_ACCESS.md`](../docs/ADMIN_PANEL_ACCESS.md), the panel's own
     guide, which also separates the running tree from the repository. Full session text, verbatim,
     rotated into `checkpoints/20261030-q3-lane-launch-readiness-job-a-the-operators-own-rea.md`.
-11. **JOB B (tasks #22/#30), branch `q3-engagement-ladder` — and the brief's premise was already false.**
-   The wallet/streak/ad-cadence tables and all 16 `MONETIZATION_FIELDS` knobs already existed, and money is
-   an **integer in whole rupees** (`_MONEY` refuses decimals; `amount_pkr` is `INTEGER`) — not paise. The four
-   rules caught: `redeem_pass` debited coins *before* branching on the tier name (now cost and expiry both
-   resolve from the tier's own `expiry_rule`, enforced by an AST walk); `_engagement_public` priced the ladder
-   from its own tuples while the spender read `PASS_LADDER` (now one `resolve_ladder` feeds both);
-   `usage_stats._payments` was the last `float()` money field (now `int`); and
-   `fetch_database_payload(full=True)` published `source_url`/`final_url`/`resource_id`/`intermediate_url` for
-   a **flagged** row, which the dashboard turned into Play/Copy/Stream/m3u controls — `_withhold_playable`
-   withholds them and names the refusal, the ledger keeps every column, the badge stays operator-only.
-   27 + 17 tests, `test_engagement_ladder.py` + `test_operator_adult_projection.py`. Full text:
-   `checkpoints/20261030-09xx-q3-lane-job-b-the-pass-ladder-is-data-and-a.md` — which also carries a
-   measurement contradicting two documents: **`redact.link_is_adult` returns False for an unknown link id**,
-   not the True its docstring and root `AGENTS.md` claim, so a typo reaches `resolve_live_source` and is
-   stopped there rather than at the adult gate. Reported, not fixed.
+11. **JOB B (tasks #22/#30), branch `q3-engagement-ladder`** — the four monetization rules caught in review (`redeem_pass` debited before branching, `_engagement_public` double-priced the ladder, `usage_stats._payments` was the last float money field, `fetch_database_payload(full=True)` published playable columns for a flagged row), 27 + 17 tests, and the measurement that contradicts two documents: **`redact.link_is_adult` returns False for an unknown link id**, not the True its docstring and root `AGENTS.md` claim. Rotated verbatim into that checkpoint file; nothing was reworded.
 12. `[Q3-ONBOARD-PAY]` — trial mint + PIN link + relay credit, 83 tests, CI 33: `checkpoints/20261031-q3-lane-zero-friction-onboarding-and-the-merchant-relay.md`.
+13. **qoder1 supervisor pass — `0e5ae28` + `8ca798a` + `a424ffc` landed, `q3-adultkey-net` and `q2-raddrelay` refused:** all four workers were idle; qoder4's seek fix is missing from the landed app. Full text: `checkpoints/20261031-q1-supervisor-three-lanes-reviewed-gated-and-landed-two.md`.
 
 ---
 

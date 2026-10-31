@@ -189,3 +189,23 @@ page computation and the `return` dict (`truncated`/`clamped`/`ceiling`), JOB B 
 the `sources`/`r_dict` branches. Different lines, same function, so expect a textual conflict that
 resolves by keeping both halves. Neither branch is a fast-forward child of trunk as of `682a65a`; land
 one, then rebase the other onto the merge.
+
+---
+
+## Rotated verbatim out of `CONTINUITY.md` open-items index (2026-10-31, qoder1)
+
+11. **JOB B (tasks #22/#30), branch `q3-engagement-ladder` — and the brief's premise was already false.**
+   The wallet/streak/ad-cadence tables and all 16 `MONETIZATION_FIELDS` knobs already existed, and money is
+   an **integer in whole rupees** (`_MONEY` refuses decimals; `amount_pkr` is `INTEGER`) — not paise. The four
+   rules caught: `redeem_pass` debited coins *before* branching on the tier name (now cost and expiry both
+   resolve from the tier's own `expiry_rule`, enforced by an AST walk); `_engagement_public` priced the ladder
+   from its own tuples while the spender read `PASS_LADDER` (now one `resolve_ladder` feeds both);
+   `usage_stats._payments` was the last `float()` money field (now `int`); and
+   `fetch_database_payload(full=True)` published `source_url`/`final_url`/`resource_id`/`intermediate_url` for
+   a **flagged** row, which the dashboard turned into Play/Copy/Stream/m3u controls — `_withhold_playable`
+   withholds them and names the refusal, the ledger keeps every column, the badge stays operator-only.
+   27 + 17 tests, `test_engagement_ladder.py` + `test_operator_adult_projection.py`. Full text:
+   `checkpoints/20261030-09xx-q3-lane-job-b-the-pass-ladder-is-data-and-a.md` — which also carries a
+   measurement contradicting two documents: **`redact.link_is_adult` returns False for an unknown link id**,
+   not the True its docstring and root `AGENTS.md` claim, so a typo reaches `resolve_live_source` and is
+   stopped there rather than at the adult gate. Reported, not fixed.
