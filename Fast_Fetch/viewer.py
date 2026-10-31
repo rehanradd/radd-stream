@@ -3560,10 +3560,11 @@ class DashboardHandler(BaseHTTPRequestHandler):
         byte-for-byte body whether the caller presented nothing or nonsense.
         """
         if self._through_public_proxy():
+            # 404, not 403: the same sentence the login door tells. A 403 here would
+            # confirm to a scanner that an operator surface answers behind this edge
+            # and only needs the right request, which is the one thing worth hiding.
             self.send_triple(admin_panel._problem(
-                "forbidden", "/operator",
-                "The operator surface is not reachable through the public edge.",
-                stable=True))
+                "not_found", "/operator", "No such route.", stable=True))
             return False
         refusal, session_cookie = admin_panel.gate_operator_port(
             self.client_address[0],
@@ -3844,7 +3845,11 @@ class DashboardHandler(BaseHTTPRequestHandler):
             )
 
         elif path == "/api/health-check":
-            query_params = urllib.parse.parse_qs(parsed.query)
+            # `keep_blank_values` so `?id=` is visible as an empty id rather than
+            # silently becoming "no id" — which on this route means "sweep every
+            # post", the most expensive request the panel can make. A blank value is
+            # the caller's error, exactly like `abc`; it is not an invitation.
+            query_params = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
             # `/api/m3u` and `/api/v1/posts/{id}` all answer a malformed id with a
             # 400 the caller can read. A bare `int()` here raised out of `do_GET`
             # instead, and a handler that raises mid-request drops the socket with no
@@ -3868,7 +3873,11 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self.send_json(resp_payload)
 
         elif path == "/api/heal":
-            query_params = urllib.parse.parse_qs(parsed.query)
+            # `keep_blank_values` for the same reason as `/api/health-check`: with the
+            # default, `?id=` disappears and the route heals post 0, answering
+            # `{"success": true, "error": "Post not found"}` — a 200 that contradicts
+            # itself. A blank id is the caller's error and is answered as one.
+            query_params = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
             # The third member of the same defect class as `/api/m3u` and
             # `/api/health-check`: an unguarded `int()` on a query value raised out of
             # `do_GET` and dropped the connection. It is also the only one of the three

@@ -23,6 +23,7 @@ import tempfile
 import threading
 import unittest
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 from unittest import mock
@@ -39,6 +40,14 @@ import viewer             # noqa: E402
 
 TOKEN = "socket-level-operator-token"
 SITE = "somecdn.site"
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Refuse to follow: `redirect_request` returning None makes `urllib` raise the
+    3xx as an `HTTPError`, so the caller sees the redirect as the server sent it."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
 
 
 def _without_request_id(raw: bytes) -> bytes:
@@ -117,12 +126,19 @@ class TwoPortFixture(unittest.TestCase):
 
     # ---- the socket ------------------------------------------------------- #
     def fetch(self, base, path, method="GET", body=None, headers=None):
+        """One request, answered exactly as sent: redirects are never followed.
+
+        A 30x is the thing under test here, and an opener that followed it would
+        report some other route's status as though this one had said it — and for a
+        stream redirect, would take the test off the box to a third-party host.
+        """
         data = json.dumps(body).encode("utf-8") if body is not None else None
         request = urllib.request.Request(
             base + path, data=data, method=method,
             headers={"Content-Type": "application/json", **(headers or {})})
+        opener = urllib.request.build_opener(_NoRedirect)
         try:
-            with urllib.request.urlopen(request, timeout=10) as response:
+            with opener.open(request, timeout=10) as response:
                 return response.status, dict(response.headers), response.read()
         except urllib.error.HTTPError as error:
             return error.code, dict(error.headers), error.read()
@@ -349,14 +365,21 @@ class SignInOverTheWire(TwoPortFixture):
         self.addCleanup(spec.stop)
 
     def post_form(self, path, form, headers=None):
-        """A real `<form method="post">` submission: urlencoded, not JSON."""
+        """A real `<form method="post">` submission: urlencoded, not JSON.
+
+        Redirects are NOT followed, and that is load-bearing: a successful sign-in
+        is a 303 with the session cookie on it, and an opener that followed it would
+        report the landing route's 401 as though the credential had failed. The
+        redirect itself is the thing under test.
+        """
         body = urllib.parse.urlencode(form).encode("utf-8")
         request = urllib.request.Request(
             self.operator_url + path, data=body, method="POST",
             headers={"Content-Type": "application/x-www-form-urlencoded",
                      **(headers or {})})
+        opener = urllib.request.build_opener(_NoRedirect)
         try:
-            with urllib.request.urlopen(request, timeout=10) as response:
+            with opener.open(request, timeout=10) as response:
                 return response.status, dict(response.headers), response.read()
         except urllib.error.HTTPError as error:
             return error.code, dict(error.headers), error.read()
@@ -409,8 +432,18 @@ class SignInOverTheWire(TwoPortFixture):
         status, headers, raw = self.operator_fetch("/", headers={"Cookie": header})
         self.assertEqual(status, 200, raw[:200])
         self.assertIn(b"<!DOCTYPE", raw[:300])
-        self.assertIn(header, headers.get("Set-Cookie", ""),
-                      "a proven bearer/session should not re-mint on every request")
+        # A caller that already holds a valid session is not handed a second cookie.
+        # Re-minting per response would extend the TTL on every page view and turn an
+        # eight-hour session into one that never ends.
+        self.assertNotIn(admin_panel.OPERATOR_COOKIE, headers.get("Set-Cookie", ""),
+                         "a proven bearer/session should not re-mint on every request")
+        # A bearer-only caller DOES get one, because the dashboard's own `/api/data`
+        # fetch sends no `Authorization` header — that cookie is why the panel works.
+        bearer_status, bearer_headers, _raw = self.operator_fetch(
+            "/", headers={"Authorization": f"Bearer {TOKEN}"})
+        self.assertEqual(200, bearer_status)
+        self.assertIn(admin_panel.OPERATOR_COOKIE, bearer_headers.get("Set-Cookie", ""),
+                      "the machine credential hands out no session, so the panel breaks")
         self.assertEqual(401, self.operator_fetch("/")[0])
         self.assertEqual(401, self.operator_fetch(
             "/", headers={"Cookie": f"{admin_panel.OPERATOR_COOKIE}=9999999999.deadbeef"})[0])
