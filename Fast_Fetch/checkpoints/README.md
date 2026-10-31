@@ -6,6 +6,7 @@ Entries written to `CONTINUITY.md` by another lane *after* the rotation are not 
 trunk `4fe6f65` moved them here the same way, verbatim, with the trunk line range in the header.
 
 - 2026-10-31 — q3 backend lane `[Q3-ONBOARD-PAY]`: the hardware-locked 3-day trial, the PBKDF2 phone+PIN link, and the merchant relay that can credit money — 83 tests, CI step 33 — [`20261031-q3-lane-zero-friction-onboarding-and-the-merchant-relay.md`](20261031-q3-lane-zero-friction-onboarding-and-the-merchant-relay.md)
+- 2026-10-30 — q2 `[Q2-DUB-COLLISION-CENSUS]`: the read-only query exists and is tested; the corpus numbers wait on the load hold — [`20261030-q2-dub-collision-census-the-query-exists-the-numbers-wait.md`](20261030-q2-dub-collision-census-the-query-exists-the-numbers-wait.md)
 - 2026-10-30 — q2 `[Q2-MB-CRAWL-20261030]`: the first real bounded MovieBox crawl (12 rows, 158 releases, 0 sources) — [`20261030-session-2026-10-30-q2-mb-crawl-the-first-real-bounded-crawl.md`](20261030-session-2026-10-30-q2-mb-crawl-the-first-real-bounded-crawl.md)
 - 2026-10-30 — q3 `[Q3-OPS-READS]`: launch readiness JOB A — the operator's own reads are bounded, they say so, and the boundary is named in code — [`20261030-q3-lane-launch-readiness-job-a-the-operators-own-rea.md`](20261030-q3-lane-launch-readiness-job-a-the-operators-own-rea.md)
 - 2026-10-30 — q2 `[Q2-MB-MINT]`: the play grant needs an account; MovieBox stays catalog-only — [`20261030-session-2026-10-30-q2-mb-mint-the-play-grant-needs-an-accou.md`](20261030-session-2026-10-30-q2-mb-mint-the-play-grant-needs-an-accou.md)

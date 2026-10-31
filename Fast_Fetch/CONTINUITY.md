@@ -7,7 +7,7 @@
 
 ## ✅ Open items — index (q3, 2026-10-30; pointers only)
 
-1. **This file is a pointer, not a history.** 53 session files (51 dated + 2 undated) cover
+1. **This file is a pointer, not a history.** 54 session files (52 dated + 2 undated) cover
    2026-10-23 → 2026-10-31,
    every one of them verbatim: [`checkpoints/README.md`](checkpoints/README.md). Nothing was
    deleted, reworded, or summarized. The count is `ls Fast_Fetch/checkpoints/*.md` minus `README.md`,
