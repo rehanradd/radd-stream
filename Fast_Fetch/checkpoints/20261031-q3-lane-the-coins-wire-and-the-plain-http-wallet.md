@@ -169,7 +169,7 @@ again read `GET /user -> 401`, `GET /repos/rehanradd/radd-stream -> 401`. So the
 between the two attempts, and the three commits that landed on trunk in that window (`5cde741`, `babb06f`,
 `8fe83e5`) were not landed by this lane's token — which is the pattern q1 describes ("I run the hosted gate"),
 and it means the recovery command above is a lane's last step, not its next one.
-**Current local heads, both unpushed:** `q3-coins-engine` at **`1e9bffc`** (parent `058b350` ← `058b350`'s
+**Current local heads, both unpushed:** `q3-coins-engine` at **`1e9bffc`** plus this note as one further commit (chain: `058b350` ← `058b350`'s
 parents `eb1d6fb`, `b8944bc`, base trunk `8fe83e5`), and `q3-adultkey-net` at **`f3f6e76`** (parent `5c5db78`,
 base trunk `8fe83e5`) — the two dispatch items, each rebased onto the same trunk sha and each handed over as a
 sha rather than a branch on the remote.
