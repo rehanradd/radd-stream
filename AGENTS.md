@@ -227,7 +227,7 @@ Every agent — no matter how short the session — MUST do this before ending:
    that grows; the workflow file is the only source of truth, so read it instead of quoting a number
    from this file. The historical per-run module lists and test counts moved to
    [`docs/SPEC_AGENTS_MEASURED_NOTES.md`](docs/SPEC_AGENTS_MEASURED_NOTES.md).
-2. `test_database.py` alone is **133** at the tip and `test_vidout.py` is 6/6 — but do not substitute that 3-module quick gate for item 1.
+2. **Quote a test count from the log that executed it, or from `git show <sha>:Fast_Fetch/<module> | grep -cE '^\s+def test_'` — never from prose in this file.** This line has been 76, then 124, then 133 inside a week (`docs/SPEC_AGENTS_MEASURED_NOTES.md`, the "re-count" note), which is what a prose count with no sha costs: every push gate that trusts a stale number is steered by it. Verified by the method at `ee5100f` and again at `11c1008`: `test_database.py` is **133** (runner log `Ran 133 tests in 6.609s`, run `41245756423`) and `test_vidout.py` is **6**. Naming two modules is a quick gate, not item 1 — do not substitute it.
 3. Append a session log to `Fast_Fetch/CONTINUITY.md`
 4. Push with Git over HTTPS using the temporary askpass helper in [`ORACLE_DEPLOYMENT.md`](ORACLE_DEPLOYMENT.md); do not use the legacy per-file API push scripts
 
