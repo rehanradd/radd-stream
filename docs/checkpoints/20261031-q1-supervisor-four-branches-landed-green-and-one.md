@@ -162,3 +162,59 @@ a missing gate; `/actions/runs?branch=<b>` is where you see the other workflow's
 restarted, so the live process still predates this fix; `8137b16` stays red and unlanded; `v1.0.0` is
 still not tagged; no Gradle, no crawl, no production read ran here (load 3.4–7.0 all pass), and the
 only local execution was the markdown guard.
+
+## 8 — the owner's Muse handover: `q3-coins-engine` gated to trunk at `1f97bfe`, and what the green did not cover
+
+**Order received:** gate `q3-coins-engine` at `1f97bfe` into trunk, take q3's L3 review, verify the
+threaded spend test, merge to `master` **and** `main`, report trunk sha and CI to Muse. Constraints
+re-stated by the same order: no tag, no service restart, no credential printed, no Gradle unless the
+gate required it (it did not), load under 4, and **do not re-assign coins work to anyone else**.
+
+**Why no merge commit was needed.** `git merge-base --is-ancestor refs/remotes/q1sup/master
+refs/remotes/q3-coins-engine` → true: the branch is a direct child of `8fe83e5`, so `1f97bfe` *is*
+trunk's descendant and the candidate's own hosted run applies byte-for-byte to the new head. Its
+own contribution was `+22` lines in `backend-ci.yml` (one comment block and exactly one step; 🧪 35→36)
+plus `accounts_api.py 351/1`, `admin_panel.py 43/9`, `engagement.py 106/17`, `test_coins_engine.py
+812/0`, `test_admin_panel.py 21/2`, a 377-line lane checkpoint — **zero deletions of tracked content**.
+
+**The threaded test, read rather than trusted.** `Concurrency.test_ten_concurrent_spends_never_overspend_the_wallet`:
+`grant(100)`, a `threading.Barrier(10)`, one `engagement.connect()` **per thread** (not one shared
+connection), each spending 20, outcomes collected as `spent` / `insufficient` / `error:{exc!r}`, then
+`5 spent / 5 insufficient` and `wallet_state() == (6, 0, 0.0)`. It is non-vacuous in the way that
+matters: any `SQLITE_BUSY` arrives as `error:…` and breaks both counts, so a flaky-under-load result
+fails loudly instead of passing silently. The mechanism is real too — one guarded
+`INSERT … SELECT … WHERE (SELECT COALESCE(SUM(delta),0) …) >= ?` (no read-then-write window),
+`PRAGMA journal_mode = WAL` and `busy_timeout = 5000`, with `connect()` deliberately not overriding
+`isolation_level` so the preceding SELECT holds no read snapshot. `spend_coins` itself is **unchanged
+by this branch** (0 mentions in the diff), so the test is retro-fit evidence for code already in trunk.
+
+**Residuals, escalated as task #32 rather than fixed under a gate.** (1) `_commit` swallows
+`sqlite3.Error`, so a failed commit after the guarded INSERT still returns `spent: <amount>` and
+`redeem_pass` would mint the VIP pass while the debit rolls back at close — a free pass. q3's own L3
+review named the same window and called it "unreachable rather than safe"; unreachable is not the
+same as guarded. (2) The wallet is public over **cleartext HTTP**: `/api/v2/account*` is already in
+the nginx allow-list at `location ^~ /api/v2/account` with `burst=30`, so the coin routes are
+reachable the moment they exist, carrying the 16-char sync key up and balance + ledger + signed pass
+back — and `/coins/history` is an attendance timeline. A `Grep` for `coins` over `App/app/src` returns
+**no files**, so no viewer traffic crosses yet; the owner's TLS decision must therefore be made
+*before* the App lane wires a wallet screen, not after.
+
+**Measured CI, at three heads.** Branch run `41220223169`, trunk runs `41221372855` (ref `main`) and
+`41221370328` (ref `master`) — all `completed / success` at head `1f97bfeef08bdadef65cba1e368c98c2a9dd8623`,
+each 41 steps, **36** 🧪 suites, `non-green: []`, with `🧪 test_coins_engine.py → success` and
+`🧪 test_docs_invariants.py → success` in both trunk jobs. `ls-remote` answers that one sha for both
+refs, so `master == main == 1f97bfe`.
+
+**One credential observation for whoever reads this next.** `Authorization: Bearer $GITHUB_TOKEN`
+now answers **401 Bad credentials** on `/user` *and* on `/repos/...` from this session's shell, while
+the identical `/repos/...` URL answers **200 anonymously** — this repository is public, so every
+read needed for a gate is available without a token, and `git push` over the askpass flow still
+landed both refs. Read the two facts separately: a green API read proves nothing about write access,
+and a refused API bearer header proves nothing about the Git credential. Do not print either.
+
+**What this section does not claim.** Production is untouched — `radd-stream.service` was not
+restarted, so the live process predates the coin routes entirely; no App-path file was touched and no
+Gradle ran; `v1.0.0` is still untagged; `8137b16` is still red and unlanded; and this docs-only push
+legitimately triggers **zero** CI runs (`backend-ci.yml` filters on `Fast_Fetch/**` and its own
+workflow file). Load 1.59–1.97, `MemAvailable` ~3.9 GB — the hard floor never fired, and the only
+local execution was the markdown guard.
