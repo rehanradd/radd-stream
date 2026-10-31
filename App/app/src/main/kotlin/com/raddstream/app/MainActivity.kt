@@ -1,5 +1,7 @@
 package com.raddstream.app
 
+import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -19,6 +21,7 @@ import androidx.compose.ui.Modifier
 import com.raddstream.app.brand.Brand
 import com.raddstream.app.data.RemoteFeatures
 import com.raddstream.app.data.ServerSettingsRepository
+import com.raddstream.app.ui.navigation.LocalVideoOpen
 import com.raddstream.app.ui.navigation.Screen
 import com.raddstream.app.ui.navigation.RaddStreamNavGraph
 import com.raddstream.app.ui.screens.MaintenanceScreen
@@ -38,14 +41,32 @@ import kotlinx.coroutines.flow.first
  * This activity also owns the app-wide theme, which is why the wallpaper-colour
  * preference is read *here*: it is the only place where the answer can reach
  * [RaddStreamTheme] before any screen paints.
+ *
+ * And it is the one door a video file handed over by another app comes through — cold start and
+ * warm start alike. Which intent that counts as, and what the file gets called, is
+ * [LocalVideoOpen]'s rule, not this activity's; what lives here is the reading of the Intent and
+ * the holding of the request until there is a back stack to put it on.
  */
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
     @Inject
     lateinit var serverSettingsRepository: ServerSettingsRepository
 
+    /**
+     * A file another app asked us to play, waiting for the graph that can route it. It is
+     * composition state on the activity, not a local in [setContent], because the cold-start
+     * intent lands before the nav graph exists: the server address is read asynchronously, so
+     * the first frame this activity paints is often the spinner, and an open kept only in the
+     * composition would be gone by the time there is a back stack to push onto.
+     */
+    private var pendingLocalOpen by mutableStateOf<LocalVideoOpen?>(null)
+
+    /** Makes two opens of one file two requests; see [LocalVideoOpen.from]. */
+    private var localOpenNonce = 0L
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        takeLocalVideoFrom(intent)
         enableEdgeToEdge()
         setContent {
             // Collected as composition state, not snapshotted once: flipping the Settings switch
@@ -140,11 +161,52 @@ class MainActivity : ComponentActivity() {
                         else -> RaddStreamNavGraph(
                             startDestination = destination,
                             features = operatorFeatures,
+                            openRequest = pendingLocalOpen,
+                            onOpenConsumed = { pendingLocalOpen = null },
                         )
                     }
                 }
             }
         }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        // The activity is declared `launchMode=singleTop`, so a second file opened from a file
+        // manager while the app is alive arrives here instead of starting another activity — and
+        // without this the second file a viewer opens would silently stay the first one on screen.
+        setIntent(intent)
+        takeLocalVideoFrom(intent)
+    }
+
+    /**
+     * One Intent in, one route out. Nothing is decided here: [LocalVideoOpen] owns which intent
+     * becomes a play request, which scheme may be played at all, and what the file is called, so
+     * the manifest's advertised filter and this activity's behaviour are the same rule rather
+     * than two that have to be kept in step by hand.
+     */
+    private fun takeLocalVideoFrom(source: Intent?) {
+        val data = source?.data ?: return
+        val open = LocalVideoOpen.from(
+            scheme = data.scheme,
+            address = data.toString(),
+            mimeType = source.type ?: resolvedType(data),
+            lastPathSegment = data.lastPathSegment,
+            nonce = ++localOpenNonce,
+        ) ?: return
+        pendingLocalOpen = open
+    }
+
+    /**
+     * The provider's own idea of what a `content://` row holds, for the sender that declared no
+     * type. A provider this app may not read throws, and an unreadable file is a file we do not
+     * play — it is not a reason for another app's Intent to crash this activity before it has
+     * painted a frame.
+     */
+    private fun resolvedType(data: Uri): String? = try {
+        contentResolver.getType(data)
+    } catch (_: Exception) {
+        null
     }
 }
 

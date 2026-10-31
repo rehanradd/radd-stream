@@ -12,6 +12,7 @@ import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.Renderer
@@ -53,8 +54,11 @@ import kotlinx.coroutines.launch
  *    redirector — see [evaluateAutoQuality].
  *
  * The UI-side commands arrive through the shared [PlayerSessionStore] (same process) — no
- * Intent serialization. HLS/progressive source selection stays with Media3's default media
- * source factory (media3-exoplayer-hls is already a dependency).
+ * Intent serialization. Which container a link is gets declared per item by
+ * [PlaybackMediaItemFactory] (our play addresses carry no file extension, so Media3 cannot
+ * infer one); everything below that stays Media3's own — the default media source factory picks
+ * the HLS, DASH and progressive readers from the declared type, and `media3-exoplayer-hls` plus
+ * `media3-exoplayer-dash` are already dependencies.
  */
 @OptIn(UnstableApi::class)
 class PlaybackService : MediaSessionService() {
@@ -111,6 +115,7 @@ class PlaybackService : MediaSessionService() {
         val exo = ExoPlayer.Builder(this)
             .setRenderersFactory(renderersFactory)
             .setMediaSourceFactory(DefaultMediaSourceFactory(dataFactory))
+            .setLoadControl(loadControl())
             .setSeekBackIncrementMs(MX_SKIP_MS)
             .setSeekForwardIncrementMs(MX_SKIP_MS)
             .setAudioAttributes(AudioAttributes.DEFAULT, /* handleAudioFocus= */ true)
@@ -136,6 +141,23 @@ class PlaybackService : MediaSessionService() {
     }
 
     private var lastHandledNonce: Long = -1L
+
+    /**
+     * The buffering policy, in one call. [PlayerBuffering] owns the four numbers and the reason
+     * for each; this is the only place they are handed to Media3, in the order
+     * `setBufferDurationsMs` takes them — minimum, maximum, to start, to start again after a
+     * stall — because the method is positional and a swap of two of them compiles happily.
+     */
+    private fun loadControl(): DefaultLoadControl =
+        DefaultLoadControl.Builder()
+            .setPrioritizeTimeOverSizeThresholds(PlayerBuffering.PRIORITIZE_TIME_OVER_SIZE)
+            .setBufferDurationsMs(
+                PlayerBuffering.MIN_BUFFER_MS,
+                PlayerBuffering.MAX_BUFFER_MS,
+                PlayerBuffering.BUFFER_FOR_PLAYBACK_MS,
+                PlayerBuffering.BUFFER_FOR_PLAYBACK_AFTER_REBUFFER_MS,
+            )
+            .build()
 
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaSession? =
         mediaSession

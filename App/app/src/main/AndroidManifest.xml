@@ -63,6 +63,34 @@
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="${brandScheme}" />
             </intent-filter>
+
+            <!-- Local video files: a file manager, a browser's download row or a mail
+                 attachment hands us an address for a file on THIS device and asks that it
+                 be played. What arrives becomes the app's own player_local route, and
+                 LocalVideoOpen is the single rule that decides whether an intent does —
+                 the filter and the code are checked against each other by
+                 LocalVideoIntentCensusTest.
+
+                 Exactly the two schemes a local file can have, and nothing else: naming
+                 http/https here would let any app push an address straight into the player,
+                 past the server's stream handle, its adult redaction and its provenance.
+                 No BROWSABLE either, so a browser link cannot land here.
+
+                 The MIME wildcard is one entry, not a list: video/star matches mp4, mkv,
+                 webm, x-matroska and every other video type the sender or the media
+                 provider declares, which is the honest shape of the claim — the type comes
+                 from whoever sent the intent, and no path pattern is promised here that
+                 nothing can verify. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data
+                    android:scheme="content"
+                    android:mimeType="video/*" />
+                <data
+                    android:scheme="file"
+                    android:mimeType="video/*" />
+            </intent-filter>
         </activity>
 
         <!-- Background playback service.

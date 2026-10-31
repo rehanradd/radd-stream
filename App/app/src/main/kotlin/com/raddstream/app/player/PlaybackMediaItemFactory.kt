@@ -42,6 +42,9 @@ object PlaybackMediaItemFactory {
                     .build(),
             )
 
+        // A manifest must be told what it is before the reader is chosen: see manifestMimeType.
+        manifestMimeType(rendition.playback)?.let { builder.setMimeType(it) }
+
         // Native subtitle configurations for non-custom-render externals (API_V2 tracks.subtitles
         // and user-picked exotic formats). SRT/VTT we parse ourselves for the overlay; both
         // paths obey the same subtitle-sync offset (see OffsetSubtitleDecoderFactory).
@@ -74,6 +77,48 @@ object PlaybackMediaItemFactory {
         val prefix = listOf(s, e).filter { it.isNotEmpty() }.joinToString(" ")
         return "$prefix · $title"
     }
+
+    /**
+     * The manifest container this link's bytes are, as the one MIME string Media3 recognises —
+     * or null to leave the choice to Media3's own inference.
+     *
+     * Inference reads a URI's path extension and a declared type; it never sniffs bytes, and
+     * every address this app plays is our own `/api/v1/stream?id=<handle>`, which has no
+     * extension and is redirected long after the reader has been picked. So an HLS link left
+     * undeclared is opened by the progressive reader, which meets `#EXTM3U` where an MP4 box
+     * should be and fails with `UnrecognizedInputFormatException` before the first frame. The
+     * server already knows which protocol it recorded for the link; this is where that
+     * knowledge crosses into Media3.
+     *
+     * The wire spelling is normalised, not trusted: a CDN answers `application/vnd.apple.mpegurl`
+     * as often as the Media3 constant's own text, and the content type the backend stores is the
+     * header verbatim. An alias Media3 does not know is the silent progressive reader again, so
+     * every match here is against a known set and the value handed back is always the constant.
+     *
+     * Progressive MP4, MKV and WebM are deliberately NOT declared: their readers do sniff the
+     * container from the bytes, which is the one thing an extensionless address cannot break.
+     */
+    fun manifestMimeType(playback: PlaybackInfo): String? {
+        val declared = playback.mimeType?.lowercase()?.trim()?.substringBefore(';')?.trim().orEmpty()
+        return when {
+            playback.isHls() || declared in hlsManifestMimes -> MimeTypes.APPLICATION_M3U8
+            playback.isDash() || declared in dashManifestMimes -> MimeTypes.APPLICATION_MPD
+            else -> null
+        }
+    }
+
+    private val hlsManifestMimes: Set<String> = setOf(
+        MimeTypes.APPLICATION_M3U8.lowercase(),
+        "application/vnd.apple.mpegurl",
+        "application/vnd.mpegurl",
+        "application/mpegurl",
+        "audio/mpegurl",
+    )
+
+    private val dashManifestMimes: Set<String> = setOf(
+        MimeTypes.APPLICATION_MPD.lowercase(),
+        "application/mpd",
+    )
 
     private fun ExternalSubtitle.toSubtitleConfiguration(): MediaItem.SubtitleConfiguration =
         MediaItem.SubtitleConfiguration.Builder(Uri.parse(url))

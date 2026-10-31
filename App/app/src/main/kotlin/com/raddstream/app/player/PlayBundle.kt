@@ -132,6 +132,14 @@ data class PlaybackInfo(
     fun isHls(): Boolean =
         protocol?.lowercase() == "hls" || playUrl?.lowercase()?.contains(".m3u8") == true
 
+    /**
+     * The same question for the other manifest protocol. Mirrors [isHls] exactly — the server's
+     * `protocol` word first, the address as corroboration second — because a rank can carry one
+     * and not the other, and either alone is enough to know what reader the bytes need.
+     */
+    fun isDash(): Boolean =
+        protocol?.lowercase() == "dash" || playUrl?.lowercase()?.contains(".mpd") == true
+
     /** URL rot guard: expires_at is epoch **seconds** in the wire contract. */
     fun isExpired(nowEpochMillis: Long): Boolean =
         expiresAt != null && nowEpochMillis / 1000L >= expiresAt!!
