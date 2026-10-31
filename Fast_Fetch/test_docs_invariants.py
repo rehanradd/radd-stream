@@ -131,7 +131,11 @@ INVARIANTS = [
     ("debug APK needs no secret", ROOT_AGENTS,
      "uploads a **debug APK** on every green run"),
     ("app lane: signed release needs the 4 secrets", ROOT_AGENTS,
-     "the *signed release* needs the 4 keystore secrets, which are **currently absent**"),
+     "the *signed release* needs the 4 keystore secrets"),
+    ("no signed artifact has ever been produced", ROOT_AGENTS,
+     "No signed APK or AAB has ever existed for this product"),
+    ("cutting and moving tags is owner-only", ROOT_AGENTS,
+     "Moving or re-cutting a tag is an owner action"),
 
     # --- the live tree and the push discipline -------------------------------------
     ("/opt/radd-stream is the live deployment tree", ROOT_AGENTS,

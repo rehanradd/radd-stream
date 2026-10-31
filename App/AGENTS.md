@@ -129,33 +129,46 @@ screens, the Room favorites DB, and `PlaybackService` all exist and are wired in
 
 ## 10. Signing Configuration
 
-The `app/build.gradle.kts` must read signing from environment variables (set as GitHub Secrets):
+This section previously printed a sample that `app/build.gradle.kts` does not contain —
+`android.util.Base64.decode(...)` is an **Android runtime API and is not on the Gradle script's
+classpath**, so the block as written could never have configured a build. What the file actually
+runs (`App/app/build.gradle.kts:110-126`, verified at `a51c0c4`):
 
 ```kotlin
 signingConfigs {
     create("release") {
         val keystoreBase64 = System.getenv("KEYSTORE_BASE64") ?: ""
-        if (keystoreBase64.isNotEmpty()) {
-            // Decode keystore from base64 env var to a temp file
-            val keystoreFile = File(rootProject.buildDir, "release.jks")
-            keystoreFile.writeBytes(android.util.Base64.decode(keystoreBase64, 0))
+        val storePassword  = System.getenv("KEY_STORE_PASSWORD") ?: ""
+        val keyAlias       = System.getenv("KEY_ALIAS") ?: ""
+        val keyPassword    = System.getenv("KEY_PASSWORD") ?: ""
+
+        if (keystoreBase64.isNotEmpty() && storePassword.isNotEmpty()) {
+            val keystoreFile = File(layout.buildDirectory.asFile.get(), "radd-release.jks")
+            keystoreFile.parentFile?.mkdirs()
+            keystoreFile.writeBytes(Base64.getDecoder().decode(keystoreBase64))  // java.util, imported at :3
             storeFile = keystoreFile
-        } else {
-            storeFile = file("../radd-release-key.jks")  // local fallback
+            this.storePassword = storePassword
+            this.keyAlias = keyAlias
+            this.keyPassword = keyPassword
         }
-        storePassword = System.getenv("KEY_STORE_PASSWORD") ?: ""
-        keyAlias = System.getenv("KEY_ALIAS") ?: ""
-        keyPassword = System.getenv("KEY_PASSWORD") ?: ""
-    }
-}
-buildTypes {
-    release {
-        isMinifyEnabled = true
-        proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
-        signingConfig = signingConfigs.getByName("release")
     }
 }
 ```
+
+Two consequences an App agent needs before spending a release run:
+
+- The config is applied **only when both** `KEYSTORE_BASE64` and `KEY_STORE_PASSWORD` are non-empty,
+  and the keystore is written under `app/build/` (never to the source tree, never committed).
+- `Base64.getDecoder()` is the strict **basic** codec: no line breaks accepted, and a value whose
+  length is not a whole base64 quantum throws. Measured on the release run log:
+  `java.lang.IllegalArgumentException: Last unit does not have enough valid bits` at
+  `build.gradle.kts:120`, `BUILD FAILED in 4s` — it dies during **configuration**, before any Kotlin
+  compiles, so no compile error or lint error is ever reached. That exception is the *stored secret*
+  being malformed, not this code being wrong: the keystore on the VM re-encodes cleanly
+  (`/home/ubuntu/raddstream-release.jks`, 2,752 bytes → 3,672 base64 chars ending `==`, strict
+  round-trip OK). **Fix it by re-entering the secret (`base64 -w 0` of that file), not by editing
+  this block** — switching to `getMimeDecoder()` would silently accept a truncated keystore instead
+  of refusing it.
 
 **One-time keystore generation** (run in GitHub Codespaces terminal — no local install needed):
 ```bash
