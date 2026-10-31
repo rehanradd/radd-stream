@@ -7,7 +7,7 @@
 
 ## ✅ Open items — index (q3, 2026-10-30; pointers only)
 
-1. **This file is a pointer, not a history.** 56 session files (54 dated + 2 undated) cover
+1. **This file is a pointer, not a history.** 57 session files (55 dated + 2 undated) cover
    2026-10-23 → 2026-10-31,
    every one of them verbatim: [`checkpoints/README.md`](checkpoints/README.md). Nothing was
    deleted, reworded, or summarized. The count is `ls Fast_Fetch/checkpoints/*.md` minus `README.md`,
@@ -55,8 +55,9 @@
     rotated into `checkpoints/20261030-q3-lane-launch-readiness-job-a-the-operators-own-rea.md`.
 11. **JOB B (tasks #22/#30), branch `q3-engagement-ladder`** — the four monetization rules caught in review (`redeem_pass` debited before branching, `_engagement_public` double-priced the ladder, `usage_stats._payments` was the last float money field, `fetch_database_payload(full=True)` published playable columns for a flagged row), 27 + 17 tests, and the measurement that contradicts two documents: **`redact.link_is_adult` returns False for an unknown link id**, not the True its docstring and root `AGENTS.md` claim. Rotated verbatim into that checkpoint file; nothing was reworded.
 12. `[Q3-ONBOARD-PAY]` — trial mint + PIN link + relay credit, 83 tests, CI 33: `checkpoints/20261031-q3-lane-zero-friction-onboarding-and-the-merchant-relay.md`.
-13. **qoder1 supervisor pass — `0e5ae28` + `8ca798a` + `a424ffc` landed, `q3-adultkey-net` and `q2-raddrelay` refused:** all four workers were idle; qoder4's seek fix is missing from the landed app. Full text: `checkpoints/20261031-q1-supervisor-three-lanes-reviewed-gated-and-landed-two.md`.
-14. **qoder1 supervisor pass — `0afea35` + `a775ba7` + `e7f6bbb` landed; `q5-adultkey-reconciliation` held on one guard line, `q3-coins-engine` found empty and re-scoped:** the census CI step, `CLOSEST_SYNC`, and the SMS relay with its payment-deleting defect fixed. Every gate was a hosted run; the adult gate's 407-work safety property is now verified in code, not prose. Full text: `checkpoints/20261031-q1-supervisor-pass-three-landed-the-adult-gate-held.md`.
+13. **qoder1 pass — `0e5ae28` + `8ca798a` + `a424ffc` landed; `q3-adultkey-net` and `q2-raddrelay` refused:** all four workers idle, qoder4's seek fix missing from the landed app. Text: `checkpoints/20261031-q1-supervisor-three-lanes-reviewed-gated-and-landed-two.md`.
+14. **qoder1 pass — `0afea35` + `a775ba7` + `e7f6bbb` landed (census CI step, `CLOSEST_SYNC`, the relay that deleted payments on a proxy 403); `q3-coins-engine` found empty and re-scoped; `q5-adultkey-reconciliation` held on one guard line, then green (item 15).** Every gate was a hosted run, zero local CPU. Text: `checkpoints/20261031-q1-supervisor-pass-three-landed-the-adult-gate-held.md`.
+15. `[Q5-ADULTKEY]` — merge-time corroborated adult fold (dual identity, journalled/undoable) and `link_is_adult` fail-closed; tests queued under the load freeze: `checkpoints/20261031-q5-adultkey-merge-time-corroborated-fold.md`.
 
 ---
 

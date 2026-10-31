@@ -1098,7 +1098,15 @@ def link_is_adult(source_id: int, db_path) -> bool:
                 """, (source_id,)).fetchone()
         except sqlite3.Error:
             return True
-    return bool(row and row[0])
+    # No row means one of two things, and both refuse: an id that was never minted
+    # (a typo, a stale bookmark) and a `download_sources` row whose release or post
+    # has gone, which nothing lists any more. Both callers — `/api/v1/stream` and
+    # `/api/v1/download` — address the same `download_sources` id space that
+    # `fast_fetch.resolve_live_source` selects from, so this cannot refuse a link any
+    # listing ever handed out.
+    if row is None or row[0]:
+        return True
+    return False
 
 
 # ── rate limiting: the documented buckets, in-app ────────────────────────────

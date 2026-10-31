@@ -59,12 +59,23 @@ Two shape traps this avoids, both learned the hard way tonight in
 
 ## 3. What the probe does NOT settle
 
-(A) and (B) count the exposure; they do not remove it. The fix is a **reconciliation**: propagate
-`MAX(is_18_plus)` across every row sharing a `canonical_key`, so a flagged twin flags the work,
-plus a test that fails if a later scrape writes an unflagged row under a key that has ever carried
-a flagged one. Reconciling is a production write and is explicitly outside this brief. Also note
-(B) counts rows, (A) counts works; the older 442/455 pair is (A)/(B) respectively, so re-measuring
-must report both or it is not comparable.
+(A) and (B) count the exposure; they do not remove it. **A raw `MAX(is_18_plus)` is not the fix.**
+Measured on the live catalog 2026-10-30, 10,816 of 15,068 stored flags cannot be re-derived from
+the row's own text by `is_adult_title()`; the works they name are mostly mainstream
+(*Nenokkadine*, *118*, *24*, *18 Pages*, all flagged on dubbed-release vocabulary), and a
+catalog-wide key fold would have hidden 407 of them to reach 12 real ones.
+
+The fix that shipped is a **corroborated fold**: only a flagged row whose own title/slug still
+reproduces the flag may propagate, across `canonical_key` *and* `(clean_title, year)` (the second
+identity reaches the slug-keyed rows a key law cannot see). It runs where twins are actually
+created — a staging vault declares `canonical_key` PRIMARY KEY/UNIQUE, so one database cannot hold
+two rows for a work, and `merge_catalogs.merge_site_db` reconciles the unified catalog it just
+wrote. Every flip is journalled in `adult_fold_journal`; `backfill_adult_key.py --undo` reverses
+it and never unflags a row whose own text justifies the flag (or whose key still holds a flagged
+sibling the fold did not touch). `--audit` is the provenance report that tells you how much of a
+catalog is unpropagatable. Reconciling production is a write and remains the owner's
+`--owner-go` call. Also note (B) counts rows, (A) counts works; the older 442/455 pair is (A)/(B)
+respectively, so re-measuring must report both or it is not comparable.
 
 ## 4. The quiet-window run, marked as a next step
 

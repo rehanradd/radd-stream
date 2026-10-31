@@ -1014,6 +1014,81 @@ class AdultDenialOnBothPortsTests(FixtureMixin):
             "SELECT COUNT(*) AS n FROM posts WHERE COALESCE(is_18_plus, 0) = 0")["n"],
             "the unflagged fixture films stay listed")
 
+    def test_the_merge_time_fold_hides_a_shared_key_twin_from_list_search_and_play(self):
+        """Two titles, one `canonical_key`, one flagged: after reconciliation the public
+        API serves neither — list, search, or stream.
+
+        The reconciliation is the one a merge runs (`reconcile_adult_on_merge`), not a
+        raw key-level MAX read at request time: a read-time MAX would also hide the twin
+        of a flag no rule can reproduce, which is the 407-works regression pinned by the
+        next test.
+        """
+        key = self.one("SELECT canonical_key FROM posts WHERE id = ?",
+                       (self.adult_id,))["canonical_key"]
+        twin_url = self.insert_twin(key, clean_title="Adult Diary")
+        twin_id = self.one("SELECT id FROM posts WHERE url = ?", (twin_url,))["id"]
+        with sqlite3.connect(self.db_path) as conn:
+            release_id = conn.execute(
+                "INSERT INTO releases (post_id, release_title, quality, source_site)"
+                " VALUES (?, 'Adult Diary 720p', '720p', 'bolly4u')", (twin_id,)).lastrowid
+            link_id = conn.execute(
+                "INSERT INTO download_sources (release_id, service, resource_id,"
+                " source_url, final_url) VALUES (?, 'pixeldrain', 'twin',"
+                " 'https://bolly4u.example/dl/twin', 'https://pixeldrain.com/u/twin')",
+                (release_id,)).lastrowid
+
+        total, ids = self.public_titles(query="Adult Diary")
+        self.assertEqual((total, ids), (1, [twin_id]),
+                         "fixture failed to reproduce the shared-key exposure")
+        self.assertFalse(redact.link_is_adult(link_id, self.db_path))
+
+        with fast_fetch.get_db() as conn:
+            folded = fast_fetch.apply_corroborated_adult_fold(
+                conn, fast_fetch.corroborated_adult_exposures(conn))
+        self.assertEqual(folded, 1)
+
+        total, ids = self.public_titles(query="Adult Diary")
+        self.assertEqual((total, ids), (0, []), "search still served the twin")
+        total, ids = self.public_titles()
+        self.assertNotIn(twin_id, ids, "the general list still served the twin")
+        self.assertTrue(redact.link_is_adult(link_id, self.db_path),
+                        "the folded row's link must not play")
+        self.assertEqual(
+            self.one("SELECT COUNT(*) AS n FROM adult_fold_journal")["n"], 1,
+            "the flip must be journalled so --undo can reverse it")
+
+    def test_an_asserted_only_flag_never_hides_its_twin(self):
+        """The 407-works boundary, on the public surface.
+
+        A stored flag that `is_adult_title()` cannot reproduce is a review candidate,
+        not evidence: propagating it is how a catalog-wide MAX hid 407 mainstream works
+        (measured 2026-10-30). The twin stays listed until the flag itself is resolved.
+        """
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                "INSERT INTO posts (url, slug, title, clean_title, year, content_type,"
+                " source_site, is_18_plus, canonical_key)"
+                " VALUES (?, ?, ?, ?, 2014, 'movie', ?, 1, ?)",
+                ("https://ssrmovies.example/nenokkadine", "nenokkadine",
+                 "1 - Nenokkadine (2014) South Indian Hindi Dubbed",
+                 "1 - Nenokkadine", "ssrmovies", "1-nenokkadine-2014"))
+            conn.execute(
+                "INSERT INTO posts (url, slug, title, clean_title, year, content_type,"
+                " source_site, is_18_plus, canonical_key)"
+                " VALUES (?, ?, ?, ?, 2014, 'movie', ?, 0, ?)",
+                ("https://moviezguru.example/nenokkadine", "nenokkadine-copy",
+                 "1 - Nenokkadine (2014)", "1 - Nenokkadine", "moviezguru",
+                 "1-nenokkadine_2014"))
+        total, ids = self.public_titles(query="Nenokkadine")
+        self.assertEqual(total, 1, "fixture: the disputed twin is public")
+
+        with fast_fetch.get_db() as conn:
+            folded = fast_fetch.apply_corroborated_adult_fold(
+                conn, fast_fetch.corroborated_adult_exposures(conn))
+        self.assertEqual(folded, 0, "an unreproducible flag must propagate to nobody")
+        total, _ = self.public_titles(query="Nenokkadine")
+        self.assertEqual(total, 1, "the twin was hidden on evidence the rule rejects")
+
     def test_a_second_site_cannot_write_a_public_copy_of_a_hidden_work(self):
         """The same film from another site lands on the flagged row, so the ingest
         path cannot re-create the exposure the backfill closed."""

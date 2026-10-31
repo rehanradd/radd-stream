@@ -37,17 +37,14 @@ What this suite proves, in order:
   6. the dashboard HTML builds the playlist anchor and the source buttons behind the
      flag, and renders the withheld note.
 
-One measured correction, recorded here because it is the finding that bounds claim 5
-and because two documents state the opposite: `redact.link_is_adult` returns `bool(row
-and row[0])`, so an **unknown** link id answers **False**, not the True its docstring
-and root `AGENTS.md` claim ("answers True for an unknown link id so a typo cannot
-play"). Probed in this suite's fixture: `/api/v1/stream?id=999999999` reaches
-`resolve_live_source`, which fails on the missing row and answers 404
-`no_playable_source`. The effect a typo cannot play therefore holds, but by the
-resolver's failure and not by the adult guard — and an unrecognized id does server
-work rather than being refused outright. That is a play-path behaviour change on both
-ports, so this lane reports it instead of landing it; the flag itself is honoured,
-which is all claim 5 needs.
+The unknown-id contradiction is resolved in favour of the documented law (2026-10-31):
+`redact.link_is_adult` used to return `bool(row and row[0])`, so an unknown link id
+answered **False** while its docstring and root `AGENTS.md` claimed True. It now refuses
+a missing row on both branches — an id that was never minted and a link whose release or
+post has gone — so `/api/v1/stream?id=999999999` is answered `not_found` before
+`resolve_live_source` sees it. The test that pinned the old behaviour
+(`..._reaches_the_resolver_today`) is flipped with it; the suite's `resolved` recorder
+proves the resolver is not called.
 
 Offline: a `tempfile` catalog, real `HTTPServer` bound to 127.0.0.1 with port 0 (the
 process, not nginx, which forwards neither port), no network — `resolve_live_source`
@@ -358,18 +355,17 @@ class OperatorSocketTests(CatalogFixture):
         self.assertEqual(self.resolved, [],
                          f"a flagged link was resolved: {self.resolved}")
 
-    def test_an_unrecognized_link_id_reaches_the_resolver_today(self):
-        """Characterization, not endorsement.
+    def test_an_unrecognized_link_id_is_refused_before_the_resolver(self):
+        """Was a characterization of `bool(row and row[0])` answering False.
 
-        `redact.link_is_adult` documents that an unknown id answers True so a typo
-        cannot play; measured here it answers False, and the request goes on to
-        `resolve_live_source`. This test pins what the code does now, so the report
-        above is executed rather than asserted, and so a fix flips a named expectation
-        instead of quietly changing a play path."""
+        Flipped with the fail-closed `redact.link_is_adult` (2026-10-31): an id that
+        exists nowhere is refused by the adult guard, with the same 404 a flagged row
+        gets, and `resolve_live_source` is never called for it."""
         unknown = self.get("/api/v1/stream?id=999999999&redirect=1")
         self.assertEqual(unknown[0], 404, unknown)
-        self.assertEqual(self.resolved, [999999999],
-                         "an unknown id is refused by the resolver, not by the flag")
+        self.assertEqual(self.resolved, [],
+                         "an unknown id must not reach the resolver")
+        self.assertTrue(redact.link_is_adult(999999999, self.db_path))
 
     def test_the_flagged_works_playlist_over_the_wire_is_zero_bytes(self):
         status, body = self.get(f"/api/m3u?id={self.adult_post}")
