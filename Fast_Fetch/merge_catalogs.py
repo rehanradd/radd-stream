@@ -261,10 +261,14 @@ def reconcile_adult_on_merge(conn, *, apply: bool = True) -> dict[str, int]:
     so it belongs to an offline merge, not to a request.
     """
     exposures = fast_fetch.corroborated_adult_exposures(conn)
+    # The journal exists after every merge, folded or not. "This merge folded nothing"
+    # is a fact an audit has to be able to read as zero rows; a database whose journal
+    # table is missing reads as broken, and the next operator cannot tell which.
+    conn.execute(fast_fetch.ADULT_FOLD_JOURNAL_DDL)
     folded = 0
     if apply and exposures:
         folded = fast_fetch.apply_corroborated_adult_fold(conn, exposures)
-        conn.commit()
+    conn.commit()
     return {
         "exposures_found": len(exposures),
         "adult_rows_folded": folded,
@@ -295,6 +299,7 @@ def merge_site_db(source_db_path: Path, target_db_path: Path, verbose: bool = Tr
         "posts_conflicted": 0,
         "adult_rows_folded": 0,
         "adult_exposures_remaining": 0,
+        "adult_fold_skipped": 0,
     }
 
     # Ensure target DB is initialized
@@ -432,6 +437,16 @@ def merge_site_db(source_db_path: Path, target_db_path: Path, verbose: bool = Tr
                       + (f", {folded['adult_exposures_remaining']} left (already flagged "
                          f"elsewhere)" if folded["adult_exposures_remaining"] else ""),
                       flush=True)
+        else:
+            # "I looked and folded nothing" and "I was told not to look" are different
+            # facts, and the stats have to carry both — plus an auditable empty journal,
+            # because a missing table is indistinguishable from a broken one.
+            with fast_fetch.get_db() as conn:
+                conn.execute(fast_fetch.ADULT_FOLD_JOURNAL_DDL)
+            stats["adult_fold_skipped"] = 1
+            if verbose:
+                print("[i] adult reconciliation skipped (--no-adult-fold): "
+                      "no exposure count was taken", flush=True)
 
     finally:
         src_conn.close()

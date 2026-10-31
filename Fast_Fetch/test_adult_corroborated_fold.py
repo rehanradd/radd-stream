@@ -445,11 +445,20 @@ class PlayPathTests(Fixture):
         self.conn.execute("INSERT INTO download_sources VALUES (23, NULL, 'r', 'https://x/c')")
         self.conn.commit()
 
+    def _point_release_at_a_clean_post(self):
+        """Post 1 carries the fixture's flag; these two cases need an unflagged target."""
+        self.add(90, "An Ordinary Film", "An Ordinary Film", site="9xmovies",
+                 year="2025", key="an-ordinary-film-2025", flag=0)
+        self.conn.execute("UPDATE releases SET post_id = 90 WHERE id = 11")
+        self.conn.commit()
+
     def test_a_clean_link_answers_false(self):
+        self._point_release_at_a_clean_post()
         self.assertFalse(redact.link_is_adult(21, self.path))
 
     def test_a_flagged_link_answers_true(self):
-        self.conn.execute("UPDATE posts SET is_18_plus = 1 WHERE id = 1")
+        self._point_release_at_a_clean_post()
+        self.conn.execute("UPDATE posts SET is_18_plus = 1 WHERE id = 90")
         self.conn.commit()
         self.assertTrue(redact.link_is_adult(21, self.path))
 

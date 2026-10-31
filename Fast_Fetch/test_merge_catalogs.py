@@ -385,6 +385,7 @@ class MergeTimeAdultReconciliationTests(unittest.TestCase):
             self.assertEqual(stats["posts_merged"], 1)
             self.assertEqual(stats["adult_rows_folded"], 1)
             self.assertEqual(stats["adult_exposures_remaining"], 0)
+            self.assertEqual(stats["adult_fold_skipped"], 0)
 
             posts, journal = self._ledger(tgt_db)
             self.assertEqual(posts, [("Puli", 1), ("Puli", 1)],
@@ -438,6 +439,8 @@ class MergeTimeAdultReconciliationTests(unittest.TestCase):
             stats = merge_catalogs.merge_site_db(src_db, tgt_db, verbose=False,
                                                  adult_fold=False)
             self.assertEqual(stats["adult_rows_folded"], 0)
+            self.assertEqual(stats["adult_fold_skipped"], 1,
+                             "'not asked to look' is a different fact from 'looked, found nothing'")
             posts, journal = self._ledger(tgt_db)
             self.assertEqual(posts, [("Puli", 0), ("Puli", 1)],
                              "the twin is listed until a fold is run")
