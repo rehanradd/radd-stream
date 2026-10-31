@@ -1,5 +1,7 @@
+import java.io.ByteArrayInputStream
 import java.io.File
 import java.net.URI
+import java.security.KeyStore
 import java.util.Base64
 import java.util.Properties
 
@@ -115,9 +117,92 @@ android {
             val keyPassword    = System.getenv("KEY_PASSWORD") ?: ""
 
             if (keystoreBase64.isNotEmpty() && storePassword.isNotEmpty()) {
+                // Why this block interrogates its input instead of just decoding it: release run
+                // 41233720264 died on the decode line below with "Last unit does not have enough
+                // valid bits" after 8 seconds — 8 seconds is Gradle configuration, not signing, so
+                // nothing had compiled. That message describes a malformed final base64 group, i.e.
+                // a corrupt stored value, and the strict decoder was right to refuse it. Measured on
+                // this host: for that exact input the tolerant MIME decoder throws identically, so
+                // relaxing the decoder would have fixed nothing while discarding the one check that
+                // caught the fault. What the failure lacked was a sentence an operator could act on.
+                //
+                // These checks therefore report the *shape* of the value — length, position,
+                // character code, byte count after decode — and never the value itself, which is a
+                // credential and belongs in no log, no error message and no artifact.
+                fun refuse(shape: String): Nothing = throw GradleException(
+                    "KEYSTORE_BASE64 is not usable: $shape.\n" +
+                        "  Re-export with `base64 -w 0 <keystore-file>` and paste the terminal output " +
+                        "straight into Settings -> Secrets and variables -> Actions, replacing the " +
+                        "stored value. Do not route it through a file, an editor or a chat message — " +
+                        "that is where a single-line string gains newlines or loses its `==` padding. " +
+                        "The correct length for the keystore this repo has always used is 3672 " +
+                        "characters. No decoder change will help: the stored value is what is wrong, " +
+                        "and this message prints its shape only, never its contents."
+                )
+
+                if (keystoreBase64.length % 4 != 0) {
+                    refuse(
+                        "is ${keystoreBase64.length} characters, and base64 is always a multiple of 4 " +
+                            "— a tail that is not a whole group is exactly the \"Last unit does not " +
+                            "have enough valid bits\" crash this replaces"
+                    )
+                }
+                val badChar = keystoreBase64.indexOfFirst { c ->
+                    !(c.isLetterOrDigit() || c == '+' || c == '/' || c == '=')
+                }
+                if (badChar >= 0) {
+                    refuse(
+                        "holds a non-base64 character at index $badChar of ${keystoreBase64.length} " +
+                            "(code point 0x${keystoreBase64[badChar].code.toString(16)}) — a newline " +
+                            "or a space pasted in from a wrapping display"
+                    )
+                }
+                if (keyAlias.isEmpty()) refuse("is set but KEY_ALIAS is empty, so nothing could be selected")
+                if (keyPassword.isEmpty()) refuse("is set but KEY_PASSWORD is empty")
+
+                val keystoreBytes = Base64.getDecoder().decode(keystoreBase64)
+
+                // Bytes that decode cleanly are not yet a keystore. Without this the operator gets
+                // a structural pass and then a signing task that names neither the secret nor the
+                // file; with it, garbage fails here as "not a keystore" and a wrong password fails
+                // here as itself. JKS is dual-format on JDK 9+, so it reads a PKCS12 store too, and
+                // PKCS12 is tried for a store that is not self-describing.
+                val storeChars = storePassword.toCharArray()
+                val probe = listOf("JKS", "PKCS12").firstNotNullOfOrNull { type ->
+                    runCatching {
+                        KeyStore.getInstance(type).apply {
+                            ByteArrayInputStream(keystoreBytes).use { load(it, storeChars) }
+                        }
+                    }.getOrNull()
+                } ?: refuse(
+                    "decodes to ${keystoreBytes.size} bytes that parse as neither a JKS nor a PKCS12 " +
+                        "keystore with the stored KEY_STORE_PASSWORD"
+                )
+                if (!probe.containsAlias(keyAlias)) {
+                    refuse(
+                        "the keystore holds ${probe.size()} alias(es) and none is the configured " +
+                            "KEY_ALIAS (the name is not printed; list it with " +
+                            "`keytool -list -keystore <file>`)"
+                    )
+                }
+                if (!probe.isKeyEntry(keyAlias)) {
+                    refuse("the configured alias is not a private-key entry, so it cannot sign an APK")
+                }
+                runCatching { probe.getKey(keyAlias, keyPassword.toCharArray()) }.onFailure {
+                    refuse(
+                        "KEY_PASSWORD does not recover the private key for the configured alias " +
+                            "(${it.javaClass.simpleName}) — signing would fail on precisely this, and " +
+                            "the identity a release is signed with cannot be changed after the fact"
+                    )
+                }
+
                 val keystoreFile = File(layout.buildDirectory.asFile.get(), "radd-release.jks")
                 keystoreFile.parentFile?.mkdirs()
-                keystoreFile.writeBytes(Base64.getDecoder().decode(keystoreBase64))
+                keystoreFile.writeBytes(keystoreBytes)
+                println(
+                    "release signing: KEYSTORE_BASE64 accepted — ${keystoreBase64.length} chars -> " +
+                        "${keystoreBytes.size} bytes, private-key entry found and unlocked"
+                )
                 storeFile = keystoreFile
                 this.storePassword = storePassword
                 this.keyAlias = keyAlias
