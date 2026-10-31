@@ -127,8 +127,37 @@ EXPORT_DIR = Path(os.environ.get("RADD_EXPORT_DIR", str(BASE_DIR)))
 # being published, and AGENTS.md's isolation rule exists for exactly that.
 _DATA_DIR_ENV = os.environ.get("RADD_DATA_DIR")
 _ORACLE_DATA_DIR = Path("/home/ubuntu/radd-stream-data")
+
+
+def _probe_dir(path: Path) -> bool:
+    """`Path.exists()`, with the errors that do not mean "absent" made absent.
+
+    `Path.exists()` is not a total probe: `os.stat` swallows ENOENT, ENOTDIR,
+    EBADF and ELOOP and returns False for them, but re-raises EACCES. So on a
+    shared runner whose worker image can mount /home/ubuntu without letting the
+    job read it, asking "is this data directory there?" at import time answers
+    PermissionError — the failure the supervisor measured on hosted backend CI
+    at q2's eb4c0ee, where the run died in 0.2 s before a single test executed
+    and every later step skipped. The same line on trunk was green an hour
+    earlier, which is what makes that crash a runner-pool lottery rather than a
+    regression anyone can reproduce: a green trunk is not evidence the probe
+    ever ran somewhere it could not read.
+
+    A directory we cannot stat cannot be one we are allowed to put a 400 MB
+    staging database in, so an unreadable path answers "no" and the caller takes
+    the same branch a machine with no data disk takes. That is the point of the
+    fallback: a checkout-local staging database is the hazard AGENTS.md's
+    isolation rule names, and it is still a smaller one than a suite that
+    cannot start.
+    """
+    try:
+        return path.exists()
+    except OSError:
+        return False
+
+
 DATA_DIR = Path(_DATA_DIR_ENV) if _DATA_DIR_ENV else (
-    _ORACLE_DATA_DIR if _ORACLE_DATA_DIR.exists() else BASE_DIR
+    _ORACLE_DATA_DIR if _probe_dir(_ORACLE_DATA_DIR) else BASE_DIR
 )
 
 
