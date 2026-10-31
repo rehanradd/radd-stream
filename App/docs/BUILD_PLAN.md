@@ -109,20 +109,37 @@ base64 -w 0 radd-release-key.jks > keystore_base64.txt
 **Symptom, read from the API on 2026-10-31 (not inferred from the docs):** `GET /releases` returns
 `[]`, and every one of the four runs in the history of
 `🚀 Release — Sign & Publish APK + AAB` is `completed / failure` — `40876596427`, `41102348096`,
-`41104217171`, `41104231187`. In the newest one the failing step is
+`41104217171`, `41104231187`. A fifth, `41233720264` (dispatched from the tag `v1.0.1` at `0a1894d8`),
+is measured below and fails the same way, so the count is now five for one cause. In the newest one the failing step is
 `🏗️ Build signed release APK + AAB`; `🧪 Unit tests gate the release` passed, and everything after the
 build (`apksigner` verify, checksums, staging, publish) is `skipped`. **No signed APK or AAB has ever
 existed for this product.** The tag `v1.0.0` exists in the repo, and resolves to `6a441ec77` — a
 trunk point that predates the adult merge-time fold `4a8c163`, so re-running *that* tag would ship
 pre-law code.
 
-**Cause, from the run log:** `java.lang.IllegalArgumentException: Last unit does not have enough valid
-bits` at `App/app/build.gradle.kts:120`, `BUILD FAILED in 4s`. Gradle dies during
-**configuration**, inside `signingConfigs`, before a single Kotlin file compiles. Line 120 is
+**Cause, read from the hosted log of run `41233720264` / job `124633000210` (qoder1, 2026-11-01):**
+steps 1-9 `SUCCESS` — including `🧪 Unit tests gate the release` — step 10
+`🏗️ Build signed release APK + AAB` `FAILURE`, steps 11-14 `skipped`; the job ran 19:20:07 →
+19:23:01Z and the Gradle block itself says **`BUILD FAILED in 7s`** (the older run `41104231187` said
+4s — both are the same death, and neither is a build). The error is
+`java.lang.IllegalArgumentException: Last unit does not have enough valid bits` at
+`App/app/build.gradle.kts:120`, and the stack frames are `Build_gradle$3$2$1.execute(build.gradle.kts:120)`
+→ `signingConfigs` → `CommonExtensionImpl.signingConfigs` → `ExtensionsStorage.configureExtension` →
+`Build_gradle.<init>`. That is **configuration time, inside `create("release")`** — no task executed, no
+Kotlin compiled, no `.apk` byte written. Line 120 as it stands at `0a1894d8` is
 `keystoreFile.writeBytes(Base64.getDecoder().decode(keystoreBase64))`, and
 `java.util.Base64.getDecoder()` is the strict *basic* codec: it accepts no line breaks and throws on a
-value whose length is not a whole base64 quantum. The stored `KEYSTORE_BASE64` is such a value —
-padding lost between the terminal and the secret field.
+value whose length is not a whole base64 quantum.
+
+**Read the message for what it is.** `Last unit does not have enough valid bits` is a
+**length/padding** fault — a truncated or character-losing string, e.g. trailing `=` padding trimmed
+between the terminal and the secret field. It is not a wrapped secret: an embedded newline in the basic
+decoder fails with `Illegal base64 character 0a`, a different message, so the stored value is short of
+a whole base64 quantum (or has lost tail characters), and it is not line-broken. And because the throw
+is at configure time, **no signing password has
+ever been exercised by CI** — not `KEY_STORE_PASSWORD`, not `KEY_PASSWORD`, not the alias. A
+`keytool -list -keystore … -storepass …` experiment answers a question this release never got to ask,
+and the preflight step (`release.yml:53`, name-only) proves only that `KEYSTORE_BASE64` is *non-empty*.
 
 **Why the debug CI is green while the release is red, on the same commit:** the four secrets are
 mapped into `env:` on exactly two steps — the preflight (`release.yml:53-58`) and the release build
@@ -139,7 +156,26 @@ base64 -w 0 /home/ubuntu/raddstream-release.jks
 ```
 
 pasted **straight from the terminal into the secret field** — no intermediate file, no editor, no
-chat message, because each of those is a place trailing `=` padding gets trimmed. Then re-run the
+chat message, because each of those is a place trailing `=` padding gets trimmed. (`/home/ubuntu/`
+holds exactly one keystore, `raddstream-release.jks`; the `radd-release-key.jks` name earlier in this
+file is the *generation* snippet's example, not a second key.)
+
+**Check the stored value before re-pasting it, without ever printing it.** In the owner's own shell,
+with the current secret in `$KB64`:
+
+```bash
+printf '%s' "$KB64" | wc -c        # must be a multiple of 4
+printf '%s' "$KB64" | base64 -d | wc -c   # must equal the keystore's own byte count
+stat -c%s /home/ubuntu/raddstream-release.jks   # the number the line above must match
+```
+
+A first command that is not a multiple of 4, or a second that disagrees with the third, is the fault
+itself — and `base64 -w 0`, one line, no trailing newline, is the re-mint that fixes it.
+**Nothing secret may ever leave the owner's shell:** not the keystore bytes, not `KEYSTORE_BASE64`, not
+a password, not a decoded dump — not into a file, a log, a commit, a chat message, or a documentation
+example. The commands above print counts only; keep it that way.
+
+Then re-run the
 release workflow: `release.yml:34` accepts `workflow_dispatch`, so **no new tag is needed**, and
 re-dispatching is better than re-tagging anyway — `v1.0.0` (`6a441ec`) predates the adult
 reconciliation fold and `v1.0.1` (`0a1894d`) is already behind trunk, so both are stale as release
@@ -173,6 +209,29 @@ is read by more people than the secret is. Against the real 2,752-byte keystore:
 character now reads `3673 chars, not a multiple of 4` instead of a stack trace, a missing character is
 refused (which the decoder alone did not do), and a 76-column wrap is refused at `index 76 (0xa)`.
 `KeystorePreflightGuardTest` pins the strict decoder's presence, the ordering, and the no-value rule.
+
+**What that preflight does and does not prove — stated plainly, because it is easy to over-read.**
+It has **never executed on CI, not once.** Every release run to date dies at `build.gradle.kts:120`
+inside `signingConfigs`, and the block above now refuses *before* the decode — so on a still-broken
+secret the next dispatch will print a named refusal instead of a stack trace, but nothing after the
+first refusal line has ever run on a runner either, and the store-password load, the `containsAlias`
+check and the `getKey` unlock have certainly not. Two consequences follow. (1) The 0-byte-keystore
+path is unreachable by construction: `writeBytes` is the last statement, so a configure-time death
+never produces a keystore file at all — which is also why no password has ever been tested. (2) What
+hosted CI *did* prove is narrower than it looks: run `41236922263` on `1efadf2` is `completed success`
+and its `:app:testDebugUnitTest` executed `KeystorePreflightGuardTest`, but that test reads the script
+text to pin ordering and the no-value rule — it is a test **about** the block, not an execution **of**
+it. Reasoning is not evidence. The first real evidence will be a line printed by the block itself in a
+`workflow_dispatch` log, and the only proof that matters is a published Release with a signed `.apk`
+and `.aab`.
+
+**Two records this section now contradicts, deliberately.** Tags exist: `refs/tags/v1.0.0` → `6a441ec7`
+and `refs/tags/v1.0.1` → `61d88d04`, which peels to the trunk commit `0a1894d8` (measured by
+`git merge-base --is-ancestor` — the tag is on trunk). So any document still asserting
+"tags: 0, releases: 0, no release has ever been made" is false, and the App-side rule that the *first*
+tag waits for green Android CI has already been crossed by someone other than this lane. `v1.0.1`
+being on trunk is also why re-dispatching beats re-tagging: the tag already points at code trunk
+contains, it just points at code trunk has moved past.
 
 ---
 
