@@ -83,7 +83,7 @@ OPERATOR_ONLY_ROUTES = frozenset({
 #: second and after the peer address. A token does not make the dashboard
 #: reachable, so the dashboard is not "token-gated" — see root AGENTS.md, which
 #: forbids that wording, and `docs/ADMIN_PANEL_ACCESS.md` for the measurement.
-OPERATOR_ONLY_PREFIXES = ("/admin",)
+OPERATOR_ONLY_PREFIXES = ("/admin", "/operator")
 
 #: The two byte paths a playback actually travels, counted for the operator's
 #: usage report. `/api/m3u` is deliberately absent: it is an operator route, and
@@ -3309,16 +3309,28 @@ class DashboardHandler(BaseHTTPRequestHandler):
         self.send_bytes(body, content_type="application/json; charset=utf-8",
                         status=status, extra_headers=headers)
 
-    def send_triple(self, answered: tuple) -> None:
+    def send_triple(self, answered: tuple, extra_headers: list[tuple[str, str]] | None = None) -> None:
         """One `(status, content_type, body)` answer from `admin_panel` or
         `accounts_api` — the tuple contract both use so each stays testable as a
         function call and this stays the only thing that writes a socket.
         `send_bytes` adds the `RateLimit-*` triple and closes the connection, so
-        the headers a bucket already bought are not thrown away at the last step."""
+        the headers a bucket already bought are not thrown away at the last step.
+
+        `extra_headers` exists for the sign-in flow, which has to emit `Location`
+        and `Set-Cookie` on a 303: the triple carries a status, a type and a body,
+        and a redirect is none of those. Nothing else about the contract changes.
+        """
         status, content_type, body = answered
-        self.send_bytes(body, content_type=content_type, status=status)
+        self.send_bytes(body, content_type=content_type, status=status,
+                        extra_headers=extra_headers)
 
     def _bucket_for(self, path: str, method: str = "GET") -> str:
+        if path in admin_panel.LOGIN_PATHS or path in admin_panel.LOGOUT_PATHS:
+            # Named here so a sign-in route can never inherit `browse` by accident
+            # of a fall-through if anyone ever mounts it on the public port. On the
+            # operator port it is charged directly, in `_operator_login`, because
+            # this gate does not run there.
+            return "auth"
         if accounts_api.is_account(path):
             # Account writes are small and boring; the reason for a budget of their
             # own is the sync key. A caller may hammer `Authorization` guesses all
@@ -3335,27 +3347,142 @@ class DashboardHandler(BaseHTTPRequestHandler):
             return "reports"
         return "browse"
 
-    def _operator_gate(self, query_params) -> bool:
+    #: Headers that only the public reverse proxy puts on a request. Their presence
+    #: means "this came in through port 80", which for the operator port is exactly
+    #: the thing that must never be true — see `_through_public_proxy`.
+    _PROXY_MARKERS = ("X-Forwarded-For", "X-Real-IP", "X-Forwarded-Proto")
+
+    def _through_public_proxy(self) -> bool:
+        """True when this request carries a reverse-proxy marker.
+
+        Measured 2026-10-31 and the reason this method exists: the enabled nginx
+        site has `location /operator/ { proxy_pass http://127.0.0.1:8081/; }`, so the
+        operator port — the one whose entire access model is "a process on this
+        machine" — was reachable from the public internet, prefix-stripped, and
+        `admin_panel._gate`'s loopback rule passed for every visitor because nginx
+        connects *from* 127.0.0.1. Fixing that properly is an owner action on a file
+        that is not in this repo. This is the code-side wall: a direct loopback
+        client sends no `X-Forwarded-For`, the public proxy always does, and so a
+        marker here means the edge let something in that the edge was never meant to
+        serve.
+
+        It is deliberately a *refusal*, not a trust decision: an attacker can omit
+        the headers and gain nothing they did not already have, while a local process
+        that adds them only locks itself out. `RADD_TRUST_EDGE_PROXY=1` opts out, for
+        an operator who has put a real authentication in front of the proxy and means
+        it. A local attacker who can already write to the loopback socket can already
+        do anything the port allows — this closes the *remote* path, which is the one
+        that was open.
+        """
+        if os.environ.get("RADD_TRUST_EDGE_PROXY", "").strip() == "1":
+            return False
+        return any(self.headers.get(name) for name in self._PROXY_MARKERS)
+
+    def _accepts_html(self) -> bool:
+        """Whether the caller asked for HTML, which decides the shape of a refusal.
+        Deliberately not used for anything but that: `Accept` is caller-controlled,
+        so it may choose between two refusals and never between a refusal and data.
+        """
+        return "text/html" in str(self.headers.get("Accept", "") or "")
+
+    def _operator_login(self, path: str) -> bool:
+        """Serve sign-in and sign-out ahead of the gate. True when this handled it.
+
+        These are the only operator-port paths that answer before a credential
+        exists, and both re-check the peer themselves (`admin_panel.authenticate`
+        refuses a non-loopback peer before comparing anything), so opening them is
+        not opening the port. Everything else on this socket still faces the gate
+        first.
+
+        Reading the body is the mount's job and never the module's, so the form is
+        parsed here — capped at the same ceiling every other admin body uses, since
+        an unbounded `Content-Length` on a page that answers without a credential is
+        a free memory grab.
+        """
+        if path not in admin_panel.LOGIN_PATHS and path not in admin_panel.LOGOUT_PATHS:
+            return False
+        if self._through_public_proxy():
+            # Not even a form: from the public edge, this surface does not exist.
+            self.send_json({"success": False, "error": "not_found"}, status=404)
+            return True
+        if path in admin_panel.LOGIN_PATHS:
+            # One budget per address for sign-in attempts, spent before a byte of
+            # the body is read and before `authenticate` runs, so a refused attempt
+            # costs this box nothing but a counter tick — and so the memory-hard
+            # password derive in `admin_panel.verify_password` cannot be turned
+            # into a CPU buy by a caller who never authenticates.
+            #
+            # The key is the SOCKET peer, not `redact.client_ip(self)`: on this port
+            # `X-Real-IP` is a caller-typed string unless the proxy refusal above
+            # fired, and a limiter an attacker can rename is decoration. Loopback
+            # means exactly one bucket for the box, which is the point — the
+            # per-username lockout in `admin_panel` is what separates two people
+            # sharing it. Sign-out is deliberately not charged: locking out a
+            # logout buys an attacker nothing and punishes an operator who is
+            # already authenticated.
+            verdict = redact.limiter.check("auth", str(self.client_address[0] or ""))
+            self.rate_headers = redact.limiter.headers(verdict)
+            if not verdict["allowed"]:
+                self.send_triple(
+                    admin_panel._problem(
+                        "rate_limited", path,
+                        "Too many sign-in attempts from this address.", stable=True),
+                    extra_headers=[("Retry-After", str(verdict["retry_after"])),
+                                   ("Cache-Control", "no-store")])
+                return True
+        body = None
+        if path in admin_panel.LOGIN_PATHS:
+            try:
+                length = int(self.headers.get("Content-Length") or 0)
+            except (TypeError, ValueError):
+                length = 0
+            length = max(0, min(length, api_v2.MAX_BODY_BYTES))
+            body = admin_panel.parse_form_body(self.rfile.read(length)) if length else {}
+        self.operator_cookie = ""
+        if path in admin_panel.LOGOUT_PATHS:
+            answered, headers = admin_panel.logout_response(
+                path, peer_address=self.client_address[0])
+        else:
+            answered, headers = admin_panel.login_submit(
+                path, body, peer_address=self.client_address[0],
+                accepts_html=self._accepts_html())
+        self.send_triple(answered, extra_headers=headers)
+        return True
+
+    def _operator_gate(self) -> bool:
         """The credential every route on the operator port now requires.
 
         Called first, before any SQL and before the panel is consulted, because
         this is the whole point: `/`, `/client`, `/api/v1/stats` and
         `/api/v1/rules` are not `/admin` and were never routed through
         `admin_panel._gate`, so on this port they answered whoever reached the
-        socket. Loopback is a boundary — nginx forwards neither port, which
-        `test_operator_isolation.py` and the sweep both assert — but it is not a
-        credential, and this box runs a web IDE as root on the same interface.
+        socket. Loopback is the boundary only while nothing is listening on the
+        other side of it — and `_through_public_proxy` is what keeps that sentence
+        true after someone adds a proxy. A loopback peer that is not the proxy is a
+        process on this box; this box runs a web IDE as root, so the credential is
+        checked regardless.
 
-        Returns True when the caller may proceed. A proven bearer token also
+        There is no `?token=` any more, in this method or anywhere behind it: a
+        credential that travels in a URL is recorded in browser history, in the
+        `Referer`, and in nginx's access log, all of which outlive the session it was
+        meant to open. Present `Authorization: Bearer` or sign in.
+
+        Returns True when the caller may proceed. A proven bearer credential also
         mints the short-lived session cookie the dashboard needs to fetch
         `/api/data`; a session alone is accepted, and refusal is the same
         byte-for-byte body whether the caller presented nothing or nonsense.
         """
+        if self._through_public_proxy():
+            self.send_triple(admin_panel._problem(
+                "forbidden", "/operator",
+                "The operator surface is not reachable through the public edge.",
+                stable=True))
+            return False
         refusal, session_cookie = admin_panel.gate_operator_port(
             self.client_address[0],
             authorization=self.headers.get("Authorization", ""),
             cookie=self.headers.get("Cookie", ""),
-            query_token=(query_params or {}).get("token", [""])[0])
+            accepts_html=self._accepts_html())
         self.operator_cookie = session_cookie or ""
         if refusal is not None:
             self.send_triple(refusal)
@@ -3500,8 +3627,14 @@ class DashboardHandler(BaseHTTPRequestHandler):
         # (see start_server), so it cannot be negotiated by a request header or a
         # query parameter — the whole point of a separate loopback port.
         full = bool(getattr(self.server, "operator", False))
-        if full and not self._operator_gate(query_params):
-            return
+        if full:
+            # Sign-in is the one thing on this port that answers before a credential
+            # exists, so it goes ahead of the gate; the gate then covers every other
+            # path, including every read that used to be free on loopback.
+            if self._operator_login(path):
+                return
+            if not self._operator_gate():
+                return
         base_url = "" if full else _public_base(self)
         if not full and not self._public_gate(path, "GET"):
             return
@@ -3519,7 +3652,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 peer_address=self.client_address[0],
                 token_header=self.headers.get("Authorization", ""),
                 state_db_path=accounts_api.state_db(),
-                cookie_header=self.headers.get("Cookie", ""))
+                cookie_header=self.headers.get("Cookie", ""),
+                accepts_html=self._accepts_html())
             if answered is not None:
                 self.send_triple(answered)
                 return
@@ -3624,7 +3758,19 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
         elif path == "/api/health-check":
             query_params = urllib.parse.parse_qs(parsed.query)
-            post_id = int(query_params.get("id", [0])[0]) if query_params.get("id") else None
+            # `/api/m3u` and `/api/v1/posts/{id}` all answer a malformed id with a
+            # 400 the caller can read. A bare `int()` here raised out of `do_GET`
+            # instead, and a handler that raises mid-request drops the socket with no
+            # status and no body — which is indistinguishable, to the operator, from
+            # the server having died. Same rule as the detail route: `?id=abc` is the
+            # caller's error, so it is answered as one.
+            post_id = None
+            if query_params.get("id"):
+                try:
+                    post_id = int(query_params["id"][0])
+                except (TypeError, ValueError):
+                    self.send_json({"error": "Invalid post ID"}, status=400)
+                    return
             try:
                 import fast_fetch
                 results = fast_fetch.run_health_check(post_id=post_id, verbose=False)
@@ -3636,7 +3782,16 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
         elif path == "/api/heal":
             query_params = urllib.parse.parse_qs(parsed.query)
-            post_id = int(query_params.get("id", [0])[0])
+            # The third member of the same defect class as `/api/m3u` and
+            # `/api/health-check`: an unguarded `int()` on a query value raised out of
+            # `do_GET` and dropped the connection. It is also the only one of the three
+            # that *writes* — `heal_post_links` re-resolves links and updates rows — so
+            # a malformed id must be refused before any of that begins, not midway.
+            try:
+                post_id = int(query_params.get("id", [0])[0])
+            except (TypeError, ValueError):
+                self.send_json({"error": "Invalid post ID"}, status=400)
+                return
             try:
                 import fast_fetch
                 res = fast_fetch.heal_post_links(post_id, verbose=False)
@@ -3890,8 +4045,11 @@ class DashboardHandler(BaseHTTPRequestHandler):
         path = parsed.path
         query_params = urllib.parse.parse_qs(parsed.query)
         full = bool(getattr(self.server, "operator", False))
-        if full and not self._operator_gate(query_params):
-            return
+        if full:
+            if self._operator_login(path):
+                return
+            if not self._operator_gate():
+                return
         if not full and not self._public_gate(path, "POST"):
             return
         if path.startswith(OPERATOR_ONLY_PREFIXES):
@@ -3924,7 +4082,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 peer_address=self.client_address[0],
                 token_header=self.headers.get("Authorization", ""),
                 body=body, state_db_path=accounts_api.state_db(),
-                cookie_header=self.headers.get("Cookie", ""))
+                cookie_header=self.headers.get("Cookie", ""),
+                accepts_html=self._accepts_html(),
+                csrf_header=self.headers.get(admin_panel.CSRF_HEADER, ""))
             if answered is not None:
                 self.send_triple(answered)
                 return

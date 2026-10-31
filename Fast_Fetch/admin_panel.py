@@ -2,30 +2,45 @@
 """admin_panel.py — the operator's control surface over the `cat_*` projection.
 
 ═══════════════════════════════════════════════════════════════════════════════
-THIS IS NOT REAL WEB AUTHENTICATION. READ THIS BEFORE "IMPROVING" IT.
+THIS IS AN AUTHENTICATED SURFACE, AND HERE IS EXACTLY WHAT THAT IS WORTH.
 ───────────────────────────────────────────────────────────────────────────────
-The gate below (loopback peer + one bearer token compared with
-``hmac.compare_digest``) is *not* a login and must never be mistaken for one or
-"upgraded" into session cookies, JWTs or a cookie jar. Two hard facts decide it:
+Until the login milestone this module opened by telling the reader that its gate
+(loopback peer + one bearer token compared with ``hmac.compare_digest``) "is *not*
+a login and must never be mistaken for one or 'upgraded' into session cookies,
+JWTs or a cookie jar". That sentence is retired, and the paragraph replacing it is
+written against the code as it now stands — not against what a panel like this is
+usually described as having:
 
-  * The host is plain HTTP with no TLS (see ORACLE_DEPLOYMENT.md; the deployed
-    address is ``http://92.4.95.252/``). Any bearer token typed into this gate
-    travels across the wire *in the clear* — a single sniff on the path steals it,
-    and a cookie would be stolen exactly as easily. Adding client-side session
-    state would only widen the blast radius; it buys no secrecy that HTTP can't
-    provide, and inventing one here would hide that fact behind a confident API.
-  * Because the token cannot be kept secret in transit, the loopback requirement
-    (the peer address must be 127.0.0.1/::1) plus the deployment rule that
-    **nginx must never proxy ``/admin``** is the *actual* protection. The bearer
-    token is a second, cheap lock on an already-localhost-only door — a defence
-    against a stray local process or a mis-bound socket, not against a network
-    attacker who can reach the port.
+  * There is a login. A username and a password are POSTed to an HTML form, the
+    password is verified against a **salted, memory-hard KDF digest** stored in
+    ``RADD_ADMIN_PASSWORD_HASH`` (scrypt by default; :func:`verify_password`),
+    five failures lock a name for fifteen minutes, and success returns a signed,
+    expiring, ``HttpOnly``, ``SameSite=Strict`` cookie. No code path in this module
+    compares a plaintext password to a value read from the environment, and a
+    ``RADD_ADMIN_PASSWORD`` that is set with no stored hash is *refused* (503)
+    rather than used.
+  * No credential travels in a URL. ``?token=`` is gone from every route, form and
+    script here, because a URL credential is recorded in browser history, in the
+    ``Referer`` and in the access log — all of which outlive the session it opened.
+  * The transport has not changed and this is the honest limit: the host is plain
+    HTTP with no TLS (see ORACLE_DEPLOYMENT.md; the deployed address is
+    ``http://92.4.95.252/``). A session cookie sent over cleartext can be sniffed
+    as easily as a bearer token could, so the cookie buys hygiene — nothing in a
+    URL, nothing in a log, an expiry, and rotation invalidates every session — and
+    buys *no* confidentiality in transit. If TLS is ever terminated in front of
+    this panel, adding ``Secure`` to :data:`OPERATOR_COOKIE_ATTRS` is the change,
+    and it is one line.
+  * What still decides reachability is the same two facts it always was: this
+    surface binds to loopback, and ``viewer.py`` refuses it outright when a request
+    arrives carrying a reverse-proxy marker — because a live
+    ``location /operator/ { proxy_pass http://127.0.0.1:8081/; }`` made the
+    loopback peer check true for every visitor on the internet, prefix-stripped
+    around ``^~ /api/ { return 403; }``. The credential is a lock on the door that
+    door-locking was supposed to guard; the proxy refusal is the wall.
 
-So the security model is: reachability is controlled by the bind address and the
-reverse-proxy config (owned by ``viewer.py`` + nginx, never by this module), and
-the token is an operator-consent check on the one machine that is allowed to see
-this page. If you are about to add cookies, remember you would be replacing an
-honest localhost-only gate with a fake remote-authentication one over cleartext.
+So: a bearer token stays the machine credential (`RADD_ADMIN_TOKEN`), the password
+is the human one, and both are checked by the same gate on every route of the
+operator port — a cookie never reopens a path the token could not.
 
 ───────────────────────────────────────────────────────────────────────────────
 DESIGN / CONVENTION (mirrors ``api_v2.py`` deliberately, invents nothing new):
@@ -97,6 +112,7 @@ Standard Library only, like the rest of the backend.
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import html
 import hmac
@@ -227,6 +243,10 @@ _PROBLEM = {
     "unauthorised": (401, "Authentication required"),
     "forbidden": (403, "This action is not allowed"),
     "not_found": (404, "The requested resource does not exist"),
+    # Same code, status and title as the public manifest's `rate_limited`, or
+    # `test_admin_only_uses_codes_the_public_manifest_declares` rightly fails: the
+    # login lockout is a refusal in the §16.4 vocabulary, not a new one.
+    "rate_limited": (429, "Too many requests"),
     "internal": (500, "Internal error"),
     "unavailable": (503, "The catalog is not ready"),
 }
@@ -383,33 +403,57 @@ def _bearer(token_header):
     return text
 
 
-def _gate(peer_address, token_header, cookie_header="", query_token=""):
+def bearer_matches(token_header) -> bool:
+    """True when this header carries the configured bearer token, compared in
+    constant time. One definition, because three call sites — `_gate`,
+    `gate_operator_port` and the same-origin rule below — must not disagree about
+    what a proven bearer is: if they did, a request could pass the gate on a bearer
+    and still be treated as a cookie-authenticated browser. A *session* is not a
+    bearer, so nothing that only holds a cookie takes this branch."""
+    secret = bearer_secret()
+    presented = _bearer(token_header)
+    return bool(secret and presented) and hmac.compare_digest(
+        presented.encode("utf-8"), secret.encode("utf-8"))
+
+
+def _gate(peer_address, token_header, cookie_header="", accepts_html=False):
     """Return a refusal tuple, or ``None`` when the request may proceed.
 
-    Order is fixed and runs before any SQL: loopback first, then the bearer token.
-    A missing token and a wrong token yield the *identical* 401 body, so a caller
-    learns nothing about whether one is merely absent. If no token is configured
-    the gate denies everything — fail closed, never "empty token means open".
+    Order is fixed and runs before any SQL: loopback first, then the bearer
+    credential, then the session cookie. A missing credential and a wrong one
+    yield the *identical* refusal body, so a caller learns nothing about whether
+    one is merely absent. If no secret is configured the gate denies everything —
+    fail closed, never "empty token means open".
 
-    `cookie_header` is the second credential, and it is not a second door: a
-    session value is only ever minted for a caller who already proved the bearer
-    token (`mint_operator_session`), it is keyed by that token's hash, and
-    rotating or unsetting `RADD_ADMIN_TOKEN` invalidates every session with it.
-    It exists so the dashboard at `/` can fetch `/api/data` without pasting a
-    token into a URL that outlives the page.
+    `accepts_html` decides the *shape* of the refusal, never its outcome: a browser
+    gets the login card at 401 (an HTML refusal is still a refusal — nothing about
+    the catalog is rendered and no status code pretends success), while a client
+    that did not ask for HTML gets the §16.4 problem document it expects. curl and
+    every existing test land in that second branch, so the byte-for-byte
+    missing-equals-wrong property they pin is unchanged.
+
+    **There is no query-string credential any more, on purpose.** The gate used to
+    take `query_token`, and the panel used to write `?token=` into its own form
+    actions and `fetch` calls, so the operator's credential landed in browser
+    history, in the `Referer` of every asset the page pulled, and — measured
+    2026-10-31 in `/var/log/nginx/access.log`, which is `www-data:adm 0640` and
+    rotated daily for 14 days — in the clear, six times, from ordinary use. A
+    credential that a human is *invited* to put in a URL is not a secret. What
+    replaces it is the session cookie minted by `authenticate`, and nothing else on
+    this surface takes a credential off the header.
     """
     if str(peer_address or "").strip() not in _LOOPBACK:
         return _problem("forbidden", ADMIN_PREFIX,
                         "This surface answers on loopback only.", stable=True)
-    expected = os.environ.get("RADD_ADMIN_TOKEN", "")
-    provided = _bearer(token_header) or str(query_token or "").strip()
-    if expected and provided and hmac.compare_digest(
-            provided.encode("utf-8"), expected.encode("utf-8")):
+    expected = session_signing_secret()
+    if bearer_matches(token_header):
         return None
     if cookie_header and operator_session_valid(cookie_header, expected):
         return None
+    if accepts_html:
+        return _respond_login_form(ADMIN_PREFIX)
     return _problem("unauthorised", ADMIN_PREFIX,
-                    "A valid operator bearer token is required.", stable=True)
+                    "A valid operator credential is required.", stable=True)
 
 
 # ── the whole-port credential ────────────────────────────────────────────────
@@ -497,41 +541,549 @@ def operator_session_valid(cookie_header_or_value, expected_token, *, now=None):
                                _session_signature(expected_token, int(expiry)))
 
 
+#: The one place the session cookie's attributes are spelled. Every mint and every
+#: deletion goes through it, so "what does this cookie assert" has one answer.
+#: No `Secure` because this deployment serves plain HTTP; measured 2026-10-31, an
+#: enabled `location /operator/` proxy did forward the operator port, so the
+#: cleartext risk is real and the mitigation is the proxy refusal in `viewer.py`,
+#: not a flag on a cookie over HTTP.
+OPERATOR_COOKIE_ATTRS = "Path=/; HttpOnly; SameSite=Strict"
+
+
 def operator_session_cookie(expected_token, *, now=None):
     """The full `Set-Cookie` string for a minted session, or ``None``.
 
     `HttpOnly` so a script on the panel cannot read it back, `SameSite=Strict` so
-    another page on this box cannot spend it, and no `Secure` flag because this
-    deployment is plain HTTP on loopback — the port is not bound beyond 127.0.0.1
-    and nginx forwards neither port, so there is no path on which the cookie
-    could travel in the clear to anyone who is not already root on this machine.
+    another page on this box cannot spend it, and an `Max-Age` that matches the
+    server-side expiry — a cookie the browser keeps after the signature stops
+    validating is only a confusing dead credential.
     """
     value = mint_operator_session(expected_token, now=now)
     if not value:
         return None
     remaining = max(1, int(OPERATOR_SESSION_TTL))
-    return (f"{OPERATOR_COOKIE}={value}; Path=/; Max-Age={remaining};"
-            " HttpOnly; SameSite=Strict")
+    return (f"{OPERATOR_COOKIE}={value}; Max-Age={remaining}; "
+            + OPERATOR_COOKIE_ATTRS)
 
 
-def gate_operator_port(peer_address, *, authorization="", cookie="", query_token=""):
+def gate_operator_port(peer_address, *, authorization="", cookie="",
+                       accepts_html=False):
     """The credential every operator-port route now requires.
 
     Returns `(refusal, set_cookie)`. `refusal` is a `(status, content_type, body)`
     tuple to answer with, or ``None`` when the caller may proceed; `set_cookie` is
-    a header value to emit when a proven bearer token should hand out a session —
-    issued once per authenticated request, never on a refusal.
+    a header value to emit when a proven bearer credential should hand out a
+    session — issued once per authenticated request, never on a refusal.
     """
     refusal = _gate(peer_address, authorization, cookie_header=cookie,
-                    query_token=query_token)
+                    accepts_html=accepts_html)
     if refusal is not None:
         return refusal, None
-    token = os.environ.get("RADD_ADMIN_TOKEN", "")
-    presented = _bearer(authorization) or str(query_token or "").strip()
-    if token and presented and hmac.compare_digest(
-            presented.encode("utf-8"), token.encode("utf-8")):
-        return None, operator_session_cookie(token)
+    if bearer_matches(authorization):
+        return None, operator_session_cookie(session_signing_secret())
     return None, None
+
+
+# ── the credential: a username and a salted password hash ────────────────────
+#
+# `RADD_ADMIN_TOKEN` stays the bearer credential, because every existing client of
+# this panel — the dashboard's `Authorization` header, the JSON tooling, the
+# isolation suites — speaks it, and a bearer token is the right shape for a
+# machine. What it was never the right shape for is a *human* at a keyboard: the
+# only way a person could use it was to paste it into a URL, which is the leak the
+# gate above just closed. So a human types a username and a password.
+#
+# What the server stores about that password is a decision, not an accident, and it
+# is the one this module's own header line demanded: an HMAC compare of a presented
+# secret "is *not* a login and must never be mistaken for one". A login that keeps
+# the password in plaintext and compares it with `compare_digest` is that same
+# compare wearing a form, and it fails three ways at once: a readable environment
+# dump is a password dump, the value survives in whatever snapshotted the
+# environment, and the compare is only constant-time for an attacker who already
+# knows the length. So the stored form is a **salted KDF digest**, and the only
+# plaintext this module accepts is the one a person types once.
+#: Login name. Defaults to `admin` so an operator who sets only a password gets a
+#: working login rather than an unguessable username.
+ADMIN_USERNAME_ENV = "RADD_ADMIN_USERNAME"
+DEFAULT_ADMIN_USERNAME = "admin"
+#: The machine credential: `Authorization: Bearer …`, constant-time compared.
+TOKEN_ENV = "RADD_ADMIN_TOKEN"
+#: The human credential, stored as a self-describing hash. Format:
+#: `$scrypt$N=<n>,r=<r>,p=<p>$<b64 url-safe salt, unpadded>$<b64 dk, unpadded>`
+#: or `$pbkdf2-sha256$<rounds>$<b64 salt>$<b64 dk>`. Mint one with
+#: `python3 -S Fast_Fetch/admin_panel.py hash-password`.
+PASSWORD_HASH_ENV = "RADD_ADMIN_PASSWORD_HASH"
+#: Named so the refusal can be about it. A plaintext password in the environment is
+#: NOT a credential this panel will use: set with no `RADD_ADMIN_PASSWORD_HASH`,
+#: login answers 503 and tells the operator to mint the hash. Silently falling back
+#: to a plaintext compare is the exact defect this block exists to remove.
+PLAINTEXT_PASSWORD_ENV = "RADD_ADMIN_PASSWORD"
+#: Optional dedicated session-signing key. Falling back to the stored hash string
+#: means a box that configured only a login still has a high-entropy key — that
+#: string is not the password, and it never leaves the environment.
+SESSION_SECRET_ENV = "RADD_ADMIN_SESSION_SECRET"
+
+#: The parameters a mint writes into the string it prints, so verification always
+#: reads them from the stored value and a future change can never silently
+#: re-interpret an old hash. scrypt at N=2**14, r=8, p=1 needs 16 MiB and measured
+#: 1,013 ms per derive on this box's single vCPU (`nice -n 19`, 2026-11-01) —
+#: deliberate: that is what an attacker pays per guess, and `auth` in
+#: redact.BUCKET_LIMITS is what caps how many guesses a minute they may buy.
+PASSWORD_KDF = "scrypt"
+SCRYPT_N = 1 << 14
+SCRYPT_R = 8
+SCRYPT_P = 1
+PBKDF2_ROUNDS = 200_000
+SALT_BYTES = 16
+DK_BYTES = 32
+
+
+def _b64(raw: bytes) -> str:
+    """URL-safe base64 with the padding stripped: the separators in this format are
+    `$`, and `=` is what every query parser in the world would choke on."""
+    return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+
+def _unb64(text: str) -> bytes:
+    return base64.urlsafe_b64decode(text + "=" * (-len(text) % 4))
+
+
+def _derive(kdf: str, password: str, salt: bytes, *, n: int, r: int, p: int,
+            rounds: int, dk_bytes: int) -> bytes:
+    if kdf == "scrypt":
+        return hashlib.scrypt(password.encode("utf-8"), salt=salt, n=n, r=r, p=p,
+                              dklen=dk_bytes, maxmem=(n * r * p * 2) + (16 << 20))
+    return hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, rounds,
+                               dk_bytes)
+
+
+def mint_password_hash(password: str, *, kdf: str = PASSWORD_KDF, n: int = SCRYPT_N,
+                       r: int = SCRYPT_R, p: int = SCRYPT_P,
+                       rounds: int = PBKDF2_ROUNDS, salt: bytes | None = None) -> str:
+    """The stored form of the human credential. The only place parameters are chosen.
+
+    A fresh random salt per mint (`secrets.token_bytes`, not the clock, not the
+    username), so two operators who pick the same password store different strings
+    and no attacker can pre-compute a table against this deployment.
+    """
+    password = str(password or "")
+    if not password:
+        raise ValueError("an empty password has no hash worth storing")
+    chosen = salt if salt is not None else secrets.token_bytes(SALT_BYTES)
+    digest = _derive(kdf, password, chosen, n=n, r=r, p=p, rounds=rounds,
+                     dk_bytes=DK_BYTES)
+    if kdf == "scrypt":
+        return f"$scrypt$N={n},r={r},p={p}${_b64(chosen)}${_b64(digest)}"
+    return f"$pbkdf2-sha256${rounds}${_b64(chosen)}${_b64(digest)}"
+
+
+def parse_password_hash(spec: str) -> dict | None:
+    """The stored string taken apart, or ``None`` when it is not one.
+
+    Deliberately total: a truncated, mistyped or hostile value is a refusal here,
+    and a refusal never raises out of an authentication route.
+    """
+    text = str(spec or "").strip()
+    if not text.startswith("$") or "$" not in text[1:]:
+        return None
+    pieces = text.split("$")
+    # A leading `$` makes pieces[0] empty — the format is a marker, not a field.
+    if pieces[0] != "" or len(pieces) != 5:
+        return None
+    _, scheme, params, salt, digest = pieces
+    try:
+        if scheme == "scrypt":
+            fields = dict(part.split("=", 1) for part in params.split(","))
+            n, r, p = (int(fields["N"]), int(fields["r"]), int(fields["p"]))
+            if n < 2 or (n & (n - 1)) or r < 1 or p < 1:
+                return None
+            rounds = 0
+        elif scheme == "pbkdf2-sha256":
+            rounds = int(params)
+            n = r = p = 0
+            if rounds < 1_000:
+                return None
+        else:
+            return None
+        raw_salt, raw_digest = _unb64(salt), _unb64(digest)
+    except (ValueError, KeyError, TypeError):
+        return None
+    if len(raw_salt) < 8 or len(raw_digest) < 16:
+        return None
+    return {"kdf": scheme, "n": n, "r": r, "p": p, "rounds": rounds,
+            "salt": raw_salt, "dk": raw_digest}
+
+
+def verify_password(password: str, spec: str) -> bool:
+    """Constant-time comparison of two *derived* values; the password never is.
+
+    No branch here depends on the password's content, and a stored digest that is
+    32 bytes says nothing about the length of the secret that produced it.
+    """
+    parsed = parse_password_hash(spec)
+    if not parsed:
+        return False
+    try:
+        derived = _derive(parsed["kdf"], str(password or ""), parsed["salt"],
+                          n=parsed["n"], r=parsed["r"], p=parsed["p"],
+                          rounds=parsed["rounds"], dk_bytes=len(parsed["dk"]))
+    except (ValueError, TypeError, MemoryError):
+        return False
+    return hmac.compare_digest(derived, parsed["dk"])
+
+
+def password_hash_spec() -> str:
+    """The stored human credential, or ``""``. Read per call, never cached, so an
+    operator who re-mints and reloads the environment is not still gated by the
+    hash this process memorised."""
+    return str(os.environ.get(PASSWORD_HASH_ENV) or "").strip()
+
+
+def admin_secret():
+    """Any credential this panel has at all — the fail-closed switch, not a compare.
+
+    Empty when the environment carries no token, no session secret and no stored
+    password hash, and empty means *deny everything*: the rule that already governs
+    `_gate`, `mint_operator_session` and the whole-port gate. A caller that means to
+    compare something uses `bearer_secret()` (a header) or `session_signing_secret()`
+    (a cookie); neither should reach for this one. Read per call, never cached, so an
+    operator who rotates the value is not still gated by what this process
+    memorised.
+    """
+    return (str(os.environ.get(TOKEN_ENV) or "").strip()
+            or str(os.environ.get(SESSION_SECRET_ENV) or "").strip()
+            or password_hash_spec())
+
+
+def bearer_secret() -> str:
+    """The value a `Bearer` header is compared to: `RADD_ADMIN_TOKEN`, or nothing.
+
+    Deliberately NOT `admin_secret()`. The stored password *hash* is a legitimate
+    session-signing key and a legitimate thing to keep in the environment, but if it
+    also satisfied a bearer header then anyone who could read that one environment
+    entry would hold a working machine credential, and a token the owner rotated out
+    would silently still be replaced by a second way in. A box with no token simply
+    has no bearer surface: it authenticates by signing in.
+    """
+    return str(os.environ.get(TOKEN_ENV) or "").strip()
+
+
+def session_signing_secret() -> str:
+    """The HMAC key behind a session cookie's signature.
+
+    `RADD_ADMIN_SESSION_SECRET` when the owner set one (the only value whose whole
+    job is this, and the one to set if the password hash is ever re-minted while
+    people are logged in), else the bearer token, else the stored hash string. Every
+    one of those rotates sessions when it changes, which is the property an operator
+    actually wants after a suspected leak: sign out of the panel by changing the
+    environment, not by hunting for a session table this box never had.
+    """
+    return (str(os.environ.get(SESSION_SECRET_ENV) or "").strip()
+            or str(os.environ.get(TOKEN_ENV) or "").strip()
+            or password_hash_spec())
+
+
+def admin_username():
+    """The configured login name, never the secret and never a value from a body."""
+    return (str(os.environ.get(ADMIN_USERNAME_ENV) or "").strip()
+            or DEFAULT_ADMIN_USERNAME)
+
+
+#: Failed-login policy: five wrong answers, then a quarter of an hour of nothing.
+LOGIN_FAIL_LIMIT = 5
+LOGIN_LOCK_SECONDS = 15 * 60
+#: A lockout table that grows without bound is a memory leak on a 1-core box, and
+#: the only key in it is one username. The cap is a guard rail, not a feature: at
+#: `DEFAULT_ADMIN_USERNAME` there is exactly one live entry in practice.
+_LOGIN_TABLE_MAX = 64
+_login_failures = {}
+_login_lock = threading.Lock()
+
+
+def login_locked_until(username, *, now=None):
+    """Epoch seconds when this name may try again, or ``0`` when it may not be
+    locked at all. Pure read: it does not consume an attempt."""
+    stamp = now if now is not None else time.time()
+    name = str(username or "")
+    with _login_lock:
+        record = _login_failures.get(name)
+    if not record:
+        return 0
+    count, locked_until = record
+    if locked_until and locked_until > stamp:
+        return locked_until
+    if count >= LOGIN_FAIL_LIMIT and locked_until and locked_until <= stamp:
+        # The window has passed: the lock expires by itself, taking its counter
+        # with it, so an operator who waits out the 15 minutes is not still one
+        # wrong keystroke away from a second lockout.
+        with _login_lock:
+            _login_failures.pop(name, None)
+    return 0
+
+
+def _note_login_failure(username, *, now=None):
+    stamp = now if now is not None else time.time()
+    name = str(username or "")
+    with _login_lock:
+        count, _locked = _login_failures.get(name, (0, 0.0))
+        count += 1
+        _login_failures[name] = (
+            count, stamp + LOGIN_LOCK_SECONDS if count >= LOGIN_FAIL_LIMIT else 0.0)
+        if len(_login_failures) > _LOGIN_TABLE_MAX:
+            for stale in sorted(_login_failures)[:len(_login_failures) - _LOGIN_TABLE_MAX]:
+                _login_failures.pop(stale, None)
+    return count
+
+
+def _clear_login_failures(username):
+    with _login_lock:
+        _login_failures.pop(str(username or ""), None)
+
+
+def reset_login_lockouts():
+    """Empty the lockout table. For a test, and for an operator who is locked out
+    of their own box and can reach its shell."""
+    with _login_lock:
+        _login_failures.clear()
+
+
+def authenticate(username, password, *, peer_address=None, now=None):
+    """`(ok, refusal, set_cookie)` for one username/password attempt.
+
+    Checked in this order, and the order is the security argument:
+
+    1. **loopback first** — a remote peer never gets to *attempt* a password, so it
+       learns nothing about the lockout table either.
+    2. **stored hash present second** — with no `RADD_ADMIN_PASSWORD_HASH` there is
+       nothing to verify against, and this panel answers 503 rather than inventing a
+       credential. The plaintext `RADD_ADMIN_PASSWORD` a deployer might expect to be
+       the fallback is never read here: that fallback is how a form-login silently
+       becomes an unsalted compare.
+    3. **locked out third** — while a name is locked the password is not derived at
+       all. Verifying anyway would make the lockout a speed bump, and on a single
+       vCPU it would also let a locked-out attacker keep paying for scrypt.
+    4. **then the username**, constant-time, and only then one KDF run against the
+       stored digest.
+
+    A wrong password and a wrong username return the *same bytes* (401, same body,
+    same headers), which is what the isolation suites can assert. What is not
+    identical is the cost: a wrong username stops before the KDF, so the wall clock
+    distinguishes "no such operator" from "wrong password". That is accepted on
+    purpose and stated here rather than hidden, because the username is
+    configuration this project publishes (`DEFAULT_ADMIN_USERNAME`), while deriving
+    on every guess would double the CPU an attacker can buy per request.
+
+    `set_cookie` is returned ONLY on success. `peer_address=None` means "the caller
+    already proved the peer", which is what the mount does; a test that wants the
+    loopback rule passes it explicitly.
+    """
+    if peer_address is not None and str(peer_address).strip() not in _LOOPBACK:
+        return False, _problem("forbidden", LOGIN_PATH,
+                               "This surface answers on loopback only.",
+                               stable=True), None
+    spec = password_hash_spec()
+    if not spec:
+        return False, _problem("unavailable", LOGIN_PATH,
+                               "No stored operator password is configured.",
+                               stable=True), None
+    name = str(username or "").strip()
+    locked = login_locked_until(name, now=now)
+    if locked:
+        wait = max(1, int(locked - (now if now is not None else time.time())))
+        # 429, not 401: an operator who is typed-out deserves to know they are
+        # rate-limited rather than wrong. The trade is stated honestly — with the
+        # default username this leaks nothing an attacker cannot guess, and the
+        # alternative is a person hammering a correct password for 15 minutes
+        # because the panel told them it was wrong.
+        return False, _problem("rate_limited", LOGIN_PATH,
+                               f"Too many failed attempts. Try again in {wait}s.",
+                               stable=True), None
+    signing = session_signing_secret()
+    username_ok = hmac.compare_digest(name.encode("utf-8"),
+                                      admin_username().encode("utf-8"))
+    # A blank field is measured against a one-byte dummy so the KDF runs for the
+    # empty case exactly as it does for a typed one; the compare is still against
+    # the stored digest, never against whatever the operator typed.
+    password_ok = verify_password(str(password or "") or "\0", spec)
+    if username_ok and password_ok:
+        _clear_login_failures(name)
+        return True, None, operator_session_cookie(signing, now=now)
+    _note_login_failure(name, now=now)
+    return False, _problem("unauthorised", LOGIN_PATH,
+                           "Username or password is wrong.", stable=True), None
+
+
+def logout_cookie():
+    """A `Set-Cookie` that deletes the session: same name, same attributes, no
+    value, `Max-Age=0`. Browsers need the path to match the one it was set with, or
+    the cookie survives the logout — which is why the attributes come from
+    :data:`OPERATOR_COOKIE_ATTRS` and are not retyped here."""
+    return f"{OPERATOR_COOKIE}=; Max-Age=0; " + OPERATOR_COOKIE_ATTRS
+
+
+#: The two login paths, named for the surface a human arrives at. `/admin` is the
+#: panel; `/` on the operator port is the dashboard, and both now demand the same
+#: cookie before they answer anything.
+LOGIN_PATH = ADMIN_PREFIX + "/login"
+OPERATOR_LOGIN_PATH = "/operator/login"
+LOGOUT_PATH = ADMIN_PREFIX + "/logout"
+OPERATOR_LOGOUT_PATH = "/operator/logout"
+#: path → where a successful login sends the browser
+LOGIN_TARGETS = {LOGIN_PATH: ADMIN_PREFIX,
+                 OPERATOR_LOGIN_PATH: "/"}
+LOGOUT_TARGETS = {LOGOUT_PATH: LOGIN_PATH,
+                  OPERATOR_LOGOUT_PATH: OPERATOR_LOGIN_PATH}
+LOGIN_PATHS = frozenset(LOGIN_TARGETS)
+LOGOUT_PATHS = frozenset(LOGOUT_TARGETS)
+#: The only body keys a login POST may carry. Anything else is refused, so no
+#: future field can smuggle itself into a credential check.
+_LOGIN_BODY_KEYS = frozenset({"username", "password"})
+#: A login page and a refusal are both never cacheable: a shared cache that kept a
+#: 401 form would hand it to the next person, and one that kept a redirect would
+#: replay a session onto someone else's browser.
+_NO_STORE = [("Cache-Control", "no-store")]
+
+
+def _respond_login_form(target=LOGIN_PATH, *, status=401, reason=""):
+    """The login card as an *answer*, with the status the caller deserves.
+
+    401 is the default because that is what an unauthenticated request gets: the
+    form is the refusal's shape for a browser, not a downgrade of it. Nothing in
+    the page varies with the state behind the gate, so it is an oracle for nothing.
+    """
+    page = login_form_page(target, reason=reason)
+    return (status, CONTENT_HTML, page.encode("utf-8"))
+
+
+def login_page(path, *, peer_address):
+    """`GET /admin/login` / `GET /operator/login` — the form, and nothing else.
+
+    Reached WITHOUT a credential (that is the point), so it carries its own loopback
+    rule: a remote peer is refused here exactly as it is refused everywhere else, and
+    does not get to see a login box to aim a tool at.
+    """
+    if str(peer_address or "").strip() not in _LOOPBACK:
+        return _problem("forbidden", path,
+                        "This surface answers on loopback only.", stable=True), []
+    return _respond_login_form(path, status=200), list(_NO_STORE)
+
+
+def login_submit(path, body, *, peer_address, accepts_html=False, now=None):
+    """`POST /admin/login` — check the credential, mint the cookie, redirect.
+
+    Returns `(triple, headers)` with `Cache-Control: no-store` always,
+    `Set-Cookie` only on success, and `Location` only on success. 303 rather than
+    302 on purpose: it tells the browser to follow with a GET, so a reload of the
+    landing page never re-POSTs a password. On failure the caller sees the form
+    again at 401 (or 429 once locked) — never a redirect, because a redirect on a
+    bad password is how a login page turns into an open redirect.
+    """
+    headers = list(_NO_STORE)
+    if str(peer_address or "").strip() not in _LOOPBACK:
+        return _problem("forbidden", path,
+                        "This surface answers on loopback only.",
+                        stable=True), headers
+    if not isinstance(body, dict) or set(body) - _LOGIN_BODY_KEYS:
+        return _problem("invalid_params", path,
+                        "Sign-in takes a username and a password."), headers
+    ok, refusal, cookie = authenticate(body.get("username"), body.get("password"),
+                                       peer_address=peer_address, now=now)
+    if not ok:
+        # A browser that typed something gets the card back with its own status,
+        # so a human can retry; the answer still carries no data and never varies
+        # with anything but the attempt's own outcome.
+        if accepts_html:
+            return _respond_login_form(
+                path, status=refusal[0],
+                reason="locked" if refusal[0] == 429 else ""), headers
+        return refusal, headers
+    if cookie:
+        headers.append(("Set-Cookie", cookie))
+    headers.append(("Location", LOGIN_TARGETS.get(path, ADMIN_PREFIX)))
+    return (303, CONTENT_HTML, b"Signed in. Redirecting."), headers
+
+
+def logout_response(path, *, peer_address):
+    """`POST /admin/logout` — expire the cookie, redirect to the login card.
+
+    A logout needs no credential: the worst an unauthenticated caller can do with it
+    is delete a cookie it does not have, and `SameSite=Strict` means a cross-site
+    request cannot even send one. It is POST-only in the page (a link a prefetcher
+    follows must not sign the operator out mid-click).
+    """
+    headers = list(_NO_STORE)
+    if str(peer_address or "").strip() not in _LOOPBACK:
+        return _problem("forbidden", path,
+                        "This surface answers on loopback only.", stable=True), headers
+    headers.append(("Set-Cookie", logout_cookie()))
+    headers.append(("Location", LOGOUT_TARGETS.get(path, LOGIN_PATH)))
+    return (303, CONTENT_HTML, b"Signed out."), headers
+
+
+def login_form_page(target="/admin", *, reason=""):
+    """The dark-mode login card. No credential is required to *see* it, and it
+    contains no data: nothing about the catalog, the fleet, or whether a token is
+    configured — a login page that varies with the state behind it is an oracle.
+
+    `method="post"` and no action query, so the password goes in the POST body and
+    never into a URL, a history entry, or an access log. `autocomplete="username"`
+    / `"current-password"` so a password manager can do its job; `rel="noopener"`
+    nowhere, because there are no links. `reason` is a fixed vocabulary
+    (`locked`/`signed_out`), never caller text.
+    """
+    notice = ""
+    if reason == "locked":
+        notice = '<p class="bad">Too many failed attempts — this name is locked ' \
+                 'for 15 minutes.</p>'
+    elif reason == "signed_out":
+        notice = '<p class="dim">Signed out.</p>'
+    return f"""<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Sign in — Radd Stream operator</title><style>
+:root{{--bg:#0b0f16;--panel:#111826;--edge:#1f2a3a;--ink:#e6edf5;--dim:#8a9bb0;
+--accent:#10b981;--bad:#ef4444}}
+*{{box-sizing:border-box}}
+body{{margin:0;min-height:100vh;background:radial-gradient(1200px 600px at 50% -10%,
+#14243a 0%,var(--bg) 60%);color:var(--ink);
+font:15px/1.5 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+display:flex;align-items:center;justify-content:center;padding:24px}}
+.card{{width:100%;max-width:380px;background:var(--panel);border:1px solid var(--edge);
+border-radius:14px;padding:26px 24px;box-shadow:0 18px 50px rgba(0,0,0,.45)}}
+h1{{margin:0 0 4px;font-size:19px;letter-spacing:.2px}}
+.sub{{margin:0 0 20px;color:var(--dim);font-size:13px}}
+label{{display:block;margin:0 0 6px;font-size:12px;text-transform:uppercase;
+letter-spacing:.6px;color:var(--dim)}}
+input{{width:100%;background:#0d1420;border:1px solid var(--edge);border-radius:9px;
+color:var(--ink);padding:11px 12px;font:inherit;margin-bottom:14px}}
+input:focus{{outline:2px solid var(--accent);outline-offset:1px;border-color:var(--accent)}}
+button{{width:100%;background:var(--accent);color:#04160f;border:0;border-radius:9px;
+padding:11px 14px;font:600 inherit;cursor:pointer}}
+button:hover{{filter:brightness(1.08)}}
+.bad{{color:var(--bad);font-size:13px;margin:0 0 14px}}
+.dim{{color:var(--dim);font-size:13px;margin:0 0 14px}}
+.foot{{margin:18px 0 0;color:var(--dim);font-size:12px}}
+code{{background:#0d1420;padding:1px 5px;border-radius:4px;
+font-family:ui-monospace,SFMono-Regular,monospace;font-size:12px}}
+</style></head>
+<body><main class="card">
+<h1>Radd Stream operator console</h1>
+<p class="sub">Loopback-only control surface. Sign in to continue.</p>
+{notice}<form method="post" action="{html.escape(target, quote=True)}">
+<label for="username">Username</label>
+<input id="username" name="username" type="text" autocomplete="username"
+ autocapitalize="none" spellcheck="false" required>
+<label for="password">Password</label>
+<input id="password" name="password" type="password" autocomplete="current-password"
+ required>
+<button type="submit">Sign in</button>
+</form>
+<p class="foot">A wrong username and a wrong password answer identically, and
+{LOGIN_FAIL_LIMIT} failures lock the name for {LOGIN_LOCK_SECONDS // 60} minutes.
+This form never puts a credential in a URL.</p>
+</main></body></html>
+"""
 
 
 # ── small read helpers ───────────────────────────────────────────────────────
@@ -1831,6 +2383,60 @@ def _csrf_ok(action: str, payment_id, token) -> bool:
                                str(token or "")[:_CSRF_CHARS])
 
 
+#: The writes that a browser session can trigger. A payment review is deliberately
+#: absent: its token is bound to one (action, payment id) pair and `_review_payment`
+#: already refuses without it, which is a stronger claim than same-origin.
+_ORIGIN_WRITES = {
+    SAVE_MONETIZATION_PATH.rsplit("/", 1)[-1]: SAVE_MONETIZATION_PATH,
+    RUN_SCRAPER_PATH.rsplit("/", 1)[-1]: RUN_SCRAPER_PATH,
+}
+_EVIDENCE_ORIGIN_ACTION = "link-evidence"
+#: Where a JSON client puts the same-origin token when there is no body to put it
+#: in — the evidence re-fold reads none, so a header is the only place left, and a
+#: header is also what a cross-site page cannot set without a CORS preflight this
+#: panel's own allow-list would have to grant first.
+CSRF_HEADER = "X-Radd-Action-Token"
+
+
+def panel_origin_token(action: str) -> str:
+    """The same-origin token for one write, minted for the page to carry.
+
+    Bound to (action, `*`), not to a session, for the same reason the payment token
+    is: this panel keeps no session table, and a per-process secret that dies with a
+    restart is honest — an operator reloads. It is NOT the credential and gains
+    nothing on its own; it only proves the request was assembled by a page this
+    process rendered. It never goes in a URL, which is the whole lesson of the
+    query-string token this branch deleted."""
+    return _csrf_token(action, "*")
+
+
+def _origin_action(path):
+    """The same-origin action name for this POST, or ``None`` when it needs none."""
+    segments = _segments(path)
+    if len(segments) == 3 and segments[2] in _ORIGIN_WRITES:
+        return segments[2]
+    if (len(segments) == 5 and segments[1] == "api" and segments[2] == "links"
+            and segments[4] == "evidence"):
+        return _EVIDENCE_ORIGIN_ACTION
+    return None
+
+
+def _origin_ok(action: str, body, csrf_header) -> bool:
+    """True when the write carries the token the page was rendered with.
+
+    Checked only for a cookie-authenticated request. A bearer request does not need
+    it: a cross-site page cannot attach an `Authorization` header without a preflight
+    the CORS allow-list refuses, so the bearer itself already proves the caller
+    assembled the request on purpose. That distinction is why adding this rule broke
+    none of the 41 existing monetization and fleet tests, which all present a bearer.
+    """
+    presented = ""
+    if isinstance(body, dict):
+        presented = str(body.get("csrf") or "")
+    presented = presented or str(csrf_header or "")
+    return _csrf_ok(action, "*", presented)
+
+
 @contextmanager
 def _ledger(state_db_path=None):
     """A connection to the accounts ledger, schema included.
@@ -1946,27 +2552,30 @@ def _review_banner(result: dict) -> str:
             f"{result['status']} — nothing was written and no second credit was made")
 
 
-def _payment_forms(action_path, row, token) -> str:
+def _payment_forms(action_path, row) -> str:
     """The two buttons, as real HTML forms.
 
-    Each carries the CSRF token for its own (action, payment) pair, the admin
-    bearer token the gate already demanded (a `<form>` cannot set an
-    `Authorization` header, so the page's own token travels in the action URL —
-    this is the loopback panel of an operator who typed that token themselves),
-    and for a reject a short note the operator can type."""
+    Each carries the CSRF token for its own (action, payment) pair and posts to a
+    bare path. Nothing credential-shaped goes in the `action` any more: the earlier
+    version put the operator's own token in the form action, which meant every
+    approve or reject wrote the credential into browser history, into nginx's access
+    log, and into the `Referer` of whatever the refreshed page asked for. A
+    `<form>` cannot set an `Authorization` header, and now it does not need one — the
+    `HttpOnly` session cookie the sign-in page minted travels with the POST by
+    itself, and `csrf` proves the page that rendered the button is the page that is
+    answering. That is the whole replacement for a token in the URL: the browser
+    authenticates, the token authorizes one specific button."""
     identifier = row["payment_id"]
     shared = (f'<input type="hidden" name="payment_id" value="{_e(identifier)}">'
               f'<input type="hidden" name="{_FORM_FLAG}" value="1">'
               f'<input type="hidden" name="reviewer" value="panel">')
     approve = (
-        f'<form method="post" class="inline" action="'
-        f'{_e(action_path)}?token={_e(token)}">'
+        f'<form method="post" class="inline" action="{_e(action_path)}">'
         f'{shared}'
         f'<input type="hidden" name="csrf" value="{_e(_csrf_token(payments.STATUS_APPROVED, identifier))}">'
         '<button class="btn" type="submit">Approve</button></form>')
     reject = (
-        f'<form method="post" class="inline" action="'
-        f'{_e(REJECT_PAYMENT_PATH)}?token={_e(token)}">'
+        f'<form method="post" class="inline" action="{_e(REJECT_PAYMENT_PATH)}">'
         f'{shared}'
         f'<input type="hidden" name="csrf" value="{_e(_csrf_token(payments.STATUS_REJECTED, identifier))}">'
         '<input class="limit" type="text" name="note" maxlength="80"'
@@ -1976,8 +2585,11 @@ def _payment_forms(action_path, row, token) -> str:
 
 
 def render_payments_page(data, query, banner=""):
-    """The payment queue page. Loopback only, like the rest of `/admin`."""
-    token = _q(query, "token")
+    """The payment queue page. Loopback only, like the rest of `/admin`.
+
+    `query` still drives the queue's `limit`, and nothing else: it used to supply a
+    `token` to paste into every button's action URL, which is the leak the sign-in
+    cookie replaces."""
     parts = [
         "<!DOCTYPE html><html lang=\"en\"><head><meta charset=\"UTF-8\">",
         "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">",
@@ -2023,7 +2635,7 @@ def render_payments_page(data, query, banner=""):
                     _e(row.get("method")), _e(row.get("tid")),
                     _e(row.get("amount_pkr")), _e(row.get("plan")), submitted]
             if actions:
-                line.append(_payment_forms(APPROVE_PAYMENT_PATH, row, token))
+                line.append(_payment_forms(APPROVE_PAYMENT_PATH, row))
             else:
                 line.append(_e(row.get("status"))
                             + (" — " + _e(row.get("reviewer_note"))
@@ -2306,14 +2918,18 @@ def _ts(value):
 
 
 #: The page's own controls. A plain constant (not an f-string) so the JS braces
-#: stay inert; the two route paths are substituted at render time. The bearer
-#: token is read from the page's own query string, never embedded in the HTML.
+#: stay inert; the two route paths and the three same-origin tokens are substituted
+#: at render time. There is no credential in here any more: the browser presents the
+#: `HttpOnly` session cookie on its own, and `credentials` below is what makes it
+#: ride a same-origin `fetch`. `credentials: "same-origin"` is the default in modern
+#: browsers and is spelled out because the whole page depends on it.
 _SCRIPT = """
 <script>
 (function () {
-  const TOKEN = new URLSearchParams(window.location.search).get("token") || "";
   const SAVE_PATH = "__SAVE_PATH__";
   const RUN_PATH = "__RUN_PATH__";
+  const TOKENS = {"__SAVE_PATH__": "__SAVE_TOKEN__",
+                  "__RUN_PATH__": "__RUN_TOKEN__"};
   function note(text, ok) {
     const el = document.getElementById("ops-status");
     if (!el) return;
@@ -2321,15 +2937,13 @@ _SCRIPT = """
     el.className = ok ? "ok statusline" : "bad statusline";
   }
   async function post(path, payload) {
-    if (!TOKEN) {
-      note("Open this page with ?token=... to use the controls.", false);
-      return null;
-    }
     let response;
     try {
-      response = await fetch(path + "?token=" + encodeURIComponent(TOKEN), {
+      response = await fetch(path, {
         method: "POST",
-        headers: {"Content-Type": "application/json"},
+        credentials: "same-origin",
+        headers: {"Content-Type": "application/json",
+                  "__CSRF_HEADER__": TOKENS[path] || ""},
         body: JSON.stringify(payload)
       });
     } catch (error) {
@@ -2555,15 +3169,28 @@ def render_admin_page(conn, q):
     if not adult.get("available"):
         card("Adult suppression proof", '<div class="empty">' + _e(NOT_BUILT) + '</div>')
     else:
-        flag = ('<span class="ok">holds — zero flagged rows projected</span>'
+        flag = ('<span class="ok">holds — no adult work lost its flag</span>'
                 if adult.get("suppression_holds")
-                else '<span class="bad">FAILED — flagged rows reached the'
-                     ' projection</span>')
-        ad = _kv([("flagged posts in ledger", _num(adult.get("ledger_flagged_posts"))),
-                  ("flagged works projected", _num(adult.get("projected_flagged_works"))),
-                  ("flagged releases projected", _num(adult.get("projected_flagged_releases"))),
-                  ("flagged links projected", _num(adult.get("projected_flagged_links"))),
-                  ("display filtering", flag)])
+                else '<span class="bad">FAILED — flagged works are projected'
+                     ' unflagged</span>')
+        lost = adult.get("works_that_lost_their_flag")
+        exposed = adult.get("exposed_rows_if_leaked") or {}
+        ad = _kv([
+            ("flagged posts in ledger", _num(adult.get("ledger_flagged_posts"))),
+            ("flagged works projected", _num(adult.get("projected_flagged_works"))),
+            ("works that LOST the flag", _num(lost)),
+            ("display filtering", flag)])
+        # The two numbers this card used to print — `projected_flagged_releases` and
+        # `projected_flagged_links` — are not keys `screen_adult_proof` returns, so
+        # they rendered `n/a` on every load, forever, while the two it does return
+        # (`works_that_lost_their_flag`, and `exposed_rows_if_leaked` per surface) went
+        # unshown. A compliance card that displays nothing but `n/a` is worse than no
+        # card: it looks audited. These are the real measurements, and the counts are
+        # all this screen may print — no title, no URL, by design.
+        if isinstance(exposed, dict) and exposed:
+            ad += _table(("projected surface", "rows hanging off a lost flag"),
+                         [[_e(name), _num(count)]
+                          for name, count in sorted(exposed.items())])
         ad += '<p class="sub">' + _e(adult.get("note", "")) + '</p>'
         card("Adult suppression proof", ad)
 
@@ -2580,8 +3207,16 @@ def render_admin_page(conn, q):
         sh += _table(("work", "title", "type", "episodes"), tops)
         card("Catalog shape", sh)
 
+    # Path first, then token: the TOKENS map is keyed by the *path*, so substituting
+    # the path placeholders before the token ones turns that literal into the lookup
+    # key the `post()` call actually uses.
     parts.append(_SCRIPT.replace("__SAVE_PATH__", _e(SAVE_MONETIZATION_PATH))
-                 .replace("__RUN_PATH__", _e(RUN_SCRAPER_PATH)))
+                 .replace("__RUN_PATH__", _e(RUN_SCRAPER_PATH))
+                 .replace("__SAVE_TOKEN__",
+                          _e(panel_origin_token("save-monetization")))
+                 .replace("__RUN_TOKEN__",
+                          _e(panel_origin_token("run-scraper")))
+                 .replace("__CSRF_HEADER__", _e(CSRF_HEADER)))
     parts.append("</div></body></html>")
     return "".join(parts)
 
@@ -2597,7 +3232,7 @@ def _segments(path):
 
 
 def route_get(path, query, *, db_path, peer_address, token_header,
-              state_db_path=None, cookie_header=""):
+              state_db_path=None, cookie_header="", accepts_html=False):
 
     """Serve one admin GET. Returns ``(status, content_type, body_bytes)`` when
     answered, or ``None`` when ``path`` is not under ``/admin`` (the caller falls
@@ -2610,8 +3245,14 @@ def route_get(path, query, *, db_path, peer_address, token_header,
     one."""
     if not _is_admin(path):
         return None
+    if path in LOGIN_PATHS:
+        # Sign-in answers before the credential exists, and carries its own
+        # loopback rule so it cannot be reached from off the box.
+        return login_page(path, peer_address=peer_address)
+    if path in LOGOUT_PATHS:
+        return logout_response(path, peer_address=peer_address)
     refusal = _gate(peer_address, token_header, cookie_header=cookie_header,
-                    query_token=(query or {}).get("token", [""])[0])
+                    accepts_html=accepts_html)
     if refusal is not None:
         return refusal
     try:
@@ -2664,8 +3305,12 @@ _BODY_ACTIONS = frozenset({
 def takes_body(path):
     """Whether this admin POST consumes a request body — so the mount knows when
     to read one and can leave every other POST's bytes alone. Only the settings
-    save, the scraper action and the two payment reviews do: the evidence re-fold
-    derives everything from the journal already in the database."""
+    save, the scraper action, the two payment reviews and the sign-in form do: the
+    evidence re-fold derives everything from the journal already in the database,
+    and a logout carries nothing."""
+    if path in LOGIN_PATHS:
+        # The password is in the body, which is the entire reason the body exists.
+        return True
     segments = _segments(path)
     return (len(segments) == 3 and segments[1] == "action"
             and segments[2] in _BODY_ACTIONS)
@@ -2702,7 +3347,8 @@ def refuse_bad_body(path):
 
 
 def route_post(path, query, *, db_path, peer_address, token_header, body=None,
-               state_db_path=None, cookie_header=""):
+               state_db_path=None, cookie_header="", accepts_html=False,
+               csrf_header=""):
     """Serve one admin POST. Same tuple/``None`` contract as :func:`route_get`.
 
     Five writes, no more. ``POST /admin/api/links/{id}/evidence`` takes no body:
@@ -2719,10 +3365,27 @@ def route_post(path, query, *, db_path, peer_address, token_header, body=None,
     No screen gains a setter that ``payments.py`` does not already expose."""
     if not _is_admin(path):
         return None
+    if path in LOGIN_PATHS:
+        # The credential check itself, before any credential exists. It reads the
+        # form the page posted and nothing else: `authenticate` refuses a body with
+        # a key beyond username/password, so no field can join the decision.
+        return login_submit(path, body, peer_address=peer_address,
+                            accepts_html=accepts_html)
+    if path in LOGOUT_PATHS:
+        return logout_response(path, peer_address=peer_address)
     refusal = _gate(peer_address, token_header, cookie_header=cookie_header,
-                    query_token=(query or {}).get("token", [""])[0])
+                    accepts_html=accepts_html)
     if refusal is not None:
         return refusal
+    # Once a browser holds a session cookie instead of a token in its URL, a write
+    # has to prove it was assembled by a page this process rendered. Only the three
+    # writes that have no row-bound CSRF token are checked here; a bearer caller is
+    # exempt by construction, and `_origin_ok` says why.
+    origin_action = _origin_action(path)
+    if (origin_action is not None and not bearer_matches(token_header)
+            and not _origin_ok(origin_action, body, csrf_header)):
+        return _problem("unauthorised", path,
+                        "This write must come from a panel page.", stable=True)
     segments = _segments(path)
     try:
         if takes_body(path):
@@ -2780,3 +3443,60 @@ def route_post(path, query, *, db_path, peer_address, token_header, body=None,
         return _problem("unavailable", path, NOT_BUILT)
     except Exception:
         return _problem("internal", path, GENERIC_ERROR)
+
+
+# ── minting the stored password ──────────────────────────────────────────────
+#
+# The owner needs a way to turn a typed password into `RADD_ADMIN_PASSWORD_HASH`
+# without a second tool, and the tool has to be *this* file so the parameters it
+# writes are the parameters `verify_password` reads. The invocation never puts the
+# secret in a command-line argument: argv is readable by every process on the box
+# through `/proc`, lands in the shell history, and shows up in the `ps` output a
+# health check prints.
+
+USAGE = """usage: python3 -S Fast_Fetch/admin_panel.py hash-password [--pbkdf2]
+
+  Reads the operator password from the terminal without echoing it (or from
+  stdin when piped), and prints ONLY the salted hash. Put what it prints in
+  the environment as RADD_ADMIN_PASSWORD_HASH; the password itself is stored
+  nowhere, and this panel will refuse to compare one if it is.
+
+  --pbkdf2 selects PBKDF2-HMAC-SHA256 instead of the default scrypt, for a
+  Python whose OpenSSL has no scrypt. Both are salted and both are fine;
+  scrypt is memory-hard, which is the better trade on a single-vCPU box.
+"""
+
+
+def read_secret_from_input() -> str:
+    """One typed secret, taken off the terminal or the pipe, never off argv."""
+    if sys.stdin.isatty():
+        import getpass
+        first = getpass.getpass("operator password: ")
+        if first != getpass.getpass("repeat it: "):
+            raise SystemExit("the two entries differed; nothing minted")
+        return first
+    return sys.stdin.readline().rstrip("\n")
+
+
+def main(argv=None) -> int:
+    args = list(sys.argv[1:] if argv is None else argv)
+    if args[:1] != ["hash-password"]:
+        sys.stderr.write(USAGE)
+        return 2
+    secret = read_secret_from_input()
+    if not secret:
+        sys.stderr.write("an empty password has no hash worth storing\n")
+        return 2
+    kdf = "pbkdf2-sha256" if "--pbkdf2" in args else PASSWORD_KDF
+    try:
+        sys.stdout.write(mint_password_hash(secret, kdf=kdf) + "\n")
+    except ValueError as problem:
+        # OpenSSL without scrypt says `memory cost is too large`, and the owner
+        # needs to hear that as a sentence, not as a traceback off a 1-core box.
+        sys.stderr.write(f"{problem}\ntry --pbkdf2\n")
+        return 2
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
