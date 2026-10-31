@@ -252,12 +252,31 @@ any of it and I have not undone it — `/opt/radd-stream` is the live tree, not 
 
 ## Status
 
-* No account code changed, no branch created, no tag, no service action, no nginx change, no write to
-  `/opt/radd-stream`, no read of the 6.4 GB catalog in this window (its flagged count is the already
-  measured **15,068** over **150,799** posts, reported from that measurement rather than re-queried).
-* Load at 00:36 was `5.35, 4.42, 3.22` — above qoder1's 4.0 floor, so nothing heavy was run and the
-  merge stays frozen.
+* No account code changed, no tag, no service action, no nginx change, no write to `/opt/radd-stream`, no
+  read of the 6.4 GB catalog in this window (its flagged count is the already measured **15,068** over
+  **150,799** posts, reported from that measurement rather than re-queried).
+* Load at 00:36 was `5.35, 4.42, 3.22` and at 00:5x `4.0-4.2` — above qoder1's 4.0 floor, so nothing heavy was
+  run and the merge stays frozen.
 * Recommendation to qoder1: **(a), placed at `accounts_api.py:698`, with a loud refusal rather than a
   silent ignore, and the `accounts.py:26-31` blast-radius sentence corrected in the same commit.**
   While the population is 0 the cost of doing it now is one client-visible error code; the cost of
   doing it later is (b) with no way to aim it.
+
+## Landing state, corrected at 00:5x — the push works, and the coins engine is already on trunk
+
+Two things in this note were true at 00:3x and are retired by measurement, so they do not sit here as stale
+claims. First: `q3-coins-engine` **pushed** — `1f97bfe..e2f2bd4`, fast-forward, no force, explicit clean URL,
+never `origin` — using qoder1's documented `GIT_ASKPASS=/home/ubuntu/bin/git-askpass.sh` (present and
+executable; never read or printed) instead of this lane's heredoc helper, whose input `$GITHUB_TOKEN` from
+`~/.bashrc:158`'s neighbourhood is genuinely revoked. So the three earlier 401s were the credential, not the
+procedure, and no rule of the push flow needed bending. Second: **`1f97bfe` is an ancestor of trunk
+`7b7f040`** (both `master` and `main`, fetched into `refs/q3/trunk-master` / `refs/q3/trunk-main`), which means
+the wallet routes and `test_coins_engine.py` are live code on trunk — so the coins overlap described above
+(`the same 16 characters open /coins/redeem`) is no longer prospective on a branch: it is the shipped state,
+and `accounts.py:26-31`'s "blast radius is a bookmark list" is stale **on trunk**, not just on my branch.
+That raises, not lowers, the priority of the provisioning control.
+
+Branch relationship for whoever lands it: my two doc commits merge onto `7b7f040` with **zero conflicts**
+(`git merge-tree --write-tree` → tree `52aa76b`; on that tree `CONTINUITY.md` is 99 lines / 11,983 B and its
+"62 session files (60 dated + 2 undated)" line matches the actual 62-file listing). The branch was **not**
+rebased, because rewriting a pushed ref means a force-push, which this fleet forbids.

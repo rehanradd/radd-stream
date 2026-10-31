@@ -140,6 +140,11 @@ only by hand-editing `streak_state` in a fixture, which is why that fixture now 
 
 ## ⛔ The push failed — this commit is local, and the sha is not on the remote
 
+> **SUPERSEDED 2026-11-01 00:5x — every claim in this section was true when written and is now false.**
+> The coins work is on trunk and this lane's branch is on the remote; the measurements are in
+> `## ✅ Retired:` at the foot of this file, which is kept rather than edited because the corpus test
+> forbids deleting a line another commit added. Read the foot before quoting this section.
+
 `git push` to the clean URL with the documented `GIT_ASKPASS` helper (token never in argv, URL, file or log)
 was refused by GitHub: `remote: Invalid username or token. Password authentication is not supported for Git
 operations. / fatal: Authentication failed`. Measured with the same credential, status only, no value read:
@@ -375,3 +380,52 @@ So there is no nginx exception that would expose a wallet: the only balance-bear
 and 403s at the edge. If a future lane adds a balance to `_engagement_public`, `test_admin_panel.py`'s mirror
 test is where it should be caught, and `/api/v1/app/remote-config` is the path that would leak it — that is the
 line to watch, and it is worth naming because it is public by design.
+
+## ✅ Retired: the "unpushed / not on trunk" state above, measured 2026-11-01 00:5x
+
+Trunk moved to **`7b7f040`** (merge of q4's `461e142` onto `836c31f`) on **both** `refs/heads/master` and
+`refs/heads/main`, and this lane fetched it into its own refspace (`refs/q3/trunk-master`,
+`refs/q3/trunk-main`) rather than trusting the local `master` ref in `/opt/radd-stream`, which sits at
+`bf9e565` and is **not** an ancestor of trunk. Measured against that fetch:
+
+* `git merge-base --is-ancestor 1f97bfe refs/q3/trunk-master` → **YES**, and the same for `8fe83e5`. So the
+  coins engine — `test_coins_engine.py`, `engagement.py`, `accounts_api.py`, `admin_panel.py` and the
+  `/api/v2/account/coins*` routes — **is on trunk on both refs**. The sentence "Nothing named
+  `test_coins_engine.py` … is on trunk until that push lands" is retired by measurement, and the honest
+  status of `[Q3-COINS-ROUTE]` was **landed**, not unpushed, from the moment the owner pushed `1f97bfe`.
+* This lane's own two doc commits then pushed clean: `1f97bfe..e2f2bd4 q3-coins-engine -> q3-coins-engine`,
+  fast-forward, no force, explicit clean URL, **never `origin`** (its stored URL still carries an unrevoked
+  token). Landing my branch onto trunk is a clean merge: `git merge-tree --write-tree refs/q3/trunk-master
+  e2f2bd4` produced tree `52aa76b` with **zero conflicted paths**, and on that merged tree `CONTINUITY.md` is
+  99 lines / 11,983 B with its "62 session files (60 dated + 2 undated)" line matching an actual listing of
+  62. I have not run `test_docs_invariants.py` against a checkout of `52aa76b`, so the README-index and
+  corpus assertions are unverified there — the three numbers above are what I actually measured.
+* I did **not** rebase `q3-coins-engine` onto `7b7f040`. It is already pushed, so rewriting it would be a
+  force-push, which this fleet forbids; the branch stays ff-only and merging is qoder1's gate call.
+
+Why the three 401s earlier were the credential and not my helper. The `GITHUB_TOKEN` exported by
+`~/.bashrc` is **genuinely revoked** — qoder1 established that by header length and status codes, no value
+printed. My heredoc helper reads exactly that variable, so the helper was right and its input was dead;
+switching `GIT_ASKPASS` to `/home/ubuntu/bin/git-askpass.sh` (verified present and executable, contents never
+read or printed) pushed on the first attempt minutes later. Two cautions this cost real time to learn, and
+they belong in the file rather than the chat log:
+
+1. **A 401 and a dead token can look identical to a missing credential.** The helper's own case label is
+   `*[Pp]assword*)`, so anything that scrapes it with a literal `Password*)` extracts zero characters and
+   produces an empty `Authorization` header — which answers 401 exactly like a revoked one. Diagnose the
+   header before blaming the token.
+2. **This host's single IP burns the anonymous GitHub API quota (60/hour) and it was exhausted tonight**, so
+   an anonymous probe reads like an authentication failure. The discriminator is the status: `401` means a
+   credential was sent and refused, `403` means the quota is gone, and the reported core limit says whether
+   you are authenticated at all (5000 authenticated, 60 anonymous). My probes returned 401, so the revocation
+   conclusion stands; but a probe that silently sent no header would have looked the same, and that is the
+   trap, not the quota.
+
+Load 4.0-4.2 while all of this ran, so nothing heavy moved with it: one fetch, one push, in-process
+`rev-parse`/`merge-base`/`merge-tree`, `stat`/`fuser`/`wc`/`grep`, and one 0.6-second offline docs module. No
+merge write, no crawl, no Gradle, no read of the 6.4 GB catalog, no service action, no tag. The `[Q1]`
+merge-gate position is unchanged and recorded in
+[`20261101-00xx-q3-lane-the-phone-derived-sync-key-decision-memo.md`](20261101-00xx-q3-lane-the-phone-derived-sync-key-decision-memo.md):
+both `fast_fetch.db` names are symlinks to the served catalog (inode 813810), so the overnight mission's
+target is production twice over, and this lane writes to no target until one is named that is neither.
+
