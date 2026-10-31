@@ -2,7 +2,16 @@
 # planned to the command, costed where I measured it and marked unmeasured where I did not
 
 Lane: **qoder3**. Tree: `/tmp/q3_coins`, branch `q3-coins-engine` at `ef91096` (first hand-off of this plan;
-the corrections below are the second). Requested by
+the corrections below are the second). **Everything up to the C3R landing is on trunk at `f12ab3f`** (main ==
+master) as qoder1 replayed it; this entry adds only the landing note and the re-branch. The lane continues as
+`/tmp/q3_premerge` on `q3-premerge-exec-20261101`, based on `f12ab3f`, for anything after this point.
+Read that before diffing anything: `60ef341` is **not an ancestor of trunk** — qoder1 replayed the two
+commits as a cherry-pick rather than merging the side branch — so `git diff 60ef341 trunk` shows trunk's
+*other* content as my deletion, and that reading is wrong. qoder1 made exactly that error against an earlier
+head of mine, measured it properly with `git diff --name-only $(git merge-base …)`, found this lane's
+contribution to be four documentation paths and **no Python at all**, and retracted in writing. The replay
+makes the question unaskable, which is the right fix; the note here is so the next lane does not re-ask it.
+Requested by
 `Q1 TARGET DECISION plus a CORRECTION 01:20`: prepare the sequence, the measured cost per step and the
 expected row-count delta as a **queued action**, hand the sha, and do not run it — load1 was 9.91 at the
 notice and 6.57 at 01:23, so the freeze holds. **Nothing in this file ran against the catalog.** The only
@@ -229,7 +238,20 @@ through without a separate go, and the single in-sequence stop is the per-post r
 
 **Step 5 — the merges, sequential, calibrated on the first one.**
 ```
-cd /tmp/q3_coins/Fast_Fetch
+cd /tmp/q3_premerge/Fast_Fetch
+# Step 5.0 — the DB_PATH assertion from qoder1's [Q1-DBPATH-HAZARD], run BEFORE any write:
+nice -n 19 timeout 60 python3 -S -c "import sys; sys.path.insert(0,'.'); import config; print(config.DB_PATH)"
+```
+It must print a path **inside my own worktree**, and it must not name `merged_catalog_20261025.db`. Measured
+2026-11-01 from `/tmp/q3_premerge`: `/tmp/q3_premerge/Fast_Fetch/fast_fetch.db` — and that file **does not
+exist**, because `DB_PATH` is `BASE_DIR`-relative (`config.py:119`, `BASE_DIR` at `:101`) while `.gitignore:18
+*.db` keeps a worktree from ever receiving the link. That is the structural reason this lane is clean, not a
+lucky one; the hazard is real in `/opt/radd-stream`, where `Fast_Fetch/fast_fetch.db` has been a symlink onto
+the live catalog since 00:32:17 (`/home/ubuntu/radd-stream-data/fast_fetch.db` likewise, at 00:32:29 — both
+measured, both **reported as found and not fixed**, creator unknown). So a default-path write from the live
+tree *is* a production write and the command line looks identical either way, which is why Step 5.0 exists
+rather than a rule of thumb. If the print names the merged catalog: **stop**, do not merge, report.
+```
 nice -n 19 python3 -S merge_catalogs.py /home/ubuntu/radd-stream-data/vegamovies.db \
   --target-db /home/ubuntu/radd-stream-data/merged_catalog_premerge_20261101.db \
   2>&1 | tee /home/ubuntu/radd-stream-data/merge_01_vegamovies.log
@@ -250,7 +272,7 @@ ends with a report, not a continuation.
 
 **Step 5.5 — mp4moviez, LAST (C3R): convert to a new vault, then merge the vault.**
 ```
-nice -n 19 python3 -S /tmp/q3_coins/Fast_Fetch/importers/convert_mp4moviez.py \
+nice -n 19 python3 -S /tmp/q3_premerge/Fast_Fetch/importers/convert_mp4moviez.py \
   --source /home/ubuntu/radd-stream-data/mp4moviez.db \
   --target /home/ubuntu/radd-stream-data/mp4moviez_staging_20261101.db \
   2>&1 | tee /home/ubuntu/radd-stream-data/convert_05_mp4moviez.log
@@ -442,6 +464,22 @@ on `mp4moviez.db` (31 MB) and on both vault variants (34 MB) through `sqlite3 -r
 adopting them; and the offline docs module. C1–C4 and the C3R reversal are landed in place in this same file;
 the pre-correction version remains readable at `ef91096` and the C3-exclusion version in the commit before
 this one, which is the point of keeping the plan in git rather than in a chat log — a reversal that only
-exists in the last message is indistinguishable from a rumor. `q3-coins-engine` remote head after this entry
-is recorded in the commit that carries it, qoder1 lands trunk, and per their standing instruction **this lane
-stops at the sha.**
+exists in the last message is indistinguishable from a rumor.
+**Landed: trunk `f12ab3f`** (main == master), Backend CI `completed success` on both refs (runs 41247930663 /
+41247930667), footprint exactly this lane's four documentation paths. Three index lines were corrected during
+the landing and all three are re-verified here against the directory rather than taken on faith:
+`Fast_Fetch/CONTINUITY.md` now claims **65 session files (63 dated + 2 undated)** — measured
+`ls Fast_Fetch/checkpoints/*.md` minus `README.md` = 65, 63 dated, 2 undated; `docs/SESSION_CHECKPOINT.md`
+item 1 now claims **60 files** — measured 60 of 61 paths minus `README.md`, 58 of them dated; and
+`checkpoints/README.md` keeps both q5 bullets plus this lane's single merged `[Q3-PREMERGE-PLAN] +
+[Q3-PREMERGE-P]` bullet, with my earlier separate line dropped — indexing a retired verdict twice is a second
+index bug wearing a union's clothes. All three are what `test_the_index_counts_are_the_directory_listings`
+compares, which is why an either/or merge resolution goes red here instead of going quiet. That module re-run
+offline in the re-based tree: 22 tests OK.
+
+**Freeze, restated so nobody over-reads the load number:** load is genuinely under 4 now (load1 1.62), and
+qoder1 released exactly one inch of it — single offline test modules, one at a time, `nice -n 19`,
+timeout-wrapped. That release does **not** cover this merge, which is frozen for **irreversibility, not for
+load**, nor Gradle (owner-gated at load < 0.5), nor any crawl, nor any production read — and a pre-merge
+`.backup` of the 6.2 GB catalog **is** a production read, so Steps 2 and 3.5 stay queued however idle the box
+gets. Per the standing instruction, **this lane stops at the sha.**
