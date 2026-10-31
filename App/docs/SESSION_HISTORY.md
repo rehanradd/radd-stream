@@ -627,6 +627,18 @@ comment.
 5. `tooling/InstantStartGuardTest.kt` is still not landed for its owner; the real owners are named
    and the follow-up guard is written against them in `PlayerBufferingTest`, in the player lane.
 
+**Hosted verdict on the fix, and a guard blind spot worth someone's attention.** Run `41159934843`
+at `cfd6de3` got past the compile: 766 tests ran, my `DeviceTrialTest` and `OnboardHonestyTest`
+executed, and exactly one failure remained — `tooling/CommentBalanceTest`, repo-wide. Its scanner
+walks `'` as the start of a character literal and returns the line if the closing `'` is not on the
+same line, but Kotlin's backticked identifiers are not string contexts, so a test name written as
+`` fun `the name rule is the server's rule` `` reads to that scanner as an unterminated char
+literal. Four of my test names used the possessive; all four are reworded here, which is also how
+every other name in this module is already written. The hole itself is `CommentBalanceTest`'s owner's
+call, not mine to patch blind from a lane that has run no build: any future backticked name with an
+apostrophe will fail CI for the wrong reason, and the positive-control case in that suite would not
+notice the difference.
+
 **Rules kept:** no `./gradlew`, no test module, no python, no crawl, no merge, no service restart,
 no nginx change, no tag, no release, no keystore work, no `git add -A`, no force-push, nothing
 pushed to `main`/`master` — branch push only, no identifier/phone/PIN in any log, fixture or

@@ -38,7 +38,7 @@ class DeviceTrialTest {
     }
 
     @Test
-    fun `the id is 64 lowercase hex characters and always inside the server's device-id grammar`() {
+    fun `the id is 64 lowercase hex characters and always inside the device-id grammar`() {
         val id = DeviceTrial.deviceId("android-id-aaaa", "qcom", "BUILD-1")!!
         assertTrue("hex, not base64: $id", id.all { it in 'a'..'f' || it in '0'..'9' })
         assertEquals("SHA-256 rendered as hex is 64 characters", 64, id.length)
@@ -105,7 +105,7 @@ class DeviceTrialTest {
     // ── the countdown ────────────────────────────────────────────────────────────
 
     @Test
-    fun `the countdown is the server's seconds minus the time this device has held them`() {
+    fun `the countdown is seconds from the server minus the time this device has held them`() {
         assertEquals(
             3_600.0,
             DeviceTrial.secondsRemaining(3_660.0, storedAtMs = 1_000L, nowMs = 61_000L),
@@ -182,7 +182,7 @@ class DeviceTrialTest {
     // ── the profile fields ───────────────────────────────────────────────────────
 
     @Test
-    fun `the name rule is the server's rule`() {
+    fun `the name rule is the rule the server enforces`() {
         assertNull(DeviceTrial.nameError("Rehan"))
         assertNull(DeviceTrial.nameError("  Ali  Khan  "))
         assertNotNull("an empty name is refused by accounts._check_profile_name, so it must be by us too", DeviceTrial.nameError("   "))

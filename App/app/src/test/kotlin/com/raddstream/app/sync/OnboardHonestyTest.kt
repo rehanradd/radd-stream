@@ -210,7 +210,7 @@ class OnboardHonestyTest {
      * value the wire model carried and the clock only stamps WHEN it was read.
      */
     @Test
-    fun `the stored countdown is the server's number and not one this device multiplied`() {
+    fun `the stored countdown is the number from the server, not one this device multiplied`() {
         val args = argsOf(repository, "settingsRepository.saveDeviceTrial(")
         val parts = args.split(",").map { it.trim() }
         assertEquals("exactly two arguments: $args", 2, parts.size)
