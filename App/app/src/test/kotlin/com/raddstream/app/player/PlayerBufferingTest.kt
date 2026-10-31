@@ -2,6 +2,7 @@ package com.raddstream.app.player
 
 import java.io.File
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -113,6 +114,83 @@ class PlayerBufferingTest {
             Regex("""setPrioritizeTimeOverSizeThresholds\(PlayerBuffering\.PRIORITIZE_TIME_OVER_SIZE\)""")
                 .containsMatchIn(service),
         )
+    }
+
+    /**
+     * Seeking is the other half of feeling instant, and it is the half that was written once in a
+     * live tree, never landed, and therefore shipped as nothing: `ExoPlayer` defaults to
+     * [androidx.media3.exoplayer.SeekParameters.DEFAULT], which decodes forward from the previous
+     * sync frame. A text scan is the only gate available here — building a real player needs an
+     * Android `Context`, and the Robolectric suites that could are excluded on this architecture —
+     * so the scan asserts both the call and the object it is called on.
+     */
+    @Test
+    fun `the service sets the seek parameters on the player it just built`() {
+        val service = File(SERVICE_PATH).readText()
+        val built = service.substringAfter("ExoPlayer.Builder(this)").substringBefore("player = exo")
+        assertTrue(
+            "positive control: the builder block was still found — an empty slice would make " +
+                "every assertion below pass over nothing",
+            built.isNotBlank() && built.contains(".build()"),
+        )
+        assertTrue(
+            "a scrub must land on the nearest sync frame, not decode forward from the last one",
+            built.contains("exo.setSeekParameters(SeekParameters.CLOSEST_SYNC)"),
+        )
+        assertTrue(
+            "and the value must be installed, not computed: ExoPlayer exposes this as a setter " +
+                "whose getter returns a different type, so an assignment would not even compile",
+            !built.contains("exo.seekParameters ="),
+        )
+
+        val installed = "        val exo = ExoPlayer.Builder(this)\n            .build()\n" +
+            "        exo.setSeekParameters(SeekParameters.CLOSEST_SYNC)\n        player = exo"
+        val computedAndDropped = "        val exo = ExoPlayer.Builder(this)\n            .build()\n" +
+            "        val parameters = SeekParameters.CLOSEST_SYNC\n        player = exo"
+        val assigned = "        val exo = ExoPlayer.Builder(this)\n            .build()\n" +
+            "        exo.seekParameters = SeekParameters.CLOSEST_SYNC\n        player = exo"
+        val slice = { text: String -> text.substringAfter("ExoPlayer.Builder(this)").substringBefore("player = exo") }
+        assertTrue("a wired player matches", slice(installed).contains("exo.setSeekParameters(SeekParameters.CLOSEST_SYNC)"))
+        assertTrue("a value nobody installs does not", !slice(computedAndDropped).contains("setSeekParameters"))
+        assertTrue(
+            "and the detector is shown to see the assignment shape when it is present, so its " +
+                "absence above is a refusal rather than blindness",
+            slice(assigned).contains("exo.seekParameters ="),
+        )
+    }
+
+    /**
+     * `SeekParameters` is `androidx.media3.exoplayer.SeekParameters`. There is no
+     * `androidx.media3.common.SeekParameters` at Media3 1.3.1, and importing the non-existent one is
+     * exactly what broke that build once; the wrong package compiles nowhere, so the guard is the
+     * only place the mistake can be caught before a runner does.
+     */
+    @Test
+    fun `the seek parameter type is imported from the package that actually ships it`() {
+        val service = File(SERVICE_PATH).readText()
+        assertTrue(
+            "the shipped package is androidx.media3.exoplayer.SeekParameters",
+            service.contains("import androidx.media3.exoplayer.SeekParameters"),
+        )
+        assertFalse(
+            "androidx.media3.common.SeekParameters does not exist and must never be imported",
+            service.contains("import androidx.media3.common.SeekParameters"),
+        )
+        // The guard needs its own guard: the two strings differ only in one word, so prove the
+        // scan tells them apart rather than matching any import that mentions the type.
+        val correct = "import androidx.media3.exoplayer.SeekParameters\n"
+        val wrong = "import androidx.media3.common.SeekParameters\n"
+        assertTrue(
+            "one accepts the real package and refuses the phantom, the other does the reverse",
+            correct.contains("androidx.media3.exoplayer.SeekParameters") &&
+                !correct.contains("androidx.media3.common.SeekParameters") &&
+                wrong.contains("androidx.media3.common.SeekParameters") &&
+                !wrong.contains("androidx.media3.exoplayer.SeekParameters"),
+        )
+        val census = mainSources().filter {
+            Regex("""import androidx\.media3\.common\.SeekParameters""").containsMatchIn(it.readText())
+        }.map { it.path }
+        assertTrue("no file anywhere may import the phantom type: $census", census.isEmpty())
     }
 
     /** The guard needs a guard: the scans must be shown to tell these shapes apart. */

@@ -527,3 +527,50 @@ the second.
 restart, no nginx change, no tag, no `git add -A`, no merge, no credential in argv/URL/file/log,
 `/opt/radd-stream` never used as a workspace and never written, nothing pushed to `master`/`main`,
 branch push only.
+
+---
+
+### Session 28 — The seek parameter that landed as nothing (Q4-SEEK-RELAND) (2026-10-31)
+
+**Agent:** Qoder (q4 player lane, `/tmp/q4_player_work`, branch `q4-player-zero-buffer-20261031`)
+**Status:** ⚠️ WRITTEN AND PUSHED — hosted Android CI is the only judge; no build or test was run on this box (owner hold, load 8.74).
+**Key Milestones:**
+- `player/PlaybackService.kt` gained the two lines that were measured missing from trunk:
+  `import androidx.media3.exoplayer.SeekParameters` and
+  `exo.setSeekParameters(SeekParameters.CLOSEST_SYNC)`, placed on the player the service has just
+  built (between `.build()` and `addListener`), next to the existing `setWakeMode` call.
+- **Why the package is the whole story:** there is no `androidx.media3.common.SeekParameters` at
+  Media3 1.3.1. That wrong import is what broke a build once already, so a second guard case pins
+  the package and a census refuses the phantom import in *every* file under `src/main/kotlin`.
+- **A `val` reassignment is not an option** — ExoPlayer exposes this as a setter whose getter
+  returns a different type — so the guard also refuses `exo.seekParameters =` while proving its
+  detector can see that shape when it is present.
+- Two cases added to `PlayerBufferingTest` (4 → 6), which is the landed instant-start owner: it
+  already reads `PlaybackService.kt`, already censuses the load control, and already carries the
+  positive-control idiom this feature needs.
+
+**Deviation, stated plainly because the brief asked for a different file:** item 2 named
+`tooling/InstantStartGuardTest.kt` ("7 cases today"). Measured on trunk at `7bc47ba5` it is **not on
+trunk** — it exists only in the live tree and in `/tmp/q1_rescue`. Landing it as written would have
+shipped a red suite, because three of its assertions describe code that never shipped: it requires
+`.setLoadControl(instantStartLoadControl())` (trunk: `loadControl()` — 0 hits), `private const val
+START_BUFFER_MS = 500` (0 hits; the durations live in `PlayerBuffering`), and
+`builder.setMimeType(manifestMime)` (0 hits; trunk applies `manifestMimeType(rendition.playback)`
+through `?.let`). Its cache/keep cases were not evaluated. So the two seek cases went into a file
+that is on trunk and green, and the stale suite is left for its owner to reconcile — not silently
+rewritten by me, and not landed broken.
+
+**About the seven names the supervisor flagged** (`QualityTierProbe.kt`, `BufferGuardTest.kt`,
+`GestureBudgetTest.kt`, `PlayerPerfProbeTest.kt`, `ShareLinkHonestyTest.kt`, `DeepLinkCensusTest.kt`,
+`AdultDeepLinkGuardTest.kt`): searched in this branch's `App/docs/SESSION_HISTORY.md` and
+`App/AGENTS.md` — **no occurrence**. The claim lives in the live tree's uncommitted `App/AGENTS.md`
+(Session 39 `Q4-PLAYER-ZERO-BUFFER`, Session 40 `Q4-DEEPLINK-HONESTY`), which is not this branch and
+which I will not edit from here. Nothing in this log names a file that does not exist: the four
+suites that really shipped are `PlayerBufferingTest`, `UniversalSourceTest`,
+`LocalVideoIntentCensusTest`, `LocalVideoOpenTest`, and this session extends the first.
+
+**Rules kept:** edits plus `git` only — no Gradle, no `./gradlew`, no test module, no python, no
+crawl, no scan of the live tree beyond read-only greps; both runaway host-wide greps I started were
+killed when load hit 8.74. Kotlin only, no new dependency, `App/**` paths staged by name, no tag, no
+release, no merge, no service restart, no nginx change, no device claim, nothing that could make a
+flagged `is_18_plus` row listable or playable, `/opt/radd-stream` never written.
