@@ -1159,18 +1159,28 @@ _MAX_PKR = 10_000_000
 #: the default, never unlimited") lives in `engagement.resolve_caps`, which is the
 #: consumer; this only refuses a paste that cannot be a real setting.
 _MAX_INT = 1_000_000
-#: Four count knobs have a domain tighter than that, and the number a phone reads
+#: Seven count knobs have a domain tighter than that, and the number a phone reads
 #: must be the number the server enforces. `engagement.resolve_caps` clamps an
-#: over-large cadence to its own `CAP_MAX`, and `engagement._clamp_hour` answers a
-#: rollover outside 0..23 with the default: a stored value past either bound would
-#: be silently rewritten by the consumer, which is the one thing a settings row may
-#: not do to its own display. So the consumer's ceiling is refused on the way in
-#: instead. A pinned test compares these numbers to `engagement`'s.
+#: over-large cadence to its own `CAP_MAX`, `engagement._clamp_hour` answers a
+#: rollover outside 0..23 with the default, and `engagement.resolve_streak_grants`
+#: clamps a streak bonus to `STREAK_GRANT_COINS_MAX` and its day-7 pass to
+#: `STREAK_GRANT_HOURS_MAX`. A stored value past either bound would be silently
+#: rewritten by the consumer, which is the one thing a settings row may not do to
+#: its own display. So the consumer's ceiling is refused on the way in instead.
+#: `test_the_engagement_block_is_the_ledgers_own_projection` pins these numbers to
+#: `engagement`'s own constants, on both sides of the mirror.
 _INT_MAX = {
     "ad_preroll_min_gap_minutes": 24 * 60,
     "ad_native_card_every_posters": 5000,
     "ad_app_open_min_gap_minutes": 24 * 60,
     "streak_day_boundary_hour": 23,
+    # A literal on each side, deliberately: the write path and `engagement` state
+    # the same bound twice, and the pinned test is what makes the two statements
+    # one claim. Deriving one from the other would let a wrong constant move both
+    # halves together and leave nothing to fail.
+    "streak_day1_coins": 10_000,
+    "streak_day3_coins": 10_000,
+    "streak_day7_pass_hours": 720,
 }
 
 #: A payment *handle*, as the guide writes one: `0300-1234567`, `+92 300 1234567`,
@@ -1273,6 +1283,23 @@ def _as_flag(value):
     if text in ("0", "false", "off", "no", ""):
         return 0
     return None
+
+
+def monetization_values(conn):
+    """The operator's settings row, as the row itself answers it — `None` if there is
+    no row to read.
+
+    The public half of `_read_monetization`, because a route that charges money has to
+    price from the same row the panel publishes, and reading `app_remote_config` with
+    its own `SELECT` would be a second mapping of one row: the JOB B defect, in the
+    other direction. Unlike `remote_config`, this never calls `_ensure_monetization`
+    — creating a table is not a read, and the account routes hold a *read-only* catalog
+    handle, where an attempt to write raises rather than being quietly skipped. A
+    caller that gets `None` (no row, or a catalog that predates this table) resolves
+    the shipped numbers, which is the same answer `engagement.resolve_ladder` and
+    `payments.price_table` give to a deployment that never saved a setting.
+    """
+    return _read_monetization(conn)
 
 
 def _monetization_view(values):
@@ -1537,10 +1564,17 @@ def _engagement_public(values):
                                           for plan, spec in ladder.items()}
     view["wallet"]["coin_per_rewarded_ad"] = _setting_count(values, "coin_per_rewarded_ad")
     view["wallet"]["rewarded_daily_cap"] = _setting_count(values, "rewarded_daily_cap")
+    # The streak ladder is published through the resolver that grants it, not key by
+    # key here — the same correction `resolve_ladder` got for the pass prices. Reading
+    # `streak_day1_coins` a second way would put a second mapping of one row between
+    # the number a phone is shown and the number `coin_ledger` writes, and would
+    # publish a bonus above `engagement.STREAK_GRANT_COINS_MAX` that the ledger then
+    # quietly clamps.
+    streak = engagement.resolve_streak_grants(values)
     grants = view["streak"]["grants"]
-    grants["day1_coins"] = _setting_count(values, "streak_day1_coins")
-    grants["day3_coins"] = _setting_count(values, "streak_day3_coins")
-    grants["day7_pass_seconds"] = _setting_count(values, "streak_day7_pass_hours") * 3600
+    grants["day1_coins"] = streak["coins"][1]
+    grants["day3_coins"] = streak["coins"][3]
+    grants["day7_pass_seconds"] = streak["pass_seconds"]
     view["streak"]["day_boundary_hour"] = _rollover_hour(
         values, "streak_day_boundary_hour")
     # A TEXT column is created `DEFAULT ''` whatever the spec says, so an operator

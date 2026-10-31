@@ -348,3 +348,25 @@ jobs:
       - name: 🧪 test_adult_corroborated_fold.py
         run: python3 -S Fast_Fetch/test_adult_corroborated_fold.py
 
+      # The wallet's HTTP surface on the wallet's own owner (q3, 2026-10-31). `engagement.py`
+      # had owned `coin_ledger`, the streak, the caps and the ladder for four pushes before any
+      # route could read them, so an earned balance existed that a phone could neither see, earn
+      # nor redeem — and the fix for "no HTTP surface" is a wire, never a second engine. 34 tests
+      # over `accounts_api.route_get`/`route_post` on a temp user-state DB: `GET /coins` answers
+      # the same `SUM(delta)` the spender checks before it debits; `GET /coins/caps` publishes the
+      # pass prices and streak grants that THIS file's own routes enforce from the saved row
+      # (one knob moves the price list, the earn and the spend together or the mirror assertion
+      # fails) while deliberately still publishing `rewarded_daily_cap` as the constant, because
+      # `_enforce_rewarded_cap` still reads the constant and a row-resolved cap here would be the
+      # second number; a body naming another `account_id`, an `amount`, a `source` or a
+      # client-attested `rewarded_ad`/`watch_time` is refused and writes NOTHING; ten replays of
+      # one civil day are one ledger row, deduped by a key derived from the day bucket rather than
+      # from anything the client typed; a short wallet is a 402 that leaves the row count and the
+      # sum untouched; two redeems never buy more pass than the wallet paid for; every coin on the
+      # wire is an `int` and every `delta` has `typeof` = `integer`; a wrong sync key gets the same
+      # 404 every account route gives so this host stays un-enumerable; the neighbours already
+      # mounted under `/api/v2/account*` still answer, and `/coins/balance` does NOT resolve.
+      # Positive controls throughout — the leak scan asserts it found `balance` before it asserts
+      # it found no `canonical_key`. Offline — temp DBs, no socket, no network, no production read.
+      - name: 🧪 test_coins_engine.py
+        run: python3 -S Fast_Fetch/test_coins_engine.py

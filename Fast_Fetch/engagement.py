@@ -645,19 +645,47 @@ def coin_balance(conn_or_path, account_id) -> int:
         return _balance(conn, account_id)
 
 
-def _enforce_rewarded_cap(conn: sqlite3.Connection, account_id, moment: float,
-                          *, tz, day_boundary_hour) -> None:
-    if reason_cap_disabled():
-        return
+def _rewarded_count(conn: sqlite3.Connection, account_id, moment: float,
+                    *, tz, day_boundary_hour) -> int:
+    """How many rewarded grants this account has in the current day-bucket — the one
+    query the cap and the wallet screen share.
+
+    It is a function rather than four lines inside :func:`_enforce_rewarded_cap`
+    because a route that shows a viewer "3 of 10 today" must count the same rows the
+    ledger counts before it refuses the fourth. Two `SELECT COUNT(*)` statements with
+    the same bucket arithmetic written twice is how a published number and an enforced
+    one start disagreeing, and this file has already paid for that once."""
     tz = tz or STREAK_TZ_DEFAULT
     boundary = DAY_BOUNDARY_HOUR_DEFAULT if day_boundary_hour is None else day_boundary_hour
     bucket = _day_bucket(moment, tz, boundary)
     start = _bucket_start_epoch(bucket, tz, boundary)
-    count = int(conn.execute(
+    return int(conn.execute(
         "SELECT COUNT(*) FROM coin_ledger"
         " WHERE account_id = ? AND reason = 'rewarded_ad'"
         " AND created_at >= ? AND created_at < ?",
         (int(account_id), start, start + DAY_SECONDS)).fetchone()[0])
+
+
+def rewarded_grants_today(conn_or_path, account_id, *, now=None, tz=None,
+                          day_boundary_hour=None) -> int:
+    """The account's rewarded-ad grants counted in the civil day the cap uses.
+
+    Read-only, and it reports the count whether or not the cap is lifted
+    (:func:`reason_cap_disabled` is a test switch, not a fact about the ledger): the
+    number a wallet screen shows is the number of rows, and the number that decides a
+    refusal is `REWARDED_DAILY_CAP`'s comparison against this same count.
+    """
+    with _borrow(conn_or_path) as conn:
+        return _rewarded_count(conn, account_id, _now(now), tz=tz,
+                               day_boundary_hour=day_boundary_hour)
+
+
+def _enforce_rewarded_cap(conn: sqlite3.Connection, account_id, moment: float,
+                          *, tz, day_boundary_hour) -> None:
+    if reason_cap_disabled():
+        return
+    count = _rewarded_count(conn, account_id, moment, tz=tz,
+                            day_boundary_hour=day_boundary_hour)
     if count >= REWARDED_DAILY_CAP:
         raise RewardedCapReached(int(account_id), count)
 
@@ -771,8 +799,61 @@ def streak_state(conn_or_path, account_id) -> dict:
             "tz": str(row["tz"]), "day_boundary_hour": int(row["day_boundary_hour"])}
 
 
+def _bounded_count(value, shipped, ceiling) -> int:
+    """One whole-number knob, resolved the way every other one on this host is: a
+    stored 0, a blank or an unparseable paste means "use the shipped number", and a
+    number above `ceiling` is clamped to it. Zero is never free and a cap is never
+    unlimited — the sentence `resolve_caps` already states for the ad cadence, here
+    because a fat-fingered `1000000` in a bonus field makes every pass free."""
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return int(shipped)
+    if number <= 0:
+        return int(shipped)
+    return min(number, int(ceiling))
+
+
+#: Which `app_remote_config` knob sizes which streak milestone. The milestones are
+#: code: a knob can make day 1's reward bigger or smaller, it cannot invent a day.
+STREAK_GRANT_SETTINGS = {1: "streak_day1_coins", 3: "streak_day3_coins"}
+STREAK_PASS_HOURS_SETTING = "streak_day7_pass_hours"
+#: A bad save is clamped, not trusted. 10,000 coins is 300 one-day passes, so it is
+#: far past any plausible bonus and still below a paste error's damage.
+STREAK_GRANT_COINS_MAX = 10_000
+#: The day-7 bonus is a *pass*, so its ceiling is the longest pass the ladder sells.
+#: Anything a month long is a membership, and a streak reward must not become one.
+STREAK_GRANT_HOURS_MAX = MONTHLY_SECONDS // 3600
+
+
+def resolve_streak_grants(values=None) -> dict:
+    """The streak ladder as the operator set it: `{"coins": {day: coins}, "pass_seconds": n}`.
+
+    `values` is the `app_remote_config` row, and this is the same job
+    :func:`resolve_ladder` does for prices — one function that turns a settings row
+    into the ladder, read by whoever grants the reward. It exists because
+    :func:`remote_view` names the divergence it closes: `record_engagement_day` read
+    `STREAK_GRANTS_COINS` while `remote_config` published `streak_day1_coins`, so an
+    operator lowering the bonus changed the number a phone shows and not the number
+    the ledger writes. Wiring it was left for "the route that owns each grant", and
+    that route is `POST /api/v2/account/coins/earn`; it resolves the table once and
+    passes it in, so the reply and the ledger cannot disagree about what day 1 paid.
+
+    With no row, or a row whose knobs are blank or zero, this answers the shipped
+    numbers exactly — so every caller that has never heard of it behaves as before.
+    """
+    stored = values or {}
+    coins = {day: _bounded_count(stored.get(key), STREAK_GRANTS_COINS[day],
+                                 STREAK_GRANT_COINS_MAX)
+             for day, key in STREAK_GRANT_SETTINGS.items()}
+    hours = _bounded_count(stored.get(STREAK_PASS_HOURS_SETTING),
+                           STREAK_PASS_SECONDS // 3600, STREAK_GRANT_HOURS_MAX)
+    return {"coins": coins, "pass_seconds": hours * 3600}
+
+
 def record_engagement_day(conn_or_path, account_id, *, now=None, tz=None,
-                          day_boundary_hour=None, pass_secret=None) -> dict:
+                          day_boundary_hour=None, pass_secret=None,
+                          values=None, grants=None) -> dict:
     """Advance the streak for the current day-bucket. The only mutator; returns the
     transition so the caller never has to guess.
 
@@ -783,12 +864,18 @@ def record_engagement_day(conn_or_path, account_id, *, now=None, tz=None,
       Day-7 milestone mints a signed 24 h pass via `redact.mint_vip_pass` when a
       `pass_secret` is supplied.
 
+    * `values` is the `app_remote_config` row and `grants` a table already resolved
+      by :func:`resolve_streak_grants` (a caller that resolved it for its own reply
+      passes it here so the two cannot diverge) — the same pair `redeem_pass` takes.
+      Both default to the shipped ladder.
+
     The day is claimed with one guarded `UPDATE … WHERE last_counted_day IS ?`, so
     two concurrent calls for the same account cannot both credit the same bucket or
     mint the same pass twice."""
     moment = _now(now)
     tz = tz or STREAK_TZ_DEFAULT
     boundary = DAY_BOUNDARY_HOUR_DEFAULT if day_boundary_hour is None else day_boundary_hour
+    table = grants if grants is not None else resolve_streak_grants(values)
     with _borrow(conn_or_path) as conn:
         _require_account(conn, account_id)
         conn.execute(
@@ -833,8 +920,8 @@ def record_engagement_day(conn_or_path, account_id, *, now=None, tz=None,
                     "best_streak": int(fresh["best_streak"]),
                     "bucket": bucket, "granted_coins": 0, "pass": None}
         granted = 0
-        if new_current in STREAK_GRANTS_COINS:
-            coins = STREAK_GRANTS_COINS[new_current]
+        coins = table["coins"].get(new_current)
+        if coins:
             _insert_ledger(
                 conn, account_id=account_id, delta=coins, reason="streak_day",
                 source="server", ref=f"streak-day-{new_current}",
@@ -846,7 +933,7 @@ def record_engagement_day(conn_or_path, account_id, *, now=None, tz=None,
             # `redact.mint_vip_pass` packs the expiry as a signed 64-bit int, so
             # the token's own resolution is whole seconds — report what the token
             # actually says, not a float that a round trip would not reproduce.
-            pass_expires = float(int(moment + STREAK_PASS_SECONDS))
+            pass_expires = float(int(moment + table["pass_seconds"]))
             pass_token = redact.mint_vip_pass(pass_expires, pass_secret)
         _commit(conn)
     return {"account_id": int(account_id), "status": status,
@@ -986,14 +1073,16 @@ def remote_view() -> dict:
     site too: `redeem_pass(values=…)` prices and times a pass through
     :func:`resolve_ladder`, the same resolver that builds the `passes` block below,
     so a published price and a charged price are one number read twice rather than
-    two numbers that happen to agree. Two enforcement sites still read this
-    module's constants rather than the row — `_enforce_rewarded_cap`
-    (`REWARDED_DAILY_CAP`) and `record_engagement_day` (`STREAK_GRANTS_COINS`) —
-    and wiring those belongs with the route that owns each grant. It is not
-    cosmetic there either, but the mistake runs the other way: a lowered cap would
-    publish a stricter ceiling than the ledger hands out. Publishes costs and grant
-    sizes as data — the whole point of the rule is that a user can see the real
-    numbers, and there is no field here a coin could be cashed out through."""
+    two numbers that happen to agree. One enforcement site still reads this
+    module's constant rather than the row — `_enforce_rewarded_cap`
+    (`REWARDED_DAILY_CAP`) — and wiring it belongs with the rewarded-ad route,
+    which does not exist yet; it is not cosmetic there either, but the mistake
+    runs the other way: a lowered cap would publish a stricter ceiling than the
+    ledger hands out. `record_engagement_day` has left that list: the streak
+    grants reach it through :func:`resolve_streak_grants`, supplied by the caller
+    that owns the grant. Publishes costs and grant sizes as data — the whole
+    point of the rule is that a user can see the real numbers, and there is no
+    field here a coin could be cashed out through."""
     ladder = resolve_ladder()
     return {
         "wallet": {

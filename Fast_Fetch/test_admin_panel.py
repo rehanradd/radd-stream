@@ -679,14 +679,28 @@ class Monetization(Fixture):
         self.assertEqual(spec["streak_day_boundary_hour"],
                          view["streak"]["day_boundary_hour"])
         self.assertEqual(spec["streak_tz"], view["streak"]["tz"])
-        # The two ceilings that would otherwise let a stored number and an enforced
-        # one differ: `resolve_caps` clamps, `_validated` refuses. Same bounds.
+        # The ceilings that would otherwise let a stored number and an enforced
+        # one differ: the consumers clamp, `_validated` refuses. Same bounds.
         self.assertEqual(admin_panel._INT_MAX["ad_preroll_min_gap_minutes"],
                          engagement.CAP_MAX["ad_preroll_min_gap_minutes"])
         self.assertEqual(admin_panel._INT_MAX["ad_native_card_every_posters"],
                          engagement.CAP_MAX["ad_native_card_every_posters"])
         self.assertEqual(admin_panel._INT_MAX["ad_app_open_min_gap_minutes"],
                          engagement.CAP_MAX["ad_app_open_min_gap_minutes"])
+        # The streak ladder, from its own resolver: a bonus the write path accepts
+        # cannot be one `resolve_streak_grants` then clamps behind the operator's
+        # back — which is the whole reason the row may not exceed these numbers.
+        self.assertEqual(admin_panel._INT_MAX["streak_day1_coins"],
+                         engagement.STREAK_GRANT_COINS_MAX)
+        self.assertEqual(admin_panel._INT_MAX["streak_day3_coins"],
+                         engagement.STREAK_GRANT_COINS_MAX)
+        self.assertEqual(admin_panel._INT_MAX["streak_day7_pass_hours"],
+                         engagement.STREAK_GRANT_HOURS_MAX)
+        # Hour 23 is the largest rollover `_clamp_hour` still honors, so it is the
+        # largest one the write path may store; a day cannot start at hour 24.
+        self.assertEqual(engagement._clamp_hour(admin_panel._INT_MAX["streak_day_boundary_hour"]),
+                         admin_panel._INT_MAX["streak_day_boundary_hour"])
+        self.assertNotEqual(engagement._clamp_hour(24), 24)
 
     def test_a_saved_knob_reaches_the_phone_and_the_card_alike(self):
         self.save({"ad_preroll_min_gap_minutes": "40",
@@ -750,6 +764,11 @@ class Monetization(Fixture):
                          ("ad_native_card_every_posters", "5001"),
                          ("ad_app_open_min_gap_minutes", "-1"),
                          ("streak_day_boundary_hour", "24"),
+                         # Past what `resolve_streak_grants` would clamp to, so the
+                         # row would otherwise store a bonus the ledger quietly
+                         # shrinks: the ceiling is refused here instead.
+                         ("streak_day1_coins", str(engagement.STREAK_GRANT_COINS_MAX + 1)),
+                         ("streak_day7_pass_hours", str(engagement.STREAK_GRANT_HOURS_MAX + 1)),
                          ("coin_redeem_day", True),
                          ("coin_redeem_day", "twelve"),
                          ("rewarded_daily_cap", "1000001")):

@@ -39,6 +39,38 @@ WHAT THIS IS NOT. Read it before "hardening" anything.
 * **Not an access-control system for the catalog.** Everything a signed-out
   client may see, a signed-in client may see. An account changes what is
   *stored* for you, never what you are *allowed to read*.
+* **Not a wallet, and not a mint.** `/coins/*` is a wire over the wallet
+  `engagement.py` already owns: a balance that is `SUM(delta)` over the append-only
+  `coin_ledger`, a streak record that claims its day with one guarded `UPDATE`, and a
+  pass ladder whose cost *and* expiry resolve through `engagement.resolve_ladder` —
+  the same resolver that builds the price block the phone drew its buttons from.
+  Nothing here stores a balance, names a price, or counts a cap; a second column,
+  price list or constant for any of those is exactly the defect JOB B removed from the
+  pricer, and an HTTP edge is where it would grow back.
+  The corollary is what these routes refuse, and each refusal is a measured fact about
+  this host rather than caution. `watch_time` is not creditable because elapsed viewing
+  is not something this server observes: a stream is a *redirect* — the bytes leave from
+  the source's own host — so a client reporting minutes is reporting them about itself.
+  `rewarded_ad` is not creditable either, for the same reason one step on: the only
+  completion signal on this box is `usage_stats`'s client-reported telemetry, which
+  `engagement.py:20` calls analytics and not money, and no ad network calls *this*
+  server back to say a video finished. `engagement.SERVER_SOURCES` is the ledger's own
+  answer to both — a client claim mints nothing — so a route that relayed one would
+  either be refused by `grant_coins` or would have to label the row `source="server"`,
+  which is a lie in the one column whose whole job is who vouched. A daily login is the
+  different kind of statement: a bearer-authenticated request *is* the observation, the
+  grant is the streak ladder's own, and it lands once per civil day however often it is
+  posted. That pair is also why no earning route may take an `amount`: "+10 coins" is
+  `streak_day1_coins`, an operator setting, and a caller that could name its own reward
+  is a caller that is setting its own price.
+* **A wallet over plain HTTP.** `/api/v2/account*` is already in the nginx allow-list,
+  so these routes are public the moment they exist, and this host serves HTTP with no
+  TLS (root `AGENTS.md`, `ORACLE_DEPLOYMENT.md`). For catalog reads that is a settled
+  decision — "the catalog is not private". A balance is not the catalog: the whole
+  credential for moving real rupee-value is a 16-character sync key that crosses the
+  path in the clear, next to the phone+PIN that already does. That is a hazard for the
+  owner to accept or fix, not a reason to hide the route and not something this file can
+  fix; it is recorded in `Fast_Fetch/checkpoints/` with the rest of the plaintext list.
 
 PROVENANCE (absolute; `redact.py` is the vocabulary owner):
   A `cat_works.work_key` is built from scraped data and can contain a site
@@ -72,7 +104,9 @@ import time
 from contextlib import closing
 
 import accounts
+import admin_panel
 import api_v2
+import engagement
 import payments
 import redact
 import usage_stats
@@ -87,6 +121,46 @@ PROBLEM = "application/problem+json; charset=utf-8"
 #: own purchase — is a 400 before the ledger is opened, so a client can never be
 #: the one that decides what VIP costs.
 _PAYMENT_KEYS = frozenset({"plan", "method", "tid"})
+
+#: The only keys an earning request may carry. `amount` and `minutes` are the two worth
+#: naming: a client that can say how many coins it earned is a client setting its own
+#: price, and a body `account_id` would be a wallet with no owner.
+_EARN_KEYS = frozenset({"reason"})
+#: The only key a redemption may carry. `media_id`/`work_ref` are refused with the rest:
+#: what is sold here is a time-boxed pass over the catalog, never one title.
+_REDEEM_KEYS = frozenset({"plan"})
+
+#: The one earnable `reason`, and what it does. Not a price: `daily_login` is the app's
+#: name for claiming today in the streak ladder, so the size of the grant is
+#: `engagement.resolve_streak_grants`'s business (an operator knob) and the day is
+#: claimed by one guarded `UPDATE` inside `record_engagement_day`. A coin figure in this
+#: file would be the second price list JOB B removed.
+_EARN_DAILY_LOGIN = "daily_login"
+
+#: What this edge refuses to credit, each with the sentence that says why. 403
+#: (`forbidden`, "This action is not allowed") is the declared code that fits: the
+#: caller is authenticated, its wallet is not short, and no edit of its request makes
+#: the feature exist. Both of these are the brief's own earning rules, and both fail on
+#: a measured fact about this host rather than on caution.
+_REFUSED_EARN = {
+    "rewarded_ad": (
+        "a rewarded-ad credit needs the ad network's own completion callback and this "
+        "server holds none: the only completion signal on this host is client-reported "
+        "telemetry, which engagement.py calls analytics and not money"),
+    "watch_time": (
+        "watch-time credit needs playback this server observed, and it observes none: a "
+        "stream is a redirect, so elapsed minutes are a client claim and a client claim "
+        "mints no coin"),
+}
+
+#: Rewards this server will not sell, with the same 403 reasoning. `unlock_1080p` is not
+#: laziness — see the two measured reasons in the sentence.
+_REFUSED_REWARDS = {
+    "unlock_1080p": (
+        "a single-title quality unlock is not sold here. the pass this server signs "
+        "carries one expiry and no scope, and quality is chosen by the player at "
+        "playback time, so a coin spent on it would buy nothing the server enforces"),
+}
 
 #: The account surface is tiny and every call is cheap, so the edge keeps one
 #: limiter for the whole process — the same object `accounts.py` falls back to,
@@ -377,6 +451,85 @@ def _target(payload, mint, path):
     return work, None
 
 
+# ── the wallet's wire shape (the numbers all come from `engagement`) ──────────
+
+
+def _settings(catalog):
+    """The operator's `app_remote_config` row, or `{}` when there is no row to read.
+
+    Read through `admin_panel`, which owns that table — a `SELECT` here would be a
+    second mapping of one settings row, the defect JOB B removed from the pass ladder
+    and the reason `resolve_ladder` is the only function that turns a row into prices.
+    `{}` is not a failure: it resolves to the shipped ladder and the shipped streak
+    grants, which is the same answer `payments.price_table` gives a deployment that has
+    never saved a setting. The catalog handle is read-only, so nothing here can create
+    the table — and a route that charges money has no business creating schema anyway.
+    """
+    if catalog is None:
+        return {}
+    try:
+        values = admin_panel.monetization_values(catalog)
+    except sqlite3.Error:
+        return {}
+    return values or {}
+
+
+def _civil_zone(values):
+    """The zone a streak day is counted in, and the hour it rolls over — the two
+    `app_remote_config` knobs the streak owns, passed through unresolved so
+    `engagement`'s own defaults apply to a blank or a bad paste. A stored row for this
+    account wins over both whatever is sent here; `record_engagement_day` says so."""
+    zone = str(values.get("streak_tz") or "").strip()
+    return {"tz": zone or None,
+            "day_boundary_hour": values.get("streak_day_boundary_hour")}
+
+
+def _ledger_entry(row) -> dict:
+    """One `coin_ledger` row, as the wallet owner shows it.
+
+    `source` stays in, beside `reason`: a `refund` the server issued and a `refund` an
+    operator typed are different events with the same reason, and an account is allowed
+    to ask who vouched for its own credit. What never crosses is anything the ledger does
+    not hold — `idempotency_key` is not even selected by `engagement.ledger`.
+
+    `ref` is scrubbed on the way out, not because the write path is trusted to keep a
+    site name or a URL out of it (`engagement.py` says a ref is never a title, and
+    `admin_grant` lets an operator type one) but because this body leaves on the public
+    port and a stored free-text column is exactly the thing §13 says to clean at the
+    edge. `reason` and `source` are closed vocabularies, validated on write, so they
+    pass through untouched."""
+    ref = row["ref"]
+    return {"id": int(row["id"]), "delta": int(row["delta"]),
+            "reason": str(row["reason"]), "source": str(row["source"]),
+            "ref": redact.scrub_text(ref) if ref else None,
+            "created_at": float(row["created_at"] or 0.0)}
+
+
+def _earn_view(day: dict) -> dict:
+    """What a daily-login call answers. No `account_id` on the wire: §16.9 gives no
+    client a server-side primary key to point at, and this caller has already proven
+    the key that owns the row."""
+    out = {"status": str(day["status"]),
+           "current_streak": int(day["current_streak"]),
+           "best_streak": int(day["best_streak"]),
+           "day": str(day["bucket"]),
+           "coins_granted": int(day["granted_coins"])}
+    if day.get("pass"):
+        # Only the Day-7 milestone carries one, and it is this account's own pass.
+        out["pass"] = day["pass"]
+        out["pass_expires_at"] = day.get("pass_expires_at")
+    return out
+
+
+def _redeem_view(redeemed: dict) -> dict:
+    cost = int(redeemed["cost"])
+    return {"reward": str(redeemed["plan"]), "cost": cost,
+            "balance": int(redeemed["balance"]),
+            "already_applied": bool(redeemed["already_applied"]),
+            "expires_at": float(redeemed["expires_at"]),
+            "pass": redeemed["pass"]}
+
+
 def route_get(path, query, *, db_path, catalog_path, secret, headers) -> tuple | None:
     """GET on the account surface. `None` means "not mine", fall through."""
     if not is_account(path):
@@ -451,6 +604,70 @@ def route_get(path, query, *, db_path, catalog_path, secret, headers) -> tuple |
                 "expires_at": expires_at,
                 "membership_until": membership_end,
             })
+        if tail == ["coins"]:
+            # The wallet a caller may read is only its own, and the number is the same
+            # `SUM(delta)` the spender checks before it debits — so a reply and a
+            # refusal cannot disagree about what this account holds, because there is
+            # no second balance to disagree with. One state connection for the branch:
+            # `_borrow(path)` would open (and re-install schema) once per call.
+            if not key:
+                return _problem("unauthorised", 401,
+                                "a bearer sync key is required", path)
+            account = accounts.authenticate(db_path, key, tracker=LIMITER)
+            zone = _civil_zone(_settings(catalog))
+            with closing(engagement.connect(db_path)) as wallet:
+                return _respond({
+                    "balance": engagement.coin_balance(wallet, account["account_id"]),
+                    "rewarded_grants_today": engagement.rewarded_grants_today(
+                        wallet, account["account_id"], tz=zone["tz"],
+                        day_boundary_hour=zone["day_boundary_hour"]),
+                    # `remote_view()` is the ledger's own published block, called rather
+                    # than copied, so this cannot become a third statement of a cap. It
+                    # answers the shipped numbers on purpose: `rewarded_daily_cap` is the
+                    # knob `remote_view()`'s docstring still names as enforced from the
+                    # constant, and a row-resolved cap here would be a number this
+                    # server does not actually hold anyone to.
+                    "caps": dict(engagement.remote_view()["wallet"])})
+        if tail == ["coins", "history"]:
+            # The account's own ledger rows, newest first, on the owner's bounded page.
+            # `ref` comes along because a `ref` is a ladder tier or a streak day and
+            # never a title — which is what makes a wallet history safe to publish at
+            # all on a host that hides nothing else about a work.
+            if not key:
+                return _problem("unauthorised", 401,
+                                "a bearer sync key is required", path)
+            account = accounts.authenticate(db_path, key, tracker=LIMITER)
+            with closing(engagement.connect(db_path)) as wallet:
+                entries = engagement.ledger(wallet, account["account_id"],
+                                            limit=_limit(query, "limit", 20))
+            return _respond({"entries": [_ledger_entry(row) for row in entries],
+                             "count": len(entries)})
+        if tail == ["coins", "caps"]:
+            # What a phone needs before it is asked to earn or to spend: the ceilings
+            # the ledger holds, the pass prices and the streak grants this server will
+            # actually charge and pay.
+            #
+            # Every block is the owner's own function, called on the request. A number
+            # restated here is a second number, and the two halves of the mirror law are
+            # which of these are row-resolved: `["coins","earn"]` hands
+            # `resolve_streak_grants(values)` to `record_engagement_day` and
+            # `["coins","redeem"]` hands `resolve_ladder(values)` to `redeem_pass`, so
+            # `streak` and `passes` follow the saved row because this file's own routes
+            # enforce the row. `caps` is the shipped projection because
+            # `_enforce_rewarded_cap` still reads `REWARDED_DAILY_CAP` rather than the
+            # row: publishing the row's 3 while the ledger hands out 10 would make this
+            # route the lie. Same reasoning, opposite resolution, and both belong to the
+            # enforcement site rather than to this route.
+            if not key:
+                return _problem("unauthorised", 401,
+                                "a bearer sync key is required", path)
+            accounts.authenticate(db_path, key, tracker=LIMITER)
+            values = _settings(catalog)
+            return _respond({
+                "caps": dict(engagement.remote_view()["wallet"]),
+                "passes": engagement.passes_projection(
+                    engagement.resolve_ladder(values)),
+                "streak": engagement.resolve_streak_grants(values)})
         return _problem("not_found", 404, "no such account route", path)
     except Exception as error:                      # noqa: BLE001 — the edge answers, it never re-raises
         return _refused(error, path)
@@ -589,6 +806,75 @@ def route_post(path, body, *, db_path, catalog_path, secret, headers) -> tuple |
                 tid=payload.get("tid"), catalog_path=catalog_path)
             return _respond({"payment": redact.project(filed, "account_payment")},
                             status=201)
+        if tail == ["coins", "earn"]:
+            # The daily claim, and what is *not* taken from the caller is the point:
+            # no `amount`, no `minutes`, no `event_id`, no `account_id`. The size of the
+            # grant is the ladder's own (`streak_day1_coins`, an operator setting,
+            # resolved through `engagement.resolve_streak_grants` so the number this
+            # reply reports is the number the ledger wrote), the day is claimed by one
+            # guarded `UPDATE` inside `record_engagement_day`, and the account is the one
+            # the bearer key names. Replay is therefore answered twice over and by the
+            # server alone: the guarded UPDATE leaves the streak where it is, and the
+            # credit carries `idempotency_key = "streak:<account>:<day-bucket>:coins"` —
+            # a key computed from the civil day, not from anything the client typed, so
+            # there is no fresh event id that buys a second coin the same day.
+            extra = sorted(str(name) for name in payload if name not in _EARN_KEYS)
+            if extra:
+                return _problem("invalid_params", 400,
+                                "an earning request accepts reason only", path)
+            reason = str(payload.get("reason") or "")
+            refusal = _REFUSED_EARN.get(reason)
+            if refusal:
+                return _problem("forbidden", 403, refusal, path)
+            if reason != _EARN_DAILY_LOGIN:
+                return _problem("invalid_params", 400, "no such earning reason", path)
+            account = accounts.authenticate(db_path, key, tracker=LIMITER)
+            values = _settings(catalog)
+            zone = _civil_zone(values)
+            with closing(engagement.connect(db_path)) as wallet:
+                day = engagement.record_engagement_day(
+                    wallet, account["account_id"],
+                    grants=engagement.resolve_streak_grants(values),
+                    pass_secret=secret, tz=zone["tz"],
+                    day_boundary_hour=zone["day_boundary_hour"])
+            return _respond({"earned": _earn_view(day)})
+        if tail == ["coins", "redeem"]:
+            # Coins into a signed pass. This route never calls `spend_coins` itself,
+            # because the order is the whole lesson: `redeem_pass` resolves the tier's
+            # cost *and* its expiry from the ladder before the wallet is touched, and it
+            # does the spend and the mint in one connection's transaction, so a tier this
+            # module cannot time costs nothing rather than taking coins and minting
+            # nothing. Handing it the already-resolved `ladder` — the same table the row
+            # produces — is what keeps the price this reply reports and the price the
+            # wallet was debited one read rather than two.
+            extra = sorted(str(name) for name in payload if name not in _REDEEM_KEYS)
+            if extra:
+                return _problem("invalid_params", 400,
+                                "a redemption accepts plan only", path)
+            plan = str(payload.get("plan") or "")
+            refusal = _REFUSED_REWARDS.get(plan)
+            if refusal:
+                return _problem("forbidden", 403, refusal, path)
+            ladder = engagement.resolve_ladder(_settings(catalog))
+            # The ladder is the whole name space: no reward table lives here, so a tier
+            # the operator's row prices is a tier this route can sell, and nothing else.
+            if plan not in ladder:
+                return _problem("invalid_params", 400, "no such reward", path)
+            account = accounts.authenticate(db_path, key, tracker=LIMITER)
+            with closing(engagement.connect(db_path)) as wallet:
+                try:
+                    redeemed = engagement.redeem_pass(
+                        wallet, account["account_id"], plan=plan,
+                        pass_secret=secret, ladder=ladder)
+                except engagement.InsufficientCoins:
+                    # 402 — §16.4's "a licence is required before this can be played",
+                    # said about a wallet instead of a file. `InsufficientCoins` names
+                    # the account id and both numbers; none of it reaches the wire. The
+                    # caller can read its own balance from `GET /coins`, and a refusal
+                    # that quotes the cost is a hint about what to farm.
+                    return _problem("licence_required", 402,
+                                    "this wallet cannot cover that reward", path)
+            return _respond({"redeemed": _redeem_view(redeemed)})
         return _problem("not_found", 404, "no such account route", path)
     except Exception as error:                      # noqa: BLE001 — the edge answers, it never re-raises
         return _refused(error, path)
@@ -670,8 +956,72 @@ def _selfcheck() -> int:
         other = route_get("/api/v2/browse", {}, db_path=db, catalog_path=catalog,
                           secret=secret, headers={})
         assert other is None, other
+        # The wallet: one day claimed, one replay refused, one short redemption that
+        # writes nothing, one pass bought for exactly the ladder's own price.
+        wallet = route_get(f"{PREFIX}/coins", {}, db_path=db, catalog_path=catalog,
+                           secret=secret, headers=auth)
+        assert wallet[0] == 200, wallet
+        opening = json.loads(wallet[2])
+        assert opening["balance"] == 0 and opening["rewarded_grants_today"] == 0, opening
+        earned = route_post(f"{PREFIX}/coins/earn", {"reason": "daily_login"},
+                            db_path=db, catalog_path=catalog, secret=secret, headers=auth)
+        assert earned[0] == 200, earned
+        first = json.loads(earned[2])["earned"]
+        assert first["status"] == "started" and first["coins_granted"] > 0, first
+        again = route_post(f"{PREFIX}/coins/earn", {"reason": "daily_login"},
+                           db_path=db, catalog_path=catalog, secret=secret, headers=auth)
+        replay = json.loads(again[2])["earned"]
+        assert replay["status"] == "same_day_noop" and replay["coins_granted"] == 0, replay
+        priced = route_post(f"{PREFIX}/coins/earn",
+                            {"reason": "daily_login", "amount": 500},
+                            db_path=db, catalog_path=catalog, secret=secret, headers=auth)
+        assert priced[0] == 400, priced
+        claimed = route_post(f"{PREFIX}/coins/earn", {"reason": "rewarded_ad"},
+                             db_path=db, catalog_path=catalog, secret=secret, headers=auth)
+        assert claimed[0] == 403, claimed
+        short = route_post(f"{PREFIX}/coins/redeem", {"plan": "monthly_vip"},
+                           db_path=db, catalog_path=catalog, secret=secret, headers=auth)
+        assert short[0] == 402, short
+        assert json.loads(route_get(f"{PREFIX}/coins", {}, db_path=db,
+                                    catalog_path=catalog, secret=secret,
+                                    headers=auth)[2])["balance"] == first["coins_granted"]
+        with closing(engagement.connect(db)) as state:
+            tier = engagement.resolve_ladder()["day"]
+            shortfall = tier["coins"] - first["coins_granted"]
+            if shortfall > 0:
+                engagement.grant_coins(
+                    state, accounts.authenticate(db, key)["account_id"],
+                    amount=shortfall, reason="admin_grant", source="admin",
+                    idempotency_key="selfcheck-topup")
+        bought = route_post(f"{PREFIX}/coins/redeem", {"plan": "day"},
+                            db_path=db, catalog_path=catalog, secret=secret,
+                            headers=auth)
+        assert bought[0] == 200, bought
+        receipt = json.loads(bought[2])["redeemed"]
+        assert receipt["cost"] == tier["coins"], receipt
+        assert redact.parse_vip_pass(receipt["pass"], secret) == receipt["expires_at"], receipt
+        unlisted = route_post(f"{PREFIX}/coins/redeem", {"plan": "unlock_1080p"},
+                              db_path=db, catalog_path=catalog, secret=secret,
+                              headers=auth)
+        assert unlisted[0] == 403, unlisted
+        listed = route_get(f"{PREFIX}/coins/caps", {}, db_path=db,
+                           catalog_path=catalog, secret=secret, headers=auth)
+        assert listed[0] == 200, listed
+        assert json.loads(listed[2])["passes"]["day"]["coins"] == receipt["cost"], listed
+        seen = route_get(f"{PREFIX}/coins/history", {}, db_path=db,
+                         catalog_path=catalog, secret=secret, headers=auth)
+        assert seen[0] == 200 and json.loads(seen[2])["count"] >= 2, seen
+        stranger = accounts.register(db, device="selfcheck-stranger")["sync_key"]
+        theirs = route_get(f"{PREFIX}/coins/history", {}, db_path=db,
+                           catalog_path=catalog, secret=secret,
+                           headers={"Authorization": f"Bearer {stranger}"})
+        assert json.loads(theirs[2])["count"] == 0, theirs
         print("[.] accounts_api selfcheck OK — one favorite, adult and forged refs "
-              "refused, one trial resumed and one profile linked")
+              "refused, one trial resumed and one profile linked, one day claimed and "
+              "one replay refused, a client-priced claim and a quality unlock refused, "
+              "a short redemption that wrote nothing, one pass bought at the ladder's "
+              "own price, one price list that matched the charge and one ledger page "
+              "that showed a stranger nothing")
         return 0
 
 
