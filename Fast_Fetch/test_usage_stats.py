@@ -18,6 +18,7 @@ Everything runs against a temp SQLite file with an injected clock: no network, n
 catalog, no `fast_fetch` rows.
 """
 
+import inspect
 import json
 import os
 import sqlite3
@@ -924,13 +925,16 @@ class GateTests(TempLedger):
         else:
             os.environ[TOKEN_ENV] = self.old_token
 
-    def gate(self, *, authorization="", cookie="", query_token="",
-             peer="127.0.0.1"):
+    def gate(self, *, authorization="", cookie="", peer="127.0.0.1"):
         """The refusal *status*, or ``None`` when the gate let the caller pass —
-        so a passing assertion never indexes into ``None``."""
+        so a passing assertion never indexes into ``None``.
+
+        There is no `query_token` here because there is none in the gate: the
+        credential is a header or the session cookie, and nothing else. See
+        `test_a_query_string_credential_does_not_exist`.
+        """
         refusal = admin_panel.gate_operator_port(
-            peer, authorization=authorization, cookie=cookie,
-            query_token=query_token)[0]
+            peer, authorization=authorization, cookie=cookie)[0]
         return None if refusal is None else refusal[0]
 
     def test_no_credential_at_all_is_refused(self):
@@ -942,10 +946,25 @@ class GateTests(TempLedger):
     def test_the_real_token_is_accepted(self):
         self.assertIsNone(self.gate(authorization="Bearer " + self.TOKEN))
 
-    def test_a_query_token_opens_the_port_once(self):
-        """The dashboard's own entry link carries `?token=`, which is how an
-        operator who has no cookie yet gets in; it is still the same secret."""
-        self.assertIsNone(self.gate(query_token=self.TOKEN))
+    def test_a_query_string_credential_does_not_exist(self):
+        """This test used to read `test_a_query_token_opens_the_port_once` and
+        assert the opposite: that `?token=` was a way in. That was the leak, not a
+        feature — the dashboard's entry link put the operator's secret in browser
+        history, in the `Referer` of every asset the page pulls, and in this box's
+        nginx access log (measured 2026-10-31: six times, from ordinary use, in a
+        file that is `www-data:adm 0640` and kept 14 days).
+
+        What is asserted now is stronger than "refused": the gate has no parameter
+        for a query credential to arrive through, so a later author cannot re-open
+        the URL secret by passing one and watching it be ignored. The over-the-wire
+        half — `?token=` answered 401 on `/`, `/admin`, `/api/data` and
+        `/api/v1/stats` by a real socket — is
+        `test_operator_isolation.py::SignInOverTheWire`.
+        """
+        params = inspect.signature(admin_panel.gate_operator_port).parameters
+        self.assertNotIn("query_token", params)
+        self.assertRaises(TypeError, admin_panel.gate_operator_port,
+                          "127.0.0.1", query_token=self.TOKEN)
 
     def test_a_session_minted_by_the_gate_opens_every_later_request(self):
         refused, jar = admin_panel.gate_operator_port(
