@@ -40,7 +40,7 @@ Update this file after each independently verified milestone so work can resume 
    not in `backend-ci.yml` at all**, so `accounts.py` and `payments.py` — the money and the keys —
    have no hosted gate on any lane's push. Owner's call to register them; this lane reported and did
    not silently widen everyone's gate.
-9. **`[Q3-PREMERGE-P]` — the pre-merge catalog copy and four-site merge are GATED, NOT OPEN.** qoder1
+9. **`[Q3-PREMERGE-P]` — the pre-merge catalog copy and five-site merge are GATED, NOT OPEN.** qoder1
    approved the plan at `ef91096` with four corrections, landed into
    [`../Fast_Fetch/checkpoints/20261101-01xx-q3-lane-premerge-copy-plan-queued-not-run.md`](../Fast_Fetch/checkpoints/20261101-01xx-q3-lane-premerge-copy-plan-queued-not-run.md):
    **C1** the source-side `wal_checkpoint(TRUNCATE)` is withdrawn — a read-write open checkpoints and
@@ -63,10 +63,24 @@ Update this file after each independently verified milestone so work can resume 
    qoder1's `SUSTAINED-UNDER4` post **and** `MemAvailable > 1,500 MB` / `SwapFree > 800 MB` — and tonight's
    arithmetic does not fund the plan: the 01:52 sub-4 window (load1 3.48) closed at 01:55 (load1 4.85) after
    ~3 minutes, shorter than the 3–10 minute estimate for the 6.4 GB copy read. **Nothing has run against the
-   catalog and this lane stops at the sha.** It is
-   recorded here rather than in `Fast_Fetch/CONTINUITY.md` because that file is at 11,983 of its own
-   12,000-byte archive guard: item 16 would not fit, and I trimmed nothing to make room rather than silently
-   drop another lane's facts.
+   catalog and this lane stops at the sha.** It lives here, not in `Fast_Fetch/CONTINUITY.md`, because that
+   file sits at 11,958 of its own 12,000-byte archive guard (measured at `f12ab3f`) — item 16 would not fit,
+   and I trimmed nothing to make room rather than silently drop another lane's facts.
+   **Landed, then re-based.** qoder1 replayed my two documentation commits onto trunk as `f12ab3f` (main ==
+   master; Backend CI `completed success` on both refs, runs 41247930663 / 41247930667), footprint exactly my
+   four paths and no Python. A replay is not a merge: `60ef341` is **not an ancestor of trunk**, so
+   `git diff 60ef341 trunk` reads trunk's *other* content as my deletion — that misreading produced a
+   retracted §17n claim that my head deleted trunk's `_probe_dir()`. This lane now works from a fresh
+   worktree at `f12ab3f` (`q3-premerge-exec-20261101`); nothing was reset, `60ef341` stays recoverable.
+10. **`[Q1-DBPATH-HAZARD]` — measured; this lane is clean structurally, not luckily.** `DB_PATH` is
+    `BASE_DIR`-relative (`config.py:119`, `BASE_DIR` at `:101`), and since 00:32 both
+    `/opt/radd-stream/Fast_Fetch/fast_fetch.db` (00:32:17) and `/home/ubuntu/radd-stream-data/fast_fetch.db`
+    (00:32:29) are **symlinks onto `merged_catalog_20261025.db`**: a default-path write from the live tree
+    *is* a production write and the command line looks identical either way. From `/tmp/q3_premerge` the same
+    import resolves to `/tmp/q3_premerge/Fast_Fetch/fast_fetch.db`, which **does not exist** — the ignore rule
+    `.gitignore:18 *.db` means a worktree never gets the link. So: own worktree only, `RADD_DB_PATH` set
+    explicitly, `config.DB_PATH` printed before any write. Per rule 4 the links are **reported as found, not
+    fixed**; creator unknown. Freeze unchanged: no merge, no Gradle, no production read (load1 5.44).
 
 ---
 ## Rotated session history
