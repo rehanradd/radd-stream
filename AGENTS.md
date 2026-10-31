@@ -47,23 +47,23 @@ Describe the code's behavior accurately to users and tools. Do not disguise its 
   site's catalog including 18+ titles, flagging them via the `is_18_plus` column
   (`is_18_plus=1`) present in every site staging database. The flag is set at storage time and
   `save_scraped_data` re-derives it from the title as a row becomes a post
-  (`Fast_Fetch/fast_fetch.py:4426`), so an unlabelled adult title still gets flagged.
+  (`Fast_Fetch/fast_fetch.py:4598`), so an unlabelled adult title still gets flagged.
   **The invariant, measured against the code and pinned by tests**
   (`Fast_Fetch/test_redact.py::AdultDenialOnBothPortsTests`,
   `Fast_Fetch/test_database.py::KeyLevelAdultIdentityTests`): no public surface may list *or play* a
-  flagged row. Enforced today by `redact.adult_clause` (`Fast_Fetch/redact.py:1073`) inside
-  `api_v1_get_posts` (`Fast_Fetch/viewer.py:2534`), by the per-post bail at `viewer.py:709` and
-  `:2710`, by `redact.link_is_adult` (`redact.py:1079`) on the stream/download redirectors — which
+  flagged row. Enforced today by `redact.adult_clause` (`Fast_Fetch/redact.py:1077`) inside
+  `api_v1_get_posts` (`Fast_Fetch/viewer.py:2780`), by the per-post bail at `viewer.py:887` and
+  `:2956`, by `redact.link_is_adult` (`redact.py:1083`) on the stream/download redirectors — which
   answers True for an unknown link id so a typo cannot play either — and by nginx, which allow-lists
   only the public routes. To a public client a flagged row is indistinguishable from a row that never
   existed: the same `not_found`, the same status code, no hint that a flag caused the denial.
   **One exception, deliberately, and it is not a user-facing display surface:** the operator panel.
-  `DASHBOARD_HTML` (`viewer.py:739`) reads `/api/data`, which this process 404s on the public port,
+  `DASHBOARD_HTML` (`viewer.py:917`) reads `/api/data`, which this process 404s on the public port,
   is served only on the loopback operator port, and 403s at the public edge; the trust boundary there
   is the loopback interface, not `RADD_ADMIN_TOKEN` (the token guards `/admin`, and `/` answers 200 on
   `8081` without it — measured 2026-10-29 05:47, see the table below). `fetch_database_payload`
-  (`viewer.py:494`) documents `full` as "the operator-only mode (loopback port): raw ledger rows", and
-  the panel renders a `18+ ADULT` badge (`viewer.py:1681`) because an operator auditing flag coverage
+  (`viewer.py:557`) documents `full` as "the operator-only mode (loopback port): raw ledger rows", and
+  the panel renders a `18+ ADULT` badge (`viewer.py:1919`) because an operator auditing flag coverage
   has to see which rows carry the flag. That is the *stored* half of this rule, shown to the person who
   owns the storage — never a playable link, and never a public list. `/api/v1/stream` and
   `/api/v1/download` deny a flagged link **on the operator port too**, with the same uniform
@@ -81,6 +81,12 @@ Describe the code's behavior accurately to users and tools. Do not disguise its 
   `generate_canonical_key(clean_title, year)` instead of the scraper's page slug, so two sites writing
   one film now write one key. Stored rows keep the key they were filed under — re-keying them touches
   ids `releases` reference and is its own reviewed migration.
+  **Cross-key twins that already exist are reconciled at each merge, on evidence only:**
+  `merge_catalogs.reconcile_adult_on_merge()` folds a work's flagged row onto its siblings only
+  when `is_adult_title()` still reproduces the flag from the source row's own text — a raw key-level
+  `MAX` would have hidden 407 mainstream works — and journals every flip in `adult_fold_journal`,
+  which `backfill_adult_key.py --undo` reverses; `--audit` reports how much of a catalog rests on
+  flags no rule can reproduce. The catalog-wide pass is the owner's call.
   **Residual, measured 2026-10-29 on the production catalog:** 953 works are flagged in the projection
   while 1,190 distinct ledger rows for the same title and year are still public under a *different*
   key (`suzume-2022` vs `suzume_2022`, `puli-2015` vs `puli_2015`), concentrated in filmyzilla (437),
