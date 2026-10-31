@@ -317,3 +317,17 @@ jobs:
       - name: 🧪 test_device_trials_and_webhook.py
         run: python3 -S Fast_Fetch/test_device_trials_and_webhook.py
 
+      # The work-level adult law, reconciled where twins are actually created (q5, 2026-10-31).
+      # A staging vault declares `canonical_key` PRIMARY KEY/UNIQUE, so one database cannot
+      # hold two rows for a work; the exposure appears when two sites meet in the unified
+      # catalog, which is why `merge_catalogs.merge_site_db` runs the fold. It is
+      # evidence-scoped — only flags `is_adult_title()` reproduces may propagate, because a
+      # raw key-level MAX hid 407 mainstream works (measured 2026-10-30, 10,816 of 15,068
+      # stored flags are asserted-only). Every flip is journalled and `--undo` reverses it,
+      # never unflagging a row whose own text justifies the flag. 44 tests: the rule gate,
+      # the cross-key identity, the 3,490-row protection, apply/undo symmetry, the CLI
+      # modes and their memory gate, and the play path refusing an unknown or dangling link
+      # on both ports. Offline — temp SQLite files, no network, no catalog read.
+      - name: 🧪 test_adult_corroborated_fold.py
+        run: python3 -S Fast_Fetch/test_adult_corroborated_fold.py
+

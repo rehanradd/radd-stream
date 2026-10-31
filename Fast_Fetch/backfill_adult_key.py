@@ -29,12 +29,28 @@ were taken before the flip, and `_get_cached_stats()` treats a missing stamp as
 "count it live" rather than publishing a stale public number. That invalidation is
 the honest half of this shortcut.
 
-Read-only by default. The residual it reports is measured and never written: those are
-works flagged on one site and served by another under a *different* key, which no
-key-level law can reach. Closing them means re-keying stored rows — a reviewed
-migration with its own snapshot, not a side effect of this one.
+Read-only by default. The residual it used to leave unwritten — a work flagged on one
+site and served by another under a *different* key — is reachable without re-keying
+anything, by grouping on `(clean_title, year)` instead of `canonical_key`. It must be
+reached only with `--corroborate`, because propagation multiplies one row's verdict across
+its siblings and a stored flag is not always anybody's evidence: measured on the live
+catalog 2026-10-30 (`--audit`), 10,816 of 15,068 flags cannot be reproduced by
+`is_adult_title()` at all, and the works they hide are mostly mainstream. Folding across
+those would hide 3,490 further rows; `--corroborate` hides the 12 that stand on
+reproducible evidence.
+
+Do not read the unconditional `--apply` as safe merely because it is older. It propagates
+asserted-only flags too, one key at a time; it was gated before provenance was measurable,
+and `--audit` is what tells you how much of a catalog is in that state. Re-keying stored
+rows stays out of scope: `find_existing_post` raises once a `canonical_key` matches more
+than one record, so rewriting 150k keys into the title+year scheme would put thousands of
+works over that threshold and break ingest.
 
     python3 -S Fast_Fetch/backfill_adult_key.py <db.path>                        # report
+    python3 -S Fast_Fetch/backfill_adult_key.py <db.path> --audit                 # provenance
+    python3 -S Fast_Fetch/backfill_adult_key.py <db.path> --corroborate           # report
+    python3 -S Fast_Fetch/backfill_adult_key.py <db.path> --corroborate --apply   # fold
+    python3 -S Fast_Fetch/backfill_adult_key.py <db.path> --undo                  # reverse it
     python3 -S Fast_Fetch/backfill_adult_key.py <db.path> --apply                # ledger
     python3 -S Fast_Fetch/backfill_adult_key.py <db.path> --apply --projection   # + cat_*/stats
 
@@ -163,6 +179,109 @@ def invalidate_safe_stamp(conn) -> int:
     return cur.rowcount
 
 
+def mem_headroom_mb(meminfo: str = "/proc/meminfo") -> int:
+    """MemAvailable in MB — the pass below holds the whole ledger in memory, so on this
+    one-CPU box it is a load decision, not just a correctness one."""
+    try:
+        with open(meminfo) as handle:
+            for line in handle:
+                if line.startswith("MemAvailable:"):
+                    return int(line.split()[1]) // 1024
+    except OSError:
+        pass
+    return 0
+
+
+def audit_flags(conn, *, samples: int = 12) -> dict:
+    """Split every stored flag into what the central rule reproduces and what it cannot.
+
+    The second half is not "false positives" — a title with no adult vocabulary can still
+    name an adult work — it is flags nobody can re-derive from the row's own text, which
+    is exactly the population that may not be *propagated* to other rows and the worklist
+    a human has to review. Read-only.
+    """
+    rows = conn.execute(
+        "SELECT %s FROM posts WHERE COALESCE(is_18_plus, 0) = 1"
+        % ", ".join(fast_fetch.ADULT_FOLD_FIELDS)).fetchall()
+    reproducible = [row for row in rows if fast_fetch.adult_rule_agrees(row)]
+    asserted = [row for row in rows if not fast_fetch.adult_rule_agrees(row)]
+    return {
+        "flagged": len(rows),
+        "reproducible": len(reproducible),
+        "asserted_only": len(asserted),
+        "samples": [(row["id"], str(row["source_site"] or ""),
+                     str(row["clean_title"] or row["title"] or "")[:60])
+                    for row in asserted[:samples]],
+    }
+
+
+def run_audit(db_path: Path) -> int:
+    conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    conn.row_factory = sqlite3.Row
+    try:
+        out = audit_flags(conn)
+    finally:
+        conn.close()
+    print(f"[i] {db_path}: {out['flagged']:,} rows carry the flag; "
+          f"{out['reproducible']:,} reproduce from `is_adult_title()`, "
+          f"{out['asserted_only']:,} are asserted-only and cannot be propagated")
+    for post_id, site, title in out["samples"]:
+        print(f"      id={post_id} site={site or '?':<14} {title!r}")
+    return 0
+
+
+def run_corroborated(db_path: Path, *, apply: bool, undo: bool = False) -> int:
+    """The precision-gated fold: propagate only what the shared rule can defend.
+
+    `--undo` first reverses this pass's own flips and leaves any flag that has since
+    gained independent evidence (the rule agrees, or a sibling under the same key is
+    flagged). Every write happens in one transaction, journal and all.
+    """
+    headroom = mem_headroom_mb()
+    if headroom and headroom < 2000:
+        print(f"[!] refused: MemAvailable {headroom} MB < 2000 MB — this pass loads the "
+              f"ledger once, and the live box is out of breath", file=sys.stderr)
+        return 3
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    started = time.time()
+    try:
+        if undo:
+            out = fast_fetch.undo_corroborated_adult_fold(conn)
+            conn.commit()
+            print(f"[✓] undo: {out['unflagged']:,} rows restored, {out['kept']:,} kept "
+                  f"(their flag now stands on its own evidence)")
+            return 0
+        before = public_total(conn)
+        exposures = fast_fetch.corroborated_adult_exposures(conn)
+        print(f"[i] corroborated exposures: {len(exposures):,} rows publicly served under "
+              f"a flag the rule reproduces (public total {before:,})")
+        for item in exposures[:10]:
+            print(f"      post {item['post_id']}  <-  {item['evidence']}")
+        if len(exposures) > 10:
+            print(f"      … {len(exposures) - 10} more")
+        if not apply:
+            print("[i] report only; pass --corroborate --apply to write, --undo to reverse")
+            return 0
+        flipped = fast_fetch.apply_corroborated_adult_fold(conn, exposures)
+        after = public_total(conn)
+        if flipped != before - after:
+            print(f"[!] VERIFICATION FAILED: flipped {flipped} rows but the public total "
+                  f"moved {before - after}", file=sys.stderr)
+            conn.rollback()
+            return 1
+        dropped = invalidate_safe_stamp(conn)
+        conn.commit()
+        print(f"[✓] {flipped:,} rows hidden and journalled in `adult_fold_journal`; "
+              f"{dropped:,} adult-excluded stamps retired")
+        left = fast_fetch.corroborated_adult_exposures(conn)
+        print(f"[i] corroborated exposures after the fold: {len(left):,} — must be 0")
+        return 0 if not left else 1
+    finally:
+        print(f"[i] {time.time() - started:.1f}s", flush=True)
+        conn.close()
+
+
 def report(db_path: Path, *, apply: bool = False, projection: bool = False) -> dict:
     started = time.time()
     conn = sqlite3.connect(db_path)
@@ -236,10 +355,23 @@ def main(argv=None) -> int:
                         help="write the ledger reconciliation (default: report only)")
     parser.add_argument("--projection", action="store_true",
                         help="with --apply, also fold flags into cat_works")
+    parser.add_argument("--audit", action="store_true",
+                        help="read-only: how many stored flags the central rule still "
+                             "reproduces, and how many are asserted-only")
+    parser.add_argument("--corroborate", action="store_true",
+                        help="propagate only flags the central rule reproduces "
+                             "(report; combine with --apply to write)")
+    parser.add_argument("--undo", action="store_true",
+                        help="reverse the corroborated fold, keeping any flag that has "
+                             "since gained independent evidence")
     args = parser.parse_args(argv)
     if not args.db.exists():
         print(f"[!] no such database: {args.db}", file=sys.stderr)
         return 2
+    if args.audit:
+        return run_audit(args.db)
+    if args.corroborate or args.undo:
+        return run_corroborated(args.db, apply=args.apply, undo=args.undo)
     report(args.db, apply=args.apply, projection=args.projection)
     return 0
 

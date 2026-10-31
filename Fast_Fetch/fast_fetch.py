@@ -681,6 +681,178 @@ def reconcile_key_adult(db_path=None, keys=None) -> int:
     return flipped
 
 
+#: The columns a propagation pass reads. `title`, `clean_title` and `slug` are the texts
+#: the scraper itself derived the flag from (`is_adult_title(raw_title, slug)`), so they
+#: are what a stored verdict has to stand on now.
+ADULT_FOLD_FIELDS = ("id", "title", "clean_title", "slug", "url",
+                     "source_site", "year", "canonical_key", "is_18_plus")
+
+
+def adult_rule_agrees(row) -> bool:
+    """True when `is_adult_title()` reproduces a stored flag from the row's own texts.
+
+    Propagating a flag multiplies one row's verdict across every sibling that shares the
+    work's identity, so it may only start from evidence the shared rule still accepts. A
+    flag an importer asserted and today's rule cannot re-derive is a review candidate
+    (`backfill_adult_key.py --audit`), not a warrant to hide other rows. Measured on the
+    live catalog 2026-10-30: 10,816 of 15,068 flags are of that kind, and the work they
+    name is usually mainstream — *Nenokkadine* (2014), *118* (2019), *24* (2016), *18
+    Pages* (2022), all flagged on dubbed-release vocabulary. Folding across them would
+    have hidden 3,490 more rows the rule says are clean.
+
+    Deliberately wider than `save_scraped_data`'s re-derivation, which reads
+    `clean_title or title` and so loses the evidence a cleaner stripped out of
+    `clean_title`: the question here is whether the row's own stored text still says it,
+    not whether the column order happens to surface it.
+    """
+    return bool(is_adult_title(
+        row["clean_title"] or "",
+        row["title"] or "",
+        row["slug"] or "",
+        source_site=row["source_site"],
+    ))
+
+
+def work_identity(row) -> tuple | None:
+    """`(normalized clean title, year)` — the identity that reaches rows whose
+    `canonical_key` came from a page slug, so one film written by two sites under two
+    keys (`puli-2015`, `puli__2015`) is still one work here.
+
+    `None` for an empty title or a missing/non-numeric year: that is the shared bucket of
+    every badly parsed page, not a work, and it must never group.
+    """
+    title = str(row["clean_title"] or row["title"] or "").strip().lower()
+    year = str(row["year"] or "").strip()
+    if not title or not year.isdigit():
+        return None
+    return (title, year)
+
+
+def corroborated_adult_exposures(conn, rows=None) -> list[dict]:
+    """Rows the adult law must hide and currently serves, backed by reproducible evidence.
+
+    Two identities, exact first: `canonical_key` (what the ingest law already uses) and
+    `(clean_title, year)` (what reaches the slug-keyed rows the key law cannot see). Only
+    a source row whose flag `adult_rule_agrees()` reproduces may propagate.
+
+    This is the reconciliation a merge runs, and the only catalog-wide fold there is: a
+    raw key-level MAX is *not* this law. Measured on the live catalog 2026-10-30, a raw
+    fold would have hidden 407 mainstream works on flags no rule can reproduce.
+
+    Read-only, one pass over `posts` — 150,799 rows measured 16.3 s including the regex,
+    so this is a merge/offline pass, never something a request path runs. Returns
+    `[{"post_id", "source_post_id", "evidence"}]` and never names a flagged row.
+    """
+    if rows is None:
+        rows = conn.execute("SELECT %s FROM posts" % ", ".join(ADULT_FOLD_FIELDS)).fetchall()
+    grouped = []
+    for kind, field in (("key", "canonical_key"), ("work", None)):
+        buckets: dict = {}
+        for row in rows:
+            if field is None:
+                ident = work_identity(row)
+            else:
+                value = str(row[field] or "").strip().lower()
+                ident = value if value and value != "unknown" else None
+            if ident is not None:
+                buckets.setdefault(ident, []).append(row)
+        grouped.append((kind, buckets))
+
+    exposures: list[dict] = []
+    claimed: set = set()
+    for kind, buckets in grouped:
+        for ident, members in buckets.items():
+            sources = [row for row in members
+                       if int(row["is_18_plus"] or 0) and adult_rule_agrees(row)]
+            if not sources:
+                continue
+            source = sources[0]
+            for row in members:
+                if int(row["is_18_plus"] or 0) or row["id"] in claimed:
+                    continue
+                claimed.add(row["id"])
+                exposures.append({
+                    "post_id": row["id"],
+                    "source_post_id": source["id"],
+                    "evidence": "corroborated adult flag on post %d, %s=%s"
+                                % (source["id"], kind, ident),
+                })
+    return exposures
+
+
+#: Journal so a fold is reversible and auditable. No public surface reads it: the flag
+#: column stays the single source of truth, and this only records who decided it.
+ADULT_FOLD_JOURNAL_DDL = """
+CREATE TABLE IF NOT EXISTS adult_fold_journal (
+    post_id INTEGER PRIMARY KEY,
+    source_post_id INTEGER NOT NULL,
+    evidence TEXT NOT NULL,
+    decided_at REAL NOT NULL
+)
+"""
+
+
+def apply_corroborated_adult_fold(conn, exposures) -> int:
+    """Hide the exposed rows and journal the evidence, in the caller's transaction.
+
+    One primary-key UPDATE per row, so the flip and its reason commit together or not at
+    all. Returns the number of rows actually flipped.
+    """
+    conn.execute(ADULT_FOLD_JOURNAL_DDL)
+    flipped = 0
+    now = time.time()
+    for item in exposures:
+        cur = conn.execute(
+            "UPDATE posts SET is_18_plus = 1 WHERE id = ? AND is_18_plus IS NOT 1",
+            (item["post_id"],))
+        if cur.rowcount:
+            conn.execute(
+                "INSERT OR REPLACE INTO adult_fold_journal"
+                " (post_id, source_post_id, evidence, decided_at) VALUES (?, ?, ?, ?)",
+                (item["post_id"], item["source_post_id"], item["evidence"], now))
+            flipped += 1
+    return flipped
+
+
+def undo_corroborated_adult_fold(conn) -> dict:
+    """Reverse this pass, but never a flag that stands on its own evidence.
+
+    A journaled row stays hidden when the central rule reproduces its flag, or when some
+    row under its `canonical_key` is flagged and was **not** flipped by this pass. The
+    exclusion is what makes the undo terminate honestly: two siblings hidden by one fold
+    would otherwise justify each other forever, and neither would say so.
+    """
+    out = {"unflagged": 0, "kept": 0}
+    if conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table'"
+                    " AND name = 'adult_fold_journal'").fetchone() is None:
+        return out
+    journaled = sorted(row["post_id"] for row in
+                       conn.execute("SELECT post_id FROM adult_fold_journal"))
+    if not journaled:
+        return out
+    marks = ",".join("?" * len(journaled))
+    for post_id in journaled:
+        current = conn.execute(
+            "SELECT %s FROM posts WHERE id = ?" % ", ".join(ADULT_FOLD_FIELDS),
+            (post_id,)).fetchone()
+        if current is None:
+            out["kept"] += 1
+            continue
+        justified = adult_rule_agrees(current)
+        if not justified and str(current["canonical_key"] or "").strip():
+            justified = conn.execute(
+                "SELECT 1 FROM posts WHERE canonical_key = ? AND id <> ?"
+                " AND COALESCE(is_18_plus, 0) = 1 AND id NOT IN (%s)" % marks,
+                [current["canonical_key"], post_id, *journaled]).fetchone()
+        if justified:
+            out["kept"] += 1
+            continue
+        conn.execute("UPDATE posts SET is_18_plus = 0 WHERE id = ?", (post_id,))
+        conn.execute("DELETE FROM adult_fold_journal WHERE post_id = ?", (post_id,))
+        out["unflagged"] += 1
+    return out
+
+
 def get_poster_quality_rank(url: str | None) -> int:
     """
     Returns an artwork quality score to prevent high-res TMDB artwork from

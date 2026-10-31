@@ -241,10 +241,46 @@ def _ensure_conflict_table(conn) -> None:
     )
 
 
-def merge_site_db(source_db_path: Path, target_db_path: Path, verbose: bool = True) -> dict[str, int]:
+def reconcile_adult_on_merge(conn, *, apply: bool = True) -> dict[str, int]:
+    """Fold every *corroborated* adult exposure the merge has just made reachable.
+
+    A staging vault declares `canonical_key` PRIMARY KEY/UNIQUE, so one database cannot
+    hold two rows for one work and a twin cannot be created there. The twin exists only
+    after two sites' rows meet in the unified catalog — which makes the merge the one
+    moment the work-level adult law can act, and the reason this pass lives here rather
+    than in a scraper.
+
+    It is deliberately **not** a raw key-level `MAX`: a flag the shared rule cannot
+    re-derive from the row's own text is a review candidate, not warrant to hide every
+    row that shares its key (measured 2026-10-30: such a fold would have hidden 407
+    mainstream works). Only `fast_fetch.adult_rule_agrees()` sources propagate, and every
+    flip is journalled in `adult_fold_journal`, so `backfill_adult_key.py --undo` can
+    restore a flag that turns out to have been asserted, not evidenced.
+
+    Reads the whole target ledger once — the same 16.3 s pass measured at 150,799 rows —
+    so it belongs to an offline merge, not to a request.
+    """
+    exposures = fast_fetch.corroborated_adult_exposures(conn)
+    folded = 0
+    if apply and exposures:
+        folded = fast_fetch.apply_corroborated_adult_fold(conn, exposures)
+        conn.commit()
+    return {
+        "exposures_found": len(exposures),
+        "adult_rows_folded": folded,
+        "adult_exposures_remaining": max(len(exposures) - folded, 0),
+    }
+
+
+def merge_site_db(source_db_path: Path, target_db_path: Path, verbose: bool = True,
+                  *, adult_fold: bool = True) -> dict[str, int]:
     """
     Merges all posts, post_sources, releases, and download_sources from source_db into target_db.
     Maintains canonical identity matching across sites.
+
+    With ``adult_fold`` (the default), the corroborated adult reconciliation runs at the
+    end of the merge — see `reconcile_adult_on_merge`. Pass ``adult_fold=False`` to merge
+    the data without it.
     """
     if not source_db_path.exists():
         raise FileNotFoundError(f"Source database not found: {source_db_path}")
@@ -257,6 +293,8 @@ def merge_site_db(source_db_path: Path, target_db_path: Path, verbose: bool = Tr
         "releases_merged": 0,
         "sources_merged": 0,
         "posts_conflicted": 0,
+        "adult_rows_folded": 0,
+        "adult_exposures_remaining": 0,
     }
 
     # Ensure target DB is initialized
@@ -383,6 +421,18 @@ def merge_site_db(source_db_path: Path, target_db_path: Path, verbose: bool = Tr
         if verbose and conflicts:
             print(f"[!] {len(conflicts)} identity conflict(s) recorded in merge_conflicts", flush=True)
 
+        if adult_fold:
+            with fast_fetch.get_db() as conn:
+                folded = reconcile_adult_on_merge(conn)
+            stats["adult_rows_folded"] = folded["adult_rows_folded"]
+            stats["adult_exposures_remaining"] = folded["adult_exposures_remaining"]
+            if verbose:
+                print(f"[i] adult reconciliation: {folded['exposures_found']} corroborated "
+                      f"exposure(s) reached, {folded['adult_rows_folded']} row(s) folded"
+                      + (f", {folded['adult_exposures_remaining']} left (already flagged "
+                         f"elsewhere)" if folded["adult_exposures_remaining"] else ""),
+                      flush=True)
+
     finally:
         src_conn.close()
 
@@ -397,6 +447,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=None,
         help="Path to unified catalog target database (defaults to Fast_Fetch/fast_fetch.db)",
     )
+    parser.add_argument(
+        "--no-adult-fold",
+        action="store_true",
+        help="merge the rows without the corroborated adult reconciliation this merge "
+             "otherwise runs (the fold is journalled; `backfill_adult_key.py --undo` "
+             "reverses it)",
+    )
     return parser.parse_args(argv)
 
 
@@ -405,7 +462,8 @@ def main():
     source_path = Path(args.source_db).resolve()
     target_path = Path(args.target_db or os.environ.get("RADD_DB_PATH") or (BASE_DIR / "fast_fetch.db")).resolve()
     print(f"[*] Merging {source_path} -> {target_path}", flush=True)
-    stats = merge_site_db(source_path, target_path, verbose=True)
+    stats = merge_site_db(source_path, target_path, verbose=True,
+                          adult_fold=not args.no_adult_fold)
     print(f"[✓] Merge complete! Summary: {stats}", flush=True)
 
 

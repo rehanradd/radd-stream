@@ -313,5 +313,136 @@ class StagingFamilyMergeTests(unittest.TestCase):
                 self.assertEqual(rels, {"Shivaay 1080p", "Campus Beats 1080p"})
 
 
+class MergeTimeAdultReconciliationTests(unittest.TestCase):
+    """The work-level adult law acts when two sites' rows meet — at merge.
+
+    A staging vault declares `canonical_key` PRIMARY KEY/UNIQUE, so a twin cannot exist
+    inside one database. The exposure is created by the merge itself, which is why the
+    fold lives there (`merge_catalogs.reconcile_adult_on_merge`). It is evidence-scoped:
+    a stored flag `is_adult_title()` cannot reproduce propagates to nobody.
+    """
+
+    def _make_unified_source(self, path: Path, rows):
+        fast_fetch.DB_PATH = path
+        fast_fetch.init_db()
+        with sqlite3.connect(path) as conn:
+            for row in rows:
+                conn.execute(
+                    "INSERT INTO posts (url, slug, title, clean_title, year, content_type,"
+                    " source_site, is_18_plus, canonical_key)"
+                    " VALUES (?, ?, ?, ?, ?, 'movie', ?, ?, ?)",
+                    (row["url"], row["url"].rstrip("/").split("/")[-1], row["title"],
+                     row["clean_title"], row["year"], row["site"], row["flag"],
+                     row["key"]))
+
+    def _make_target_with_legacy_row(self, path: Path, row):
+        """A unified catalog that already holds the pre-law, slug-keyed copy."""
+        fast_fetch.DB_PATH = path
+        fast_fetch.init_db()
+        with sqlite3.connect(path) as conn:
+            conn.execute(
+                "INSERT INTO posts (url, slug, title, clean_title, year, content_type,"
+                " source_site, is_18_plus, canonical_key)"
+                " VALUES (?, ?, ?, ?, ?, 'movie', ?, ?, ?)",
+                (row["url"], row["url"].rstrip("/").split("/")[-1], row["title"],
+                 row["clean_title"], row["year"], row["site"], row["flag"],
+                 row["key"]))
+
+    def _ledger(self, target: Path):
+        conn = sqlite3.connect(target)
+        conn.row_factory = sqlite3.Row
+        try:
+            posts = [(row["clean_title"], int(row["is_18_plus"] or 0)) for row in
+                     conn.execute(
+                         "SELECT clean_title, is_18_plus FROM posts ORDER BY id")]
+            journal = conn.execute(
+                "SELECT post_id, source_post_id, evidence FROM adult_fold_journal"
+            ).fetchall()
+            return posts, journal
+        finally:
+            conn.close()
+
+    def test_a_legacy_slug_keyed_twin_is_folded_when_the_sites_merge(self):
+        """The residual shape: the catalog already holds a slug-keyed unflagged copy
+        (`puli-2015`); the merge files the flagged copy under the derived key
+        (`puli_2015`), so the key law cannot see across them — the `(clean_title, year)`
+        identity the merge fold runs does, and hides the legacy row too.
+        """
+        with tempfile.TemporaryDirectory() as td:
+            src_db = Path(td) / "filmyzilla.db"
+            tgt_db = Path(td) / "unified.db"
+            self._make_target_with_legacy_row(tgt_db, {
+                "url": "https://9xmovies.example/puli-2015-hd/", "title": "Puli (2015)",
+                "clean_title": "Puli", "year": 2015, "site": "9xmovies", "flag": 0,
+                "key": "puli-2015"})
+            self._make_unified_source(src_db, [
+                {"url": "https://filmyzilla.example/puli-2015/", "title":
+                 "Puli (2015) 18+ Hindi Dubbed", "clean_title": "Puli", "year": 2015,
+                 "site": "filmyzilla", "flag": 1, "key": "puli-2015"},
+            ])
+
+            stats = merge_catalogs.merge_site_db(src_db, tgt_db, verbose=False)
+            self.assertEqual(stats["posts_merged"], 1)
+            self.assertEqual(stats["adult_rows_folded"], 1)
+            self.assertEqual(stats["adult_exposures_remaining"], 0)
+
+            posts, journal = self._ledger(tgt_db)
+            self.assertEqual(posts, [("Puli", 1), ("Puli", 1)],
+                             "the legacy copy is hidden with the work")
+            self.assertEqual(len(journal), 1)
+            self.assertIn("work=('puli', '2015')", journal[0]["evidence"])
+
+    def test_a_disputed_flag_folds_nothing_at_merge(self):
+        """The 407-works boundary: a stored flag the rule cannot reproduce must not
+        multiply across the work, even though the merge is the moment it could."""
+        with tempfile.TemporaryDirectory() as td:
+            src_db = Path(td) / "ssrmovies.db"
+            tgt_db = Path(td) / "unified.db"
+            self._make_target_with_legacy_row(tgt_db, {
+                "url": "https://moviezguru.example/nenokkadine/",
+                "title": "1 - Nenokkadine (2014)", "clean_title": "1 - Nenokkadine",
+                "year": 2014, "site": "moviezguru", "flag": 0,
+                "key": "1-nenokkadine-2014"})
+            self._make_unified_source(src_db, [
+                {"url": "https://ssrmovies.example/nenokkadine/", "title":
+                 "1 - Nenokkadine (2014) South Indian Hindi Dubbed",
+                 "clean_title": "1 - Nenokkadine", "year": 2014,
+                 "site": "ssrmovies", "flag": 1, "key": "1-nenokkadine_2014"},
+            ])
+
+            stats = merge_catalogs.merge_site_db(src_db, tgt_db, verbose=False)
+            self.assertEqual(stats["adult_rows_folded"], 0,
+                             "an unreproducible flag must not hide the twin")
+            self.assertEqual(stats["adult_exposures_remaining"], 0,
+                             "nothing corroborated was left behind")
+
+            posts, journal = self._ledger(tgt_db)
+            self.assertEqual(posts, [("1 - Nenokkadine", 0), ("1 - Nenokkadine", 1)],
+                             "the twin stays listed until its flag is resolved")
+            self.assertEqual(journal, [])
+
+    def test_the_fold_can_be_skipped_explicitly(self):
+        with tempfile.TemporaryDirectory() as td:
+            src_db = Path(td) / "filmyzilla.db"
+            tgt_db = Path(td) / "unified.db"
+            self._make_target_with_legacy_row(tgt_db, {
+                "url": "https://9xmovies.example/puli-2015-hd/", "title": "Puli (2015)",
+                "clean_title": "Puli", "year": 2015, "site": "9xmovies", "flag": 0,
+                "key": "puli-2015"})
+            self._make_unified_source(src_db, [
+                {"url": "https://filmyzilla.example/puli-2015/", "title":
+                 "Puli (2015) 18+ Hindi Dubbed", "clean_title": "Puli", "year": 2015,
+                 "site": "filmyzilla", "flag": 1, "key": "puli-2015"},
+            ])
+
+            stats = merge_catalogs.merge_site_db(src_db, tgt_db, verbose=False,
+                                                 adult_fold=False)
+            self.assertEqual(stats["adult_rows_folded"], 0)
+            posts, journal = self._ledger(tgt_db)
+            self.assertEqual(posts, [("Puli", 0), ("Puli", 1)],
+                             "the twin is listed until a fold is run")
+            self.assertEqual(journal, [])
+
+
 if __name__ == "__main__":
     unittest.main()
