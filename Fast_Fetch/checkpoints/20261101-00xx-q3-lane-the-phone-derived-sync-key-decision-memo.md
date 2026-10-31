@@ -171,23 +171,84 @@ entitlement* behind a computable string. The coins wire is `1f97bfe`, mine, and 
 docstring — so the module's headline claim now understates its own risk. That line must be corrected in
 whatever commit implements (a), not left as a stale reassurance.
 
-## Also recorded, measured in the same window and unrelated to this memo
+## Also recorded, same window: the merge gate answered, and the answer inverts the supervisor's read
 
-While answering qoder1's `[Q1]` merge gate read-only, the tree moved under me at 00:32: both
-`/opt/radd-stream/Fast_Fetch/fast_fetch.db` and `/home/ubuntu/radd-stream-data/fast_fetch.db` are now
-**symlinks to `/home/ubuntu/radd-stream-data/merged_catalog_20261025.db`** — the 6.4 GB catalog the
-public API serves (`stat -c %F` = `symbolic link`, link mtime 00:32:17 and 00:32:29, target resolved to
-inode 813810, size 6,396,899,328). `Fast_Fetch/fast_fetch.db.bak_empty_8mb`, created 7 s earlier, is a
-*second symlink to the same catalog*, not a copy: the 8,093,696-byte regular file I measured at ~00:2x
-(no catalog rows in it: 0 posts / 0 releases / 0 `download_sources`) no longer exists anywhere at
-depth 4. I did not do this and I have not touched it. The hazard for every lane is that a *fallback*
-path (`fast_fetch.py:47`, `config.py:104-119`) now resolves to production, so any command or test that
-opens those names without `RADD_DB_PATH` set is reading — and a merge writing through
-`--target-db` — the live catalog, while SQLite names its `-wal`/`-shm` after the path it was handed,
-so the alias gets its *own* WAL pair for one inode. The stale `fast_fetch.db-wal` (20,632 B, 10-29
-22:42) and `-shm` beside the symlink are now orphaned relative to that inode. I have not reproduced
-that and will not test it against production. Escalating to qoder1 as a live-tree event, not as
-something for me to repair.
+qoder1 measured `size=56` on both `fast_fetch.db` names at 00:3x and concluded they are "bare SQLite
+headers — empty databases", so the mission "merges into an empty file at a path production does not
+read". **The measurement is right and the reading of it is wrong, and the truth is the more dangerous
+of the two.** A `stat` without `-L` reports a *symlink's own* size, and 56 is the character count of
+`/home/ubuntu/radd-stream-data/merged_catalog_20261025.db`. Measured:
+
+```
+/opt/radd-stream/Fast_Fetch/fast_fetch.db            type=symbolic link  ->  merged_catalog_20261025.db  (mtime 00:32:17)
+/home/ubuntu/radd-stream-data/fast_fetch.db          type=symbolic link  ->  merged_catalog_20261025.db  (mtime 00:32:29)
+/opt/radd-stream/Fast_Fetch/fast_fetch.db.bak_empty_8mb  type=symbolic link -> merged_catalog_20261025.db (mtime 00:32:10)
+stat -Lc ino:  both the alias and the catalog are inode 813810, size 6396899328, mtime 10-29 10:52
+```
+
+So the mission's target resolves — twice, by both spellings — to **the 6.4 GB file the public API
+serves**. A true SQLite header is 100 bytes and starts with the magic; the `od -c` anyone gets from
+these paths shows `SQLite format 3\0` *because `od` follows the link* into the catalog. The four gate
+questions, answered against that:
+
+**(1) Which path.** `/opt/radd-stream/Fast_Fetch/fast_fetch.db` at 00:2x was an 8,093,696-byte regular
+file holding **0 posts / 0 releases / 0 `download_sources`** (measured once, pre-relink). At 00:32 it
+became a symlink to the production catalog, so the mission's literal command writes production. And
+`merge_catalogs.py:473` resolves the target as `--target-db` **or `$RADD_DB_PATH` or
+`BASE_DIR/fast_fetch.db`**, while `/home/ubuntu/.bashrc:158` gained
+`export RADD_DB_PATH="/home/ubuntu/radd-stream-data/merged_catalog_20261025.db"` in the same minute —
+so omitting `--target-db` also writes production. There is no spelling of the mission that is safe,
+and rule 9 of root `AGENTS.md` forbids the one that is possible. I have written to none of them.
+
+**(2) Backup.** `cp`/`cp -a` is not a valid backup of a WAL-mode database: content can live in the
+`-wal`, and a byte hash of a 6.4 GB file taken "after the copy" proves nothing about a file another
+process can write. The online-consistent forms are `sqlite3 src ".backup dst"` or `VACUUM INTO`
+(this box's CLI is 3.45.1, both present), verified on the **copy** by size + `PRAGMA integrity_check`
++ per-table counts — not by comparing against a moving source. A usable prior snapshot already
+exists and qoder1 found it: `preapply_20261029_1726.db`, 6,396,899,328 B, mtime 10-29 18:57, which is
+after the live file's last write (10-29 10:52). Its `-wal` is **0 bytes** (mtime 00:26:24) and nothing
+holds it (`fuser` empty), so it is complete as it stands; and it is *not* a rollback point for a merge
+I have not started, because no merge has run.
+
+**(3) WAL discipline.** Measured, all metadata only: every `-wal` in play is 0 bytes — vegamovies
+(00:22:57), bolly4u (00:23:09), katmoviehd (00:23:11) — and `filmyhit.db` and `mp4moviez.db` have **no
+`-wal`/`-shm` at all**, which is what a rollback-journal database looks like. The catalog's own pair,
+created 00:23 while I held read-only opens, was **gone by 00:32** (last connection closed, SQLite
+checkpointed and removed it). No process holds any of these names now. A 0-byte wal means no
+un-checkpointed frames, so those main files *are* the whole database and no checkpoint was needed
+before reading them. I ran **no** `wal_checkpoint` anywhere, deliberately: the rule is never to
+checkpoint a file another writer owns, and the service owns the catalog. One genuine hazard worth
+naming rather than asserting: SQLite builds `-wal`/`-shm` names from the **path string it was handed**,
+so opening the alias journals into `Fast_Fetch/fast_fetch.db-wal` — a second WAL pair for inode 813810
+that the service never reads. The orphan pair beside the alias is dated 10-29 22:42, i.e. no writer has
+used the alias since it was relinked. I have not reproduced the two-WAL failure mode and will not do
+so against production; the control is simply that nothing may open either alias for write.
+
+**(4) Adult ordering.** The fold is in the tool and on by default — `reconcile_adult_on_merge`
+(`merge_catalogs.py:244-275`, using `fast_fetch.corroborated_adult_exposures` +
+`apply_corroborated_adult_fold`, journalled in `adult_fold_journal` so `backfill_adult_key.py --undo`
+reverses it) — but it runs at the **end** of each `merge_site_db` (`:279-302`, `adult_fold=True`;
+`--no-adult-fold` opts out at `:464`). On a copy that is fine; on a file the public reads, rows are
+appended first and reconciled after, which is too late to call a pre-merge reconciliation.
+Measured entering (one pass each, read-only): vegamovies **445**, bolly4u **972**, katmoviehd
+**1,017**, filmyhit **117**, mp4moviez **91** flagged rows = **2,642** entering a catalog already
+holding **15,068** flagged over **150,799** posts (that number reported from the earlier measurement,
+not re-queried). Post-merge counts are **not measurable** — no merge ran. `mp4moviez.db` cannot enter
+at all as things stand: its tables are `sitemap_cache,posts,sqlite_sequence,releases`, so
+`_source_family` (`:41-47`) raises before any row is read. And the honest limit on the fold: it is
+*corroborated*, not the raw key-level `MAX(is_18_plus)` (which stays forbidden as an un-corroborated
+rule), so unless a merge report prints `adult_exposures_remaining == 0`, the merged file is **NOT
+deployable** until q5's key reconciliation runs on it — I will state that in the report rather than
+let a green integrity check imply compliance. On dub collisions I have nothing: q2's
+`[Q2-DUB-COLLISION-CENSUS]` query exists and its numbers are still queued on the load hold, so the
+merge's `posts_conflicted` counter (`:330-365`, which retargets a canonical key rather than silently
+picking) is the only figure I could report, and it does not distinguish a flagged twin from an
+unflagged one.
+
+Timeline for whoever owns the relink: `preapply`'s wal/shm touched 00:26:24/00:26:52, the three
+`.bashrc`-adjacent symlinks at 00:32:10 → 00:32:29, `/home/ubuntu/.bashrc` modified 00:32,
+`/tmp/q1_and_27c1034.log` at 00:31 and the `/tmp/q1_night_id` checkout at 00:33. I am not the author of
+any of it and I have not undone it — `/opt/radd-stream` is the live tree, not my workspace.
 
 ## Status
 
