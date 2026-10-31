@@ -116,6 +116,10 @@ end-to-end figure will be measured when the hold lifts (estimate 1–3 min, sing
 | mid-design | 6.35 | — | — | stopped scans |
 | before live pass | 9.81 | 4,688 MB | 3,152 MB | refused; wrote module and report |
 | HOLD from qoder1 | 12.5 | — | — | no execution; commit + push only |
+| supervisor pass, first check | 3.25 | 5,228 MB avail | 2,723 MB | under 4.0 but above the 3.5 rule → edits only |
+| one minute later | 4.83 | — | — | census refused; queued |
+| supervisor sets 3.5 ceiling | 3.82 | — | — | edits only, no python |
+| hard freeze | 8.74 | — | — | nothing run; table written instead |
 
 ## Supervisor pass, 2026-10-31 — landed, CI-gated, numbers queued
 
@@ -150,15 +154,28 @@ single core, one database at a time, `nice -n 19`**; the run itself reports `wal
 
 Numbers wanted, by their keys in the JSON report:
 
-1. `keys_across_more_than_one_site` and `divergent_keys_across_sites` — deliverable 1 (a key naming
-   two prints across vaults).
-2. `divergent_keys_with_flagged_and_clean_rows` — deliverable 2; the adult-twin share is that count
-   over `divergent_keys` (and over `divergent_keys_across_sites` when the collision is cross-site).
-3. `examples` (up to 15, ordered divergent-then-flagged first) — the concrete pairs, with each key's
-   `language_sets`, `sites` and `flagged`/`unflagged` counts.
-4. `stopped` must be `null` before any of the above is quoted as a corpus number, and
-   `databases_skipped` must be read — `mp4moviez.db` (29,850 rows) predates `canonical_key` and is
-   skipped, so the corpus is the key-carrying vaults only.
+### Queued quiet-window table
+
+One executor, `nice -n 19`, one database at a time. Gate: proceed only when the supervisor has
+posted load1 **< 3.5**; the module's own refusal is load1 ≥ 4.0 (exit 2). At the time of writing,
+load1 was **8.74** under a hard freeze, so nothing below has been run.
+
+```bash
+cd /tmp/q2_collide        # any worktree at trunk; never /opt/radd-stream
+nice -n 19 python3 -S Fast_Fetch/importers/test_dub_collision_census.py --census \
+  > /tmp/q2_census_20261031.json
+echo "exit=$?"            # 0 = whole corpus; 2 = load gate stopped it (partial, not a result)
+```
+
+| # | Number wanted | JSON key(s) in the report | Exact command | Measured cost |
+|---|---|---|---|---|
+| 1 | keys carrying rows from more than one vault, with divergent audio | `keys_across_more_than_one_site`, `divergent_keys_across_sites` | the block above | covering-index reads of ≈340k keys over 39 vaults + point lookups for cross-DB keys only; nearest comparable measured **12.0 s** (16,943-row full-scan `GROUP BY canonical_key`, load 0.91) → estimate **1–3 min** single core; the run reports `wall_seconds` |
+| 2 | of those, keys with ≥1 `is_18_plus=1` row (adult-twin share = this ÷ `divergent_keys`) | `divergent_keys_with_flagged_and_clean_rows`, `divergent_keys` | the block above | same pass — no second read; free with #1 |
+| 3 | 15 concrete examples (key, sites, language sets, flagged/unflagged counts) | `examples[]` (already ordered divergent-then-flagged, `flag[0]`, `-rows`) | the block above | same pass — no second read; free with #1 |
+
+A number is quotable only when `stopped` is `null`. `databases_skipped` must be read: `mp4moviez.db`
+(29,850 rows) predates `canonical_key` and is skipped, so the corpus is the key-carrying vaults only.
+
 
 ### The merge-step recommendation, stated once and plainly (for qoder3)
 
