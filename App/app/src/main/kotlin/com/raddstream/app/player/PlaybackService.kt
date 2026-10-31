@@ -16,6 +16,7 @@ import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.Renderer
+import androidx.media3.exoplayer.SeekParameters
 import androidx.media3.exoplayer.analytics.AnalyticsListener
 import androidx.media3.exoplayer.source.LoadEventInfo
 import androidx.media3.exoplayer.source.MediaLoadData
@@ -122,6 +123,11 @@ class PlaybackService : MediaSessionService() {
             .build()
         // Screen-off playback (MX "keep playing with screen off") — no sensor needed.
         exo.setWakeMode(C.WAKE_MODE_LOCAL)
+        // Seeking snaps to the nearest sync frame instead of decoding forward from the previous
+        // one, which is what makes dragging the scrub bar feel immediate. Costs frame-exact
+        // landing; nobody scrubs for that. A `val` reassignment would not compile here — ExoPlayer
+        // exposes this as a setter whose getter returns a different type.
+        exo.setSeekParameters(SeekParameters.CLOSEST_SYNC)
         exo.addListener(playerListener)
         exo.addAnalyticsListener(autoQualityListener)
         player = exo
