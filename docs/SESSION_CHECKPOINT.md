@@ -4,7 +4,7 @@ Update this file after each independently verified milestone so work can resume 
 
 ## ✅ Open items — index (q3, 2026-10-30; pointers only)
 
-1. **This file is a pointer, not a history.** 56 files cover 2026-10-20 → 2026-10-31: 54 dated
+1. **This file is a pointer, not a history.** 57 files cover 2026-10-20 → 2026-10-31: 55 dated
    session blocks, one undated block, the entry template — every one verbatim. Newest first in
    [`checkpoints/README.md`](checkpoints/README.md). The count is `ls docs/checkpoints/*.md` minus
    `README.md`, and `Fast_Fetch/test_docs_invariants.py` checks the number written here against that
