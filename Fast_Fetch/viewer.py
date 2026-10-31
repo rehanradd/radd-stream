@@ -914,6 +914,55 @@ def generate_m3u_playlist(post_id: int, full: bool = False,
         return "\n".join(lines)
 
 
+#: The escaping core, shipped verbatim inside both page scripts — the dashboard's
+#: and the PWA's — because two documents that each carry their own escaper are two
+#: escapers that drift, and the drift is invisible until the catalog row with a `<`
+#: in its title renders as markup. `Fast_Fetch/test_html_escape_guard.py` reads this
+#: constant, requires it inside `DASHBOARD_HTML` and `MOBILE_CLIENT_HTML`, and then
+#: requires every markup-bearing template literal in both pages to be an `esc` one.
+ESCAPE_CORE_JS = """
+    // ── the one place that decides escaping ───────────────────────────────────
+    //
+    // `esc` is a template tag: every value interpolated through it is escaped by
+    // default, and the only way to put markup in is to say so — `raw()` around a
+    // fragment that `esc` already built. A page where twelve renderers each remember
+    // to call an escaper has twelve chances to forget one, and this page's data
+    // comes out of a scraper: a title containing `<` is a normal catalog row, not an
+    // attack. So the decision lives here and nowhere else, and
+    // Fast_Fetch/test_html_escape_guard.py fails CI when a markup template literal
+    // appears that does not use this tag, or when an `on*=` attribute interpolates
+    // anything at all — the class of bug where `&#39;` is decoded back into a `'`
+    // before the script inside the attribute is parsed, which an escaper cannot
+    // prevent and only a data attribute can.
+    const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, ch => ({
+      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+    }[ch]));
+    const raw = value => ({ __raddRaw: String(value ?? '') });
+    const esc = (strings, ...values) => {
+      let out = String(strings[0] ?? '');
+      for (let i = 0; i < values.length; i += 1) {
+        const value = values[i];
+        out += ((value && typeof value === 'object' && '__raddRaw' in value)
+          ? value.__raddRaw : escapeHtml(value)) + String(strings[i + 1] ?? '');
+      }
+      return out;
+    };
+    // A URL is escaped like text and then checked like a URL, because `javascript:`
+    // survives quoting: an escaper's job is delimiters, not schemes.
+    const safeHttpUrl = value => {
+      try {
+        const parsed = new URL(String(value));
+        return parsed.protocol === 'http:' || parsed.protocol === 'https:' ? parsed.href : '';
+      } catch (_) {
+        return '';
+      }
+    };
+    // Ids are numbers or they are nothing, and `num` is what an interpolation is
+    // allowed to be when it is not text.
+    const num = value => { const n = Number(value); return Number.isFinite(n) ? String(n) : '0'; };
+"""
+
+
 DASHBOARD_HTML = """<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -1479,7 +1528,30 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   <div id="toast" class="toast">Link copied to clipboard!</div>
 
   <script>
-    const API_BASE = window.location.pathname.endsWith('/') ? window.location.pathname.slice(0, -1) : window.location.pathname;
+""" + ESCAPE_CORE_JS + """    const API_BASE = window.location.pathname.endsWith('/') ? window.location.pathname.slice(0, -1) : window.location.pathname;
+    // One delegated handler for every button that carries data, and the reason it
+    // exists: `onclick="viewInDb('${r.slug}')"` puts a scraped value inside a JS
+    // string inside an HTML attribute, which is a context no escaper can make safe —
+    // the browser decodes `&#39;` back into a `'` before it parses the script, so
+    // escaping the quote is exactly as broken as not escaping it. A data attribute
+    // has no parser to fool: it is text, escaped like text, read back with
+    // `dataset` after `Number()` when it is meant to be an id.
+    const ACTIONS = {
+      'goto-page': el => gotoPage(Number(el.dataset.value)),
+      'view-in-db': el => viewInDb(el.dataset.value),
+      'fetch-on-demand': el => fetchPostOnDemand(el.dataset.loc, el.dataset.value),
+      'check-health': el => checkHealthPost(Number(el.dataset.value)),
+      'heal-post': el => healPost(Number(el.dataset.value)),
+      'play-jit': el => openStreamPlayer(Number(el.dataset.id), el.dataset.name, el.dataset.title),
+      'copy-url': el => copyToClipboard(el.dataset.value),
+    };
+    document.addEventListener('click', event => {
+      const trigger = event.target.closest('[data-action]');
+      if (!trigger) return;
+      const handler = Object.prototype.hasOwnProperty.call(ACTIONS, trigger.dataset.action)
+        ? ACTIONS[trigger.dataset.action] : null;
+      if (handler) handler(trigger);
+    });
     let dbData = { stats: {}, posts: [] };
     let currentFilter = 'all';
     let currentMainTab = 'db';
@@ -1536,16 +1608,10 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       if (!box) return;
       const p = dbData.page || {};
       if (!p.limit) { box.innerHTML = ''; return; }
-      box.innerHTML =
-        '<button class="filter-btn" onclick="gotoPage(' + (p.page - 1) + ')"' +
-        (p.page <= 1 ? ' disabled' : '') + '>← Prev</button>' +
-        '<span style="font-size:12px;color:var(--text-dim)">page ' + p.page +
-        ' · ' + p.returned + ' rows' + (p.has_more ? ' · more' : ' · end') +
-        ' · max ' + p.ceiling + '/page' +
-        (p.clamped ? ' · <b style="color:var(--warn,#f5a623)">CLAMPED</b>' : '') +
-        '</span>' +
-        '<button class="filter-btn" onclick="gotoPage(' + (p.page + 1) + ')"' +
-        (p.has_more ? '' : ' disabled') + '>Next →</button>';
+      box.innerHTML = esc`
+        <button class="filter-btn" data-action="goto-page" data-value="${num(p.page - 1)}"${raw(p.page <= 1 ? ' disabled' : '')}>← Prev</button>
+        <span style="font-size:12px;color:var(--text-dim)">page ${num(p.page)} · ${num(p.returned)} rows${raw(p.has_more ? ' · more' : ' · end')} · max ${num(p.ceiling)}/page${raw(p.clamped ? ' · <b style="color:var(--warn,#f5a623)">CLAMPED</b>' : '')}</span>
+        <button class="filter-btn" data-action="goto-page" data-value="${num(p.page + 1)}"${raw(p.has_more ? '' : ' disabled')}>Next →</button>`;
     }
 
     function gotoPage(n) {
@@ -1608,27 +1674,30 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       let html = '<div class="sitemap-list">';
       for (const r of rows) {
         const isScraped = r.scraped === 1;
-        let siteTag = `<span class="media-badge badge-vega" style="margin-right: 8px;">VEGAMOVIES</span>`;
-        if (r.site === 'rogmovies') siteTag = `<span class="media-badge badge-rog" style="margin-right: 8px;">ROGMOVIES</span>`;
-        else if (r.site === 'ssrmovies') siteTag = `<span class="media-badge badge-ssr" style="margin-right: 8px;">SSRMOVIES</span>`;
-        else if (r.site === 'katmoviehd') siteTag = `<span class="media-badge badge-kat" style="margin-right: 8px;">KATMOVIEHD</span>`;
-        else if (r.site === '7starhd') siteTag = `<span class="media-badge badge-7star" style="margin-right: 8px;">7STARHD</span>`;
-        else if (r.site === 'multimovies') siteTag = `<span class="media-badge badge-mm" style="margin-right: 8px;">MULTIMOVIES</span>`;
-        else if (r.site === '10xflix') siteTag = `<span class="media-badge badge-10x" style="margin-right: 8px;">10XFLIX</span>`;
+        const siteLabels = {
+          rogmovies: ['ROGMOVIES', 'badge-rog'], ssrmovies: ['SSRMOVIES', 'badge-ssr'],
+          katmoviehd: ['KATMOVIEHD', 'badge-kat'], '7starhd': ['7STARHD', 'badge-7star'],
+          multimovies: ['MULTIMOVIES', 'badge-mm'], '10xflix': ['10XFLIX', 'badge-10x'],
+        };
+        const labeled = siteLabels[String(r.site)] || ['VEGAMOVIES', 'badge-vega'];
+        const siteTag = raw(esc`<span class="media-badge ${labeled[1]}" style="margin-right: 8px;">${labeled[0]}</span>`);
+        const slug = String(r.slug ?? '');
+        const loc = safeHttpUrl(r.loc);
+        const lastmod = String(r.lastmod ?? '');
         const btnHtml = isScraped
-          ? `<button class="btn-action" onclick="viewInDb('${r.slug}')">✓ View in DB</button>`
-          : `<button class="btn-fetch" id="btn-fetch-${r.slug}" onclick="fetchPostOnDemand('${r.loc}', '${r.slug}')">⚡ Resolve Direct Links</button>`;
+          ? esc`<button class="btn-action" data-action="view-in-db" data-value="${slug}">✓ View in DB</button>`
+          : esc`<button class="btn-fetch" id="btn-fetch-${slug}" data-action="fetch-on-demand" data-value="${slug}" data-loc="${loc}">⚡ Resolve Direct Links</button>`;
 
-        html += `
+        html += esc`
           <div class="sitemap-row">
             <div class="sitemap-info">
-              <div class="sitemap-title">${siteTag}${r.slug}</div>
+              <div class="sitemap-title">${siteTag}${slug}</div>
               <div class="sitemap-meta">
-                <span>📅 ${r.lastmod.split('T')[0] || r.lastmod}</span>
-                <a href="${r.loc}" target="_blank" class="post-link">Original Page ↗</a>
+                <span>📅 ${lastmod.split('T')[0] || lastmod}</span>
+                <a href="${loc}" target="_blank" rel="noopener noreferrer" class="post-link">Original Page ↗</a>
               </div>
             </div>
-            <div>${btnHtml}</div>
+            <div>${raw(btnHtml)}</div>
           </div>
         `;
       }
@@ -1796,17 +1865,6 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     function renderPosts() {
       const container = document.getElementById('posts-container');
       let posts = dbData.posts || [];
-      const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, ch => ({
-        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
-      }[ch]));
-      const safeHttpUrl = value => {
-        try {
-          const parsed = new URL(String(value));
-          return parsed.protocol === 'http:' || parsed.protocol === 'https:' ? parsed.href : '';
-        } catch (_) {
-          return '';
-        }
-      };
       const postHasSite = (post, site) =>
         post.source_site === site ||
         (post.source_pages || []).some(source => source.source_site === site) ||
@@ -1863,25 +1921,25 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           ...(p.source_pages || []).map(source => source.source_site),
           ...(p.releases || []).map(release => release.source_site)
         ].filter(Boolean).map(site => String(site).toLowerCase()))];
-        const siteBadges = sourceSites.map(site =>
-          `<span class="media-badge ${siteBadgeClasses[site] || 'badge-vega'}">${escapeHtml(site.toUpperCase())}</span>`
-        ).join('');
-        const sourcePageLinks = (p.source_pages || []).map(source => {
+        const siteBadges = raw(sourceSites.map(site =>
+          esc`<span class="media-badge ${siteBadgeClasses[site] || 'badge-vega'}">${String(site).toUpperCase()}</span>`
+        ).join(''));
+        const sourcePageLinks = raw((p.source_pages || []).map(source => {
           const href = safeHttpUrl(source.url);
           if (!href) return '';
-          return `<a href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer">${escapeHtml(source.source_site || 'Site')} ↗</a>`;
-        }).filter(Boolean).join(' <span aria-hidden="true">·</span> ');
+          return esc`<a href="${href}" target="_blank" rel="noopener noreferrer">${source.source_site || 'Site'} ↗</a>`;
+        }).filter(Boolean).join(' <span aria-hidden="true">·</span> '));
         const sourcePagesHtml = sourcePageLinks
-          ? `<div style="margin:8px 0 0 58px;font-size:12px;color:var(--text-dim)">Indexed pages: ${sourcePageLinks}</div>`
+          ? raw(esc`<div style="margin:8px 0 0 58px;font-size:12px;color:var(--text-dim)">Indexed pages: ${sourcePageLinks}</div>`)
           : '';
         const originalPageHref = safeHttpUrl(p.url);
         const originalPageLink = originalPageHref
-          ? `<a href="${escapeHtml(originalPageHref)}" target="_blank" rel="noopener noreferrer" class="post-link">First-seen page ↗</a>`
+          ? raw(esc`<a href="${originalPageHref}" target="_blank" rel="noopener noreferrer" class="post-link">First-seen page ↗</a>`)
           : '';
 
-        const indBadge = p.industry ? `<span class="media-badge badge-industry">${p.industry}</span>` : '';
-        const cntBadge = p.country ? `<span class="media-badge badge-country">${getCountryFlag(p.country)}</span>` : '';
-        const langBadge = p.language ? `<span class="media-badge badge-lang">🗣️ ${p.language}</span>` : '';
+        const indBadge = p.industry ? raw(esc`<span class="media-badge badge-industry">${p.industry}</span>`) : '';
+        const cntBadge = p.country ? raw(esc`<span class="media-badge badge-country">${getCountryFlag(p.country)}</span>`) : '';
+        const langBadge = p.language ? raw(esc`<span class="media-badge badge-lang">🗣️ ${p.language}</span>`) : '';
 
         const seasonsMap = {};
         for (const r of (p.releases || [])) {
@@ -1898,13 +1956,14 @@ DASHBOARD_HTML = """<!DOCTYPE html>
             genresList = [p.genres];
           }
         }
-        const genresHtml = genresList.map(g => `<span class="pill-genre">${g}</span>`).join(' ');
+        const genresHtml = raw(genresList.map(g => esc`<span class="pill-genre">${g}</span>`).join(' '));
 
-        const posterImgHtml = p.poster_url
-          ? `<img src="${p.poster_url}" class="poster-thumb" alt="${p.clean_title}" loading="lazy" onerror="this.style.display='none'">`
+        const posterHref = safeHttpUrl(p.poster_url);
+        const posterImgHtml = posterHref
+          ? raw(esc`<img src="${posterHref}" class="poster-thumb" alt="${p.clean_title}" loading="lazy" onerror="this.style.display='none'">`)
           : '';
 
-        html += `
+        html += esc`
           <div class="media-card">
             <div class="media-header">
               <div class="media-title-group">
@@ -1914,24 +1973,24 @@ DASHBOARD_HTML = """<!DOCTYPE html>
                     ${siteBadges}
                     <span class="media-badge ${badgeClass}">${typeLabel}</span>
                     <span class="media-title">${p.clean_title}</span>
-                    ${p.year ? `<span class="media-badge badge-year">${p.year}</span>` : ''}
-                    ${p.seasons ? `<span class="media-badge badge-season">${p.seasons}</span>` : ''}
-                    ${p.is_18_plus ? `<span class="media-badge badge-18">🔞 18+ ADULT</span>` : ''}
-                    ${p.is_animated ? `<span class="media-badge badge-anim">🎨 ANIME</span>` : ''}
+                    ${raw(p.year ? esc`<span class="media-badge badge-year">${p.year}</span>` : '')}
+                    ${raw(p.seasons ? esc`<span class="media-badge badge-season">${p.seasons}</span>` : '')}
+                    ${raw(p.is_18_plus ? '<span class="media-badge badge-18">🔞 18+ ADULT</span>' : '')}
+                    ${raw(p.is_animated ? '<span class="media-badge badge-anim">🎨 ANIME</span>' : '')}
                     ${indBadge}
                     ${cntBadge}
                     ${langBadge}
-                    ${p.imdb_rating ? `<span class="media-badge badge-imdb">⭐ ${p.imdb_rating} IMDb</span>` : ''}
+                    ${raw(p.imdb_rating ? esc`<span class="media-badge badge-imdb">⭐ ${p.imdb_rating} IMDb</span>` : '')}
                   </div>
-                  ${genresHtml ? `<div style="display: flex; gap: 6px; flex-wrap: wrap;">${genresHtml}</div>` : ''}
+                  ${raw(genresHtml ? esc`<div style="display: flex; gap: 6px; flex-wrap: wrap;">${genresHtml}</div>` : '')}
                 </div>
               </div>
               <div class="media-actions">
-                <button class="btn-check" onclick="checkHealthPost(${p.id})">🩺 Probe Links</button>
-                <button class="btn-heal" onclick="healPost(${p.id})">🔄 Auto-Heal</button>
-                ${p.is_18_plus
-                  ? `<span class="media-badge badge-18" title="The endpoints refuse this work on both ports and the ledger view publishes no upstream URL for it">🔞 no playlist</span>`
-                  : `<a href="/api/m3u?id=${p.id}" class="btn-m3u" download="${p.slug}.m3u">📺 VLC Playlist</a>`}
+                <button class="btn-check" data-action="check-health" data-value="${num(p.id)}">🩺 Probe Links</button>
+                <button class="btn-heal" data-action="heal-post" data-value="${num(p.id)}">🔄 Auto-Heal</button>
+                ${raw(p.is_18_plus
+                  ? '<span class="media-badge badge-18" title="The endpoints refuse this work on both ports and the ledger view publishes no upstream URL for it">🔞 no playlist</span>'
+                  : esc`<a href="/api/m3u?id=${num(p.id)}" class="btn-m3u" download="${p.slug}.m3u">📺 VLC Playlist</a>`)}
                 ${originalPageLink}
               </div>
             </div>
@@ -1940,7 +1999,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         `;
 
         for (const [seasonName, releases] of Object.entries(seasonsMap)) {
-          html += `
+          html += esc`
             <div class="season-section">
               <div class="season-heading">${seasonName} (${releases.length} options)</div>
               <div class="releases-grid">
@@ -1949,10 +2008,10 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           for (const r of releases) {
             const qClass = 'pill-' + (r.quality || '720p').toLowerCase();
             const isBatch = r.episode === 'Batch';
-            const epBadge = r.episode ? `<span class="pill ${isBatch ? 'pill-batch' : 'pill-720p'}">${r.episode}</span>` : '';
-            const rSiteBadge = r.source_site ? `<span class="pill" style="background:#0f172a; color:#38bdf8; border:1px solid #0284c7; font-size:10px;">${r.source_site.toUpperCase()}</span>` : '';
+            const epBadge = r.episode ? raw(esc`<span class="pill ${isBatch ? 'pill-batch' : 'pill-720p'}">${r.episode}</span>`) : '';
+            const rSiteBadge = r.source_site ? raw(esc`<span class="pill" style="background:#0f172a; color:#38bdf8; border:1px solid #0284c7; font-size:10px;">${String(r.source_site).toUpperCase()}</span>`) : '';
 
-            html += `
+            html += esc`
               <div class="release-box">
                 <div class="release-top">
                   <span class="release-title">${r.release_title}</span>
@@ -1963,9 +2022,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
                   </div>
                 </div>
                 <div class="release-meta">
-                  ${r.size ? `<span>📦 ${r.size}</span>` : ''}
-                  ${r.languages ? `<span>🌐 ${r.languages}</span>` : ''}
-                  ${r.codec ? `<span>🎞️ ${r.codec}</span>` : ''}
+                  ${raw(r.size ? esc`<span>📦 ${r.size}</span>` : '')}
+                  ${raw(r.languages ? esc`<span>🌐 ${r.languages}</span>` : '')}
+                  ${raw(r.codec ? esc`<span>🎞️ ${r.codec}</span>` : '')}
                 </div>
                 <div class="sources-list">
             `;
@@ -1977,19 +2036,19 @@ DASHBOARD_HTML = """<!DOCTYPE html>
               const statusDot = isActive ? '🟢' : (isDead ? '🔴' : '⚪');
               const statusTooltip = s.http_status ? `HTTP ${s.http_status} (${s.status})` : s.status;
               const resumableBadge = s.is_resumable === 1
-                ? `<span class="pill-resumable" title="HTTP Range 206 supported: Resume, Fast seek, IDM/aria2 multi-part acceleration">⚡ Resumable</span>`
+                ? raw('<span class="pill-resumable" title="HTTP Range 206 supported: Resume, Fast seek, IDM/aria2 multi-part acceleration">⚡ Resumable</span>')
                 : '';
-              const sizeStr = s.file_size_bytes ? `<span style="font-size: 11px; color: var(--text-dim);">${formatBytes(s.file_size_bytes)}</span>` : '';
+              const sizeStr = s.file_size_bytes ? raw(esc`<span style="font-size: 11px; color: var(--text-dim);">${formatBytes(s.file_size_bytes)}</span>`) : '';
               // A flagged work's sources arrive with no URL to copy and no id to
               // stream — `_withhold_playable` removed them server-side, and this
               // renders the refusal instead of a button that would call it.
               const withheld = s.playback_withheld
-                ? `<span class="pill-resumable" title="Stored for the audit, withheld from the panel">${s.playback_withheld}</span>`
-                : `<button class="btn-action" style="background:#2563eb; color:white; border-color:#3b82f6;" onclick="openStreamPlayer(${s.id}, '${escapeHtml(s.source_name || 'Direct Stream')}', '${escapeHtml(p.clean_title || 'Media Stream')}')">▶ Play JIT</button>
-                    <button class="btn-action" onclick="copyToClipboard('${s.final_url}')">📋 Copy Direct URL</button>
-                    <a href="/api/v1/stream?id=${s.id}&redirect=1" target="_blank" class="btn-action btn-open" title="Instant Live JIT Stream with 302 Redirect">⚡ Stream / DL</a>`;
+                ? raw(esc`<span class="pill-resumable" title="Stored for the audit, withheld from the panel">${s.playback_withheld}</span>`)
+                : raw(esc`<button class="btn-action" style="background:#2563eb; color:white; border-color:#3b82f6;" data-action="play-jit" data-id="${num(s.id)}" data-name="${s.source_name || 'Direct Stream'}" data-title="${p.clean_title || 'Media Stream'}">▶ Play JIT</button>
+                    <button class="btn-action" data-action="copy-url" data-value="${s.final_url}">📋 Copy Direct URL</button>
+                    <a href="/api/v1/stream?id=${num(s.id)}&redirect=1" target="_blank" rel="noopener noreferrer" class="btn-action btn-open" title="Instant Live JIT Stream with 302 Redirect">⚡ Stream / DL</a>`);
 
-              html += `
+              html += esc`
                 <div class="source-item ${isDead ? 'source-dead' : ''}">
                   <div class="source-name" title="${statusTooltip}">
                     <span>${statusDot}</span>
@@ -2444,9 +2503,23 @@ MOBILE_CLIENT_HTML = """<!DOCTYPE html>
   <div id="mobile-toast" class="toast">Link copied!</div>
 
   <script>
-    let currentType = '';
+""" + ESCAPE_CORE_JS + """    let currentType = '';
     let searchTimer = null;
     let activeStreamUrl = '';
+    // The same data-attribute rule the dashboard follows: nothing a scraper wrote
+    // goes inside an `on*=` attribute, because that is a script context an escaper
+    // cannot protect.
+    const CLIENT_ACTIONS = {
+      'open-detail': el => openDetail(num(el.dataset.value)),
+      'play-source': el => playSource(el.dataset.value, el.dataset.name, el.dataset.title),
+    };
+    document.addEventListener('click', event => {
+      const trigger = event.target.closest('[data-action]');
+      if (!trigger) return;
+      const handler = Object.prototype.hasOwnProperty.call(CLIENT_ACTIONS, trigger.dataset.action)
+        ? CLIENT_ACTIONS[trigger.dataset.action] : null;
+      if (handler) handler(trigger);
+    });
 
     async function loadPosts(query = '', type = '') {
       const container = document.getElementById('media-list');
@@ -2461,15 +2534,16 @@ MOBILE_CLIENT_HTML = """<!DOCTYPE html>
         }
         let html = '';
         for (const p of results) {
-          const typeBadge = p.content_type ? `<span class="pill pill-type">${p.content_type}</span>` : '';
-          const yearBadge = p.year ? `<span class="pill pill-year">${p.year}</span>` : '';
-          const imdbBadge = p.imdb_rating ? `<span class="pill pill-imdb">⭐ ${p.imdb_rating}</span>` : '';
-          const poster = p.poster_url
-            ? `<img src="${p.poster_url}" class="poster-img" alt="${p.clean_title}" loading="lazy" onerror="this.src='';this.alt='🎬'">`
-            : '<span class="poster-placeholder">🎬</span>';
+          const typeBadge = p.content_type ? raw(esc`<span class="pill pill-type">${p.content_type}</span>`) : '';
+          const yearBadge = p.year ? raw(esc`<span class="pill pill-year">${p.year}</span>`) : '';
+          const imdbBadge = p.imdb_rating ? raw(esc`<span class="pill pill-imdb">⭐ ${p.imdb_rating}</span>`) : '';
+          const posterHref = safeHttpUrl(p.poster_url);
+          const poster = posterHref
+            ? raw(esc`<img src="${posterHref}" class="poster-img" alt="${p.clean_title}" loading="lazy" onerror="this.src='';this.alt='🎬'">`)
+            : raw('<span class="poster-placeholder">🎬</span>');
 
-          html += `
-            <div class="media-card" onclick="openDetail(${p.id})">
+          html += esc`
+            <div class="media-card" data-action="open-detail" data-value="${num(p.id)}">
               <div class="poster-box">${poster}</div>
               <div class="card-content">
                 <div class="card-header">
@@ -2481,7 +2555,7 @@ MOBILE_CLIENT_HTML = """<!DOCTYPE html>
                   </div>
                 </div>
                 <div class="card-footer">
-                  <span>${p.release_count || 0} releases · ${p.source_count || 0} sources</span>
+                  <span>${num(p.release_count || 0)} releases · ${num(p.source_count || 0)} sources</span>
                   <button class="btn-detail">View & Play ↗</button>
                 </div>
               </div>
@@ -2534,26 +2608,26 @@ MOBILE_CLIENT_HTML = """<!DOCTYPE html>
 
         let html = '';
         for (const r of (p.releases || [])) {
-          html += `
+          html += esc`
             <div class="release-group">
               <div class="release-hdr">
-                <span>${escapeHtml(r.label || r.release_title)}</span>
+                <span>${r.label || r.release_title}</span>
                 <span class="pill pill-year">${(r.quality || 'HD').toUpperCase()}</span>
               </div>
               <div style="font-size:11px; color:var(--text-dim); margin-bottom:6px;">
-                ${r.size ? '📦 ' + r.size + ' · ' : ''}${r.languages ? '🌐 ' + r.languages : ''}
+                ${raw(r.size ? esc`📦 ${r.size} · ` : '')}${raw(r.languages ? esc`🌐 ${r.languages}` : '')}
               </div>
           `;
           for (const s of (r.sources || [])) {
             const isTemp = s.is_temporary ? '⏳' : '';
             // `s.source_name` only ever exists on the operator port's response;
             // the public projection replaces it with our own neutral label.
-            const name = escapeHtml(s.label || s.source_name || 'Streaming server');
+            const name = s.label || s.source_name || 'Streaming server';
             const handle = s.stream_id || s.id;
-            html += `
+            html += esc`
               <div class="stream-row">
                 <div class="stream-name">⚡ ${name} ${isTemp}</div>
-                <button class="btn-play-stream" onclick="playSource('${handle}', '${name}', '${escapeHtml(p.clean_title)}')">▶ Play</button>
+                <button class="btn-play-stream" data-action="play-source" data-value="${handle}" data-name="${name}" data-title="${p.clean_title}">▶ Play</button>
               </div>
             `;
           }
@@ -2602,11 +2676,11 @@ MOBILE_CLIENT_HTML = """<!DOCTYPE html>
         const rules = await rRes.json();
         const stats = await sRes.json();
 
-        let rulesHtml = `
+        let rulesHtml = esc`
           <div style="background:#090d16; padding:10px; border-radius:8px; margin-bottom:12px; border:1px solid var(--card-border);">
             <div style="font-weight:700; color:#fff; margin-bottom:4px;">📊 Catalog Statistics</div>
-            <div>Posts: <b>${stats.posts}</b> · Releases: <b>${stats.releases}</b> · Sources: <b>${stats.sources}</b></div>
-            <div>Active Streams: <b>${stats.active_sources}</b> · Resumable: <b>${stats.resumable_sources}</b></div>
+            <div>Posts: <b>${num(stats.posts)}</b> · Releases: <b>${num(stats.releases)}</b> · Sources: <b>${num(stats.sources)}</b></div>
+            <div>Active Streams: <b>${num(stats.active_sources)}</b> · Resumable: <b>${num(stats.resumable_sources)}</b></div>
           </div>
           <div style="font-weight:700; color:#fff; margin-bottom:6px;">🛠️ Client-Side Unwrapping Rules</div>
           <p style="color:var(--text-dim); margin-bottom:10px;">
@@ -2615,9 +2689,9 @@ MOBILE_CLIENT_HTML = """<!DOCTYPE html>
         `;
 
         for (const [svc, conf] of Object.entries(rules.services || {})) {
-          rulesHtml += `
+          rulesHtml += esc`
             <div style="background:#090d16; border:1px solid var(--card-border); border-radius:6px; padding:8px; margin-bottom:6px;">
-              <span style="font-weight:700; color:var(--accent);">${svc.toUpperCase()}</span> (Tier ${conf.tier || 1})
+              <span style="font-weight:700; color:var(--accent);">${String(svc).toUpperCase()}</span> (Tier ${num(conf.tier || 1)})
               <div style="font-family:monospace; color:#a7f3d0; word-break:break-all; font-size:11px; margin-top:2px;">
                 ${conf.pattern || conf.regex || conf.type || 'direct'}
               </div>
@@ -2648,11 +2722,6 @@ MOBILE_CLIENT_HTML = """<!DOCTYPE html>
       t.innerText = msg;
       t.style.display = 'block';
       setTimeout(() => { t.style.display = 'none'; }, 2000);
-    }
-
-    function escapeHtml(str) {
-      if (!str) return '';
-      return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
     }
 
     // Initial load

@@ -1070,7 +1070,7 @@ font-family:ui-monospace,SFMono-Regular,monospace;font-size:12px}}
 <body><main class="card">
 <h1>Radd Stream operator console</h1>
 <p class="sub">Loopback-only control surface. Sign in to continue.</p>
-{notice}<form method="post" action="{html.escape(target, quote=True)}">
+{notice}<form method="post" action="{_e(target)}">
 <label for="username">Username</label>
 <input id="username" name="username" type="text" autocomplete="username"
  autocapitalize="none" spellcheck="false" required>
@@ -3003,10 +3003,10 @@ def _fleet_card(fleet):
         last = (_ts(item.get("last_sync_at"))
                 if item.get("last_sync_at") else '<span class="empty">never</span>')
         actions = (
-            f'<button class="btn" onclick="runScraper(\'{_e(crawler_id)}\','
-            f' \'sync\', this)">Sync now</button> '
-            f'<button class="btn" onclick="runScraper(\'{_e(crawler_id)}\','
-            f' \'crawl\', this)">Crawl</button>')
+            f'<button class="btn" data-crawler="{_e(crawler_id)}"'
+            ' onclick="runScraper(this.dataset.crawler, \'sync\', this)">Sync now</button> '
+            f'<button class="btn" data-crawler="{_e(crawler_id)}"'
+            ' onclick="runScraper(this.dataset.crawler, \'crawl\', this)">Crawl</button>')
         rows.append([f"<code>{_e(crawler_id)}</code>", _e(name), badge, last,
                      _progress_cell(item), _num(item.get("failed")), actions])
     limit = int(fleet.get("default_limit") or DEFAULT_CRAWL_LIMIT)
@@ -3044,15 +3044,17 @@ def _config_card(monetization):
                 f' <span>{_e(field.get("label", key))}</span></label>')
 
     def text_row(key, label, placeholder=""):
-        field = fields.get(key) or {"value": ""}
+        # The key travels in a `data-key` attribute and the handler reads it back,
+        # rather than being written into the `onclick` source: an attribute that
+        # holds a script has two parsers, and `_e` only satisfies the first one.
         return (f'<div class="field"><label for="f-{_e(key)}">{_e(label)}</label>'
-                f'<input id="f-{_e(key)}" autocomplete="off"'
+                f'<input id="f-{_e(key)}" autocomplete="off" data-key="{_e(key)}"'
                 f' placeholder="{_e(placeholder)}" value="{_e(field.get("value"))}"'
-                f' onkeydown="if(event.key===\'Enter\')'
-                f' document.getElementById(\'b-{_e(key)}\').click()">'
-                f'<button id="b-{_e(key)}" class="btn"'
-                f' onclick="saveSetting(\'{_e(key)}\','
-                f' document.getElementById(\'f-{_e(key)}\').value, this)">'
+                ' onkeydown="if(event.key===\'Enter\')'
+                ' this.form.querySelector(\'[id=\\\'b-\'+this.dataset.key+\'\\\']\').click()">'
+                f'<button id="b-{_e(key)}" class="btn" data-key="{_e(key)}"'
+                ' onclick="saveSetting(this.dataset.key,'
+                " this.form.querySelector('[id=\\'f-'+this.dataset.key+'\\']').value, this)'>"
                 'Update</button></div>')
 
     out = '<h2 style="margin-top:0">Feature matrix</h2>'
