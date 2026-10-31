@@ -53,6 +53,22 @@ fun MyListScreen(
     ) { contentPadding ->
         when {
             state.isLoading -> PosterGridSkeleton(modifier = Modifier.fillMaxSize().padding(contentPadding))
+            state.favorites.isEmpty() && state.hiddenCount > 0 -> EmptyState(
+                // Nothing here is "empty" — the rows exist and this build may not show them.
+                // Saying "your list is empty" would be a second loss on top of the first one.
+                title = "Nothing to show from your list",
+                message = state.hiddenNotice
+                    ?: "Tap the heart on any movie or series to save it here for quick access.",
+                icon = {
+                    Icon(
+                        Icons.Default.FavoriteBorder,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.secondary,
+                        modifier = Modifier.size(40.dp),
+                    )
+                },
+                modifier = Modifier.padding(contentPadding),
+            )
             state.favorites.isEmpty() -> EmptyState(
                 title = "Your list is empty",
                 message = "Tap the heart on any movie or series to save it here for quick access.",
@@ -67,6 +83,14 @@ fun MyListScreen(
                 modifier = Modifier.padding(contentPadding),
             )
             else -> Column(Modifier.fillMaxSize().padding(contentPadding)) {
+                state.hiddenNotice?.let { notice ->
+                    Text(
+                        text = notice,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
+                    )
+                }
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()

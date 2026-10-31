@@ -48,6 +48,22 @@ data class FavoritePost(
      * Subtitled chip the viewer saw when they saved it.
      */
     val subtitled: Boolean? = null,
+    /**
+     * `posts.is_18_plus` — stored, because a saved row is the one place this app renders a catalog
+     * row it cannot re-ask about in the same frame. Null means the server never told us, which on
+     * today's public edge is *always*: the flag is not in `post_brief` or `post_detail`, and the
+     * un-redacted `full` view is switched on per server instance, never per request
+     * (`Fast_Fetch/viewer.py:3109`/`:3465`). So this column is the strict half of the rule and
+     * [checkedAt] plus `unavailable_works` is the half that actually fires. Null is not false: an
+     * older row must keep the listing it had rather than be stamped with a fact nobody sent.
+     */
+    val is18Plus: Boolean? = null,
+    /**
+     * Wall-clock millis of the last time the server answered about this id — served or refused,
+     * either is an answer. Null means "never asked by this build", which makes the row the first
+     * candidate for a revalidation pass rather than the last.
+     */
+    val checkedAt: Long? = null,
 ) {
     /** True when this row CAN be named on the sync surface — not "true when it should be". */
     val syncable: Boolean get() = !workRef.isNullOrBlank()
@@ -63,6 +79,7 @@ data class FavoritePost(
         workRef = workRef,
         isAnimated = isAnimated,
         subtitled = subtitled,
+        is18Plus = is18Plus,
     )
 
     companion object {
@@ -77,6 +94,7 @@ data class FavoritePost(
             workRef = post.workRef,
             isAnimated = post.isAnimated,
             subtitled = post.subtitled,
+            is18Plus = post.is18Plus,
         )
 
         fun fromPostDetail(detail: PostDetail): FavoritePost = FavoritePost(
@@ -89,6 +107,7 @@ data class FavoritePost(
             imdbRating = detail.imdbRating,
             workRef = detail.workRef,
             isAnimated = detail.isAnimated,
+            is18Plus = detail.is18Plus,
         )
     }
 }
