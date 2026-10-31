@@ -238,6 +238,54 @@ def action_handlers_defined(js, map_name):
     return used, declared
 
 
+#: An interpolation whose value comes from a call — `${num(p.id)}`, `${raw(…)}`.
+#: Only the *leading* callee is read. `${p.id}` is a property lookup and is none of
+#: this detector's business, and a call that is not first in the interpolation
+#: (`${a ? f(x) : g(y)}`) is also not read; this guard refuses the shape these pages
+#: actually use to build a fragment, and does not claim to be an interpreter.
+LEADING_INTERPOLATED_CALL = re.compile(r"\$\{([A-Za-z_$][\w$]*)\(")
+
+#: Names the JS environment provides before any page writes one.
+JS_GLOBALS = frozenset({
+    "String", "Number", "Boolean", "Array", "Object", "Math", "Date", "JSON",
+    "RegExp", "Map", "Set", "Promise", "Symbol", "Error", "encodeURIComponent",
+    "decodeURIComponent", "parseInt", "parseFloat", "isNaN", "fetch", "alert",
+    "setTimeout", "setInterval", "clearTimeout", "clearInterval", "structuredClone",
+})
+
+
+def defined_functions(js):
+    """Every name this script binds as a function, by any of the three spellings.
+
+    Deliberately presence-based rather than scope-based: `renderStats()` declares its
+    own local `num` that means something different from the core's, and a text scan
+    cannot tell those apart. That is the accepted weakness — this guard catches the
+    name that exists *nowhere*, which is the typo that ships a broken row.
+    """
+    return (set(re.findall(r"function\s+([A-Za-z_$][\w$]*)\s*\(", js))
+            | set(re.findall(r"(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=", js)))
+
+
+def undefined_interpolated_calls(js):
+    """A `${fn(…)}` in this page whose `fn` this page never defines.
+
+    This exists because the escaping pass wrote JavaScript that no test on any host
+    executes. `num()` inside `DASHBOARD_HTML` is the whole reason a playlist link
+    survives its own interpolation: if the name is misspelled or the core stops
+    shipping it, every row loses its button, and all seventeen Python tests over that
+    page still pass, because no Python test runs a browser.
+    """
+    defined = defined_functions(js)
+    findings = []
+    for match in LEADING_INTERPOLATED_CALL.finditer(js):
+        name = match.group(1)
+        if name in defined or name in JS_GLOBALS:
+            continue
+        findings.append((line_of(js, match.start()),
+                         js[match.start():match.start() + 60].split("\n")[0].strip()))
+    return findings
+
+
 class EscapeGuardTests(unittest.TestCase):
     """The refusal itself."""
 
@@ -334,6 +382,39 @@ class EscapeGuardTests(unittest.TestCase):
                 self.assertIn("${", match.group(0),
                               "a data attribute that is not an interpolation")
 
+    def test_every_function_an_interpolation_calls_is_defined_on_the_same_page(self):
+        """No page may call a helper it does not ship.
+
+        Written the day the escaping pass went in, because that pass was the first
+        change to this JavaScript that every one of our tests could pass while the
+        page was broken. `num()` is now inside the playlist anchor, the probe button
+        and the heal button; delete its definition or misspell it and each row loses
+        its VLC link, and no Python test notices, because no Python test runs a
+        browser. The runner is the only machine here that executes this file, and it
+        executes it as text — which is the honest description of what is being
+        claimed: not "the page works", but "no call in it names nothing".
+        """
+        offenders = self.code_findings(undefined_interpolated_calls)
+        self.assertEqual([], offenders,
+                          "an interpolation calls a function this page never "
+                          "defines:\n" + "\n".join(offenders))
+
+    def test_the_undefined_call_detector_has_something_to_look_at(self):
+        """Positive control for the case above: the real pages contain interpolated
+        calls, so a detector that matched nothing would report green blindness."""
+        seen = set()
+        for name in PAGES:
+            js = self.js(name)
+            called = {match.group(1)
+                      for match in LEADING_INTERPOLATED_CALL.finditer(js)}
+            self.assertEqual(set(), called - defined_functions(js) - JS_GLOBALS,
+                             f"{name}: the control's universe disagrees with the "
+                             "detector")
+            seen |= called
+        self.assertIn("num", seen,
+                      f"no `${{fn(…)}}` found in either page; scanned universe is "
+                      f"{sorted(seen)}")
+
 
 class DetectorControlsTests(unittest.TestCase):
     """The two controls that make a scan mean something.
@@ -359,6 +440,26 @@ class DetectorControlsTests(unittest.TestCase):
     def test_the_detector_passes_the_fixed_form(self):
         self.assertEqual([], unescaped_markup_templates(self.FIXED_SINK))
         self.assertEqual([], interpolated_attributes(self.FIXED_HANDLER))
+
+    def test_a_call_of_an_undefined_helper_is_caught_and_a_defined_one_is_not(self):
+        """Controls for `undefined_interpolated_calls`, the newest detector.
+
+        The shape it exists for is exactly what the escaping pass produced: a page
+        that calls `num()` inside a template and defines `num()` somewhere else, or
+        nowhere. Both directions are asserted, because a name set built by a regex
+        that matches nothing reports every page as clean.
+        """
+        missing = 'html += esc`<a href="/api/m3u?id=${num(p.id)}">VLC</a>`;'
+        self.assertEqual(1, len(undefined_interpolated_calls(missing)),
+                         "the detector does not see a call of a name nothing defines")
+        for spelling in ("    const num = v => String(v);\n",
+                         "    function num(v) { return String(v); }\n"):
+            self.assertEqual([], undefined_interpolated_calls(spelling + missing),
+                             f"`{spelling.strip()}` is a real definition and was "
+                             "reported as missing")
+        self.assertEqual([], undefined_interpolated_calls(
+            'html += `${p.id} · ${encodeURIComponent(p.slug)} · ${String(x)}`;'),
+            "a property lookup or a JS global is not a missing helper")
 
     def test_prose_about_the_defect_is_not_the_defect(self):
         """A comment naming the pattern must not fail the build — the alternative is
