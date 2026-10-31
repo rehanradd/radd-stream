@@ -968,3 +968,86 @@ paragraph it also carried about the nine arm64-excluded Robolectric tests was NO
 green, so keeping the branch's duplicate would have put two versions of the same measurement in the
 tree. The one claim unique to the branch's copy — that this app contains no device identifier — is
 false against trunk and is corrected in `PhoneCredentialGuardTest`'s own header, not quietly dropped.)*
+
+### Session 34 — The decoder swap that would not have fixed the release, and the preflight that does (2026-11-01)
+
+The instruction arriving at 00:5x was: replace `Base64.getDecoder()` with
+`Base64.getMimeDecoder().decode(keystoreBase64.filter { !it.isWhitespace() })` at
+`App/app/build.gradle.kts:120`, because "the secret has newlines from browser copy-paste and the
+standard decoder crashes on whitespace". It was not landed, and the reason is measurable rather than
+a matter of taste.
+
+The failing release run `41233720264` (tag `v1.0.1` → `0a1894d`) died at step 10 in **8 seconds** —
+after step 3 (`Verify signing secrets are present`) and step 9 (`Unit tests gate the release`, 135 s)
+had both passed. Eight seconds is Gradle *configuration*, not signing: the app's own test step needed
+135 s with a warm cache and a full CI run is ~7 m, so no Kotlin had been read when it threw. Steps 11-14
+(including `Publish GitHub Release`) were skipped and `GET /releases` still returns `[]`.
+
+The proposed diagnosis was right about the file and wrong about the decoder. Measured on this host by
+q1 with a single JVM (`nice -n 19`), basic decoder vs MIME decoder:
+
+```
+clean secret                    -> basic OK      | mime OK
+wrapped at 76 columns (\n)      -> basic throws  | mime OK
+trailing newline                 -> basic throws  | mime OK
+space inside                     -> basic throws  | mime OK
+ONE CHAR SHORT (truncated)      -> basic OK      | mime OK       <-- both accept it
+ONE CHAR EXTRA (bad final group)-> basic "Last unit does not have enough valid bits"
+                               -> mime THROWS THE IDENTICAL ERROR <-- the swap changes nothing
+```
+
+Our error is the last line. The tolerant decoder does not hide it, so the swap could not have fixed
+the run — and it *does* silently accept the truncated case, which is the fifth row: a keystore missing
+its tail decodes to bytes that are still not a keystore, and if the build tolerated it the app would
+ship signed with an identity nobody can reproduce. A whitespace filter is the same weakening in
+another form: it makes a damaged secret look valid instead of telling the operator to re-paste it.
+
+What the run actually lacked was a sentence an operator could act on. So `signingConfigs` now refuses
+loudly, in this order, before anything is written: length is a multiple of four; the value contains
+only the base64 alphabet (the first offender is reported by index and code point); `KEY_ALIAS` and
+`KEY_PASSWORD` are present; then the strict decode; then the bytes must parse as a `JKS` or `PKCS12`
+keystore under the stored store password; then the configured alias must exist, must be a private-key
+entry, and must actually be unlocked by `KEY_PASSWORD`. Every message prints the **shape** of the
+credential — length, index, code point, decoded byte count — and never the credential, because a build
+log is read by more people than the secret is. `Base64.getDecoder()` stays strict.
+
+Ported to a runnable check against the real keystore (`/home/ubuntu/raddstream-release.jks`, 2,752
+bytes; `base64 -w 0` is 3,672 chars ending `==`):
+
+```
+correct secret                       PASS: 3672 chars -> 2752 bytes
+one EXTRA trailing char              REFUSE: 3673 chars, not a multiple of 4   <- our exact crash, as a sentence
+one char SHORT                       REFUSE: 3671 chars, not a multiple of 4   <- the strict decoder ACCEPTS this; the preflight catches it
+76-column wrapped                    REFUSE: non-base64 char at index 76 of 3720 (0xa)
+trailing newline                     REFUSE: 3673 chars, not a multiple of 4
+space pasted inside                  REFUSE: non-base64 char at index 100 of 3672 (0x20)
+```
+
+The fourth row is the one that was not known before this change: q1's probe shows the *strict* decoder
+accepts a truncated secret, so the preflight is not merely a nicer message — it refuses a case the old
+line would have written to disk.
+
+`KeystorePreflightGuardTest` pins all of it from the test sources: the strict decoder present,
+`getMimeDecoder` absent in any form, no whitespace filter, the structure checks ordered *before* the
+decode (a check after the throw cannot fire), the integrity probes before the file is handed to the
+signing config, no inline re-decode at `writeBytes`, and no string template that expands a secret
+value — including the `${name}` form, which a `$name`-only scan would have missed while looking safe.
+Its control test feeds the detector the block this replaced, so a guard that has gone blind fails.
+
+Unverified, and honestly so: **no Gradle was run** (load1 measured 4.0-5.9 against the owner's 0.5
+build line, and the service cgroup read 1,523 MB against the 1,200 MB halt), so the block has never
+been executed by a JVM here. The structural half was verified by porting it and running the port; the
+`KeyStore.getInstance` half cannot be exercised on this box without reading a credential value, which
+is refused — it will be exercised by the next release run, which is the only place it matters. If the
+hosted runner reports a configuration-time compile error in this block, the likely suspects are the
+local `fun refuse(...)` inside the DSL lambda and the `firstNotNullOfOrNull` chain, and the fix belongs
+in this file, not in a relaxed decoder.
+
+The owner's remedy is unchanged and is still the only thing that can make a release: re-export with
+`base64 -w 0 <keystore-file>` and paste the terminal output **straight** into
+Settings → Secrets and variables → Actions, replacing the stored value — no file, editor or chat
+message in between, which is where a single-line string gains newlines or loses its `==`. Then
+`workflow_dispatch` against `v1.0.1` is enough; `release.yml:34` accepts it, so **no new tag is
+required** and none will be cut by an agent. Both `v1.0.0` (`6a441ec`, predating the adult fold) and
+`v1.0.1` (`0a1894d`, now three merges behind trunk) are stale as release points, which is a second
+reason the retag proposed at the start of this session was refused.
