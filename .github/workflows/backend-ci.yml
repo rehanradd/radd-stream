@@ -370,3 +370,16 @@ jobs:
       # it found no `canonical_key`. Offline — temp DBs, no socket, no network, no production read.
       - name: 🧪 test_coins_engine.py
         run: python3 -S Fast_Fetch/test_coins_engine.py
+
+      # The escaping law, as a scan (q2, 2026-11-01). Nine `innerHTML` sinks in
+      # `DASHBOARD_HTML` took a caller's string straight into markup; they are fixed, and a fix
+      # in a 1,700-line f-string page is worth exactly as much as the next author remembers.
+      # So this suite refuses the SHAPE rather than the instance: an interpolation reaching HTML
+      # unescaped, an `on*="…${…}"` attribute (entity decoding runs before the JS parser, so no
+      # escaper survives there), a second escaper beside the one `ESCAPE_CORE_JS` ships, a
+      # `data-action` with no handler in the map that owns it, and a `?token=` in code. Each
+      # detector is proved twice — against the real pre-fix line and against fixed code — because
+      # a guard whose regex matches nothing reports green forever. Offline: it parses two module
+      # constants with `ast`, no server, no catalog.
+      - name: 🧪 test_html_escape_guard.py
+        run: python3 -S Fast_Fetch/test_html_escape_guard.py

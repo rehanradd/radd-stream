@@ -3454,7 +3454,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
         """
         return "text/html" in str(self.headers.get("Accept", "") or "")
 
-    def _operator_login(self, path: str) -> bool:
+    def _operator_login(self, path: str, method: str) -> bool:
         """Serve sign-in and sign-out ahead of the gate. True when this handled it.
 
         These are the only operator-port paths that answer before a credential
@@ -3462,6 +3462,15 @@ class DashboardHandler(BaseHTTPRequestHandler):
         refuses a non-loopback peer before comparing anything), so opening them is
         not opening the port. Everything else on this socket still faces the gate
         first.
+
+        `method` decides which of three answers this is, and that is not decoration:
+        a `GET` on the login path is a person arriving at the door, so it renders the
+        form at 200 and spends no sign-in budget, while a `POST` is an *attempt*,
+        charged to the `auth` bucket before a byte of the body is read. A `GET` on the
+        logout path is refused with 405 rather than honoured, because the only thing
+        that reliably follows a `GET` nobody typed is a prefetcher, a link scanner or
+        an image loader — and a logout that a robot can trigger is a denial of service
+        against the one person who is allowed to use this panel.
 
         Reading the body is the mount's job and never the module's, so the form is
         parsed here — capped at the same ceiling every other admin body uses, since
@@ -3473,6 +3482,17 @@ class DashboardHandler(BaseHTTPRequestHandler):
         if self._through_public_proxy():
             # Not even a form: from the public edge, this surface does not exist.
             self.send_json({"success": False, "error": "not_found"}, status=404)
+            return True
+        peer = str(self.client_address[0] or "")
+        if method != "POST":
+            if path in admin_panel.LOGOUT_PATHS:
+                self.send_json({"success": False, "error": "method_not_allowed"},
+                               status=405,
+                               extra_headers=[("Allow", "POST"),
+                                              ("Cache-Control", "no-store")])
+                return True
+            answered, headers = admin_panel.login_page(path, peer_address=peer)
+            self.send_triple(answered, extra_headers=headers)
             return True
         if path in admin_panel.LOGIN_PATHS:
             # One budget per address for sign-in attempts, spent before a byte of
@@ -3489,7 +3509,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
             # sharing it. Sign-out is deliberately not charged: locking out a
             # logout buys an attacker nothing and punishes an operator who is
             # already authenticated.
-            verdict = redact.limiter.check("auth", str(self.client_address[0] or ""))
+            verdict = redact.limiter.check("auth", peer)
             self.rate_headers = redact.limiter.headers(verdict)
             if not verdict["allowed"]:
                 self.send_triple(
@@ -3509,12 +3529,10 @@ class DashboardHandler(BaseHTTPRequestHandler):
             body = admin_panel.parse_form_body(self.rfile.read(length)) if length else {}
         self.operator_cookie = ""
         if path in admin_panel.LOGOUT_PATHS:
-            answered, headers = admin_panel.logout_response(
-                path, peer_address=self.client_address[0])
+            answered, headers = admin_panel.logout_response(path, peer_address=peer)
         else:
             answered, headers = admin_panel.login_submit(
-                path, body, peer_address=self.client_address[0],
-                accepts_html=self._accepts_html())
+                path, body, peer_address=peer, accepts_html=self._accepts_html())
         self.send_triple(answered, extra_headers=headers)
         return True
 
@@ -3700,7 +3718,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
             # Sign-in is the one thing on this port that answers before a credential
             # exists, so it goes ahead of the gate; the gate then covers every other
             # path, including every read that used to be free on loopback.
-            if self._operator_login(path):
+            if self._operator_login(path, "GET"):
                 return
             if not self._operator_gate():
                 return
@@ -4115,7 +4133,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
         query_params = urllib.parse.parse_qs(parsed.query)
         full = bool(getattr(self.server, "operator", False))
         if full:
-            if self._operator_login(path):
+            if self._operator_login(path, "POST"):
                 return
             if not self._operator_gate():
                 return

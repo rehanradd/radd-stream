@@ -10,6 +10,7 @@ port is opened, no live database is touched.
     python3 -S Fast_Fetch/test_admin_panel.py
 """
 import ast
+import io
 import json
 import sqlite3
 import sys
@@ -1030,6 +1031,379 @@ class Fleet(Fixture):
         self.assertTrue(admin_panel.takes_body(admin_panel.RUN_SCRAPER_PATH))
         self.assertTrue(admin_panel.takes_body(admin_panel.SAVE_MONETIZATION_PATH))
         self.assertFalse(admin_panel.takes_body("/admin/api/links/1/evidence"))
+
+
+def _without_request_id(triple):
+    """A refusal with its per-call id removed, so two answers can be compared for
+    equality of *information* rather than equality of a random token."""
+    status, content_type, raw = triple
+    try:
+        body = json.loads(raw.decode("utf-8", "replace") or "{}")
+    except ValueError:
+        return status, content_type, raw
+    body.pop("request_id", None)
+    return status, content_type, json.dumps(body, sort_keys=True).encode("utf-8")
+
+
+class OperatorLogin(unittest.TestCase):
+    """The human credential, as plain calls: no port, no database, no catalog read.
+
+    These are the four answers the landing review asked for, written down as
+    refusals rather than as prose: what is stored (a salted KDF digest), what a failed
+    attempt costs (a rate bucket plus one derive, and nothing at all once locked),
+    whether the cookie reopened the token-free `/` on the operator port (it did not),
+    and where escaping is decided (the guard in `test_html_escape_guard.py`).
+
+    Behaviour tests mint a **pbkdf2** digest at the lowest round count
+    `parse_password_hash` accepts, because a suite that pays a full scrypt derive per
+    assertion is a suite that will get deleted for being slow. The one place the real
+    default parameters are proved is `test_the_stored_form_is_a_salted_kdf_digest`,
+    and it pays that cost once.
+    """
+
+    NAME = "rehan"
+    PASSWORD = "correct horse operator"
+    SESSION_KEY = "session-signing-key-for-tests"
+
+    def setUp(self):
+        admin_panel.reset_login_lockouts()
+        self.addCleanup(admin_panel.reset_login_lockouts)
+        self.hash = admin_panel.mint_password_hash(
+            self.PASSWORD, kdf="pbkdf2-sha256", rounds=1_000)
+        # Empty strings, not absent keys: every secret here is read as
+        # `os.environ.get(NAME) or ""`, so "" is genuinely "not configured" and the
+        # patch reverts cleanly whatever the surrounding suite left in the shell.
+        patcher = mock.patch.dict("os.environ", {
+            admin_panel.PASSWORD_HASH_ENV: self.hash,
+            admin_panel.ADMIN_USERNAME_ENV: self.NAME,
+            admin_panel.SESSION_SECRET_ENV: self.SESSION_KEY,
+            admin_panel.TOKEN_ENV: "",
+            admin_panel.PLAINTEXT_PASSWORD_ENV: "",
+        })
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def attempt(self, username=None, password=None, **kw):
+        kw.setdefault("peer_address", "127.0.0.1")
+        return admin_panel.authenticate(self.NAME if username is None else username,
+                                        self.PASSWORD if password is None else password,
+                                        **kw)
+
+    # ── (a) what is stored ────────────────────────────────────────────────── #
+
+    def test_the_stored_form_is_a_salted_kdf_digest_and_never_the_password(self):
+        spec = admin_panel.mint_password_hash(self.PASSWORD)
+        self.assertTrue(spec.startswith(f"$scrypt$N={admin_panel.SCRYPT_N},"
+                                        f"r={admin_panel.SCRYPT_R},"
+                                        f"p={admin_panel.SCRYPT_P}$"), spec)
+        self.assertNotIn(self.PASSWORD, spec)
+        parsed = admin_panel.parse_password_hash(spec)
+        self.assertEqual(admin_panel.SALT_BYTES, len(parsed["salt"]))
+        self.assertEqual(admin_panel.DK_BYTES, len(parsed["dk"]))
+        self.assertTrue(admin_panel.verify_password(self.PASSWORD, spec))
+        self.assertFalse(admin_panel.verify_password(self.PASSWORD + "x", spec))
+        # A fresh salt per mint, so two operators who choose the same password do not
+        # store the same string and nobody can pre-compute a table against this box.
+        other = admin_panel.mint_password_hash(self.PASSWORD)
+        self.assertNotEqual(spec, other)
+        self.assertTrue(admin_panel.verify_password(self.PASSWORD, other))
+
+    def test_a_deployer_who_sets_only_a_plaintext_password_gets_503_not_a_weaker_compare(self):
+        """`RADD_ADMIN_PASSWORD` is refused, never read. The fallback that "convenience"
+        configs expect — compare the env plaintext if no hash is set — is precisely the
+        unsalted compare the landing review said was a refusal, not a merge."""
+        with mock.patch.dict("os.environ", {admin_panel.PASSWORD_HASH_ENV: "",
+                                            admin_panel.PLAINTEXT_PASSWORD_ENV:
+                                                self.PASSWORD}):
+            self.assertEqual("", admin_panel.password_hash_spec())
+            ok, refusal, cookie = self.attempt()
+        self.assertFalse(ok)
+        self.assertEqual(503, refusal[0])
+        self.assertIsNone(cookie)
+
+    def test_the_password_hash_can_never_be_used_as_a_machine_credential(self):
+        """The stored digest is a legitimate session key and a legitimate environment
+        entry; if it also satisfied `Bearer`, one readable env dump would hand out a
+        token that works in every tool, and a rotated token would silently still work."""
+        self.assertEqual("", admin_panel.bearer_secret())
+        self.assertFalse(admin_panel.bearer_matches(f"Bearer {self.hash}"))
+        self.assertEqual(self.SESSION_KEY, admin_panel.session_signing_secret())
+        refusal = admin_panel._gate("127.0.0.1", f"Bearer {self.hash}")
+        self.assertIsNotNone(refusal)
+        self.assertEqual(401, _without_request_id(refusal)[0])
+
+    def test_parse_password_hash_refuses_every_malformed_shape_without_raising(self):
+        junk = ["", "   ", "hunter2", "$", "$$", "$scrypt$",
+                "$scrypt$N=16384,r=8,p=1$AAAA", "$pbkdf2-sha256$999$AAAA$BBBB",
+                "$md5$1$AAAAAAAA$BBBBBBBB", "$scrypt$N=3,r=8,p=1$AAAAAAAA$BBBBBBBB",
+                "$scrypt$N=0,r=8,p=1$AAAAAAAA$BBBBBBBB",
+                "$scrypt$N=16384,r=8,p=1$AAA$BBB", "$scrypt$r=8$AAAAAAAA$BBBBBBBB"]
+        for spec in junk:
+            with self.subTest(spec=spec):
+                self.assertIsNone(admin_panel.parse_password_hash(spec))
+                self.assertFalse(admin_panel.verify_password(self.PASSWORD, spec))
+
+    # ── (b) what a failed attempt costs ───────────────────────────────────── #
+
+    def test_a_wrong_password_a_wrong_username_and_no_password_answer_the_same_bytes(self):
+        answers = [_without_request_id(self.attempt(**case)[1]) for case in (
+            {"password": "not-it"}, {"username": "someone-else"},
+            {"password": ""}, {"username": "", "password": ""})]
+        self.assertEqual(401, answers[0][0])
+        self.assertEqual([answers[0]] * 4, answers,
+                         "a refusal now says which half was wrong")
+
+    def test_five_wrong_answers_lock_the_name_and_the_sixth_never_derives(self):
+        for index in range(admin_panel.LOGIN_FAIL_LIMIT):
+            ok, refusal, _cookie = self.attempt(password=f"wrong-{index}", now=1_000.0)
+            self.assertFalse(ok, index)
+            self.assertEqual(401, refusal[0], index)
+        with mock.patch.object(admin_panel, "verify_password",
+                               side_effect=AssertionError("derived while locked")):
+            ok, refusal, cookie = self.attempt(now=1_001.0)
+        self.assertFalse(ok)
+        self.assertEqual(429, refusal[0])
+        self.assertIsNone(cookie)
+        self.assertIn(b"Too many failed attempts", refusal[2])
+
+    def test_the_lockout_expires_by_itself_and_a_success_clears_the_counter(self):
+        for index in range(admin_panel.LOGIN_FAIL_LIMIT):
+            self.attempt(password=f"wrong-{index}", now=1_000.0)
+        self.assertEqual(429, self.attempt(now=1_001.0)[1][0])
+        later = 1_000.0 + admin_panel.LOGIN_LOCK_SECONDS + 1
+        self.assertEqual(401, self.attempt(password="still-wrong", now=later)[1][0],
+                         "waiting out the window left the name one keystroke from a "
+                         "second lockout")
+        ok, refusal, _cookie = self.attempt(now=later + 1)
+        self.assertTrue(ok)
+        for index in range(admin_panel.LOGIN_FAIL_LIMIT - 1):
+            self.assertEqual(401, self.attempt(password=f"again-{index}",
+                                               now=later + 2)[1][0], index)
+
+    def test_the_login_route_pays_into_a_rate_bucket_as_much_as_the_lockout_does(self):
+        """The lockout is per *username* and the bucket is per *address*: a caller
+        cycling through names must still be stopped. An unbucketed login route is a
+        brute-force door, and this is the door."""
+        for path in (admin_panel.LOGIN_PATH, admin_panel.OPERATOR_LOGIN_PATH,
+                     admin_panel.LOGOUT_PATH, admin_panel.OPERATOR_LOGOUT_PATH):
+            # `_bucket_for` reads no handler state, so it is asked directly rather
+            # than through a socket: the route must be named before any request is.
+            self.assertEqual("auth", viewer.DashboardHandler._bucket_for(
+                None, path, "POST"), path)
+            self.assertEqual("auth", viewer.DashboardHandler._bucket_for(
+                None, path, "GET"), path)
+        limit, window = redact.BUCKET_LIMITS["auth"]
+        self.assertLessEqual(limit, 10, limit)
+        self.assertLessEqual(window, 60.0, window)
+        limiter = redact.RateLimiter()
+        verdicts = [limiter.check("auth", "bucket-probe") for _ in range(limit)]
+        self.assertTrue(all(v["allowed"] for v in verdicts))
+        stalled = limiter.check("auth", "bucket-probe")
+        self.assertFalse(stalled["allowed"])
+        self.assertGreater(stalled["retry_after"], 0)
+        # A different address keeps its own budget: one operator's proxy must not
+        # lock out the next one on the strength of a shared counter.
+        self.assertTrue(limiter.check("auth", "other-probe")["allowed"])
+
+    def test_a_wrong_username_still_pays_for_the_derive(self):
+        """The point of running the KDF before the username compare is that nothing
+        about the name is measurable: bytes, headers and cost are the same answer for
+        "no such operator" and "wrong password". If anyone reorders this to save a
+        millisecond, this test says so."""
+        calls = []
+        real = admin_panel.verify_password
+
+        def counted(password, spec):
+            calls.append(password)
+            return real(password, spec)
+
+        with mock.patch.object(admin_panel, "verify_password", side_effect=counted):
+            self.assertEqual(401, self.attempt(username="nobody-here")[1][0])
+            self.assertEqual(401, self.attempt(password="not-it")[1][0])
+        self.assertEqual(2, len(calls), calls)
+        self.assertEqual([self.PASSWORD, "not-it"], calls,
+                         "one of these two attempts skipped the KDF, so the wall "
+                         "clock now distinguishes the name from the password")
+
+    # ── (c) the session, and the port it may not reopen ───────────────────── #
+
+    def test_the_session_cookie_carries_the_attributes_it_is_documented_with(self):
+        ok, _refusal, cookie = self.attempt()
+        self.assertTrue(ok)
+        self.assertIn(f"{admin_panel.OPERATOR_COOKIE}=", cookie)
+        for attribute in admin_panel.OPERATOR_COOKIE_ATTRS.split("; "):
+            self.assertIn(attribute, cookie, cookie)
+        self.assertIn(f"Max-Age={admin_panel.OPERATOR_SESSION_TTL}", cookie)
+        self.assertNotIn("Secure", cookie,
+                         "this deployment is plain HTTP; the mitigation is the proxy "
+                         "refusal in viewer.py, not a flag that would break the panel")
+        self.assertNotIn(self.PASSWORD, cookie)
+
+    def test_a_session_value_expires_and_a_forged_expiry_breaks_the_signature(self):
+        minted = admin_panel.mint_operator_session(self.SESSION_KEY, now=1_000.0)
+        self.assertTrue(admin_panel.operator_session_valid(minted, self.SESSION_KEY,
+                                                           now=1_000.0))
+        expiry, _, signature = minted.partition(".")
+        self.assertFalse(admin_panel.operator_session_valid(
+            minted, self.SESSION_KEY, now=1_000.0 + admin_panel.OPERATOR_SESSION_TTL + 1))
+        forged = f"{int(expiry) + 10_000}.{signature}"
+        self.assertFalse(admin_panel.operator_session_valid(forged, self.SESSION_KEY,
+                                                            now=1_000.0))
+        self.assertFalse(admin_panel.operator_session_valid(minted, "another-key",
+                                                            now=1_000.0))
+        self.assertFalse(admin_panel.operator_session_valid(minted, "", now=1_000.0))
+        for junk in ("", ".", "abc.def", "9999999999.", "x" * 4):
+            self.assertFalse(admin_panel.operator_session_valid(junk, self.SESSION_KEY,
+                                                                now=1_000.0), junk)
+
+    def test_the_operator_port_still_refuses_everything_without_a_credential(self):
+        """Gate (c). The measured defect was `/` on 8081 answering 200 with no token;
+        a cookie session must not have reopened it, and it did not: the gate is the
+        same call for every path on that port, and `/` has no exemption."""
+        refusal, minted = admin_panel.gate_operator_port("127.0.0.1")
+        self.assertIsNotNone(refusal)
+        self.assertEqual(401, _without_request_id(refusal)[0])
+        self.assertIsNone(minted)
+        html_refusal, _ = admin_panel.gate_operator_port("127.0.0.1", accepts_html=True)
+        self.assertEqual(401, html_refusal[0])
+        self.assertEqual(admin_panel.CONTENT_HTML, html_refusal[1])
+        self.assertIn(b'type="password"', html_refusal[2])
+        self.assertNotIn(b"admin/api", html_refusal[2],
+                         "the refusal page now lists what hides behind the gate")
+        self.assertEqual(401, _without_request_id(html_refusal)[0])
+
+    def test_a_signed_in_cookie_gates_the_port_and_a_remote_peer_never_gets_in(self):
+        ok, _refusal, cookie = self.attempt()
+        self.assertTrue(ok)
+        value = admin_panel.cookie_value(cookie, admin_panel.OPERATOR_COOKIE)
+        refusal, _minted = admin_panel.gate_operator_port(
+            "127.0.0.1", cookie=f"{admin_panel.OPERATOR_COOKIE}={value}")
+        self.assertIsNone(refusal)
+        for peer in ("10.0.0.9", "92.4.95.252", ""):
+            refusal, minted = admin_panel.gate_operator_port(
+                peer, cookie=f"{admin_panel.OPERATOR_COOKIE}={value}")
+            self.assertEqual(403, _without_request_id(refusal)[0], peer)
+            self.assertIsNone(minted, peer)
+
+    def test_a_bearer_request_is_handed_a_session_once_and_nothing_is_in_the_url(self):
+        """The existing machine credential keeps working and now also hands out the
+        cookie, so a tool that speaks `Bearer` never needs a URL credential either."""
+        with mock.patch.dict("os.environ", {admin_panel.TOKEN_ENV: TOKEN,
+                                            admin_panel.SESSION_SECRET_ENV: ""}):
+            refusal, cookie = admin_panel.gate_operator_port(
+                "127.0.0.1", authorization=f"Bearer {TOKEN}")
+            self.assertIsNone(refusal)
+            self.assertTrue(cookie, cookie)
+            value = admin_panel.cookie_value(cookie, admin_panel.OPERATOR_COOKIE)
+            self.assertTrue(admin_panel.operator_session_valid(value, TOKEN))
+            # The hash is not a token, so it must not take this branch either.
+            refusal, minted = admin_panel.gate_operator_port(
+                "127.0.0.1", authorization=f"Bearer {self.hash}")
+            self.assertEqual(401, _without_request_id(refusal)[0])
+            self.assertIsNone(minted)
+        page = admin_panel.login_form_page(admin_panel.LOGIN_PATH)
+        self.assertNotIn("?token=", page)
+        self.assertNotIn("&token=", page)
+        self.assertIn('method="post"', page)
+        self.assertIn(f'action="{admin_panel.LOGIN_PATH}"', page)
+
+    def test_logout_deletes_the_cookie_with_the_same_attributes_and_never_reuses_it(self):
+        ok, _refusal, cookie = self.attempt()
+        self.assertTrue(ok)
+        _triple, headers = admin_panel.logout_response(admin_panel.LOGOUT_PATH,
+                                                       peer_address="127.0.0.1")
+        set_cookie = dict(headers)["Set-Cookie"]
+        self.assertTrue(set_cookie.startswith(f"{admin_panel.OPERATOR_COOKIE}=; "))
+        self.assertIn("Max-Age=0", set_cookie)
+        self.assertTrue(set_cookie.endswith(admin_panel.OPERATOR_COOKIE_ATTRS))
+        self.assertEqual(dict(headers)["Location"], admin_panel.LOGIN_PATH)
+        self.assertFalse(admin_panel.operator_session_valid(
+            admin_panel.cookie_value(set_cookie, admin_panel.OPERATOR_COOKIE),
+            self.SESSION_KEY))
+        refusal, _minted = admin_panel.gate_operator_port("127.0.0.1", cookie=set_cookie)
+        self.assertEqual(401, _without_request_id(refusal)[0])
+
+    # ── the mount's own refusals ──────────────────────────────────────────── #
+
+    def test_the_login_page_is_reachable_without_a_credential_from_loopback_only(self):
+        triple, headers = admin_panel.login_page(admin_panel.LOGIN_PATH,
+                                                 peer_address="127.0.0.1")
+        self.assertEqual(200, triple[0])
+        self.assertIn("no-store", dict(headers)["Cache-Control"])
+        self.assertIn(b"<form", triple[2])
+        self.assertNotIn(self.PASSWORD, triple[2].decode("utf-8"))
+        triple, _headers = admin_panel.login_page(admin_panel.LOGIN_PATH,
+                                                  peer_address="203.0.113.7")
+        self.assertEqual(403, triple[0])
+        self.assertNotIn(b"<form", triple[2],
+                         "a remote caller was handed a login box to aim a tool at")
+
+    def test_a_login_body_with_any_extra_key_is_refused_before_it_is_checked(self):
+        for body in ({"username": self.NAME, "password": self.PASSWORD, "admin": True},
+                     {"username": self.NAME, "password": self.PASSWORD, "token": "x"},
+                     {"password": self.PASSWORD, "role": "owner"},
+                     "not-a-dict", None):
+            with self.subTest(body=body):
+                triple, headers = admin_panel.login_submit(
+                    admin_panel.LOGIN_PATH, body, peer_address="127.0.0.1")
+                self.assertEqual(400, triple[0], body)
+                self.assertIn("no-store", dict(headers)["Cache-Control"])
+
+    def test_a_half_filled_login_body_is_a_wrong_credential_not_a_bad_request(self):
+        """`{}` and `{"username": …}` carry no forbidden key, so they are answered as
+        an unsuccessful sign-in. Making them 400 would tell a prober which field names
+        the form accepts, and it would give an empty body a different shape than a
+        wrong one for no security reason."""
+        for body in ({}, {"username": self.NAME}, {"password": "x"}):
+            with self.subTest(body=body):
+                triple, _headers = admin_panel.login_submit(
+                    admin_panel.LOGIN_PATH, body, peer_address="127.0.0.1")
+                self.assertEqual(401, triple[0], body)
+
+    def test_a_failed_login_never_redirects_and_a_success_never_echoes_the_password(self):
+        triple, headers = admin_panel.login_submit(
+            admin_panel.LOGIN_PATH, {"username": self.NAME, "password": "not-it"},
+            peer_address="127.0.0.1")
+        self.assertEqual(401, triple[0])
+        self.assertNotIn("Location", dict(headers),
+                         "a redirect on a bad password is how a login page becomes an "
+                         "open redirect")
+        triple, headers = admin_panel.login_submit(
+            admin_panel.LOGIN_PATH, {"username": self.NAME, "password": self.PASSWORD},
+            peer_address="127.0.0.1")
+        self.assertEqual(303, triple[0])
+        self.assertEqual(admin_panel.LOGIN_TARGETS[admin_panel.LOGIN_PATH],
+                         dict(headers)["Location"])
+        self.assertIn("Set-Cookie", dict(headers))
+        for name, value in headers:
+            self.assertNotIn(self.PASSWORD, f"{name} {value}")
+        browser, _headers = admin_panel.login_submit(
+            admin_panel.LOGIN_PATH, {"username": self.NAME, "password": "late-wrong"},
+            peer_address="127.0.0.1", accepts_html=True)
+        self.assertEqual(401, browser[0])
+        self.assertEqual(admin_panel.CONTENT_HTML, browser[1])
+        self.assertIn(b"<form", browser[2])
+
+    def test_the_mint_cli_never_takes_the_password_as_an_argument(self):
+        """A secret in argv is readable by any process on the box through `/proc`, and
+        by `ps`, and by whatever collects it. So the argument is ignored on purpose and
+        this test mints from a pipe with a *different* value in argv."""
+        decoy = "value-that-must-never-be-the-secret"
+        printed = io.StringIO()
+        with mock.patch.object(sys, "stdin", io.StringIO(self.PASSWORD + "\n")), \
+                mock.patch.object(sys, "stdout", printed):
+            self.assertEqual(0, admin_panel.main(["hash-password", decoy]))
+        spec = printed.getvalue().strip()
+        self.assertTrue(admin_panel.verify_password(self.PASSWORD, spec), spec)
+        self.assertFalse(admin_panel.verify_password(decoy, spec),
+                         "the CLI read the password off argv")
+        for argv, secret in ((["hash-password"], "\n"),
+                             ([], self.PASSWORD + "\n"),
+                             (["--pbkdf2", "hash-password"], "")):
+            with mock.patch.object(sys, "stdin", io.StringIO(secret)), \
+                    mock.patch.object(sys, "stdout", io.StringIO()), \
+                    mock.patch.object(sys, "stderr", io.StringIO()):
+                self.assertEqual(2, admin_panel.main(argv), argv)
 
 
 if __name__ == "__main__":

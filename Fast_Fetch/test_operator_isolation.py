@@ -15,6 +15,7 @@ disturbs the live service.
 
     python3 -S Fast_Fetch/test_operator_isolation.py
 """
+import http.client
 import json
 import sqlite3
 import sys
@@ -304,6 +305,229 @@ class EveryRouteOnTheOperatorPortIsGated(TwoPortFixture):
         self.assertEqual(status, 200, raw[:160])
         status, _headers, raw = self.public_fetch("/api/v1/stats")
         self.assertEqual(status, 200, raw[:160])
+
+
+class SignInOverTheWire(TwoPortFixture):
+    """Username and password, asked of a real socket: what a browser actually does.
+
+    `OperatorLogin` in `test_admin_panel.py` already covers the credential as a
+    function. This class is the part only a socket can answer — that the form is
+    reachable before any credential exists, that the session it mints then opens the
+    dashboard the bearer token opens, that the door being open did not reopen the
+    token-free `/`, and that the two independent brakes (per-name lockout, per-address
+    bucket) both bite over the wire.
+
+    A deliberate limitation is asserted rather than hidden: this session is a stateless
+    signed value, so signing out deletes the browser's copy and cannot invalidate a
+    copy somebody kept. See `test_logout_deletes_the_cookie_and_cannot_revoke_a_kept_one`.
+    """
+
+    NAME = "rehan"
+    PASSWORD = "socket-sign-in-password"
+    SESSION_KEY = "socket-session-key"
+
+    def setUp(self):
+        super().setUp()
+        admin_panel.reset_login_lockouts()
+        self.addCleanup(admin_panel.reset_login_lockouts)
+        # Both brakes are process-global and every request here comes from one
+        # loopback address, so a budget left over from the previous test would decide
+        # the next assertion. Each test gets a fresh limiter, and the real one comes
+        # back on cleanup.
+        fresh = mock.patch.object(redact, "limiter", redact.RateLimiter())
+        fresh.start()
+        self.addCleanup(fresh.stop)
+        spec = mock.patch.dict("os.environ", {
+            "RADD_ADMIN_TOKEN": TOKEN,
+            admin_panel.PASSWORD_HASH_ENV: admin_panel.mint_password_hash(
+                self.PASSWORD, kdf="pbkdf2-sha256", rounds=1_000),
+            admin_panel.ADMIN_USERNAME_ENV: self.NAME,
+            admin_panel.SESSION_SECRET_ENV: self.SESSION_KEY,
+            admin_panel.PLAINTEXT_PASSWORD_ENV: "",
+        })
+        spec.start()
+        self.addCleanup(spec.stop)
+
+    def post_form(self, path, form, headers=None):
+        """A real `<form method="post">` submission: urlencoded, not JSON."""
+        body = urllib.parse.urlencode(form).encode("utf-8")
+        request = urllib.request.Request(
+            self.operator_url + path, data=body, method="POST",
+            headers={"Content-Type": "application/x-www-form-urlencoded",
+                     **(headers or {})})
+        try:
+            with urllib.request.urlopen(request, timeout=10) as response:
+                return response.status, dict(response.headers), response.read()
+        except urllib.error.HTTPError as error:
+            return error.code, dict(error.headers), error.read()
+
+    def signed_in_cookie(self):
+        status, headers, raw = self.post_form(
+            admin_panel.LOGIN_PATH, {"username": self.NAME,
+                                     "password": self.PASSWORD})
+        self.assertEqual(status, 303, raw[:200])
+        value = admin_panel.cookie_value(headers.get("Set-Cookie", ""),
+                                         admin_panel.OPERATOR_COOKIE)
+        self.assertTrue(value, headers)
+        return value
+
+    def test_get_on_the_login_path_is_the_form_and_spends_no_sign_in_budget(self):
+        limit = redact.BUCKET_LIMITS["auth"][0]
+        for _ in range(3):
+            status, headers, raw = self.operator_fetch(admin_panel.LOGIN_PATH)
+            self.assertEqual(status, 200, raw[:200])
+            self.assertIn(b'type="password"', raw)
+            self.assertIn("no-store", headers.get("Cache-Control", ""))
+            self.assertNotIn(b"Ordinary Film", raw, "the door now shows the room")
+        self.assertEqual(limit, redact.limiter.peek("auth", "127.0.0.1")["remaining"],
+                         "a page view was charged as an attempt, so reloading the "
+                         "form locks a human out of their own panel")
+
+    def test_the_operator_login_path_serves_the_same_form_as_the_admin_one(self):
+        for path in (admin_panel.LOGIN_PATH, admin_panel.OPERATOR_LOGIN_PATH):
+            status, _headers, raw = self.operator_fetch(path)
+            self.assertEqual(status, 200, (path, raw[:160]))
+            self.assertIn(f'action="{path}"'.encode(), raw)
+
+    def test_a_get_on_the_logout_path_is_405_and_signs_nobody_out(self):
+        """A prefetcher, a link scanner or an image loader follows GETs nobody typed.
+        A logout it can reach is a denial of service against the one person allowed
+        here, so sign-out is POST and nothing else."""
+        value = self.signed_in_cookie()
+        cookie = {admin_panel.OPERATOR_COOKIE: value}
+        status, headers, _raw = self.operator_fetch(
+            admin_panel.LOGOUT_PATH, headers={"Cookie": f"{admin_panel.OPERATOR_COOKIE}={value}"})
+        self.assertEqual(status, 405, headers)
+        self.assertEqual("POST", headers.get("Allow"))
+        self.assertEqual(200, self.operator_fetch("/", headers={
+            "Cookie": f"{admin_panel.OPERATOR_COOKIE}={value}"})[0],
+            "the refused GET signed the operator out anyway")
+
+    def test_the_session_the_form_mints_opens_the_dashboard_a_stranger_cannot_see(self):
+        value = self.signed_in_cookie()
+        header = f"{admin_panel.OPERATOR_COOKIE}={value}"
+        status, headers, raw = self.operator_fetch("/", headers={"Cookie": header})
+        self.assertEqual(status, 200, raw[:200])
+        self.assertIn(b"<!DOCTYPE", raw[:300])
+        self.assertIn(header, headers.get("Set-Cookie", ""),
+                      "a proven bearer/session should not re-mint on every request")
+        self.assertEqual(401, self.operator_fetch("/")[0])
+        self.assertEqual(401, self.operator_fetch(
+            "/", headers={"Cookie": f"{admin_panel.OPERATOR_COOKIE}=9999999999.deadbeef"})[0])
+
+    def test_a_token_in_the_url_no_longer_opens_anything(self):
+        """The credential left the URL for good: browser history, the `Referer` of
+        every asset the page pulls, and the nginx access log all outlive a session,
+        and this box's log is world-readable to the `adm` group."""
+        for path in ("/", "/admin", "/api/data", "/api/v1/stats"):
+            status, _headers, raw = self.operator_fetch(f"{path}?token={TOKEN}")
+            self.assertEqual(status, 401, (path, raw[:160]))
+
+    def test_five_bad_passwords_lock_the_name_and_the_answer_says_locked_not_wrong(self):
+        for index in range(admin_panel.LOGIN_FAIL_LIMIT):
+            status, _headers, raw = self.post_form(
+                admin_panel.LOGIN_PATH, {"username": self.NAME,
+                                         "password": f"nope-{index}"})
+            self.assertEqual(status, 401, (index, raw[:160]))
+        status, headers, raw = self.post_form(
+            admin_panel.LOGIN_PATH, {"username": self.NAME, "password": "one more"})
+        self.assertEqual(status, 429, raw[:160])
+        self.assertIn(b"Too many failed attempts", raw)
+        self.assertIn("no-store", headers.get("Cache-Control", ""))
+
+    def test_the_address_bucket_refuses_the_eleventh_attempt_before_the_body_is_read(self):
+        """Two independent brakes. The lockout is per username, so a caller cycling
+        through names walks straight past it; the bucket is per address and stops the
+        one who never authenticates at all — including the memory-hard derive."""
+        limit = redact.BUCKET_LIMITS["auth"][0]
+        for _ in range(limit):
+            admin_panel.reset_login_lockouts()
+            status, headers, _raw = self.post_form(
+                admin_panel.LOGIN_PATH, {"username": self.NAME, "password": "wrong"})
+            self.assertEqual(status, 401, status)
+            self.assertIn("RateLimit-Limit", headers, headers)
+            self.assertIn("RateLimit-Remaining", headers)
+        admin_panel.reset_login_lockouts()
+        status, headers, raw = self.post_form(
+            admin_panel.LOGIN_PATH, {"username": self.NAME, "password": self.PASSWORD})
+        self.assertEqual(status, 429, raw[:200])
+        self.assertIn(b"sign-in attempts from this address", raw)
+        self.assertGreater(int(headers.get("Retry-After") or 0), 0, headers)
+
+    def test_a_json_login_body_is_refused_because_the_form_is_urlencoded(self):
+        """Pinned, not accidental: `parse_form_body` reads a urlencoded body, so JSON
+        keys are unknown keys and `_LOGIN_BODY_KEYS` refuses them. A browser posts the
+        form; a machine uses the bearer header. Nothing here accepts both shapes."""
+        status, _headers, raw = self.operator_fetch(
+            admin_panel.LOGIN_PATH, method="POST",
+            body={"username": self.NAME, "password": self.PASSWORD})
+        self.assertEqual(status, 400, raw[:200])
+
+    def test_logout_deletes_the_cookie_and_cannot_revoke_a_kept_one(self):
+        """The honest shape of a stateless session. Signing out answers 303 with an
+        expired cookie, which is what a browser needs; it cannot reach into a copy
+        somebody kept. What bounds that is the 8-hour TTL, `HttpOnly`, `SameSite=Strict`
+        and the fact that changing any configured secret rotates every session — there
+        is no session table to trust, and this file says so rather than testing a
+        revocation that does not exist."""
+        value = self.signed_in_cookie()
+        status, headers, raw = self.operator_fetch(
+            admin_panel.LOGOUT_PATH, method="POST", body={},
+            headers={"Cookie": f"{admin_panel.OPERATOR_COOKIE}={value}"})
+        self.assertEqual(status, 303, raw[:200])
+        set_cookie = headers.get("Set-Cookie", "")
+        self.assertIn("Max-Age=0", set_cookie)
+        self.assertTrue(set_cookie.endswith(admin_panel.OPERATOR_COOKIE_ATTRS))
+        self.assertEqual(admin_panel.LOGIN_PATH, headers.get("Location"))
+        self.assertEqual(200, self.operator_fetch("/", headers={
+            "Cookie": f"{admin_panel.OPERATOR_COOKIE}={value}"})[0],
+            "a documented limitation just changed shape: the kept value still works")
+
+    def test_the_login_surface_is_invisible_on_the_public_port(self):
+        for method in ("GET", "POST"):
+            for path in (admin_panel.LOGIN_PATH, admin_panel.OPERATOR_LOGIN_PATH,
+                         admin_panel.LOGOUT_PATH, admin_panel.OPERATOR_LOGOUT_PATH):
+                status, _headers, raw = self.public_fetch(path, method=method,
+                                                          body={} if method == "POST" else None)
+                self.assertEqual(status, 404, (method, path, raw[:160]))
+                self.assertNotIn(b"password", raw.lower(), (method, path))
+
+    def test_a_proxy_marker_on_the_operator_port_is_404_rather_than_a_form(self):
+        """Measured 2026-10-31: the live nginx had `location /operator/ { proxy_pass
+        http://127.0.0.1:8081/; }`, which would make a login box reachable from the
+        internet. The owner's fix is to delete that block; this is the code-side wall
+        that keeps the sentence true until it is, and the door is refused like the
+        room — not found, so a scanner learns nothing."""
+        for marker in ("X-Forwarded-For", "X-Real-IP", "X-Forwarded-Proto"):
+            for path in (admin_panel.LOGIN_PATH, admin_panel.LOGOUT_PATH, "/"):
+                status, _headers, raw = self.operator_fetch(
+                    path, headers={marker: "203.0.113.7"})
+                self.assertEqual(status, 404, (marker, path, raw[:160]))
+                self.assertNotIn(b'type="password"', raw)
+            # The opt-out is real, and it is the operator's choice, not ours.
+            with mock.patch.dict("os.environ", {"RADD_TRUST_EDGE_PROXY": "1"}):
+                self.assertEqual(200, self.operator_fetch(
+                    admin_panel.LOGIN_PATH,
+                    headers={marker: "203.0.113.7"})[0])
+
+    def test_a_malformed_id_answers_400_and_the_connection_is_not_dropped(self):
+        """The class of bug `/api/m3u` was fixed for on trunk: a bare `int()` on a
+        query value raised out of `do_GET`, and a handler that raises mid-request
+        closes the socket with no status and no body, which looks to the operator
+        exactly like the server having died. `?id=abc` is the caller's error, so it is
+        answered as one. Only malformed ids are sent: a well-formed one would probe
+        upstreams, and nothing here reaches the network."""
+        for path in ("/api/health-check?id=abc", "/api/heal?id=abc", "/api/m3u?id=abc",
+                     "/api/health-check?id=1%2C2", "/api/heal?id="):
+            try:
+                status, _headers, raw = self.operator_fetch(
+                    path, headers={"Authorization": f"Bearer {TOKEN}"})
+            except (http.client.RemoteDisconnected, ConnectionResetError,
+                    urllib.error.URLError) as dropped:
+                self.fail(f"{path} dropped the connection instead of answering: "
+                          f"{type(dropped).__name__}: {dropped}")
+            self.assertEqual(status, 400, (path, raw[:200]))
+            self.assertEqual({"error": "Invalid post ID"}, json.loads(raw), path)
 
 
 class AccountRoundTrip(TwoPortFixture):

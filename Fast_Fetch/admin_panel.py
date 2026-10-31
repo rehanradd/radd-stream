@@ -862,16 +862,19 @@ def authenticate(username, password, *, peer_address=None, now=None):
     3. **locked out third** — while a name is locked the password is not derived at
        all. Verifying anyway would make the lockout a speed bump, and on a single
        vCPU it would also let a locked-out attacker keep paying for scrypt.
-    4. **then the username**, constant-time, and only then one KDF run against the
-       stored digest.
+    4. **then both halves of the credential**, and the password is derived before the
+       name is compared, so a wrong username costs exactly what a wrong password
+       costs. The order of the two *compares* is irrelevant to the outcome; the order
+       here is what makes the cost unmeasurable.
 
-    A wrong password and a wrong username return the *same bytes* (401, same body,
-    same headers), which is what the isolation suites can assert. What is not
-    identical is the cost: a wrong username stops before the KDF, so the wall clock
-    distinguishes "no such operator" from "wrong password". That is accepted on
-    purpose and stated here rather than hidden, because the username is
-    configuration this project publishes (`DEFAULT_ADMIN_USERNAME`), while deriving
-    on every guess would double the CPU an attacker can buy per request.
+    A wrong password, a wrong username, an empty password and a missing one all
+    return the *same bytes* (401, same body, same headers), which is what the
+    isolation suites assert. They also cost the *same work*: the KDF runs before the
+    username is compared, so neither the answer nor the wall clock distinguishes "no
+    such operator" from "wrong password". That ordering is not an accident and
+    `test_a_wrong_username_still_pays_for_the_derive` keeps it one — the cheaper
+    arrangement (compare the name, then derive) is the one that leaks, because this
+    deployment publishes its username.
 
     `set_cookie` is returned ONLY on success. `peer_address=None` means "the caller
     already proved the peer", which is what the mount does; a test that wants the
@@ -3044,6 +3047,7 @@ def _config_card(monetization):
                 f' <span>{_e(field.get("label", key))}</span></label>')
 
     def text_row(key, label, placeholder=""):
+        field = fields.get(key) or {"label": label, "value": ""}
         # The key travels in a `data-key` attribute and the handler reads it back,
         # rather than being written into the `onclick` source: an attribute that
         # holds a script has two parsers, and `_e` only satisfies the first one.

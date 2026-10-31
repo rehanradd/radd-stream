@@ -1126,9 +1126,10 @@ BUCKET_LIMITS = {
     # Every other bucket throttles something whose failure is an inconvenience;
     # this one throttles the route whose failure is someone else getting in. A
     # password check here runs a memory-hard KDF (`admin_panel.verify_password`) —
-    # measured 2026-11-01 at 1,013 ms for one derive on this single-vCPU box at
-    # `nice -n 19`, i.e. the ten permitted attempts a minute are ten seconds of CPU
-    # nobody may buy, and an unbounded login route is an outage with a form on it.
+    # measured twice on this single-vCPU box at `nice -n 19`, and the spread is the
+    # load: 419 ms per derive at load1 4.27, 1,013 ms at load1 ~9. So the ten
+    # permitted attempts a minute are four to ten seconds of CPU nobody may buy, and
+    # an unbounded login route is an outage with a form on it.
     # The per-username lockout in `admin_panel` caps how *close* any one name can be
     # guessed; this caps how much anybody may spend trying.
     "auth": (10, 60.0),      # /admin/login, /operator/login
