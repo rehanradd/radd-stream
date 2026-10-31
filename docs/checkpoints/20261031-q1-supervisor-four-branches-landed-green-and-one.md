@@ -122,3 +122,43 @@ survive is a stored **43-char** key passing through `quickLoginKey()` unchanged)
 production behaviour changed, and the four landings are repository state — not deployment state. The
 Hum TV crawl number in the checkpoint is a *plan with a measured price*, not a result: the importer
 exists, is import-clean, and is byte-identical to `296ac5e`; the catalog it will write does not exist yet.
+
+## 7 — the follow-up pass (same day, ~20:4x host): §5's "still open" list dispositioned
+
+§5 is superseded by this section for three of its four items. What happened after the four landings,
+each judged by a measurement rather than by the branch's name:
+
+| Item as §5 left it | Measured outcome | State |
+|---|---|---|
+| `e6482e9` "green and reviewed, still open" | cherry-picked to `q1-edge-scenarios-20261031` (`89a1597` → `8137b16`), **hosted RED on exactly one step** | split — see below |
+| `2be6a86` q3-launch-reads | `git cherry` said `+` (un-landed), which was **wrong**; the files are byte-identical to trunk (`git diff --numstat` empty) and its CI step is already present | closed as absorbed, **not** merged |
+| `7c36cec` q3-engagement-ladder | same test: absorbed; merging it would have resurrected the deliberately retired `App/.github/workflows/*.yml` | closed as absorbed |
+| `36a47a2` q5-adultkey-prod-gap | merged as `ae8f86d`, both workflows green at that head, two shared-index conflicts resolved by keeping every entry | **landed** |
+
+**The split is the part worth keeping.** `8137b16` failed 5 of 22 cases in
+`🧪 test_public_edge_scenarios.py` — and *not* because of the fix it carried. Root cause: trunk
+`9859b8a` made **every** route on the operator port bearer-gated ("the loopback interface is not a
+credential"), so four of the five fail on `401 != 404/200` before any route-level answer is reached,
+and the fifth is a `KeyError: 'success'` on the 401 body. The fifth is different in kind:
+`test_b_a_legacy_twin_is_closed_by_the_documented_repair` asserts a **key**-level
+`redact.link_is_adult`, and trunk's is **per-row** — the 442 mixed-flag `canonical_key` hole that
+root `AGENTS.md` still documents as open. So I did not merge the fix behind a red suite and I did not
+weaken the suite: I cherry-picked the 9-line `/api/m3u` guard alone onto trunk as
+`q1-m3u-400-20261031` = `5cde741` (`Fast_Fetch/viewer.py`, one file, +9/−1), gated it hosted — 35
+`🧪` steps, job `124580818635` all green, zero non-green steps — landed it to `master` and `main`,
+and re-measured **both trunk runs at the new head**: `41216445749` (master) and `41216459743` (main)
+both `completed / success`. The failure list went to q2 verbatim, with the policy attached: fix the
+transport, do not soften the adult assertion, and either gate case 5 on the repair existing or move it
+to what trunk enforces today. Also re-flagged for that lane: `/api/health-check` still does the same
+bare `int(query_params.get("id", [0])[0])` the m3u route just stopped doing.
+
+**Two traps this pass re-confirmed.** (a) A `check-run` id is **not** a workflow-run id —
+`/actions/runs/124580818635/jobs` answers 404, and the run is `41216095937`, read out of the
+check-run's `details_url`. Query the jobs of the *run*. (b) A one-file `Fast_Fetch/**` push answers
+exactly **1** check-run for the branch, because `ci.yml` filters on `App/**` — that is the filter, not
+a missing gate; `/actions/runs?branch=<b>` is where you see the other workflow's history.
+
+**What this section does not claim.** Production is untouched — `radd-stream.service` was not
+restarted, so the live process still predates this fix; `8137b16` stays red and unlanded; `v1.0.0` is
+still not tagged; no Gradle, no crawl, no production read ran here (load 3.4–7.0 all pass), and the
+only local execution was the markdown guard.
