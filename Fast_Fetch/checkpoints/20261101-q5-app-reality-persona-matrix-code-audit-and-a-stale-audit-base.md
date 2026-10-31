@@ -92,6 +92,30 @@ to on third-party hosters over plain HTTP. The supportable claim is that cross-s
   enabled symlink), then `limit_req_status 429` — **owner action, it touches nginx on a live host.**
 * The first device pass: the debug APK from a green hosted run; no tag, no signing decision required.
 
+## Addendum — CI-1 re-issued at trunk
+
+`701b344` on branch `q5-ci1-money-keys-on-trunk`, cut directly from `7b7f040` in a detached worktree
+(`git worktree add -d /tmp/q5_ci1_rebase 7b7f040`), so it lands without a rebase: three `🧪` steps
+appended after `test_coins_engine.py` (step 36) and the same three names pruned from `UNREGISTERED`.
+Gate measured **39** steps there; `nice -n 19 python3 -S Fast_Fetch/test_docs_invariants.py` →
+Ran 22 tests, **OK**. The stale "35 of the 86" comment is deleted rather than re-numbered to 39.
+`3163d76`/`f01f99a` on `q5-register-money-keys` remain the branch history; **`701b344` is the one to
+land.** Not duplicated: `test_coins_engine.py` gates the wallet surface, `test_accounts_api.py` adds
+the cross-hand `viewer.request_is_vip` proof (`:423-437`).
+
+## Addendum — two claims of mine that trunk corrected, logged because the reports are the deliverable
+
+* "No coin/reward endpoint exists" — false on trunk. `/api/v2/account/coins` (`accounts_api.py:607`),
+  `/coins/history:631`, `/coins/caps:645`, `POST /coins/earn:809`, `/coins/redeem:841` are live and
+  gated. What is true is the client half: none of the 13 `RaddStreamApi.kt` routes calls them.
+* My AD-1 ticket asked for a server-verified reward path before any client reward call. Trunk already
+  does better than the ticket: `_REFUSED_EARN` (`:145-153`) returns a 403 for `rewarded_ad` and
+  `watch_time` because "no ad network calls *this* server back" and a stream is a redirect the server
+  never observes, and `engagement.SERVER_SOURCES`/`grant_coins:712` make a client claim mint nothing.
+  AD-1 is therefore now a *guard* ticket — a rewarded credit may leave `_REFUSED_EARN` only in the same
+  change that adds a signature-verified network callback, and never by relaying one under
+  `source="server"`, "a lie in the one column whose whole job is who vouched" (`:57-60`).
+
 ## Not done
 
 The 16 state-shaped `INVARIANTS` pin conversions Q1 assigned are still open and now sit behind this
