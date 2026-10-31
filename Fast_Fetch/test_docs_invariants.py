@@ -88,6 +88,8 @@ INVARIANTS = [
      "That is fixed here, not by adding another `WHERE` clause"),
     ("inherit_key_adult reconciles MAX(is_18_plus)", ROOT_AGENTS,
      "`fast_fetch.inherit_key_adult()` reconciles `MAX(is_18_plus)` across every row sharing the key"),
+    ("merge-time fold is the cross-key reconciliation", ROOT_AGENTS,
+     "merge_catalogs.reconcile_adult_on_merge() folds a work's flagged row onto its siblings only"),
     ("residual measure under the correct identity", ROOT_AGENTS,
      "2,600 keys carrying both a flagged and an unflagged row, 3,486 publicly served rows "
      "under those keys, and a 69,773-row re-key blast radius"),
