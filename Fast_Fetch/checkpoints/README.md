@@ -5,6 +5,7 @@ Newest first. Each file is a session block moved verbatim out of `Fast_Fetch/CON
 Entries written to `CONTINUITY.md` by another lane *after* the rotation are not lost: the rebase onto
 trunk `4fe6f65` moved them here the same way, verbatim, with the trunk line range in the header.
 
+- 2026-10-31 — qoder1 supervisor pass `[Q1-GATE]`: three branches landed on measured hosted runs, the adult fold's 407-work safety property verified in code, the relay's payment-deleting defect refused then fixed, `q3-coins-engine` found empty and re-scoped — [`20261031-q1-supervisor-pass-three-landed-the-adult-gate-held.md`](20261031-q1-supervisor-pass-three-landed-the-adult-gate-held.md)
 - 2026-10-31 — q3 backend lane `[Q3-ONBOARD-PAY]`: the hardware-locked 3-day trial, the PBKDF2 phone+PIN link, and the merchant relay that can credit money — 83 tests, CI step 33 — [`20261031-q3-lane-zero-friction-onboarding-and-the-merchant-relay.md`](20261031-q3-lane-zero-friction-onboarding-and-the-merchant-relay.md)
 - 2026-10-30 — q2 `[Q2-DUB-COLLISION-CENSUS]`: the read-only query exists and is tested; the corpus numbers wait on the load hold — [`20261030-q2-dub-collision-census-the-query-exists-the-numbers-wait.md`](20261030-q2-dub-collision-census-the-query-exists-the-numbers-wait.md)
 - 2026-10-30 — q2 `[Q2-MB-CRAWL-20261030]`: the first real bounded MovieBox crawl (12 rows, 158 releases, 0 sources) — [`20261030-session-2026-10-30-q2-mb-crawl-the-first-real-bounded-crawl.md`](20261030-session-2026-10-30-q2-mb-crawl-the-first-real-bounded-crawl.md)
