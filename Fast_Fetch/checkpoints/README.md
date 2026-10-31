@@ -5,6 +5,7 @@ Newest first. Each file is a session block moved verbatim out of `Fast_Fetch/CON
 Entries written to `CONTINUITY.md` by another lane *after* the rotation are not lost: the rebase onto
 trunk `4fe6f65` moved them here the same way, verbatim, with the trunk line range in the header.
 
+- 2026-10-31 — q2 lane `[Q2-EDGE-HEALTHCHECK]`: `/api/health-check` answers a non-numeric id with 400, and the edge suite learns that the operator port now requires a bearer — 5 red cases fixed without weakening one assertion — [`20261031-q2-edge-the-operator-port-is-a-credential-and-hea.md`](20261031-q2-edge-the-operator-port-is-a-credential-and-hea.md)
 - 2026-10-31 — q5 backend lane `[Q5-ADULTKEY-PROD-GAP]`: the adult law is code-complete on trunk (`4a8c163`) and absent from the running service (`/opt/radd-stream` at `bf9e565`) — the re-measure commands, queued as owner actions — [`20261031-q5-adultkey-production-is-pre-law.md`](20261031-q5-adultkey-production-is-pre-law.md)
 - 2026-10-31 — q2 lane `[Q2-HUMTV-STATUS]`: the Hum TV importer exists and is import-clean; the live crawl and the census numbers stay queued on the load hold — [`20261031-q2-humtv-status-and-rotated-diet-notes.md`](20261031-q2-humtv-status-and-rotated-diet-notes.md)
 - 2026-10-31 — q5 backend lane `[Q5-ADULTKEY]`: the merge-time corroborated adult fold (dual identity, journalled and undoable) and the gate that now fails closed — [`20261031-q5-adultkey-merge-time-corroborated-fold.md`](20261031-q5-adultkey-merge-time-corroborated-fold.md)
