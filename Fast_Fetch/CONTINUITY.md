@@ -35,7 +35,7 @@
 9. `[Q2-HUMTV-STATUS]` — the Hum TV importer exists on trunk, is import-clean, and is byte-identical
    to `296ac5e`; the crawl is queued in "🕒" row 5. Evidence in that same file.
 10. **Launch readiness JOB A `[Q3-OPS-READS]` — LANDED as trunk `5bf6e59`, CI-green on both refs at
-    `d9d3615` (all 32 steps now), still not deployed** (`/opt/radd-stream` is behind trunk and the
+    `d9d3615` (all its steps), still not deployed** (`/opt/radd-stream` is behind trunk and the
     service has not been restarted — that is the owner's call). It is the entry that writes the
     boundary order — **loopback is the reachability boundary, the token is checked inside it,
     second** — into [`docs/ADMIN_PANEL_ACCESS.md`](../docs/ADMIN_PANEL_ACCESS.md), the panel's own
