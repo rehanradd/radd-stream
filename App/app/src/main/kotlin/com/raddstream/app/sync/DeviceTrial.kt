@@ -103,9 +103,10 @@ enum class LinkRefusal {
 object DeviceTrial {
 
     /**
-     * Domain separation for the device id. Public by design — it ships in the APK and protects
-     * nothing, exactly like [SyncContract.PHONE_KEY_NAMESPACE]. Its only job is to keep this
-     * hash from colliding with some other hash of the same three strings.
+     * Domain separation for the device id. Public by design — it ships in the APK and guards
+     * nothing on its own, and this app has already learned that once such a string is public it
+     * becomes an enumeration recipe if anything treats the value behind it as a secret. Its only
+     * job here is to keep this hash from colliding with some other hash of the same three strings.
      */
     const val DEVICE_ID_NAMESPACE = "device-trial/v1"
 
