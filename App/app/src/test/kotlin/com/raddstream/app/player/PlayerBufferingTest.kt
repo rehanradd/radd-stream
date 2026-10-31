@@ -94,6 +94,7 @@ class PlayerBufferingTest {
         )
 
         val service = File(SERVICE_PATH).readText()
+        val policy = loadControlBody(service)
         assertEquals(
             "setBufferDurationsMs is positional: a pair swapped here compiles and changes when " +
                 "the first frame appears",
@@ -103,16 +104,16 @@ class PlayerBufferingTest {
                 "BUFFER_FOR_PLAYBACK_MS",
                 "BUFFER_FOR_PLAYBACK_AFTER_REBUFFER_MS",
             ),
-            orderedOwners(service).map { it.groupValues[1] },
+            orderedOwners(policy).map { it.groupValues[1] },
         )
         assertTrue(
             "a load control that is built and never installed is a policy on a dead object",
-            Regex("""\.setLoadControl\(loadControl\(\)\)""").containsMatchIn(service),
+            Regex("""\.setLoadControl\(loadControl\(\)\)""").containsMatchIn(playerConstruction(service)),
         )
         assertTrue(
             "the time-over-size switch has to be the owner's value, not a second literal",
             Regex("""setPrioritizeTimeOverSizeThresholds\(PlayerBuffering\.PRIORITIZE_TIME_OVER_SIZE\)""")
-                .containsMatchIn(service),
+                .containsMatchIn(policy),
         )
     }
 
@@ -126,13 +127,7 @@ class PlayerBufferingTest {
      */
     @Test
     fun `the service sets the seek parameters on the player it just built`() {
-        val service = File(SERVICE_PATH).readText()
-        val built = service.substringAfter("ExoPlayer.Builder(this)").substringBefore("player = exo")
-        assertTrue(
-            "positive control: the builder block was still found — an empty slice would make " +
-                "every assertion below pass over nothing",
-            built.isNotBlank() && built.contains(".build()"),
-        )
+        val built = playerConstruction(File(SERVICE_PATH).readText())
         assertTrue(
             "a scrub must land on the nearest sync frame, not decode forward from the last one",
             built.contains("exo.setSeekParameters(SeekParameters.CLOSEST_SYNC)"),
@@ -238,6 +233,71 @@ class PlayerBufferingTest {
         )
     }
 
+    /**
+     * The slice helpers above are the thing that can lie, so they are the thing under test here.
+     * Each case is a service that has been rewritten around one marker: the scan must be refused,
+     * not left to score the leftovers. This is the failure that shipped a phantom guard once — the
+     * suite named `setLoadControl(instantStartLoadControl())` and `START_BUFFER_MS`, neither of
+     * which the owner ever had, and stayed green for as long as the real policy went unset — and an
+     * empty slice is how that looks from the inside: nothing to refuse, nothing to report.
+     */
+    @Test
+    fun `a scan whose subject moved is refused instead of scoring what is left`() {
+        val wired = "        val exo = ExoPlayer.Builder(this)\n" +
+            "            .setMediaSourceFactory(factory)\n" +
+            "            .setLoadControl(loadControl())\n" +
+            "            .build()\n" +
+            "        exo.addListener(playerListener)\n" +
+            "        player = exo\n" +
+            "    }\n\n" +
+            "    private fun loadControl(): DefaultLoadControl =\n" +
+            "        DefaultLoadControl.Builder()\n" +
+            "            .setBufferDurationsMs(PlayerBuffering.MIN_BUFFER_MS)\n" +
+            "            .build()\n\n" +
+            "    override fun onGetSession(info: MediaSession.ControllerInfo): MediaSession? = null"
+        assertTrue(
+            "positive control first: a subject that is really there is scored, never refused",
+            requireSlice(wired, "ExoPlayer.Builder(this)", "player = exo", ".build()")
+                .contains(".setLoadControl(loadControl())"),
+        )
+        assertTrue(
+            "and the policy slice is found where the owner puts it",
+            requireSlice(
+                wired,
+                "private fun loadControl(): DefaultLoadControl =",
+                "override fun onGetSession",
+                "DefaultLoadControl.Builder()",
+            ).contains("PlayerBuffering.MIN_BUFFER_MS"),
+        )
+
+        val renamedBuilder = wired.replace("ExoPlayer.Builder(this)", "newPlayerBuilder(this)")
+        assertTrue(
+            "an absent opening marker must be refused — handed the whole file, a scan would find the " +
+                "commented-out leftovers and call the policy wired",
+            refusal { requireSlice(renamedBuilder, "ExoPlayer.Builder(this)", "player = exo", ".build()") },
+        )
+        val movedAssignment = wired.replace("player = exo", "bind(exo)")
+        assertTrue(
+            "an absent closing marker is refused the same way, whatever survives in between",
+            refusal { requireSlice(movedAssignment, "ExoPlayer.Builder(this)", "player = exo", ".build()") },
+        )
+        val unbuilt = wired.replace("            .build()\n", "")
+        assertTrue(
+            "a slice that exists but is not the shape expected is refused, not read as a passing scan",
+            refusal { requireSlice(unbuilt, "ExoPlayer.Builder(this)", "player = exo", ".build()") },
+        )
+        val installedElsewhere = wired.replace(".setLoadControl(loadControl())", ".setTrackSelectionFactory(other())")
+        assertTrue(
+            "and the wiring itself is what the slice is for: with the builder block intact and the " +
+                "install gone, the slice is still scored — it is the assertion on its contents that " +
+                "refuses, so prove the contents are the difference",
+            requireSlice(installedElsewhere, "ExoPlayer.Builder(this)", "player = exo", ".build()")
+                .let { slice ->
+                    !slice.contains(".setLoadControl(loadControl())") && slice.contains(".build()")
+                },
+        )
+    }
+
     /** The four owner references inside one `setBufferDurationsMs` call, in the order they appear. */
     private fun orderedOwners(text: String): List<MatchResult> =
         Regex("""setBufferDurationsMs\(([^)]*)\)""").find(text)
@@ -247,6 +307,61 @@ class PlayerBufferingTest {
                 Regex("""PlayerBuffering\.(\w+)""").findAll(block).toList()
             }
             ?: emptyList()
+
+    /**
+     * The part of the service that builds the player and installs the policy on it. Every wiring
+     * assertion above reads this slice rather than the file, because the file is where a deleted
+     * line hides best: the value can stay in a comment, in an import, or in the other function, and
+     * a whole-file `contains` is satisfied by all three.
+     */
+    private fun playerConstruction(service: String): String = requireSlice(
+        service,
+        after = "ExoPlayer.Builder(this)",
+        before = "player = exo",
+        mustContain = ".build()",
+    )
+
+    /** The one function that turns the owner's numbers into a `DefaultLoadControl`. */
+    private fun loadControlBody(service: String): String = requireSlice(
+        service,
+        after = "private fun loadControl(): DefaultLoadControl =",
+        before = "override fun onGetSession",
+        mustContain = "DefaultLoadControl.Builder()",
+    )
+
+    /**
+     * The slice between two markers, refused when either marker is missing or the slice is not the
+     * shape expected. The marker check is the whole point: Kotlin's `substringAfter` hands back the
+     * *entire* string when its delimiter is absent, so a scan written with those calls keeps
+     * scoring a file whose subject it can no longer locate — and a leftover `.build()` somewhere
+     * else in that file makes the positive assertions pass while the code that was supposed to be
+     * there has been deleted. A guard that cannot notice its own subject vanishing is not a guard.
+     */
+    private fun requireSlice(text: String, after: String, before: String, mustContain: String): String {
+        val starts = text.indexOf(after)
+        val ends = if (starts >= 0) text.indexOf(before, startIndex = starts + after.length) else -1
+        assertTrue(
+            "the guard lost its subject: `$after` at $starts, `$before` at $ends. Refusing to score " +
+                "what is left, because an empty or whole-file slice makes every positive assertion " +
+                "a matter of luck and every negated one true by construction.",
+            starts >= 0 && ends > starts,
+        )
+        val slice = text.substring(starts + after.length, ends)
+        assertTrue(
+            "the slice is present but is not the thing this guard means (it lacks `$mustContain`): " +
+                slice.take(80).replace("\n", " "),
+            slice.contains(mustContain),
+        )
+        return slice
+    }
+
+    /** True when the block refused — the shape every control below reports as success. */
+    private fun refusal(block: () -> String): Boolean = try {
+        block()
+        false
+    } catch (expected: AssertionError) {
+        true
+    }
 
     private fun mainSources(): List<File> =
         File("src/main/kotlin").walkTopDown()
