@@ -47,6 +47,7 @@ Update this file after each independently verified milestone so work can resume 
 Session blocks moved verbatim to [`docs/checkpoints/`](checkpoints/README.md); nothing was deleted or reworded.
 The newest 14 are listed here; the complete index (all 54) is in `docs/checkpoints/README.md`.
 
+- [2026-10-31 09:05 — q4 App lane `[Q4-ONBOARD-GREEN]`: onboarding went hosted-green at `03e926b`, the favourites rescue is provably not self-contained, and both lines own Room version 7](checkpoints/20261031-0905-q4-onboarding-hosted-green-and-the-favourites-version-collision.md) — three run ids measured, one destructive-migration trap found by reading
 - [2026-10-30 22:55 — Release signing secrets active on GitHub, tag v1.0.0 triggered `[RELEASE-SIGNING-ACTIVE]`](checkpoints/20261030-2255-signing-keys-active-release-triggered.md) — release pipeline live
 - [2026-10-30 10:xx — q6 lane `[Q6-DOC-TRUTH]`: eleven false API-security statements corrected against code, the never-discovered `App/.github/workflows` copies deleted, and two findings that contradict the docs (reported, unfixed)](checkpoints/20261030-10xx-q6-lane-doc-truth-the-api-security-paragraph.md) — written straight into the archive per rule 4
 

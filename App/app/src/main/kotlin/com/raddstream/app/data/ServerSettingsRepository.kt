@@ -178,6 +178,63 @@ class ServerSettingsRepository @Inject constructor(
         }
     }
 
+    // ── The anonymous three-day trial ────────────────────────────────────────────
+    //
+    // Two numbers, not one: the seconds the SERVER said were left, and the instant this device
+    // heard it. Keeping the pair is what lets the countdown survive a wrong wall clock — see
+    // [com.raddstream.app.sync.DeviceTrial.secondsRemaining]. Storing `trial_expires_at` alone
+    // would make a phone whose clock is a day fast lose a day nobody took from it.
+
+    /** The trial's remaining seconds at the moment they were read; `0` means no trial recorded. */
+    val trialSecondsRemaining: Flow<Double> = dataStore.data.map { preferences ->
+        preferences[TRIAL_SECONDS_REMAINING_KEY] ?: 0.0
+    }
+
+    /** When this device read that answer, in epoch milliseconds. */
+    val trialRecordedAtMs: Flow<Long> = dataStore.data.map { preferences ->
+        preferences[TRIAL_RECORDED_AT_MS_KEY] ?: 0L
+    }
+
+    /**
+     * Record one trial answer. Both values move together, always: a countdown stored without its
+     * anchor would count down from whenever the anchor happened to be written.
+     */
+    suspend fun saveDeviceTrial(secondsRemaining: Double, recordedAtMs: Long) {
+        dataStore.edit { preferences ->
+            preferences[TRIAL_SECONDS_REMAINING_KEY] = secondsRemaining
+            preferences[TRIAL_RECORDED_AT_MS_KEY] = recordedAtMs
+        }
+    }
+
+    /**
+     * True while a key this app minted silently has never been shown to the viewer.
+     *
+     * The anonymous route hands the plaintext exactly once, at the launch when nobody was looking
+     * at a screen. Without this flag the app would have created an account whose only credential
+     * can never be read again — and the Account card's existing sentence ("the full key was shown
+     * once, when it was created") would be a lie about a key that was never shown at all. Cleared
+     * when the viewer presses "Done showing this key".
+     */
+    val trialKeyUnseen: Flow<Boolean> = dataStore.data.map { preferences ->
+        preferences[TRIAL_KEY_UNSEEN_KEY] ?: false
+    }
+
+    suspend fun saveTrialKeyUnseen(unseen: Boolean) {
+        dataStore.edit { preferences ->
+            if (unseen) preferences[TRIAL_KEY_UNSEEN_KEY] = true
+            else preferences.remove(TRIAL_KEY_UNSEEN_KEY)
+        }
+    }
+
+    /** Drop the trial state with the credential: a signed-out device has no clock to show. */
+    suspend fun clearDeviceTrial() {
+        dataStore.edit { preferences ->
+            preferences.remove(TRIAL_SECONDS_REMAINING_KEY)
+            preferences.remove(TRIAL_RECORDED_AT_MS_KEY)
+            preferences.remove(TRIAL_KEY_UNSEEN_KEY)
+        }
+    }
+
     // ── The operator's remote switches ──────────────────────────────────────────
     //
     // Mirrored into DataStore rather than sampled from the network in every screen: the last
@@ -510,6 +567,9 @@ class ServerSettingsRepository @Inject constructor(
         private val VIP_UNTIL_KEY = doublePreferencesKey("vip_until")
         private val VIP_PENDING_CLAIM_KEY = booleanPreferencesKey("vip_pending_claim")
         private val SYNC_KEY_KEY = stringPreferencesKey("sync_key")
+        private val TRIAL_SECONDS_REMAINING_KEY = doublePreferencesKey("trial_seconds_remaining")
+        private val TRIAL_RECORDED_AT_MS_KEY = longPreferencesKey("trial_recorded_at_ms")
+        private val TRIAL_KEY_UNSEEN_KEY = booleanPreferencesKey("trial_key_unseen")
         private val SEARCH_RECENTS_KEY = stringPreferencesKey("search_recents")
         private val IMAGE_QUALITY_KEY = stringPreferencesKey("image_quality")
         private val MOBILE_DATA_KEY = booleanPreferencesKey("mobile_data_allowed")

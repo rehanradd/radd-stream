@@ -14,8 +14,11 @@ import com.raddstream.app.repository.CatalogRepository
 import com.raddstream.app.share.LanShareRunner
 import com.raddstream.app.share.LanShareStatus
 import com.raddstream.app.sync.AccountMutation
+import com.raddstream.app.sync.DeviceTrial
+import com.raddstream.app.sync.LinkRefusal
 import com.raddstream.app.sync.Refusal
 import com.raddstream.app.sync.SyncAccountRepository
+import com.raddstream.app.sync.ProfileLinkFiled
 import com.raddstream.app.sync.SyncContract
 import com.raddstream.app.sync.SyncReport
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -118,9 +121,14 @@ data class SettingsUiState(
 /**
  * The account card's whole state, and the reason the card can stay honest.
  *
- * [revealedKey] is the only place a full key exists in UI state, it is filled by exactly one
- * code path (a key this server just minted), and it is never read back out of storage — so a
- * screen that is re-opened cannot show a credential that was only ever meant to be shown once.
+ * [revealedKey] is the only place a full key exists in UI state. It is filled by exactly two code
+ * paths — a key this screen's own button just minted, and a key the launch trial minted that this
+ * card has not shown yet — and both clear it on the same tap, so a credential is never kept on
+ * screen after the viewer said they had written it down. The second path is the one exception to
+ * "never read back out of storage", and it exists because the trial mints while no screen is open:
+ * without it the app would have created an account whose key nobody could ever see.
+ * [keyHint] is what the card falls back to: a partial preview, which is enough to tell two
+ * accounts apart and is not a usable key.
  * [keyHint] is what the card falls back to: a partial preview, which is enough to tell two
  * accounts apart and is not a usable key.
  */
@@ -133,7 +141,27 @@ data class AccountUiState(
     val message: String? = null,
     val messageIsError: Boolean = false,
     val lastReport: SyncReport? = null,
-)
+    /**
+     * Seconds left on the server's trial answer, or null when this install has never been granted
+     * one. Null and 0.0 are different statements — "nothing was ever given" versus "it ran out" —
+     * and the card must not confuse them, because the second one is a claim about a grant.
+     */
+    val trialSecondsLeft: Double? = null,
+    val showLinkForm: Boolean = false,
+    val linkName: String = "",
+    val linkPhone: String = "",
+    /** Lives only while the form is open, and is cleared the moment the call is made. */
+    val linkPin: String = "",
+    val isLinking: Boolean = false,
+    val linkMessage: String? = null,
+    val linkMessageIsError: Boolean = false,
+) {
+    /** Whole days to show, or null when there is no trial to count. */
+    val trialDays: Int? get() = trialSecondsLeft?.let { DeviceTrial.daysRemaining(it) }
+
+    /** True when a trial was granted here and has run out. */
+    val trialExpired: Boolean get() = trialSecondsLeft != null && trialSecondsLeft <= 0.0
+}
 
 @HiltViewModel
 class SettingsViewModel @Inject constructor(
@@ -152,25 +180,58 @@ class SettingsViewModel @Inject constructor(
         loadPersistedPrefs()
         observeLanShare()
         observeAccount()
+        observeTrial()
     }
 
     /**
      * The account card reads the stored key rather than a copy of it, so a sign-in made on
      * another screen (or a sign-out forced by the server refusing a key mid-sync) is reflected
-     * here the moment it happens. Only [AccountUiState.signedIn] and the preview are derived
-     * from storage; the full key never comes from here — see [AccountUiState].
+     * here the moment it happens. Only [AccountUiState.signedIn] and the preview are derived from
+     * storage. The full key reaches this screen by exactly two routes: the one this screen's own
+     * button just minted, and — see the flag below — the one the launch trial minted while no
+     * screen was open, which is the last moment that plaintext will ever exist.
      */
     private fun observeAccount() {
         viewModelScope.launch {
             syncAccountRepository.syncKey.collect { key ->
+                val usable = key?.takeIf { it.isNotBlank() }
+                // One-shot: a key the launch trial minted while no screen was open. Cleared by
+                // hideRevealedKey, so this branch can only ever fire the first time the card is
+                // opened after that mint — which is the point, and the reason it is a flag in
+                // storage rather than a field in this state.
+                val unseenMint = usable != null && syncAccountRepository.trialKeyUnseen.first()
                 _uiState.update {
                     it.copy(
                         account = it.account.copy(
-                            signedIn = !key.isNullOrBlank(),
-                            keyHint = SyncContract.keyPreview(key),
+                            signedIn = usable != null,
+                            keyHint = SyncContract.keyPreview(usable),
+                            revealedKey = if (unseenMint) usable else it.account.revealedKey,
                         ),
                     )
                 }
+            }
+        }
+    }
+
+    /**
+     * The trial countdown, read the way every other stored value here is read: collected, not
+     * sampled, so a grant that landed while this screen was closed shows up on the next open.
+     * [DeviceTrial.secondsRemaining] does the arithmetic against the instant the server's answer
+     * was read, which is what makes a wrong wall clock change nothing.
+     */
+    private fun observeTrial() {
+        viewModelScope.launch {
+            settingsRepository.trialRecordedAtMs.collect { recordedAtMs ->
+                val seconds = if (recordedAtMs <= 0L) {
+                    null
+                } else {
+                    DeviceTrial.secondsRemaining(
+                        storedSecondsRemaining = settingsRepository.trialSecondsRemaining.first(),
+                        storedAtMs = recordedAtMs,
+                        nowMs = System.currentTimeMillis(),
+                    )
+                }
+                _uiState.update { it.copy(account = it.account.copy(trialSecondsLeft = seconds)) }
             }
         }
     }
@@ -478,9 +539,129 @@ class SettingsViewModel @Inject constructor(
         _uiState.update { it.copy(account = it.account.copy(quickInput = value, message = null)) }
     }
 
-    /** Forget the full key on this screen; the preview stays, the credential does not linger. */
+    /**
+     * Drop the full key on this screen; the preview stays, the credential does not linger. This is
+     * also what retires a trial-minted key's one-shot: the flag is cleared here and nowhere else,
+     * so a key the launch minted can be shown exactly once from storage.
+     */
     fun hideRevealedKey() {
         _uiState.update { it.copy(account = it.account.copy(revealedKey = null)) }
+        viewModelScope.launch { syncAccountRepository.acknowledgeTrialKeyShown() }
+    }
+
+    // ── the phone + PIN profile link ─────────────────────────────────────────────
+
+    fun openLinkForm() {
+        _uiState.update {
+            it.copy(
+                account = it.account.copy(
+                    showLinkForm = true,
+                    linkMessage = null,
+                    linkMessageIsError = false,
+                ),
+            )
+        }
+    }
+
+    /** Closing wipes the PIN and the phone: nothing the viewer typed for one attempt lingers. */
+    fun closeLinkForm() {
+        _uiState.update {
+            it.copy(
+                account = it.account.copy(
+                    showLinkForm = false,
+                    linkName = "",
+                    linkPhone = "",
+                    linkPin = "",
+                    linkMessage = null,
+                ),
+            )
+        }
+    }
+
+    fun onLinkNameChanged(value: String) {
+        _uiState.update { it.copy(account = it.account.copy(linkName = value, linkMessage = null)) }
+    }
+
+    fun onLinkPhoneChanged(value: String) {
+        _uiState.update { it.copy(account = it.account.copy(linkPhone = value, linkMessage = null)) }
+    }
+
+    fun onLinkPinChanged(value: String) {
+        _uiState.update { it.copy(account = it.account.copy(linkPin = value, linkMessage = null)) }
+    }
+
+    /**
+     * Send the three fields to `profile-link`. The value of a PIN never appears in any sentence
+     * this produces — including the validation ones, which name the field and its shape and stop
+     * there — and the field is cleared before the request goes out, so the state this screen holds
+     * while it waits contains no credential.
+     */
+    fun linkProfile() {
+        val account = _uiState.value.account
+        if (account.isLinking) return
+        // The card's own precondition, said in the dialog rather than in the card's message slot:
+        // a profile is a row on a server, and with no address there is no server to write to.
+        if (_uiState.value.serverUrl.isBlank()) {
+            _uiState.update {
+                it.copy(
+                    account = it.account.copy(
+                        linkMessage = refusalSentence(Refusal.NO_SERVER),
+                        linkMessageIsError = true,
+                    ),
+                )
+            }
+            return
+        }
+        val error = DeviceTrial.nameError(account.linkName)
+            ?: DeviceTrial.phoneError(account.linkPhone)
+            ?: DeviceTrial.pinError(account.linkPin)
+        if (error != null) {
+            _uiState.update {
+                it.copy(
+                    account = it.account.copy(linkMessage = error, linkMessageIsError = true),
+                )
+            }
+            return
+        }
+        val name = account.linkName.trim()
+        val phone = account.linkPhone.trim()
+        val pin = account.linkPin
+        _uiState.update {
+            it.copy(
+                account = it.account.copy(
+                    isLinking = true,
+                    linkPin = "",
+                    linkMessage = null,
+                    linkMessageIsError = false,
+                ),
+            )
+        }
+        viewModelScope.launch {
+            when (val outcome = syncAccountRepository.linkProfile(name, phone, pin)) {
+                is ProfileLinkFiled.Linked -> _uiState.update {
+                    it.copy(
+                        account = it.account.copy(
+                            isLinking = false,
+                            showLinkForm = false,
+                            linkName = "",
+                            linkPhone = "",
+                            linkPin = "",
+                            linkMessage = AccountCardCopy.linkSentence(outcome.bonusDayGranted),
+                            linkMessageIsError = false,
+                        ),
+                    )
+                }
+                is ProfileLinkFiled.Refused -> _uiState.update {
+                    it.copy(
+                        account = it.account.copy(
+                            isLinking = false,
+                            linkMessage = AccountCardCopy.linkRefusalSentence(outcome.reason),
+                            linkMessageIsError = true,
+                        ),
+                    )
+                }
+            }
+        }
     }
 
     /**
@@ -583,6 +764,98 @@ private fun refusalSentence(reason: Refusal): String = when (reason) {
     Refusal.THROTTLED -> "The server is asking this device to slow down. Syncing is paused until the app is restarted."
     Refusal.OFFLINE -> "The server could not be reached. Nothing was changed on this device."
     Refusal.SIGNED_OUT -> "That key is no longer valid here, so this device is signed out."
+}
+
+/**
+ * Every sentence the trial and profile-link surfaces show, in one file, because these are the
+ * words a viewer acts on and the words this repository can be audited against.
+ *
+ * Four rules they all obey, and the reason each one is a rule rather than a style:
+ *  - **no security claim.** This deployment is plain HTTP with no TLS, so the PIN and the phone
+ *    cross the wire in the clear. Nothing here may say secure, encrypted, private, or "only you";
+ *  - **no lock claim.** The trial is opened by a device id this app makes up about itself
+ *    (`accounts.py:240`: "client-reported … spoofable on a rooted phone"), so it is a gate, and no
+ *    copy may call it verified, locked to a device, or proof of who somebody is;
+ *  - **no invented entitlement.** The days come from the server's answer and the +1 comes from its
+ *    `bonus_granted`, never from arithmetic this app did to a local clock;
+ *  - **the escape hatch stays.** A wrongly-flagged deployment must remain escapable, so the form
+ *    names the server it writes to and points at the row that changes it — the same precedent the
+ *    maintenance notice set with "Use a different server".
+ */
+object AccountCardCopy {
+
+    /** The line under the account heading while a trial has days left. */
+    internal fun trialActive(daysLeft: Int): String =
+        "Free VIP days are running on this install — " +
+            if (daysLeft == 1) "1 day left." else "$daysLeft days left."
+
+    /** The same line once the ledger says the trial is over. Names nothing that stops working. */
+    internal const val TRIAL_ENDED = "The free days on this install have run out."
+
+    /** What the trial actually is, said before a viewer could mistake it for protection. */
+    internal const val TRIAL_HONESTY =
+        "The server counts these days per install, not per person. It cannot tell one phone from " +
+            "another and does not try to: the count is a gate on repeat free trials, not a lock on " +
+            "your device and not proof of who you are."
+
+    internal const val LINK_TITLE = "Link a phone number and a 4-digit PIN"
+    internal const val LINK_BONUS = "+1 free VIP day, once per account"
+
+    internal const val LINK_BUTTON = "Link and claim the day"
+
+    /**
+     * The transport warning. It is the sentence the whole modal exists to earn the right to show,
+     * and it states what is true about this host rather than what a TLS deployment would be.
+     */
+    internal const val LINK_TRANSPORT_WARNING =
+        "This server speaks plain HTTP, so the name, the number and the PIN you are about to type " +
+            "travel across the network in the clear. Anyone able to read this traffic can read them. " +
+            "Do not enter a PIN you also use somewhere else."
+
+    /** The honest statement about what the number is worth — the card's existing claim, kept. */
+    internal const val LINK_PIN_MEANING =
+        "The phone number is not a password and the PIN is not a second one. Linking adds nothing " +
+            "to how well your list is protected: anyone who knows this number can already derive " +
+            "the same sync key. The PIN only lets you edit this profile later."
+
+    internal const val LINK_ONCE_PER_ACCOUNT =
+        "The extra day is granted once per account. Linking again, or fixing a typo, changes the " +
+            "profile and adds nothing — so a second tap is safe and gets you nothing."
+
+    /** The escape hatch, in the maintenance notice's own shape. */
+    internal const val LINK_WHICH_SERVER =
+        "This is written to the server whose address is in the Server card above. If that is not " +
+            "the server you meant, change it there first — this form cannot move the profile for you."
+
+    internal const val LINK_NAME_LABEL = "A name for this account"
+    internal const val LINK_PHONE_LABEL = "Phone number"
+    internal const val LINK_PIN_LABEL = "4 to 8 digit PIN"
+
+    /** After a send. The two answers are different claims and are never merged into one. */
+    internal fun linkSentence(bonusGranted: Boolean): String = if (bonusGranted) {
+        "Linked. One free day was added to this account."
+    } else {
+        "Saved. No free day was added — this account already used its one."
+    }
+
+    internal fun linkRefusalSentence(reason: LinkRefusal): String = when (reason) {
+        LinkRefusal.NOT_SIGNED_IN ->
+            "This device is not signed in, so there is no account to link a profile to."
+        LinkRefusal.WRONG_PIN ->
+            "That PIN does not match the one on file, so the profile was not changed. Your sync " +
+                "key still works and you are still signed in."
+        LinkRefusal.DEAD_KEY ->
+            "This server no longer recognises the key on this device, so it is signed out here. " +
+                "Nothing was linked."
+        LinkRefusal.THROTTLED ->
+            "The server is asking this device to slow down, so the profile was not saved. Try again " +
+                "after restarting the app."
+        LinkRefusal.BAD_INPUT ->
+            "That name, number or PIN is not something this server will store. Nothing was changed."
+        LinkRefusal.OFFLINE ->
+            "The server could not be reached, so nothing was linked. A number and PIN that were " +
+                "already saved stay saved."
+    }
 }
 
 /**

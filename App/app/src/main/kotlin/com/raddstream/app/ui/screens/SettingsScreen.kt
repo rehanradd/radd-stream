@@ -1,6 +1,7 @@
 package com.raddstream.app.ui.screens
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -27,6 +28,7 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -49,6 +51,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -58,6 +62,8 @@ import com.raddstream.app.data.RemoteFeatures
 import com.raddstream.app.player.AudioBoost
 import com.raddstream.app.player.AudioBoostUi
 import com.raddstream.app.share.LanShareStatus
+import com.raddstream.app.viewmodel.AccountCardCopy
+import com.raddstream.app.viewmodel.AccountUiState
 import com.raddstream.app.viewmodel.CatalogScale
 import com.raddstream.app.viewmodel.ImageQuality
 import com.raddstream.app.viewmodel.KeepTtl
@@ -233,6 +239,28 @@ fun SettingsScreen(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
 
+                // ── the free days this install was granted ───────────────────────
+                account.trialSecondsLeft?.let { secondsLeft ->
+                    val daysLeft = account.trialDays ?: 0
+                    Text(
+                        if (daysLeft > 0) AccountCardCopy.trialActive(daysLeft) else AccountCardCopy.TRIAL_ENDED,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = if (daysLeft > 0) {
+                            MaterialTheme.colorScheme.primary
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        },
+                        fontWeight = FontWeight.Medium,
+                    )
+                    if (daysLeft > 0) {
+                        Text(
+                            AccountCardCopy.TRIAL_HONESTY,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+
                 account.revealedKey?.let { key ->
                     OutlinedTextField(
                         value = key,
@@ -324,6 +352,40 @@ fun SettingsScreen(
                         ) {
                             Text("Sign out (revokes the key)")
                         }
+                    }
+                }
+
+                // ── the phone + PIN profile link ─────────────────────────
+                //
+                // Offered only to a device that holds a key: the route writes onto the account the
+                // bearer names, so with no credential there is nothing to link and the honest thing
+                // is to hide the form rather than let it fail.
+                if (account.signedIn) {
+                    Spacer(Modifier.height(10.dp))
+                    Text(
+                        AccountCardCopy.LINK_TITLE,
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Medium,
+                    )
+                    Text(
+                        AccountCardCopy.LINK_BONUS,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                    Text(
+                        AccountCardCopy.LINK_PIN_MEANING,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    OutlinedButton(
+                        onClick = viewModel::openLinkForm,
+                        enabled = !account.isLinking,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text(if (account.showLinkForm) "Close" else AccountCardCopy.LINK_BUTTON)
+                    }
+                    if (account.showLinkForm) {
+                        ProfileLinkDialog(account = account, viewModel = viewModel)
                     }
                 }
 
@@ -599,4 +661,97 @@ private fun lanShareStatusLine(status: LanShareStatus): String = when (status) {
         val where = status.address?.let { "$it:${status.port}" } ?: "port ${status.port}"
         "Listening on $where · ${status.servableCount} kept ${if (status.servableCount == 1) "file" else "files"}"
     }
+}
+
+/**
+ * The phone + PIN form. Three fields, four sentences, one button.
+ *
+ * The name field is not decoration: `accounts.link_profile_with_pin` refuses an empty display name
+ * (`_check_profile_name`), so a form that collected only a number and a PIN would fail on a route
+ * this app cannot change. Every warning below is the truth about this deployment — plain HTTP, a
+ * number that is not a secret, a day that is granted once — because the alternative to saying it
+ * here is a viewer discovering it by being harvested.
+ */
+@Composable
+internal fun ProfileLinkDialog(account: AccountUiState, viewModel: SettingsViewModel) {
+    AlertDialog(
+        onDismissRequest = viewModel::closeLinkForm,
+        title = { Text(AccountCardCopy.LINK_TITLE) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(
+                    value = account.linkName,
+                    onValueChange = viewModel::onLinkNameChanged,
+                    label = { Text(AccountCardCopy.LINK_NAME_LABEL) },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                OutlinedTextField(
+                    value = account.linkPhone,
+                    onValueChange = viewModel::onLinkPhoneChanged,
+                    label = { Text(AccountCardCopy.LINK_PHONE_LABEL) },
+                    placeholder = { Text("03XXXXXXXXX") },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                OutlinedTextField(
+                    value = account.linkPin,
+                    onValueChange = viewModel::onLinkPinChanged,
+                    label = { Text(AccountCardCopy.LINK_PIN_LABEL) },
+                    singleLine = true,
+                    // Masked so the four digits are not readable over a shoulder on the way in. It
+                    // says nothing about how they travel, which the sentence below is for.
+                    visualTransformation = PasswordVisualTransformation(),
+                    keyboardOptions = KeyboardOptions(
+                        keyboardType = KeyboardType.NumberPassword,
+                        autoCorrect = false,
+                    ),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Text(
+                    AccountCardCopy.LINK_TRANSPORT_WARNING,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+                Text(
+                    AccountCardCopy.LINK_ONCE_PER_ACCOUNT,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(
+                    AccountCardCopy.LINK_WHICH_SERVER,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                account.linkMessage?.let { message ->
+                    Text(
+                        message,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (account.linkMessageIsError) {
+                            MaterialTheme.colorScheme.error
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        },
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = viewModel::linkProfile,
+                enabled = !account.isLinking &&
+                    account.linkName.isNotBlank() &&
+                    account.linkPhone.isNotBlank() &&
+                    account.linkPin.isNotEmpty(),
+            ) {
+                BusyLabel(account.isLinking, "Send")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = viewModel::closeLinkForm, enabled = !account.isLinking) {
+                Text("Cancel")
+            }
+        },
+    )
 }

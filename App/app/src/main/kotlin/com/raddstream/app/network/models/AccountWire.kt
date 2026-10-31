@@ -11,6 +11,10 @@ import com.google.gson.annotations.SerializedName
  * design note:
  *
  *   POST api/v2/account                     -> account{created, created_at, sync_key?}
+ *   POST api/v2/account/anonymous           -> account{created, reissued, first_seen_at,
+ *                                                      trial_expires_at,
+ *                                                      trial_seconds_remaining, vip_until, sync_key?}
+ *   POST api/v2/account/profile-link        -> profile{linked, name, phone, bonus_granted, vip_until}
  *   GET  api/v2/account                     -> account{created_at, last_seen_at}
  *   POST api/v2/account/revoke              -> {revoked}
  *   GET  api/v2/account/favorites?limit=n   -> {favorites[], count}
@@ -28,9 +32,10 @@ import com.google.gson.annotations.SerializedName
  *     server and reaches this app only inside a catalog payload; a raw title, a row id
  *     or a `work_key` sent here is refused with a 400 by `_target()`. So every request
  *     body below takes a ref, and nothing in this app can build a ref itself.
- *  2. `sync_key` exists on exactly one response: the creation answer. The server cannot
- *     hand it back a second time (it stores only a hash), so a model that looked like it
- *     could be refreshed would be a lie.
+ *  2. `sync_key` exists on exactly two responses: the one that mints an account, and the trial
+ *     route's reissue when the account a known device pointed at has been revoked or pruned. The
+ *     server cannot hand it back a second time for the same account (it stores only a hash), so a
+ *     model that looked like it could be refreshed would be a lie.
  *  3. Provenance (App/AGENTS.md, root AGENTS.md): no type here carries a site, hoster or
  *     upstream address, and `code`/`detail` from a refusal are never rendered. A refusal
  *     is answered to the viewer in our own words — the server's `detail` string is not a
@@ -56,6 +61,71 @@ data class AccountCreated(
 
 data class AccountCreateResponse(
     val account: AccountCreated? = null,
+)
+
+/**
+ * Body of POST api/v2/account/anonymous. `device_id` and nothing else, by the server's design:
+ * `accounts_api.py:494` says a client that could set its own trial length would be a client that
+ * sets its own price, and the same route ignores a body `account_id` rather than refusing it so as
+ * not to advertise which field is interesting. There is therefore no field here to add later.
+ */
+data class DeviceTrialRequest(
+    @SerializedName("device_id") val deviceId: String,
+)
+
+/**
+ * The trial answer. `created` and `reissued` are the two bits that say whether this response is
+ * the last moment the plaintext key exists, and `trial_seconds_remaining` is the server's own
+ * countdown — the app displays that number and never computes one from a local clock.
+ *
+ * `trial_expires_at` is carried because the ledger publishes it, and is deliberately unread here:
+ * turning it into "days left" would be a subtraction against a wall clock the viewer controls.
+ */
+data class DeviceTrialGrant(
+    val created: Boolean = false,
+    val reissued: Boolean = false,
+    @SerializedName("first_seen_at") val firstSeenAt: Double = 0.0,
+    @SerializedName("trial_expires_at") val trialExpiresAt: Double = 0.0,
+    @SerializedName("trial_seconds_remaining") val trialSecondsRemaining: Double? = null,
+    @SerializedName("vip_until") val vipUntil: Double = 0.0,
+    @SerializedName("sync_key") val syncKey: String? = null,
+)
+
+data class DeviceTrialResponse(
+    val account: DeviceTrialGrant? = null,
+)
+
+/**
+ * Body of POST api/v2/account/profile-link — the three values the server stores, and the phone is
+ * data, not a credential.
+ *
+ * There is no `account_id` field, and adding one would change nothing: the route takes the account
+ * from the bearer sync key and ignores that field on purpose. There is no `sync_key` field either,
+ * because this call is authenticated with it.
+ */
+data class ProfileLinkRequest(
+    @SerializedName("name") val name: String,
+    @SerializedName("phone") val phone: String,
+    @SerializedName("pin") val pin: String,
+)
+
+/**
+ * The linked profile, returned to the caller that already proved it holds the key. No hash, no
+ * salt, no iteration count: `accounts_api.py:291` refuses to publish them because a wire-tap on
+ * this plain-HTTP host could then try PINs offline. `bonus_granted` is the one-day extension, and
+ * it is false on every call after the first — the ledger grants it once per account via
+ * `linked_at`, which is also why replaying this request is safe.
+ */
+data class LinkedProfile(
+    val linked: Boolean = false,
+    @SerializedName("name") val name: String? = null,
+    @SerializedName("phone") val phone: String? = null,
+    @SerializedName("bonus_granted") val bonusGranted: Boolean = false,
+    @SerializedName("vip_until") val vipUntil: Double = 0.0,
+)
+
+data class ProfileLinkResponse(
+    val profile: LinkedProfile? = null,
 )
 
 /** GET api/v2/account — the read-back that proves a stored key still works. */

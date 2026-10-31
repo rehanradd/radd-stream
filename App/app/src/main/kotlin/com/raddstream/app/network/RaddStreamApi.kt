@@ -3,6 +3,8 @@ package com.raddstream.app.network
 import com.raddstream.app.network.models.AccountCreateRequest
 import com.raddstream.app.network.models.AccountCreateResponse
 import com.raddstream.app.network.models.AccountInfoResponse
+import com.raddstream.app.network.models.DeviceTrialRequest
+import com.raddstream.app.network.models.DeviceTrialResponse
 import com.raddstream.app.network.models.EntitlementResponse
 import com.raddstream.app.network.models.FavoriteRequest
 import com.raddstream.app.network.models.FavoriteWriteResponse
@@ -11,6 +13,8 @@ import com.raddstream.app.network.models.PaymentRequest
 import com.raddstream.app.network.models.PaymentSubmitResponse
 import com.raddstream.app.network.models.PostDetailResponse
 import com.raddstream.app.network.models.PostsResponse
+import com.raddstream.app.network.models.ProfileLinkRequest
+import com.raddstream.app.network.models.ProfileLinkResponse
 import com.raddstream.app.network.models.ProgressRequest
 import com.raddstream.app.network.models.ProgressResponse
 import com.raddstream.app.network.models.ProgressWriteResponse
@@ -130,6 +134,49 @@ interface RaddStreamApi {
     suspend fun createAccount(
         @Body body: AccountCreateRequest,
     ): AccountCreateResponse
+
+    /**
+     * POST /api/v2/account/anonymous — start or resume this install's three-day trial.
+     *
+     * Unauthenticated by construction, like [createAccount]: the body is `device_id` and nothing
+     * else, and no body field can set `trial_days` (`accounts_api.py:494` — a client that picks
+     * its own trial length is a client that picks its own price). A device the server has never
+     * seen gets a new account and answers **201 with `sync_key`**; a device it knows gets its own
+     * stored expiry back as **200 with no key**, because the key is stored one-way and handing it
+     * back on a caller-chosen id would be a takeover for anyone who guessed one. The one
+     * exception is `reissued`: a known device whose account was revoked or pruned gets a freshly
+     * minted key for the SAME expired clock — so the app must read the key out of the answer
+     * rather than assume 200 means no key.
+     *
+     * What this is not: an attestation. `device_id` is client-reported and spoofable, so the copy
+     * that shows this answer says "three days on this install" and never "locked to your device".
+     */
+    @POST("api/v2/account/anonymous")
+    suspend fun startDeviceTrial(
+        @Body body: DeviceTrialRequest,
+    ): DeviceTrialResponse
+
+    /**
+     * POST /api/v2/account/profile-link — put a name, a phone and a 4-8 digit PIN on this account.
+     *
+     * The bearer key is mandatory and is the only thing that decides which account is written:
+     * a body `account_id` is ignored on purpose, not refused. The server stores the PIN as
+     * PBKDF2-HMAC-SHA256 with a per-row salt and 120k iterations, which slows a stolen database
+     * file and does nothing for the wire — this deployment has no TLS, so the digits cross it in
+     * the clear and the attempt limiter is the only thing between a 4-digit PIN and a guesser.
+     * No copy about this call may say secure, encrypted, private, or "only you can access this".
+     *
+     * **201 means the +1 day bonus was granted; 200 means it already was** (`linked_at` makes it
+     * once per account), so the entitlement is unchanged by a replay and a retry after a network
+     * error is safe here in a way it is not for a payment. A second call must present the PIN
+     * already on file, and a wrong one answers 401 — which on this route means the PIN and not the
+     * key; see [com.raddstream.app.sync.DeviceTrial.profileLinkVerdict].
+     */
+    @POST("api/v2/account/profile-link")
+    suspend fun linkProfile(
+        @Header("Authorization") authorization: String?,
+        @Body body: ProfileLinkRequest,
+    ): ProfileLinkResponse
 
     /** GET /api/v2/account — proves the stored key still names a live account. */
     @GET("api/v2/account")

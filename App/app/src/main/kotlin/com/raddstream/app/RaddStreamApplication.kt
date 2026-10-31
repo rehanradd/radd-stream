@@ -2,6 +2,7 @@ package com.raddstream.app
 
 import android.app.Application
 import com.raddstream.app.brand.Brand
+import com.raddstream.app.data.DeviceIdentity
 import com.raddstream.app.data.RemoteConfigWatcher
 import com.raddstream.app.data.cache.CacheEngineRunner
 import com.raddstream.app.data.cache.KeepTtlHolder
@@ -66,6 +67,11 @@ class RaddStreamApplication : Application() {
         // key to ask with, and an app that was simply closed re-reads on the next launch — which is
         // why the expiry lives on the ledger and never as a countdown here.
         syncAccountRepository.startEntitlementWatch()
+        // The free three days are granted by the server's trial ledger, keyed on a device id this
+        // install reports about itself — a gate against the uninstall-reinstall case, not an
+        // attestation, and the card copy says so. Asked once per launch, and only by a device with
+        // no key and no trial record, so a returning viewer sends nothing here.
+        syncAccountRepository.ensureDeviceTrialAtLaunch { DeviceIdentity.trialDeviceId(this) }
         // The operator's switches are process state, not a screen's private fetch: this is the
         // only reader of `/remote-config` that runs before any UI, and it is what makes
         // maintenance mode cover the whole app instead of only a screen someone opened.

@@ -13,10 +13,12 @@ import com.raddstream.app.network.buildRaddGson
 import com.raddstream.app.network.models.AccountCreateRequest
 import com.raddstream.app.network.models.AccountEntitlement
 import com.raddstream.app.network.models.AccountProblem
+import com.raddstream.app.network.models.DeviceTrialRequest
 import com.raddstream.app.network.models.FavoriteEntry
 import com.raddstream.app.network.models.FavoriteRequest
 import com.raddstream.app.network.models.PaymentReceipt
 import com.raddstream.app.network.models.PaymentRequest
+import com.raddstream.app.network.models.ProfileLinkRequest
 import com.raddstream.app.network.models.ProgressEntry
 import com.raddstream.app.network.models.ProgressRequest
 import java.util.concurrent.atomic.AtomicBoolean
@@ -183,6 +185,153 @@ class SyncAccountRepository @Inject constructor(
         }
     }
 
+    // ── the anonymous trial, and the profile link ────────────────────────────────
+
+    /**
+     * Start or resume this install's three-day trial. Called once at launch, by the Application,
+     * and only when nothing is signed in — the mission's "first launch, no token" precondition is
+     * a real guard here and not a hint, because a second mint would orphan the first account.
+     *
+     * The answer is the server's clock, stored as a countdown plus the instant it was read (see
+     * [ServerSettingsRepository.saveDeviceTrial]). Two rules decide everything else in this call:
+     *
+     *  - a key that arrives here is stored and marked **not yet shown**. The route mints it while
+     *    no screen is open, and it is the only moment it will ever exist in plaintext. Showing it
+     *    later on the Account card is what keeps that card's existing sentence true;
+     *  - a countdown is stored only when this device ends the call holding a usable key. A viewer
+     *    who signed out has no credential to spend VIP with, so telling them a trial is running
+     *    would be a promise this app cannot keep.
+     *
+     * Nothing here retries: a 429 is the same session pause every other route gets, and a network
+     * failure leaves the stored countdown exactly where it was.
+     */
+    suspend fun startDeviceTrial(deviceId: String): DeviceTrialOutcome {
+        if (settingsRepository.serverUrl.first().isNullOrBlank()) {
+            return DeviceTrialOutcome.Refused(TrialRefusal.NO_SERVER)
+        }
+        if (!DeviceTrial.isStorableDeviceId(deviceId)) {
+            return DeviceTrialOutcome.Refused(TrialRefusal.NO_DEVICE_ID)
+        }
+        if (currentKey() != null) return DeviceTrialOutcome.Refused(TrialRefusal.ALREADY_SIGNED_IN)
+        return try {
+            val grant = apiProvider.current().startDeviceTrial(DeviceTrialRequest(deviceId)).account
+            val read = DeviceTrial.trialAnswer(
+                secondsRemaining = grant?.trialSecondsRemaining,
+                syncKey = grant?.syncKey?.trim()?.takeIf { it.isNotEmpty() },
+                usableKey = { SyncContract.isUsableSyncKey(it) },
+            ) ?: return DeviceTrialOutcome.Refused(TrialRefusal.UNAVAILABLE)
+            val key = read.keyToReveal
+            if (key != null) {
+                settingsRepository.saveSyncKey(key)
+                settingsRepository.saveTrialKeyUnseen(true)
+            }
+            // No key from this answer and none on the device: there is nothing to spend the days
+            // with, so the honest outcome is "no trial", not a countdown the UI cannot honour.
+            if (currentKey() == null) return DeviceTrialOutcome.Refused(TrialRefusal.UNAVAILABLE)
+            settingsRepository.saveDeviceTrial(read.secondsRemaining, System.currentTimeMillis())
+            DeviceTrialOutcome.Active(
+                secondsRemaining = read.secondsRemaining,
+                newAccount = grant?.created == true,
+                reissued = grant?.reissued == true,
+                keyToReveal = key,
+            )
+        } catch (error: Exception) {
+            when (verdictOf(error, hadWorkRef = false)) {
+                ServerVerdict.PAUSE_SESSION -> {
+                    pausedByThrottle = true
+                    DeviceTrialOutcome.Refused(TrialRefusal.UNAVAILABLE)
+                }
+                else -> DeviceTrialOutcome.Refused(TrialRefusal.UNAVAILABLE)
+            }
+        }
+    }
+
+    /**
+     * Bind a name, a phone and a PIN to this account, and take the +1 day if it is still there.
+     *
+     * The three fields are checked against the server's own grammar first ([DeviceTrial.nameError]
+     * and friends) so a typo costs a message instead of a request that charges this account's
+     * attempt bucket. The PIN is sent and never stored on this device, never logged, and never put
+     * in a state object that survives the screen.
+     *
+     * `profile-link` is the one route where a 401 must not sign this device out: on every other
+     * account route it means the key, and here it means the four digits. That distinction is
+     * [DeviceTrial.profileLinkVerdict], and a dead key really does answer 404 on this route
+     * because the bearer is resolved before the PIN is ever compared.
+     *
+     * A `200` after a `201` is not a failure: the bonus day is granted once per account, so a
+     * replay edits the profile and moves no entitlement. That is also why this is the one account
+     * write worth retrying after a network error, and this call still does not retry by itself.
+     */
+    suspend fun linkProfile(name: String, phone: String, pin: String): ProfileLinkFiled {
+        DeviceTrial.nameError(name)?.let { return ProfileLinkFiled.Refused(LinkRefusal.BAD_INPUT) }
+        DeviceTrial.phoneError(phone)?.let { return ProfileLinkFiled.Refused(LinkRefusal.BAD_INPUT) }
+        DeviceTrial.pinError(pin)?.let { return ProfileLinkFiled.Refused(LinkRefusal.BAD_INPUT) }
+        val key = currentKey() ?: return ProfileLinkFiled.Refused(LinkRefusal.NOT_SIGNED_IN)
+        return try {
+            val profile = apiProvider.current()
+                .linkProfile(bearerHeader(key), ProfileLinkRequest(name = name, phone = phone, pin = pin))
+                .profile
+            if (profile == null || !profile.linked) {
+                return ProfileLinkFiled.Refused(LinkRefusal.BAD_INPUT)
+            }
+            if (profile.bonusGranted) {
+                // Same step a filed payment takes: ask the ledger what it now says rather than
+                // adding the day on this device. It is one call, on a press, and it goes through
+                // the same floor `refreshEntitlement` already enforces.
+                refreshEntitlement(force = true)
+            }
+            ProfileLinkFiled.Linked(bonusDayGranted = profile.bonusGranted, vipUntil = profile.vipUntil)
+        } catch (error: Exception) {
+            val status = if (error is HttpException) error.code() else 0
+            val code = if (error is HttpException) parseProblem(error)?.code else null
+            when (DeviceTrial.profileLinkVerdict(status, code)) {
+                LinkRefusal.DEAD_KEY -> {
+                    signOutLocally()
+                    ProfileLinkFiled.Refused(LinkRefusal.DEAD_KEY)
+                }
+                LinkRefusal.THROTTLED -> {
+                    pausedByThrottle = true
+                    ProfileLinkFiled.Refused(LinkRefusal.THROTTLED)
+                }
+                else -> ProfileLinkFiled.Refused(
+                    if (status == 401) LinkRefusal.WRONG_PIN else LinkRefusal.OFFLINE,
+                )
+            }
+        }
+    }
+
+    /**
+     * The launch hook: ask for this install's trial once, on the process scope this class already
+     * owns, and only when there is genuinely something to ask.
+     *
+     * [deviceIdProvider] is a function rather than a value because reading `ANDROID_ID` needs a
+     * `Context`, and this class has never had one. It is invoked on the scope, once, and its result
+     * is never logged or stored — the app keeps the hash, not the identifier it was hashed from.
+     *
+     * The two guards are what keep this off the network for the installs that do not need it:
+     * a device that already holds a key has an account, and a device with a trial record (even an
+     * expired one) has the server's answer already. Both return without a request, so the only
+     * launch that sends one is a first launch on a server that has never seen this install.
+     */
+    fun ensureDeviceTrialAtLaunch(deviceIdProvider: () -> String?) {
+        if (!startedTrial.compareAndSet(false, true)) return
+        scope.launch {
+            if (currentKey() != null) return@launch
+            if (settingsRepository.trialRecordedAtMs.first() > 0L) return@launch
+            val deviceId = deviceIdProvider() ?: return@launch
+            startDeviceTrial(deviceId)
+        }
+    }
+
+    /** A minted trial key the viewer has not been shown yet, or null when there is none. */
+    val trialKeyUnseen: Flow<Boolean> = settingsRepository.trialKeyUnseen
+
+    /** The card has displayed the minted key; stop offering it, so a screenshot is not a loan. */
+    suspend fun acknowledgeTrialKeyShown() {
+        settingsRepository.saveTrialKeyUnseen(false)
+    }
+
     /**
      * "Sign out (revokes the key)". The remote revoke is best effort and its failure changes
      * nothing about the local half: the key is dropped, the pulled mirror is dropped, and the
@@ -212,6 +361,10 @@ class SyncAccountRepository @Inject constructor(
         syncedProgressDao.clear()
         clearEntitlement()
         settingsRepository.clearStoredEntitlement()
+        // The trial clock belongs to the credential, not to the phone: with no key there is
+        // nothing to spend the remaining days on, and a badge that outlived the account it was
+        // minted with would be the app claiming an entitlement it cannot show.
+        settingsRepository.clearDeviceTrial()
         settingsRepository.saveSyncKey(null)
     }
     // ── best-effort writes, each called AFTER the local write already happened ─────
@@ -377,6 +530,7 @@ class SyncAccountRepository @Inject constructor(
     val entitlement: StateFlow<AccountEntitlement?> = _entitlement.asStateFlow()
 
     private val startedWatch = AtomicBoolean(false)
+    private val startedTrial = AtomicBoolean(false)
     private var lastEntitlementReadMs: Long = 0L
 
     /**
