@@ -162,6 +162,18 @@ Local head at the moment of writing: **`718e1bf`** (parent `ae8f86d`), with this
 Nothing named `test_coins_engine.py` and no `/api/v2/account/coins*` route is on trunk until that push lands —
 so the honest status of `[Q3-COINS-ROUTE]` is **built, tested, rebased, unpushed**, not landed.
 
+**Re-attempted after dispatch 2 (2026-10-31 ~21:2x), and it fails identically.** The rebased head was pushed to
+the `q3-coins-engine` ref with the same documented helper: `remote: Invalid username or token. Password
+authentication is not supported for Git operations. / fatal: Authentication failed`, and the two API probes
+again read `GET /user -> 401`, `GET /repos/rehanradd/radd-stream -> 401`. So the credential did not come back
+between the two attempts, and the three commits that landed on trunk in that window (`5cde741`, `babb06f`,
+`8fe83e5`) were not landed by this lane's token — which is the pattern q1 describes ("I run the hosted gate"),
+and it means the recovery command above is a lane's last step, not its next one.
+**Current local heads, both unpushed:** `q3-coins-engine` at **`1e9bffc`** (parent `058b350` ← `058b350`'s
+parents `eb1d6fb`, `b8944bc`, base trunk `8fe83e5`), and `q3-adultkey-net` at **`f3f6e76`** (parent `5c5db78`,
+base trunk `8fe83e5`) — the two dispatch items, each rebased onto the same trunk sha and each handed over as a
+sha rather than a branch on the remote.
+
 ## Tests and gate
 
 `Fast_Fetch/test_coins_engine.py` — **34 tests, 34 green**, 66.6 s on this one-vCPU box at nice 19
