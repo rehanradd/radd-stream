@@ -32,6 +32,7 @@ import json
 import sqlite3
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from contextlib import closing
@@ -700,6 +701,50 @@ class Redeem(Wallet):
         receipt = self.body(self.redeem("day"))["redeemed"]
         self.assertIsNotNone(redact.parse_vip_pass(receipt["pass"], SECRET))
         self.assertIsNone(redact.parse_vip_pass(receipt["pass"], "wrong-secret"))
+
+
+# ── concurrency ───────────────────────────────────────────────────────────────
+
+
+class Concurrency(Wallet):
+    """Ten threads spending at once must never take more than the wallet holds.
+
+    `spend_coins` claims its guard is one `INSERT ... SELECT ... WHERE
+    balance >= cost` statement, so this is the test that statement exists for:
+    with 100 coins and ten concurrent 20-coin spends, exactly five must win,
+    five must get `InsufficientCoins`, and the ledger must end at exactly zero
+    — never negative, never overspent. Each thread opens its own connection,
+    because sharing one sqlite connection across threads would test the
+    driver's lock, not the guard.
+    """
+
+    def test_ten_concurrent_spends_never_overspend_the_wallet(self):
+        self.grant(100)
+        barrier = threading.Barrier(10)
+        outcomes = []
+
+        def attempt():
+            try:
+                barrier.wait(timeout=10)
+                with closing(engagement.connect(self.state)) as conn:
+                    engagement.spend_coins(conn, self.account_id, amount=20,
+                                           reason="refund")
+                outcomes.append("spent")
+            except engagement.InsufficientCoins:
+                outcomes.append("insufficient")
+            except Exception as exc:  # noqa: BLE001 - surfaced as a failure below
+                outcomes.append(f"error:{exc!r}")
+
+        threads = [threading.Thread(target=attempt) for _ in range(10)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=30)
+        self.assertFalse(any(thread.is_alive() for thread in threads), threads)
+        self.assertEqual(outcomes.count("spent"), 5, outcomes)
+        self.assertEqual(outcomes.count("insufficient"), 5, outcomes)
+        self.assertEqual(self.wallet_state(), (6, 0, 0.0), self.rows())
+
 
 
 # ── authentication and routing ─────────────────────────────────────────────────
