@@ -639,6 +639,12 @@ call, not mine to patch blind from a lane that has run no build: any future back
 apostrophe will fail CI for the wrong reason, and the positive-control case in that suite would not
 notice the difference.
 
+**Closed on the third attempt, measured:** run `41160533249` (job `124416873462`) at `03e926b`
+completed success — all ten steps, `BUILD SUCCESSFUL in 3m 33s`, with `:app:assembleDebug`,
+`:app:testDebugUnitTest` and `:app:lintDebug` each executed. So the trial, the countdown card, the
+link modal, `DeviceTrial`'s server-bound census and the copy law are gate-passing source. What the
+green run still does not say: no device has executed any of it.
+
 **Rules kept:** no `./gradlew`, no test module, no python, no crawl, no merge, no service restart,
 no nginx change, no tag, no release, no keystore work, no `git add -A`, no force-push, nothing
 pushed to `main`/`master` — branch push only, no identifier/phone/PIN in any log, fixture or
