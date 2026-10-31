@@ -615,6 +615,99 @@ class Monetization(Fixture):
         self.assertFalse(self.public()["maintenance_mode"])
         self.assertEqual(self.public()["apk_update_url"], "")
 
+    # ── UPD-1a: what identifies the file the update banner points at ──────
+    def test_the_update_descriptors_default_to_nothing_published(self):
+        """A deployment that never typed a checksum publishes `""` and `0`, not an
+        absent key and not a `None`.
+
+        The types matter as much as the values: a client that has to distinguish a
+        missing key from a zero from an empty string will get that wrong on one of
+        its own updates, and the one thing `UPD-1b` must never do is decide that an
+        absent field means the same as a verified one."""
+        data = self.public()
+        self.assertEqual(data["apk_update_sha256"], "")
+        self.assertEqual(data["apk_update_size_bytes"], 0)
+        self.assertEqual(data["apk_update_version_code"], 0)
+        self.assertIsInstance(data["apk_update_sha256"], str)
+        self.assertIsInstance(data["apk_update_size_bytes"], int)
+        self.assertIsInstance(data["apk_update_version_code"], int)
+
+    def test_an_uppercase_digest_is_stored_lowercase_and_publishes_whole(self):
+        """Hex case is not a security property and a comparison is case-sensitive.
+
+        Normalising on the write path is the one place both halves can agree: an
+        operator who pastes what `sha256sum` printed in caps, or what a browser
+        plugin showed in caps, gets a digest a client can actually match — and it is
+        a public descriptor of a public binary, so it is not masked anywhere."""
+        digest = "AB6F8B342712ED5853E04A53C6D0F0F6EC69646E411C65BC6808C4A617C99A2C"
+        self.assertEqual(self.save({"apk_update_sha256": f"  {digest}  ",
+                                    "apk_update_size_bytes": "24000000",
+                                    "apk_update_version_code": 42})[0], 200)
+        data = self.public()
+        self.assertEqual(data["apk_update_sha256"], digest.lower())
+        self.assertEqual(data["apk_update_size_bytes"], 24000000)
+        self.assertEqual(data["apk_update_version_code"], 42)
+        self.assertEqual(self.values()["apk_update_sha256"], digest.lower())
+        self.assertNotIn("*", self.values()["apk_update_sha256"],
+                         "a digest is not a credential and must not be masked")
+
+    def test_a_digest_that_could_never_match_is_refused_at_the_save(self):
+        """The failure this validator exists to prevent is a row that saves and then
+        silently never verifies, so the refusal has to be at the write.
+
+        63 and 65 characters are the two ways a paste goes wrong, `z` is a
+        non-hexdigit, a mid-string space survives `.strip()`, and `sha512` is a
+        digest of the wrong length that would otherwise store fine under a text
+        column. Each is refused, and nothing is written."""
+        good = "ab6f8b342712ed5853e04a53c6d0f0f6ec69646e411c65bc6808c4a617c99a2c"
+        for bad in (good[:-1], good + "0", "z" * 64, good[:32] + " " + good[33:],
+                    "0" * 128, "not a digest", True, 5, [good]):
+            self.assertEqual(self.save({"apk_update_sha256": bad})[0], 400, repr(bad))
+        self.assertEqual(self.public()["apk_update_sha256"], "")
+
+    def test_an_empty_digest_is_legal_and_means_nothing_is_published(self):
+        """Clearing a banner's checksum is a supported action, not a corrupted row.
+
+        `""` is the value `UPD-1b` reads as "offer nothing", so the write path must
+        accept it; what it must not do is accept a *whitespace* digest that a client
+        would then compare against and lose."""
+        self.save({"apk_update_sha256": "ab" * 32})
+        self.assertEqual(self.save({"apk_update_sha256": ""})[0], 200)
+        self.assertEqual(self.public()["apk_update_sha256"], "")
+        self.assertEqual(self.save({"apk_update_sha256": "   "})[0], 200)
+        self.assertEqual(self.public()["apk_update_sha256"], "")
+
+    def test_a_real_apk_size_saves_where_the_default_ceiling_would_refuse_it(self):
+        """`_MAX_INT` is 1,000,000 — one megabyte — so without its own entry the
+        size column would 400 on the first paste any real build produces.
+
+        The ceiling is therefore load-bearing in both directions: 5 MB must save,
+        and a number past the declared ceiling must not, because a stored size a
+        client would compare against a 5 GB paste is not a check either."""
+        self.assertEqual(self.save({"apk_update_size_bytes": 5_000_000})[0], 200)
+        self.assertEqual(self.public()["apk_update_size_bytes"], 5_000_000)
+        self.assertEqual(self.save({"apk_update_version_code": 42})[0], 200)
+        for key in ("apk_update_size_bytes", "apk_update_version_code"):
+            for bad in (admin_panel._INT_MAX[key] + 1, -1, "twenty"):
+                self.assertEqual(self.save({key: bad})[0], 400, (key, bad))
+        self.assertEqual(self.public()["apk_update_size_bytes"], 5_000_000,
+                         "a refused save must not have rewritten the row")
+        self.assertEqual(self.public()["apk_update_version_code"], 42)
+
+    def test_the_update_descriptor_fields_are_editable_on_the_card(self):
+        """A setting with no input is a setting nobody saves.
+
+        The field spec, the save path and the projection can all be right while the
+        operator still cannot type the checksum in, which is the state where a
+        security control exists only in a commit message."""
+        page = admin_panel.route_get("/admin", {}, db_path=self.db_path,
+                                     peer_address="127.0.0.1",
+                                     token_header=f"Bearer {TOKEN}")[2].decode()
+        for key in ("apk_update_sha256", "apk_update_size_bytes",
+                    "apk_update_version_code"):
+            self.assertIn(f'id="f-{key}"', page, key)
+            self.assertIn(f'id="b-{key}"', page, key)
+
     def test_an_older_settings_row_gains_the_remote_control_columns(self):
         """A deployment whose row was created before this session must not lose
         its payment settings — and must not 500 because the new columns are

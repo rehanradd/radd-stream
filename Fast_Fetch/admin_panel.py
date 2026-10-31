@@ -1061,6 +1061,11 @@ _INT = "count"
 #: Not `"url"`: every admin body is scanned for provenance *keys*, and `"url"`
 #: is one of them. The kind is display metadata, so it takes a neutral spelling.
 _URL = "address"
+#: A hex digest. Its own kind rather than `_TEXT`, because a checksum is the one
+#: setting here that a client *compares* instead of printing: 63 characters, one
+#: space or one uppercase digit is not a weaker check but a check that can never
+#: pass, and `_TEXT` would store all three.
+_DIGEST = "digest"
 
 #: (key, label, kind, default). A key is the column name *and* the POST-body key
 #: *and* the admin-card field id, so a setting has exactly one spelling here.
@@ -1069,10 +1074,10 @@ _URL = "address"
 #: account. They are stored, they are shown masked on this page, and they are
 #: never serialised anywhere else — see :func:`remote_config`.
 #:
-#: The last five are the app's remote controls: a maintenance switch, the
-#: address of the APK-update banner, and the three feature flags the owner asked
-#: for. They are deliberately in the same single row as pricing so a client has
-#: one endpoint and one atomic update, not two settings stores that can disagree.
+#: The remote controls — a maintenance switch, the APK-update banner and what
+#: identifies the file it points at, and the feature flags the owner asked for —
+#: are deliberately in the same single row as pricing so a client has one endpoint
+#: and one atomic update, not two settings stores that can disagree.
 MONETIZATION_FIELDS = (
     ("pak_till_id", "JazzCash Merchant Till ID", _TEXT, ""),
     ("pak_jazzcash_number", "JazzCash Mobile Account", _PHONE, ""),
@@ -1094,6 +1099,26 @@ MONETIZATION_FIELDS = (
     ("feature_link_shorteners", "Link-Shortener Download Detour (RETIRED — off)", _FLAG, 0),
     ("maintenance_mode", "Maintenance Mode", _FLAG, 0),
     ("apk_update_url", "APK Update URL banner", _URL, ""),
+    # ── UPD-1a: what a phone needs before it offers that banner ───────────────
+    # An update banner is an instruction to install whatever answers the address.
+    # The client today gates on nothing but `WireText.isHttpUrl`
+    # (`App/…/viewmodel/HomeViewModel.kt`, `AppUpdate.from`) and then fires
+    # `Intent.ACTION_VIEW` (`App/…/ui/screens/HomeScreen.kt`, `openDownload`), so
+    # one mistyped or attacker-pasted URL points every device at an APK nothing
+    # identified. These three columns are the pieces a client needs to doubt it: a
+    # digest to compare the downloaded bytes against, a size so a truncated fetch is
+    # not read as a corrupt file, and a `versionCode` so "newer" is a comparison
+    # rather than a guess.
+    #
+    # This is the backend half on purpose. Until UPD-1b lands a phone still shows
+    # the banner from `apk_update_url` alone and reads none of these; the rule
+    # UPD-1b enforces is written down here so the two halves are reviewed as one
+    # decision: **no digest, no banner.** An empty `apk_update_sha256` is not
+    # "unchecked", it is "nothing published", and a client must treat the two the
+    # same way — by not offering the update.
+    ("apk_update_sha256", "APK Update SHA-256", _DIGEST, ""),
+    ("apk_update_size_bytes", "APK Update size (bytes)", _INT, 0),
+    ("apk_update_version_code", "APK Update versionCode", _INT, 0),
     ("feature_downloads", "Background Downloads", _FLAG, 1),
     ("feature_pure_cinema", "Pure Cinema Mode", _FLAG, 1),
     ("feature_chromecast", "Chromecast", _FLAG, 1),
@@ -1181,6 +1206,18 @@ _INT_MAX = {
     "streak_day1_coins": 10_000,
     "streak_day3_coins": 10_000,
     "streak_day7_pass_hours": 720,
+    # The APK descriptors need their own ceilings or `_MAX_INT` would refuse them:
+    # that default is 1,000,000, so a size of 5 MB — 5,000,000 bytes, arithmetic
+    # rather than a measurement — would 400 as a paste above the ceiling, and a
+    # setting a legitimate operator cannot save is a setting that gets worked around.
+    # 500 MB is above any build this repo can produce, so a larger paste is a
+    # mistake rather than a setting; and a versionCode counts up by one per release,
+    # so 2,100,000,000 is a wall no real build approaches that still refuses a
+    # phone number or a timestamp pasted into the field. Neither ceiling is a
+    # policy — no consumer reads either number as a limit — and neither is derived
+    # from the client, which decides for itself what "newer" means.
+    "apk_update_size_bytes": 500_000_000,
+    "apk_update_version_code": 2_100_000_000,
 }
 
 #: A payment *handle*, as the guide writes one: `0300-1234567`, `+92 300 1234567`,
@@ -1189,6 +1226,11 @@ _INT_MAX = {
 #: to a Copy button rather than parsed, so the shape is theirs — control
 #: characters and URLs are refused above regardless of kind.
 _HANDLE_RE = re.compile(r"[0-9A-Za-z+()\-. @:_]+")
+
+#: Lowercase hex, exactly 64 of it — the shape of a SHA-256 digest and nothing
+#: else. Stored lowercased by `_validated`, because a comparison a client cannot
+#: win is worse than a refusal the operator can see.
+_SHA256_RE = re.compile(r"[0-9a-f]{64}")
 
 
 def _column_ddl(key, kind, default):
@@ -1424,6 +1466,24 @@ def _validated(key, value):
             return None, label
         return text, None
 
+    if kind == _DIGEST:
+        # A checksum is the one setting here that gets *compared* rather than
+        # printed, so its failure mode is silence: a 63-character paste, a trailing
+        # space or an uppercase `A` saves fine under `_TEXT` and then never matches
+        # the hash of a correctly downloaded file, which reads to the operator as a
+        # banner that will not appear rather than as a row that cannot be right.
+        # Empty is legal and means "nothing published" — see the note on the field.
+        # Case is normalised on the way in, because a comparison a client cannot win
+        # is worse than a refusal the operator can see.
+        if not isinstance(value, str):
+            return None, label
+        text = value.strip().lower()
+        if not text:
+            return "", None
+        if not _SHA256_RE.fullmatch(text):
+            return None, label
+        return text, None
+
     if isinstance(value, int):
         value = str(value)          # a numeric till id from a form is still a till id
     if not isinstance(value, str):
@@ -1587,7 +1647,8 @@ def _engagement_public(values):
 
 def remote_config(conn):
     """The app-facing projection: what a phone needs to take a payment and to
-    hang a sponsor card, and nothing that is a credential.
+    hang a sponsor card, to decide whether an offered APK is the file the operator
+    actually published, and nothing that is a credential.
 
     A shortener API token in this body would be readable by anyone who can reach
     the endpoint — and this host is plain HTTP (§ ORACLE_DEPLOYMENT.md), so that
@@ -1632,6 +1693,16 @@ def remote_config(conn):
         "updated_at": int(values.get("updated_at") or 0),
         "maintenance_mode": flag("maintenance_mode"),
         "apk_update_url": shown("apk_update_url"),
+        # Flat and additive, never nested: `VipRemoteConfig.kt` decodes
+        # `apk_update_url` at the top level of this body and every phone caches it
+        # for 60 s, so moving it under an `apk_update` object would break a client
+        # that has not been updated yet. An un-updated client reads what it always
+        # read; an updated one reads these too and can decline to offer an
+        # unverifiable banner. `""` and `0` are not values to use, they are the
+        # absence of a publication, which is the whole point of publishing them.
+        "apk_update_sha256": shown("apk_update_sha256"),
+        "apk_update_size_bytes": int(values.get("apk_update_size_bytes") or 0),
+        "apk_update_version_code": int(values.get("apk_update_version_code") or 0),
         "feature_flags": {
             "downloads": flag("feature_downloads"),
             "pure_cinema": flag("feature_pure_cinema"),
@@ -2453,6 +2524,16 @@ def _config_card(monetization):
             'actually happen.</p>')
     out += text_row("apk_update_url", "APK update banner",
                     "https://downloads.example/app.apk")
+    out += text_row("apk_update_sha256", "APK update SHA-256",
+                    "64 hex from `sha256sum the.apk`")
+    out += text_row("apk_update_size_bytes", "APK update size (bytes)", "e.g. 24000000")
+    out += text_row("apk_update_version_code", "APK update versionCode", "e.g. 42")
+    out += ('<p class="hint">The three lines above describe the file the banner '
+            'points at. A SHA-256 is what lets a phone check it got that file, and '
+            'an empty one means nothing is published — which a client that enforces '
+            'it reads as "offer nothing". The shipped client checks only that the '
+            'address is absolute, so until that changes these are recorded and '
+            'unread: publishing them changes nothing on a phone by itself.</p>')
     out += ('<h2 style="margin-top:18px">Pakistani payment channels</h2>'
             '<p class="hint">Updates publish immediately to'
             ' <code>/api/v1/app/remote-config</code>.</p>')
