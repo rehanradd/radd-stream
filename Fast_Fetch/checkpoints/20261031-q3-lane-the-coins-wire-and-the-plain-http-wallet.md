@@ -84,6 +84,28 @@ Three things this lane did **not** do about it, on purpose: no nginx change (not
 terminate TLS at the edge, or scope `/api/v2/account/coins*` to app-only paths, or accept it as written.
 Nothing in this code can substitute for that decision.
 
+**What it costs a viewer, in the terms the root `AGENTS.md` honesty rule asks for** (dispatch 2, item 5). This
+wire ships a numeric balance, and the balance is not the loss — the *credential* is. On the plain-HTTP edge
+this host runs today, anyone on the same network path can read one request and get:
+
+- the 16-character bearer sync key, which **is** the account. Not a token scoped to the wallet: the same string
+  opens `GET /coins/history`, `profile-link`, the trial mint and every `/api/v2/account*` route the app uses.
+  Stealing it is not spending someone's coins, it is becoming them, and the owner cannot revoke it from the
+  panel because nothing about a captured key looks different from a used one;
+- the `signed VIP pass` in the response body, which is itself a bearer credential for `/api/v1/download` and
+  `/api/v1/stream` until it expires, so a passive eavesdrop buys a paid capability without ever touching the
+  wallet. A day pass is hours of someone else's account; a monthly one is a month;
+- **the pattern in the ledger rows**: `GET /coins/history` reads back `reason`, `ref` and `created_at` per
+  grant, so a viewer's streak days — which days they opened the app, how steadily, from what clock — are on
+  the wire. For a service whose public face is a Pakistani catalog on an unencrypted line, a viewing-and-
+  attendance history is not innocuous metadata, and `redact.scrub_text` does not help because the values are
+  not secrets the redactor knows, they are the response's own payload.
+
+A viewer therefore loses the account, everything the account had earned, a playable pass, and a timeline of
+their own attendance — from one request made on hotel WiFi. That is the price of shipping this over cleartext,
+stated as a cost rather than a caveat, and it is why the three mitigations above are an owner decision and not
+a follow-up ticket.
+
 ## What these routes refuse, and why each refusal is a measurement
 
 - **`source="app"` is impossible on this host.** The gap brief asked for `grant_coins(…, source="app")`;
@@ -154,16 +176,17 @@ Load discipline: one run of my own module, `nice -n 19`, no CI list, no crawl, n
 A five-module neighbour sweep I started was killed when the supervisor flagged the resulting load; no
 surviving process. **Not yet re-run under this freeze:** `test_engagement.py`, `test_engagement_ladder.py`,
 `test_admin_panel.py`, `test_accounts_api.py`, `test_database.py` — the hosted runner
-is the judge, and `test_admin_panel.py` carries my three new `_INT_MAX` pins. `test_docs_invariants.py`
-was run (18/18 green) because this session edited `CONTINUITY.md` and the archive index — **but that run was
-against the pre-rebase tree**, at load 5.7 and 75 s, not the 1.3 s the fleet quotes for it. The rebase then
-changed both index files, so the head's index state is verified by hand, not by the guard: archive = 60
-non-README files (58 dated + 2 undated, which is what the tested claim now says), `CONTINUITY.md` = 11,983 B /
+is the judge, and `test_admin_panel.py` carries my three new `_INT_MAX` pins. `test_docs_invariants.py` was run
+once mid-session (18/18, 75 s, load 5.7) **against the pre-rebase tree**, which is what commit `058b350`
+corrected. **Re-run against the rebased head after the `8fe83e5` rebase: `Ran 22 tests in 0.378s / OK`** at
+load 1.44, one module, `nice -n 19`. Two numbers worth keeping: the guard is 22 tests, not 18, because
+`8fe83e5` added `WorkflowSuiteCoverageTests`; and 0.378 s, not the 75 s measured at load 5.7 — the module is
+cheap, the box was not. The head's index state is therefore verified by the guard and not by hand: archive =
+61 non-README files (59 dated + 2 undated, which is what the tested claim says), `CONTINUITY.md` = 11,983 B /
 99 lines against the 12,000 B / 120 ceiling, this session's line present exactly once in
-`checkpoints/README.md`. **The guard re-run against the head is queued** under the load hold (load reached 7.57
-during this session), and running it was itself a lapse: q1 authorised it for a different branch, and the
-1-minute-module rule says one owned module at nice 19, which is what I honoured for `test_coins_engine.py` and
-should have honoured here too.
+`checkpoints/README.md`. Running the guard was still outside what q1 had authorised for *this* branch when the
+first run happened — the re-run is authorised by name in dispatch 2 — and the 1-minute-module rule is why
+`test_coins_engine.py` itself has not been re-run on the rebased tree (see the dispatch-2 section below).
 
 ## 🕒 Queued read-only production check (the one thing this session could not answer without the live DB)
 
@@ -249,3 +272,94 @@ one?** It mints only random; it accepts both, and cannot tell them apart.
   PBKDF2 migration can be additive and per-row, but it cannot be applied to a key the server never saw in
   plaintext.
 
+
+## Rebase onto `8fe83e5` (dispatch 2, item 1) — and the CI-step count corrected
+
+Trunk moved three commits under this branch: `5cde741` (the `/api/m3u` non-numeric-id 400 guard), `babb06f`
+(the supervisor checkpoint), `8fe83e5` (q5's `WorkflowSuiteCoverageTests`). `git rebase origin/master` applied
+all three commits with **zero conflicts**, and the reason is worth recording rather than enjoying: q5's count
+bump and this lane's were written as the *same* line (`60 session files (58 dated + 2 undated)`), so git saw
+two identical edits instead of a collision. It then became wrong in the same way twice: this branch adds one
+dated file, so the claim was **re-derived from the directory** after the rebase —
+`find Fast_Fetch/checkpoints -maxdepth 1 -name '*.md' ! -name README.md` → 61, of which 2 do not start with
+`20` → `61 session files (59 dated + 2 undated)`. Not `60 + 1` from memory. `test_docs_invariants.py` confirms
+it (`test_the_index_counts_are_the_directory_listings`), and the byte total is unchanged at 11,983 B / 99 lines
+because a two-digit swap is byte-neutral — the 17-byte headroom on trunk is still exactly the headroom.
+
+**Correction to the dispatch's measurement, offered because the guard is the thing that will actually judge
+this:** the branch adds **one** `🧪` step, not two. `grep -c 'name: 🧪' .github/workflows/backend-ci.yml` →
+**36** on this head against **35** on `8fe83e5`; the `+22` in `git diff --stat` is that one step plus its
+21-line rationale comment, which is the file's existing convention. `WorkflowSuiteCoverageTests` passes on the
+rebased tree, which is the only proof that matters here: the step name equals the module its `run` command runs,
+no module appears twice, the file exists, and the set equation holds — **36 registered + 51 in the `UNREGISTERED`
+debt ledger = 87 `test_*.py` on disk**, so no ledger edit was needed and none was made. The branch adds exactly
+one module (`test_coins_engine.py`) and it is registered, so there is no name for the ledger to still be
+carrying.
+
+`test_coins_engine.py` has **not** been re-run on the rebased tree: 66 s of one core is dispatch 2's item 3,
+and the tree it would test differs from the 34-green tree only in files it does not import from trunk's side
+(`git diff --stat origin/master` touches none of `redact.py`, `api_v2.py`, `accounts.py`, `viewer.py`). That is
+an inference about the import graph, not a test result, and the hosted run is the judge.
+
+## Three answers with file:line (dispatch 2, item 4) — no code changed to write them
+
+**(a) Can a coin balance be spent twice?** No, and the reason is one statement's shape rather than a lock this
+lane added: `engagement.spend_coins` at `Fast_Fetch/engagement.py:752-759` is a single
+`INSERT INTO coin_ledger … SELECT … WHERE (SELECT COALESCE(SUM(delta),0) FROM coin_ledger WHERE account_id = ?) >= ?`
+— the balance test and the debit are the *same* statement, so there is no read-then-write window in the
+application at all, and `:760-761` turns `rowcount == 0` into `InsufficientCoins` instead of a negative row. The
+wallet can never go negative even if two callers arrive together, because the second one's subquery is
+evaluated when it already holds the write lock (`connect` at `:249-251` sets `timeout=busy_timeout/1000` and
+`_prepare` the busy handler; SQLite allows one writer, so the second statement waits rather than interleaves).
+Two concurrent `POST /coins/redeem` for a wallet that covers one tier therefore produce one debit and one
+402, not two passes. `redeem_pass` (`:958`) does the spend before the mint inside one connection, which is why
+a refused tier writes nothing.
+**Named test:** `test_coins_engine.py:672` `test_two_redeems_never_buy_more_pass_than_the_wallet_paid_for`,
+which asserts the invariant (coins that left the ledger == passes handed out, `:691`) rather than a count,
+because `redeem_pass`'s default idempotency key is second-granular and the boundary is a clock.
+**Honest limit, stated because item 4 asked for the truth and not a reassurance:** that test is
+single-threaded — it proves the *accounting* invariant across repeated calls, not two statements racing in
+different threads. The double-spend argument above rests on SQL shape plus SQLite's single-writer rule, which
+is the stronger of the two but is not what a test can show on this box without a thread harness and a file DB
+(`:memory:` connections do not share). If the owner wants it proven rather than argued, the test is two threads
+redeeming a wallet that covers exactly one tier against a real temp file, asserting one `redeem_pass` row and
+one `InsufficientCoins`; that is new code, so it is a question, not a change.
+**One real hazard in the owner's code, reported not fixed** (same rule as the `:925-930` observation):
+`_commit` at `engagement.py:274-278` swallows `sqlite3.Error`. If `commit()` ever fails after
+`spend_coins` inserted its row, the function still returns `spent: <amount>` — and in `redeem_pass` the pass is
+minted from that return, while the uncommitted debit rolls back when the connection closes. That is a
+*free pass*, i.e. the failure direction is against the wallet, not the viewer. It needs a commit that fails
+while holding a reserved write lock, which SQLite does not normally do, so it is unreachable rather than safe;
+the fix is `_commit` re-raising, which is the owner's call and one line.
+
+**(b) What stops a client minting coins by replaying the same earn event?** A server-derived idempotency key,
+not a client event id, and not merely a cap. Two mechanisms, both in the engine: the claim itself is one
+guarded `UPDATE … WHERE account_id = ? AND last_counted_day IS ?` (`engagement.py:909-913`, and `claimed.rowcount == 0` at
+`:914` returns `same_day_noop` at `:918-921`), and the credit carries
+`idempotency_key=f"streak:{account_id}:{bucket}:coins"` (`engagement.py:928`), where `bucket` is the civil day
+computed from the stored `tz` and `day_boundary_hour` (`_day_bucket`/`_bucket_start_epoch`) — so the unique
+index on `coin_ledger.idempotency_key` makes ten POSTs in one day one row. The route adds nothing to this and
+takes nothing from the caller: `accounts_api.py:809-840` accepts `reason` only (`:821-824` refuses any other
+body key, so there is no `event_id` field to forge even by accident), and `:829-830` answers any reason other
+than `daily_login` with 400/403. Proved by `test_coins_engine.py:253`
+`test_a_replayed_login_is_a_noop_and_mints_no_second_coin`. To buy a second coin the same day a client would
+have to change the server's clock or its stored timezone row, not its request.
+
+**(c) Does the `admin_panel.py` change publish a coin total to the public port?** No — measured field by
+field, and the diff is smaller than the dispatch's number: `git diff --stat origin/master` says **52** changed
+lines, not 43, in `admin_panel.py` (+43/-9 is the shape I reported earlier; both are the same edit at
+different moments). The three touched places are `_INT_MAX` (`admin_panel.py:1172-1184`, four new *write-side*
+ceilings — it validates an operator's paste and publishes nothing), `monetization_values` (`:1288-1304`, a
+read-only accessor for `_read_monetization` that deliberately does not call `_ensure_monetization`), and
+`_engagement_public` (`:1532`, its publish lines at `:1562-1573`). Its output is the settings row's own knobs:
+`wallet.coin_per_rewarded_ad`, `wallet.rewarded_daily_cap`, the `passes` price list and the `streak` grant
+schedule. **It takes no `account_id` and has no path to `coin_ledger`**, so it is structurally incapable of
+naming a balance; `engagement.remote_view()` is the same shape with the same argument. The public route that
+does reach it is `/api/v1/app/remote-config` (`viewer.py:3839-3851`, in the nginx allow-list), and it was
+already serving `_engagement_public` before this branch — the change moves the streak block from hand-restated
+tuples to `resolve_streak_grants`, i.e. it publishes the number the granter uses instead of a second number.
+So there is no nginx exception that would expose a wallet: the only balance-bearing routes are
+`/api/v2/account/coins*`, which are bearer-scoped, and the operator panel's `/api/data`, which is loopback-only
+and 403s at the edge. If a future lane adds a balance to `_engagement_public`, `test_admin_panel.py`'s mirror
+test is where it should be caught, and `/api/v1/app/remote-config` is the path that would leak it — that is the
+line to watch, and it is worth naming because it is public by design.
