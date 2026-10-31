@@ -373,16 +373,101 @@ class OperatorSocketTests(CatalogFixture):
         self.assertEqual(body, b"", body[:80])
 
 
+def _ternary_branches(source, marker):
+    """Every `raw(<cond> ? <a> : <b>)` in `source` that opens with `marker`, as
+    `(flagged_branch, clean_branch)` pairs.
+
+    A scanner, not a parser: it steps forward from the marker, skips single-quoted,
+    double-quoted and backtick-quoted runs wholesale (honouring `\\` escapes), and
+    counts parentheses so the `?` and `:` it reports are the ternary's own and not a
+    colon inside a URL or a question mark inside a title attribute. It is exact for
+    the few expressions this suite cares about, and it is not offered as a general JS
+    reader — the alternative, indexing a literal substring of the anchor, is what
+    broke when the anchor was legitimately edited.
+
+    Every occurrence is returned, not the first. `p.is_18_plus` guards two different
+    ternaries on this page, the `🔞 18+ ADULT` badge and the playlist handle, so a
+    caller that took the first would silently test the badge for a playlist.
+    """
+    branches = []
+    for start in _every_index(source, marker):
+        index = start + len(marker)
+        depth, question, colon, end = 1, None, None, None
+        while index < len(source):
+            char = source[index]
+            if char in "'\"`":
+                closing = index + 1
+                while closing < len(source):
+                    if source[closing] == "\\":
+                        closing += 2
+                        continue
+                    if source[closing] == char:
+                        break
+                    closing += 1
+                index = closing + 1
+                continue
+            if char == "(":
+                depth += 1
+            elif char == ")":
+                depth -= 1
+                if depth == 0:
+                    end = index
+                    break
+            elif depth == 1 and question is None and char == "?":
+                question = index
+            elif depth == 1 and question is not None and colon is None and char == ":":
+                colon = index
+            index += 1
+        if None in (question, colon, end):
+            raise AssertionError(f"{marker!r} at offset {start} is not two-branch")
+        branches.append((source[question + 1:colon], source[colon + 1:end]))
+    return branches
+
+
+def _every_index(source, needle):
+    found, at = [], source.find(needle)
+    while at != -1:
+        found.append(at)
+        at = source.find(needle, at + 1)
+    return found
+
+
 class DashboardRenderingTests(unittest.TestCase):
     """The page builds its handles behind the flag, not beside it."""
 
+    #: The anchor's spelling since the escaping pass (q2, 2026-11-01): the id reaches
+    #: the href through `num()`, which is what makes it a number and not a script.
+    PLAYLIST_ANCHOR = '/api/m3u?id=${num(p.id)}'
+
     def test_the_vlc_playlist_anchor_is_built_behind_the_flag(self):
+        """Placement, proven by branch — not by finding the string somewhere.
+
+        What has to stay true is that a flagged row gets the note and no playlist
+        handle, and a clean row gets the handle. Reading the two branches of the
+        flag's own ternary proves exactly that; searching the page for one literal
+        substring of the anchor proved nothing, and it was the first thing a
+        legitimate edit of the anchor broke.
+        """
         html = viewer.DASHBOARD_HTML
-        guard = html.index("p.is_18_plus")
-        anchor = html.index('/api/m3u?id=${p.id}')
-        self.assertLess(guard, anchor,
-                        "the playlist anchor must be inside the flag's ternary")
-        self.assertIn("🔞 no playlist", html)
+        playlist = [pair for pair in _ternary_branches(html, "${raw(p.is_18_plus")
+                    if "/api/m3u" in pair[0] + pair[1]]
+        self.assertEqual(1, len(playlist),
+                          "exactly one `p.is_18_plus` ternary may build a playlist "
+                          f"handle; found {len(playlist)}")
+        flagged_branch, clean_branch = playlist[0]
+
+        self.assertNotIn("/api/m3u", flagged_branch,
+                         "a flagged row builds a playlist link")
+        self.assertIn("🔞 no playlist", flagged_branch)
+        self.assertIn(self.PLAYLIST_ANCHOR, clean_branch,
+                      "the clean branch no longer builds the playlist anchor")
+        self.assertTrue(clean_branch.lstrip().startswith("esc`"),
+                        "the anchor left the escaping template tag, so the scraped "
+                        "slug in its `download=` attribute is raw again")
+        self.assertNotIn("${p.id}", clean_branch,
+                         "an id interpolated without `num()` is executable markup")
+        self.assertNotIn('/api/m3u?id=${p.id}', html,
+                         "the pre-escaping spelling came back")
 
     def test_the_source_buttons_are_built_from_the_withheld_note(self):
         html = viewer.DASHBOARD_HTML

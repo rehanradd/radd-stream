@@ -1051,3 +1051,52 @@ message in between, which is where a single-line string gains newlines or loses 
 required** and none will be cut by an agent. Both `v1.0.0` (`6a441ec`, predating the adult fold) and
 `v1.0.1` (`0a1894d`, now three merges behind trunk) are stale as release points, which is a second
 reason the retag proposed at the start of this session was refused.
+
+### Session 35 — The release death is at configure time, so no password has ever been tested (2026-11-01)
+
+qoder1 closed this lane's keystore ticket from the hosted log, and the measurement retires a question
+this session was still asking. Run `41233720264`, job `124633000210`: steps 1-9 `SUCCESS` (including
+`🧪 Unit tests gate the release`), step 10 `🏗️ Build signed release APK + AAB` `FAILURE`, steps 11-14
+`skipped`, 19:20:07 → 19:23:01Z, `BUILD FAILED in 7s`. Frames:
+`Build_gradle$3$2$1.execute(build.gradle.kts:120)` → `signingConfigs` →
+`CommonExtensionImpl.signingConfigs` → `ExtensionsStorage.configureExtension` → `Build_gradle.<init>`.
+So Gradle died while *configuring* `create("release")`, before a task ran, which means the store
+password, the key password and the alias have **never been exercised by CI** — a
+`keytool -list -storepass` experiment cannot tell us anything about this failure, and my preflight's
+integrity half was never reached either. `Last unit does not have enough valid bits` is a length/padding
+fault (a truncated or character-losing string); a wrapped secret would read
+`Illegal base64 character 0a` instead, so the stored value is not line-broken, it is short of a whole
+quantum. `App/docs/BUILD_PLAN.md` now says exactly this (+65/-7 in the "Release signing" section),
+along with the owner's own-shell shape checks (`wc -c` a multiple of 4; `base64 -d | wc -c` equal to
+`stat -c%s` of the keystore) and the rule that no keystore byte, password or value may go into a file,
+log, commit, chat message **or documentation example** — the commands print counts only.
+
+Session 34's own prediction is corrected by measurement, not by argument: it named the local
+`fun refuse` inside the DSL lambda and the `firstNotNullOfOrNull` chain as the suspects for a
+configuration-time compile error, and hosted CI run `41236922263` on `1efadf25` came back
+`completed success`, so the block compiles. It landed: qoder1 merged it as `3c2ed706` onto `d87f9e8`,
+and it is contained in trunk `03d580a4`. Verified against trunk's own bytes rather than my branch —
+`App/app/build.gradle.kts` 21,770 B with `keystoreBase64.length % 4 != 0`, `Base64.getDecoder().decode`,
+`KeyStore.getInstance`, `containsAlias(keyAlias)` and **no** `getMimeDecoder`;
+`KeystorePreflightGuardTest.kt` 8,615 B intact. What still is not true anywhere: the preflight has run.
+The guard test reads the script text and pins ordering plus the no-value rule, which is a test *about*
+the block, not an execution *of* it — reasoning is not evidence, and the first evidence will be the
+block's own line in a `workflow_dispatch` log.
+
+Two project-record corrections, both from refs: tags exist (`v1.0.0` → `6a441ec7`, `v1.0.1` →
+`61d88d04` peeling to trunk's `0a1894d8`, confirmed with `git merge-base --is-ancestor`), so any claim
+of "tags: 0, releases: 0" is false and the App-side rule that the first tag waits for green Android CI
+has already been crossed by another hand. No agent in this lane tagged, dispatched, or re-ran anything.
+
+Host-read method, because it wasted two attempts: `api.github.com` fails from this box right now
+(`curl` 55 then 56, five tries, including the `ci-reports-80` artifact download), while `git ls-remote`,
+`raw.githubusercontent.com` and the rendered compare page all work — so verdicts this session came from
+those. A 0-byte `raw` fetch is a failed read here, not a deleted file: retried, the same URL returned
+21,770 bytes, and I nearly logged a revert on the strength of an empty body.
+
+Unverified, stated plainly: nothing tests this prose. `BUILD_PLAN.md` is referenced by no test in the
+repo (measured: no hit for it across `Fast_Fetch/*.py` and `App/app/src/test`), so the docs gate cannot
+catch a wrong sentence here — the section was checked by reading it against the log facts qoder1 quoted
+and against the files on trunk. Load was 4.5-6.1 all ticket: no Gradle, no crawl, no merge, no catalog
+read, `/opt/radd-stream` untouched, service untouched, no credential value in any file, log, argv or
+report.

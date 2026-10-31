@@ -1122,6 +1122,17 @@ BUCKET_LIMITS = {
     "browse": (60, 60.0),    # /posts, /api/data, search, sitemap
     "reports": (10, 60.0),   # /stats
     "account": (30, 60.0),   # /api/v2/account* — cheap calls, but they carry a key
+    # Sign-in attempts, and the number is a cost argument rather than a guess.
+    # Every other bucket throttles something whose failure is an inconvenience;
+    # this one throttles the route whose failure is someone else getting in. A
+    # password check here runs a memory-hard KDF (`admin_panel.verify_password`) —
+    # measured twice on this single-vCPU box at `nice -n 19`, and the spread is the
+    # load: 419 ms per derive at load1 4.27, 1,013 ms at load1 ~9. So the ten
+    # permitted attempts a minute are four to ten seconds of CPU nobody may buy, and
+    # an unbounded login route is an outage with a form on it.
+    # The per-username lockout in `admin_panel` caps how *close* any one name can be
+    # guessed; this caps how much anybody may spend trying.
+    "auth": (10, 60.0),      # /admin/login, /operator/login
 }
 
 #: The budget for a bucket name nobody declared. An unmapped route must still be

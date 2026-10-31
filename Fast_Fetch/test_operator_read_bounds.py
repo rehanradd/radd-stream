@@ -60,7 +60,8 @@ BOGUS = "obviously-not-the-operator-token"
 #: A snapshot, deliberately: widening this set is a public-surface change and must
 #: fail a test rather than pass a review.
 OPERATOR_ONLY = ["/api/data", "/api/sitemap", "/api/fetch", "/api/heal",
-                 "/api/health-check", "/api/v1/rules", "/admin", "/admin/anything"]
+                 "/api/health-check", "/api/v1/rules", "/admin", "/admin/anything",
+                 "/operator", "/operator/login", "/admin/login"]
 
 #: The documented public reads. `test_the_public_allow_list_is_unchanged` proves the
 #: process still answers each of these with no credential at all — the boundary this
@@ -326,7 +327,10 @@ class OperatorPortCredentialTests(unittest.TestCase):
             set(viewer.OPERATOR_ONLY_ROUTES),
             {"/api/sitemap", "/api/fetch", "/api/heal", "/api/health-check",
              "/api/v1/rules", "/api/data"})
-        self.assertEqual(tuple(viewer.OPERATOR_ONLY_PREFIXES), ("/admin",))
+        # Re-pinned when `/operator/login` landed: the second prefix exists so the
+        # sign-in door has its own path, and both are invisible on the public port.
+        # A snapshot that is never re-pinned is a test that only fires on accident.
+        self.assertEqual(tuple(viewer.OPERATOR_ONLY_PREFIXES), ("/admin", "/operator"))
 
 
 class _TwoPorts:
