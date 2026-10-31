@@ -131,12 +131,18 @@ data class SettingsUiState(
  * accounts apart and is not a usable key.
  * [keyHint] is what the card falls back to: a partial preview, which is enough to tell two
  * accounts apart and is not a usable key.
+ *
+ * [accountLabel] is the only other account text this card paints, and it is the opposite of a
+ * key in every respect: the viewer typed it about themselves, it is sent nowhere, and nothing
+ * that authorizes a request reads it. [labelInput] is the unfinished edit of the same value.
  */
 data class AccountUiState(
     val signedIn: Boolean = false,
     val revealedKey: String? = null,
     val keyHint: String = "",
     val quickInput: String = "",
+    val accountLabel: String = "",
+    val labelInput: String = "",
     val isBusy: Boolean = false,
     val message: String? = null,
     val messageIsError: Boolean = false,
@@ -208,6 +214,13 @@ class SettingsViewModel @Inject constructor(
                             revealedKey = if (unseenMint) usable else it.account.revealedKey,
                         ),
                     )
+                }
+            }
+        }
+        viewModelScope.launch {
+            settingsRepository.accountLabel.collect { label ->
+                _uiState.update {
+                    it.copy(account = it.account.copy(accountLabel = label.orEmpty()))
                 }
             }
         }
@@ -465,10 +478,13 @@ class SettingsViewModel @Inject constructor(
     }
 
     /**
-     * One tap: sign in with a Pakistani mobile number or a 16-character sync key, then pull
-     * the library down immediately. The sign-in answer alone would leave a second device
+     * One tap: sign in with a 16-character sync key the viewer already holds, then pull the
+     * library down immediately. The sign-in answer alone would leave a second device
      * signed in but empty until the viewer found "Sync now", which is exactly the extra tap
      * this flow exists to remove. A failed first sync does not undo the sign-in.
+     *
+     * The optional label is written whether or not the key opened anything: it is a note the
+     * viewer typed about themselves, not part of the credential, so a refused sign-in keeps it.
      */
     fun quickSignIn() {
         if (noServerYet()) return
@@ -476,6 +492,9 @@ class SettingsViewModel @Inject constructor(
         if (candidate.isBlank() || _uiState.value.account.isBusy) return
         _uiState.update { it.copy(account = it.account.copy(isBusy = true, message = null)) }
         viewModelScope.launch {
+            // The label is written before the key is asked about, and stays whatever it is on a
+            // refusal: it is a note the viewer typed about themselves, not part of the credential.
+            persistAccountLabel(_uiState.value.account.labelInput)
             when (val outcome = syncAccountRepository.quickSignIn(candidate)) {
                 is AccountMutation.SignedIn -> {
                     val report = syncAccountRepository.syncNow()
@@ -537,6 +556,36 @@ class SettingsViewModel @Inject constructor(
 
     fun onQuickInputChanged(value: String) {
         _uiState.update { it.copy(account = it.account.copy(quickInput = value, message = null)) }
+    }
+
+    fun onAccountLabelChanged(value: String) {
+        _uiState.update { it.copy(account = it.account.copy(labelInput = value)) }
+    }
+
+    /**
+     * "Save what I am called": the optional label, on its own, without touching the key.
+     *
+     * A label is display data — it is never sent and no decision reads it — so a failed write
+     * costs a name on a card and must not be reported as a sign-in problem. The canonical form
+     * is echoed back into the field so what is stored is what the viewer sees.
+     */
+    fun saveAccountLabel() {
+        viewModelScope.launch { persistAccountLabel(_uiState.value.account.labelInput) }
+    }
+
+    /** The one writer of the label. Returns the value that ended up stored, null for "none". */
+    private suspend fun persistAccountLabel(raw: String?): String? {
+        val label = SyncContract.accountLabel(raw)
+        runCatching { settingsRepository.saveAccountLabel(label) }
+        _uiState.update {
+            it.copy(
+                account = it.account.copy(
+                    accountLabel = label.orEmpty(),
+                    labelInput = label.orEmpty(),
+                ),
+            )
+        }
+        return label
     }
 
     /**
@@ -694,6 +743,9 @@ class SettingsViewModel @Inject constructor(
         _uiState.update { it.copy(account = it.account.copy(isBusy = true, message = null)) }
         viewModelScope.launch {
             syncAccountRepository.signOut()
+            // A label goes with the account it described: sign-out is this device saying "not
+            // yours any more", and the next person to open this card must not inherit a number.
+            persistAccountLabel(null)
             _uiState.update {
                 it.copy(
                     account = it.account.copy(
@@ -759,7 +811,7 @@ class SettingsViewModel @Inject constructor(
 /** Our own sentence for a refusal. The server's `detail` text is never shown, by design. */
 private fun refusalSentence(reason: Refusal): String = when (reason) {
     Refusal.NO_SERVER -> "No server is connected yet, so there is nothing to sign in to."
-    Refusal.WEAK_KEY -> "Enter a Pakistani mobile number (03XXXXXXXXX), a 16-character sync key, or the full key from the other device."
+    Refusal.WEAK_KEY -> "Enter the 16-character sync key from the other device. A mobile number is not a key."
     Refusal.REJECTED -> "The server refused that key. Nothing was changed on this device."
     Refusal.THROTTLED -> "The server is asking this device to slow down. Syncing is paused until the app is restarted."
     Refusal.OFFLINE -> "The server could not be reached. Nothing was changed on this device."
@@ -812,11 +864,16 @@ object AccountCardCopy {
             "travel across the network in the clear. Anyone able to read this traffic can read them. " +
             "Do not enter a PIN you also use somewhere else."
 
-    /** The honest statement about what the number is worth — the card's existing claim, kept. */
+    /**
+     * What the number is worth, in the same words the card above uses. This sentence used to say a
+     * number was worth a key, because at the time it was: `q1-identity-fix` deleted that
+     * derivation, and a card that still advertised it would send a reader hunting for a feature this
+     * build does not have. See `tooling/PhoneCredentialGuardTest`.
+     */
     internal const val LINK_PIN_MEANING =
-        "The phone number is not a password and the PIN is not a second one. Linking adds nothing " +
-            "to how well your list is protected: anyone who knows this number can already derive " +
-            "the same sync key. The PIN only lets you edit this profile later."
+        "The phone number is not a password and the PIN is not a second one. This app cannot turn a " +
+            "number into a key, so linking adds nothing to how well your list is protected: the key " +
+            "the server minted is the whole account. The PIN only lets you edit this profile later."
 
     internal const val LINK_ONCE_PER_ACCOUNT =
         "The extra day is granted once per account. Linking again, or fixing a typo, changes the " +

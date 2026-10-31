@@ -9,9 +9,14 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * The two ways a viewer can sign in on this card — a Pakistani mobile number or a key the
- * server minted — and the one rule both must obey: the same input opens the same library on
- * every device, while a key the viewer already holds is never re-derived into a different one.
+ * The one way a viewer can sign in on this card — a key the server minted, presented unchanged —
+ * and the rule that key obeys: the same key opens the same library on every device, and nothing
+ * re-derives it into a different one. Plus the phone number, which is a label and nothing more.
+ *
+ * The number used to be a second sign-in path. It is pinned here as NOT one, because that is the
+ * defect this file exists to keep from coming back: deriving a credential from
+ * `SHA-256("phone-sync/v1|03XXXXXXXXX")` made knowing somebody's mobile number sufficient to open
+ * their library, and the 16-character result cleared the server's own entropy floor.
  */
 class SyncContractTest {
 
@@ -48,32 +53,23 @@ class SyncContractTest {
         assertFalse(SyncContract.isShortSyncKey(null))
     }
 
+    /**
+     * The retired attack, stated as a refusal. Every spelling of one number, and the number that
+     * a whole country's worth of viewers wrote down, must open NOTHING. A single line here that
+     * returns a String would mean the derivation is back.
+     */
     @Test
-    fun `a phone number derives the same sixteen-character key from every spelling`() {
-        val fromLocal = SyncContract.quickLoginKey("0300-1234567")
-        val fromInternational = SyncContract.quickLoginKey("+92 300 1234567")
-        val fromCountryCode = SyncContract.quickLoginKey("923001234567")
-
-        assertEquals(fromLocal, fromInternational)
-        assertEquals(fromLocal, fromCountryCode)
-        assertNotNull(fromLocal)
-        assertEquals(SyncContract.SHORT_SYNC_KEY_CHARS, fromLocal!!.length)
-        assertTrue(SyncContract.isShortSyncKey(fromLocal))
-        assertTrue(SyncContract.isUsableSyncKey(fromLocal))
-        // The number never travels as itself.
-        assertFalse(fromLocal.contains("03001234567"))
-        assertFalse(fromLocal.contains("3001234567"))
-    }
-
-    @Test
-    fun `different numbers and a literal key never collide`() {
-        val first = SyncContract.quickLoginKey("03001234567")
-        val second = SyncContract.quickLoginKey("03011234567")
-        val literal = SyncContract.quickLoginKey("ABCD1234EFGH5678")
-
-        assertNotEquals(first, second)
-        assertNotEquals(first, literal)
-        assertEquals("ABCD1234EFGH5678", literal)
+    fun `a mobile number is never a credential, in any spelling`() {
+        assertNull(SyncContract.quickLoginKey("03001234567"))
+        assertNull(SyncContract.quickLoginKey("0300-1234567"))
+        assertNull(SyncContract.quickLoginKey("+92 300 1234567"))
+        assertNull(SyncContract.quickLoginKey("923001234567"))
+        assertNull(SyncContract.quickLoginKey("00923001234567"))
+        assertNull(SyncContract.quickLoginKey("3001234567"))
+        assertFalse(SyncContract.isQuickLoginInput("03001234567"))
+        // And no fixed answer exists for it either: this is not "the same key every time", it is
+        // no key at all.
+        assertNull(SyncContract.quickLoginKey("03001234567 "))
     }
 
     @Test
@@ -85,6 +81,22 @@ class SyncContractTest {
         // An older, 43-character key keeps working instead of being "helpfully" remade.
         val legacy = "a".repeat(SyncContract.LEGACY_SYNC_KEY_CHARS)
         assertEquals(legacy, SyncContract.quickLoginKey(legacy))
+    }
+
+    /**
+     * Path (a) of the two that remain: a key this server minted is the credential, and two
+     * different keys are two different accounts. Nothing about a person — a number, a name —
+     * is an input to which library opens.
+     */
+    @Test
+    fun `distinct keys open distinct accounts and nothing else`() {
+        val first = SyncContract.quickLoginKey("ABCD1234EFGH5678")
+        val second = SyncContract.quickLoginKey("ABCD1234EFGH5679")
+
+        assertNotNull(first)
+        assertNotNull(second)
+        assertNotEquals(first, second)
+        assertEquals("ABCD1234EFGH5678", first)
     }
 
     @Test
@@ -99,10 +111,48 @@ class SyncContractTest {
 
     @Test
     fun `quick login classification matches the credential it would send`() {
-        assertTrue(SyncContract.isQuickLoginInput("03001234567"))
         assertTrue(SyncContract.isQuickLoginInput("ABCD1234EFGH5678"))
+        assertTrue(SyncContract.isQuickLoginInput("a".repeat(43)))
+        assertFalse(SyncContract.isQuickLoginInput("03001234567"))
         assertFalse(SyncContract.isQuickLoginInput("0300123"))
         assertFalse(SyncContract.isQuickLoginInput(""))
+    }
+
+    /**
+     * The number's only remaining job. It canonicalizes like [normalizePakistaniMobile] so the
+     * card reads one way however it was typed, keeps anything that is not a number as written,
+     * and caps at the length a card row can paint.
+     */
+    @Test
+    fun `a label is display text, canonical for numbers and as-written otherwise`() {
+        assertEquals("03001234567", SyncContract.accountLabel("0300-123-4567"))
+        assertEquals("03001234567", SyncContract.accountLabel("+92 300 1234567"))
+        assertEquals("Rehan", SyncContract.accountLabel("  Rehan  "))
+        assertEquals("My dad's phone", SyncContract.accountLabel("My dad's phone"))
+        assertNull(SyncContract.accountLabel("   "))
+        assertNull(SyncContract.accountLabel(null))
+        assertEquals(
+            SyncContract.MAX_LABEL_CHARS,
+            SyncContract.accountLabel("n".repeat(200))!!.length,
+        )
+    }
+
+    /**
+     * The boundary the whole task is about, pinned as a value rather than only as a scan: the
+     * label and the credential are functions of the same text and must never be functions of each
+     * other. A label is not a key, and typing a key into the label box produces a label — not a
+     * sign-in.
+     */
+    @Test
+    fun `a label is never a key and a key is never a label-only path`() {
+        val number = "03001234567"
+        assertEquals(number, SyncContract.accountLabel(number))
+        assertNull(SyncContract.quickLoginKey(number))
+        assertNull(SyncContract.accountLabel(SyncContract.quickLoginKey(number)))
+
+        val key = "ABCD1234EFGH5678"
+        assertEquals(key, SyncContract.quickLoginKey(key))
+        assertEquals(key, SyncContract.accountLabel(key))
     }
 
     @Test

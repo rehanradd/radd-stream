@@ -145,8 +145,9 @@ class OnboardHonestyTest {
             joined.contains("per install") && joined.contains("not a lock"),
         )
         assertTrue(
-            "the pre-existing honest sentence about a phone number stays true here too",
-            joined.contains("can already derive the same sync key"),
+            "the card must say what a number is worth now that the derivation is deleted — the " +
+                "same fact the key card above it prints, not the claim this app used to make",
+            joined.contains("cannot turn a number into a key"),
         )
         assertTrue(
             "a wrongly-flagged deployment keeps its escape hatch, as the maintenance notice does",
