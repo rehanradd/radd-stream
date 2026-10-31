@@ -348,3 +348,15 @@ jobs:
       - name: 🧪 test_adult_corroborated_fold.py
         run: python3 -S Fast_Fetch/test_adult_corroborated_fold.py
 
+
+      # A–H over real HTTP (q2, 2026-10-31). Two ephemeral loopback servers — the public
+      # policy and the operator one — against one temporary ledger. Pins the adult
+      # invariant on both ports with the operator bearer presented (a token-less request
+      # there is the identical 401, which proves the gate and nothing about filtering),
+      # the twin exposure audit and its documented repair (the per-row law trunk has, not
+      # a key-level read law it does not), pagination bounds including the non-numeric
+      # `/api/m3u` and `/api/health-check` ids, the rate-limit bucket key, download
+      # directness, provenance suppression, v1/v2 agreement and the cold-stats stamps.
+      # Offline: loopback sockets and temp SQLite only.
+      - name: 🧪 test_public_edge_scenarios.py
+        run: python3 -S Fast_Fetch/test_public_edge_scenarios.py

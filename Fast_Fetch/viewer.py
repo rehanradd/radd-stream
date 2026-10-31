@@ -3624,7 +3624,16 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
         elif path == "/api/health-check":
             query_params = urllib.parse.parse_qs(parsed.query)
-            post_id = int(query_params.get("id", [0])[0]) if query_params.get("id") else None
+            # Same rule as `/api/m3u` above: a non-numeric id is the caller's
+            # error and gets the detail route's 400. A bare `int()` here raised
+            # out of the handler and dropped the socket instead of answering.
+            post_id = None
+            if query_params.get("id"):
+                try:
+                    post_id = int(query_params["id"][0])
+                except (TypeError, ValueError):
+                    self.send_json({"error": "Invalid post ID"}, status=400)
+                    return
             try:
                 import fast_fetch
                 results = fast_fetch.run_health_check(post_id=post_id, verbose=False)
