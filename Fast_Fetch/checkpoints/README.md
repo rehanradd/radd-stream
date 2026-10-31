@@ -5,6 +5,7 @@ Newest first. Each file is a session block moved verbatim out of `Fast_Fetch/CON
 Entries written to `CONTINUITY.md` by another lane *after* the rotation are not lost: the rebase onto
 trunk `4fe6f65` moved them here the same way, verbatim, with the trunk line range in the header.
 
+- 2026-10-31 — q5 backend lane `[Q5-MONEY-KEYS-GATE]`: the accounts/API/payments trio's offline verdict measured (61/38/85 green), three `🧪` steps added and the same three names pruned from the guard's debt ledger — [`20261031-q5-money-keys-gate-the-trio-verdict-and-the-ledger-prune.md`](20261031-q5-money-keys-gate-the-trio-verdict-and-the-ledger-prune.md)
 - 2026-10-31 — q5 backend lane `[Q5-GUARD-DERIVED]`: the guard's remembered constants classified, and the CI gate now checks its own step list against the tree — [`20261031-q5-guard-derived-constants-audit-and-the-gate-that-checks-itself.md`](20261031-q5-guard-derived-constants-audit-and-the-gate-that-checks-itself.md)
 - 2026-10-31 — q5 backend lane `[Q5-ADULTKEY-PROD-GAP]`: the adult law is code-complete on trunk (`4a8c163`) and absent from the running service (`/opt/radd-stream` at `bf9e565`) — the re-measure commands, queued as owner actions — [`20261031-q5-adultkey-production-is-pre-law.md`](20261031-q5-adultkey-production-is-pre-law.md)
 - 2026-10-31 — q2 lane `[Q2-HUMTV-STATUS]`: the Hum TV importer exists and is import-clean; the live crawl and the census numbers stay queued on the load hold — [`20261031-q2-humtv-status-and-rotated-diet-notes.md`](20261031-q2-humtv-status-and-rotated-diet-notes.md)
