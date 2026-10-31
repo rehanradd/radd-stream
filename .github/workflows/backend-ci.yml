@@ -298,3 +298,22 @@ jobs:
       - name: 🧪 test_operator_adult_projection.py
         run: python3 -S Fast_Fetch/test_operator_adult_projection.py
 
+      # Zero-friction identity and the relay that credits money (q3, 2026-10-31). Three new
+      # surfaces in one suite: `POST /api/v2/account/anonymous` mints a 3-day VIP trial gated on a
+      # client-reported device id (a gate, not an attestation — `docs/RADD_RELAY_AND_AUTH_ARCHITECTURE.md`
+      # R5 is why the code says "trial gate" and never "hardware lock") and that CANNOT be restarted
+      # by asking twice, `POST /api/v2/account/profile-link` stores a PBKDF2-HMAC-SHA256 PIN
+      # (120k iterations per R6, per-row salt) and banks its +1 day once per account, and `POST
+      # /api/v2/payment/sms-webhook` lets a merchant relay credit a claim automatically — but only on
+      # an exact gateway + TID + the PKR this server itself quoted. 83 tests: the two new tables and
+      # their primary keys, a pre-release `user_state.db` gaining the four profile columns
+      # additively, ten resumes earning one clock, a revoked account re-minted WITHOUT a fresh
+      # trial, a burned PIN window that still admits the person who knows their four digits,
+      # `sha256:` key digests refused as PINs and absurd iteration counts refused instead of
+      # computed, no secret on any response body, and the relay refusing a replay, a stolen TID
+      # presented before its payer claimed it, a half payment and a deployment that forgot
+      # `RADD_MERCHANT_SECRET`. Offline — temp user-state DB, temp catalog, the webhook driven
+      # through a header mapping, no socket and no network.
+      - name: 🧪 test_device_trials_and_webhook.py
+        run: python3 -S Fast_Fetch/test_device_trials_and_webhook.py
+

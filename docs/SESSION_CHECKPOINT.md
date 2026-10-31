@@ -27,6 +27,19 @@ Update this file after each independently verified milestone so work can resume 
 7. This lane's own rotation claim is checked, not asserted: `test_docs_invariants.py` enumerates the
    law strings *and* the headings of the absorbed trunk edits, so a later diet that drops one fails
    CI instead of silently losing it.
+8. **`[Q3-ONBOARD-PAY]` backend, branch `q3-backend-auth-payments` @ `9df2f62`** — the device-gated
+   3-day trial, the PBKDF2 phone+PIN link, and the merchant relay that can credit a claim (83 offline
+   tests, CI step 33): pointer, not a copy —
+   [`../Fast_Fetch/checkpoints/20261031-q3-lane-zero-friction-onboarding-and-the-merchant-relay.md`](../Fast_Fetch/checkpoints/20261031-q3-lane-zero-friction-onboarding-and-the-merchant-relay.md).
+   Two findings outrank the feature itself: **the review that governs this exact task —
+   `docs/RADD_RELAY_AND_AUTH_ARCHITECTURE.md`, R1-R9 — was already in trunk when the brief landed,
+   and the brief did not name it**, so a lane re-derives from scratch what another lane already
+   ruled (this lane's first draft of the session log told the owner to open an nginx route that R2
+   rules against). Point at the governing ruling-file when you post a task. And
+   **`Fast_Fetch/test_accounts.py` (61) and `Fast_Fetch/test_payments.py` (85) exist, pass, and are
+   not in `backend-ci.yml` at all**, so `accounts.py` and `payments.py` — the money and the keys —
+   have no hosted gate on any lane's push. Owner's call to register them; this lane reported and did
+   not silently widen everyone's gate.
 
 ---
 ## Rotated session history

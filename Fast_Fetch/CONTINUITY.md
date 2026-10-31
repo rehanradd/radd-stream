@@ -7,8 +7,8 @@
 
 ## ✅ Open items — index (q3, 2026-10-30; pointers only)
 
-1. **This file is a pointer, not a history.** 52 session files (50 dated + 2 undated) cover
-   2026-10-23 → 2026-10-30,
+1. **This file is a pointer, not a history.** 53 session files (51 dated + 2 undated) cover
+   2026-10-23 → 2026-10-31,
    every one of them verbatim: [`checkpoints/README.md`](checkpoints/README.md). Nothing was
    deleted, reworded, or summarized. The count is `ls Fast_Fetch/checkpoints/*.md` minus `README.md`,
    and `Fast_Fetch/test_docs_invariants.py` checks the number written here against that listing — a
@@ -68,6 +68,7 @@
    measurement contradicting two documents: **`redact.link_is_adult` returns False for an unknown link id**,
    not the True its docstring and root `AGENTS.md` claim, so a typo reaches `resolve_live_source` and is
    stopped there rather than at the adult gate. Reported, not fixed.
+12. `[Q3-ONBOARD-PAY]` — trial mint + PIN link + relay credit, 83 tests, CI 33: `checkpoints/20261031-q3-lane-zero-friction-onboarding-and-the-merchant-relay.md`.
 
 ---
 

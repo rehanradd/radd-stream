@@ -1821,10 +1821,10 @@ def _ledger(state_db_path=None):
 
 
 def _payment_rows(conn, limit: int = _PENDING_LIMIT) -> dict:
-    """The queue and its recent history, as data. Raw `tid` included, because the
-    operator is the only reader this surface has (`viewer.py` 404s `/admin` on the
-    public port, `_gate` demands loopback plus the bearer token) and a TID they
-    cannot see is a TID they cannot check."""
+    """The queue, its recent history and the relay's unclaimed money, as data. Raw
+    `tid` included, because the operator is the only reader this surface has
+    (`viewer.py` 404s `/admin` on the public port, `_gate` demands loopback plus the
+    bearer token) and a TID they cannot see is a TID they cannot check."""
     pending = payments.list_payments(conn, status=payments.STATUS_PENDING, limit=limit)
     recent = payments.list_payments(conn, status=None, limit=_RECENT_LIMIT)
     for row in pending:
@@ -1838,10 +1838,17 @@ def _payment_rows(conn, limit: int = _PENDING_LIMIT) -> dict:
         "pending_count": len(pending),
         "pending": pending,
         "recent": recent,
+        # Money the SMS relay confirmed that no claim has spent yet. The operator
+        # cannot approve a row that does not exist, so this is a list to explain a
+        # waiting payer with, not a queue to work — and it is why the row is deleted
+        # when it buys a credit rather than flagged (`payments._consume_verified`).
+        "unclaimed": payments.unclaimed_credits(conn, limit=_RECENT_LIMIT),
         "approve_path": APPROVE_PAYMENT_PATH,
         "reject_path": REJECT_PAYMENT_PATH,
-        "note": ("a transaction id is a claim until a human who has read the"
-                 " payment SMS closes it; nothing here verifies one"),
+        "note": ("a transaction id is a claim until a human who has read the payment"
+                 " SMS closes it; the only automatic credit is a relay callback that"
+                 " matches a claim on gateway, TID and the exact PKR this server"
+                 " quoted, and it is audited as " + payments.RELAY_REVIEWER),
     }
 
 
@@ -1947,11 +1954,14 @@ def render_payments_page(data, query, banner=""):
         "<h1>Payment queue</h1>",
         '<p class="sub"><a href="/admin">operator panel</a> · pending claims'
         ' against the PKR price list. Loopback only, no TLS.</p>',
-        '<div class="warn"><strong>Nothing here verifies a payment.</strong> A'
-        ' transaction id is what the payer typed. Check your own payment SMS for'
-        ' the amount and the reference before you approve, and approve only then.'
-        ' A TID is printed on this page and nowhere else on the account surface.'
-        '</div>',
+        '<div class="warn"><strong>A transaction id is what the payer typed.</strong>'
+        ' Check your own payment SMS for the amount and the reference before you'
+        ' approve, and approve only then. The relay is one exception, and a narrow'
+        ' one: a callback that holds the merchant secret and matches an existing'
+        ' claim on gateway, TID and the exact PKR this server quoted closes the row'
+        ' as <code>' + _e(payments.RELAY_REVIEWER) + '</code> while you sleep.'
+        ' Everything else waits for you. A TID is printed on this page and nowhere'
+        ' else on the account surface.</div>',
     ]
     if banner:
         parts.append(f'<p id="ops-status" class="ok statusline">{_e(banner)}</p>')
@@ -2000,7 +2010,20 @@ def render_payments_page(data, query, banner=""):
     parts.append(_table(("account", "method", "TID", "PKR", "plan", "submitted",
                          "outcome"),
                         table(data.get("recent"), actions=False)))
-    parts.append("</section></div></body></html>")
+    parts.append("</section>")
+    parts.append('<section class="card"><h2>Relay-confirmed, unclaimed</h2>')
+    parts.append(_table(("gateway", "TID", "PKR", "seen"),
+                        [[_e(row.get("gateway")), _e(row.get("tid")),
+                          _e(row.get("amount_pkr")), _ts(row.get("verified_at"))]
+                         for row in data.get("unclaimed") or []]))
+    parts.append('<p class="hint">Money the SMS relay reported that no claim has'
+                 ' spent. Nothing here is approvable — the credit lands the moment'
+                 ' the payer files the matching reference — so this list exists to'
+                 ' explain someone who has paid and not submitted, and to be checked'
+                 f' against your bank statement. A record older than'
+                 f' {int(payments.VERIFIED_TID_MAX_AGE_SECONDS // 86400)} days'
+                 ' credits nothing by itself and waits for you like a claim does.'
+                 '</p></section></div></body></html>')
     return "".join(parts)
 
 

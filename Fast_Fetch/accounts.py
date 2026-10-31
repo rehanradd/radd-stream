@@ -31,10 +31,20 @@ survives cleartext transport:
   scribble on a list of catalog work keys. That is the whole of it, and it is why
   this account is *optional*, why the app must keep working with none at all, and
   why the app should say so in one sentence of UI copy.
-* **No personal data, ever.** No free-text notes, no display name, no device
-  label: this API is public and anonymous today (`App/AGENTS.md` §5 — no auth
-  anywhere in `viewer.py`), so every string stored here would be storable by
-  anyone, readable by anyone, and unbounded in what it could be used to write.
+* **No personal data, except the one profile the owner asked for.** No free-text
+  notes, no device label, no avatar, no address. The release that added the
+  device-gated trial and phone+PIN linking (`grant_or_resume_device_trial`,
+  :func:`link_profile_with_pin`) put four columns on `user_accounts` —
+  `profile_name`, `phone`, `pin_hash`, `linked_at` — and that is the complete list
+  of what the server now knows about a person: a name they typed, a number they
+  typed, and a hash of a PIN they typed. Nothing here is ever serialised to a
+  caller (:func:`to_public` is the only sanctioned wire shape and it reads
+  favorites and progress), the PIN is stored only as a PBKDF2 digest with a
+  per-row salt, and the *phone* is stored in the clear because the operator has to
+  be able to find an account by it — which means this file now holds personal data
+  and must be treated as such in backups, on disks, and in any future export. That
+  is a decision, not an oversight, and it is reversible only by deleting the
+  columns.
 * **The key is stored hashed, one-way.** See `_hash_key()` for why sha256 is the
   honest choice here and why a password KDF would be a lie about the protection
   actually on offer.
@@ -171,9 +181,10 @@ BASE_DIR = Path(__file__).parent.resolve()
 
 #: Bumped only when the shape of the state changes incompatibly; additive columns
 #: are installed by `_migrate_columns` and never require a bump. A NEW TABLE (the
-#: `payment_transactions` ledger) likewise needs no bump: `ensure_schema()` runs
-#: the whole `CREATE ... IF NOT EXISTS` script on every `connect()`, so an older
-#: file gains the table on its next open and every older row is still valid.
+#: `payment_transactions` ledger, `device_trials`) likewise needs no bump:
+#: `ensure_schema()` runs the whole `CREATE ... IF NOT EXISTS` script on every
+#: `connect()`, so an older file gains the table on its next open and every older
+#: row is still valid.
 SCHEMA_VERSION = 1
 
 DB_FILENAME = "user_state.db"
@@ -215,6 +226,74 @@ CLOCK_SKEW_TOLERANCE = 24 * 3600.0
 #: `last_seen_at` is rewritten at most this often, so reading a library does not
 #: turn every browse request into a write.
 LAST_SEEN_WRITE_INTERVAL = 900.0
+
+# ── the trial gate and the linked profile ────────────────────────────────────
+#: Days of VIP a never-before-seen device gets, and the only length that number
+#: ever has: the clock starts at first sight and NEVER restarts, so the row in
+#: `device_trials` is the whole of the grant. A caller that wants a different
+#: width passes `trial_days` per call (tests do); nothing on the wire sets it.
+#:
+#: It is a TRIAL GATE, not a hardware lock, and the difference is load-bearing
+#: rather than modest (`docs/RADD_RELAY_AND_AUTH_ARCHITECTURE.md` R5): the
+#: `device_id` is a string the client reports, an emulator hands out fresh ones, a
+#: re-flashed or OTA'd device can look new, and nothing in this design attests
+#: anything — `docs/IDENTITY_AND_TRIAL_ABUSE.md` §3 measured zero attestation calls
+#: across `App/app/src`. What it does stop is the ordinary case the owner named: a
+#: viewer who uninstall-reinstalls to farm another free week.
+TRIAL_DAYS = 3
+DAY_SECONDS = 86400.0
+#: The day a linked profile adds. Granted exactly once per account, judged from
+#: `user_accounts.linked_at` — the column the same write sets — so a customer who
+#: re-links to fix a typo cannot farm bonus days off one phone number.
+PROFILE_BONUS_SECONDS = 86400.0
+#: A device id is the app's own installation identifier (ANDROID_ID, a UUID):
+#: bounded and character-checked because it becomes a PRIMARY KEY straight from a
+#: request body, and an unbounded one is an unbounded row.
+MIN_DEVICE_ID_CHARS = 8
+MAX_DEVICE_ID_CHARS = 128
+#: A PIN is 4-8 decimal digits — 10^4 at the floor. Nothing about a slow hash
+#: fixes that: what makes a 4-digit PIN survivable online is the attempt limiter
+#: (`_pin_bucket`, which reuses `AttemptTracker`'s fixed window), and what makes
+#: it survivable in a stolen database file is that the answer is PBKDF2 with a
+#: per-row salt rather than the unsalted sha256 a 96-bit sync key can afford.
+#: The number below is a *choice*, and the honest reason it is not bigger: this
+#: box has one CPU, the hash runs inside the request that a real viewer is waiting
+#: on, and Python's `hashlib.pbkdf2_hmac` is C code — 120k iterations measured a
+#: 56.6 ms median (51.6 min / 98.7 max, twelve samples) of that one core on the
+#: live host 2026-10-31, which is a person linking a phone once, not a per-browse
+#: cost. It is NOT protection against an attacker who owns the file and can spend
+#: the whole machine offline for a week on 10^4 guesses; no iteration count
+#: reachable at this price is, for a secret this short.
+#: 120_000 is the floor set by `docs/RADD_RELAY_AND_AUTH_ARCHITECTURE.md` R6
+#: ("PBKDF2-HMAC-SHA256 with a per-account random salt, >= 120_000"), which is
+#: what the review ruled for a credential whose whole space is 10^4.
+PIN_ITERATIONS = 120_000
+MIN_PIN_DIGITS = 4
+MAX_PIN_DIGITS = 8
+#: Stored form of a PIN, prefix-tagged for the same reason `HASH_PREFIX` is: the
+#: column records which construction made it, so a future release can migrate row
+#: by row instead of guessing, and `_verify_pin_hash` can refuse a foreign shape
+#: rather than compare across forms. `sha256:`/`revoked:` are rejected outright —
+#: a sync-key digest must never be mistaken for a PIN digest.
+PIN_HASH_PREFIX = "pbkdf2_sha256$"
+#: The stored PIN's iteration count is read back out of its own digest so an old
+#: row keeps the cost it was minted at; an absurd parsed value is refused rather
+#: than spent.
+MAX_PIN_ITERATIONS = 1_000_000
+#: Both are free text typed on a phone, both arrive on a public unauthenticated
+#: route, and both are stored. Bounded hard, control characters stripped, and
+#: never on the wire: `to_public()` is the only sanctioned way this module puts a
+#: row on the wire and it reads favorites and progress, not these columns.
+MAX_PROFILE_NAME_CHARS = 60
+MIN_PHONE_DIGITS = 8
+MAX_PHONE_DIGITS = 16
+
+#: Compiled shapes for the three strings above. `fullmatch` at every call site:
+#: these are the complete grammar of what may be stored, not a substring test.
+_DEVICE_ID_RE = re.compile(r"[A-Za-z0-9._:-]+")
+_PIN_RE = re.compile(r"[0-9]+")
+#: C0/C1 controls and DEL, which have no business in a name a terminal will print.
+_CONTROL_RE = re.compile(r"[\x00-\x1f\x7f-\x9f]")
 
 #: The one-way form a sync key is stored in (`_hash_key`).
 HASH_PREFIX = "sha256:"
@@ -321,6 +400,49 @@ class WeakSyncKey(AccountError):
     default_detail = "that sync key is not strong enough"
 
 
+class WeakDeviceId(AccountError):
+    """The `device_id` was missing, blank, over-long, or not transmissible. It
+    becomes a PRIMARY KEY straight out of a request body, so a string that cannot
+    be stored safely is refused rather than truncated into the table."""
+
+    code = "invalid_request"
+    status = 400
+    default_detail = "that device id is not usable"
+
+
+class WeakProfile(AccountError):
+    """A name or phone that cannot be stored honestly: empty, over the length
+    bound, or not a phone-shaped run of digits once separators are dropped."""
+
+    code = "invalid_request"
+    status = 400
+    default_detail = "that name or phone number is not valid"
+
+
+class WeakPIN(AccountError):
+    """A PIN outside `MIN_PIN_DIGITS`..`MAX_PIN_DIGITS` decimal digits. Refusing
+    it is the whole of what this module can do about a weak choice: the limiter is
+    what actually stands between a 4-digit PIN and a guesser, and a PIN this file
+    will not store is never counted as protection anywhere else."""
+
+    code = "weak_pin"
+    status = 400
+    default_detail = "that PIN must be 4 to 8 digits"
+
+
+class PINMismatch(AccountError):
+    """The PIN presented for an already-linked profile is not the one on file.
+    Only ever reachable by a caller that already holds the account's sync key —
+    that is who the re-link rule protects, and the reason it is not the same
+    byte-shaped 404 a stranger gets for a wrong key. 401 because a wrong PIN is a
+    failed credential, which is also what the HTTP edge answers (§16.4's
+    `unauthorised` carries 401 and nothing here may invent a code)."""
+
+    code = "unauthorised"
+    status = 401
+    default_detail = "that PIN is not correct for this profile"
+
+
 # ── paths and connections ────────────────────────────────────────────────────
 
 
@@ -416,7 +538,15 @@ CREATE TABLE IF NOT EXISTS user_accounts (
     created_at REAL NOT NULL,
     last_seen_at REAL NOT NULL DEFAULT 0,
     revoked_at REAL,
-    vip_until REAL NOT NULL DEFAULT 0
+    vip_until REAL NOT NULL DEFAULT 0,
+    -- The linked profile, all four written by `link_profile_with_pin()` and none
+    -- of them ever for the wire: `to_public()` is not involved, no public route
+    -- reads these columns, and the operator CLI prints row counts only. A new
+    -- database gets them here; an existing one gets them from `_NEW_COLUMNS`.
+    linked_at REAL,
+    profile_name TEXT,
+    phone TEXT,
+    pin_hash TEXT
 );
 
 CREATE TABLE IF NOT EXISTS user_favorites (
@@ -479,6 +609,46 @@ CREATE TABLE IF NOT EXISTS payment_review_audit (
     note TEXT,
     acted_at REAL NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS verified_incoming_tids (
+    -- Money the SMS relay has already seen arrive, filed against the transaction
+    -- id rather than against an account, because when the bank SMS lands the payer
+    -- has not necessarily submitted the claim yet. `payments.sms_webhook()` is the
+    -- only writer and `payments.submit_payment()` is the only consumer: a claim
+    -- whose TID is here at the same price is credited on arrival instead of waiting
+    -- for a human. `gateway` is part of the key because two networks can each write
+    -- the same digits into a phone; one row per (network, TID) is the honest unit.
+    --
+    -- The row is DELETED when it buys the credit, not marked spent. Replaying the
+    -- same SMS, or a second account claiming the same TID, must not be able to buy
+    -- a second membership off one payment; see `payments._claim_already_credited`.
+    gateway TEXT NOT NULL,
+    tid TEXT NOT NULL,
+    amount_pkr INTEGER NOT NULL,
+    verified_at REAL NOT NULL,
+    PRIMARY KEY (gateway, tid)
+);
+
+CREATE TABLE IF NOT EXISTS device_trials (
+    -- The trial-gate ledger: one row per device id the server has ever
+    -- seen, and the ONLY place a device's trial clock lives. It is a gate on a
+    -- client-reported string, not an attestation (see `TRIAL_DAYS`), and it is
+    -- called a gate for that reason. `account_id` has no
+    -- FOREIGN KEY ... ON DELETE CASCADE for the same reason the money ledger has
+    -- none: `prune_accounts()` deletes an idle account, and a record of when a
+    -- device first appeared must not vanish with it, or the next visit from that
+    -- device would be indistinguishable from a brand-new one and mint a second
+    -- free trial. `grant_or_resume_device_trial()` re-points a stale row at a
+    -- freshly minted account and keeps the ORIGINAL expiry.
+    --
+    -- No index on `account_id` either: every read is by the `device_id` primary
+    -- key, and the one `prune_accounts()` write filters a table this small with a
+    -- scan. An index nobody queries is a permanent write cost for nothing.
+    device_id TEXT PRIMARY KEY,
+    account_id INTEGER NOT NULL,
+    first_seen_at REAL NOT NULL,
+    trial_expires_at REAL NOT NULL
+);
 """
 
 #: Columns this release needs that an older database may not have, as
@@ -493,6 +663,14 @@ _NEW_COLUMNS = {
         # membership use the same column, because the question the download
         # route asks is the same for both: is this account VIP right now?
         "vip_until": ("REAL NOT NULL DEFAULT 0", None),
+        # The linked profile. `linked_at` doubles as the record that the
+        # one-time bonus day was already spent: it is set by the same write that
+        # grants the bonus, so there is no second flag that could disagree with
+        # the fact it is supposed to mirror. NULL means never linked.
+        "linked_at": ("REAL", None),
+        "profile_name": ("TEXT", None),
+        "phone": ("TEXT", None),
+        "pin_hash": ("TEXT", None),
     },
     "user_progress": {
         "client_updated_at": ("REAL NOT NULL DEFAULT 0", "SET client_updated_at = updated_at"),
@@ -939,6 +1117,350 @@ def create_account(conn_or_path, key=None, *, now: float | None = None) -> dict:
             "created": True}
 
 
+# ── the trial gate ───────────────────────────────────────────────────────────
+
+
+def _check_device_id(device_id) -> str:
+    """Validate a client-supplied device identifier without storing junk: bounded,
+    stripped, and only characters an installation id actually contains (hex, a
+    UUID's dashes, base64url, a colon). No whitespace, no quote, no slash, no
+    control character — this string becomes a PRIMARY KEY straight out of a request
+    body, and it never becomes anything else, so there is nothing to escape into.
+    """
+    if not isinstance(device_id, str):
+        raise WeakDeviceId("a device id must be a string")
+    text = device_id.strip()
+    if not (MIN_DEVICE_ID_CHARS <= len(text) <= MAX_DEVICE_ID_CHARS):
+        raise WeakDeviceId(
+            f"a device id must be {MIN_DEVICE_ID_CHARS}..{MAX_DEVICE_ID_CHARS} "
+            "characters")
+    if not _DEVICE_ID_RE.fullmatch(text):
+        raise WeakDeviceId("that device id uses characters this server cannot store")
+    return text
+
+
+def _mint_account_row(conn, now: float, vip_until: float) -> tuple:
+    """Insert an anonymous account and hand back `(account_id, plaintext_key)`.
+
+    The key is generated here and returned once: it is stored as
+    `_hash_key(plaintext)` and nothing in this module can serve the plaintext again
+    (docstring: "show it once, then never again"). Private because every caller
+    that needs the key has to say so in its own response contract."""
+    plaintext = new_sync_key()
+    conn.execute(
+        "INSERT INTO user_accounts(key_hash, created_at, last_seen_at, revoked_at,"
+        " vip_until) VALUES(?, ?, ?, NULL, ?)",
+        (_hash_key(plaintext), now, now, float(vip_until)))
+    return int(conn.execute("SELECT last_insert_rowid()").fetchone()[0]), plaintext
+
+
+def _trial_answer(device: str, row, vip_until: float, *, sync_key=None,
+                  created: bool = False, reissued: bool = False,
+                  now: float = 0.0) -> dict:
+    """Shape the one response both branches of
+    :func:`grant_or_resume_device_trial` give back.
+
+    `trial_expires_at` is always what the ledger says, never a recomputed
+    `now + days`, which is the difference between resuming a trial and silently
+    granting a second one. `sync_key` is the plaintext only when this call minted
+    the account it belongs to, and `vip_until` is the account's live entitlement —
+    which a paid plan can carry past the trial, so the two numbers are reported
+    separately rather than one standing in for the other."""
+    return {
+        "device_id": device,
+        "account_id": int(row["account_id"]),
+        "sync_key": sync_key,
+        "created": created,
+        "reissued": reissued,
+        "first_seen_at": float(row["first_seen_at"]),
+        "trial_expires_at": float(row["trial_expires_at"]),
+        "trial_seconds_remaining": max(0.0, float(row["trial_expires_at"]) - now),
+        "vip_until": float(vip_until or 0),
+    }
+
+
+def grant_or_resume_device_trial(conn_or_path, device_id, *,
+                                 now: float | None = None,
+                                 trial_days: float = TRIAL_DAYS) -> dict:
+    """Start a device's free trial, or resume the one it already has.
+
+    A device the server has never seen gets a brand-new anonymous account (no key
+    the human typed, no password, nothing to reuse elsewhere) with
+    `vip_until = now + trial_days * 86400`. A device that HAS been seen gets
+    **its own stored `trial_expires_at` back** — the clock is the `device_trials`
+    row, so reinstalling, revoking the account, or waiting out `prune_accounts()`
+    cannot buy a second free trial. That is the entire point of the feature and the
+    whole reason the ledger exists: `user_accounts.vip_until` is an entitlement,
+    this row is the *record of the grant*, and only the second one is
+    un-restartable.
+
+    If the account a trial row points at is gone or revoked, the row re-points at a
+    freshly minted account and KEEPS the original expiry — the device gets a usable
+    account, which may already be expired, and never a fresh three days. That is
+    the one branch that hands back a plaintext key for an existing device, because
+    the key belongs to an account minted by this very call.
+
+    Otherwise the resume answer carries `sync_key: None`, and the reason is the
+    rule this module has never been able to break: the key is stored one-way, so a
+    device that lost it cannot be given it back on the strength of a
+    client-chosen `device_id` — which would be an account takeover for anyone who
+    guessed one (`created=False`, `reissued=False`, and the app must keep the key
+    it was shown at mint).
+
+    Returns `{"device_id", "account_id", "sync_key", "created", "reissued",
+    "first_seen_at", "trial_expires_at", "trial_seconds_remaining", "vip_until"}`.
+    Concurrent first-sight of one device is settled by the primary key: the loser
+    rolls back its orphan account and answers with the winner's row."""
+    device = _check_device_id(device_id)
+    moment = time.time() if now is None else float(now)
+    seconds = max(0.0, float(trial_days)) * DAY_SECONDS
+    with _borrow(conn_or_path) as conn:
+        row = conn.execute("SELECT * FROM device_trials WHERE device_id = ?",
+                           (device,)).fetchone()
+        if row is not None:
+            return _resume_or_reissue(conn, device, row, moment)
+        try:
+            account_id, plaintext = _mint_account_row(conn, moment, moment + seconds)
+            trial_row = {"account_id": account_id, "first_seen_at": moment,
+                         "trial_expires_at": moment + seconds}
+            conn.execute(
+                "INSERT INTO device_trials(device_id, account_id, first_seen_at,"
+                " trial_expires_at) VALUES(?, ?, ?, ?)",
+                (device, account_id, moment, moment + seconds))
+            _commit(conn)
+        except sqlite3.IntegrityError:
+            # Another request minted this device between our read and our write.
+            # The rollback takes our orphan account with it, so a race cannot leave
+            # a second live account behind for the same device id.
+            conn.rollback()
+            row = conn.execute("SELECT * FROM device_trials WHERE device_id = ?",
+                               (device,)).fetchone()
+            if row is None:
+                raise
+            return _resume_or_reissue(conn, device, row, moment)
+    return _trial_answer(device, trial_row, moment + seconds, sync_key=plaintext,
+                         created=True, now=moment)
+
+
+def _resume_or_reissue(conn, device: str, row, now: float) -> dict:
+    """The resume half of :func:`grant_or_resume_device_trial`, and the only place
+    that decides whether a trial row's account is still somebody's."""
+    account = conn.execute(
+        "SELECT id, vip_until, revoked_at FROM user_accounts WHERE id = ?",
+        (int(row["account_id"]),)).fetchone()
+    if account is not None and account["revoked_at"] is None:
+        return _trial_answer(device, row, account["vip_until"], now=now)
+    expiry = float(row["trial_expires_at"])
+    account_id, plaintext = _mint_account_row(conn, now, expiry)
+    conn.execute("UPDATE device_trials SET account_id = ? WHERE device_id = ?",
+                 (account_id, device))
+    _commit(conn)
+    resumed = {"account_id": account_id, "first_seen_at": row["first_seen_at"],
+               "trial_expires_at": expiry}
+    return _trial_answer(device, resumed, expiry, sync_key=plaintext, reissued=True,
+                         now=now)
+
+
+# ── the linked profile ───────────────────────────────────────────────────────
+
+
+def _check_profile_name(name) -> str:
+    """Bound and clean a display name. Control characters become a SPACE (a name
+    that carries a newline can otherwise forge a line in an operator's log or
+    terminal, and "Ali\\nKhan" is two words rather than one long one), whitespace is
+    collapsed, then length-checked — a name that arrives as only punctuation or
+    spaces is an empty name and gets refused, not stored."""
+    if not isinstance(name, str):
+        raise WeakProfile("a display name must be a string")
+    text = " ".join(_CONTROL_RE.sub(" ", name).split()).strip()
+    if not text:
+        raise WeakProfile("a display name is required")
+    if len(text) > MAX_PROFILE_NAME_CHARS:
+        raise WeakProfile(f"a display name must be {MAX_PROFILE_NAME_CHARS} "
+                          "characters or fewer")
+    return text
+
+
+def _normalize_phone(phone) -> str:
+    """Digits only, so `+92 300 1234567`, `0300-1234567` and `03001234567` all
+    arrive as one shape. Deliberately NOT a country-code normalizer: folding the
+    local `0300…` form into the international `92300…` one would mean deciding
+    which country every caller is in, and a wrong guess there silently merges two
+    different people's numbers. Two spellings of one number therefore stay two
+    rows, which is reported rather than hidden — the bonus is granted once per
+    *account* (see :func:`link_profile_with_pin`), so it is not a way to earn days.
+    """
+    if not isinstance(phone, str):
+        raise WeakProfile("a phone number must be a string")
+    digits = "".join(ch for ch in phone if ch.isdigit() and ch.isascii())
+    if not MIN_PHONE_DIGITS <= len(digits) <= MAX_PHONE_DIGITS:
+        raise WeakProfile(
+            f"a phone number must have {MIN_PHONE_DIGITS}..{MAX_PHONE_DIGITS} digits")
+    return digits
+
+
+def _check_pin(pin) -> str:
+    """`MIN_PIN_DIGITS`..`MAX_PIN_DIGITS` ASCII digits, nothing else. ASCII on
+    purpose: `str.isdigit()` also accepts `²` and Arabic-Indic `٣`, which would let
+    two visually identical PINs hash to different digests, so the shape is checked
+    against an explicit byte class and never against Unicode's opinion."""
+    if not isinstance(pin, str):
+        raise WeakPIN("a PIN must be a string of digits")
+    text = pin.strip()
+    if not (MIN_PIN_DIGITS <= len(text) <= MAX_PIN_DIGITS):
+        raise WeakPIN(
+            f"a PIN must be {MIN_PIN_DIGITS}..{MAX_PIN_DIGITS} digits")
+    if not _PIN_RE.fullmatch(text):
+        raise WeakPIN("a PIN must be digits only")
+    return text
+
+
+def _hash_pin(pin: str, *, iterations: int = PIN_ITERATIONS) -> str:
+    """PBKDF2-HMAC-SHA256 with a fresh 128-bit per-row salt, prefix-tagged with the
+    cost that made it.
+
+    This is NOT `_hash_key`, and the difference is the whole reason both exist: a
+    96-bit minted sync key has no searchable space, so one unsalted sha256 is the
+    honest cost, while a 4-digit PIN is 10,000 candidates and a stolen database
+    file gets a week offline on them. The salt stops one precomputed table from
+    answering every row at once; the iterations slow the guesser who works row by
+    row. Neither makes a 4-digit PIN strong, and neither is described here as
+    doing so — the thing standing between a PIN that short and a guesser trying
+    them over the network is :class:`AttemptTracker` (see `_pin_bucket`)."""
+    salt = secrets.token_bytes(16)
+    digest = hashlib.pbkdf2_hmac("sha256", pin.encode("utf-8"), salt, iterations)
+    return "%s%d$%s$%s" % (PIN_HASH_PREFIX, iterations, salt.hex(), digest.hex())
+
+
+def _verify_pin_hash(stored, pin) -> bool:
+    """Re-derive a presented PIN at the cost factor recorded in the row and compare
+    in constant time.
+
+    Refuses anything that is not `PIN_HASH_PREFIX`-shaped — including a `sha256:`
+    sync-key digest and a `revoked:` tombstone, so no column in this database can
+    be spent as the other kind of credential. An iteration count outside
+    `1_000`..`MAX_PIN_ITERATIONS` is refused rather than computed: a corrupt or
+    hand-edited row must not be able to make one request cost a minute of this box
+    (a free denial of service) or 12 iterations (a giveaway)."""
+    if not isinstance(stored, str) or not stored.startswith(PIN_HASH_PREFIX):
+        return False
+    parts = stored[len(PIN_HASH_PREFIX):].split("$")
+    if len(parts) != 3:
+        return False
+    count_text, salt_hex, digest_hex = parts
+    try:
+        iterations = int(count_text)
+        salt = bytes.fromhex(salt_hex)
+        want = bytes.fromhex(digest_hex)
+    except (TypeError, ValueError):
+        return False
+    if not (1_000 <= iterations <= MAX_PIN_ITERATIONS):
+        return False
+    got = hashlib.pbkdf2_hmac("sha256", str(pin).encode("utf-8"), salt, iterations)
+    return hmac.compare_digest(got, want)
+
+
+def _pin_bucket(account_id) -> str:
+    """The attempt window for one account's PIN guesses. Namespaced so it can never
+    collide with a bucket keyed on a sync-key digest (`GLOBAL_BUCKET` aside, which
+    no PIN path charges — that one counts wrong *keys*, and a wrong PIN is not
+    evidence anybody guessed a key)."""
+    return "pin:%d" % int(account_id)
+
+
+def _require_pin_match(conn, account_id, stored_hash, pin, now: float,
+                       tracker: AttemptTracker) -> None:
+    """Verify a PIN against the row's digest, charging the fixed window on a
+    miss. Same shape as `_authenticate`: the limiter is consulted on the failure
+    path only, so a burned-out bucket can never deny the person who actually knows
+    their PIN, and a guesser runs into `Locked` long before 10^4 tries.
+
+    Raises `PINMismatch` (401) or `Locked` (429) and never says which of a wrong
+    PIN and no stored PIN it saw, because a row with no digest is a row nobody
+    should be trying to re-link anyway."""
+    bucket = _pin_bucket(account_id)
+    if _verify_pin_hash(stored_hash, pin):
+        tracker.record_success(conn, bucket, now)
+        return
+    state = tracker.record_failure(conn, bucket, now)
+    if state["locked"]:
+        raise Locked(retry_after=state["retry_after"])
+    raise PINMismatch()
+
+
+def link_profile_with_pin(conn_or_path, account_id, *, name, phone, pin,
+                          now: float | None = None,
+                          tracker: AttemptTracker | None = None) -> dict:
+    """Bind a name, a phone and a PIN to an account, and grant the bonus day —
+    once.
+
+    The first link on an account extends `vip_until` by `PROFILE_BONUS_SECONDS`;
+    every later one extends nothing. The record of that is `linked_at`, the column
+    the same write sets, so there is no second flag that could drift out of step
+    with the fact it tracks and no way to earn the day twice by fixing a typo,
+    changing a number, or replaying the request.
+
+    A re-link must present the PIN already on file — the stored digest is proof of
+    ownership of the profile, not decoration nobody reads. The PIN itself cannot be
+    changed through this function (there is no second field for a new one), and
+    there is no PIN reset path yet either: a customer who forgets four digits loses
+    the ability to edit that profile, which is a product gap the owner has to
+    decide, not something this docstring should pretend away.
+
+    `account_id` is not authority: this writes onto whatever number it is handed,
+    so every caller must resolve it from an authenticated sync key first (see
+    :func:`authenticate`), and a revoked or absent account is refused exactly like
+    any other read. The plaintext PIN never reaches the table, the log, or a
+    return value.
+
+    The PIN is a verification factor and never credential material, which is the
+    ruling this function exists to honor (`docs/RADD_RELAY_AND_AUTH_ARCHITECTURE.md`
+    R6). The recovered spec wanted `sync_key = unsalted-SHA256("radd-stream-v2" +
+    phone + pin)`: one 10^4-space digest with no salt, which turns a stolen
+    `user_state.db` into every linked account — the same defect the phone-derived
+    key in `SyncContract.kt` already is, with a thousand times less entropy.
+    Nothing here derives a key from anything a person types; `new_sync_key()`'s
+    random mint stays the only credential, and this row only proves somebody knew
+    the four digits.
+
+    Returns `{"account_id", "linked", "bonus_granted", "vip_until", "phone",
+    "name"}` — the phone is the normalized digits (an operator needs to see it, and
+    it is not for the wire) and no key, hash or digest is among them."""
+    wanted = int(account_id)
+    profile_name = _check_profile_name(name)
+    digits = _normalize_phone(phone)
+    pin_digits = _check_pin(pin)
+    moment = time.time() if now is None else float(now)
+    with _borrow(conn_or_path) as conn:
+        row = conn.execute(
+            "SELECT id, vip_until, revoked_at, linked_at, pin_hash FROM user_accounts"
+            " WHERE id = ?", (wanted,)).fetchone()
+        if row is None or row["revoked_at"] is not None:
+            raise UnknownAccount()
+        limiter = tracker if tracker is not None else attempt_tracker
+        first_link = row["linked_at"] is None
+        if first_link:
+            # `max(now, vip_until)` rather than a literal `+ 86400`: a trial that
+            # lapsed a week ago has already spent its day, and adding to the old
+            # number would grant a bonus measured from a date nobody can see. Same
+            # law `payments.approve_payment()` applies to a paid plan.
+            vip_until = max(moment, float(row["vip_until"] or 0)) + PROFILE_BONUS_SECONDS
+            linked_at = moment
+        else:
+            _require_pin_match(conn, wanted, row["pin_hash"], pin_digits, moment,
+                               limiter)
+            vip_until = float(row["vip_until"] or 0)
+            linked_at = float(row["linked_at"])
+        conn.execute(
+            "UPDATE user_accounts SET profile_name = ?, phone = ?, pin_hash = ?,"
+            " linked_at = ?, vip_until = ? WHERE id = ?",
+            (profile_name, digits, _hash_pin(pin_digits), linked_at, vip_until,
+             wanted))
+        _commit(conn)
+    return {"account_id": wanted, "linked": True, "bonus_granted": first_link,
+            "vip_until": vip_until, "name": profile_name, "phone": digits}
+
+
 def revoke_account(conn_or_path, key, *, now: float | None = None,
                    tracker: AttemptTracker | None = None) -> dict:
     """Destroy a sync account: the row stays for audit, the key stops working
@@ -1006,15 +1528,27 @@ def prune_accounts(conn_or_path, *, idle_days: float = DEFAULT_IDLE_DAYS,
     out on the same call, so the attempt table cannot grow one row per guessed
     string forever either.
 
+    A `device_trials` row is collected only when BOTH of those are true: the
+    account it points at is gone, and the trial itself expired past the same
+    cutoff. A live account keeps its trial record whatever its expiry (that row is
+    the thing that stops a second free grant), and an expired trial belonging to a
+    still-live account survives too, because that account may be paid. The case
+    this does collect is a device whose owner vanished from this server entirely —
+    and the law already applied to a person that absent for `idle_days` is that
+    their account is gone, so their clock is allowed to restart with it. That is a
+    decision with a price on it, stated plainly: `idle_days` of total silence is
+    also the window in which a device can come back and be treated as new.
+
     Returns `{"removed", "favorites_removed", "progress_removed", "cutoff",
-    "attempts_removed"}`. Never touches an account still in use."""
+    "attempts_removed", "trials_removed"}`. Never touches an account still in
+    use."""
     now = time.time() if now is None else float(now)
     cutoff = now - max(0.0, float(idle_days)) * 86400.0
     idle = ("(CASE WHEN last_seen_at > created_at THEN last_seen_at ELSE created_at END) < ?")
     with _borrow(conn_or_path) as conn:
         ids = [int(row[0]) for row in conn.execute(
             f"SELECT id FROM user_accounts WHERE {idle}", (cutoff,))]
-        favorites = progress = attempts = 0
+        favorites = progress = attempts = trials = 0
         if ids:
             marks = ",".join("?" * len(ids))
             favorites = int(conn.execute(
@@ -1026,12 +1560,20 @@ def prune_accounts(conn_or_path, *, idle_days: float = DEFAULT_IDLE_DAYS,
             conn.execute(f"DELETE FROM user_favorites WHERE account_id IN ({marks})", ids)
             conn.execute(f"DELETE FROM user_progress WHERE account_id IN ({marks})", ids)
             conn.execute(f"DELETE FROM user_accounts WHERE id IN ({marks})", ids)
+        if _has_table(conn, "device_trials"):
+            trials = int(conn.execute(
+                "SELECT COUNT(*) FROM device_trials WHERE trial_expires_at < ?"
+                " AND account_id NOT IN (SELECT id FROM user_accounts)",
+                (cutoff,)).fetchone()[0])
+            conn.execute("DELETE FROM device_trials WHERE trial_expires_at < ?"
+                         " AND account_id NOT IN (SELECT id FROM user_accounts)",
+                         (cutoff,))
         if sweep_attempts:
             attempts = (tracker if tracker is not None else attempt_tracker).sweep(conn, now)
         _commit(conn)
     return {"removed": len(ids), "favorites_removed": favorites,
             "progress_removed": progress, "cutoff": cutoff,
-            "attempts_removed": attempts}
+            "attempts_removed": attempts, "trials_removed": trials}
 
 
 # ── the visibility oracle (adult rule + provenance rule) ─────────────────────
@@ -1525,10 +2067,15 @@ def _summary(conn_or_path) -> dict:
     with _borrow(conn_or_path) as conn:
         out = {}
         for table in ("user_accounts", "user_favorites", "user_progress",
-                      "sync_key_attempts"):
+                      "sync_key_attempts", "device_trials"):
             out[table] = int(conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
         out["accounts_live"] = int(conn.execute(
             "SELECT COUNT(*) FROM user_accounts WHERE revoked_at IS NULL").fetchone()[0])
+        # How much personal data this file actually holds. The operator's number to
+        # decide whether that is still the right trade (`profile_state` prints the
+        # name and phone of ONE account, given its id; nothing prints a list).
+        out["profiles_linked"] = int(conn.execute(
+            "SELECT COUNT(*) FROM user_accounts WHERE linked_at IS NOT NULL").fetchone()[0])
     out["schema_version"] = schema_version(conn_or_path)
     return out
 
@@ -1550,7 +2097,8 @@ def main(argv=None) -> int:
         print(f"removed {result['removed']} idle accounts "
               f"({result['favorites_removed']} favorites, "
               f"{result['progress_removed']} progress rows, "
-              f"{result['attempts_removed']} attempt rows)")
+              f"{result['attempts_removed']} attempt rows, "
+              f"{result['trials_removed']} expired trial rows)")
         return 0
     if args.command == "stats":
         for name, value in account_stats(db, args.key).items():

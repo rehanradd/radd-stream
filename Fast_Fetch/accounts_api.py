@@ -10,12 +10,23 @@ either direction.
 ═══════════════════════════════════════════════════════════════════════════════
 WHAT THIS IS NOT. Read it before "hardening" anything.
 ───────────────────────────────────────────────────────────────────────────────
-* **Not a login.** There is no password, no email, no session cookie, no JWT.
-  A sync account is one 256-bit key the app minted or we minted once; showing
-  it *is* authenticating. That is deliberate: the mandate is an *optional*
-  cross-device sync of favorites and resume points, not an identity system,
-  and every identity mechanism added here would be data we have to protect and
-  a way for a user to be locked out of their own list.
+* **Not a login — except in one direction added on purpose.** There is no
+  password, no email, no session cookie, no JWT. A sync account is one 256-bit key
+  the app minted or we minted once; showing it *is* authenticating. That is
+  deliberate: the mandate is an *optional* cross-device sync of favorites and
+  resume points, not an identity system, and every identity mechanism added here
+  would be data we have to protect and a way for a user to be locked out of their
+  own list.
+  The two routes this release adds are the exception, and they are narrow:
+  `POST /anonymous` turns a device id into an account with a three-day trial, and
+  `POST /profile-link` attaches a name, a phone and a 4-digit PIN to an account the
+  caller already holds the key for. Neither is a *login* — nothing in this module
+  accepts a phone number plus a PIN as authority, the PIN is only ever checked
+  against a profile that already exists, and a customer who forgets four digits
+  cannot get their account back through any route here. If somebody later wants
+  phone+PIN sign-in, that is a different feature with a different threat model
+  (10^4 guesses against a national numbering plan, on a host with no TLS) and it
+  must not be built by quietly removing the bearer requirement from these routes.
 * **Not confidential in transit.** The deployed host is plain HTTP with no TLS
   (see ORACLE_DEPLOYMENT.md; ``http://92.4.95.252/``). The sync key in the
   ``Authorization`` header therefore travels in the clear, and anyone on the
@@ -95,19 +106,22 @@ MAX_N = 1000
 #: The app is expected to re-ask when it refreshes its entitlement.
 VIP_PASS_TTL_SECONDS = 6 * 3600
 
-#: `accounts.py` codes mapped onto §16.4's closed vocabulary, because this edge
-#: publishes the same problem bodies as the rest of v2 and may not invent codes:
-#: `/manifest` publishes `error_codes`, and a code nobody declared is a client
-#: that branches on a string no other route can ever answer. The four account
-#: codes with no §16.4 equivalent (`dependency_unavailable`, `invalid_progress`,
-#: `weak_sync_key`, `account_full`) collapse into the declared one whose status
-#: they already carry, and `detail` — not `code` — says which.
+#: §16.4's closed vocabulary, and the four account codes with no §16.4 equivalent
+#: (`dependency_unavailable`, `invalid_progress`, `weak_sync_key`, `account_full`)
+#: collapse into the declared one whose status they already carry, and `detail` —
+#: not `code` — says which. `weak_pin` and `invalid_request` join them for the same
+#: reason: a PIN that is four characters is a bad parameter, and `unauthorised`
+#: (which `PINMismatch` carries) is already declared, so it needs no mapping and
+#: answers 401 — the same answer a missing bearer key gets, which is the honest one:
+#: a wrong PIN is a failed credential, not a forbidden action.
 _STATUS = {
     "not_found": "not_found",
     "rate_limited": "rate_limited",
     "dependency_unavailable": "unavailable",
     "invalid_progress": "invalid_params",
     "weak_sync_key": "invalid_params",
+    "weak_pin": "invalid_params",
+    "invalid_request": "invalid_params",
     "account_full": "forbidden",
     "account_error": "invalid_params",
 }
@@ -252,6 +266,41 @@ def _catalog_handle(catalog_path):
 def _account_view(created: dict) -> dict:
     """`create_account` returns our row number; the client never sees it (§3)."""
     return {"created_at": created["created_at"], "created": bool(created["created"])}
+
+
+def _trial_view(trial: dict) -> dict:
+    """The same law as `_account_view`, one step further: `grant_or_resume_device_trial`
+    hands back `account_id` and the wire does not carry it, because §3 makes our row
+    numbers somebody else's join key.
+
+    What it does publish is the clock — `trial_expires_at` and the remaining seconds —
+    because the app has to show a countdown, and `vip_until` because a trial that a
+    payment extended has to read as extended. `created` is the one bit that tells the
+    app whether this response is the last time it will ever see `sync_key`: a resume
+    carries `None` there, and no replay of the device id changes that (the reason is
+    in `grant_or_resume_device_trial`: handing the key back on a client-chosen id
+    would be a takeover for anyone who guessed one)."""
+    return {"created": bool(trial["created"]),
+            "reissued": bool(trial["reissued"]),
+            "first_seen_at": trial["first_seen_at"],
+            "trial_expires_at": trial["trial_expires_at"],
+            "trial_seconds_remaining": trial["trial_seconds_remaining"],
+            "vip_until": trial["vip_until"]}
+
+
+def _profile_view(linked: dict) -> dict:
+    """The caller's own three values back to them, and no digest with them.
+
+    `name` and `phone` are what this request just submitted, to a caller that already
+    proved it holds the account's sync key — the only place either may appear. The
+    hash, the salt and the iteration count are not: a response that carried them
+    would let a wire-tap on this plain-HTTP host try PINs offline at whatever speed
+    the KDF allows, which is the exact thing `accounts._hash_pin` exists to prevent."""
+    return {"linked": True,
+            "name": linked["name"],
+            "phone": linked["phone"],
+            "bonus_granted": bool(linked["bonus_granted"]),
+            "vip_until": linked["vip_until"]}
 
 
 def _note_usage(db_path, key, headers, count_request=True):
@@ -434,11 +483,50 @@ def route_post(path, body, *, db_path, catalog_path, secret, headers) -> tuple |
             if created["sync_key"]:
                 out["sync_key"] = created["sync_key"]
             return _respond({"account": out}, status=201 if created["created"] else 200)
+        if tail == ["anonymous"]:
+            # The zero-friction entry: a device id in, an account out, nothing typed
+            # and nothing to remember. Unauthenticated by construction, like
+            # creation, and counted the same way (`_note_usage` above ran with no
+            # key, so this gets a request count and no device).
+            #
+            # What it is NOT is a way to get more free VIP: the three days live in
+            # `device_trials`, keyed on the id, and the server hands back the stored
+            # expiry for any device it has already seen. `trial_days` is not a
+            # parameter of this route and no body field can become one — a client
+            # that could set its own trial length would be a client that sets its own
+            # price, which is the rule `["payment"]` below enforces on money.
+            trial = accounts.grant_or_resume_device_trial(
+                db_path, payload.get("device_id"))
+            out = _trial_view(trial)
+            if trial["sync_key"]:
+                out["sync_key"] = trial["sync_key"]
+            return _respond({"account": out}, status=201 if trial["created"] else 200)
         if not key:
             return _problem("unauthorised", 401, "a bearer sync key is required", path)
         if tail == ["revoke"]:
             accounts.revoke_account(db_path, key, tracker=LIMITER)
             return _respond({"revoked": True})
+        if tail == ["profile-link"]:
+            # Bearer first, always: `link_profile_with_pin` writes onto whatever
+            # `account_id` it is handed, so the number may only ever come from a key
+            # this server minted and has not revoked — never from the body. A body
+            # that carries `account_id` is ignored on purpose rather than refused:
+            # refusing would advertise that the field is the interesting one.
+            #
+            # The PIN is what makes a re-link edit the profile instead of stealing
+            # it, and the +1 day it earns is granted once per account (`linked_at`),
+            # so replaying this call is a no-op on the entitlement. What it costs on
+            # a plain-HTTP host is stated in `accounts.link_profile_with_pin`: the
+            # PIN and the phone cross the wire in the clear, the limiter is the only
+            # thing between a 4-digit PIN and a guesser, and a watcher who captured
+            # the sync key already owns the account anyway.
+            account = accounts.authenticate(db_path, key, tracker=LIMITER)
+            linked = accounts.link_profile_with_pin(
+                db_path, account["account_id"],
+                name=payload.get("name"), phone=payload.get("phone"),
+                pin=payload.get("pin"), tracker=LIMITER)
+            return _respond({"profile": _profile_view(linked)},
+                            status=201 if linked["bonus_granted"] else 200)
         if tail == ["favorites"]:
             work, refusal = _target(payload, mint, path)
             if refusal:
@@ -549,10 +637,41 @@ def _selfcheck() -> int:
         anon = route_get(PREFIX, {}, db_path=db, catalog_path=catalog,
                          secret=secret, headers={})
         assert anon[0] == 404, anon            # UnknownAccount: no key at all
+        trial = route_post(f"{PREFIX}/anonymous", {"device_id": "selfcheck-device-1"},
+                           db_path=db, catalog_path=catalog, secret=secret, headers={})
+        assert trial[0] == 201, trial
+        fresh = json.loads(trial[2])["account"]
+        assert fresh["created"] and fresh["sync_key"], fresh
+        again = route_post(f"{PREFIX}/anonymous", {"device_id": "selfcheck-device-1"},
+                           db_path=db, catalog_path=catalog, secret=secret, headers={})
+        resumed = json.loads(again[2])["account"]
+        assert again[0] == 200 and not resumed["created"], again
+        assert resumed["trial_expires_at"] == fresh["trial_expires_at"], resumed
+        assert "sync_key" not in resumed or not resumed["sync_key"], resumed
+        junk = route_post(f"{PREFIX}/anonymous", {"device_id": "x"}, db_path=db,
+                          catalog_path=catalog, secret=secret, headers={})
+        assert junk[0] == 400, junk
+        mine = {"Authorization": "Bearer " + fresh["sync_key"]}
+        linked = route_post(f"{PREFIX}/profile-link",
+                            {"name": "Self Check", "phone": "+92 300 1234567",
+                             "pin": "4821"}, db_path=db, catalog_path=catalog,
+                            secret=secret, headers=mine)
+        assert linked[0] == 201, linked
+        assert json.loads(linked[2])["profile"]["bonus_granted"], linked
+        assert b"pin" not in linked[2].lower() and b"4821" not in linked[2], linked
+        wrong = route_post(f"{PREFIX}/profile-link",
+                           {"name": "Self Check", "phone": "03001234567", "pin": "9999"},
+                           db_path=db, catalog_path=catalog, secret=secret, headers=mine)
+        assert wrong[0] == 401, wrong
+        naked = route_post(f"{PREFIX}/profile-link",
+                           {"name": "Self Check", "phone": "03001234567", "pin": "4821"},
+                           db_path=db, catalog_path=catalog, secret=secret, headers={})
+        assert naked[0] == 401, naked
         other = route_get("/api/v2/browse", {}, db_path=db, catalog_path=catalog,
                           secret=secret, headers={})
         assert other is None, other
-        print("[.] accounts_api selfcheck OK — one favorite, adult and forged refs refused")
+        print("[.] accounts_api selfcheck OK — one favorite, adult and forged refs "
+              "refused, one trial resumed and one profile linked")
         return 0
 
 
