@@ -33,6 +33,9 @@ ADMIN_DOC = REPO_ROOT / "docs" / "ADMIN_PANEL_ACCESS.md"
 FF_CKPT = BASE_DIR / "checkpoints"
 DOC_CKPT = REPO_ROOT / "docs" / "checkpoints"
 
+#: The gate's own module list. Docs may describe the gate; only this file decides what runs.
+WORKFLOW = REPO_ROOT / ".github" / "workflows" / "backend-ci.yml"
+
 AUTO_LOADED = [ROOT_AGENTS, FF_AGENTS, APP_AGENTS]
 
 
@@ -541,6 +544,88 @@ class OpenItemsIndexTests(unittest.TestCase):
                                 "%s: the index is not at the top" % path)
             self.assertTrue(re.search(r"(?i)open items|current state", body[:4_000]),
                             "%s lost its open-items index" % path)
+
+
+class WorkflowSuiteCoverageTests(unittest.TestCase):
+    """The gate is the module list in `backend-ci.yml`, re-derived on every run.
+
+    A number in a doc is a memory; the workflow's own steps are the fact. Measured 2026-10-31
+    at `babb06f`: 35 suite steps, 35 run commands, all 35 files present, and 86 test modules
+    on disk — that is the receipt, never an assertion. Nothing here quotes a total: adding a
+    suite, deleting or renaming a module, pointing a step at a file that does not exist, or
+    running one module twice all fail without anyone editing a count.
+    """
+
+    STEP = re.compile(r"^\s*- name: 🧪\s+(\S+\.py)\b", re.M)
+    RUN = re.compile(r"^\s*run:\s+(?:time\s+)?python3\s+-S\s+(\S*test_[a-z0-9_]+\.py)\s*$", re.M)
+
+    #: Modules on disk that exist and are NOT in the gate. This is a DEFECT INVENTORY, not a
+    #: policy: the gate runs 35 of the 86 test modules that exist, and an unregistered suite does
+    #: not run on anyone's push (`test_accounts.py`, `test_accounts_api.py`, `test_payments.py`
+    #: are the money-and-keys ones the fleet already knows about). The list is a ratchet, not a
+    #: count: a NEW module must be registered in the workflow or added here with the reason it
+    #: cannot run; registering one means deleting it here; deleting or renaming one fails too.
+    #: What it enforces is `in_gate | UNREGISTERED == on_disk` — exact set equality, modulo the
+    #: debt — which becomes plain equality the moment the debt is paid.
+    UNREGISTERED = frozenset({
+        "test_10xflix_import.py", "test_5movierulz_import.py", "test_7starhd_import.py",
+        "test_9xmovies.py", "test_accounts.py", "test_accounts_api.py",
+        "test_all_sites.py", "test_animahd_import.py", "test_aryplus_import.py",
+        "test_audit_staging.py", "test_backfill_animated_flag.py", "test_backfill_tmdb.py",
+        "test_bolly4u_import.py", "test_convert_mp4moviez.py", "test_desicinemas.py",
+        "test_desiserials_import.py", "test_download_endpoint.py", "test_dramacool_import.py",
+        "test_engagement.py", "test_filmiyin_import.py", "test_filmyhit_import.py",
+        "test_filmywap_import.py", "test_filmyzilla_import.py", "test_hdhub4u_import.py",
+        "test_hdtvb_import.py", "test_hindilinks4u.py", "test_hindilinks4u_retry.py",
+        "test_host_resolvers.py", "test_import_humtv.py", "test_import_katmoviehd.py",
+        "test_import_wp_family.py", "test_katmoviehd.py", "test_katmoviehd_import.py",
+        "test_kisskh_import.py", "test_kuttymovies_import.py", "test_levidia_import.py",
+        "test_moviecok_import.py", "test_moviesmela_import.py", "test_moviezguru.py",
+        "test_mp4moviez_import.py", "test_multimovies_import.py", "test_pagalmovies_import.py",
+        "test_payments.py", "test_rareanimes_import.py", "test_rogmovies_import.py",
+        "test_ssrmovies_import.py", "test_stream_resolvers.py", "test_themoviebox_import.py",
+        "test_toonworld4all.py", "test_vegamovies_import.py", "test_world4ufree_import.py",
+    })
+
+    def _steps(self):
+        return [pathlib.PurePosixPath(p).name for p in self.STEP.findall(load(WORKFLOW))]
+
+    def _runs(self):
+        return [pathlib.PurePosixPath(p).name for p in self.RUN.findall(load(WORKFLOW))]
+
+    def _on_disk(self):
+        return {p.name for d in (BASE_DIR, BASE_DIR / "importers") for p in d.glob("test_*.py")}
+
+    def test_every_step_names_the_module_its_run_command_runs(self):
+        steps, runs = self._steps(), self._runs()
+        self.assertTrue(steps, "backend-ci.yml has no 🧪 suite steps")
+        self.assertEqual(steps, runs,
+                         "a step's name and its run command disagree (or a suite lost its 🧪):\n"
+                         "  not run: %s\n  not named: %s"
+                         % (sorted(set(steps) - set(runs)), sorted(set(runs) - set(steps))))
+
+    def test_no_suite_runs_twice(self):
+        runs = self._runs()
+        dupes = sorted({name for name in runs if runs.count(name) > 1})
+        self.assertFalse(dupes, "a module runs in two steps: %s" % dupes)
+
+    def test_every_step_runs_a_module_that_exists(self):
+        missing = sorted(set(self._runs()) - self._on_disk())
+        self.assertFalse(missing, "the gate runs modules that are not in the tree:\n"
+                         + "\n".join(missing))
+
+    def test_every_module_is_registered_or_recorded_as_debt(self):
+        on_disk, in_gate = self._on_disk(), set(self._runs())
+        undeclared = sorted(on_disk - in_gate - self.UNREGISTERED)
+        self.assertFalse(undeclared,
+                         "a module exists and runs on no one's push. Register it in "
+                         "backend-ci.yml, or add it to UNREGISTERED with the reason it cannot "
+                         "run:\n" + "\n".join(undeclared))
+        registered = sorted(self.UNREGISTERED & in_gate)
+        self.assertFalse(registered, "now in the gate; delete from UNREGISTERED:\n"
+                         + "\n".join(registered))
+        gone = sorted(self.UNREGISTERED - on_disk)
+        self.assertFalse(gone, "deleted or renamed; prune UNREGISTERED:\n" + "\n".join(gone))
 
 
 if __name__ == "__main__":
