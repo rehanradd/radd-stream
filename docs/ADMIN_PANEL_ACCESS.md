@@ -13,7 +13,7 @@ Neither is bound beyond loopback and nginx forwards neither.
 |---|---|---|
 | `http://127.0.0.1:8080/` | `200`, 1,355 B | the small public-port landing page, **not** the dashboard |
 | `http://127.0.0.1:8080/api/data` | `404`, 40 B | the data feed does not exist on this port |
-| `http://127.0.0.1:8081/` | `200`, **46,476 B** | the real dashboard ("Database & Site Explorer"), **no token required** |
+| `http://127.0.0.1:8081/` | `200`, **46,476 B** *(2026-10-29 05:47 read; the page renders catalog rows, so its size is data-dependent — re-measure it with `curl -s` piped to `wc -c`, do not quote this number as current)* | the real dashboard ("Database & Site Explorer"), **no token required** |
 | `http://127.0.0.1:8081/api/data` | `200`, **2,533,437 B in 46.6 s** | the payload the dashboard renders |
 | `http://127.0.0.1:8081/admin` | `401`, 193 B | the only route on that port that consulted `RADD_ADMIN_TOKEN` |
 | `http://92.4.95.252/api/data` | `403` | nginx `^~ /api/` denies it at the public edge |
