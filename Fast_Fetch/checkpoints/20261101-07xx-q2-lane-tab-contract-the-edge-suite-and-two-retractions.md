@@ -158,3 +158,44 @@ no key to compare them on, so the subtraction is arithmetic, not a measurement.
    the rest cheaper or pointless.
 4. Root `AGENTS.md` at 31,990 / 32,000 B: **any** append to it needs a paragraph removed in the same
    commit. Decide the ceiling or the eviction before someone discovers it as a CI failure.
+
+## 8. The base moved twice more inside this session, and what that cost — recorded so the next lane
+##    does not read §4's shas as the gated head
+
+`f50d74b` (merge of `c2ae2bf`) and `37f5082` were the head I pushed and CI-judged *first*; the verdicts
+below are theirs and they are real: **run 41262497585 at `b0add6b`** → step 37
+`🧪 test_public_edge_scenarios.py` **success** on its first-ever execution, step 41 `🧪 test_accounts.py`
+**failure**, and **run 41264880812 at `37f5082`** → `completed success` with steps 37/41/42/44 all green.
+`test_accounts.py` is byte-identical at `4b025bf`, `c2ae2bf` and my head (`git rev-parse
+<ref>:Fast_Fetch/test_accounts.py` = `7d189b0c…` in all three) and its lockout tests inject `now=` rather
+than reading the clock, so the `b0add6b` red is **not reproducible on identical inputs** and I could not
+read its log: the annotations API returns only `Process completed with exit code 1` (annotation
+`start_line 102`, no test name), and `/actions/runs/{id}/logs` needs a token this lane does not have. It
+is q3's module, it went green twice on the same content, and I am reporting it as a runner-side unknown
+rather than a cause.
+
+Then trunk moved to `c2ae2bf` → `c2528e1` (q3's premerge-plan docs) with the instruction to re-branch.
+**A re-branch is not something I can do to the existing ref:** `q2-admin-auth-upgrade` already carries the
+merge of `c2ae2bf`, and rewriting it onto `c2528e1` would be a force-push, which is barred. So the replay
+went onto a **new ref, `q2-admin-auth-c2528e1`**, by `git cherry-pick -x` of exactly my five non-merge
+commits (`--right-only --cherry-pick` proved none of them were already in trunk), leaving
+`q2-admin-auth-upgrade` at `37f5082` as history — **gate on the new ref, and do not land the old one**;
+deleting the stale ref is the owner's call, not mine.
+
+What that cost, honestly: two `checkpoints/README.md` conflicts and one `CONTINUITY.md` conflict, all the
+same shape (two lanes prepending a newest-first line, plus the archive integer). One of my resolutions was
+**wrong and I caught it before pushing**: my first sorter treated the picked side and the base side
+backwards and its timestamp regex could not match the index's `05:xx` spelling (`\d{2}:\d{2}` does not
+match `xx`), so it silently sorted my entry above q3's newer one and put `06:xx` after `05:xx`. Fixed by
+swapping the two adjacent entries back and re-checking for duplicates (`none`), and the integer was taken
+from the listing the guard counts, not from arithmetic — as §7 of this file already said to do. Static
+re-check of the final tree: `CONTINUITY` claims 70 / listing holds 70, `docs/SESSION_CHECKPOINT.md` 60/60,
+newest checkpoint indexed, `steps == runs` at 42 with no duplicate, no undeclared module and no stale debt
+row, no conflict markers in any changed path, and both tab-strip detectors still matching the real page.
+
+**Second near-cap file, found by the same measurement, and it is not mine either:**
+`docs/SESSION_CHECKPOINT.md` is now **11,941 B of a 12,000 B cap** and **112 of 120 lines** (cap at
+`Fast_Fetch/test_docs_invariants.py:352-355`) after trunk's own `c2528e1` append added 24 lines to it.
+So the diet guard has *two* files within one screenful of failing — root `AGENTS.md` at 10 B of headroom
+and this at 59 B and 8 lines — and both will be hit by ordinary appends rather than by misuse. Reported,
+not edited: `docs/SESSION_CHECKPOINT.md` is q3's file and root `AGENTS.md` is nobody's to trim silently.
