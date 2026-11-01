@@ -349,8 +349,21 @@ INVARIANTS = [
     ("the detail API is preferred only when a subjectId exists",
      FF_CKPT / "20261030-q2-themoviebox-crawl-2026-10-30-parser-fixes-detail-api-preference.md",
      "Crawl now prefers the API when the queued row carries a `subjectId`"),
-    ("MovieBox is metadata + trailer evidence, not playable", REPO_ROOT / "Fast_Fetch" / "SITES.md",
-     "**metadata + trailer-evidence** source, not a"),
+    # Converted 2026-11-01 (q5, slice 7). The old literal was the *classification* sentence — "MovieBox is a
+    # **metadata + trailer-evidence** source, not a playable-source site, from this host at this time". It
+    # reads like a law and is actually a measurement with a timestamp on it: the first lane that resolves a
+    # playable print rewrites that sentence as honest bookkeeping and the guard reports it as a policy
+    # change. The interest the classification serves is unconditional and is stated two sentences later, so
+    # the pin moves onto it: no sources row may be written for a print that was never resolved. That clause
+    # is true before the site gains playability and true after, because it is about *resolution*, not about
+    # the site's identity — which is precisely the test this series uses.
+    # Trade, stated: the pin no longer keeps the classification wording on the page. The classification stays
+    # in `SITES.md` where it belongs — dated, and paired with the two measured caps behind it — and the next
+    # slice takes the display half of the same paragraph (`Do not list it as scraped-and-playable anywhere`),
+    # deliberately not this one, so slices 7 and 8 pin two obligations that fire alone instead of re-pinning
+    # one proposition twice the way the two old state literals did.
+    ("no sources row for a print that was never resolved", REPO_ROOT / "Fast_Fetch" / "SITES.md",
+     "No `sources` row may be written for a print we have never resolved."),
     ("no playable print is resolvable from this host", REPO_ROOT / "Fast_Fetch" / "SITES.md",
      "no playable print is resolvable from this host"),
 ]

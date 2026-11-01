@@ -312,3 +312,43 @@ The habit that caused it is worth naming for the next lane: the branch identity 
 was about to create rather than state I had created — the same shape as the "98 entries" and "most-edited block"
 errors, just pointing at a ref instead of a count. Method correction: create the branch, print
 `git rev-parse --abbrev-ref HEAD`, and only then write the sentence that names it.
+
+## Slice 7 — `MovieBox is metadata + trailer evidence, not playable` → the write-law behind the classification
+
+**Branch:** `q5-pin-s7-moviebox-evidence-20261101`, created *before* the edits this time and its name printed
+before it was claimed (the slice-6 method correction applied), stacked on slice 6's tip (`a9335cd`). Supervisor
+16:30: own worktree, local commit, **one push attempt only**, report tip sha and verification, then stand by; no
+credential read or print, no Gradle while load ≥ 4, no tag, no restart, no production DB write, no catalog merge.
+All observed.
+
+**What it pinned:** `Fast_Fetch/SITES.md:1231` — "MovieBox is a **metadata + trailer-evidence** source, not a
+playable-source site, **from this host at this time**". The label called it a law; reading the sentence shows it is
+a measurement wearing a timestamp. The first lane that resolves a playable print has to rewrite it as honest
+bookkeeping, and the guard would report that as a policy change.
+
+**What it pins now:** `Fast_Fetch/SITES.md:1241` — "No `sources` row may be written for a print we have never
+resolved." Same paragraph, two sentences later, and unconditional: true before the site gains playability and true
+after, because it is about *resolution*, not about the site's identity. That is the test this series uses, and it is
+why the classification sentence is not the pin's home even though it is the sentence a reader remembers. The
+classification stays in `SITES.md` where it is honest — dated, with its two measured caps named in the same
+paragraph ("both measured rather than assumed").
+
+**Slices 7 and 8 were planned together, on purpose.** The two old literals asserted nearly the same thing twice
+("not playable", "no playable print is resolvable from this host"), which is the duplication this series exists to
+remove, so converting them onto one clause would have left a gap and a repeat. This slice takes the **write**
+obligation; slice 8 takes the **display** obligation from the same paragraph
+(`Do not list it as scraped-and-playable anywhere`) — a lane can rewrite either while the other still reads true,
+so two pins, two propositions. Both candidates were probed against the flat text before choosing
+(`No \`sources\` row may be written…` → match; display clause → match; the scheduling clause
+`periodic metadata top-up`, never as a bulk crawl` → match, deliberately unused, because it depends on the
+non-enumerable-shelf measurement and would reintroduce a timer).
+
+**Verification.** Guard imported: `len(INVARIANTS)` 104, 0 failing phrases, 0 duplicate labels, `ast.parse` clean.
+Module run: **22 tests OK in 0.758 s** — against **107.100 s** for the same committed code at load ≈ 8 in the
+slice-5/6 checks, a 141× spread on identical assertions with load 2.7 and a warm cache. Rule 7 in one line: local
+seconds are the box's, not the module's, and only CI's per-step timing decides gate membership. **Status: 10 of 15
+converted, 5 still pinning state** — 4 held by decision (`one vCPU`, `backend is the running system`, 2 on qoder3's
+adult surface) and **1 ordinary left** (slice 8). Byte budgets unmoved (`AGENTS.md` 31,990 / 32,000,
+`Fast_Fetch/AGENTS.md` 14,469 / 18,000, `App/AGENTS.md` 14,061 / 15,000; `SITES.md` not edited — the conversion
+moved the pin onto a clause that already existed, which is the series rule), archive counts 71/71 and 60/60, no new
+file, CONTINUITY 11,970 B / 93 lines.
