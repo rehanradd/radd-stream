@@ -117,6 +117,178 @@ jobs:
         working-directory: App
         run: ./gradlew :app:testDebugUnitTest --no-daemon --stacktrace --console=plain
 
+      # ---------------------------------------------------------------------------
+      # Signing diagnostics. Why these exist as SEPARATE steps rather than more
+      # sentences inside the Gradle preflight: a release run's log is readable only
+      # to someone with admin rights on this repo, while a step's *name and verdict*
+      # are readable by anyone who can see the Checks tab. So each step below tests
+      # exactly one property of one secret and fails on nothing else — the first red
+      # step is the diagnosis, with no log access required.
+      #
+      # Every step prints only integers and booleans. The keystore bytes and the four
+      # secret values are never echoed, never written outside $RUNNER_TEMP, and never
+      # reach an artifact. Temp material is removed whether the step passes or fails.
+      # ---------------------------------------------------------------------------
+      - name: "🔎 1/6 base64 length is a whole number of groups"
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+        run: |
+          python3 - <<'PYEOF'
+          import os, sys
+          v = os.environ["KEYSTORE_BASE64"]
+          print("chars=%d  mod4=%d" % (len(v), len(v) % 4))
+          sys.exit(0 if len(v) % 4 == 0 else 1)
+          PYEOF
+
+      - name: "🔎 2/6 base64 has no newline or stray character"
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+        run: |
+          python3 - <<'PYEOF'
+          import os, sys
+          v = os.environ["KEYSTORE_BASE64"]
+          allowed = set("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=")
+          bad = [(i, c) for i, c in enumerate(v) if c not in allowed]
+          if bad:
+              i, c = bad[0]
+              print("offenders=%d first_index=%d first_codepoint=0x%02x total_chars=%d"
+                    % (len(bad), i, ord(c), len(v)))
+              sys.exit(1)
+          print("charset clean: %d chars, base64 alphabet only, no newline" % len(v))
+          sys.exit(0)
+          PYEOF
+
+      - name: "🔎 3/6 Java's strict base64 decoder accepts it"
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+        run: |
+          # Deliberately not python's decoder: the failure this repo already hit was Java's
+          # "Last unit does not have enough valid bits", which python tolerates. This runs the
+          # same java.util.Base64.getDecoder() the Gradle signing block calls, so a step that
+          # passes here cannot fail there on the same input.
+          cat > "$RUNNER_TEMP/Decode.java" <<'JAVA'
+          import java.util.Base64;
+          public class Decode {
+            public static void main(String[] a) {
+              String v = System.getenv("KS");
+              try {
+                byte[] d = Base64.getDecoder().decode(v);
+                String magic = String.format("%02x%02x%02x%02x", d[0], d[1], d[2], d[3]);
+                System.out.printf("decoded_bytes=%d magic=%s type=%s%n", d.length, magic,
+                    magic.equals("feedfeed") ? "JKS" : (magic.startsWith("3082") ? "PKCS12" : "UNKNOWN"));
+              } catch (Exception e) {
+                System.out.printf("java_decode_refused=%s input_chars=%d%n",
+                    e.getClass().getSimpleName(), v.length());
+                System.exit(1);
+              }
+            }
+          }
+          JAVA
+          cd "$RUNNER_TEMP" && javac Decode.java 2>&1 | tail -3
+          KS="$KEYSTORE_BASE64" java -cp "$RUNNER_TEMP" Decode
+          rc=$?
+          cd - >/dev/null
+          exit $rc
+
+      - name: "🔎 4/6 KEY_STORE_PASSWORD opens the store"
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEY_STORE_PASSWORD: ${{ secrets.KEY_STORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+        run: |
+          set -u
+          ks="$RUNNER_TEMP/diag.jks"; pwf="$RUNNER_TEMP/diag.pw"
+          trap 'rm -f "$ks" "$pwf"' EXIT
+          printf '%s' "$KEYSTORE_BASE64" | base64 -d > "$ks"
+          printf '%s' "$KEY_STORE_PASSWORD" > "$pwf"; chmod 600 "$ks" "$pwf"
+          # keytool prints alias names, so its stdout is discarded; only verdicts are reported.
+          if ! keytool -list -keystore "$ks" -storepass:file "$pwf" >/dev/null 2>&1; then
+            echo "::error::KEY_STORE_PASSWORD does not open this keystore"
+            exit 1
+          fi
+          echo "store password accepted"
+          if keytool -list -keystore "$ks" -storepass:file "$pwf" -alias "$KEY_ALIAS" >/dev/null 2>&1; then
+            echo "the configured KEY_ALIAS exists in this store"
+          else
+            echo "::error::KEY_ALIAS names no entry in this keystore"
+            exit 1
+          fi
+
+      - name: "🔎 5/6 a PKCS12 store needs KEY_PASSWORD to equal KEY_STORE_PASSWORD"
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEY_STORE_PASSWORD: ${{ secrets.KEY_STORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          set -u
+          magic=$(printf '%s' "$KEYSTORE_BASE64" | base64 -d 2>/dev/null | od -An -tx1 -N4 | tr -d ' \n')
+          echo "first4=$magic"
+          if [ "$magic" = "feedfeed" ]; then
+            echo "JKS store: it keeps its own key password, so this check does not apply"
+            exit 0
+          fi
+          # PKCS12 has no separate key password: keytool silently re-protects the entry with the
+          # store password, and a KEY_PASSWORD that differs can then never unlock it. This is the
+          # single most common way a PKCS12 release keystore fails to sign.
+          if [ "$magic" = "308209f2" ] || [ "${magic#3082}" != "$magic" ]; then
+            if [ "$KEY_PASSWORD" = "$KEY_STORE_PASSWORD" ]; then
+              echo "PKCS12 store and the two passwords match — signing will use the store password"
+              exit 0
+            fi
+            echo "::error::this keystore is PKCS12, which stores no separate key password: set KEY_PASSWORD to the same value as KEY_STORE_PASSWORD, or re-export the store as JKS with -storetype JKS"
+            exit 1
+          fi
+          echo "unrecognised store magic, continuing (Gradle's own preflight judges this)"
+
+      - name: "🔎 6/6 the private key at KEY_ALIAS unlocks"
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEY_STORE_PASSWORD: ${{ secrets.KEY_STORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          set -u
+          cat > "$RUNNER_TEMP/Unlock.java" <<'JAVA'
+          import java.io.ByteArrayInputStream;
+          import java.security.KeyStore;
+          import java.util.Base64;
+          public class Unlock {
+            public static void main(String[] a) throws Exception {
+              byte[] raw = Base64.getDecoder().decode(System.getenv("KS"));
+              char[] sp = System.getenv("SP").toCharArray();
+              String type = null;
+              String magic = String.format("%02x%02x%02x%02x", raw[0], raw[1], raw[2], raw[3]);
+              if (magic.equals("feedfeed")) type = "JKS";
+              else if (magic.startsWith("3082")) type = "PKCS12";
+              else { System.out.println("unknown_magic=" + magic); type = "JKS"; }
+              System.out.println("storeType=" + type);
+              // Loaders are cross-format on the JDK, so the magic byte is the type of record,
+              // not the load attempt; the password a PKCS12 entry needs is the store password.
+              KeyStore ks = KeyStore.getInstance(type);
+              try { ks.load(new ByteArrayInputStream(raw), sp); }
+              catch (Exception e) { System.out.println("store_open=false"); System.exit(2); }
+              String alias = System.getenv("AL");
+              if (!ks.containsAlias(alias) || !ks.isKeyEntry(alias)) {
+                System.out.println("alias_usable=false entries=" + ks.size()); System.exit(3);
+              }
+              char[] kp = type.equals("PKCS12") ? sp : System.getenv("KP").toCharArray();
+              try { ks.getKey(alias, kp); System.out.println("unlocked=true"); }
+              catch (Exception e) {
+                System.out.printf("unlocked=false %s%n", e.getClass().getSimpleName()); System.exit(1);
+              }
+            }
+          }
+          JAVA
+          cd "$RUNNER_TEMP" && javac Unlock.java 2>&1 | tail -3
+          KS="$KEYSTORE_BASE64" SP="$KEY_STORE_PASSWORD" AL="$KEY_ALIAS" KP="$KEY_PASSWORD" \
+            java -cp "$RUNNER_TEMP" Unlock
+          rc=$?
+          cd - >/dev/null
+          if [ "$rc" -ne 0 ]; then
+            echo "::error::the private key at the configured alias could not be unlocked (rc=$rc) — see the two verdict lines above for which of the four secrets is wrong"
+          fi
+          exit $rc
+
       - name: 🏗️ Build signed release APK + AAB
         working-directory: App
         env:
