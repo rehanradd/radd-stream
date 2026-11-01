@@ -1466,17 +1466,21 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       <button class="filter-btn" id="btn-stats-live" onclick="fetchData(null, currentPage, 'full')">🧮 Count live (slow)</button>
     </div>
 
-    <div class="nav-tabs">
-      <button class="tab-btn active" id="tab-db-btn" onclick="switchMainTab('db')">
+    <div class="nav-tabs" role="tablist" aria-label="Catalog views">
+      <button class="tab-btn active" id="tab-db-btn" role="tab"
+              aria-selected="true" aria-controls="section-db" data-action="switch-tab"
+              data-value="db">
         💾 Indexed Database Releases
       </button>
-      <button class="tab-btn" id="tab-site-btn" onclick="switchMainTab('site')">
+      <button class="tab-btn" id="tab-site-btn" role="tab"
+              aria-selected="false" aria-controls="section-site" data-action="switch-tab"
+              data-value="site" tabindex="-1">
         🌐 Multi-Site Catalog Explorer (16,000+ Titles)
       </button>
     </div>
 
     <!-- TAB 1: DB RELEASES -->
-    <div id="section-db">
+    <div id="section-db" role="tabpanel" aria-labelledby="tab-db-btn" tabindex="0">
       <div class="controls">
         <input type="text" id="search-box" class="search-input" placeholder="🔍 Search saved titles, qualities (1080p, 4K), audio, episodes, Hollywood, Bollywood..." oninput="handleSearch()">
         <button class="filter-btn active" onclick="setFilter('all', this)">All</button>
@@ -1502,7 +1506,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     </div>
 
     <!-- TAB 2: SITEMAP EXPLORER -->
-    <div id="section-site" style="display: none;">
+    <div id="section-site" role="tabpanel" aria-labelledby="tab-site-btn" tabindex="0" style="display: none;">
       <div class="controls">
         <input type="text" id="sitemap-search-box" class="search-input" placeholder="🔍 Search any movie, anime, or series across all 16,000+ sitemapped posts..." oninput="handleSitemapSearch()">
         <div style="display: flex; gap: 8px; flex-wrap: wrap;">
@@ -1544,6 +1548,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       'heal-post': el => healPost(Number(el.dataset.value)),
       'play-jit': el => openStreamPlayer(Number(el.dataset.id), el.dataset.name, el.dataset.title),
       'copy-url': el => copyToClipboard(el.dataset.value),
+      'switch-tab': el => switchMainTab(el.dataset.value),
     };
     document.addEventListener('click', event => {
       const trigger = event.target.closest('[data-action]');
@@ -1551,6 +1556,23 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       const handler = Object.prototype.hasOwnProperty.call(ACTIONS, trigger.dataset.action)
         ? ACTIONS[trigger.dataset.action] : null;
       if (handler) handler(trigger);
+    });
+    // Arrow-key navigation for the tab strip, which is the other half of the
+    // `role="tablist"` contract: a page that announces itself as tabs and then
+    // makes the operator Tab through them is worse than one that claims nothing,
+    // because the claim is what tells a screen-reader user what keys to expect.
+    document.addEventListener('keydown', event => {
+      const tab = event.target.closest('[role="tab"]');
+      if (!tab) return;
+      const step = event.key === 'ArrowRight' ? 1 : (event.key === 'ArrowLeft' ? -1 : 0);
+      if (!step) return;
+      const tabs = Array.from(document.querySelectorAll('[role="tab"]'));
+      const next = tabs[(tabs.indexOf(tab) + step + tabs.length) % tabs.length];
+      if (next) {
+        switchMainTab(next.dataset.value);
+        next.focus();
+      }
+      event.preventDefault();
     });
     let dbData = { stats: {}, posts: [] };
     let currentFilter = 'all';
@@ -1563,10 +1585,22 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
     function switchMainTab(tab) {
       currentMainTab = tab;
-      document.getElementById('tab-db-btn').classList.toggle('active', tab === 'db');
-      document.getElementById('tab-site-btn').classList.toggle('active', tab === 'site');
-      document.getElementById('section-db').style.display = tab === 'db' ? 'block' : 'none';
-      document.getElementById('section-site').style.display = tab === 'site' ? 'block' : 'none';
+      for (const name of ['db', 'site']) {
+        const on = tab === name;
+        const panel = document.getElementById('section-' + name);
+        if (panel) panel.style.display = on ? 'block' : 'none';
+        const button = document.getElementById('tab-' + name + '-btn');
+        if (!button) continue;
+        button.classList.toggle('active', on);
+        // The click has to move the ARIA state with the visual state. `active`
+        // only paints; `aria-selected` is what a screen reader announces, and
+        // `tabindex` is what keeps ArrowLeft/ArrowRight — not Tab — as the way
+        // between tabs. Paint one and forget the other and the page looks
+        // correct while reading wrong, which is invisible to whoever depends on
+        // the reading.
+        button.setAttribute('aria-selected', on ? 'true' : 'false');
+        button.tabIndex = on ? 0 : -1;
+      }
       if (tab === 'site') {
         fetchSitemapList();
       }

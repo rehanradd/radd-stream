@@ -564,5 +564,128 @@ class DetectorControlsTests(unittest.TestCase):
         self.assertGreater(len(ESCAPE_CORE_JS), 500)
 
 
+#: One `<button … role="tab" …>` tag, opening bracket to closing bracket. The
+#: attributes wrap across source lines, so the unit scanned here is the tag, not a line.
+TAB_BUTTON_TAG = re.compile(r'<button[^>]*role="tab"[^>]*>', re.DOTALL)
+
+
+def tab_buttons(page):
+    return TAB_BUTTON_TAG.findall(page)
+
+
+def tag_attribute(tag, name):
+    match = re.search(re.escape(name) + r'="([^"]*)"', tag)
+    return match.group(1) if match else None
+
+
+def balanced(text, opening_index):
+    """The text from `text[opening_index]` (an open bracket) through its match."""
+    pairs = {"(": ")", "{": "}", "[": "]"}
+    opening, closing = text[opening_index], pairs[text[opening_index]]
+    depth, index = 0, opening_index
+    while index < len(text):
+        if text[index] == opening:
+            depth += 1
+        elif text[index] == closing:
+            depth -= 1
+            if depth == 0:
+                return text[opening_index:index + 1]
+        index += 1
+    raise AssertionError(f"unbalanced {opening!r} at offset {opening_index}")
+
+
+def function_body(js, name):
+    """The braces of `function name(…) {…}`, so a test can ask what the body does."""
+    start = js.index("function " + name + "(")
+    return balanced(js, js.index("{", start))
+
+
+def event_listener(js, event_name):
+    """The whole `addEventListener('name', …)` call, brackets counted."""
+    start = js.index("addEventListener('" + event_name + "'")
+    return balanced(js, js.index("(", start))
+
+
+class TabSurfaceTests(unittest.TestCase):
+    """The tab strip claims a structure, so the structure is now a tested fact.
+
+    `role="tablist"` and `aria-selected` are not decoration: they change what keys a
+    screen-reader user expects to press and what the page answers with. A claim the
+    code does not keep is worse than no claim, because the user is told the page
+    behaves one way while it behaves another. So each half of the contract — the
+    markup's claim, the click's answer, and the keys the strip announces — is asserted
+    against the shipped source here, the same way the escaping shape is asserted: as a
+    scan, so the next author who adds a third tab either satisfies it or reads this
+    file. Offline; no browser, no DOM, no server.
+    """
+
+    #: A tab button from before this contract: it paints `active`, calls a global
+    #: straight from the markup, and says nothing about what it controls.
+    PRE_FIX_TAB = ('<button class="tab-btn active" id="tab-db-btn" '
+                   'onclick="switchMainTab(\'db\')">💾 Indexed Database Releases</button>')
+
+    def test_every_tab_claims_a_panel_that_exists_on_the_same_page(self):
+        for tag in tab_buttons(viewer_page("DASHBOARD_HTML")):
+            panel = tag_attribute(tag, "aria-controls")
+            self.assertTrue(panel, f"tab markup claims a role without a panel: {tag}")
+            self.assertIn(f'id="{panel}"', viewer_page("DASHBOARD_HTML"),
+                          f"aria-controls names {panel!r}, which the page does not contain")
+            self.assertTrue(tag_attribute(tag, "aria-selected"),
+                            f"{tag} is a tab that never says whether it is selected")
+            self.assertEqual(tag_attribute(tag, "data-action"), "switch-tab",
+                             f"a tab that selects itself from its own markup is an "
+                             f"inline handler, not a delegated action: {tag}")
+
+    def test_the_state_moves_with_the_paint(self):
+        """`classList.toggle('active')` alone is the old defect: the page looks
+        right and reads wrong, which is invisible to whoever depends on the reading."""
+        body = function_body(page_script(viewer_page("DASHBOARD_HTML")), "switchMainTab")
+        self.assertIn("aria-selected", body)
+        self.assertIn("tabIndex", body)
+
+    def test_the_tablist_answers_the_keys_it_announces(self):
+        script = page_script(viewer_page("DASHBOARD_HTML"))
+        self.assertIn("'keydown'", script,
+                      "a tablist that announces itself and takes no arrow keys is a lie")
+        handler = event_listener(script, "keydown")
+        for key in ("ArrowRight", "ArrowLeft"):
+            self.assertIn(key, handler, f"the tablist claims tabs and ignores {key}")
+        self.assertIn("switchMainTab", handler)
+
+    def test_no_tab_reaches_for_a_global_from_its_markup(self):
+        page = viewer_page("DASHBOARD_HTML")
+        self.assertNotIn('onclick="switchMainTab', page,
+                         "delegated actions are the rule; an inline handler is how "
+                         "the copy-to-clipboard defect was written in the first place")
+        _, declared = action_handlers_defined(page_script(page), "ACTIONS")
+        self.assertIn("switch-tab", declared,
+                      "a data-action with no handler in the map is a dead button")
+        #: `used` is a scan of the *script*, and the two tab buttons are static markup
+        #: above it, so their action never appears in `used`. Asserting it there would
+        #: be a check against the wrong surface. The claim that matters is the one the
+        #: browser can actually break: every action the markup asks for is in the map.
+        for tag in tab_buttons(page):
+            action = tag_attribute(tag, "data-action")
+            self.assertIn(action, declared,
+                          f"markup asks for {action!r}, which no handler is registered "
+                          f"for: {tag}")
+
+    def test_the_tab_detector_has_something_to_look_at(self):
+        """Proved against the pre-fix markup, as every detector in this file is. A
+        guard that matches nothing is a green light that stopped looking."""
+        real = tab_buttons(viewer_page("DASHBOARD_HTML"))
+        self.assertGreaterEqual(len(real), 2,
+                                f"the dashboard has {len(real)} tabs, and this class "
+                                "would be scanning an empty list")
+        for tag in real:
+            self.assertTrue(tag_attribute(tag, "aria-controls"), tag)
+        self.assertEqual([], tab_buttons(self.PRE_FIX_TAB),
+                          "the detector also matches a button that claims no role, so "
+                          "it is not scanning tabs at all")
+        self.assertIsNone(tag_attribute(self.PRE_FIX_TAB, "aria-controls"),
+                          "the pre-fix spelling must still fail the check it was "
+                          "written to fail")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
