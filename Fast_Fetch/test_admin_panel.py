@@ -498,6 +498,59 @@ class Monetization(Fixture):
         finally:
             plain.close()
 
+    def test_a_settings_read_that_cannot_be_answered_says_so_instead_of_lying(self):
+        """`settings_unavailable` is the difference between a default and a lie.
+
+        The fallback this replaces published the shipped defaults with no marker, so a
+        phone read `maintenance_mode: false` while the operator had it switched on, and
+        the default PKR price while the stored one was different. `false` is not the
+        safe value on that field: it is the value that keeps playing. The panel's own
+        diagnostic already reports `the settings row is unavailable` in this state;
+        only the public route was silent about it.
+
+        Saved row deliberately differs from the defaults on two fields, so this fails
+        if the marker is dropped *and* if the degraded body starts diverging in shape
+        from a healthy one.
+        """
+        self.save({"maintenance_mode": 1, "vip_monthly_pkr": 250})
+        healthy = self.public()
+        self.assertEqual(healthy["maintenance_mode"], True)
+        self.assertEqual(healthy["vip"]["monthly_pkr"], 250)
+
+        boom = mock.patch.object(admin_panel, "_read_monetization",
+                                 side_effect=sqlite3.Error("database is locked"))
+        boom.start()
+        self.addCleanup(boom.stop)
+        degraded = self.public()
+
+        self.assertTrue(degraded["settings_unavailable"])
+        self.assertEqual(sorted(degraded), sorted(healthy),
+                         "a degraded body dropped keys a client decodes")
+        # What a degraded read prints, and why the marker is the whole point: without
+        # it these two lines are indistinguishable from an operator's decision.
+        self.assertEqual(degraded["maintenance_mode"], False)
+        self.assertEqual(degraded["vip"]["monthly_pkr"], 200)
+
+    def test_a_missing_row_is_unknown_too_and_not_a_set_of_defaults(self):
+        """`_read_monetization` answers None when the row is not there. After
+        `_ensure_monetization` has only just inserted it, a None means the insert did
+        not land — the same statement about the world as a raised read, so it gets the
+        same answer."""
+        gone = mock.patch.object(admin_panel, "_read_monetization", return_value=None)
+        gone.start()
+        self.addCleanup(gone.stop)
+        body = self.public()
+        self.assertTrue(body["settings_unavailable"])
+
+    def test_the_marker_is_a_boolean_and_false_on_the_healthy_path(self):
+        """The positive control. A flag that is always true guards nothing, and a phone
+        comparing `settingsUnavailable === true` must not be handed SQLite's 0/1 — the
+        rule every other flag in this body already follows."""
+        self.save({"maintenance_mode": 1})
+        body = self.public()
+        self.assertIs(body["settings_unavailable"], False)
+        self.assertTrue(body["maintenance_mode"])
+
     def test_the_retired_detour_is_off_on_a_fresh_install(self):
         """Nothing has to be typed to keep downloads direct: the flag ships off.
 
