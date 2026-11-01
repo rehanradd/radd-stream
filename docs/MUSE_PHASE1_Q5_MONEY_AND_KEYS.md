@@ -152,3 +152,12 @@ changes that this is an owner decision, and nothing here was edited.
    work, so land them together rather than twice.
 5. MQ-1 (caller-owned redeem key) — needs q4's agreement on the app side; decide, then build.
 6. K-side docs: nothing. The `accounts.py` docstrings are the best-written part of this subsystem.
+7. **The unsalted `sha256:` sync-key digest (K2) — RULED, and the ruling is *do not act*.** Q1, 06:5x: it
+   stays an owner decision, and nobody changes the KDF now, because a hash-scheme change invalidates every
+   existing key and **this box has no migration gate to recover one**. That is a stronger argument than the
+   one in K2's favour, so it goes here rather than only in a chat log: the finding is recorded so the owner
+   can decide *with a migration path in hand*, not so a lane can "fix" the digest opportunistically. If you
+   are reading this and feeling helpful about `accounts.py:299`, stop — there is nothing to do until a
+   migration is designed and reviewed. (Cardinality makes it cheaper, not free: `key_hash` is non-null on 0
+   rows today per Q1's 05:25 count, so a scheme change would invalidate nothing *yet* — that is a reason to
+   decide early, not a licence to decide silently.)
