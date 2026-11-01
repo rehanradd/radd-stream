@@ -279,7 +279,7 @@ class PlanAndPrice(Fixture):
 class TidShape(Fixture):
     def test_each_method_gets_its_own_shape(self):
         cases = (("jazzcash", JAZZ_TID), ("jazzcash", "1234567890"),
-                 ("easypaisa", EASY_TID), ("easypaisa", "1234567890"),
+                 ("easypaisa", EASY_TID), ("easypaisa", "2345678901234"),
                  ("raast", RAAST_TID), ("raast", "abcdefghijkl234567"))
         for index, (method, tid) in enumerate(cases):
             with self.subTest(method=method, tid=tid):
@@ -347,6 +347,132 @@ class RateLimit(Fixture):
         payments.reject_payment(self.conn, filed["payment_id"], now=NOW + 60)
         again = self.file_claim(now=NOW + payments.PAYMENT_MIN_INTERVAL_SECONDS + 1)
         self.assertEqual(again["status"], "pending")
+
+
+class DuplicateTid(Fixture):
+    """Audit critical 6 — one transaction id, one live claim, on every account.
+
+    The owner's decision is absolute: the same TID is refused across ALL
+    accounts, no family-account exception. Enforcement is the read inside
+    `submit_payment` (which is also the rule that works on a ledger whose
+    duplicates predate the guard) plus `ux_payment_tid_live`, a partial unique
+    index over `lower(tid)` scoped to live statuses, as the schema backstop."""
+
+    def other_account(self):
+        made = accounts.create_account(self.conn, key=accounts.new_sync_key())
+        return made["account_id"]
+
+    def file_for(self, account_id, tid=JAZZ_TID, method="jazzcash", now=NOW,
+                 plan="vip_monthly"):
+        return payments.submit_payment(self.conn, account_id, plan=plan,
+                                       method=method, tid=tid,
+                                       catalog_path=self.catalog, now=now)
+
+    def ledger_count(self):
+        return self.conn.execute(
+            "SELECT COUNT(*) FROM payment_transactions").fetchone()[0]
+
+    def test_a_pending_tid_is_refused_on_another_account(self):
+        """The core of the critical: two accounts, one SMS reference, one row."""
+        self.file_for(self.account_id, now=NOW)
+        other = self.other_account()
+        with self.assertRaises(payments.DuplicatePayment) as caught:
+            self.file_for(other, now=NOW + 400)      # past any window; not the rate limiter
+        self.assertEqual(caught.exception.status, 403)
+        self.assertEqual(caught.exception.code, "forbidden")
+        self.assertEqual(self.ledger_count(), 1)
+
+    def test_an_approved_tid_is_refused_on_another_account(self):
+        filed = self.file_for(self.account_id, now=NOW)
+        payments.approve_payment(self.conn, filed["payment_id"], now=NOW)
+        other = self.other_account()
+        with self.assertRaises(payments.DuplicatePayment):
+            self.file_for(other, now=NOW + 400)
+        self.assertEqual(self.ledger_count(), 1)
+
+    def test_the_same_tid_refiled_by_the_same_account_is_refused(self):
+        self.file_for(self.account_id, now=NOW)
+        with self.assertRaises(payments.DuplicatePayment):
+            self.file_for(self.account_id,
+                          now=NOW + payments.PAYMENT_MIN_INTERVAL_SECONDS + 1)
+        self.assertEqual(self.ledger_count(), 1)
+
+    def test_a_rejected_tid_does_not_block_a_new_claim(self):
+        """`rejected` is outside the guard on purpose: the honest payer whose
+        claim was wrongly rejected re-files the same reference."""
+        filed = self.file_for(self.account_id, now=NOW)
+        payments.reject_payment(self.conn, filed["payment_id"], now=NOW + 60)
+        other = self.other_account()
+        again = self.file_for(other, now=NOW + 400)
+        self.assertEqual(again["status"], "pending")
+        self.assertEqual(self.ledger_count(), 2)
+
+    def test_case_folding_refuses_a_recased_raast_claim(self):
+        """Raast TIDs are mixed-case alphanumerics; `AbC…` and `abc…` are one
+        bank reference and must not buy two claims."""
+        self.file_for(self.account_id, tid=RAAST_TID, method="raast", now=NOW)
+        other = self.other_account()
+        with self.assertRaises(payments.DuplicatePayment):
+            self.file_for(other, tid=RAAST_TID.lower(), method="raast", now=NOW + 400)
+
+    def test_the_rate_limit_still_answers_first_for_the_same_account(self):
+        """A second submit inside the window is the pre-existing 429; the 403
+        must not reorder the two refusals a tester already depends on."""
+        self.file_for(self.account_id, now=NOW)
+        with self.assertRaises(payments.PaymentRateLimited):
+            self.file_for(self.account_id, now=NOW + 1)
+
+    def test_the_live_tid_guard_index_exists_on_a_fresh_ledger(self):
+        row = self.conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type = 'index'"
+            " AND name = 'ux_payment_tid_live'").fetchone()
+        self.assertIsNotNone(row, "the backstop index was not installed")
+        self.assertIn("lower(tid)", row[0])
+        self.assertIn("pending", row[0])
+        self.assertIn("approved", row[0])
+
+    def test_a_direct_duplicate_insert_hits_the_index(self):
+        """The backstop works even against a writer that skips `submit_payment`
+        entirely — that is what makes it a constraint and not a convention."""
+        self.file_claim(now=NOW)
+        with self.assertRaises(sqlite3.IntegrityError):
+            self.conn.execute(
+                "INSERT INTO payment_transactions(account_id, plan, amount_pkr,"
+                " method, tid, status, submitted_at)"
+                " VALUES(?, 'vip_monthly', 200, 'jazzcash', ?, 'pending', ?)",
+                (self.other_account(), JAZZ_TID, NOW + 900))
+        self.conn.rollback()
+
+    def test_a_legacy_ledger_with_duplicates_still_opens(self):
+        """The guard is best-effort on an old file: collapsing pre-existing
+        duplicates is an operator migration, and a schema step that crashes on
+        the money rows it finds would take the whole service down. The read
+        inside `submit_payment` still refuses a third live claim either way."""
+        legacy = Path(self.tmp.name) / "legacy_dups.db"
+        with closing(sqlite3.connect(str(legacy))) as raw:
+            raw.executescript(accounts.DDL)
+            raw.execute("INSERT INTO user_accounts(key_hash, created_at)"
+                        " VALUES('sha256:one', 1.0)")
+            for stamp in (1000.0, 1001.0):
+                raw.execute(
+                    "INSERT INTO payment_transactions(account_id, plan,"
+                    " amount_pkr, method, tid, status, submitted_at)"
+                    " VALUES(1, 'vip_monthly', 200, 'jazzcash',"
+                    " '9823145671', 'pending', ?)", (stamp,))
+            raw.commit()
+        with closing(accounts.connect(legacy)) as conn:
+            self.assertIsNone(conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'index'"
+                " AND name = 'ux_payment_tid_live'").fetchone(),
+                "the guard must decline, not delete, a duplicated legacy ledger")
+            with self.assertRaises(payments.DuplicatePayment):
+                payments.submit_payment(conn, 1, plan="vip_monthly",
+                                        method="jazzcash", tid="9823145671",
+                                        catalog_path=self.catalog, now=NOW)
+            filed = payments.submit_payment(conn, 1, plan="vip_monthly",
+                                            method="easypaisa", tid=EASY_TID,
+                                            catalog_path=self.catalog, now=NOW)
+            self.assertEqual(filed["status"], "pending")
 
 
 class Approval(Fixture):
@@ -619,6 +745,23 @@ class AccountEdge(Fixture):
         self.assertEqual(problem["code"], "rate_limited")
         self.assertGreaterEqual(problem["retry_after"], 1)
         self.assertLessEqual(problem["retry_after"], 300)
+
+    def test_a_duplicate_tid_is_a_clean_403_at_the_edge(self):
+        """Audit critical 6 on the public surface: a second account claiming the
+        same TID gets 403 `forbidden`, and the refusal echoes no TID."""
+        first = self.submit(self.good())
+        self.assertEqual(self.status(first), 201)
+        other_key = accounts.new_sync_key()
+        accounts.create_account(self.conn, key=other_key)
+        self.conn.commit()
+        again = self.post(f"{P}/payment", self.good(),
+                          headers={"Authorization": f"Bearer {other_key}"})
+        self.assertEqual(self.status(again), 403)
+        problem = self.payload(again)
+        self.assertEqual(problem["code"], "forbidden")
+        self.assert_clean_public_body(again, "duplicate refusal", forbid_tid=JAZZ_TID)
+        self.assertEqual(self.conn.execute(
+            "SELECT COUNT(*) FROM payment_transactions").fetchone()[0], 1)
 
     def test_entitlement_needs_a_key(self):
         refused = self.get(f"{P}/entitlement", headers={})

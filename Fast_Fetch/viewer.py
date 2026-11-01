@@ -3970,6 +3970,17 @@ class DashboardHandler(BaseHTTPRequestHandler):
             res = fast_fetch.resolve_live_source(int(source_id))
             redirect_flag = query_params.get("redirect", ["1"])[0]
 
+            if res.get("success") and res.get("stale"):
+                # Audit critical 2: the v1 resolver answers a failed re-resolve with
+                # `success: True` and the last known URL flagged `stale: True`. The
+                # download route (v2 contract) refuses exactly that, and this route
+                # must not 302 a player at an unverifiable token either: a stale
+                # temporary URL is an expired 403, not a stream. The public else
+                # below then answers 404 no_playable_source — the client's failover
+                # ladder moves to the next source. The operator port still sees the
+                # full body, url and `stale` included, which is what healing reads.
+                res = dict(res, success=False)
+
             if res.get("success") and res.get("url"):
                 if redirect_flag in ("1", "true", "yes"):
                     # The player follows this and gets bytes; the VM moves none of

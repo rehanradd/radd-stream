@@ -695,6 +695,46 @@ CREATE INDEX IF NOT EXISTS idx_payment_audit_payment
     ON payment_review_audit(payment_id, acted_at);
 """
 
+#: Audit critical 6 backstop: one live (pending/approved) claim per normalised
+#: transaction id, across every account. `lower()` folds the mixed-case Raast
+#: shape so `AbC…` and `abc…` are one TID; JazzCash/EasyPaisa are digits and
+#: unaffected. Rejected rows deliberately stay outside the index — a payer whose
+#: claim was wrongly rejected must be able to re-file the same reference.
+#: This is NOT in `_INDEXES`: `executescript` there aborts the whole script on
+#: its first error, and a live ledger may already hold duplicates (the very
+#: damage this critical is about), which would take the service down at the next
+#: `connect()`. `_install_live_tid_guard` therefore checks first and declines
+#: rather than raises; `payments.submit_payment` refuses duplicates in code
+#: either way, and the index only closes the check-then-insert race.
+_LIVE_TID_INDEX = "ux_payment_tid_live"
+_LIVE_TID_INDEX_DDL = (
+    "CREATE UNIQUE INDEX IF NOT EXISTS %s"
+    " ON payment_transactions(lower(tid))"
+    " WHERE status IN ('pending', 'approved')" % _LIVE_TID_INDEX)
+_LIVE_TID_DUPLICATES = (
+    "SELECT 1 FROM payment_transactions"
+    " WHERE status IN ('pending', 'approved')"
+    " GROUP BY lower(tid) HAVING COUNT(*) > 1 LIMIT 1")
+
+
+def _install_live_tid_guard(conn: sqlite3.Connection) -> bool:
+    """Try to install the duplicate-TID unique index. Returns True when the
+    guard is in place. A ledger that already contains duplicate live claims is
+    skipped with the service left fully up: removing or collapsing those rows
+    is an operator's data migration, and a schema step that deletes or rewrites
+    money rows on first boot is not a migration, it is an incident."""
+    try:
+        if conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'index'"
+                " AND name = ? LIMIT 1", (_LIVE_TID_INDEX,)).fetchone():
+            return True
+        if conn.execute(_LIVE_TID_DUPLICATES).fetchone() is not None:
+            return False
+        conn.execute(_LIVE_TID_INDEX_DDL)
+        return True
+    except sqlite3.Error:
+        return False
+
 
 def _has_table(conn: sqlite3.Connection, name: str) -> bool:
     return conn.execute(
@@ -720,6 +760,7 @@ def ensure_schema(conn: sqlite3.Connection) -> dict:
     conn.executescript(DDL)
     added = _migrate_columns(conn)
     conn.executescript(_INDEXES)
+    _install_live_tid_guard(conn)
     conn.execute("INSERT OR REPLACE INTO user_state_meta(key, value) VALUES(?, ?)",
                  ("schema_version", str(SCHEMA_VERSION)))
     return {"schema_version": SCHEMA_VERSION, "added_columns": added}
