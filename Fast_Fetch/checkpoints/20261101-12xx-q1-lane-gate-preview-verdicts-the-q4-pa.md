@@ -87,6 +87,22 @@ requires the newest sorted archive to be indexed.
 * **`GITHUB_TOKEN` for this lane still answers 401 on `/user`** (owner-only fix at wake-up); a green
   `ls-remote` proves only that the repo is public, never write access.
 
+## Follow-up measured at the record commit itself
+
+This entry is a docs-only commit, and exactly one CI module can see that: `test_docs_invariants.py`. It was
+re-run against this head (`8255572`, i.e. `a9cab3a` + this file + the `CONTINUITY.md` count 71→72 + one
+README index line) once the load window reopened, at 15:15:52: **22 tests, `rc=0`, `OK`** in 0.855 s —
+including `test_the_index_counts_are_the_directory_listings` (the written count against the directory
+glob), `test_session_logs_are_indexes_not_archives` (both pointer indexes under their 12,000 B / 120-line
+ceilings), `test_dated_session_files_are_reachable_from_the_root_index`, and
+`test_no_lane_edited_file_carries_conflict_markers`. So the gate-able sha for the backend pair is this
+commit, not `a9cab3a`: nothing measured here is one commit behind its own evidence.
+
+The run to reach this point paused rather than adding load: the guard waited 6 minutes 41 seconds for the
+1-min average to fall under its 3.8 ceiling (`WAIT_START 15:09:10 load=4.47` → `RUNNING 15:15:51
+load1=3.76`), which is the pause-and-resume shape the Python sweep used successfully and the shape the
+Gradle watchdog should have used instead of a `pkill` that could not reach its target.
+
 ## Commands that judge this entry, in order, without a build
 
 ```sh
