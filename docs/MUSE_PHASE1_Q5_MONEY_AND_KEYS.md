@@ -271,8 +271,8 @@ and diff `len(INVARIANTS)`' label set against the audit's sixteen**, not to grep
 lines, and a line-grep is the method that undercounted the CI suites and produced the "98 entries" error below.
 Every figure in this paragraph came from that import, and the count in each slice's checkpoint says so.
 
-**As of slice 6 of the ordinary eight (2026-11-01, q5): 9 of 15 converted, 6 still pinning state** —
-derived by importing the guard (`len(INVARIANTS)` = 104; 7 audit labels still present, one of which is the
+**As of slice 7 of the ordinary eight (2026-11-01, q5): 10 of 15 converted, 5 still pinning state** —
+derived by importing the guard (`len(INVARIANTS)` = 104; 6 audit labels still present, one of which is the
 requirement pin kept by design), not incremented from the previous sentence.
 Held, not open — these are *not* mine to close:
 
@@ -310,9 +310,18 @@ can cross that wrap. Established by matching four candidates, not by reading the
 linked spec doc instead of the law file being edited to fit. Consequence, stated plainly: the pin no longer
 implies anything about run history, and nothing in prose can prove the exclusion — that proof is the
 `tasks.withType<Test>()` block in `app/build.gradle.kts`.)
-**Two remain:**
-`MovieBox is metadata + trailer evidence, not playable` and `no playable print is resolvable from this host`, both
-targeting `Fast_Fetch/SITES.md`, as slices 7 and 8. The
+`MovieBox is metadata + trailer evidence, not playable` (**s7** —
+`Fast_Fetch/SITES.md:1231`'s classification sentence, "not a playable-source site, **from this host at this time**",
+which is a measurement wearing a timestamp, replaced by the unconditional write-law two sentences later in the same
+paragraph: "No `sources` row may be written for a print we have never resolved." Conversion commit `7fe420d` on
+`q5-pin-s7-moviebox-evidence-20261101`, stacked on s6. Slices 7 and 8 were sequenced together rather than taken in
+whatever order: the two old literals said nearly the same thing twice, so s7 pins the **write** obligation and s8
+pins the **display** obligation from the same paragraph ("Do not list it as scraped-and-playable anywhere") — two
+propositions that fire alone, instead of one proposition pinned twice. The scheduling clause
+(`periodic metadata top-up`, never as a bulk crawl) was probed, matched, and deliberately unused because it depends
+on the non-enumerable-shelf measurement and would reinstall a timer.)
+**One remains:** `no playable print is resolvable from this host`, targeting
+`Fast_Fetch/SITES.md`, as slice 8. The
 running record, including the duplicate-versus-coverage argument and the escalated `AGENTS.md` release-safety
 finding (owner's decision, untouched by this lane), is
 `Fast_Fetch/checkpoints/20261101-q5-pin-conversions-the-eight-ordinary-slices.md`.
