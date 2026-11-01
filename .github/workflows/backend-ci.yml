@@ -315,6 +315,47 @@ jobs:
       - name: 🧪 test_operator_adult_projection.py
         run: python3 -S Fast_Fetch/test_operator_adult_projection.py
 
+      # THE PUBLIC EDGE, ASKED OVER REAL HTTP (q2, 2026-11-01; the file is `cd766d0`).
+      # 22 scenarios A–H boot both policies the service actually ships (`operator=False` and
+      # `operator=True`, ephemeral loopback ports) against a temp ledger and ask the documented
+      # question instead of reading the code: a flagged post 404s on both ports and its links
+      # never play, a *typo'd* link id refuses exactly like a flagged one, the operator port
+      # answers 401 for an adult route and an absent route identically (that is the gate, not the
+      # filter), `/api/m3u?id=abc` and `/api/health-check?id=` answer 400 rather than raising out
+      # of the handler and costing a 502 at the edge, a spoofed leftmost `X-Forwarded-For` cannot
+      # mint a bucket, the retired shortener never detours a free download, no provenance token
+      # survives any public body including a column added to the ledger *after* the code shipped,
+      # v1 and v2 answer the same catalog question, and a cold `/api/v1/stats` reads the five
+      # stamped `cat_projection_meta` keys rather than the 42-second ledger count.
+      #
+      # WHY IT WAS RED AND WHAT ACTUALLY FIXED IT. Task #13's note said five of 22 failed at
+      # `8137b16`: four on `401 != 404/200`, one asserting a key-level `redact.link_is_adult`.
+      # Both were real and both are already answered in this file's own text, not by softening
+      # anything. The four were transport: trunk made the operator port a credential, so the
+      # class now runs with `RADD_ADMIN_TOKEN` configured and `operator_headers()` presents it —
+      # and the token-less request is still asserted, as the identical 401 for an adult route and
+      # a typo'd one, which proves the gate. The fifth was rewritten rather than weakened:
+      # `test_b_a_legacy_twin_is_closed_by_the_documented_repair` now pins the AUDITED exposure
+      # (`assertFalse(redact.link_is_adult(link, …))` — per-row law, the truth on trunk) and then
+      # calls the repair that is on trunk (`fast_fetch.reconcile_key_adult`, `fast_fetch.py:663`)
+      # and asserts the twin stops answering with 404. It does not assert a key-level read law the
+      # code does not have, and it does not drop the assertion; it moved from "what the reader
+      # does" to "what the write and the repair do", which is testable today.
+      #
+      # THIS RUN IS ITS FIRST EXECUTION. The owner's freeze barred local module runs, so nothing
+      # here was executed before CI: what I verified statically is that every collaborator it
+      # names exists on trunk — `test_redact.FixtureMixin` (`:117`), `viewer.make_server`
+      # (`:4250`), `viewer._STATS_CACHE` (`:3173`), `fast_fetch.adult_key_exposures` (`:652`) /
+      # `reconcile_key_adult` (`:663`) / `inherit_key_adult` (`:612`), the `keep_blank_values`
+      # hunks at `viewer.py:3852`/`:3880` — and that the `ORACLE_DEPLOYMENT.md` region it parses
+      # ("What is actually installed" → the first ```nginx fence) really contains both the
+      # `^~ /api/v2/account` allow and the `location ^~ /api/ { return 403; }` catch-all. The
+      # behavioral claims inside the suite are what this run is for. If a case fails, the fix
+      # belongs in the code or in an honest named skip with a defect, an owner and a measurement
+      # attached — never in a loosened adult assertion.
+      - name: 🧪 test_public_edge_scenarios.py
+        run: python3 -S Fast_Fetch/test_public_edge_scenarios.py
+
       # Zero-friction identity and the relay that credits money (q3, 2026-10-31). Three new
       # surfaces in one suite: `POST /api/v2/account/anonymous` mints a 3-day VIP trial gated on a
       # client-reported device id (a gate, not an attestation — `docs/RADD_RELAY_AND_AUTH_ARCHITECTURE.md`
