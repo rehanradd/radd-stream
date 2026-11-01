@@ -15,7 +15,7 @@ start of this segment, so HEAVY stayed frozen and nothing heavy was launched.
 ## 1. What I ran, and its exact cost — disclosed because it sits between the freeze's categories
 
 `sqlite_master` + `PRAGMA table_info` + `EXPLAIN QUERY PLAN` against **19 vaults, opened `mode=ro`,
-nothing executed, nothing written.** Cumulative wall time **9.30 s**, single-threaded, `nice -n 19`,
+nothing executed, nothing written.** Cumulative wall time **10.33 s** (the per-file milliseconds in the table below, summed — my first figure was estimated from three samples and was wrong by a second, which is why the sum is what is printed), single-threaded, `nice -n 19`,
 per-file 190–1,509 ms (table below). `EXPLAIN QUERY PLAN` describes a statement; it does not run it, and
 no row of `posts` was read.
 
@@ -69,7 +69,7 @@ Four facts that decide how #37 gets run:
    needs no sort), 3 do not (`filmyhit`, `kisskh`, `moviesmela`) and fall back to an autoindex. An
    index-order scan plus rowid lookups is not free either; it changes the *shape* of the cost, not its
    order of magnitude.
-4. **All 19 are checkpointed clean: 18 `-wal` sidecars in the data dir, every one 0 bytes, 18 `-shm`.** So
+4. **Nothing is uncheckpointed in any of the 19.** Measured per file: **14 carry a `-wal` and every one of those is 0 bytes; the other 5 carry no `-wal` at all.** (The data dir as a whole holds 18 `-wal` and 18 `-shm` sidecars, all zero-length.) Either state means a `mode=ro` read sees the complete main file, so
    a `mode=ro` count reads the complete main file and cannot silently miss rows — which also means q3's
    premerge `.backup` plan is not currently racing a dirty WAL on any of these.
 
@@ -94,7 +94,7 @@ measurements, and the range is wide because the box is CPU-starved, not because 
 | tier | files | bytes | projected CPU-minutes | what it buys |
 |---|---|---|---|---|
 | A | `hindilinks4u`, `filmyhit`, `kisskh`, `7starhd` | 301 M | **5–25** | 4 sites closed in one admitted minute-scale window |
-| B | `hdhub4u`, `katmoviehd`, `katmoviehd_refreshed`, `rareanimes`, `moviesmela`, `toonworld4all` | 885 M | 13–74 (cumulative 18–99) | 10 of 19 closed |
+| B | `hdhub4u`, `katmoviehd`, `katmoviehd_refreshed`, `rareanimes`, `moviesmela`, `toonworld4all` | 884 M | 13–74 (cumulative 18–99) | 10 of 19 closed |
 | C | `10xflix`, `bolly4u`, `ssrmovies`, `multimovies`, `vegamovies`, `multimovies_full_20261022`, `9xmovies`, `world4ufree` | 3.42 G | 51–285 (cumulative 69–384) | the whole remainder |
 
 The two `world4ufree` + `9xmovies` files alone are **1.39 GB = 30% of the total cost**, so a run that
