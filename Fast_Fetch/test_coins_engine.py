@@ -745,6 +745,56 @@ class Concurrency(Wallet):
         self.assertEqual(outcomes.count("insufficient"), 5, outcomes)
         self.assertEqual(self.wallet_state(), (6, 0, 0.0), self.rows())
 
+    def test_two_threads_redeem_a_wallet_that_covers_exactly_one_tier(self):
+        """The limit the coins review named, closed with threads instead of argued.
+
+        `Redeem.test_two_redeems_never_buy_more_pass_than_the_wallet_paid_for` is
+        single-threaded, and `redeem_pass` derives its default idempotency key from the
+        second (`engagement.py:988`), so two claims inside one second collapse to
+        `already_applied` before the balance is ever consulted: that test proves the
+        accounting, not the race. Here each thread carries **its own key**, so nothing
+        stands between this wallet and two day passes except the shape of
+        `spend_coins`'s `INSERT … SELECT … WHERE balance >= cost` and SQLite's
+        one-writer rule — which is exactly the argument the review said was stronger
+        than the test but was not what a test could show.
+
+        Each thread opens its own connection for the same reason as the spend test
+        above: sharing one handle across threads would test the driver's lock. The
+        assertion is on the ledger as well as the outcomes, so a refusal that wrote a
+        row cannot pass by answering `insufficient` on the way out.
+        """
+        cost = engagement.resolve_ladder()["day"]["coins"]
+        self.grant(cost)
+        barrier = threading.Barrier(2)
+        outcomes = []
+
+        def attempt(which):
+            try:
+                barrier.wait(timeout=10)
+                with closing(engagement.connect(self.state)) as conn:
+                    answered = engagement.redeem_pass(
+                        conn, self.account_id, plan="day", pass_secret=SECRET,
+                        idempotency_key=f"race:{which}")
+                outcomes.append(("spent", answered["already_applied"]))
+            except engagement.InsufficientCoins:
+                outcomes.append(("insufficient", None))
+            except Exception as exc:  # noqa: BLE001 - surfaced as a failure below
+                outcomes.append((f"error:{exc!r}", None))
+
+        threads = [threading.Thread(target=attempt, args=(i,)) for i in (0, 1)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=30)
+        self.assertFalse(any(thread.is_alive() for thread in threads), threads)
+        # `False` beside "spent" is the point: a distinct key means the winner really
+        # spent, so the loser was stopped by the balance and not by a collapsed replay.
+        self.assertEqual(sorted(outcomes), [("insufficient", None), ("spent", False)],
+                         outcomes)
+        spends = [row for row in self.rows() if row["reason"] == "redeem_pass"]
+        self.assertEqual(len(spends), 1, spends)
+        self.assertEqual(self.wallet_state(), (2, 0, 0.0), self.rows())
+
 
 
 # ── authentication and routing ─────────────────────────────────────────────────

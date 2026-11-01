@@ -2223,13 +2223,34 @@ def remote_config(conn):
     a client drawing the table and the ledger filling it cannot disagree about what
     a day pass costs. No knob in it can be cashed out — there is no cash-out path in
     `engagement.py` at all — and no field of it is a credential.
+
+    `settings_unavailable` is the answer to a read that could not be answered, and it
+    exists because the fallback below was otherwise a lie. When `_read_monetization`
+    raises — a locked table, a corrupt page, a deployment mid-migration — this body
+    published the shipped defaults with no marker, so a phone read
+    `maintenance_mode: false`, `feature_flags` all on and the default PKR prices, and
+    acted on them, while the operator had flipped exactly those switches. The panel's
+    own diagnostic says `the settings row is unavailable` in that state
+    (`SETTINGS_UNAVAILABLE`, :1604, used at :1943 and :3109); the public route said
+    nothing. The defaults stay in the body — a client that decodes flat keys must not
+    crash on a degraded answer — but the marker tells the client that this is a shape
+    guarantee and not the operator's decision, and the rule the app half (q4) must
+    implement is: **when `settings_unavailable` is true, keep the last cached config,
+    do not act on these values.** Treating unknown as `false` is how a remote control
+    fails open.
     """
+    unavailable = False
     try:
         _ensure_monetization(conn)
         values = _read_monetization(conn)
     except sqlite3.Error:
         values = None
+        unavailable = True
     if values is None:
+        # Either the read raised, or the row `_ensure_monetization` only just
+        # inserted is not there. Both mean "unknown", and the two are not worth
+        # separating: a client can only be told one thing.
+        unavailable = True
         values = {key: default for key, _l, _k, default in MONETIZATION_FIELDS}
         values["updated_at"] = 0
 
@@ -2246,6 +2267,10 @@ def remote_config(conn):
         "success": True,
         "currency": "PKR",
         "updated_at": int(values.get("updated_at") or 0),
+        # Flat and a real boolean, same rule as every other flag below: a client
+        # that writes `if (cfg.settingsUnavailable) keepLastGood()` must not have to
+        # guess whether `0` and `false` mean different things.
+        "settings_unavailable": unavailable,
         "maintenance_mode": flag("maintenance_mode"),
         "apk_update_url": shown("apk_update_url"),
         # Flat and additive, never nested: `VipRemoteConfig.kt` decodes
