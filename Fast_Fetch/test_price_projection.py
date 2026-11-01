@@ -442,7 +442,36 @@ class CommandLineTests(unittest.TestCase):
         self.assertIn("refused", text)
 
 
+def _workflow_escape(text: str) -> str:
+    """:`::error::` message escaping — the runner reads these three sequences and nothing else."""
+    return text.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+
+
+def _failure_digest(result) -> str:
+    """One line naming every failing test and the last line of its traceback.
+
+    This exists because the hosted log is not readable from this box: `/actions/runs/{id}/logs`
+    answers 401 for the token-less lanes while `/check-runs/{id}/annotations` answers 200 to anyone.
+    A `::error::` printed by the step's own process becomes one of those annotations, so a red run
+    here can say *which* assertion broke instead of only saying that exit 1 happened. The interpreter
+    and SQLite versions ride along because a planner-wording claim is only true of a version.
+    """
+    heads = []
+    for kind, group in (("FAIL", result.failures), ("ERROR", result.errors)):
+        for test, trace in group:
+            lines = [line.strip() for line in (trace or "").rstrip().splitlines() if line.strip()]
+            heads.append("%s %s :: %s" % (kind, test.id(), lines[-1] if lines else "no traceback"))
+    return ("test_price_projection RED — ran %d, %d failures, %d errors | sqlite %s | python %s | %s"
+            % (result.testsRun, len(result.failures), len(result.errors),
+               sqlite3.sqlite_version, sys.version.split()[0], " || ".join(heads)))
+
+
 if __name__ == "__main__":
     print("fixture: %s (offline, temp ledgers only — no production file, no network)"
           % Path(__file__).name)
-    unittest.main(verbosity=2)
+    _suite = unittest.defaultTestLoader.loadTestsFromModule(sys.modules["__main__"])
+    _result = unittest.TextTestRunner(verbosity=2).run(_suite)
+    if not _result.wasSuccessful():
+        # One annotation, truncated: the runner caps a check run at ten and drops the rest silently.
+        print("::error::%s" % _workflow_escape(_failure_digest(_result))[:2500])
+    sys.exit(0 if _result.wasSuccessful() else 1)
