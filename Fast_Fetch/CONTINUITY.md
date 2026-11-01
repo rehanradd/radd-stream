@@ -7,7 +7,7 @@
 
 ## ✅ Open items — index (q3, 2026-10-30; pointers only)
 
-1. **This file is a pointer, not a history.** 70 session files (68 dated + 2 undated) cover
+1. **This file is a pointer, not a history.** 71 session files (69 dated + 2 undated) cover
    2026-10-23 → 2026-11-01,
    every one of them verbatim: [`checkpoints/README.md`](checkpoints/README.md). Nothing was
    deleted, reworded, or summarized. The count is `ls Fast_Fetch/checkpoints/*.md` minus `README.md`,
@@ -41,15 +41,19 @@
     second** — into [`docs/ADMIN_PANEL_ACCESS.md`](../docs/ADMIN_PANEL_ACCESS.md), the panel's own
     guide, which also separates the running tree from the repository. Full session text, verbatim,
     rotated into `checkpoints/20261030-q3-lane-launch-readiness-job-a-the-operators-own-rea.md`.
-11. **JOB B (tasks #22/#30), branch `q3-engagement-ladder`** — the four monetization rules caught in review (`redeem_pass` debited before branching, `_engagement_public` double-priced the ladder, `usage_stats._payments` was the last float money field, `fetch_database_payload(full=True)` published playable columns for a flagged row), 27 + 17 tests, and the measurement that contradicts two documents: **`redact.link_is_adult` returns False for an unknown link id**, not the True its docstring and root `AGENTS.md` claim. Rotated verbatim into that checkpoint file; nothing was reworded.
-12. `[Q3-ONBOARD-PAY]` — trial mint + PIN link + relay credit, 83 tests, CI 33: `checkpoints/20261031-q3-lane-zero-friction-onboarding-and-the-merchant-relay.md`.
+11–12. *q3's JOB B (`q3-engagement-ladder`) and `[Q3-ONBOARD-PAY]` bullets, moved verbatim to* [`checkpoints/README.md`](checkpoints/README.md) *(second rotation, 06:2x) — numbering preserved there; nothing reworded.*
 13. **qoder1 pass — `0e5ae28` + `8ca798a` + `a424ffc` landed; `q3-adultkey-net` and `q2-raddrelay` refused:** all four workers idle, qoder4's seek fix missing from the landed app. Text: `checkpoints/20261031-q1-supervisor-three-lanes-reviewed-gated-and-landed-two.md`.
 14. **qoder1 pass — `0afea35` + `a775ba7` + `e7f6bbb` landed (census CI step, `CLOSEST_SYNC`, the relay that deleted payments on a proxy 403); `q3-coins-engine` found empty and re-scoped; `q5-adultkey-reconciliation` held on one guard line, then green (item 15).** Every gate was a hosted run, zero local CPU. Text: `checkpoints/20261031-q1-supervisor-pass-three-landed-the-adult-gate-held.md`.
 15. `[Q5-ADULTKEY]` — the merge-time corroborated adult fold and `link_is_adult` fail-closed; green on run 41156831610, landed `4a8c163`; **production still pre-law** — gap and read-only re-measure commands: `checkpoints/20261031-q5-adultkey-production-is-pre-law.md`.
 
+16. **`[Q5-BACKUP-SCOPE]` FINDING, owner decision, nothing edited** — the nightly `radd-backup-hf` run snapshots `user_state.db` (the credential + payment store) because `backup_manager.py:526` decides scope by `data_dir.glob("*.db")` with no allow-list; the archive goes off-box over git+LFS, where deletion is not revocation. Rule, a test to write first, and the journal evidence: [`../docs/BACKUP_SNAPSHOT_SCOPE_FINDING.md`](../docs/BACKUP_SNAPSHOT_SCOPE_FINDING.md).
+17. **`[Q5-MUSE-P1]` a verdict, not a fix** — money-and-keys audit (integer, append-only, one-statement debit; `INSERT OR IGNORE` conflating replay with rejection; a nonce-less keystream behind the "opaque" handles) → [`../docs/MUSE_PHASE1_Q5_MONEY_AND_KEYS.md`](../docs/MUSE_PHASE1_Q5_MONEY_AND_KEYS.md); cine-finder QA, three spec contradictions reported not chosen, FTS5 proven by `CREATE` because `sqlite3.dbinfo()` does not exist on py3.12 → [`../docs/MUSE_PHASE1_Q5_CINEFINDER_QA.md`](../docs/MUSE_PHASE1_Q5_CINEFINDER_QA.md); `config.py:31`/`:110` probes now total; and the backup **timed out at exactly 2 h** — no off-box copy of tonight exists, 22 GB of snapshots stranded in `/tmp` as evidence, untouched. Text: `checkpoints/20261101-q5-muse-phase1-money-and-keys-the-two-sibling-probes-and-the.md`. **G2 landed (`b385356`)** — `test_clip_bytes_guard.py` pins the three capped body reads, pairs every refusal with a derived-text control, and passes on the finding itself: the 64 KiB cap is NOT the boundary (a base64 keyframe fits inside it); q3's route field allow-list is. Written under LIGHT ONLY — CI is its first execution.
+
 ---
 
-## 🕒 Queued quiet-window actions (run only when `cat /proc/loadavg` 1-min is under 4)
+## 🕒 Queued quiet-window actions (the gate is PSI now, not load1 — Q1 retired it 2026-11-01:
+heavy work needs `cpu some avg10 < 60` AND `memory some < 10` AND `memory full == 0.00` sustained 5 min,
+plus MemAvailable > 1,500 MB and SwapFree > 800 MB; `cat /proc/pressure/{cpu,io,memory}` is the whole check)
 
 | # | exact command | expected cost | why |
 |---|---|---|---|
@@ -86,6 +90,4 @@ The newest are listed here; `Fast_Fetch/checkpoints/README.md` is the complete i
 
 - ✍️ Incoming Agent Checklist → [`../docs/SPEC_INCOMING_AGENT_CHECKLIST.md`](../docs/SPEC_INCOMING_AGENT_CHECKLIST.md) (294 lines) — the onboarding procedure, unchanged
 
-- 🎯 Current Operational State → [`checkpoints/20261030-pre-diet-state-and-roadmap.md`](checkpoints/20261030-pre-diet-state-and-roadmap.md)
-
-- 📌 Next Action Items (Production & App Layer Roadmap) → [`checkpoints/20261030-pre-diet-state-and-roadmap.md`](checkpoints/20261030-pre-diet-state-and-roadmap.md)
+- 🎯 Current Operational State and 📌 Next Action Items (Production & App Layer Roadmap) → [`checkpoints/20261030-pre-diet-state-and-roadmap.md`](checkpoints/20261030-pre-diet-state-and-roadmap.md)

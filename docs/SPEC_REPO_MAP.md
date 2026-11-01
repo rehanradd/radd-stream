@@ -19,6 +19,9 @@ radd-stream/                        ← repo root
 ├── docs/
 │   ├── AI_HANDOFF_PROMPT.md         ← short prompt to resume in another AI tool/account
 │   ├── AGENT_BOOTSTRAP.md           ← project context and safe onboarding steps
+│   ├── BACKUP_SNAPSHOT_SCOPE_FINDING.md ← nightly backup snapshots user_state.db: scope=directory membership (finding, owner decision)
+│   ├── MUSE_PHASE1_Q5_MONEY_AND_KEYS.md ← Phase-1 verdict on the coin/payment ledger and the key/handle minters, with the two defects that are not theft
+│   ├── MUSE_PHASE1_Q5_CINEFINDER_QA.md ← cine-finder QA design: bytes guard with its positive control, the FTS5 measurement, three spec contradictions reported not chosen
 │   ├── PROJECT_MAP.md               ← verified locations, branches, CI, and server status
 │   └── SESSION_CHECKPOINT.md        ← concise cross-agent progress and next action
 │
@@ -33,7 +36,7 @@ radd-stream/                        ← repo root
 │   ├── fast_fetch.py               ← MAIN ENGINE (6,513 lines, stdlib only)
 │   ├── viewer.py                   ← REST API + dashboard HTTP server
 │   ├── config.py                   ← project-level constants
-│   ├── test_database.py            ← 124 offline unit tests (measured 2026-10-29)
+│   ├── test_database.py            ← offline suite; count it with `git show <sha>:Fast_Fetch/test_database.py | grep -cE '^\s+def test_'` — it was 76, 124, then 133 in a week
 │   ├── test_vidout.py              ← 6 VIDOUT-specific tests
 │   └── test_all_sites.py           ← live 10-site audit
 │
