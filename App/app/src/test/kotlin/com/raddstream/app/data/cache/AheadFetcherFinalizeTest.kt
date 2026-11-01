@@ -244,7 +244,7 @@ class AheadFetcherFinalizeTest {
         assertTrue("COMPLETED without a committed file is the exact defect", fx.committedFile.exists())
         assertFalse("the .part must be renamed away", fx.tempFile.exists())
         fx.assertContentMatches()
-        val row = fx.fileDao.getById(sourceKey)
+        val row = fx.fileDao.rows[sourceKey]
         assertNotNull("a COMPLETED keep must be in the inventory offline-play can read", row)
         row!!
         assertEquals(CacheTaskState.COMPLETED.name, row.state)
@@ -264,7 +264,7 @@ class AheadFetcherFinalizeTest {
         assertTrue(fx.committedFile.exists())
         assertFalse(fx.tempFile.exists())
         fx.assertContentMatches()
-        assertNotNull(fx.fileDao.getById(sourceKey))
+        assertNotNull(fx.fileDao.rows[sourceKey])
     }
 
     @Test
@@ -276,10 +276,10 @@ class AheadFetcherFinalizeTest {
         assertEquals(FetchOutcome.WINDOW_FILLED, outcome)
         assertFalse("an incomplete fetch must not publish a committed file", fx.committedFile.exists())
         assertTrue("the .part stays for the next pass", fx.tempFile.exists())
-        val task = fx.taskDao.getById(1L)!!
+        val task = fx.taskDao.rows[1L]!!
         assertEquals(4 * 1024L, task.downloadedBytes)
         assertEquals(4 * 1024L, task.verifiedPrefixBytes)
-        assertNull(fx.fileDao.getById(sourceKey))
+        assertNull(fx.fileDao.rows[sourceKey])
     }
 
     @Test
