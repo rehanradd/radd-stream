@@ -105,6 +105,37 @@ class ApplyEvidenceTests(ProjectionTestCase):
         catalog_v2.apply_evidence(self.conn, [rotted])
         self.assertEqual("expired", self.link()["state"])
 
+    def test_a_probe_that_sniffed_hls_replaces_the_progressive_guess(self):
+        """Audit Top-20 #1: the projection called this `.mp4` URL `progressive`
+        because of its shape, the probe read `#EXTM3U` off the body, and the
+        body is the stronger fact — Media3 must be told `hls` or the progressive
+        reader feeds manifest text where an MP4 box should be."""
+        self.assertEqual("progressive", self.link()["protocol"])
+        catalog_v2.apply_evidence(self.conn, [
+            probe(self.url, protocol="hls", size=0, ranges=False,
+                  content_type="application/vnd.apple.mpegurl")])
+        self.assertEqual("hls", self.link()["protocol"])
+
+    def test_a_probe_that_sniffed_dash_records_dash(self):
+        """The other manifest, recorded from the probe and not the extension:
+        a `.mp4`-named endpoint serving an MPEG-DASH XML body is still DASH."""
+        catalog_v2.apply_evidence(self.conn, [
+            probe(self.url, protocol="dash", size=0, ranges=False,
+                  content_type="application/dash+xml")])
+        self.assertEqual("dash", self.link()["protocol"])
+
+    def test_a_probe_protocol_that_names_no_media_moves_nothing(self):
+        """`unusable`/`embed`/`html_page`/empty are not medium facts: they must
+        not rewrite `protocol` behind the projection's own kind answer."""
+        catalog_v2.apply_evidence(self.conn, [
+            probe(self.url, ok=False, status=404, protocol="unusable", size=0,
+                  content_type="", error="http_404")])
+        self.assertEqual("progressive", self.link()["protocol"])
+        catalog_v2.apply_evidence(self.conn, [
+            probe(self.url, protocol="html_page", at=1_700_000_500.0,
+                  content_type="text/html")])
+        self.assertEqual("progressive", self.link()["protocol"])
+
     def test_a_refused_probe_is_not_a_verdict(self):
         """blocked_target means we never knocked — the ledger state must not move."""
         before = self.link()["state"]
