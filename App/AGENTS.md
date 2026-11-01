@@ -1,68 +1,58 @@
 # 🤖 AGENTS.md — Android App Guide for AI Agents
 
-> **READ THIS ENTIRE FILE before making any changes to the App.**
-> This is the authoritative guide for building the RADD Stream Android app.
-> Also read the root [`AGENTS.md`](../AGENTS.md) for project-wide context.
+> **READ THIS ENTIRE FILE before making any changes to the App** — the authoritative guide for the
+> RADD Stream Android app. Read the root [`AGENTS.md`](../AGENTS.md) for project-wide context.
 
 ---
 
 ## 0. One-Line Summary
 
-> A native Kotlin/Compose Android client for a `radd-stream` server. As verified in `App/app/src`, the implemented surface covers server setup, catalog browsing, search, favorites, a detail screen, and Media3 playback via the stream resolver. Device/CI verification of that build is still pending — see §5 and §6 for the exact API contract and the known broken spots.
-
----
+> A native Kotlin/Compose Android client for a `radd-stream` server. Verified in `App/app/src`, the
+> surface covers server setup, catalog browsing, search, favorites, a detail screen, and Media3
+> playback via the stream resolver. Device/CI verification is pending — §5 and §6 give the exact
+> API contract and the known broken spots.---
 
 ## 1. Critical Constraint — No Local Android Studio
 
-The user has no powerful PC and cannot run Android Studio. The **entire build pipeline runs on GitHub Actions** (free Ubuntu runners). You write code, push to GitHub, and GitHub builds the APK automatically.
+The user has no powerful PC and cannot run Android Studio; the **entire build pipeline runs on GitHub Actions** (free Ubuntu runners) — you push, GitHub builds the APK.
 
-**Never tell the user to:**
-- Open Android Studio
-- Run `gradlew` locally
-- Install the Android SDK locally
-- Connect a device with ADB locally (they can sideload the APK manually)
+**Never tell the user to:** open Android Studio; run `gradlew` locally; install the Android SDK locally; connect a device with ADB (they can sideload the APK manually).
 
-**Always use:**
-- GitHub Actions for builds
-- GitHub Releases for APK distribution
-- GitHub web editor / Codespaces / Replit for code editing
+**Always use:** GitHub Actions for builds, GitHub Releases for APK distribution, GitHub web editor / Codespaces / Replit for code editing.
 
-### 1a. Correction: builds DO happen on this VM, and only one at a time
+### 1a. Correction: builds DO happen on this VM, one at a time
 
-The rule above is stale as written in one direction and stale in the other since 2026-10-29:
-GitHub Actions is **enabled and running** (measured through the API — all three root workflows are
-active, 42 runs recorded, and `backend-ci.yml` is **green at `64c0b1b`** on both refs). The Android `ci.yml`
-job is red, so a **local** offline Gradle run is still the fast verification loop on the Oracle
-host and is how every milestone since has been proven — a CI check is now a second opinion
-available to everyone, not an unavailable gate. Local builds are also how agents break each
-other's work: this VM has **one vCPU**, and two concurrent Gradle invocations writing into the
-same `App/app/build` tree fail BOTH of them (`kaptDebugKotlin` aborts with
-`Unable to delete directory .../generated/source/kapt` — a lock race, not a code error).
+The rule above is stale in both directions since 2026-10-29: GitHub Actions is **enabled and
+running** (API-measured: three root workflows active, 42 runs, `backend-ci.yml`
+**green at `64c0b1b`** on both refs). Android `ci.yml` is red, so a **local** offline Gradle run is
+still the fast verification loop on the Oracle host and how every milestone since was proven — CI
+is now a second opinion, not an unavailable gate. Local builds are also how agents break each
+other's work: this VM has **one vCPU**, and two concurrent Gradle invocations into the same
+`App/app/build` tree fail BOTH (`kaptDebugKotlin` aborts with `Unable to delete directory
+.../generated/source/kapt` — a lock race, not a code error).
 
-So, on this host:
+On this host:
 
-- **Never run `./gradlew` directly.** Use the queue, which waits for any other agent's build
-  and then takes an exclusive lock: `/tmp/qbuild.sh :app:compileDebugKotlin :app:testDebugUnitTest`
-- Read the `GRADLE_EXIT=` line it prints, not your pipeline's status — `... | tail` reports
-  the exit code of `tail`, which is always 0.
-- Never read `app/build/test-results/**` as passing without checking the file is newer than
-  your run; a stale XML looks identical to a green one.
-- One build at a time, and no build while another agent is mid-verification. If you are a
-  fan-out worker, edit freely and build rarely — each build is minutes of this VM's entire
-  CPU.
+- **Never run `./gradlew` directly.** Use the queue — it waits for any other agent's build, then
+  takes an exclusive lock: `/tmp/qbuild.sh :app:compileDebugKotlin :app:testDebugUnitTest`
+- Read the `GRADLE_EXIT=` line it prints, not your pipeline's status (`... | tail` reports
+  `tail`'s exit, always 0).
+- Never read `app/build/test-results/**` as passing unless newer than your run — a stale XML looks
+  identical to a green one.
+- One build at a time, and no build while another agent is mid-verification. Fan-out workers:
+  edit freely, build rarely — each build is minutes of this VM's entire CPU.
 
-> The nine arm64-excluded Robolectric tests, why they are excluded here and what the hosted
-> runner proved about them, moved to
-> [`../docs/SPEC_APP_ROBOLECTRIC_ARM64.md`](../docs/SPEC_APP_ROBOLECTRIC_ARM64.md). The exclusion
-> stays: no number printed on this host includes those two suites.
+> The nine arm64-excluded Robolectric tests — why excluded here, what the hosted runner proved —
+> moved to [`../docs/SPEC_APP_ROBOLECTRIC_ARM64.md`](../docs/SPEC_APP_ROBOLECTRIC_ARM64.md). The
+> exclusion stays: no number printed on this host includes those two suites.
 
 ---
 
 ## 2. Build System Architecture
 
 The CI pipeline diagram moved to
-[`../docs/SPEC_APP_BUILD_ARCHITECTURE.md`](../docs/SPEC_APP_BUILD_ARCHITECTURE.md). What stays law
-is §1a (one build at a time, through this host's queue) and §13.
+[`../docs/SPEC_APP_BUILD_ARCHITECTURE.md`](../docs/SPEC_APP_BUILD_ARCHITECTURE.md). What stays law is §1a (one build at
+a time, through this host's queue) and §13.
 
 ---
 
@@ -70,69 +60,68 @@ is §1a (one build at a time, through this host's queue) and §13.
 
 | Layer | Technology | Why |
 |---|---|---|
-| Language | **Kotlin** | Maximum Android power, coroutines, type safety, Google's #1 language |
-| UI | **Jetpack Compose** | Declarative, modern, Material 3, hot-reload in Codespaces |
-| Media playback | **ExoPlayer / Media3** | `PlayerScreen.kt` + `PlaybackService.kt` exist and are wired into `NavGraph.kt`; never yet run on a device |
-| Architecture | **MVVM + Repository + Hilt** | Testable, scalable, industry standard |
-| Networking | **Retrofit 2 + OkHttp** | Type-safe API calls to radd-stream backend |
+| Language | **Kotlin** | Coroutines, type safety, Google's #1 language |
+| UI | **Jetpack Compose** | Declarative, Material 3, hot-reload in Codespaces |
+| Media playback | **ExoPlayer / Media3** | `PlayerScreen.kt` + `PlaybackService.kt`, wired into `NavGraph.kt`; never run on a device |
+| Architecture | **MVVM + Repository + Hilt** | Testable, industry standard |
+| Networking | **Retrofit 2 + OkHttp** | Type-safe calls to the radd-stream backend |
 | Local DB | **Room** | Watchlist, continue watching, cached catalog |
-| Images | **Coil** | Kotlin-native, Compose-aware, poster image cache |
+| Images | **Coil** | Compose-aware poster image cache |
 | DI | **Hilt (Dagger)** | Automatic ViewModel injection |
-| Navigation | **Jetpack Navigation Compose** | Type-safe, deep link support |
-| Settings | **DataStore Preferences** | Server URL + user preferences |
-| Build | **Gradle Kotlin DSL** (`build.gradle.kts`) | Type-safe, modern |
+| Navigation | **Jetpack Navigation Compose** | Type-safe, deep links |
+| Settings | **DataStore Preferences** | Server URL, preferences |
+| Build | **Gradle Kotlin DSL** (`build.gradle.kts`) | Type-safe |
 
-> Keep this Android app in Kotlin/Compose for the current milestone. Flutter can be reconsidered later; do not migrate the app without an explicit project decision.
+> Keep this app in Kotlin/Compose for the current milestone; Flutter can be reconsidered later —
+> do not migrate without an explicit project decision.
 > ❌ Do NOT introduce: React Native, Java, Glide, Volley, RxJava, Koin
 
 ---
 
 ## 4. Current Source Folder Structure
 
-The tree inventory moved to
-[`../docs/SPEC_APP_SOURCE_LAYOUT.md`](../docs/SPEC_APP_SOURCE_LAYOUT.md).
-`find App/app/src -name '*.kt' | wc -l` is the only honest count of what exists today.
+The tree inventory moved to [`../docs/SPEC_APP_SOURCE_LAYOUT.md`](../docs/SPEC_APP_SOURCE_LAYOUT.md).
+`find App/app/src -name '*.kt' | wc -l` is the only honest count of what exists.
 
 ---
 
 ## 6. Screens Reference
 
-The per-screen inventory moved to [`../docs/SPEC_APP_SCREENS.md`](../docs/SPEC_APP_SCREENS.md);
-the wireframes stay in [`design/SCREENS.md`](design/SCREENS.md), and
+The per-screen inventory moved to [`../docs/SPEC_APP_SCREENS.md`](../docs/SPEC_APP_SCREENS.md); the
+wireframes stay in [`design/SCREENS.md`](design/SCREENS.md), and
 `app/src/main/kotlin/com/raddstream/app/ui/` is the source of truth over both.
 
 ---
 
 ## 7. Design System Quick Reference
 
-The token dump moved to
-[`../docs/SPEC_APP_DESIGN_QUICKREF.md`](../docs/SPEC_APP_DESIGN_QUICKREF.md).
-[`design/DESIGN_SYSTEM.md`](design/DESIGN_SYSTEM.md) is the spec — read that, not a summary.
+The token dump moved to [`../docs/SPEC_APP_DESIGN_QUICKREF.md`](../docs/SPEC_APP_DESIGN_QUICKREF.md).
+[`design/DESIGN_SYSTEM.md`](design/DESIGN_SYSTEM.md) is the spec — read it, not a summary.
 
 ---
 
 ## 8. Phase Roadmap
 
-⚠️ **Reality (verified against `App/app/src` 2026-10-22):** the "Deferred" labels
-on Phase 2 detail/playback/watchlist/settings no longer match the source. Those
-screens, the Room favorites DB, and `PlaybackService` all exist and are wired into
-`NavGraph.kt`. What is actually missing is verification, not implementation.
+⚠️ **Reality (`App/app/src`, 2026-10-22):** the "Deferred" labels on Phase 2
+detail/playback/watchlist/settings no longer match the source — those screens, the Room favorites
+DB, and `PlaybackService` all exist and are wired into `NavGraph.kt`. What is missing is
+verification, not implementation.
 
 | Phase | What to build | Status |
 |---|---|---|
 | **Phase 0** | Gradle project skeleton + CI | ✅ Complete |
-| **Phase 1** | Server setup → metadata catalog → search | 🚧 Implemented; needs CI/device verification |
-| **Phase 2** | Detail pages, playback, watchlist, settings | 🚧 Code implemented; unverified, and the season/episode + `is_temporary` model mismatches in §6 block correct series playback |
+| **Phase 1** | Server setup → metadata catalog → search | 🚧 Implemented; CI/device verification pending |
+| **Phase 2** | Detail pages, playback, watchlist, settings | 🚧 Code implemented; unverified; the season/episode + `is_temporary` model mismatches in §6 block correct series playback |
 | **Phase 3** | Chromecast, multi-server, Android TV | ⏳ Future |
 
 ---
 
 ## 10. Signing Configuration
 
-This section previously printed a sample that `app/build.gradle.kts` does not contain —
-`android.util.Base64.decode(...)` is an **Android runtime API and is not on the Gradle script's
-classpath**, so the block as written could never have configured a build. What the file actually
-runs (`App/app/build.gradle.kts:110-126`, verified at `a51c0c4`):
+This section previously printed a sample `app/build.gradle.kts` does not contain:
+`android.util.Base64.decode(...)` is an **Android runtime API, not on the Gradle classpath**, so
+that block could never have configured a build. What actually runs
+(`App/app/build.gradle.kts:110-126`, verified at `a51c0c4`):
 
 ```kotlin
 signingConfigs {
@@ -155,24 +144,23 @@ signingConfigs {
 }
 ```
 
-Two consequences an App agent needs before spending a release run:
+Two consequences to know before spending a release run:
 
-- The config is applied **only when both** `KEYSTORE_BASE64` and `KEY_STORE_PASSWORD` are non-empty,
-  and the keystore is written under `app/build/` (never to the source tree, never committed).
-- `Base64.getDecoder()` is the strict **basic** codec: no line breaks accepted, and a value whose
-  length is not a whole base64 quantum throws. Measured on the release run log:
+- Applied **only when both** `KEYSTORE_BASE64` and `KEY_STORE_PASSWORD` are non-empty; the keystore
+  is written under `app/build/`, never the source tree, never committed.
+- `Base64.getDecoder()` is the strict **basic** codec: no line breaks, and a value whose length is
+  not a whole base64 quantum throws. Measured:
   `java.lang.IllegalArgumentException: Last unit does not have enough valid bits` at
   `build.gradle.kts:120`, `BUILD FAILED in 4s` — it dies during **configuration**, before any Kotlin
-  compiles, so no compile error or lint error is ever reached. That exception is the *stored secret*
-  being malformed, not this code being wrong: the keystore on the VM re-encodes cleanly
+  compiles, so no compile or lint error is reached. That exception is the *stored secret* being
+  malformed, not this code: the VM's keystore re-encodes cleanly
   (`/home/ubuntu/raddstream-release.jks`, 2,752 bytes → 3,672 base64 chars ending `==`, strict
-  round-trip OK). **Fix it by re-entering the secret (`base64 -w 0` of that file), not by editing
-  this block** — switching to `getMimeDecoder()` would silently accept a truncated keystore instead
-  of refusing it.
+  round-trip OK). **Fix it by re-entering the secret, not by editing this block** —
+  `getMimeDecoder()` would silently accept a truncated keystore instead of refusing it.
 
-**One-time keystore generation** (run in GitHub Codespaces terminal — no local install needed):
+**One-time keystore generation** (GitHub Codespaces terminal — no local install):
 ```bash
-# Open Codespaces on the repo, open terminal, run:
+# Codespaces terminal:
 keytool -genkey -v \
   -keystore radd-release-key.jks \
   -keyalg RSA -keysize 2048 \
@@ -180,82 +168,75 @@ keytool -genkey -v \
   -alias radd-key \
   -dname "CN=RADD Stream, O=RADD, C=US"
 
-# Encode for GitHub Secret:
+# Encode for the Secret:
 base64 -w 0 radd-release-key.jks
 
-# Add to GitHub: Settings → Secrets → Actions:
+# GitHub: Settings → Secrets → Actions:
 #   KEYSTORE_BASE64 = (paste output above)
 #   KEY_STORE_PASSWORD = (the password you chose)
 #   KEY_ALIAS = raddstream
 #   KEY_PASSWORD = (the key password you chose)
 ```
 
-> **Status (Measured 2026-10-30):** All 4 release signing secrets are active in GitHub Actions Secrets. The release keystore is backed up on Oracle VM at `/home/ubuntu/raddstream-release.jks`. Tagging `v*.*.*` automatically triggers `.github/workflows/release.yml` which builds, signs, verifies, and publishes release APKs + AABs to GitHub Releases.
+> **Status (measured 2026-10-30):** all 4 release signing secrets are active in GitHub Actions
+> Secrets; the keystore is backed up on the Oracle VM at `/home/ubuntu/raddstream-release.jks`.
+> A `v*.*.*` tag triggers `.github/workflows/release.yml`: build, sign, verify, publish APKs + AABs.
 
 ---
 
 ## 11. Git and Credential Safety
 
-Use the repository's Git workflow for commits and pushes; do not use GitHub's
-Contents API to write files one at a time. Never put a GitHub token in source,
-shell arguments, a checked-in script, chat, or logs. Authenticate through the
-workspace's secret-backed Git credential flow, and do not persist the token in
-the repository.
+Use the repository's Git workflow; do not use GitHub's Contents API to write files one at a time. Never put a GitHub token in source, shell arguments, a checked-in
+script, chat, or logs. Authenticate through the workspace's secret-backed Git credential flow;
+never persist the token in the repository.
 
 ### Oracle backend connection
 
-- The configured backend host is `http://92.4.95.252/` over plain HTTP; the
-  SSH account is `ubuntu@92.4.95.252` on port 22. Use the secret-safe process
-  in [`../ORACLE_DEPLOYMENT.md`](../ORACLE_DEPLOYMENT.md).
-- The app calls `/api/v1/stats`, `/api/v1/posts`, `/api/v1/posts/{id}`, and
-  `/api/v1/stream` (see §5). It does not call `/api/v1/rules`.
-- Cleartext HTTP is permitted only in the debug build. The release build must
-  use HTTPS; do not relax Android network security globally to make a release
-  work over HTTP.
+- The configured backend host is `http://92.4.95.252/` over plain HTTP; the SSH account is
+  `ubuntu@92.4.95.252` on port 22. Use the secret-safe process in
+  [`../ORACLE_DEPLOYMENT.md`](../ORACLE_DEPLOYMENT.md).
+- The app calls `/api/v1/stats`, `/api/v1/posts`, `/api/v1/posts/{id}`, `/api/v1/stream` (§5);
+  not `/api/v1/rules`.
+- Cleartext HTTP is debug-build only; the release build must use HTTPS — do not relax Android
+  network security globally to make a release work over HTTP.
   ⚠️ **Reality (re-verified against `viewer.py`/`redact.py` 2026-10-30):** the backend has no TLS
-  support at all and the Oracle host is plain HTTP, so a release build cannot
-  legally point at `http://92.4.95.252/`. That is a deployment gap, not something
-  to paper over by loosening network security. The catalog routes take no API key or
-  session, so nothing behind them is private. Two things this bullet used to assert are
-  now false of the code and must not be repeated: there is no wildcard CORS —
-  `CORS_ALLOW_ORIGINS` is an empty `frozenset`, so a refused origin gets no header — and
-  the API is not un-throttled: `_public_gate()` returns 429 with `Retry-After` and stamps
-  the `RateLimit-*` triple on every response, which is why the client should honour a 429
-  instead of retrying immediately.
-- The user's permanent choice is to configure `ORACLE_SSH_KEY` and
-  `GITHUB_TOKEN` as Replit Configurations environment variables, not Secrets.
-  Verify presence by name only; never reveal values, ask to move them, or place
-  either in the APK, GitHub Actions logs/artifacts, or Oracle environment.
-- GitHub Actions only discovers workflows from the repository-root
-  `.github/workflows/`; the current workflow files under `App/.github/workflows/`
-  are not automatically discovered there.
+  at all and the host is plain HTTP, so a release build cannot legally point at
+  `http://92.4.95.252/` — a deployment gap, not something to paper over by loosening network
+  security. The catalog routes take no API key or session; nothing behind them is private. Two
+  claims this bullet used to make are now false of the code and must not be repeated: no wildcard
+  CORS (`CORS_ALLOW_ORIGINS` is an empty `frozenset`; a refused origin gets no header) and no
+  un-throttled API (`_public_gate()` returns 429 with `Retry-After` and the `RateLimit-*` triple —
+  honour 429 instead of retrying immediately).
+- The user's permanent choice: `ORACLE_SSH_KEY` and `GITHUB_TOKEN` are Replit Configurations
+  environment variables, not Secrets. Verify presence by name only; never reveal values, ask to
+  move them, or put either in the APK, Actions logs/artifacts, or Oracle environment.
+- GitHub Actions discovers workflows only from the repo-root `.github/workflows/`;
+  `App/.github/workflows/` files are not discovered.
 
 ---
 
 ## 13. Critical Rules for App Agents
 
-1. **No local Android Studio** — always target GitHub Actions as the build environment
+1. **No local Android Studio** — GitHub Actions is the build environment
 2. **Kotlin only** — no Java files
 3. **Compose only** — no XML layouts
-4. **Every screen must be a Composable function** — no Activities (except MainActivity)
-5. **All API calls via Retrofit + coroutines** — no raw `HttpURLConnection` in the UI layer
+4. **Every screen is a Composable function** — no Activities except MainActivity
+5. **All API calls via Retrofit + coroutines** — no raw `HttpURLConnection` in UI
 6. **All state via StateFlow/ViewModel** — no mutable state in Composables directly
-7. **Test every network model** — add a JSON deserialization test for every new data class
-8. **Keep APK under 15 MB** — no bundled video assets, lazy-load everything
-9. **Minimum SDK 21** — never use APIs below API 21 without a Build.VERSION_CODES guard
+7. **Test every network model** — a JSON deserialization test per new data class
+8. **Keep APK under 15 MB** — no bundled video assets; lazy-load everything
+9. **Minimum SDK 21** — guard anything below API 21 with Build.VERSION_CODES
 10. **Always update this AGENTS.md** with your session log before ending
-
 
 ---
 
-
 ## Moved out (reference prose, verbatim)
 
-- 5. REST API Contract (Verified Against viewer.py) → [`../docs/SPEC_APP_API_CONTRACT.md`](../docs/SPEC_APP_API_CONTRACT.md) (214 lines) — the endpoint contract, field by field
-- 9. Phase 0 Implementation Notes (Historical) → [`../docs/SPEC_APP_PHASE0_NOTES.md`](../docs/SPEC_APP_PHASE0_NOTES.md) (74 lines) — historical implementation notes
-- 12. Session Log — Append Here → [`docs/SESSION_HISTORY.md`](docs/SESSION_HISTORY.md) (19 lines) — app session log
-- 14. Session Log → [`docs/SESSION_HISTORY.md`](docs/SESSION_HISTORY.md) (235 lines) — app session log, second half
-- 15. Re-Skinning The Product From ONE File (`/brand.properties`) → [`../docs/SPEC_APP_RESKIN_BRAND_PROPERTIES.md`](../docs/SPEC_APP_RESKIN_BRAND_PROPERTIES.md) (1686 lines) — the one-file re-skin reference
+- 5. REST API Contract (Verified Against viewer.py) → [`../docs/SPEC_APP_API_CONTRACT.md`](../docs/SPEC_APP_API_CONTRACT.md) (214 lines) — endpoint contract
+- 9. Phase 0 Implementation Notes (Historical) → [`../docs/SPEC_APP_PHASE0_NOTES.md`](../docs/SPEC_APP_PHASE0_NOTES.md) (74 lines)
+- 12. Session Log — Append Here → [`docs/SESSION_HISTORY.md`](docs/SESSION_HISTORY.md) (19 lines) — session log
+- 14. Session Log → [`docs/SESSION_HISTORY.md`](docs/SESSION_HISTORY.md) (235 lines) — session log (cont.)
+- 15. Re-Skinning From ONE File (`/brand.properties`) → [`../docs/SPEC_APP_RESKIN_BRAND_PROPERTIES.md`](../docs/SPEC_APP_RESKIN_BRAND_PROPERTIES.md) (1686 lines) — re-skin reference
 - 1a. The nine arm64-excluded Robolectric tests → [`../docs/SPEC_APP_ROBOLECTRIC_ARM64.md`](../docs/SPEC_APP_ROBOLECTRIC_ARM64.md)
 - 2. Build System Architecture → [`../docs/SPEC_APP_BUILD_ARCHITECTURE.md`](../docs/SPEC_APP_BUILD_ARCHITECTURE.md)
 - 4. Current Source Folder Structure → [`../docs/SPEC_APP_SOURCE_LAYOUT.md`](../docs/SPEC_APP_SOURCE_LAYOUT.md)
@@ -264,32 +245,27 @@ the repository.
 
 ### Gating-lane note — APK builds moved to GitHub Actions, permanently (2026-11-01)
 
-**Owner order, standing:** every APK build happens on GitHub Actions. No agent on this
-VM runs `./gradlew` — not `assembleDebug`, not `testDebugUnitTest`, not `lintDebug` —
-unless the owner explicitly reopens local builds. This box has one vCPU and it is the
-box that serves the live API; a Gradle daemon is exactly what the load holds in
-Session 28 and Session 31 were written to prevent. The gate for App work is now a
-**hosted run**, and the number to read is `App/**`'s `ci.yml` result plus its step
-count, not a local XML.
+**Owner order, standing:** every APK build happens on GitHub Actions. No agent on this VM runs
+`./gradlew` — not `assembleDebug`, not `testDebugUnitTest`, not `lintDebug` — unless the owner
+reopens local builds. This one-vCPU box serves the live API; a Gradle daemon is exactly
+what the Session 28 and 31 load holds were written to prevent. The App gate is now a **hosted
+run**: read `App/**`'s `ci.yml` result and step count, not a local XML.
 
 **How to get an artifact without any secret:** push a branch that touches `App/**`.
-`ci.yml` (`🔨 CI — Android Build & Test`) runs
-`:app:assembleDebug :app:testDebugUnitTest :app:lintDebug` and uploads the **debug APK**
-on a green run. Debug-signed, installable, needs none of the four keystore variables,
-and it is the only build that can talk to the deployed host:
+`ci.yml` (`🔨 CI — Android Build & Test`) runs `:app:assembleDebug :app:testDebugUnitTest
+:app:lintDebug` and uploads the **debug APK** on a green run — debug-signed, installable, needing
+none of the four keystore variables, and the only build that can talk to the deployed host:
 `App/app/src/debug/res/xml/network_security_config.xml` sets
 `cleartextTrafficPermitted="true"`, while a **release** build reads
-`brand.properties:199 network.release_cleartext_for_default_host=false`, so a signed
-release APK cannot reach `http://92.4.95.252` over plain HTTP at all. That is a
-deployment fact about what is testable, not a reason to loosen release policy.
+`brand.properties:199 network.release_cleartext_for_default_host=false`, so a signed release APK
+cannot reach `http://92.4.95.252` over plain HTTP at all — a deployment fact about what is
+testable, not a reason to loosen release policy.
 
 **How to get a signed release:** push a `v*.*.*` tag → `release.yml`. It needs
-`KEYSTORE_BASE64`, `KEY_STORE_PASSWORD`, `KEY_ALIAS`, `KEY_PASSWORD`. Measured cause of
-every release failure so far, recorded in the `signingConfigs` block itself: the stored
-`KEYSTORE_BASE64` is **malformed** — it failed strict base64 decoding with
-`Last unit does not have enough valid bits`, and the tolerant MIME decoder throws
-identically on the same input, so this is a corrupt secret value, not a Gradle bug.
-The block now refuses *before* signing, printing only the value's shape (length, index,
-code point, decoded byte count, keystore alias count) and never its contents. The
-correct export is `base64 -w 0 <keystore-file>` pasted straight into
-Settings → Secrets and variables → Actions, replacing the stored value.
+`KEYSTORE_BASE64`, `KEY_STORE_PASSWORD`, `KEY_ALIAS`, `KEY_PASSWORD`. Measured cause of every
+release failure so far, recorded in the `signingConfigs` block itself: the stored
+`KEYSTORE_BASE64` is **malformed** — the strict-decode failure measured in §10; the tolerant MIME
+decoder throws identically on the same input, so this is a corrupt secret value, not a Gradle bug. The block now refuses
+*before* signing, printing only the value's shape (length, index, code point, decoded byte count,
+keystore alias count) and never its contents. The correct export is `base64 -w 0 <keystore-file>`
+pasted straight into Settings → Secrets and variables → Actions, replacing the stored value.
