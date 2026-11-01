@@ -161,6 +161,13 @@ data class AccountUiState(
     val isLinking: Boolean = false,
     val linkMessage: String? = null,
     val linkMessageIsError: Boolean = false,
+    /**
+     * The operator's `quality_gate` switch, as left by the last config this app was told to believe.
+     * Seeded false on purpose: an offer may appear only once the app knows the thing it offers
+     * unlocks something, so a cold start or a store that cannot answer hides the day rather than
+     * advertising it. [AccountCardCopy.dayUnlocksAnything] is the rule; this is the raw answer.
+     */
+    val qualityGateEnabled: Boolean = false,
 ) {
     /** Whole days to show, or null when there is no trial to count. */
     val trialDays: Int? get() = trialSecondsLeft?.let { DeviceTrial.daysRemaining(it) }
@@ -187,6 +194,7 @@ class SettingsViewModel @Inject constructor(
         observeLanShare()
         observeAccount()
         observeTrial()
+        observeQualityGate()
     }
 
     /**
@@ -245,6 +253,20 @@ class SettingsViewModel @Inject constructor(
                     )
                 }
                 _uiState.update { it.copy(account = it.account.copy(trialSecondsLeft = seconds)) }
+            }
+        }
+    }
+
+    /**
+     * The gate switch, collected rather than sampled for the same reason the clock above is: the
+     * offer has to follow the operator's board while this screen is open, not merely at
+     * composition. DetailViewModel and PlayerViewModel already ask this one flow; this is the third
+     * reader of the same stored answer, not a second answer.
+     */
+    private fun observeQualityGate() {
+        viewModelScope.launch {
+            settingsRepository.qualityGateEnabled.collect { enabled ->
+                _uiState.update { it.copy(account = it.account.copy(qualityGateEnabled = enabled)) }
             }
         }
     }
@@ -854,6 +876,28 @@ object AccountCardCopy {
     internal const val LINK_BONUS = "+1 free VIP day, once per account"
 
     internal const val LINK_BUTTON = "Link and claim the day"
+
+    /**
+     * Whether the free day on offer would actually unlock anything. The operator decides: with the
+     * `quality_gate` switch off, `VipQualityGate.premiumAccess` answers yes for every viewer, so a
+     * VIP day opens no door and offering one sells a thing this deployment does not have.
+     *
+     * The countdown is NOT governed by this rule and keeps showing either way, because it names a
+     * fact of the server's ledger (`accounts.py` sets `vip_until` when it grants the trial) and the
+     * switch can move at any minute — a viewer must still know the day their trial ends. Only the
+     * offer is suppressed.
+     */
+    internal fun dayUnlocksAnything(qualityGateEnabled: Boolean): Boolean = qualityGateEnabled
+
+    /** The offer line, or null when the day it advertises unlocks nothing. */
+    internal fun bonusLine(qualityGateEnabled: Boolean): String? =
+        if (dayUnlocksAnything(qualityGateEnabled)) LINK_BONUS else null
+
+    /** The button keeps its verb and drops its claim when there is no day to claim. */
+    internal fun linkButton(qualityGateEnabled: Boolean): String =
+        if (dayUnlocksAnything(qualityGateEnabled)) LINK_BUTTON else LINK_BUTTON_NO_DAY
+
+    internal const val LINK_BUTTON_NO_DAY = "Link your profile"
 
     /**
      * The transport warning. It is the sentence the whole modal exists to earn the right to show,

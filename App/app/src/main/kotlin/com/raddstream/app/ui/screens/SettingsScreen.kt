@@ -382,11 +382,13 @@ fun SettingsScreen(
                         style = MaterialTheme.typography.bodyMedium,
                         fontWeight = FontWeight.Medium,
                     )
-                    Text(
-                        AccountCardCopy.LINK_BONUS,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.primary,
-                    )
+                    AccountCardCopy.bonusLine(account.qualityGateEnabled)?.let { bonus ->
+                        Text(
+                            bonus,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.primary,
+                        )
+                    }
                     Text(
                         AccountCardCopy.LINK_PIN_MEANING,
                         style = MaterialTheme.typography.labelSmall,
@@ -397,7 +399,10 @@ fun SettingsScreen(
                         enabled = !account.isLinking,
                         modifier = Modifier.fillMaxWidth(),
                     ) {
-                        Text(if (account.showLinkForm) "Close" else AccountCardCopy.LINK_BUTTON)
+                        Text(
+                            if (account.showLinkForm) "Close"
+                            else AccountCardCopy.linkButton(account.qualityGateEnabled),
+                        )
                     }
                     if (account.showLinkForm) {
                         ProfileLinkDialog(account = account, viewModel = viewModel)
