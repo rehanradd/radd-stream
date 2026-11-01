@@ -2,6 +2,7 @@ package com.raddstream.app.viewmodel
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.raddstream.app.BuildConfig
 import com.raddstream.app.data.local.SyncedProgressDao
 import com.raddstream.app.data.local.WatchHistoryDao
 import com.raddstream.app.data.local.WatchHistoryMerge
@@ -65,22 +66,38 @@ data class HomeUiState(
 )
 
 /**
- * A build the operator published through remote config.
+ * A build the operator published through remote config, and that earned the right to be offered.
  *
- * The published body carries no version code, so this cannot compare versions: a
- * non-empty, http(s) URL is the whole signal, and the copy says "a new build is
- * available" rather than pretending to know whether it is newer than this APK.
+ * Three conditions, all of them the operator's declaration rather than the app's verification:
+ * the link is `https` (or plain `http` to loopback), a 64-hex SHA-256 was published with it, and
+ * its version code is strictly newer than this build's.
+ *
+ * **This is a narrower banner than the one shipped before.** A deployment whose operator has
+ * published only a URL — which is every deployment today, because UPD-1a added the three fields to
+ * the admin panel and nobody has filled them in yet — now shows nothing. That is the intended
+ * direction: `openDownload` fires `ACTION_VIEW` and never asks `REQUEST_INSTALL_PACKAGES`, so the
+ * app holds no bytes and can verify nothing, which means an unverified cleartext download offer is a
+ * button that installs whatever the wire delivered. The honest reading of a missing digest is
+ * "unchecked", not "checked and fine".
+ *
+ * `installedVersionCode == 0` is what a build carries when the environment gave it no
+ * `VERSION_CODE` (`app/build.gradle.kts:218`), so any published positive code clears it. The
+ * comparison is one-sided there and says so rather than pretending both sides are known.
  */
 data class AppUpdate(
     val url: String,
     val publishedAt: Long,
 ) {
     companion object {
-        /** Null unless the operator actually published a usable download link. */
-        fun from(config: VipRemoteConfig?): AppUpdate? {
-            val url = config?.apkUpdateUrl?.trim().orEmpty()
-            if (!WireText.isHttpUrl(url)) return null
-            return AppUpdate(url = url, publishedAt = config?.updatedAt ?: 0L)
+        /** Null unless the operator published a link this app can honestly call an update. */
+        fun from(config: VipRemoteConfig?, installedVersionCode: Int): AppUpdate? {
+            if (config == null || !config.success) return null
+            val url = config.apkUpdateUrl.trim()
+            if (!WireText.isVerifiableDownloadUrl(url)) return null
+            if (!WireText.isApkDigest(config.apkUpdateSha256)) return null
+            val published = config.apkUpdateVersionCode
+            if (published <= 0 || published <= installedVersionCode) return null
+            return AppUpdate(url = url, publishedAt = config.updatedAt)
         }
     }
 }
@@ -181,7 +198,7 @@ class HomeViewModel @Inject constructor(
     private fun checkForUpdate() {
         viewModelScope.launch {
             val notice = try {
-                AppUpdate.from(catalogRepository.getRemoteConfig())
+                AppUpdate.from(catalogRepository.getRemoteConfig(), BuildConfig.VERSION_CODE)
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (_: Exception) {
