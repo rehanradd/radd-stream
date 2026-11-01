@@ -237,3 +237,60 @@ lane worktree (page cache warm) and **107.100 s** in the freshly materialized on
 one vCPU). Neither number licenses excluding the suite; only CI's per-step timing does, and there is no CI read for
 any of this because nothing here was pushed. The re-check proves the *content* survives a clean checkout; it cannot
 prove the gate is green, and it is not presented as if it did.
+
+## Slice 6 — `app: arm64-excluded suites are invisible here` → "they are invisible to any number printed on this host"
+
+**Branch:** `q5-pin-s6-arm64-invisible-20261101`, stacked on slice 5 (`1241a4c`). Supervisor instruction for
+slice 6: own worktree only, **local commit only — do not push and do not retry a push**, no credential read or
+print, no Gradle (load above 4), no tag, no restart, no production write, no catalog merge, do not move the
+`AGENTS.md` release-safety sentence, record the slice-6 sha and which pin it converts here, report and stand by.
+All observed: nothing was pushed, no credential was touched, no Gradle ran (the conversion is a docs change and
+needs no build), `AGENTS.md` untouched at 31,990 / 32,000.
+
+**What it pinned:** `App/AGENTS.md:57` — "no number printed on this host includes those two suites". That is a
+statement over the *run history of this box*: nobody can re-derive it, no test can execute it, and its rot path is
+ordinary honest editing. A lane that re-measures the suite, or the lane that finally lifts the arm64 exclusion,
+rewrites that sentence as a matter of bookkeeping, and the guard would report a docs-law regression for a
+housekeeping edit.
+
+**What it pins now:** `docs/SPEC_APP_ROBOLECTRIC_ARM64.md:27` — "they are invisible to any number printed on this
+host", the universal reading rule that the historical tally was merely an instance of. It holds whether or not the
+nine have ever run here, and it survives the day the exclusion is lifted: local numbers stay silent about
+arm64-excluded classes either way. Proof that the exclusion *exists* was never this pin's job and is not in prose
+at all — it is the `tasks.withType<Test>()` block in `app/build.gradle.kts` that performs it. Stated as a trade,
+the same way rule 7's conversion was: the pin no longer implies a run history, and no pin can.
+
+**A second, mechanical finding — why the target moved docs, not just phrases.** The obvious replacement in
+`App/AGENTS.md` was its own law clause "The exclusion stays". It cannot be pinned there, and not for lack of
+worth: `load()` returns the raw file including the `> ` blockquote markers, and `flat()` collapses whitespace only,
+so the sentence as written in that file flattens to **"The exclusion > stays"** and no natural phrase can match it
+across the wrap. Confirmed by matching, not by reading — the slice-3 discipline (a claim about a match has to be
+tested by matching). Four candidates were probed against the flat text:
+
+| candidate | flat match? | used |
+|---|---|---|
+| `App/AGENTS.md` "The exclusion stays" | **NO** (marker sits inside the wrapped sentence) | refused |
+| `App/AGENTS.md` "no number printed on this host includes those two suites" | yes | the *old* literal, retired |
+| spec doc "they are invisible to any number printed on this host" | yes | **pinned** |
+| spec doc "the exclusion itself stays, because an un-excludable Robolectric crash is worse" | yes | considered, not used |
+
+The reason-with-policy clause (last row) is the better *sentence* but the worse *pin*: it would fire on a rewrite
+of the exclusion rationale, which is q4/q1 app-lane territory, while the reading rule is what an agent actually
+misuses a local count against. One proposition, one pin, no accumulation — the converted label leaves exactly one
+new label.
+
+**Reachability, checked rather than assumed.** The new target is not in `AUTO_LOADED`, so
+`test_every_invariant_target_is_reachable_from_the_loaded_indexes` must find its filename in the needles; it does,
+because `App/AGENTS.md:56` links `docs/SPEC_APP_ROBOLECTRIC_ARM64.md` by name, and that doc is already in
+`test_moved_spec_documents_exist`. Running the module, not reasoning about it, is what settled this.
+
+**Derived after the edit, by importing the guard:** `len(INVARIANTS)` 104 (one-for-one swap; the count is never
+the progress signal, the label set is), 0 failing phrases, 0 duplicate labels, **9 of 15 converted, 6 still
+pinning state** — 4 held by decision (`one vCPU`, `backend is the running system`, 2 on qoder3's adult surface) and
+**2 ordinary left**: `MovieBox is metadata + trailer evidence, not playable` and `no playable print is resolvable
+from this host`, both targeting `Fast_Fetch/SITES.md`, as slices 7 and 8. Byte budgets unmoved: root
+`AGENTS.md` 31,990 / 32,000, `Fast_Fetch/AGENTS.md` 14,469 / 18,000, `App/AGENTS.md` 14,061 / 15,000, CONTINUITY
+11,970 B / 93 lines, SESSION_CHECKPOINT 11,941 B / 112 lines, archive counts 71/71 and 60/60 (no new file added).
+Full guard module run locally: **22 tests OK** in 91.226 s at load ≈ 8 on one vCPU — a cold-cache, contended
+number, and per rule 7 not grounds for excluding anything; only CI's per-step timing decides that, and this branch
+has no CI read because it was never pushed.

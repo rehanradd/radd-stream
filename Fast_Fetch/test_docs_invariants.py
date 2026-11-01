@@ -30,6 +30,9 @@ CHECKPOINT = REPO_ROOT / "docs" / "SESSION_CHECKPOINT.md"
 #: carried the wording root AGENTS.md forbids.
 ADMIN_DOC = REPO_ROOT / "docs" / "ADMIN_PANEL_ACCESS.md"
 MEASURED_NOTES = REPO_ROOT / "docs" / "SPEC_AGENTS_MEASURED_NOTES.md"
+#: Where the arm64/Robolectric evidence lives since the 2026-10-30 diet. `App/AGENTS.md` links it by
+#: name, so it passes the reachability test even though it is not auto-loaded.
+APP_ROBO_DOC = REPO_ROOT / "docs" / "SPEC_APP_ROBOLECTRIC_ARM64.md"
 
 FF_CKPT = BASE_DIR / "checkpoints"
 DOC_CKPT = REPO_ROOT / "docs" / "checkpoints"
@@ -293,8 +296,22 @@ INVARIANTS = [
     ("app: credential safety", APP_AGENTS, "Git and Credential Safety"),
     ("app: never run gradlew directly", APP_AGENTS, "**Never run `./gradlew` directly.**"),
     ("app: one build at a time", APP_AGENTS, "One build at a time, and no build while another agent is mid-verification."),
-    ("app: arm64-excluded suites are invisible here", APP_AGENTS,
-     "no number printed on this host includes those two suites"),
+    # Converted 2026-11-01 (q5, slice 6). Two defects in one entry. (a) The old literal — "no number
+    # printed on this host includes those two suites" — is a claim over the *history of runs on this
+    # box*, which no reader can re-derive and no test can execute. Its rot path is honest editing: a
+    # lane that re-measures, lifts the arm64 exclusion, or simply tightens the wording updates that
+    # sentence, and the gate then reports a docs-law regression for a bookkeeping edit. (b) Its subject
+    # sentence in `App/AGENTS.md` begins "The exclusion stays", which cannot be pinned there: `load()`
+    # keeps the blockquote markers and `flat()` collapses the wrap to "The exclusion > stays", so any
+    # phrase crossing that line break is unreachable by this matcher — verified by matching, not by
+    # reading, which is the slice-3 lesson. So the target moves to the spec doc `App/AGENTS.md` links by
+    # name, and the literal becomes the universal rule rather than the historical tally: the suites are
+    # invisible to *any* number printed on this host, which holds whether or not the nine have ever run
+    # here and does not depend on a run history nobody can audit.
+    # Consequence stated, not hidden: the pin no longer proves the suites are excluded, only that the
+    # reading rule is on the page. Proof of exclusion lives in the build file that does it.
+    ("the arm64-excluded suites are invisible to any local number", APP_ROBO_DOC,
+     "they are invisible to any number printed on this host"),
 
     # --- law written to trunk AFTER the rotation, absorbed by the rebase onto `4fe6f65` ----------
     # A guard that enumerates only the laws it knew at writing time is the failure mode this diet
