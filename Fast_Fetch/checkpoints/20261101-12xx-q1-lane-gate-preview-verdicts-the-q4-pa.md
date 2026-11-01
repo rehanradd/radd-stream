@@ -114,3 +114,55 @@ git -C /tmp/q1_preview_q4 status --porcelain        # empty, before and after
 ls -l /tmp/q1_preview_q4/App/app/build/test-results/testDebugUnitTest/   # 94 XMLs @ 12:10:51-52
 grep -c '^PASS' /tmp/q1_seq_pytest.log; grep -c '^FAIL' /tmp/q1_seq_pytest.log   # 45 / 0
 ```
+
+---
+
+## Follow-up, same lane, 15:4x — the q4-pair lint task, which turned out to need no patch
+
+The order was to draft the q4-pair lint fix locally at `718a8ef`/`ede66f4` so it is ready when the gate
+opens. The draft is **`/tmp/q1_lint_draft_AUDIT.md`**, and it carries no patch, because measuring found no
+lint error to fix. Four facts, each read from the refs rather than from memory:
+
+1. **Lint already judged both heads.** `ci.yml:111` at trunk runs
+   `:app:assembleDebug :app:testDebugUnitTest :app:lintDebug` in **one** invocation, and both q4 heads are
+   `completed / success` on that workflow (`718a8ef` → run 41268769164, `ede66f4` → 41267702882).
+2. **That green cannot be a suppressed green.** Measured at trunk `c2528e1`: a `lint {` block in
+   `App/app/build.gradle.kts` → 0, `lintConfig`/`lint.xml` references → 0, lint baseline files → 0, lint
+   keys in `App/gradle.properties` → 0. `abortOnError` therefore keeps AGP's `true` default, so one lint
+   **error** fails the step.
+3. **The pair adds no lint-visible surface.** `git diff --name-only c2528e1..057d344` is 12 Kotlin files
+   and nothing else (filtering `\.kt$` out prints empty) — no `res/`, no manifest, no build file — so
+   neither `NewApi`-on-theme-attributes nor `UnsafeOptInUsageError` can recur. Greps over every added
+   main-source line for Java-8+ APIs (`Base64`, `java.time`, `java.util.function`, `Collectors`,
+   `.stream()`, `getOrDefault`, `String.join`, `List.of`, `Optional`, `removeIf`, `Files.`, `transferTo`,
+   `readAllBytes`, `MessageDigest`, `Locale`, `SimpleDateFormat`) and for any `androidx.` reference both
+   return nothing.
+4. **Predicted is not measured.** The pair has never been on the runner together, so the draft supplies
+   the window recipe instead of a patch: lint needs network (`--offline` cannot resolve
+   `kotlin-stdlib-jdk7:1.8.22`), memory floor 1700M + 600M headroom, 1-min load ceiling 3.9, read
+   `GRADLE_EXIT=` from the log rather than the pipeline status, disqualify on `OVERLAP=YES` or a
+   `lint-results-debug.txt` older than the run — and judge it at **each gated merge sha**, never at
+   `057d344`. Plus the per-family fix menu already proven on this box, and the standing refusal to add a
+   baseline or suppression.
+
+**Attribution corrected, and it changes the gate verdict.** `native_card_every_posters` is claimed as a
+`@SerializedName` *alternate* by two properties: parsing every explicit annotation in the merged
+`VipRemoteConfig.kt` gives 66 distinct keys with exactly one double claim (`:148` under primary
+`feed_card_posters`, `:250` under primary `ad_native_card_every_posters`). But **trunk carries both
+claims already** — `c2528e1` at `:116`/`:218`, `718a8ef` at `:130`/`:232`, `ede66f4` at `:134`/`:236` —
+so neither q4 head introduced it or made it worse and it is not a blocker for gating them. Owner stays
+qoder4; their worktree was not touched. Which field Gson actually populates is **not** verified here and
+is deliberately left unstated; the settling test is a decode of a body carrying only
+`native_card_every_posters`.
+
+**One loop closed on a dependency q4A's own KDoc asserts.** `4b025bf`, `c2ae2bf`, `e7d5fc7`, `1fe8fad`
+are each ancestors of trunk `c2528e1`, and trunk's `admin_panel.py` already publishes
+`settings_unavailable` (`:2273`, with the client rule documented at `:2238`), so q4A's refusal logic
+matches a server field that has landed rather than one still in flight.
+
+Nothing was pushed, tagged, merged to trunk or to local master; no service restart, no production DB
+write, no catalog merge, no credential read or retry. **No Gradle was run** — load1 was 6.32 at the start
+of this task and 7.52 at the end, above the bar. The pointer indexes named in the previous entry are
+still at their ceilings, which is why this entry is appended to *this* lane's own archive file instead of
+written to `docs/SESSION_CHECKPOINT.md` or root `AGENTS.md`: `Fast_Fetch/CONTINUITY.md` stays at 11,970
+bytes of a 12,000-byte cap and its session-file count is unchanged here, because no new file was added.
