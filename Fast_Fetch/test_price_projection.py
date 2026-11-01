@@ -247,6 +247,32 @@ class PlanClassificationTests(unittest.TestCase):
                         "a ledger whose indexes differ from init_db's is a different ledger, and"
                         " silently calling it the same is how a plan lies")
 
+    def test_a_layer0_table_without_the_join_column_is_reported_not_a_traceback(self):
+        """Found on real vaults, not invented: `filmyhit.db`, `kisskh.db` and `moviesmela.db` carry a
+        `releases` table with no `post_id` column, and `EXPLAIN QUERY PLAN` *parses* the statement —
+        so pricing one of those ledgers raised `OperationalError: no such column: post_id` and the
+        pass died instead of naming the drift. A ledger the projection cannot read is the finding.
+        """
+        path = self.dir / "no-post-id.db"
+        conn = sqlite3.connect(str(path))
+        conn.execute(POSTS_DDL)
+        conn.execute("CREATE TABLE releases (id INTEGER PRIMARY KEY, release_title TEXT,"
+                     " quality TEXT)")
+        conn.execute(SOURCES_DDL)
+        conn.execute(POST_SOURCES_DDL)
+        conn.commit()
+        conn.close()
+        result = price_file(path)
+        releases = plan_of(result, "releases per post")
+        self.assertEqual(releases["plan"], "NO-COLUMN")
+        self.assertIn("no post_id column in releases", releases["detail"])
+        self.assertEqual(result["verdict"], "does not fit",
+                         "the rebuild would raise here, not run slowly")
+        self.assertTrue(any("cannot be planned" in line for line in result["why"]),
+                        "the report has to name the lookup that cannot even be planned")
+        self.assertEqual(plan_of(result, "sources per post")["plan"], "SCAN",
+                         "post_sources does have post_id, so that half stays a scan and not a crash")
+
     def test_a_database_without_the_layer0_tables_is_refused(self):
         path = self.dir / "empty.db"
         conn = sqlite3.connect(str(path))

@@ -164,13 +164,25 @@ def price(conn, *, posts=None, releases=None, mean_row_bytes=None,
         table = stmt["table"]
         indexes = index_map(conn, table)
         join = stmt["join_column"]
+        cols = columns(conn, table)
         covering = sorted(name for name, sql in indexes.items()
                           if join and join in sql)
-        kind, detail = plan(conn, stmt["sql"])
+        if join and join not in cols:
+            # Measured, not hypothetical: `filmyhit.db`, `kisskh.db` and `moviesmela.db` carry a
+            # `releases`/`post_sources` table without the engine's `post_id`. `EXPLAIN QUERY PLAN`
+            # *parses*, so it raises on that ledger — and a ledger the projection cannot read is a
+            # finding, not a crash.
+            kind, detail = "NO-COLUMN", "no %s column in %s" % (join, table)
+        else:
+            try:
+                kind, detail = plan(conn, stmt["sql"])
+            except sqlite3.OperationalError as exc:
+                kind, detail = "UNPLANNABLE", str(exc)
         expected = EXPECTED_INDEX.get(table)
         rows.append({"label": stmt["label"], "table": table, "per": stmt["per"],
                      "join_column": join, "retains_rows": stmt["retains_rows"],
                      "plan": kind, "detail": detail,
+                     "columns": cols,
                      "indexes": sorted(indexes), "covering_join": covering,
                      "matches_engine_ddl": (None if expected is None
                                             else expected in indexes)})
@@ -236,6 +248,15 @@ def price(conn, *, posts=None, releases=None, mean_row_bytes=None,
             result["verdict"] = "does not fit"
         result["why"].append("full-table scans on the hot path: %s — the rebuild would scan that"
                              " table once per outer row" % ", ".join(hot_scans))
+    #: A lookup that cannot be planned at all is worse than one that scans: the projection would
+    #: raise on this ledger rather than finish slowly.
+    unplannable = [r["label"] + " (" + r["detail"] + ")" for r in rows
+                   if r["plan"] in ("NO-COLUMN", "UNPLANNABLE")]
+    if unplannable:
+        result["verdict"] = "does not fit"
+        result["why"].append("lookups that cannot be planned against this schema: %s — the"
+                             " projection reads columns the engine's DDL created and this ledger"
+                             " does not have" % ", ".join(unplannable))
     drift = [r["label"] for r in rows if r["matches_engine_ddl"] is False]
     if drift:
         result["why"].append("index drift from the engine's own DDL: %s" % ", ".join(drift))

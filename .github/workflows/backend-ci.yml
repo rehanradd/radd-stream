@@ -498,6 +498,9 @@ jobs:
       # content read" is proved against a database that could have been read.
       # Registered WITHOUT a local suite run (the freeze stands), but not shipped unchecked: the plan
       # it guards was executed against synthetic ledgers here, and two of its claims were falsified by
-      # the planner before the sha — `ORDER BY id` costs no sort, because id is the rowid.
+      # the planner before the sha — `ORDER BY id` costs no sort, because id is the rowid. A third was
+      # falsified afterwards by the real vault set: `EXPLAIN QUERY PLAN` parses, so a ledger whose
+      # `releases` has no `post_id` (filmyhit, kisskh, moviesmela) raised instead of being reported,
+      # and that case is now a `NO-COLUMN` verdict with its own fixture built to lack the column.
       - name: 🧪 test_price_projection.py
         run: python3 -S Fast_Fetch/test_price_projection.py
