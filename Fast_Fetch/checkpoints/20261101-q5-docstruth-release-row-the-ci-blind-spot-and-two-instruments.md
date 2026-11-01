@@ -129,3 +129,41 @@ its own base.
    first, and the rotation of `Fast_Fetch/CONTINUITY.md` (this session: 11,958 → ~11.2 KB) is the
    model: move the pointer bullets verbatim into `checkpoints/README.md`, then re-count the archive
    line — digit-for-digit, because that count is a tested claim.
+
+## Correction, appended 2026-11-01 after Q1's own retraction — the sentence above this line is wrong
+
+§"Two instruments changed" says the 03:47 run made "the pre-merge-grade backup the frozen merge plan
+is waiting on". It is not, and the reason is worse than a scope mismatch. Re-measured from the unit's
+journal at `6014dd5`, and this is the deepest read available without touching a database:
+
+```
+03:47:17 [*] Found 49 databases: [… 'fast_fetch.db', 'merged_catalog_20261025.db', 'resolvers.db',
+                                  'user_state.db', …]        ← the run's own enumeration
+04:44:03 [*] Safely vacuuming user_state.db...
+04:44:56 [*] Creating compressed archive radd-stream-backup_20261031_224717.tar.gz...
+```
+
+`backup_manager.py:526` picks scope with `sorted(data_dir.glob("*.db"))` over
+`--dir /home/ubuntu/radd-stream-data` (`:507`) and `grep -n 'exclude\|user_state\|allow'` on that file
+returns **nothing** — so "which databases leave the box" is decided by directory membership, and the
+credential and payment store sits in the same directory as the catalog. The archive therefore carries
+`user_state.db`; Q1's bounded read-only schema query found `user_accounts`, `payment_transactions`,
+`verified_incoming_tids`, `sync_key_attempts` and `usage_device` in it (his measurement, cited from
+`/tmp/q1_backup_correction.txt` — I did not open the file, a production read is frozen).
+
+What I wrote before this line came from the fleet message that generalised one catalog file to the whole
+archive, and I repeated it back to the supervisor in a status report: "the snapshot it just made is worth
+more than the CPU it costs". That was a quoted claim, not a measured one, and the code that decides scope
+was three lines from the file I had already opened tonight. The rule that would have caught it is the one
+this lane already uses for everything else — a trunk fact is read from the sha, and `glob("*.db")` is a
+trunk fact.
+
+Sharpened, because the memo blurred it: an **unsalted `sha256:` over a minted key is not the hole** —
+`accounts.py:768` mints 96 random bits and `:771-795` says so with the right reasoning. The hole is (a)
+`accounts.py:782-790`'s own admission that an app-derived phone-shaped key *is* offline-bruteforceable,
+whether such rows exist being unmeasured, (b) `:264-266` admitting a 4-digit PIN is not protection against
+whoever owns the file, and (c) payment and viewing rows leaving the box either way. Full write-up with the
+allow-list rule, the test that should be written first, and why git+LFS history means deletion is not
+revocation: [`docs/BACKUP_SNAPSHOT_SCOPE_FINDING.md`](../../docs/BACKUP_SNAPSHOT_SCOPE_FINDING.md).
+Nothing was killed, edited or disabled here; the unit is the owner's, the timer is the owner's, and
+`~/.bashrc` stays alone.
