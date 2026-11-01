@@ -89,13 +89,13 @@ Describe the code's behavior accurately to users and tools. Do not disguise its 
   flags no rule can reproduce. The catalog-wide pass is the owner's call.
   **Residual, measured 2026-10-29 on the production catalog:** 953 works are flagged in the projection
   while 1,190 distinct ledger rows for the same title and year are still public under a *different*
-  key (`suzume-2022` vs `suzume_2022`, `puli-2015` vs `puli_2015`), concentrated in filmyzilla (437),
-  9xmovies (344), moviezguru (190) and hindilinks4u (151). No key-level law can reach those; they need
-  the re-key migration, which is planned and not attempted here. Under the correct identity
-  (`generate_canonical_key(clean_title, year)`) that residual is **2,600 keys carrying both a flagged
-  and an unflagged row, 3,486 publicly served rows under those keys, and a 69,773-row re-key blast
-  radius** (measured 2026-10-29); the earlier 442-keys / 455-rows figures describe the slug-keyed
-  catalog before that reconciliation.
+  key. No key-level law can reach those; they need the re-key migration, which is planned and not
+  attempted here. Under the correct identity (`generate_canonical_key(clean_title, year)`) that
+  residual is **2,600 keys carrying both a flagged and an unflagged row, 3,486 publicly served rows
+  under those keys, and a 69,773-row re-key blast radius** (measured 2026-10-29); the earlier
+  442-keys / 455-rows figures describe the slug-keyed catalog before that reconciliation. The
+  per-site concentration and the key-pair examples moved verbatim to
+  [`docs/ARCHIVE_ROOT_AGENTS_20261101.md`](docs/ARCHIVE_ROOT_AGENTS_20261101.md).
   **The pattern list is a policy, and it was wrong once.** `\buncut\b` and `\bunrated\b` sat in
   `ADULT_TITLE_PATTERNS` and seven per-site lists until 2026-10-29: they are *edition* labels, not
   adult markers, and desicinemas puts them on mainstream releases — 7,663 of the 15,068 flagged rows
@@ -143,7 +143,20 @@ and there is no installed base to protect yet, so the owner's key is the only co
 every green run (`📤 Upload debug APK` succeeded at `2caadb3`) — debug-signed and installable for the
 device verification every doc still marks "pending".
 
-**UPDATE (Measured 2026-10-30 22:53, then re-measured 2026-10-31 07:5x):** All four release signing secrets (`KEYSTORE_BASE64`, `KEY_ALIAS`, `KEY_PASSWORD`, `KEY_STORE_PASSWORD`) were generated, backed up on Oracle VM (`/home/ubuntu/raddstream-release.jks`), and configured in GitHub Actions Secrets by the repository owner. **That half is confirmed by execution:** the release run at the tag (`41104217171`) cleared `🗝️ Verify signing secrets are present` at `18:08:05Z` — the preflight that killed the 2026-10-29 attempt in 10 s. **The rest of that sentence was false and is retired:** the workflow is *not* "producing signed release artifacts". Measured on the API: `GET /releases` returns `[]`, all five release runs in history are `failure`, and `tag v1.0.0` resolves to commit `6a441ec77` — a trunk point that predates the adult merge-time fold (`4a8c163`), so re-running that tag would ship pre-law code. **No signed APK or AAB has ever existed for this product.** The cause is now read from the run log, not guessed: `java.lang.IllegalArgumentException: Last unit does not have enough valid bits` at `App/app/build.gradle.kts:120`, `BUILD FAILED in 4s` — it died during *configuration*, in `signingConfigs`, before any Kotlin compiled. That exception is `java.util.Base64.getDecoder()` refusing the **stored `KEYSTORE_BASE64` value**, whose length is not a clean base64 quantum (padding lost in the paste); the keystore itself is sound — re-encoding `/home/ubuntu/raddstream-release.jks` (2,752 bytes → 3,672 chars, ends `==`) round-trips strictly. So the fix is owner-side secret re-entry, **not** a build-script edit, and the `android.util.Base64` story in §10 was never what this file runs. **Moving or re-cutting a tag is an owner action: no agent may create, move or delete a tag.**
+**UPDATE (measured 2026-10-30 22:53, re-measured 2026-10-31 07:5x):** the repository owner generated
+all four release-signing secrets, backed the keystore up on the Oracle VM
+(`/home/ubuntu/raddstream-release.jks`), and configured them in GitHub Actions Secrets — confirmed by
+execution: run `41104217171` cleared the `🗝️ Verify signing secrets are present` preflight that had
+killed the 2026-10-29 attempt in 10 s. **What that sentence did *not* earn is retired: the workflow is
+not producing signed artifacts.** `GET /releases` is `[]`, every release run in history is a
+`failure`, `tag v1.0.0` resolves to a trunk point that predates the adult merge-time fold.
+**No signed APK or AAB has ever existed for this product.** The read cause, from the run log:
+`java.util.Base64` refusing the **stored `KEYSTORE_BASE64` value** (length not a clean base64
+quantum — padding lost in the paste), failing during *configuration* in `signingConfigs`
+(`App/app/build.gradle.kts:120`, `BUILD FAILED in 4s`) before any Kotlin compiled; the keystore file
+itself round-trips. **So the fix is owner-side secret re-entry, not a build-script edit.**
+**Moving or re-cutting a tag is an owner action: no agent may create, move or delete a tag.**
+Per-run receipts: [`docs/SPEC_AGENTS_MEASURED_NOTES.md`](docs/SPEC_AGENTS_MEASURED_NOTES.md).
 
 **Backend agents**: use `GITHUB_TOKEN` for GitHub operations and `ORACLE_SSH_KEY` only when connecting to Oracle. Read [`ORACLE_DEPLOYMENT.md`](ORACLE_DEPLOYMENT.md) first.
 **App agents**: the debug build needs no secrets; the *signed release* needs the 4 keystore secrets above **and** a release workflow that builds — which it does not have. A task that needs an installable build today takes the **debug APK** from `🔨 CI — Android Build & Test`.
@@ -227,59 +240,54 @@ Every agent — no matter how short the session — MUST do this before ending:
    that grows; the workflow file is the only source of truth, so read it instead of quoting a number
    from this file. The historical per-run module lists and test counts moved to
    [`docs/SPEC_AGENTS_MEASURED_NOTES.md`](docs/SPEC_AGENTS_MEASURED_NOTES.md).
-2. **Quote a test count from the log that executed it, or from `git show <sha>:Fast_Fetch/<module> | grep -cE '^\s+def test_'` — never from prose here** (this line read 76, then 124, then 133 in a week — `docs/SPEC_AGENTS_MEASURED_NOTES.md`). Method's example, verified at `ee5100f` and `11c1008`: `test_database.py` **133** (`Ran 133 tests in 6.609s`, run `41245756423`), `test_vidout.py` **6**. Naming those two is a quick gate, not item 1.
+2. **Quote a test count from the log that executed it, or from `git show <sha>:Fast_Fetch/<module> | grep -cE '^\s+def test_'` — never from prose here.** This line read 76, then 124, then 133 inside a week; the counts, the shas and the run ids that produced them are in [`docs/SPEC_AGENTS_MEASURED_NOTES.md`](docs/SPEC_AGENTS_MEASURED_NOTES.md). Naming two modules is a quick gate, not item 1.
 3. Append a session log to `Fast_Fetch/CONTINUITY.md`
 4. Push with Git over HTTPS using the temporary askpass helper in [`ORACLE_DEPLOYMENT.md`](ORACLE_DEPLOYMENT.md); do not use the legacy per-file API push scripts
 
-**Run the gate in a worktree at the tip, never in `/opt/radd-stream`** — the live tree is a diverged
-older draft and a "green" from it is a weaker claim than CI's. The measurement that proved it is in
-[`docs/SPEC_AGENTS_MEASURED_NOTES.md`](docs/SPEC_AGENTS_MEASURED_NOTES.md).
+**Run the gate in a worktree at the tip, never in `/opt/radd-stream`** — the live tree is a
+diverged older draft, and a "green" measured in it is a weaker claim than CI's.
 
 ### For App Sessions:
 1. Ensure Gradle builds pass locally OR wait for GitHub Actions green check
 2. Append a session log to `App/AGENTS.md` (Session History section)
 3. Push with Git over HTTPS using the temporary askpass helper in [`ORACLE_DEPLOYMENT.md`](ORACLE_DEPLOYMENT.md)
-4. Tag a release with `git tag vX.Y.Z && ...` if a milestone is complete
-   — **superseded by the Fleet Resource Guardrail rule 5: this is the owner's call alone, no agent
-   may create or push a tag, and CI cannot sign one today anyway (`/actions/secrets` is `[]`).**
+4. ~~Tag a release~~ **superseded by Fleet Resource Guardrail rule 5: no agent creates, moves or
+   pushes a tag — the owner's call alone — and CI cannot sign one today.**
 
 ---
 
 ## 🚦 Current Project Status
 
-| Component | Status | Phase |
-|---|---|---|
-| Backend: ingestion, SQLite catalog, resolver, REST API | ✅ **Deployed and running on this host** — `systemctl is-active radd-stream` → `active`, `fast_fetch.py serve --host 127.0.0.1:8080` behind Nginx | Complete |
-| Android App: server setup, metadata catalog, search | ✅ Implemented; device verification pending | Phase 1 |
-| Android App: details and playback | ✅ Implemented (Media3 playback, favorites, keeps, VIP screen); device verification pending | Phase 2 |
-| GitHub Actions | ✅ **Enabled and running** — `/actions/permissions` → `{"enabled": true, "allowed_actions": "all"}`; all three repo-root workflows are `state=active`, and the never-discovered duplicates under `App/.github/workflows` have been deleted (a PR gate exists: `ci.yml:57`, `backend-ci.yml:113`, `raddrelay-ci.yml:37` all carry `pull_request`). The retired "disabled at the account level" claim and the full CI-health measurement history (per-sha run verdicts on both trunk refs, the Android `unfed-not-red` misdiagnosis, the Robolectric #9166 trap) are in [`docs/SPEC_AGENTS_MEASURED_NOTES.md`](docs/SPEC_AGENTS_MEASURED_NOTES.md). | Gate is live |
-| Release signing | ❌ **Secrets configured, nothing signed** — run `41233720264`: the secrets preflight passes, the build step fails; `GET /releases` is `[]` (tags `v1.0.0`, `v1.0.1`). Installable bytes = the CI debug APK. Per-run receipts: `docs/SPEC_AGENTS_MEASURED_NOTES.md`. | Owner |
+| Component | Status |
+|---|---|
+| Backend: ingestion, SQLite catalog, resolver, REST API | ✅ **Deployed and running on this host** |
+| Android App: Phase 1 (catalog/search) and Phase 2 (details/playback) | ✅ Implemented; device verification pending |
+| GitHub Actions | ✅ Enabled and running; repo-root workflows `state=active` |
+| Release signing | ❌ No signed artifact has ever existed; `GET /releases` is `[]` — installable bytes = the CI debug APK |
+
+The per-sha receipts behind those four rows — the CI verdicts per trunk ref, the never-discovered
+duplicates under `App/.github/workflows` and the PR-gate line numbers, the five failed release runs
+and where each one died — moved verbatim to
+[`docs/ARCHIVE_ROOT_AGENTS_20261101.md`](docs/ARCHIVE_ROOT_AGENTS_20261101.md). A status row that
+quotes a run id is stale the moment another lane pushes; the row that survives is the claim, and the
+evidence belongs where it can age without contradicting anyone.
 
 The current Oracle host and its HTTP-only limitations are documented in
 [`ORACLE_DEPLOYMENT.md`](ORACLE_DEPLOYMENT.md). The backend is **already deployed there and is the
 running system** — do not treat it as hypothetical, and never copy untested or WIP code onto it.
 
-**Do not misread an empty CI run list.** `backend-ci.yml` triggers on `push: branches: ["**"]` with
-`paths: ["Fast_Fetch/**", ".github/workflows/backend-ci.yml"]`, so a **docs-only push legitimately
-produces zero runs** — that is the path filter working, not the account. Measured 2026-10-29:
-`/actions/permissions` → `{"enabled": true, "allowed_actions": "all"}` and `/actions/runs` carries 40+
-runs. This file previously claimed "Actions is disabled at the account level" on the strength of a
-filtered `total_count: 0`; that claim cost a week of unverified pushes and must not be repeated. If
-you need to know whether CI can run, query `/actions/permissions` and print what it says.
-
-**⚠️ Re-measured 2026-10-30 at `dc73ac7`, and this is what the filter is today:**
-`backend-ci.yml`'s push trigger is `branches: ["**"]` with
-`paths: ["Fast_Fetch/**", ".github/workflows/backend-ci.yml"]` (md5 of the file matches
-`git show dc73ac7:.github/workflows/backend-ci.yml`). Consequence for a docs-only change: editing
-root `AGENTS.md` or `docs/**` alone feeds **nothing**, but the diet touches `Fast_Fetch/**`
-(`Fast_Fetch/AGENTS.md`, `Fast_Fetch/CONTINUITY.md`, `Fast_Fetch/checkpoints/`,
-`Fast_Fetch/test_docs_invariants.py`) so it does feed CI. `.github/workflows/ci.yml` triggers on
-`App/**`, so a push that edits `App/AGENTS.md` also starts the ~7-minute hosted Android build. That
-is CI's cost on a hosted runner, not this box's. **The rule is the method, not the shape: read the
-workflow's own trigger block before predicting whether CI will run** — a `total_count: 0` run list is
-evidence about the filter, never about the account. (A `paths-ignore` variant of this file was
-quoted once tonight and could not be reproduced against the tree or the object store; treat it as
-never having existed, which is precisely why the method above is the law and not a quoted shape.)
+**Do not misread an empty CI run list.** `backend-ci.yml`'s push trigger is `branches: ["**"]` with
+`paths: ["Fast_Fetch/**", ".github/workflows/backend-ci.yml"]`, so a push that touches neither feeds
+no backend run — that is the path filter working, not the account. `.github/workflows/ci.yml`
+triggers on `App/**`, so a push editing `App/AGENTS.md` also starts the ~7-minute hosted Android
+build; that is CI's cost on a hosted runner, not this box's. **The rule is the method, not the
+shape: read the workflow's own trigger block before predicting whether CI will run** — a
+`total_count: 0` run list is evidence about the filter, never about the account. If you need to know
+whether CI can run, query `/actions/permissions` and print what it says. The two measurements behind
+this paragraph (the 2026-10-29 permissions reading, the 2026-10-30 `dc73ac7` trigger re-measure, and
+the `paths-ignore` variant that could not be reproduced against the tree or the object store) are in
+[`docs/ARCHIVE_ROOT_AGENTS_20261101.md`](docs/ARCHIVE_ROOT_AGENTS_20261101.md) — which is precisely
+why the method above is the law and not a quoted shape.
 
 ---
 
@@ -316,18 +324,17 @@ python Fast_Fetch/fast_fetch.py search "Inception"
 ```
 
 ### App (no local Android Studio needed)
-```bash
-# GitHub only discovers workflows under the repository-root .github/workflows/. The duplicates
-# that used to sit under App/.github/workflows were never discovered and are now deleted.
-#
-# ⛔ NO AGENT CREATES OR PUSHES A TAG. tags v1.0.0 + v1.0.1 exist and the four secrets are
-# configured (run 41233720264's preflight passes), yet GET /releases is []: all five release runs
-# failed — one at the preflight, one at the unit-test gate, three at the build step. A tag today
-# publishes nothing. Per-run receipts: docs/SPEC_AGENTS_MEASURED_NOTES.md.
 
-# Download APK: github.com/rehanradd/radd-stream/actions (debug)
-#               /releases — measured empty
+```bash
+# ⛔ NO AGENT CREATES OR PUSHES A TAG — Fleet Resource Guardrail rule 5, the owner's call alone.
+# A tag publishes nothing today anyway: the release workflow cannot sign (`/releases` is `[]`).
+# An installable build right now = the debug APK from the 🔨 CI — Android Build & Test artifacts.
+# GitHub discovers workflows only under the repository-root .github/workflows/; the duplicates that
+# sat under App/.github/workflows were never discovered and are deleted.
 ```
+
+The five failed release runs and which step killed each one moved verbatim to
+[`docs/ARCHIVE_ROOT_AGENTS_20261101.md`](docs/ARCHIVE_ROOT_AGENTS_20261101.md).
 
 ---
 
@@ -340,7 +347,7 @@ python Fast_Fetch/fast_fetch.py search "Inception"
 | GitHub Releases | https://github.com/rehanradd/radd-stream/releases |
 | Oracle HTTP host (measured 2026-10-29) | `http://92.4.95.252/` — plain HTTP, and `location /` proxies **code-server** (the web IDE), not the app |
 | Backend REST API (publicly reachable) | `http://92.4.95.252/api/v1/posts` — nginx allow-lists only `/api/v1/posts`, `/api/v1/stream`, `/api/v1/stats`, `/api/v1/download`, `/api/v1/search/by-media`, `/api/v1/app/remote-config`, `/api/v2/account*`, and static `/download/`; `^~ /api/` 403s everything else, including all v2 catalog routes and `/api/data` |
-| Operator panel — **measured 2026-10-29 05:47 on this host** | One process (pid of `fast_fetch.py serve`) listens on BOTH `127.0.0.1:8080` and `127.0.0.1:8081`; neither is bound beyond loopback and nginx forwards neither. Public `/admin` falls through to code-server and answers 401. On `8081`: `/admin` → **401 without `RADD_ADMIN_TOKEN`** (the gate is `admin_panel.route_get` → `_gate(peer, token)`), but `/` → **200 serving the 46,476-byte dashboard with no token at all**, and `/api/v1/stats` and `/api/v1/rules` also answer **200 on 8081 with a bogus bearer token**. So the trust boundary on the operator port is *the loopback interface*, not the token: the token guards `/admin` only. On `8080` the same paths differ — `/` is a 1,355-byte page, `/client` is the 20,510-byte PWA, `/api/v1/rules` is **404**. Do not describe the dashboard as token-gated; describe it as loopback-only, which is what is true. |
+| Operator panel | **loopback-only, not token-gated** — `fast_fetch.py serve` binds `127.0.0.1:8080` and `127.0.0.1:8081`, nginx forwards neither, the token guards `/admin` alone, and `/` answers 200 on `8081` with no token at all. Do not describe the dashboard as token-gated; describe it as loopback-only, which is what is true. Route-by-route access law: [`docs/ADMIN_PANEL_ACCESS.md`](docs/ADMIN_PANEL_ACCESS.md); the 2026-10-29 05:47 measurement moved verbatim to [`docs/ARCHIVE_ROOT_AGENTS_20261101.md`](docs/ARCHIVE_ROOT_AGENTS_20261101.md) |
 | Mobile PWA `/client` | **not public** — measured 401 through nginx (same code-server fallthrough). It serves 200 only from `127.0.0.1:8080` |
 
 ---
