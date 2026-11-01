@@ -160,6 +160,7 @@ class DownloadService : Service() {
         var downloaded = entry.bytesDownloaded.coerceAtLeast(0L)
         var total = entry.bytesTotal
         var target: OutputTarget? = null
+        var contentType = ""
         try {
             target = prepareOutput(entry)
             repo.setOutputUri(id, target.uri.toString())
@@ -172,8 +173,10 @@ class DownloadService : Service() {
             response.use { answer ->
                 if (!answer.isSuccessful) throw IOException("HTTP ${answer.code}")
                 val body = answer.body ?: throw IOException("empty body")
+                contentType = answer.header("Content-Type").orEmpty()
                 if (downloaded > 0 && answer.code != 206) downloaded = 0L
                 total = totalBytes(answer.header("Content-Range"), body.contentLength(), downloaded)
+                if (total <= 0L) total = entry.bytesTotal
                 // Some providers refuse append mode. A Range response starts at the old
                 // offset, so the only correct restart is a fresh request from zero.
                 val stream = try {
@@ -208,6 +211,18 @@ class DownloadService : Service() {
             output?.flush()
             output?.close()
             output = null
+            // Audit critical 9: never mark a partial or empty file READY. OkHttp's final
+            // response carries the Content-Type after redirects, so this judges what actually
+            // arrived, not what the catalog claimed. An unknown total cannot prove coverage,
+            // so it fails too.
+            val defect = completionDefect(downloaded, total, contentType)
+            if (defect != null) {
+                repo.markFailed(id, downloaded, total, defect)
+                repo.entity(id)?.let { repo.deleteOutput(it) }
+                repo.resetResume(id)
+                repo.entity(id)?.let { notifyFailed(it, downloaded, total) }
+                return@withContext
+            }
             finalizeOutput(target.uri, entry.mimeType)
             repo.markReady(id, downloaded, total, target.uri.toString())
             notifyCompleted(entry.title)
@@ -464,6 +479,17 @@ class DownloadService : Service() {
         private const val SUBDIR = "RaddStream"
         private const val CHUNK_BYTES = 64 * 1024
         private const val NOTIFY_INTERVAL_MS = 750L
+
+        /** Null when the transfer provably completed as video; otherwise the failure reason. */
+        internal fun completionDefect(downloaded: Long, total: Long, contentType: String): String? =
+            when {
+                downloaded <= 0L -> "Downloaded nothing."
+                total <= 0L -> "Server did not report a size, so completeness cannot be verified."
+                downloaded < total -> "Incomplete: $downloaded of $total bytes."
+                !contentType.startsWith("video/", ignoreCase = true) ->
+                    "Unexpected content type: ${contentType.ifBlank { "none" }}."
+                else -> null
+            }
 
         fun start(context: Context, id: String) {
             val intent = Intent(context, DownloadService::class.java)
