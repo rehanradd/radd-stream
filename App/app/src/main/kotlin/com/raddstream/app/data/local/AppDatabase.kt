@@ -15,11 +15,11 @@ import com.raddstream.app.data.cache.CacheTaskEntity
  * The app's single Room database: favorites plus the offline cache engine (tasks, byte ledgers
  * and the file inventory the TTL sweep and eviction planner walk).
  *
- * Version 2 held only favorites; version 3 adds the three cache tables. Because the cache tables
- * are brand new (they have never shipped on any device), the 2 → 3 step is handled by a
- * destructive fallback registered in the DI layer, which lets Room generate the cache schema
- * verbatim from these entities rather than hand-writing DDL that could drift from them. The
- * favorite migration from 1 is preserved for anyone already on that schema.
+ * Version 2 held only favorites; version 3 adds the three cache tables. The 2 → 3 step is real
+ * DDL like every step after it: leaving it to the destructive fallback in the DI layer would
+ * drop `favorite_posts` too, so an upgrade may never depend on that fallback — it is a last
+ * resort for an unknown future version only. The favorite migration from 1 is preserved for
+ * anyone already on that schema.
  *
  * Version 4 is the optional sync account. It adds two columns to `favorite_posts` (the
  * server-minted handle, and the stamp of the write that last succeeded) and the
@@ -89,6 +89,71 @@ abstract class AppDatabase : RoomDatabase() {
                 )
                 db.execSQL("DROP TABLE favorite_posts")
                 db.execSQL("ALTER TABLE favorite_posts_new RENAME TO favorite_posts")
+            }
+        }
+
+        /**
+         * 2 → 3: the three offline-cache tables, created from nothing. This is hand-written DDL
+         * that must equal Room's own output for the cache entities — column types and nullability
+         * implied by the Kotlin types, AUTOINCREMENT for the generated key, and the index names
+         * Room derives from table plus columns. A drift is caught the first time a device opens
+         * the migrated database (Room validates the result against the entities and throws), and
+         * [com.raddstream.app.data.local.AppDatabaseMigrationTest] plus the schema-guard tests
+         * hold that contract on CI.
+         */
+        val MIGRATION_2_3: Migration = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS cache_tasks (" +
+                        "id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, sourceKey TEXT NOT NULL, " +
+                        "releaseId INTEGER NOT NULL, linkKind TEXT NOT NULL, currentUrl TEXT NOT NULL, " +
+                        "resourceId TEXT, title TEXT NOT NULL, printLabel TEXT NOT NULL, " +
+                        "origin TEXT NOT NULL, priority TEXT NOT NULL, state TEXT NOT NULL, " +
+                        "totalSizeBytes INTEGER NOT NULL, downloadedBytes INTEGER NOT NULL, " +
+                        "verifiedPrefixBytes INTEGER NOT NULL, resumeToken TEXT NOT NULL, " +
+                        "attempt INTEGER NOT NULL, nextRetryAtElapsedRealtime INTEGER NOT NULL, " +
+                        "enqueueElapsedRealtime INTEGER NOT NULL, createdAtWallClock INTEGER NOT NULL, " +
+                        "playOffsetSeconds REAL NOT NULL, packTotalDurationSeconds REAL NOT NULL, " +
+                        "lastError TEXT)",
+                )
+                db.execSQL(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS index_cache_tasks_sourceKey " +
+                        "ON cache_tasks (sourceKey)",
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS index_cache_tasks_state ON cache_tasks (state)",
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS index_cache_tasks_priority_enqueueElapsedRealtime " +
+                        "ON cache_tasks (priority, enqueueElapsedRealtime)",
+                )
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS cache_files (" +
+                        "fileId TEXT NOT NULL, sourceKey TEXT NOT NULL, taskId INTEGER, " +
+                        "path TEXT NOT NULL, sizeBytes INTEGER NOT NULL, origin TEXT NOT NULL, " +
+                        "state TEXT NOT NULL, isTemporary INTEGER NOT NULL, isComplete INTEGER NOT NULL, " +
+                        "createdElapsedRealtime INTEGER NOT NULL, lastAccessElapsedRealtime INTEGER NOT NULL, " +
+                        "watchCount INTEGER NOT NULL, ttlHours INTEGER NOT NULL, PRIMARY KEY(fileId))",
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS index_cache_files_sourceKey ON cache_files (sourceKey)",
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS index_cache_files_state ON cache_files (state)",
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS index_cache_files_origin_createdElapsedRealtime " +
+                        "ON cache_files (origin, createdElapsedRealtime)",
+                )
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS byte_range_manifests (" +
+                        "taskId INTEGER NOT NULL, start INTEGER NOT NULL, end INTEGER NOT NULL, " +
+                        "committedElapsedRealtime INTEGER NOT NULL, PRIMARY KEY(taskId, start))",
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS index_byte_range_manifests_taskId " +
+                        "ON byte_range_manifests (taskId)",
+                )
             }
         }
 

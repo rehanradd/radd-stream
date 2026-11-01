@@ -1100,3 +1100,62 @@ catch a wrong sentence here — the section was checked by reading it against th
 and against the files on trunk. Load was 4.5-6.1 all ticket: no Gradle, no crawl, no merge, no catalog
 read, `/opt/radd-stream` untouched, service untouched, no credential value in any file, log, argv or
 report.
+
+### Session 36 — Audit critical 9: downloads no longer claim READY on partial or empty bytes (q8 lane, 2026-11-01)
+
+Owner task, new lane `q8-audit-download-ready-20261101` from trunk `b99814e`, worked only in the
+`/tmp/q8_dl` worktree. The defect was real and trivially reachable: `DownloadService.download()`
+ran the write loop and went straight to `repo.markReady` with no verdict on what it had written.
+A connection truncated mid-body, a 0-byte 200, or an upstream that answers a redirect with an
+HTML error page all produced a READY row pointing at a file that cannot play.
+
+Fix, in `DownloadService.kt` after the output is closed and before `markReady`:
+a pure gate `DownloadService.completionDefect(downloaded, total, contentType)` returns a reason
+unless (1) `downloaded > 0`, (2) the total is known and covered — `totalBytes` first, falling
+back to the catalog's `entry.bytesTotal` when the response reports no size, and an unknown total
+cannot prove coverage so it fails, and (3) the **final** response's `Content-Type` starts with
+`video/` — OkHttp's post-redirect response is what `answer.header` reads, so this judges what
+actually arrived, not what `/api/v1/stream` promised. On any defect: `markFailed` with the stated
+reason (`DeviceDownloadsRepository.markFailed` gained a default-valued `reason` parameter; both
+existing call sites unchanged), `deleteOutput` drops the partial MediaStore/file row, and
+`resetResume` zeroes the offset so a Resume cannot append onto bytes that no longer exist.
+
+`DownloadCompletionGateTest.kt` pins the gate with 7 plain-JVM tests (full video passes;
+case/parameter tolerant; empty refused; partial names the shortfall; unknown total refused;
+non-video names what arrived; emptiness outranks other defects).
+
+Measured, not assumed: hosted CI run 41333704433 on this branch — `🔨 CI — Android Build & Test`
+`completed success`, the `assembleDebug + testDebugUnitTest + lintDebug` job green, so the new
+tests executed on the runner. Per the load gate: no Gradle was run on the VM. Trunk untouched,
+no tag, no service restart, no live DB write, no credential value read or printed. Branch commit
+`6fb9d38`; this log entry is the second and last commit on the branch.
+
+### Session 37 — Audit critical 1 (App half): a manifest is never a file — protocol from the probe, dash both sides (q6 lane, 2026-11-02)
+
+Supervisor command (Muse/Billo), lane `q6-audit-hls-20261102` off trunk `9074134`, worked only in
+`/tmp/q6_hls`. Backend half recorded in `Fast_Fetch/CONTINUITY.md` /
+`Fast_Fetch/checkpoints/20261102-q6-audit-hls-a-manifest-is-never-a-file.md`; this entry is the
+App half, which the first push lacked — three changed Kotlin files with no session log here was
+qoder1's gate finding, and this re-merge onto main `723b504` carries the correction inside its
+merge commit.
+
+The client bug was a wrong mirror of the old projection law: `LinkClassification.isHls()` counted
+`.mpd` paths as HLS (the wrong reader for a DASH manifest), `protocolOf()` had no `dash` branch,
+and a link the server called `progressive` was never re-checked against its measured `mime_type`
+before a `MediaItem` was built — while `playUrl` is always our own `/api/v1/stream?id=` redirector,
+so URL-extension inference can never save it. `PlaybackMediaItemFactory.manifestMimeType` already
+normalised declared manifest MIMEs to the Media3 constants (Session-of-`54e4aca` work, pinned by
+`UniversalSourceTest`); the hole was upstream of it, in the classification law feeding the factory.
+
+App changes: `CatalogEnums.LinkKind` gained `DASH_MANIFEST("dash_manifest")`; `LinkClassification`
+gained `isDash()` beside a corrected `isHls()` (no `.mpd`), the dash branch in `protocolOf` and
+`kindFromWire`, `classify()` files a dash manifest by kind and — when the served protocol is
+`progressive`/unknown — promotes it from the measured content type before the player is built;
+`V1CatalogMapper.resolvedRendition` gained the dash branch its mime re-derivation always lacked.
+New `ManifestProtocolTest.kt` pins all six laws. No root `AGENTS.md` line was added (10 bytes of
+headroom, measured by qoder1; prose belongs here).
+
+Judged hosted-only per the load gate — no VM Gradle: at the re-merged sha the Backend CI and the
+Android `assembleDebug + testDebugUnitTest + lintDebug` runs are reported to the supervisor with
+ids and per-step verdicts. Trunk untouched, no tag, no release, no service restart, no live-tree
+edit, no credential value read or printed.

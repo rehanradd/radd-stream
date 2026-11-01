@@ -402,6 +402,16 @@ class LinkTruthTests(ProjectionTestCase):
         links = self.one_work_with([self.src("cdn", "https://cdn.test/master.m3u8")])
         self.assertEqual(links[0]["kind"], "hls_manifest")
         self.assertEqual(links[0]["playability"], "stream")
+        self.assertEqual(links[0]["protocol"], "hls")
+
+    def test_dash_manifest_is_its_own_medium_not_hls(self):
+        """Audit Top-20 #1: an `.mpd` used to ride the HLS marker into
+        `hls_manifest`, so Media3 was told to feed an MPD to the HLS reader —
+        the same wrong-reader failure in a different spelling."""
+        links = self.one_work_with([self.src("cdn", "https://cdn.test/stream/manifest.mpd")])
+        self.assertEqual(links[0]["kind"], "dash_manifest")
+        self.assertEqual(links[0]["playability"], "stream")
+        self.assertEqual(links[0]["protocol"], "dash")
 
     def test_hoster_page_is_resolve_required_not_stream(self):
         links = self.one_work_with([self.src("gdtot", "https://new26.gdtot.dad/file/330578949")])

@@ -378,6 +378,67 @@ class HandleTests(unittest.TestCase):
                 "SELECT value FROM server_state WHERE key = 'stream_secret'").fetchone()
             self.assertEqual(stored[0], first)
 
+    def test_stream_secret_fails_closed_when_no_secret_can_be_persisted(self):
+        """Audit critical 4: no constant fallback may ever sign a handle.
+
+        With no environment secret and no usable catalog path the function must
+        raise — refusing to mint — and the retired constant must appear nowhere,
+        including in the error text."""
+        prev = os.environ.pop("RADD_STREAM_SECRET", None)
+        try:
+            with self.assertRaises(RuntimeError) as raised:
+                redact.stream_secret(None)
+            self.assertNotIn("radd-stream-dev-secret-unconfigured",
+                             str(raised.exception))
+            with self.assertRaises(RuntimeError):
+                redact.stream_secret("/proc/definitely-not-a-writable-db/catalog.db")
+            if prev is not None:
+                os.environ["RADD_STREAM_SECRET"] = prev
+                self.assertEqual(redact.stream_secret(None), prev)
+        finally:
+            os.environ.pop("RADD_STREAM_SECRET", None)
+            if prev is not None:
+                os.environ["RADD_STREAM_SECRET"] = prev
+
+    def test_stream_secret_generates_and_persists_a_random_key_at_first_install(self):
+        """A brand-new install (no db file, no parent directory) gets its own
+        random persisted key, never a shared or repeated one."""
+        prev = os.environ.pop("RADD_STREAM_SECRET", None)
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                path = Path(tmp) / "fresh" / "catalog.db"
+                self.assertFalse(path.exists())
+                secret = redact.stream_secret(path)
+                self.assertTrue(path.exists(), "first install must persist the key")
+                self.assertNotEqual(secret, "radd-stream-dev-secret-unconfigured")
+                self.assertGreaterEqual(len(secret), 32)
+                other = redact.stream_secret(Path(tmp) / "other" / "catalog.db")
+                self.assertNotEqual(secret, other,
+                                    "per-install keys must not collide")
+                self.assertEqual(redact.stream_secret(path), secret)
+        finally:
+            if prev is not None:
+                os.environ["RADD_STREAM_SECRET"] = prev
+
+    def test_viewer_signing_secret_never_caches_a_failure_or_a_constant(self):
+        prev_global = viewer._SIGNING_SECRET
+        viewer._SIGNING_SECRET = None
+        try:
+            def boom(_db_path=None):
+                raise RuntimeError("storage unavailable")
+            with patch.object(redact, "stream_secret", boom):
+                with self.assertRaises(RuntimeError):
+                    viewer.signing_secret()
+            self.assertIsNone(viewer._SIGNING_SECRET,
+                              "a failed lookup must not be cached")
+            with patch.object(redact, "stream_secret",
+                              lambda _db_path=None: "recovered-secret"):
+                self.assertEqual(viewer.signing_secret(), "recovered-secret")
+            self.assertNotEqual(viewer.signing_secret(),
+                                "radd-stream-dev-secret-unconfigured")
+        finally:
+            viewer._SIGNING_SECRET = prev_global
+
     def test_art_value_passes_public_cdn_and_wraps_everything_else(self):
         url = redact.public_art_value("https://image.tmdb.org/t/p/w500/a.jpg", 5,
                                       self.SECRET, "http://our.host", "poster", 0)
