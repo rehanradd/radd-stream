@@ -1159,3 +1159,29 @@ Judged hosted-only per the load gate — no VM Gradle: at the re-merged sha the 
 Android `assembleDebug + testDebugUnitTest + lintDebug` runs are reported to the supervisor with
 ids and per-step verdicts. Trunk untouched, no tag, no release, no service restart, no live-tree
 edit, no credential value read or printed.
+
+### Session 38 — Sweep #10: the resume map finally gets written under the key its readers use (q8 lane, 2026-11-02)
+
+Owner ticket, fresh lane `q8-fix-resume-key-20261102` from trunk `4f47d51`, worked only in the
+`/tmp/q8_resume` worktree. One finding, no others: item 5 of `/tmp/q10-overview-findings-20261102.md`.
+
+Locations verified against this trunk before editing (the finding's line numbers had drifted, the
+code had not): the map is `PlayerViewModel.resumeByTarget` (decl at `:168`), the orphaned write was
+`rememberResume`'s `val key = bundle.target.workKey ?: …` (was `:727`, now measured at the same
+declaration), `playFrom` keyed the same wrong way, and the readers are `beginBundle`'s offer
+(`resumeKey = streamId` at `:496`, local-file address at `:555`) and
+`seedResumeFromStoredPositions` — which additionally resolves the work scope via
+`store.peekWorkRef(resumeKey)`, a handle→scope lookup, so the handle is provably the right key and
+the workKey entry was unreachable by construction. Consequence, exactly as filed: a pause or
+teardown wrote its position into an entry nobody reads, while the stale handle-keyed seed kept
+answering "Resume from X" on re-open inside the same ViewModel.
+
+Fix: `beginBundle`/`loadNow` now record `activeResumeKey`, and both write sites
+(`rememberResume`, `playFrom`) resolve their key as `activeResumeKey ?: …` with the old workKey kept
+only as the fallback, so write key == read key at every path including `resolveResume`'s removal.
+`ResumeKeyGuardTest` (5 cases, source-scan pattern of `AdCadenceGuardTest`) pins the invariant and
+carries positive controls so a rename cannot silently retire the guard.
+
+Measured: hosted CI is the judge (no VM Gradle — load gate). Report: branch tip, Backend and Android
+run ids and step verdicts below in the commit trail. No trunk push, no tag, no release, no service
+restart, no `/opt/radd-stream` edit, no credential read or print.
