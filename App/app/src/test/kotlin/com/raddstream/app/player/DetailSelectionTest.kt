@@ -96,4 +96,31 @@ class DetailSelectionTest {
         assertFalse(DetailSelection.isSelected(FIRST, Scope(1, 2)))
         assertFalse(DetailSelection.isSelected(null, FIRST))
     }
+
+    /**
+     * The screen has no else-branch on the two buttons today, so a title with nothing selectable
+     * shows no Play / Download AND no reason — which reads as a broken page. The explanation and the
+     * buttons are mutually exclusive, both keyed on the same [DetailSelection.canAct] predicate, so
+     * the rule that decides "say nothing" must never be able to disagree with "show the buttons".
+     * This pins both no-action cases: a title with no target at all, and a target whose ladder the
+     * server has not filled yet.
+     */
+    @Test
+    fun `the no-ladder explanation shows exactly when the buttons cannot act`() {
+        // Nothing selectable → the screen paints the plain-word notice, never a disabled button.
+        assertFalse(
+            "a title with no target must fall to the explanation branch",
+            DetailSelection.canAct(selection = null, ladderEmpty = false),
+        )
+        // A real target but an empty ladder (the server has no picture for it) → same.
+        assertFalse(
+            "a scope the server cannot picture yet must fall to the explanation branch",
+            DetailSelection.canAct(FIRST, ladderEmpty = true),
+        )
+        // Only when there is both a target and a picture do the buttons act and the notice stay away.
+        assertTrue(
+            "with a target and a ladder the buttons act, so no explanation is painted",
+            DetailSelection.canAct(FIRST, ladderEmpty = false),
+        )
+    }
 }

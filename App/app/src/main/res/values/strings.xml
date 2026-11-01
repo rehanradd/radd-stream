@@ -139,4 +139,8 @@
          two blanks are filled by QualityChoice, which owns which bands go in them; the sentence is
          owned here, so a locale folder can reach it and no composable can re-write it. -->
     <string name="detail_quality_note">Playing in %1$s — %2$s is not available for this title.</string>
+    <!-- The detail page's plain word when there is nothing to point Play / Download at: a title with
+         no selectable version. Painted in place of the two buttons, never alongside a fake one. No
+         site, no code, no address — the spec forbids showing why in technical terms. -->
+    <string name="detail_no_ladder">There is nothing to play for this title right now. Try another title, or check back later.</string>
 </resources>

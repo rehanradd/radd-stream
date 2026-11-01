@@ -10,6 +10,7 @@ import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -35,11 +36,9 @@ import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
-import androidx.compose.material.icons.filled.OpenInNew
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Star
-import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -69,6 +68,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -244,9 +244,7 @@ fun DetailScreen(
                 isSeries = state.layout?.isSeriesLike ?: false,
                 selectedSeason = state.selectedSeason,
                 onSelectSeason = viewModel::selectSeason,
-                onPlayPrint = { print -> viewModel.playPrint(print, external = false) },
-                onOpenExternal = { print -> viewModel.playPrint(print, external = true) },
-                onKeep = { print -> downloadWithStoragePermission { viewModel.keepPrint(print) } },
+                selection = state.selection,
                 rungs = RungActions(
                     ladder = state.ladder,
                     selectedBand = state.selectedBand,
@@ -306,9 +304,13 @@ private fun DetailContent(
     isSeries: Boolean,
     selectedSeason: Int?,
     onSelectSeason: (Int) -> Unit,
-    onPlayPrint: (RankedPrint) -> Unit,
-    onOpenExternal: (RankedPrint) -> Unit,
-    onKeep: (RankedPrint) -> Unit,
+    /**
+     * What the two primary buttons currently point at. Every row compares itself to this to decide
+     * whether it is highlighted as chosen — a row's selection and the buttons' target are one fact,
+     * owned by [DetailSelection], never computed twice. There is no per-row Play/Download any more;
+     * a row tap only moves this, and the page's two buttons act on it.
+     */
+    selection: DetailSelection.Scope?,
     /** The quality menu, as one bundle the work row and an episode row can both reuse. */
     rungs: RungActions,
     /** "Season 2 · Episode 5", or null when these rungs are the whole work's. */
@@ -379,6 +381,17 @@ private fun DetailContent(
                     onKeep = onKeepSelected,
                 )
             }
+        } else {
+            // The other half of the no-fake-affordance rule. Before this the page simply had no
+            // buttons and no reason, which reads to a viewer as a broken screen rather than as a
+            // title the server cannot picture yet. Plain words only: no site, no code, no address.
+            item {
+                Text(
+                    text = stringResource(R.string.detail_no_ladder),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
         }
 
         // A first-party sponsor slot: no third-party SDK, no hidden network call, and it
@@ -429,8 +442,11 @@ private fun DetailContent(
                     item {
                         PackedSeasonBanner(
                             season = season,
-                            onPlay = onPlayPrint,
-                            onKeep = onKeep,
+                            selected = DetailSelection.isSelected(
+                                selection,
+                                DetailSelection.Scope(season.number, null),
+                            ),
+                            onSelect = { onAskRungs(season.number, null) },
                         )
                     }
                 }
@@ -440,15 +456,16 @@ private fun DetailContent(
                     val scopeLabel = rungScopeLabel(season.number, episodeKey)
                     EpisodeRow(
                         episode = episode,
-                        onPlayPrint = onPlayPrint,
-                        onOpenExternal = onOpenExternal,
-                        onKeep = onKeep,
+                        selected = DetailSelection.isSelected(
+                            selection,
+                            DetailSelection.Scope(season.number, episodeKey),
+                        ),
                         scopeLabel = scopeLabel,
                         canChooseQuality = hasRungs(season.number, episodeKey),
                         showQuality = ladderScope == scopeLabel && !rungs.ladder.isEmpty,
-                        onChooseQuality = {
-                            onAskRungs(season.number, episodeKey)
-                        },
+                        // A row tap SELECTS this episode; the two page buttons then act on it. There
+                        // is no play icon on the row — one gesture to choose, one to act.
+                        onSelect = { onAskRungs(season.number, episodeKey) },
                         rungs = rungs,
                     )
                 }
@@ -464,12 +481,9 @@ private fun DetailContent(
                 }
             } else {
                 items(workPrints, key = { "print-${it.releaseId}" }) { print ->
-                    PrintCard(
-                        print = print,
-                        onPlayPrint = onPlayPrint,
-                        onOpenExternal = onOpenExternal,
-                        onKeep = onKeep,
-                    )
+                    // A display-only summary of one copy. It carries no Play/Download of its own:
+                    // the two buttons at the top of the page are the only way to act on a movie.
+                    PrintCard(print = print)
                 }
             }
         }
@@ -584,21 +598,6 @@ private fun PrimaryActions(
             )
         }
     }
-}
-
-/**
- * Whether this print gets the viewer somewhere: our player can start a file, or the provider's own
- * page can be opened. One owner, so the hero button and the release-row button never disagree about
- * whether a tapped row does something.
- */
-private val RankedPrint.canStart: Boolean get() = playableHere || opensProviderPage
-
-/** The button's word. A page is OPENED, a file is played, and a cam says so while it does. */
-private fun RankedPrint.playLabel(): String = when {
-    playableHere && isCam -> "Play (cam)"
-    playableHere -> "Play"
-    opensProviderPage -> "Open"
-    else -> "Play"
 }
 
 /**
@@ -824,13 +823,21 @@ private fun SeasonHeader(season: SeasonGroup) {
 }
 
 @Composable
-private fun PackedSeasonBanner(season: SeasonGroup, onPlay: (RankedPrint) -> Unit, onKeep: (RankedPrint) -> Unit) {
+private fun PackedSeasonBanner(
+    season: SeasonGroup,
+    selected: Boolean,
+    onSelect: () -> Unit,
+) {
     val pack = season.packedPrints.maxByOrNull { it.rankKey } ?: return
     Column(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(12.dp))
-            .background(MaterialTheme.colorScheme.surfaceVariant)
+            .background(
+                if (selected) MaterialTheme.colorScheme.primaryContainer
+                else MaterialTheme.colorScheme.surfaceVariant,
+            )
+            .clickable(role = Role.Button, onClick = onSelect)
             .padding(14.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
@@ -840,19 +847,18 @@ private fun PackedSeasonBanner(season: SeasonGroup, onPlay: (RankedPrint) -> Uni
             color = MaterialTheme.colorScheme.onSurface,
         )
         Text(
-            "Playing a packed season starts the whole-season video — pick a specific episode below for per-episode files when available.",
+            "Tapping selects the whole-season file; Play and Download above then act on it. " +
+                "Pick a specific episode below for per-episode files when they exist.",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Button(onClick = { onPlay(pack) }) {
-                Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(18.dp))
-                Spacer(Modifier.width(6.dp))
-                Text("Play season")
-            }
-            OutlinedButton(onClick = { onKeep(pack) }) {
-                Icon(Icons.Default.Download, contentDescription = "Download season")
-            }
+        if (selected) {
+            Text(
+                "Selected — use Play or Download above.",
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onPrimaryContainer,
+            )
         }
     }
 }
@@ -861,14 +867,14 @@ private fun PackedSeasonBanner(season: SeasonGroup, onPlay: (RankedPrint) -> Uni
 @Composable
 private fun EpisodeRow(
     episode: EpisodeGroup,
-    onPlayPrint: (RankedPrint) -> Unit,
-    onOpenExternal: (RankedPrint) -> Unit,
-    onKeep: (RankedPrint) -> Unit,
+    /** Whether this is the episode the page's two buttons point at. */
+    selected: Boolean,
     /** "Season 1 · Episode 5" — the card the row opens has to say what it is the ladder of. */
     scopeLabel: String?,
     canChooseQuality: Boolean,
     showQuality: Boolean,
-    onChooseQuality: () -> Unit,
+    /** A tap SELECTS this episode; Play / Download above then act on it. Nothing starts here. */
+    onSelect: () -> Unit,
     rungs: RungActions,
 ) {
     var expanded by remember(episode.absoluteNumber) { mutableStateOf(false) }
@@ -877,7 +883,11 @@ private fun EpisodeRow(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(12.dp))
-            .background(MaterialTheme.colorScheme.surface)
+            .background(
+                if (selected) MaterialTheme.colorScheme.primaryContainer
+                else MaterialTheme.colorScheme.surface,
+            )
+            .clickable(role = Role.Button, onClick = onSelect)
             .padding(12.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
@@ -953,26 +963,16 @@ private fun EpisodeRow(
                     )
                 }
             }
-            best?.let {
-                IconButton(
-                    onClick = { onPlayPrint(it) },
-                    modifier = Modifier.size(48.dp),
-                ) {
-                    Icon(Icons.Default.PlayArrow, contentDescription = "Play episode ${episode.numberWithinSeason}", tint = MaterialTheme.colorScheme.primary)
-                }
-            }
-            if (canChooseQuality) {
-                IconButton(
-                    onClick = onChooseQuality,
-                    modifier = Modifier.size(48.dp),
-                ) {
-                    Icon(
-                        Icons.Default.Tune,
-                        contentDescription = "Choose quality for episode ${episode.numberWithinSeason}",
-                        tint = if (showQuality) MaterialTheme.colorScheme.primary
-                        else MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
+            // The row no longer carries a Play icon or a quality gear — a tap anywhere on the row
+            // selects it (see onSelect), and the page's two buttons do the acting. What the row still
+            // owes the viewer is the answer to "which one am I about to Play?" — so the chosen row
+            // says so, and nothing else does.
+            if (selected) {
+                Pill(
+                    text = "Selected",
+                    backgroundColor = MaterialTheme.colorScheme.primary,
+                    contentColor = MaterialTheme.colorScheme.onPrimary,
+                )
             }
         }
 
@@ -988,12 +988,7 @@ private fun EpisodeRow(
         }
         if (expanded) {
             episode.prints.forEach { print ->
-                PrintCard(
-                    print = print,
-                    onPlayPrint = onPlayPrint,
-                    onOpenExternal = onOpenExternal,
-                    onKeep = onKeep,
-                )
+                PrintCard(print = print)
             }
         }
         if (showQuality) {
@@ -1011,10 +1006,11 @@ private fun EpisodeRow(
 @Composable
 private fun PrintCard(
     print: RankedPrint,
-    onPlayPrint: (RankedPrint) -> Unit,
-    onOpenExternal: (RankedPrint) -> Unit,
-    onKeep: (RankedPrint) -> Unit,
 ) {
+    // Display-only. It used to carry its own Play / Download / open-externally buttons, which is the
+    // per-copy action row the two-button rule removes: one picture choice and two page buttons, not a
+    // button on every print. What a print still owes the viewer is what it IS, so every fact badge
+    // stays and every action goes.
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -1058,27 +1054,6 @@ private fun PrintCard(
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.error,
             )
-        }
-
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-            Button(
-                onClick = { onPlayPrint(print) },
-                enabled = print.canStart,
-                modifier = Modifier.weight(1f),
-            ) {
-                Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(18.dp))
-                Spacer(Modifier.width(6.dp))
-                Text(print.playLabel())
-            }
-            OutlinedButton(onClick = { onKeep(print) }) {
-                Icon(Icons.Default.Download, contentDescription = "Download video")
-            }
-            if (print.playableHere) {
-                IconButton(onClick = { onOpenExternal(print) }, modifier = Modifier.size(40.dp)) {
-                    Icon(Icons.Default.OpenInNew, contentDescription = "Open in external player",
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-            }
         }
     }
 }
