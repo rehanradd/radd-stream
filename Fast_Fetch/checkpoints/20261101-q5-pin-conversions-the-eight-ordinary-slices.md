@@ -122,3 +122,37 @@ plus slices 1–3 here), 10 audit labels still present, of which 1 is the delibe
 (`debug APK needs no secret`, `the filter shape is measured, never assumed`, `app: arm64-excluded suites are
 invisible here`, `MovieBox is metadata + trailer evidence, not playable`, `no playable print is resolvable from
 this host`).
+
+## Slice 4 — `debug APK needs no secret` → "the debug build needs no secrets"
+
+**Branch:** `q5-pin-s4-debug-apk-20261101`, stacked on slice 3 (`23d1558`). Supervisor ruling 15:35: slice 4
+only; the `AGENTS.md` release-safety sentence stays the owner's decision and is **not** edited; no release is
+dispatched; no Gradle while load ≥ 4 (it is above 6). All observed.
+
+**What it pinned:** "uploads a **debug APK** on every green run" — a description of what `ci.yml`'s artifact step
+currently does. That is falsifiable by any lane that edits the upload step, for reasons that have nothing to do
+with signing, and the guard would then report a signing-law regression that did not happen.
+
+**What it pins now:** the reason the snapshot was worth recording — the debug variant needs no keystore secret
+at all, which is why an installable build has never been blocked by the owner's signing decision. That clause
+survives the artifact step moving, being renamed, or the debug APK coming from somewhere else entirely.
+
+**Applying the slice-3 rule to myself, because a rule that only exempts its author is not a rule:** this new
+pin lands in the *same sentence* as a pin the audit explicitly kept (`app lane: signed release needs the 4
+secrets` — "the *signed release* needs the 4 keystore secrets"). Two pins, one sentence. The test is not
+"one sentence, one pin", it is whether one half can be edited while the other stays true — and here they are
+two different propositions about two different build variants: the debug clause changes if debug signing ever
+starts needing a CI secret, the release clause changes only if release signing stops needing the keystore. Each
+pin can fire alone, so both are coverage. Recorded as *accepted with reason*, not waved through.
+
+**Alternative considered and refused:** the routing instruction in the next clause ("A task that needs an
+installable build today takes the **debug APK** from `🔨 CI — Android Build & Test`") is more actionable, but it
+names a specific workflow, so it inherits the same rot the old literal had. The reason is tool-independent; the
+route is not.
+
+**Derived after the edit, by importing the guard:** `len(INVARIANTS)` 104, 0 missing phrases, 0 duplicate
+labels, 7 of 15 converted, 9 audit labels present of which 1 is the kept requirement pin → **8 pinning state**:
+4 held (2 supervisor decisions — `one vCPU`, `backend is the running system`; 2 on qoder3's adult surface) and
+**4 ordinary left** — `the filter shape is measured, never assumed`, `app: arm64-excluded suites are invisible
+here`, `MovieBox is metadata + trailer evidence, not playable`, `no playable print is resolvable from this host`.
+No `AGENTS.md` byte moved; `App/AGENTS.md` untouched this slice.

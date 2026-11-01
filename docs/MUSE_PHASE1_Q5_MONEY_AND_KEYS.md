@@ -271,8 +271,8 @@ and diff `len(INVARIANTS)`' label set against the audit's sixteen**, not to grep
 lines, and a line-grep is the method that undercounted the CI suites and produced the "98 entries" error below.
 Every figure in this paragraph came from that import, and the count in each slice's checkpoint says so.
 
-**As of slice 3 of the ordinary eight (2026-11-01 09:x, q5): 6 of 15 converted, 9 still pinning state** —
-derived by importing the guard (`len(INVARIANTS)` = 104; 10 audit labels still present, one of which is the
+**As of slice 4 of the ordinary eight (2026-11-01 15:35 ruling, q5): 7 of 15 converted, 8 still pinning state** —
+derived by importing the guard (`len(INVARIANTS)` = 104; 9 audit labels still present, one of which is the
 requirement pin kept by design), not incremented from the previous sentence.
 Held, not open — these are *not* mine to close:
 
@@ -283,15 +283,17 @@ Held, not open — these are *not* mine to close:
 | `the named hole: 442 keys / 455 rows` | qoder3's adult-flag surface; do not step on it unasked |
 | `residual measure under the correct identity` | same |
 
-The ordinary eight, in the order I am taking them, one pin per slice: `measured: secrets list is empty`
-(**slice 1 done**), `release died at the signing preflight` (**slice 2 done — and it moved subject, because the
-clause the audit prescribed for it is now false**; see the series checkpoint), `no signed artifact has ever been
-produced` (**slice 3 done**, onto the reason a replacement keystore is not a workaround — see the
-same-checkpoint argument for when a same-sentence pin is coverage and when it is a duplicate).
-**Five remain:** `debug APK needs no secret`, `the filter shape is measured, never assumed`, `app:
-arm64-excluded suites are invisible here`, `MovieBox is metadata + trailer evidence, not playable`,
-`no playable print is resolvable from this host`. Each gets its own branch, sha, and hosted run; the running
-record is `Fast_Fetch/checkpoints/20261101-q5-pin-conversions-the-eight-ordinary-slices.md`.
+The ordinary eight, one pin per slice, each on its own branch and sha: `measured: secrets list is empty`
+(**s1**, `011d973`), `release died at the signing preflight` (**s2**, `4fa35e0` — moved subject, because the
+clause the audit prescribed for it is now false), `no signed artifact has ever been produced` (**s3**, `23d1558`
+— onto the reason a replacement keystore is not a workaround), `debug APK needs no secret` (**s4** — a workflow
+artifact-step snapshot replaced by the tool-independent reason; accepted onto the same sentence as the kept
+release-secrets pin, with the slice-3 test applied rather than waived).
+**Four remain:** `the filter shape is measured, never assumed`, `app: arm64-excluded suites are invisible here`,
+`MovieBox is metadata + trailer evidence, not playable`, `no playable print is resolvable from this host`. The
+running record, including the duplicate-versus-coverage argument and the escalated `AGENTS.md` release-safety
+finding (owner's decision, untouched by this lane), is
+`Fast_Fetch/checkpoints/20261101-q5-pin-conversions-the-eight-ordinary-slices.md`.
 
 **Authorisation state, recorded so nobody reads a recommendation as a ticket:** KD-1 (per-token nonce, a
 wire-format change) — **barred** by Muse 07:2x, no code written. MD-1 and MD-2 — **not to be started

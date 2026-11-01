@@ -145,8 +145,15 @@ INVARIANTS = [
      "read the job log, not the summary"),
     ("do not generate a replacement keystore", ROOT_AGENTS,
      "**Do not generate a replacement keystore to work around it**"),
-    ("debug APK needs no secret", ROOT_AGENTS,
-     "uploads a **debug APK** on every green run"),
+    # Converted 2026-11-01 (q5, slice 4). The old literal was a workflow behaviour snapshot — "uploads a
+    # **debug APK** on every green run" — which any edit to `ci.yml`'s artifact step can falsify without
+    # meaning anything. The clause pinned now is the reason that made the snapshot useful in the first
+    # place, and it does not depend on a step existing. Self-check against the rule from slice 3: this
+    # sentence's *other* half is already pinned by `app lane: signed release needs the 4 secrets`, so
+    # two pins do land in one sentence — accepted, because debug-variant and release-variant are two
+    # propositions that reword apart, which is the test, not the sentence boundary.
+    ("the debug build needs no signing secret", ROOT_AGENTS,
+     "the debug build needs no secrets"),
     ("app lane: signed release needs the 4 secrets", ROOT_AGENTS,
      "the *signed release* needs the 4 keystore secrets"),
     # Converted 2026-11-01 (q5, slice 3). The old literal — "No signed APK or AAB has ever existed for
