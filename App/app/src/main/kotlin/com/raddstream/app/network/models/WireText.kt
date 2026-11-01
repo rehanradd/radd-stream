@@ -59,4 +59,47 @@ object WireText {
         val value = raw?.trim()?.lowercase().orEmpty()
         return value.startsWith("http://") || value.startsWith("https://")
     }
+
+    /**
+     * True for exactly a published APK digest: 64 lowercase hex characters, nothing else.
+     *
+     * Lowercase-only is deliberate. The admin form normalises case on write and refuses a row
+     * that is not 64 hex (`Fast_Fetch/admin_panel.py`, UPD-1a), so an uppercase or 63-character
+     * value here did not come from that form — it came from a paste that will never match the
+     * hash of a correctly downloaded file. A digest that cannot match is worse than no digest,
+     * because it reads as a download that was checked.
+     */
+    fun isApkDigest(raw: String?): Boolean {
+        val value = raw?.trim().orEmpty()
+        return value.length == 64 && value.all { it in '0'..'9' || it in 'a'..'f' }
+    }
+
+    /**
+     * True when an APK link is worth offering at all: `https` anywhere, or plain `http` only to
+     * loopback, where the wire is the device itself rather than a network path.
+     *
+     * This is a gate on the *offer*, not a verification of the install. `openDownload` fires
+     * `ACTION_VIEW` and never asks `REQUEST_INSTALL_PACKAGES`, so the app receives no bytes and
+     * cannot hash anything; the cleartext case this refuses is the one where a tampered file would
+     * still install silently.
+     */
+    fun isVerifiableDownloadUrl(raw: String?): Boolean {
+        val value = raw?.trim()?.lowercase().orEmpty()
+        if (value.startsWith("https://")) return true
+        if (!value.startsWith("http://")) return false
+        val authority = value.removePrefix("http://")
+            .substringBefore('/')
+            .substringBefore('?')
+            .substringAfterLast('@')
+        // An IPv6 literal keeps its brackets and its colons, so the port is cut outside them.
+        val host = if (authority.startsWith("[")) {
+            authority.substringBefore(']')
+        } else {
+            authority.substringBeforeLast(':')
+        }
+        if (host == "localhost" || host == "::1" || host == "[::1]") return true
+        // `127/8` is loopback, `127.example.com` is not, so the prefix has to be followed by
+        // nothing but octets. A name that merely starts like the range is a host on the internet.
+        return host.startsWith("127.") && host.drop(4).all { it.isDigit() || it == '.' }
+    }
 }
