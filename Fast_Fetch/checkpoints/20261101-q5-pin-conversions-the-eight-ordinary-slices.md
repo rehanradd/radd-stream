@@ -408,3 +408,13 @@ the audit's sixteen did not list: a pin whose literal is "The vault stays a FAIL
 playable URL", targeting the q2 MovieBox checkpoint. Checkpoint archives are a different case from law files —
 pinning a sentence in an immutable log cannot rot, because the log does not get rewritten — so it may be perfectly
 shaped. Flagged, not touched.
+
+**Slice 8 push attempt — one, refused, no retry.** Gate checked before attempting: pure stack on `c2528e1`, 0 merge
+commits, 0 tags at head, footprint exactly the three lane-owned paths, 0 bytes in another lane's surface. GitHub
+returned `remote: Invalid username or token` — the third consecutive lane-identical refusal (s4 twice, s7 once, s8
+once), so the owner-side restore is confirmed rather than remembered. No helper diagnostic was re-run: slice 4
+settled that the askpass emits a credential, and repeating a credential-length print is not evidence, it is noise.
+**So slice 8 has no hosted run and no CI verdict, exactly as slices 4–7 do**, and the claim for the series is the
+local one: 22 guard tests OK against the committed content, with slices 1–3 the only conversions CI has seen. If the
+credential is restored, the action is one push of this branch and one read of the 49-step job (`🧪
+test_docs_invariants.py` inside it) — no rebase, no re-author, no second copy of any conversion.
