@@ -117,7 +117,7 @@ other does not. Two consequences for whoever owns the adult code:
 Measured throughput on this box at this load: **0.9–5.0 s per MB** of vault, worst case on the
 one file with no index on `canonical_key` (`filmyzilla.db`: 153.8 s for 33 MB).
 
-**19 files, 4.3 GB, not run: `world4ufree` 801M, `9xmovies` 523M, `multimovies_full_20261022`
+**19 files, 4.3 GB — **MiB**, the sizes below summed — measured in decimal bytes as 4,605,050,880 B = 4.61 GB by `st_size`, the same quantity in a different unit, not a stale number, not run: `world4ufree` 801M, `9xmovies` 523M, `multimovies_full_20261022`
 416M, `vegamovies` 348M, `multimovies` 334M, `ssrmovies` 272M, `bolly4u` 215M, `10xflix` 203M,
 `toonworld4all` 192M, `moviesmela` 175M, `rogmovies` 150M, `katmoviehd_refreshed` 120M,
 `rareanimes` 120M, `katmoviehd` 120M, `hdhub4u` 117M, `7starhd` 86M, `kisskh` 75M,
@@ -134,7 +134,7 @@ were inspected for a `canonical_key` index: `world4ufree.db` **has** `idx_w4u_ca
 unindexed 33 MB table it sorted at 153.8 s (`filmyzilla.db`, the worst number in the table
 above, ~4.7 s/MB against ~0.9 s/MB for the indexed or tiny files). So the expensive half of
 that list is whichever of the 19 are unindexed, and the cheap way to finish this census is to
-check `sqlite_master` for the index first and run the indexed files before the rest.
+check `sqlite_master` for the index first and run the indexed files before the rest. **Done in the 08xx pricing pass** (`20261101-08xx-q2-lane-vault-pricing-no-cheap-count-and-the-plan-that-follows.md`): all 19 have `canonical_key`, 16 of them a key index, and **none has an index over the flag column**, so `COUNT(*) WHERE is_18_plus=1` plans `SCAN posts` in every file — the cheap form of this census does not exist, and adding the index is barred because these are q3's merge inputs.
 
 ## Also verified while running this
 
