@@ -100,3 +100,26 @@ no credential was probed, and the two rejections were real and are recorded abov
 concluding a permanent state from two failures, in a lane whose whole method is to ask again cheaper
 than it asserts. **A rejected push is a retryable event before it is a finding** — say "failed twice,
 retrying", not "local-only", unless the third attempt also failed.
+
+## 16:2x — the gate said no for a reason I would have missed, and CI said yes for the trim
+
+Two loose ends from the same twenty minutes:
+
+**#18 is blocked by CPU, not by load.** Load fell to 1.37 at 16:19, nine minutes after it read 8.32,
+so I sampled instead of assuming: three consecutive 60 s windows of `/proc/loadavg` plus busy-CPU from
+two `/proc/stat` reads → **1.78 @ 74.6 %, 3.70 @ 92.7 %, 3.60 @ 93.1 %**. All three pass the sub-4
+load clause — the "two consecutive sustained sub-4 windows" condition was *met* — and the gate still
+refuses, because `cpu avg10 < 50 %` is 25 to 43 points away and widening. `uptime` would have waved
+this run through; the AND clause earned its keep, and a projection whose head pass is a `SCAN p` over
+the whole `posts` table is exactly the CPU-bound work it exists to defer. Recorded in §6a of the
+artifact with the method, because a scratch file in `/tmp` is not a reproducible thing to cite.
+
+**The AGENTS.md trim is CI-judged green, not self-judged.** `650a2d3` → run 41301246383 / job
+124832438746, `completed success` on **all 45 steps**, including `test_docs_invariants.py` — the real
+module behind the 24-assertion static replica I had to use under the freeze — plus
+`test_adult_vault_census.py` and `test_price_projection.py`. That closes the caveat the 15:5x entry
+left open ("CI still judges the module, because a replica proves my reading of it, not its
+behaviour"): root `AGENTS.md` at 29,601 B, every one of the 104 pinned phrases, and all 11 archived
+hunks pass on the hosted runner. **No module was executed locally at any point in this segment**; the
+verification here is GitHub's, and the only local reads were file contents and a `mode=ro` schema-only
+open.

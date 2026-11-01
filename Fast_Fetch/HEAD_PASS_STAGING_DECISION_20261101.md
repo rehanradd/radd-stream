@@ -148,6 +148,29 @@ So the honest status of #18 is: *feasibility answered from plan shape, residency
 run not attempted.* Anyone who reads "the decision is recorded" as "the rebuild was sized" has been
 given the wrong impression by a document, which is the failure this file exists to avoid.
 
+### 6a. Measured 16:22–16:24: it is the CPU clause, not the load clause
+
+Load fell inside a minute, so I sampled rather than assumed — three consecutive 60 s windows,
+`/proc/loadavg` plus busy-CPU percentage from two `/proc/stat` reads:
+
+| window | load 1/5/15 | cpu busy | MemAvailable | SwapFree | verdict |
+|---|---|---|---|---|---|
+| 16:22:18 | 1.78 / 3.09 / 5.01 | **74.6 %** | 3,024 MB | 3,066 MB | load ✓ cpu ✗ |
+| 16:23:18 | 3.70 / 3.39 / 4.99 | **92.7 %** | 2,759 MB | 3,066 MB | load ✓ cpu ✗ |
+| 16:24:18 | 3.60 / 3.49 / 4.93 | **93.1 %** | 2,789 MB | 3,067 MB | load ✓ cpu ✗ |
+
+**Three consecutive sub-4 load windows, and the gate still says no** — the `cpu some avg10 < 50%`
+clause is 25 to 43 points away, and widening rather than settling. This is the gate earning its keep:
+the load number alone would have admitted this run at 16:19 (1.37) on a box that was already 75 %
+busy, and a projection that is CPU-bound on a `SCAN p` of the whole `posts` table is precisely the
+work that finishes slowly and takes the service's latency with it. **The floors that pass are not the
+floors that decide.** #18 waits for a window under 50 % CPU, not merely under 4 load.
+
+The sampler is three lines, not a tool: read the first line of `/proc/stat`, sleep 60, read it again,
+`busy = 1 - (idle + iowait) / total`, and print `/proc/loadavg` beside it. Anyone re-deciding #18
+should sample rather than read `uptime`, because the 1-minute load average is the only number on that
+box that moves fast enough to look like an opening — and it is the one that lied at 16:19.
+
 ## 7. What would change this decision
 
 1. A measured `VmHWM` from §5 above the floor → option A becomes a task, with the number attached.
