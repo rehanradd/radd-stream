@@ -181,10 +181,12 @@ class CensusCountingTests(unittest.TestCase):
         self.assertEqual(result["flagged_rows_on_exposed_keys"], 1)
 
     def test_null_empty_and_unknown_keys_never_become_twins(self):
-        cases = [("hindilinks4u.db", [(1, None, 1), (2, None, 0)]),
-                 ("filmyhit.db", [(1, "", 1), (2, "", 0)]),
-                 ("kisskh.db", [(1, "unknown", 1), (2, "unknown", 0)])]
-        for name, rows in cases:
+        # keys_both stays 0 for all three: the flagged and the unflagged row share a key that
+        # names no work, so the key is not an exposure.
+        cases = [("hindilinks4u.db", [(1, None, 1), (2, None, 0)], 0),
+                 ("filmyhit.db", [(1, "", 1), (2, "", 0)], 0),
+                 ("kisskh.db", [(1, "unknown", 1), (2, "unknown", 0)], 0)]
+        for name, rows, expected in cases:
             path = make_vault(self.dir / name, rows)
             self.assertEqual(census.census_vault(path)["keys_both"], expected,
                              "NULL, '' and 'unknown' are the shared bucket every titleless payload "
