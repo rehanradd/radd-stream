@@ -945,20 +945,32 @@ def parse_text(token, secret: str) -> str | None:
 
 
 def stream_secret(db_path=None) -> str:
-    """Per-install signing secret, persisted beside the catalog.
+    """Per-install signing secret, persisted beside the catalog. Fails closed.
 
     Read from ``RADD_STREAM_SECRET`` when set (deployment owns it); otherwise a
-    random one is generated into ``server_state`` so tokens stay stable across
-    restarts. Never in the checkout, never in the git history."""
+    random one is generated into ``server_state`` on first use — the database
+    file is created if it does not exist yet, so a fresh install gets a real
+    per-install key, not a shared one — and stays stable across restarts.
+    Never in the checkout, never in the git history.
+
+    Audit critical 4 retired the constant fallback: a hardcoded secret is a
+    public credential, so anyone holding the source could mint valid stream,
+    download, and art handles against an unconfigured install. If no secret can
+    be read or durably generated (no environment value and no writable
+    ``db_path``), this raises instead of returning any fallback. Callers must
+    treat that as "refuse to sign", never as "use a default". The secret value
+    is never included in the error text."""
     env = os.environ.get("RADD_STREAM_SECRET")
     if env:
         return env
     if db_path is None:
-        return "radd-stream-dev-secret-unconfigured"
+        raise RuntimeError(
+            "no signing secret available: RADD_STREAM_SECRET is unset and no "
+            "catalog path was given to persist a generated one; refusing to "
+            "sign with a fallback")
     path = Path(db_path)
-    if not path.exists():
-        return "radd-stream-dev-secret-unconfigured"
     try:
+        path.parent.mkdir(parents=True, exist_ok=True)
         conn = sqlite3.connect(path)
         try:
             conn.execute("CREATE TABLE IF NOT EXISTS server_state "
@@ -974,8 +986,10 @@ def stream_secret(db_path=None) -> str:
             return secret
         finally:
             conn.close()
-    except Exception:
-        return "radd-stream-dev-secret-unconfigured"
+    except Exception as exc:
+        raise RuntimeError(
+            f"cannot read or durably generate the signing secret for {path}; "
+            "refusing to sign with a fallback") from exc
 
 
 # ── art: keep the image host ours ────────────────────────────────────────────
