@@ -180,3 +180,32 @@ box that moves fast enough to look like an opening — and it is the one that li
 3. Any change to `posts`' row shape or the retention pattern in `catalog_v2._WorkAccumulator.absorb`
    → the 1,975 B/row quotation and the 1.01× factor both stop describing reality and every number in
    §4 must be re-derived, not re-used.
+
+## 8. Owner ruling 16:30 — the guard stays, and what that costs
+
+*"Keep the guard: do not change `resolve_target` to allow plan-only production reads; price from a
+staged or non-production catalog."*  Nothing in §2 was changed and nothing will be. But the second
+half of that instruction has no target on this host, and that is worth knowing before someone looks
+for it:
+
+I swept the schema of **every `.db` in the staging data dir** — 49 files, `mode=ro` +
+`PRAGMA query_only=ON`, `SELECT name FROM sqlite_master WHERE type='table'` only, no row content, 18
+sidecar-bearing vaults skipped and listed rather than opened. Result:
+
+| class | count | shape |
+|---|---|---|
+| forbidden by name (`merged_catalog_`, `preapply_`, `fast_fetch.db`, `user_state.db`, `resolvers.db`) | 5 | the only files that could hold the Layer-0 four-table shape |
+| sidecar-barred (0-byte `-wal` / 32 KB `-shm` debris) | 18 | not opened at all |
+| openable scrape vaults | 26 | **every one 2/4: `posts` + `releases` + `sources` + `sitemap_cache`, missing `download_sources` and `post_sources`** |
+
+**Full Layer-0 shape among openable non-production files: zero.** So "price from a staged or
+non-production catalog" cannot be satisfied by *finding* one — the staging tree holds merge
+*inputs* (old-schema vaults), and the four-table shape is created by the merge, which writes it into
+exactly the names the guard refuses. That is not a hole to route around; it is the reason the guard
+reads the way it does. The practical consequence for #18: **the only instrument left that can size the
+projection is Decision B's own measured `VmHWM`** — a staged ledger would have to be *manufactured*,
+and a manufactured ledger prices a shape, not this data.
+
+**Window status at 16:32, sampled not assumed:** load 5.24 / 3.76 / 4.26 with busy CPU **99.7 %**
+(two `/proc/stat` reads 60 s apart). The load clause failed and the CPU clause failed by 50 points.
+#18 remains unrun.
