@@ -203,3 +203,49 @@ replay would have gone red on a line that merged without conflict. Fixed in `7cc
 and will always be wrong after the union. `git diff --stat <trunk> HEAD` proves the footprint; it does not
 prove the arithmetic. After any rebase, re-derive every number that describes the *tree*, not just the ones
 you wrote.
+
+---
+
+## Addendum, 07:2x — the verdict closed with a guard, and the guard corrected the verdict
+
+Muse's slice: *finish the money-and-keys verdict, CI-verifiable, no KD-1, no MD-1/MD-2 code yet, no trunk
+push*. Delivered `test_handle_provenance.py` (17 tests, registered) plus the coverage close-out in
+[`../../docs/MUSE_PHASE1_Q5_MONEY_AND_KEYS.md`](../../docs/MUSE_PHASE1_Q5_MONEY_AND_KEYS.md) §E.
+
+**Two of my own claims turned out wrong, and writing the test is what found them — recorded in the order
+they broke:**
+
+1. **KD-3 was overstated.** I wrote "one env var away from being broken", pointing at
+   `mint_token(...) if secret else str(id)`. The idiom is real at `api_v2.py:1024`, `:1141`, `:1342` and
+   `catalog_api.py:703` — note `:1024` is wrapped across two lines, which is why a one-line grep returns
+   three and why the guard counts the *idiom*, not the pair. But the mount never hands those sites a falsy
+   secret: `viewer.py:3770` passes `signing_secret()`, which cannot return `""`. So the fallback is
+   **latent**, reachable only via `catalog_api.configure_public()`'s default `secret=""`. The *live* defence
+   is `signed_only=not full` at `viewer.py:3683`/`:3949`/`:4011`, and that is what the new test pins.
+2. **KD-5 is the finding I should have led with.** `redact.stream_secret` returns the literal
+   `"radd-stream-dev-secret-unconfigured"` on three paths (`:957`, `:960`, `:978`) — and `:978` is
+   `except Exception`, so a read-only or locked data directory downgrades to a key that is in the public
+   repository. Nothing refuses, nothing logs, the handles look opaque. Demonstrated by minting a handle from
+   the literal alone and having the server's own parser accept it. The fix is a behaviour change in the
+   *minting* class Muse barred, so it is reported, not shipped.
+
+**The method note, because it generalises:** a prose verdict cites lines; a test verdict has to call the
+function. Every claim that survived being executed stayed; KD-3 did not, and KD-5 was invisible until I
+needed a secret for a mint. **A verdict with no executable artifact is a memo, and memos do not fail when
+the code changes.**
+
+**Offline status, as asked:** `test_accounts.py` 61, `test_accounts_api.py` 38, `test_payments.py` 85 — all
+three offline by source (tempdir `user_state.db`, zero `urlopen`/`socket`/`subprocess`, zero
+`config.DATA_DIR`/`DB_PATH`/`RADD_DB_PATH` references) and offline *by evidence*, since a hosted runner has
+no data disk to read and the steps are green in the same job. Nothing was run locally: the counts come from
+`grep -c`, the verdicts from CI.
+
+**16 pin conversions: still open, 0 of 15 converted.** All 16 labels are still present in `INVARIANTS`
+(`test_docs_invariants.py:60-278`, 98 entries). Two are now tolerable because the prose they quote was
+reframed as history; thirteen still assert today's state as law, including `266.312 s`, a single sample off
+a loaded box. Conversion is a docs-plus-guard change that *does* feed CI (it edits a `Fast_Fetch/` file), so
+it is sliceable on your word.
+
+**Still blocked, unchanged:** the five "Not measured" items need a production read; `/opt/radd-stream` was
+never opened; no crawl, no merge, no Gradle, no tag, no service restart, no credential read or printed;
+`backup_manager.py` and `accounts.py` were read and never edited; `/tmp/tmpjbp1_4w9` untouched.

@@ -78,7 +78,7 @@ need the app lane (q4) to agree; that is why this is a question and not a patch.
 | K4 | **The capability pass is the strongest thing in the set**: version byte + 8-byte expiry + **8-byte HMAC tag** (64-bit) over a domain-separated message (`b"vip" + body`), verified with `compare_digest`, and expiry is compared against the server clock. Truncating `expires_at` to whole seconds *before* signing (`engagement.py:991`) is the right detail — a sub-second float would make the token unstable. | `redact.py:891-921` |
 | K5 | **A phone-derived key is the file's own named exception**: same digest, real input space = the phone-number space, so the digest is brute-forceable "no matter what this function costs". The code says this; nobody should re-litigate it as a docstring bug. | `accounts.py:782-790` |
 
-## B′. Keys — two properties that are weaker than the naming suggests
+## B′. Keys — the properties that are weaker than the naming suggests (KD-1..KD-5)
 
 **KD-1 — the handle "cipher" uses a fixed keystream, so one known pair de-opaques every handle.**
 `_keystream(secret, n, salt)` is `SHA-256(secret ‖ salt ‖ counter)` iterated to length — the only inputs
@@ -106,14 +106,20 @@ truncation length per minter, because today nothing stops a future `[:4]` landin
 rate-limit or reject-loop the routes that call `parse_token`, since 2⁻³² per guess is only a large number
 if guesses are free.
 
-**KD-3 — an unconfigured signing secret silently publishes raw row ids.** Every call site I read is
-written `mint_token(id, secret) if secret else str(id)` (e.g. `api_v2.py:1141`, `:1342`,
-`catalog_api.py:703`). That fallback is the right behaviour for a development box and the wrong default
-for a deployment: it turns the opaque-handle rule into a configuration accident, one env var away from
-being broken, with no log line and no failing test. The cheap instrument is the guard q4 already needs —
-see [`MUSE_PHASE1_Q5_CINEFINDER_QA.md`](MUSE_PHASE1_Q5_CINEFINDER_QA.md) §2: *a public response must not
-carry a bare integer where a handle belongs*, asserted by a test that starts the server with the secret
-unset and expects a refusal, not a plain id.
+**KD-3 — a falsy signing secret publishes raw row ids at four sites. CORRECTED by measurement, and the
+correction lowers the severity while raising a different one.** The idiom is real:
+`api_v2.py:1024` (wrapped across two lines, which is why a one-line grep finds only three), `:1141`,
+`:1342`, `catalog_api.py:703`. What I had not read when I wrote "one env var away from being broken" is the
+mount: `viewer.py:3770` passes `secret=signing_secret()`, and `signing_secret` → `redact.stream_secret`
+**never returns an empty string** — it returns a generated 256-bit secret, or the literal at KD-5 below. So
+the `else str(id)` branch is **latent** on this deployment, reachable only by an embedder that calls
+`catalog_api.configure_public()` with its default `secret=""` (`catalog_api.py:474`).
+The live defence is on the *accepting* side and it is already correct: `signed_only=not full`
+(`viewer.py:3683`, `:3949`, `:4011`) makes the public port refuse a bare integer outright, while loopback
+keeps the operator's plain-`curl` id. **So the finding is now: the guard is a boolean on one mount call
+site, not the fallback** — pinned by `test_handle_provenance.py::EnumerationDefenceTests`, which fails if
+`signed_only` stops being derived from `full`. Removing the four fallbacks is still the right cleanup, but
+it is hygiene, not a hole, and the cheap instrument is the same test rather than a new one.
 
 **KD-4 — scope: the credential store is wired into the nightly off-box copy, and the store is empty
 today.**
@@ -125,6 +131,23 @@ own 2 h `TimeoutStartSec` and the last good off-box snapshot is Oct 31 05:13, wh
 22 GB snapshot set on local disk — evidence, the owner's call, untouched by me. Full write-up and the
 proposed allow-list: [`BACKUP_SNAPSHOT_SCOPE_FINDING.md`](BACKUP_SNAPSHOT_SCOPE_FINDING.md). Nothing here
 changes that this is an owner decision, and nothing here was edited.
+
+**KD-5 — new, found while writing the guard, and it is the one that replaces KD-3's headline: an
+unconfigured deployment signs every public handle with a constant copied out of the source.**
+`redact.stream_secret` answers "nothing is configured" with
+`"radd-stream-dev-secret-unconfigured"` on **three** paths — `:957` (no `db_path` at all), `:960` (the
+catalog file is absent) and `:978`, whose `except Exception` also catches a **read-only or locked data
+directory**, so the box that cannot write its own state file silently downgrades to a key that is public
+knowledge. Nothing refuses, nothing logs, and the handles *look* opaque: anyone who can read this
+repository can mint one that the public parser accepts, using two functions that already exist in
+`redact.py`. Demonstrated end-to-end by `test_handle_provenance.py::UnconfiguredSecretTests`, which mints a
+handle from the literal alone and asserts the server's own `parse_token(..., signed_only=True)` accepts it —
+a test that **passes today**, pinned in the same style as the 64 KiB ceiling in `test_clip_bytes_guard.py`
+so a green run cannot be read as "the unconfigured case is safe". The fix is a decision, not a sweep:
+either refuse to serve handles without a configured secret (loud, and it changes what a misconfigured box
+does), or keep generating into `server_state` and stop catching `Exception` at `:978` so an unwritable
+directory fails visibly. Both are behaviour changes, so both need your word — and KD-5 is a *minting*
+change, which is exactly the class Muse barred at 07:2x for KD-1.
 
 ---
 
@@ -161,3 +184,56 @@ changes that this is an owner decision, and nothing here was edited.
    migration is designed and reviewed. (Cardinality makes it cheaper, not free: `key_hash` is non-null on 0
    rows today per Q1's 05:25 count, so a scheme change would invalidate nothing *yet* — that is a reason to
    decide early, not a licence to decide silently.)
+
+---
+
+## E. What this verdict is now backed by — closed 07:2x, and how each number was obtained
+
+The dispatch asked for the verdict to be *finished*, and a verdict about money and keys that no run
+re-checks is a memo. So: one new guard module, no behaviour changed, every claim below obtained without a
+local run (the freeze is LIGHT-ONLY until two sustained sub-4 windows, so **hosted CI on the sha is the
+only execution these numbers have**).
+
+**The guard:** `Fast_Fetch/test_handle_provenance.py`, **17 tests** — handle shapes (13-byte id handle with
+a 32-bit tag; 17-byte pass with a 64-bit tag; text handle with the same 32-bit tag), refusal uniformity
+(tampered / unminted / non-base64 / empty / `None` all answer the same `None`, with the good handle
+accepted as the control), the enumeration defence on both ports, **KD-1 demonstrated rather than asserted**
+(one known pair recovers the fixed pad and reads another row's id, while a forgery built from that pad is
+still refused — decode-only, exactly as claimed, and this is the test that fails if a per-token nonce ever
+lands), and **KD-5** (a handle minted from the published constant validates against the server's own
+parser).
+
+**The three money suites, one line each — offline or not:**
+
+| module | verdict | how it was obtained |
+|---|---|---|
+| `test_accounts.py` | **offline — 61 tests**, `tempfile.TemporaryDirectory()` for every DB (`user_state.db`, `catalog_fixture.db`), no socket, no real token | `grep -cE '^\s+def test_'` → 61; `urlopen\|create_connection\|socket\.\|http\.client\|subprocess` → **0**; `config.DATA_DIR\|config.DB_PATH\|RADD_DB_PATH\|radd-stream-data` → **0**. Registered as its own step, `backend-ci.yml:394`. |
+| `test_accounts_api.py` | **offline — 38 tests**, calls `accounts_api.route_get/route_post` in-process with an explicit `db_path`; SECRET and auth tokens are literal test strings | same three counts: 38 / **0** / **0**. Step at `:397`. It also carries the only cross-hand proof in the fleet — `:423-437` mints a VIP pass and asserts `viewer.request_is_vip` accepts it. |
+| `test_payments.py` | **offline — 85 tests**, `RADD_USER_STATE_DB`/`RADD_ADMIN_TOKEN` scoped by `mock.patch.dict` to a temp file, operator panel invoked as a *function* with `peer_address="127.0.0.1"` — an argument, never a connection | same three counts: 85 / **0** / **0**. Step at `:400`. |
+
+All three pass on the hosted runner in the same 48-step job, which is the part that cannot be faked: a
+runner has no `/home/ubuntu/radd-stream-data` and no production catalog, so **a green step is the proof of
+offline-ness**, not my reading of the imports. The counts above match the workflow's own comment block at
+`:380-389` exactly, so the comment and the tree agree today.
+
+**Money coverage, stated as the verdict needs it:** 61 + 38 + 85 + 17 = **201 offline tests** now stand
+between a money-or-handle change and trunk, none of which needs this box.
+
+**The 16 pins — STILL OPEN, and this is the honest status.** `Fast_Fetch/checkpoints/20261031-q5-guard-derived-constants-audit-and-the-gate-that-checks-itself.md` §"the defect class" listed 16 `INVARIANTS`
+entries in `test_docs_invariants.py` that pin a *fact about today* rather than the *method sentence around
+it*; 15 were to be converted, 1 (`app lane: signed release needs the 4 secrets`) kept as a requirement.
+Measured on the sha this branch is based on: **all 16 labels are still in `INVARIANTS`** (block at
+`test_docs_invariants.py:60-278`, 98 entries total), so **0 of 15 converted**. Two of them
+(`measured: secrets list is empty`, `release died at the signing preflight`) are now *tolerable* rather
+than converted, because `63396c1`/`b48d15f` reframed the prose they quote as history — the pin bites on a
+dated measurement instead of asserting a live blocker. The other thirteen still assert state as if it were
+law, and one of them (`266.312 s`) is a single sample from a loaded box.
+This is not a Phase 1 blocker: the guard is red only when a doc *rewords*, which is the direction we want.
+It is a slow tax, and converting it is a docs-only change that feeds **no CI** for `Fast_Fetch/**`… except
+that it edits `test_docs_invariants.py` itself, which *is* under `Fast_Fetch/` — so it does run. Say the
+word and I will take it as its own slice.
+
+**Authorisation state, recorded so nobody reads a recommendation as a ticket:** KD-1 (per-token nonce, a
+wire-format change) — **barred** by Muse 07:2x, no code written. MD-1 and MD-2 — **not to be started
+before this slice was reported**; still not started, by choice. The sync-key digest — ruled **do not act**
+(recommendation 7). What landed here is a guard and a document, which is the most that is authorised.
