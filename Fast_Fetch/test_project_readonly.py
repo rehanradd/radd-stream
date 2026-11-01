@@ -172,5 +172,105 @@ class ProjectReadonlyTests(unittest.TestCase):
         self.assertEqual(_hash(self.src), self.before)
 
 
+    def test_the_resolved_target_is_printed_before_any_write(self):
+        out = self.run_driver()
+        first = out.splitlines()[0]
+        self.assertIn("resolved target before any write", first,
+                      "the hazard rule is that the operator sees the resolved pair before the first "
+                      "byte is written, not after")
+        self.assertIn(os.path.abspath(str(self.src)), first)
+        self.assertIn(os.path.abspath(str(self.out)), first)
+
+
+class TargetGuardTests(unittest.TestCase):
+    """Where a rebuild output may be created is a safety property, not a preference.
+
+    The staging data dir holds the live catalog and the merge's inputs. `main()` used to accept any
+    path that did not already exist, so `OUT=/home/ubuntu/radd-stream-data/scratch.db` was legal — and
+    a new `.db` there is globbed as a vault by the next lane and joins the copy set. A scratch
+    rebuild beside its own source stays legal, because that is how the suite above runs.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.staging = self.root / "radd-stream-data"
+        self.staging.mkdir()
+        self.src = self.staging / "ledger.db"
+        self.out = self.staging / "projection.db"
+
+    def resolve(self, out, protected=None):
+        return project_readonly.resolve_target(self.src, out,
+                                               protected=[str(self.staging)]
+                                               if protected is None else protected)
+
+    def test_a_scratch_rebuild_beside_its_source_is_allowed(self):
+        scratch = Path(self.tmp.name) / "scratch"
+        scratch.mkdir()
+        src, out = self.resolve(scratch / "projection.db", protected=[])
+        self.assertEqual(out, os.path.abspath(str(scratch / "projection.db")))
+        self.assertEqual(src, os.path.abspath(str(self.src)),
+                         "a guard that refused a rebuild beside its own source would refuse every "
+                         "legitimate scratch run, including the one this file runs")
+
+    def test_an_output_inside_the_staging_data_dir_is_refused(self):
+        with self.assertRaises(project_readonly.TargetRefused) as caught:
+            self.resolve(self.out)
+        self.assertIn("inside", str(caught.exception))
+        self.assertIn(str(self.staging), str(caught.exception))
+
+    def test_a_nested_path_under_the_data_dir_is_refused_too(self):
+        nested = self.staging / "sub" / "dir" / "projection.db"
+        with self.assertRaises(project_readonly.TargetRefused):
+            self.resolve(nested)
+
+    def test_a_data_dir_prefix_that_is_only_a_name_similar_is_allowed(self):
+        sibling = Path(self.tmp.name) / "radd-stream-data-other" / "projection.db"
+        sibling.parent.mkdir()
+        src, out = self.resolve(sibling)
+        self.assertEqual(out, os.path.abspath(str(sibling)),
+                         "the rule is containment, so /x-data-other is not inside /x-data")
+
+    def test_catalog_and_snapshot_names_are_refused_anywhere(self):
+        scratch = Path(self.tmp.name) / "scratch2"
+        scratch.mkdir()
+        bad = list(project_readonly.FORBIDDEN_NAMES) + ["merged_catalog_20261101.db",
+                                                        "preapply_20261101_0900.db"]
+        for name in bad:
+            with self.assertRaises(project_readonly.TargetRefused,
+                                   msg="%s must not be a rebuild output" % name):
+                self.resolve(scratch / name, protected=[])
+
+    def test_the_source_itself_is_refused_by_name_and_by_path(self):
+        with self.assertRaises(project_readonly.TargetRefused):
+            self.resolve(self.src, protected=[])
+
+    def test_an_existing_output_is_refused_by_the_guard(self):
+        scratch = Path(self.tmp.name) / "scratch3"
+        scratch.mkdir()
+        existing = scratch / "there.db"
+        existing.write_bytes(b"")
+        with self.assertRaises(project_readonly.TargetRefused):
+            self.resolve(existing, protected=[])
+
+    def test_main_refuses_without_creating_anything(self):
+        with mock.patch.object(project_readonly, "protected_dirs",
+                               return_value=[str(self.staging)]):
+            with contextlib.redirect_stderr(io.StringIO()) as err:
+                rc = project_readonly.main(["project_readonly.py", str(self.src), str(self.out)])
+        self.assertEqual(rc, 2, err.getvalue())
+        self.assertFalse(self.out.exists(),
+                         "a refused run must leave nothing behind for the next glob to find")
+
+    def test_the_data_dir_default_survives_an_unreadable_config(self):
+        """`protected_dirs()` must not need `config` to be importable to know the host layout."""
+        with mock.patch.dict(sys.modules, {"config": None}):
+            dirs = project_readonly.protected_dirs()
+        self.assertIn("/home/ubuntu/radd-stream-data", dirs,
+                      "if the config import fails the guard has to fall back to the literal host "
+                      "path, not silently protect nothing")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

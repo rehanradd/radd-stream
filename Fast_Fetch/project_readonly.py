@@ -5,7 +5,12 @@
 `download_sources`, `post_sources` — and writes only `cat_*`. This driver binds
 those four names to TEMP VIEWs over an ATTACHed read-only copy of the production
 file, so the source is opened `mode=ro` (plus `PRAGMA query_only`) and every
-write lands in `--out`, a new file. The running service keeps its catalog.
+write lands in OUT, a new file. The running service keeps its catalog.
+
+OUT is validated before anything is opened (`resolve_target`): it may not be the
+source, may not already exist, may not be named like a catalog or a merge
+snapshot, and may not sit inside the staging data dir — a fresh `.db` there would
+join the merge's input glob and be read as a catalog by the next lane.
 
 Usage:
     python3 -S project_readonly.py SRC OUT
@@ -21,18 +26,75 @@ import catalog_v2  # noqa: E402
 
 LAYER0 = ("posts", "releases", "download_sources", "post_sources")
 
+#: Names that belong to a catalog, a merge snapshot, or a credential store — never to a rebuild
+#: output, wherever it is written. A lane that globs `*.db` in the data dir cannot tell a fresh
+#: projection from the file it is named like.
+FORBIDDEN_NAMES = ("fast_fetch.db", "user_state.db", "resolvers.db")
+FORBIDDEN_PREFIXES = ("merged_catalog_", "preapply_")
+
+
+class TargetRefused(RuntimeError):
+    """The output path is one this driver must not create, so nothing is opened."""
+
+
+def protected_dirs():
+    """Directories a projection output must never be created inside.
+
+    Total by design: `config` is asked inside the guard, and an import that fails — including the
+    EACCES-on-`/home/ubuntu` shape that ended a hosted run at q5's `eb4c0ee` — falls back to the
+    literal host paths. An unreadable mount is never a licence to write beside the live catalog.
+    Nothing here stats or opens anything; these are strings until `resolve_target` compares them.
+    """
+    dirs = ["/home/ubuntu/radd-stream-data"]
+    try:
+        import config
+        dirs += [str(config.DATA_DIR), os.path.dirname(str(config.DB_PATH))]
+    except Exception:
+        pass
+    return [os.path.abspath(d) for d in dirs]
+
+
+def resolve_target(src, out, protected=None):
+    """Turn two operator-supplied paths into the two the driver will actually use, or refuse.
+
+    The standing hazard rule is "print the resolved target before any write and stop if it names the
+    merged catalog or anything under the staging data dir". Until now the only checks were
+    same-file and exists — which is why `OUT=/home/ubuntu/radd-stream-data/scratch.db`, a path the
+    driver happily accepts today, would have dropped a new file into the merge's input glob.
+
+    A rebuild beside its own source in a *scratch* directory stays legal: that is exactly how
+    `test_project_readonly.py` runs, and a guard that refused it would be a guard nobody can use.
+    """
+    src_abs, out_abs = os.path.abspath(src), os.path.abspath(out)
+    if src_abs == out_abs:
+        raise TargetRefused("refusing to project a database onto itself: %s" % src_abs)
+    name = os.path.basename(out_abs)
+    if name in FORBIDDEN_NAMES or name.startswith(FORBIDDEN_PREFIXES):
+        raise TargetRefused("%s names a catalog, a merge snapshot or a credential store; give a "
+                            "rebuild output a name a lane can tell apart" % out_abs)
+    if os.path.exists(out_abs):
+        raise TargetRefused("refusing to reuse an existing output: %s" % out_abs)
+    for directory in (protected_dirs() if protected is None else protected):
+        prefix = os.path.abspath(directory).rstrip(os.sep) + os.sep
+        if out_abs == os.path.abspath(directory) or out_abs.startswith(prefix):
+            raise TargetRefused(
+                "%s is inside %s — that directory holds the live catalog and the merge's inputs, "
+                "and a NEW .db created there is read as a catalog by the next lane and added to "
+                "q3's copy glob. Project into a scratch directory instead."
+                % (out_abs, os.path.abspath(directory)))
+    return src_abs, out_abs
+
 
 def main(argv):
     if len(argv) != 3:
         print(__doc__.strip().splitlines()[-1], file=sys.stderr)
         return 2
-    src, out = argv[1], argv[2]
-    if os.path.abspath(src) == os.path.abspath(out):
-        print("refusing to project a database onto itself", file=sys.stderr)
+    try:
+        src, out = resolve_target(argv[1], argv[2])
+    except TargetRefused as exc:
+        print(f"[!] {exc}", file=sys.stderr)
         return 2
-    if os.path.exists(out):
-        print(f"refusing to reuse an existing output: {out}", file=sys.stderr)
-        return 2
+    print(f"[i] resolved target before any write: source={src} (mode=ro) out={out}", flush=True)
 
     started = time.time()
     conn = sqlite3.connect(f"file:{out}?mode=rwc", uri=True)
