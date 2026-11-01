@@ -31,15 +31,16 @@ object DatabaseModule {
         )
             .addMigrations(
                 AppDatabase.MIGRATION_1_2,
+                AppDatabase.MIGRATION_2_3,
                 AppDatabase.MIGRATION_3_4,
                 AppDatabase.MIGRATION_4_5,
                 AppDatabase.MIGRATION_5_6,
                 AppDatabase.MIGRATION_6_7,
             )
-            // Version 3 adds the offline cache tables for the first time. They have never shipped
-            // on any device, so a destructive fallback lets Room generate their schema verbatim
-            // from the entities instead of hand-written DDL that could drift out of sync and
-            // crash at open. Existing favorites are untouched on the 1 → 2 step above.
+            // The ladder 1 → 7 is continuous, so this fallback never fires for a known schema;
+            // it is a last resort against an unknown future version, and no step may ever be
+            // planned into it — a destructive migration drops every table, `favorite_posts`
+            // included. (Flow-audit #25: the 2 → 3 gap used to make that fallback the plan.)
             .fallbackToDestructiveMigration()
             .build()
     }

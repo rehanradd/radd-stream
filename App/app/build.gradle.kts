@@ -307,13 +307,14 @@ tasks.withType<Test>().configureEach {
         filter {
             excludeTestsMatching("com.raddstream.app.ui.components.PosterCardProvenanceTest")
             excludeTestsMatching("com.raddstream.app.ui.ScreenSnapshotTest")
+            excludeTestsMatching("com.raddstream.app.data.local.AppDatabaseMigrationTest")
         }
         doFirst {
             // Name every excluded class: this line is the only signal a reader of a local gate
             // gets that the suite count below is not the whole suite count.
             logger.lifecycle(
-                "Skipping PosterCardProvenanceTest and ScreenSnapshotTest (9 @Tests): Robolectric " +
-                    "has no native runtime for ${System.getProperty("os.arch")}. " +
+                "Skipping PosterCardProvenanceTest, ScreenSnapshotTest and AppDatabaseMigrationTest: " +
+                    "Robolectric has no native runtime for ${System.getProperty("os.arch")}. " +
                     "Run these classes on an x86_64 CI runner."
             )
         }
