@@ -194,11 +194,14 @@ class FailoverTests(unittest.TestCase):
         self.assertEqual(tier["link"]["id"], 1)
         self.assertEqual(tier["backups"], [])
 
-    def test_a_dead_copy_does_not_take_the_second_backup_slot(self):
+    def test_a_dead_copy_is_no_longer_a_silent_failover_hop(self):
+        # Audit critical 10 retired the older expectation ([3, 2]) that kept a
+        # dead copy in the last backup slot: a failover hop is a served copy,
+        # and nothing that answers dead/broken/gone/expired may be played.
         ladder = tiers.for_release({"quality": "720p"}, [
             link(id=1, is_resumable=1), link(id=2, status="dead"), link(id=3)])
         tier = ladder["tiers"][0]
-        self.assertEqual([item["id"] for item in tier["backups"]], [3, 2])
+        self.assertEqual([item["id"] for item in tier["backups"]], [3])
 
     def test_a_download_only_tier_still_offers_its_other_copies(self):
         ladder = tiers.for_release({"quality": "480p"}, [
@@ -326,6 +329,67 @@ class DetailRouteTests(unittest.TestCase):
         blob = str(tier).lower()
         for needle in ("pixeldrain", "hubcloud", "cdn.example", "source_url", "final_url"):
             self.assertNotIn(needle, blob, needle)
+
+
+class DeadLinkGateTests(unittest.TestCase):
+    """Audit critical 10: a dead or expired copy must never win a band, be
+    called playable, or be served as a stream — however shiny its other
+    evidence is. This was arithmetic, not taste: −60 inside a stack of bonuses
+    (kind 100 + active-absent + resumable 15 + HTTP 15 + speed 20) left a dead
+    direct link scoring ~90, above a slow live resolve."""
+
+    def test_a_dead_link_scores_zero_however_fast_and_resumable(self):
+        fast_dead = link(id=1, status="dead", is_resumable=1, http_status=200,
+                         speed_mbps=95, rank_score=200,
+                         last_checked_at="2026-10-01 00:00:00")
+        self.assertEqual(tiers.score(fast_dead, "1080p"), 0)
+        for verdict in ("dead", "broken", "gone"):
+            self.assertEqual(tiers.score(link(status=verdict), "1080p"), 0, verdict)
+
+    def test_a_live_slow_link_outscores_a_fast_dead_one(self):
+        slow_live = link(id=1, playback_type="url", is_resumable=0)
+        fast_dead = link(id=2, status="dead", is_resumable=1, http_status=200,
+                         speed_mbps=95, rank_score=200)
+        self.assertGreater(tiers.score(slow_live, "1080p"),
+                           tiers.score(fast_dead, "1080p"))
+
+    def test_expired_is_penalised_like_a_dead_verdict_but_not_zeroed(self):
+        live = link(id=1)
+        expired = link(id=2, status="expired", is_resumable=1, http_status=200)
+        self.assertLess(tiers.score(expired, "1080p"), tiers.score(live, "1080p"))
+        self.assertGreater(tiers.score(expired, "1080p"), 0)
+
+    def test_playable_refuses_every_dead_family_verdict(self):
+        for verdict in ("dead", "broken", "gone", "expired"):
+            self.assertFalse(tiers.playable(link(status=verdict)), verdict)
+
+    def test_a_stated_verdict_outranks_a_projected_playable_boolean(self):
+        # A v2 view may still carry playable=True from an older projection; the
+        # link's own state answers first, so a stale boolean cannot play it.
+        self.assertFalse(tiers.playable(
+            {"kind": "direct", "state": "expired", "playable": True}))
+        self.assertFalse(tiers.playable(
+            {"kind": "direct", "state": "dead", "playable": True}))
+
+    def test_unprobed_and_live_states_still_play(self):
+        for verdict in ("active", "unchecked", "unknown", "", None):
+            self.assertTrue(tiers.playable(link(status=verdict)), repr(verdict))
+
+    def test_link_view_marks_a_dead_ledger_row_unplayable(self):
+        view = viewer.link_view(link(status="dead"), "http://our.box")
+        self.assertFalse(view["playable"])
+        view = viewer.link_view(link(status="expired"), "http://our.box")
+        self.assertFalse(view["playable"])
+
+    def test_a_dead_direct_never_wins_a_band_against_a_live_resolve(self):
+        dead_direct = link(id=1, status="dead", is_resumable=1, http_status=200,
+                           speed_mbps=95, rank_score=200)
+        live_resolve = link(id=2, playback_type="url")
+        ladder = tiers.for_release({"quality": "1080p"}, [dead_direct, live_resolve])
+        self.assertEqual(ladder["tiers"][0]["link"]["id"], 2)
+        # The dead copy may still trail as a silent runner-up (an existing rule
+        # pins dead last in `backups`); what it may no longer be is the winner.
+        self.assertEqual(tiers.score(dead_direct, "1080p"), 0)
 
 
 if __name__ == "__main__":
