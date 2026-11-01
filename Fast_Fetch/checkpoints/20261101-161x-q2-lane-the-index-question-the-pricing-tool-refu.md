@@ -53,7 +53,7 @@ consecutive sustained sub-4 windows. `MemAvailable` ≈ 3,109 MB and the radd cg
 their floors, so the blocker is load and the production-read freeze, and I am recording it as such
 rather than writing "sized".
 
-## The push that did not happen — read this before believing the branch
+## The push that failed twice — see the correction at the end of this file
 
 `ec7789d` (the census + the 18-pair inventory) is **on the remote**. The AGENTS.md trim is commit
 **`0da8c9e`**, and pushing it failed twice:
@@ -79,3 +79,24 @@ the remote, not of the work.
 - **any lane:** if you re-run this probe, `conn.row_factory = sqlite3.Row` before reading
   `sqlite_master` by name; the default tuple factory raises `TypeError: tuple indices must be
   integers`, which is how I lost one attempt.
+
+## Correction, 16:2x — the push landed on the third attempt
+
+The section above is wrong and it was wrong when I wrote it, in the direction that flatters caution:
+I attempted the push **twice**, both rejected, and then published "local-only" as if that were the
+state of the world rather than the state of my attempts. A third attempt — the same documented
+command, nothing about the credential changed on my side — succeeded:
+
+```
+To https://github.com/rehanradd/radd-stream.git
+   ec7789d..45db0b1  HEAD -> q2-census-pricing
+```
+
+verified by `git ls-remote` → `refs/heads/q2-census-pricing` = `45db0b136cc5c6d50a9bc65e4cd33ea8231d0f0c`.
+So `0da8c9e` (the root `AGENTS.md` trim to 29,601 B) and `45db0b1` (this decision) **are on the
+remote**, the branch is not "the census without the trim", and the sentence *"recorded, not glossed,
+no credential retried"* is the honest half of a story I had stopped halfway through. What was right:
+no credential was probed, and the two rejections were real and are recorded above. What was wrong:
+concluding a permanent state from two failures, in a lane whose whole method is to ask again cheaper
+than it asserts. **A rejected push is a retryable event before it is a finding** — say "failed twice,
+retrying", not "local-only", unless the third attempt also failed.

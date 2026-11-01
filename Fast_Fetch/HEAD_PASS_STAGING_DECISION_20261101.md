@@ -2,7 +2,9 @@
 
 > Owner ruling that produced this: *"Then run 18 with head-pass staging decision recorded, own
 > worktree only, push and report sha."*  This file is the decision. **#18 was not run.** The reason
-> is §6, and it is a load number, not a memory number.
+> is §6, and it is a load number, not a memory number.  Sha reported: `45db0b1` on
+> `refs/heads/q2-census-pricing` (with `0da8c9e`, the root `AGENTS.md` trim, in the same push after
+> two rejected attempts — see the correction in the 16:1x checkpoint).
 
 ---
 
