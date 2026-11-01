@@ -104,9 +104,11 @@ surfaces are guarded as text.
 
 ## The verdict is NOT read: this branch cannot be pushed, measured 2026-11-01
 
-Two attempts, both with the sanctioned flow (`GIT_ASKPASS=/home/ubuntu/bin/git-askpass.sh`,
+Three attempts, all with the sanctioned flow (`GIT_ASKPASS=/home/ubuntu/bin/git-askpass.sh`,
 `GIT_TERMINAL_PROMPT=0`, explicit clean URL `https://github.com/rehanradd/radd-stream.git`, never
-`origin`), both against `refs/heads/q4-fav-revalidation-v8-c2528e1`:
+`origin`), all against `refs/heads/q4-fav-revalidation-v8-c2528e1`. The third carried this entry's
+own failure record, so the refusal is not an artifact of the union's content — a docs-only push on top
+of `53767c3` is refused identically:
 
 ```
 remote: Invalid username or token. Password authentication is not supported for Git operations.
@@ -124,17 +126,19 @@ is not write access").
 What was **not** done to work around it, deliberately: no push to `origin` (its stored remote URL
 still embeds the owner's unrevoked token), no token in a URL, argv, file or log, no credential read
 or print, no second credential (q1 reported its own write credential blocked the same morning, so
-this is a repo-wide state, not my lane's config), no retry beyond those two attempts, no force-push,
-no merge, no tag. `53767c3` is therefore **local-only and unjudged**: the compile risk this union
+this is a repo-wide state, not my lane's config), no retry loop (three attempts, spread over the work
+that had to be pushed anyway, then stopped), no force-push, no merge, no tag. `53767c3` is therefore
+**local-only and unjudged**: the compile risk this union
 carries — `583fd54` alone was 35 errors — has had no verdict, and I do not claim one.
 
 **Recovery:** the commit is exported outside the repo tree so it survives a worktree cleanup while the
-credential is out —
-`/home/ubuntu/q4-recovery/q4-fav-revalidation-v8-53767c3.bundle` (31,849 bytes, `git bundle verify`
-clean: tip `53767c347d4e9a4b41bcd648120eee38b636db10`, prerequisite `c2528e10d72fdd901fa017b9952af262ba769f33`).
-Restoring it into any clone of trunk is one command, and pushing it later is one more:
+credential is out — `/home/ubuntu/q4-recovery/q4-fav-revalidation-v8-head.bundle`, a `c2528e1..HEAD`
+bundle. `git bundle verify <path>` prints the tip it currently holds and its prerequisite; regenerate
+it after any new commit on this branch with
+`git bundle create /home/ubuntu/q4-recovery/q4-fav-revalidation-v8-head.bundle c2528e1..HEAD`.
+Pushing it later is one more command, and reading the verdict is one after that:
 `GIT_ASKPASS=/home/ubuntu/bin/git-askpass.sh GIT_TERMINAL_PROMPT=0 git push <clean URL> HEAD:refs/heads/q4-fav-revalidation-v8-c2528e1`
-then read `/repos/rehanradd/radd-stream/commits/<sha>/check-runs`. **Gate order stays q1's call.**
+then `/repos/rehanradd/radd-stream/commits/<sha>/check-runs`. **Gate order stays q1's call.**
 
 ## One correction to `53767c3`'s message
 
