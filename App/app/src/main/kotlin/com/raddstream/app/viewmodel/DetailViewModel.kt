@@ -234,10 +234,10 @@ class DetailViewModel @Inject constructor(
         val state = _uiState.value
         if (!DetailSelection.canAct(state.selection, state.ladder.isEmpty)) return
         val offers = DownloadOffers.eligible(state.ladder.options)
-        val option = offers.firstOrNull { QualityChoice.canonical(it.option.band) == QualityChoice.canonical(state.selectedBand) }
+        val offer = offers.firstOrNull { QualityChoice.canonical(it.option.band) == QualityChoice.canonical(state.selectedBand) }
             ?: offers.firstOrNull()
             ?: return
-        keepRung(option)
+        keepRung(offer.option)
     }
 
     /** The rows the Download sheet may show for the current selection. */
@@ -506,6 +506,11 @@ class DetailViewModel @Inject constructor(
      * they are about to get — so an episode row asks for its own rung list and the card
      * says which scope it belongs to. A season with no packed file has no season-level
      * ladder, and the card correctly disappears.
+     *
+     * It deliberately does NOT touch `selectedBand` any more. That is the viewer's standing
+     * choice, owned by [QualityChoice] and the store; repointing the card at another scope used
+     * to wipe it back to Auto, so browsing two seasons was enough to lose the picture the viewer
+     * picked — the opposite of "the next title opens the same way".
      */
     fun showRungsFor(season: Int?, episode: Int?) {
         _uiState.update {
@@ -520,7 +525,6 @@ class DetailViewModel @Inject constructor(
                 ),
                 ladderSeason = season,
                 ladderEpisode = episode,
-                selectedBand = LadderForScope.AUTO,
             )
         }
     }

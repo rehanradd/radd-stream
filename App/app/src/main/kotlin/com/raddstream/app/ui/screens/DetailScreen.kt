@@ -250,17 +250,12 @@ fun DetailScreen(
                 rungs = RungActions(
                     ladder = state.ladder,
                     selectedBand = state.selectedBand,
-                    // A rung tap is now TWO facts in one gesture: it saves the picture the viewer
-                    // chose (so the next title opens the same way) and it acts on the selection.
+                    // A rung tap records the picture the viewer chose and saves it as the band for
+                    // the next title. It does NOT start anything: the two buttons under the work
+                    // (Play / Keep) are the only place an action happens, so a viewer who taps a
+                    // row by mistake is never sent to a player or handed a download prompt.
                     // The band list it comes from is already only the bands this title has.
-                    onPlay = { option ->
-                        viewModel.selectBand(option.band)
-                        viewModel.playSelected()
-                    },
-                    onKeep = { option ->
-                        viewModel.selectBand(option.band)
-                        downloadWithStoragePermission { viewModel.keepSelected() }
-                    },
+                    onSelect = { option -> viewModel.selectBand(option.band) },
                 ),
                 ladderScope = rungScopeLabel(state.ladderSeason, state.ladderEpisode),
                 adFree = state.adFree,
@@ -282,14 +277,14 @@ fun DetailScreen(
 }
 
 /**
- * The quality switch and the download card as one bundle: the same rows render under the work
- * and under an episode, so a series never inherits another episode's links by accident.
+ * The quality switch as the screen sees it: the bands this scope has, the one saved as chosen,
+ * and the one thing tapping a row does — remember the band. Playing and keeping are separate
+ * buttons, wired through [PrimaryActions]; a row never triggers either.
  */
 private data class RungActions(
     val ladder: LadderForScope,
     val selectedBand: String?,
-    val onPlay: (QualityOption) -> Unit,
-    val onKeep: (QualityOption) -> Unit,
+    val onSelect: (QualityOption) -> Unit,
 )
 
 /** Which scope a ladder belongs to, in the viewer's words. Null means the whole work. */
@@ -314,7 +309,7 @@ private fun DetailContent(
     onPlayPrint: (RankedPrint) -> Unit,
     onOpenExternal: (RankedPrint) -> Unit,
     onKeep: (RankedPrint) -> Unit,
-    /** The quality switch and the download card, as one bundle the rows can reuse. */
+    /** The quality menu, as one bundle the work row and an episode row can both reuse. */
     rungs: RungActions,
     /** "Season 2 · Episode 5", or null when these rungs are the whole work's. */
     ladderScope: String?,

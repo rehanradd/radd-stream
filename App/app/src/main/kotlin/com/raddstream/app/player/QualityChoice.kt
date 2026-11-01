@@ -245,9 +245,15 @@ object QualityChoice {
      * The silent failover order inside one band: the winner first, then every remaining copy by
      * the same score. The player walks this list and never mentions it, which is why the spec
      * can promise "Never show failed attempts" — the order is data, not chrome.
+     *
+     * The two sorts read one score, in opposite directions: [ByLiveCopy] is the ascending one
+     * [bestCopy] compares against, [ByLiveCopyDescending] is this list. Kotlin's
+     * `compareByDescending` is used instead of the Java `reversed()` default method because the
+     * app runs on every device back to API 21, where that comparator method does not exist.
+     * Both sorts are stable, so equal scores keep the order the server ranked the ladder in.
      */
     fun sortedForFailover(copies: List<CopyCandidate>): List<CopyCandidate> =
-        copies.sortedWith(CopyCandidate.ByLiveCopy.reversed())
+        copies.sortedWith(CopyCandidate.ByLiveCopyDescending)
 
     /**
      * One copy of one band, in the only terms this decision reads. Every field maps straight
@@ -286,14 +292,22 @@ object QualityChoice {
 
         companion object {
             /**
-             * The one comparator the band decision uses, in one place so [bestCopy] and
-             * [sortedForFailover] can never rank two copies two different ways. Highest score
-             * first, and NOTHING after it: [sortedWith] is stable and [maxWithOrNull] answers
-             * with the first maximum, so a tie keeps the order the server already ranked the
-             * ladder in. A second key here would re-shuffle equal copies and make the failover
-             * trail impossible to read against the response it came from.
+             * The one score the band decision ranks copies by, written in one place so [bestCopy]
+             * and [sortedForFailover] can never rank two copies two different ways. Nothing after
+             * it: [maxWithOrNull] answers with the first maximum, so a tie keeps the order the
+             * server already ranked the ladder in. A second key here would re-shuffle equal copies
+             * and make the failover trail impossible to read against the response it came from.
              */
             internal val ByLiveCopy: Comparator<CopyCandidate> = compareBy { it.liveScore }
+
+            /**
+             * The same score, read the other way round, for the list that starts with the winner.
+             * Written with Kotlin's `compareByDescending` rather than Java's `reversed()` because
+             * `reversed()` is a default method on `java.util.Comparator` added in API 24 and this
+             * app runs down to API 21 — a lint `NewApi` error, not a warning.
+             */
+            internal val ByLiveCopyDescending: Comparator<CopyCandidate> =
+                compareByDescending { it.liveScore }
         }
     }
 }
