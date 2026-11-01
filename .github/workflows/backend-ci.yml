@@ -466,3 +466,18 @@ jobs:
       # all — it is manufactured by `mock.patch`. This run is its first execution.
       - name: 🧪 test_config_data_dir.py
         run: python3 -S Fast_Fetch/test_config_data_dir.py
+
+      # THE CENSUS THAT CANNOT BE RUN HERE YET (q2, 2026-11-01). #37 counts the adult flag across the
+      # last 19 staging vaults. The 08xx pricing pass proved there is no cheap form — no vault indexes
+      # `is_18_plus`, so the count plans `SCAN posts` in 19 of 19 — and left a tier table behind with
+      # one name missing (`rogmovies.db` was priced and named in the table but placed in no tier row;
+      # its bytes were already inside tier C's published total, so the costs were right and only the
+      # membership was not). This suite recomputes every published figure from `PRICED` — the three
+      # tier totals, the 4,605,050,880 B corpus, all five CPU-minute ranges, the 30% two-file share and
+      # the 561 MB / 12% pair saving — so the plan cannot drift from the doc again. Offline and
+      # synthetic: temp fixtures only, no production file, and `config` is never imported at module
+      # scope, because an un-statbable `/home/ubuntu` would end the step before its first assertion.
+      # Registered WITHOUT a local run, same as the step above: the supervisor froze local suites at
+      # load1 5.05, and the read-only census this guards needs a window the box has not had.
+      - name: 🧪 test_adult_vault_census.py
+        run: python3 -S Fast_Fetch/test_adult_vault_census.py

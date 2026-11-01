@@ -95,7 +95,15 @@ measurements, and the range is wide because the box is CPU-starved, not because 
 |---|---|---|---|---|
 | A | `hindilinks4u`, `filmyhit`, `kisskh`, `7starhd` | 301 M | **5–25** | 4 sites closed in one admitted minute-scale window |
 | B | `hdhub4u`, `katmoviehd`, `katmoviehd_refreshed`, `rareanimes`, `moviesmela`, `toonworld4all` | 884 M | 13–74 (cumulative 18–99) | 10 of 19 closed |
-| C | `10xflix`, `bolly4u`, `ssrmovies`, `multimovies`, `vegamovies`, `multimovies_full_20261022`, `9xmovies`, `world4ufree` | 3.42 G | 51–285 (cumulative 69–384) | the whole remainder |
+| C | `10xflix`, `bolly4u`, `ssrmovies`, `multimovies`, `vegamovies`, `multimovies_full_20261022`, `9xmovies`, `world4ufree`, **`rogmovies`** | 3.42 G | 51–285 (cumulative 69–384) | the whole remainder |
+
+> **Erratum, written 08:5x while turning this table into `Fast_Fetch/adult_vault_census.py`.** The tier
+rows above named 18 vaults while §2 priced 19: `rogmovies.db` (157,319,168 B) was missing from C's list.
+The *costs* were not wrong — its bytes were already inside C's published 3.42 GB, which is why
+A+B+C still summed to the corpus — so this is a membership defect, not an arithmetic one, and no number
+in this file changes. It is the kind of defect no test could see while the table was prose, which is why
+the tier totals, the 4,605,050,880 B corpus, all five CPU-minute ranges, the 30% two-file share and the
+561 MB / 12% pair saving are now recomputed from `PRICED` by `test_adult_vault_census.py` on every push.
 
 The two `world4ufree` + `9xmovies` files alone are **1.39 GB = 30% of the total cost**, so a run that
 starts with tier C looks like a failure even when it is going well. Order matters and is now decided by
