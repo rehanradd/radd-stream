@@ -42,8 +42,16 @@ series, which is a real question.
 Both edited files compile (`py_compile`), and the suite parses to 10 cases with the two new ones
 named. **Neither new case was executed locally**: local test-module runs stay frozen in this window and
 the box read 99.7 % busy CPU at 16:32. `test_merge_catalogs.py` is in `backend-ci.yml`'s list, so CI
-judges the collapse, and "landed" here means *pushed and CI-green or not* — not *demonstrated*. If CI
-comes back red on either case the fix is not in, whatever this file says.
+judges the collapse, and "landed" here means *pushed and CI-green or not* — not *demonstrated*.
+
+**Closed 16:5x: it is demonstrated.** `65c9d2f` → run 41303255439 / job 124838402567,
+`completed success`, and I checked the step rather than the headline — `🧪 test_merge_catalogs.py`
+→ `success` (and `test_docs_invariants.py` → `success`, which is what keeps the trim from rotting
+back). `aa5169f` (the §7/§8 partition analysis) is green on run 41303544356 too. That matters
+specifically here because a green suite can also mean *my cases never ran*: the positive control
+asserts `releases_merged == 3`, so if the collapse over-collapsed or the new methods went
+undiscovered, that case fails rather than quietly passing. The collapse is therefore discriminating
+on the hosted runner, not merely present in a diff.
 
 ## Handoffs
 
