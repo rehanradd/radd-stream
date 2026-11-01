@@ -192,10 +192,25 @@ class AdultListingGuardTest {
         )
 
         val models = source("network", "models", "Models.kt")
+        // This scans code shapes on purpose. `Models.kt`'s own header rule (item 4) spells the key
+        // out to forbid it, so a bare "the string must not appear in the file" pin fails on the
+        // documentation of the very rule it is enforcing — which is what this assertion did on
+        // hosted CI at `98933db`. What must be absent is a field, and a field has two shapes.
         assertFalse(
-            "the public projection sends no is_18_plus key, so modelling one on the wire would be a " +
+            "the public projection sends no is_18_plus key, so a @SerializedName for it would be a " +
                 "permanently-null phantom field — see the KDoc on this test",
-            models.contains("is_18_plus"),
+            Regex("""@SerializedName\(\s*"is_18_plus\b""").containsMatchIn(models),
+        )
+        assertFalse(
+            "and no property carries the flag onto the wire either",
+            Regex("""\bis18Plus\b""").containsMatchIn(models),
+        )
+        assertTrue(
+            "positive control: the two scans above reject a real phantom field, they are not " +
+                "matching nothing",
+            Regex("""@SerializedName\(\s*"is_18_plus\b""").containsMatchIn(
+                """@SerializedName("is_18_plus") val is18Plus: Boolean? = null,""",
+            ),
         )
         mainSources().forEach { file ->
             val text = file.readText()

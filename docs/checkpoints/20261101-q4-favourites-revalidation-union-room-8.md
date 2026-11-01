@@ -104,6 +104,10 @@ surfaces are guarded as text.
 
 ## The verdict is NOT read: this branch cannot be pushed, measured 2026-11-01
 
+> **Superseded later the same afternoon — the branch did push and CI did run; read the last section
+> before repeating anything below.** Kept as written because the credential failure it records is the
+> reason the recovery bundle exists, and that is worth knowing even now.
+
 Three attempts, all with the sanctioned flow (`GIT_ASKPASS=/home/ubuntu/bin/git-askpass.sh`,
 `GIT_TERMINAL_PROMPT=0`, explicit clean URL `https://github.com/rehanradd/radd-stream.git`, never
 `origin`), all against `refs/heads/q4-fav-revalidation-v8-c2528e1`. The third carried this entry's
@@ -145,3 +149,79 @@ then `/repos/rehanradd/radd-stream/commits/<sha>/check-runs`. **Gate order stays
 Its body line 42 reads `NO GUIN PIN COVERS IT`; the intended phrase is **no *guard* pin covers it** —
 `AdultListingGuardTest` does not pin the two doors that section lists. The commit is not amended for
 a typo (never amend; the correction belongs beside it, which is what this entry is).
+
+## 2026-11-01 16:4x — it pushed, and hosted CI is RED. What that rules in and out
+
+The write path came back the same afternoon (q1's `a5c5805` and q2's `f6acef3` both landed), and the
+sanctioned push then succeeded first try: `* [new branch] HEAD -> q4-fav-revalidation-v8-c2528e1`,
+remote tip confirmed at `98933db` by `ls-remote`. Flow unchanged — helper, clean URL, never `origin`,
+no credential read or print, no force-push, no merge, no tag.
+
+Before pushing I proved the recovery bundle rather than trusting its header, and that produced a
+correction to the section above: the pack starts at **byte 208, not 1024**, and standing alone
+`git index-pack --stdin` answers **`pack has 30 unresolved deltas`** — it is a **thin** pack,
+delta-dependent on trunk. So it restores only into a repo that already holds `c2528e1`, which is what
+`git bundle verify` declares as its prerequisite. The decisive test then did exactly that: clone a
+**trunk-only** repo, confirm it did *not* contain the tip, fetch the bundle → tip
+`98933db7ac7d74a16fdc2c1b055a436ec894ae15`, tree `71c3b51…` identical to local, three commits in
+order, `17 files, +1212/−9`, and **all 712 path+sha entries identical**. Nothing was pushed that the
+bundle could not reproduce.
+
+**The verdict** (`🔨 CI — Android Build & Test`, run `41302639884`, job `124836585688`):
+`completed / failure`, and the failing step is `7 🏗️🧪🔍 Gradle: debug APK + unit tests + lint`, after
+**178 s** — a green run of that same step takes about 7 m 02 s. Steps 1–6 (checkout, JDK, cache
+restore, SDK install, `gradlew` chmod) all succeeded, and step 8 uploaded an `app-debug` artifact of
+22,222,414 bytes.
+
+What that evidence supports, and what it does not:
+
+- **`:app:assembleDebug` is not the failure.** The one Android run we have that *did* fail in
+  compilation — `583fd54`, 35 errors, run `41157938495` — published **zero artifacts**, because there
+  was no APK to publish. This run published a real 22 MB APK. So the union's main sources compiled,
+  including `MIGRATION_7_8`, the four-flow `MyListViewModel`, and the three-flow `HomeViewModel`.
+- **The failure is in `:app:testDebugUnitTest` or `:app:lintDebug`**, and the API will not say which:
+  the check run carries one annotation, `Process completed with exit code 1`, its `output.summary` is
+  empty, and both the job log and the `ci-reports` artifact (445,281 bytes, where the test and lint
+  XML live) answered **404 anonymously**. Reading them needs authentication, which the
+  no-credential standing order puts on q1/Muse, not on me.
+- **So the guards were run the only way they can be run without a runner: simulated.** They are pure
+  file-text scans, so their assertions are reproducible with reads — no Gradle, no SDK, nothing
+  heavier than a `--single-branch` clone. `FavoritesSchemaGuardTest` came out clean on every rule
+  (entity columns ≡ DDL columns, one favorites `CREATE`, all added columns nullable, six migration
+  steps each climbing one, `version = 8` equal to the newest step, the 7→8 body containing both
+  `ADD COLUMN`s and none of `DROP TABLE`/`DELETE FROM`/`RENAME TO`, the ledger's three columns in both
+  files with `PRIMARY KEY(postId)`, every declared `MIGRATION_*` registered on the builder).
+  `AdultListingGuardTest` came out with **one violated pin, and it was mine.**
+- **Root cause, and it is a guard bug rather than a policy bug.** The last assertion of
+  `the flag is a stored answer, never a phantom wire field…` read
+  `assertFalse(models.contains("is_18_plus"))`. `Models.kt:34` is the header rule that forbids
+  modelling the key, and it *names* the key to forbid it: "`is_18_plus` is deliberately NOT modelled
+  anywhere in this app." The pin therefore failed on the documentation of the very rule it was
+  enforcing — a text scan treating prose as code, which is the same class of mistake this repo's
+  guard culture keeps calling out, only in the over-strict direction rather than the vacuous one.
+  Fixed by scanning the two shapes a field can actually have (`@SerializedName("is_18_plus"` and a
+  `\bis18Plus\b` property), with a positive control fed a real phantom field so the narrowed scan
+  cannot go green by matching nothing. The key's prose is left in place on purpose: deleting the
+  documentation must not be a way to satisfy a guard.
+- **Two Kotlin-lexer hazards found on the way, both before pushing.** The replacement regexes
+  originally ended in a four-quote run (`…"is_18_plus""""`), which Kotlin resolves greedily — the
+  pattern silently gains a trailing `"` or fails to compile depending on the parse. They now end at
+  `\b`, which is unambiguous. Verified separately: no test file references the `recordStreamRefusal`
+  I dropped; `listableRows` and `selectForRevalidation` exist as generic `fun <Row>` declarations (an
+  earlier grep of mine missed them and I re-checked instead of reporting a missing symbol); no manual
+  call site depends on the old `HomeViewModel`/`FavoritesRepository` constructor arity, Hilt injects
+  both; and `DeadCodeGuardTest` looks only for orphan resources and `*ForTest` names, neither of
+  which this diff introduces.
+- **Trunk is not the reason.** `c2528e1` has no Android check-run at all — `ci.yml` filters on
+  `App/**` and trunk's tip is a docs commit — so the last green Android judgement is `718a8ef` and
+  `1cbd54d`, both on this same base and both `success`. My union is the delta.
+
+**What is still not proven:** that the violated pin was the *only* thing CI objected to. It is the
+only violation simulation can find, it is consistent with an APK that built and a test task that
+failed, and it is mine — but the next red/green on the fixed tip is the evidence, not this reasoning.
+
+**Next step, and whose it is:** the fix is pushed to the same branch and CI re-ran on it; the verdict
+is appended below when it lands. If it is red again, the thing to obtain is the authenticated
+`ci-reports` artifact (that is q1's/Muse's call, not a credential action on my side), because
+simulation has run out of what it can see. Until a green run exists on a sha, nothing on this branch
+may be gated on the strength of my reasoning.
