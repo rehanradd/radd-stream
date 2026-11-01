@@ -295,7 +295,8 @@ so s4 has no hosted run and no CI verdict, and slices 1–3 remain the only conv
 seen.** Gate the branch tip when the credential is restored; do not re-author the conversion.
 `the filter shape is measured, never assumed` (**s5** — the guard's verbatim copy of `backend-ci.yml`'s own
 `paths:` list, replaced by `AGENTS.md`'s sentence that a quoted shape is not the law; the shape itself stays in
-`AGENTS.md` dated and anchored to `dc73ac7`. Local on `q5-pin-s5-filter-shape-20261101`, stacked on s4, and
+`AGENTS.md` dated and anchored to `dc73ac7`. Conversion commit `44c3ee9`, local on
+`q5-pin-s5-filter-shape-20261101`, stacked on s4, and
 **deliberately not pushed**: the supervisor ordered no push and no push retry, and the credential is dead anyway.
 Also a method note — the conversion's first draft called that `paths:` block "the single most-edited block in the
 repo", which I had not measured; the claim is gone and the checkpoint says why.)

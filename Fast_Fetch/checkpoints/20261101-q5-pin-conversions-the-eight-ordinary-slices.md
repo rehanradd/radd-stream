@@ -172,7 +172,9 @@ re-author, no second copy of the conversion.
 
 ## Slice 5 — `the filter shape is measured, never assumed` → "the method above is the law and not a quoted shape"
 
-**Branch:** `q5-pin-s5-filter-shape-20261101`, stacked on slice 4 (`aad46c5`). Supervisor instruction
+**Branch:** `q5-pin-s5-filter-shape-20261101`, stacked on slice 4 (`aad46c5`). Conversion commit `44c3ee9`; the
+branch tip after this paragraph is the records commit that names it, so gate the *branch*, not a remembered sha.
+Supervisor instruction
 (post–15:35): slice 4 stays unpushed, **do not push and do not retry the push**, no credential value read; slice 5
 is local docs work only. All observed — nothing was pushed from this slice and no credential was printed or
 inspected.
