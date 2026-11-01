@@ -258,3 +258,48 @@ which is the second time this has been self-inflicted; I am not raising the ceil
 disappear, and I will not start a fourth attempt until `load1` reads under 2.0 twice in a row. So the
 q4 pair's lint leg remains, as it has been, **judged only by `ci.yml`'s `lintDebug` on a hosted runner**
 — see `/tmp/q1_lint_draft_AUDIT.md` for why there is nothing to *draft* for it.
+
+## 16:4x–16:55 — one retraction of my own, plus the two findings the supervisor asked me to report
+
+**RETRACTION: my askpass claim was over-extended, and I am retiring it.** The line above — "overriding
+`GIT_ASKPASS` for the single command is what made the difference" — conflated two distinct failure modes.
+`ECONNREFUSED /tmp/vscode-git-*.sock` is a **delivery** failure (git asked a helper that isn't listening,
+so no credential ever left the box). `Invalid username or token` is GitHub refusing a **value**. The
+second is what qoder3/qoder5 report, and an askpass override cannot fix it. Measured at 16:4x with the
+store path and `GIT_ASKPASS=/bin/false`: a dry-run push answered `Everything up-to-date`, `rc=0`, so
+`credential.helper=store` (set in `~/.gitconfig`, shared by every lane running as `ubuntu`) authenticates
+on its own today — no override involved. Two different 40-char tokens live on this box: store's
+(sha256 prefix `d6e698af…`) and `~/.bashrc`/askpass (`85a4ae4f…`), and `~/.git-credentials` mtime moved
+`16:17:41 → 16:46:43` **during my own pushes**, because `store` re-saves on use. Lanes therefore share and
+can overwrite one another's credential. **Settled by measurement:** only that my 16:2x write landed a real
+new branch on origin (`q1-gate-preview-seq-20261101` = `e6e55f5`, read back). **NOT settled:** a general
+credential path for other lanes — qoder5's fresh slice-9 push was refused minutes later, so the "one retry
+settles it" idea I put forward is dead, and the supervisor ruled credential restore an owner action. I will
+not re-issue push instructions to another lane again; a dry-run on an up-to-date ref is weaker evidence
+than the real write it resembles.
+
+**#53 — `test_provenance_stamping.py` was red on CI at `a5c5805` and means less than it looks.** One step
+failed; because the job fail-fastes, **31 modules behind it were `skipped`**, so the run carried no
+information downstream. My docs-only child `e6e55f5` then ran **50/50 steps success** (`/actions/runs/
+41302131938/jobs` → `{'success': 50}`). Re-running the module here at the failing sha: **12 tests, rc=0,
+0.809 s**. Reading it: 294 lines, 17 defs, **no clock dependency at all** (`time.`/`datetime`/`now()`/
+`monotonic`/`sleep` all absent), touches only `sqlite3` and `tempfile.TemporaryDirectory` — so not a
+wall-clock or data flake; what remains is runner environment or an ordering dependency I have not found.
+The runner log is unreachable anonymously: `GET /actions/runs/41301976124/logs` → **403 "Must have admin
+rights to Repository"**. Rule kept and hardened: **no CI verdict is quoted without its step count, and no
+head is gated on a single sample.** The structural fix (per-module jobs, or stop fail-fasting the suite
+list) belongs to `backend-ci.yml` and I will not edit CI config unasked.
+
+**#44 — the live tree's next restart is the hazard, not its current behaviour.** `/opt/radd-stream` is on
+local `master` = `bf9e565`, **218 behind / 2 ahead** of trunk, and has no `Fast_Fetch/checkpoints/` on disk.
+My first report said the *running process* was 218 behind too — unproven and effectively false: pid 1835070
+started `Fri Oct 30 17:09:52`, and a read-only probe of the live service answers `total=135731` with
+`subtitled`, `is_animated`, `work_ref` present on the row, which also retires Session 24's "the deployed
+service has not been restarted". What is stale is the **disk**, and the two are now different code.
+File-by-file, disk vs `c2528e1`: `backfill_adult_key.py`, `test_adult_corroborated_fold.py` and
+`test_adult_twin_probe.py` are **in trunk and absent from the live disk**, and `viewer.py` calls
+`adult_clause` **6× on disk vs 7× in trunk** — one enforcement site missing. All three are registered CI
+steps at trunk, so trunk expects them present. And it is not a scheduled risk: `systemctl show radd-stream`
+→ `Restart=on-failure`, `RestartUSec=5s`, `NRestarts=1`, with an OOM death-and-restart already in the
+record. An unattended crash re-executes the stale tree inside five seconds, past every gate. **Owner-held
+by ruling; I do not checkout/reset that tree and do not restart the service.**
