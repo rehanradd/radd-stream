@@ -231,8 +231,21 @@ INVARIANTS = [
      "**Do not misread an empty CI run list.**"),
     ("read the trigger block, not the account", ROOT_AGENTS,
      "read the workflow's own trigger block before predicting whether CI will run"),
-    ("the filter shape is measured, never assumed", ROOT_AGENTS,
-     '`paths: ["Fast_Fetch/**", ".github/workflows/backend-ci.yml"]`'),
+    # Converted 2026-11-01 (q5, slice 5 of the ordinary eight). The old literal was a verbatim copy of
+    # `backend-ci.yml`'s own `paths:` list — configuration a lane may legitimately change, and `AGENTS.md`
+    # itself calls such a list "a snapshot that grows". The guard would have turned CI red on a lane that
+    # widened the filter for a good reason (adding `docs/**`, say), reporting a docs-law regression that was
+    # only a CI configuration change. `AGENTS.md` keeps the shape where it belongs: dated, anchored to
+    # `dc73ac7`, and explicitly labelled "what the filter is today".
+    # The clause pinned now is the one that forbids trusting *any* transcription, including this file's.
+    # Nearest-neighbour check before accepting, because the series rule is coverage not accumulation: the
+    # two adjacent pins are `the workflow file is the only source of truth` (about the *step list* — a stale
+    # count quoted in prose) and `read the trigger block, not the account` (the *obligation to measure*).
+    # This one is neither: it is the `paths-ignore` incident — a shape quoted into a doc that could not be
+    # reproduced against the tree or the object store. Three propositions that each fire alone, so three
+    # pins. No `AGENTS.md` byte moved; headroom stays 10 B.
+    ("the method outranks any quoted trigger shape", ROOT_AGENTS,
+     "the method above is the law and not a quoted shape"),
     ("ask permissions, not vibes", ROOT_AGENTS,
      "If you need to know whether CI can run, query `/actions/permissions` and print what it says."),
 

@@ -271,8 +271,8 @@ and diff `len(INVARIANTS)`' label set against the audit's sixteen**, not to grep
 lines, and a line-grep is the method that undercounted the CI suites and produced the "98 entries" error below.
 Every figure in this paragraph came from that import, and the count in each slice's checkpoint says so.
 
-**As of slice 4 of the ordinary eight (2026-11-01 15:35 ruling, q5): 7 of 15 converted, 8 still pinning state** —
-derived by importing the guard (`len(INVARIANTS)` = 104; 9 audit labels still present, one of which is the
+**As of slice 5 of the ordinary eight (2026-11-01, q5): 8 of 15 converted, 7 still pinning state** —
+derived by importing the guard (`len(INVARIANTS)` = 104; 8 audit labels still present, one of which is the
 requirement pin kept by design), not incremented from the previous sentence.
 Held, not open — these are *not* mine to close:
 
@@ -293,7 +293,13 @@ waived). **s4 is committed but NOT on origin: this lane's push credential starte
 `Invalid username or token` (measured 2026-11-01, after the helper was checked to confirm it emits a credential),
 so s4 has no hosted run and no CI verdict, and slices 1–3 remain the only converted pins that CI has actually
 seen.** Gate the branch tip when the credential is restored; do not re-author the conversion.
-**Four remain:** `the filter shape is measured, never assumed`, `app: arm64-excluded suites are invisible here`,
+`the filter shape is measured, never assumed` (**s5** — the guard's verbatim copy of `backend-ci.yml`'s own
+`paths:` list, replaced by `AGENTS.md`'s sentence that a quoted shape is not the law; the shape itself stays in
+`AGENTS.md` dated and anchored to `dc73ac7`. Local on `q5-pin-s5-filter-shape-20261101`, stacked on s4, and
+**deliberately not pushed**: the supervisor ordered no push and no push retry, and the credential is dead anyway.
+Also a method note — the conversion's first draft called that `paths:` block "the single most-edited block in the
+repo", which I had not measured; the claim is gone and the checkpoint says why.)
+**Three remain:** `app: arm64-excluded suites are invisible here`,
 `MovieBox is metadata + trailer evidence, not playable`, `no playable print is resolvable from this host`. The
 running record, including the duplicate-versus-coverage argument and the escalated `AGENTS.md` release-safety
 finding (owner's decision, untouched by this lane), is

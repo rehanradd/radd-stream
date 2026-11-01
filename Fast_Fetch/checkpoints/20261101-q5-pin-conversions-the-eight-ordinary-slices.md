@@ -169,3 +169,49 @@ lane** — `c0e86e5` → `19b4a5f` → `011d973`/`4fa35e0`/`23d1558` (already on
 exists for a sha that never reached origin, and none is fabricated. Next step is owner-only (re-issue or
 re-authorize the token); on restoration, push this branch as-is and read the 49-step hosted job — no rebase, no
 re-author, no second copy of the conversion.
+
+## Slice 5 — `the filter shape is measured, never assumed` → "the method above is the law and not a quoted shape"
+
+**Branch:** `q5-pin-s5-filter-shape-20261101`, stacked on slice 4 (`aad46c5`). Supervisor instruction
+(post–15:35): slice 4 stays unpushed, **do not push and do not retry the push**, no credential value read; slice 5
+is local docs work only. All observed — nothing was pushed from this slice and no credential was printed or
+inspected.
+
+**What it pinned:** the verbatim YAML of `backend-ci.yml`'s own `paths:` list,
+`` `paths: ["Fast_Fetch/**", ".github/workflows/backend-ci.yml"]` ``. A guard that quotes a configuration file's
+contents is a timer on the next legitimate CI change: a lane that widens the filter (to feed CI on `docs/**`, for
+instance) would turn CI red and the failure would read like a docs-law regression when it is a configuration edit.
+That is the same defect class as slice 4's artifact-step snapshot, one level closer to the machine.
+
+**What it pins now:** `AGENTS.md:282` — "the method above is the law and not a quoted shape", the parenthetical
+recording the `paths-ignore` incident: a trigger shape quoted into a document that could not be reproduced against
+the tree or the object store, retired as "treat it as never having existed". That sentence is the reason the old
+literal was unsafe to rely on, so pinning it protects the *same* interest the state pin was reaching for without
+inheriting its rot. The shape itself stays in `AGENTS.md` where it is honest: dated 2026-10-30, anchored to
+`dc73ac7`, md5-anchored to the workflow blob, and labelled "what the filter is today".
+
+**Nearest-neighbour check, because the series rule is coverage and not accumulation.** Three pins now sit in this
+one block, so I checked them against each other rather than declaring a clean slot:
+
+| pin | the proposition it guards | how it can fire alone |
+|---|---|---|
+| `the workflow file is the only source of truth` | the **step list** — a stale suite count quoted in prose | a lane rewrites the counting paragraph, leaves the trigger paragraph intact |
+| `read the trigger block, not the account` | the **obligation to measure** before predicting | a lane deletes the shape-warning parenthetical, keeps the instruction |
+| `the method outranks any quoted trigger shape` | a **transcription is not evidence** — the `paths-ignore` failure | a lane fixes the phantom-shape sentence, keeps the counting and measuring sentences as they are |
+
+Three different artifacts (a count, an instruction, a copy), three different historical failures. Not duplicates.
+
+**Verification, derived by importing the guard rather than grepping:** `len(INVARIANTS)` 104 (unchanged — one
+label swapped for another, so no count moved), 0 failing phrases, 0 duplicate labels, `ast.parse` clean,
+**8 of 15 converted, 7 still pinning state**: 4 held by decision (`one vCPU`, `backend is the running system`, and
+2 on qoder3's adult surface) plus **3 ordinary left** — `app: arm64-excluded suites are invisible here`,
+`MovieBox is metadata + trailer evidence, not playable`, `no playable print is resolvable from this host`.
+Byte budget untouched: root `AGENTS.md` 31,990 / 32,000 (10 B headroom, no edit made), `Fast_Fetch/AGENTS.md`
+14,469 / 18,000, `App/AGENTS.md` 14,061 / 15,000. No archive file added, so the CONTINUITY and SESSION_CHECKPOINT
+counts stay 71/71 and 60/60.
+
+**One claim corrected while writing it.** The guard comment first said the `paths:` list was "the single
+most-edited block in the repo". I did not measure that, so it is gone — replaced by what is actually checkable: a
+trigger block is configuration a lane may legitimately change, and `AGENTS.md:226` already calls such a list "a
+snapshot that grows". Same habit as the "98 entries" error: a superlative is a measurement, and an unmeasured
+measurement in a doc that other lanes quote is how a false law gets made.
