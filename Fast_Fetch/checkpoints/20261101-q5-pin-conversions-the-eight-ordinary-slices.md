@@ -418,3 +418,54 @@ settled that the askpass emits a credential, and repeating a credential-length p
 local one: 22 guard tests OK against the committed content, with slices 1–3 the only conversions CI has seen. If the
 credential is restored, the action is one push of this branch and one read of the 49-step job (`🧪
 test_docs_invariants.py` inside it) — no rebase, no re-author, no second copy of any conversion.
+
+---
+
+## Slice 9 — `one vCPU` → "Throttle the fleet against the box, not the box against the fleet" (a held item reclassified, deliberately in this same file)
+
+Appended here rather than opened as a new archive file on purpose: a new checkpoint would move the two index
+counts and the newest-file index for a one-pin slice, and the series rule is that the record grows where the
+series lives. The eight ordinary slices are complete; this is the first of the four the 09:03 note marked HELD,
+taken because the 16:37 instruction asked me to re-classify the four and start anything actionable.
+
+**Branch:** `q5-pin-s9-throttle-fleet-20261101`, created before the edits, name printed before claimed, stacked on
+slice 8's tip (`ee6a378`). Limits: own worktree, verify, local commit, one push attempt, no credential read or
+print, no Gradle while load ≥ 4 (it was 5.9 and no build was needed), no tag, no restart, no production DB write,
+no catalog merge.
+
+**The reclassification, and why the earlier hold was right *as stated* but not permanent.** Muse held this pin
+because "a replacement clause would itself be a state claim (host hardware)" and root `AGENTS.md` has 10 B of
+headroom, so there was no room to mint a new law sentence. Both halves dissolve without touching `AGENTS.md`: the
+law the reading exists to enforce is **already written**, in `docs/CAPACITY_MEASURED.md` item 4, and it is
+core-count-free — "**Throttle the fleet against the box, not the box against the fleet.**" Probed before choosing,
+by matching rather than reading: it matches `flat()`, it is not already pinned by any other entry, and it is
+reachable because root `AGENTS.md` names `docs/CAPACITY_MEASURED.md` in the guardrail section. The hardware number
+is *evidence* for a rule about concurrency; the rule is what must not be lost, and it survives a bigger host
+unchanged — on a 4-core box the right move is still to throttle the lanes, and the cap in that same item ("2–3 on
+this vCPU") is where the machine-specific number properly lives, one sentence later.
+
+**Candidates refused, with the reason.** Two clauses in the same `AGENTS.md` paragraph were viable-looking and are
+not: "the rule is memory-led, not load-led" is the *conclusion half of a sentence already pinned* by
+`memory is what kills the host`, so pinning it would restate one proposition twice — the exact failure the audit
+listed the MovieBox pair for. "CPU saturation only adds latency" is a distinct claim but actively the wrong
+interest: it argues load is harmless, which is not what the single-core pin was protecting.
+
+**Coverage check before retiring a state literal, because "convert it" is not the same as "it was worthless".**
+The reading's operational consequences are already pinned three times over in the same block —
+`memory is what kills the host`, `rule 1 HARD FLOOR`, `rule 2 heavy work frozen over load 4`. So this conversion
+removes a timer on `nproc`, not a guard.
+
+**Verification.** `len(INVARIANTS)` 104, 0 failing phrases, 0 duplicate labels, **22 tests OK in 95.625 s** (load
+≈ 5–6; the same assertions ran in 0.758 s at load 2.7 — rule 7, restated once and for all). **Series status: 12 of
+15 converted, 3 still pinning state, and all 3 held outside this lane.** Byte budgets unmoved (`AGENTS.md`
+31,990 / 32,000 — not edited; `App/AGENTS.md` 14,061 / 15,000; CONTINUITY 11,970 B / 93 lines; archive counts
+71/71 and 60/60, no new file).
+
+**The other three, classified as instructed.** `backend is the running system` — **held, and this probe says the
+hold is correct, not provisional**: its sentence's law half ("never copy untested or WIP code onto it") is already
+pinned at `deployment is separate from a branch push`, and its other half ("do not treat it as hypothetical") is a
+state claim wearing imperative clothing, which is what a law pin must not be. So there is no non-duplicate,
+non-rotting clause to move it onto without writing new law in a file with 10 B of headroom — an owner/supervisor
+call, not a slice. `the named hole: 442 keys / 455 rows` and `residual measure under the correct identity` —
+**held on qoder3's adult surface** (catalog measures inside the adult-law paragraph q3 is actively rewriting; a
+guard edit here would land inside someone else's in-flight change). None of the three is actionable by me.

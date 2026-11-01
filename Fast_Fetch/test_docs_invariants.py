@@ -33,6 +33,8 @@ MEASURED_NOTES = REPO_ROOT / "docs" / "SPEC_AGENTS_MEASURED_NOTES.md"
 #: Where the arm64/Robolectric evidence lives since the 2026-10-30 diet. `App/AGENTS.md` links it by
 #: name, so it passes the reachability test even though it is not auto-loaded.
 APP_ROBO_DOC = REPO_ROOT / "docs" / "SPEC_APP_ROBOLECTRIC_ARM64.md"
+#: The capacity ledger. Root `AGENTS.md` points at it by name, so it passes the reachability test.
+CAPACITY_DOC = REPO_ROOT / "docs" / "CAPACITY_MEASURED.md"
 
 FF_CKPT = BASE_DIR / "checkpoints"
 DOC_CKPT = REPO_ROOT / "docs" / "checkpoints"
@@ -195,7 +197,19 @@ INVARIANTS = [
      "do not copy untested or WIP code to the live host"),
 
     # --- fleet resource guardrail: all seven steps --------------------------------
-    ("one vCPU", ROOT_AGENTS, "**This host has ONE vCPU** (`nproc` = 1)"),
+    # Converted 2026-11-01 (q5, slice 9 — the first of the four the 09:03 note called HELD). The old literal
+    # was the hardware reading itself: "**This host has ONE vCPU** (`nproc` = 1)". The supervisor held it
+    # because a replacement that says "we now have N cores" is still a state claim, and root `AGENTS.md` has
+    # 10 bytes of headroom, so no new law sentence could be minted to host one. Both halves of that objection
+    # are answered without editing `AGENTS.md` at all: the law the reading exists to enforce already sits in
+    # the capacity ledger root `AGENTS.md` already points at, and it is core-count-free — throttle the fleet
+    # against the box, never the box against the fleet. `nproc = 1` is the *evidence* for a rule about
+    # concurrency; the rule is what must not be lost, and it survives a bigger host unchanged.
+    # Coverage audit before accepting a held item as mine: the reading's operational consequences were already
+    # pinned three times over (`memory is what kills the host`, `rule 1 HARD FLOOR`, `rule 2 heavy work frozen
+    # over load 4`), so retiring this literal removes a timer and not a guard.
+    ("throttle the fleet against the box, not the reverse", CAPACITY_DOC,
+     "**Throttle the fleet against the box, not the box against the fleet.**"),
     ("memory is what kills the host", ROOT_AGENTS,
      "**Memory saturation is what kills this host**"),
     ("rule 1 HARD FLOOR", ROOT_AGENTS,
