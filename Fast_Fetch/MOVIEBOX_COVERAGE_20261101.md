@@ -142,11 +142,33 @@ whose URL is not public". Nothing here is broken; it is the site not publishing 
 Getting them is the **play-info mint** (`#22`'s probe path): an API call per work, not an HTML fetch,
 which is why #19's row 1 is 12 mint attempts rather than 12 page loads.
 
-**One value is extracted and then thrown away.** `_resource_renditions` carries `"episodes"` (from
-`epNum`) in its output, but the `releases` insert (line 1969) has no column for it and the stored
-`raw_meta` holds only `page_url` + `quality_token`. The per-season episode counts the site *did*
-publish are therefore lost at the schema boundary, which is the cheapest real fix in this file: keep
-the count, and group B's shape survives without a second crawl.
+**Correction, 2026-11-01 17:5x — the paragraph that was here is falsified, and it was the wrong shape
+of optimistic.** It claimed "`_resource_renditions` carries `episodes` (from `epNum`) but the `releases`
+insert has no column for it and the stored `raw_meta` holds only `page_url` + `quality_token`, so the
+per-season episode counts are *lost at the schema boundary*, and 'keep the count' is the cheapest real
+fix." Both the code and the vault say otherwise:
+
+- The count is **not** thrown away. `import_themoviebox.py:695` reads `epNum` → `episodes`, `:733`
+  writes it into the rendition's `raw_meta` as `{"declared": True, "episodes": <int>}`, and the releases
+  INSERT (`:1970`, binding at `:1978` with `json.dumps(rel.get("raw_meta"))`) **stores `raw_meta`**.
+  Measured on this vault: **158 / 218 releases carry `raw_meta.episodes` as an integer** (e.g. `25`,
+  `24`) — the counts survive.
+- There is **no episode index to retain.** `epNum` is a season's episode **count**, not a per-episode
+  number, and `rel["episode"]` is `None` by construction for a season-tier rendition (`:730`), so
+  `episode_number` written NULL is *correct* — the importer's own coverage stat (`:2339`) counts
+  episodes exactly as `episode_number IS NOT NULL` and expects 0 here.
+
+So the "cheapest real fix" is **unnecessary (already kept) and, done naively, harmful**: copying the
+count into `episode_number` would assert "this release is episode #25" from "season has 25 episodes," a
+category error, and `EPISODE_KEYS`/`_episode_number` (`:218`/`:880`) already handle a real per-episode
+number *when a payload supplies one* — which the sitemap/detail-listing never does. What this vault
+genuinely lacks — an entry for each individual episode — is **not in the page the crawl already fetched**;
+it lives behind the play-info/detail endpoint, so it is #19's crawl, not an offline edit. **The mistake
+worth naming is the same one as the 16:4x embed claim**: reading a fix out of a variable's *name*
+(`epNum` looks like an episode number) instead of the *value* the code actually produces (a count). One
+`json.loads` of a stored `raw_meta` would have shown it; I should not have written the paragraph from
+the docstring. Group B therefore needs **nothing offline** — its season numbers (1–9 on 158 rows) and
+episode counts are faithfully stored; only the play-info mint (#19) can enumerate the episodes.
 
 ## 8. What this changes about #19, in one table
 
@@ -154,5 +176,5 @@ the count, and group B's shape survives without a second crawl.
 |---|---|---|---|
 | C (2) | retry the two failed detail pages | 2 requests | crawl freeze |
 | B (12) | play-info mint per work | 12 API calls, host-gated | freeze, and the mint must be re-probed since `#22` |
-| A (30) | map the single print to seasons/episodes | **0 requests** | a decision about what a work-level print *means*, plus `epNum` retention |
+| A (30) | map the single work-level print to its season range | **0 requests offline; but no offline value left to write** — the epNum "fix" is falsified (§7) | the *owner* decision about what a work-level print *means*; retention is already handled |
 | dupes (30 rows) | leave, or repair | 0 requests | owner call, same ruling as the sidecar debris |
