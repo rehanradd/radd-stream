@@ -286,9 +286,13 @@ Held, not open — these are *not* mine to close:
 The ordinary eight, one pin per slice, each on its own branch and sha: `measured: secrets list is empty`
 (**s1**, `011d973`), `release died at the signing preflight` (**s2**, `4fa35e0` — moved subject, because the
 clause the audit prescribed for it is now false), `no signed artifact has ever been produced` (**s3**, `23d1558`
-— onto the reason a replacement keystore is not a workaround), `debug APK needs no secret` (**s4** — a workflow
-artifact-step snapshot replaced by the tool-independent reason; accepted onto the same sentence as the kept
-release-secrets pin, with the slice-3 test applied rather than waived).
+— onto the reason a replacement keystore is not a workaround), `debug APK needs no secret` (**s4**, `f162f70` on
+`q5-pin-s4-debug-apk-20261101` — a workflow artifact-step snapshot replaced by the tool-independent reason;
+accepted onto the same sentence as the kept release-secrets pin, with the slice-3 test applied rather than
+waived). **s4 is committed but NOT on origin: this lane's push credential started returning
+`Invalid username or token` (measured 2026-11-01, after the helper was checked to confirm it emits a credential),
+so s4 has no hosted run and no CI verdict, and slices 1–3 remain the only converted pins that CI has actually
+seen.** Gate the branch tip when the credential is restored; do not re-author the conversion.
 **Four remain:** `the filter shape is measured, never assumed`, `app: arm64-excluded suites are invisible here`,
 `MovieBox is metadata + trailer evidence, not playable`, `no playable print is resolvable from this host`. The
 running record, including the duplicate-versus-coverage argument and the escalated `AGENTS.md` release-safety
