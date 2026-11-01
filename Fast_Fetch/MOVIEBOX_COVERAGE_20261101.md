@@ -111,3 +111,48 @@ line is the honest status until a green run says otherwise).
 is not this segment's call — the same rule that left 18 sidecar pairs alone (§5 of the census). The
 merge-side collapse makes the duplicates harmless on the way in; removing them from the vault is
 `#19`'s business when the crawl unfreezes.
+
+## 7. The 44 works partition three ways, and each part needs a different thing
+
+`posts.seasons` × "has a source" is a clean partition — measured, then read against the importer:
+
+| group | works | `seasons` | print? | what it actually means |
+|---|---|---|---|---|
+| A | **30** | `'[0]'` | yes — 1 file each | every release carries `season_number = 0` |
+| B | **12** | `'[1, … ,N]'` | **no** | tier rows declared from `resource.seasons[].resolutions[]`, no URL published |
+| C | **2** | `NULL` | no | the fetch failed: `Squid Game` 2021 and `The Night Agent` 2023 are exactly the two `sitemap_cache` rows with `scraped=2, error_count=2` |
+
+`real-list ∩ no-source = 12 of 12`, `placeholder ∩ has-source = 30 of 30` — so the split is total, not
+tendency. Group C is not a parsing problem at all; it is two failed requests and a retry.
+
+**Group A is the one that should worry the product.** `_positive_int` (line 575) is documented as
+*"This site uses `0` for 'no season / no episode'"*, and `_stamp_seasons` collects the seasons that
+are present on the releases — so `'[0]'` is not a placeholder for "unknown", it is the module's own
+marker for **this work has no season structure**. Yet those same releases are labelled
+`Lucifer S1-S6 S00 SD`. **The label asserts a six-season range that the structured columns
+simultaneously deny**, and there is one SD file behind all of it. A viewer that asks for season 3 of
+Lucifer is served the same bytes as season 1, and the API has nothing structured to say so: the range
+exists only inside free text. So Rule §10's "all seasons/episodes" is not met by group A either — the
+prints exist but are work-level, and that is a mapping gap, not a fetching gap.
+
+**Group B is the module behaving exactly as designed.** `_resource_renditions`' own docstring: the
+payload lists `360/480/720/1080` with a per-season `epNum` while `detailUrl`/`sniffUrl`/`sourceUrl` are
+empty and `dl` is null, so each tier becomes "a release with an empty source list — a declared print
+whose URL is not public". Nothing here is broken; it is the site not publishing URLs in the page.
+Getting them is the **play-info mint** (`#22`'s probe path): an API call per work, not an HTML fetch,
+which is why #19's row 1 is 12 mint attempts rather than 12 page loads.
+
+**One value is extracted and then thrown away.** `_resource_renditions` carries `"episodes"` (from
+`epNum`) in its output, but the `releases` insert (line 1969) has no column for it and the stored
+`raw_meta` holds only `page_url` + `quality_token`. The per-season episode counts the site *did*
+publish are therefore lost at the schema boundary, which is the cheapest real fix in this file: keep
+the count, and group B's shape survives without a second crawl.
+
+## 8. What this changes about #19, in one table
+
+| Group | Work | Cost | Blocking condition |
+|---|---|---|---|
+| C (2) | retry the two failed detail pages | 2 requests | crawl freeze |
+| B (12) | play-info mint per work | 12 API calls, host-gated | freeze, and the mint must be re-probed since `#22` |
+| A (30) | map the single print to seasons/episodes | **0 requests** | a decision about what a work-level print *means*, plus `epNum` retention |
+| dupes (30 rows) | leave, or repair | 0 requests | owner call, same ruling as the sidecar debris |

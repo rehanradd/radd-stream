@@ -54,3 +54,31 @@ comes back red on either case the fix is not in, whatever this file says.
   parser change in `import_themoviebox.py`, plus the 14 works whose payload names no print.
 - **q3:** `duplicate_releases_dropped` is now in every merge's stats. A non-zero count on some other
   site means the same crawl pattern, not a merge bug.
+
+## Same segment — the 44 works partition three ways (artifact §7, §8)
+
+`posts.seasons` crossed with "has a source" is a **total** split, not a tendency: `real-list ∩
+no-source = 12 of 12`, `placeholder ∩ has-source = 30 of 30`, and the 2 NULLs are exactly the two
+`sitemap_cache` rows carrying `scraped=2, error_count=2` (`Squid Game` 2021, `The Night Agent` 2023 —
+failed fetches, not parse failures).
+
+- **Group A (30 works, `seasons='[0]'`, one SD file each)** is the product problem. `_positive_int:575`
+  documents that this site uses `0` for *no season / no episode*, and `_stamp_seasons` derives
+  `seasons` from the releases — so `'[0]'` is the module's own statement that the work has no season
+  structure, while the same rows are labelled `Lucifer S1-S6 S00 SD`. **The label asserts a six-season
+  range the structured columns deny, and one file sits behind all of it.** Rule §10 is unmet here by
+  mapping, not by fetching: 0 requests would fix it, but someone has to decide what a work-level print
+  means for a series.
+- **Group B (12 works, real season lists, no prints)** is the module behaving as designed —
+  `_resource_renditions`' docstring says the payload names tiers with empty `detailUrl`/`sniffUrl`/
+  `sourceUrl` and null `dl`, so each tier is stored as a declared print with an empty source list.
+  Getting URLs is the **play-info mint** (`#22`'s path): an API call per work, not an HTML fetch. That
+  is why #19's first row is 12 mints.
+- **One published value is thrown away at the schema boundary:** `_resource_renditions` extracts
+  `"episodes"` from `epNum`, but the `releases` insert (`:1969`) has no column for it and stored
+  `raw_meta` carries only `page_url` + `quality_token`. Retaining `epNum` is the cheapest real fix in
+  this file, and it preserves group B's shape without a second crawl.
+
+I did **not** patch the importer for any of it: verifying a season/episode mapping needs a live payload
+and the crawl freeze holds, so guessing at it would be a blind change to the module that already
+carries the site's whole media law. Recorded as `#19`/`#21` work with the requests counted.
