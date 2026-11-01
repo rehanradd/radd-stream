@@ -217,3 +217,23 @@ most-edited block in the repo". I did not measure that, so it is gone — replac
 trigger block is configuration a lane may legitimately change, and `AGENTS.md:226` already calls such a list "a
 snapshot that grows". Same habit as the "98 entries" error: a superlative is a measurement, and an unmeasured
 measurement in a doc that other lanes quote is how a false law gets made.
+
+## Worktree re-check of the unpushed stack (slices 4 and 5), 2026-11-01
+
+Supervisor item (1): prove the unpushed commits survive a re-check. Done twice, each time from committed content
+only — `git worktree add --detach <tmp> <tip>`, then re-derive inside that tree, then `git worktree remove`:
+
+| what | at slice 4 (`aad46c5`) | at slice 5 (`42c0414`) |
+|---|---|---|
+| working tree of the fresh checkout | clean (0 paths) | clean (0 paths) |
+| unpushed commits above `origin/q5-pin-s3-owner-key-20261101` | 3 | 5 |
+| merge commits in `c2528e1..HEAD` | 0 | 0 |
+| files touched by the whole unpushed stack | exactly the 3 lane-owned paths | exactly the same 3 paths |
+| imported guard | 104 entries, 0 failing phrases, 0 duplicate labels | same, 8 of the audit's sixteen converted |
+| guard module run | not run at s4 | **22 tests OK** |
+
+The timing is a rule-7 demonstration, not a finding: the same module in the same session took **11.853 s** in my
+lane worktree (page cache warm) and **107.100 s** in the freshly materialized one (cold cache, load 5.4 → 8.1 on
+one vCPU). Neither number licenses excluding the suite; only CI's per-step timing does, and there is no CI read for
+any of this because nothing here was pushed. The re-check proves the *content* survives a clean checkout; it cannot
+prove the gate is green, and it is not presented as if it did.
