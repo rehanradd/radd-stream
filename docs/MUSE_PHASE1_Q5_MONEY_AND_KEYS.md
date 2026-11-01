@@ -211,10 +211,21 @@ parser).
 | `test_accounts_api.py` | **offline — 38 tests**, calls `accounts_api.route_get/route_post` in-process with an explicit `db_path`; SECRET and auth tokens are literal test strings | same three counts: 38 / **0** / **0**. Step at `:397`. It also carries the only cross-hand proof in the fleet — `:423-437` mints a VIP pass and asserts `viewer.request_is_vip` accepts it. |
 | `test_payments.py` | **offline — 85 tests**, `RADD_USER_STATE_DB`/`RADD_ADMIN_TOKEN` scoped by `mock.patch.dict` to a temp file, operator panel invoked as a *function* with `peer_address="127.0.0.1"` — an argument, never a connection | same three counts: 85 / **0** / **0**. Step at `:400`. |
 
-All three pass on the hosted runner in the same 48-step job, which is the part that cannot be faked: a
+All three pass on the hosted runner, which is the part that cannot be faked: a
 runner has no `/home/ubuntu/radd-stream-data` and no production catalog, so **a green step is the proof of
 offline-ness**, not my reading of the imports. The counts above match the workflow's own comment block at
 `:380-389` exactly, so the comment and the tree agree today.
+
+**Re-anchored by the run that executed it — 2026-11-01 03:15z (q5, anonymous read of run `41268348267`).**
+This paragraph originally said "the same 48-step job", citing run `41262155898` at `14ceca7`. That number
+described the tree, and the tree moved: at `1b4fc9f` (branched from trunk `c2528e1`) the job
+`python3 -S offline suites` is **49 steps, 0 skipped, `completed success`**, and the three money suites are
+steps **40 / 41 / 42**, each `success` — `test_accounts.py` `03:15:35 → 03:15:36`, `test_accounts_api.py`
+`→ 03:15:37`, `test_payments.py` `→ 03:15:38`. One step is the difference between the two counts, and it is
+mine: `🧪 test_handle_provenance.py`, **step 47, `success`, `03:15:39`** — that is the module's first
+execution anywhere, local or hosted, and it is green. `🧪 test_clip_bytes_guard.py` (step 46) is green on the
+same run, as are `🧪 test_config_data_dir.py` (44) and `🧪 test_fts5_capability.py` (45).
+So KD-1's demonstration and KD-5's forgery check are now hosted facts rather than my reading of `redact.py`.
 
 **Money coverage, stated as the verdict needs it:** 61 + 38 + 85 + 17 = **201 offline tests** now stand
 between a money-or-handle change and trunk, none of which needs this box.

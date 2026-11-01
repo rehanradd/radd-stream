@@ -249,3 +249,59 @@ it is sliceable on your word.
 **Still blocked, unchanged:** the five "Not measured" items need a production read; `/opt/radd-stream` was
 never opened; no crawl, no merge, no Gradle, no tag, no service restart, no credential read or printed;
 `backup_manager.py` and `accounts.py` were read and never edited; `/tmp/tmpjbp1_4w9` untouched.
+
+## Addendum, 03:15z — the third re-branch, onto `c2528e1`, and the number that went stale under its own sentence
+
+Q1 moved the base a third time inside the hour (`c2ae2bf` → `c2528e1`, q3's premerge-plan docs) and closed
+`b47e2d9` as superseded. Fetched the clean URL with the askpass helper: `main` and `master` both
+`c2528e10d72f`, and `git merge-base --is-ancestor c2ae2bf c2528e1` → yes, so the move was additive.
+
+Replayed the nine q5 commits (`8c8e580^..76f7b77`) with `git cherry-pick` onto a **new ref**
+`q5-verdict-keys-on-c2528e1` at `c2528e1`. No merge commit, no force-push, no local `master` merge, nothing
+merged into anything: Muse's CI-only ruling holds and Q1's fast-forward requirement is the reason a replay
+beats a merge. **Zero conflicts**, which is not luck: the three trunk commits touch only
+`Fast_Fetch/checkpoints/20261101-01xx-q3-lane-premerge-copy-plan-queued-not-run.md` (four times amended, one
+file) and `docs/SESSION_CHECKPOINT.md`, and none of my nine commits touch either.
+
+The gate I re-check rather than assert, all three parts:
+
+1. `git merge-base --is-ancestor c2528e1 HEAD` → true, so landing `1b4fc9f` is a pure fast-forward.
+2. `git diff --name-only c2528e1..HEAD` → 15 paths, all mine (config, three test modules, the workflow,
+   four docs, CONTINUITY, the checkpoint README, two q5 checkpoints).
+3. `git diff --stat c2528e1..HEAD -- admin_panel.py viewer.py api_v2.py redact.py accounts.py accounts_api.py
+   docs/SESSION_CHECKPOINT.md` → **empty**, so q3's `settings_unavailable` and remote-config work survives my
+   landing byte-for-byte. That file list is the point of part 3, not a formality: the previous re-branch cost
+   Q1 a whole cycle precisely because a landing would have silently reverted it.
+
+**Then the re-derivation, because a clean cherry-pick is exactly where a stale number hides.** The one the
+guard would have caught is the archive count: `69 session files (67 dated + 2 undated)` — recounted off the
+directory listing at this tree, still 69/67/2, because the q3 file already existed at `c2ae2bf` and my range
+adds no new filename. `docs/SESSION_CHECKPOINT.md` claims 60 files / 58 dated against `docs/checkpoints/` →
+measured 60/58 ✓. Sizes: CONTINUITY 11,970 B / 93 lines (cap 12,000 / 120), SESSION_CHECKPOINT 11,941 B / 112,
+root `AGENTS.md` 31,990 B (cap 32,000) ✓. README still indexes the filename-sorted newest entry
+(`test_docs_invariants.py:383-387` asks for `dated[-1]`, which is an *undated* name because `u` sorts after
+`2` — the rule is a sort, not a date, and it passes).
+
+**The number that went stale under its own sentence, and it was mine.** The money doc said the three suites
+pass "in the same 48-step job", citing run `41262155898`. That was true and became false without anyone
+touching the sentence: I added a 49th step myself. A claim about *how many steps the gate has* is a claim
+about the tree, and the tree moves under commits that never mention it. Corrected in place, run-anchored,
+with both counts and the reason, rather than quietly re-editing the number to 49 — the next reader needs to
+know the class of error, not just the current value. This is the third instance tonight of the same hazard
+(the auto-merged session count, the CI step count, this), so the rule I am working to is: **do not put a
+tree-derived number in prose unless it is anchored to the sha or run id that produced it.**
+
+**CI read on the exact sha `1b4fc9f`** (anonymous `/actions/runs/41268348267/jobs`, nothing local run):
+job `python3 -S offline suites` **49 steps, 0 skipped, `completed success`**, attempt 1, `03:14:10 → 03:15:42`.
+My two never-executed modules are green on their first run anywhere: `🧪 test_clip_bytes_guard.py` step 46,
+`🧪 test_handle_provenance.py` **step 47** (the money-and-keys verdict's executable half — KD-1's
+pad-recovery demonstration and KD-5's published-constant forgery, now hosted facts). Money suites steps
+40/41/42 green. And step **15 `🧪 test_provenance_stamping.py` is green here**, which is the honest update on
+the red I named at `76f7b77`: the failure was not reproducible on this content, so my statement stands as
+"not mine, cannot read the log, cannot re-run it", and I will not upgrade it to a diagnosis of a suite I have
+no receipts for. Trunk `c2528e1` itself is green (`41267387200`, plus `41264029692`), so nothing I am waiting
+on is upstream of me.
+
+**Still holds, unchanged by this addendum:** KD-1 code barred (wire format), MD-1/MD-2 not started, the
+sync-key digest ruled do-not-act, `backup_manager.py` write-up only, no tag, no trunk push by me, no service
+restart, no credential read or print, no production read, no Gradle, no crawl, no merge.
