@@ -154,6 +154,44 @@ jobs:
           ./gradlew :app:testDebugUnitTest \
             --no-daemon --stacktrace --console=plain
 
+      - name: "🧾 Name the failing tests in the check-run annotations"
+        # WHY THIS STEP EXISTS (measured 2026-11-01, qoder1): the job log is 403 to an
+        # anonymous reader and the only annotations a red test run produced were
+        # "Process completed with exit code 1", so a failing test name was unreachable.
+        # GitHub turns ::error:: log commands into check-run ANNOTATIONS, and
+        # GET /check-runs/{id}/annotations reads fine without admin. One Gradle
+        # invocation, no extra minutes, and the report XMLs already exist when a test
+        # step fails. Prints class#case + a truncated message; never an env value.
+        if: failure()
+        working-directory: App
+        run: |
+          python3 - <<'PYEOF'
+          import glob, os, xml.etree.ElementTree as ET
+          def esc(t):
+              return t.replace("%", "%25").replace("\r", "%0D").replace("\n", " ")
+          files = sorted(glob.glob("app/build/test-results/testDebugUnitTest/*.xml"))
+          if not files:
+              print("::error title=NO TEST REPORTS FOUND::testDebugUnitTest produced no XML under app/build/test-results (reports dir empty)")
+          total = bad = skip = 0
+          for f in files:
+              try:
+                  root = ET.parse(f).getroot()
+              except Exception as e:
+                  print("::error title=UNPARSEABLE REPORT::%s (%s)" % (esc(os.path.basename(f)), type(e).__name__))
+                  continue
+              cls = root.get("name") or os.path.basename(f)
+              total += int(root.get("tests") or 0)
+              skip += int(root.get("skipped") or 0)
+              for tc in root.iter("testcase"):
+                  for kind in ("failure", "error"):
+                      for node in tc.findall(kind):
+                          raw = node.get("message") or (node.text or "")
+                          msg = " ".join(raw.split())[:380]
+                          print("::error title=%s in %s::%s" % (kind.upper(), esc(cls), esc("%s -- %s" % (tc.get("name"), msg))))
+                          bad += 1
+          print("reports=%d tests=%d failing=%d skipped=%d" % (len(files), total, bad, skip))
+          PYEOF
+
       - name: "🔍 Lint (:app:lintDebug)"
         working-directory: App
         run: |
