@@ -2768,7 +2768,7 @@ PUBLIC_LANDING_HTML = """<!DOCTYPE html>
     <ul>
       <li><a href="/client">__PROJECT_NAME__ Web client</a></li>
       <li><code>GET /api/v1/posts?q=&amp;type=&amp;page=&amp;limit=</code></li>
-      <li><code>GET /api/v1/search/by-media?q=&amp;duration_s=&amp;resolution=&amp;language=</code></li>
+      <li><code>GET /api/v1/search/by-media?q=&amp;duration_s=&amp;resolution=&amp;language=&amp;plot=1</code></li>
       <li><code>GET /api/v1/posts/{id}</code></li>
       <li><code>GET /api/v1/stream?id=&amp;redirect=1</code></li>
       <li><code>GET /api/v1/stats</code></li>
@@ -2989,7 +2989,8 @@ def api_v1_get_posts(query: str = "", content_type: str = "", page: int = 1,
 
 def api_v1_search_by_media(query: str = "", duration_s=None, resolution: str = "",
                            audio_language: str = "", limit: int = 10,
-                           full: bool = False, base_url: str = "") -> dict:
+                           full: bool = False, base_url: str = "",
+                           plot: bool = False) -> dict:
     """/api/v1/search/by-media — what the file in the viewer's hand probably is.
 
     Thin on purpose: the matching and the three-way honesty report live in
@@ -2999,6 +3000,9 @@ def api_v1_search_by_media(query: str = "", duration_s=None, resolution: str = "
     list already uses, so a by-media row and a `q=` row are indistinguishable
     shapes to the client. `subtitled` is filled here rather than in `media_search`
     because it is a display-surface verdict, and that module answers matching.
+    `plot` is passed straight through: it is a matcher question, not a projection one,
+    and the answer (`matcher`, and a `hint` when the plot dimension did not run) comes
+    from the module that knows which statement it sent.
     """
     _ensure_schema()
 
@@ -3009,7 +3013,8 @@ def api_v1_search_by_media(query: str = "", duration_s=None, resolution: str = "
     with get_db() as conn:
         result = media_search.search_by_media(
             conn, title=query, duration_s=duration_s, resolution=resolution,
-            audio_language=audio_language, limit=limit, full=full, enrich=enrich)
+            audio_language=audio_language, limit=limit, full=full, enrich=enrich,
+            plot=plot)
         if not full and result.get("results"):
             subs = _subtitled_posts(conn, [int(r["id"]) for r in result["results"]])
             for item in result["results"]:
@@ -3925,6 +3930,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 resolution=number("resolution"),
                 audio_language=query_params.get("language", [""])[0],
                 limit=limit, full=full, base_url=base_url,
+                # Off unless asked for, and asked for the same way `ladder` is asked
+                # for: the string a caller writes is `1` or `true`, anything else is no.
+                plot=query_params.get("plot", [""])[0].strip().lower() in ("1", "true"),
             )
             self.send_json(data, status=200 if data.get("success") else 400)
 

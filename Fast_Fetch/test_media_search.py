@@ -713,5 +713,162 @@ class PopulationCost(_Scaled):
 
 
 
+class PlotOptIn(Fixture):
+    """`plot=1` — the opt-in FTS disjunct, and the two things it must never become.
+
+    **None of these has been executed on this box.** The load freeze bars every test
+    module, so the hosted Backend CI run on this sha is the first judge; read a red test
+    here as a wrong assertion in this file until it is shown otherwise.
+
+    What they pin, in one line each: with the flag off the module sends the statement it
+    has always sent and nothing else; with the flag on and no index the answer says so
+    instead of silently narrowing; a plot word no title contains becomes reachable *only*
+    through the disjunct; the disjunct cannot escape `redact.adult_clause`, which is the
+    property that lets this ship without triggers or a reconciliation of adult twins; and
+    a viewer's quote or FTS5 keyword arrives as text rather than as query syntax.
+
+    The index these tests build is `docs/SPEC_CLIP_SEARCH_SCHEMA.md` §3b verbatim. No
+    migration creates it yet — §5 is the gate — so creating it here is the fixture
+    supplying a corpus the production catalog does not have, and the tests that expect it
+    to be absent are the ones that describe today.
+    """
+
+    #: A word that goes into a synopsis and into no title, so a hit on it can only have
+    #: come from the plot disjunct.
+    PLOT_WORD = "marigold"
+
+    def build_plot_index(self):
+        self.conn.execute(
+            "CREATE VIRTUAL TABLE IF NOT EXISTS posts_text_fts USING fts5("
+            "clean_title, title, synopsis, genres, content='posts',"
+            " content_rowid='id', tokenize='unicode61 remove_diacritics 2',"
+            " prefix='2 3')")
+        self.rebuild_plot_index()
+
+    def rebuild_plot_index(self):
+        self.conn.execute("INSERT INTO posts_text_fts(posts_text_fts) VALUES('rebuild')")
+        self.conn.commit()
+
+    def set_synopsis(self, title, text):
+        self.conn.execute("UPDATE posts SET synopsis = ? WHERE clean_title = ?",
+                          (text, title))
+        self.conn.commit()
+
+    def test_the_default_path_sends_the_statement_it_has_always_sent(self):
+        """`plot` off is not "equivalent to"; it is the same bytes.
+
+        Asserted as text because the claim a reviewer needs is that turning the feature
+        off returns the code to the shape that took 45 s at `q=love` out of the room — and
+        a disjunct that leaked into the default path would be exactly how a second
+        unbounded scan comes back.
+        """
+        self.ingest(title="Zebra County")
+        spy = _Spy(self.conn)
+        result = media_search.search_by_media(spy, title="Zebra", plot=False)
+        scans = [sql for sql, _ in spy.calls if "FROM posts p" in sql]
+        self.assertEqual(len(scans), 1, spy.calls)
+        self.assertIn(r"AND (p.clean_title LIKE ? ESCAPE '\' OR p.title LIKE ? ESCAPE '\')",
+                      scans[0], scans[0])
+        self.assertNotIn("MATCH", scans[0], scans[0])
+        self.assertNotIn("posts_text_fts", scans[0], scans[0])
+        self.assertEqual(result["matcher"], media_search.MATCHER_TITLE)
+        self.assertNotIn("hint", result, "the hint belongs to the unavailable answer only")
+
+    def test_plot_on_without_an_index_says_which_dimension_did_not_run(self):
+        """The honesty case, and the one every production catalog answers today.
+
+        A shorter list plus silence reads as "no film has this plot", which is a claim
+        about the catalog and not true of it. The answer must name the matcher.
+        """
+        self.ingest(title="Zebra County")
+        result = media_search.search_by_media(self.conn, title="Zebra", plot=True)
+        self.assertEqual(result["matcher"], media_search.MATCHER_PLOT_UNAVAILABLE)
+        self.assertEqual(result["hint"], media_search.PLOT_UNAVAILABLE_HINT)
+        self.assertTrue(result["query"]["plot"], result["query"])
+        self.assertEqual(result["total"], 1, "the title query still answered normally")
+
+    def test_a_plot_word_no_title_contains_reaches_the_work_only_through_the_disjunct(self):
+        self.ingest(title="Zebra County")
+        self.set_synopsis("Zebra County", "A runaway marigold wedding on a night bus.")
+        self.build_plot_index()
+        title_only = media_search.search_by_media(self.conn, title="marigold")
+        self.assertEqual(title_only["total"], 0, "the title LIKEs must not reach the plot")
+        with_plot = media_search.search_by_media(self.conn, title="marigold", plot=True)
+        self.assertEqual(with_plot["matcher"], media_search.MATCHER_PLOT)
+        self.assertEqual(with_plot["total"], 1, with_plot)
+
+    def test_the_plot_disjunct_cannot_escape_the_adult_clause(self):
+        """The safety property, tested by finding a row rather than by reading SQL.
+
+        `adult_clause` is ANDed over `posts` while the MATCH is one disjunct inside the
+        parenthesis. Written as `adult AND (titles) OR plot` — which is what appending the
+        disjunct after the closing parenthesis yields, because `AND` binds tighter than
+        `OR` — a flagged work would list on a public route on the strength of its synopsis.
+        The positive control is the raw index: the flagged row's id *is* in it, so the
+        absence below is the clause and not an empty corpus.
+        """
+        self.ingest(title="Ordinary Hours")
+        self.ingest(title="Night of Cardamom", is_18_plus=1)
+        self.set_synopsis("Ordinary Hours", f"A story about {self.PLOT_WORD} and a train.")
+        self.set_synopsis("Night of Cardamom",
+                          f"An explicit retelling involving a {self.PLOT_WORD}.")
+        self.build_plot_index()
+        indexed = {int(row[0]) for row in self.conn.execute(
+            "SELECT rowid FROM posts_text_fts WHERE posts_text_fts MATCH ?",
+            (f'"{self.PLOT_WORD}"',))}
+        self.assertEqual(len(indexed), 2, "both synopses are in the index — the premise")
+        listed = media_search.search_by_media(self.conn, title=self.PLOT_WORD, plot=True)
+        titles = [row["clean_title"] for row in listed["results"]]
+        self.assertEqual(titles, ["Ordinary Hours"],
+                         f"adult exposure through the plot disjunct: {titles}")
+        self.assertEqual(listed["matcher"], media_search.MATCHER_PLOT)
+
+    def test_a_viewers_quotes_and_keywords_arrive_as_text(self):
+        """`OR` inside a query is the word `OR`, not a second clause.
+
+        The architecture doc's `re.sub(r'[^a-zA-Z0-9\\s]', '', title)` strips punctuation
+        and leaves every FTS5 operator, because operators are alphanumeric; a query of
+        `NOT marigold` would then be a boolean expression, and `NEAR(a, b)` an error. The
+        phrase-quoting in `_fts_phrase` is the whole fix, so this asserts the fix rather
+        than the bug's absence by luck: the same query with and without the operator word
+        in front of it must return the same rows.
+        """
+        self.ingest(title="Zebra County")
+        self.set_synopsis("Zebra County", f"A runaway {self.PLOT_WORD} wedding.")
+        self.build_plot_index()
+        plain = media_search.search_by_media(self.conn, title=self.PLOT_WORD, plot=True)
+        operatory = media_search.search_by_media(self.conn, title='AND marigold', plot=True)
+        self.assertEqual(plain["matcher"], media_search.MATCHER_PLOT)
+        self.assertEqual(operatory["matcher"], media_search.MATCHER_PLOT)
+        self.assertEqual(operatory["total"], 0,
+                         "'AND marigold' became a boolean expression, not a phrase")
+
+    def test_the_opt_in_buys_one_statement_and_no_join(self):
+        """The bounded shape survives the feature structurally: still one scan of
+        `posts`, still no fan-out, one extra `sqlite_master` read for the presence check.
+
+        What this does NOT assert, and says so rather than hiding it: whether SQLite
+        keeps the rowid-reverse walk (`SCAN p`, no temp B-tree) once the third disjunct is
+        in the WHERE. An OR whose terms cannot all be index-satisfied can push the
+        optimizer onto a sort. That is a plan question and a plan question needs
+        `EXPLAIN QUERY PLAN` on a database big enough to have one, which the freeze bars
+        tonight — so §5 of the spec carries it as the first lift task, and if the plan
+        comes back with a temp B-tree the disjunct ships as a second bounded statement
+        unioned in Python rather than folded into this one.
+        """
+        self.ingest(title="Zebra County")
+        self.build_plot_index()
+        spy = _Spy(self.conn)
+        media_search.search_by_media(spy, title="Zebra", plot=True)
+        scans = [sql for sql, _ in spy.calls if "FROM posts p" in sql]
+        self.assertEqual(len(scans), 1, spy.calls)
+        self.assertNotIn("LEFT JOIN", scans[0])
+        self.assertNotIn("JOIN releases", scans[0])
+        self.assertNotIn("JOIN download_sources", scans[0])
+        self.assertIn("posts_text_fts", scans[0])
+        self.assertIn("LIMIT ?", scans[0], "the window must still bound the walk")
+        self.assertEqual(len(spy.calls), 6, [sql[:60] for sql, _ in spy.calls])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

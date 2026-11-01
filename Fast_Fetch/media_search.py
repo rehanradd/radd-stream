@@ -42,6 +42,18 @@ into a 504 behind a spinner. The `LIMIT` bounded the *response*, never the *work
 So the work is bounded where the work actually is: candidates come from `posts` alone
 and are capped before anything is joined, and the counts for that capped window are
 read back through the two foreign-key indexes. Nothing here joins the catalog again.
+
+**One opt-in exists on top of that shape, and it does not change it.** `plot=1` adds a
+third disjunct to the candidate test — an FTS5 MATCH over a `posts`-side plot index — so
+a viewer who remembers what *happens* in a film rather than its name can be answered.
+Off, the statement below is the statement this module has always sent. On, the disjunct
+joins the other two *inside* one parenthesis, with `redact.adult_clause` still ANDed
+outside it: an FTS hit is a candidate, never a permission. The index does not exist on
+any database yet, because its write-side cost has not been measured and the measurement
+is frozen; the answer says which matcher ran rather than leaving the client to guess.
+The schema, the corpus that is missing behind the feature, and the gate step 4 must pass
+are all in `docs/SPEC_CLIP_SEARCH_SCHEMA.md`.
+
 Stdlib only, and it never opens a write transaction: the catalog is read as-is.
 """
 
@@ -131,6 +143,56 @@ def _contains_pattern(text: str) -> str:
     return f"%{_escape_like(text)}%"
 
 
+#: The FTS5 table a plot-text candidate comes from: `clean_title, title, synopsis,
+#: genres` over `posts`, external content, `content_rowid='id'`. **Nothing creates it
+#: yet.** Its DDL and its gate live in `docs/SPEC_CLIP_SEARCH_SCHEMA.md` §3b and §5 —
+#: the write-side cost of triggering it on a table every scraper appends to has not been
+#: measured, and the measurement is barred until the load lift is announced. So today
+#: `_has_plot_index` is False on every database this code can reach, `plot=1` answers
+#: `plot_unavailable`, and the shipped behaviour is the behaviour before this constant
+#: existed. The name lives here, beside its only reader, so the day the index ships there
+#: is one string to agree on rather than two files that can drift.
+PLOT_INDEX_TABLE = "posts_text_fts"
+
+#: The three answers `matcher` can carry. `title_like` is the only one a client can
+#: receive from a catalog that has not been migrated, and receiving it is not an error.
+MATCHER_TITLE = "title_like"
+MATCHER_PLOT = "title_like+plot_fts"
+MATCHER_PLOT_UNAVAILABLE = "plot_unavailable"
+
+#: What a screen should say when `plot=1` came back `plot_unavailable`. The results are
+#: real; what is missing is a dimension, and a viewer who is not told will conclude the
+#: plot is not in the catalog.
+PLOT_UNAVAILABLE_HINT = ("Plot-text search did not run: this catalog has no plot index "
+                         "yet, so these are title matches only.")
+
+
+def _has_plot_index(conn) -> bool:
+    """Whether the plot corpus exists in *this* database, checked not assumed.
+
+    A per-search read of `sqlite_master` by name, which the planner answers from the
+    schema cookie without touching a data page. It is one extra statement on the opt-in
+    path only, and the opt-in path is the only one that can be wrong about it.
+    """
+    return conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+                        (PLOT_INDEX_TABLE,)).fetchone() is not None
+
+
+def _fts_phrase(text: str) -> "str | None":
+    """User text as ONE quoted phrase, so FTS5 never parses it as a query expression.
+
+    `AND`, `OR`, `NEAR`, `*` are syntax to FTS5 and words to a viewer, and a phrase is the
+    shape a clip query actually is. Measured on this box: `MATCH 'AND marigold'` raises
+    `fts5: syntax error near "AND"`, `MATCH '"AND marigold"'` answers no rows — which is
+    exactly the hole the architecture doc's punctuation-stripping sanitizer leaves open,
+    because operators are alphanumeric. A double quote folds to a space; folding beats
+    maintaining a second escaping rule. None when nothing but quotes was typed, so an
+    answer cannot claim a matcher that asked an empty question.
+    """
+    inner = " ".join(str(text or "").replace('"', " ").split())
+    return f'"{inner}"' if inner else None
+
+
 def _row_columns(full: bool) -> str:
     """The `posts` columns the projection and the evidence step need, in one list.
 
@@ -145,8 +207,8 @@ def _row_columns(full: bool) -> str:
             f"{provenance}")
 
 
-def _candidates(conn, clean: str, window: int, full: bool) -> tuple:
-    """One newest-first walk of `posts`, returning `(rows, tier)`.
+def _candidates(conn, clean: str, window: int, full: bool, plot: bool = False) -> tuple:
+    """One newest-first walk of `posts`, returning `(rows, tier, matcher)`.
 
     Only the `contains` test is in SQL, because that is the one that decides whether a
     row exists at all; the *strength* of the match (2 exact, 1 prefix, 0 contains) is
@@ -162,14 +224,47 @@ def _candidates(conn, clean: str, window: int, full: bool) -> tuple:
     count. A film that is popular but old can therefore be missed by a broad query that
     the old whole-catalog popularity sort would have surfaced — the price of bounding
     the work before the join instead of after it.
+
+    `plot=True` adds the FTS disjunct, and only that: see `PLOT_INDEX_TABLE` for what
+    has to be true for it to run, and `docs/SPEC_CLIP_SEARCH_SCHEMA.md` §4 for why the
+    adult clause stays outside the parenthesis. With `plot` off the statement below is
+    the statement this module has always sent, character for character.
     """
     wanted = clean.lower()
+    # The three candidate tests go inside ONE parenthesis, and `adult_clause` stays
+    # outside it ANDed to the whole thing. That placement is the safety property: an FTS
+    # hit is a *candidate*, never a permission. Written as
+    # `WHERE adult AND (title…) OR plot…` — which is what string-appending the disjunct
+    # onto a statement that already closes its parenthesis produces — SQLite's precedence
+    # reads it as `(adult AND title…) OR plot…`, and a flagged work's synopsis would then
+    # list on a public route. `test_the_plot_disjunct_cannot_escape_the_adult_clause`
+    # fails on that precedence bug, and it fails by finding a row, not by reading SQL.
+    disjuncts = ["p.clean_title LIKE ? ESCAPE '\\'", "p.title LIKE ? ESCAPE '\\'"]
+    args = [_contains_pattern(clean), _contains_pattern(clean)]
+    matcher = MATCHER_TITLE
+    if plot:
+        present = _has_plot_index(conn)
+        phrase = _fts_phrase(clean) if present else None
+        if phrase is not None:
+            disjuncts.append(f"p.id IN (SELECT rowid FROM {PLOT_INDEX_TABLE}"
+                             f" WHERE {PLOT_INDEX_TABLE} MATCH ?)")
+            args.append(phrase)
+            matcher = MATCHER_PLOT
+        elif present:
+            # The index is there and the query has no words to ask it with, so the title
+            # LIKEs are what answered; `matcher` says so rather than claiming a MATCH.
+            pass
+        else:
+            # Told, not guessed, and not quietly replaced by an unindexed
+            # `OR synopsis LIKE '%…%'`: that is how a 45-second query is born, and a
+            # widening nobody measured is a defect with a feature label on it.
+            matcher = MATCHER_PLOT_UNAVAILABLE
     sql = (f"SELECT {_row_columns(full)} FROM posts p"
            f" WHERE {redact.adult_clause('p')}"
-           f" AND (p.clean_title LIKE ? ESCAPE '\\' OR p.title LIKE ? ESCAPE '\\')"
+           f" AND ({' OR '.join(disjuncts)})"
            f" ORDER BY p.id DESC LIMIT ?")
-    contains = _contains_pattern(clean)
-    rows = conn.execute(sql, [contains, contains, window]).fetchall()
+    args.append(window)
+    rows = conn.execute(sql, args).fetchall()
     tier: dict = {}
     for row in rows:
         pid = int(row["id"])
@@ -180,7 +275,7 @@ def _candidates(conn, clean: str, window: int, full: bool) -> tuple:
             tier[pid] = 1
         else:
             tier[pid] = 0
-    return rows, tier
+    return rows, tier, matcher
 
 
 def _counts_for(conn, post_ids: list) -> dict:
@@ -311,12 +406,19 @@ def _score(evidence: dict, hints: dict) -> tuple:
 
 def search_by_media(conn, title: str = "", duration_s=None, resolution=None,
                     audio_language: str = "", limit: int = 10, full: bool = False,
-                    enrich=None) -> dict:
+                    enrich=None, plot: bool = False) -> dict:
     """Read-only by-media lookup.
 
     ``enrich`` is the caller's chance to add the art handles and the work reference
     this module cannot mint (both are ``viewer`` concerns); it is called as
     ``enrich(item, row)`` with the already-projected item and its raw row.
+
+    ``plot`` is the opt-in described in `docs/SPEC_CLIP_SEARCH_SCHEMA.md` §4: off, the
+    statement is this module's own, unchanged; on, the FTS disjunct joins it when the
+    corpus exists. The answer always says which one ran, in ``matcher`` — a client must
+    be able to tell "plot search found nothing" from "plot search did not run", because
+    those two need different words on a screen and only one of them is a fact about the
+    film.
     """
     clean = re.sub(r"\s+", " ", str(title or "")).strip()
     if not clean:
@@ -358,7 +460,7 @@ def search_by_media(conn, title: str = "", duration_s=None, resolution=None,
         hints["audio_language"] = language
 
     window = min(CANDIDATE_WINDOW, max(limit * 4, limit))
-    rows, tier = _candidates(conn, clean, window, full)
+    rows, tier, matcher = _candidates(conn, clean, window, full, plot)
     ids = [int(r["id"]) for r in rows]
     counts = _counts_for(conn, ids)
 
@@ -411,9 +513,12 @@ def search_by_media(conn, title: str = "", duration_s=None, resolution=None,
             "duration_s": hints.get("duration_s"),
             "resolution": hints.get("resolution"),
             "audio_language": hints.get("audio_language"),
+            "plot": bool(plot),
         },
         "duration_tolerance": DURATION_TOLERANCE,
+        "matcher": matcher,
         "candidates": len(rows),
         "total": len(results),
         "results": results,
+        **({"hint": PLOT_UNAVAILABLE_HINT} if matcher == MATCHER_PLOT_UNAVAILABLE else {}),
     }
