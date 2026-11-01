@@ -25,7 +25,10 @@ The four things that make it safe to start in a window:
 2. **It re-stats each vault after counting it and refuses to continue if the file moved.** A census
    that changed its own input is not a census, and a size+mtime pair edited under q3's merge guard is
    how one lane's measurement invalidates another's safety check. Same for a `-wal`/`-shm`/`-journal`
-   sibling appearing next to a vault.
+   that appears *next to a vault we are counting* — a read-only open cannot create one, so it is this
+   run's own evidence of a co-writer. A sidecar that was already there is a different question, and the
+   11:0x owner ruling answers it per file: the vault is barred, named with the sidecar's byte size, and
+   the debris is left alone. `sidecar_state()` is that ruling; 14 of the 19 priced vaults are in it.
 3. **A budget it cannot overrun silently.** Costs are projected per vault from the measured
    0.9-5.0 s/MB spread on this box; when the remaining budget cannot cover the cheapest thing left,
    the run stops, prints what it did *not* count, and marks the result incomplete. A partial census
@@ -207,6 +210,36 @@ def stray_sidecars(path: Path) -> list[str]:
             if Path(base + suffix).exists()]
 
 
+#: The 2026-11-01 11:0x owner ruling, encoded: a sidecar found *before* we open is a classification
+#: of that vault, not an abort of the walk. 0-byte `-wal` + `-shm` is crash debris; a `-journal` is an
+#: interrupted transaction; a non-empty `-wal` holds frames that were never checkpointed. All three
+#: leave a `mode=ro` open either failing or reading a state nobody agreed to measure, so the vault is
+#: **barred, named, and its sidecars left exactly where they are** — deleting another lane's artifact
+#: is not this tool's decision. What still aborts the whole walk is a sidecar that appears *while this
+#: process counts*, which is `assert_untouched`'s business and is evidence of a live co-writer.
+SIDECAR_WHY = {"journal": "a -journal sits beside it: an interrupted transaction",
+               "dirty-wal": "a non-empty -wal: frames that were never checkpointed",
+               "debris": "0-byte -wal and/or -shm, no journal: crash debris"}
+
+
+def sidecar_state(path: Path) -> dict:
+    """What sits beside the vault and which class that is. `stat` only, never an open, never a delete."""
+    found = {}
+    for suffix in ("-journal", "-wal", "-shm"):
+        sibling = Path(str(path) + suffix)
+        if sibling.exists():
+            found[suffix.strip("-")] = sibling.stat().st_size
+    if not found:
+        return {"sidecars": {}, "class": None, "why": None}
+    if "journal" in found:
+        cls = "journal"
+    elif found.get("wal"):
+        cls = "dirty-wal"
+    else:
+        cls = "debris"
+    return {"sidecars": found, "class": cls, "why": SIDECAR_WHY[cls]}
+
+
 class CensusRefused(RuntimeError):
     """The census stopped because continuing would cost more than it is allowed to."""
 
@@ -248,8 +281,10 @@ def run(data_dir: Path, tiers: str = "ABC", *, include_lineage: bool = False,
     targets = plan(tiers, include_lineage=include_lineage, only=only)
     if not targets:
         raise CensusRefused("the plan is empty — nothing would be counted, so nothing is claimed")
-    out = {"data_dir": str(data_dir), "results": [], "skipped": [],
-           "unpriced_on_disk": [], "complete": False, "elapsed": 0.0}
+    out = {"data_dir": str(data_dir), "results": [], "skipped": [], "barred": [], "lineage": [],
+           "unpriced_on_disk": [], "complete": False, "elapsed": 0.0,
+           "sidecar_ruling": "2026-11-01 11:0x owner: a pre-existing sidecar bars that vault — "
+                             "list it, never open it, never delete the debris"}
     #: A vault another lane added after the 08xx pricing is not silently ignored: it is reported, so
     #: the census's own coverage claim stays checkable by whoever reads the number. `*_readonly.db`
     #: snapshots are excluded because they are copies of a priced file, not a new site.
@@ -260,12 +295,26 @@ def run(data_dir: Path, tiers: str = "ABC", *, include_lineage: bool = False,
     for index, target in enumerate(targets):
         path = Path(data_dir) / target["vault"]
         if not target["counted"]:
-            out["skipped"].append({"vault": target["vault"], "reason": "lineage of %s"
-                                   % target["lineage_of"], "bytes": target["bytes"]})
+            #: A lineage row is the *plan's* decision to measure one site once, not a shortfall, so it
+            #: does not live in `skipped`: `run("ABC")` can be complete and still say which two vaults
+            #: it deliberately did not double-count.
+            out["lineage"].append({"vault": target["vault"], "lineage_of": target["lineage_of"],
+                                   "bytes": target["bytes"]})
             continue
         if not path.exists():
             out["skipped"].append({"vault": target["vault"], "reason": "not on disk",
                                    "bytes": target["bytes"]})
+            continue
+        #: Before the budget and before the open: a barred vault costs no time, so it must not be
+        #: charged against a window that was sized to count the vaults it can actually read.
+        state = sidecar_state(path)
+        if state["class"]:
+            out["barred"].append({"vault": target["vault"], "tier": target["tier"],
+                                  "bytes": target["bytes"], "class": state["class"],
+                                  "sidecars": state["sidecars"], "why": state["why"]})
+            print("%-30s tier %s %7.1f MB  BARRED (%s) — listed, not opened, nothing deleted"
+                  % (target["vault"], target["tier"], target["bytes"] / 1e6, state["why"]),
+                  flush=True)
             continue
         spent = time.monotonic() - started
         if budget is not None:
@@ -293,8 +342,15 @@ def run(data_dir: Path, tiers: str = "ABC", *, include_lineage: bool = False,
                  result["size_delta_vs_pricing"]), flush=True)
     out["elapsed"] = round(time.monotonic() - started, 1)
     counted = {r["vault"] for r in out["results"]}
+    barred = {b["vault"] for b in out["barred"]}
+    out["barred_bytes"] = sum(b["bytes"] for b in out["barred"])
+    #: `admitted` is the set the ruling allows this run to read. Completeness is measured against it,
+    #: because 14 vaults barred by 0-byte sidecars is a *ruling*, not a failed census — and the number
+    #: that matters is that the report says which 14. A `skipped` row (lineage, not on disk, over
+    #: budget) still reads as incomplete, since those are the plan falling short of itself.
+    out["admitted"] = sorted({t["vault"] for t in targets if t["counted"]} - barred)
     out["complete"] = bool(out["results"]) and not out["skipped"] and not out.get("refused") \
-        and counted == {t["vault"] for t in targets if t["counted"]}
+        and counted == set(out["admitted"])
     return out
 
 
@@ -341,9 +397,14 @@ def main(argv=None) -> int:
         print(f"[!] refusing to run: {exc}", file=sys.stderr)
         return 2
     print("RESULT\t" + json.dumps(result, sort_keys=True))
+    print("[i] coverage: %d counted, %d barred by sidecar (%d B left unread, debris untouched), "
+          "%d lineage, %d skipped, %d unpriced on disk"
+          % (len(result["results"]), len(result["barred"]), result["barred_bytes"],
+             len(result["lineage"]), len(result["skipped"]), len(result["unpriced_on_disk"])))
     if not result["complete"]:
-        print("[!] INCOMPLETE: %d counted, %d skipped, refused=%s"
-              % (len(result["results"]), len(result["skipped"]), result.get("refused")),
+        print("[!] INCOMPLETE: %d counted, %d barred, %d skipped, refused=%s"
+              % (len(result["results"]), len(result["barred"]), len(result["skipped"]),
+                 result.get("refused")),
               file=sys.stderr)
         return 1
     return 0

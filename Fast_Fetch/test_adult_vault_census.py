@@ -340,12 +340,119 @@ class WindowBudgetTests(unittest.TestCase):
             self.quiet("A", only="never-priced.db")
 
     def test_refusal_mid_walk_stops_and_is_reported_as_incomplete(self):
-        make_vault(self.dir / "9xmovies.db", [(1, "k", 1)])
-        (self.dir / "hindilinks4u.db-wal").write_bytes(b"")
-        result = self.quiet("ABC", budget=600.0)
+        """A vault the census cannot count is a stop, not a row of zeroes.
+
+        `filmyhit.db` here has a `posts` table with no flag column at all — the shape a scraper can
+        leave behind — so the walk counts `hindilinks4u`, refuses, and must not carry on pretending the
+        tier was measured. This used to be driven by planting a 0-byte `-wal`, which is now a *bar*
+        under the 11:0x ruling rather than a refusal; `SidecarRulingTests` covers that half.
+        """
+        (self.dir / "filmyhit.db").unlink()          # setUp made it with a flag column; unmake it
+        conn = sqlite3.connect(str(self.dir / "filmyhit.db"))
+        conn.execute("CREATE TABLE posts (id INTEGER PRIMARY KEY, canonical_key TEXT)")
+        conn.commit()
+        conn.close()
+        result = self.quiet("A", budget=600.0)
         self.assertFalse(result["complete"])
-        self.assertIn("grew", result["refused"])
-        self.assertEqual(result["results"], [], "the tier-A walk must stop at the first refusal")
+        self.assertIn("filmyhit.db", result["refused"])
+        self.assertIn("no `posts.is_18_plus", result["refused"])
+        self.assertEqual([r["vault"] for r in result["results"]], ["hindilinks4u.db"],
+                         "the tier-A walk must stop at the first refusal, not reorder around it")
+
+
+class SidecarRulingTests(unittest.TestCase):
+    """The 11:0x owner ruling, as behaviour: bar the file, name it, leave the debris alone.
+
+    Fourteen of the nineteen priced vaults sit behind a 0-byte `-wal` plus a 32,768-byte `-shm` — crash
+    residue from a lane that opened them read-write and exited uncleanly. Under the 09:07 abort rule as
+    written that made #37 unrunnable forever, so the ruling classifies it instead: skip and list. What
+    these cases pin is the three things that make the skip honest — the barred vault is never opened
+    (proved with a file that is not a database at all, so an open would raise), the debris still exists
+    afterwards (this tool does not delete another lane's artifact), and the run reads as complete over
+    the vaults the ruling admits while naming the bytes it did not read.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.dir = Path(self.tmp.name)
+        for name in census.PRICED:
+            if census.PRICED[name][1] == "A":
+                make_vault(self.dir / name, [(1, "k", 1), (2, "k", 0)])
+
+    def quiet(self, *args, **kwargs):
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            return census.run(self.dir, *args, **kwargs)
+
+    def plant(self, name, wal_bytes=0, shm_bytes=32768, journal=False):
+        base = self.dir / name
+        if journal:
+            base.with_name(base.name + "-journal").write_bytes(b"")
+        if wal_bytes is not None:
+            base.with_name(base.name + "-wal").write_bytes(b"\0" * wal_bytes)
+        if shm_bytes is not None:
+            base.with_name(base.name + "-shm").write_bytes(b"\0" * shm_bytes)
+        return base
+
+    def test_the_three_classes_are_distinguished_from_stat_alone(self):
+        self.assertIsNone(census.sidecar_state(self.plant("kisskh.db", wal_bytes=None,
+                                                         shm_bytes=None))["class"])
+        self.assertEqual(census.sidecar_state(self.plant("kisskh.db"))["class"], "debris")
+        self.assertEqual(census.sidecar_state(self.plant("filmyhit.db", wal_bytes=8))["class"],
+                         "dirty-wal")
+        self.assertEqual(census.sidecar_state(self.plant("7starhd.db", journal=True))["class"],
+                         "journal")
+        self.assertEqual(census.sidecar_state(self.plant("hindilinks4u.db", wal_bytes=8,
+                                                         journal=True))["class"], "journal",
+                         "a journal is the worst of the three, so it wins the classification")
+        self.assertEqual(census.sidecar_state(self.plant("kisskh.db"))["sidecars"],
+                         {"wal": 0, "shm": 32768}, "the byte sizes are the evidence; without them the "
+                                                   "report says only that something was there")
+
+    def test_a_barred_vault_is_never_opened_and_its_debris_is_never_touched(self):
+        path = self.plant("hindilinks4u.db")
+        path.write_bytes(b"this is not a sqlite file")     # an open would raise DatabaseError
+        result = self.quiet("A", budget=600.0)
+        self.assertNotIn("hindilinks4u.db", [r["vault"] for r in result["results"]])
+        self.assertFalse(result.get("refused"), result.get("refused"))
+        barred = [b for b in result["barred"] if b["vault"] == "hindilinks4u.db"]
+        self.assertEqual(len(barred), 1)
+        self.assertEqual(barred[0]["class"], "debris")
+        self.assertEqual(barred[0]["sidecars"], {"wal": 0, "shm": 32768})
+        self.assertEqual(path.read_bytes(), b"this is not a sqlite file",
+                         "the vault stays exactly as found")
+        for suffix in ("-wal", "-shm"):
+            self.assertTrue((self.dir / ("hindilinks4u.db" + suffix)).exists(),
+                            "%s is another lane's artifact, not this census's to delete" % suffix)
+
+    def test_barring_the_debris_leaves_a_complete_census_of_what_the_ruling_admits(self):
+        self.plant("hindilinks4u.db")
+        result = self.quiet("A", budget=600.0)
+        self.assertEqual(sorted(r["vault"] for r in result["results"]),
+                         ["7starhd.db", "filmyhit.db", "kisskh.db"])
+        self.assertTrue(result["complete"],
+                        "the ruling admits three of four here, and three of four is the answer")
+        self.assertEqual(result["admitted"], ["7starhd.db", "filmyhit.db", "kisskh.db"])
+        self.assertEqual(result["barred_bytes"], census.PRICED["hindilinks4u.db"][0],
+                         "the unread bytes have to be in the report, or 3 reads as 4")
+        self.assertIn("11:0x", result["sidecar_ruling"])
+
+    def test_a_journal_or_a_dirty_wal_bars_the_same_way_but_is_named_differently(self):
+        self.plant("filmyhit.db", journal=True)
+        self.plant("kisskh.db", wal_bytes=8)
+        result = self.quiet("A", budget=600.0)
+        self.assertEqual(sorted(b["class"] for b in result["barred"]), ["dirty-wal", "journal"],
+                         "debris is crash residue; these two say a transaction did not finish, and "
+                         "lumping them together would hide the difference from whoever reads it")
+        self.assertEqual([r["vault"] for r in result["results"]], ["hindilinks4u.db", "7starhd.db"])
+
+    def test_a_sidecar_growing_during_a_count_is_still_a_refusal(self):
+        """The bar is for sidecars that were already there; one that appears under us is a co-writer."""
+        before = census.fingerprint(self.dir / "kisskh.db")
+        (self.dir / "kisskh.db-wal").write_bytes(b"")
+        with self.assertRaises(census.CensusRefused) as caught:
+            census.assert_untouched(self.dir / "kisskh.db", before)
+        self.assertIn("grew", str(caught.exception))
 
     def test_the_list_command_needs_no_directory_at_all(self):
         with contextlib.redirect_stdout(io.StringIO()):
@@ -354,7 +461,34 @@ class WindowBudgetTests(unittest.TestCase):
         self.assertEqual(listed, 0, "the plan is arithmetic; a window can print it before it trusts it")
 
 
+def _workflow_escape(text: str) -> str:
+    """`::error::` message escaping — the runner reads these three sequences and nothing else."""
+    return text.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+
+
+def _failure_digest(result) -> str:
+    """Up to three traceback lines per failing test, for the annotation a token-less lane can read.
+
+    Same channel `test_price_projection.py` opened on 2026-11-01: `/actions/runs/{id}/logs` is 401
+    without a token, `/check-runs/{id}/annotations` is 200 to anyone, and a `::error::` on the step
+    process's stdout becomes one of those annotations. Three lines because `assertEqual` prints the
+    value it got above the value it wanted.
+    """
+    heads = []
+    for kind, group in (("FAIL", result.failures), ("ERROR", result.errors)):
+        for test, trace in group:
+            lines = [line.strip() for line in (trace or "").rstrip().splitlines() if line.strip()]
+            heads.append("%s %s :: %s" % (kind, test.id(), " ⏐ ".join(lines[-3:])))
+    return ("test_adult_vault_census RED — ran %d, %d failures, %d errors | sqlite %s | python %s"
+            " | %s" % (result.testsRun, len(result.failures), len(result.errors),
+                       sqlite3.sqlite_version, sys.version.split()[0], " || ".join(heads)))
+
+
 if __name__ == "__main__":
     print("fixture: %s (offline, temp vaults only — no production file, no network)"
           % Path(__file__).name)
-    unittest.main(verbosity=2)
+    _suite = unittest.defaultTestLoader.loadTestsFromModule(sys.modules["__main__"])
+    _result = unittest.TextTestRunner(verbosity=2).run(_suite)
+    if not _result.wasSuccessful():
+        print("::error::%s" % _workflow_escape(_failure_digest(_result))[:2500])
+    sys.exit(0 if _result.wasSuccessful() else 1)
