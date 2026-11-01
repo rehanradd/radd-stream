@@ -40,7 +40,9 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -368,8 +370,14 @@ fun <T> MediaRail(
 
 /**
  * Emits [onLoadMore] when the user is within [buffer] rows of the bottom of a grid.
- * Cancelled automatically with the composition. Only fires once per page because the
- * caller gates on an `isLoadingMore` flag in its ViewModel.
+ * Cancelled automatically with the composition.
+ *
+ * The trigger arms on the viewer's own advance into the bottom window, once per depth:
+ * it never re-arms on a total-items change alone. A load-more footer (or an inline
+ * failure row) toggling changes `totalItemsCount` without any new cells arriving —
+ * and since a de-duplicated page can legitimately add zero visible cells, keying the
+ * re-arm on the total would walk the remaining catalog one request at a time while
+ * the viewer stands still at the bottom.
  */
 @Composable
 fun rememberGridEndlessPaging(
@@ -379,8 +387,12 @@ fun rememberGridEndlessPaging(
 ) {
     val total = gridState.layoutInfo.totalItemsCount
     val lastVisible = gridState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1
+    var lastTriggerAt by remember { mutableIntStateOf(-1) }
     LaunchedEffect(total, lastVisible) {
-        if (total > 0 && lastVisible >= total - buffer) onLoadMore()
+        if (total > 0 && lastVisible >= total - buffer && lastVisible > lastTriggerAt) {
+            lastTriggerAt = total - 1
+            onLoadMore()
+        }
     }
 }
 
