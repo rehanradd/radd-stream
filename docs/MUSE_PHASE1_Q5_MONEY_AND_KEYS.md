@@ -271,9 +271,11 @@ and diff `len(INVARIANTS)`' label set against the audit's sixteen**, not to grep
 lines, and a line-grep is the method that undercounted the CI suites and produced the "98 entries" error below.
 Every figure in this paragraph came from that import, and the count in each slice's checkpoint says so.
 
-**As of slice 7 of the ordinary eight (2026-11-01, q5): 10 of 15 converted, 5 still pinning state** —
-derived by importing the guard (`len(INVARIANTS)` = 104; 6 audit labels still present, one of which is the
-requirement pin kept by design), not incremented from the previous sentence.
+**As of slice 8 — the ordinary eight is COMPLETE (2026-11-01, q5): 11 of 15 converted, 4 still pinning state,
+and all 4 of those are held pending a decision that is not mine** — derived by importing the guard
+(`len(INVARIANTS)` = 104; 5 audit labels still present, one of which is the requirement pin kept by design, the
+other 4 being `one vCPU`, `backend is the running system`, `the named hole: 442 keys / 455 rows` and `residual
+measure under the correct identity`), not incremented from the previous sentence.
 Held, not open — these are *not* mine to close:
 
 | label | why held |
@@ -320,8 +322,14 @@ pins the **display** obligation from the same paragraph ("Do not list it as scra
 propositions that fire alone, instead of one proposition pinned twice. The scheduling clause
 (`periodic metadata top-up`, never as a bulk crawl) was probed, matched, and deliberately unused because it depends
 on the non-enumerable-shelf measurement and would reinstall a timer.)
-**One remains:** `no playable print is resolvable from this host`, targeting
-`Fast_Fetch/SITES.md`, as slice 8. The
+`no playable print is resolvable from this host` (**s8** — the `Fast_Fetch/SITES.md:790` site-inventory cell,
+which was both a routine-bookkeeping timer and a repeat of s7's proposition, replaced by the display obligation it
+had only been summarising: "Do not list it as scraped-and-playable anywhere" (`SITES.md:1242`, inside
+`## 25. TheMovieBox` at :1110). Conversion commit `b0ac12c` on `q5-pin-s8-scraped-playable-20261101`, stacked on s7.
+Write and display now pin two obligations that fire apart; what MovieBox serves *today* is deliberately unpinned,
+because a guard that audits ledgers goes red on true news.)
+**None remain in the ordinary set.** The four surviving state pins are the held rows in the table above, and the
+next step on them belongs to the supervisor and to qoder3, not to another slice of this series. The
 running record, including the duplicate-versus-coverage argument and the escalated `AGENTS.md` release-safety
 finding (owner's decision, untouched by this lane), is
 `Fast_Fetch/checkpoints/20261101-q5-pin-conversions-the-eight-ordinary-slices.md`.
