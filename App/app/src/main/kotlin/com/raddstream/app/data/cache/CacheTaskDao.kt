@@ -39,17 +39,29 @@ interface CacheTaskDao {
     @Query("SELECT * FROM cache_tasks WHERE state IN (:states) ORDER BY enqueueElapsedRealtime ASC")
     suspend fun listByStates(states: List<String>): List<CacheTaskEntity>
 
-    /** Everything the scheduler needs for one tick: non-terminal tasks, best priority first. */
+    /**
+     * Everything the scheduler needs for one tick: non-terminal tasks whose retry backoff has
+     * elapsed, best priority first.
+     *
+     * `nextRetryAtElapsedRealtime` is the absolute uptime the last transient failure parked a task
+     * until ([markFailedWithRetry] writes it, [reResolveWithNewUrl] clears it to 0). It used to be
+     * written and reset but read by no query, so the fixed engine cadence re-resolved a failing
+     * keep on every tick instead of honouring [com.raddstream.app.data.cache.RetryPolicy]'s
+     * 2 s→30 min backoff. A ready task (never backed off, or backoff elapsed) carries 0 and always
+     * satisfies `<= :nowElapsed`; a task still inside its window carries a future stamp and is held
+     * out until [nowElapsed] reaches it.
+     */
     @Query(
         """
         SELECT * FROM cache_tasks
         WHERE state IN ('QUEUED','LOADING','PAUSED','FAILED')
+          AND nextRetryAtElapsedRealtime <= :nowElapsed
         ORDER BY
           CASE priority WHEN 'USER_REQUESTED' THEN 0 ELSE 1 END ASC,
           enqueueElapsedRealtime ASC
         """
     )
-    suspend fun listSchedulable(): List<CacheTaskEntity>
+    suspend fun listSchedulable(nowElapsed: Long): List<CacheTaskEntity>
 
     @Query("SELECT * FROM cache_tasks WHERE state = 'LOADING'")
     suspend fun listLoading(): List<CacheTaskEntity>

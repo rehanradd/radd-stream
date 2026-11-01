@@ -1159,3 +1159,27 @@ Judged hosted-only per the load gate — no VM Gradle: at the re-merged sha the 
 Android `assembleDebug + testDebugUnitTest + lintDebug` runs are reported to the supervisor with
 ids and per-step verdicts. Trunk untouched, no tag, no release, no service restart, no live-tree
 edit, no credential value read or printed.
+
+### Session 38 — q10 sweep #18 (App): the retry backoff stamp is now read by the scheduler (q6 lane, 2026-11-02)
+
+Supervisor task, lane `q6-fix-cache-backoff-20261102`, fresh worktree `/tmp/q6_backoff` off trunk
+`4f47d51`. One item only (findings item 2 / sweep #18); the finalize/COMPLETED path that qoder10's
+#15 fix owns was left untouched.
+
+The offline keep engine pumps `CacheCoordinator.tick()` on a fixed 3-second cadence
+(`CacheEngineRunner` `TICK_MILLIS = 3_000L`). A transient failure routes through `recordRetry`,
+which asks `RetryPolicy` (2 s → 30 min exponential, jittered) for a window and writes it onto the
+row as `nextRetryAtElapsedRealtime` via `CacheTaskDao.markFailedWithRetry`; `reResolveWithNewUrl`
+clears it back to 0. The stamp was written and reset but read by **no** query — `listSchedulable()`
+selected on `state IN ('QUEUED','LOADING','PAUSED','FAILED')` alone — so a failing keep was
+re-resolved every three seconds forever instead of honouring its backoff.
+
+Fix: `listSchedulable` takes `nowElapsed` and adds `AND nextRetryAtElapsedRealtime <= :nowElapsed`;
+a ready row (never backed off, or window elapsed) carries 0 and always qualifies, a row still inside
+its window carries a future stamp and is held out. `tick()` now reads the clock before the query and
+passes it (it already computed `now` and dropped it on the floor). The JVM fake in
+`OfflineCacheWiringTest` mirrors the real query, and a new test proves the symptom end to end: a
+first tick runs one pass and parks the keep under backoff; a second tick at the same clock instant
+does NOT re-run it; after `clock.advanceTo(stamp)` the same row is eligible and the engine resumes
+it. Judged hosted-only (Backend + Android) — no VM Gradle/APK; trunk untouched, no tag, no release,
+no restart, no live-tree edit, no credential value read or printed.

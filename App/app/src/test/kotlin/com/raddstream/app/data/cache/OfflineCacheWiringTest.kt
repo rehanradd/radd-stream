@@ -70,12 +70,12 @@ class OfflineCacheWiringTest {
         override suspend fun listByStates(states: List<String>): List<CacheTaskEntity> =
             rows.values.filter { it.state in states }
 
-        override suspend fun listSchedulable(): List<CacheTaskEntity> =
+        override suspend fun listSchedulable(nowElapsed: Long): List<CacheTaskEntity> =
             rows.values.filter {
                 it.state in setOf(
                     CacheTaskState.QUEUED.name, CacheTaskState.LOADING.name,
                     CacheTaskState.PAUSED.name, CacheTaskState.FAILED.name,
-                )
+                ) && it.nextRetryAtElapsedRealtime <= nowElapsed
             }
 
         override suspend fun listLoading(): List<CacheTaskEntity> =
@@ -290,6 +290,7 @@ class OfflineCacheWiringTest {
         val coordinator: CacheCoordinator,
         val factory: FakeFactory,
         val repository: CacheRepository,
+        val clock: FixedUptimeClock,
     )
 
     private fun wiring(
@@ -323,7 +324,7 @@ class OfflineCacheWiringTest {
         )
         val factory = FakeFactory("https://catalog.test")
         val repository = CacheRepository(coordinator, taskDao, factory, storage, clock)
-        return Wiring(taskDao, fileDao, manifestDao, storage, resolver, ahead, coordinator, factory, repository)
+        return Wiring(taskDao, fileDao, manifestDao, storage, resolver, ahead, coordinator, factory, repository, clock)
     }
 
     /** Let the queued engine pass run to a terminal state on the shared event loop. */
@@ -656,6 +657,41 @@ class OfflineCacheWiringTest {
         assertEquals(before.isComplete, after.isComplete)
         assertEquals(before.isTemporary, after.isTemporary)
         assertEquals(before.sizeBytes, after.sizeBytes)
+    }
+
+    // ── (g) retry backoff is honoured between engine ticks (audit sweep #18) ──────
+
+    @Test
+    fun `a transient failure holds the keep out of the next tick until its backoff elapses`() = runBlocking {
+        val handle = "HDL-17"
+        val w = wiring(coroutineContext, FakeAhead(FetchOutcome.RETRY_LATER))
+        w.taskDao.insertIfAbsent(
+            newTask(handle, id = 600L, state = CacheTaskState.QUEUED, url = "x", downloaded = 10, total = 1000)
+        )
+
+        // First tick: the row is ready (stamp 0), runs one pass, fails transiently, and the real
+        // RetryPolicy stamps it with a future retry time.
+        w.coordinator.tick()
+        awaitPasses(w.ahead, 1)
+        pump()
+        val parked = w.taskDao.getById(600L)!!
+        assertEquals(CacheTaskState.FAILED.name, parked.state)
+        assertTrue("a non-exhausted failure is stamped with a future backoff", parked.nextRetryAtElapsedRealtime > 0L)
+
+        // The engine tick fires again at the SAME clock instant. Before the fix the scheduler read no
+        // stamp and re-resolved the keep every three seconds forever; now the open window holds it
+        // out, so the byte mover is not asked to run again.
+        val passesAfterPark = w.ahead.seenTasks.size
+        w.coordinator.tick()
+        pump()
+        assertEquals("a keep inside its backoff window is not re-run on the next tick",
+            passesAfterPark, w.ahead.seenTasks.size)
+
+        // Once the window elapses the same row is eligible again and the engine resumes it.
+        w.clock.advanceTo(parked.nextRetryAtElapsedRealtime)
+        w.coordinator.tick()
+        awaitPasses(w.ahead, passesAfterPark + 1)
+        assertTrue("past the backoff the eligible keep runs again", w.ahead.seenTasks.size > passesAfterPark)
     }
 
     private companion object {
