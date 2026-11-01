@@ -122,6 +122,48 @@ alternative matcher and make plot search reachable, which is the only part of th
 user can find. I built the index and pinned today's semantics; I did not decide that question by
 editing a WHERE clause.
 
+## The route half, and why I stopped at the index instead of shipping it
+
+The brief names four things for this lane: the virtual table (done), the text in it (done), the ranking,
+and **"the one HTTP route that answers derived text only"**. The route is a decision I am handing up, not
+a file I can write honestly tonight, and the reason is measured rather than stylistic:
+
+**Where the plot text actually lives decides which table gets indexed.** A v1 route answers from `posts`,
+and `posts` has its own `synopsis` column (`fast_fetch.py:948-968`) — while `cat_works.synopsis` is the
+v2 projection's copy. A route that returns v1 rows must match against `posts`, because `_art_pair`,
+`_work_ref` and `_subtitled_posts` all take a post row; feeding them `cat_works.id` would mint handles
+that name a different id space — finding (c) again, one layer up. So the route needs a **posts-side**
+plot index, which step 3 is not: step 3 is the index `catalog_api` already asks for by name, and it is
+the right thing for v2 regardless of what the route does.
+
+**And a posts-side index cannot be shipped unmeasured, because `posts` is written incrementally.** Step 2
+put sync triggers on `posts_fts` precisely because rows arrive one scrape at a time; a second triggered
+index on the same table charges the ingest path again. Step 2's tax is already measured at **5,308 µs/row
+against 412 µs/row** for two short title columns, and `synopsis` is the long column — so a
+`posts_text_fts` with triggers is a *bigger* number than the one already in this file, and measuring it
+means running code against a database. `[q1 REVOCATION]` bars exactly that ("no test modules… light
+only"), and `cpu some avg10 ≈ 99`. Step 2's own discipline was *measure on a copy, then ask*; I will not
+hand the operator a write-path cost I did not measure, and I will not add triggers to `posts` on an
+extrapolation. So step 4 is designed and not shipped.
+
+**Ranking is the same problem one level down.** `bm25()` weights over (title, original_title, synopsis,
+genres) are the obvious shape, and `_relevance()` (`catalog_api.py:1204`) already ranks the LIKE path's
+results by exact/prefix/containment hits. Choosing between them changes which titles surface first for a
+given query — a user-visible decision, and tonight it would be a silent one.
+
+**What I need from Muse, as three one-line rulings:**
+1. Route shape: extend the already-allow-listed `/api/v1/search/by-media` (`viewer.py:3914`, whose
+   `_candidates` clause is `p.clean_title LIKE ? OR p.title LIKE ?` at `media_search.py:169`) with a
+   plot branch, **or** a new `/api/v1/search/by-plot`. My recommendation is the former: it needs no nginx
+   edge change (only exact paths are allow-listed, so a new route is 403 until an owner edits nginx —
+   which also means the route I build tonight is untestable from the app anyway), it already has the
+   three-way honesty report, and q4 is coded against it.
+2. Whether I may measure the `posts_text_fts` trigger cost on a copy when the freeze lifts, before that
+   index ships — i.e. approve step 4 as measure-then-propose rather than approve-a-write-path-cost.
+3. Finding (e): whether the read layer treats `cat_works_fts` as an *alternative* matcher (plot search
+   becomes reachable, result sets and `total_estimate` change) or keeps it as the accelerator it is today
+   (step 3 ships, users see no difference). Either is fine; choosing silently is not.
+
 ## What a reviewer should check first
 
 `plan --with-works-fts` output, then `apply --with-works-fts` **without** `--execute`, then the
