@@ -7,7 +7,7 @@
 
 ## ✅ Open items — index (q3, 2026-10-30; pointers only)
 
-1. **This file is a pointer, not a history.** 68 session files (66 dated + 2 undated) cover
+1. **This file is a pointer, not a history.** 69 session files (67 dated + 2 undated) cover
    2026-10-23 → 2026-11-01,
    every one of them verbatim: [`checkpoints/README.md`](checkpoints/README.md). Nothing was
    deleted, reworded, or summarized. The count is `ls Fast_Fetch/checkpoints/*.md` minus `README.md`,
@@ -74,6 +74,7 @@
 
 Session blocks moved verbatim to [`Fast_Fetch/checkpoints/`](checkpoints/README.md); nothing was deleted or reworded.
 The newest are listed here; `Fast_Fetch/checkpoints/README.md` is the complete index.
+- [Session 2026-11-01 — q6 supervisor lane `[Q6-AUDIT-TID]`: audit critical 6 — one TID, one live claim, across every account](checkpoints/20261101-q6-audit-tid-one-tid-one-live-claim-across-every-account.md)
 - [Session 2026-11-01 — q5 `[Q5-DOCSTRUTH-RELEASE]`: the release row is retired, and the 32,000 B ceiling cannot see the pushes that breach it](checkpoints/20261101-q5-docstruth-release-row-the-ci-blind-spot-and-two-instruments.md)
 
 - [Session 2026-10-30 — q3 `[Q3-OPS-READS]`: JOB A — the operator's own reads are bounded, and the boundary is named in code](checkpoints/20261030-q3-lane-launch-readiness-job-a-the-operators-own-rea.md)

@@ -12,6 +12,8 @@ payment gateway and no TLS, so the ledger's default answer is a claim a human ow
      built by `admin_panel.remote_config`) and the user sends PKR out-of-band;
   2. the user posts the transaction id here — `submit_payment()` — which stores
      it as `pending` against a price the SERVER chose, never one the client sent;
+     a TID that already carries a pending or approved claim is refused (403) on
+     every account — audit critical 6, one TID one live claim, no exception;
   3. the operator reads the SMS and approves or rejects on `/admin/payments`
      (`admin_panel`, loopback only);
   4. approval is what writes `user_accounts.vip_until`. Nothing else does.
@@ -188,6 +190,20 @@ class PaymentRateLimited(accounts.Locked):
     default_detail = "a payment was already submitted for this account"
 
 
+class DuplicatePayment(PaymentError):
+    """Audit critical 6: this transaction id is already on the ledger as a live
+    (pending or approved) claim — for this account or ANY other. The owner's rule
+    is absolute: no family-account exception, one TID one claim, everywhere.
+    `forbidden` (403) is the honest code: the parameters are well-shaped, the
+    server simply will not record the same money twice. The detail names no TID
+    and no other account; a rejected row does not block a re-file, so an honest
+    payer whose claim was wrongly rejected can still try again."""
+
+    code = "forbidden"
+    status = 403
+    default_detail = "that transaction id has already been submitted"
+
+
 class PaymentNotFound(PaymentError):
     """No such ledger row — the identical answer for an id that never existed and
     one another operator already closed, because an operator surface is still not
@@ -352,6 +368,24 @@ def _recent_gap(conn, account_id, now: float) -> float:
     return now - float(row["submitted_at"] or 0)
 
 
+def _tid_already_filed(conn, reference: str) -> bool:
+    """Audit critical 6: is this TID already a live claim on ANY account?
+
+    Compared on `lower(tid)` because the Raast shape is mixed-case alphanumerics
+    and `AbC…`/`abc…` are one bank reference; the digit methods are unaffected.
+    Deliberately no `account_id` filter — the owner's decision is that the same
+    TID is refused across ALL accounts, with no family-account exception. Uses
+    `ux_payment_tid_live` when that guard is installed (accounts.py installs it
+    best-effort, and declines on a ledger that already holds pre-existing
+    duplicates), and is correct without it: the scan is bounded by a ledger the
+    operator closes by hand."""
+    row = conn.execute(
+        "SELECT 1 FROM payment_transactions"
+        " WHERE lower(tid) = lower(?) AND status IN (?, ?) LIMIT 1",
+        (reference, STATUS_PENDING, STATUS_APPROVED)).fetchone()
+    return row is not None
+
+
 def submit_payment(conn_or_path, account_id, *, plan, method, tid,
                    catalog_path=None, now: float | None = None,
                    min_interval: float = PAYMENT_MIN_INTERVAL_SECONDS) -> dict:
@@ -364,10 +398,16 @@ def submit_payment(conn_or_path, account_id, *, plan, method, tid,
     against. A client that sent its own amount got a 400 before reaching here (see
     `accounts_api`).
 
-    Raises `InvalidPayment` (400) for an unknown plan/method or a bad TID shape
-    and `PaymentRateLimited` (429, `Retry-After`) for a second submission inside
-    the window. The rate limit is checked inside the same transaction as the
-    insert, so two parallel POSTs from one account cannot both land."""
+    Raises `InvalidPayment` (400) for an unknown plan/method or a bad TID shape,
+    `DuplicatePayment` (403) when the TID already carries a pending or approved
+    row on ANY account (audit critical 6 — normalised on `lower(tid)`, no
+    family-account exception), and `PaymentRateLimited` (429, `Retry-After`) for
+    a second submission inside the window. The rate limit, the duplicate check
+    and the insert share one IMMEDIATE transaction, so two parallel POSTs —
+    from one account or from two — cannot both land on the same TID; and the
+    partial unique index `ux_payment_tid_live` is the schema backstop: an
+    `IntegrityError` from the insert is answered as the same 403, never as a
+    500."""
     name = _clean_plan(plan)
     way = _clean_method(method)
     reference = _clean_tid(way, tid)
@@ -384,6 +424,10 @@ def submit_payment(conn_or_path, account_id, *, plan, method, tid,
                 if owns:
                     conn.rollback()
                 raise PaymentRateLimited(retry_after=float(min_interval) - gap)
+            if _tid_already_filed(conn, reference):
+                if owns:
+                    conn.rollback()
+                raise DuplicatePayment()
             conn.execute(
                 "INSERT INTO payment_transactions(account_id, plan, amount_pkr,"
                 " method, tid, status, submitted_at)"
@@ -415,6 +459,13 @@ def submit_payment(conn_or_path, account_id, *, plan, method, tid,
                     status = STATUS_PENDING
         except accounts.Locked:
             raise
+        except sqlite3.IntegrityError as error:
+            # The only unique constraint a payment insert can hit is the
+            # live-TID guard: another submit won the race between our check and
+            # our insert. Answer it as the refusal it is, not as a ledger fault.
+            if owns:
+                _rollback(conn)
+            raise DuplicatePayment() from error
         except sqlite3.Error as error:
             if owns:
                 _rollback(conn)
@@ -701,10 +752,12 @@ def verify_merchant_header(headers, *, env=None) -> bool:
 def _rows_for_tid(conn, reference: str) -> list:
     """Every ledger row that carries this TID, oldest claim first.
 
-    A TID has no unique index, and adding one to a live table that may already hold
-    duplicates is a migration, not a `CREATE UNIQUE INDEX` — so the rule is enforced
-    by reading instead: one payment may appear in several claims, and it may buy
-    exactly one of them."""
+    `submit_payment` now refuses a duplicate live claim, and `ux_payment_tid_live`
+    backstops it where the schema could install it — but the guard is best-effort
+    (accounts.py declines on a ledger that predates it with duplicates already in
+    it) and a TID may still legitimately appear as several REJECTED rows plus one
+    live row, so the read rule stays: one payment may appear in several claims,
+    and it may buy exactly one of them."""
     return conn.execute(
         "SELECT %s FROM payment_transactions WHERE tid = ?"
         " ORDER BY submitted_at ASC" % ", ".join(_PAYMENT_COLUMNS),
@@ -1052,9 +1105,12 @@ def _selfcheck() -> int:
                                  amount=200)
             assert not replay["approved"] and replay["reason"] == "already-credited"
             thief = accounts.create_account(conn, key="z" * 20)["account_id"]
-            stolen = submit_payment(conn, thief, plan="vip_monthly",
-                                    method="jazzcash", tid="9823145672")
-            assert stolen["status"] == STATUS_PENDING, stolen
+            try:
+                submit_payment(conn, thief, plan="vip_monthly",
+                               method="jazzcash", tid="9823145672")
+                raise AssertionError("a TID that already bought VIP was filed again")
+            except DuplicatePayment:
+                pass
             late = accounts.create_account(conn, key="w" * 20)["account_id"]
             half = sms_webhook(conn, gateway="easypaisa", tid="9823145673", amount=50)
             assert half["recorded"], half
@@ -1069,7 +1125,8 @@ def _selfcheck() -> int:
                                     amount=1500)
             assert now_claim["approved"] and now_claim["reason"] == "credited", now_claim
         print("[.] payments selfcheck OK — pending, approved, replayed, VIP, and the"
-              " relay credited one claim and refused a replay, a theft and a partial")
+              " relay credited one claim and refused a replay, a stolen TID,"
+              " a duplicate cross-account claim and a partial")
         return 0
 
 

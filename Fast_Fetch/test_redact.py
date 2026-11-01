@@ -707,6 +707,59 @@ class PublicEdgeHttpTests(FixtureMixin):
         self.assertEqual(status, 302)
         self.assertTrue(headers["Location"].startswith("https://pixeldrain.com/"))
 
+    def make_stale_source(self, post_id):
+        """Turn a fixture link into one the v1 resolver answers stale about:
+        a temporary, non-bridge media URL with no hoster branch to re-resolve
+        it. The resolver's legacy contract then returns ``success: True`` with
+        the last known URL and ``stale: True`` — the answer the stream route
+        must refuse. No socket is opened: the URL matches no known hoster."""
+        sid = self.source_id(post_id)
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                "UPDATE download_sources SET service = 'generic_cdn', "
+                "source_url = 'https://media.example.test/film.mp4?token=old', "
+                "final_url = 'https://media.example.test/film.mp4?token=old', "
+                "is_temporary = 1, last_checked_at = NULL, expires_at = NULL, "
+                "status = 'active' WHERE id = ?", (sid,))
+            conn.commit()
+        return sid
+
+    def test_a_stale_re_resolve_is_not_a_stream_redirect(self):
+        """Audit critical 2: when re-resolve fails, the v1 resolver still says
+        success and names the last URL, flagged stale. The stream route must not
+        302 a player at it — an expired token is a broken playback, not a
+        playback — and must answer the download route's refusal instead."""
+        sid = self.make_stale_source(self.post_id)
+        res = fast_fetch.resolve_live_source(sid)
+        self.assertTrue(res["success"] and res.get("stale"),
+                        "fixture must reproduce the v1 stale answer: " + str(res))
+        handle = redact.mint_token(sid, viewer.signing_secret())
+        status, headers, body = self.get(f"/api/v1/stream?id={handle}",
+                                         self.public_port)
+        self.assertEqual(status, 404, body)
+        self.assertNotIn("Location", headers, "a stale URL must never be redirected to")
+        self.assertEqual(json.loads(body),
+                         {"success": False, "error": "no_playable_source"})
+        for needle in ("media.example.test", "token=old"):
+            self.assertNotIn(needle, body, "the refusal must not quote the dead URL")
+
+    def test_stale_refusal_covers_json_mode_and_shows_the_operator_the_truth(self):
+        sid = self.make_stale_source(self.post_id)
+        handle = redact.mint_token(sid, viewer.signing_secret())
+        status, _, body = self.get(f"/api/v1/stream?id={handle}&redirect=0",
+                                   self.public_port)
+        self.assertEqual(status, 404, body)
+        self.assertEqual(json.loads(body),
+                         {"success": False, "error": "no_playable_source"})
+        status, _, body = self.get(f"/api/v1/stream?id={sid}", self.operator_port)
+        self.assertEqual(status, 404, body)
+        payload = json.loads(body)
+        self.assertFalse(payload["success"])
+        self.assertTrue(payload.get("stale"),
+                        "healing reads the operator body; it must say stale")
+        self.assertEqual(payload.get("url"),
+                         "https://media.example.test/film.mp4?token=old")
+
     def test_row_ids_are_not_addresses_the_public_can_walk(self):
         """`1..3,070,247` is every link we own. A caller who could use a bare row
         id would harvest the whole library without our API ever naming a hoster,
