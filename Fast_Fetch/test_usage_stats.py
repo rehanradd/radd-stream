@@ -655,9 +655,11 @@ class PaymentsCounterTests(TempLedger):
 
     def file(self, plan, label):
         created = accounts.create_account(self.ledger, key=sync_key(label))
+        # One distinct TID per label: audit critical 6 refuses a second live
+        # claim on the same transaction id, across every account.
         return payments.submit_payment(self.ledger, created["account_id"],
                                        plan=plan, method="jazzcash",
-                                       tid="12345678%02d" % (len(label) + 10),
+                                       tid="12345678%02d" % (ord(str(label)[-1]) - 96),
                                        now=NOW)
 
     def test_approved_purchases_split_by_tier_and_sum_the_money(self):

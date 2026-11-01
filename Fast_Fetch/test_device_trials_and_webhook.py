@@ -175,13 +175,26 @@ class TrialLedgerSchema(Fixture):
         self.assertEqual(sorted(name for name, pk in keys.items() if pk),
                          ["gateway", "tid"])
 
-    def test_a_tid_has_no_unique_index_because_one_payment_can_be_claimed_twice(self):
-        # The rule is enforced by reading (`_claim_already_credited`), not by a
-        # constraint a live table may already violate.
+    def test_the_live_tid_guard_is_one_partial_unique_index_and_nothing_else(self):
+        # Audit critical 6: the table itself stays UNIQUE-free (a live ledger may
+        # hold legacy duplicates, and the guard is installed best-effort by
+        # `_install_live_tid_guard`), but on any ledger without pre-existing
+        # duplicates exactly one partial unique index exists — over `lower(tid)`,
+        # scoped to the statuses that still hold money (`pending`/`approved`) —
+        # and read-enforcement in `submit_payment` works with or without it.
         indexed = self.conn.execute(
-            "SELECT sql FROM sqlite_master WHERE type IN ('index','table')"
+            "SELECT name, sql FROM sqlite_master WHERE type IN ('index','table')"
             " AND tbl_name = 'payment_transactions'").fetchall()
-        self.assertNotIn("UNIQUE", " ".join(str(row[0] or "") for row in indexed))
+        table_sql = " ".join(str(sql or "") for name, sql in indexed
+                             if name == "payment_transactions")
+        self.assertNotIn("UNIQUE", table_sql)
+        guards = [str(sql or "") for name, sql in indexed
+                  if "UNIQUE" in str(sql or "")]
+        self.assertEqual(len(guards), 1, guards)
+        self.assertIn("ux_payment_tid_live", guards[0])
+        self.assertIn("lower(tid)", guards[0])
+        self.assertIn("pending", guards[0])
+        self.assertIn("approved", guards[0])
 
     def test_the_profile_columns_are_additive_on_an_older_database(self):
         """A `user_state.db` written before this release must gain the four columns
@@ -767,10 +780,13 @@ class RelayCredits(Fixture):
         self.assertFalse(replay["approved"])
         self.assertEqual(replay["reason"], "already-credited")
         thief = self.trial(OTHER_DEVICE, now=NOW + DAY)
-        stolen = payments.submit_payment(self.conn, thief["account_id"],
-                                         plan="vip_monthly", method="jazzcash",
-                                         tid=JAZZ_TID, catalog_path=self.catalog)
-        self.assertEqual(stolen["status"], payments.STATUS_PENDING, stolen)
+        # Audit critical 6 (owner decision, no family-account exception): a TID
+        # that already bought VIP is not filed as a second claim at all — the
+        # submit itself is refused, cross-account and normalised.
+        with self.assertRaises(payments.DuplicatePayment):
+            payments.submit_payment(self.conn, thief["account_id"],
+                                    plan="vip_monthly", method="jazzcash",
+                                    tid=JAZZ_TID, catalog_path=self.catalog)
         self.assertTrue(self.column(thief["account_id"], "vip_until") <=
                         thief["vip_until"])
         self.assertFalse(payments.unclaimed_credits(self.conn))
