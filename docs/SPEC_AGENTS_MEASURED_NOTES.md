@@ -98,3 +98,38 @@ git tag v1.0.0
 #    a token in a URL is the leak this rule exists to prevent.)
 git push https://github.com/rehanradd/radd-stream.git v1.0.0
 # → GitHub Actions builds signed APK + creates Release automatically
+
+## Re-measured 2026-11-01 against the anonymous API: that last arrow has never fired
+
+Lines 88–100 above are kept as the dated 2026-10-30 measurement they are. Their ending claim —
+"builds signed APK + creates Release automatically" — is not a prediction that came true, and the
+root `AGENTS.md` "Release signing" row asserted it anyway. Every number below is a read, not a
+recollection; each is reproducible with the command printed under it.
+
+| run | date (UTC) | trigger | failing step |
+|---|---|---|---|
+| `40876596427` | 2026-10-29 12:50 | `workflow_dispatch` @ `35f9e89` | 🗝️ Verify signing secrets are present |
+| `41102348096` | 2026-10-30 17:54 | push @ `14ecb57` | 🧪 Unit tests gate the release |
+| `41104217171` | 2026-10-30 18:07 | push @ `6a441ec` | 🏗️ Build signed release APK + AAB |
+| `41104231187` | 2026-10-30 18:08 | `workflow_dispatch` @ `6a441ec` | 🏗️ Build signed release APK + AAB |
+| `41233720264` | 2026-10-31 19:20 | tag `v1.0.1` @ `0a1894d` | 🏗️ Build signed release APK + AAB |
+
+- `GET /repos/rehanradd/radd-stream/actions/workflows/398476978/runs` → `total_count: 5`, every one
+  `completed / failure`. **No signed APK or AAB has ever been produced by this repo.**
+- `GET /repos/.../releases` → `[]` (zero). `GET /repos/.../tags` → `v1.0.1`, `v1.0.0` (two).
+  So `https://github.com/rehanradd/radd-stream/releases` publishes nothing, and a table row or a
+  download link that points a user there is sending them to an empty page.
+- The secrets themselves are configured — proven by execution, not by a listing I cannot read
+  anonymously (`GET /repos/.../actions/secrets` → `401` without a token): on `41233720264` the step
+  `🗝️ Verify signing secrets are present (fail loudly if not)` is `success`, every step through the
+  unit-test gate is `success`, and the job dies at the build step. That is the difference between "absent" (the 2026-10-29 state, first row
+  of the table) and "present but unusable" (every state since `41104217171`).
+- Read any of this yourself with:
+  `curl -s https://api.github.com/repos/rehanradd/radd-stream/actions/runs/<id>/jobs`, then print the
+  steps whose `conclusion` is `failure`. Job logs are `403` anonymously, so the step name is the
+  deepest anonymous proof — the base64 exception text behind the build-step failures is quoted in
+  root `AGENTS.md` §Secrets from the supervisor's read of the log, not from mine.
+- What a lane may say today: installable bytes are the **debug** APK artifact uploaded by
+  `🔨 CI — Android Build & Test`. Do not call it a release, and do not re-cut or move a tag to make
+  the row true — the tag is the owner's, and the fix is re-entering `KEYSTORE_BASE64` with its
+  padding intact.

@@ -121,10 +121,10 @@ Describe the code's behavior accurately to users and tools. Do not disguise its 
 |---|---|---|
 | `GITHUB_TOKEN` | Replit Configurations (environment variable; user says not Secrets) | GitHub access from Replit; use the temporary Git askpass flow in `ORACLE_DEPLOYMENT.md` |
 | `ORACLE_SSH_KEY` | Replit Configurations (environment variable; user says not Secrets) | SSH private key for `ubuntu@92.4.95.252`; use only via a temporary 0600 file |
-| `KEYSTORE_BASE64` | ✅ **CONFIGURED & ACTIVE** (measured 2026-10-30) | Android signing keystore (base64 encoded) |
-| `KEY_STORE_PASSWORD` | ✅ **CONFIGURED & ACTIVE** (measured 2026-10-30) | Keystore file password |
-| `KEY_ALIAS` | ✅ **CONFIGURED & ACTIVE** (measured 2026-10-30) | Key alias inside keystore (`raddstream`) |
-| `KEY_PASSWORD` | ✅ **CONFIGURED & ACTIVE** (measured 2026-10-30) | Key password |
+| `KEYSTORE_BASE64` | ⚠️ **CONFIGURED; build step fails** (run 41233720264) | Android signing keystore (base64 encoded) |
+| `KEY_STORE_PASSWORD` | ⚠️ **CONFIGURED, never exercised** | Keystore file password |
+| `KEY_ALIAS` | ⚠️ **CONFIGURED, never exercised** | Key alias inside keystore (`raddstream`) |
+| `KEY_PASSWORD` | ⚠️ **CONFIGURED, never exercised** | Key password |
 
 **Measured 2026-10-29 17:55 — this retires the claim that the four keystore variables are "GitHub
 Repo Secrets".** `GET /repos/rehanradd/radd-stream/actions/secrets` returns
@@ -143,7 +143,7 @@ and there is no installed base to protect yet, so the owner's key is the only co
 every green run (`📤 Upload debug APK` succeeded at `2caadb3`) — debug-signed and installable for the
 device verification every doc still marks "pending".
 
-**UPDATE (Measured 2026-10-30 22:53, then re-measured 2026-10-31 07:5x):** All four release signing secrets (`KEYSTORE_BASE64`, `KEY_ALIAS`, `KEY_PASSWORD`, `KEY_STORE_PASSWORD`) were generated, backed up on Oracle VM (`/home/ubuntu/raddstream-release.jks`), and configured in GitHub Actions Secrets by the repository owner. **That half is confirmed by execution:** the release run at the tag (`41104217171`) cleared `🗝️ Verify signing secrets are present` at `18:08:05Z` — the preflight that killed the 2026-10-29 attempt in 10 s. **The rest of that sentence was false and is retired:** the workflow is *not* "producing signed release artifacts". Measured on the API: `GET /releases` returns `[]`, all four release runs in history are `failure`, and `tag v1.0.0` resolves to commit `6a441ec77` — a trunk point that predates the adult merge-time fold (`4a8c163`), so re-running that tag would ship pre-law code. **No signed APK or AAB has ever existed for this product.** The cause is now read from the run log, not guessed: `java.lang.IllegalArgumentException: Last unit does not have enough valid bits` at `App/app/build.gradle.kts:120`, `BUILD FAILED in 4s` — it died during *configuration*, in `signingConfigs`, before any Kotlin compiled. That exception is `java.util.Base64.getDecoder()` refusing the **stored `KEYSTORE_BASE64` value**, whose length is not a clean base64 quantum (padding lost in the paste); the keystore itself is sound — re-encoding `/home/ubuntu/raddstream-release.jks` (2,752 bytes → 3,672 chars, ends `==`) round-trips strictly. So the fix is owner-side secret re-entry, **not** a build-script edit, and the `android.util.Base64` story in §10 was never what this file runs. **Moving or re-cutting a tag is an owner action: no agent may create, move or delete a tag.**
+**UPDATE (Measured 2026-10-30 22:53, then re-measured 2026-10-31 07:5x):** All four release signing secrets (`KEYSTORE_BASE64`, `KEY_ALIAS`, `KEY_PASSWORD`, `KEY_STORE_PASSWORD`) were generated, backed up on Oracle VM (`/home/ubuntu/raddstream-release.jks`), and configured in GitHub Actions Secrets by the repository owner. **That half is confirmed by execution:** the release run at the tag (`41104217171`) cleared `🗝️ Verify signing secrets are present` at `18:08:05Z` — the preflight that killed the 2026-10-29 attempt in 10 s. **The rest of that sentence was false and is retired:** the workflow is *not* "producing signed release artifacts". Measured on the API: `GET /releases` returns `[]`, all five release runs in history are `failure`, and `tag v1.0.0` resolves to commit `6a441ec77` — a trunk point that predates the adult merge-time fold (`4a8c163`), so re-running that tag would ship pre-law code. **No signed APK or AAB has ever existed for this product.** The cause is now read from the run log, not guessed: `java.lang.IllegalArgumentException: Last unit does not have enough valid bits` at `App/app/build.gradle.kts:120`, `BUILD FAILED in 4s` — it died during *configuration*, in `signingConfigs`, before any Kotlin compiled. That exception is `java.util.Base64.getDecoder()` refusing the **stored `KEYSTORE_BASE64` value**, whose length is not a clean base64 quantum (padding lost in the paste); the keystore itself is sound — re-encoding `/home/ubuntu/raddstream-release.jks` (2,752 bytes → 3,672 chars, ends `==`) round-trips strictly. So the fix is owner-side secret re-entry, **not** a build-script edit, and the `android.util.Base64` story in §10 was never what this file runs. **Moving or re-cutting a tag is an owner action: no agent may create, move or delete a tag.**
 
 **Backend agents**: use `GITHUB_TOKEN` for GitHub operations and `ORACLE_SSH_KEY` only when connecting to Oracle. Read [`ORACLE_DEPLOYMENT.md`](ORACLE_DEPLOYMENT.md) first.
 **App agents**: the debug build needs no secrets; the *signed release* needs the 4 keystore secrets above **and** a release workflow that builds — which it does not have. A task that needs an installable build today takes the **debug APK** from `🔨 CI — Android Build & Test`.
@@ -253,7 +253,7 @@ older draft and a "green" from it is a weaker claim than CI's. The measurement t
 | Android App: server setup, metadata catalog, search | ✅ Implemented; device verification pending | Phase 1 |
 | Android App: details and playback | ✅ Implemented (Media3 playback, favorites, keeps, VIP screen); device verification pending | Phase 2 |
 | GitHub Actions | ✅ **Enabled and running** — `/actions/permissions` → `{"enabled": true, "allowed_actions": "all"}`; all three repo-root workflows are `state=active`, and the never-discovered duplicates under `App/.github/workflows` have been deleted (a PR gate exists: `ci.yml:57`, `backend-ci.yml:113`, `raddrelay-ci.yml:37` all carry `pull_request`). The retired "disabled at the account level" claim and the full CI-health measurement history (per-sha run verdicts on both trunk refs, the Android `unfed-not-red` misdiagnosis, the Robolectric #9166 trap) are in [`docs/SPEC_AGENTS_MEASURED_NOTES.md`](docs/SPEC_AGENTS_MEASURED_NOTES.md). | Gate is live |
-| Release signing | ✅ **Active & Configured** — All 4 keystore secrets verified; tag `v1.0.0` pushed and signed release pipeline active. Release artifacts published at `https://github.com/rehanradd/radd-stream/releases`. | Live |
+| Release signing | ❌ **Secrets configured, nothing signed** — run `41233720264`: the secrets preflight passes, the build step fails; `GET /releases` is `[]` (tags `v1.0.0`, `v1.0.1`). Installable bytes = the CI debug APK. Per-run receipts: `docs/SPEC_AGENTS_MEASURED_NOTES.md`. | Owner |
 
 The current Oracle host and its HTTP-only limitations are documented in
 [`ORACLE_DEPLOYMENT.md`](ORACLE_DEPLOYMENT.md). The backend is **already deployed there and is the
@@ -320,13 +320,13 @@ python Fast_Fetch/fast_fetch.py search "Inception"
 # GitHub only discovers workflows under the repository-root .github/workflows/. The duplicates
 # that used to sit under App/.github/workflows were never discovered and are now deleted.
 #
-# ⛔ NO AGENT CREATES OR PUSHES A TAG. tags: [] and releases: [] are measured empty and
-# /actions/secrets returns [], so a release run cannot succeed today — the owner adds the four
-# keystore secrets and tags. The historical tag procedure and why `origin`'s URL is no longer the
-# reason to avoid it: docs/SPEC_AGENTS_MEASURED_NOTES.md.
+# ⛔ NO AGENT CREATES OR PUSHES A TAG. tags v1.0.0 + v1.0.1 exist and the four secrets are
+# configured (run 41233720264's preflight passes), yet GET /releases is []: all five release runs
+# failed — one at the preflight, one at the unit-test gate, three at the build step. A tag today
+# publishes nothing. Per-run receipts: docs/SPEC_AGENTS_MEASURED_NOTES.md.
 
 # Download APK: github.com/rehanradd/radd-stream/actions (debug)
-#               github.com/rehanradd/radd-stream/releases (release)
+#               /releases — measured empty
 ```
 
 ---

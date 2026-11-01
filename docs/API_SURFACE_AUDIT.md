@@ -80,7 +80,7 @@ directly; `8081` is the operator port.
 
 | Path | `:8080` (public app) | `:8081` (operator) | Edge |
 |---|---|---|---|
-| `/` | 1,355 B page | **46,476 B dashboard, no token** | code-server |
+| `/` | 1,355 B page | **46,476 B dashboard, no token** *(this column is the 2026-10-29 05:47 read; the page is data-dependent, so re-measure before quoting it as current)* | code-server |
 | `/client` | 20,510 B PWA | — | 401 (code-server) |
 | `/admin` | — | **401 without `RADD_ADMIN_TOKEN`** | 401 |
 | `/api/v1/rules` | 404 | **200** | 403 |
