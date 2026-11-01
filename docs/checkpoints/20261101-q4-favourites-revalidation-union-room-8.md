@@ -101,3 +101,43 @@ Hosted `🔨 CI — Android Build & Test` is the only judge available and the on
 is appended to this entry once read. Local `testDebugUnitTest` is impossible on this host, and the
 two Robolectric suites remain excluded on aarch64 (robolectric/robolectric#9166), which is why the
 surfaces are guarded as text.
+
+## The verdict is NOT read: this branch cannot be pushed, measured 2026-11-01
+
+Two attempts, both with the sanctioned flow (`GIT_ASKPASS=/home/ubuntu/bin/git-askpass.sh`,
+`GIT_TERMINAL_PROMPT=0`, explicit clean URL `https://github.com/rehanradd/radd-stream.git`, never
+`origin`), both against `refs/heads/q4-fav-revalidation-v8-c2528e1`:
+
+```
+remote: Invalid username or token. Password authentication is not supported for Git operations.
+fatal: Authentication failed for 'https://github.com/rehanradd/radd-stream.git/'
+```
+
+The credential is not merely unblessed for this ref: **the same helper, the same clean URL, the same
+session pushed `380d148` earlier the same day**, and it is verifiably still there
+(`refs/heads/q4-update-banner-questions-c2528e1 = 380d1481a96085f6c670530f658e066be494b12c`, read with
+`git ls-remote --heads`). So the write path went bad between the two pushes rather than never having
+worked. `git ls-remote` answering 200 proves nothing here — a public repo serves anonymous reads, and
+this repo's own history already records that conclusion (`bf9e565`: "a public repo's green ls-remote
+is not write access").
+
+What was **not** done to work around it, deliberately: no push to `origin` (its stored remote URL
+still embeds the owner's unrevoked token), no token in a URL, argv, file or log, no credential read
+or print, no second credential (q1 reported its own write credential blocked the same morning, so
+this is a repo-wide state, not my lane's config), no retry beyond those two attempts, no force-push,
+no merge, no tag. `53767c3` is therefore **local-only and unjudged**: the compile risk this union
+carries — `583fd54` alone was 35 errors — has had no verdict, and I do not claim one.
+
+**Recovery:** the commit is exported outside the repo tree so it survives a worktree cleanup while the
+credential is out —
+`/home/ubuntu/q4-recovery/q4-fav-revalidation-v8-53767c3.bundle` (31,849 bytes, `git bundle verify`
+clean: tip `53767c347d4e9a4b41bcd648120eee38b636db10`, prerequisite `c2528e10d72fdd901fa017b9952af262ba769f33`).
+Restoring it into any clone of trunk is one command, and pushing it later is one more:
+`GIT_ASKPASS=/home/ubuntu/bin/git-askpass.sh GIT_TERMINAL_PROMPT=0 git push <clean URL> HEAD:refs/heads/q4-fav-revalidation-v8-c2528e1`
+then read `/repos/rehanradd/radd-stream/commits/<sha>/check-runs`. **Gate order stays q1's call.**
+
+## One correction to `53767c3`'s message
+
+Its body line 42 reads `NO GUIN PIN COVERS IT`; the intended phrase is **no *guard* pin covers it** —
+`AdultListingGuardTest` does not pin the two doors that section lists. The commit is not amended for
+a typo (never amend; the correction belongs beside it, which is what this entry is).
