@@ -166,3 +166,61 @@ of this task and 7.52 at the end, above the bar. The pointer indexes named in th
 still at their ceilings, which is why this entry is appended to *this* lane's own archive file instead of
 written to `docs/SESSION_CHECKPOINT.md` or root `AGENTS.md`: `Fast_Fetch/CONTINUITY.md` stays at 11,970
 bytes of a 12,000-byte cap and its session-file count is unchanged here, because no new file was added.
+
+---
+
+## Follow-up, same lane, 15:5x — gate-preview verdict on qoder3's `1fbc080` (`q3-reason-law-on-c2528e1`)
+
+Read-only git plus three offline Python modules. **No Gradle** (load1 6.5–7.8 throughout, above the bar);
+no push, no trunk merge, no local-master merge, no tag, no restart, no production DB write, no catalog
+merge, no credential read or retry. The branch was already in this repo's object store, so nothing was
+fetched, and the throwaway worktree `/tmp/q1_preview_q3` is a detached checkout of `1fbc080` only — it was
+`git merge --abort`-ed back to 0 dirty paths after every merge trial.
+
+**Scope, measured.** 2 commits, 4 files, **backend-only**: `Fast_Fetch/test_coins_engine.py` (+107),
+`Fast_Fetch/CONTINUITY.md` (1 line), `Fast_Fetch/checkpoints/README.md` (+1 index line), and 1 new archive
+file (122 lines). `git diff --name-only c2528e1..1fbc080` filtered for anything outside `Fast_Fetch/`
+prints nothing, and filtering out `test_`/`checkpoints/`/`CONTINUITY` prints nothing either — so **no
+production source changed**. The changed module is CI-registered at its own head
+(`backend-ci.yml:371-372`), which is what makes a test-only branch gateable at all.
+
+**Evidence obtained without a build.** At `1fbc080` itself: `test_coins_engine.py` → **Ran 40 tests, OK,
+`rc=0`** in 30.1 s (36 defs at trunk → **+4 executed cases**, the four reason-law pins);
+`test_docs_invariants.py` → **22 tests, OK**, so the branch's own index edits satisfy the authoritative
+guard at the sha that carries them.
+
+**One debt q3 handed to q1, and it is real.** `test_engagement.py` exists at this head with **25** test
+defs and passes when run directly (`rc=0`, "OK"), but `grep -E 'test_engagement\.py'` over
+`backend-ci.yml` at `1fbc080` finds **nothing** — only `test_engagement_ladder.py` is registered
+(`:304-305`). So those 25 tests execute in no CI run. Fixing it means one step in
+`.github/workflows/backend-ci.yml`, which is a CI-file change and therefore its own gate, not a favour
+folded into this branch. Registered module total at this head: **41** one-per-invocation steps.
+
+**The finding that matters is a sequencing one.** `1fbc080` is **FF-able onto trunk `c2528e1` today**
+(`merge-base --is-ancestor` says so), and I tried it against each queued head:
+
+| merged with | result | conflicted files |
+|---|---|---|
+| my preview `cdbb763` | `rc=1` conflict | `Fast_Fetch/CONTINUITY.md`, `Fast_Fetch/checkpoints/README.md` |
+| q2 `f294bee` | `rc=1` conflict | the same two index files |
+| q5 `c0e86e5` | **`rc=0`, clean** | none — **and the result is wrong** |
+
+That last row is the reason this preview exists. The clean merge leaves the count line at
+**"69 session files"** while the merged directory holds **70**, and the guard fails it exactly as predicted:
+`AssertionError: 69 != 70 : Fast_Fetch/CONTINUITY.md claims 69 archive files, Fast_Fetch/checkpoints holds
+70` (`FAILED (failures=1)`, 22 tests run). **A conflict-free merge here produces a CI-red tree** — the
+conflict is the *lucky* case, because it forces a human to look.
+
+**The resolution recipe, with the union re-counted from the directory rather than from either side.**
+The archive union is **74 entries incl `README.md` = 73 session files (71 dated + 2 undated)**; 4 files are
+unique to my preview, 1 to the reason-law branch. `CONTINUITY.md` takes the re-counted digits (a digit
+swap is byte-neutral, so the 12,000 B / 120-line pointer cap stays intact — measured 11,970 B on my side),
+and `checkpoints/README.md` keeps **both** newest-first lines, `20261101-15xx-q3…` above
+`20261101-12xx-q1…`. Neither pointer cap covers that README: `ByteBudgetTests.CEILINGS` is
+`{ROOT_AGENTS: 32_000, FF_AGENTS: 18_000, APP_AGENTS: 15_000}` and `test_session_logs_are_indexes_not_archives`
+lists only `CONTINUITY` and `CHECKPOINT` at 12,000 B / 120 lines.
+
+**Recommendation to the gate, in one line: land `1fbc080` first.** While trunk is still `c2528e1` it is a
+zero-conflict fast-forward whose evidence sits at its own sha; landing it after the q2+q5 preview instead
+guarantees the same two-file index conflict twice over. Then re-preview the q2+q5 chain on top of it and
+do the union re-count **once**, in a sha I gate and measure — never by picking one side of a stale number.
