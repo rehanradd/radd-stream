@@ -150,6 +150,35 @@ refusal it uses for a client-supplied price, and (c) that **no handler on the pu
 multipart** — grep the dispatch table, don't trust the docs table. Positive control: a fixture that
 plants a `read(length)` on that route must be caught.
 
+> **Written, registered, and it changed the finding — 2026-11-01 06:3x (q5).**
+> `Fast_Fetch/test_clip_bytes_guard.py`, 8 tests, step `🧪 test_clip_bytes_guard.py`. What the source said
+> when I read it instead of predicting it: there are exactly **three** body reads in the modules that
+> mount HTTP — `viewer.py:3529` and `viewer.py:4170` (both operator-port form paths, both clamped with
+> `max(0, min(length, api_v2.MAX_BODY_BYTES))`) and `api_v2.py:1629` inside `read_body`, which rejects at
+> `:1627` *before* reading, so an oversized body costs zero socket bytes — the difference between a cap
+> and a ceiling you paid to find. My (a)/(b)/(c) framing was wrong in its shape: the public by-media route
+> never reads a body at all, so there is nothing there to refuse; the refusal is `read_body`'s JSON shape
+> check, which rejects `image/jpeg`, `multipart/form-data` and a raw clip POST alike.
+>
+> **The finding, and it is the reason this section was rewritten: the 64 KiB ceiling is NOT the compliance
+> boundary.** `MAX_BODY_BYTES = 64 * 1024` (`api_v2.py:117`), and a 320x180 JPEG keyframe base64s to
+> roughly 8–20 KB — it fits, it is valid JSON, and `read_body` hands it back as a dict. The clip rule is
+> therefore enforced by a **field allow-list in the route that does not exist yet** (q3 owns it), not by
+> anything in this file. That is pinned by a test which *passes today* on purpose
+> (`test_a_small_base64_frame_inside_a_json_object_is_parsed_today`), so nobody can mark G2 satisfied by
+> citing the cap; if a real allow-list later flips it to a refusal, the test tells you and the message
+> tells you to update this doc.
+>
+> Scope decision, recorded because a guard's exclusions are where it lies: the by-name scan covers
+> `viewer.py`, `api_v2.py`, `media_search.py`, `admin_panel.py`, `accounts_api.py` — not all of
+> `Fast_Fetch/*.py`. A repo-wide scan hits `importers/import_filmiyin.py:659`, `elif "screenshot" in src`,
+> which names a *link* off its URL and carries no request field. Flagging it would have bought a blanket
+> exclusion; the honest alternative was to narrow the scanned set and say why.
+>
+> Cost honesty: written under the LIGHT-ONLY freeze, so **the hosted step is this module's first
+> execution** — no local run, and every claim above is a read off the source at the sha.
+
+
 **G3 — the law the spec forgot: the new corpus must carry the adult clause.** Today's route already
 does: `media_search.py:168` builds `WHERE {redact.adult_clause('p')}` and `:388` projects rows through
 `redact.project(r, "post_brief")`. An FTS5 virtual table does **not** inherit either: if Phase 3 populates
