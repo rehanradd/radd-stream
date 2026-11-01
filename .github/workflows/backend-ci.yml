@@ -444,3 +444,10 @@ jobs:
       # allow-list, which does not exist yet and belongs to q3.
       - name: 🧪 test_clip_bytes_guard.py
         run: python3 -S Fast_Fetch/test_clip_bytes_guard.py
+      # The executable half of the money-and-keys verdict: handle shapes, refusal uniformity, the public
+      # port's bare-integer refusal, and KD-1 demonstrated offline (one known pair recovers the fixed pad
+      # and reads another row's id — while a forgery from that pad is still refused). No behaviour changed,
+      # no socket, no production database; the two tests that pin a hole pass today on purpose, in the
+      # `test_clip_bytes_guard.py` style, so a green run is never read as "safe".
+      - name: 🧪 test_handle_provenance.py
+        run: python3 -S Fast_Fetch/test_handle_provenance.py
