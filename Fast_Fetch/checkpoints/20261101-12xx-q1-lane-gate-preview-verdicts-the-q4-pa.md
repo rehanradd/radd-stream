@@ -303,3 +303,56 @@ steps at trunk, so trunk expects them present. And it is not a scheduled risk: `
 → `Restart=on-failure`, `RestartUSec=5s`, `NRestarts=1`, with an OOM death-and-restart already in the
 record. An unattended crash re-executes the stale tree inside five seconds, past every gate. **Owner-held
 by ruling; I do not checkout/reset that tree and do not restart the service.**
+
+## 16:58 — the pre-flight I owed the supervisor, with my own evidence split stated
+
+Trunk read back unchanged: `refs/heads/main` = `refs/heads/master` = **`c2528e1`**. No gate, no tag, no
+trunk write, no restart — the 16:55 ruling still holds. My local `b49423c` stays **unpushed on purpose**:
+a store-authenticated push rewrites `~/.git-credentials`, which every lane running as `ubuntu` shares,
+while qoder5 is mid-refusal.
+
+**What I re-measured, and what I could not.** I re-fetched the check-runs for all seven candidate shas
+and this time *persisted the payloads* (`/tmp/q1_cr_*.json`), because the first pre-flight only printed.
+Conclusions, all `completed`: `1fbc080` success · `f294bee` success · `718a8ef` success · `ede66f4`
+success · `e6e55f5` success · `a5c5805` failure · `bba6b5b` **`total_count: 0` — no check run, so CI has
+never looked at it and it is not gate-ready**.
+
+Then I hit the wall that this lane exists to watch for: **`/actions/runs?head_sha=<sha>` answers
+`total_count: 0` anonymously** for six shas that demonstrably *have* check-runs. A filtered-empty list is
+the same trap `AGENTS.md` already records for `backend-ci.yml` path filters, and this time it was my own
+query, not the workflow's `paths:`. So run ids cannot come from that endpoint, and run ids are what the
+**jobs** endpoint — the only place step counts live — needs. My anonymous quota then hit `remaining: 0`
+(reset 12:28:26Z), so step counts are currently unobtainable.
+
+**The consequence, stated against myself.** The `46 / 47 / 14 / 14` step counts in my 16:5x pre-flight were
+printed to the terminal from live calls and never written to disk. They are **not evidence** and I am not
+repeating them as such. The two shas whose step counts I can re-read from a saved artifact right now are:
+
+| sha | run | steps | source I can re-open |
+|---|---|---|---|
+| `e6e55f5` (my 50-module preview) | 41302131938 | **50 success / 0 failure / 0 skipped** | `/tmp/q1_greenjob.json` |
+| `a5c5805` (q2+q5 union) | 41301976124 | **16 / 1 / 33 of 50** | `/tmp/q1_redjob.json` |
+
+**That pair is the #53 finding, and it is now sharper than it was.** `e6e55f5` is `a5c5805` plus one docs
+commit under `Fast_Fetch/checkpoints/` — the same 46 offline modules, the same code. `a5c5805` ran
+11:27:42→11:28:10 and **failed**; `e6e55f5` ran 11:29:58→11:31:41, ninety seconds later, and passed 50/50.
+A docs-only diff is a natural experiment, and the only variable was the run. This is the evidence for the
+supervisor's own rule — *no gate on a single sample* — and for keeping `test_provenance_stamping.py` filed
+as CI-nondeterministic rather than as broken code (it is clock-free: `grep -E "time\.|datetime|utcnow|
+monotonic|now\(\)|sleep|mktime"` over its 294 lines returns **nothing**; and it re-ran 12/12 `rc=0` here).
+
+**Lint: the window opened and I still did not take it.** The monitor reported `load1=3.60 load5=3.83` under
+4.0 for five straight minutes (`mem_avail=2733M swap_free=3035M`) — the supervisor's stated bar, so the
+ruling would permit a start. I declined anyway, and the reason is arithmetic, not caution: my kill-guard
+fires at 3.9, which is **0.3 above the ambient load**, and in all three prior attempts the load that tripped
+it was substantially produced by my own daemon starting. Starting at 3.60 is starting a fourth run I expect
+to self-kill, and a killed run produces neither a `lint-results-debug.txt` nor a measurement. The bar stays
+where I set it in writing — under 2.0 twice in a row — because that is the first point where a build has
+room to exist without being the thing that ends itself. Raising the ceiling to make the three kills
+disappear was never on the table, and lowering my own floor to accept a doomed start isn't the honest
+alternative either; the honest alternative is not to start.
+
+So the q4 pair's lint leg remains judged by `ci.yml`'s `lintDebug` on the hosted runner — and note what
+that means for the two Android candidates: `718a8ef` and `ede66f4` each have exactly **one** check-run whose
+job is `assembleDebug + testDebugUnitTest + lintDebug`, so lint is a *single step inside a single sample*.
+`14 steps, 0 failures` would be the minimum evidence I'd want, and I cannot currently attach it.
