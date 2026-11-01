@@ -232,6 +232,21 @@ class PlanClassificationTests(unittest.TestCase):
         self.assertEqual(result["verdict"], "does not fit")
         self.assertTrue(any("full-table scans" in line for line in result["why"]))
 
+    def test_a_hot_scan_refuses_the_rebuild_on_its_plan_alone(self):
+        """`does not fit` here is a plan finding, not a memory finding.
+
+        The cost model needs counts, and counts are a frozen content read, so the common typed-in
+        invocation is `price_projection.py bare.db` with no numbers at all — and a ledger that scans
+        `releases` once per outer row has to be refused by that invocation too. It was `indeterminate`
+        until this case pinned it: the demotion only fired against a `fits` the cost model had
+        produced, so the shape that guarantees a non-finishing rebuild reported that it did not know.
+        """
+        result = price_file(build_ledger(self.dir / "bare-noinputs.db", indexed=False, rows=20))
+        self.assertIsNone(result["retention"], "no cost inputs were given, so there is no cost model")
+        self.assertEqual(result["verdict"], "does not fit",
+                         "the plan alone is enough to refuse this rebuild")
+        self.assertTrue(any("full-table scans" in line for line in result["why"]))
+
     def test_index_drift_from_the_engine_ddl_is_reported_not_assumed_away(self):
         path = build_ledger(self.dir / "drift.db", indexed=False, rows=5)
         conn = sqlite3.connect(str(path))
@@ -281,7 +296,7 @@ class PlanClassificationTests(unittest.TestCase):
         conn.close()
         with self.assertRaises(pp.PricingRefused) as caught:
             price_file(path)
-        self.assertIn("no Layer-0 table", str(caught.exception).lower())
+        self.assertIn("no layer-0 table", str(caught.exception).lower())
 
 
 class CostModelTests(unittest.TestCase):
@@ -448,19 +463,21 @@ def _workflow_escape(text: str) -> str:
 
 
 def _failure_digest(result) -> str:
-    """One line naming every failing test and the last line of its traceback.
+    """Up to three lines per failing test, with the versions that made those lines true.
 
     This exists because the hosted log is not readable from this box: `/actions/runs/{id}/logs`
     answers 401 for the token-less lanes while `/check-runs/{id}/annotations` answers 200 to anyone.
     A `::error::` printed by the step's own process becomes one of those annotations, so a red run
-    here can say *which* assertion broke instead of only saying that exit 1 happened. The interpreter
-    and SQLite versions ride along because a planner-wording claim is only true of a version.
+    here can say *which* assertion broke instead of only saying that exit 1 happened. The tail is
+    three lines rather than one because `assertEqual` puts the value it *got* above the value it
+    wanted, and the wanted value alone is not a diagnosis. Versions ride along because a
+    planner-wording claim is only true of a SQLite version.
     """
     heads = []
     for kind, group in (("FAIL", result.failures), ("ERROR", result.errors)):
         for test, trace in group:
             lines = [line.strip() for line in (trace or "").rstrip().splitlines() if line.strip()]
-            heads.append("%s %s :: %s" % (kind, test.id(), lines[-1] if lines else "no traceback"))
+            heads.append("%s %s :: %s" % (kind, test.id(), " ⏐ ".join(lines[-3:])))
     return ("test_price_projection RED — ran %d, %d failures, %d errors | sqlite %s | python %s | %s"
             % (result.testsRun, len(result.failures), len(result.errors),
                sqlite3.sqlite_version, sys.version.split()[0], " || ".join(heads)))

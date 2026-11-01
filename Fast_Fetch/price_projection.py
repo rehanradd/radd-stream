@@ -32,7 +32,9 @@ The consequence of staying schema-only, stated plainly: **row counts are inputs,
 Counting them is a content read, which stays FROZEN. So `--posts` / `--releases` / `--mean-row-bytes`
 have to be typed in from a figure someone already measured (the code-recorded 146,176 posts is the
 default, and it is labelled *recorded* because it is a quotation, not a fresh count), and a ledger
-whose numbers nobody has recorded gets an `indeterminate` verdict instead of a guess.
+whose numbers nobody has recorded gets an `indeterminate` verdict instead of a guess. One exception,
+and it is not a memory claim: a ledger with no index over a join column gets `does not fit` from its
+plan alone, counts or none, because a scan repeated per outer row will not finish either way.
 
 Never a write, never a content row, and it says `indeterminate` rather than inventing a number.
 
@@ -244,8 +246,10 @@ def price(conn, *, posts=None, releases=None, mean_row_bytes=None,
     hot_scans = [r["label"] for r in rows
                  if r["per"] != "once" and r["plan"].startswith("SCAN")]
     if hot_scans:
-        if result["verdict"] == "fits":
-            result["verdict"] = "does not fit"
+        #: Not a demotion of `fits` alone. A rebuild that scans `releases` once per post does not fit
+        #: whether or not the memory model has the inputs to answer the memory question, and leaving
+        #: it `indeterminate` would report "unknown" about a ledger whose plan is already a failure.
+        result["verdict"] = "does not fit"
         result["why"].append("full-table scans on the hot path: %s — the rebuild would scan that"
                              " table once per outer row" % ", ".join(hot_scans))
     #: A lookup that cannot be planned at all is worse than one that scans: the projection would

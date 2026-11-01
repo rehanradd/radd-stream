@@ -490,8 +490,10 @@ jobs:
       # `price_projection.py` answers it from the schema instead: `EXPLAIN QUERY PLAN` on the four
       # Layer-0 statements (SQLite plans without executing), the engine's own index law as an
       # expected-name check that reports drift, and a retention model calibrated on a synthetic
-      # ledger. Row counts are *inputs*, never measurements, and a run without them exits 4 rather
-      # than guessing. This suite pins all of it: each quoted statement must still be literally
+      # ledger. Row counts are *inputs*, never measurements, so a run without them on a well-shaped
+      # ledger exits 4 rather than guessing; the one exception is a ledger with no index over a join
+      # column, which `does not fit` from its plan alone because a scan repeated per outer row will
+      # not finish whatever the free memory is. This suite pins all of it: each quoted statement must still be literally
       # present in `catalog_v2.py`, an index-less ledger must come back as hot-path `SCAN`s and
       # `does not fit`, and every SQL string that reaches the connection is recorded with a trace
       # callback and checked against the schema-only grammar — on a ledger holding 500 rows, so "no
@@ -502,5 +504,11 @@ jobs:
       # falsified afterwards by the real vault set: `EXPLAIN QUERY PLAN` parses, so a ledger whose
       # `releases` has no `post_id` (filmyhit, kisskh, moviesmela) raised instead of being reported,
       # and that case is now a `NO-COLUMN` verdict with its own fixture built to lack the column.
+      # A THIRD channel had to be built to find the last two: the hosted log needs a token none of
+      # the lanes on this box hold (`/actions/runs/{id}/logs` → 401), so the suite prints a
+      # `::error::` workflow command when it goes red, and `/check-runs/{id}/annotations` serves that
+      # to anyone. It named both defects on the first use — a mixed-case needle compared against a
+      # lower-cased exception message, and a hot-scan ledger that reported `indeterminate` because
+      # the demotion only fired against a `fits` the cost model had produced.
       - name: 🧪 test_price_projection.py
         run: python3 -S Fast_Fetch/test_price_projection.py
