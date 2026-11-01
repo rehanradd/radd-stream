@@ -296,3 +296,19 @@ from this host`, both targeting `Fast_Fetch/SITES.md`, as slices 7 and 8. Byte b
 Full guard module run locally: **22 tests OK** in 91.226 s at load ≈ 8 on one vCPU — a cold-cache, contended
 number, and per rule 7 not grounds for excluding anything; only CI's per-step timing decides that, and this branch
 has no CI read because it was never pushed.
+
+## Ref bookkeeping at slice 6 — disclosed, because a wrong branch name in a record is the same defect class as a wrong number
+
+The slice-6 section above names `q5-pin-s6-arm64-invisible-20261101`, and at the moment I wrote it that branch
+**did not exist**: both slice-6 commits (`9d120dc`, `b22b9c1`) were made while `HEAD` still pointed at
+`q5-pin-s5-filter-shape-20261101`, because I created the per-slice branch *after* editing instead of before, as I
+had done for slices 4 and 5. Fixed locally, no history rewritten and nothing pushed: the s6 branch was created at
+`b22b9c1`, `HEAD` switched to it, and the s5 ref was moved back to its own tip `1241a4c` (the commit whose subject
+already says it re-checks the slice 4+5 stack). The moved-back commits stayed reachable throughout, so no object
+was orphaned. Verified after the fact: `git for-each-ref` gives s4 → `aad46c5`, s5 → `1241a4c`, s6 → `b22b9c1`,
+`HEAD` on s6, working tree clean.
+
+The habit that caused it is worth naming for the next lane: the branch identity was a claim I made about state I
+was about to create rather than state I had created — the same shape as the "98 entries" and "most-edited block"
+errors, just pointing at a ref instead of a count. Method correction: create the branch, print
+`git rev-parse --abbrev-ref HEAD`, and only then write the sentence that names it.
