@@ -240,7 +240,9 @@ prove the gate is green, and it is not presented as if it did.
 
 ## Slice 6 — `app: arm64-excluded suites are invisible here` → "they are invisible to any number printed on this host"
 
-**Branch:** `q5-pin-s6-arm64-invisible-20261101`, stacked on slice 5 (`1241a4c`). Supervisor instruction for
+**Branch:** `q5-pin-s6-arm64-invisible-20261101`, stacked on slice 5 (`1241a4c`); **conversion commit
+`9d120dc`**, and the records commit that names it is the branch tip — gate the branch, not a remembered sha.
+Supervisor instruction for
 slice 6: own worktree only, **local commit only — do not push and do not retry a push**, no credential read or
 print, no Gradle (load above 4), no tag, no restart, no production write, no catalog merge, do not move the
 `AGENTS.md` release-safety sentence, record the slice-6 sha and which pin it converts here, report and stand by.

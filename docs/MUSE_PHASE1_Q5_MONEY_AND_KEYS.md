@@ -271,8 +271,8 @@ and diff `len(INVARIANTS)`' label set against the audit's sixteen**, not to grep
 lines, and a line-grep is the method that undercounted the CI suites and produced the "98 entries" error below.
 Every figure in this paragraph came from that import, and the count in each slice's checkpoint says so.
 
-**As of slice 5 of the ordinary eight (2026-11-01, q5): 8 of 15 converted, 7 still pinning state** —
-derived by importing the guard (`len(INVARIANTS)` = 104; 8 audit labels still present, one of which is the
+**As of slice 6 of the ordinary eight (2026-11-01, q5): 9 of 15 converted, 6 still pinning state** —
+derived by importing the guard (`len(INVARIANTS)` = 104; 7 audit labels still present, one of which is the
 requirement pin kept by design), not incremented from the previous sentence.
 Held, not open — these are *not* mine to close:
 
@@ -300,8 +300,19 @@ seen.** Gate the branch tip when the credential is restored; do not re-author th
 **deliberately not pushed**: the supervisor ordered no push and no push retry, and the credential is dead anyway.
 Also a method note — the conversion's first draft called that `paths:` block "the single most-edited block in the
 repo", which I had not measured; the claim is gone and the checkpoint says why.)
-**Three remain:** `app: arm64-excluded suites are invisible here`,
-`MovieBox is metadata + trailer evidence, not playable`, `no playable print is resolvable from this host`. The
+`app: arm64-excluded suites are invisible here` (**s6** — `App/AGENTS.md`'s tally of what has been printed on this
+box, replaced by the universal reading rule in `docs/SPEC_APP_ROBOLECTRIC_ARM64.md`: the excluded suites are
+invisible to *any* local number. Conversion commit `9d120dc`, local on `q5-pin-s6-arm64-invisible-20261101`,
+stacked on s5, pushed by no one. **This one also produced a mechanical finding about the guard itself**:
+`App/AGENTS.md`'s own law clause "The exclusion stays" is *unpinnable as written* — `load()` keeps blockquote
+markers and `flat()` collapses only whitespace, so the sentence flattens to "The exclusion > stays" and no phrase
+can cross that wrap. Established by matching four candidates, not by reading them, so the target moved to the
+linked spec doc instead of the law file being edited to fit. Consequence, stated plainly: the pin no longer
+implies anything about run history, and nothing in prose can prove the exclusion — that proof is the
+`tasks.withType<Test>()` block in `app/build.gradle.kts`.)
+**Two remain:**
+`MovieBox is metadata + trailer evidence, not playable` and `no playable print is resolvable from this host`, both
+targeting `Fast_Fetch/SITES.md`, as slices 7 and 8. The
 running record, including the duplicate-versus-coverage argument and the escalated `AGENTS.md` release-safety
 finding (owner's decision, untouched by this lane), is
 `Fast_Fetch/checkpoints/20261101-q5-pin-conversions-the-eight-ordinary-slices.md`.
