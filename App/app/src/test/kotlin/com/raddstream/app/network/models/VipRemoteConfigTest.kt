@@ -359,4 +359,32 @@ class VipRemoteConfigTest {
         assertFalse(config.wallet.enabled)
         assertFalse(config.streak.enabled)
     }
+
+    /**
+     * The marker the server adds when its own settings read fails (`Fast_Fetch/admin_panel.py`,
+     * UPD-1a / [Q3-MUSE-P1]). Two things are pinned here, and the second is the risk of the field
+     * existing at all: a deployment older than the marker must keep behaving exactly as it did, so
+     * silence may not read as "degraded" — that would strand every phone on its last cached board.
+     * The degraded case itself is [com.raddstream.app.data.RemoteConfigPolicyTest]'s, not this
+     * file's: a decoder test cannot show what the app does with a value it was handed.
+     */
+    @Test
+    fun `the settings_unavailable marker decodes as a real boolean and defaults to believed`() {
+        val degraded = gson.fromJson(
+            """{"success": true, "settings_unavailable": true, "maintenance_mode": false}""",
+            VipRemoteConfig::class.java,
+        )
+        assertTrue("a published true is a boolean, not 0/1 or a string", degraded.settingsUnavailable)
+        assertFalse(degraded.maintenanceMode)
+
+        val believed = gson.fromJson(
+            """{"success": true, "settings_unavailable": false}""",
+            VipRemoteConfig::class.java,
+        )
+        assertFalse(believed.settingsUnavailable)
+        assertFalse(
+            "a body that never mentioned the marker is not a degraded one",
+            gson.fromJson("""{"success": true}""", VipRemoteConfig::class.java).settingsUnavailable,
+        )
+    }
 }

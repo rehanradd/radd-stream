@@ -2,6 +2,7 @@ package com.raddstream.app.viewmodel
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.raddstream.app.data.RemoteConfigPolicy
 import com.raddstream.app.data.ServerSettingsRepository
 import com.raddstream.app.data.VipPendingSubmission
 import com.raddstream.app.network.friendlyNetworkError
@@ -271,7 +272,10 @@ class VipViewModel @Inject constructor(
             _uiState.update { it.copy(isLoading = true, loadError = null) }
             try {
                 val config = catalogRepository.getRemoteConfig()
-                if (!config.success) {
+                // A degraded body decodes and carries the shipped prices, so this screen would
+                // otherwise quote them as the operator's live quote — the same lie
+                // `settings_unavailable` exists to tell the phone about (see RemoteConfigPolicy).
+                if (!RemoteConfigPolicy.isAuthoritative(config)) {
                     _uiState.update {
                         it.copy(isLoading = false, loadError = "Payment details are unavailable right now.")
                     }
