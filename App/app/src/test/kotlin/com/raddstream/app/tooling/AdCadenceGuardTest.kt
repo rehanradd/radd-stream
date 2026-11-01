@@ -233,9 +233,15 @@ class AdCadenceGuardTest {
     @Test
     fun `the config poll publishes the caps and resets the windows when the switch goes off`() {
         val watcher = lines("data/RemoteConfigWatcher.kt")
+        val policy = lines("data/RemoteConfigPolicy.kt")
         assertTrue("caps travel with the body", watcher.any { "publishLimits(config.ads, config.engagement)" in it })
         assertTrue("a disabled switch clears every stamp", watcher.any { "clearForDisabledSwitch()" in it })
-        assertTrue("the switch is mirrored to storage", watcher.any { "adsEnabled = config.ads.enabled" in it })
+        // The mirror spans the extraction: the wire value is chosen in the policy and handed to
+        // storage by the watcher. Asserting both halves is stronger than the one line this guard
+        // used to read — a policy that picked the switch but a watcher that dropped it (or the
+        // reverse) now fails here, where before it would have gone green on the shape alone.
+        assertTrue("the switch is mirrored from the body", policy.any { "adsEnabled = config.ads.enabled" in it })
+        assertTrue("and the mirror reaches storage", watcher.any { "adsEnabled = write.adsEnabled" in it })
     }
 
     @Test
