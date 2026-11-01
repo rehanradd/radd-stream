@@ -47,9 +47,13 @@
 14. **qoder1 pass — `0afea35` + `a775ba7` + `e7f6bbb` landed (census CI step, `CLOSEST_SYNC`, the relay that deleted payments on a proxy 403); `q3-coins-engine` found empty and re-scoped; `q5-adultkey-reconciliation` held on one guard line, then green (item 15).** Every gate was a hosted run, zero local CPU. Text: `checkpoints/20261031-q1-supervisor-pass-three-landed-the-adult-gate-held.md`.
 15. `[Q5-ADULTKEY]` — the merge-time corroborated adult fold and `link_is_adult` fail-closed; green on run 41156831610, landed `4a8c163`; **production still pre-law** — gap and read-only re-measure commands: `checkpoints/20261031-q5-adultkey-production-is-pre-law.md`.
 
+16. **`[Q5-BACKUP-SCOPE]` FINDING, owner decision, nothing edited** — the nightly `radd-backup-hf` run snapshots `user_state.db` (the credential + payment store) because `backup_manager.py:526` decides scope by `data_dir.glob("*.db")` with no allow-list; the archive goes off-box over git+LFS, where deletion is not revocation. Rule, a test to write first, and the journal evidence: [`../docs/BACKUP_SNAPSHOT_SCOPE_FINDING.md`](../docs/BACKUP_SNAPSHOT_SCOPE_FINDING.md).
+
 ---
 
-## 🕒 Queued quiet-window actions (run only when `cat /proc/loadavg` 1-min is under 4)
+## 🕒 Queued quiet-window actions (the gate is PSI now, not load1 — Q1 retired it 2026-11-01:
+heavy work needs `cpu some avg10 < 60` AND `memory some < 10` AND `memory full == 0.00` sustained 5 min,
+plus MemAvailable > 1,500 MB and SwapFree > 800 MB; `cat /proc/pressure/{cpu,io,memory}` is the whole check)
 
 | # | exact command | expected cost | why |
 |---|---|---|---|
