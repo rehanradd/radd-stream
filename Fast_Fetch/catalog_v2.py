@@ -125,7 +125,13 @@ _FILE_SERVICES = {
     "vegadrive", "superduperload", "razorshell", "direct_cloud",
 }
 
-_HLS_MARKERS = (".m3u8", "mpegurl", "playlist", "/hls/", ".mpd")
+_HLS_MARKERS = (".m3u8", "mpegurl", "playlist", "/hls/")
+#: A DASH manifest is its own medium: the reader Media3 picks, the bytes on the
+#: wire and the MIME the server stores all differ from HLS. It was folded into
+#: `_HLS_MARKERS` while the projection had no `dash` word to give it (audit
+#: Top-20 #1) — declaring an `.mpd` as `hls` is the same wrong-reader failure in
+#: a different spelling.
+_DASH_MARKERS = (".mpd",)
 _MEDIA_MARKERS = (".mp4", ".mkv", ".webm", ".mov", ".avi", ".m4v", ".ts", ".m3u8")
 _FILE_HOST_MARKERS = (
     "cloudflarestorage", "video-downloads.googleusercontent", "r2.dev", "backblazeb2",
@@ -542,6 +548,8 @@ def classify_link(service: str, source_url: str, final_url: str,
     last_seg = path.rsplit("/", 1)[-1]
     if any(marker in lowered for marker in _HLS_MARKERS):
         return "hls_manifest", "stream"
+    if any(marker in lowered for marker in _DASH_MARKERS):
+        return "dash_manifest", "stream"
     if _looks_like_file(lowered):
         if svc in _EMBED_SERVICES:
             return "embed", "webview"
@@ -1389,8 +1397,14 @@ def _measured_evidence(src) -> dict:
 
 
 def _protocol_of(kind: str, playability: str) -> str:
+    """The medium this link's URL shape promises. A guess, and the weakest one
+    on the row: whenever `apply_evidence()` has a probe that sniffed the bytes
+    (`link_health._sniff` names `#EXTM3U`/MPEG-DASH directly), the probe's answer
+    replaces this one — see `_blend_link`."""
     if kind == "hls_manifest":
         return "hls"
+    if kind == "dash_manifest":
+        return "dash"
     if playability in ("stream", "download", "both"):
         return "progressive"
     if kind in ("embed", "cloud_page", "bridge"):
@@ -2158,6 +2172,15 @@ EVIDENCE_EWMA_WEIGHT = 0.4
 #: catalog, which is millions of links on a one-CPU VM.
 EVIDENCE_BATCH = 500
 
+#: The probe's reader words that are also `cat_links.protocol` words, verbatim.
+#: A sniffed `#EXTM3U` or MPEG-DASH body outranks any URL-shape guess, and it
+#: outranks the projection's `progressive` default (audit Top-20 #1: manifests
+#: declared progressive, Media3 then feeds manifest text to the progressive
+#: reader). `embed`/`html_page`/`unusable` deliberately do not appear: they say
+#: "not media", which is a kind fact, not a protocol fact, and the projection's
+#: own kind already owns that column's answer for pages.
+_PROBE_PROTOCOL_WORDS = frozenset({"hls", "dash", "progressive"})
+
 _EVIDENCE_INSERT_SQL = """
 INSERT INTO cat_link_evidence (link_id, probed_at, ok, protocol, http_status,
     content_type, size_bytes, latency_ms, speed_mbps, accepts_ranges, error, url)
@@ -2347,7 +2370,8 @@ def _blend_link(link, rows, *, weight: float = EVIDENCE_EWMA_WEIGHT, cors_fact=N
       a sample actually measured them — an unmeasured timing stays NULL instead
       of being faked as 0 (§7.1).
     * the facts a probe observed — ``http_status``, ``content_type``, ``size_bytes``
-      — come from the newest *probe-shaped* row (one that names a protocol),
+      and, for a media word, ``protocol`` — come from the newest *probe-shaped*
+      row (one that names a protocol),
       whatever its verdict, because they are simply the last thing we saw.
       ``accepts_ranges`` and ``resumable`` (ranges + a file the client can keep)
       come from the row the score is built from, so the two always agree.
@@ -2397,6 +2421,9 @@ def _blend_link(link, rows, *, weight: float = EVIDENCE_EWMA_WEIGHT, cors_fact=N
         size_bytes = int(_pick_col(observed, "size_bytes", 0) or 0)
         if size_bytes:
             values["size_bytes"] = size_bytes
+        sniffed = str(_pick_col(observed, "protocol", "") or "").strip().lower()
+        if sniffed in _PROBE_PROTOCOL_WORDS:
+            values["protocol"] = sniffed
 
     # the sample the score is built from: a probe that matches the newest verdict.
     # A link the client says works but that has never had a successful probe has

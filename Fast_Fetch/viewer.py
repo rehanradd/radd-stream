@@ -98,6 +98,13 @@ _SIGNING_SECRET = None
 
 
 def signing_secret() -> str:
+    """The process-wide handle-signing secret. Fails closed.
+
+    Delegates to :func:`redact.stream_secret`, which raises when no secret can
+    be read or durably generated (audit critical 4: never a constant fallback).
+    A failed lookup is not cached — the next signing attempt re-resolves, so a
+    transient storage failure never freezes the process onto any fallback key.
+    The value is never logged or returned in error text."""
     global _SIGNING_SECRET
     if _SIGNING_SECRET is None:
         _SIGNING_SECRET = redact.stream_secret(DB_PATH)
@@ -209,7 +216,13 @@ def link_view(row, base_url: str = "") -> dict:
             "iframe": "external"}.get(str(row["playback_type"] or "").lower(),
                                       "resolve")
     link["kind"] = kind
-    link["playable"] = kind in ("direct", "resolve")
+    # Audit critical 10: a measured verdict outranks the ingest label. A row the
+    # healer or a 404 marked dead/broken/gone/expired is not playable, whatever
+    # its kind says.
+    ledger_state = str(row["status"] or "").strip().lower() \
+        if "status" in row.keys() else ""
+    link["playable"] = (kind in ("direct", "resolve")
+                        and ledger_state not in tiers.UNPLAYABLE_STATES)
     if base_url:
         link["play_url"] = (f"{base_url.rstrip('/')}/api/v1/stream"
                             f"?id={link['stream_id']}")
@@ -893,7 +906,8 @@ def generate_m3u_playlist(post_id: int, full: bool = False,
         for r in releases:
             sources = conn.execute("""
                 SELECT * FROM download_sources
-                WHERE release_id = ? AND status != 'dead'
+                WHERE release_id = ? AND (status IS NULL OR status NOT IN
+                    ('dead', 'broken', 'gone', 'expired', 'unreachable'))
                 ORDER BY is_resumable DESC, id ASC
             """, (r["id"],)).fetchall()
             for s in sources:
@@ -3039,10 +3053,17 @@ def api_v1_get_post_detail(post_id: int, full: bool = False,
         rel_list = []
         for rel in releases:
             sources = conn.execute("""
-                SELECT * FROM download_sources 
-                WHERE release_id = ? 
-                ORDER BY 
-                    status = 'active' DESC,
+                SELECT * FROM download_sources
+                WHERE release_id = ?
+                ORDER BY
+                    CASE
+                        WHEN status IN ('dead', 'broken', 'gone') THEN 3
+                        WHEN status = 'expired' THEN 2
+                        WHEN status = 'active'
+                             AND last_checked_at IS NOT NULL
+                             AND http_status IS NOT NULL AND http_status <> 0 THEN 0
+                        ELSE 1
+                    END ASC,
                     is_temporary ASC,
                     CASE service
                         WHEN 'pixeldrain' THEN 1
@@ -3056,6 +3077,11 @@ def api_v1_get_post_detail(post_id: int, full: bool = False,
             """, (rel["id"],)).fetchall()
             # The ordering above is our own preference between servers; it is a
             # query, not a field. Nothing that names a hoster leaves this box.
+            # The first key is audit critical 10's evidence ladder — a probe-
+            # confirmed live copy, then an unprobed claim (unchecked, never a
+            # promise), then expired, then dead last. `status = 'active' DESC`
+            # alone ranked a scraper's blanket 'active' above everything, dead
+            # links included.
             if full:
                 r_dict = dict(rel)
                 r_dict["sources"] = [dict(s) for s in sources]

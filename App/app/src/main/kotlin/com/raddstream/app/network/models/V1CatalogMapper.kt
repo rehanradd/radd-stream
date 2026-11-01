@@ -233,13 +233,18 @@ object V1CatalogMapper {
         val mime = stream.mimeType?.lowercase().orEmpty()
         val isHls = LinkClassification.isHls(stream.mimeType, source.bestUrl) ||
             mime.contains("mpegurl")
+        val isDash = LinkClassification.isDash(stream.mimeType, source.bestUrl)
         val playable = stream.streamId != null && source.bestUrl != null
         return Rendition(
             linkId = source.linkId?.toLong(),
             streamId = stream.streamId ?: source.streamId,
             playUrl = source.bestUrl,
             label = source.label,
-            protocol = if (isHls) PlayProtocol.HLS else PlayProtocol.PROGRESSIVE,
+            protocol = when {
+                isHls -> PlayProtocol.HLS
+                isDash -> PlayProtocol.DASH
+                else -> PlayProtocol.PROGRESSIVE
+            },
             playability = if (playable) Playability.STREAM else Playability.NONE,
             qualityLabel = "",
             ephemeral = stream.expiresIn != null || source.isEphemeral,
