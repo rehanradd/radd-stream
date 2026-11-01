@@ -6,7 +6,9 @@ reconciliation **read-only**, own worktree only, push and report sha. Gate held,
 no production read."* Followed by: ruling (2) stands (no step-4 plan/trigger cost), and stop
 after these two commits — `reason-law-test` + `checkpoint-counts`.
 
-Branch `q3-reason-law-on-c2528e1`, base `c2528e1` (q1's standing item 5). Two commits.
+Branch `q3-reason-law-on-c2528e1`, base `c2528e1` (q1's standing item 5). First two commits
+`9010683` (test) + `1fbc080` (checkpoint + counts), both on origin; the 15:56 dispatch that
+recorded that sha is §3-§5 below.
 
 ## 1. The named contradiction is not a contradiction, and the test says which axis the law lives on
 
@@ -105,6 +107,38 @@ merged-catalog problem, not a staging one. It does not re-open the reassignment 
 q2; I ran the method because the supervisor dispatched it back to me as "finish … read-only"), and
 it inherits the honesty note at `20261101-06xx-…:106-108`: the earlier dispatch had already
 completed, so nothing here was ever a clean un-run handoff.
+
+## 3. Recorded outcome, and the sha the supervisor verified on origin
+
+Supervisor 15:56: *"Your 43/88/91 reconciliation is recorded and your `q3-reason-law` branch is
+now on origin at `1fbc080` (supervisor `ls-remote` verified)."* Confirmed from this worktree with
+the askpass helper against the explicit clean URL — `refs/heads/q3-reason-law-on-c2528e1` =
+`1fbc0803610092dc662e4887d92372d31d8c47ff`, and the three earlier q3 refs are also on origin:
+`q3-cinefinder-route-on-c2528e1` = `d5a8d77`, `q3-fts5-on-c2528e1` = `1e8b355`,
+`q3-wallet-memo-on-c2528e1` = `99b7cc1`. **None is merged; the gate is held and none is mine to
+land.** L3 deep review of `9010683` + `1fbc080`: `findings_count: 0`.
+
+The verdict in one line each, so a later lane does not have to re-derive it:
+
+| figure | verdict |
+|---|---|
+| 91 | **true and stable** — flagged legacy pages, `SUM(is_18_plus)` over 29,848 rows, re-measured |
+| 43 | **true and the correct one for "works"** — flagged groups at the converter's own key, re-measured and independently matched by `mp4moviez_staging2.db` (11,404 / 43 / 54,267) |
+| 88 | **stale, and stale with its denominator** — it counted rows under the 28,066 near-page identity, which no artifact on this host reproduces and the trunk converter no longer emits |
+
+Nothing here changes the adult law, and nothing here claims the cross-site residual is closed
+(CONTINUITY item 5 stays open: 2,600 keys with both flags, 3,486 publicly served rows, 69,773-row
+re-key blast radius — all of those are *merged-catalog* numbers and this was a staging-file
+measurement).
+
+## 4. Next item picked: `SITES.md` contradicts itself about this exact measurement
+
+Skipped as instructed and as barred: #8 (production read), #9 (app lane Kotlin), #10 (credential
+read + gate held), #30 (owner signature), #34 (merge), #36 (ruling (2) — copy-only at the lift),
+#43 (`backup_manager.py`, owner's). What was left that is neither owner-held nor barred was a
+defect the reconciliation itself surfaced: `Fast_Fetch/SITES.md:83` still certifies the retired
+28,066 inside the same file whose § MP4Moviez paragraph carries the counted identity. §5 records
+what I did about it.
 
 ## Blocks and bounds
 
