@@ -98,6 +98,13 @@ _SIGNING_SECRET = None
 
 
 def signing_secret() -> str:
+    """The process-wide handle-signing secret. Fails closed.
+
+    Delegates to :func:`redact.stream_secret`, which raises when no secret can
+    be read or durably generated (audit critical 4: never a constant fallback).
+    A failed lookup is not cached — the next signing attempt re-resolves, so a
+    transient storage failure never freezes the process onto any fallback key.
+    The value is never logged or returned in error text."""
     global _SIGNING_SECRET
     if _SIGNING_SECRET is None:
         _SIGNING_SECRET = redact.stream_secret(DB_PATH)
