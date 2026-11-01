@@ -352,3 +352,15 @@ adult surface) and **1 ordinary left** (slice 8). Byte budgets unmoved (`AGENTS.
 `Fast_Fetch/AGENTS.md` 14,469 / 18,000, `App/AGENTS.md` 14,061 / 15,000; `SITES.md` not edited — the conversion
 moved the pin onto a clause that already existed, which is the series rule), archive counts 71/71 and 60/60, no new
 file, CONTINUITY 11,970 B / 93 lines.
+
+**The one push attempt, and what it proved.** Slice 7 is the first slice where a push was *authorized* (supervisor
+16:30: "one push attempt only"), so the gate was checked before attempting it — pure stack on `c2528e1`, 0 merge
+commits, footprint exactly the three lane-owned paths, 0 bytes touched in another lane's surface (`admin_panel.py`,
+`viewer.py`, `api_v2.py`, `redact.py`, `accounts*.py`, `docs/SESSION_CHECKPOINT.md`, all three `AGENTS.md`s,
+`Fast_Fetch/SITES.md`), 0 tags pointing at the head. The attempt itself returned
+`remote: Invalid username or token` — the identical signature to slice 4's two attempts, so the owner-only
+credential restore is now confirmed on a fresh call rather than remembered. No retry (the ruling was one attempt),
+and no repeat of the helper diagnostic that slice 4 ran to rule out a broken askpass: the failure text is the same
+and re-printing credential lengths adds nothing to a settled finding. **Consequence unchanged: slice 7 has no
+hosted run and no CI verdict.** What is claimed for it is only what a local run can claim — 22 guard tests OK
+against the committed content — and slices 1–3 remain the only conversions CI has seen.
