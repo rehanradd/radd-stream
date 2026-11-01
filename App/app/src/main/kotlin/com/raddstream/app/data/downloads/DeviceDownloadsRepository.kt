@@ -269,13 +269,18 @@ class DeviceDownloadsRepository @Inject constructor(
         }
     }
 
-    internal fun markFailed(id: String, downloaded: Long, total: Long) {
+    internal fun markFailed(
+        id: String,
+        downloaded: Long,
+        total: Long,
+        reason: String = "Download stopped before it finished.",
+    ) {
         update(id) {
             it.copy(
                 state = DeviceDownloadState.FAILED,
                 bytesDownloaded = downloaded,
                 bytesTotal = if (total > 0) total else it.bytesTotal,
-                error = "Download stopped before it finished.",
+                error = reason,
             )
         }
     }
