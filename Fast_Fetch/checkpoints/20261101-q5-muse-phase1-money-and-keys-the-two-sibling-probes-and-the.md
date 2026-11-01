@@ -166,3 +166,40 @@ nobody has run. The stranded 22 GB is Q1's measurement; my only read on it was `
    in this record, because widening a handed scope silently is how a lane ends up reviewing its own work.
    If the fleet wants the class retired, the cheap way is to move `_probe_dir` out of `config.py` into one
    importable helper and have the eight call it — a decision, not a sweep.
+
+---
+
+## Addendum, 06:5x — three rulings landed on this lane, and the replay hazard they exposed
+
+**1. The freeze is a rule now, not a message.** Q1 published it after retracting his own 06:16 partial
+lift: LIGHT-ONLY until **two consecutive sustained sub-4 windows** AND `cpu some avg10 < 50` AND the hard
+floors clear (mem ≥ 1500 MB, swap ≥ 800 MB, radd cgroup ≤ 1200 MB). One window was his error, said as
+much, and the fix was a rule rather than a reproach. Gradle is outside anything a supervisor can open —
+only the owner, at load < 0.5, which he has not confirmed. Practical consequence for this lane: **plan the
+work so CI is the verifier**, which is also cheaper and was already true — `test_clip_bytes_guard.py`,
+`test_fts5_capability.py` and `test_config_data_dir.py` all have their first execution on a hosted run.
+
+**2. The sync-key digest is ruled *do not act*.** Q1, 06:5x: unsalted `sha256:` (`accounts.py:299`) stays
+the owner's decision, and no lane changes the KDF now, because a hash-scheme change invalidates every
+existing key and **this box has no migration gate**. Recorded as recommendation 7 in
+[`../../docs/MUSE_PHASE1_Q5_MONEY_AND_KEYS.md`](../../docs/MUSE_PHASE1_Q5_MONEY_AND_KEYS.md) rather than
+left in chat, because the person who will "helpfully" fix it is reading that file, not this thread. The
+empty `key_hash` column makes a change *cheap*, never *silent*.
+
+**3. The replay, and the collision nobody flagged.** Trunk moved to `c2ae2bf` (q3's `settings_unavailable`)
+after my `14ceca7`, so my branch was no longer fast-forwardable and landing it would have reverted q3's
+`admin_panel` change. Replay by cherry-pick onto the new trunk — Muse's ruling was CI-only with no local
+master merge, so **no merge commit**, and a *new* branch ref (`q5-g2-clipguard-20261101`) instead of
+force-pushing the old one.
+
+The interesting part: q3 and this lane each added one checkpoint file and each independently edited the
+same CONTINUITY line `67 → 68 session files (65 → 66 dated)`, for **different reasons**. Git saw identical
+text on both sides and auto-merged it — cleanly, wrongly. The union is **69 files (67 dated + 2 undated)**,
+and `test_docs_invariants.py` compares that claim against the directory listing on every run, so the
+replay would have gone red on a line that merged without conflict. Fixed in `7ccf6b0`.
+
+**The lesson for every lane, stated once:** an auto-merge is not a semantic merge. A count, a total, a
+"last measured at", or a version number edited by two lanes for two reasons will always resolve cleanly
+and will always be wrong after the union. `git diff --stat <trunk> HEAD` proves the footprint; it does not
+prove the arithmetic. After any rebase, re-derive every number that describes the *tree*, not just the ones
+you wrote.
