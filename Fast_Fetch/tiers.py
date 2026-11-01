@@ -54,6 +54,15 @@ KIND_WEIGHT = {
     "external": 0,
 }
 
+#: Measured verdicts that name a copy nothing can play. A dead link must never
+#: win a quality band or be called playable, however good its other evidence is.
+DEAD_STATES = ("dead", "broken", "gone")
+#: A signed link whose window elapsed 403s exactly like a dead one, but its URL
+#: can be re-resolved — so it loses any bonus and never plays, yet is not zeroed.
+EXPIRED_STATES = ("expired", "unreachable")
+#: Everything the play surfaces must refuse, whichever vocabulary wrote it.
+UNPLAYABLE_STATES = DEAD_STATES + EXPIRED_STATES
+
 #: Bytes a print of this band should plausibly weigh. Outside the window the copy
 #: is either mislabelled or a truncated upload, so it loses the tie.
 _SIZE_WINDOW = {
@@ -210,8 +219,19 @@ def score(link, band: str = UNSPECIFIED) -> int:
     state = str(row.get("status") or row.get("state") or "").lower()
     if state in ("active", "live", "ok"):
         value += 40
-    elif state in ("dead", "broken", "gone"):
-        value -= 60
+    elif state in DEAD_STATES:
+        # Audit critical 10: a dead copy is not a candidate. One −60 inside a
+        # stack of bonuses (kind 100 + resumable + HTTP + speed) could still
+        # leave it top of its band; link_health.score_link already says 0 for a
+        # failed probe, so the ranking agrees with the measurement.
+        return 0
+    elif state in EXPIRED_STATES:
+        # A lapsed signature voids every measurement made while it was valid:
+        # speed and range support describe a fetch that now 403s. The kind's
+        # own weight is all an expired copy may keep, so it always trails any
+        # live or unchecked copy of the same kind — but it can be re-resolved,
+        # which a dead one cannot, so it is not zeroed.
+        return max(value - 60, 0)
     if row.get("http_status") and 200 <= int(row["http_status"]) < 400:
         value += 15
     if row.get("is_resumable") or row.get("resumable"):
@@ -242,8 +262,14 @@ def playable(link, band: str = UNSPECIFIED) -> bool:
 
     An iframe is excluded even though it is a real link: it is only viewable by
     handing the user to another app's page, which is the surface the owner asked
-    to remove. ``url`` counts because our resolver turns it into a stream."""
+    to remove. ``url`` counts because our resolver turns it into a stream.
+    A state of dead/broken/gone/expired answers False whatever the kind or the
+    projected ``playable`` boolean claims — a verdict measured against the
+    endpoint outranks a label written at ingest (audit critical 10)."""
     row = link if isinstance(link, dict) else dict(link)
+    state = str(row.get("status") or row.get("state") or "").lower()
+    if state in UNPLAYABLE_STATES:
+        return False
     kind = str(row.get("kind") or row.get("playback_type") or "").lower()
     if kind in ("iframe", "embed", "external"):
         return False

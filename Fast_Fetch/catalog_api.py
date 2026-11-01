@@ -707,7 +707,10 @@ def _link_view(row, evidence: dict | None, secret: str = "") -> dict:
         # Honest behaviour, not provenance: can our one player start this copy
         # itself. `tiers.py` reads it to pick the winner of a quality band, and
         # the app reads it to decide between the player and the download card.
-        "playable": _link_group(row) <= _GROUP_RESOLVE and state != "dead",
+        # Audit critical 10: an expired signed link 403s like a dead one, so one
+        # dict may no longer say `playable` here and `dead` below — the verdict
+        # shared with the scorer is `tiers.UNPLAYABLE_STATES`.
+        "playable": _link_group(row) <= _GROUP_RESOLVE and state not in tiers.UNPLAYABLE_STATES,
         "group": _link_group(row),
         "state": state,
         "dead": state not in ("active", "unknown", "unchecked"),
