@@ -1129,3 +1129,33 @@ Measured, not assumed: hosted CI run 41333704433 on this branch — `🔨 CI —
 tests executed on the runner. Per the load gate: no Gradle was run on the VM. Trunk untouched,
 no tag, no service restart, no live DB write, no credential value read or printed. Branch commit
 `6fb9d38`; this log entry is the second and last commit on the branch.
+
+### Session 37 — Audit critical 1 (App half): a manifest is never a file — protocol from the probe, dash both sides (q6 lane, 2026-11-02)
+
+Supervisor command (Muse/Billo), lane `q6-audit-hls-20261102` off trunk `9074134`, worked only in
+`/tmp/q6_hls`. Backend half recorded in `Fast_Fetch/CONTINUITY.md` /
+`Fast_Fetch/checkpoints/20261102-q6-audit-hls-a-manifest-is-never-a-file.md`; this entry is the
+App half, which the first push lacked — three changed Kotlin files with no session log here was
+qoder1's gate finding, and this re-merge onto main `723b504` carries the correction inside its
+merge commit.
+
+The client bug was a wrong mirror of the old projection law: `LinkClassification.isHls()` counted
+`.mpd` paths as HLS (the wrong reader for a DASH manifest), `protocolOf()` had no `dash` branch,
+and a link the server called `progressive` was never re-checked against its measured `mime_type`
+before a `MediaItem` was built — while `playUrl` is always our own `/api/v1/stream?id=` redirector,
+so URL-extension inference can never save it. `PlaybackMediaItemFactory.manifestMimeType` already
+normalised declared manifest MIMEs to the Media3 constants (Session-of-`54e4aca` work, pinned by
+`UniversalSourceTest`); the hole was upstream of it, in the classification law feeding the factory.
+
+App changes: `CatalogEnums.LinkKind` gained `DASH_MANIFEST("dash_manifest")`; `LinkClassification`
+gained `isDash()` beside a corrected `isHls()` (no `.mpd`), the dash branch in `protocolOf` and
+`kindFromWire`, `classify()` files a dash manifest by kind and — when the served protocol is
+`progressive`/unknown — promotes it from the measured content type before the player is built;
+`V1CatalogMapper.resolvedRendition` gained the dash branch its mime re-derivation always lacked.
+New `ManifestProtocolTest.kt` pins all six laws. No root `AGENTS.md` line was added (10 bytes of
+headroom, measured by qoder1; prose belongs here).
+
+Judged hosted-only per the load gate — no VM Gradle: at the re-merged sha the Backend CI and the
+Android `assembleDebug + testDebugUnitTest + lintDebug` runs are reported to the supervisor with
+ids and per-step verdicts. Trunk untouched, no tag, no release, no service restart, no live-tree
+edit, no credential value read or printed.

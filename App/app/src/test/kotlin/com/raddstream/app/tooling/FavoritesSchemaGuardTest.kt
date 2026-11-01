@@ -180,4 +180,41 @@ class FavoritesSchemaGuardTest {
             assertTrue("$name is declared but never handed to Room", registered.contains(name))
         }
     }
+
+    @Test
+    fun `the migration ladder covers every step from 1 to the declared version`() {
+        // Flow-audit #25: the ladder once skipped 2 → 3, and the builder's destructive
+        // fallback filled that gap by dropping every table — favorites included. A device
+        // must never be able to fall into the fallback just by upgrading one version.
+        val flat = database.readText().replace(Regex("""\s+"""), " ")
+        val steps = Regex("""object : Migration\((\d+), (\d+)\)""").findAll(flat)
+            .map { it.groupValues[1].toInt() to it.groupValues[2].toInt() }
+            .toSet()
+        val declared = Regex("""version = (\d+)""").find(flat)
+            ?.groupValues?.get(1)?.toIntOrNull()
+            ?: error("no declared version to climb to")
+        assertTrue("positive control: no migration was found to read", steps.isNotEmpty())
+        for (v in 1 until declared) {
+            assertTrue(
+                "a device on version $v has no $v → ${v + 1} step: the builder's fallback " +
+                    "would drop every table instead of migrating it",
+                steps.contains(v to v + 1),
+            )
+        }
+    }
+
+    @Test
+    fun `the 2 to 3 step creates the cache tables and never touches saved rows`() {
+        val flat = flattenedDdl()
+        val start = flat.indexOf("Migration(2, 3)")
+        assertTrue("positive control: the 2 → 3 step exists to read", start >= 0)
+        val nextStep = flat.indexOf("Migration(3, 4)", start)
+        val body = flat.substring(start, if (nextStep > start) nextStep else flat.length)
+        assertTrue(body.contains("CREATE TABLE IF NOT EXISTS cache_tasks"))
+        assertTrue(body.contains("CREATE TABLE IF NOT EXISTS cache_files"))
+        assertTrue(body.contains("CREATE TABLE IF NOT EXISTS byte_range_manifests"))
+        assertFalse("the step would drop the saved list", body.contains("DROP TABLE"))
+        assertFalse("the step has no business rewriting favorites", body.contains("favorite_posts"))
+        assertFalse("the step has no business rewriting watch history", body.contains("watch_history"))
+    }
 }

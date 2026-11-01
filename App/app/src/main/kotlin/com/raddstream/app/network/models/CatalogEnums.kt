@@ -268,6 +268,7 @@ enum class SubtitleMode(val wire: String) {
 enum class LinkKind(val wire: String) {
     CDN_DIRECT("cdn_direct"),
     HLS_MANIFEST("hls_manifest"),
+    DASH_MANIFEST("dash_manifest"),
     CLOUD_PAGE("cloud_page"),
     BRIDGE("bridge"),
     EMBED("embed"),

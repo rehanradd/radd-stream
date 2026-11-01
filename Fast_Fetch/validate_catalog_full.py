@@ -41,8 +41,8 @@ SCORE_SAMPLE = 3000
 WORK_TYPES = {"movie", "series", "anime", "documentary", "sport_event", "music_video",
               "tv_special", "miniseries", "unknown"}
 COVERAGE = {"whole_work", "season_pack", "episode_range", "single_episode"}
-LINK_KINDS = {"hls_manifest", "cdn_direct", "download_only", "bridge", "embed",
-              "cloud_page", "dead_end"}
+LINK_KINDS = {"hls_manifest", "dash_manifest", "cdn_direct", "download_only", "bridge",
+              "embed", "cloud_page", "dead_end"}
 PLAYABILITY = {"stream", "download", "both", "webview", "resolve_required", "none"}
 # Two vocabularies, deliberately not one set. `cat_links.state` is the *projection*:
 # closed, and `unverified` is not in it, because `catalog_v2._link_state_of()` folds an

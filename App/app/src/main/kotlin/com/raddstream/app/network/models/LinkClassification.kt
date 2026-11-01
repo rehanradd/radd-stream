@@ -118,12 +118,16 @@ object LinkClassification {
 
     private val HLS_MIME_MARKERS = listOf("mpegurl", "m3u8", "vnd.apple.mpegurl", "mp2t")
 
+    private val DASH_MIME_MARKERS = listOf("dash", "mpd")
+
     /**
      * `_protocol_of(kind, playability)`, kept for the projection's own rule: a manifest is
-     * HLS, anything a player or a downloader can open is progressive, HTML kinds are html.
+     * its own protocol, anything a player or a downloader can open is progressive, HTML
+     * kinds are html.
      */
     fun protocolOf(kind: LinkKind, playability: Playability): PlayProtocol = when {
         kind == LinkKind.HLS_MANIFEST -> PlayProtocol.HLS
+        kind == LinkKind.DASH_MANIFEST -> PlayProtocol.DASH
         playability == Playability.STREAM || playability == Playability.DOWNLOAD ||
             playability == Playability.BOTH -> PlayProtocol.PROGRESSIVE
         kind == LinkKind.CLOUD_PAGE || kind == LinkKind.BRIDGE || kind == LinkKind.EMBED ->
@@ -140,6 +144,7 @@ object LinkClassification {
             // file endpoint, exactly like "direct".
             "resolve" -> LinkKind.CDN_DIRECT
             "hls", "manifest" -> LinkKind.HLS_MANIFEST
+            "dash", "dash_manifest", "mpd" -> LinkKind.DASH_MANIFEST
             // "external" (the v1 edge) and "embed" (the projection) are one condition: a page.
             "download" -> LinkKind.DOWNLOAD_ONLY
             "external", "embed" -> LinkKind.EMBED
@@ -200,13 +205,21 @@ object LinkClassification {
         }
     }
 
-    /** A mime type, or our own play_url, naming an HLS manifest. */
+    /** A mime type, or our own play_url, naming an HLS manifest. `.mpd` names the other one. */
     fun isHls(mimeType: String?, playUrl: String?): Boolean {
         val mime = mimeType?.trim()?.lowercase().orEmpty()
         if (HLS_MIME_MARKERS.any { it in mime }) return true
         val path = playUrl?.lowercase()?.substringBefore("#")?.substringBefore("?").orEmpty()
-        return path.endsWith(".m3u8") || path.endsWith(".mpd") ||
+        return path.endsWith(".m3u8") ||
             HLS_MIME_MARKERS.any { it in playUrl?.lowercase().orEmpty() && it != "text/html" }
+    }
+
+    /** The same question for DASH — a different reader, a different MIME, never an HLS alias. */
+    fun isDash(mimeType: String?, playUrl: String?): Boolean {
+        val mime = mimeType?.trim()?.lowercase().orEmpty()
+        if (DASH_MIME_MARKERS.any { it in mime }) return true
+        val path = playUrl?.lowercase()?.substringBefore("#")?.substringBefore("?").orEmpty()
+        return path.endsWith(".mpd")
     }
 
     /**
@@ -230,16 +243,32 @@ object LinkClassification {
             hasHandle = hasHandle,
         )
         val hls = isHls(source.mimeType, source.bestUrl)
+        val dash = isDash(source.mimeType, source.bestUrl)
         val kind = when {
             !hasHandle -> LinkKind.DEAD_END
             hls && (servedPlayability == null || servedPlayability.isDirectlyPlayable) ->
                 LinkKind.HLS_MANIFEST
+            dash && (servedPlayability == null || servedPlayability.isDirectlyPlayable) ->
+                LinkKind.DASH_MANIFEST
             playability == Playability.DOWNLOAD || playability == Playability.NONE ->
                 LinkKind.DOWNLOAD_ONLY
             else -> kindFromWire(source.kind, playability)
         }
         val protocol = PlayProtocol.fromWire(source.protocol).let {
             if (it == PlayProtocol.UNKNOWN) protocolOf(kind, playability) else it
+        }.let {
+            // Audit Top-20 #1, client half: when the link claims to be a file (or says
+            // nothing) the measured content type is checked before the MediaItem is
+            // built, because a manifest handed to the progressive reader dies with
+            // `UnrecognizedInputFormatException` before the first frame. The bytes'
+            // own MIME outranks the projection's shape guess.
+            if (it == PlayProtocol.PROGRESSIVE || it == PlayProtocol.UNKNOWN) {
+                when {
+                    dash -> PlayProtocol.DASH
+                    hls -> PlayProtocol.HLS
+                    else -> it
+                }
+            } else it
         }
         return LinkAssessment(
             kind = if (kind == LinkKind.UNKNOWN && playability.isDirectlyPlayable) {
