@@ -156,3 +156,16 @@ labels, 7 of 15 converted, 9 audit labels present of which 1 is the kept require
 **4 ordinary left** — `the filter shape is measured, never assumed`, `app: arm64-excluded suites are invisible
 here`, `MovieBox is metadata + trailer evidence, not playable`, `no playable print is resolvable from this host`.
 No `AGENTS.md` byte moved; `App/AGENTS.md` untouched this slice.
+
+**Push block, measured 2026-11-01 on this lane (q5), so nobody reads the sha below as "on origin".** The slice
+commit exists locally on `q5-pin-s4-debug-apk-20261101`; `git push` to the clean HTTPS URL with the askpass
+procedure in `ORACLE_DEPLOYMENT.md` returned `remote: Invalid username or token. Password authentication is not
+supported for Git operations.` Before accepting that as "token dead" I ran the check the same file prescribes —
+that the helper really emitted a credential rather than an empty string: the heredoc-built helper answers the
+Password prompt with a non-empty value, and the variable is present in the environment. So the answer came from
+GitHub about the credential, not from a broken helper. Consequence for the fleet: this lane's write credential
+is now in the same state qoder1 reported at 09:03, so **the whole pin stack is parked at the owner, not at a
+lane** — `c0e86e5` → `19b4a5f` → `011d973`/`4fa35e0`/`23d1558` (already on origin) plus this slice. No CI run
+exists for a sha that never reached origin, and none is fabricated. Next step is owner-only (re-issue or
+re-authorize the token); on restoration, push this branch as-is and read the 49-step hosted job — no rebase, no
+re-author, no second copy of the conversion.
