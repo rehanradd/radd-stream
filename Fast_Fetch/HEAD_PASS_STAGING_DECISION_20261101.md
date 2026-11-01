@@ -209,3 +209,28 @@ and a manufactured ledger prices a shape, not this data.
 **Window status at 16:32, sampled not assumed:** load 5.24 / 3.76 / 4.26 with busy CPU **99.7 %**
 (two `/proc/stat` reads 60 s apart). The load clause failed and the CPU clause failed by 50 points.
 #18 remains unrun.
+
+## 9. What is actually keeping the window shut (measured 16:5x)
+
+Five consecutive sub-4 load windows this afternoon — 1.78, 3.70, 3.60, 3.12, 3.55 — and every one of
+them failed the CPU clause. The instrument for that clause is PSI, and it says the same thing:
+
+```
+/proc/pressure/cpu :  some avg10=85.20  avg60=79.22  avg300=75.87   full avg10=0.00
+```
+
+Top consumers by `%CPU`, one `ps` pass: **five concurrent `qodercli` processes (6.6 – 9.0 % each), a
+`tmux: server`, and my own `ps`** — the radd-stream service's cgroup has accumulated **153.9 s of CPU
+in total across 5 days 15 h of uptime**. `full avg10 = 0` throughout, so nothing is ever fully stalled;
+this is contention, not saturation of a single task.
+
+**The thing blocking #18, #19 and #21's crawl half is the agent lanes themselves, not the deployment.**
+That is worth stating plainly because it changes how the remaining work should be sequenced: no
+sub-50 % CPU window exists while several sessions are interactive, and waiting for one during working
+hours is waiting for something that is not going to happen. The options are to run the heavy work when
+exactly one lane is live (overnight, realistically), or to accept that these three tasks are
+window-bound for reasons that have nothing to do with the service they are protecting — the freeze's
+own numbers say the service is not the consumer.
+
+`MemoryCurrent=263364608` (263 MB) and `MemAvailable` ≈ 2,792 MB were steady across every sample, so
+the memory half of the gate has passed all afternoon and is not what to wait on.
