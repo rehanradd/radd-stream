@@ -858,5 +858,112 @@ class Edge(Wallet):
         self.assertNotIn("account_id", body)
 
 
+# ── the reason vocabulary against the source law ──────────────────────────────
+
+
+class ReasonLaw(Wallet):
+    """`engagement.py`'s `_selfcheck` prints `no-client-coin` (around `:1139-1145`) while
+    `refund` sits in `SPEND_REASONS` (`:116`) *and* in `LEDGER_REASONS` (`:110-112`) — so
+    one word names both a credit and a debit, and `redeem_pass` does too. Read as a
+    contradiction it says the wallet mints coins for something a caller could name; read
+    as written at `:113-115` it says a wrong credit is clawed back by a compensating row
+    and a failed spend is returned by a positive one, which needs the same word on both
+    sides.
+
+    A print inside `python3 -S Fast_Fetch/engagement.py` is not a gate — nothing in CI
+    runs it — so the law it claims is pinned here instead, as the four properties that
+    make the overlap harmless: direction comes from the function, the source law is
+    checked before the reason law, the vocabulary is deliberately asymmetric, and no
+    client-reachable route can name a `refund`.
+    """
+
+    def test_spend_reasons_are_a_declared_subset_and_the_asymmetry_is_the_law(self):
+        """`SPEND_REASONS ⊆ LEDGER_REASONS` is the overlap, and the difference is the
+        safety: the three credit-only reasons cannot be spent. `redeem_pass` is legal in
+        both directions because a failed redemption is refunded by `grant_coins` — so the
+        word cannot tell you which way the money went and this test does not pretend it
+        can."""
+        self.assertTrue(engagement.SPEND_REASONS < engagement.LEDGER_REASONS,
+                        (sorted(engagement.SPEND_REASONS),
+                         sorted(engagement.LEDGER_REASONS)))
+        credit_only = (engagement.LEDGER_REASONS - engagement.SPEND_REASONS)
+        self.assertEqual(credit_only,
+                         frozenset({"rewarded_ad", "streak_day", "admin_grant"}))
+        self.grant(5)                       # a wallet that COULD pay: the refusal is the word
+        armed = self.wallet_state()
+        for reason in sorted(credit_only):
+            with self.assertRaises(engagement.BadReason, msg=reason):
+                self.spend(1, reason=reason)
+        self.assertEqual(self.wallet_state(), armed, self.rows())
+        # Positive control: the refusal is about the vocabulary, not about a spend path
+        # that never works — one member of `SPEND_REASONS` does debit.
+        self.spend(1, reason="redeem_pass")
+        self.assertEqual(self.wallet_state()[0], armed[0] + 1, self.rows())
+        self.assertEqual(self.rows()[-1]["reason"], "redeem_pass")
+        self.assertEqual(self.rows()[-1]["delta"], -1)
+
+    def test_the_reason_word_carries_no_direction_the_function_does_not(self):
+        """`refund` twice, once per function, is two rows of opposite sign and a wallet
+        back where it started. Nothing in the ledger stores 'this was a debit', and a
+        reader that infers one from the word is reading `:113-115` wrong."""
+        before = self.wallet_state()
+        credited = self.grant(7, reason="refund")
+        self.assertEqual(credited["delta"], 7)
+        debited = self.spend(7, reason="refund")
+        self.assertEqual(debited["spent"], 7)
+        rows = self.rows()
+        self.assertEqual([row["reason"] for row in rows], ["refund", "refund"])
+        self.assertEqual([row["delta"] for row in rows], [7, -7])
+        self.assertEqual(self.wallet_state()[1], before[1])
+        self.assertEqual(engagement.coin_balance(self.state, self.account_id), 0)
+
+    def test_no_source_reaches_a_debit_and_the_source_law_outranks_the_reason_law(self):
+        """Two halves of the same law. `spend_coins` writes `source` as the literal
+        `'server'` inside its guarded `INSERT … SELECT` (`:752-757`) and its signature
+        takes none, so there is no parameter to aim at a debit; and `grant_coins` checks
+        `source` (`:712`) *before* `reason` (`:714`), so a request that is both a client
+        claim and a bad reason is refused for being a client claim. `refund` in the reason
+        slot changes neither — the self-check's `no-client-coin` is a source law."""
+        with self.assertRaises(TypeError):
+            engagement.spend_coins(self.state, self.account_id, amount=1,
+                                   reason="refund", source="client")
+        self.assertEqual(self.wallet_state(), (0, 0, 0.0), self.rows())
+        for reason in ("refund", "redeem_pass", "admin_grant", "not_a_reason"):
+            with self.assertRaises(engagement.BadSource, msg=reason):
+                engagement.grant_coins(self.state, self.account_id, amount=50,
+                                       reason=reason, source="client")
+        # Positive control: the same four reasons are refused for the *other* reason once
+        # the source is legal, so `BadSource` here is not a route that always raises.
+        with self.assertRaises(engagement.BadReason):
+            engagement.grant_coins(self.state, self.account_id, amount=50,
+                                   reason="not_a_reason", source="server")
+        self.assertEqual(self.wallet_state(), (0, 0, 0.0), self.rows())
+
+    def test_a_client_cannot_name_a_refund_and_a_vouched_refund_stays_distinguishable(
+            self):
+        """`/coins/earn` accepts exactly one reason (`_EARN_KEYS` `:128`, `_EARN_DAILY_LOGIN`
+        `:138`, the `:825-830` fallthrough), so `refund` is a 400 before it can reach
+        `grant_coins` and the overlap in the sets is unreachable from the phone. The two
+        rows that a legal `refund` credit and a server debit do produce stay distinguishable
+        because `_ledger_entry` publishes `source` beside `reason` (`:486-499` says exactly
+        why), so 'who vouched' survives a word that names two directions."""
+        before = self.wallet_state()
+        self.assertEqual(self.code(self.claim("refund")), "invalid_params")
+        self.assertEqual(self.wallet_state(), before, self.rows())
+        # Positive control at the same surface: this route does credit a reason it knows,
+        # so the 400 above is about `refund` and not about an endpoint that answers 400 to
+        # every body.
+        earned = self.body(self.claim())["earned"]
+        self.assertGreater(earned["coins_granted"], 0, self.rows())
+        self.grant(9, reason="refund")                  # operator-typed: source `admin`
+        self.spend(9, reason="refund")                  # server-clawback: source `server`
+        entries = self.body(self.get(COINS + "/history", {"limit": ["50"]}))["entries"]
+        refunds = [entry for entry in entries if entry["reason"] == "refund"]
+        self.assertEqual(len(refunds), 2, entries)      # positive control
+        self.assertEqual(sorted(entry["source"] for entry in refunds), ["admin", "server"])
+        self.assertEqual(sorted(entry["delta"] for entry in refunds), [-9, 9])
+        self.assertEqual(self.body(self.get(COINS))["balance"], earned["coins_granted"])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
