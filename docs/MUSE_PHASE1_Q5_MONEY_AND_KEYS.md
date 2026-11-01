@@ -230,7 +230,9 @@ So KD-1's demonstration and KD-5's forgery check are now hosted facts rather tha
 **Money coverage, stated as the verdict needs it:** 61 + 38 + 85 + 17 = **201 offline tests** now stand
 between a money-or-handle change and trunk, none of which needs this box.
 
-**The 16 pins — 3 CONVERTED on Muse's 08:30 word, and the count above this line was wrong when I wrote it.**
+**The 16 pins — 3 CONVERTED on Muse's 08:30 word, and the entry count this section first quoted was wrong when
+I wrote it.** *(This "3 of 15" is that slice's record, not the running total; the current figure is the recount
+below, which is re-derived from the guard every slice.)*
 `Fast_Fetch/checkpoints/20261031-q5-guard-derived-constants-audit-and-the-gate-that-checks-itself.md`
 §"the defect class" listed 16 `INVARIANTS` entries that pin a *fact about today* rather than the *method
 sentence around it*; 15 were to be converted, 1 (`app lane: signed release needs the 4 secrets`) kept as a
@@ -269,7 +271,7 @@ and diff `len(INVARIANTS)`' label set against the audit's sixteen**, not to grep
 lines, and a line-grep is the method that undercounted the CI suites and produced the "98 entries" error below.
 Every figure in this paragraph came from that import, and the count in each slice's checkpoint says so.
 
-**As of slice 1 of the ordinary eight (2026-11-01 09:x, q5): 4 of 15 converted, 11 still pinning state.**
+**As of slice 2 of the ordinary eight (2026-11-01 09:x, q5): 5 of 15 converted, 10 still pinning state.**
 Held, not open — these are *not* mine to close:
 
 | label | why held |
@@ -279,11 +281,12 @@ Held, not open — these are *not* mine to close:
 | `the named hole: 442 keys / 455 rows` | qoder3's adult-flag surface; do not step on it unasked |
 | `residual measure under the correct identity` | same |
 
-The ordinary eight that are mine, in the order I am taking them, one pin per slice: `measured: secrets list is
-empty` (**done, slice 1**), `release died at the signing preflight`, `no signed artifact has ever been
+The ordinary eight, in the order I am taking them, one pin per slice: `measured: secrets list is empty`
+(**slice 1 done**), `release died at the signing preflight` (**slice 2 done — and it moved subject, because the
+clause the audit prescribed for it is now false**; see the series checkpoint), `no signed artifact has ever been
 produced`, `debug APK needs no secret`, `the filter shape is measured, never assumed`, `app: arm64-excluded
 suites are invisible here`, `MovieBox is metadata + trailer evidence, not playable`, `no playable print is
-resolvable from this host`. Each gets its own branch, sha, and hosted run; the running record is
+resolvable from this host`. Six remain. Each gets its own branch, sha, and hosted run; the running record is
 `Fast_Fetch/checkpoints/20261101-q5-pin-conversions-the-eight-ordinary-slices.md`.
 
 **Authorisation state, recorded so nobody reads a recommendation as a ticket:** KD-1 (per-token nonce, a

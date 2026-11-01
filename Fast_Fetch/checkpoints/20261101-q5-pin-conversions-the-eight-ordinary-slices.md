@@ -50,3 +50,39 @@ a duplicate and removed a value. That candidate is dropped; slice 3 takes a diff
 **Trade, stated:** nothing now fails if the empty-list measurement is deleted or reworded out of `AGENTS.md`.
 The measurement stays there as dated history (`Measured 2026-10-29 17:55`), and the guard keeps the *reason it
 was believable* — which is the part worth keeping.
+
+## Slice 2 — `release died at the signing preflight` → moved subject, and a live doc defect found on the way
+
+**Branch:** `q5-pin-s2-release-preflight-20261101`, stacked on slice 1 (`011d973`).
+
+**This is the one the series rule was for.** The 20261031 audit prescribed, for this pin, that the sentence
+*around* the run outcome should be pinned — "That preflight is why exercising this is safe". That clause is
+present in `AGENTS.md`, so a mechanical conversion would have landed green. And it is now **false**:
+`SPEC_AGENTS_MEASURED_NOTES.md` records run `41104217171` clearing `🗝️ Verify signing secrets are present`, so
+the preflight no longer stops anything. Pinning it would have made the gate an accomplice to a safety claim
+that expired — a guard that bites hardest on exactly the sentence that must not be trusted.
+
+**What the pin became instead:** label `a red release run is read from the job log, not the summary`, file
+`docs/SPEC_AGENTS_MEASURED_NOTES.md` (new constant `MEASURED_NOTES` beside `ADMIN_DOC`), phrase "read the job
+log, not the summary" — the live reading rule in the file that actually holds the release-run history. This is
+a **subject change, not a phrase swap**, and it is declared rather than smuggled: the guard no longer promises
+anything about the 2026-10-29 run outcome, and never promises what the next release run will do.
+
+**Eligibility checked, not assumed:** a pin target outside `AUTO_LOADED` must be named in `CONTINUITY.md` or
+`docs/SESSION_CHECKPOINT.md` (`test_every_invariant_target_is_reachable_from_the_loaded_indexes`); `docs/**`
+maps to an empty holder in that test, so `SPEC_AGENTS_MEASURED_NOTES.md` was verified to appear in the needles
+before the pin moved. Precedent for a `docs/` pin target already exists (`docs/ADMIN_PANEL_ACCESS.md`, 2 pins).
+
+**The finding this conversion produced, for the supervisor and not for me to fix:** `AGENTS.md`'s signing
+section still says dispatching the release workflow is safe *because the preflight stops it*. It does not stop
+it any more. Today nothing publishes anyway, because every release run dies later — at the unit-test gate or at
+`App/app/build.gradle.kts:120` (`Last unit does not have enough valid bits`, the stored `KEYSTORE_BASE64`
+padding) — during *configuration*, before any artifact exists. But that safety is now an accident of a broken
+secret, and the moment the owner re-enters `KEYSTORE_BASE64` correctly, a `workflow_dispatch` on
+`🚀 Release — Sign & Publish APK + AAB` would be stopped by nothing except the standing orders (no tag, no
+release publication, no restart). Two consequences:
+  1. the sentence should be corrected — and the corrected form is **longer** than the original, so it cannot
+     go in at 10 bytes of headroom; it needs bytes freed elsewhere in `AGENTS.md`, which is a fleet decision;
+  2. until it is corrected, treat "exercising the release workflow is safe" as **not** available to any lane:
+     the rule that protects the artifact today is the owner's order, not the preflight.
+Named here, escalated, and **not** worked around: no `AGENTS.md` byte edited, no workflow dispatched, no tag.

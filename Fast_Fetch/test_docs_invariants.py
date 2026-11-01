@@ -29,6 +29,7 @@ CHECKPOINT = REPO_ROOT / "docs" / "SESSION_CHECKPOINT.md"
 #: The one file a lane reads to learn how to reach the panel, and the one that
 #: carried the wording root AGENTS.md forbids.
 ADMIN_DOC = REPO_ROOT / "docs" / "ADMIN_PANEL_ACCESS.md"
+MEASURED_NOTES = REPO_ROOT / "docs" / "SPEC_AGENTS_MEASURED_NOTES.md"
 
 FF_CKPT = BASE_DIR / "checkpoints"
 DOC_CKPT = REPO_ROOT / "docs" / "checkpoints"
@@ -131,8 +132,17 @@ INVARIANTS = [
     # only once you have checked the reader's own repo permissions. That clause is what is pinned now.
     ("an empty list from a scoped read is still a real answer", ROOT_AGENTS,
      "so it is a real answer and not a permission artifact"),
-    ("release died at the signing preflight", ROOT_AGENTS,
-     "it died at the `🗝️ Verify signing secrets are present` preflight"),
+    # Converted 2026-11-01 (q5, slice 2 of the ordinary eight). The old literal was a 2026-10-29 run
+    # outcome ("it died at the `🗝️ Verify signing secrets are present` preflight"), and the audit's own
+    # suggested replacement — "That preflight is why exercising this is safe", the sentence right after
+    # it — is now the dangerous half of the paragraph: run `41104217171` *cleared* that preflight, so a
+    # dispatched release run is no longer stopped by it. Pinning the audit's suggestion would have
+    # frozen a false safety guarantee into the gate. So this pin moves subject, not just phrase: it
+    # lands on the live reading rule from the file that records release-run history, and the staleness
+    # of the `AGENTS.md` safety sentence is reported to the supervisor rather than edited by this lane
+    # (the file is 10 B under its ceiling and the sentence is policy, not prose).
+    ("a red release run is read from the job log, not the summary", MEASURED_NOTES,
+     "read the job log, not the summary"),
     ("do not generate a replacement keystore", ROOT_AGENTS,
      "**Do not generate a replacement keystore to work around it**"),
     ("debug APK needs no secret", ROOT_AGENTS,
