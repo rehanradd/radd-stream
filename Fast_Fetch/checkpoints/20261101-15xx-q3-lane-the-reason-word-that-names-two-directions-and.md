@@ -98,7 +98,9 @@ pages folded at the correct media identity, with the release and source totals p
 mp4moviez was *verified* at `28,066 works`. Under the converter that is on trunk today the number
 is 11,404. That is a doc-truth defect with a measured replacement, in the same family as the
 7-way contradiction report the supervisor ruled "recorded, not resolved now" — so it goes to q1
-with the number to use, and I have not touched `SITES.md`.
+with the number to use, and I have not touched `SITES.md`. **Superseded within the hour:** the
+15:56 dispatch asked for the next item that was neither owner-held nor barred, and this was it, so
+§5 records the edit that retired the claim.
 
 **What this does NOT claim.** It does not say the adult law is complete: the 0-both-flags result
 holds *within this one site's vault*, and the cross-site residual in CONTINUITY item 5 (2,600 keys
@@ -139,6 +141,35 @@ read + gate held), #30 (owner signature), #34 (merge), #36 (ruling (2) — copy-
 defect the reconciliation itself surfaced: `Fast_Fetch/SITES.md:83` still certifies the retired
 28,066 inside the same file whose § MP4Moviez paragraph carries the counted identity. §5 records
 what I did about it.
+
+## 5. Task #39 — `SITES.md` now says one thing about mp4moviez, and it is the measured one
+
+The defect the reconciliation surfaced was inside one file: `SITES.md:83` certified
+`(verified: 28,066 works, 54,267 releases, 54,267 sources)` for `import_mp4moviez.py` while the
+same file's § MP4Moviez paragraph states the counted identity — `29,848 = 11,404 staged + 18,155
+collapsed + 289 skipped (187 not-a-work, 102 listing)`. Two claims, one converter, four lines
+apart in the reader's eye. Neither guard in `test_docs_invariants.py` covers the number (its two
+SITES.md entries are the MovieBox phrases at `:274-277`, both re-checked present after the edit),
+so nothing would have caught the contradiction: it was free to say either thing.
+
+**Edit, in one bullet:** the line now states **11,404 works / 54,267 releases / 54,267 sources**
+at § MP4Moviez's identity, and *retires rather than deletes* the 28,066 — naming it as the
+2026-10-29 near-page count, the arithmetic that reproduces it (`29,848 − 1,438 dropped − 344
+merged = 28,066`), the checkpoint that recorded it
+(`20261029-…mp4moviez-becomes-mergeable-and-a-fleet.md:48-52`), and the fact that no database in
+`/home/ubuntu/radd-stream-data` holds it. Then the new measurement in one line: re-derived
+read-only from `mp4moviez.db` through the converter's own `:264`/`:277` calls, **11,404 keys, 289
+skipped, 43 flagged**.
+
+Three arithmetic checks that now close against each other, which is the whole value of the edit:
+`187 + 102 = 289` (my probe's `skipped_pages.none` against the file's own split), `11,404 +
+18,155 + 289 = 29,848` (the counted identity, and my independent group count sits in it exactly),
+and `54,267 = 54,267` (legacy releases = staged sources, so the fold lost no link).
+
+**Bounds on this item:** docs-only, no Python, no test run, no measurement beyond the 1.84 s
+read-only pass already recorded in §2. It is not a rule change and it does not touch the adult law
+— the cross-site residual in CONTINUITY item 5 stays open and unmeasured by me. And it is not the
+7-way contradiction report: that ruling still stands, and I have not edited the architecture doc.
 
 ## Blocks and bounds
 

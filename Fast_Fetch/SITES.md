@@ -80,9 +80,18 @@ Two further claims this table retires:
   29,848 pages scraped before the fleet schema existed: no `canonical_key`, no
   `sources` table, so `_source_family()` raises
   `ValueError: Source database has neither download_sources nor sources table`.
-  `Fast_Fetch/importers/import_mp4moviez.py` converts it (verified: 28,066 works,
-  54,267 releases, 54,267 sources, and the result reads back through
-  `merge_catalogs._collect_staging_post`). Before this file, SITES.md had
+  `Fast_Fetch/importers/import_mp4moviez.py` converts it — at the identity § MP4Moviez
+  states below: **11,404 works**, 54,267 releases, 54,267 sources, and
+  the result reads back through `merge_catalogs._collect_staging_post`. The figure
+  this line carried until 2026-11-01, **28,066 works**, is retired here rather than
+  deleted: it was the 2026-10-29 run's near-page count (`29,848 − 1,438 dropped − 344
+  merged = 28,066`, in
+  `checkpoints/20261029-2026-10-29-session-mp4moviez-becomes-mergeable-and-a-fleet.md:48-52`),
+  the identity the converter had not reached yet, and no database in
+  `/home/ubuntu/radd-stream-data` holds it. Re-measured read-only from `mp4moviez.db`
+  with the converter's own calls (`convert_mp4moviez.py:264` `parse_slug` → `:277`
+  `generate_canonical_key`): 11,404 keys and 289 skipped pages, 43 of those keys
+  flagged `is_18_plus`. Before this file, SITES.md had
   MP4Moviez listed under *Sites To Add Next* with a domain nobody scraped —
   neither half of that was true. See § MP4Moviez.
 
