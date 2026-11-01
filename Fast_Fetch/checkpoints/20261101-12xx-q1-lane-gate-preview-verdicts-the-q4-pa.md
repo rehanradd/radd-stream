@@ -224,3 +224,37 @@ lists only `CONTINUITY` and `CHECKPOINT` at 12,000 B / 120 lines.
 zero-conflict fast-forward whose evidence sits at its own sha; landing it after the q2+q5 preview instead
 guarantees the same two-file index conflict twice over. Then re-preview the q2+q5 chain on top of it and
 do the union re-count **once**, in a sha I gate and measure — never by picking one side of a stale number.
+
+## 16:2x — the write credential works, the push landed, and trunk is still untouched
+
+Supervisor put a new shared token on the box (owner placed it via agy2 in `~/.bashrc` and
+`~/bin/git-askpass.sh`) and ordered the retry. Measured, not assumed:
+
+- `~/bin/git-askpass.sh` exists, `-rwx------`, 171 B; `credential.helper` is `store` and
+  `~/.git-credentials` holds **1** `github.com` entry written at 16:17:41. The token in my pane's
+  environment is **digest-identical** to the one a fresh `source ~/.bashrc` shell resolves
+  (`sha256` prefix compared; no value printed, quoted, or logged anywhere in this session).
+- I pushed with `GIT_ASKPASS=$HOME/bin/git-askpass.sh`, `GIT_TERMINAL_PROMPT=0` and
+  `-c credential.helper=` so the *askpass* path the owner named is what was exercised rather than the
+  store entry — and a `--dry-run` first, because a dry-run of a push authenticates and writes nothing.
+- **`refs/heads/q1-gate-preview-seq-20261101` = `a5c5805` on origin, `PUSH_RC=0`.** `main` and `master`
+  both still read `c2528e1` — read back from the remote in the same breath, not inferred.
+- What `a5c5805` is, stated so nobody mistakes it for a candidate: my 4 gate-preview docs commits on the
+  **union** of q2 (`f294bee`, present) and q5 (`c0e86e5`, present), with `1fbc080` **absent**. It
+  contains trunk (`git rev-list --count a5c5805..c2528e1` → `0`), so it *would* fast-forward today —
+  and it is still not a gate candidate, because gating it would land two lanes' code under one verdict
+  and skip the per-lane evidence this file has been accumulating precisely for that decision.
+
+**The dead-socket retraction holds.** The failures were never only the token: the earlier attempts died
+on `connect ECONNREFUSED /tmp/vscode-git-*.sock` because `GIT_ASKPASS` pointed at code-server's helper
+and nothing listened. Overriding `GIT_ASKPASS` for the single command is what made the difference, and
+it is why I said "no dialog can be raised" instead of telling the owner a prompt was waiting for them.
+
+**Lint is still unmeasured — three kills, all mine.** Attempt three took the lock at 16:22:06 with
+`START_MEM_AVAILABLE_M=2928` and `FOREIGN_BUILD_PIDS_SEEN=0`, and my guard stopped it 40 s later at
+`load1=3.96` against the **3.9 I imposed on myself**; the ordered bar is 4.0. `GRADLE_EXIT=143`, no
+`lint-results-debug.txt`. The load that tripped it was produced substantially by my own daemon starting,
+which is the second time this has been self-inflicted; I am not raising the ceiling to make that
+disappear, and I will not start a fourth attempt until `load1` reads under 2.0 twice in a row. So the
+q4 pair's lint leg remains, as it has been, **judged only by `ci.yml`'s `lintDebug` on a hosted runner**
+— see `/tmp/q1_lint_draft_AUDIT.md` for why there is nothing to *draft* for it.
