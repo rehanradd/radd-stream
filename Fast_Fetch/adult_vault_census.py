@@ -213,7 +213,8 @@ class CensusRefused(RuntimeError):
 
 def census_vault(path: Path) -> dict:
     """Count one vault, and prove the counting did not touch it."""
-    if Path(path).name in FORBIDDEN:
+    path = Path(path)          # every other helper accepts a str; this one used to only look like it
+    if path.name in FORBIDDEN:
         raise CensusRefused(f"{path.name} is not a census target")
     before = fingerprint(path)
     started = time.monotonic()
