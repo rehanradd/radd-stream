@@ -92,6 +92,9 @@ import com.raddstream.app.ui.components.PrintSourceBadge
 import com.raddstream.app.ui.components.QualityRungCard
 import com.raddstream.app.ui.components.SectionHeader
 import com.raddstream.app.ui.components.SubtitleBadge
+import androidx.compose.ui.res.stringResource
+import com.raddstream.app.R
+import com.raddstream.app.player.DetailSelection
 import com.raddstream.app.player.LadderForScope
 import com.raddstream.app.player.QualityOption
 import com.raddstream.app.viewmodel.DetailNavigationEvent
@@ -247,14 +250,28 @@ fun DetailScreen(
                 rungs = RungActions(
                     ladder = state.ladder,
                     selectedBand = state.selectedBand,
-                    onPlay = viewModel::playLadder,
-                    onKeep = { option -> downloadWithStoragePermission { viewModel.keepRung(option) } },
+                    // A rung tap is now TWO facts in one gesture: it saves the picture the viewer
+                    // chose (so the next title opens the same way) and it acts on the selection.
+                    // The band list it comes from is already only the bands this title has.
+                    onPlay = { option ->
+                        viewModel.selectBand(option.band)
+                        viewModel.playSelected()
+                    },
+                    onKeep = { option ->
+                        viewModel.selectBand(option.band)
+                        downloadWithStoragePermission { viewModel.keepSelected() }
+                    },
                 ),
                 ladderScope = rungScopeLabel(state.ladderSeason, state.ladderEpisode),
                 adFree = state.adFree,
                 premiumSourcesLocked = state.premiumSourcesLocked,
-                onAskRungs = viewModel::showRungsFor,
+                onAskRungs = { season, episode -> viewModel.selectScope(season, episode) },
                 hasRungs = { season, episode -> !viewModel.ladderFor(season, episode).isEmpty },
+                canAct = DetailSelection.canAct(state.selection, state.ladder.isEmpty),
+                canDownload = viewModel.downloadOffers().isNotEmpty(),
+                qualityNote = state.qualityNote,
+                onPlaySelected = viewModel::playSelected,
+                onKeepSelected = { downloadWithStoragePermission { viewModel.keepSelected() } },
                 onOpenVipUpgrade = onOpenVipUpgrade,
                 reloadError = state.error,
                 onRetryReload = viewModel::loadDetail,
@@ -307,6 +324,22 @@ private fun DetailContent(
     premiumSourcesLocked: Boolean,
     onAskRungs: (season: Int?, episode: Int?) -> Unit,
     hasRungs: (season: Int?, episode: Int?) -> Boolean,
+    /**
+     * Whether the page has a target with something to play. False means the two buttons do not
+     * exist: a button that can only answer with a failure toast is the fake affordance the spec
+     * bans, and an unplayable title is told to the viewer in words instead.
+     */
+    canAct: Boolean,
+    /** Whether ANY kept-file can be offered for the selection at all (see DownloadOffers). */
+    canDownload: Boolean,
+    /**
+     * The two halves of the substitution sentence — the picture that arrived, and the one the
+     * viewer had saved that this title does not have. Null when nothing was substituted.
+     */
+    qualityNote: Pair<String, String>?,
+    /** The page's one Play, and its one Download. Both act on the selection, never on a row. */
+    onPlaySelected: () -> Unit,
+    onKeepSelected: () -> Unit,
     onOpenVipUpgrade: () -> Unit,
     /**
      * A reload of a title that is already on screen. Null in the normal case. It arrives here
@@ -319,7 +352,6 @@ private fun DetailContent(
     contentPadding: PaddingValues,
 ) {
     val allPrints = (workPrints + seasons.flatMap { it.episodes.flatMap { e -> e.prints } } + seasons.flatMap { it.packedPrints })
-    val bestPrint = allPrints.maxByOrNull { it.rankKey }
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -339,13 +371,19 @@ private fun DetailContent(
 
         item { PosterHeader(post = post, capabilities = capabilities) }
 
-        item {
-            PrimaryActions(
-                bestPrint = bestPrint,
-                hasAnyPrint = allPrints.isNotEmpty(),
-                onPlay = { bestPrint?.let(onPlayPrint) },
-                onKeep = { bestPrint?.let(onKeep) },
-            )
+        // Two buttons, and only two: one Play and one Download, both acting on what the viewer
+        // selected. Before this the page had a play icon on every rung, every episode row and every
+        // print card, so "Play" meant about forty different things and a viewer who wanted the
+        // second episode had to find which of its four icons was the one that started it.
+        if (canAct) {
+            item {
+                PrimaryActions(
+                    canDownload = canDownload,
+                    note = qualityNote,
+                    onPlay = onPlaySelected,
+                    onKeep = onKeepSelected,
+                )
+            }
         }
 
         // A first-party sponsor slot: no third-party SDK, no hidden network call, and it
@@ -364,8 +402,7 @@ private fun DetailContent(
                 QualityRungCard(
                     ladder = rungs.ladder,
                     selectedBand = rungs.selectedBand,
-                    onPlayRung = rungs.onPlay,
-                    onKeepRung = rungs.onKeep,
+                    onSelectBand = rungs.onSelect,
                 )
             }
         }
@@ -513,24 +550,43 @@ private fun PosterHeader(post: PostDetail, capabilities: List<String>) {
 
 @Composable
 private fun PrimaryActions(
-    bestPrint: RankedPrint?,
-    hasAnyPrint: Boolean,
+    canDownload: Boolean,
+    note: Pair<String, String>?,
     onPlay: () -> Unit,
     onKeep: () -> Unit,
 ) {
-    Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
-        Button(
-            onClick = onPlay,
-            enabled = bestPrint?.canStart == true,
-            modifier = Modifier.weight(1f).height(52.dp),
-            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
-        ) {
-            Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(20.dp))
-            Spacer(Modifier.width(8.dp))
-            Text(bestPrint?.playLabel() ?: "Play")
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
+            Button(
+                onClick = onPlay,
+                modifier = Modifier.weight(1f).height(52.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
+            ) {
+                Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(20.dp))
+                Spacer(Modifier.width(8.dp))
+                Text("Play")
+            }
+            // The second button only exists when there is a file to keep. A rung that is a page, a
+            // dead address or a copy that cannot resume is filtered by DownloadOffers before it
+            // reaches this row, so a viewer tapping Download is tapping something that will finish.
+            if (canDownload) {
+                OutlinedButton(onClick = onKeep, modifier = Modifier.height(52.dp)) {
+                    Icon(Icons.Default.Download, contentDescription = "Download video", modifier = Modifier.size(20.dp))
+                }
+            }
         }
-        OutlinedButton(onClick = onKeep, enabled = hasAnyPrint, modifier = Modifier.height(52.dp)) {
-            Icon(Icons.Default.Download, contentDescription = "Download video", modifier = Modifier.size(20.dp))
+        note?.let { (arrived, asked) ->
+            // One plain line, in the viewer's words, when the picture that arrived is not the one
+            // they saved. The sentence lives in res/values and the decision in QualityChoice, so
+            // neither can drift away from the other in a composable nobody tested.
+            Text(
+                text = stringResource(R.string.detail_quality_note, arrived, asked),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
     }
 }
@@ -949,8 +1005,7 @@ private fun EpisodeRow(
             QualityRungCard(
                 ladder = rungs.ladder,
                 selectedBand = rungs.selectedBand,
-                onPlayRung = rungs.onPlay,
-                onKeepRung = rungs.onKeep,
+                onSelectBand = rungs.onSelect,
                 scopeTitle = scopeLabel,
             )
         }

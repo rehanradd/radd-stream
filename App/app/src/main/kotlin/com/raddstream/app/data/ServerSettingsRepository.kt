@@ -124,6 +124,36 @@ class ServerSettingsRepository @Inject constructor(
     }
 
     /**
+     * The picture quality this viewer chose, in the ladder's own band words (`720p`, `2160p`),
+     * or null when nobody has ever chosen. It is a standing decision like the region: a viewer who
+     * picks 480p on a mobile connection expects the next title to open at 480p, and the spec makes
+     * that the whole quality model — one saved choice, `720p` for the first ever play, and no
+     * per-title surprise menus.
+     *
+     * The store keeps WHAT was asked, never what a title could deliver: resolving a saved band
+     * against the bands a title actually has is [com.raddstream.app.player.QualityChoice]'s rule,
+     * and a preference that stored a resolved answer would silently rewrite itself on the next
+     * title. Blank reads as absent, so an old row from a build that wrote an empty string does not
+     * look like a choice.
+     */
+    val playbackBand: Flow<String?> = dataStore.data.map { preferences ->
+        preferences[PLAYBACK_BAND_KEY]?.trim()?.takeIf { it.isNotEmpty() }
+    }
+
+    /**
+     * Saves the quality choice. Null REMOVES it, which is how Settings says "put me back to the
+     * default" without storing a word for the default — the same idiom [saveSyncKey] uses, and the
+     * reason a reset needs no migration.
+     */
+    suspend fun savePlaybackBand(band: String?) {
+        val clean = band?.trim()?.takeIf { it.isNotEmpty() }
+        dataStore.edit { preferences ->
+            if (clean == null) preferences.remove(PLAYBACK_BAND_KEY)
+            else preferences[PLAYBACK_BAND_KEY] = clean
+        }
+    }
+
+    /**
      * The one opt-in that exposes anything: whether kept files may be read over the local network.
      * Persisted because it is a standing decision, not a session gesture — a viewer who turns it on
      * for an evening expects it still on until they turn it off, and the [com.raddstream.app.share.LanShareRunner]
@@ -596,6 +626,7 @@ class ServerSettingsRepository @Inject constructor(
         private val ACCOUNT_LABEL_KEY = stringPreferencesKey("account_label")
         private val SEARCH_RECENTS_KEY = stringPreferencesKey("search_recents")
         private val IMAGE_QUALITY_KEY = stringPreferencesKey("image_quality")
+        private val PLAYBACK_BAND_KEY = stringPreferencesKey("playback_band")
         private val MOBILE_DATA_KEY = booleanPreferencesKey("mobile_data_allowed")
         private val KEEP_TTL_KEY = intPreferencesKey("keep_ttl_hours")
         private val PREFERRED_SUBTITLE_LANGUAGE_KEY = stringPreferencesKey("preferred_subtitle_language")

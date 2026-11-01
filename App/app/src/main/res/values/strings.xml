@@ -135,4 +135,8 @@
     <string name="embed_page_title">Provider page</string>
     <string name="embed_load_failed">The page did not load: %1$s</string>
     <string name="embed_load_failed_unknown">The page did not load</string>
+    <!-- The detail page's one plain line when the picture that arrived is not the one saved. The
+         two blanks are filled by QualityChoice, which owns which bands go in them; the sentence is
+         owned here, so a locale folder can reach it and no composable can re-write it. -->
+    <string name="detail_quality_note">Playing in %1$s — %2$s is not available for this title.</string>
 </resources>
