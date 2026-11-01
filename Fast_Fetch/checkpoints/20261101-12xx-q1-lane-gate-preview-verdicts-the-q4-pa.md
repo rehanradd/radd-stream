@@ -356,3 +356,35 @@ So the q4 pair's lint leg remains judged by `ci.yml`'s `lintDebug` on the hosted
 that means for the two Android candidates: `718a8ef` and `ede66f4` each have exactly **one** check-run whose
 job is `assembleDebug + testDebugUnitTest + lintDebug`, so lint is a *single step inside a single sample*.
 `14 steps, 0 failures` would be the minimum evidence I'd want, and I cannot currently attach it.
+
+## 17:0x — swap hit zero, my own monitor lied 20 times, and the #44 chain got a real tripwire
+
+**The breach was real.** Swap is **two files** — `/swapfile` 2 G (fully used) and `/swapfile2` 4 G (3.9 G
+used) — and `SwapFree` went to **0 MB**. `load1` reached 7.33 with **zero java/gradle processes**, so the
+load was seven `qodercli` panes (5,105 MB of RSS between them), not a build. Disk was never the problem:
+`/dev/sda1` 67% used, 66 G free, and `Dirty` only 200 kB. It recovered on its own: 0 → 83 → 128 → 150 MB
+free, `MemAvailable` steady at ~5.8 G, PSI `memory full avg10=0.04` (the stall had passed; `avg300=13.27`
+was the record of it). vmstat `so` went 135 → 0.
+
+**My monitor was wrong and I retired it.** Its floor read `[ memavail -lt 1500 ] || [ swapfree -lt 800 ]` —
+an **OR**, with no dedup and no trend. So once `SwapFree` fell under 800 M it re-emitted
+`HARD FLOOR BREACH … halt every lane now` every 20 s **while `MemAvailable` sat at 5,800 M and the swap
+figure was climbing**. Twenty-plus alarms saying "halt everything" on a recovering box, and the real danger
+of an alarm like that is not noise, it is that the next one gets dismissed. Replaced with a
+state-transition monitor that fires on exactly two things: a change in `NRestarts`/`MainPID`, and
+`mem_avail < 1200 M` **AND** `swap_free < 200 M` together. One line per state change.
+
+**Why a restart is the only event on this box worth watching.** `radd-stream.service` is `active`,
+`Restart=on-failure`, `RestartUSec=5s`, `NRestarts=1`, MainPID 1835070. Measured that process directly:
+**VmRSS 31,936 kB, VmSwap 37,196 kB, 2 threads** — while its cgroup reports `MemoryCurrent=3.4 GB`
+(`Memory: 3.1G, peak 3.2G, swap: 36.3M`) with only **one** task in `cgroup.procs`. So the 3.4 GB is
+**page cache charged to the service** (global `Cached: 5,579 MB`) — the catalog DB it reads — not 3.4 GB of
+anonymous leak. Reclaimable, and not the fire. **Unexplained and stated as unmeasured:** that 31 MB process
+carries `oom_score=668`, which RSS + swap alone cannot produce (≈67 MB of 12 GB). The five agent panes score
+709–754, so panes die before the service does — but the service is the *only* process on this box whose OOM
+death has a compliance consequence, because the auto-restart re-executes the disk tree that is 218 commits
+behind and lacks `backfill_adult_key.py`, `test_adult_corroborated_fold.py`,
+`test_adult_twin_probe.py` (6 `adult_clause` call sites on disk vs 7 in trunk). **That is #44, and it stays
+owner-held: I did not restart anything, did not touch `/opt/radd-stream`, and did not write an
+`oom_score_adj`.** The owner's one-line mitigation, if they want it, is to lower that score's priority from
+the unit (`OOMScoreAdjust=`), which is a production config change and therefore explicitly not mine.
