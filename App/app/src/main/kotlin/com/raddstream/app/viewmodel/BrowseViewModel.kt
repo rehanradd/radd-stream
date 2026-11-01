@@ -17,6 +17,14 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
+/**
+ * Paging guard for every grid/rail keyed on `post.id`. The server orders `id DESC`, so a
+ * scrape landing between page fetches shifts the window and hands the same row back twice;
+ * a duplicate key in `LazyVerticalGrid` (or a keyed `MediaRail`) throws. De-duplicating at
+ * the paging source keeps one id exactly once per list, first occurrence winning.
+ */
+internal fun List<Post>.distinctById(): List<Post> = distinctBy { post -> post.id }
+
 /** A paged, single-content-type grid — the destination behind Home's rails and
  *  type jump-off tiles. Uses only `GET /api/v1/posts` (`type` + `page` + `limit`). */
 data class BrowseUiState(
@@ -73,7 +81,7 @@ class BrowseViewModel @Inject constructor(
                 val resp = catalogRepository.getPosts(type = type, page = 1, limit = PAGE)
                 _uiState.update {
                     it.copy(
-                        items = resp.results,
+                        items = resp.results.distinctById(),
                         loading = false,
                         page = 1,
                         hasMore = resp.results.size >= PAGE && 1 < resp.totalPages,
@@ -97,7 +105,7 @@ class BrowseViewModel @Inject constructor(
                 val resp = catalogRepository.getPosts(type = type, page = next, limit = PAGE)
                 _uiState.update {
                     it.copy(
-                        items = it.items + resp.results,
+                        items = (it.items + resp.results).distinctById(),
                         page = next,
                         hasMore = resp.results.size >= PAGE && next < resp.totalPages,
                         loadingMore = false,

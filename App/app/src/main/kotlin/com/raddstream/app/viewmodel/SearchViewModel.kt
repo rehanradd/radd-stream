@@ -242,7 +242,7 @@ class SearchViewModel @Inject constructor(
                     page = next,
                     limit = PAGE_SIZE,
                 )
-                rawResults = rawResults + resp.results
+                rawResults = (rawResults + resp.results).distinctById()
                 _uiState.update {
                     it.copy(
                         page = next,
@@ -291,7 +291,7 @@ class SearchViewModel @Inject constructor(
                     page = 1,
                     limit = PAGE_SIZE,
                 )
-                rawResults = resp.results
+                rawResults = resp.results.distinctById()
                 _uiState.update {
                     it.copy(
                         isLoading = false,
