@@ -53,7 +53,11 @@ class LowerQualityStepTest {
         // ladder's own spelling, which is what a rung lookup matches on.
         assertEquals("1080p", LowerQualityStep.nextLower("4K", listOf("1080p", "2160p")))
         assertEquals("1080p", LowerQualityStep.nextLower("2160p", listOf("1080p", "4K")))
-        assertEquals("4K", LowerQualityStep.nextLower("2160p", listOf("4K", "1080p")))
+        assertEquals("1080p", LowerQualityStep.nextLower("2160p", listOf("4K", "1080p")))
+        // The spelling case the rule exists for: a ladder whose lower rung reads FHD must be handed
+        // back as FHD, because that is the word a rung lookup matches on. 4K is the CURRENT band
+        // folded away, never the answer — stepping down to the picture you are already on.
+        assertEquals("FHD", LowerQualityStep.nextLower("2160p", listOf("4K", "FHD")))
     }
 
     @Test
