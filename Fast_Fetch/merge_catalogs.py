@@ -69,6 +69,43 @@ def _post_release_rows(src_conn: sqlite3.Connection, post: sqlite3.Row) -> list[
     return []
 
 
+def _release_identity(rel: dict) -> tuple:
+    """Every field the merge maps, so an equal tuple means an equal rendition."""
+    return (
+        rel.get("release_title"), rel.get("quality"), rel.get("codec"), rel.get("size"),
+        rel.get("languages"), rel.get("season"), rel.get("episode"),
+        rel.get("intermediate_url"), rel.get("source_site"),
+        tuple(sorted((s.get("source_url"), s.get("service"), s.get("playback_type"),
+                      s.get("status"), s.get("resource_id"))
+                     for s in rel.get("sources") or [])),
+    )
+
+
+def _collapse_identical_releases(releases: list) -> tuple:
+    """Drop a work's releases that repeat the same rendition, keeping the first.
+
+    Measured 2026-11-01 on `themoviebox.db`: 218 release rows carry only 188 distinct
+    (canonical_key, label) values — 30 rows are identical in every column but their own `id`,
+    each one doubling a real print. A crawl that re-derives a work appends rather than upserts,
+    so the pattern is whatever the last run before this one happened to be. It matters at merge
+    because the target's `UNIQUE(release_id, url)` is keyed on `release_id`: two sibling releases
+    with the same URL are two rows that no constraint recognises as duplicates, so the phantom
+    survives into `download_sources` and the catalog reports a work as having twice the prints it
+    has. Distinguishing a duplicate from a genuine twin — same label, two different files — is
+    exactly what this cannot do from a row alone, so it compares the sources too and collapses
+    only when those match as well.
+    """
+    seen, unique, dropped = set(), [], 0
+    for rel in releases:
+        identity = _release_identity(rel)
+        if identity in seen:
+            dropped += 1
+            continue
+        seen.add(identity)
+        unique.append(rel)
+    return unique, dropped
+
+
 def _collect_staging_post(src_conn: sqlite3.Connection, post: sqlite3.Row,
                           default_site: str = "unknown") -> dict:
     """Maps a per-site staging database (posts/releases/sources) onto the unified shape."""
@@ -297,6 +334,7 @@ def merge_site_db(source_db_path: Path, target_db_path: Path, verbose: bool = Tr
         "releases_merged": 0,
         "sources_merged": 0,
         "posts_conflicted": 0,
+        "duplicate_releases_dropped": 0,
         "adult_rows_folded": 0,
         "adult_exposures_remaining": 0,
         "adult_fold_skipped": 0,
@@ -374,7 +412,10 @@ def merge_site_db(source_db_path: Path, target_db_path: Path, verbose: bool = Tr
                     "episode_evidence": _has_episode_evidence(post_data),
                 }
 
-            releases = post_data["releases"]
+            releases, duplicate_releases = _collapse_identical_releases(post_data["releases"])
+            if duplicate_releases:
+                post_data["releases"] = releases
+                stats["duplicate_releases_dropped"] += duplicate_releases
 
             try:
                 target_post_id = fast_fetch.save_scraped_data(

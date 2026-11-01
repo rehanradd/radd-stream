@@ -170,6 +170,110 @@ class StagingFamilyMergeTests(unittest.TestCase):
                 # probe that never happened (see 8c7488e and _link_state_of).
                 self.assertEqual(src["status"], "unverified")
 
+    def _make_duplicate_releases_db(self, path: Path):
+        """One work whose crawl ran twice: two byte-identical rows plus a real second print."""
+        conn = sqlite3.connect(path)
+        conn.executescript(
+            """
+            CREATE TABLE posts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                canonical_key TEXT, title TEXT, year INTEGER, media_type TEXT,
+                is_18_plus INTEGER DEFAULT 0, site TEXT, post_url TEXT
+            );
+            CREATE TABLE releases (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                post_id INTEGER, label TEXT, quality TEXT, resolution TEXT,
+                size_bytes INTEGER, season_number INTEGER, episode_number INTEGER,
+                codec TEXT, bridge_url TEXT, audio_languages TEXT
+            );
+            CREATE TABLE sources (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                release_id INTEGER, source_name TEXT, service TEXT, resource_id TEXT,
+                source_url TEXT, final_url TEXT, is_temporary INTEGER, quality TEXT
+            );
+            """
+        )
+        cur = conn.execute(
+            "INSERT INTO posts (canonical_key, title, year, media_type, is_18_plus, site,"
+            " post_url) VALUES ('lucifer_2016', 'Lucifer', 2016, 'series', 0, 'themoviebox',"
+            " 'https://themoviebox.xyz/detail/lucifer')")
+        post_id = cur.lastrowid
+        for label, url in (("Lucifer S1-S6 S00 SD", "https://cdn.example/a-sd.mp4"),
+                           ("Lucifer S1-S6 S00 SD", "https://cdn.example/a-sd.mp4"),
+                           ("Lucifer S1-S6 S00 HD", "https://cdn.example/b-hd.mp4")):
+            rel_id = conn.execute(
+                "INSERT INTO releases (post_id, label, quality, resolution, size_bytes,"
+                " season_number, episode_number, codec, bridge_url, audio_languages)"
+                " VALUES (?, ?, ?, '640x360', 1024, 0, NULL, 'x264', '', '[\"English\"]')",
+                (post_id, label, label.rsplit(" ", 1)[-1])).lastrowid
+            conn.execute(
+                "INSERT INTO sources (release_id, source_name, service, resource_id,"
+                " source_url, final_url, is_temporary, quality)"
+                " VALUES (?, 'themoviebox', 'themoviebox', ?, ?, ?, 0, ?)",
+                (rel_id, url.rsplit("/", 1)[-1], url, url, label.rsplit(" ", 1)[-1]))
+        conn.commit()
+        conn.close()
+
+    def test_identical_duplicate_releases_collapse_and_the_real_print_survives(self):
+        """A re-derived work must not double its print count in the unified catalog.
+
+        Measured 2026-11-01 on the live `themoviebox.db`: 218 release rows hold 188 distinct
+        (key, label) values — 30 byte-identical pairs, 30 of 42 works affected, and every one of
+        the 60 source rows has a twin. The target cannot catch this by constraint: its
+        `UNIQUE(release_id, url)` is keyed on `release_id`, and two sibling releases carrying the
+        same URL are two different `release_id`s, so both survive into `download_sources`. The
+        collapse therefore has to happen where the rows are read, and it must be able to tell a
+        duplicate from a genuine second rendition — hence the HD row in the same fixture, which
+        must NOT be collapsed.
+        """
+        with tempfile.TemporaryDirectory() as td:
+            src_db = Path(td) / "themoviebox.db"
+            tgt_db = Path(td) / "unified.db"
+            self._make_duplicate_releases_db(src_db)
+
+            stats = merge_catalogs.merge_site_db(src_db, tgt_db, verbose=False)
+            self.assertEqual(stats["posts_merged"], 1)
+            self.assertEqual(stats["duplicate_releases_dropped"], 1)
+            self.assertEqual(stats["releases_merged"], 2)
+            self.assertEqual(stats["sources_merged"], 2)
+
+            fast_fetch.DB_PATH = tgt_db
+            with fast_fetch.get_db() as conn:
+                self.assertEqual(
+                    [r["release_title"] for r in conn.execute(
+                        "SELECT release_title FROM releases ORDER BY id")],
+                    ["Lucifer S1-S6 S00 SD", "Lucifer S1-S6 S00 HD"])
+                self.assertEqual(
+                    {r["source_url"] for r in conn.execute("SELECT source_url FROM download_sources")},
+                    {"https://cdn.example/a-sd.mp4", "https://cdn.example/b-hd.mp4"})
+
+    def test_a_duplicate_collapse_never_merges_two_distinct_files(self):
+        """Positive control: same label, same quality, different URL is two prints, not one."""
+        with tempfile.TemporaryDirectory() as td:
+            src_db = Path(td) / "themoviebox.db"
+            tgt_db = Path(td) / "unified.db"
+            self._make_duplicate_releases_db(src_db)
+            conn = sqlite3.connect(src_db)
+            conn.execute(
+                "INSERT INTO releases (post_id, label, quality, resolution, size_bytes,"
+                " season_number, episode_number, codec, bridge_url, audio_languages)"
+                " VALUES ((SELECT id FROM posts), 'Lucifer S1-S6 S00 SD', 'SD', '640x360',"
+                " 1024, 0, NULL, 'x264', '', '[\"English\"]')")
+            rel_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+            conn.execute(
+                "INSERT INTO sources (release_id, source_name, service, resource_id,"
+                " source_url, final_url, is_temporary, quality)"
+                " VALUES (?, 'themoviebox', 'themoviebox', 'c-sd.mp4',"
+                " 'https://cdn.example/c-sd.mp4', 'https://cdn.example/c-sd.mp4', 0, 'SD')",
+                (rel_id,))
+            conn.commit()
+            conn.close()
+
+            stats = merge_catalogs.merge_site_db(src_db, tgt_db, verbose=False)
+            self.assertEqual(stats["duplicate_releases_dropped"], 1,
+                             "the third row differs by URL and must survive")
+            self.assertEqual(stats["releases_merged"], 3)
+            self.assertEqual(stats["sources_merged"], 3)
 
     def test_duplicate_canonical_keys_merge_into_one_record(self):
         """Two staging rows for the same title must not create sibling catalog records."""

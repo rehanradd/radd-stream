@@ -32,7 +32,8 @@ true when written); this section is the correction of record.
 - **42 of 44 posts have at least one release.** The two with none:
   `Squid Game` (2021, `squid-game_2021`) and `The Night Agent` (2023, `the-night-agent_2023`).
 - **14 of 44 posts have no source at all** — 32 % of the works in the vault are catalogued but
-  unplayable. Only 60 of the 218 releases (27 %) carry a source.
+  unplayable. Only 60 of the 218 releases carry a source, and 30 of those 218 rows are
+  duplicates, so the honest figure is 30 prints across 30 distinct files (§6).
 
 ## 3. The two structural defects that a re-crawl will not fix by itself
 
@@ -42,13 +43,21 @@ true when written); this section is the correction of record.
    Rule §10 ("capture all seasons/episodes") is therefore **not met** by this vault, and no amount of
    link crawling changes that: it is a parser-granularity gap in
    `Fast_Fetch/importers/import_themoviebox.py`, not a fetch gap.
-2. **Every source is a direct link.** 60/60 are `service='themoviebox'`, `status='active'`,
-   `playback_type='direct'`, and **`bridge_url` is empty in 218/218 releases** while `origin_url` is
-   populated in all of them. So the Dooplay/embed resolution path that exists in the importer
-   (`#22`, `#23`, `resolve Dooplay embeds` per `66769c7`) has produced **zero rows in this vault**.
-   Either the detail API stopped returning embeds, or the resolver ran against other sites only.
-   This is the single most valuable thing for #19 to answer, and it is answerable with a handful of
-   requests rather than a crawl.
+2. **All 60 sources are one CDN, and 30 of them are duplicates — not an untested embed path.**
+   60/60 are `service='themoviebox'`, `status='active'`, `playback_type='direct'`, `bridge_url` empty
+   in 218/218 releases, `source_url == final_url`. My first reading of that was "`#22`/`#23`'s Dooplay
+   embed resolution has produced zero rows here, so either the endpoint is dead or it was never
+   tried". **Reading `import_themoviebox.py` says the opposite**: this site's own backend is
+   Aoneroom — `SERVICE = "themoviebox"`, `MEDIA_HOST_HINTS = ("aoneroom.com",)`, and the module
+   writes `source_url` and `final_url` as the same value by construction. Measured, all 60 URLs are
+   `macdn.aoneroom.com/media/vone/<date>/<hash>-{sd,ld}.mp4` (56 `-sd`, 4 `-ld`), which is the
+   work's print, not a trailer and not a missing embed. The header of that file warns that a host
+   filter alone cannot separate trailer from print and that `NONPLAYABLE_KEYS` is what does it —
+   nothing here contradicts that. **The `#19` question I wrote in §4.1 was therefore the wrong
+   question, and the correction is the finding: there is no embed gap.**
+
+   What there *is*: 60 source rows over **30 distinct files**, because 30 of the 218 release rows
+   are byte-identical twins (§6).
 
 ## 4. What #19's bounded re-crawl should be, in priority order
 
@@ -57,7 +66,7 @@ follows directly from §2 and §3 and is small enough to stay honest about its c
 
 | # | Target | Rows | Why this order |
 |---|---|---|---|
-| 1 | embed/detail probe on **3** known-good series | 3 requests | answers §3.2 for one page-fetch each; decides whether "0 embeds" is a dead endpoint or an untested path |
+| 1 | detail probe on the **14** source-less series | 14 page-fetches, the same requests as row 2 | the payload either names a print or it does not; that decides whether these works are crawlable or metadata-only by the site's own declaration |
 | 2 | the **14** source-less posts | 14 detail fetches | turns catalogued-but-unplayable into playable; biggest user-visible win per request |
 | 3 | the **2** release-less posts | 2 detail fetches | closes the only true holes in §2 |
 | 4 | episode lists for the **218** season packs | the expensive half, and the only half that needs a real budget | §3.1; must be a parser fix + a bounded sweep, not a re-crawl of everything |
@@ -74,3 +83,31 @@ statement for this site must be scoped to *series discovered by the sitemap walk
 `sitemap_cache` of exactly 44 `loc` rows also means the vault is a **detail-tier sample**, not a
 discovery result — the sitemap was not walked to exhaustion, so #24's number is a floor with an
 unmeasured gap above it, and §3.1's episode question is what actually bounds the work.
+
+## 6. The duplicate-row defect, and why the merge cannot catch it
+
+`SELECT COUNT(*) - COUNT(DISTINCT post_canonical_key || '|' || label) FROM releases` → **30**.
+218 rows, 188 distinct `(key, label)`, max copies 2, **30 of the 42 works with releases affected**.
+The twins are identical on every compared column — `label`, `quality`, `resolution`, `codec`,
+`size_bytes`, `season_number`, `origin_url` — 188 distinct tuples for 218 rows. Each twin carries
+its own source row pointing at the same file, which is why 60 sources hide 30 prints.
+
+The obvious fix is a constraint, and there isn't one to add: the target's
+`UNIQUE(release_id, url)` is keyed on `release_id`, so two sibling releases with the same URL are two
+rows no constraint recognises as duplicates. They pass straight through `_collect_staging_post` into
+`download_sources`, and the catalog then reports a work as having twice the renditions it has. The
+collapse therefore has to happen where the rows are read, and it must not be a `DISTINCT` on the
+label — same label with two different files is two prints, which is the whole point of the quality
+tiers. `merge_catalogs._collapse_identical_releases` now compares the mapped release *and* its
+sources, keeps the first, and reports the count as `stats["duplicate_releases_dropped"]`.
+
+Two offline cases in `Fast_Fetch/test_merge_catalogs.py`: the collapse with a genuine second
+rendition in the same fixture that must survive, and a positive control — same label, same quality,
+different file — that must **not** be collapsed. **Neither was executed locally** (local test-module
+runs are frozen in this window; `test_merge_catalogs.py` is in CI's list, so CI judges them and this
+line is the honest status until a green run says otherwise).
+
+**Not done, deliberately:** the 30 rows stay in `themoviebox.db`. Deleting another lane's crawl output
+is not this segment's call — the same rule that left 18 sidecar pairs alone (§5 of the census). The
+merge-side collapse makes the duplicates harmless on the way in; removing them from the vault is
+`#19`'s business when the crawl unfreezes.

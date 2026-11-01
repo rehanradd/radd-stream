@@ -61,3 +61,25 @@ are re-derivable in one command and nothing else in this segment depends on them
   That is the §10 gap and it is a parser change with a test, not a crawl.
 - **#19 when unfrozen:** 3 embed probes → 14 source-less posts → 2 release-less posts → episode
   lists last, host-gated, writes only to `themoviebox.db`.
+
+## 16:5x correction — the embed claim in this file is wrong, and the numbers moved
+
+The line above reading *"60/60 sources are `direct`/`themoviebox` with `bridge_url` empty in 218/218 —
+the Dooplay embed path from `66769c7` has produced zero rows in this vault, answerable with 3 detail
+fetches"* is a misreading of a schema as a symptom. `import_themoviebox.py` is an **Aoneroom-backed
+direct site by construction**: `SERVICE = "themoviebox"`, `MEDIA_HOST_HINTS = ("aoneroom.com",)`, and
+the module writes `source_url == final_url` on purpose. All 60 URLs are
+`macdn.aoneroom.com/media/vone/<date>/<hash>-{sd,ld}.mp4` (56 `-sd`, 4 `-ld`) — the works' prints.
+There is no embed gap, so §4's row 1 is re-aimed at the 14 source-less series instead.
+
+The measurement that replaced it is worse than what I mistook for a gap: **30 of the 218 release rows
+are byte-identical twins** (188 distinct `(key,label)`, max 2 copies, 30 of the 42 populated works
+affected), and each twin carries its own copy of the same source file — so the 60 sources are really
+**30 prints**. The merge cannot catch this: `UNIQUE(release_id, url)` is keyed on `release_id`, so two
+sibling releases with one URL are two rows no constraint calls duplicates, and they propagate into
+`download_sources` as a doubled rendition count. `merge_catalogs._collapse_identical_releases` now
+collapses them where the rows are read, reports `stats["duplicate_releases_dropped"]`, and is covered
+by two offline cases including a positive control (same label + quality, different file = two prints,
+must survive). **Not executed locally — local test-module runs stay frozen; CI's
+`test_merge_catalogs.py` is the judge.** The 30 rows themselves are untouched in the vault, per the
+same rule that left the 18 sidecar pairs alone.
