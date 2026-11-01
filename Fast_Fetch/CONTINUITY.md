@@ -74,6 +74,7 @@
 
 Session blocks moved verbatim to [`Fast_Fetch/checkpoints/`](checkpoints/README.md); nothing was deleted or reworded.
 The newest are listed here; `Fast_Fetch/checkpoints/README.md` is the complete index.
+- [Session 2026-11-02 — q8 supervisor lane `[Q8-AUDIT-DEADLINKS]`: audit critical 10 — dead and expired links can no longer win a band or play](checkpoints/20261102-q8-audit-deadlinks-dead-and-expired-links-can-no-longer-win.md)
 - [Session 2026-11-01 — q6 supervisor lane `[Q6-AUDIT-TID]`: audit critical 6 — one TID, one live claim, across every account](checkpoints/20261101-q6-audit-tid-one-tid-one-live-claim-across-every-account.md)
 - [Session 2026-11-01 — q5 `[Q5-DOCSTRUTH-RELEASE]`: the release row is retired, and the 32,000 B ceiling cannot see the pushes that breach it](checkpoints/20261101-q5-docstruth-release-row-the-ci-blind-spot-and-two-instruments.md)
 
