@@ -425,3 +425,12 @@ jobs:
       # all — it is manufactured by `mock.patch`. This run is its first execution.
       - name: 🧪 test_config_data_dir.py
         run: python3 -S Fast_Fetch/test_config_data_dir.py
+      # Phase-3 cine-finder gate: FTS5 is a property of the interpreter's libsqlite3, not of this repo,
+      # and the instrument the dispatch named for proving it (`sqlite3.dbinfo()`) does not exist on
+      # Python 3.12 — it landed in 3.14. So the capability is pinned by a real CREATE VIRTUAL TABLE in a
+      # tempdir, and a runner without FTS5 SKIPS loudly instead of promising a corpus. The local verdict
+      # for this module is measured: `Ran 5 tests in 0.109s`, OK, python 3.12.3 / libsqlite3 3.45.1, at
+      # `nice -n 19` on the single core. It asserts a version FLOOR rather than printing the version,
+      # because a green step is the evidence an untokened lane can read.
+      - name: 🧪 test_fts5_capability.py
+        run: python3 -S Fast_Fetch/test_fts5_capability.py
