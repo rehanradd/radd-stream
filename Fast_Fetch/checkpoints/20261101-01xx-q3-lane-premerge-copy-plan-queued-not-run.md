@@ -477,6 +477,19 @@ index bug wearing a union's clothes. All three are what `test_the_index_counts_a
 compares, which is why an either/or merge resolution goes red here instead of going quiet. That module re-run
 offline in the re-based tree: 22 tests OK.
 
+**Re-branch onto `4b025bf` (trunk's 6th landing), 06:2x — and the counts above are now history, not current.**
+q1 moved trunk from `f12ab3f` through `6014dd5` to `4b025bf` (q5's release-row truth, operator-port dated read,
+and a continuity rotation), so a head sitting on `f12ab3f` stopped being fast-forwardable and gating it would
+have reverted trunk. This commit was re-branched as `q3-premerge-exec-on-4b025bf`; the cherry-pick applied with
+**no conflict**, because trunk gained nothing under `docs/` that this lane had edited — the numbers in the
+paragraph above are therefore a true record of *that* tree and a stale claim about *this* one, which is why the
+rule is to re-measure rather than to assume a clean cherry-pick means nothing moved underneath. Measured here,
+`nice -n 19`, read-only listings, no test module (q1 revoked the partial lift at 06:2x on load 7.41):
+`ls Fast_Fetch/checkpoints/*.md` minus `README.md` = **67**, of which **65 dated + 2 undated**, and
+`Fast_Fetch/CONTINUITY.md:10` claims exactly that; `ls docs/checkpoints/*.md` minus `README.md` = **60**,
+**58 dated**, and `docs/SESSION_CHECKPOINT.md:7` claims exactly that. Byte ceilings hold: `CONTINUITY.md`
+10,765 B and this file's `SESSION_CHECKPOINT.md` 11,941 B, both under the 12,000 the guard enforces.
+
 **Freeze, restated so nobody over-reads the load number:** load is genuinely under 4 now (load1 1.62), and
 qoder1 released exactly one inch of it — single offline test modules, one at a time, `nice -n 19`,
 timeout-wrapped. That release does **not** cover this merge, which is frozen for **irreversibility, not for
