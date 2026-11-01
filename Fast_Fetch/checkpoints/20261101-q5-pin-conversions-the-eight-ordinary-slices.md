@@ -86,3 +86,39 @@ release publication, no restart). Two consequences:
   2. until it is corrected, treat "exercising the release workflow is safe" as **not** available to any lane:
      the rule that protects the artifact today is the owner's order, not the preflight.
 Named here, escalated, and **not** worked around: no `AGENTS.md` byte edited, no workflow dispatched, no tag.
+
+## Slice 3 — `no signed artifact has ever been produced` → "the owner's key is the only correct one"
+
+**Branch:** `q5-pin-s3-owner-key-20261101`, stacked on slice 2 (`4fa35e0`).
+
+**What it pinned:** "No signed APK or AAB has ever existed for this product" — an *event-expiring* sentence.
+It is true right now, it goes false on the first successful release, and it never comes back. A pin like that is
+a countdown to its own deletion, and the deletion is the moment a lane is least expecting a red build.
+
+**What it pins now:** the identity rule from the same paragraph — "the owner's key is the only correct one", the
+clause that carries the *reason* a replacement keystore is not a workaround: a different signing key makes every
+later upgrade incompatible with the first install. That sentence does not expire when the first artifact ships;
+it is the one a lane under "just produce an APK" pressure actually needs to hit.
+
+**The argument the code comment refers to — when is a same-sentence pin a duplicate, and when is it coverage?**
+Slice 3's first candidate was "no agent may create, move or delete a tag", rejected because the guard already
+pins "Moving or re-cutting a tag is an owner action" — those are the **same obligation worded twice**, so the
+new pin would add tax and zero coverage. What landed is different in kind: `do not generate a replacement
+keystore to work around it` is a **prohibition**, and `the owner's key is the only correct one` is the **reason
+for it**. Two propositions that reword apart — the ban can be paraphrased while the reason stands, and the
+reason can be re-justified ("there is an installed base now") while the ban stands — so each pin can fire
+without the other. The test I apply is not "is it the same sentence" but *"can one half be edited while the
+other stays true"*; if it cannot, the pin is a duplicate.
+
+**Checked, not assumed:** candidate clause verified present in `AGENTS.md` (`flat()` comparison, as the guard
+does), no existing pin phrase equal to or containing it, `len(INVARIANTS)` unchanged at 104, zero missing
+phrases, zero duplicate labels. No `AGENTS.md` byte moved; `App/AGENTS.md` and `Fast_Fetch/AGENTS.md` untouched
+in this slice too.
+
+**Recount after this slice, derived by importing the guard:** 6 of 15 converted (the three from the 08:30 slice,
+plus slices 1–3 here), 10 audit labels still present, of which 1 is the deliberate requirement pin
+(`app lane: signed release needs the 4 secrets`) → **9 still pinning state**: 2 held for a supervisor decision
+(`one vCPU`, `backend is the running system`), 2 held on qoder3's adult-flag surface, and **5 ordinary left**
+(`debug APK needs no secret`, `the filter shape is measured, never assumed`, `app: arm64-excluded suites are
+invisible here`, `MovieBox is metadata + trailer evidence, not playable`, `no playable print is resolvable from
+this host`).

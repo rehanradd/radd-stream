@@ -149,8 +149,17 @@ INVARIANTS = [
      "uploads a **debug APK** on every green run"),
     ("app lane: signed release needs the 4 secrets", ROOT_AGENTS,
      "the *signed release* needs the 4 keystore secrets"),
-    ("no signed artifact has ever been produced", ROOT_AGENTS,
-     "No signed APK or AAB has ever existed for this product"),
+    # Converted 2026-11-01 (q5, slice 3). The old literal — "No signed APK or AAB has ever existed for
+    # this product" — is an event-expiring sentence: it goes false on the first successful release and
+    # stays false, so the pin was a countdown to its own deletion. The gap it documents is also the
+    # pressure that makes a lane want to manufacture an artifact, which is why this bites on the
+    # identity rule instead: a self-generated key is not a workaround, it is a different product line.
+    # Same sentence as the `do not generate a replacement keystore` pin: that one holds the prohibition,
+    # this one holds the reason, and they can be reworded apart. Why that is not the duplicate the tag
+    # clause would have been is argued in the slice-3 section of
+    # `Fast_Fetch/checkpoints/20261101-q5-pin-conversions-the-eight-ordinary-slices.md`.
+    ("the owner's signing key is the only correct one", ROOT_AGENTS,
+     "the owner's key is the only correct one"),
     ("cutting and moving tags is owner-only", ROOT_AGENTS,
      "Moving or re-cutting a tag is an owner action"),
 

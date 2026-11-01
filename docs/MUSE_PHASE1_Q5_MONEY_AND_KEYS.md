@@ -271,7 +271,9 @@ and diff `len(INVARIANTS)`' label set against the audit's sixteen**, not to grep
 lines, and a line-grep is the method that undercounted the CI suites and produced the "98 entries" error below.
 Every figure in this paragraph came from that import, and the count in each slice's checkpoint says so.
 
-**As of slice 2 of the ordinary eight (2026-11-01 09:x, q5): 5 of 15 converted, 10 still pinning state.**
+**As of slice 3 of the ordinary eight (2026-11-01 09:x, q5): 6 of 15 converted, 9 still pinning state** —
+derived by importing the guard (`len(INVARIANTS)` = 104; 10 audit labels still present, one of which is the
+requirement pin kept by design), not incremented from the previous sentence.
 Held, not open — these are *not* mine to close:
 
 | label | why held |
@@ -284,10 +286,12 @@ Held, not open — these are *not* mine to close:
 The ordinary eight, in the order I am taking them, one pin per slice: `measured: secrets list is empty`
 (**slice 1 done**), `release died at the signing preflight` (**slice 2 done — and it moved subject, because the
 clause the audit prescribed for it is now false**; see the series checkpoint), `no signed artifact has ever been
-produced`, `debug APK needs no secret`, `the filter shape is measured, never assumed`, `app: arm64-excluded
-suites are invisible here`, `MovieBox is metadata + trailer evidence, not playable`, `no playable print is
-resolvable from this host`. Six remain. Each gets its own branch, sha, and hosted run; the running record is
-`Fast_Fetch/checkpoints/20261101-q5-pin-conversions-the-eight-ordinary-slices.md`.
+produced` (**slice 3 done**, onto the reason a replacement keystore is not a workaround — see the
+same-checkpoint argument for when a same-sentence pin is coverage and when it is a duplicate).
+**Five remain:** `debug APK needs no secret`, `the filter shape is measured, never assumed`, `app:
+arm64-excluded suites are invisible here`, `MovieBox is metadata + trailer evidence, not playable`,
+`no playable print is resolvable from this host`. Each gets its own branch, sha, and hosted run; the running
+record is `Fast_Fetch/checkpoints/20261101-q5-pin-conversions-the-eight-ordinary-slices.md`.
 
 **Authorisation state, recorded so nobody reads a recommendation as a ticket:** KD-1 (per-token nonce, a
 wire-format change) — **barred** by Muse 07:2x, no code written. MD-1 and MD-2 — **not to be started
