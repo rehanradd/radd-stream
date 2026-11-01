@@ -364,8 +364,21 @@ INVARIANTS = [
     # one proposition twice the way the two old state literals did.
     ("no sources row for a print that was never resolved", REPO_ROOT / "Fast_Fetch" / "SITES.md",
      "No `sources` row may be written for a print we have never resolved."),
-    ("no playable print is resolvable from this host", REPO_ROOT / "Fast_Fetch" / "SITES.md",
-     "no playable print is resolvable from this host"),
+    # Converted 2026-11-01 (q5, slice 8 — the last of the ordinary eight). The old literal was a per-site
+    # status cell in the `SITES.md` inventory table: "**metadata + trailer evidence only; no playable print
+    # is resolvable from this host**". Inventory rows are rewritten by whoever crawls next, so a pin living in
+    # one is a timer on routine bookkeeping, and this one repeated slice 7's proposition rather than adding a
+    # second obligation — the duplication the audit flagged. It now pins the display half of §25's verdict,
+    # the obligation that the table row was only ever summarising: never present this site's rows as
+    # scraped-and-playable to a user. Unconditional in the same way slice 7's write-law is — resolving a
+    # playable print does not license advertising a play that is not there — and the two fire apart: a lane
+    # that changes what may be *written* leaves the display sentence standing, and a lane that rewords the
+    # display rule leaves the write rule standing.
+    # What is NOT claimed: no pin in this file can prove what MovieBox serves today. That is an inventory
+    # fact, it belongs in the table and in the dated §25 measurement, and it is deliberately unpinned now —
+    # the guard checks laws, and a guard that checks ledgers goes red on true news.
+    ("never present an unresolved site as scraped-and-playable", REPO_ROOT / "Fast_Fetch" / "SITES.md",
+     "Do not list it as scraped-and-playable anywhere."),
 ]
 
 

@@ -364,3 +364,47 @@ and no repeat of the helper diagnostic that slice 4 ran to rule out a broken ask
 and re-printing credential lengths adds nothing to a settled finding. **Consequence unchanged: slice 7 has no
 hosted run and no CI verdict.** What is claimed for it is only what a local run can claim — 22 guard tests OK
 against the committed content — and slices 1–3 remain the only conversions CI has seen.
+
+## Slice 8 — `no playable print is resolvable from this host` → the display obligation that the table row was summarising
+
+**Branch:** `q5-pin-s8-scraped-playable-20261101`, created before the edits and its name printed before claimed,
+stacked on slice 7's tip (`982038d`). Supervisor 16:37: own worktree, convert the remaining **display-obligation**
+pin (exactly the target slice 7 recorded for this slice), verify by guard import + module tests, local commit,
+**one push attempt only**, report tip sha + verification + push result, then stand by; no credential read or print,
+no Gradle while load ≥ 4, no tag, no restart, no production DB write, no catalog merge. All observed. Load was
+3.14 at the start and the module run finished inside that window; no build was needed or attempted.
+
+**What it pinned:** the `SITES.md:790` inventory cell — "**metadata + trailer evidence only; no playable print is
+resolvable from this host**". Two defects at once: an inventory row is rewritten by whoever crawls next, so a pin
+living there is a timer on routine bookkeeping; and it repeated slice 7's proposition instead of adding a second
+obligation — the duplication the audit named when it listed both literals among the sixteen.
+
+**What it pins now:** `SITES.md:1242`, the display half of §25's verdict (heading `## 25. TheMovieBox` at
+`SITES.md:1110`, confirmed rather than assumed): "Do not list it as scraped-and-playable anywhere." Unconditional
+in the same shape as slice 7's write-law — resolving a playable print would not license advertising a play that is
+not there — and the pair fires apart: widening what may be *written* leaves the display sentence standing,
+rewording the display rule leaves the write rule standing. That is the coverage test, applied to the last two
+labels of the series and passed by splitting them across two obligations rather than pinning one proposition twice.
+
+**Deliberately left unpinned, and that is the finding rather than an oversight:** nothing in this guard can prove
+what MovieBox serves today, and nothing should. The table row keeps that fact where it belongs — in the inventory
+and in §25's dated measurements. A guard that audits ledgers goes red on true news, which is the entire defect class
+this eight-slice series existed to retire.
+
+**Verification.** Guard imported: `len(INVARIANTS)` 104, 0 failing phrases, 0 duplicate labels, `ast.parse` clean.
+Module run: **22 tests OK in 32.340 s**. Duplicate probe done properly this time: my first check grepped the guard
+*source* for "scraped-and-playable" and got a hit — from the slice-7 comment I had written about this very clause,
+not from a pin. Re-probed against the parsed `INVARIANTS` triples: no entry mentions it. A grep of a file that
+contains prose about a phrase is not a check on the pins; the parse is. **Series status: 11 of 15 converted, 4 still
+pinning state — and all 4 are held pending someone else's decision** (`one vCPU` and `backend is the running
+system` for the supervisor/owner, `the named hole: 442 keys / 455 rows` and `residual measure under the correct
+identity` on qoder3's adult surface). **The ordinary eight is complete.** Byte budgets unmoved: root
+`AGENTS.md` 31,990 / 32,000, `Fast_Fetch/AGENTS.md` 14,469 / 18,000, `App/AGENTS.md` 14,061 / 15,000, CONTINUITY
+11,970 B / 93 lines, SESSION_CHECKPOINT 11,941 B / 112 lines, archive counts 71/71 and 60/60; `SITES.md` not
+edited — the pin moved onto a clause that already existed, per the series rule.
+
+**One observation for the next step, not acted on.** While probing for duplicates I saw a state-shaped phrase that
+the audit's sixteen did not list: a pin whose literal is "The vault stays a FAIL until some surface publishes a
+playable URL", targeting the q2 MovieBox checkpoint. Checkpoint archives are a different case from law files —
+pinning a sentence in an immutable log cannot rot, because the log does not get rewritten — so it may be perfectly
+shaped. Flagged, not touched.
