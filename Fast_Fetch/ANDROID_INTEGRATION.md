@@ -102,6 +102,35 @@ path is a `404`, the same answer an unknown path gets on `GET`.
 >    arbitrary relative order. Verify the `service` values your scraper writes
 >    before relying on tier ordering.
 
+### The by-media guard, in the client's terms
+
+`/api/v1/search/by-media` is the route a phone calls with a file it already holds, and it is the
+route this host measured at **45 s for `q=love`** and never returning at all for `q=a`. The server
+now refuses that work instead of doing it, and the client has to know what a refusal looks like:
+
+- **The floor is 2 characters** — `media_search.MIN_QUERY_CHARS` (`media_search.py:83`). Under it the
+  route answers **HTTP 200 with `success: true`, `total: 0`, `results: []` and a `hint`**
+  (`media_search.py:431-445`, and no SQL is built at all). It is *not* a 400 and *not* an error, so
+  the client must render the `hint` ("Type at least 2 characters of a title") rather than a "no
+  results found" card — the empty list is a statement about the keyboard, not about the catalog.
+  **Do not retry it.** Retrying a 200-with-hint is how a typo becomes a loop against the route that is
+  already this host's worst query.
+- **No `q` at all is the 400** (`media_search.py:424-430`): `success: false` with an `error` naming
+  the missing title. Duration and resolution alone match thousands of the ~130,000 works here, so a
+  popularity list is not what this route is for. 400 is terminal — show nothing, request nothing
+  again.
+- **`plot=1` is an opt-in the client should send once, with the query, not on every keystroke.** Off,
+  the route behaves exactly as documented above. On, the answer carries `matcher` and `query.plot`:
+  `title_like+plot_fts` (the plot disjunct ran), `title_like` (asked, index present, no usable words),
+  or `plot_unavailable` plus a `hint` (`media_search.py:159-167`). `plot_unavailable` is a 200 with
+  real results and a missing *dimension* — say "searched titles only", never "nothing has this plot".
+  The response contract is `docs/SPEC_CLIP_SEARCH_SCHEMA.md` §4.
+- **What the client owes the server regardless:** one in-flight request per query, cancelled when the
+  text changes; a submit path that bypasses the debounce only when the viewer actually tapped; no
+  automatic retry on a 4xx. `SearchViewModel.kt` already does the first two — `searchJob?.cancel()`
+  (`:265`) and `if (!immediate) delay(DEBOUNCE_MS)` (`:281`); the length floor is the piece that does
+  not exist on either side yet, because the server only grew it tonight.
+
 ### Detail-response shape actually returned by `/api/v1/posts/{id}`
 
 On the **public** port the `data` object is a projected view (`redact.VIEWS`), not the

@@ -29,9 +29,17 @@ box**, so the hosted Backend CI run on the pushed sha is the first judge of ever
   returning `(rows, tier, matcher)`, `search_by_media(..., plot=False)` returning `matcher`,
   `query.plot` and a `hint` that appears only on `plot_unavailable`.
 - `Fast_Fetch/viewer.py` — `plot` parsed as `("1", "true")` on the by-media route, mirroring the
-  `ladder` idiom at `:3941`, threaded through `api_v1_search_by_media`; the documented route line
+  `ladder` idiom at `:3944`, threaded through `api_v1_search_by_media`; the documented route line
   gained `&plot=1`.
 - `Fast_Fetch/test_media_search.py` — `PlotOptIn`, six tests.
+- `Fast_Fetch/ANDROID_INTEGRATION.md` — a new subsection, "The by-media guard, in the client's
+  terms": the 2-character floor and what its answer actually looks like (**200, `success: true`,
+  zero results, a `hint`, no SQL at all** — so the client renders the hint and must not retry it),
+  the no-`q` 400 as terminal, the `plot`/`matcher` contract for q4, and what the app already does
+  (`SearchViewModel.kt:265` cancels the in-flight job, `:281` debounces unless `immediate`) so the
+  app lane is not told to build what exists. This is the backend half of the Phase 1 item "guard the
+  app side": the floor was previously documented in neither direction, which is how a short keystroke
+  becomes a retry loop against the route that took 45 s at `q=love`.
 
 Production behaviour is **unchanged**, and not because the code is careful: the index this disjunct
 reads does not exist on any database, so `_has_plot_index` is False everywhere and `plot=1` answers
