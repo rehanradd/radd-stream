@@ -5,6 +5,7 @@ Newest first. Each file is a session block moved verbatim out of `Fast_Fetch/CON
 Entries written to `CONTINUITY.md` by another lane *after* the rotation are not lost: the rebase onto
 trunk `4fe6f65` moved them here the same way, verbatim, with the trunk line range in the header.
 
+- 2026-11-01 — q5 backend lane `[Q5-MUSE-P1]`: the money-and-keys verdict, the two sibling non-total probes in `config.py` made total (9 tests, 3 of which fail trunk's unfixed file), the cine-finder QA plan with three spec contradictions reported rather than chosen, `test_fts5_capability.py` as the correction to the dispatch's own instrument (`sqlite3.dbinfo()` does not exist on py3.12), and the 06:1x fact that the nightly backup was killed at exactly its 2 h deadline — 22 GB of snapshots stranded in `/tmp` as evidence — [`20261101-q5-muse-phase1-money-and-keys-the-two-sibling-probes-and-the.md`](20261101-q5-muse-phase1-money-and-keys-the-two-sibling-probes-and-the.md)
 - 2026-11-01 — q5 backend lane `[Q5-DOCSTRUTH-RELEASE]`: `AGENTS.md:256` claimed a signed release pipeline and published artifacts; `/releases` is `[]`, all five runs of workflow `398476978` are `failure`, and their failing steps differ — `20261101-q5-docstruth-release-row-the-ci-blind-spot-and-two-instruments.md`
 - 2026-11-01 — q5 backend lane `[Q5-RECORD-CLOSED]`: the probe fix is trunk (`11c1008`, `7ba9db6`, both refs, guard green at step 33), and the accusation that this lane had cited a run that did not exist was retracted by its author after a by-role transcript check — the rule now: quote a ruling about another agent's words from a pointed-at artifact, never from a summary (`35` was `test_backfill_tmdb.py`'s real count wearing `test_database.py`'s name) — [`20261101-q5-record-closed-the-probe-landed-and-the-retraction.md`](20261101-q5-record-closed-the-probe-landed-and-the-retraction.md)
 - 2026-11-01 — q5 backend lane `[Q5-PROBE-TOTAL]`: `config.py`'s import-time `Path.exists()` probe re-raised EACCES and ended a hosted run at 0.2 s (q2's `eb4c0ee`) — the probe is total now, the OSError is mocked, and the new suite is the first registration in `backend-ci.yml` with no offline verdict because the freeze came back mid-task — [`20261101-q5-probe-total-config-data-dir-the-runner-lottery.md`](20261101-q5-probe-total-config-data-dir-the-runner-lottery.md)
@@ -82,3 +83,12 @@ The pointer list in `CONTINUITY.md` is capped by a byte budget its own test enfo
 - [2026-10-30 01:50–02:2x — q3 lane, LINK-HEALTH SWEEP: design + budget arithmetic only](checkpoints/20261030-2026-10-30-01-50-02-2x-q3-lane-link-health-sweep-design-bu.md) — 70 lines
 - [2026-10-30 03:0x–03:5x — q3 lane, LINK-HEALTH follow-up: the per-host serialiser is built, and t](checkpoints/20261030-2026-10-30-03-0x-03-5x-q3-lane-link-health-follow-up-the-p.md) — 89 lines
 - [Session 2026-10-30 (q2, MovieBox link-shape defect) `[Q2-MOVIEBOX]`](checkpoints/20261030-session-2026-10-30-q2-moviebox-link-shape-defect-q2-movieb.md) — 69 lines
+
+### Second rotation, 2026-11-01 06:2x (q5) — same rule, two more bullets
+
+`CONTINUITY.md` gained a Muse Phase-1 entry and hit its own 12,000-byte cap, so these two numbered
+bullets left the index verbatim instead of being shortened or deleted. Their numbering is kept here as it
+was in the index; `CONTINUITY.md` carries a one-line pointer in their place.
+
+11. **JOB B (tasks #22/#30), branch `q3-engagement-ladder`** — the four monetization rules caught in review (`redeem_pass` debited before branching, `_engagement_public` double-priced the ladder, `usage_stats._payments` was the last float money field, `fetch_database_payload(full=True)` published playable columns for a flagged row), 27 + 17 tests, and the measurement that contradicts two documents: **`redact.link_is_adult` returns False for an unknown link id**, not the True its docstring and root `AGENTS.md` claim. Rotated verbatim into that checkpoint file; nothing was reworded.
+12. `[Q3-ONBOARD-PAY]` — trial mint + PIN link + relay credit, 83 tests, CI 33: `checkpoints/20261031-q3-lane-zero-friction-onboarding-and-the-merchant-relay.md`.
