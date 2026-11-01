@@ -1100,3 +1100,32 @@ catch a wrong sentence here — the section was checked by reading it against th
 and against the files on trunk. Load was 4.5-6.1 all ticket: no Gradle, no crawl, no merge, no catalog
 read, `/opt/radd-stream` untouched, service untouched, no credential value in any file, log, argv or
 report.
+
+### Session 36 — Audit critical 9: downloads no longer claim READY on partial or empty bytes (q8 lane, 2026-11-01)
+
+Owner task, new lane `q8-audit-download-ready-20261101` from trunk `b99814e`, worked only in the
+`/tmp/q8_dl` worktree. The defect was real and trivially reachable: `DownloadService.download()`
+ran the write loop and went straight to `repo.markReady` with no verdict on what it had written.
+A connection truncated mid-body, a 0-byte 200, or an upstream that answers a redirect with an
+HTML error page all produced a READY row pointing at a file that cannot play.
+
+Fix, in `DownloadService.kt` after the output is closed and before `markReady`:
+a pure gate `DownloadService.completionDefect(downloaded, total, contentType)` returns a reason
+unless (1) `downloaded > 0`, (2) the total is known and covered — `totalBytes` first, falling
+back to the catalog's `entry.bytesTotal` when the response reports no size, and an unknown total
+cannot prove coverage so it fails, and (3) the **final** response's `Content-Type` starts with
+`video/` — OkHttp's post-redirect response is what `answer.header` reads, so this judges what
+actually arrived, not what `/api/v1/stream` promised. On any defect: `markFailed` with the stated
+reason (`DeviceDownloadsRepository.markFailed` gained a default-valued `reason` parameter; both
+existing call sites unchanged), `deleteOutput` drops the partial MediaStore/file row, and
+`resetResume` zeroes the offset so a Resume cannot append onto bytes that no longer exist.
+
+`DownloadCompletionGateTest.kt` pins the gate with 7 plain-JVM tests (full video passes;
+case/parameter tolerant; empty refused; partial names the shortfall; unknown total refused;
+non-video names what arrived; emptiness outranks other defects).
+
+Measured, not assumed: hosted CI run 41333704433 on this branch — `🔨 CI — Android Build & Test`
+`completed success`, the `assembleDebug + testDebugUnitTest + lintDebug` job green, so the new
+tests executed on the runner. Per the load gate: no Gradle was run on the VM. Trunk untouched,
+no tag, no service restart, no live DB write, no credential value read or printed. Branch commit
+`6fb9d38`; this log entry is the second and last commit on the branch.
