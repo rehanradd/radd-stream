@@ -8,7 +8,8 @@ runs."* Nothing in this file runs on its own, and nothing here is applied by the
 that shipped: `media_search.py` answers from the query shape alone, so the catalog is
 correct and fast before any of this is scheduled.
 
-Two steps, deliberately separated because they are not the same kind of change:
+Two steps here, plus a third that this session added; deliberately separated because they
+are not the same kind of change:
 
 1. **`idx_cat_work_sites_post`** — `cat_work_sites.post_id` is the v1↔v2 bridge and has
    no index (`catalog_v2.DDL` indexes `cat_releases.work_id` but not the bridge), so
@@ -31,11 +32,26 @@ Additive only. No table is dropped, altered or recreated, every statement is
 never guesses where the catalog lives.
 
     python3 -S Fast_Fetch/migrate_search_indexes.py plan    --target PATH
-    python3 -S Fast_Fetch/migrate_search_indexes.py apply   --target PATH [--with-fts] --execute
-    python3 -S Fast_Fetch/migrate_search_indexes.py verify  --target PATH
-    python3 -S Fast_Fetch/migrate_search_indexes.py rollback --target PATH --execute
+    python3 -S Fast_Fetch/migrate_search_indexes.py apply   --target PATH [--with-fts] [--with-works-fts] --execute
+    python3 -S Fast_Fetch/migrate_search_indexes.py verify  --target PATH [--with-fts] [--with-works-fts]
+    python3 -S Fast_Fetch/migrate_search_indexes.py rollback --target PATH [--with-works-fts] --execute
 
 Stdlib only, like everything else here. SQLite 3.45.1 on this host, which has FTS5.
+
+**Step 3, added by the Cine-Finder brief, and the finding that put it here.** The v2 read
+layer has always narrowed its search candidates with `AND w.id IN (SELECT rowid FROM
+cat_works_fts WHERE cat_works_fts MATCH :fts)` (`catalog_api.py:1132`), guarded by
+`_has_table(conn, "cat_works_fts")` (`:1260`, `:1302`). Nothing in this repository creates
+that table, and no test ever did — so that branch has never executed anywhere, the flag has
+always been False, and v2 search has only ever run its own documented LIKE fallback. The
+module comment says as much in the conditional tense ("If a `cat_works_fts` FTS5 table is
+ever added by the projection…", `catalog_api.py:39`), which is why this is a gap and not a
+bug: the accelerator was designed, named, and never built. Step 3 builds it.
+
+Step 2's `posts_fts` cannot be renamed to fill the hole. Its rowids are `posts.id`; the
+read layer compares against `cat_works.id`, and those two id spaces are unrelated. That is
+the whole reason an external-content index has to name its content table and its rowid
+column out loud, and it is the shape of defect that a name-only fix would have shipped.
 """
 from __future__ import annotations
 
@@ -97,6 +113,57 @@ TRIGGER_SQL = (
     f"  INSERT INTO {FTS_TABLE}(rowid, {', '.join(FTS_COLUMNS)})"
     f"  VALUES (new.id, new.clean_title, new.title); END",
 )
+
+
+#: Step 3 — the index the v2 read layer already asks for by name.
+#:
+#: `catalog_api._run_listing` narrows candidates with
+#: `AND w.id IN (SELECT rowid FROM cat_works_fts WHERE cat_works_fts MATCH :fts)`
+#: (`catalog_api.py:1132`) behind `_has_table(conn, "cat_works_fts")` (`:1260`, `:1302`).
+#: No code in this repo has ever created that table and no test has ever created it, so
+#: the branch is dead in production and unjudged in CI: the v2 search has always taken
+#: the LIKE path it documents as the fallback. Step 2's `posts_fts` cannot be renamed to
+#: fill the hole — its rowids are `posts.id` while `w.id` is `cat_works.id`, and the two
+#: id spaces are unrelated, which is exactly the kind of "same name, different row" bug
+#: an external-content index invites. So this table is its own, external content on
+#: `cat_works` with `content_rowid='id'`.
+#:
+#: The columns are the text the ledger actually holds: title, original title, synopsis,
+#: and the facet strings. **Synopsis is the point.** `viewer.py:2860` matches `q=`
+#: against `clean_title`, `title` and `slug`, and the word `synopsis` appears nowhere in
+#: any query in this repo (measured: it is only echoed at `catalog_api.py:1522`), so plot
+#: text is stored, shown on a detail page, and searchable by nothing. A clip's dialogue
+#: line or a one-line plot memory therefore has no server-side answer today, and this is
+#: the minimum corpus that changes it. Two dimensions the feature spec names are NOT in
+#: here because the ledger has no such text, and inventing them would be worse than
+#: reporting them: subtitle/dialogue text (`download_sources.playback_type='subtitle'`
+#: is a file pointer, not a transcript) and cast/actor names (no cast column exists in
+#: any table in `Fast_Fetch`).
+#:
+#: No triggers, deliberately, against step 2's reasoning. `cat_works` is a projection
+#: written in bulk by `catalog_v2.project()`, and the trigger cost step 2 measured on
+#: `posts` — 5,308 us/row against 412 us/row — would charge roughly 12 minutes per
+#: 150k-row projection to a table that is about to be rewritten anyway. The refresh is
+#: therefore an explicit `rebuild` after a projection, and the failure mode of forgetting
+#: it is the safe direction: the adult law is NOT delegated to this index.
+#: `_run_listing` applies `_adult_clause("w")` to `cat_works` itself (`catalog_api.py:1106`)
+#: and the MATCH clause only ever *narrows* that set, so a stale or half-built works
+#: index can under-report and can never surface a flagged work.
+#: `test_forgotten_rebuild_loses_a_result_and_verify_says_so` and
+#: `test_a_flagged_work_in_the_index_still_cannot_be_listed` pin the two halves of that
+#: sentence rather than leaving them as a comment.
+WORKS_FTS_TABLE = "cat_works_fts"
+WORKS_FTS_COLUMNS = ("title", "original_title", "synopsis", "genres",
+                     "languages", "country", "industry", "work_type")
+WORKS_FTS_SQL = (f"CREATE VIRTUAL TABLE IF NOT EXISTS {WORKS_FTS_TABLE} USING fts5("
+                 f"{', '.join(WORKS_FTS_COLUMNS)}, content='cat_works', "
+                 f"content_rowid='id', tokenize='unicode61 remove_diacritics 2',"
+                 f" prefix='2 3')")
+#: The read layer asks for a prefix match on every token (`"tok"*`, `catalog_api.py:1134`),
+#: so `prefix='2 3'` is what makes that expression an index lookup instead of a scan of
+#: the posting lists. It costs index bytes, which is what the disk headroom line is for.
+WORKS_FTS_REBUILD = (f"INSERT INTO {WORKS_FTS_TABLE}({WORKS_FTS_TABLE})"
+                     " VALUES('rebuild')")
 
 
 def _count(conn, table):
@@ -199,7 +266,50 @@ def _free_bytes(path: Path) -> int:
     return shutil.disk_usage(str(path)).free
 
 
-def plan(conn, target: Path, with_fts: bool) -> int:
+def _plan_works(conn, target: Path) -> int:
+    """STEP 3's report, shared by both `plan` paths so `--with-works-fts` alone still
+    prints it. Returns 1 only where the build must be refused."""
+    works = _count(conn, "cat_works")
+    print()
+    if not fts5_available():
+        print("STEP 3  REFUSE: this SQLite build cannot create an fts5 virtual table")
+        return 1
+    print("STEP 3  FTS5 over the v2 work text, external content on `cat_works` —"
+          " the table `catalog_api` already queries by name")
+    print(f"        cat_works    : {works:,} rows"
+          + ("  (projection absent — run catalog_v2.project first)" if works < 0 else ""))
+    print(f"        columns      : {', '.join(WORKS_FTS_COLUMNS)}")
+    print(f"        present now  : {'yes' if _has_table(conn, WORKS_FTS_TABLE) else 'no'}")
+    print(f"        triggers     : none by design; refresh is an explicit `rebuild`")
+    print(f"        statement    : {WORKS_FTS_SQL}")
+    print()
+    if works > 0 and MEASURED_FTS_ROWS_PER_SECOND > 0:
+        est = works / MEASURED_FTS_ROWS_PER_SECOND
+        print(f"        estimate     : ~{est / 60:.1f} min at load 1"
+              f" (extrapolated from the measured {MEASURED_FTS_ROWS_PER_SECOND:,.0f} rows/s,"
+              " which was two short title columns — synopsis is longer, so read this"
+              " as a floor and re-measure on a copy before scheduling)")
+        need = works * MEASURED_FTS_BYTES_PER_ROW * DISK_SAFETY_FACTOR
+        print(f"        disk headroom  : ~{need / 1e9:.2f} GB"
+              f" (have {_free_bytes(target) / 1e9:.1f} GB; 61 B/row was measured on titles"
+              " only, synopsis + prefix will cost more)")
+        if need > _free_bytes(target):
+            print("        REFUSE: not enough free space for the build")
+            return 1
+    else:
+        print("        estimate     : NOT MEASURED for this table — the rate above was"
+              " titles-only on `posts`, and there is no synopsis-indexed measurement yet")
+    print()
+    print("Unlike step 2, this table is LIVE the moment it exists: `_has_table` flips")
+    print("`catalog_api`'s search onto the MATCH path. That is why it carries its own")
+    print("tests, and why rollback is safe in the other direction — the read layer")
+    print("computes its cursor fingerprint without the MATCH clause (catalog_api.py:1129-1133),")
+    print("so dropping the index degrades to the LIKE path mid-conversation without")
+    print("invalidating a single cursor.")
+    return 0
+
+
+def plan(conn, target: Path, with_fts: bool, works_fts: bool = False) -> int:
     posts = _count(conn, "posts")
     bridge = _count(conn, "cat_work_sites")
     print(f"target        : {_fingerprint(target)}")
@@ -218,7 +328,9 @@ def plan(conn, target: Path, with_fts: bool) -> int:
     print()
     if not with_fts:
         print("STEP 2  FTS5     : not requested (pass --with-fts to include it)")
-        return 0
+        if not works_fts:
+            return 0
+        return _plan_works(conn, target)
     if not fts5_available():
         print("STEP 2  REFUSE: this SQLite build cannot create an fts5 virtual table")
         return 1
@@ -256,19 +368,29 @@ def plan(conn, target: Path, with_fts: bool) -> int:
     print("an index that drifts answers wrong.")
     print("Nothing in `Fast_Fetch` reads `posts_fts` yet, so step 2 is a pure capability:")
     print("it can be approved and rolled back without touching a live code path.")
-    return 0
+    if not works_fts:
+        print()
+        print("STEP 3  cat_works_fts: not requested (pass --with-works-fts to include it)")
+        return 0
+    return _plan_works(conn, target)
 
 
-def _sqls(with_fts):
+def _sqls(with_fts, works_fts=False):
     out = [BRIDGE_SQL]
     if with_fts:
         out.append("INSERT INTO " + FTS_TABLE + "(" + FTS_TABLE + ") VALUES('rebuild')")
         out.extend(TRIGGER_SQL)
+    if works_fts:
+        # The `CREATE` is here too so a dry run shows every statement a real run writes;
+        # `apply` runs it separately because the rebuild needs the table to exist first.
+        out.append(WORKS_FTS_SQL)
+        out.append(WORKS_FTS_REBUILD)
     return out
 
 
-def apply_migration(conn, target: Path, with_fts: bool, execute: bool) -> int:
-    statements = _sqls(with_fts)
+def apply_migration(conn, target: Path, with_fts: bool, execute: bool,
+                    works_fts: bool = False) -> int:
+    statements = _sqls(with_fts, works_fts)
     if not execute:
         print("DRY RUN — nothing was written. Re-run with --execute to apply.")
         for statement in statements:
@@ -304,10 +426,103 @@ def apply_migration(conn, target: Path, with_fts: bool, execute: bool) -> int:
             conn.execute(statement)
         conn.commit()
         print(f"                triggers {', '.join(TRIGGERS)} installed")
-    return verify(conn, target, with_fts)
+    if works_fts:
+        if _count(conn, "cat_works") < 0:
+            print("step 3        : REFUSED — `cat_works` does not exist in this database."
+                  " Run catalog_v2.project() first; an external-content index cannot be"
+                  " built over a content table that is not there.")
+            return 1
+        if not _has_table(conn, WORKS_FTS_TABLE):
+            print(f"creating      : {WORKS_FTS_TABLE}")
+            conn.execute(WORKS_FTS_SQL)
+            conn.commit()
+        started = time.perf_counter()
+        conn.execute(WORKS_FTS_REBUILD)
+        conn.commit()
+        took = time.perf_counter() - started
+        rows = _count(conn, "cat_works")
+        print(f"step 3        : rebuild of {rows:,} works took {took:.1f} s"
+              f" ({rows / max(took, 0.001):,.0f} rows/s)")
+        print("                no triggers installed — re-run `apply --with-works-fts"
+              " --execute` (or the rebuild statement alone) after every projection.")
+    return verify(conn, target, with_fts, works_fts)
 
 
-def verify(conn, target: Path, with_fts: bool) -> int:
+def _verify_works(conn, failures) -> None:
+    """Drift checks for the works index, appended to `verify`'s failure list.
+
+    The two facts worth having are the ones step 2 had to learn the hard way: a
+    `COUNT(*)` on an external-content table reads the *content* table, so it cannot see
+    drift, and `integrity-check` returns clean on a mismatched database. The shadow
+    `…_docsize` row count and a token sampled out of the long column are the honest
+    probes, and here the sampled token comes from `synopsis` — the column this index
+    exists to make searchable and the one nothing else in the repo queries.
+    """
+    works = _count(conn, "cat_works")
+    print(f"  rows in cat_works      {works:,}")
+    if not _has_table(conn, WORKS_FTS_TABLE):
+        failures.append(f"{WORKS_FTS_TABLE} missing")
+        return
+    docsize = _count(conn, f"{WORKS_FTS_TABLE}_docsize")
+    print(f"  index rows ({WORKS_FTS_TABLE}_docsize): {docsize:,}")
+    if works >= 0 and docsize >= 0 and works != docsize:
+        failures.append(f"index holds {docsize} rows, cat_works holds {works}"
+                        " — run the rebuild")
+    orphan = conn.execute(
+        f"SELECT COUNT(*) FROM {WORKS_FTS_TABLE}_docsize d"
+        f" LEFT JOIN cat_works w ON w.id = d.id WHERE w.id IS NULL").fetchone()[0]
+    print(f"  orphan rowids          {int(orphan):,}")
+    if int(orphan) > 0:
+        # An orphan rowid is not merely untidy: `catalog_api` narrows with
+        # `w.id IN (SELECT rowid …)`, so a rowid that no longer names a work can only
+        # ever drop a result — but it is proof the content table moved under the index,
+        # which is the condition that makes every other number here untrustworthy.
+        failures.append(f"{int(orphan)} indexed rowid(s) name no cat_works row")
+    misses = _sample_works_tokens(conn, works)
+    print(f"  synopsis spot check    {misses[1]} works sampled,"
+          f" {len(misses[0])} not findable")
+    if misses[0]:
+        failures.append(f"FTS cannot find a synopsis token from works {misses[0][:6]}"
+                        + (f" (+{len(misses[0]) - 6} more)"
+                           if len(misses[0]) > 6 else ""))
+
+
+def _sample_works_tokens(conn, works: int) -> tuple:
+    """(work ids whose synopsis token is missing from the index, rows sampled)."""
+    if works <= 0:
+        return [], 0
+    rows = conn.execute("SELECT id, synopsis FROM cat_works"
+                        " WHERE synopsis IS NOT NULL AND length(synopsis) > 20"
+                        " ORDER BY id").fetchall()
+    if not rows:
+        return [], 0
+    step = max(len(rows) // SAMPLE_ROWS, 1)
+    picked = rows[::step][:SAMPLE_ROWS]
+    newest = conn.execute("SELECT id, synopsis FROM cat_works"
+                          " WHERE synopsis IS NOT NULL AND length(synopsis) > 20"
+                          " ORDER BY id DESC LIMIT 10").fetchall()
+    seen, misses, sampled = set(), [], 0
+    for row in list(picked) + list(newest):
+        wid = int(row[0])
+        if wid in seen:
+            continue
+        seen.add(wid)
+        sampled += 1
+        words = re.findall(r"[A-Za-z]{4,}", str(row[1] or ""))
+        if not words:
+            continue
+        try:
+            found = conn.execute(
+                f"SELECT 1 FROM {WORKS_FTS_TABLE} WHERE rowid = ?"
+                f" AND {WORKS_FTS_TABLE} MATCH ?", (wid, f'"{words[0]}"')).fetchone()
+        except sqlite3.Error:
+            return [wid], sampled
+        if found is None:
+            misses.append(wid)
+    return misses, sampled
+
+
+def verify(conn, target: Path, with_fts: bool, works_fts: bool = False) -> int:
     """The index must be provably in step with the ledger, or it is a liability."""
     failures = []
     print()
@@ -318,9 +533,7 @@ def verify(conn, target: Path, with_fts: bool) -> int:
         failures.append(f"{BRIDGE_INDEX} missing")
     if not with_fts:
         print("  posts_fts              not part of this run")
-        print("  RESULT                 " + ("OK" if not failures else "; ".join(failures)))
-        return 1 if failures else 0
-    if not _has_table(conn, FTS_TABLE):
+    elif not _has_table(conn, FTS_TABLE):
         failures.append("posts_fts missing")
     else:
         posts = _count(conn, "posts")
@@ -348,14 +561,27 @@ def verify(conn, target: Path, with_fts: bool) -> int:
             failures.append(f"FTS cannot find a token from rows {misses[0][:6]}"
                             + (f" (+{len(misses[0]) - 6} more)"
                                if len(misses[0]) > 6 else ""))
+    if works_fts:
+        _verify_works(conn, failures)
+    else:
+        print("  cat_works_fts          not part of this run")
     print("  RESULT                 " + ("OK" if not failures else "; ".join(failures)))
     return 1 if failures else 0
 
 
-def rollback(conn, target: Path, execute: bool) -> int:
-    """Only safe because nothing reads `posts_fts`: see the module docstring."""
+def rollback(conn, target: Path, execute: bool, works_fts: bool = False) -> int:
+    """Only safe because nothing reads `posts_fts`: see the module docstring.
+
+    `cat_works_fts` is safe to drop for the *opposite* reason, and the difference is the
+    one thing a reviewer should check before approving step 3: `catalog_api` does read it
+    the moment it exists, but its cursor fingerprint is computed without the MATCH clause
+    (`catalog_api.py:1129-1133`), so dropping the table mid-conversation degrades the
+    search to the documented LIKE path rather than breaking any cursor in flight.
+    """
     statements = [f"DROP TRIGGER IF EXISTS {t}" for t in TRIGGERS]
     statements.append(f"DROP TABLE IF EXISTS {FTS_TABLE}")
+    if works_fts:
+        statements.append(f"DROP TABLE IF EXISTS {WORKS_FTS_TABLE}")
     if not execute:
         print("DRY RUN — nothing was dropped. Re-run with --execute.")
         for statement in statements:
@@ -365,7 +591,10 @@ def rollback(conn, target: Path, execute: bool) -> int:
     for statement in statements:
         conn.execute(statement)
     conn.commit()
-    print(f"dropped: {', '.join(TRIGGERS)}, {FTS_TABLE}")
+    dropped = ", ".join(TRIGGERS) + ", " + FTS_TABLE
+    if works_fts:
+        dropped += ", " + WORKS_FTS_TABLE
+    print(f"dropped: {dropped}")
     return 0
 
 
@@ -376,6 +605,9 @@ def main(argv=None) -> int:
                         help="path to the catalog database — required, never guessed")
     parser.add_argument("--with-fts", action="store_true",
                         help="include step 2 (FTS5 + triggers); default is step 1 only")
+    parser.add_argument("--with-works-fts", action="store_true",
+                        help="include step 3 (cat_works_fts over the v2 work text, no"
+                             " triggers); this is the index catalog_api already names")
     parser.add_argument("--execute", action="store_true",
                         help="actually write; without it apply/rollback are dry runs")
     args = parser.parse_args(argv)
@@ -384,12 +616,13 @@ def main(argv=None) -> int:
     conn = sqlite3.connect(str(target))
     try:
         if args.action == "plan":
-            return plan(conn, target, args.with_fts)
+            return plan(conn, target, args.with_fts, args.with_works_fts)
         if args.action == "apply":
-            return apply_migration(conn, target, args.with_fts, args.execute)
+            return apply_migration(conn, target, args.with_fts, args.execute,
+                                   args.with_works_fts)
         if args.action == "verify":
-            return verify(conn, target, args.with_fts)
-        return rollback(conn, target, args.execute)
+            return verify(conn, target, args.with_fts, args.with_works_fts)
+        return rollback(conn, target, args.execute, args.with_works_fts)
     finally:
         conn.close()
 
