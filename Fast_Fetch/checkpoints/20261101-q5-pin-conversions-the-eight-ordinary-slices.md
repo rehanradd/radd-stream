@@ -469,3 +469,16 @@ non-rotting clause to move it onto without writing new law in a file with 10 B o
 call, not a slice. `the named hole: 442 keys / 455 rows` and `residual measure under the correct identity` —
 **held on qoder3's adult surface** (catalog measures inside the adult-law paragraph q3 is actively rewriting; a
 guard edit here would land inside someone else's in-flight change). None of the three is actionable by me.
+
+**Slice 9 push attempt — one, refused, no retry; plus the number that settles rule 7 for this suite.** Same
+pre-push gate as slices 7 and 8 (pure stack on `c2528e1`, 0 merges, 0 tags at head, footprint exactly the three
+lane-owned paths, 0 bytes in another lane's surface — `docs/CAPACITY_MEASURED.md` included in the not-touched list,
+since it is this slice's pin target and was read, never written). GitHub returned `remote: Invalid username or
+token`: fourth consecutive lane-identical refusal, so no new diagnostic was run and none is needed.
+
+The verification at the final tip also produced the cleanest rule-7 evidence this fleet has, because it separates
+the two quantities the rule says are confused: **22 tests in 1.794 s, real time 11.082 s, `user` 0.257 s + `sys`
+0.062 s = 0.319 CPU-seconds.** The same committed assertions took 95.625 s twenty minutes earlier at load ≈ 5.9 and
+107.100 s in a cold fresh worktree at load ≈ 8. So this suite costs a **third of a CPU-second** and anything from 1
+to 107 seconds of wall, and only the first number is a property of the code. Recorded here so the next lane that
+wants to exclude a suite "because it is slow here" has a measured counter-example rather than an opinion.
