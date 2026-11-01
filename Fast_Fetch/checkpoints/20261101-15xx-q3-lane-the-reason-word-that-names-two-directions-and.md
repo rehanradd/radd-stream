@@ -173,6 +173,17 @@ read-only pass already recorded in §2. It is not a rule change and it does not 
 
 ## Blocks and bounds
 
+- **NEW BLOCK, and it is the lane's transport, not the work:** the push that would have published
+  §3-§5 (`862919d`, `559360f`) failed at 15:5x with GitHub answering `Invalid username or token.
+  Password authentication is not supported for Git operations.` — the askpass helper emitted a
+  value and the edge rejected **it**, so this is the owner's credential, not my flow: the same
+  helper pushed `1fbc080` successfully inside this hour, and `ls-remote` on the same URL still
+  reads. **`refs/heads/q3-reason-law-on-c2528e1` on origin is therefore `1fbc080`, and this
+  worktree is 2 commits ahead of it** (`862919d` record + `559360f` SITES). Both L3-clean
+  (`findings_count: 0` over the committed set). Not retried, per Muse's standing rule, and no
+  credential was read or printed. **Next step is the owner's:** restore the lane token, then a
+  single `git push` of this ref — nothing is lost, and nothing here needs re-doing.
+
 - **Gate held.** No trunk push, no merge, no tag, no restart, no production read, no crawl, no
   Gradle. Nothing of mine was ever run against `fast_fetch.db` or `user_state.db`.
 - **Ruling (2) untouched**: no `EXPLAIN QUERY PLAN` and no trigger-cost measurement — step 4 stays
