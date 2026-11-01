@@ -21,6 +21,20 @@ import com.google.gson.annotations.SerializedName
  */
 data class VipRemoteConfig(
     val success: Boolean = false,
+    /**
+     * The server's own "this read could not be answered" marker (`Fast_Fetch/admin_panel.py`,
+     * UPD-1a / [Q3-MUSE-P1]). A degraded body is NOT an error: it decodes, and it carries the
+     * shipped defaults — `maintenance_mode: false` and every feature flag on — while the operator
+     * may have flipped exactly those switches. The marker is what separates a shape guarantee from
+     * a decision, and [com.raddstream.app.data.RemoteConfigPolicy] is the one reader that obeys it.
+     *
+     * Flat and a real boolean, which is the server's stated rule for every flag in this body: a
+     * client must not have to guess whether `0` and `false` mean different things. Absent means
+     * false — a deployment older than the marker keeps behaving as it always did rather than
+     * going permanently cache-last-good on a body that never said anything was wrong.
+     */
+    @SerializedName("settings_unavailable")
+    val settingsUnavailable: Boolean = false,
     val currency: String = "PKR",
     @SerializedName("updated_at")
     val updatedAt: Long = 0L,

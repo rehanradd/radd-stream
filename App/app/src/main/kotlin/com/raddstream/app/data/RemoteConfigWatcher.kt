@@ -24,7 +24,10 @@ import kotlinx.coroutines.launch
  * Failure policy: a failed or malformed poll leaves the last good answer in place. That is
  * deliberate — a server being restarted is exactly when it cannot serve `/remote-config`
  * either, and flipping the app out of maintenance on a network error would defeat the
- * switch. Only a successful, fully decoded body overwrites stored flags.
+ * switch. A body that decodes cleanly while saying its own read failed
+ * (`settings_unavailable`) is refused on the same grounds, because it publishes defaults the
+ * operator did not choose. Only a body the server can stand behind overwrites stored flags, and
+ * [RemoteConfigPolicy] is where that one rule is decided, written down, and tested.
  */
 @Singleton
 class RemoteConfigWatcher @Inject constructor(
@@ -55,18 +58,18 @@ class RemoteConfigWatcher @Inject constructor(
         } catch (_: Exception) {
             return
         }
-        if (!config.success) return
-        // `flags.chromecast` is deliberately not mirrored: this build has no cast UI at all, so
-        // there is no feature for that switch to take away. Storing it would be a dead key.
-        val flags = config.featureFlags
+        // The decision itself lives in RemoteConfigPolicy so that a JVM test can pin it: the null
+        // case is the cache-last-good rule, and reaching it through this loop would mean driving a
+        // five-minute coroutine against a DataStore.
+        val write = RemoteConfigPolicy.flagsFor(config) ?: return
         settings.saveRemoteFlags(
-            maintenanceMode = config.maintenanceMode,
-            downloadsEnabled = flags.downloads,
-            sharingEnabled = flags.sharing,
-            searchEnabled = flags.search,
-            pureCinemaEnabled = flags.pureCinema,
-            qualityGateEnabled = flags.qualityGate,
-            adsEnabled = config.ads.enabled,
+            maintenanceMode = write.maintenanceMode,
+            downloadsEnabled = write.downloadsEnabled,
+            sharingEnabled = write.sharingEnabled,
+            searchEnabled = write.searchEnabled,
+            pureCinemaEnabled = write.pureCinemaEnabled,
+            qualityGateEnabled = write.qualityGateEnabled,
+            adsEnabled = write.adsEnabled,
         )
         // The caps travel with the switch, and only a body that carries them overrides what this
         // build already enforces — a partial body leaves the shipped 25/12/4 windows in force
