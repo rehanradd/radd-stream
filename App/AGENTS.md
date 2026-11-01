@@ -261,3 +261,35 @@ the repository.
 - 4. Current Source Folder Structure → [`../docs/SPEC_APP_SOURCE_LAYOUT.md`](../docs/SPEC_APP_SOURCE_LAYOUT.md)
 - 6. Screens Reference → [`../docs/SPEC_APP_SCREENS.md`](../docs/SPEC_APP_SCREENS.md)
 - 7. Design System Quick Reference → [`../docs/SPEC_APP_DESIGN_QUICKREF.md`](../docs/SPEC_APP_DESIGN_QUICKREF.md)
+
+### Gating-lane note — APK builds moved to GitHub Actions, permanently (2026-11-01)
+
+**Owner order, standing:** every APK build happens on GitHub Actions. No agent on this
+VM runs `./gradlew` — not `assembleDebug`, not `testDebugUnitTest`, not `lintDebug` —
+unless the owner explicitly reopens local builds. This box has one vCPU and it is the
+box that serves the live API; a Gradle daemon is exactly what the load holds in
+Session 28 and Session 31 were written to prevent. The gate for App work is now a
+**hosted run**, and the number to read is `App/**`'s `ci.yml` result plus its step
+count, not a local XML.
+
+**How to get an artifact without any secret:** push a branch that touches `App/**`.
+`ci.yml` (`🔨 CI — Android Build & Test`) runs
+`:app:assembleDebug :app:testDebugUnitTest :app:lintDebug` and uploads the **debug APK**
+on a green run. Debug-signed, installable, needs none of the four keystore variables,
+and it is the only build that can talk to the deployed host:
+`App/app/src/debug/res/xml/network_security_config.xml` sets
+`cleartextTrafficPermitted="true"`, while a **release** build reads
+`brand.properties:199 network.release_cleartext_for_default_host=false`, so a signed
+release APK cannot reach `http://92.4.95.252` over plain HTTP at all. That is a
+deployment fact about what is testable, not a reason to loosen release policy.
+
+**How to get a signed release:** push a `v*.*.*` tag → `release.yml`. It needs
+`KEYSTORE_BASE64`, `KEY_STORE_PASSWORD`, `KEY_ALIAS`, `KEY_PASSWORD`. Measured cause of
+every release failure so far, recorded in the `signingConfigs` block itself: the stored
+`KEYSTORE_BASE64` is **malformed** — it failed strict base64 decoding with
+`Last unit does not have enough valid bits`, and the tolerant MIME decoder throws
+identically on the same input, so this is a corrupt secret value, not a Gradle bug.
+The block now refuses *before* signing, printing only the value's shape (length, index,
+code point, decoded byte count, keystore alias count) and never its contents. The
+correct export is `base64 -w 0 <keystore-file>` pasted straight into
+Settings → Secrets and variables → Actions, replacing the stored value.
