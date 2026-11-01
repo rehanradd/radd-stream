@@ -1100,3 +1100,69 @@ catch a wrong sentence here — the section was checked by reading it against th
 and against the files on trunk. Load was 4.5-6.1 all ticket: no Gradle, no crawl, no merge, no catalog
 read, `/opt/radd-stream` untouched, service untouched, no credential value in any file, log, argv or
 report.
+
+### Session 36 — q4 playback lane, increment 2: the two-button rule actually met, the no-ladder reason, and Settings can pick the picture (2026-11-01)
+
+Routed to this file, not to `App/AGENTS.md`: the task said "AGENTS.md session log entry", but `AGENTS.md`
+§12/§13 rule 10 forbids a session log in that auto-loaded instructions-only file and points to this log,
+which exists here at `App/docs/SESSION_HISTORY.md`. The instruction's substance (log the session in the
+App folder) is met without breaking the hard rule.
+
+Built directly on increment 1 (`640cfa1`, the pure rules + the saved-band write + `PrimaryActions`/
+`RungActions.onSelect`), which I reused and did not re-implement. Three things shipped, nothing else.
+
+**1. The two-button rule, actually met.** Increment 1 reduced only the work-level `PrimaryActions` and the
+rung card; `EpisodeRow`, `PackedSeasonBanner` and `PrintCard` still carried per-row `onPlayPrint` /
+`onOpenExternal` / `onKeep`. I removed all three from those composables and from `DetailContent`'s
+signature:
+- `EpisodeRow` — dropped the play `IconButton` and the quality `Tune` `IconButton`; the whole row is now
+  `clickable` and only SELECTS (its `onSelect` calls `viewModel.selectScope`, the same owner `onAskRungs`
+  already used). The chosen row shows a `Selected` pill; `selected` comes from `DetailSelection.isSelected`
+  against `state.selection`, so a row's highlight and the buttons' target can never disagree.
+- `PackedSeasonBanner` — dropped its "Play season" / Download buttons; a tap selects `Scope(season, null)`.
+- `PrintCard` — now display-only (badges, detail line, CAM warning stay); the per-copy Play / Download /
+  Open-in-external `Row` is gone, and with it the now-unused private helpers `RankedPrint.canStart` and
+  `playLabel()` and the `OpenInNew` / `Tune` icon imports.
+No capability was deleted: the external-player path stays (`DetailNavigationEvent.OpenExternal`, the
+`when` arm, `openInExternalPlayer`) for the player lane's More-menu fallback (spec DEFAULTS #3); the
+detail screen just no longer offers it. The removed buttons used only hardcoded Kotlin literals and
+material-icon imports, never a `strings.xml` entry or a drawable, so nothing was orphaned for the guards
+(verified: the only surviving `onKeep` is `PrimaryActions`' own param).
+
+**2. The no-ladder explanation.** `if (canAct)` had no `else`, so a title with no selectable ladder showed
+no buttons and no reason. Added the `else` painting a new plain-word `res/values/strings.xml` entry
+`detail_no_ladder` ("There is nothing to play for this title right now. Try another title, or check back
+later.") — no site, code, or URL. It is deliberately not a `player_*` name, so `PlayerChromeCopyTest`
+(which pairs `player_*` ↔ `PlayerScreen.kt` only) is untouched, and it is referenced via
+`R.string.detail_no_ladder` so `DeadCodeGuardTest` sees it live. Added a JVM test
+(`DetailSelectionTest`) pinning the state: both no-target and empty-ladder fall to the explanation branch
+(`canAct` false), and only a target *with* a picture acts.
+
+**3. Saved band honoured end-to-end — already true, now also reachable from Settings.** Read before
+assuming: `playSelected` resolves the saved band through `QualityChoice.rungFor` and stages that rung's
+handle with `auto = (option.band == ladder.autoBand)`; `AdaptiveQuality.pickBand` (line 102) returns the
+current band untouched when `auto` is false — "a manual choice outranks any estimate." So the player does
+NOT override the saved band with its own adaptive logic on the detail→player path; the rung chosen from the
+saved band is what streams, and Auto only ever arms when the viewer literally picked the ladder's AUTO
+pointer. What was missing was reach: `savePlaybackBand` had exactly one call site (a detail rung tap). I
+added a "Streaming picture quality" control to Settings (`SettingsScreen` `ChipRow` over the canonical
+bands + `SettingsViewModel.setPlaybackBand`) that reads and writes the SAME
+`ServerSettingsRepository.playbackBand` key, collected not sampled, so a choice here is the choice the next
+title opens at. Note: the in-player quality sheet (`PlayerViewModel.selectQualityBand`) still changes only
+the live playback and does not persist the global band — that wiring is the player lane's (More-menu)
+scope, left for a later increment.
+
+**CI, measured, not inferred.** `🔨 CI — Android Build & Test`, run `41338480950`, branch
+`q4-playback-simplification-20261101` at `be8af2b` — `completed success`, 27 steps, every one `success`,
+including the four named phases: `🧱 Kotlin compiles` (step 7) success, `🧪 Unit tests` (step 8) success,
+`🔍 Lint` (step 9) success, `📦 Debug APK` (step 10) success, `📤 Upload debug APK` (step 11) success.
+Artifacts for the run: `app-debug-115` (22,225,190 B) and `ci-reports-115`. I never ran Gradle on this
+box (owner standing order; one vCPU, 7 lanes, live service).
+
+**Not verified by us — owner device checks:** the two-button tap targets on a phone, the Salaar / Agent
+play checks, one series episode play + download with pause/resume, the new `Selected` pill and highlight
+geometry, and the Settings quality chip actually driving the next title. `ScreenSnapshotTest` /
+`PosterCardProvenanceTest` (the nine Robolectric cases) execute only on the hosted x86_64 runner and were
+part of the green `🧪` step, but I cannot read their individual pass/fail from here — CI's green word is
+the only evidence, and it was green. No `Fast_Fetch/` change, no server change, no trunk push, no tag, no
+merge, no credential read. `/opt/radd-stream` untouched; nothing written outside `/tmp/q4_playback`.
