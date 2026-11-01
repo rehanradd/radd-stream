@@ -481,3 +481,23 @@ jobs:
       # load1 5.05, and the read-only census this guards needs a window the box has not had.
       - name: 🧪 test_adult_vault_census.py
         run: python3 -S Fast_Fetch/test_adult_vault_census.py
+
+      # SIZING FOR A REBUILD THAT CANNOT BE SIZED BY RUNNING IT (q2, 2026-11-01). #18 is queued: the
+      # projection rebuild is now safe to type (`project_readonly.py` refuses a protected output) but
+      # still not sized, because `catalog_v2.project` takes `SELECT p.id, p.*  FROM posts ORDER BY p.id`
+      # and keeps every row alive in `_WorkAccumulator.posts` — so its cost is resident memory, and
+      # measuring that means reading a 6.4 GB production ledger, which stays frozen.
+      # `price_projection.py` answers it from the schema instead: `EXPLAIN QUERY PLAN` on the four
+      # Layer-0 statements (SQLite plans without executing), the engine's own index law as an
+      # expected-name check that reports drift, and a retention model calibrated on a synthetic
+      # ledger. Row counts are *inputs*, never measurements, and a run without them exits 4 rather
+      # than guessing. This suite pins all of it: each quoted statement must still be literally
+      # present in `catalog_v2.py`, an index-less ledger must come back as hot-path `SCAN`s and
+      # `does not fit`, and every SQL string that reaches the connection is recorded with a trace
+      # callback and checked against the schema-only grammar — on a ledger holding 500 rows, so "no
+      # content read" is proved against a database that could have been read.
+      # Registered WITHOUT a local suite run (the freeze stands), but not shipped unchecked: the plan
+      # it guards was executed against synthetic ledgers here, and two of its claims were falsified by
+      # the planner before the sha — `ORDER BY id` costs no sort, because id is the rowid.
+      - name: 🧪 test_price_projection.py
+        run: python3 -S Fast_Fetch/test_price_projection.py
