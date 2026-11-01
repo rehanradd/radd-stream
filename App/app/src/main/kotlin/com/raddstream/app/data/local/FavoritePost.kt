@@ -48,6 +48,33 @@ data class FavoritePost(
      * Subtitled chip the viewer saw when they saved it.
      */
     val subtitled: Boolean? = null,
+    /**
+     * The adult flag, as the server ever stated it for this id — and on today's public edge it
+     * never does. Measured 2026-11-01 against the live deployment: `post_brief` and `post_detail`
+     * both send `is_animated` and neither sends `is_18_plus`, which is not an oversight but the
+     * design — a flagged row is *invisible* on the public routes, not labelled on them, so a row
+     * that arrives at all arrives unflagged. That is why this column exists without a wire field
+     * beside it: modelling `is_18_plus` on [Post] would be a permanently-null phantom, and the
+     * app's own history (§6 of `App/AGENTS.md`) says a field the API never returns is a field
+     * somebody will one day render.
+     *
+     * So this is the strict half of the rule, written only by
+     * [com.raddstream.app.data.local.FavoriteDao.recordAnswer] when a payload really does carry a
+     * flag (an operator-port probe, or a future projection that publishes the key), and read by
+     * [com.raddstream.app.viewmodel.AdultPolicy] wherever a cached row is drawn. The half that
+     * fires against the server this app can reach is [checkedAt] plus `unavailable_works`: an id
+     * the public route 404s is, by that route's own design, indistinguishable from a flagged one.
+     *
+     * Null is not false. An older row keeps the listing it had rather than be stamped with a fact
+     * nobody sent — and nothing may give this a default.
+     */
+    val is18Plus: Boolean? = null,
+    /**
+     * Wall-clock millis of the last time the server answered about this id — served or refused,
+     * either is an answer. Null means "never asked by this build", which makes the row the first
+     * candidate for a revalidation pass rather than the last.
+     */
+    val checkedAt: Long? = null,
 ) {
     /** True when this row CAN be named on the sync surface — not "true when it should be". */
     val syncable: Boolean get() = !workRef.isNullOrBlank()

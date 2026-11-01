@@ -12,6 +12,7 @@ import com.raddstream.app.network.models.WireText
 import com.raddstream.app.player.AdCadenceGovernor
 import com.raddstream.app.player.AdSurface
 import com.raddstream.app.repository.CatalogRepository
+import com.raddstream.app.repository.FavoritesRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
 import kotlinx.coroutines.CancellationException
@@ -98,6 +99,7 @@ class HomeViewModel @Inject constructor(
     private val catalogRepository: CatalogRepository,
     private val watchHistoryDao: WatchHistoryDao,
     private val syncedProgressDao: SyncedProgressDao,
+    private val favoritesRepository: FavoritesRepository,
     private val adCadence: AdCadenceGovernor,
     private val adFreeReader: AdFreeReader,
 ) : ViewModel() {
@@ -156,7 +158,20 @@ class HomeViewModel @Inject constructor(
             combine(
                 watchHistoryDao.observeRecent(WatchHistoryMerge.DEFAULT_LIMIT * 2),
                 syncedProgressDao.observeRecent(WatchHistoryMerge.DEFAULT_LIMIT * 2),
-            ) { local, synced -> WatchHistoryMerge.merge(local, synced) }
+                favoritesRepository.observeRefusedIds(),
+            ) { local, synced, refused ->
+                // A resume row is a cached surface like any other: it names a work this device
+                // watched, and the ledger may have been refused an answer about it since.
+                // `flagOf` is a constant null because `watch_history` keeps no adult column — the
+                // table is written by playback, and no payload ever told us a flag. Null is "not
+                // told", which [AdultPolicy] reads as no evidence either way, so the refusal is
+                // what removes a card here and a 200 later puts it back.
+                AdultPolicy.listableRows(
+                    rows = WatchHistoryMerge.merge(local, synced),
+                    flagOf = { null },
+                    refusedOf = { it.postId in refused },
+                )
+            }
                 .collect { rows ->
                     val items = rows.mapNotNull { ResumeTile.of(it) }
                     _uiState.update { it.copy(continueWatching = items) }

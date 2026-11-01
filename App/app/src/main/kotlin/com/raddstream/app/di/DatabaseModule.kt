@@ -9,6 +9,7 @@ import com.raddstream.app.data.local.AdCadenceDao
 import com.raddstream.app.data.local.AppDatabase
 import com.raddstream.app.data.local.FavoriteDao
 import com.raddstream.app.data.local.SyncedProgressDao
+import com.raddstream.app.data.local.UnavailableWorkDao
 import com.raddstream.app.data.local.WatchHistoryDao
 import dagger.Module
 import dagger.Provides
@@ -35,6 +36,7 @@ object DatabaseModule {
                 AppDatabase.MIGRATION_4_5,
                 AppDatabase.MIGRATION_5_6,
                 AppDatabase.MIGRATION_6_7,
+                AppDatabase.MIGRATION_7_8,
             )
             // Version 3 adds the offline cache tables for the first time. They have never shipped
             // on any device, so a destructive fallback lets Room generate their schema verbatim
@@ -77,6 +79,11 @@ object DatabaseModule {
     @Provides
     fun provideAdCadenceDao(database: AppDatabase): AdCadenceDao {
         return database.adCadenceDao()
+    }
+
+    @Provides
+    fun provideUnavailableWorkDao(database: AppDatabase): UnavailableWorkDao {
+        return database.unavailableWorkDao()
     }
 }
 
