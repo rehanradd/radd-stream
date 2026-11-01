@@ -28,6 +28,7 @@ import sqlite3
 import sys
 import tempfile
 import threading
+import time
 import unittest
 import urllib.error
 import urllib.request
@@ -759,6 +760,93 @@ class PublicEdgeHttpTests(FixtureMixin):
                         "healing reads the operator body; it must say stale")
         self.assertEqual(payload.get("url"),
                          "https://media.example.test/film.mp4?token=old")
+
+    # ---- audit critical 5: server-side 720p free cap ----------------------- #
+    def enable_quality_gate(self):
+        """Flip the operator's `feature_quality_gate` on for this ledger. The
+        shipped default is off, and every other test relies on that, so the
+        flag is switched per test against the temp catalog, never globally."""
+        import admin_panel
+        with sqlite3.connect(self.db_path) as conn:
+            admin_panel._ensure_monetization(conn)
+            conn.execute(
+                "UPDATE app_remote_config SET feature_quality_gate = 1 "
+                "WHERE id = 1")
+            conn.commit()
+
+    def test_the_quality_gate_refuses_premium_bands_for_free_viewers(self):
+        """Audit critical 5: the 720p free cap lived only in the app — a
+        signed handle alone bought 1080p bytes to anyone who skipped the
+        client. With the operator flag on, both playback routes answer 402
+        for a premium band, refuse before the resolver runs, and name nobody."""
+        self.enable_quality_gate()
+        handle = redact.mint_token(self.source_id(self.post_id),
+                                   viewer.signing_secret())
+        for path in (f"/api/v1/stream?id={handle}",
+                     f"/api/v1/download?id={handle}"):
+            status, headers, body = self.get(path, self.public_port)
+            self.assertEqual(status, 402, f"{path}: {body}")
+            self.assertNotIn("Location", headers,
+                             "the refusal must not redirect anywhere")
+            self.assertEqual(json.loads(body),
+                             {"success": False,
+                              "error": "premium_quality_requires_vip"})
+            for needle in SENTINELS:
+                self.assertNotIn(needle, body.lower(), body)
+
+    def test_gate_refusal_covers_redirect_zero_too(self):
+        self.enable_quality_gate()
+        handle = redact.mint_token(self.source_id(self.post_id),
+                                   viewer.signing_secret())
+        for route in ("stream", "download"):
+            status, _, body = self.get(
+                f"/api/v1/{route}?id={handle}&redirect=0", self.public_port)
+            self.assertEqual(status, 402, f"{route}: {body}")
+            self.assertEqual(json.loads(body),
+                             {"success": False,
+                              "error": "premium_quality_requires_vip"})
+
+    def test_the_gate_lets_720p_and_a_signed_vip_pass_through(self):
+        self.enable_quality_gate()
+        secret = viewer.signing_secret()
+        sid_1080 = self.source_id(self.post_id)
+        # A distinct clean_title, so it is its own release row: the two
+        # shipped fixtures share a canonical key and merge into one ledger
+        # release, which would silently test the same band twice.
+        sid_720 = self.source_id(fast_fetch.save_scraped_data(
+            media("somecdn.site", "https://somecdn.example/quiet-short/",
+                  clean_title="Quiet Short", quality="720p")))
+        self.assertIsNone(
+            viewer.quality_gate_block_reason(sid_720, {}, {}),
+            "720p is free even with the gate on")
+        self.assertEqual(
+            "premium_quality_requires_vip",
+            viewer.quality_gate_block_reason(sid_1080, {}, {}))
+        vip = redact.mint_vip_pass(time.time() + 300, secret)
+        self.assertIsNone(
+            viewer.quality_gate_block_reason(sid_1080, {}, {"vip": [vip]}),
+            "a live signed pass unlocks the band")
+        self.assertEqual(
+            "premium_quality_requires_vip",
+            viewer.quality_gate_block_reason(sid_1080, {},
+                                             {"vip": ["not-a-pass"]}),
+            "a typed vip=1 is not a purchase")
+        handle = redact.mint_token(sid_1080, secret)
+        status, _, body = self.get(f"/api/v1/stream?id={handle}&vip={vip}",
+                                   self.public_port)
+        self.assertNotEqual(status, 402, body)
+
+    def test_the_operator_port_is_never_gated(self):
+        """The loopback port is the healing and audit surface; a paywall
+        boundary must not blind the person who owns the ledger. (The adult
+        rule stays unconditional on both ports — different law, different
+        failure mode.)"""
+        self.enable_quality_gate()
+        raw = self.source_id(self.post_id)
+        for route in ("stream", "download"):
+            status, _, body = self.get(f"/api/v1/{route}?id={raw}",
+                                       self.operator_port)
+            self.assertNotEqual(status, 402, f"{route}: {body}")
 
     def test_row_ids_are_not_addresses_the_public_can_walk(self):
         """`1..3,070,247` is every link we own. A caller who could use a bare row
