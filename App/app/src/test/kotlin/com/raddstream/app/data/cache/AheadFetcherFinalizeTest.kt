@@ -161,11 +161,13 @@ class AheadFetcherFinalizeTest {
     private fun slicingClient(): OkHttpClient = OkHttpClient.Builder()
         .addInterceptor { chain ->
             val request = chain.request()
-            val range = request.header("Range") ?: "bytes=0-"
+            // HTTP Range ends are INCLUSIVE: "bytes=0-1023" asks for 1024 bytes.
+            val range = request.header("Range") ?: "bytes=0-${payload.size - 1}"
             val bounds = range.removePrefix("bytes=").split("-")
-            val start = bounds[0].toLong().coerceIn(0L, payload.size.toLong())
-            val end = bounds.getOrNull(1)?.takeIf { it.isNotBlank() }?.toLong()?.minus(1)
-                ?.coerceAtMost(payload.size - 1L) ?: (payload.size - 1L).coerceAtLeast(start)
+            val start = bounds[0].toLong().coerceAtMost(payload.size.toLong())
+            val lastByte = bounds.getOrNull(1)?.takeIf { it.isNotBlank() }?.toLong()
+                ?: (payload.size - 1L)
+            val end = lastByte.coerceIn(start, (payload.size - 1L).coerceAtLeast(start))
             val slice = payload.copyOfRange(start.toInt(), (end + 1).toInt())
             Response.Builder()
                 .request(request)
