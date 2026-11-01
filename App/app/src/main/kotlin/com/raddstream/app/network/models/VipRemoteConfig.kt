@@ -48,6 +48,24 @@ data class VipRemoteConfig(
      */
     @SerializedName("apk_update_url")
     val apkUpdateUrl: String = "",
+    /**
+     * The three facts UPD-1a lets the operator publish beside that link: the build's SHA-256, its
+     * size in bytes, and its version code. Flat and additive on purpose — this body is cached on
+     * every phone for 60 s and an un-updated client must still decode it, so nesting them would
+     * break exactly the installs that most need the old behaviour.
+     *
+     * `""` and `0` mean *nothing published*, never *published and fine*.
+     * [com.raddstream.app.viewmodel.AppUpdate] refuses an offer whose digest is missing, which is
+     * what turns these from decoration into a gate. The size is decoded and deliberately read by
+     * nothing yet: the only surface that could use it is a download progress meter, and there is
+     * no download in this app (see the note above about `ACTION_VIEW`).
+     */
+    @SerializedName("apk_update_sha256")
+    val apkUpdateSha256: String = "",
+    @SerializedName("apk_update_size_bytes")
+    val apkUpdateSizeBytes: Long = 0L,
+    @SerializedName("apk_update_version_code")
+    val apkUpdateVersionCode: Int = 0,
     val vip: VipRemotePricing = VipRemotePricing(),
     val payments: VipRemotePayments = VipRemotePayments(),
     /** Operator switches for whole surfaces; every one defaults ON when the body omits it. */

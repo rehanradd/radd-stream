@@ -11,6 +11,8 @@ class VipRemoteConfigTest {
 
     private val gson = Gson()
 
+    private val digest = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+
     @Test
     fun `decodes the servers full payment projection`() {
         val config = gson.fromJson(
@@ -93,6 +95,38 @@ class VipRemoteConfigTest {
 
         assertEquals("", config.apkUpdateUrl)
         assertFalse(config.maintenanceMode)
+    }
+
+    /**
+     * The three fields UPD-1a added beside the banner (`Fast_Fetch/admin_panel.py`). Flat and
+     * additive on the server side, so the client's job is to decode them when present and to
+     * decode the *old* body exactly as before when they are not — a deployment that has never
+     * opened the admin panel must not fall over, and must not look like it published a digest.
+     */
+    @Test
+    fun `decodes the apk digest size and version code and defaults them to unpublished`() {
+        val published = gson.fromJson(
+            """
+            {"success": true, "apk_update_url": "https://dl.example.com/app.apk",
+             "apk_update_sha256": "$digest", "apk_update_size_bytes": 20971520,
+             "apk_update_version_code": 12}
+            """.trimIndent(),
+            VipRemoteConfig::class.java,
+        )
+
+        assertEquals(digest, published.apkUpdateSha256)
+        assertEquals(20_971_520L, published.apkUpdateSizeBytes)
+        assertEquals(12, published.apkUpdateVersionCode)
+
+        val legacy = gson.fromJson(
+            """{"success": true, "apk_update_url": "https://dl.example.com/app.apk"}""",
+            VipRemoteConfig::class.java,
+        )
+
+        assertEquals("", legacy.apkUpdateSha256)
+        assertEquals(0L, legacy.apkUpdateSizeBytes)
+        assertEquals(0, legacy.apkUpdateVersionCode)
+        assertEquals("https://dl.example.com/app.apk", legacy.apkUpdateUrl)
     }
 
     @Test
