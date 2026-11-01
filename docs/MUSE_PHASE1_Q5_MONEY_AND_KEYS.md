@@ -271,19 +271,19 @@ and diff `len(INVARIANTS)`' label set against the audit's sixteen**, not to grep
 lines, and a line-grep is the method that undercounted the CI suites and produced the "98 entries" error below.
 Every figure in this paragraph came from that import, and the count in each slice's checkpoint says so.
 
-**As of slice 8 — the ordinary eight is COMPLETE (2026-11-01, q5): 11 of 15 converted, 4 still pinning state,
-and all 4 of those are held pending a decision that is not mine** — derived by importing the guard
-(`len(INVARIANTS)` = 104; 5 audit labels still present, one of which is the requirement pin kept by design, the
-other 4 being `one vCPU`, `backend is the running system`, `the named hole: 442 keys / 455 rows` and `residual
-measure under the correct identity`), not incremented from the previous sentence.
-Held, not open — these are *not* mine to close:
+**As of slice 9 (2026-11-01, q5): 12 of 15 converted, 3 still pinning state, and all 3 of those are held on a
+decision or a surface that is not mine** — derived by importing the guard (`len(INVARIANTS)` = 104; 4 audit labels
+still present, one of which is the requirement pin kept by design, the other 3 being `backend is the running
+system`, `the named hole: 442 keys / 455 rows` and `residual measure under the correct identity`), not incremented
+from the previous sentence. The ordinary eight finished at slice 8; slice 9 is the first of the four previously
+marked HELD, reclassified as actionable on the 16:37 instruction to re-check each one.
 
-| label | why held |
+| label | status after the re-check |
 |---|---|
-| `one vCPU` | replacement clause would itself be a state claim (host hardware); needs new law in a file with 10 B headroom → supervisor decision |
-| `backend is the running system` | same, deployment status → supervisor decision |
-| `the named hole: 442 keys / 455 rows` | qoder3's adult-flag surface; do not step on it unasked |
-| `residual measure under the correct identity` | same |
+| `one vCPU` | **converted at slice 9** (`c8684ac`). The hold's stated reason was sound — a hardware replacement clause is still a state claim, and root `AGENTS.md` has 10 B of headroom — but it was not permanent: the law the reading enforces is already written elsewhere, in `docs/CAPACITY_MEASURED.md` item 4 ("Throttle the fleet against the box, not the box against the fleet"), which is core-count-free and reachable from the loaded indexes. No `AGENTS.md` byte was needed. |
+| `backend is the running system` | **held, and the probe says the hold is correct rather than provisional.** Its sentence's law half is already pinned (`deployment is separate from a branch push`), and its other half — "do not treat it as hypothetical" — is a state claim in imperative clothing, which is precisely what a law pin must not be. Converting it needs new law in a 10-byte-headroom file: an owner/supervisor call, not a slice. |
+| `the named hole: 442 keys / 455 rows` | **held on qoder3's adult-flag surface.** The measures sit inside the adult-law paragraph q3 is actively rewriting; a guard edit here would land mid-change in someone else's surface. |
+| `residual measure under the correct identity` | **same.** |
 
 The ordinary eight, one pin per slice, each on its own branch and sha: `measured: secrets list is empty`
 (**s1**, `011d973`), `release died at the signing preflight` (**s2**, `4fa35e0` — moved subject, because the
@@ -328,7 +328,11 @@ had only been summarising: "Do not list it as scraped-and-playable anywhere" (`S
 `## 25. TheMovieBox` at :1110). Conversion commit `b0ac12c` on `q5-pin-s8-scraped-playable-20261101`, stacked on s7.
 Write and display now pin two obligations that fire apart; what MovieBox serves *today* is deliberately unpinned,
 because a guard that audits ledgers goes red on true news.)
-**None remain in the ordinary set.** The four surviving state pins are the held rows in the table above, and the
+`one vCPU` (**s9** — the first item the 09:03 note marked HELD, converted after the 16:37 instruction to
+re-check actionability: the hardware reading now pins `docs/CAPACITY_MEASURED.md`'s core-count-free throttle law;
+conversion commit `c8684ac` on `q5-pin-s9-throttle-fleet-20261101`, stacked on s8, and refused candidates are named
+with reasons in the series checkpoint).
+**None remain in the ordinary set.** The three surviving state pins are the held rows in the table above, and the
 next step on them belongs to the supervisor and to qoder3, not to another slice of this series. The
 running record, including the duplicate-versus-coverage argument and the escalated `AGENTS.md` release-safety
 finding (owner's decision, untouched by this lane), is
