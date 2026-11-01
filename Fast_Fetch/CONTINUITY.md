@@ -7,7 +7,7 @@
 
 ## ✅ Open items — index (q3, 2026-10-30; pointers only)
 
-1. **This file is a pointer, not a history.** 66 session files (64 dated + 2 undated) cover
+1. **This file is a pointer, not a history.** 67 session files (65 dated + 2 undated) cover
    2026-10-23 → 2026-11-01,
    every one of them verbatim: [`checkpoints/README.md`](checkpoints/README.md). Nothing was
    deleted, reworded, or summarized. The count is `ls Fast_Fetch/checkpoints/*.md` minus `README.md`,
@@ -74,19 +74,12 @@
 
 Session blocks moved verbatim to [`Fast_Fetch/checkpoints/`](checkpoints/README.md); nothing was deleted or reworded.
 The newest are listed here; `Fast_Fetch/checkpoints/README.md` is the complete index.
+- [Session 2026-11-01 — q5 `[Q5-DOCSTRUTH-RELEASE]`: the release row is retired, and the 32,000 B ceiling cannot see the pushes that breach it](checkpoints/20261101-q5-docstruth-release-row-the-ci-blind-spot-and-two-instruments.md)
 
 - [Session 2026-10-30 — q3 `[Q3-OPS-READS]`: JOB A — the operator's own reads are bounded, and the boundary is named in code](checkpoints/20261030-q3-lane-launch-readiness-job-a-the-operators-own-rea.md)
 - [Session 2026-10-30 (q3 JOB B) `[Q3-LADDER]`: the pass ladder is data, a refusal writes nothing, and a flagged row publishes no playable handle](checkpoints/20261030-09xx-q3-lane-job-b-the-pass-ladder-is-data-and-a.md) — 191 lines
 - [Session 2026-10-30 — q2 `[Q2-MOVIEBOX-CRAWL]`: parser fixes + detail-API preference; crawl gate closed](checkpoints/20261030-q2-themoviebox-crawl-2026-10-30-parser-fixes-detail-api-preference.md) — 110 lines (absorbed from trunk `4fe6f65` during the rebase)
 - [2026-10-30 04:0x→ — q3 lane, THE DOCUMENTATION DIET: split, not delete](checkpoints/20261030-04xx-q3-lane-the-documentation-diet-split-not-delet.md)
-- [📜 Session History & Commit Ledger](checkpoints/undated-session-history-commit-ledger.md) — 22 lines
-- [Session 2026-10-30 (q2 bounded ledger + read-only projection) `[Q2-LEDGER]`](checkpoints/20261030-session-2026-10-30-q2-bounded-ledger-read-only-projection.md) — 98 lines
-- [Session 2026-10-30 (qoder4 master orchestrator) — Antigravity's MovieBox importer, finished, tes](checkpoints/20261030-session-2026-10-30-qoder4-master-orchestrator-antigravity.md) — 85 lines
-- [2026-10-30 01:15–01:4x — q3 lane, DISHW stale-claim sweep part 2 (docs only)](checkpoints/20261030-2026-10-30-01-15-01-4x-q3-lane-dishw-stale-claim-sweep-par.md) — 76 lines
-- [Session 2026-10-30 (q5 account5 — Task #22c: the engagement knobs are admin-controllable) `[Q5-E](checkpoints/20261030-session-2026-10-30-q5-account5-task-22c-the-engagement-kno.md) — 123 lines
-- [2026-10-30 01:50–02:2x — q3 lane, LINK-HEALTH SWEEP: design + budget arithmetic only](checkpoints/20261030-2026-10-30-01-50-02-2x-q3-lane-link-health-sweep-design-bu.md) — 70 lines
-- [2026-10-30 03:0x–03:5x — q3 lane, LINK-HEALTH follow-up: the per-host serialiser is built, and t](checkpoints/20261030-2026-10-30-03-0x-03-5x-q3-lane-link-health-follow-up-the-p.md) — 89 lines
-- [Session 2026-10-30 (q2, MovieBox link-shape defect) `[Q2-MOVIEBOX]`](checkpoints/20261030-session-2026-10-30-q2-moviebox-link-shape-defect-q2-movieb.md) — 69 lines
 - 2026-11-01 q5 `[Q5-PROBE-TOTAL]` RECORD: this branch had no commit and no push before `11c1008` (02:54); Backend CI run `41245756423` at that sha is completed success, 45 steps, none non-green, step 43 being the new suite. The identifiers `226737e`, `41245142329`, `q5-config-probe-20261101` and a 35-test `test_database` figure appear in none of this lane's turns; the true set is above.
 
 ## Moved out (reference prose, verbatim)
