@@ -180,8 +180,16 @@ INVARIANTS = [
      "**If your task needs a heavy read, do not run it — queue it.**"),
     ("rule 7 local timing is not module timing", ROOT_AGENTS,
      "**A slow local test module is not a slow test module — never exclude one on this box's timing.**"),
-    ("rule 7 carries its measurement", ROOT_AGENTS, "266.312 s"),
-    ("rule 7 names the hosted verdict", ROOT_AGENTS, "1 s on the hosted runner"),
+    # Converted 2026-11-01 (q5, Muse's slice): these two pinned a *measured number* — `266.312 s`
+    # and `1 s on the hosted runner` — so any lane that re-measured rule 7 turned CI red for editing
+    # a stopwatch reading. The numbers stay in `AGENTS.md` where they belong (rule 7 cites its run
+    # id); the pin now bites on the two clauses that make the numbers non-load-bearing, which is the
+    # shape the ADMIN_DOC pins in the edge-truth block below already use. Trade, stated plainly: the tax
+    # is gone and so is the guarantee that anyone re-measures — rule 7's own sentence is what demands it.
+    ("rule 7 says the local number is a symptom", ROOT_AGENTS,
+     "the local number is a symptom of the guardrail, not a property of the code"),
+    ("rule 7 gives CI the timing authority", ROOT_AGENTS,
+     "only CI's per-step timing decides whether a suite belongs in the gate"),
 
     # --- the measured CI truth ------------------------------------------------------
     ("count steps by the 🧪 name", ROOT_AGENTS, "grep -c 'name: 🧪' .github/workflows/backend-ci.yml"),
@@ -205,8 +213,18 @@ INVARIANTS = [
      "Never describe the dashboard as token-gated: holding `RADD_ADMIN_TOKEN` does not make it reachable"),
     ("the panel guide separates the running tree from the repository", ADMIN_DOC,
      "Read that table as the state of the *running tree*, not of the repository."),
-    ("nginx allow-lists the public routes", ROOT_AGENTS,
-     "nginx allow-lists only `/api/v1/posts`, `/api/v1/stream`, `/api/v1/stats`"),
+    # Converted 2026-11-01 (q5): the old phrase was a *prefix* of a seven-item enumeration in the Key
+    # Links row (`/api/v1/posts`, `/api/v1/stream`, `/api/v1/stats` … the row also carries `/download`,
+    # `/search/by-media`, `/app/remote-config`, `/v2/account*`, `/download/`). It still matched, so this
+    # pin was not broken — it was doubly wrong: it red-fires on any reorder or reword of a list the doc
+    # has visibly grown once already, while giving false comfort that the allow-list was guarded when it
+    # only ever described its first three entries. What is invariant is the *shape* of the policy — nginx
+    # is the edge and it allow-lists, it does not block-list — so that clause is what is pinned now. The
+    # live list stays in `AGENTS.md` (Key Links, row "Backend REST API (publicly reachable)") as the
+    # measured fact it is; it carries no date there, which is a separate weakness and is *not* claimed
+    # fixed here.
+    ("nginx allow-lists rather than block-lists at the edge", ROOT_AGENTS,
+     "allow-lists only the public routes"),
     ("backend is the running system", ROOT_AGENTS,
      "The backend is **already deployed there and is the running system**"),
 

@@ -230,19 +230,49 @@ So KD-1's demonstration and KD-5's forgery check are now hosted facts rather tha
 **Money coverage, stated as the verdict needs it:** 61 + 38 + 85 + 17 = **201 offline tests** now stand
 between a money-or-handle change and trunk, none of which needs this box.
 
-**The 16 pins — STILL OPEN, and this is the honest status.** `Fast_Fetch/checkpoints/20261031-q5-guard-derived-constants-audit-and-the-gate-that-checks-itself.md` §"the defect class" listed 16 `INVARIANTS`
-entries in `test_docs_invariants.py` that pin a *fact about today* rather than the *method sentence around
-it*; 15 were to be converted, 1 (`app lane: signed release needs the 4 secrets`) kept as a requirement.
-Measured on the sha this branch is based on: **all 16 labels are still in `INVARIANTS`** (block at
-`test_docs_invariants.py:60-278`, 98 entries total), so **0 of 15 converted**. Two of them
-(`measured: secrets list is empty`, `release died at the signing preflight`) are now *tolerable* rather
-than converted, because `63396c1`/`b48d15f` reframed the prose they quote as history — the pin bites on a
-dated measurement instead of asserting a live blocker. The other thirteen still assert state as if it were
-law, and one of them (`266.312 s`) is a single sample from a loaded box.
-This is not a Phase 1 blocker: the guard is red only when a doc *rewords*, which is the direction we want.
-It is a slow tax, and converting it is a docs-only change that feeds **no CI** for `Fast_Fetch/**`… except
-that it edits `test_docs_invariants.py` itself, which *is* under `Fast_Fetch/` — so it does run. Say the
-word and I will take it as its own slice.
+**The 16 pins — 3 CONVERTED on Muse's 08:30 word, and the count above this line was wrong when I wrote it.**
+`Fast_Fetch/checkpoints/20261031-q5-guard-derived-constants-audit-and-the-gate-that-checks-itself.md`
+§"the defect class" listed 16 `INVARIANTS` entries that pin a *fact about today* rather than the *method
+sentence around it*; 15 were to be converted, 1 (`app lane: signed release needs the 4 secrets`) kept as a
+requirement. Two corrections to what this paragraph claimed an hour ago:
+
+- **The entry count was 104, not 98.** `len(INVARIANTS)` at `c2528e1` is **104**, and `grep -c '^    ("'` on
+  the same file agrees, so the 98 was not a stale measurement of a moving tree — it was wrong when I typed it.
+  The authoritative way to ask this question is `len(INVARIANTS)` from the module itself; a line-grep happens
+  to agree here but is the method that undercounted the CI steps for the same reason (entries wrap across
+  lines). Recorded because the earlier paragraph cited a number as "measured on the sha", which implied a
+  method it did not have.
+- **"the guard is red only when a doc rewords" was too kind to the tax.** A state pin also fires red on an
+  *honest re-measurement*: change `266.312 s` to a new stopwatch reading in `AGENTS.md` and CI goes red on a
+  docs edit that made the doc *more* accurate. That is the reason to convert, not a rewording nuisance.
+
+**Converted in this slice (3 of 15), each one re-pointed from a value to the clause that makes the value
+non-load-bearing — the shape the `ADMIN_DOC` pins already use ("Read that table as the state of the *running
+tree*, not of the repository"):**
+
+| old label / old literal | new label / new literal | why the new one cannot rot |
+|---|---|---|
+| `rule 7 carries its measurement` / `266.312 s` | `rule 7 says the local number is a symptom` / "the local number is a symptom of the guardrail, not a property of the code" | a stopwatch reading is re-taken routinely; the interpretation is the law |
+| `rule 7 names the hosted verdict` / `1 s on the hosted runner` | `rule 7 gives CI the timing authority` / "only CI's per-step timing decides whether a suite belongs in the gate" | the runner's number changes per run; who decides does not |
+| `nginx allow-lists the public routes` / the first three items of a seven-route enumeration | `nginx allow-lists rather than block-lists at the edge` / "allow-lists only the public routes" | the Key Links row lists seven (`/download`, `/search/by-media`, `/app/remote-config`, `/v2/account*` besides the pinned three), so the old pin was **both** a timer on any reorder **and** an incomplete description of the thing it claimed to guard |
+
+No `AGENTS.md` byte moved: all three replacement clauses were already present verbatim in the file, so the
+conversion is a guard-only edit and cannot collide with the 32,000 B ceiling (currently 31,990 B — 10 bytes of
+headroom, which is why "edit the doc to fit the pin" was not the cheap option). Verified before pushing by
+importing the module and re-running its own comparison over all 104 entries: **0 missing phrases, 0 duplicate
+labels**; the suite itself was **not** run locally, per the LIGHT-ONLY freeze, so CI judges it.
+
+**Status now: 3 of 15 converted, 12 open.** Two of the twelve are *tolerable* (`measured: secrets list is
+empty`, `release died at the signing preflight`) because `63396c1`/`b48d15f` reframed the prose they quote as
+history; the other ten still assert state as law — `one vCPU`, `backend is the running system`, the two adult
+flag measures (`442 keys / 455 rows`, `2,600 / 3,486 / 69,773`), `debug APK needs no secret`, `no signed
+artifact has ever been produced`, `MovieBox is metadata + trailer evidence, not playable`, `no playable print
+is resolvable from this host`, `app: arm64-excluded suites are invisible here`. **Two of those ten are not
+mine to convert:** `one vCPU` and `backend is the running system` quote `AGENTS.md` prose whose replacement
+clauses are *also* state (host hardware, deployment status), so converting them properly means writing new
+law into a capped file — a supervisor call, not a docs tidy. The remaining eight are the ordinary next
+slices, and the adult-flag two touch `SPEC_ADULT_FLAG_EVIDENCE.md`, which q3 has been editing; I will not
+step on it unasked.
 
 **Authorisation state, recorded so nobody reads a recommendation as a ticket:** KD-1 (per-token nonce, a
 wire-format change) — **barred** by Muse 07:2x, no code written. MD-1 and MD-2 — **not to be started

@@ -2,6 +2,8 @@
 
 Newest first. Each file is a session block moved verbatim out of `Fast_Fetch/CONTINUITY.md` on 2026-10-30.
 
+- 2026-11-01 08:3x — q5 backend lane `[Q5-PIN-CONVERSIONS]`: Muse's authorised slice — 3 of the 15 `INVARIANTS` state pins converted to law pins (`266.312 s`, `1 s on the hosted runner`, the three-route nginx enumeration), guard-only edits because root `AGENTS.md` has 10 bytes of headroom; and the money doc's "98 entries" was wrong when it was written — `len(INVARIANTS)` is **104**, so ask the module, not the text — [`20261101-q5-pin-conversions-three-state-pins-and-the-number-i-typed-wrong.md`](20261101-q5-pin-conversions-three-state-pins-and-the-number-i-typed-wrong.md)
+
 Entries written to `CONTINUITY.md` by another lane *after* the rotation are not lost: the rebase onto
 trunk `4fe6f65` moved them here the same way, verbatim, with the trunk line range in the header.
 
