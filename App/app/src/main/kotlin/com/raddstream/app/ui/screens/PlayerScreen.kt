@@ -47,30 +47,23 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
-import androidx.compose.material.icons.filled.AspectRatio
-import androidx.compose.material.icons.filled.Bedtime
 import androidx.compose.material.icons.filled.BrightnessHigh
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.FastForward
-import androidx.compose.material.icons.filled.HighQuality
 import androidx.compose.material.icons.filled.Forward10
-import androidx.compose.material.icons.filled.KeyboardArrowLeft
-import androidx.compose.material.icons.filled.KeyboardArrowRight
-import androidx.compose.material.icons.filled.ListAlt
+import androidx.compose.material.icons.filled.Fullscreen
+import androidx.compose.material.icons.filled.FullscreenExit
+import androidx.compose.material.icons.filled.HighQuality
 import androidx.compose.material.icons.filled.LocalMovies
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.LockOpen
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Pause
-import androidx.compose.material.icons.filled.PictureInPicture
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Replay10
-import androidx.compose.material.icons.filled.RotateRight
-import androidx.compose.material.icons.filled.SkipNext
-import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Subtitles
-import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.filled.VolumeMute
 import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material.icons.filled.Warning
@@ -138,11 +131,16 @@ import com.raddstream.app.player.DominantAxis
 import com.raddstream.app.player.DragCommand
 import com.raddstream.app.player.GestureMapper
 import com.raddstream.app.player.GestureSettings
-import com.raddstream.app.player.HandoffWhy
 import com.raddstream.app.player.KeepUiState
+import com.raddstream.app.player.LowerQualityStep
 import com.raddstream.app.player.PinchCommand
+import com.raddstream.app.player.PlayerChromePlan
+import com.raddstream.app.player.PlayerChromePlan.Control
+import com.raddstream.app.player.PlayerChromeZones
+import com.raddstream.app.player.ChromeZone
 import com.raddstream.app.player.PlayerOrientation
 import com.raddstream.app.player.PlayerUiState
+import com.raddstream.app.player.QualityChoice
 import com.raddstream.app.player.ScreenZone
 import com.raddstream.app.player.SleepMode
 import com.raddstream.app.player.SleepTimerState
@@ -188,15 +186,25 @@ import kotlinx.coroutines.delay
  *  - [GestureOverlay] — the researched gesture table (PLAYER_SPEC §2.1), decisions delegated
  *    to the pure `GestureMapper`; tap / boost-release / drag / pinch live in independent
  *    `pointerInput` lanes so they never fight over events.
- *  - [TopBar] / [CenterControls] / [BottomControls] — three-zone fading chrome with the MX
- *    bottom button row (subtitles, audio, speed, lock, ±10s, frame-step, next episode,
- *    sleep, aspect, rotate, audio-only, stereo-select, cinema, PiP).
+ *  - [TopBar] / [CenterControls] / [BottomControls] — the SIMPLE surface, painted from a table
+ *    rather than from taste. [PlayerChromePlan] decides which controls this title earns, and
+ *    [PlayerChromeZones] decides which of the three rows each of them sits in: back, title and
+ *    quality at the top, one big play/pause in the centre, and along the bottom the seek bar, the
+ *    time, the two ten-second jumps, fullscreen, subtitles (only when the file has text), audio
+ *    tracks (only when it has more than one) and the single More button. The bar is gone about
+ *    three seconds into untouched playback — [PlayerChromePlan.AUTO_HIDE_MS], the same constant
+ *    the auto-hide timer reads, so the wait and the surface cannot drift apart.
+ *  - [MoreSheet] — the one home of everything the simple surface moved off: speed, subtitle sync,
+ *    lock, frame-step, sleep timer, aspect, orientation, audio-only, stereo-only, cinema mode, the
+ *    source log, the external player, next episode and picture-in-picture. Moved, not deleted, and
+ *    every one of them still labelled with the words it had on the old eighteen-button row.
  *  - [EdgeHud] — what the same three zones collapse to in Ghost mode
  *    ([com.raddstream.app.player.ViewMode.PURE_CINEMA]): no pause scrim, no centre button,
  *    only edge chips and a 2dp progress line.
- *  - Sheets/dialogs — speed, sleep timer (fade-out), subtitle settings (sync applies to
- *    both render paths), tracks, prints + failover log, resume prompt, pack calibration,
- *    play-from, give-up card with the four §5 handoff reasons.
+ *  - Sheets/dialogs — speed, quality (bands only, spelled by [QualityChoice]), sleep timer
+ *    (fade-out), subtitle settings (sync applies to both render paths), tracks, prints + failover
+ *    log, resume prompt, pack calibration, play-from, and the give-up card in plain words with
+ *    Retry plus Try lower quality.
  *  - [SubtitleOverlay] — custom-rendered external SRT/VTT (delay read straight from the
  *    settings); embedded and Media3-parsed tracks get the same delay from the service's
  *    decoder wrapper.
@@ -258,22 +266,55 @@ private fun PlayerScreenContent(
     var snackbar by remember { mutableStateOf<String?>(null) }
     var scrubPreviewMs by remember { mutableStateOf<Long?>(null) }
 
+    // The fullscreen control's whole state: true = the system bars are hidden and the picture
+    // owns the frame, false = they are back. The player opens immersive, so the button's first
+    // press means "leave", which is what its label then says.
+    var immersive by remember { mutableStateOf(true) }
+
     val launchPip = rememberPipLauncher()
     PlayerEventWatcher(vm, context, onPlayNextEpisode) { snackbar = it }
+
+    val insetsController = remember(activity) {
+        activity?.window?.let { WindowInsetsControllerCompat(it, it.decorView) }
+    }
+
+    /**
+     * The one surface decision: which controls this title earns, and where each of them sits.
+     * The table ([PlayerChromePlan]) answers "on the bar or behind More", [PlayerChromeZones]
+     * answers "which row of the bar", and nothing below this line is allowed to decide either —
+     * the three composables paint the lists they are handed. That is what makes the simplification
+     * verifiable rather than a matter of taste: `PlayerChromePlanTest` and `PlayerChromeZonesTest`
+     * walk the real table, and a `qualityCount` of 1 removes the quality button from a title that
+     * has one picture without anyone having to remember to edit a second place.
+     *
+     * [PlayerChromePlan.Inputs.isLockedOutByEntitlement] is false from here on purpose. The VIP
+     * quality gate restricts WHICH BANDS the ladder offers, and [PlayerViewModel.armQualityChoices]
+     * already filters those out before they reach `qualityRungs`; there is no state in this build
+     * where the whole title is unplayable-but-on-screen, which is the case that surface was drawn
+     * for. Inventing one would hide the back button on a viewer who still has somewhere to go.
+     */
+    val chromePlan = PlayerChromePlan.plan(
+        PlayerChromePlan.Inputs(
+            subtitleCount = state.subtitleTracks.size,
+            audioTrackCount = state.audioTracks.size,
+            qualityCount = state.qualityRungs.size,
+            hasNextEpisode = (state.bundle?.target?.episode ?: 0) > 0,
+            canEnterPictureInPicture = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O,
+            isLockedOutByEntitlement = false,
+        ),
+    )
 
     // Immersive fullscreen + keep-screen-on while the player exists (MX behaviour).
     DisposableEffect(activity) {
         val window = activity?.window
         window?.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-        val insets = window?.let { WindowInsetsControllerCompat(it, it.decorView) }
-        insets?.systemBarsBehavior =
+        insetsController?.systemBarsBehavior =
             WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
-        insets?.hide(WindowInsetsCompat.Type.systemBars())
         val originalBrightness = window?.attributes?.screenBrightness
         activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
         onDispose {
             window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-            insets?.show(WindowInsetsCompat.Type.systemBars())
+            insetsController?.show(WindowInsetsCompat.Type.systemBars())
             window?.let {
                 val attrs = it.attributes
                 attrs.screenBrightness =
@@ -282,6 +323,13 @@ private fun PlayerScreenContent(
             }
             activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
         }
+    }
+
+    // The fullscreen button's only effect: the system bars are hidden or they are not.
+    LaunchedEffect(immersive, insetsController) {
+        val controller = insetsController ?: return@LaunchedEffect
+        if (immersive) controller.hide(WindowInsetsCompat.Type.systemBars())
+        else controller.show(WindowInsetsCompat.Type.systemBars())
     }
 
     // Brightness override from the left-half vertical gesture.
@@ -301,10 +349,11 @@ private fun PlayerScreenContent(
         }
     }
 
-    // Auto-hide the chrome 3.8 s into uninterrupted playback.
+    // Auto-hide the chrome on the table's own timer (about three seconds of untouched playback),
+    // not on a number the screen invented.
     LaunchedEffect(controlsVisible, state.isPlaying, interactTick, state.dialogBlocking) {
         if (controlsVisible && state.isPlaying && !state.dialogBlocking) {
-            delay(3800)
+            delay(chromePlan.autoHideMs)
             if (state.isPlaying) controlsVisible = false
         }
     }
@@ -345,7 +394,7 @@ private fun PlayerScreenContent(
         // 1 — video surface or audio-only placeholder
         if (state.audioOnly) {
             AudioOnlySurface(
-                title = state.pendingTitle ?: state.activeRendition?.displayLabel() ?: stringResource(R.string.player_audio_title),
+                title = state.pendingTitle ?: stringResource(R.string.player_audio_title),
                 isPlaying = state.isPlaying,
             )
         } else {
@@ -392,17 +441,25 @@ private fun PlayerScreenContent(
         if (state.boosting) BoostBadge()
 
         // 5 — chrome. Ghost mode paints only the edge strip; everything else keeps the
-        // three-zone MX bars, the pause scrim and the big centre button.
+        // three-zone MX bars, the pause scrim and the big centre button. Each zone paints only
+        // what the table put on the bar AND placed in that row.
         if (controlsVisible && !state.locked) {
             if (state.pureCinema) {
                 EdgeHud(state = state, vm = vm, onBack = onBackClick)
             } else {
-                TopBar(vm = vm, state = state, onBack = onBackClick)
-                CenterControls(state, vm)
+                TopBar(
+                    vm = vm,
+                    state = state,
+                    onBack = onBackClick,
+                    controls = PlayerChromeZones.onBar(chromePlan, ChromeZone.TOP),
+                )
+                CenterControls(state, vm, PlayerChromeZones.onBar(chromePlan, ChromeZone.CENTRE))
                 BottomControls(
                     state = state,
                     vm = vm,
-                    onEnterPip = launchPip,
+                    controls = PlayerChromeZones.onBar(chromePlan, ChromeZone.BOTTOM),
+                    immersive = immersive,
+                    onToggleFullscreen = { immersive = !immersive },
                     onActivity = { interactTick = System.nanoTime() },
                 )
             }
@@ -412,7 +469,7 @@ private fun PlayerScreenContent(
         }
 
         // 6 — narration cards
-        state.settledBanner?.let { banner ->
+        state.settledBanner?.let { band ->
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
                 Surface(
                     color = RaddNarrationPlate,
@@ -428,36 +485,59 @@ private fun PlayerScreenContent(
                     ) {
                         Icon(Icons.Default.Check, null, tint = RaddNarrationCheck, modifier = Modifier.size(16.dp))
                         Spacer(Modifier.width(8.dp))
-                        Text(banner, color = Color.White, fontSize = brandSp(13), maxLines = 2, overflow = TextOverflow.Ellipsis)
+                        // The band, in the same words the quality button uses, and nothing else:
+                        // which print settled and how many attempts died before it is the source
+                        // log's job, not a sentence over someone's film.
+                        Text(
+                            stringResource(R.string.player_switched_quality, band),
+                            color = Color.White,
+                            fontSize = brandSp(13),
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                        )
                     }
                 }
             }
         }
 
-        state.giveUp?.let { (message, why) ->
+        if (state.giveUp != null) {
             GiveUpCard(
-                message = message,
-                why = why,
+                canTryLower = LowerQualityStep.available(
+                    current = state.qualityBand,
+                    present = state.qualityRungs.map { it.band },
+                ),
                 onRetry = { vm.retryCurrentCandidates() },
-                onExternal = { vm.openWithExternalPlayer() },
+                onTryLower = { vm.tryLowerQuality() },
                 onDismiss = { vm.dismissGiveUp() },
             )
         }
 
-        state.connectionError?.let { err ->
-            ConnectionErrorCard(err, onRetry = { vm.retryCurrentCandidates() })
+        if (state.connectionError != null) {
+            ConnectionErrorCard(onRetry = { vm.retryCurrentCandidates() })
         }
 
         if (state.isBuffering && !state.isPlaying && state.giveUp == null &&
             state.startPhase == StartPhase.NONE
         ) {
-            CircularProgressIndicator(
-                modifier = Modifier
-                    .align(Alignment.Center)
-                    .size(46.dp),
-                color = AccentOrange,
-                strokeWidth = 3.dp,
-            )
+            // A wait says "Loading…" and nothing else. Which hoster refused, which codec the file
+            // carries and what the transport called it are not things a viewer can act on, and
+            // painting them turns a stall into a wall of text nobody asked to read.
+            Column(
+                modifier = Modifier.align(Alignment.Center),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(46.dp),
+                    color = AccentOrange,
+                    strokeWidth = 3.dp,
+                )
+                Spacer(Modifier.height(10.dp))
+                Text(
+                    stringResource(R.string.player_loading),
+                    color = Color.White.copy(alpha = 0.8f),
+                    fontSize = brandSp(13),
+                )
+            }
         }
 
         // The window before the first frame is the one a viewer cannot tell apart from a
@@ -504,6 +584,9 @@ private fun PlayerScreenContent(
         if (state.tracksSheetVisible) TracksSheet(state, vm)
         if (state.printSheetVisible) PrintLogSheet(state, vm)
         if (state.qualitySheetVisible) QualitySheet(state, vm)
+        if (state.moreSheetVisible) {
+            MoreSheet(state, vm, PlayerChromeZones.menu(chromePlan), onEnterPip = launchPip)
+        }
         if (state.adBreak != AdSlot.NONE) {
             SponsorBreakDialog(slot = state.adBreak, onDismiss = { vm.dismissAdBreak() })
         }
@@ -546,7 +629,7 @@ private val PlayerUiState.dialogBlocking: Boolean
     get() = resumeOfferMs != null || calibration != null || giveUp != null ||
         speedSheetVisible || tracksSheetVisible || subtitleSheetVisible ||
         subtitleOffsetSheetVisible || printSheetVisible || sleepSheetVisible ||
-        playFromDialogVisible || qualitySheetVisible
+        playFromDialogVisible || qualitySheetVisible || moreSheetVisible
 
 // ── 1. Surface ─────────────────────────────────────────────────────────────────
 
@@ -965,9 +1048,24 @@ private fun BoostBadge() {
 
 // ── 5. Chrome bars ─────────────────────────────────────────────────────────────
 
+/**
+ * The top row of the simple surface: leave, what is playing, and the picture.
+ *
+ * It paints exactly the controls the table put on the bar AND assigned to [ChromeZone.TOP] —
+ * nothing it invented and nothing the plan withheld. What used to sit under the title, the
+ * "print · HLS · expiring link · Auto: 1080P" sub-line, is gone from the frame entirely: the
+ * transport a file arrives over, whether its link expires and what its codec is called are not
+ * choices a viewer can make, and a line of them reads as a status report rather than as a
+ * player. The one thing in that line a viewer could act on — which band is playing — is the
+ * quality button, which says it in [QualityChoice]'s words and opens the sheet that changes it.
+ */
 @Composable
-private fun TopBar(vm: PlayerViewModel, state: PlayerUiState, onBack: () -> Unit) {
-    val print = state.activeRendition
+private fun TopBar(
+    vm: PlayerViewModel,
+    state: PlayerUiState,
+    onBack: () -> Unit,
+    controls: List<Control>,
+) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -975,67 +1073,53 @@ private fun TopBar(vm: PlayerViewModel, state: PlayerUiState, onBack: () -> Unit
             .padding(start = 4.dp, end = 4.dp, top = 6.dp, bottom = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        IconButton(onClick = onBack) {
-            Icon(Icons.Default.ArrowBack, stringResource(R.string.player_back), tint = Color.White)
+        if (Control.BACK in controls) {
+            IconButton(onClick = onBack) {
+                Icon(Icons.Default.ArrowBack, stringResource(R.string.player_back), tint = Color.White)
+            }
+            Spacer(Modifier.width(6.dp))
         }
-        Spacer(Modifier.width(6.dp))
-        Column(Modifier.weight(1f)) {
+        if (Control.TITLE in controls) {
             Text(
-                state.pendingTitle ?: print?.displayLabel() ?: Brand.name,
+                state.pendingTitle ?: Brand.name,
                 color = Color.White,
                 fontSize = brandSp(15),
                 fontWeight = FontWeight.SemiBold,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
             )
-            if (print != null) {
-                val hlsTag = stringResource(R.string.player_tag_hls)
-                val expiringTag = stringResource(R.string.player_tag_expiring)
-                val autoTag = state.autoQualityBand?.let { band -> stringResource(R.string.player_tag_auto, band) }
-                Text(
-                buildString {
-                    append(print.displayLabel())
-                    if (print.playback.isHls()) append(" · ").append(hlsTag)
-                    if (print.playback.ephemeral) append(" · ").append(expiringTag)
-                    // Says out loud that the rung shown is Auto's current choice, so a
-                    // quality that moves on its own is never mistaken for a hand-picked one.
-                    autoTag?.let { append(" · ").append(it) }
-                },
-                    color = Color.White.copy(alpha = 0.72f),
-                    fontSize = brandSp(11),
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
+        } else {
+            Spacer(Modifier.weight(1f))
+        }
+        if (Control.QUALITY in controls) {
+            PlayerControlButton(
+                { vm.showQualitySheet() },
+                stringResource(R.string.player_quality_label, state.qualityLabel),
+            ) {
+                Icon(
+                    Icons.Default.HighQuality,
+                    null,
+                    tint = if (state.qualityAuto) Color.White else AccentOrange,
                 )
             }
         }
-        if (state.sleep.mode == SleepMode.COUNTDOWN) {
-            Icon(
-                Icons.Default.Bedtime,
-                stringResource(R.string.player_sleep_remaining, state.sleep.remainingMs.formatTime()),
-                tint = AccentOrange,
-                modifier = Modifier
-                    .size(16.dp)
-                    .padding(end = 6.dp),
-            )
-        }
-        if (state.speed != 1f && !state.boosting) {
-            Text(
-                stringResource(R.string.player_speed_short, state.speed),
-                color = AccentOrange,
-                fontSize = brandSp(13),
-                fontWeight = FontWeight.Bold,
-                modifier = Modifier.padding(end = 6.dp),
-            )
-        }
         KeepChip(state, vm)
-        IconButton(onClick = { vm.showPrintSheet() }) {
-            Icon(Icons.Default.ListAlt, stringResource(R.string.player_prints_tools), tint = Color.White)
-        }
     }
 }
 
+/**
+ * The centre of the frame: one big transport button, and only when the table asked for it.
+ * Buffering hides it on purpose — a play control over a wait the viewer already knows about is
+ * two things spinning at once.
+ */
 @Composable
-private fun CenterControls(state: PlayerUiState, vm: PlayerViewModel) {
+private fun CenterControls(
+    state: PlayerUiState,
+    vm: PlayerViewModel,
+    controls: List<Control>,
+) {
+    if (Control.PLAY_PAUSE !in controls) return
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         if (!state.isBuffering) {
             Surface(color = RaddHudChip, shape = CircleShape) {
@@ -1111,7 +1195,7 @@ private fun EdgeHud(
                 Icon(Icons.Default.ArrowBack, null, tint = Color.White, modifier = Modifier.size(20.dp))
             }
             Text(
-                text = state.pendingTitle ?: state.activeRendition?.displayLabel() ?: Brand.name,
+                text = state.pendingTitle ?: Brand.name,
                 color = Color.White.copy(alpha = 0.85f),
                 fontSize = brandSp(12),
                 fontWeight = FontWeight.Medium,
@@ -1184,129 +1268,236 @@ private fun EdgeHud(
     }
 }
 
+/**
+ * The bottom row of the simple surface: where you are in the file, the two ten-second jumps,
+ * fullscreen, the two buttons that only exist when the title can honour them, and the one
+ * [Control.MORE] button that owns everything else.
+ *
+ * Every control here is painted because the table put it on the bar AND [PlayerChromeZones] put
+ * it in this row. The old row was eighteen buttons wide and horizontally scrollable, which is the
+ * screen the owner's video called confusing: a first-time viewer met frame-stepping, stereo
+ * selection, cinema mode and an external-player chooser before they found pause. Nothing was
+ * deleted to get here — [MoreSheet] paints what this row stopped painting.
+ *
+ * The ±10 s buttons deliberately duplicate what a double-tap on the left or right half already
+ * does. The gesture is faster and the button is visible; a viewer who does not know the gesture
+ * must still be able to skip an intro.
+ */
 @Composable
 private fun BottomControls(
     state: PlayerUiState,
     vm: PlayerViewModel,
-    onEnterPip: () -> Unit,
+    controls: List<Control>,
+    immersive: Boolean,
+    onToggleFullscreen: () -> Unit,
     onActivity: () -> Unit,
 ) {
+    val skipMs = GestureSettings().skipMs
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.BottomCenter) {
         Column(
             Modifier
                 .fillMaxWidth()
                 .background(RaddHudBar),
         ) {
-            Scrubber(
-                positionMs = state.positionMs,
-                bufferedMs = state.bufferedMs,
-                durationMs = state.durationMs,
-                enabled = state.seekEnabled,
-                onSeek = { vm.seekTo(it) },
-                onActivity = onActivity,
-            )
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 12.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(state.positionMs.formatTime(), color = Color.White, fontSize = brandSp(12))
-                Spacer(Modifier.weight(1f))
-                Text(
-                    if (state.durationMs > 0) state.durationMs.formatTime() else "--:--",
-                    color = Color.White.copy(alpha = 0.75f),
-                    fontSize = brandSp(12),
+            if (Control.SEEK in controls) {
+                Scrubber(
+                    positionMs = state.positionMs,
+                    bufferedMs = state.bufferedMs,
+                    durationMs = state.durationMs,
+                    enabled = state.seekEnabled,
+                    onSeek = { vm.seekTo(it) },
+                    onActivity = onActivity,
                 )
+            }
+            if (Control.ELAPSED in controls) {
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(state.positionMs.formatTime(), color = Color.White, fontSize = brandSp(12))
+                    Spacer(Modifier.weight(1f))
+                    Text(
+                        if (state.durationMs > 0) state.durationMs.formatTime() else "--:--",
+                        color = Color.White.copy(alpha = 0.75f),
+                        fontSize = brandSp(12),
+                    )
+                }
             }
             Row(
                 Modifier
                     .fillMaxWidth()
-                    .horizontalScroll(rememberScrollState())
                     .padding(horizontal = 4.dp, vertical = 2.dp),
                 verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(2.dp),
             ) {
-                val subtitleWord = subtitleStatusLabel(state, stringResource(R.string.player_off))
-                if (state.canSwitchQuality) {
-                    PlayerControlButton({ vm.showQualitySheet() }, stringResource(R.string.player_quality_label, state.qualityLabel)) {
+                if (Control.SKIP_BACK in controls) {
+                    PlayerControlButton({ vm.seekBy(-skipMs); onActivity() }, stringResource(R.string.player_rewind_10)) {
+                        Icon(Icons.Default.Replay10, null, tint = Color.White)
+                    }
+                }
+                if (Control.SKIP_FORWARD in controls) {
+                    PlayerControlButton({ vm.seekBy(skipMs); onActivity() }, stringResource(R.string.player_forward_10)) {
+                        Icon(Icons.Default.Forward10, null, tint = Color.White)
+                    }
+                }
+                // Subtitles only when the title has text, audio only when it has more than one
+                // track. A button that can only ever answer "none" is the fake affordance the
+                // spec names, and the table — not this row — is what knows the counts.
+                if (Control.SUBTITLES in controls) {
+                    PlayerControlButton(
+                        { vm.showSubtitleSheet() },
+                        stringResource(R.string.player_subtitles_label, subtitleStatusLabel(state, stringResource(R.string.player_off))),
+                    ) {
                         Icon(
-                            Icons.Default.HighQuality,
+                            Icons.Default.Subtitles,
                             null,
-                            tint = if (state.qualityAuto) Color.White else AccentOrange,
+                            tint = if (subtitleActive(state)) AccentOrange else Color.White,
                         )
                     }
                 }
-                PlayerControlButton({ vm.showSubtitleSheet() }, stringResource(R.string.player_subtitles_label, subtitleWord)) {
-                    Icon(Icons.Default.Subtitles, null, tint = if (subtitleActive(state)) AccentOrange else Color.White)
-                }
-                PlayerControlButton(
-                    { vm.showSubtitleOffsetSheet() },
-                    stringResource(R.string.player_subtitle_sync, SubtitleOffset.format(state.subtitle.delayMs)),
-                ) {
-                    Icon(
-                        Icons.Default.Sync,
-                        null,
-                        tint = if (state.subtitle.delayMs != 0L) AccentOrange else Color.White,
-                    )
-                }
-                PlayerControlButton({ vm.showTracksSheet() }, stringResource(R.string.player_audio_tracks)) {
-                    Icon(
-                        Icons.Default.MusicNote,
-                        null,
-                        tint = if (state.selectedAudioId != null) AccentOrange else Color.White,
-                    )
-                }
-                PlayerControlButton({ vm.showSpeedSheet() }, stringResource(R.string.player_speed_label, state.speed)) {
-                    Icon(Icons.Default.Speed, null, tint = if (state.speed != 1f) AccentOrange else Color.White)
-                }
-                PlayerControlButton({ vm.setLocked(true) }, stringResource(R.string.player_lock)) {
-                    Icon(Icons.Default.Lock, null, tint = Color.White)
-                }
-                PlayerControlButton({ vm.seekBy(-10_000); onActivity() }, stringResource(R.string.player_rewind_10)) {
-                    Icon(Icons.Default.Replay10, null, tint = Color.White)
-                }
-                PlayerControlButton({ vm.seekBy(10_000); onActivity() }, stringResource(R.string.player_forward_10)) {
-                    Icon(Icons.Default.Forward10, null, tint = Color.White)
-                }
-                PlayerControlButton({ vm.stepFrame(-1) }, stringResource(R.string.player_frame_back)) {
-                    Icon(Icons.Default.KeyboardArrowLeft, null, tint = Color.White)
-                }
-                PlayerControlButton({ vm.stepFrame(1) }, stringResource(R.string.player_frame_forward)) {
-                    Icon(Icons.Default.KeyboardArrowRight, null, tint = Color.White)
-                }
-                PlayerControlButton({ vm.requestNextEpisode() }, stringResource(R.string.player_next_episode)) {
-                    Icon(Icons.Default.SkipNext, null, tint = Color.White)
-                }
-                PlayerControlButton({ vm.showSleepSheet() }, stringResource(R.string.player_sleep_timer)) {
-                    Icon(Icons.Default.Bedtime, null, tint = if (state.sleep.mode != SleepMode.OFF) AccentOrange else Color.White)
-                }
-                PlayerControlButton({ vm.cycleAspect(); onActivity() }, stringResource(R.string.player_aspect_label, state.aspect.label)) {
-                    Icon(Icons.Default.AspectRatio, null, tint = if (state.aspect != AspectMode.FIT) AccentOrange else Color.White)
-                }
-                PlayerControlButton({ vm.toggleOrientation(); onActivity() }, stringResource(R.string.player_orientation_label, state.orientation.label)) {
-                    Icon(Icons.Default.RotateRight, null, tint = if (state.orientation == PlayerOrientation.PORTRAIT) AccentOrange else Color.White)
-                }
-                PlayerControlButton({ vm.toggleAudioOnly() }, stringResource(R.string.player_audio_only_toggle)) {
-                    Icon(Icons.Default.MusicNote, null, tint = if (state.audioOnly) AccentOrange else Color.White)
-                }
-                PlayerControlButton({ vm.toggleStereoOnly() }, stringResource(R.string.player_stereo_only_toggle)) {
-                    Icon(Icons.Default.VolumeUp, null, tint = if (state.stereoOnly) AccentOrange else Color.White)
-                }
-                // Enters Ghost mode; the edge HUD's own chip is the only way back out, so
-                // this button is deliberately last-ish and clearly labelled, not a bare icon.
-                // Hidden entirely when the operator's `pure_cinema` switch is off — an entry
-                // point to a frame this build refuses to paint is only a button that lies.
-                if (state.pureCinemaAllowed) {
-                    PlayerControlButton({ vm.toggleViewMode(); onActivity() }, stringResource(R.string.player_cinema_mode)) {
-                        Icon(Icons.Default.LocalMovies, null, tint = Color.White)
+                if (Control.AUDIO_TRACKS in controls) {
+                    PlayerControlButton({ vm.showTracksSheet() }, stringResource(R.string.player_audio_tracks)) {
+                        Icon(
+                            Icons.Default.MusicNote,
+                            null,
+                            tint = if (state.selectedAudioId != null) AccentOrange else Color.White,
+                        )
                     }
                 }
-                PlayerControlButton(onEnterPip, stringResource(R.string.player_pip)) {
-                    Icon(Icons.Default.PictureInPicture, null, tint = Color.White)
+                Spacer(Modifier.weight(1f))
+                if (Control.FULLSCREEN in controls) {
+                    PlayerControlButton(
+                        { onToggleFullscreen(); onActivity() },
+                        stringResource(
+                            if (immersive) R.string.player_leave_fullscreen else R.string.player_fullscreen,
+                        ),
+                    ) {
+                        Icon(
+                            if (immersive) Icons.Default.FullscreenExit else Icons.Default.Fullscreen,
+                            null,
+                            tint = Color.White,
+                        )
+                    }
+                }
+                if (Control.MORE in controls) {
+                    PlayerControlButton({ vm.showMoreSheet() }, stringResource(R.string.player_more)) {
+                        Icon(Icons.Default.MoreVert, null, tint = Color.White)
+                    }
                 }
             }
         }
     }
+}
+
+/**
+ * The single home of everything the simple bar moved off. Relocation, not deletion: the sleep
+ * timer, the lock, aspect and orientation, subtitle sync, frame-stepping, audio-only and
+ * stereo-only selection, cinema mode, picture-in-picture, the source log and the external-player
+ * chooser are all here, in the order the table lists them, each keeping the words it used to be
+ * labelled with on the bar.
+ *
+ * The rows are text, not a second icon grid — an icon maze is what the bar became — and each row
+ * closes this sheet before opening the one it names, so two [ModalBottomSheet]s never stack over
+ * the same frame.
+ *
+ * [Control.CINEMA_MODE] is the one row this skips, and only when the operator's `pure_cinema`
+ * switch is off. That switch is not an input the table knows about, so the screen has to check it
+ * here; an entry into a frame this build refuses to paint would be exactly the dead button the
+ * spec bans.
+ *
+ * The extra row at the end is the other half of a rule the table owns: [Control.SUBTITLES] leaves
+ * the bar when a title reports no text tracks, which would otherwise strand the external-subtitle
+ * picker with no door at all. A title with no embedded text can still be given an SRT file, so the
+ * door opens on the same sheet and says so.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun MoreSheet(
+    state: PlayerUiState,
+    vm: PlayerViewModel,
+    menu: List<Control>,
+    onEnterPip: () -> Unit,
+) {
+    ModalBottomSheet(
+        onDismissRequest = { vm.hideMoreSheet() },
+        sheetState = rememberModalBottomSheetState(),
+        containerColor = RaddPlayerSheet,
+    ) {
+        Column(
+            Modifier
+                .verticalScroll(rememberScrollState())
+                .padding(bottom = 24.dp),
+        ) {
+            SheetTitle(stringResource(R.string.player_more))
+            menu.forEach { control ->
+                if (control == Control.CINEMA_MODE && !state.pureCinemaAllowed) return@forEach
+                val label = moreRowLabel(control, state)
+                SheetRow(label = label) {
+                    vm.hideMoreSheet()
+                    when (control) {
+                        Control.SPEED -> vm.showSpeedSheet()
+                        Control.SUBTITLE_DELAY -> vm.showSubtitleOffsetSheet()
+                        Control.LOCK -> vm.setLocked(true)
+                        Control.FRAME_BACK -> vm.stepFrame(-1)
+                        Control.FRAME_FORWARD -> vm.stepFrame(1)
+                        Control.SLEEP_TIMER -> vm.showSleepSheet()
+                        Control.ASPECT -> vm.cycleAspect()
+                        Control.ORIENTATION -> vm.toggleOrientation()
+                        Control.AUDIO_ONLY -> vm.toggleAudioOnly()
+                        Control.STEREO_ONLY -> vm.toggleStereoOnly()
+                        Control.CINEMA_MODE -> vm.toggleViewMode()
+                        Control.SOURCE_LOG -> vm.showPrintSheet()
+                        Control.OPEN_EXTERNALLY -> vm.openWithExternalPlayer()
+                        Control.NEXT_EPISODE -> vm.requestNextEpisode()
+                        Control.PICTURE_IN_PICTURE -> onEnterPip()
+                        else -> Unit
+                    }
+                }
+            }
+            if (state.subtitleTracks.isEmpty()) {
+                SheetRow(label = stringResource(R.string.player_subtitle_load)) {
+                    vm.hideMoreSheet()
+                    vm.showSubtitleSheet()
+                }
+            }
+        }
+    }
+}
+
+/**
+ * The words one More row wears. Kept apart from the press so the row above stays about the press:
+ * this is the same vocabulary the eighteen-button bar used, so a control's name did not change
+ * when its address did.
+ */
+@Composable
+private fun moreRowLabel(control: Control, state: PlayerUiState): String = when (control) {
+    Control.SPEED -> stringResource(R.string.player_speed_label, state.speed)
+    Control.SUBTITLE_DELAY -> stringResource(
+        R.string.player_subtitle_sync,
+        SubtitleOffset.format(state.subtitle.delayMs),
+    )
+    Control.LOCK -> stringResource(R.string.player_lock)
+    Control.FRAME_BACK -> stringResource(R.string.player_frame_back)
+    Control.FRAME_FORWARD -> stringResource(R.string.player_frame_forward)
+    // Says the remaining time out loud while the timer is running, so the control that set it is
+    // the control that reports it — the top bar no longer carries a countdown of its own.
+    Control.SLEEP_TIMER -> if (state.sleep.mode == SleepMode.COUNTDOWN) {
+        stringResource(R.string.player_sleep_remaining, state.sleep.remainingMs.formatTime())
+    } else {
+        stringResource(R.string.player_sleep_timer)
+    }
+    Control.ASPECT -> stringResource(R.string.player_aspect_label, state.aspect.label)
+    Control.ORIENTATION -> stringResource(R.string.player_orientation_label, state.orientation.label)
+    Control.AUDIO_ONLY -> stringResource(R.string.player_audio_only_toggle)
+    Control.STEREO_ONLY -> stringResource(R.string.player_stereo_only_toggle)
+    Control.CINEMA_MODE -> stringResource(R.string.player_cinema_mode)
+    Control.SOURCE_LOG -> stringResource(R.string.player_prints_tools)
+    Control.OPEN_EXTERNALLY -> stringResource(R.string.player_open_external)
+    Control.NEXT_EPISODE -> stringResource(R.string.player_next_episode)
+    Control.PICTURE_IN_PICTURE -> stringResource(R.string.player_pip)
+    else -> stringResource(R.string.player_more)
 }
 
 private fun subtitleActive(state: PlayerUiState) =
@@ -1476,8 +1667,17 @@ private fun PlayAgainButton(onPlayAgain: () -> Unit) {
     }
 }
 
+/**
+ * The service never answered. In plain words, with one action.
+ *
+ * This card used to paint the ViewModel's own failure text over the frame. That text is a
+ * transport exception — a class name, a component, sometimes an address — and none of it is
+ * something a viewer can read, act on, or repeat to anyone. The words the viewer gets are the
+ * words from resources; the detail stays on [PlayerUiState.connectionError] and is printed once,
+ * in the source log behind More, where it is a diagnosis rather than an insult.
+ */
 @Composable
-private fun ConnectionErrorCard(message: String, onRetry: () -> Unit) {
+private fun ConnectionErrorCard(onRetry: () -> Unit) {
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         Column(
             Modifier.padding(24.dp),
@@ -1485,7 +1685,12 @@ private fun ConnectionErrorCard(message: String, onRetry: () -> Unit) {
         ) {
             Icon(Icons.Default.Warning, null, tint = AccentOrange, modifier = Modifier.size(40.dp))
             Spacer(Modifier.height(10.dp))
-            Text(message, color = Color.White, fontSize = brandSp(13), textAlign = TextAlign.Center)
+            Text(
+                stringResource(R.string.player_error_unreachable),
+                color = Color.White,
+                fontSize = brandSp(13),
+                textAlign = TextAlign.Center,
+            )
             Spacer(Modifier.height(12.dp))
             OutlinedButton(onClick = onRetry) { Text(stringResource(R.string.player_retry), color = Color.White) }
         }
@@ -1532,12 +1737,23 @@ private fun StartNoticeCard(phase: StartPhase, title: String?) {
     }
 }
 
+/**
+ * Every candidate failed. Two words and the actions that are actually true.
+ *
+ * This card used to be the loudest piece of jargon in the app: which of the [HandoffWhy] codes
+ * the failover ended on, how many ranks it killed getting there, and whether the survivor was a
+ * download rather than a stream. All of that is developer-facing and stays in the source log
+ * behind More. What the viewer is owed is one sentence in plain words and the buttons that can
+ * honour it — Retry, and Try lower quality, and only when [canTryLower] says this title has a
+ * lower rung to fall to. A "Try lower quality" that leads to nothing is the dead button the spec
+ * names, so the answer comes from [LowerQualityStep] over the rungs this scope actually has,
+ * gate-filtered by the ViewModel — never from the failure code.
+ */
 @Composable
 private fun GiveUpCard(
-    message: String,
-    why: HandoffWhy,
+    canTryLower: Boolean,
     onRetry: () -> Unit,
-    onExternal: () -> Unit,
+    onTryLower: () -> Unit,
     onDismiss: () -> Unit,
 ) {
     AlertDialog(
@@ -1545,34 +1761,28 @@ private fun GiveUpCard(
         containerColor = RaddPlayerDialog,
         title = {
             Text(
-                when (why) {
-                    HandoffWhy.DOWNLOAD_ONLY -> stringResource(R.string.player_giveup_download_only)
-                    HandoffWhy.NO_CANDIDATE_LEFT -> stringResource(R.string.player_giveup_no_candidate)
-                },
+                stringResource(R.string.player_error_quality),
                 color = Color.White,
                 fontSize = brandSp(16),
             )
         },
         text = {
-            Column {
-                Text(message, color = Color.White.copy(alpha = 0.85f), fontSize = brandSp(13))
-                Spacer(Modifier.height(8.dp))
-                Text(
-                    when (why) {
-                        HandoffWhy.DOWNLOAD_ONLY ->
-                            stringResource(R.string.player_giveup_download_body)
-                        HandoffWhy.NO_CANDIDATE_LEFT ->
-                            stringResource(R.string.player_giveup_no_candidate_body)
-                    },
-                    color = Color.White.copy(alpha = 0.6f),
-                    fontSize = brandSp(12),
-                )
-            }
+            Text(
+                if (canTryLower) {
+                    stringResource(R.string.player_error_with_lower)
+                } else {
+                    stringResource(R.string.player_error_plain)
+                },
+                color = Color.White.copy(alpha = 0.85f),
+                fontSize = brandSp(13),
+            )
         },
         confirmButton = {
             Row {
                 TextButton(onClick = onRetry) { Text(stringResource(R.string.player_retry), color = AccentOrange) }
-                TextButton(onClick = onExternal) { Text(stringResource(R.string.player_open_external), color = AccentOrange) }
+                if (canTryLower) {
+                    TextButton(onClick = onTryLower) { Text(stringResource(R.string.player_try_lower), color = AccentOrange) }
+                }
             }
         },
         dismissButton = {
@@ -1884,7 +2094,11 @@ private fun QualitySheet(state: PlayerUiState, vm: PlayerViewModel) {
             state.qualityRungs.forEach { rung ->
                 val selected = !state.qualityAuto && rung.band == state.qualityBand
                 QualityRow(
-                    title = rung.label?.takeIf { it.isNotBlank() } ?: rung.band.uppercase(),
+                    // The BAND, in QualityChoice's words — never the rung's own caption, which is
+                    // the print's marketing name and its codec ("Full HD · X264"). A viewer
+                    // chooses a picture, not an encoding, and the same band has to read the same
+                    // here, on the button and in Settings.
+                    title = QualityChoice.labelOf(rung.band) ?: rung.band,
                     detail = if (selected) stringResource(R.string.player_playing) else null,
                     selected = selected,
                     onClick = { vm.selectQualityBand(rung.band) },
@@ -2236,6 +2450,21 @@ private fun PrintLogSheet(state: PlayerUiState, vm: PlayerViewModel) {
                 Text(
                     stringResource(R.string.player_failover_policy, p.retrySame, p.backoffMs, p.maxRanks),
                     color = Color.White.copy(alpha = 0.5f),
+                    fontSize = brandSp(11),
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
+                )
+            }
+            // The two raw strings this screen used to put over the picture: the transport
+            // exception from a service that would not answer, and the failover's own reason for
+            // giving up. Here, in the sheet whose whole subject is what the playback machinery
+            // did, they are a diagnosis someone can paste into a report. Over a frozen frame they
+            // were the jargon this player exists to remove — which is why they moved rather than
+            // being deleted.
+            val failureDetail = state.connectionError ?: state.giveUp?.first
+            if (failureDetail != null) {
+                Text(
+                    stringResource(R.string.player_error_detail, failureDetail),
+                    color = Color.White.copy(alpha = 0.45f),
                     fontSize = brandSp(11),
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
                 )

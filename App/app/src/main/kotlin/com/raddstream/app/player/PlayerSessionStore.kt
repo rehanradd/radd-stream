@@ -156,12 +156,17 @@ class PlayerSessionStore(
     fun setActiveIndex(index: Int, announceSettled: Boolean = false) {
         _activeRenditionIndex.value = index
         if (announceSettled) {
-            val r = activeRendition()
-            val died = _failoverLog.value.count { it.action != "skipped" }
-            _settledBanner.value = r?.displayLabel()?.let { label ->
-                if (died > 0) "Playing: $label (after $died failed candidate${if (died == 1) "" else "s"})"
-                else "Playing: $label"
-            }
+            // The viewer's question at a silent hop is "did my picture change", and the whole
+            // answer is the band it moved to. Which print settled, how many candidates died
+            // before it, and what that print calls its codec are the developer-facing trail the
+            // source log keeps; painting them over the frame was exactly the technical narration
+            // the simplified player bans. A band this app cannot name — absent, blank, or the
+            // wire's own `unknown` — announces nothing, because a half-sentence is worse than
+            // silence.
+            val band = activeRendition()?.print?.resolution
+                ?.trim()
+                ?.takeIf { it.isNotEmpty() && !it.equals("unknown", ignoreCase = true) }
+            _settledBanner.value = QualityChoice.labelOf(band)
         }
     }
 

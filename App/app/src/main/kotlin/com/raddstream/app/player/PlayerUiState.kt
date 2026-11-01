@@ -228,7 +228,9 @@ data class PlayerUiState(
     val pureCinemaAllowed: Boolean = true,
     val audioOnly: Boolean = false,
     val stereoOnly: Boolean = false,
-    // failover narration (§5: which print settled, why the others died)
+    // failover narration (§5: which print settled, why the others died). The TRAIL stays in
+    // [failoverLog] for the source sheet; what this carries to the frame is only the band the
+    // playback moved to, spelled by QualityChoice, and the screen puts it into a sentence.
     val bundle: PlaybackBundle? = null,
     val activeRendition: PlaybackRendition? = null,
     val failoverLog: List<FailoverRecord> = emptyList(),
@@ -261,6 +263,12 @@ data class PlayerUiState(
     val sleepSheetVisible: Boolean = false,
     val playFromDialogVisible: Boolean = false,
     val qualitySheetVisible: Boolean = false,
+    /**
+     * The one "More" sheet. Every control the simple surface moved off the bar lives behind
+     * this single flag, which is the whole point: there is exactly one door to the advanced
+     * set, so a viewer who opens it finds everything the bar used to cover.
+     */
+    val moreSheetVisible: Boolean = false,
     /**
      * The sponsor slot currently on screen, if any. Only [AdSlotPolicy.decide] can raise it,
      * and that policy has no value for a title that is playing — so this field can never be
@@ -337,10 +345,14 @@ data class PlayerUiState(
      * The band to print on the quality control: while Auto is armed the director's live rung
      * is the truth (it may have moved on throughput), a hand-picked rung is the user's own
      * decision and never gets second-guessed by an estimate.
+     *
+     * Spelled by [QualityChoice.labelOf], the same words the quality sheet and the saved
+     * preference use, so one band is never called `1080P` here and `1080p` there. A band word
+     * [QualityChoice] cannot name is shown as it arrived rather than shouted.
      */
     val qualityLabel: String
         get() = (if (qualityAuto) autoQualityBand ?: qualityBand else qualityBand)
-            ?.uppercase() ?: "Auto"
+            ?.let { QualityChoice.labelOf(it) ?: it } ?: "Auto"
 
     /** A switch is only honest when the scope actually offers more than one rung. */
     val canSwitchQuality: Boolean get() = qualityRungs.size > 1

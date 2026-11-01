@@ -40,6 +40,7 @@ import com.raddstream.app.player.KeepResult
 import com.raddstream.app.player.KeepUiState
 import com.raddstream.app.player.LadderForScope
 import com.raddstream.app.player.LadderRung
+import com.raddstream.app.player.LowerQualityStep
 import com.raddstream.app.player.NextEpisodeAction
 import com.raddstream.app.player.PlaybackBundle
 import com.raddstream.app.player.PlaybackInfo
@@ -50,6 +51,7 @@ import com.raddstream.app.player.PlayerSessionStore
 import com.raddstream.app.player.PrintInfo
 import com.raddstream.app.player.SessionInfo
 import com.raddstream.app.player.PlayerUiState
+import com.raddstream.app.player.QualityChoice
 import com.raddstream.app.player.QualityLadder
 import com.raddstream.app.player.RippleState
 import com.raddstream.app.player.ScreenZone
@@ -649,6 +651,23 @@ class PlayerViewModel @Inject constructor(
         store.autoQuality.configure(plan.rungs, rung.band, auto)
         store.setAutoBand(if (auto) store.autoQuality.currentBand else null)
         _ui.update { it.copy(qualitySheetVisible = false, qualityBand = rung.band, qualityAuto = auto) }
+        // ONE quality preference, three doors. A hand-picked rung is written through the same key
+        // Settings saves and the detail page reads on the next title, so choosing 720p here is not
+        // a decision that quietly dies with this film. What the band MEANS — which rung a word
+        // names, what the nearest is when a title lacks it — stays QualityChoice's alone; this
+        // line only stores the word the viewer picked, canonicalised the same way the other two
+        // doors write it.
+        //
+        // Auto is deliberately NOT written. It is this viewing's instruction to the bandwidth
+        // director, and the stored key has no vocabulary for "let the app choose": a literal
+        // "auto" read back by QualityChoice is an unplaceable band, would resolve to 720p, and
+        // Settings would then display 720p as though the viewer had asked for it. Leaving the
+        // saved choice untouched is the honest half of that gap, and the gap is reported.
+        if (!auto) {
+            QualityChoice.canonical(rung.band)?.let { band ->
+                viewModelScope.launch { settingsRepository.savePlaybackBand(band) }
+            }
+        }
         if (rung.streamId == active?.playback?.streamId) return
 
         val title = _ui.value.pendingTitle ?: active?.displayLabel() ?: Brand.name
@@ -673,6 +692,33 @@ class PlayerViewModel @Inject constructor(
 
     fun hideQualitySheet() {
         _ui.update { it.copy(qualitySheetVisible = false) }
+    }
+
+    /**
+     * The one door to the advanced controls. Everything the simple bar moved off — speed, sleep
+     * timer, lock, aspect, subtitle sync, frame-step, external player — is a row in this sheet,
+     * so relocating them never made one of them unreachable.
+     */
+    fun showMoreSheet() {
+        _ui.update { it.copy(moreSheetVisible = true) }
+    }
+
+    fun hideMoreSheet() {
+        _ui.update { it.copy(moreSheetVisible = false) }
+    }
+
+    /**
+     * "Try lower quality" — one step down the ladder this title actually has, decided by
+     * [LowerQualityStep] so the answer obeys [QualityChoice]'s nearest-lower rule and is never
+     * a hop UP. The rung list is already gate-filtered by [armQualityChoices], so a band this
+     * viewer is not entitled to is not in it and can never be offered as the escape.
+     */
+    fun tryLowerQuality() {
+        val lower = LowerQualityStep.nextLower(
+            current = _ui.value.qualityBand,
+            present = _ui.value.qualityRungs.map { it.band },
+        ) ?: return
+        selectQualityBand(lower)
     }
 
     private fun beginBundle(
