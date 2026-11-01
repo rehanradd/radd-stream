@@ -22,11 +22,18 @@ name: 🔨 CI — Android Build & Test
 #       - GitHub-hosted ubuntu-24.04 images ship an SDK, but which
 #         platforms/build-tools are preinstalled drifts with image updates;
 #         pinning the packages we need (android-35, 35.0.0) is deterministic.
-#   * Gradle is invoked ONCE with `--continue` so the fleet sees ALL of
-#     assembleDebug + testDebugUnitTest + lintDebug results in one log, not
-#     just the first failure. Task names are the AGP-generated per-variant
-#     tasks (`:app:assembleDebug`, `:app:testDebugUnitTest`, `:app:lintDebug`);
-#     `:app` is the only module in settings.gradle.kts.
+#   * Each Gradle task runs in its OWN named step, in sequence, with no
+#     `if: always()`: compile -> testDebugUnitTest -> lintDebug -> assembleDebug.
+#     It used to be ONE invocation with `--continue` so the fleet saw all task
+#     results in a single log. That design made an unparseable failure: the log
+#     needs admin rights to read anonymously, and the annotations GitHub exposes
+#     carry only "exit code 1", so a short red run identified nothing. One step
+#     per task makes the red STEP NAME the diagnosis. Trade-off accepted: each
+#     step pays JVM/Gradle startup (~1 min) and a later phase is not judged at
+#     all until the earlier one passes. Task names are the AGP-generated
+#     per-variant tasks (`:app:compileDebugKotlin`, `:app:testDebugUnitTest`,
+#     `:app:lintDebug`, `:app:assembleDebug`); `:app` is the only module in
+#     settings.gradle.kts.
 #   * Cache poisoning: we cache ONLY ~/.gradle (dependency modules, wrapper
 #     dists, transform + build caches — all content-addressed by Gradle).
 #     We deliberately DO NOT cache the project's App/.gradle directory, which
@@ -102,14 +109,62 @@ jobs:
       - name: 🔧 Make gradlew executable
         run: chmod +x App/gradlew
 
-      - name: "🏗️🧪🔍 Gradle: debug APK + unit tests + lint (single invocation)"
+      # ---------------------------------------------------------------------
+      # ONE TASK PER STEP — DIAGNOSTIC CHANNEL, NOT AN OPTIMISATION
+      # (branch-local on q4-playback-simplification-20261101; deliberately NOT
+      # proposed for trunk.)
+      #
+      # This file used to run one combined invocation
+      #   ./gradlew :app:assembleDebug :app:testDebugUnitTest :app:lintDebug --continue
+      # and when that died at 78 s the failure was undiagnosable from outside:
+      # the job log needs admin (`/actions/jobs/{id}/logs` -> 403 "Must have
+      # admin rights"), and the check-run annotations carry only
+      # "Process completed with exit code 1." plus a missing-APK warning. There
+      # is no error text to fetch. So the step NAME is the instrument: the red
+      # step tells us which phase died, which is the same technique that turned
+      # an opaque signing failure into six readable `🔎 n/6 …` steps.
+      #
+      # Deliberately NO `if: always()` — steps run in sequence and stop at the
+      # first failure, so a compile error never wastes a test run and the red
+      # name is unambiguous about the phase. Cost is real and accepted: each
+      # step pays JVM/Gradle startup (~1 min) and a later phase is not judged
+      # until the earlier one passes. timeout-minutes 45 covers all four.
+      #
+      # --no-daemon is load-bearing now, not housekeeping: a daemon would
+      # outlive the step and hide the next invocation's JVM args.
+      # --console=plain gives unadorned file:line Kotlin errors.
+      # --stacktrace names the failing task if Gradle itself is the problem.
+      #
+      # Secret hygiene: every step below prints ONLY Gradle's own output — task
+      # paths, warning/error lines, exit codes. Nothing here references, echoes,
+      # derives or lists a secret, keystore path, password or token, and no step
+      # runs a signing task (assembleDebug is the DEBUG variant, which needs no
+      # signing secrets at all).
+      # ---------------------------------------------------------------------
+
+      - name: "🧱 Kotlin compiles (:app:compileDebugKotlin)"
         working-directory: App
-        # --continue: report every task's failures in one run.
-        # --no-daemon/--stacktrace per project standard.
-        # --console=plain: unadorned file:line Kotlin errors, no ANSI noise.
         run: |
-          ./gradlew :app:assembleDebug :app:testDebugUnitTest :app:lintDebug \
-            --no-daemon --stacktrace --continue --console=plain
+          ./gradlew :app:compileDebugKotlin \
+            --no-daemon --stacktrace --console=plain
+
+      - name: "🧪 Unit tests (:app:testDebugUnitTest)"
+        working-directory: App
+        run: |
+          ./gradlew :app:testDebugUnitTest \
+            --no-daemon --stacktrace --console=plain
+
+      - name: "🔍 Lint (:app:lintDebug)"
+        working-directory: App
+        run: |
+          ./gradlew :app:lintDebug \
+            --no-daemon --stacktrace --console=plain
+
+      - name: "📦 Debug APK (:app:assembleDebug)"
+        working-directory: App
+        run: |
+          ./gradlew :app:assembleDebug \
+            --no-daemon --stacktrace --console=plain
 
       - name: 📤 Upload debug APK
         if: always()   # assembleDebug may succeed while tests/lint fail — the APK is the most useful output
