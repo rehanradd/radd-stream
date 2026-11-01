@@ -2,6 +2,8 @@
 
 Newest first. Each file is a session block moved verbatim out of `Fast_Fetch/CONTINUITY.md` on 2026-10-30.
 
+- 2026-11-01 09:x — q5 backend lane `[Q5-PIN-SERIES]`: Muse's eight ordinary pin conversions, **one pin per slice, one rolling file for all eight** so the archive count moves once instead of eight times; slice 1 converts the `{"total_count": 0, "secrets": []}` response-body pin onto "so it is a real answer and not a permission artifact", and the series rule is that a conversion may only target a clause that already exists — root `AGENTS.md` sits 10 B under its ceiling and `App/AGENTS.md` 939 B under theirs as measured in this slice (ceilings are `ByteBudgetTests.CEILINGS`, sizes are re-read every slice), so "rewrite the doc to fit the pin" is refused, not forgotten — [`20261101-q5-pin-conversions-the-eight-ordinary-slices.md`](20261101-q5-pin-conversions-the-eight-ordinary-slices.md)
+
 - 2026-11-01 08:3x — q5 backend lane `[Q5-PIN-CONVERSIONS]`: Muse's authorised slice — 3 of the 15 `INVARIANTS` state pins converted to law pins (`266.312 s`, `1 s on the hosted runner`, the three-route nginx enumeration), guard-only edits because root `AGENTS.md` has 10 bytes of headroom; and the money doc's "98 entries" was wrong when it was written — `len(INVARIANTS)` is **104**, so ask the module, not the text — [`20261101-q5-pin-conversions-three-state-pins-and-the-number-i-typed-wrong.md`](20261101-q5-pin-conversions-three-state-pins-and-the-number-i-typed-wrong.md)
 
 Entries written to `CONTINUITY.md` by another lane *after* the rotation are not lost: the rebase onto

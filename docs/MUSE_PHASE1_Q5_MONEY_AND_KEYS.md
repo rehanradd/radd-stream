@@ -262,17 +262,29 @@ headroom, which is why "edit the doc to fit the pin" was not the cheap option). 
 importing the module and re-running its own comparison over all 104 entries: **0 missing phrases, 0 duplicate
 labels**; the suite itself was **not** run locally, per the LIGHT-ONLY freeze, so CI judges it.
 
-**Status now: 3 of 15 converted, 12 open.** Two of the twelve are *tolerable* (`measured: secrets list is
-empty`, `release died at the signing preflight`) because `63396c1`/`b48d15f` reframed the prose they quote as
-history; the other ten still assert state as law — `one vCPU`, `backend is the running system`, the two adult
-flag measures (`442 keys / 455 rows`, `2,600 / 3,486 / 69,773`), `debug APK needs no secret`, `no signed
-artifact has ever been produced`, `MovieBox is metadata + trailer evidence, not playable`, `no playable print
-is resolvable from this host`, `app: arm64-excluded suites are invisible here`. **Two of those ten are not
-mine to convert:** `one vCPU` and `backend is the running system` quote `AGENTS.md` prose whose replacement
-clauses are *also* state (host hardware, deployment status), so converting them properly means writing new
-law into a capped file — a supervisor call, not a docs tidy. The remaining eight are the ordinary next
-slices, and the adult-flag two touch `SPEC_ADULT_FLAG_EVIDENCE.md`, which q3 has been editing; I will not
-step on it unasked.
+**Status — recounted from the guard at every slice, never incremented from memory.** Of the audit's 16 labels,
+those that no longer appear in `INVARIANTS` are the converted ones; the 16th (`app lane: signed release needs
+the 4 secrets`) is kept by design as a requirement. The method is to **import `Fast_Fetch/test_docs_invariants.py`
+and diff `len(INVARIANTS)`' label set against the audit's sixteen**, not to grep the file: entries wrap across
+lines, and a line-grep is the method that undercounted the CI suites and produced the "98 entries" error below.
+Every figure in this paragraph came from that import, and the count in each slice's checkpoint says so.
+
+**As of slice 1 of the ordinary eight (2026-11-01 09:x, q5): 4 of 15 converted, 11 still pinning state.**
+Held, not open — these are *not* mine to close:
+
+| label | why held |
+|---|---|
+| `one vCPU` | replacement clause would itself be a state claim (host hardware); needs new law in a file with 10 B headroom → supervisor decision |
+| `backend is the running system` | same, deployment status → supervisor decision |
+| `the named hole: 442 keys / 455 rows` | qoder3's adult-flag surface; do not step on it unasked |
+| `residual measure under the correct identity` | same |
+
+The ordinary eight that are mine, in the order I am taking them, one pin per slice: `measured: secrets list is
+empty` (**done, slice 1**), `release died at the signing preflight`, `no signed artifact has ever been
+produced`, `debug APK needs no secret`, `the filter shape is measured, never assumed`, `app: arm64-excluded
+suites are invisible here`, `MovieBox is metadata + trailer evidence, not playable`, `no playable print is
+resolvable from this host`. Each gets its own branch, sha, and hosted run; the running record is
+`Fast_Fetch/checkpoints/20261101-q5-pin-conversions-the-eight-ordinary-slices.md`.
 
 **Authorisation state, recorded so nobody reads a recommendation as a ticket:** KD-1 (per-token nonce, a
 wire-format change) — **barred** by Muse 07:2x, no code written. MD-1 and MD-2 — **not to be started

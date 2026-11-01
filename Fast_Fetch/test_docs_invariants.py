@@ -125,8 +125,12 @@ INVARIANTS = [
      "their values, put them in Git URLs or command arguments, commit them, or copy them to Oracle."),
     ("do not ask to move to Replit Secrets", ROOT_AGENTS,
      "Do not ask the user to move them to Replit Secrets."),
-    ("measured: secrets list is empty", ROOT_AGENTS,
-     "`{\"total_count\": 0, \"secrets\": []}`"),
+    # Converted 2026-11-01 (q5, Muse's 09:03 word): the old literal was an API *response body* —
+    # `{"total_count": 0, "secrets": []}` — so the pin guarded a measurement that `63396c1` already
+    # overturned. What the paragraph is for is the reading rule it states: an empty list is evidence
+    # only once you have checked the reader's own repo permissions. That clause is what is pinned now.
+    ("an empty list from a scoped read is still a real answer", ROOT_AGENTS,
+     "so it is a real answer and not a permission artifact"),
     ("release died at the signing preflight", ROOT_AGENTS,
      "it died at the `🗝️ Verify signing secrets are present` preflight"),
     ("do not generate a replacement keystore", ROOT_AGENTS,
