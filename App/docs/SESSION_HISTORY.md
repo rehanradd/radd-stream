@@ -1159,3 +1159,40 @@ Judged hosted-only per the load gate — no VM Gradle: at the re-merged sha the 
 Android `assembleDebug + testDebugUnitTest + lintDebug` runs are reported to the supervisor with
 ids and per-step verdicts. Trunk untouched, no tag, no release, no service restart, no live-tree
 edit, no credential value read or printed.
+
+### Session 38 — Overview finding 1: a keep is committed before it is called COMPLETED (q10 lane, 2026-11-02)
+
+Supervisor command: fix item 1 only of the saved overview list (sweep #15) — a keep whose bytes
+finish inside one fetch pass was reported `COMPLETED` without ever running `finalize()`, so the
+`.part` was never renamed, no `cache_files` row existed, Downloads showed "Saved", and the title
+could never play offline. Lane `q10-fix-keep-finalize-20261102` off trunk `26c9b52`, worked only
+in `/tmp/q10_keepfix`; `CacheCoordinator` untouched.
+
+`AheadFetcher.run` had exactly two `COMPLETED` answers that skipped the commit seam: the per-pass
+byte-cap return and the exhausted-plan tail return (the common finish — any keep smaller than the
+256 MiB cap lands there). Both now check `ledger.isComplete(totalSize)` and go through
+`finalize()` — rename `.part`, upsert the `cache_files` row — before returning `COMPLETED`; a cap
+stop that still leaves gaps keeps its previous `persist` + `WINDOW_FILLED` resumable behavior.
+`finalize()` gained the KDoc naming it the one seam that makes a keep playable offline.
+
+New `AheadFetcherFinalizeTest.kt` (Robolectric) drives the real `AheadFetcher` and the real
+`AndroidStorageGate` — the coordinator's seam is normally a fake `AheadExecutor`, so production
+bytes had never been under test: an OkHttp interceptor fake serves HTTP Range slices from an
+8 KiB payload, `ShadowStatFs.registerStats` satisfies the storage gate, hand-written fake DAOs
+observe the ledger/task/file rows. Four cases: exhausted-plan finish commits; cap-exact finish
+commits; cap stop with open gaps stays `WINDOW_FILLED` with a resumable `.part` and no committed
+file; a second pass on a committed task is `ALREADY_COMPLETE` with exactly one file row. The
+class is added to the arm64 Robolectric exclusion in `app/build.gradle.kts` (Robolectric #9166 —
+hosted x86_64 judges it).
+
+Two red hosted runs were the test harness, not the fix: `3deaf10` fixed four suspend-`getById`
+calls in non-coroutine test bodies; `10235e3` fixed the fake's Range parser (HTTP Range ends are
+inclusive — every chunk was served one byte short, producing `RETRY_LATER` and 5115-vs-4096).
+
+Measured, not assumed: hosted Android run `41364458342` at tip `10235e3` — `completed success`,
+all 13 job steps green including `🏗️🧪🔍 Gradle: debug APK + unit tests + lint`, and the
+`ci-reports` artifact XML shows `AheadFetcherFinalizeTest` tests=4 failures=0 errors=0. Backend
+run `41364752907` (dispatched manually; the push was App-only) — `completed success`, all 44
+suite steps green. Per the load gate: no Gradle or APK build on the VM. Trunk untouched, no tag,
+no release, no service restart, no live-tree edit, no credential value read or printed. Gating is
+qoder1's call.
