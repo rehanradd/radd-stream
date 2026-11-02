@@ -323,7 +323,13 @@ class SearchViewModel @Inject constructor(
     private fun recompute() {
         val filters = _uiState.value.filters
         val sort = _uiState.value.sort
-        val filtered = rawResults.filter { post ->
+        // One work, one row: the server mints `work_ref` for a WORK, and the importers have written
+        // the same film from two sources, so the raw page can name one title twice. Folding happens
+        // BEFORE the year filter so the richer copy of a work is never filtered out by the row that
+        // carried no year — and `resultCount` below then counts works, which is what the viewer
+        // reads the number to mean.
+        val distinct = SearchMerge.dedupe(rawResults)
+        val filtered = distinct.filter { post ->
             // Post.year arrives as a JSON number (Int?), so no string parsing is needed.
             val year = post.year
             val yearOk = when {

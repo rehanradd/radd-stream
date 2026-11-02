@@ -11,9 +11,12 @@ import com.raddstream.app.data.local.WatchHistoryDao
 import com.raddstream.app.data.local.WatchHistoryEntity
 import com.raddstream.app.network.friendlyNetworkError
 import com.raddstream.app.network.models.PostDetail
+import com.raddstream.app.player.DetailSelection
+import com.raddstream.app.player.DownloadOffers
 import com.raddstream.app.player.LadderForScope
 import com.raddstream.app.player.LadderRung
 import com.raddstream.app.player.PlayerSessionStore
+import com.raddstream.app.player.QualityChoice
 import com.raddstream.app.player.QualityLadder
 import com.raddstream.app.player.QualityOption
 import com.raddstream.app.repository.CatalogRepository
@@ -45,6 +48,28 @@ data class DetailUiState(
     val ladderEpisode: Int? = null,
     /** null / [LadderForScope.AUTO] = let the ladder's own pointer choose the rung. */
     val selectedBand: String? = LadderForScope.AUTO,
+    /**
+     * The picture this viewer asked for, as they left it in the store. Null means never chosen,
+     * which is a different fact from "chosen as auto" and is what makes 720p the first-ever default
+     * ([com.raddstream.app.player.QualityChoice.FIRST_RUN_BAND]).
+     */
+    val savedBand: String? = null,
+    /**
+     * What the page's two buttons act on: a tapped episode, else where this device stopped, else the
+     * first episode. Null = nothing selectable yet, and the buttons do not appear.
+     */
+    val selection: DetailSelection.Scope? = null,
+    /** The tap, kept separate from [selection] so a reload can re-resolve without losing it. */
+    val tappedScope: DetailSelection.Scope? = null,
+    /** Where this device is up to in this work, when that is worth resuming. */
+    val resumeScope: DetailSelection.Scope? = null,
+    /**
+     * The two halves of the substitution sentence — the picture that arrived and the one that was
+     * asked for — or null when the viewer got what they asked for. Painted through
+     * [com.raddstream.app.R.string.detail_quality_note]; the rule that fills it is
+     * [com.raddstream.app.player.QualityChoice.fallbackFrom], and the words never live in a screen.
+     */
+    val qualityNote: Pair<String, String>? = null,
     /**
      * Whether the house sponsor card may be shown for this viewer at all. False is the
      * ordinary case; a confirmed membership or a live rewarded pass turns the card off, which
@@ -113,7 +138,110 @@ class DetailViewModel @Inject constructor(
         loadDetail()
         observeFavorite()
         observeEntitlement()
+        observeQualityPreference()
     }
+
+    /**
+     * The saved picture quality, read once and then followed.
+     *
+     * This is what makes the preference a preference: the first play of a first install gets
+     * [QualityChoice.FIRST_RUN_BAND], and every play after a choice gets that choice, across titles
+     * and across restarts. Re-publishing on change is not decoration — the page's rung and the
+     * substitution note are both computed from it, so a choice made in Settings has to reach the
+     * button the viewer is looking at.
+     */
+    private fun observeQualityPreference() {
+        viewModelScope.launch {
+            settingsRepository.playbackBand.collect { band ->
+                _uiState.update { it.copy(savedBand = band) }
+                publishViewerContent()
+            }
+        }
+    }
+
+    /**
+     * Where this device is up to in this work, so a series opened cold can offer Play at the right
+     * episode instead of at S01E01. A row that is finished is not a resume point, and a pointer from
+     * another device that has no scope here is dropped by [DetailSelection.resolve] rather than
+     * aimed at.
+     */
+    private fun observeResumePoint(workRef: String) {
+        viewModelScope.launch {
+            val row = try {
+                watchHistoryDao.findLatestForWork(workRef)
+            } catch (_: Exception) {
+                // A store that cannot answer is "no resume point", never a wall: the page still
+                // resolves to the first episode, which is the honest fallback for a new viewer.
+                null
+            }
+            val scope = row?.takeIf { it.resumable }
+                ?.let { DetailSelection.Scope(it.seasonNumber, it.episodeNumber) }
+            if (_uiState.value.resumeScope == scope) return@launch
+            _uiState.update { it.copy(resumeScope = scope) }
+            publishViewerContent()
+        }
+    }
+
+    /**
+     * An episode row was tapped. It SELECTS — the two big buttons then act on this scope. There is
+     * no play icon on the row any more, which is the whole simplification: one gesture to choose,
+     * one gesture to act, and a viewer who tapped the wrong row can tap another.
+     */
+    fun selectScope(season: Int?, episode: Int?) {
+        val tapped = DetailSelection.Scope(season, episode)
+        if (_uiState.value.tappedScope == tapped) return
+        _uiState.update { it.copy(tappedScope = tapped) }
+        publishViewerContent()
+    }
+
+    /**
+     * The viewer chose a picture in the quality menu. The menu only ever contains bands this title
+     * has (see [QualityChoice.bandsPresent]), so the choice is always honours-able, and saving it is
+     * what makes the next title open the same way. The note is recomputed here for the SAME reason
+     * it is computed on load: a saved choice that a later scope cannot honour must say so then, not
+     * never.
+     */
+    fun selectBand(band: String) {
+        val key = QualityChoice.canonical(band) ?: return
+        _uiState.update { it.copy(savedBand = key) }
+        publishViewerContent()
+        viewModelScope.launch { settingsRepository.savePlaybackBand(key) }
+    }
+
+    /**
+     * The page's one Play button. It acts on the selection, at the band the viewer saved (or the
+     * nearest the title has), and says so in one plain line if that is not the band they asked for.
+     * Which copy inside the band actually streams is the server's collapse plus the player's silent
+     * failover — see [com.raddstream.app.player.RenditionFailover] and [QualityChoice.bestCopy]; the
+     * page never mentions either.
+     */
+    fun playSelected() {
+        val state = _uiState.value
+        if (!DetailSelection.canAct(state.selection, state.ladder.isEmpty)) return
+        val option = QualityChoice.rungFor(state.ladder.options, state.selectedBand)
+            ?: state.ladder.autoOption
+            ?: return
+        playLadder(option)
+    }
+
+    /**
+     * The page's one Download button. It keeps the selected scope at the saved band, and it only
+     * ever offers a row [DownloadOffers] passed: a real file that can resume, once per picture, never
+     * a provider page and never a rung whose address is blank or dead. With nothing eligible there is
+     * no button at all, because a button whose only answer is a failure toast is a lie.
+     */
+    fun keepSelected() {
+        val state = _uiState.value
+        if (!DetailSelection.canAct(state.selection, state.ladder.isEmpty)) return
+        val offers = DownloadOffers.eligible(state.ladder.options)
+        val offer = offers.firstOrNull { QualityChoice.canonical(it.option.band) == QualityChoice.canonical(state.selectedBand) }
+            ?: offers.firstOrNull()
+            ?: return
+        keepRung(offer.option)
+    }
+
+    /** The rows the Download sheet may show for the current selection. */
+    fun downloadOffers(): List<DownloadOffers.Offer> = DownloadOffers.eligible(_uiState.value.ladder.options)
 
     /**
      * Whether this viewer is owed a page without the house card. Both inputs are pushed, so a
@@ -209,24 +337,67 @@ class DetailViewModel @Inject constructor(
             region = userRegion,
         )
         val state = _uiState.value
+        val gatedLayout = VipQualityGate.gate(full, premiumAccess)
+        // One selection drives everything below it: which episode the two buttons act on, which
+        // scope's ladder is read, and which bands can be offered for it. Deriving the ladder FROM
+        // the selection is what makes a Play tap honest — before this, the page could point its
+        // buttons at S02E04 while the ladder it read was the whole work's.
+        val selection = DetailSelection.resolve(
+            tapped = state.tappedScope,
+            resume = state.resumeScope,
+            available = selectableScopes(gatedLayout),
+        )
         val scope = QualityLadder.forNumberedScope(
             detail.optionGroups,
-            state.ladderSeason,
-            state.ladderEpisode,
+            selection?.season,
+            selection?.episode,
         )
+        val gatedScope = VipQualityGate.gate(scope, premiumAccess)
         val premiumLocked = qualityGateEnabled && !serverVip && (
-            VipQualityGate.hasPremiumPrints(full) ||
-                scope.options.any { VipQualityGate.isPremiumBand(it.band) || VipQualityGate.isPremiumLabel(it.title) }
+            VipQualityGate.hasPremiumPrints(gatedLayout) ||
+                gatedScope.options.any { VipQualityGate.isPremiumBand(it.band) || VipQualityGate.isPremiumLabel(it.title) }
             )
+        // The viewer's saved picture, resolved against what THIS scope actually has. `bandsPresent`
+        // is also the quality menu's whole contents, so a menu can never list a band with nothing
+        // behind it, and the note is filled only when the saved band genuinely was not there.
+        val plan = QualityChoice.planFor(
+            savedBand = state.savedBand,
+            present = QualityChoice.bandsPresent(gatedScope.options.map { it.band }),
+        )
         _uiState.update {
             it.copy(
-                layout = VipQualityGate.gate(full, premiumAccess),
-                ladder = VipQualityGate.gate(scope, premiumAccess),
+                layout = gatedLayout,
+                ladder = gatedScope,
+                ladderSeason = selection?.season,
+                ladderEpisode = selection?.episode,
+                selection = selection,
+                selectedBand = plan.band ?: LadderForScope.AUTO,
+                qualityNote = plan.playedLabel?.let { played ->
+                    plan.missingLabel?.let { missing -> played to missing }
+                },
                 vip = serverVip,
                 premiumSourcesLocked = premiumLocked,
                 adFree = RewardedVipPass.isAdFree(serverVip, rewardedExpiresAt),
             )
         }
+    }
+
+    /**
+     * The scopes this title can actually be played in: one per episode of one per season pack, and
+     * exactly one for a work with no episode grid. A movie maps to [DetailSelection.Scope.MOVIE]
+     * rather than to a made-up S01E01, because a movie has no scope and the difference is what
+     * stops the buttons from claiming there is an episode list.
+     *
+     * Lives here rather than in [DetailSelection] because it reads the print layout, which is this
+     * package's model; the selection RULES stay pure and testable over there.
+     */
+    private fun selectableScopes(layout: ReleaseLayout): List<DetailSelection.Scope> {
+        if (!layout.isSeriesLike) return listOf(DetailSelection.Scope.MOVIE)
+        val scopes = layout.seasons.flatMap { season ->
+            season.episodes.map { DetailSelection.Scope(it.season, it.numberWithinSeason) } +
+                season.packedPrints.map { DetailSelection.Scope(season.number, null) }
+        }
+        return scopes.distinct().ifEmpty { listOf(DetailSelection.Scope(null, null)) }
     }
 
     private fun observeFavorite() {
@@ -271,6 +442,7 @@ class DetailViewModel @Inject constructor(
                     // The catalog answer is ungated; what the viewer may SEE is decided here,
                     // from the entitlement the repository already holds.
                     publishViewerContent()
+                    detail.workRef?.trim()?.takeIf { it.isNotEmpty() }?.let(::observeResumePoint)
                     // A row saved before this app had a handle becomes syncable the moment the
                     // catalog finally names its work. Nothing here fabricates a handle: an absent
                     // key is a no-op, and a present one is the server's own.
@@ -334,6 +506,11 @@ class DetailViewModel @Inject constructor(
      * they are about to get — so an episode row asks for its own rung list and the card
      * says which scope it belongs to. A season with no packed file has no season-level
      * ladder, and the card correctly disappears.
+     *
+     * It deliberately does NOT touch `selectedBand` any more. That is the viewer's standing
+     * choice, owned by [QualityChoice] and the store; repointing the card at another scope used
+     * to wipe it back to Auto, so browsing two seasons was enough to lose the picture the viewer
+     * picked — the opposite of "the next title opens the same way".
      */
     fun showRungsFor(season: Int?, episode: Int?) {
         _uiState.update {
@@ -348,7 +525,6 @@ class DetailViewModel @Inject constructor(
                 ),
                 ladderSeason = season,
                 ladderEpisode = episode,
-                selectedBand = LadderForScope.AUTO,
             )
         }
     }

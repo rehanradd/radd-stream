@@ -16,8 +16,6 @@
     <string name="player_boost_badge">Boosting speed</string>
     <string name="player_back">Back</string>
     <string name="player_tag_hls">HLS</string>
-    <string name="player_tag_expiring">expiring link</string>
-    <string name="player_tag_auto">Auto: %1$s</string>
     <string name="player_sleep_remaining">Sleep in %1$s</string>
     <string name="player_speed_short">%1$s×</string>
     <string name="player_prints_tools">Prints &amp; tools</string>
@@ -48,10 +46,17 @@
     <string name="player_play_again">Play again from 0:00</string>
     <string name="player_retry">Retry</string>
     <string name="player_notice_spaced">%1$s %2$s</string>
-    <string name="player_giveup_download_only">Download only</string>
-    <string name="player_giveup_no_candidate">Nothing playable here right now</string>
-    <string name="player_giveup_download_body">This quality can be kept for offline viewing, but it cannot stream here.</string>
-    <string name="player_giveup_no_candidate_body">Every option for this print failed. Retry, keep it for offline, or open it in another player.</string>
+    <string name="player_error_quality">This quality isn\'t working right now.</string>
+    <string name="player_error_unreachable">The server isn\'t answering right now.</string>
+    <string name="player_error_with_lower">Try again, or pick a lower quality that streams more easily.</string>
+    <string name="player_error_plain">Try again in a moment.</string>
+    <string name="player_try_lower">Try lower quality</string>
+    <string name="player_loading">Loading…</string>
+    <string name="player_more">More</string>
+    <string name="player_fullscreen">Fullscreen</string>
+    <string name="player_leave_fullscreen">Leave fullscreen</string>
+    <string name="player_switched_quality">Now playing in %1$s</string>
+    <string name="player_error_detail">Detail: %1$s</string>
     <string name="player_open_external">Open with another player</string>
     <string name="player_close">Close</string>
     <string name="player_subtitles_for_colour">%1$s subtitles</string>
@@ -135,4 +140,12 @@
     <string name="embed_page_title">Provider page</string>
     <string name="embed_load_failed">The page did not load: %1$s</string>
     <string name="embed_load_failed_unknown">The page did not load</string>
+    <!-- The detail page's one plain line when the picture that arrived is not the one saved. The
+         two blanks are filled by QualityChoice, which owns which bands go in them; the sentence is
+         owned here, so a locale folder can reach it and no composable can re-write it. -->
+    <string name="detail_quality_note">Playing in %1$s — %2$s is not available for this title.</string>
+    <!-- The detail page's plain word when there is nothing to point Play / Download at: a title with
+         no selectable version. Painted in place of the two buttons, never alongside a fake one. No
+         site, no code, no address — the spec forbids showing why in technical terms. -->
+    <string name="detail_no_ladder">There is nothing to play for this title right now. Try another title, or check back later.</string>
 </resources>

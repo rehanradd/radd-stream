@@ -69,6 +69,14 @@ data class UserPreferences(
     val audioBoost: Float = AudioBoost.BASELINE,
     /** Preferred audio language, or [AUDIO_LANGUAGE_DEFAULT] = leave it to the player. */
     val audioLanguage: String = AUDIO_LANGUAGE_DEFAULT,
+    /**
+     * The saved streaming picture quality, in the ladder's own band words (`720p`, `2160p`), or
+     * null when the viewer has never chosen — which is a different fact from "chose auto" and is
+     * what makes 720p the first-ever default ([com.raddstream.app.player.QualityChoice.FIRST_RUN_BAND]).
+     * This is the same stored value the detail screen reads and writes, so a choice made here is the
+     * choice the next title opens at; it is not a second, parallel preference.
+     */
+    val playbackBand: String? = null,
 ) {
     /**
      * The widest poster this install asks the image loader for, in pixels. This is the ONE
@@ -311,6 +319,14 @@ class SettingsViewModel @Inject constructor(
                 _uiState.update { it.copy(prefs = it.prefs.copy(dynamicColor = enabled)) }
             }
         }
+        // The streaming quality is collected, not sampled, for the same reason every other row is:
+        // a rung tapped on the detail screen writes this exact key, so the chip here must already be
+        // the one the viewer last chose before they ever opened Settings.
+        viewModelScope.launch {
+            settingsRepository.playbackBand.collect { band ->
+                _uiState.update { it.copy(prefs = it.prefs.copy(playbackBand = band)) }
+            }
+        }
         // Collected, not sampled: the region screen this row opens writes the same key, so the
         // label a viewer comes back to must already be the one they just chose.
         viewModelScope.launch {
@@ -421,6 +437,18 @@ class SettingsViewModel @Inject constructor(
         updatePrefs { it.copy(audioLanguage = value) }
         val store = if (value == UserPreferences.AUDIO_LANGUAGE_DEFAULT) null else value
         viewModelScope.launch { settingsRepository.savePreferredAudioLanguage(store) }
+    }
+
+    /**
+     * The persisted streaming quality. Writes the SAME key the detail screen's rung tap and
+     * [com.raddstream.app.player.QualityChoice] read, so "changing it saves it" holds from Settings
+     * exactly as it does from a title — and a title that cannot deliver the saved band falls to the
+     * nearest it has and says so, rather than this screen pretending every band always exists.
+     */
+    fun setPlaybackBand(band: String) {
+        val key = com.raddstream.app.player.QualityChoice.canonical(band) ?: return
+        updatePrefs { it.copy(playbackBand = key) }
+        viewModelScope.launch { settingsRepository.savePlaybackBand(key) }
     }
 
     /**

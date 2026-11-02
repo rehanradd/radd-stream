@@ -61,6 +61,7 @@ import com.raddstream.app.data.RegionChoices
 import com.raddstream.app.data.RemoteFeatures
 import com.raddstream.app.player.AudioBoost
 import com.raddstream.app.player.AudioBoostUi
+import com.raddstream.app.player.QualityChoice
 import com.raddstream.app.share.LanShareStatus
 import com.raddstream.app.viewmodel.AccountCardCopy
 import com.raddstream.app.viewmodel.AccountUiState
@@ -442,6 +443,33 @@ fun SettingsScreen(
                 TextButton(onClick = onOpenRegionChoice) {
                     Text("Change what you watch")
                 }
+
+                Spacer(Modifier.height(10.dp))
+                PreferenceRowTitle("Streaming picture quality")
+                // The app-wide default for Play, and the value a detail-screen rung tap also writes.
+                // These are the canonical band words in height order; a title that lacks the chosen
+                // band plays the nearest it has (lower first) and says so on that title, so this list
+                // is the standing preference, not a promise every catalog row can keep.
+                val qualityBandWords = listOf("360p", "480p", "720p", "1080p", "2160p")
+                val qualityBandLabels = qualityBandWords.map { QualityChoice.labelOf(it) ?: it }
+                val savedBand = QualityChoice.canonical(state.prefs.playbackBand)
+                // A stored band this list cannot show (an old "sd" word, or none at all) reads back
+                // as the first-run default rather than leaving every chip unselected.
+                val currentBand = savedBand?.takeIf { it in qualityBandWords } ?: QualityChoice.FIRST_RUN_BAND
+                ChipRow(qualityBandLabels, qualityBandWords.indexOf(currentBand)) { idx ->
+                    viewModel.setPlaybackBand(qualityBandWords[idx])
+                }
+                Text(
+                    if (state.prefs.playbackBand == null) {
+                        "Not chosen yet, so the first title plays at 720p. Pick a picture and it is " +
+                            "remembered for every title after this one."
+                    } else {
+                        "Your saved choice. A title without this picture plays the nearest it has, " +
+                            "and tells you which one that was."
+                    },
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
 
                 Spacer(Modifier.height(10.dp))
                 PreferenceRowTitle("Image quality")

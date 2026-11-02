@@ -82,6 +82,18 @@ interface WatchHistoryDao {
     fun observeRecent(limit: Int): Flow<List<WatchHistoryEntity>>
 
     /**
+     * Where this device is up to in one WORK, across its scopes — the detail page's default
+     * target when nothing has been tapped. Newest write wins. Whether the row is worth resuming
+     * at all is the caller's read of [WatchHistoryEntity.resumable], because "started, and not at
+     * the end" is a rule the rail already applies to these same rows in Kotlin, and a second copy
+     * of it in SQL is a second copy that can disagree.
+     */
+    @Query(
+        "SELECT * FROM watch_history WHERE workRef = :workRef ORDER BY updatedAt DESC LIMIT 1",
+    )
+    suspend fun findLatestForWork(workRef: String): WatchHistoryEntity?
+
+    /**
      * Where this device last stopped in one exact scope. The rail reads [observeRecent] to
      * show a position; this is the same number read by the player, so a tile and the tape it
      * promises are the same row rather than two answers to one question.

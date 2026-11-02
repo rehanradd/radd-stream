@@ -6,11 +6,21 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -18,9 +28,11 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
 import com.raddstream.app.brand.Brand
 import com.raddstream.app.data.RemoteFeatures
 import com.raddstream.app.data.ServerSettingsRepository
+import com.raddstream.app.ui.components.ShimmerBox
 import com.raddstream.app.ui.navigation.LocalVideoOpen
 import com.raddstream.app.ui.navigation.Screen
 import com.raddstream.app.ui.navigation.RaddStreamNavGraph
@@ -152,12 +164,7 @@ class MainActivity : ComponentActivity() {
                                 changingServer = true
                             },
                         )
-                        destination == null -> Box(
-                            modifier = Modifier.fillMaxSize(),
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            CircularProgressIndicator()
-                        }
+                        destination == null -> ColdStartShell()
                         else -> RaddStreamNavGraph(
                             startDestination = destination,
                             features = operatorFeatures,
@@ -244,3 +251,62 @@ private suspend fun regionChoiceUnanswered(settings: ServerSettingsRepository): 
     } catch (_: Exception) {
         false
     }
+
+/**
+ * The first thing the app paints, while routing is still being decided.
+ *
+ * Which screen opens depends on two stored answers (the server address, and whether onboarding has
+ * ever been asked), and until both arrive the app had nothing to show — so it showed a single
+ * spinner on a black field. That is the cold start the owner's spec calls a flaw twice over: a
+ * phone that opens onto a void reads as broken, and one spinner tells the viewer nothing about the
+ * app they are about to see. The window background is already the brand's ink, so there is no white
+ * flash to fix; what was missing was SHAPE.
+ *
+ * This is that shape: the wordmark where the header goes, the wide card where the hero rail goes,
+ * and the tiles where the shelf goes, painted with the same shimmer every catalog placeholder in the
+ * app already uses ([com.raddstream.app.ui.components.ShimmerBox]) and no words that would have to
+ * be translated. It is deliberately not a fake home screen — no titles, no counts, no claims — and
+ * it is deliberately not a spinner: it is the app's own layout, arriving before the data does.
+ *
+ * Routing itself is untouched. This paints instead of nothing while [LaunchedEffect] resolves the
+ * start destination; the moment the destination exists the real navigation graph replaces it.
+ */
+@Composable
+private fun ColdStartShell() {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(top = 28.dp, start = 20.dp, end = 20.dp),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(text = Brand.name, style = MaterialTheme.typography.titleLarge)
+            ShimmerBox(modifier = Modifier.size(30.dp), shape = RoundedCornerShape(15.dp))
+        }
+        ShimmerBox(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(156.dp)
+                .padding(top = 22.dp),
+            shape = RoundedCornerShape(18.dp),
+        )
+        repeat(2) { row ->
+            Row(
+                modifier = Modifier.padding(top = if (row == 0) 22.dp else 14.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                repeat(3) {
+                    ShimmerBox(
+                        modifier = Modifier
+                            .width(112.dp)
+                            .height(158.dp),
+                        shape = RoundedCornerShape(12.dp),
+                    )
+                }
+            }
+        }
+    }
+}
