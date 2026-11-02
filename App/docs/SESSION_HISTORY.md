@@ -1264,3 +1264,41 @@ run `41364752907` (dispatched manually; the push was App-only) — `completed su
 suite steps green. Per the load gate: no Gradle or APK build on the VM. Trunk untouched, no tag,
 no release, no service restart, no live-tree edit, no credential value read or printed. Gating is
 qoder1's call.
+
+### Session 39 — q4 favourites bundle re-merged onto trunk: Room 8 lands on the ladder that already has 2 → 3 (q10 failover, 2026-11-02)
+
+Supervisor order: q4's favourites re-validation branch (`q4-fav-revalidation-v8-c2528e1` @ `7a8c430`)
+failed verification as gateable — 5 ahead / 60 behind, merge base `c2528e1`, and no hosted CI at its
+tip — so the re-merge moves to this lane. Fresh worktree `/tmp/q10_fav_remerge` off trunk `6dd247d`,
+plain merge (no rebase, no history rewrite), pushed only to the new branch
+`q4-fav-revalidation-v9-remerge-20261102`. `/tmp/q4_fav_v8` and the original branch untouched.
+
+Git resolved all four overlapping files silently; the schema collision is exactly the kind a silent
+resolution must not be trusted with, so each was read back. **Room ladder first:** trunk reached
+`version = 7` with a continuous `1 → 7` chain including the entity-exact `MIGRATION_2_3` that
+Session-of-`90b3c9c` landed to retire the destructive fallback; the branch reached `version = 8` from
+a base whose ladder had **no `MIGRATION_2_3` at all** and carried its own competing `6 → 7`. The
+merged tree keeps trunk's `2 → 3` and `6 → 7` bodies untouched and re-bases the branch's step as
+**`7 → 8`** (two nullable answer columns on `favorite_posts` + the `unavailable_works` refusal
+ledger), registered in order `1_2 … 7_8` on the builder. `fallbackToDestructiveMigration()` stays a
+last resort with trunk's "no step may be planned into it" comment — the branch's older comment that
+justified the fallback *because of* the 2 → 3 gap is gone, because the gap is gone. Verified by
+`git diff 6dd247d HEAD` on `AppDatabase.kt` being purely additive (version 7→8, one entity, one DAO,
+one migration) — nothing trunk added is reverted anywhere in the merge.
+
+`FavoritesSchemaGuardTest` took trunk's pins plus the branch's two new ones, which assert the 7 → 8
+shape (`Migration(7, 8)` exists, adds only, never `DROP`/`DELETE`/`RENAME`) and that the refusal
+entity's columns match its `CREATE TABLE` verbatim — the test that would have caught the old
+entity/DDL drift. `docs/checkpoints/README.md` is append-both-sides: q4's index line and the two
+10-31 lines stay, and trunk's stay. The fourth item is not an App file: the merge put
+`docs/checkpoints/` at **61** archives while `docs/SESSION_CHECKPOINT.md` still claimed 60, and
+Backend CI cannot judge it (this tree changes no `Fast_Fetch/**`, so `backend-ci.yml`'s path filter
+does not fire). Corrected to `61 files … 59 dated` from the directory listing and re-measured with
+the one pure-Python suite that owns the claim: `python3 -S Fast_Fetch/test_docs_invariants.py` →
+**Ran 22 tests … OK**. That single stdlib run is the only thing executed on this VM — no Gradle, no
+APK.
+
+Judged hosted-only per the load gate: the Android `assembleDebug + testDebugUnitTest + lintDebug` run
+at this tip is reported to the supervisor with its id and per-step verdicts. Trunk untouched, no tag,
+no release, no service restart, no live-tree edit, no credential value read or printed. Gating is
+qoder1's call after fresh green CI.
