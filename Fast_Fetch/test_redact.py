@@ -822,6 +822,47 @@ class PublicEdgeHttpTests(FixtureMixin):
         self.assertEqual(payload.get("url"),
                          "https://media.example.test/film.mp4?token=old")
 
+    def make_demoted_source(self, post_id, verdict):
+        """A link the ledger retired under a word the JIT used not to read.
+
+        Permanent, with a media address rather than a hoster page behind it, so the
+        only branch that can refuse it is the one keyed on ``download_sources.status``.
+        No socket opens: the URL matches no known hoster."""
+        sid = self.source_id(post_id)
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                "UPDATE download_sources SET service = 'generic_cdn', "
+                "source_url = 'https://media.example.test/film.mp4?token=old', "
+                "final_url = 'https://media.example.test/film.mp4?token=old', "
+                "is_temporary = 0, last_checked_at = NULL, expires_at = NULL, "
+                "status = ? WHERE id = ?", (verdict, sid))
+            conn.commit()
+        return sid
+
+    def test_a_ledger_demoted_link_is_not_a_stream_redirect(self):
+        """`broken`, `gone` and `unreachable` are as unplayable as `dead`, and the
+        play route used to redirect at all three: `resolve_live_source` re-resolved
+        only `dead`/`expired`, so a row retired under another of
+        `tiers.UNPLAYABLE_STATES` took the cached branch and was 302-ed at its own
+        stored address without one attempt to heal it. Retired means re-resolve, and
+        a re-resolve with nothing to walk is the download route's refusal."""
+        for verdict in ("broken", "gone", "unreachable"):
+            with self.subTest(status=verdict):
+                sid = self.make_demoted_source(self.post_id, verdict)
+                res = fast_fetch.resolve_live_source(sid)
+                self.assertFalse(res["success"] and not res.get("stale"),
+                                 f"a {verdict} link answered as a stream: {res}")
+                handle = redact.mint_token(sid, viewer.signing_secret())
+                code, headers, body = self.get(f"/api/v1/stream?id={handle}",
+                                               self.public_port)
+                self.assertEqual(code, 404, body)
+                self.assertNotIn("Location", headers,
+                                 f"a link the ledger retired as {verdict} was redirected to")
+                self.assertEqual(json.loads(body),
+                                 {"success": False, "error": "no_playable_source"})
+                for needle in ("media.example.test", "token=old"):
+                    self.assertNotIn(needle, body, "the refusal must not quote the dead URL")
+
     # ---- audit critical 5: server-side 720p free cap ----------------------- #
     def enable_quality_gate(self):
         """Flip the operator's `feature_quality_gate` on for this ledger. The
