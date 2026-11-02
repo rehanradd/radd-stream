@@ -1159,3 +1159,71 @@ Judged hosted-only per the load gate — no VM Gradle: at the re-merged sha the 
 Android `assembleDebug + testDebugUnitTest + lintDebug` runs are reported to the supervisor with
 ids and per-step verdicts. Trunk untouched, no tag, no release, no service restart, no live-tree
 edit, no credential value read or printed.
+
+### Session 38 — q10 sweep #18 (App): the retry backoff stamp is now read by the scheduler (q6 lane, 2026-11-02)
+
+Supervisor task, lane `q6-fix-cache-backoff-20261102`, fresh worktree `/tmp/q6_backoff` off trunk
+`4f47d51`. One item only (findings item 2 / sweep #18); the finalize/COMPLETED path that qoder10's
+#15 fix owns was left untouched.
+
+The offline keep engine pumps `CacheCoordinator.tick()` on a fixed 3-second cadence
+(`CacheEngineRunner` `TICK_MILLIS = 3_000L`). A transient failure routes through `recordRetry`,
+which asks `RetryPolicy` (2 s → 30 min exponential, jittered) for a window and writes it onto the
+row as `nextRetryAtElapsedRealtime` via `CacheTaskDao.markFailedWithRetry`; `reResolveWithNewUrl`
+clears it back to 0. The stamp was written and reset but read by **no** query — `listSchedulable()`
+selected on `state IN ('QUEUED','LOADING','PAUSED','FAILED')` alone — so a failing keep was
+re-resolved every three seconds forever instead of honouring its backoff.
+
+Fix: `listSchedulable` takes `nowElapsed` and adds `AND nextRetryAtElapsedRealtime <= :nowElapsed`;
+a ready row (never backed off, or window elapsed) carries 0 and always qualifies, a row still inside
+its window carries a future stamp and is held out. `tick()` now reads the clock before the query and
+passes it (it already computed `now` and dropped it on the floor). The JVM fake in
+`OfflineCacheWiringTest` mirrors the real query, and a new test proves the symptom end to end: a
+first tick runs one pass and parks the keep under backoff; a second tick at the same clock instant
+does NOT re-run it; after `clock.advanceTo(stamp)` the same row is eligible and the engine resumes
+it. Judged hosted-only (Backend + Android) — no VM Gradle/APK; trunk untouched, no tag, no release,
+no restart, no live-tree edit, no credential value read or printed.
+
+### Session 38 — Sweep #10: the resume map finally gets written under the key its readers use (q8 lane, 2026-11-02)
+
+Owner ticket, fresh lane `q8-fix-resume-key-20261102` from trunk `4f47d51`, worked only in the
+`/tmp/q8_resume` worktree. One finding, no others: item 5 of `/tmp/q10-overview-findings-20261102.md`.
+
+Locations verified against this trunk before editing (the finding's line numbers had drifted, the
+code had not): the map is `PlayerViewModel.resumeByTarget` (decl at `:168`), the orphaned write was
+`rememberResume`'s `val key = bundle.target.workKey ?: …` (was `:727`, now measured at the same
+declaration), `playFrom` keyed the same wrong way, and the readers are `beginBundle`'s offer
+(`resumeKey = streamId` at `:496`, local-file address at `:555`) and
+`seedResumeFromStoredPositions` — which additionally resolves the work scope via
+`store.peekWorkRef(resumeKey)`, a handle→scope lookup, so the handle is provably the right key and
+the workKey entry was unreachable by construction. Consequence, exactly as filed: a pause or
+teardown wrote its position into an entry nobody reads, while the stale handle-keyed seed kept
+answering "Resume from X" on re-open inside the same ViewModel.
+
+Fix: `beginBundle`/`loadNow` now record `activeResumeKey`, and both write sites
+(`rememberResume`, `playFrom`) resolve their key as `activeResumeKey ?: …` with the old workKey kept
+only as the fallback, so write key == read key at every path including `resolveResume`'s removal.
+`ResumeKeyGuardTest` (5 cases, source-scan pattern of `AdCadenceGuardTest`) pins the invariant and
+carries positive controls so a rename cannot silently retire the guard.
+
+Measured: hosted CI is the judge (no VM Gradle — load gate). Report: branch tip, Backend and Android
+run ids and step verdicts below in the commit trail. No trunk push, no tag, no release, no service
+restart, no `/opt/radd-stream` edit, no credential read or print.
+
+**Measured round-trip (same session, same one item).** Attempt 1 at tip `dbcec69` was RED on the
+hosted Android job — `Execution failed for task ':app:compileDebugUnitTestKotlin'`, two errors in my
+own `ResumeKeyGuardTest.kt:72-73` ("Only safe (`?.`) or non-null asserted (`!!.`) calls are allowed on
+a nullable receiver of type `kotlin.String?`"). `assertTrue(…, keyLine != null)` does not smart-cast,
+so the later bare `keyLine.indexOf(…)` never compiled. Main source was fine: `assembleDebug` and
+`lintDebug` passed that run, the defect was in the guard, not the fix. Corrected at `f862edb` by
+hoisting the resolved line into `val line = keyLine.orEmpty()` and computing both index anchors once,
+assertion meaning unchanged. Before pushing I re-ran all five checks as a stdlib Python port against
+the committed `PlayerViewModel.kt` (no VM Gradle, load gate): beginBundle reader present, seed
+occurrences 3 ≥ 2, `activeResumeKey` precedes `workKey` in `rememberResume`, `playFrom` keys through
+`activeResumeKey`, both write sites record it, and no bare `resumeByTarget[…target.workKey` remains.
+**Green at `f862edbd22a12b4bf7f6364e61e81a735e17edc6`** — Android run `41365855553` `success`,
+14/14 steps including the combined Gradle step; Backend run `41366094453` `success`, 46/46 steps
+(dispatched manually, since this commit touches no `Fast_Fetch/` path and `backend-ci.yml`'s path
+filter correctly produced no push-triggered run). Lesson for the next lane reading this: a
+source-scan guard must itself compile under Kotlin's smart-cast rules — assert, then bind to a
+non-null local; never reuse the `firstOrNull` result after an `assertTrue(… != null)`.
