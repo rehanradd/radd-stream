@@ -137,9 +137,18 @@ class AheadFetcher(
                                 return FetchOutcome.NO_RANGE_FALLBACK
                             }
                             if (fetchedThisPass >= maxBytesPerPass) {
+                                // A pass that fills the LAST gap at its byte cap is done, and "done"
+                                // means committed: reporting COMPLETED without finalize() left the
+                                // bytes in the .part, no cache_files row, and a Keep the UI called
+                                // "Saved" that could never play offline.
+                                val completeNow =
+                                    mode == FetchMode.FULL_DOWNLOAD && totalSize > 0 && ledger.isComplete(totalSize)
+                                if (completeNow) {
+                                    finalize(task, ledger, downloaded, totalSize, currentUrl)
+                                    return FetchOutcome.COMPLETED
+                                }
                                 persist(task, ledger, downloaded, totalSize, currentUrl)
-                                return if (mode == FetchMode.FULL_DOWNLOAD && totalSize > 0 && ledger.isComplete(totalSize))
-                                    FetchOutcome.COMPLETED else FetchOutcome.WINDOW_FILLED
+                                return FetchOutcome.WINDOW_FILLED
                             }
                         }
                         is RangeFetchResult.SourceDead -> {
@@ -173,12 +182,15 @@ class AheadFetcher(
             }
         }
 
-        persist(task, ledger, downloaded, totalSize, currentUrl)
-        return if (totalSize > 0 && ledger.isComplete(totalSize)) {
-            FetchOutcome.COMPLETED
-        } else {
-            FetchOutcome.WINDOW_FILLED
+        // The loop ran out of planned ranges. If that completed the file, this is the common
+        // finish: any keep smaller than the per-pass cap lands here, and it must commit through
+        // finalize() like every other COMPLETED answer.
+        if (totalSize > 0 && ledger.isComplete(totalSize)) {
+            finalize(task, ledger, downloaded, totalSize, currentUrl)
+            return FetchOutcome.COMPLETED
         }
+        persist(task, ledger, downloaded, totalSize, currentUrl)
+        return FetchOutcome.WINDOW_FILLED
     }
 
     /** Ask the pure planner whether we may add [newBytes]; returns true to proceed. */
@@ -244,6 +256,11 @@ class AheadFetcher(
         persistIncremental(task.id, ledger, downloaded, total, url)
     }
 
+    /**
+     * Rename the `.part` to its committed name and register it in `cache_files`. The ONE seam
+     * that makes a keep playable offline: every path that returns COMPLETED must come through
+     * here first, or the Downloads list advertises bytes the player cannot open.
+     */
     private suspend fun finalize(task: CacheTaskEntity, ledger: IntervalLedger, downloaded: Long, total: Long, url: String) {
         persist(task, ledger, downloaded, total, url)
         val temp = (storage as? AndroidStorageGate)?.tempFile(task.sourceKey)
