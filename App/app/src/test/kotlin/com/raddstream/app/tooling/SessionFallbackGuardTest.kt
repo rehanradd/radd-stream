@@ -121,10 +121,9 @@ class SessionFallbackGuardTest {
     }
 
     private fun source(vararg path: String): String {
-        val file = File(
-            repoRoot,
-            listOf("App", "app", "src", "main", "kotlin", "com", "raddstream", "app") + path.joinToString("/"),
-        )
+        val relative = (listOf("App", "app", "src", "main", "kotlin", "com", "raddstream", "app") +
+            path.toList()).joinToString("/")
+        val file = File(repoRoot, relative)
         assertTrue("${file.path} is gone — this guard has been looking at nothing", file.isFile)
         return file.readText()
     }
