@@ -225,3 +225,34 @@ is appended below when it lands. If it is red again, the thing to obtain is the 
 `ci-reports` artifact (that is q1's/Muse's call, not a credential action on my side), because
 simulation has run out of what it can see. Until a green run exists on a sha, nothing on this branch
 may be gated on the strength of my reasoning.
+
+## 2026-11-02 06:1x — the verdict is read, and it is GREEN
+
+Measured with one anonymous `GET /repos/rehanradd/radd-stream/commits/0fa2d65/check-runs` → HTTP 200,
+`total_count: 1`:
+
+| Check run | Status | Conclusion | Run / job |
+|---|---|---|---|
+| `assembleDebug + testDebugUnitTest + lintDebug` | `completed` | **`success`** | run `41304087249`, job `124840815235` |
+
+That closes the open question from the previous section. The violated `is_18_plus` prose pin was the
+*only* thing CI objected to: `98933db` was `failure` and `0fa2d65` — which differs from it only by
+that one guard rewrite and this checkpoint — is `success` on the same runner, with the same
+`assembleDebug + testDebugUnitTest + lintDebug` step and no code change in between. Simulation found
+one violation, the fix corrected exactly that violation, and the hosted run agreed. Nothing here rests
+on my reasoning any more; it rests on a green check-run at a named sha.
+
+**What this is, and what it is not.** It is the first green Android judgement on the favourites
+re-validation union + Room 8. It is not a merge, not a gate decision, and not a release: q1 alone
+gates trunk, and there is still no tag and no signed release (signing remains blocked on the owner's
+four keystore secrets — see the root `AGENTS.md` measured note).
+
+**Remaining unproven, stated rather than glossed:** the two Robolectric suites
+(`ScreenSnapshotTest`, `PosterCardProvenanceTest`) are excluded on this aarch64 host
+(Robolectric #9166), so the hosted runner is the only judge of them and it has now judged them —
+which is exactly why "CI-verifiable rather than locally runnable" is the plan here. And a green JVM
+scan still cannot prove a `LazyColumn` filters at render; the guards pin the *call*, not the pixels.
+Device verification of playback and of the My List surface stays pending, as it has been all along.
+
+**Branch state at this record:** `q4-fav-revalidation-v8-c2528e1` @ `0fa2d65`, pushed, working tree
+clean, recovery bundle refreshed.
