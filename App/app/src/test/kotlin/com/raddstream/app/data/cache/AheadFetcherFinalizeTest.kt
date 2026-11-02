@@ -68,8 +68,11 @@ class AheadFetcherFinalizeTest {
         override suspend fun listByStates(states: List<String>): List<CacheTaskEntity> =
             rows.values.filter { it.state in states }
 
-        override suspend fun listSchedulable(): List<CacheTaskEntity> =
-            rows.values.filter { it.state in listOf("QUEUED", "LOADING", "PAUSED", "FAILED") }
+        override suspend fun listSchedulable(nowElapsed: Long): List<CacheTaskEntity> =
+            rows.values.filter {
+                it.state in listOf("QUEUED", "LOADING", "PAUSED", "FAILED") &&
+                    it.nextRetryAtElapsedRealtime <= nowElapsed
+            }
 
         override suspend fun listLoading(): List<CacheTaskEntity> = rows.values.filter { it.state == "LOADING" }
         override fun observeAllActive(): Flow<List<CacheTaskEntity>> = live
@@ -99,8 +102,19 @@ class AheadFetcherFinalizeTest {
             ) }
         }
 
-        override suspend fun markFailedWithRetry(id: Long, attempt: Int, nextRetryAt: Long, error: String?) {
-            rows[id]?.let { rows[id] = it.copy(state = "FAILED", attempt = attempt, lastError = error) }
+        override suspend fun recordRetryState(
+            id: Long,
+            state: String,
+            attempt: Int,
+            nextRetryAt: Long,
+            error: String?,
+        ) {
+            rows[id]?.let { rows[id] = it.copy(
+                state = state,
+                attempt = attempt,
+                nextRetryAtElapsedRealtime = nextRetryAt,
+                lastError = error,
+            ) }
         }
 
         override suspend fun setParkReason(id: Long, reason: String?) {
