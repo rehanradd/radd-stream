@@ -303,6 +303,35 @@ class AdCadenceGovernorTest {
         assertEquals("and never reaches a network", 0, inventory.asks)
     }
 
+    /**
+     * Sweep #9: the remote-config watcher reloads the stamps only on a *successful* poll, so on an
+     * offline cold start nothing ever calls [refresh] — and the first scroll used to persist the
+     * zeroed in-memory state over every saved row. A cold start that never heard from the server
+     * must neither erase the windows nor buy a fresh ad out of the amnesia.
+     */
+    @Test
+    fun `a cold start with no successful poll neither erases the stamps nor buys a fresh ad`() = runBlocking {
+        val dao = FakeDao()
+        val clock = FixedAdWallClock(START)
+        val surfaces = setOf(AdSurface.PRE_ROLL, AdSurface.FEED_CARD)
+        val first = governor(dao, clock, FakeSwitch(), FakeInventory(surfaces))
+        first.refresh()
+        assertTrue(first.offer(AdSurface.PRE_ROLL, adFree = false) is AdDecision.Serve)
+        first.onPostersScrolled(7, adFree = false)
+
+        clock.advance(10 * MINUTE_MS)
+        // Deliberately no refresh(): this is the watcher's first poll failing to land.
+        val afterDeath = governor(dao, clock, FakeSwitch(), FakeInventory(surfaces))
+
+        afterDeath.onPostersScrolled(1, adFree = false)
+        assertEquals("the saved counter survived the cold start",
+            8, dao.rows.getValue("FEED_CARD").postersScrolled)
+        assertEquals("and the pre-roll stamp was carried, not zeroed",
+            START, dao.rows.getValue("PRE_ROLL").lastShownAtMs)
+        assertEquals("the twenty-five-minute window the stamp names still refuses",
+            AdDecision.None, afterDeath.offer(AdSurface.PRE_ROLL, adFree = false))
+    }
+
     @Test
     fun `scrolling reports nothing that was not scrolled`() = runBlocking {
         val dao = FakeDao()
