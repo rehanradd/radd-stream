@@ -44,7 +44,7 @@ interface CacheTaskDao {
      * elapsed, best priority first.
      *
      * `nextRetryAtElapsedRealtime` is the absolute uptime the last transient failure parked a task
-     * until ([markFailedWithRetry] writes it, [reResolveWithNewUrl] clears it to 0). It used to be
+     * until ([recordRetryState] writes it, [reResolveWithNewUrl] clears it to 0). It used to be
      * written and reset but read by no query, so the fixed engine cadence re-resolved a failing
      * keep on every tick instead of honouring [com.raddstream.app.data.cache.RetryPolicy]'s
      * 2 s→30 min backoff. A ready task (never backed off, or backoff elapsed) carries 0 and always
