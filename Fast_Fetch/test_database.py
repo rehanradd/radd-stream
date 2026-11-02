@@ -781,6 +781,47 @@ class DatabaseSaveTests(unittest.TestCase):
         self.assertTrue(res["cached"])
         self.assertEqual(res["url"], source["final_url"])
 
+    def test_a_ledger_demoted_link_is_re_resolved_never_recalled(self):
+        """The play path's honesty begins here, in the resolver's refresh trigger.
+
+        `tiers.UNPLAYABLE_STATES` names five ledger words and this function honoured
+        two: a permanent row retired as `broken`, `gone` or `unreachable` walked past
+        the check into the cached branch and answered as a stream. It must instead be
+        re-resolved — and with no bridge to walk, fail. Nothing may re-state the
+        stored address as playable, and nothing may launder it back to `active`.
+        """
+        for verdict in ("broken", "gone", "unreachable"):
+            with self.subTest(status=verdict):
+                media_data = self.media("site_a", f"https://site-a.example/{verdict}/")
+                media_data["releases"][0]["sources"] = [{
+                    "source_name": "Direct CDN",
+                    "service": "google_cdn",
+                    "resource_id": f"demoted-{verdict}",
+                    "source_url": "https://video-downloads.googleusercontent.com/abc/file.mp4",
+                    "final_url": "https://video-downloads.googleusercontent.com/abc/file.mp4",
+                    "is_temporary": 0,
+                }]
+                fast_fetch.save_scraped_data(media_data)
+                with fast_fetch.get_db() as conn:
+                    source = conn.execute(
+                        "SELECT id FROM download_sources ORDER BY id DESC LIMIT 1"
+                    ).fetchone()
+                    conn.execute(
+                        "UPDATE download_sources SET status = ? WHERE id = ?",
+                        (verdict, source["id"]))
+                res = fast_fetch.resolve_live_source(source["id"])
+                self.assertFalse(res["success"] and not res.get("stale"),
+                                 f"a {verdict} link answered as a stream: {res}")
+                strict = fast_fetch.resolve_live_source(source["id"], v2=True)
+                self.assertFalse(strict["success"], strict)
+                self.assertEqual(strict["code"], "no_playable_source", strict)
+                with fast_fetch.get_db() as conn:
+                    stored = conn.execute(
+                        "SELECT status FROM download_sources WHERE id = ?",
+                        (source["id"],)).fetchone()
+                self.assertEqual(stored["status"], verdict,
+                                 "a failed re-resolve must not promote the row back to active")
+
     class _FakeResolvers:
         """The shape of `importers/host_resolvers.py`, without its sockets.
 

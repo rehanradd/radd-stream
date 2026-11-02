@@ -5641,7 +5641,19 @@ def resolve_live_source(source_id: int, *, v2: bool = False) -> dict:
 
     needs_refresh = False
     observed_expiry = _expiry_fields(src)
-    if src["status"] in ("dead", "expired"):
+    # Imported where it is used, like `config` in `_tls_context`: `tiers` owns the
+    # ledger words that name a copy nothing can play and ranks with them, so the
+    # resolver reads the same tuple instead of retyping two of its five words.
+    from tiers import UNPLAYABLE_STATES
+    ledger_status = str(src["status"] or "").strip().lower()
+    if ledger_status in UNPLAYABLE_STATES:
+        # Every word the ledger uses to say this copy does not play, not just the
+        # two that used to be named here. `dead` and `expired` were re-resolved;
+        # `broken`, `gone` and `unreachable` fell past the check into the cached
+        # branch below, so a row the health checker had already demoted kept being
+        # 302-ed to a player at its stored address without a single attempt to heal
+        # it. Demoted now means re-resolved: heal it and play the fresh address, or
+        # reach the honest fall-through — never the stale one.
         needs_refresh = True
     elif observed_expiry["expires_in"] is not None:
         # A measured window beats the heuristic: if we recorded that this token
