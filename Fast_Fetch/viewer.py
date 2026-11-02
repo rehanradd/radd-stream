@@ -4235,6 +4235,29 @@ class DashboardHandler(BaseHTTPRequestHandler):
         else:
             self.send_bytes(b"Not Found", content_type="text/plain", status=404)
 
+    def do_HEAD(self):
+        """HEAD is GET with no body, and `/api/v1/art` already writes none — it
+        answers 302 with a `Location`, CORS, and `Cache-Control`. A client that
+        HEADs a poster URL (any CDN-aware loader doing cache validation) therefore
+        gets the redirect instead of the stdlib's 501 for an unhandled verb.
+
+        Only `/api/v1/art` is dispatched here: every other path keeps the base
+        class's 501, because the routes that do write a body on GET must not
+        silently advertise a zero-length HEAD that disagrees with the GET."""
+        parsed = urllib.parse.urlparse(self.path)
+        path = parsed.path
+        query_params = urllib.parse.parse_qs(parsed.query)
+        full = bool(getattr(self.server, "operator", False))
+        if full:
+            if not self._operator_gate():
+                return
+        if not full and not self._public_gate(path, "HEAD"):
+            return
+        if path == "/api/v1/art":
+            self._serve_art(query_params, full=full)
+            return
+        self.send_error(501, "Unsupported method ('HEAD')")
+
     def do_POST(self):
         """The v2 write surface (§12): `/play`, link reports, learned offsets,
         the account writes that put a favorite or a resume point on the server, and

@@ -396,9 +396,16 @@ PWA and only the list/statistics metadata endpoints: `/client`,
 > exist because the Android client cannot do anything without them; `download`
 > was added on 27 Oct because the deny was answering it 403, which made the
 > operator's whole shortener waterfall unreachable from any client
-> (`docs/FULL_MASTER_FEATURE_INVENTORY.md` M-MON-04). `/api/v1/art` is still
-> denied on purpose: `poster_url` and `backdrop_urls` in a projected row are
-> upstream CDN addresses and no Kotlin source references that route.
+> (`docs/FULL_MASTER_FEATURE_INVENTORY.md` M-MON-04). `/api/v1/art` was denied
+> on the belief that `poster_url` and `backdrop_urls` in a projected row are
+> upstream CDN addresses; that belief was measured false on 02 Nov — a
+> `GET /api/v1/posts?limit=20` at the public edge returned 60 out of 60 rows
+> whose `poster_url` is a signed `{base}/api/v1/art?id=…&k=poster&n=0` art-ref
+> (`redact.public_art_value` passes a stored URL through unchanged only when its
+> host is in `PUBLIC_IMAGE_HOSTS`, 9 entries; every scraped-site host becomes an
+> art-ref), so the deny was returning nginx's 403 HTML to the app's image
+> loader for every poster. It is now allow-listed. The `?id=` handle is signed
+> and `_serve_art` 404s a flagged row, so the deny is not the control any more.
 >
 > `/api/v1/stream` and `/api/v1/download` are the only two routes that take a
 > capability in the query string (`?vip=`), so both log under the
@@ -446,6 +453,14 @@ server {
         proxy_pass http://127.0.0.1:8080;
     }
     location = /api/v1/stats {
+        limit_except GET HEAD { deny all; }
+        proxy_pass http://127.0.0.1:8080;
+    }
+    # Art is the redirector `redact.public_art_value` wraps every non-public-CDN
+    # poster/backdrop in, so the projected `poster_url`/`backdrop_urls` on
+    # `/api/v1/posts` point here. It is a 302 with no body and its `?id=` is a
+    # signed handle; `_serve_art` still 404s a flagged row. GET and HEAD both.
+    location = /api/v1/art {
         limit_except GET HEAD { deny all; }
         proxy_pass http://127.0.0.1:8080;
     }
