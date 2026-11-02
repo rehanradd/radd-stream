@@ -12,6 +12,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 /**
  * The operator's ad switch, read from wherever the app keeps it.
@@ -64,6 +66,9 @@ class AdCadenceGovernor @Inject constructor(
 
     private var limits: AdCadenceLimits = AdCadenceLimits.SHIPPED
 
+    private val loadLock = Mutex()
+    private var loaded = false
+
     /**
      * Publish the operator's caps the moment a remote-config body lands. Until this is called —
      * a first install, a server that has never answered — [SHIPPED] is what is enforced, so
@@ -77,9 +82,39 @@ class AdCadenceGovernor @Inject constructor(
         limits = AdCadenceLimits.from(ads, engagement)
     }
 
-    /** Reload the persisted stamps. Called on start and whenever the switch or caps change. */
+    /** Reload the persisted stamps when the switch or caps change. The first load after a cold
+     *  start no longer waits for this call: [ensureLoaded] does it on the first ask, so an
+     *  offline start cannot act as though nothing was ever saved. */
     suspend fun refresh() {
-        _state.value = AdCadenceRows.toState(dao.all(), enabled = currentSwitch())
+        loadLock.withLock {
+            _state.value = AdCadenceRows.toState(dao.all(), enabled = currentSwitch())
+            loaded = true
+        }
+    }
+
+    /**
+     * Load the persisted stamps before anything is allowed to overwrite them (sweep #9). The
+     * remote-config watcher reloaded them only on a *successful* poll, so an offline cold start
+     * left the zeroed in-memory state in place — and the first feed scroll or impression then
+     * persisted those zeros over all three saved ad windows, erasing them. A stamp that cannot
+     * be read is also a stamp that must not be overwritten, so a failed load is a refusal here,
+     * the same conservative direction the watcher already takes.
+     */
+    private suspend fun ensureLoaded(): Boolean {
+        if (loaded) return true
+        return try {
+            loadLock.withLock {
+                if (!loaded) {
+                    _state.value = AdCadenceRows.toState(dao.all(), enabled = currentSwitch())
+                    loaded = true
+                }
+                true
+            }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            false
+        }
     }
 
     /**
@@ -94,6 +129,7 @@ class AdCadenceGovernor @Inject constructor(
      * forgets it has to say so, and cannot inherit a silent default that shows a paid viewer an ad.
      */
     suspend fun offer(surface: AdSurface, adFree: Boolean): AdDecision {
+        if (!ensureLoaded()) return AdDecision.None
         val enabled = currentSwitch() && !adFree
         val current = _state.value.copy(enabled = enabled)
         if (!enabled) return AdDecision.None
@@ -121,6 +157,7 @@ class AdCadenceGovernor @Inject constructor(
     suspend fun onPostersScrolled(count: Int, adFree: Boolean) {
         if (count <= 0) return
         if (!currentSwitch() || adFree) return
+        if (!ensureLoaded()) return
         val next = AdCadence.scrolled(_state.value, count, limits)
         if (next.postersSinceFeedCard == _state.value.postersSinceFeedCard) return
         _state.value = next
@@ -134,6 +171,7 @@ class AdCadenceGovernor @Inject constructor(
     suspend fun clearForDisabledSwitch() {
         dao.clear()
         _state.value = AdCadence.cleared()
+        loadLock.withLock { loaded = true }
     }
 
     private suspend fun persist(state: AdCadenceState) {
