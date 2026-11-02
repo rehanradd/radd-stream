@@ -111,9 +111,9 @@ class OfflineCacheWiringTest {
             publish()
         }
 
-        override suspend fun markFailedWithRetry(id: Long, attempt: Int, nextRetryAt: Long, error: String?) {
+        override suspend fun recordRetryState(id: Long, state: String, attempt: Int, nextRetryAt: Long, error: String?) {
             val row = rows[id] ?: return
-            rows[id] = row.copy(state = CacheTaskState.FAILED.name, attempt = attempt, nextRetryAtElapsedRealtime = nextRetryAt, lastError = error)
+            rows[id] = row.copy(state = state, attempt = attempt, nextRetryAtElapsedRealtime = nextRetryAt, lastError = error)
             publish()
         }
 

@@ -100,14 +100,20 @@ interface CacheTaskDao {
         currentUrl: String,
     )
 
+    /**
+     * Stamp one retry attempt's ledger onto the row, landing the state the caller decided.
+     * The state is a parameter, not a constant: a retry with attempts left is parked in
+     * PAUSED waiting for its backoff, and only an exhausted one is FAILED (sweep #17 — a
+     * hard-coded 'FAILED' here silently overwrote the PAUSED park a moment after it was set).
+     */
     @Query(
         """
         UPDATE cache_tasks
-        SET state = 'FAILED', attempt = :attempt, nextRetryAtElapsedRealtime = :nextRetryAt, lastError = :error
+        SET state = :state, attempt = :attempt, nextRetryAtElapsedRealtime = :nextRetryAt, lastError = :error
         WHERE id = :id
         """
     )
-    suspend fun markFailedWithRetry(id: Long, attempt: Int, nextRetryAt: Long, error: String?)
+    suspend fun recordRetryState(id: Long, state: String, attempt: Int, nextRetryAt: Long, error: String?)
 
     /**
      * Stamp WHY a task is parked WITHOUT moving it out of PAUSED. The Downloads list reads this to
