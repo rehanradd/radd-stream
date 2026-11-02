@@ -66,12 +66,12 @@ class ResumeKeyGuardTest {
         val body = block("private fun rememberResume(")
         val keyLine = body.firstOrNull { Regex("""\bval key\s*=""").containsMatchIn(it) }
         assertTrue("rememberResume lost its key resolution line", keyLine != null)
+        val line = keyLine.orEmpty()
+        val workKeyAt = line.indexOf("workKey").let { if (it < 0) line.length else it }
         assertTrue(
             "rememberResume must prefer activeResumeKey (the read key) over target.workKey — " +
-                "sweep #10's orphaned-progress bug: <$keyLine>",
-            keyLine!!.indexOf("activeResumeKey") in 0 until keyLine.indexOf("workKey").let {
-                if (it < 0) keyLine.length else it
-            },
+                "sweep #10's orphaned-progress bug: <$line>",
+            line.indexOf("activeResumeKey") in 0 until workKeyAt,
         )
     }
 
