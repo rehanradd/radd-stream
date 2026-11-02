@@ -192,17 +192,18 @@ never persist the token in the repository.
 
 ### Oracle backend connection
 
-- The configured backend host is `http://92.4.95.252/` over plain HTTP; the SSH account is
-  `ubuntu@92.4.95.252` on port 22. Use the secret-safe process in
+- The brand's primary address is `https://raddstream.duckdns.org`; the session fallback is
+  `http://92.4.95.252`; SSH is `ubuntu@92.4.95.252:22` — see the secret-safe process in
   [`../ORACLE_DEPLOYMENT.md`](../ORACLE_DEPLOYMENT.md).
 - The app calls `/api/v1/stats`, `/api/v1/posts`, `/api/v1/posts/{id}`, `/api/v1/stream` (§5);
   not `/api/v1/rules`.
-- Cleartext HTTP is debug-build only; the release build must use HTTPS — do not relax Android
-  network security globally to make a release work over HTTP.
-  ⚠️ **Reality (re-verified against `viewer.py`/`redact.py` 2026-10-30):** the backend has no TLS
-  at all and the host is plain HTTP, so a release build cannot legally point at
-  `http://92.4.95.252/` — a deployment gap, not something to paper over by loosening network
-  security. The catalog routes take no API key or session; nothing behind them is private. Two
+- Cleartext is permitted per named host only, never globally: do not relax Android network security
+  to make a release work over HTTP.
+  ⚠️ **Reality (TLS measured 2026-11-02; code re-verified against `viewer.py`/`redact.py`
+  2026-10-30):** the catalog answers `200` over https on `raddstream.duckdns.org` (Let's Encrypt,
+  to 2027-01-31) **and** over plain HTTP on the IP — so the brand ships the TLS name as default and
+  the plain IP as a fallback a session uses, never saves. The catalog routes take no API key or
+  session; nothing behind them is private. Two
   claims this bullet used to make are now false of the code and must not be repeated: no wildcard
   CORS (`CORS_ALLOW_ORIGINS` is an empty `frozenset`; a refused origin gets no header) and no
   un-throttled API (`_public_gate()` returns 429 with `Retry-After` and the `RateLimit-*` triple —
@@ -254,12 +255,12 @@ run**: read `App/**`'s `ci.yml` result and step count, not a local XML.
 **How to get an artifact without any secret:** push a branch that touches `App/**`.
 `ci.yml` (`🔨 CI — Android Build & Test`) runs `:app:assembleDebug :app:testDebugUnitTest
 :app:lintDebug` and uploads the **debug APK** on a green run — debug-signed, installable, needing
-none of the four keystore variables, and the only build that can talk to the deployed host:
-`App/app/src/debug/res/xml/network_security_config.xml` sets
-`cleartextTrafficPermitted="true"`, while a **release** build reads
-`brand.properties:199 network.release_cleartext_for_default_host=false`, so a signed release APK
-cannot reach `http://92.4.95.252` over plain HTTP at all — a deployment fact about what is
-testable, not a reason to loosen release policy.
+none of the four keystore variables. Debug's
+`App/app/src/debug/res/xml/network_security_config.xml` permits cleartext to whatever machine the
+developer aims at, while a **release** build reads
+`brand.properties:215 network.release_cleartext_for_default_host=false` and so speaks plain HTTP
+only to the loopback/emulator names plus `network.fallback_server_url`, and reaches the TLS default
+over https. Never a wildcard, never a global switch.
 
 **How to get a signed release:** push a `v*.*.*` tag → `release.yml`. It needs
 `KEYSTORE_BASE64`, `KEY_STORE_PASSWORD`, `KEY_ALIAS`, `KEY_PASSWORD`. Measured cause of every

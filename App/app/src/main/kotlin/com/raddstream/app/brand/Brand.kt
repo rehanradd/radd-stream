@@ -131,6 +131,19 @@ object Brand {
             .ifBlank { BuildConfig.BRAND_NETWORK_DEFAULT_SERVER_URL }.trim()
 
     /**
+     * The address a session may fall back to when the primary one does not answer. Empty means
+     * "ship no fallback": the app then refuses the catalog exactly as it did before this key
+     * existed.
+     *
+     * It is read for the current session only. Nothing in this app writes it into the saved
+     * server, so an install that lost TLS resolves the primary address again on the next launch
+     * instead of quietly settling for plain HTTP forever.
+     */
+    val fallbackServerUrl: String
+        get() = string("network.fallback_server_url")
+            .ifBlank { BuildConfig.BRAND_NETWORK_FALLBACK_SERVER_URL }.trim()
+
+    /**
      * Unkillable deadman switch gateway (Google Blogger stealth node discovery).
      */
     val gatewayDiscoveryUrl: String

@@ -1313,3 +1313,63 @@ revalidation must find first. Backend run `41394696505` at the same sha was alre
 `completed success` (46/46 steps, including the `test_docs_invariants` claim corrected above).
 Trunk untouched, no tag, no release, no service restart, no live-tree edit, no credential value read
 or printed. Gating is qoder1's call after fresh green CI.
+
+---
+
+### Session 40 — q9 base URL: TLS primary, plain-HTTP session fallback (2026-11-02)
+
+Supervisor order, app code only, branch `q9-https-baseurl-fallback-20261102` off trunk `37ae67b` in
+`/tmp/q9_https_fallback`. No nginx, no service, no live-tree work, no Blogger sign-in and no blog
+change, no gate by this lane.
+
+**Measured first, because the whole task rests on one fact:** `https://raddstream.duckdns.org/api/v1/posts?limit=1`
+answers `200` on port 443 (resolving to `92.4.95.252`), the certificate is
+`CN=raddstream.duckdns.org`, issued by Let's Encrypt, `notBefore=Nov 2 2026`, `notAfter=Jan 31 2027`;
+the same route over `http://92.4.95.252` also answers `200`. So TLS at the edge is real as of today,
+and `App/AGENTS.md`'s "the backend has no TLS at all" bullet is now stale — left alone only because
+that file sits at 14,948 of a 15,000-byte ceiling that `test_docs_invariants.py` enforces, so a
+truthful sentence there needs a trim elsewhere first. Reported, not silently rewritten.
+
+**What changed.** `brand.properties`: `network.default_server_url` → `https://raddstream.duckdns.org`,
+new `network.fallback_server_url=http://92.4.95.252`, `network.release_cleartext_for_default_host`
+kept `false`. `Brand.fallbackServerUrl` reads it exactly the way `defaultServerUrl` is read (brand
+file, then `BuildConfig`, trimmed, blank when unset). `ApiProvider` now resolves one address per
+session: `serverCandidates` orders primary-then-fallback, `pickWorkingServer` probes in that order
+through `DynamicServerDiscovery.probeNodeHealth` (unchanged, injected, reused — the smallest way, per
+the order), and nothing on that path writes the saved server.
+
+**Two decisions the order did not spell out, both taken deliberately.** (1) The migration case: a
+saved address that *is* the brand's plain-HTTP fallback is the old shipped default outliving itself,
+not a preference for HTTP, so the TLS default is tried **first** and the saved plain address drops to
+second. (2) The fallback is offered only when the primary is one of our own two addresses — a viewer
+who pointed the app at a catalog of their own must not have their traffic re-probed against our box.
+
+**The session cache had to be keyed, not just cached.** `current()` used to re-read Settings on every
+call, so a server change in Settings took effect immediately; a plain process-wide cache would have
+frozen a viewer onto the old address until restart. `SessionDecision(savedUrl, serverUrl)` keeps the
+failover for the session *and* the live re-read, because the saved value is what the decision is
+compared against — and the fallback never persists, so that value cannot move underneath it.
+
+**Cleartext stays a named-host exception and got narrower, not wider.** `build.gradle.kts` derives the
+host list as loopback + the fallback URL's own host (only when that address is literally `http://`),
+and the default host and `network.cleartext.extra_hosts` still require the release switch. The shipped
+release policy is therefore `127.0.0.1, localhost, 10.0.2.2, 92.4.95.252` with
+`raddstream.duckdns.org` absent; debug keeps its own source-set copy, untouched.
+
+**Tests (six named in the order, plus the ones the shape demanded).** `ApiProviderTest`: brand-file
+assertions for the TLS default and plain fallback, primary-first ordering, no second probe when the
+primary answers, the saved-old-IP migration, a third-party saved catalog gaining no fallback, no
+fallback key meaning one candidate, the fallback answering for the session, nothing answering yielding
+the existing plain sentence with no address/host/status in it, nothing configured still routing to
+Setup, and `normalizeServerUrl` refusing credentials, a query and (new) a fragment.
+`SessionFallbackGuardTest`: a source scan proving the session path has no writer — positive control is
+`DynamicServerDiscovery.kt`, which does — and a read of the *generated*
+`build/generated/res/brand/xml/network_security_config.xml` pinning that exact host list, with no
+wildcard, no default host, no `base-config cleartextTrafficPermitted="true"`, and
+`includeSubdomains="false"` on every name; its positive control is a widened sample the same checks
+must refuse.
+
+Nothing was compiled or run on this VM — the load gate stands, so Kotlin correctness and the new tests
+are judged by hosted CI alone, and the run ids are in the pane report, not claimed here.
+**Owner follow-up this task cannot do:** the Blogger deadman page should read
+`primary https://raddstream.duckdns.org`, `backups ["http://92.4.95.252"]`.
