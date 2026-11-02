@@ -1185,3 +1185,21 @@ carries positive controls so a rename cannot silently retire the guard.
 Measured: hosted CI is the judge (no VM Gradle — load gate). Report: branch tip, Backend and Android
 run ids and step verdicts below in the commit trail. No trunk push, no tag, no release, no service
 restart, no `/opt/radd-stream` edit, no credential read or print.
+
+**Measured round-trip (same session, same one item).** Attempt 1 at tip `dbcec69` was RED on the
+hosted Android job — `Execution failed for task ':app:compileDebugUnitTestKotlin'`, two errors in my
+own `ResumeKeyGuardTest.kt:72-73` ("Only safe (`?.`) or non-null asserted (`!!.`) calls are allowed on
+a nullable receiver of type `kotlin.String?`"). `assertTrue(…, keyLine != null)` does not smart-cast,
+so the later bare `keyLine.indexOf(…)` never compiled. Main source was fine: `assembleDebug` and
+`lintDebug` passed that run, the defect was in the guard, not the fix. Corrected at `f862edb` by
+hoisting the resolved line into `val line = keyLine.orEmpty()` and computing both index anchors once,
+assertion meaning unchanged. Before pushing I re-ran all five checks as a stdlib Python port against
+the committed `PlayerViewModel.kt` (no VM Gradle, load gate): beginBundle reader present, seed
+occurrences 3 ≥ 2, `activeResumeKey` precedes `workKey` in `rememberResume`, `playFrom` keys through
+`activeResumeKey`, both write sites record it, and no bare `resumeByTarget[…target.workKey` remains.
+**Green at `f862edbd22a12b4bf7f6364e61e81a735e17edc6`** — Android run `41365855553` `success`,
+14/14 steps including the combined Gradle step; Backend run `41366094453` `success`, 46/46 steps
+(dispatched manually, since this commit touches no `Fast_Fetch/` path and `backend-ci.yml`'s path
+filter correctly produced no push-triggered run). Lesson for the next lane reading this: a
+source-scan guard must itself compile under Kotlin's smart-cast rules — assert, then bind to a
+non-null local; never reuse the `firstOrNull` result after an `assertTrue(… != null)`.
