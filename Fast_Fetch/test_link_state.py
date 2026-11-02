@@ -19,9 +19,11 @@ caricature of it.
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import io
 import json
 import os
+import shutil
 import sqlite3
 import sys
 import tempfile
@@ -674,6 +676,258 @@ class SchemaSafetyTests(unittest.TestCase):
         self.assertEqual(link_state.stats_payload(conn)["active_sources"], 0)
         self.assertEqual(link_state.stats_payload(conn)["unverified_sources"], 1)
         conn.close()
+
+
+_TEMPLATE_TMP: tempfile.TemporaryDirectory | None = None
+_TEMPLATE_DB: Path | None = None
+
+
+def _template_db() -> Path:
+    """One cold ``init_db`` for the whole file, copied wherever a plain *uninstalled*
+    catalog is the point. The index-and-classify pass is the expensive part of this
+    suite on a loaded box; reusing the artifact costs every schema test nothing extra."""
+    global _TEMPLATE_TMP, _TEMPLATE_DB
+    if _TEMPLATE_DB is None:
+        _TEMPLATE_TMP = tempfile.TemporaryDirectory()
+        _TEMPLATE_DB = Path(_TEMPLATE_TMP.name) / "template.db"
+        with unittest.mock.patch.object(fast_fetch, "DB_PATH", _TEMPLATE_DB):
+            fast_fetch.init_db(_TEMPLATE_DB)
+    return _TEMPLATE_DB
+
+
+class EvidenceSchemaStatusTests(unittest.TestCase):
+    """Spec gap 4 (`/tmp/q5-probe-evidence-spec.md`): the six evidence columns
+    ``LEDGER_COLUMNS`` owns are installed by a *declared* step, and a catalog that has
+    not had that step says so out loud instead of measuring less and calling the
+    difference coverage.
+
+    Fixtures only, on copied files in ``/tmp``. Nothing here opens a production
+    database: the migration is additive, but it is still a write, and the live ledger
+    is applied by the operator."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.db_path = Path(self.tmp.name) / "catalog.db"
+        shutil.copy(_template_db(), self.db_path)
+        self.conn = link_state.connect(self.db_path)
+        self.addCleanup(self.conn.close)
+
+    def tuples(self, sql: str, params=()) -> list[tuple]:
+        """PRAGMA/SELECT results as plain tuples — the fixture connection rows are
+        ``sqlite3.Row``, and a before/after comparison must not hinge on that."""
+        return [tuple(row) for row in self.conn.execute(sql, params)]
+
+    def _seed_link(self, url: str, **legacy) -> int:
+        self.conn.execute(
+            "INSERT INTO download_sources (release_id, source_name, service, source_url,"
+            " final_url, playback_type, status) VALUES"
+            " (1, 'x', 'y', ?, ?, 'direct', 'active')", (url, url))
+        if legacy:
+            sets = ", ".join(f"{k} = ?" for k in legacy)
+            self.conn.execute(f"UPDATE download_sources SET {sets}"
+                              " WHERE id = (SELECT MAX(id) FROM download_sources)",
+                              tuple(legacy.values()))
+        self.conn.commit()
+        return self.conn.execute("SELECT MAX(id) FROM download_sources").fetchone()[0]
+
+    def test_an_uninstalled_catalog_reports_itself_legacy_only(self):
+        status = link_state.schema_status(self.conn)
+        self.assertEqual(status["evidence_columns_missing"], list(link_state.LEDGER_COLUMNS))
+        self.assertEqual(status["cursor_tables_present"], [])
+        self.assertFalse(status["installed"])
+        self.assertTrue(status["legacy_evidence_only"])
+        self.assertEqual(status["projection"], "absent")
+        # The silent shrink, made visible: this is the list `_pending_where` judges a
+        # row by, and without the migration it never contains `checked_at`.
+        self.assertNotIn("checked_at", status["pending_evidence"])
+        # And it must stay a question that can be asked: summarising this catalog is
+        # still allowed to answer (spec verification 3).
+        self.assertEqual(link_state.status_summary(self.conn)["total"], 0)
+        self.assertIn("active_sources", link_state.stats_payload(self.conn))
+
+    def test_schema_plan_is_exactly_what_the_migration_adds(self):
+        """Spec verification 1, on a fixture: the PRAGMA name diff is the plan, the
+        plan is the six columns plus the two cursor tables, and nothing else moved."""
+        plan = link_state.schema_plan(self.conn)
+        self.assertEqual(sorted(plan["ledger_columns"]),
+                         sorted(link_state.LEDGER_COLUMNS))
+        self.assertEqual(sorted(plan["cursor_tables"]), sorted(link_state.CURSOR_TABLES))
+        self.assertFalse(plan["projection_link_id"], "no cat_links in this file")
+
+        before = {row[1] for row in self.conn.execute("PRAGMA table_info(download_sources)")}
+        added = link_state.ensure_schema(self.conn)
+        link_state.ensure_projection_schema(self.conn)
+        after = {row[1] for row in self.conn.execute("PRAGMA table_info(download_sources)")}
+        self.assertEqual(sorted(after - before), sorted(link_state.LEDGER_COLUMNS),
+                         "the name diff is exactly the six additions")
+        self.assertEqual(before & after, before, "no existing column disappeared")
+        self.assertEqual(sorted(added["columns"]), sorted(plan["ledger_columns"]))
+        self.assertEqual(added["tables"], plan["cursor_tables"])
+        installed = link_state.schema_status(self.conn)
+        self.assertTrue(installed["installed"])
+        self.assertEqual(installed["evidence_columns_missing"], [])
+        self.assertEqual(installed["cursor_tables_present"], list(link_state.CURSOR_TABLES))
+        self.assertIn("checked_at", installed["pending_evidence"])
+        self.assertEqual(link_state.schema_plan(self.conn),
+                         {"ledger_columns": [], "cursor_tables": [],
+                          "projection_link_id": False})
+
+    def test_the_migration_leaves_existing_columns_and_values_alone(self):
+        """Additive means additive: same declared type, same default, same stored row."""
+        src = "https://cdn.example.com/movie.mkv"
+        link_id = self._seed_link(
+            src, http_status=206, is_resumable=1, mime_type="video/x-matroska",
+            file_size_bytes=1234, last_checked_at="2026-10-01 00:00:00")
+        cols = self.tuples("PRAGMA table_info(download_sources)")
+        rows = self.tuples(
+            "SELECT id, release_id, source_name, service, source_url, final_url,"
+            " playback_type, is_temporary, status, is_resumable, http_status,"
+            " file_size_bytes, mime_type, last_checked_at, expires_at, ttl_source"
+            " FROM download_sources ORDER BY id")
+        link_state.ensure_schema(self.conn)
+        self.assertEqual(self.tuples("PRAGMA table_info(download_sources)")[:len(cols)],
+                         cols, "every pre-existing column is declared exactly as before")
+        again = self.tuples(
+            "SELECT id, release_id, source_name, service, source_url, final_url,"
+            " playback_type, is_temporary, status, is_resumable, http_status,"
+            " file_size_bytes, mime_type, last_checked_at, expires_at, ttl_source"
+            " FROM download_sources ORDER BY id")
+        self.assertEqual(again, rows, "and no stored value moved")
+        row = self.conn.execute("SELECT * FROM download_sources WHERE id = ?",
+                                (link_id,)).fetchone()
+        self.assertIsNone(row["checked_at"],
+                          "a fresh column is NULL here, not a fabricated verdict")
+
+    def test_a_second_migration_run_adds_nothing(self):
+        """Spec verification 2, across both ensure calls."""
+        first = link_state.ensure_schema(self.conn)
+        self.assertTrue(first["columns"] and first["tables"])
+        second = link_state.ensure_schema(self.conn)
+        self.assertEqual(second, {"columns": [], "tables": []})
+        self.assertEqual(link_state.ensure_projection_schema(self.conn),
+                         {"columns": [], "skipped": True})
+
+    def test_a_legacy_projection_is_offered_the_link_id_and_gains_it(self):
+        """The other half of the migration: `cat_links.ledger_link_id`, which a
+        catalog_full.db-era projection never had, so a verdict could not reach the row
+        the API serves."""
+        self.conn.execute("CREATE TABLE cat_links ("
+                          " id INTEGER PRIMARY KEY, url TEXT, state TEXT DEFAULT 'active')")
+        self.conn.commit()
+        status = link_state.schema_status(self.conn)
+        self.assertEqual(status["projection"], "no_link_id")
+        self.assertTrue(link_state.schema_plan(self.conn)["projection_link_id"])
+        added = link_state.ensure_projection_schema(self.conn)
+        self.assertEqual(added["columns"], ["ledger_link_id"])
+        self.assertFalse(added["skipped"])
+        self.assertEqual(link_state.schema_status(self.conn)["projection"], "linked")
+
+    def test_a_legacy_timestamp_row_is_still_not_re_probed_after_install(self):
+        """Held deliberately, and pinned so the hold is a fact and not a rumour.
+
+        Spec verification 4 wanted the opposite assertion — that once `checked_at`
+        exists, a row carrying *only* a legacy `last_checked_at` stops counting as a
+        swept verdict. That is true as a criticism (`_pending_where`'s legacy tolerance
+        is a stopgap, not a verdict), but shipping it is a sweep-semantics change: every
+        row the old health check ever touched becomes pending, which on the production
+        ledger is a multi-million-request re-probe — a heavy read the Fleet Resource
+        Guardrail freezes at load, and outside 'additive migration only'. What this
+        change does instead is make the tolerance visible: `schema_status`'s
+        `pending_evidence` names the columns the sweep judges by. Flipping the stopgap
+        off is an owner/supervisor call, queued, not taken here."""
+        link_state.ensure_schema(self.conn)
+        a = self._seed_link("https://a.example.com/1.mkv")
+        self._seed_link("https://b.example.com/2.mkv")
+        plan = link_state.propagate(self.conn, scope="legacy", dry_run=True,
+                                    only_unchecked=True, stale_after_seconds=None,
+                                    resume=False)
+        self.assertEqual(plan["rows_pending"], 2)
+        self.conn.execute("UPDATE download_sources SET last_checked_at = ?,"
+                          " http_status = 200 WHERE id = ?",
+                          (time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime()), a))
+        self.conn.commit()
+        after = link_state.propagate(self.conn, scope="legacy", dry_run=True,
+                                     only_unchecked=True, stale_after_seconds=None,
+                                     resume=False)
+        self.assertEqual(after["rows_pending"], 1,
+                         "a legacy-measured row is believed, and that belief is now reported")
+        self.assertIn("last_checked_at",
+                      link_state.schema_status(self.conn)["pending_evidence"])
+
+
+class EvidenceSchemaCliTests(unittest.TestCase):
+    """The migration is reachable as its own declared action, and asking about it is
+    never a write."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.db_path = Path(self.tmp.name) / "catalog.db"
+        shutil.copy(_template_db(), self.db_path)
+        # Nothing in this class may reach the network: the migration is a DDL step.
+        for name in ("probe", "probe_many"):
+            patcher = unittest.mock.patch.object(
+                link_health, name, side_effect=AssertionError("network use in a test"))
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def digest(self) -> str:
+        return hashlib.md5(self.db_path.read_bytes()).hexdigest()
+
+    def run_cli(self, argv) -> tuple[int, dict]:
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = link_state.main(argv)
+        return code, json.loads(out.getvalue())
+
+    def test_schema_flag_needs_no_apply_and_writes_nothing(self):
+        before = self.digest()
+        code, payload = self.run_cli(["--db", str(self.db_path), "--schema"])
+        self.assertEqual(code, 0)
+        self.assertFalse(payload["schema"]["installed"])
+        self.assertEqual(payload["would_add"]["ledger_columns"],
+                         list(link_state.LEDGER_COLUMNS))
+        self.assertEqual(payload["plan"], "read-only connection: nothing was written")
+        self.assertEqual(self.digest(), before)
+
+    def test_schema_flag_with_apply_still_writes_nothing(self):
+        """Asking a question must not inherit consent from the `--apply` next to it."""
+        before = self.digest()
+        code, payload = self.run_cli(["--db", str(self.db_path), "--schema", "--apply"])
+        self.assertEqual(code, 0)
+        self.assertNotIn("added", payload, "--schema never runs the migration")
+        self.assertTrue(payload["legacy_evidence_only"])
+        self.assertEqual(self.digest(), before)
+
+    def test_ensure_schema_without_apply_is_a_plan(self):
+        before = self.digest()
+        code, payload = self.run_cli(["--db", str(self.db_path), "--ensure-schema"])
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["would_add"]["cursor_tables"],
+                         list(link_state.CURSOR_TABLES))
+        self.assertEqual(self.digest(), before,
+                         'a "dry run" of a migration must not migrate')
+
+    def test_ensure_schema_with_apply_installs_and_probes_nothing(self):
+        before = self.digest()
+        code, payload = self.run_cli(["--db", str(self.db_path), "--ensure-schema",
+                                      "--apply"])
+        self.assertEqual(code, 0)
+        self.assertEqual(sorted(payload["added"]["ledger"]["columns"]),
+                         sorted(link_state.LEDGER_COLUMNS))
+        self.assertEqual(payload["added"]["ledger"]["tables"], list(link_state.CURSOR_TABLES))
+        self.assertEqual(payload["added"]["projection"], {"columns": [], "skipped": True})
+        self.assertTrue(payload["after"]["installed"])
+        self.assertNotEqual(self.digest(), before, "the write happened where it was declared")
+        conn = link_state.connect(self.db_path, read_only=True)
+        try:
+            self.assertEqual(link_state.status_summary(conn)["total"], 0)
+        finally:
+            conn.close()
+        # A second declared run is a no-op, which is what makes it safe to re-run.
+        again = self.run_cli(["--db", str(self.db_path), "--ensure-schema", "--apply"])
+        self.assertEqual(again[1]["added"]["ledger"], {"columns": [], "tables": []})
 
 
 if __name__ == "__main__":

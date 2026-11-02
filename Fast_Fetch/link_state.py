@@ -97,6 +97,7 @@ __all__ = [
     "classify", "is_verified", "effective_status", "should_probe",
     "propagate", "mark_unverified", "iter_pending",
     "status_summary", "stats_payload", "sync_projection", "candidate_links",
+    "schema_status", "schema_plan",
 ]
 
 # ── vocabulary ───────────────────────────────────────────────────────────────
@@ -146,6 +147,11 @@ LEDGER_COLUMNS = {
     "speed_mbps": "REAL",
     "cors_open": "INTEGER DEFAULT 0",
 }
+
+#: The bookkeeping tables `ensure_schema` creates out of ``CURSOR_DDL``. Named here so
+#: `schema_status` can tell an operator whether a catalog is *installed* or merely
+#: *adapting*, which is the difference between a sweep and five legacy columns.
+CURSOR_TABLES = ("link_state_cursor", "link_state_runs")
 
 CURSOR_DDL = """
 CREATE TABLE IF NOT EXISTS link_state_cursor (
@@ -245,6 +251,58 @@ def ensure_projection_schema(conn: sqlite3.Connection) -> dict:
                  " ON cat_links(ledger_link_id)")
     conn.commit()
     return added
+
+
+def schema_status(conn: sqlite3.Connection) -> dict:
+    """What evidence this catalog can actually store, read without writing a byte.
+
+    `link_state` degrades quietly: `_available_evidence()` builds its column list from
+    whatever the table carries, so an uninstalled ledger still answers `status_summary`,
+    still plans a sweep and still prints a coverage number — it simply cannot hold a
+    verdict's protocol, error code or epoch timestamp, and nothing says so out loud.
+    This is the answer to "has this catalog been swept, or is it legacy-only?", and the
+    reason `--ensure-schema` is a declared step rather than a side effect of `--apply`.
+
+    ``installed`` means every column `LEDGER_COLUMNS` owns is present *and* both cursor
+    tables exist. ``pending_evidence`` is the list `_pending_where` would treat today as
+    proof that a row has been knocked on, which is what shrinks when columns are missing.
+    """
+    have_ledger = _has_table(conn, "download_sources")
+    have = _columns(conn, "download_sources") if have_ledger else set()
+    missing = [name for name in LEDGER_COLUMNS if name not in have]
+    cursor_present = [name for name in CURSOR_TABLES if _has_table(conn, name)]
+    if not _has_table(conn, "cat_links"):
+        projection = "absent"
+    elif "ledger_link_id" in _columns(conn, "cat_links"):
+        projection = "linked"
+    else:
+        projection = "no_link_id"
+    return {
+        "ledger_table": "download_sources" if have_ledger else None,
+        "evidence_columns_present": [n for n in LEDGER_COLUMNS if n in have],
+        "evidence_columns_missing": missing,
+        "cursor_tables_present": cursor_present,
+        "projection": projection,
+        "installed": (bool(have_ledger) and not missing
+                      and len(cursor_present) == len(CURSOR_TABLES)),
+        "legacy_evidence_only": bool(have_ledger) and bool(missing),
+        "pending_evidence": _available_evidence(conn),
+    }
+
+
+def schema_plan(conn: sqlite3.Connection) -> dict:
+    """Exactly what the two `ensure_*` calls would add here, computed read-only.
+
+    The summary works either way, so an operator cannot infer from it that a write is
+    coming: this is the part that has to be readable before a catalog is touched.
+    """
+    status = schema_status(conn)
+    return {
+        "ledger_columns": list(status["evidence_columns_missing"]),
+        "cursor_tables": [name for name in CURSOR_TABLES
+                          if name not in status["cursor_tables_present"]],
+        "projection_link_id": status["projection"] == "no_link_id",
+    }
 
 
 # ── the verdict ──────────────────────────────────────────────────────────────
@@ -997,6 +1055,12 @@ def parse_args(argv=None):
                         help="actually write; without it this is a read-only plan")
     parser.add_argument("--stats", action="store_true",
                         help="print honest status_summary / stats_payload and exit")
+    parser.add_argument("--schema", action="store_true",
+                        help="print schema_status(): which evidence this catalog can store; "
+                             "never writes, with or without --apply")
+    parser.add_argument("--ensure-schema", action="store_true",
+                        help="install the additive evidence columns and cursor tables. "
+                             "Without --apply this prints the plan and touches nothing")
     parser.add_argument("--mark-unverified", action="store_true",
                         help="first downgrade evidence-free 'active' rows to 'unverified'")
     parser.add_argument("--batch-size", type=int, default=DEFAULT_BATCH_SIZE)
@@ -1026,6 +1090,14 @@ def main(argv=None) -> int:
     if not args.apply:
         conn = connect(path, read_only=True)
         try:
+            if args.schema or args.ensure_schema:
+                # The whole point of gap 4 is that the answer must be readable before
+                # the write, on a connection that cannot perform one.
+                print(json.dumps({"schema": schema_status(conn),
+                                  "would_add": schema_plan(conn),
+                                  "plan": "read-only connection: nothing was written"},
+                                 indent=2, sort_keys=True))
+                return 0
             if args.stats:
                 print(json.dumps(status_summary(conn, projection=args.projection),
                                  indent=2, sort_keys=True))
@@ -1046,6 +1118,18 @@ def main(argv=None) -> int:
 
     conn = connect(path)
     try:
+        if args.schema:
+            # Asking a question never implies consent to a write, even with --apply.
+            print(json.dumps(schema_status(conn), indent=2, sort_keys=True))
+            return 0
+        if args.ensure_schema:
+            before = schema_status(conn)
+            added = {"ledger": ensure_schema(conn),
+                     "projection": ensure_projection_schema(conn)}
+            print(json.dumps({"before": before, "added": added,
+                              "after": schema_status(conn)},
+                             indent=2, sort_keys=True))
+            return 0
         print(f"[i] schema: {ensure_schema(conn)}")
         if args.stats:
             print(json.dumps(stats_payload(conn), indent=2, sort_keys=True))
