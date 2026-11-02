@@ -1298,7 +1298,18 @@ the one pure-Python suite that owns the claim: `python3 -S Fast_Fetch/test_docs_
 **Ran 22 tests … OK**. That single stdlib run is the only thing executed on this VM — no Gradle, no
 APK.
 
-Judged hosted-only per the load gate: the Android `assembleDebug + testDebugUnitTest + lintDebug` run
-at this tip is reported to the supervisor with its id and per-step verdicts. Trunk untouched, no tag,
-no release, no service restart, no live-tree edit, no credential value read or printed. Gating is
-qoder1's call after fresh green CI.
+Judged hosted-only per the load gate, and the first judgement came back RED: Android run
+`41394696499` at `0467087` failed step 7 (`🏗️🧪🔍 Gradle: debug APK + unit tests + lint`) with
+`843 tests completed, 1 failed` — `AppDatabaseMigrationTest › a version-2 database upgrades to 7
+with its favorites intact`, `IllegalStateException` at its own `Room.databaseBuilder(...)` line.
+That is not the merge losing data; it is the merge working exactly as intended. The test registers
+the ladder by name and had six steps, while the shipped ladder now has seven, and a builder with no
+destructive fallback **throws** when the ladder stops short of the declared version — the very
+behaviour the test exists to prove. Fixed honestly, by climbing: register `MIGRATION_7_8`, expect
+`user_version = 8`, add `unavailable_works` to the tables that must exist, and assert the new
+`is18Plus` / `checkedAt` columns arrive **NULL** on a row that was saved by a build that never asked
+— a migration-invented stamp would make a never-checked favourite look checked, which is the one row
+revalidation must find first. Backend run `41394696505` at the same sha was already
+`completed success` (46/46 steps, including the `test_docs_invariants` claim corrected above).
+Trunk untouched, no tag, no release, no service restart, no live-tree edit, no credential value read
+or printed. Gating is qoder1's call after fresh green CI.
