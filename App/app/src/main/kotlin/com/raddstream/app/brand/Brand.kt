@@ -2,6 +2,7 @@ package com.raddstream.app.brand
 
 import android.content.Context
 import com.raddstream.app.BuildConfig
+import com.raddstream.app.viewmodel.AdultPolicy
 
 /**
  * Brand — the thin typed view over the ONE brand file, `/brand.properties`.
@@ -172,10 +173,16 @@ object Brand {
     val pipEnabled: Boolean get() = bool("features.pip", BuildConfig.BRAND_FEATURES_PIP.toBoolean())
 
     /**
-     * Adult filtering is a project policy, not a brand knob: it can only ever be
-     * ON. A `false` in brand.properties is ignored on purpose.
+     * Adult filtering is a project policy, not a brand knob: a `false` in brand.properties is
+     * ignored on purpose, and there is nothing here to toggle.
+     *
+     * It is COMPUTED rather than returned because a name like this gets read as evidence, and a
+     * literal `true` was a claim with nothing behind it. [AdultPolicy.enforcesAdultListing] asks
+     * the rule itself — a flagged row must not list, a refused row must not list, a plain row
+     * must still list — so this goes false the moment any leg of the rule stops holding, which is
+     * the only way a statement like this can be worth printing.
      */
-    val adultFilterEnforced: Boolean get() = true
+    val adultFilterEnforced: Boolean get() = AdultPolicy.enforcesAdultListing
 
     // ── TTLs + storage limits ────────────────────────────────────────────────
     val catalogTtlSeconds: Long get() =

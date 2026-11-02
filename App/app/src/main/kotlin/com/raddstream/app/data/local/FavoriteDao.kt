@@ -32,6 +32,24 @@ interface FavoriteDao {
     suspend fun findById(id: Int): FavoritePost?
 
     /**
+     * Record what the server said about this id. BOTH columns are written together, because an
+     * answer is one event: stamping `checkedAt` while leaving a stale `is18Plus` behind would let
+     * a row that came back clean keep hiding, and letting a `null` overwrite a stored `true` would
+     * un-hide a flagged work on the strength of a payload that never mentioned the flag. So the
+     * caller passes the flag it actually read, and a refusal that carried no body passes `null` —
+     * which is why the UPDATE below coalesces instead of overwriting.
+     */
+    @Query(
+        "UPDATE favorite_posts SET " +
+            "is18Plus = COALESCE(:flag, is18Plus), checkedAt = :stamp WHERE id = :id",
+    )
+    suspend fun recordAnswer(id: Int, flag: Boolean?, stamp: Long)
+
+    /** Ids only, for a caller that must not hold a copy of the viewer's whole library in memory. */
+    @Query("SELECT id FROM favorite_posts ORDER BY addedAt DESC")
+    suspend fun favoriteIds(): List<Int>
+
+    /**
      * Stamp a row as confirmed on the library. Written only after the server accepted the
      * row, so a failed push leaves it eligible for the next sync instead of marking it done.
      */

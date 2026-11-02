@@ -43,6 +43,16 @@ import com.raddstream.app.data.cache.CacheTaskEntity
  * moment it is meaningful, and an absent stamp is expressed as zero rather than as NULL so
  * [com.raddstream.app.data.local.AdCadenceRows] has one shape to read. Real DDL again, because the
  * destructive fallback on this builder would still take `favorite_posts` with it.
+ *
+ * Version 8 is the two answers a saved row never kept: `checkedAt`, the stamp of the last time the
+ * server said anything about this id, and `is18Plus`, the adult flag if a payload ever carried it.
+ * Both are nullable because every row on every device was saved by a build that asked neither —
+ * a stamp invented at migration time would make a never-checked row look checked, and that is
+ * precisely the row the revalidation pass is supposed to find first. The same step adds
+ * `unavailable_works`, the ledger of ids this device has been *refused* by name. It is real DDL
+ * for the same reason 4 through 7 are: the destructive fallback on this builder would take the
+ * viewer's saved list with it, and a rule about hidden rows that costs a library to install is
+ * not a rule the app should ship.
  */
 @Database(
     entities = [
@@ -53,8 +63,9 @@ import com.raddstream.app.data.cache.CacheTaskEntity
         SyncedProgressEntity::class,
         WatchHistoryEntity::class,
         AdCadenceEntity::class,
+        UnavailableWorkEntity::class,
     ],
-    version = 7,
+    version = 8,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -65,6 +76,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun syncedProgressDao(): SyncedProgressDao
     abstract fun watchHistoryDao(): WatchHistoryDao
     abstract fun adCadenceDao(): AdCadenceDao
+    abstract fun unavailableWorkDao(): UnavailableWorkDao
 
     companion object {
         /**
@@ -218,6 +230,28 @@ abstract class AppDatabase : RoomDatabase() {
                     "CREATE TABLE IF NOT EXISTS ad_cadence (" +
                         "surface TEXT NOT NULL, lastShownAtMs INTEGER NOT NULL, " +
                         "postersScrolled INTEGER NOT NULL, PRIMARY KEY(surface))",
+                )
+            }
+        }
+
+        /**
+         * 7 → 8: the two answer columns on `favorite_posts` and the refusal ledger. One ADD
+         * COLUMN per statement, because SQLite has never supported adding two at once, and both
+         * nullable with no default: an existing row was saved by a build that never asked, and a
+         * stamp written here would be a fact about a round-trip that never happened.
+         *
+         * Nothing in this step may rebuild or empty `favorite_posts`, and the pin in
+         * [com.raddstream.app.tooling.FavoritesSchemaGuardTest] keeps it that way — the row a
+         * viewer saved is the one thing in this database they would notice losing.
+         */
+        val MIGRATION_7_8: Migration = object : Migration(7, 8) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE favorite_posts ADD COLUMN is18Plus INTEGER")
+                db.execSQL("ALTER TABLE favorite_posts ADD COLUMN checkedAt INTEGER")
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS unavailable_works (" +
+                        "postId INTEGER NOT NULL, refusedAt INTEGER NOT NULL, " +
+                        "reason TEXT NOT NULL, PRIMARY KEY(postId))",
                 )
             }
         }
