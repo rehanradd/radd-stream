@@ -670,12 +670,13 @@ class OfflineCacheWiringTest {
         )
 
         // First tick: the row is ready (stamp 0), runs one pass, fails transiently, and the real
-        // RetryPolicy stamps it with a future retry time.
+        // RetryPolicy stamps it with a future retry time. Sweep #17 fixed the display of exactly
+        // this row: an unexhausted retry is parked in PAUSED awaiting its backoff, not shown FAILED.
         w.coordinator.tick()
         awaitPasses(w.ahead, 1)
         pump()
         val parked = w.taskDao.getById(600L)!!
-        assertEquals(CacheTaskState.FAILED.name, parked.state)
+        assertEquals(CacheTaskState.PAUSED.name, parked.state)
         assertTrue("a non-exhausted failure is stamped with a future backoff", parked.nextRetryAtElapsedRealtime > 0L)
 
         // The engine tick fires again at the SAME clock instant. Before the fix the scheduler read no
