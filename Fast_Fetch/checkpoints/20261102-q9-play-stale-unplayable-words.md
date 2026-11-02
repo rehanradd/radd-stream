@@ -69,10 +69,25 @@ so this lane does not either.
 
 `python3 -S -c` compile of the three edited files (ok), and the predicate itself against the real
 `tiers.UNPLAYABLE_STATES` (five words matched; `active`, `unverified`, NULL, `''` not matched).
-**No test module was run locally**: measured at 07:51 on this box, `load average 11.17` with 5.7 GB
-of 6.1 GB swap used and 1.2 GB available — the supervisor's light-work order bars the suite here, so
-hosted Backend CI on the pushed branch is the judge, and this entry states that rather than implying
-a local green.
+Hosted Backend CI on the pushed tip is the full judge: run `41381467803` at `abc39dc`, job
+`125073004667`, **46/46 steps `success`** in 101 s — including `test_database.py`, `test_redact.py`
+and `test_docs_invariants.py`. No Android run exists at this tip because the push touched no `App/**`
+path and `ci.yml` filters on them.
+
+Under the light-work order (`load average 11.59`, 1.1 GB available at 08:12) no suite was run; the
+**single new route test** was, because it is one test and not a suite —
+`python3 -S -m unittest -v test_redact.PublicEdgeHttpTests.test_a_ledger_demoted_link_is_not_a_stream_redirect`
+→ `ok`, `Ran 1 test in 3.092s`. Two throwaway probes against the same fixture, one on this tip and
+one on a `git archive` export of the base sha, are the before/after:
+
+```
+BASE broken|gone|unreachable  resolver success=True stale=None  -> HTTP 302 Location=https://media.example.test/film.mp4?token=old
+FIX  broken|gone|unreachable  resolver success=True stale=True  -> HTTP 404 no Location, {"success": false, "error": "no_playable_source"}
+```
+
+The base line is the flaw as filed: the row never reached a re-resolve, so nothing flagged it and the
+route redirected. The fix line answers through the existing stale-refusal path, and the v1 `success`
+flag is what `viewer.py` turns into a refusal rather than a location.
 
 ## Follow-up, reported not smuggled in
 
