@@ -168,6 +168,17 @@ class PlayerViewModel @Inject constructor(
     private val resumeByTarget = HashMap<String, Long>()
 
     /**
+     * The key the current bundle was opened under — the stream-id handle (or the local file
+     * address for an on-device print). Every read of [resumeByTarget] uses it, and
+     * [seedResumeFromStoredPositions] resolves the work scope through it (`peekWorkRef` maps
+     * handle → scope), so positions measured during playback must be written under it too.
+     * Sweep #10: `rememberResume` used to key by `target.workKey` instead, orphaning every
+     * pause/destroy position under a key no reader consults while the stale handle-keyed
+     * seed kept offering "Resume from X".
+     */
+    private var activeResumeKey: String? = null
+
+    /**
      * Whether this device has a sync key, mirrored so a twice-a-second tick can read a boolean
      * instead of suspending on a Flow. False is the ordinary case, and then every account call
      * below returns before it builds a request — the player is exactly what it was before the
@@ -682,6 +693,7 @@ class PlayerViewModel @Inject constructor(
         overrideMs: Long? = null,
     ) {
         store.installBundle(bundle)
+        activeResumeKey = resumeKey
         val resume = resumeByTarget[resumeKey] ?: 0L
         when {
             // A quality switch lands on a new address mid-scene: the position is the one
@@ -698,6 +710,7 @@ class PlayerViewModel @Inject constructor(
     private fun loadNow(title: String, resumeKey: String, resumePosition: Long, override: Long?) {
         store.requestLoad(title = title, resumePositionMs = resumePosition, startOverrideMs = override)
         _ui.update { it.copy(resumeOfferMs = null, pendingResumeKey = null, giveUp = null, pendingTitle = title) }
+        activeResumeKey = resumeKey
         resumeByTarget[resumeKey] = resumePosition.coerceAtLeast(resumeByTarget[resumeKey] ?: 0L)
     }
 
@@ -717,14 +730,15 @@ class PlayerViewModel @Inject constructor(
     /** "Play again from" — MX dialog to start at an arbitrary position. */
     fun playFrom(positionMs: Long) {
         val title = _ui.value.activeRendition?.displayLabel() ?: Brand.name
-        val key = store.bundle.value?.target?.workKey ?: title
+        val key = activeResumeKey ?: store.bundle.value?.target?.workKey ?: title
         loadNow(title, key, resumePosition = 0, override = positionMs.coerceAtLeast(0))
     }
 
     private fun rememberResume(forced: Boolean = true) {
         val c = controller ?: return
         val bundle = store.bundle.value ?: return
-        val key = bundle.target.workKey ?: c.currentMediaItem?.mediaId ?: return
+        // Write under the key every reader consults — the opened handle, not the work key.
+        val key = activeResumeKey ?: bundle.target.workKey ?: c.currentMediaItem?.mediaId ?: return
         val pos = c.currentPosition
         if (pos > 5_000 && pos < c.duration) resumeByTarget[key] = pos else resumeByTarget.remove(key)
         reportResume(c, pos, forced)

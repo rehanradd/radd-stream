@@ -471,6 +471,53 @@ def request_is_vip(headers, query_params, *, now=None, secret=None) -> bool:
     return False
 
 
+#: The bands the free tier does not get once the operator switches the quality
+#: gate on (audit critical 5). Everything at 720p and below — including an
+#: unspecified print, which `tiers.band_of` deliberately reads as the
+#: conservative free band — is free: this gate protects a purchase, not the
+#: catalog.
+GATED_QUALITY_BANDS = ("1080p", "2160p")
+
+
+def quality_gate_block_reason(source_id, headers, query_params):
+    """The error name this request must be refused with, or None to serve it.
+
+    The 720p free cap was client-only: a signed handle was the whole of what
+    the server demanded, so anyone who skipped the app played 1080p/4K without
+    paying for it. This is the server's side of the same promise: the release's
+    own band (``tiers.band_of`` over the release's quality/codec/size/title
+    columns, never a link field) met by the same server-verifiable credentials
+    the shortener split already trusts (``request_is_vip``).
+
+    Opt-in by the operator (``feature_quality_gate``, default off) and
+    fail-open: an unreadable settings row answers "free". Refusing every
+    premium play because the config could not be read is an availability
+    failure, and this boundary protects revenue, not a person.
+    """
+    try:
+        with get_db() as conn:
+            admin_panel._ensure_monetization(conn)
+            cfg = conn.execute(
+                "SELECT feature_quality_gate FROM app_remote_config "
+                "WHERE id = 1").fetchone()
+            if not cfg or not int(cfg["feature_quality_gate"] or 0):
+                return None
+            src = conn.execute(
+                "SELECT r.quality, r.codec, r.size, r.release_title "
+                "FROM download_sources s JOIN releases r ON r.id = s.release_id "
+                "WHERE s.id = ?", (source_id,)).fetchone()
+    except Exception:      # noqa: BLE001 — an unreadable ledger means free tier
+        return None
+    if not src:
+        return None
+    band = tiers.band_of(src["quality"], src["codec"], src["size"],
+                         src["release_title"])
+    if band not in GATED_QUALITY_BANDS:
+        return None
+    return None if request_is_vip(headers, query_params) \
+        else "premium_quality_requires_vip"
+
+
 def _art_pair(row, base_url: str) -> dict:
     """Poster + backdrops as our own handles, unless the art already sits on a
     public CDN (TMDB and friends name nothing about us).
@@ -3985,6 +4032,19 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self.send_json({"success": False, "error": "not_found"}, status=404)
                 return
 
+            blocked = (None if full else
+                       quality_gate_block_reason(int(source_id), self.headers,
+                                                 query_params))
+            if blocked:
+                # Audit critical 5, stream half. The operator port is exempt:
+                # it is the healing and audit surface, loopback-only by
+                # design, and unlike the adult rule a paywall boundary has no
+                # reason to blind the person who owns the ledger. 402 says
+                # "this is purchasable", which is what the app's VIP screen
+                # listens for; the body names no hoster and no URL.
+                self.send_json({"success": False, "error": blocked}, status=402)
+                return
+
             import fast_fetch
             res = fast_fetch.resolve_live_source(int(source_id))
             redirect_flag = query_params.get("redirect", ["1"])[0]
@@ -4055,6 +4115,16 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 # port as well: seeing a flagged row is the panel's job, handing out
                 # its bytes is nobody's.
                 self.send_json({"success": False, "error": "not_found"}, status=404)
+                return
+
+            blocked = (None if full else
+                       quality_gate_block_reason(int(source_id), self.headers,
+                                                 query_params))
+            if blocked:
+                # Audit critical 5, download half: the free cap that used to
+                # live only in the app. Same 402, same operator exemption as
+                # the stream route above.
+                self.send_json({"success": False, "error": blocked}, status=402)
                 return
 
             import fast_fetch
