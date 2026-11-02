@@ -52,8 +52,8 @@ class CacheCoordinator(
 
     /** One scheduling tick: decide who runs given priorities, cap, network, and budget. */
     suspend fun tick() {
-        val schedulable = taskDao.listSchedulable()
         val now = clock.nowElapsedRealtime()
+        val schedulable = taskDao.listSchedulable(now)
         val tasks = schedulable.map {
             SchedulableTask(
                 taskId = it.id,
@@ -350,14 +350,13 @@ class CacheCoordinator(
             if (CacheTaskStateMachine.canTransition(cur, CacheTaskState.FAILED)) {
                 taskDao.transition(id, cur.name, CacheTaskState.FAILED.name)
             }
-            taskDao.markFailedWithRetry(id, next, 0, reason)
+            taskDao.recordRetryState(id, CacheTaskState.FAILED.name, next, 0, reason)
         } else {
             val delay = RetryPolicy.nextRetryDelayMs(next, id)
             val cur = taskDao.getById(id)?.stateEnum ?: return
-            if (CacheTaskStateMachine.canTransition(cur, CacheTaskState.PAUSED)) {
-                taskDao.transition(id, cur.name, CacheTaskState.PAUSED.name)
-            }
-            taskDao.markFailedWithRetry(id, next, clock.nowElapsedRealtime() + delay, reason)
+            val parked = CacheTaskStateMachine.canTransition(cur, CacheTaskState.PAUSED)
+            val target = if (parked) CacheTaskState.PAUSED else CacheTaskState.FAILED
+            taskDao.recordRetryState(id, target.name, next, clock.nowElapsedRealtime() + delay, reason)
         }
     }
 

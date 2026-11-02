@@ -39,17 +39,29 @@ interface CacheTaskDao {
     @Query("SELECT * FROM cache_tasks WHERE state IN (:states) ORDER BY enqueueElapsedRealtime ASC")
     suspend fun listByStates(states: List<String>): List<CacheTaskEntity>
 
-    /** Everything the scheduler needs for one tick: non-terminal tasks, best priority first. */
+    /**
+     * Everything the scheduler needs for one tick: non-terminal tasks whose retry backoff has
+     * elapsed, best priority first.
+     *
+     * `nextRetryAtElapsedRealtime` is the absolute uptime the last transient failure parked a task
+     * until ([recordRetryState] writes it, [reResolveWithNewUrl] clears it to 0). It used to be
+     * written and reset but read by no query, so the fixed engine cadence re-resolved a failing
+     * keep on every tick instead of honouring [com.raddstream.app.data.cache.RetryPolicy]'s
+     * 2 s→30 min backoff. A ready task (never backed off, or backoff elapsed) carries 0 and always
+     * satisfies `<= :nowElapsed`; a task still inside its window carries a future stamp and is held
+     * out until [nowElapsed] reaches it.
+     */
     @Query(
         """
         SELECT * FROM cache_tasks
         WHERE state IN ('QUEUED','LOADING','PAUSED','FAILED')
+          AND nextRetryAtElapsedRealtime <= :nowElapsed
         ORDER BY
           CASE priority WHEN 'USER_REQUESTED' THEN 0 ELSE 1 END ASC,
           enqueueElapsedRealtime ASC
         """
     )
-    suspend fun listSchedulable(): List<CacheTaskEntity>
+    suspend fun listSchedulable(nowElapsed: Long): List<CacheTaskEntity>
 
     @Query("SELECT * FROM cache_tasks WHERE state = 'LOADING'")
     suspend fun listLoading(): List<CacheTaskEntity>
@@ -100,14 +112,20 @@ interface CacheTaskDao {
         currentUrl: String,
     )
 
+    /**
+     * Stamp one retry attempt's ledger onto the row, landing the state the caller decided.
+     * The state is a parameter, not a constant: a retry with attempts left is parked in
+     * PAUSED waiting for its backoff, and only an exhausted one is FAILED (sweep #17 — a
+     * hard-coded 'FAILED' here silently overwrote the PAUSED park a moment after it was set).
+     */
     @Query(
         """
         UPDATE cache_tasks
-        SET state = 'FAILED', attempt = :attempt, nextRetryAtElapsedRealtime = :nextRetryAt, lastError = :error
+        SET state = :state, attempt = :attempt, nextRetryAtElapsedRealtime = :nextRetryAt, lastError = :error
         WHERE id = :id
         """
     )
-    suspend fun markFailedWithRetry(id: Long, attempt: Int, nextRetryAt: Long, error: String?)
+    suspend fun recordRetryState(id: Long, state: String, attempt: Int, nextRetryAt: Long, error: String?)
 
     /**
      * Stamp WHY a task is parked WITHOUT moving it out of PAUSED. The Downloads list reads this to
