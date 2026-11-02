@@ -52,8 +52,8 @@ class CacheCoordinator(
 
     /** One scheduling tick: decide who runs given priorities, cap, network, and budget. */
     suspend fun tick() {
-        val schedulable = taskDao.listSchedulable()
         val now = clock.nowElapsedRealtime()
+        val schedulable = taskDao.listSchedulable(now)
         val tasks = schedulable.map {
             SchedulableTask(
                 taskId = it.id,
