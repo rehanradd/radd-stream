@@ -80,6 +80,20 @@ data class QualityOption(
     }
 }
 
+/** The next rung Play may fall back to when the tapped rung is only a web page:
+ * same band, directly playable here, a real handle, and not locked for this
+ * viewer. A page is never a fallback, and a fallback never changes quality.
+ */
+fun nextPlayableRung(
+    options: List<QualityOption>,
+    current: QualityOption,
+    isLocked: (QualityOption) -> Boolean = { false },
+): QualityOption? =
+    options.firstOrNull {
+        it.band == current.band && it != current && it.playsHere &&
+            !it.isProviderPage && it.streamId.isNotBlank() && !isLocked(it)
+    }
+
 /** Everything the detail screen needs from one scope's ladder. */
 data class LadderForScope(
     val options: List<QualityOption>,

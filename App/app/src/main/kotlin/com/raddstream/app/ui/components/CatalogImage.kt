@@ -23,6 +23,7 @@ import coil.compose.SubcomposeAsyncImage
 import coil.request.ImageRequest
 import com.raddstream.app.images.ImageSizingHolder
 import com.raddstream.app.images.ImageSizingPolicy
+import com.raddstream.app.network.models.WireText
 import com.raddstream.app.ui.theme.RaddStreamMark
 import dagger.hilt.EntryPoint
 import dagger.hilt.InstallIn
@@ -76,7 +77,10 @@ fun CatalogImage(
             imagesAllowedOnMobileData = sizing.imagesAllowedOnMobileData,
             metered = metered,
         )
-        val clean = url?.takeIf { it.isNotBlank() }
+        // Only a real http(s) address reaches Coil: anything else (a bare path, a
+        // scheme-less string) falls through to the branded fallback instead of a
+        // failed load pretending to be artwork.
+        val clean = url?.takeIf { it.isNotBlank() && WireText.isHttpUrl(it) }
         if (clean != null && decision.shouldLoad) {
             ImageRequest.Builder(context)
                 .data(clean)

@@ -35,7 +35,6 @@ import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
-import androidx.compose.material.icons.filled.OpenInNew
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Star
@@ -536,17 +535,17 @@ private fun PrimaryActions(
 }
 
 /**
- * Whether this print gets the viewer somewhere: our player can start a file, or the provider's own
- * page can be opened. One owner, so the hero button and the release-row button never disagree about
- * whether a tapped row does something.
+ * Whether this print gets the viewer somewhere: our player can start a file. One owner, so
+ * the hero button and the release-row button never disagree about whether a tapped row does
+ * something. A print whose only offer is a provider page cannot start here, so its Play
+ * button stays disabled instead of opening a page.
  */
-private val RankedPrint.canStart: Boolean get() = playableHere || opensProviderPage
+private val RankedPrint.canStart: Boolean get() = playableHere
 
-/** The button's word. A page is OPENED, a file is played, and a cam says so while it does. */
+/** The button's word. A file is played, and a cam says so while it does. */
 private fun RankedPrint.playLabel(): String = when {
     playableHere && isCam -> "Play (cam)"
     playableHere -> "Play"
-    opensProviderPage -> "Open"
     else -> "Play"
 }
 
@@ -1023,12 +1022,8 @@ private fun PrintCard(
             OutlinedButton(onClick = { onKeep(print) }) {
                 Icon(Icons.Default.Download, contentDescription = "Download video")
             }
-            if (print.playableHere) {
-                IconButton(onClick = { onOpenExternal(print) }, modifier = Modifier.size(40.dp)) {
-                    Icon(Icons.Default.OpenInNew, contentDescription = "Open in external player",
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-            }
+            // No external-player button here on purpose: that fallback lives in the
+            // player's More sheet, not in the detail row.
         }
     }
 }

@@ -12,6 +12,7 @@ import com.raddstream.app.data.local.WatchHistoryEntity
 import com.raddstream.app.network.friendlyNetworkError
 import com.raddstream.app.network.models.PostDetail
 import com.raddstream.app.player.LadderForScope
+import com.raddstream.app.player.nextPlayableRung
 import com.raddstream.app.player.LadderRung
 import com.raddstream.app.player.PlayerSessionStore
 import com.raddstream.app.player.QualityLadder
@@ -59,11 +60,19 @@ data class DetailUiState(
 
 /**
  * What a keep request needs is a file. A page is not one: DownloadManager would fetch HTML and
- * the Downloads row would then claim a film had been kept. The screen offers the page instead,
- * and says why it is not in the kept list.
+ * the Downloads row would then claim a film had been kept. The screen refuses it and says why
+ * it is not in the kept list.
  */
 private const val PAGE_NOT_A_FILE =
-    "This source is a page on the provider's site, not a file — open it instead of keeping it."
+    "This source is a page on the provider's site, not a file, so it can't be downloaded. Try another copy."
+
+/**
+ * A Play tap on a copy that is only a web page: the app never opens the page.
+ * It tries another playable copy at the same quality, and says so honestly when
+ * there is none.
+ */
+private const val PLAY_PAGE_NOT_PLAYABLE =
+    "This copy opens a web page instead of playing here. Try another copy."
 
 sealed class DetailNavigationEvent {
     /** Navigate by OPAQUE HANDLE only — a URL in a route would live in the back stack. */
@@ -435,13 +444,20 @@ class DetailViewModel @Inject constructor(
             _uiState.update { it.copy(actionMessage = "Nothing playable on this rung yet.") }
             return
         }
-        // A rung that is a page is not staged and not played: nothing starts, so there is no
-        // resume point to write and no position for Auto to hop to. Staging it would put an HTML
-        // page in the failover list the player walks when a CDN refuses.
+        // A rung that is a page is never played and never opened: staging it would put an HTML
+        // page in the failover list the player walks when a CDN refuses, and opening it would
+        // hand the viewer a web page for a Play tap. Instead Play falls back to the next
+        // playable rung at the same quality, and says so honestly when there is none.
         if (option.isProviderPage) {
-            _uiState.update { it.copy(selectedBand = option.band) }
-            viewModelScope.launch {
-                _navEvents.emit(DetailNavigationEvent.OpenProviderPage(option.streamId, title))
+            val fallback = nextPlayableRung(_uiState.value.ladder.options, option) { candidate ->
+                isLocked(candidate)
+            }
+            if (fallback != null) {
+                playLadder(fallback, external)
+            } else {
+                _uiState.update {
+                    it.copy(selectedBand = option.band, actionMessage = PLAY_PAGE_NOT_PLAYABLE)
+                }
             }
             return
         }
@@ -529,9 +545,9 @@ class DetailViewModel @Inject constructor(
             _uiState.update { it.copy(actionMessage = VipQualityGate.LOCKED_MESSAGE) }
             return
         }
-        val link = print.links.firstOrNull { it.playableHere } ?:
-            print.links.firstOrNull { it.isProviderPage } ?:
-            print.links.firstOrNull { it.keepable }
+        // Play starts a directly playable link only. A page link is never a play link:
+        // falling back to one used to open the provider's page for a Play tap.
+        val link = print.links.firstOrNull { it.playableHere }
         if (link == null) {
             _uiState.update { it.copy(actionMessage = "Nothing playable on this print yet.") }
             return
@@ -555,12 +571,10 @@ class DetailViewModel @Inject constructor(
             return
         }
         // Nothing plays here, so nothing is staged: no resume scope, no Continue-watching row,
-        // no position lookup waiting on bytes that will never arrive. The provider's page opens
-        // instead, and the viewer leaves this screen having watched nothing on our side.
+        // no position lookup waiting on bytes that will never arrive. The provider's page is
+        // never opened for a Play tap either: the viewer gets an honest message instead.
         if (link.isProviderPage) {
-            viewModelScope.launch {
-                _navEvents.emit(DetailNavigationEvent.OpenProviderPage(link.streamId, title))
-            }
+            _uiState.update { it.copy(actionMessage = PLAY_PAGE_NOT_PLAYABLE) }
             return
         }
         val scope = stageSyncScope(
