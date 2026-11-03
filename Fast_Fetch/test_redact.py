@@ -42,6 +42,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import catalog_api          # noqa: E402
 import catalog_v2           # noqa: E402
 import fast_fetch           # noqa: E402
+import current_hosts        # noqa: E402
 import redact               # noqa: E402
 import viewer               # noqa: E402
 
@@ -125,6 +126,15 @@ class FixtureMixin(unittest.TestCase):
             patch.object(fast_fetch, "DB_PATH", self.db_path),
             patch.object(fast_fetch, "fetch_cinemeta_metadata", return_value=None),
             patch.object(viewer, "DB_PATH", self.db_path),
+            # Stage-1 probes the fixture's fake pixeldrain link, and no
+            # real probe can pass an invented example link. Stub the probe
+            # to a passing file verdict so this suite keeps testing what
+            # it owns — that handles work and leak nothing — while real
+            # probe behaviour is covered by test_resolver_stage1.py.
+            patch.object(current_hosts, "probe_media", return_value={
+                "ok": True, "kind": "file", "mime": "video/mp4",
+                "size": 123456, "resumable": True, "renditions": [],
+                "failure": None}),
         ]
         for p in self.patches:
             p.start()
