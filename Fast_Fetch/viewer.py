@@ -4058,7 +4058,10 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 return
 
             import fast_fetch
-            res = fast_fetch.resolve_live_source(int(source_id))
+            # Stage-2: the stream caller needs watch media — a playlist
+            # or a single file. A playlist is never a download, and a
+            # page is never either; the resolver enforces both.
+            res = fast_fetch.resolve_live_source(int(source_id), want="watch")
             redirect_flag = query_params.get("redirect", ["1"])[0]
 
             if res.get("success") and res.get("stale"):
@@ -4144,7 +4147,10 @@ class DashboardHandler(BaseHTTPRequestHandler):
             # stale landing page, is a failure — never a "download" of HTML. The
             # v1 stale-URL behaviour exists for the shipped player, and no client
             # of this route has that history.
-            res = fast_fetch.resolve_live_source(int(source_id), v2=True)
+            # Stage-2: the download caller needs a single file only.
+            # A playlist answer here would be segments, not a file.
+            res = fast_fetch.resolve_live_source(int(source_id), v2=True,
+                                                 want="download")
             redirect_flag = query_params.get("redirect", ["1"])[0]
 
             if res.get("success") and res.get("url"):

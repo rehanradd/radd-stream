@@ -622,6 +622,20 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
+def _stage2_stale_fixture_probe(url, referer, kind_hint):
+    """Stage-2 gate probe for the stale/demoted fixtures: only the
+    fixture's own media.example.test address passes. Every sibling
+    fixture address fails, so failover cannot "win" on another invented
+    link and the stale answer these tests own is reproduced exactly.
+    Real probe behaviour is covered by test_resolver_stage2.py."""
+    if "media.example.test" in str(url or ""):
+        return {"ok": True, "kind": "file", "mime": "video/mp4",
+                "size": 123456, "resumable": True, "renditions": [],
+                "failure": None}
+    return {"ok": False, "kind": None, "mime": None, "size": None,
+            "resumable": False, "renditions": [], "failure": "html_shell"}
+
+
 class PublicEdgeHttpTests(FixtureMixin):
     @classmethod
     def setUpClass(cls):
@@ -801,36 +815,38 @@ class PublicEdgeHttpTests(FixtureMixin):
         success and names the last URL, flagged stale. The stream route must not
         302 a player at it — an expired token is a broken playback, not a
         playback — and must answer the download route's refusal instead."""
-        sid = self.make_stale_source(self.post_id)
-        res = fast_fetch.resolve_live_source(sid)
-        self.assertTrue(res["success"] and res.get("stale"),
-                        "fixture must reproduce the v1 stale answer: " + str(res))
-        handle = redact.mint_token(sid, viewer.signing_secret())
-        status, headers, body = self.get(f"/api/v1/stream?id={handle}",
-                                         self.public_port)
-        self.assertEqual(status, 404, body)
-        self.assertNotIn("Location", headers, "a stale URL must never be redirected to")
-        self.assertEqual(json.loads(body),
-                         {"success": False, "error": "no_playable_source"})
-        for needle in ("media.example.test", "token=old"):
-            self.assertNotIn(needle, body, "the refusal must not quote the dead URL")
+        with patch.object(current_hosts, "probe_media", side_effect=_stage2_stale_fixture_probe):
+            sid = self.make_stale_source(self.post_id)
+            res = fast_fetch.resolve_live_source(sid)
+            self.assertTrue(res["success"] and res.get("stale"),
+                            "fixture must reproduce the v1 stale answer: " + str(res))
+            handle = redact.mint_token(sid, viewer.signing_secret())
+            status, headers, body = self.get(f"/api/v1/stream?id={handle}",
+                                             self.public_port)
+            self.assertEqual(status, 404, body)
+            self.assertNotIn("Location", headers, "a stale URL must never be redirected to")
+            self.assertEqual(json.loads(body),
+                             {"success": False, "error": "no_playable_source"})
+            for needle in ("media.example.test", "token=old"):
+                self.assertNotIn(needle, body, "the refusal must not quote the dead URL")
 
     def test_stale_refusal_covers_json_mode_and_shows_the_operator_the_truth(self):
-        sid = self.make_stale_source(self.post_id)
-        handle = redact.mint_token(sid, viewer.signing_secret())
-        status, _, body = self.get(f"/api/v1/stream?id={handle}&redirect=0",
-                                   self.public_port)
-        self.assertEqual(status, 404, body)
-        self.assertEqual(json.loads(body),
-                         {"success": False, "error": "no_playable_source"})
-        status, _, body = self.get(f"/api/v1/stream?id={sid}", self.operator_port)
-        self.assertEqual(status, 404, body)
-        payload = json.loads(body)
-        self.assertFalse(payload["success"])
-        self.assertTrue(payload.get("stale"),
-                        "healing reads the operator body; it must say stale")
-        self.assertEqual(payload.get("url"),
-                         "https://media.example.test/film.mp4?token=old")
+        with patch.object(current_hosts, "probe_media", side_effect=_stage2_stale_fixture_probe):
+            sid = self.make_stale_source(self.post_id)
+            handle = redact.mint_token(sid, viewer.signing_secret())
+            status, _, body = self.get(f"/api/v1/stream?id={handle}&redirect=0",
+                                       self.public_port)
+            self.assertEqual(status, 404, body)
+            self.assertEqual(json.loads(body),
+                             {"success": False, "error": "no_playable_source"})
+            status, _, body = self.get(f"/api/v1/stream?id={sid}", self.operator_port)
+            self.assertEqual(status, 404, body)
+            payload = json.loads(body)
+            self.assertFalse(payload["success"])
+            self.assertTrue(payload.get("stale"),
+                            "healing reads the operator body; it must say stale")
+            self.assertEqual(payload.get("url"),
+                             "https://media.example.test/film.mp4?token=old")
 
     def make_demoted_source(self, post_id, verdict):
         """A link the ledger retired under a word the JIT used not to read.
@@ -856,22 +872,23 @@ class PublicEdgeHttpTests(FixtureMixin):
         `tiers.UNPLAYABLE_STATES` took the cached branch and was 302-ed at its own
         stored address without one attempt to heal it. Retired means re-resolve, and
         a re-resolve with nothing to walk is the download route's refusal."""
-        for verdict in ("broken", "gone", "unreachable"):
-            with self.subTest(status=verdict):
-                sid = self.make_demoted_source(self.post_id, verdict)
-                res = fast_fetch.resolve_live_source(sid)
-                self.assertFalse(res["success"] and not res.get("stale"),
-                                 f"a {verdict} link answered as a stream: {res}")
-                handle = redact.mint_token(sid, viewer.signing_secret())
-                code, headers, body = self.get(f"/api/v1/stream?id={handle}",
-                                               self.public_port)
-                self.assertEqual(code, 404, body)
-                self.assertNotIn("Location", headers,
-                                 f"a link the ledger retired as {verdict} was redirected to")
-                self.assertEqual(json.loads(body),
-                                 {"success": False, "error": "no_playable_source"})
-                for needle in ("media.example.test", "token=old"):
-                    self.assertNotIn(needle, body, "the refusal must not quote the dead URL")
+        with patch.object(current_hosts, "probe_media", side_effect=_stage2_stale_fixture_probe):
+            for verdict in ("broken", "gone", "unreachable"):
+                with self.subTest(status=verdict):
+                    sid = self.make_demoted_source(self.post_id, verdict)
+                    res = fast_fetch.resolve_live_source(sid)
+                    self.assertFalse(res["success"] and not res.get("stale"),
+                                     f"a {verdict} link answered as a stream: {res}")
+                    handle = redact.mint_token(sid, viewer.signing_secret())
+                    code, headers, body = self.get(f"/api/v1/stream?id={handle}",
+                                                   self.public_port)
+                    self.assertEqual(code, 404, body)
+                    self.assertNotIn("Location", headers,
+                                     f"a link the ledger retired as {verdict} was redirected to")
+                    self.assertEqual(json.loads(body),
+                                     {"success": False, "error": "no_playable_source"})
+                    for needle in ("media.example.test", "token=old"):
+                        self.assertNotIn(needle, body, "the refusal must not quote the dead URL")
 
     # ---- audit critical 5: server-side 720p free cap ----------------------- #
     def enable_quality_gate(self):

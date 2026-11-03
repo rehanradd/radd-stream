@@ -5597,7 +5597,58 @@ def _embed_resolvers():
     return _RESOLVERS
 
 
-def resolve_live_source(source_id: int, *, v2: bool = False) -> dict:
+# Stage-2 (resolver-stage2-strict-gate): the strict gate. Stage-1 probed
+# only proven backends; every other backend's cached or freshly unwrapped
+# address used to reach the player unprobed — that is how a saved page
+# became a "stream". From here on, NO address is returned to any caller
+# unless a capped probe just proved it is real media of the kind the
+# caller asked for. A page, a parked page, a login/challenge page, a dead
+# file, or a transport failure is never a stream and never a download:
+# the answer is no_playable_source, and failover tries the next copy.
+
+#: Referer retry for referer-gated players (one retry, same shape as the
+#: live demo's probe path): a target that answers "blocked" without a
+#: Referer gets one more probe carrying the embed referer before refusal.
+_STAGE2_REFERER_RETRY = "https://embed.vidrift.net/"
+
+
+def _stage2_hint(url: str) -> str:
+    return "playlist" if str(url or "").split("?")[0].endswith(".m3u8") else "file"
+
+
+def _stage2_probe(url: str) -> dict:
+    """Capped probe of one candidate target. Never raises: any probe error
+    is a failed verdict, and a failed verdict is a refusal, not a crash."""
+    try:
+        from current_hosts import probe_media as _probe
+        verdict = _probe(url, None, _stage2_hint(url))
+        if not verdict.get("ok") and verdict.get("failure") == "blocked":
+            verdict = _probe(url, _STAGE2_REFERER_RETRY, _stage2_hint(url))
+        return verdict
+    except Exception:
+        return {"ok": False, "kind": None, "mime": None, "size": None,
+                "resumable": False, "renditions": [],
+                "failure": "probe_error"}
+
+
+def _stage2_accept(verdict: dict, want: str) -> bool:
+    """Whether a probe verdict may be served for this caller.
+
+    watch: a playlist or a single file both play. download: only a single
+    file downloads — a playlist is segments, not a file, and handing it
+    to a download is a fake download. either: both kinds (legacy callers
+    that predate the want flag keep their old behaviour).
+    """
+    if not isinstance(verdict, dict) or not verdict.get("ok"):
+        return False
+    kind = verdict.get("kind")
+    if want == "download":
+        return kind == "file"
+    return kind in ("playlist", "file")
+
+
+def resolve_live_source(source_id: int, *, v2: bool = False,
+                        want: str = "either", _failover: bool = True) -> dict:
     """
     Just-In-Time (JIT) live stream resolver:
     Given a download_sources ID, returns an active, stream-ready URL.
@@ -5614,7 +5665,19 @@ def resolve_live_source(source_id: int, *, v2: bool = False) -> dict:
     - when re-resolution fails, the answer is an honest
       ``code == "no_playable_source"`` failure rather than ``success: true`` carrying
       a stale URL, so a dead link can never look alive to the caller.
+
+    Stage-2 (resolver-stage2-strict-gate) adds the strict gate on top:
+    ``want`` names what the caller needs — ``"watch"`` (playlist or file),
+    ``"download"`` (a single file only), or ``"either"`` (legacy callers).
+    Every candidate address — cached, freshly unwrapped, stale, or a
+    failover sibling — is capped-probed before it is returned, on every
+    backend, not just the Stage-1 proven ones. A candidate that fails the
+    probe, or a playlist offered to a download caller, is discarded and
+    the next copy is tried; when no copy passes, both contracts answer
+    ``no_playable_source``. Nothing is ever redirected to a page.
     """
+    if want not in ("watch", "download", "either"):
+        want = "either"
     init_db()
     not_found = {"success": False, "error": "not_found", "code": "not_found"}
     with get_db() as conn:
@@ -5729,21 +5792,51 @@ def resolve_live_source(source_id: int, *, v2: bool = False) -> dict:
         except Exception:
             pass
 
+    # Stage-2: the legacy cached branch used to serve ANY stored address
+    # unprobed — a saved page went straight to the player as "cached".
+    # Probe it first, like Stage-1 probes its own backends. A passing
+    # probe is served with measured mime/resumable (never a probe size:
+    # a Range read's byte count is the range length, not a file size, so
+    # file_size_bytes keeps its stored value); a failing probe, or a
+    # playlist for a download caller, forces the fresh re-resolve below.
     if not needs_refresh and src.get("final_url"):
-        return {
-            "success": True,
-            "id": src["id"],
-            "url": src["final_url"],
-            "cached": True,
-            "refreshed": False,
-            "service": src["service"],
-            "is_temporary": bool(src["is_temporary"]),
-            "is_resumable": bool(src["is_resumable"]),
-            "source_name": src["source_name"],
-            "mime_type": src.get("mime_type"),
-            "file_size_bytes": src.get("file_size_bytes"),
-            **observed_expiry,
-        }
+        _cached_verdict = _stage2_probe(src["final_url"])
+        if _stage2_accept(_cached_verdict, want):
+            _measured = [(c, v) for c, v in (
+                ("mime_type", _cached_verdict.get("mime")),
+                ("http_status", 206 if (_cached_verdict.get("resumable")
+                                       and _cached_verdict.get("kind") == "file")
+                 else 200),
+                ("is_resumable", 1 if _cached_verdict.get("resumable") else 0),
+            ) if v is not None]
+            for _column, _value in _measured:
+                src[_column] = _value
+            try:
+                with get_db() as _conn:
+                    _conn.execute(
+                        "UPDATE download_sources "
+                        "SET last_checked_at = CURRENT_TIMESTAMP "
+                        + "".join(", %s = ?" % _column for _column, _v in _measured)
+                        + " WHERE id = ?",
+                        (*(v for _c, v in _measured), src["id"]))
+            except Exception:
+                pass
+            return {
+                "success": True,
+                "id": src["id"],
+                "url": src["final_url"],
+                "cached": True,
+                "refreshed": False,
+                "stage2_probed": True,
+                "service": src["service"],
+                "is_temporary": bool(src["is_temporary"]),
+                "is_resumable": bool(src["is_resumable"]),
+                "source_name": src["source_name"],
+                "mime_type": src.get("mime_type"),
+                "file_size_bytes": src.get("file_size_bytes"),
+                **observed_expiry,
+            }
+        needs_refresh = True
 
     # Needs fresh unwrap
     source_u = src.get("source_url") or src.get("final_url") or ""
@@ -5924,6 +6017,20 @@ def resolve_live_source(source_id: int, *, v2: bool = False) -> dict:
     if fresh_url and is_bridge_url(fresh_url) and not is_direct_media_url(fresh_url):
         fresh_url = None
 
+    # Stage-2: a freshly unwrapped address is a claim, not media, until
+    # a capped probe proves it. This covers every legacy branch above
+    # exactly as the cached branch is covered: a failing probe, or a
+    # playlist for a download caller, discards the candidate and lets
+    # failover decide. Browser-only page-flow backends honestly refuse
+    # here until a real unwrapper exists for them — that refusal is the
+    # user's explicit preference over a fake page.
+    fresh_verdict = None
+    if fresh_url:
+        fresh_verdict = _stage2_probe(fresh_url)
+        if not _stage2_accept(fresh_verdict, want):
+            fresh_url = None
+            fresh_verdict = None
+
     if fresh_url and fresh_url != source_u:
         # A packer's verdict carries more than a URL. `verify=True` means the
         # resolver already read the first 512 bytes of the file, so its container,
@@ -5942,13 +6049,27 @@ def resolve_live_source(source_id: int, *, v2: bool = False) -> dict:
                  else 200),
                 ("is_resumable", 1 if stage1_result.get("resumable") else 0),
             ) if value is not None]
-        else:
+        elif embed_verdict is not None:
             measured = [(column, value) for column, value in (
                 ("mime_type", (embed_verdict or {}).get("content_type")),
                 ("file_size_bytes", (embed_verdict or {}).get("size_bytes")),
                 ("http_status", (embed_verdict or {}).get("http_status")),
                 ("is_resumable", 1 if (embed_verdict or {}).get("http_status") == 206 else None),
             ) if value is not None]
+        elif fresh_verdict is not None:
+            # No packer verdict: the Stage-2 gate probe is the
+            # measurement. Mime + resumable are real; size is NOT
+            # stored — a Range probe's byte count is the range length,
+            # not a file size.
+            measured = [(column, value) for column, value in (
+                ("mime_type", fresh_verdict.get("mime")),
+                ("http_status", 206 if (fresh_verdict.get("resumable")
+                                        and fresh_verdict.get("kind") == "file")
+                 else 200),
+                ("is_resumable", 1 if fresh_verdict.get("resumable") else 0),
+            ) if value is not None]
+        else:
+            measured = []
         for column, value in measured:
             src[column] = value
         with get_db() as conn:
@@ -6064,6 +6185,64 @@ def resolve_live_source(source_id: int, *, v2: bool = False) -> dict:
         except Exception:
             pass
 
+    # Stage-2 general failover: the same-release-then-cross-release
+    # ladder, for every backend, not just Stage-1 ones. Each sibling is
+    # resolved through this same function with failover disabled, so it
+    # gets the full strict gate and can never loop back here. Same
+    # release first; then other releases of the same post, same quality
+    # first, capped so one request cannot stall on a long tail.
+    if _failover and not fresh_url:
+        try:
+            with get_db() as _conn:
+                _same_release = [r[0] for r in _conn.execute(
+                    "SELECT id FROM download_sources "
+                    "WHERE release_id = ? AND id != ? ORDER BY id LIMIT 10",
+                    (src["release_id"], src["id"])).fetchall()]
+                _post_row = _conn.execute(
+                    "SELECT post_id, quality FROM releases WHERE id = ?",
+                    (src["release_id"],)).fetchone()
+                _cross_release = []
+                if _post_row is not None:
+                    _cross_release = [r[0] for r in _conn.execute(
+                        "SELECT s.id FROM download_sources s "
+                        "JOIN releases r ON r.id = s.release_id "
+                        "WHERE r.post_id = ? AND r.id != ? "
+                        "ORDER BY CASE WHEN r.quality = ? THEN 0 ELSE 1 END, "
+                        "s.id LIMIT 10",
+                        (_post_row[0], src["release_id"],
+                         _post_row[1])).fetchall()]
+            for _sid in list(_same_release) + list(_cross_release):
+                try:
+                    _alt = resolve_live_source(
+                        int(_sid), v2=v2, want=want, _failover=False)
+                except Exception:
+                    continue
+                # A stale-flagged sibling is NOT a failover win: it means
+                # that sibling could not be re-resolved either, and serving
+                # its last-known URL here would strip the stale flag the
+                # public route relies on to refuse it. Skip it and try the
+                # next copy; the caller's own stale answer is decided by
+                # the fall-through below, never laundered through failover.
+                if _alt.get("success") and _alt.get("url") and not _alt.get("stale"):
+                    return {
+                        "success": True,
+                        "id": src["id"],
+                        "url": _alt["url"],
+                        "cached": False,
+                        "refreshed": True,
+                        "failover": True,
+                        "failover_row_id": int(_sid),
+                        "service": src["service"],
+                        "is_temporary": bool(_alt.get("is_temporary")),
+                        "is_resumable": bool(_alt.get("is_resumable")),
+                        "source_name": src["source_name"],
+                        "mime_type": _alt.get("mime_type"),
+                        "file_size_bytes": _alt.get("file_size_bytes"),
+                        **_expiry_fields(src),
+                    }
+        except Exception:
+            pass
+
     # Nothing could be re-resolved. The legacy (v1) contract keeps handing back the
     # last known URL so the shipped app's behaviour is frozen, but the answer is now
     # flagged honestly (`stale: True`) and the ledger is marked so the projection can
@@ -6095,6 +6274,22 @@ def resolve_live_source(source_id: int, *, v2: bool = False) -> dict:
             "reason": "bridge_unresolved" if bridge_stale else "re_resolve_failed",
             "stale": True,
         }
+    # Stage-2: v1's last-resort stale answer is no longer served blind.
+    # Probe it: a passing probe of an acceptable kind keeps the old
+    # stale-flagged answer (the public stream handler already converts
+    # stale success to no_playable_source; the operator port sees the
+    # body). Anything else is an honest refusal on both contracts.
+    if stale_url:
+        _stale_verdict = _stage2_probe(stale_url)
+        if not _stage2_accept(_stale_verdict, want):
+            return {
+                "success": False,
+                "id": src["id"],
+                "error": "no_playable_source",
+                "code": "no_playable_source",
+                "reason": "stale_probe_failed",
+                "stale": True,
+            }
     return {
         "success": True,
         "id": src["id"],

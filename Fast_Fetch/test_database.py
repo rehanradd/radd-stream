@@ -35,9 +35,23 @@ class DatabaseSaveTests(unittest.TestCase):
         self.db_path_patch.start()
         self.cinemeta_patch = patch.object(fast_fetch, "fetch_cinemeta_metadata", return_value=None)
         self.cinemeta_patch.start()
+        # Stage-2 probes every candidate address before serving it, and no
+        # real probe can pass an invented example link. Stub the probe to
+        # a passing file verdict so this suite keeps testing what it owns
+        # — saving, unwrapping, expiry windows — while real probe
+        # behaviour is covered by test_resolver_stage2.py. Refusal tests
+        # keep refusing: the bridge guard, the demoted-ledger rule and the
+        # unverified-embed rule all fire before any probe verdict matters,
+        # and the failover below never launders a stale-flagged sibling.
+        self.probe_patch = patch.object(current_hosts, "probe_media", return_value={
+            "ok": True, "kind": "file", "mime": "video/mp4",
+            "size": 123456, "resumable": True, "renditions": [],
+            "failure": None})
+        self.probe_patch.start()
         fast_fetch.init_db()
 
     def tearDown(self):
+        self.probe_patch.stop()
         self.cinemeta_patch.stop()
         self.db_path_patch.stop()
         self.temp_dir.cleanup()
