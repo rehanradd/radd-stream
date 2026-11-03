@@ -5677,6 +5677,58 @@ def resolve_live_source(source_id: int, *, v2: bool = False) -> dict:
             except Exception:
                 needs_refresh = True
 
+    # Stage-1 (resolver-stage1-current-hosts): a permanent cached address
+    # from a proven backend is never trusted blindly. Probe it first: a
+    # passing probe is served with measured mime/size/resumable, and a
+    # failing probe forces the full re-resolve below. Other backends keep
+    # the legacy cached branch untouched.
+    if not needs_refresh and src.get("final_url"):
+        try:
+            from current_hosts import (classify_backend as _ch_backend,
+                                       probe_media as _ch_probe)
+            _cached_backend = _ch_backend(src["final_url"],
+                                          src.get("source_url") or "")
+            if _cached_backend in ("streamhg", "vidrift", "vidbolt", "vidly",
+                                   "vibuxer", "pixeldrain", "fastdl-beer"):
+                _hint = ("playlist" if src["final_url"].split("?")[0]
+                         .endswith(".m3u8") else "file")
+                _verdict = _ch_probe(src["final_url"], None, _hint)
+                if _verdict.get("ok"):
+                    _measured = [(c, v) for c, v in (
+                        ("mime_type", _verdict.get("mime")),
+                        ("file_size_bytes", _verdict.get("size")),
+                        ("http_status", 206 if (_verdict.get("resumable")
+                                               and _verdict.get("kind") == "file")
+                         else 200),
+                        ("is_resumable", 1 if _verdict.get("resumable") else 0),
+                    ) if v is not None]
+                    for _column, _value in _measured:
+                        src[_column] = _value
+                    with get_db() as _conn:
+                        _conn.execute(f"""
+                            UPDATE download_sources
+                            SET last_checked_at = CURRENT_TIMESTAMP
+                                {"".join(f", {_column} = ?" for _column, _v in _measured)}
+                            WHERE id = ?
+                        """, (*(v for _c, v in _measured), src["id"]))
+                    return {
+                        "success": True,
+                        "id": src["id"],
+                        "url": src["final_url"],
+                        "cached": True,
+                        "refreshed": False,
+                        "service": src["service"],
+                        "is_temporary": bool(src["is_temporary"]),
+                        "is_resumable": bool(src["is_resumable"]),
+                        "source_name": src["source_name"],
+                        "mime_type": src.get("mime_type"),
+                        "file_size_bytes": src.get("file_size_bytes"),
+                        **observed_expiry,
+                    }
+                needs_refresh = True
+        except Exception:
+            pass
+
     if not needs_refresh and src.get("final_url"):
         return {
             "success": True,
@@ -5700,6 +5752,8 @@ def resolve_live_source(source_id: int, *, v2: bool = False) -> dict:
     fresh_url = None
     fresh_temp = src["is_temporary"]
     embed_verdict = None
+    stage1_tried = False
+    stage1_result = None
 
     def hoster_input(marker):
         """The stored address that actually names this hoster.
@@ -5732,7 +5786,32 @@ def resolve_live_source(source_id: int, *, v2: bool = False) -> dict:
 
     try:
         hr = _embed_resolvers()
-        if (service in ("fsl_r2", "hubcloud_10g", "hubcloud")
+        # Stage-1 first: proven backends resolve through current_hosts with
+        # a capped probe per candidate, so a passing copy carries measured
+        # mime/size/resumable. A stage-1 failure must NOT fall through to
+        # the old unprobed branches for that backend: stage1_tried blocks
+        # them, and the sibling failover below decides instead.
+        try:
+            from current_hosts import (classify_backend as _ch_backend2,
+                                       resolve_copy as _ch_resolve)
+            _dispatch_backend = _ch_backend2(source_u, cached_u)
+            if _dispatch_backend in ("streamhg", "modiplay", "vidrift",
+                                     "vidbolt", "vidly", "vibuxer",
+                                     "pixeldrain", "fastdl-beer"):
+                stage1_tried = True
+                _dispatch_input = source_u
+                if _ch_backend2(source_u) in ("unknown", "filesforever"):
+                    if _ch_backend2(cached_u) not in ("unknown", "filesforever"):
+                        _dispatch_input = cached_u
+                stage1_result = _ch_resolve(_dispatch_input)
+                if stage1_result.get("ok"):
+                    fresh_url = stage1_result["url"]
+                    fresh_temp = 1 if stage1_result.get("temporary") else 0
+        except Exception:
+            pass
+        if stage1_tried:
+            pass
+        elif (service in ("fsl_r2", "hubcloud_10g", "hubcloud")
                 or "hubcloud" in source_u.lower() or "hubcloud" in cached_u.lower()):
             hub = hoster_input("hubcloud")
             # `gpdl…hubcloud` is a redirector that carries the Google CDN URL in
@@ -5851,12 +5930,25 @@ def resolve_live_source(source_id: int, *, v2: bool = False) -> dict:
         # its length and the status it came back with are measurements we paid
         # for; storing them saves the next probe and answers the seek question from
         # evidence. Every other hoster still gets the plain five-column update.
-        measured = [(column, value) for column, value in (
-            ("mime_type", (embed_verdict or {}).get("content_type")),
-            ("file_size_bytes", (embed_verdict or {}).get("size_bytes")),
-            ("http_status", (embed_verdict or {}).get("http_status")),
-            ("is_resumable", 1 if (embed_verdict or {}).get("http_status") == 206 else None),
-        ) if value is not None]
+        if stage1_result and stage1_result.get("ok"):
+            # A stage-1 pass is a measurement, not a guess: playlist passes
+            # record 200 + resumable 0 (HLS segments are not one resumable
+            # file); a resumable file records 206 + resumable 1.
+            measured = [(column, value) for column, value in (
+                ("mime_type", stage1_result.get("mime")),
+                ("file_size_bytes", stage1_result.get("size")),
+                ("http_status", 206 if (stage1_result.get("resumable")
+                                        and stage1_result.get("kind") == "file")
+                 else 200),
+                ("is_resumable", 1 if stage1_result.get("resumable") else 0),
+            ) if value is not None]
+        else:
+            measured = [(column, value) for column, value in (
+                ("mime_type", (embed_verdict or {}).get("content_type")),
+                ("file_size_bytes", (embed_verdict or {}).get("size_bytes")),
+                ("http_status", (embed_verdict or {}).get("http_status")),
+                ("is_resumable", 1 if (embed_verdict or {}).get("http_status") == 206 else None),
+            ) if value is not None]
         for column, value in measured:
             src[column] = value
         with get_db() as conn:
@@ -5910,6 +6002,67 @@ def resolve_live_source(source_id: int, *, v2: bool = False) -> dict:
             "file_size_bytes": src.get("file_size_bytes"),
             **_expiry_fields(src),
         }
+
+    # Stage-1 sibling failover: this copy failed, but the release may hold
+    # other stage-1 copies. Try them (resolve_release caps at 10 rows and
+    # ranks one winner per independence group) before answering
+    # unavailable. A passing sibling is written back to ITS row and
+    # returned; if none passes, BOTH contracts answer no_playable_source
+    # for a stage-1 backend — never a stale redirect.
+    if stage1_tried and not fresh_url:
+        try:
+            from current_hosts import resolve_release as _ch_release
+            with get_db() as _conn:
+                _siblings = _conn.execute(
+                    "SELECT * FROM download_sources "
+                    "WHERE release_id = ? AND id != ? ORDER BY id",
+                    (src["release_id"], src["id"])).fetchall()
+            _rel = _ch_release([dict(r) for r in _siblings])
+            _winner = _rel.get("watch_winner")
+            if _winner and _winner.get("url"):
+                with get_db() as _conn:
+                    _conn.execute(
+                        """UPDATE download_sources
+                           SET final_url = ?, is_temporary = ?,
+                               status = 'active',
+                               last_checked_at = CURRENT_TIMESTAMP,
+                               updated_at = CURRENT_TIMESTAMP,
+                               mime_type = ?, file_size_bytes = ?,
+                               is_resumable = ?, http_status = ?
+                           WHERE id = ?""",
+                        (_winner["url"],
+                         1 if _winner.get("temporary") else 0,
+                         _winner.get("mime"), _winner.get("size"),
+                         1 if _winner.get("resumable") else 0,
+                         206 if (_winner.get("resumable")
+                                 and _winner.get("kind") == "file") else 200,
+                         _winner.get("row_id")))
+                return {
+                    "success": True,
+                    "id": src["id"],
+                    "url": _winner["url"],
+                    "cached": False,
+                    "refreshed": True,
+                    "failover": True,
+                    "failover_row_id": _winner.get("row_id"),
+                    "service": src["service"],
+                    "is_temporary": bool(_winner.get("temporary")),
+                    "is_resumable": bool(_winner.get("resumable")),
+                    "source_name": src["source_name"],
+                    "mime_type": _winner.get("mime"),
+                    "file_size_bytes": _winner.get("size"),
+                    **_expiry_fields(src),
+                }
+            return {
+                "success": False,
+                "id": src["id"],
+                "error": "no_playable_source",
+                "code": "no_playable_source",
+                "reason": "stage1_all_copies_failed",
+                "stale": False,
+            }
+        except Exception:
+            pass
 
     # Nothing could be re-resolved. The legacy (v1) contract keeps handing back the
     # last known URL so the shipped app's behaviour is frozen, but the answer is now

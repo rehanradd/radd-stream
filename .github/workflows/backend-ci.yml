@@ -171,6 +171,9 @@ jobs:
       - name: 🧪 test_tiers.py
         run: python3 -S Fast_Fetch/test_tiers.py
 
+      - name: 🧪 test_resolver_stage1.py
+        run: python3 -S Fast_Fetch/test_resolver_stage1.py
+
       - name: 🧪 test_catalog_api.py
         run: python3 -S Fast_Fetch/test_catalog_api.py
 
