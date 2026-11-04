@@ -2091,3 +2091,43 @@ belongs on a quiet-window timer (overnight cron), not as a self-throttling daemo
 sharing the core with the fleet and live playback.** The ceiling stays at the spec
 2.0 default in code; scheduling is the deployment decision, and a ceiling raised
 merely to make the worker look busy is refused (qoder13 §3).
+
+## Session 2026-11-05 (qoder14 lane) — crown order qoder14_repin: cross-check re-pin, fastdl-beer gap, strict host trust
+`4ab594f` on `feat/phase1-resolved-cache`; 64/64 `test_host_classifier` (was
+RED with 5 failures carried by qoder12's AND-rule commit — now resolved).
+- **Item 1 re-pin:** cross-check now pins every Category-A marker with its
+  real ledger service label (label+host -> A), pins shape-only and
+  label-only single-evidence rows to B *by verdict with reasons* (horizon A
+  is a 24h trust claim; one-evidence trust is exactly what failed with
+  hubcloud), and re-pins `test_kind_letters_are_not_horizon_letters` from
+  the defective `hubcloud==A` assertion to `B`. The 14 documented DISAGREE
+  rows re-verified: none weakened (B before, B unlabeled now, A when the
+  true label arrives with the true host). My verdict on the crown's open
+  question: shape-only pixeldrain SHOULD stay B for the horizon — the AND
+  rule is not wrong for it, because the kind claim (`is_direct_file`) is
+  untouched and cache rows never legitimately arrive label-less.
+- **Item 2:** `_SERVICE_TABLE` gains `fastdl-beer` (plus gofile/1fichier/
+  megaup/vikingfile/desiupload/hexload/dailyuploads/frdl/mega spellings) —
+  genuine fastdl-beer resolves now reach horizon A under the AND rule.
+- **Item 3:** substring host trust removed. Dotted markers = registrable
+  domains (suffix-exact), bare markers = exact second-level label, only for
+  the doc-proven TLD-rotating families. `pixeldrain.dev`, `xpixeldrain.com`,
+  `pixeldrain.com.attacker.tld`, `50filebee.xyz`, `xhubcloud.ist` now
+  classify `unknown`; legit subdomains still pass. The unsanctioned
+  "pixeldrain.dev proven crack" draft: ignored, and the classifier is now
+  structurally unable to trust that domain. Residual documented (not
+  silently fixed): site_scout's own matcher is substring-based and
+  CI-pinned; the strict authority governs storage via the predicates.
+- **CI list (15 modules + host_resolvers), measured this session:**
+  database 76, vidout 6, catalog_v2 91, release_descriptor 24, link_health
+  57, link_state 28, api_v2 46, redact 49, tiers 23, catalog_api 114,
+  provenance_stamping 12, site_scout 25, backup_manager 14, host_resolvers
+  171 — all OK. **RED, pre-existing at HEAD without my edits (verified in a
+  throwaway worktree, not touched by me):** `test_evidence_writeback` 3
+  failures (ApplyEvidenceTests x2, LedgerColumnFidelity x1) and
+  `test_merge_catalogs` 1 failure (StagingFamilyMergeTests) — ledger-column
+  territory, flagged to the Crown Prince for its owner.
+- **TLS verification posture — DOCUMENT ONLY, per crown ruling:** the probe
+  helpers (`domain_resolver._get_ssl_context`, `site_scout`'s context) skip
+  certificate verification, inherited from the original modules. Not
+  changed; recorded here so the deviation is owned, not hidden.
