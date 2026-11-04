@@ -2122,3 +2122,30 @@ past our merge-base `19abff7`). Do not push these as new work; do not delete any
   committed before the guard's own connection re-reads it. `test_redact` 65 OK (was 57),
   `test_reconcile_adult` 15 OK, run one at a time at loadavg 5.4–6.4 on nproc=1.
 - Synthetic fixtures only; zero catalog copies. fast_fetch.py untouched (freeze).
+
+### UPDATE ~02:50 — art_is_adult LANDED; resolver gate is the only open task
+
+- `e9f5019` (pushed; remote tip now `e9f5019`): the art fix + 8 tests + this log.
+  `test_redact` 65 OK, `test_reconcile_adult` 15 OK, suites run one at a time
+  (loadavg 5.4–6.4, nproc=1). Sweep confirmed 0 `bool(row and row` hits in lane
+  redact.py; trunk still has its one hit at its `:1074` — upstream merge owner's call.
+- FRESH-SESSION NOTES for the heavy-resolver gate (`qoder11_heavy_resolver.md`):
+  * NO ORDER FILE: `/tmp/crown_orders/qoder11_rescope.md` was referenced but does not
+    exist (only qoder11_numbers.md and siblings). Work from the numbers file + this log.
+  * Defect: /api/v1/stream|download on cache MISS run the full resolver synchronously;
+    vidbolt/cineverse/modiplay have zero unpacker matches → fresh_url always None →
+    60.1/54.7/78.0 ms cold pure waste. Build stdlib single-flight (lock + per-key
+    in-flight table) + negative cache (DISTINCT from resolved_cache fail_count; must
+    not re-derive failures — qoder12's 73de18e made unprobed answers non-evidence) +
+    adaptive TTL (stale unbankable) + Category B HLS stays behind real resolver; dead
+    stored URL → immediate honest refusal.
+  * Boundaries: stdlib only; own module wired at route boundary, NOT fast_fetch.py
+    (freeze); no egress unless bounded, timeout-capped, per-host rate ceiling stated in
+    docstring; no background sweeps (prefetch_worker.py owns warming).
+  * 8 required tests: dedupe N concurrent same-key; distinct keys don't block; negative
+    hit short-circuits w/o egress; negative expiry re-probes; unsupported-host does NOT
+    move fail_count; success clears negative; adult gate runs BEFORE the gate; works
+    with cache table absent. 50-concurrent stress: NOT RUN (report as "not run").
+  * Push mechanics: build GIT_ASKPASS with the Write tool, never outer printf (its
+    format eats %s → silent anonymous pushes). No export of GITHUB_TOKEN needed in the
+    child if you print via "$GITHUB_TOKEN" in the helper script itself.
