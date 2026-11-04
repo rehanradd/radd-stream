@@ -107,15 +107,29 @@ _DDL_STATEMENTS = (
 _SCHEMA_OK = "resolved_cache"
 
 
+def _is_concurrent_create(exc: sqlite3.OperationalError) -> bool:
+    """True only for ``already exists`` — the signature of another connection
+    having run the same DDL between our existence-check and our create.
+    A typo'd column or a broken statement is NOT this failure and must never
+    be tolerated the same way (crown order qoder12_night, Step 0)."""
+    return "already exists" in str(exc).lower()
+
+
 def init_resolved_cache(conn: sqlite3.Connection) -> None:
     """Create the table and its indexes, one statement per ``execute``.
 
     Deliberately NOT ``executescript`` — that commits the caller's pending
-    transaction first (addendum defect 1). Idempotent; safe to call per
-    request; never commits anything by itself.
+    transaction first (addendum defect 1). Every statement is IF NOT EXISTS,
+    so a creator that lost the race is recognised from its error text and
+    treated as success; any other OperationalError re-raises unchanged.
+    Idempotent; safe to call per request; never commits anything by itself.
     """
     for statement in _DDL_STATEMENTS:
-        conn.execute(statement)
+        try:
+            conn.execute(statement)
+        except sqlite3.OperationalError as exc:
+            if not _is_concurrent_create(exc):
+                raise
 
 
 def _ensure_schema(conn: sqlite3.Connection) -> None:

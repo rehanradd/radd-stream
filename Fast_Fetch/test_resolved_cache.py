@@ -16,6 +16,8 @@ from __future__ import annotations
 import os
 import sqlite3
 import sys
+import tempfile
+import threading
 import time
 import unittest
 
@@ -362,6 +364,97 @@ class TestAddendumDefects(unittest.TestCase):
         self.assertIsNone(resolved_cache.lookup_cache(conn, 77, now=now),
                           "record still must not commit — the caller's "
                           "transaction owns the write")
+
+
+class TestColdStartRace(unittest.TestCase):
+    """Crown order qoder12_night Step 0. `_ensure_schema` is a check-then-act
+    on shared state: on this lane (WAL, 1 core, real thread interleavings) two
+    connections can both see "no table" and both run the DDL, and the second
+    can lose the existence-check/create race inside sqlite itself. The module
+    must be safe by construction — IF NOT EXISTS everywhere, the specific
+    concurrent-create error tolerated, every other OperationalError raised."""
+
+    def _race_one_round(self, n_threads: int) -> list:
+        fd, path = tempfile.mkstemp(suffix=".db")
+        os.close(fd)
+        barrier = threading.Barrier(n_threads)
+        errors = []
+        lock = threading.Lock()
+
+        def worker(i):
+            conn = sqlite3.connect(path, timeout=5.0)
+            conn.execute("PRAGMA busy_timeout = 5000")
+            try:
+                barrier.wait()                 # every thread first-touches together
+                data = file_resolve(id=900 + i,
+                                    url="https://pixeldrain.com/api/file/race%d" % i)
+                resolved_cache.record_resolved_cache(conn, 900 + i, data)
+                conn.commit()
+                self.assertIsNotNone(
+                    resolved_cache.lookup_cache(conn, 900 + i))
+            except Exception as exc:           # noqa: BLE001 — collected, asserted below
+                with lock:
+                    errors.append("%s: %s" % (type(exc).__name__, exc))
+            finally:
+                conn.close()
+
+        try:
+            ts = [threading.Thread(target=worker, args=(i,))
+                  for i in range(n_threads)]
+            for t in ts:
+                t.start()
+            for t in ts:
+                t.join()
+            # the schema survived the race whole: table AND both indexes
+            conn = sqlite3.connect(path, timeout=5.0)
+            idx = {r[0] for r in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='index' "
+                "AND name LIKE 'idx_rc%'")}
+            n_rows = conn.execute(
+                "SELECT COUNT(*) FROM resolved_cache").fetchone()[0]
+            conn.close()
+            self.assertEqual(idx, {"idx_rc_reverify", "idx_rc_expiry"},
+                             "a reader must never see a half-built schema")
+            self.assertEqual(n_rows, n_threads)
+            return errors
+        finally:
+            for suffix in ("", "-wal", "-shm"):
+                try:
+                    os.unlink(path + suffix)
+                except OSError:
+                    pass
+
+    def test_simultaneous_first_touch_has_zero_errors(self):
+        """8 threads, one fresh DB, barrier-released onto _ensure_schema +
+        record at the same instant, 5 rounds. Zero exceptions of ANY kind and
+        zero 'no such table' specifically — a traceback path here is a
+        resolve thrown away on the live server's cold boot."""
+        for round_no in range(5):
+            errors = self._race_one_round(8)
+            no_table = [e for e in errors if "no such table" in e]
+            self.assertEqual(errors, [],
+                             f"round {round_no}: cold-start race raised {errors}")
+            self.assertEqual(no_table, [])
+
+    def test_concurrent_creator_error_is_recognised_by_text(self):
+        """The tolerance must be exactly 'already exists': a concurrent
+        creator and a broken statement are not the same failure and must not
+        be handled identically (order Step 0, is_temporary — no)."""
+        ok = sqlite3.OperationalError("table resolved_cache already exists")
+        self.assertTrue(resolved_cache._is_concurrent_create(ok))
+        typo = sqlite3.OperationalError(
+            "no such column: file_sze_bytes")
+        self.assertFalse(resolved_cache._is_concurrent_create(typo))
+        dead = sqlite3.OperationalError("no such table: resolved_cache")
+        self.assertFalse(resolved_cache._is_concurrent_create(dead),
+                         "the race we actually hit must not be swallowed — "
+                         "it must be REPAIRED by init, not tolerated by lookup")
+
+    def test_every_ddl_statement_is_if_not_exists(self):
+        for statement in resolved_cache._DDL_STATEMENTS:
+            head = statement.strip().upper()[:26]
+            self.assertIn("IF NOT EXISTS", head,
+                          f"DDL must be re-runnable by construction: {head}")
 
 
 class TestViewerRouteContract(unittest.TestCase):
