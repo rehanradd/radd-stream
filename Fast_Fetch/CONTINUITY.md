@@ -2360,3 +2360,112 @@ a branch push cannot exclude descendants; disclosed, not repeated).
   uncommitted lines at EOF untouched); fast_fetch.py NOT added/committed at
   any point. timeout-minutes 15→25 (21 steps). No trunk push, no big temp
   files (disk 98%).
+## Session 2026-11-05 — qoder14 (Host Classifier & Header Sanitizer): domain-drift slice, CROWN ORDER qoder14_ruling
+- **Provenance answer (scratch copy `mode=ro`, 6.4 GB copy at /tmp/qoder14_scratch/):**
+  hdtvb.net NEVER served hdhub4u content. hdhub4u posts: 6,557, hosts
+  new8.hdhub4u.cl (6,421) + new2.hdhub4u.free (136), ZERO hdtvb.net; the 8–9
+  download_sources "hdtvb" SQL hits are base64 substring collisions inside
+  googleusercontent tokens, not hosts. `hdtvb.net` is a needle because the
+  registry's OWN `hdtvb` site entry lists it in known_mirrors (live hdutv.com) —
+  so `hdhub4u -> hdtvb.net` in DEFAULT_DOMAINS + domains_config is a PURE
+  MIS-MAPPING, not a retired-domain artifact. No restamp_provenance conversation
+  needed: nothing was ingested under the wrong site name via this pointer.
+- **Needle law proven:** redact._registry_needles() iterates all sites, never
+  checks status; 71 needles before, 71 after (test pins superset + retired-row
+  harvest via synthetic registry). Merge gate: this changes public redaction
+  behavior on the running unit — merge only after a full sweep_public_edge.py.
+- **Built (approved slice, fast_fetch.py, +104/-3 lines, UNCOMMITTED pending
+  crown all-clear):** hunk A/B `REGISTRY_PATH` + `registry_live_domains()` +
+  overlay applied LAST in `get_domains()` (registry outranks the stale DB rows
+  that override the static table; `*_sitemap` keys host-swap, paths kept; down
+  rows skipped; malformed/missing registry degrades to old behavior). Hunk F
+  retirement markers on the 7 drifted static entries + the hdhub4u mispointer
+  (values kept, no host string deleted). Hunk G `refresh_domains()` called at
+  `sync_sitemaps()` entry; `DOMAINS = get_domains()` import-time staleness +
+  restart gate documented; NO hot-reload, per ruling. Katmovie second block:
+  retirement marker, deletion withheld; proof it has no live reference
+  (key-always-present invariant + no DELETE path on domains_config); its only
+  live firing is the guard-escape bug-shape, pinned in tests; catalog census
+  for guard-escape hosts measured separately.
+- **New test module** `test_fast_fetch_domains.py` — 25 tests OK (overlay order,
+  sitemap host-swap, down-skip, needle superset 71→71, retired-row harvest,
+  hdtvb ownership, refresh-in-place, katmovie shadowing, substring looseness
+  pinned as preexisting).
+- **Withheld remainder shipped as an unapplied patch:**
+  /tmp/qoder14_scratch/lane4_C_E_withheld.patch — hunk C (5 live TLDs into
+  SITE_CANDIDATE_TLDS + supersession note) and hunk E (normalize_url docstring
+  truth + 7 drifted cold-start fallbacks). +23/-16. NOT applied, NOT approved.
+- **Tests:** resolved_cache 52 OK (green again — qoder12 landed; still NOT
+  committing without crown all-clear) · host_classifier 64 OK · site_scout 25
+  OK · domain_resolver 18 OK · redact 49 OK · fast_fetch_domains 25 OK.
+- Lane: /opt/radd-stream untouched, zero DB writes, no `domain migrate`, stdlib
+  only. My fast_fetch.py hunks are separable (lines 54–1000 region); qoder12's
+  resolve_live_source hunks untouched.
+- **Re-pin caused by this slice (mine to own):** `test_vidout.py` episode test
+  hardcoded `https://multimovies.garden/...` episode URLs; with the registry
+  overlay, `fast_fetch.py:3447` correctly builds episode links from
+  `DOMAINS["multimovies"]` = the LIVE origin (m1.multimovies.courses), so the
+  fake http_get saw the rewritten URL and the episode release vanished
+  (StopIteration). The old pin blessed a fetch against a dead domain. Re-pinned
+  to derive the expectation from `fast_fetch.DOMAINS["multimovies"]` — the same
+  authority production uses — so future TLD rotations do not re-stale the test.
+  6/6 OK. Verified end-to-end: importing fast_fetch in the lane now yields
+  DOMAINS["multimovies"] = https://m1.multimovies.courses.
+- **Full CI list, final:** database 76 OK · vidout 6 OK (re-pinned) ·
+  catalog_v2 91 OK · release_descriptor 24 OK · link_health 57 OK · link_state
+  28 OK · evidence_writeback 12 FAILED(3, pre-existing, other lane's ledger
+  territory) · api_v2 46 OK · tiers 23 OK · catalog_api 114 OK ·
+  provenance_stamping 12 OK · merge_catalogs 5 FAILED(1, pre-existing) ·
+  site_scout 25 OK · backup_manager 14 OK · redact 49 OK · resolved_cache 52 OK
+  · host_classifier 64 OK · domain_resolver 18 OK · fast_fetch_domains 25 OK.
+  19 pre-existing-OK modules green; the 4 failures are the same
+  evidence_writeback(3)+merge_catalogs(1) rows previously proven red at HEAD
+  without any lane working-tree edits.
+- **Coverage measurement (qoder14_coverage, read-only, covering-index plan
+  printed, no temp DB, no catalog copy):** 800 distinct download_sources.service
+  labels over 4,073,865 links → A 946,334 (23.23%) · B 637,370 (15.65%) ·
+  C 268,285 (6.59%) · unknown 2,221,876 (54.54% over 768 labels). Unknown-tail
+  split: 218,998 links are spellings the JIT chain knows but _SERVICE_TABLE
+  lacks (filepress, mobilejsr, hubdrive, gdflix, gdtot, hubcloud-ist,
+  direct_cloud...); true-unknown 2,002,878 (49.16%). No-unpacker trio: vidbolt
+  69,782 + cineverse 70,050 + modiplay 4,287 = 144,119 (3.54%); cineverse grep
+  is 1, not 0 — a docstring mention at fast_fetch.py:3255, no unpacker.
+  Mismatches flagged: google_cdn A w/o unpacker; mega A despite cryptolinks;
+  res.cloudinary.com (image CDN) sitting in download_sources = ingest artifact.
+  Disk: removed my 6.4GB scratch provenance copy (95%, 10G free).
+- **qoder14_gofile scout (DOC ONLY):** wrote Fast_Fetch/GOFILE_API.md from 3
+  bounded no-auth requests: /servers 200; /contents/<id> 401 error-token (the
+  API is not anonymous even for public files — id validation happens AFTER the
+  token check, so enumeration yields no signal); share page HEAD 200 JS shell.
+  No token minted (guest flow documented but refused per order), no 429, no
+  secrets; real file ids redacted. Answer to crown: NO documented or observed
+  response field reports a direct-link lifetime — `expireTime` is an INPUT to
+  account-owned Create-Direct-Link only; 24h heuristic cap stays, and
+  is_resumable must remain NULL for gofile until §4 is honestly probed.
+  Recommendation: Category A kept (gofile.io row in _HOST_TABLE), gated by the
+  AND rule; future of gofile resolution is a POLICY call (own guest-token
+  authorisation) vs HTML path — not mine to make.
+- **qoder14_viewerA (is_direct_file shape gate, BUILT — uncommitted):** crown
+  escalated coverage findings #3/#4 (google_cdn 116,604 + mega 68,502 = 185,106
+  links: viewer HTML earning A-horizon and kind='file'). host_classifier.py now
+  ANDs CATEGORY_DIRECT_FILE with _direct_file_shape_ok(): ANY fragment -> False
+  (client-side data never reaches the host; mega AES key); mega.nz host -> False
+  for every path (no naive byte GET exists); viewer segments
+  {view,preview,edit,folder,folders} + *view/*preview suffixes -> False ONLY on
+  page-capable hosts (drive/docs/mega — object stores like r2/firebasestorage
+  serve any key as bytes; host-agnostic rule was measured to break
+  bucket.r2.dev/folder/clip.mp4). KEPT True with justification: uc?export=download
+  and /open?id= (byte-redirect endpoints; stage-2 probe gates banking).
+  KIND letters untouched: classify("mega.nz/...").category stays A — only the
+  byte-replay predicate changed (kind vs horizon axes stay separate).
+  Effect through qoder12's AND rule with ZERO resolved_cache edits: measured
+  horizon deltas — drive viewer 5.98h B, mega#key 5.98h B, pixeldrain 23.98h A,
+  uc byte path 23.98h A. Tests: test_host_classifier 71 OK (1 skip, 1
+  expectedFailure = the _derive_kind handoff assertions; XPASS is the
+  acceptance signal when qoder12 lands). Re-pinned 2 CROSS_CHECK rows on
+  correctness (drive -> uc byte path A; mega -> pinned B SHAPE-REJECTED).
+  Suites: resolved_cache 52 OK, domains 25, site_scout 25, domain_resolver 18,
+  CI list otherwise green EXCEPT evidence_writeback(3)+merge_catalogs(1) —
+  re-proven red at clean HEAD in a throwaway worktree with zero working-tree
+  edits (unverified-vs-active vocabulary from the unprobed-evidence commits;
+  not mine, not fixed). Handoff text for _derive_kind delivered to crown.
