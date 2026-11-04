@@ -1961,3 +1961,10 @@ written, live DB never opened writable.
 `LinkIsAdultGuardTests` fails 3/6 on the old code — exactly `unknown_link`,
 `dangling_source_join`, `dangling_release_join` — then 6/6 green with the fix
 restored. The old code is the control; the tests can detect the defect they name.
+
+**Gate result (full 15-module CI list + this lane's module, re-run at this commit).**
+14/16 OK: everything green except the two KNOWN baseline defects of `bf9e565` —
+`test_evidence_writeback` FAILED(3) and `test_merge_catalogs` FAILED(1) — unchanged
+from yesterday's run and still fixed only by the uncommitted `catalog_v2.py` in the
+live tree (see the 2026-11-04 gate note). `test_redact` 57 OK (incl. the 8 new
+guard tests), `test_reconcile_adult` 11 OK (incl. the composition test).
