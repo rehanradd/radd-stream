@@ -2180,3 +2180,27 @@ not a pass/fail):
 - `lane_phase1/Fast_Fetch/CONTINUITY.md` is `MM` (another agent mid-edit): I did
   NOT append there to avoid staging their in-progress hunks; entry lives here and
   in `/tmp/q11_hitpath_profile_*.json` (+ /tmp/q11_hitpath_run.log) until they land.
+
+## 2026-11-05 ~04:40 — qoder11: harness finished + transport-strike mechanism proven
+
+- `/tmp/q11_hitpath_profile.py` now instruments the FULL stage set the order names:
+  handler_lifecycle(accept+IO), do_GET total, parse_token, link_is_adult (own
+  sqlite3.connect), lookup_cache (2nd connect — the get_db OPEN sits in `remainder`,
+  honestly attributed), resp_flush, bank writeback (record_resolved_cache),
+  note_failure writeback. `validate` mode = 8 req/mode, labeled **NOT-A-GATE**: sane
+  monotone numbers at load 6.25 (do_GET p50 19.4 ≤ lifecycle 22.8; stages parse 0.05 /
+  adult 8.6 / lookup 3.6 / flush 3.9 / remainder 5.0 — all stages n=8, no drift).
+  Real 60-request triplet per mode: **not run** — box 4.6–6.4, Prince's <3 rule.
+- **Transport-strike proof** (`/tmp/q11_transport_strike_demo.py`, in-memory, zero
+  egress, resolved_cache untouched): 3 consecutive `Errno 104` conn-reset answers on a
+  LIVE banked URL → fail_count 1,2,3 → `lookup_cache` REFUSES at MAX_FAIL_COUNT=3.
+  DNS-fail and TLS-fail answers strike identically (touched=1); `unprobed` correctly
+  touches 0. qoder13's throttle-as-TCP-reset thus trips the circuit on possibly-live
+  links exactly as the Prince described.
+- **The RATE is unmeasurable from stored data, and that IS the finding**: bench DBs
+  store no resolve cause (resolved_cache has fail_count only, no cause column);
+  production has no resolved_cache table (cache undeployed) and
+  `cat_link_evidence` = **0 rows**. To get the number, the strike writer must record
+  the cause — qoder12's file, qoder12's queued order, not mine.
+- lane_phase1 CONTINUITY entry: still withheld per Prince's hold (MM file, 11 staged
+  deletions being unstaged by qoder12).
