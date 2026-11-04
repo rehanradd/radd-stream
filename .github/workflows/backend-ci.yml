@@ -25,45 +25,91 @@ name: 🐍 Backend CI — Stdlib Python Tests
 #     - Fast_Fetch/test_merge_catalogs.py    (staging → unified merge)
 #     - Fast_Fetch/test_site_scout.py        (site discovery / spec phases)
 #     - Fast_Fetch/test_backup_manager.py    (offsite backup tooling)
-#   Phase-1 additions (crown order qoder12_cigate — these modules existed in
-#   NO gate before; a change could break them and still show a green tick):
-#     - Fast_Fetch/test_resolved_cache.py    (JIT cache: serving rules, cold-start
-#                                             race, evidence-guarded failure circuit)
-#     - Fast_Fetch/test_host_classifier.py   (single host-trust authority, AND rule)
-#     - Fast_Fetch/test_catalog_exporter.py  (static export + adult reconciliation)
-#     - Fast_Fetch/test_domain_resolver.py   (live-domain registry writer)
-#     - Fast_Fetch/test_fast_fetch_domains.py(qoder14: static/DB domain drift)
-#     - Fast_Fetch/test_ci_manifest.py       (drift guard: fails if any top-level
-#                                             test_*.py is neither run here nor
-#                                             EXCLUDED below — the list cannot
-#                                             silently rot again)
+#     - Fast_Fetch/test_usage_stats.py       (operator counters + token gate)
+#     - Fast_Fetch/test_operator_isolation.py(two real loopback servers, socket-level
+#       routing — the layer every other suite calls as a function)
+#     - Fast_Fetch/test_media_search.py      (by-media matcher: the bounded candidate
+#       window, the no-SQL floor on short tokens, EXPLAIN QUERY PLAN assertions)
+#     - Fast_Fetch/test_migrate_search_indexes.py (the reviewed index migration: writes
+#       nothing without --execute, is idempotent, and fails verify on a drifted index)
+#     - Fast_Fetch/test_bounded_ledger.py    (/api/data: page ceiling, operator-only
+#       stats=full, and a scan-free default path proven by a trace callback)
+#     - Fast_Fetch/test_project_readonly.py  (v2 rebuild over an ATTACHed mode=ro ledger:
+#       source sha256 unchanged, zero link loss, safe stamps written)
+#     - Fast_Fetch/test_link_sweep_budget.py    (the link-health sweep's budget maths:
+#       probe cost, why a full 3.7 M sweep is infeasible, sample sizes and margins — pure
+#       arithmetic over link_health's own constants, no sockets, no catalog read)
+#     - Fast_Fetch/importers/test_themoviebox_links.py (the MovieBox rendition/mirror
+#       rules: one release per declared tier with no invented URL, a dead mirror stored
+#       dead, an adult label that survives a linkless page, and the zero-source post
+#       that must stay visible. Offline, devalue-encoded fixtures, in-memory SQLite)
+#     - Fast_Fetch/importers/test_themoviebox_detail_api.py (the MovieBox detail-API
+#       parser: stars[] -> cast/director/writers with per-season duplicates collapsed,
+#       dubs[] split into audio vs subtitles, a stills object becoming the backdrop,
+#       seasons stamped after the declared tiers land, keywords kept, trailer never a
+#       source. Offline fixture from the captured public detail answer)
+#     - Fast_Fetch/test_adult_twin_probe.py     (the adult-twin exposure count: works vs
+#       rows, NULL keys are not twins, and the grouping read stays in the key index)
+#     - Fast_Fetch/importers/test_dub_collision_census.py (the dub-collision query: two
+#       prints of one work can only share a title+year key ACROSS staging vaults, because
+#       each vault declares `canonical_key` PRIMARY KEY/UNIQUE; divergence is a normalized
+#       language-set comparison, not COUNT(DISTINCT), and the adult-twin verdict needs a
+#       flagged row beside a clean one under one key. Offline in-memory fixtures)
+#     - Fast_Fetch/test_posts_query_plan.py     (/api/v1/posts?q= EXPLAIN QUERY PLAN
+#       evidence: two SCAN p passes, the join indexes that already exist in production,
+#       and the unescaped/no-floor `q=` correctness half)
+#     - Fast_Fetch/test_admin_panel.py          (the operator panel's write gate: the
+#       loopback/remote peer rule, the closed admin-only verb vocabulary, refusing a
+#       field the edge would rewrite, refusing a non-numeric price, and writing nothing
+#       on refusal. Offline against a temp-file fixture catalog. MEASURED, and it
+#       settles why this box was the wrong judge: the same 65 tests are 266.312 s here
+#       at load 6.9 and 1 s on the hosted runner (run 40954291359, step 21:03:47 ->
+#       21:03:48, success). The suite blocks on I/O under contention, not on compute —
+#       so a slow local module is not a slow module, and CI's timing is the record.)
+#     - Fast_Fetch/test_host_serialiser.py      (the per-host politeness gate: a fetch
+#       that ran while its host lock was free, two requests to one host in flight
+#       together, a host wedged after an exception, or two hosts serialising as a global
+#       stop all fail this. Offline and deterministic — 18 tests, no stopwatch needed)
+#     - Fast_Fetch/test_docs_invariants.py   (the documentation diet's guard: every law sentence is
+#       still in the file every agent auto-loads, the rotated history and SPEC destinations exist,
+#       no relative link in a trimmed doc dangles, and the byte ceilings hold. Offline, markdown only)
+#     - Fast_Fetch/test_operator_read_bounds.py (the operator's own reads: the ledger page is capped
+#       and says so (`page.truncated` / `page.clamped`), /api/sitemap's row cap is enforced in the
+#       function that touches SQL and a nonsense `?limit=` answers 200 not 500, a bogus bearer token
+#       gets 401 on every route of the operator port and no credential gets the identical body, and
+#       the public allow-list is byte-for-byte unchanged. Offline: temp SQLite + two real loopback
+#       servers on port 0 — no network, no production catalog)
+#     - Fast_Fetch/test_engagement_ladder.py (the pass ladder is data: a tier names its own expiry
+#       rule, no code compares a plan to a tier name (checked by `ast`), a malformed tier refuses
+#       and writes NOTHING rather than spending coins and minting nothing, a fourth tier is an edit
+#       to `PASS_LADDER` alone, the price the panel publishes is the price the wallet is debited,
+#       and every money and coin field is an `int`. Offline against a temp user-state DB)
+#     - Fast_Fetch/test_operator_adult_projection.py (the adult rule on the operator's own read: a
+#       flagged row's ledger JSON carries no `source_url`/`final_url`/`resource_id`/
+#       `intermediate_url` and no upstream file address reaches the wire, while the flag, the hoster
+#       name, the status and the health stay for the audit; an unflagged row loses nothing; the badge
+#       stays operator-only; and over a real loopback socket a flagged source id is refused before
+#       the resolver runs. Offline — temp catalog, 127.0.0.1 port 0, no network)
 #
-#   KNOWN-RED, KEPT RUNNING ON PURPOSE (pre-existing debt, proven identical on
-#   clean bf9e565 — do not drop, do not xfail, do not "make CI green" around them):
-#     - test_evidence_writeback.py  3 failures (ApplyEvidenceTests x2,
-#                                    LedgerColumnFidelity x1) — ledger-column
-#                                    territory, owner TBD.
-#     - test_merge_catalogs.py      1 failure (StagingFamilyMergeTests,
-#                                    'unverified' != 'active').
+#   Deliberately EXCLUDED:
+#     - Fast_Fetch/test_all_sites.py  — live 10-site network audit; needs the
+#       internet and would make CI flaky/non-deterministic.
+#     - test_<site>_import.py / per-site parser tests — several read fixture
+#       files whose layout changes with the site, so they are run by the
+#       scraper's own agent at edit time rather than gating every push.
 #
-#   Deliberately EXCLUDED — MACHINE-CHECKED by Fast_Fetch/test_ci_manifest.py:
-#   every top-level Fast_Fetch/test_*.py must appear in a run step above or in
-#   this block; a new test file matching neither fails CI. (Live audit: needs
-#   the internet and would make CI flaky/non-deterministic. Per-site parser
-#   tests: read fixture files whose layout changes with the site — run by the
-#   scraper's own agent at edit time. The remaining feature suites were not
-#   verified by this lane; unverified is not a green — promoting one to a run
-#   step requires the owner proving it offline first.)
-#     EXCLUDED: test_all_sites.py  — live 10-site network audit
+#
+#   MACHINE-READABLE EXCLUSION BLOCK (parsed by Fast_Fetch/test_ci_manifest.py
+#   — the drift guard). One line per top-level Fast_Fetch/test_*.py that is
+#   deliberately NOT a CI step. A new test file that appears in neither this
+#   block nor a run: step fails the guard: silence both ways is rot.
+#     EXCLUDED: test_all_sites.py  — live 10-site network audit; needs the internet
 #     EXCLUDED: test_10xflix_import.py  — per-site parser
 #     EXCLUDED: test_7starhd_import.py  — per-site parser
 #     EXCLUDED: test_9xmovies.py  — per-site parser
-#     EXCLUDED: test_accounts.py  — owner not yet verified offline
-#     EXCLUDED: test_accounts_api.py  — owner not yet verified offline
-#     EXCLUDED: test_admin_panel.py  — owner not yet verified offline
 #     EXCLUDED: test_audit_staging.py  — owner not yet verified offline
-#     EXCLUDED: test_backfill_animated_flag.py  — owner not yet verified offline
-#     EXCLUDED: test_backfill_tmdb.py  — owner not yet verified offline
+#     EXCLUDED: test_backfill_animated_flag.py  — operator migration, not a suite
+#     EXCLUDED: test_backfill_tmdb.py  — operator migration, not a suite
 #     EXCLUDED: test_bolly4u_import.py  — per-site parser
 #     EXCLUDED: test_desicinemas.py  — per-site parser
 #     EXCLUDED: test_download_endpoint.py  — owner not yet verified offline
@@ -75,18 +121,19 @@ name: 🐍 Backend CI — Stdlib Python Tests
 #     EXCLUDED: test_import_katmoviehd.py  — per-site parser
 #     EXCLUDED: test_katmoviehd.py  — per-site parser
 #     EXCLUDED: test_katmoviehd_import.py  — per-site parser
-#     EXCLUDED: test_media_search.py  — owner not yet verified offline
 #     EXCLUDED: test_moviezguru.py  — per-site parser
 #     EXCLUDED: test_multimovies_import.py  — per-site parser
-#     EXCLUDED: test_operator_isolation.py  — owner not yet verified offline
-#     EXCLUDED: test_payments.py  — owner not yet verified offline
 #     EXCLUDED: test_rareanimes_import.py  — per-site parser
 #     EXCLUDED: test_rogmovies_import.py  — per-site parser
 #     EXCLUDED: test_ssrmovies_import.py  — per-site parser
 #     EXCLUDED: test_toonworld4all.py  — per-site parser
+#     EXCLUDED: test_transient_dead_heal.py  — UNTRACKED qoder13 work sitting in
+#       the lane worktree (same class as test_fast_fetch_domains.py was at
+#       96c689e); its owner must commit it, then it gets a real step. The drift
+#       guard would fail a run: step on it today; this line is the honest
+#       hold, not a mute.
 #     EXCLUDED: test_vegamovies_import.py  — per-site parser
 #     EXCLUDED: test_world4ufree_import.py  — per-site parser
-#
 # KNOWN FAILURE MODES THIS FILE FIXES
 #   GitHub never ran any pipeline for this repo because the workflow files lived
 #   in App/.github/workflows/ and radd-stream/.github/workflows/ — discovery
@@ -115,11 +162,18 @@ jobs:
   tests:
     name: python3 -S offline suites
     runs-on: ubuntu-24.04   # system python 3.12 — same minor as the Oracle VM
-    timeout-minutes: 25   # was 15; the suite list grew from 15 to 21 modules
+    timeout-minutes: 15
 
     steps:
       - name: 📥 Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          # fetch-depth 0 = full history and remote refs. Load-bearing:
+          # Fast_Fetch/test_ci_manifest.py compares this manifest against
+          # `git show origin/master:.github/workflows/backend-ci.yml` and
+          # fails loudly when that read is unavailable (order
+          # qoder12_ci_retarget, Task 2.3).
+          fetch-depth: 0
 
       - name: 🐍 Interpreter report (no pip, no installs)
         run: |
@@ -128,72 +182,449 @@ jobs:
 
       # One step per suite: a red X names the exact failing suite.
       - name: 🧪 test_database.py
+        id: test_database
+        if: always()
         run: python3 -S Fast_Fetch/test_database.py
 
       - name: 🧪 test_vidout.py
+        id: test_vidout
+        if: always()
         run: python3 -S Fast_Fetch/test_vidout.py
 
       - name: 🧪 test_catalog_v2.py
+        id: test_catalog_v2
+        if: always()
         run: python3 -S Fast_Fetch/test_catalog_v2.py
 
       - name: 🧪 test_release_descriptor.py
+        id: test_release_descriptor
+        if: always()
         run: python3 -S Fast_Fetch/test_release_descriptor.py
 
       - name: 🧪 test_link_health.py
+        id: test_link_health
+        if: always()
         run: python3 -S Fast_Fetch/test_link_health.py
 
       - name: 🧪 test_link_state.py
+        id: test_link_state
+        if: always()
         run: python3 -S Fast_Fetch/test_link_state.py
 
       - name: 🧪 test_evidence_writeback.py
+        id: test_evidence_writeback
+        if: always()
         run: python3 -S Fast_Fetch/test_evidence_writeback.py
 
       # The HTTP edge is the product's privacy boundary, so it is guarded in CI by
       # the same rule as the data layer: every suite below ran clean offline on the
       # Oracle VM (python 3.12, -S, zero pip) before being added here.
       - name: 🧪 test_api_v2.py
+        id: test_api_v2
+        if: always()
         run: python3 -S Fast_Fetch/test_api_v2.py
 
       - name: 🧪 test_redact.py
+        id: test_redact
+        if: always()
         run: python3 -S Fast_Fetch/test_redact.py
 
       - name: 🧪 test_tiers.py
+        id: test_tiers
+        if: always()
         run: python3 -S Fast_Fetch/test_tiers.py
 
       - name: 🧪 test_catalog_api.py
+        id: test_catalog_api
+        if: always()
         run: python3 -S Fast_Fetch/test_catalog_api.py
 
       - name: 🧪 test_provenance_stamping.py
+        id: test_provenance_stamping
+        if: always()
         run: python3 -S Fast_Fetch/test_provenance_stamping.py
 
       - name: 🧪 test_merge_catalogs.py
+        id: test_merge_catalogs
+        if: always()
         run: python3 -S Fast_Fetch/test_merge_catalogs.py
 
       - name: 🧪 test_site_scout.py
+        id: test_site_scout
+        if: always()
         run: python3 -S Fast_Fetch/test_site_scout.py
 
       - name: 🧪 test_backup_manager.py
+        id: test_backup_manager
+        if: always()
         run: python3 -S Fast_Fetch/test_backup_manager.py
 
-      # Phase-1 modules (crown order qoder12_cigate): all offline, zero network,
-      # each verified on the Oracle VM (python 3.12, -S) before being listed here.
+      # The operator counters: aggregates-only schema proofs, the increment-on-write
+      # rule, and the fail-closed token gate. Offline, stdlib, no network.
+      - name: 🧪 test_usage_stats.py
+        id: test_usage_stats
+        if: always()
+        run: python3 -S Fast_Fetch/test_usage_stats.py
+
+      # Two real servers on loopback and a real socket between them — the only suite
+      # that can catch the operator-port gate being routed around rather than removed.
+      - name: 🧪 test_operator_isolation.py
+        id: test_operator_isolation
+        if: always()
+        run: python3 -S Fast_Fetch/test_operator_isolation.py
+
+      # The by-media route's shape. The assertions that matter here are the ones that
+      # fail if somebody puts a join or a sort back in front of the candidate cap:
+      # `EXPLAIN QUERY PLAN` is captured inside the test, so a query that would take
+      # 45 s on the production catalog is red on the runner in milliseconds.
+      - name: 🧪 test_media_search.py
+        id: test_media_search
+        if: always()
+        run: python3 -S Fast_Fetch/test_media_search.py
+
+      # The index migration, against a throwaway fixture catalog in a temp directory.
+      # It never opens a real database; the target path is required on the command line.
+      - name: 🧪 test_migrate_search_indexes.py
+        id: test_migrate_search_indexes
+        if: always()
+        run: python3 -S Fast_Fetch/test_migrate_search_indexes.py
+
+      # `/api/data` is bounded twice: a page/limit with a hard ceiling and an operator
+      # `stats=full` escape, and the default branch is proven scan-free with a SQLite
+      # trace callback. On the production catalog the old shape answered 2.5 MB in 46.6 s.
+      - name: 🧪 test_bounded_ledger.py
+        id: test_bounded_ledger
+        if: always()
+        run: python3 -S Fast_Fetch/test_bounded_ledger.py
+
+      # The v2 rebuild wrapper opens the live ledger `mode=ro` behind TEMP VIEWs. The
+      # suite hashes the source before and after: a rebuild that writes to the catalog
+      # is red here before it can be run against production.
+      - name: 🧪 test_project_readonly.py
+        id: test_project_readonly
+        if: always()
+        run: python3 -S Fast_Fetch/test_project_readonly.py
+
+      # Query-plan evidence for the findings in docs/SEARCH_LATENCY_FINDINGS.md. It
+      # builds its own throwaway catalog because `catalog_v2.ensure_schema` does not
+      # create `releases`/`download_sources` at all — the drift that made an earlier
+      # "missing index" report measure a file that production is not.
+      - name: 🧪 test_posts_query_plan.py
+        id: test_posts_query_plan
+        if: always()
+        run: python3 -S Fast_Fetch/test_posts_query_plan.py
+
+      # The adult-twin probe from docs/ADULT_TWIN_PROBE.md. In-memory fixture only: the
+      # production count is deliberately NOT taken here, because the file is 6.4 GB and
+      # this runner is not allowed to decide when a heavy read is polite.
+      - name: 🧪 test_adult_twin_probe.py
+        id: test_adult_twin_probe
+        if: always()
+        run: python3 -S Fast_Fetch/test_adult_twin_probe.py
+
+      # The dub-collision census (q2, landed as a424ffc). Staging vaults make
+      # `canonical_key` PRIMARY KEY, so a dubbed print and its original can only
+      # collide ACROSS databases — the shape the merged ledger carries. The suite
+      # is the query itself over in-memory fixtures: the covering-index read, the
+      # two-phase key-set intersection, order-insensitive language signatures, and
+      # the adult-twin rule (flagged beside clean under one key). `--census` reads
+      # the staging vaults and is deliberately NOT run here, same reason as the
+      # twin probe above: this runner is not allowed to decide when a heavy read
+      # of a shared box is polite.
+      - name: 🧪 test_dub_collision_census.py
+        id: importers_test_dub_collision_census
+        if: always()
+        run: python3 -S Fast_Fetch/importers/test_dub_collision_census.py
+
+      # The sweep design's arithmetic (docs/LINK_HEALTH_SWEEP.md). It reads
+      # link_health's constants so a timeout change re-prices the estimate and turns this
+      # red. The SWEEP itself is deliberately not in CI: a suite that opens 384 sockets to
+      # third-party hosts is a test that fails when the world is healthy.
+      - name: 🧪 test_link_sweep_budget.py
+        id: test_link_sweep_budget
+        if: always()
+        run: python3 -S Fast_Fetch/test_link_sweep_budget.py
+
+      # MovieBox's rendition rules: the site declares 360/480/720/1080 per season and
+      # publishes none of their URLs (measured on one captured detail page), so each
+      # tier is a release with an empty source list and a dead mirror is kept as dead.
+      - name: 🧪 test_themoviebox_links.py
+        id: importers_test_themoviebox_links
+        if: always()
+        run: python3 -S Fast_Fetch/importers/test_themoviebox_links.py
+
+      # The detail-API parser, from the captured public answer
+      # GET /wefeed-h5api-bff/detail (39 KB, no credential): stars[] split into
+      # cast/director/writer, dubs[] split into audio vs subtitles, stills-as-object
+      # becoming the backdrop, seasons stamped after the declared tiers land,
+      # keywords kept, and the trailer still never a source. Offline fixture.
+      - name: 🧪 test_themoviebox_detail_api.py
+        id: importers_test_themoviebox_detail_api
+        if: always()
+        run: python3 -S Fast_Fetch/importers/test_themoviebox_detail_api.py
+
+      # The admin panel's write gate (6bfbd5c). Timed, because this box measured 65 tests
+      # in 266 s and CI's wall time is the open question about running it here at all.
+      - name: 🧪 test_admin_panel.py (timed)
+        id: test_admin_panel
+        if: always()
+        run: time python3 -S Fast_Fetch/test_admin_panel.py
+
+      # The per-host serialiser that `docs/LINK_HEALTH_SWEEP.md` §8 names as the
+      # precondition for any sweep. Offline: every fetch is a monkeypatched
+      # `_raw_request` and `http.client.HTTPConnection` is replaced by a tripwire,
+      # so a real socket attempt fails the run rather than the internet.
+      - name: 🧪 test_host_serialiser.py
+        id: test_host_serialiser
+        if: always()
+        run: python3 -S Fast_Fetch/test_host_serialiser.py
+
+      # The documentation diet's guard (2026-10-30). The diet moved ~690 KB of LOG and SPEC out of
+      # the files every agent auto-loads; this suite is what proves no LAW sentence was lost in the
+      # move — it greps the trimmed AGENTS.md files for each invariant phrase, checks the rotated
+      # destinations exist and every relative link still resolves, and holds the byte ceilings.
+      # Offline: five markdown files and a directory listing, no network, no catalog read.
+      - name: 🧪 test_docs_invariants.py
+        id: test_docs_invariants
+        if: always()
+        run: python3 -S Fast_Fetch/test_docs_invariants.py
+
+      # Launch readiness JOB A (q3, 2026-10-30). Two failures with the same shape: an operator
+      # read that is unbounded can OOM the box that owns it, and an operator read that needs no
+      # credential hands the ledger to any process on that box. Both are proven here over real
+      # loopback sockets, so a green run means the CODE refuses — not the edge, which forwards
+      # neither port. Offline, temp catalog, no production read.
+      - name: 🧪 test_operator_read_bounds.py
+        id: test_operator_read_bounds
+        if: always()
+        run: python3 -S Fast_Fetch/test_operator_read_bounds.py
+      # The pass ladder as data (q3, JOB B). `redeem_pass` used to branch on the plan
+      # name AFTER `spend_coins`, so a tier the branch did not know cost coins and
+      # minted nothing; and the panel published a price from its own tuple list while
+      # the spender read `PASS_LADDER` directly. 27 tests: every tier resolves its own
+      # expiry, a fourth tier is a data edit, a malformed tier refuses and writes
+      # NOTHING, the `ast` walk that forbids a comparison against a tier name, and the
+      # published price equal to the debited one. Offline — temp user-state DB, no
+      # socket, no network.
+      - name: 🧪 test_engagement_ladder.py
+        id: test_engagement_ladder
+        if: always()
+        run: python3 -S Fast_Fetch/test_engagement_ladder.py
+
+      # The adult rule on the operator's own read. `fetch_database_payload(full=True)`
+      # published `final_url`/`source_url`/`resource_id`/`intermediate_url` for a
+      # flagged row and the dashboard rendered Copy-Direct-URL, Play-JIT, Stream/DL and
+      # a VLC playlist anchor for it. 17 tests: the withheld projection, the audit that
+      # survives it, an unflagged row that loses nothing, the badge staying
+      # operator-only, and over a real loopback socket that a flagged source id is
+      # refused before `resolve_live_source` is ever called. Offline — temp catalog,
+      # 127.0.0.1 port 0, the resolver mocked to a recorder.
+      - name: 🧪 test_operator_adult_projection.py
+        id: test_operator_adult_projection
+        if: always()
+        run: python3 -S Fast_Fetch/test_operator_adult_projection.py
+
+      # Zero-friction identity and the relay that credits money (q3, 2026-10-31). Three new
+      # surfaces in one suite: `POST /api/v2/account/anonymous` mints a 3-day VIP trial gated on a
+      # client-reported device id (a gate, not an attestation — `docs/RADD_RELAY_AND_AUTH_ARCHITECTURE.md`
+      # R5 is why the code says "trial gate" and never "hardware lock") and that CANNOT be restarted
+      # by asking twice, `POST /api/v2/account/profile-link` stores a PBKDF2-HMAC-SHA256 PIN
+      # (120k iterations per R6, per-row salt) and banks its +1 day once per account, and `POST
+      # /api/v2/payment/sms-webhook` lets a merchant relay credit a claim automatically — but only on
+      # an exact gateway + TID + the PKR this server itself quoted. 83 tests: the two new tables and
+      # their primary keys, a pre-release `user_state.db` gaining the four profile columns
+      # additively, ten resumes earning one clock, a revoked account re-minted WITHOUT a fresh
+      # trial, a burned PIN window that still admits the person who knows their four digits,
+      # `sha256:` key digests refused as PINs and absurd iteration counts refused instead of
+      # computed, no secret on any response body, and the relay refusing a replay, a stolen TID
+      # presented before its payer claimed it, a half payment and a deployment that forgot
+      # `RADD_MERCHANT_SECRET`. Offline — temp user-state DB, temp catalog, the webhook driven
+      # through a header mapping, no socket and no network.
+      - name: 🧪 test_device_trials_and_webhook.py
+        id: test_device_trials_and_webhook
+        if: always()
+        run: python3 -S Fast_Fetch/test_device_trials_and_webhook.py
+
+      # The work-level adult law, reconciled where twins are actually created (q5, 2026-10-31).
+      # A staging vault declares `canonical_key` PRIMARY KEY/UNIQUE, so one database cannot
+      # hold two rows for a work; the exposure appears when two sites meet in the unified
+      # catalog, which is why `merge_catalogs.merge_site_db` runs the fold. It is
+      # evidence-scoped — only flags `is_adult_title()` reproduces may propagate, because a
+      # raw key-level MAX hid 407 mainstream works (measured 2026-10-30, 10,816 of 15,068
+      # stored flags are asserted-only). Every flip is journalled and `--undo` reverses it,
+      # never unflagging a row whose own text justifies the flag. 44 tests: the rule gate,
+      # the cross-key identity, the 3,490-row protection, apply/undo symmetry, the CLI
+      # modes and their memory gate, and the play path refusing an unknown or dangling link
+      # on both ports. Offline — temp SQLite files, no network, no catalog read.
+      - name: 🧪 test_adult_corroborated_fold.py
+        id: test_adult_corroborated_fold
+        if: always()
+        run: python3 -S Fast_Fetch/test_adult_corroborated_fold.py
+
+      # The wallet's HTTP surface on the wallet's own owner (q3, 2026-10-31). `engagement.py`
+      # had owned `coin_ledger`, the streak, the caps and the ladder for four pushes before any
+      # route could read them, so an earned balance existed that a phone could neither see, earn
+      # nor redeem — and the fix for "no HTTP surface" is a wire, never a second engine. 34 tests
+      # over `accounts_api.route_get`/`route_post` on a temp user-state DB: `GET /coins` answers
+      # the same `SUM(delta)` the spender checks before it debits; `GET /coins/caps` publishes the
+      # pass prices and streak grants that THIS file's own routes enforce from the saved row
+      # (one knob moves the price list, the earn and the spend together or the mirror assertion
+      # fails) while deliberately still publishing `rewarded_daily_cap` as the constant, because
+      # `_enforce_rewarded_cap` still reads the constant and a row-resolved cap here would be the
+      # second number; a body naming another `account_id`, an `amount`, a `source` or a
+      # client-attested `rewarded_ad`/`watch_time` is refused and writes NOTHING; ten replays of
+      # one civil day are one ledger row, deduped by a key derived from the day bucket rather than
+      # from anything the client typed; a short wallet is a 402 that leaves the row count and the
+      # sum untouched; two redeems never buy more pass than the wallet paid for; every coin on the
+      # wire is an `int` and every `delta` has `typeof` = `integer`; a wrong sync key gets the same
+      # 404 every account route gives so this host stays un-enumerable; the neighbours already
+      # mounted under `/api/v2/account*` still answer, and `/coins/balance` does NOT resolve.
+      # Positive controls throughout — the leak scan asserts it found `balance` before it asserts
+      # it found no `canonical_key`. Offline — temp DBs, no socket, no network, no production read.
+      - name: 🧪 test_coins_engine.py
+        id: test_coins_engine
+        if: always()
+        run: python3 -S Fast_Fetch/test_coins_engine.py
+
+      # THE MONEY AND THE KEYS (q5, 2026-10-31, re-based onto `7b7f040` on 2026-11-01). These three
+      # passed offline for weeks while sitting in the guard's UNREGISTERED debt ledger, so the
+      # account layer, its API and the payment relay had no hosted gate on anyone's push — the same
+      # class of hole as the 5-module gate that let Android CI sit red for five pushes. Registered
+      # after a measured verdict on this box (load 2.10, `nice -n 19`), not an inference from the
+      # imports:
+      #   test_accounts.py        61 tests OK — every DB is a `tempfile.TemporaryDirectory()`
+      #                           (`user_state.db`, `catalog_fixture.db`); no socket, no token
+      #   test_accounts_api.py    38 tests OK — calls `accounts_api.route_get/route_post` with an
+      #                           explicit `db_path`/`catalog_path`, in-process; SECRET and auth
+      #                           tokens are literal test strings
+      #   test_payments.py        85 tests OK — `RADD_USER_STATE_DB`/`RADD_ADMIN_TOKEN` are
+      #                           `mock.patch.dict`-scoped to a temp file and
+      #                           "operator-token-for-tests", and the operator panel is invoked as a
+      #                           function with `peer_address="127.0.0.1"` — an argument, never a
+      #                           connection.
+      # Offline all three: no network, no live catalog, no real token. `test_accounts_api.py` also
+      # carries the cross-hand proof the coins engine cannot make: `:423-437` mints a vip-pass and
+      # asserts `viewer.request_is_vip` accepts it, so the minting half and the consuming half are
+      # tested against each other rather than each against itself.
+      - name: 🧪 test_accounts.py
+        id: test_accounts
+        if: always()
+        run: python3 -S Fast_Fetch/test_accounts.py
+
+      - name: 🧪 test_accounts_api.py
+        id: test_accounts_api
+        if: always()
+        run: python3 -S Fast_Fetch/test_accounts_api.py
+
+      - name: 🧪 test_payments.py
+        id: test_payments
+        if: always()
+        run: python3 -S Fast_Fetch/test_payments.py
+
+      # The escaping law, as a scan (q2, 2026-11-01). Nine `innerHTML` sinks in
+      # `DASHBOARD_HTML` took a caller's string straight into markup; they are fixed, and a fix
+      # in a 1,700-line f-string page is worth exactly as much as the next author remembers.
+      # So this suite refuses the SHAPE rather than the instance: an interpolation reaching HTML
+      # unescaped, an `on*="…${…}"` attribute (entity decoding runs before the JS parser, so no
+      # escaper survives there), a second escaper beside the one `ESCAPE_CORE_JS` ships, a
+      # `data-action` with no handler in the map that owns it, and a `?token=` in code. Each
+      # detector is proved twice — against the real pre-fix line and against fixed code — because
+      # a guard whose regex matches nothing reports green forever. Offline: it parses two module
+      # constants with `ast`, no server, no catalog.
+      - name: 🧪 test_html_escape_guard.py
+        id: test_html_escape_guard
+        if: always()
+        run: python3 -S Fast_Fetch/test_html_escape_guard.py
+
+      # THE PROBE THAT COULD KILL A RUN WITHOUT TESTING ANYTHING (q5, 2026-11-01).
+      # `config.py` asked `_ORACLE_DATA_DIR.exists()` at import time. `Path.exists()` swallows
+      # ENOENT/ENOTDIR/EBADF/ELOOP and RE-RAISES EACCES, so on a worker whose image mounts
+      # /home/ubuntu without letting the job stat it, importing anything that reads `config` ends the
+      # job before its first assertion — the failure measured at q2's `eb4c0ee`: PermissionError at
+      # 0.2 s, every later step skipped, while the identical line on trunk was green an hour earlier
+      # on a different worker. This suite is registered WITHOUT a local offline verdict, and that is
+      # a deliberate exception to the note above: the supervisor refroze local suites at load1 5.05
+      # mid-task, and the property under test (an unreadable mount) cannot be produced on this box at
+      # all — it is manufactured by `mock.patch`. This run is its first execution.
+      - name: 🧪 test_config_data_dir.py
+        id: test_config_data_dir
+        if: always()
+        run: python3 -S Fast_Fetch/test_config_data_dir.py
+
+      # PHASE-1 SUITES (qoder12, crown orders qoder12_cigate + qoder12_ci_retarget).
+      # These modules were written by the Phase-1 lane and appeared in NEITHER the
+      # 3-module push gate NOR trunk's 38-step file; one invocation per module,
+      # because this runner ignores extra names in a single call.
       - name: 🧪 test_resolved_cache.py
+        id: test_resolved_cache
+        if: always()
         run: python3 -S Fast_Fetch/test_resolved_cache.py
 
       - name: 🧪 test_host_classifier.py
+        id: test_host_classifier
+        if: always()
         run: python3 -S Fast_Fetch/test_host_classifier.py
 
       - name: 🧪 test_catalog_exporter.py
+        id: test_catalog_exporter
+        if: always()
         run: python3 -S Fast_Fetch/test_catalog_exporter.py
 
       - name: 🧪 test_domain_resolver.py
+        id: test_domain_resolver
+        if: always()
         run: python3 -S Fast_Fetch/test_domain_resolver.py
 
+      # Owned by qoder14; it was UNTRACKED when first named here (a clean CI
+      # checkout would have failed with exit 2) and qoder14 committed it as
+      # 96c689e. Fast_Fetch/test_ci_manifest.py now refuses any run: step whose
+      # module is not tracked in the checked-out commit — that drift cannot hide again.
       - name: 🧪 test_fast_fetch_domains.py
+        id: test_fast_fetch_domains
+        if: always()
         run: python3 -S Fast_Fetch/test_fast_fetch_domains.py
 
-      # The manifest gate goes last: it reads this file and fails if the real
-      # suite list and the disk have drifted — including if THIS step itself
-      # were ever removed.
+      # The drift guard itself — last, so it judges a run whose steps it pins.
       - name: 🧪 test_ci_manifest.py
+        id: test_ci_manifest
+        if: always()
         run: python3 -S Fast_Fetch/test_ci_manifest.py
+
+      # ATTRIBUTION, corrected under order qoder12_ci_retarget with the crown's own
+      # numbers: test_evidence_writeback.py (3 failures) and test_merge_catalogs.py
+      # (1 failure) were carried for days as "pre-existing repo debt, red at clean
+      # bf9e565". WRONG. On trunk b99814e both are GREEN (hosted run 41156831610:
+      # 39/39 steps success, recorded in trunk's checkpoint
+      # Fast_Fetch/checkpoints/20261031-q5-adultkey-production-is-pre-law.md), and
+      # test_evidence_writeback.py is byte-identical between trunk and this fork.
+      # Measured cause of the fork-only reds, 2026-11-05:
+      #   * evidence_writeback — Fast_Fetch/catalog_v2.py `_link_state_of()`:
+      #     trunk folds the wide scraper status 'unverified' into the closed
+      #     cat_links vocabulary ('' / unverified / active -> unchecked, measured
+      #     active stays active); this fork predates that fix and projects the
+      #     raw 'unverified'. Taking trunk's catalog_v2.py clears all three.
+      #   * merge_catalogs — the TEST file itself: trunk's test_merge_catalogs.py
+      #     was rewritten to assert the honest absence (`src["status"] ==
+      #     "unverified"`, "a merged source nobody probed must not claim
+      #     'active'"); the fork still asserts 'active'. Trunk's version clears it.
+      # So neither step is xfail/skip material and neither is eternal debt: the
+      # fix comes by taking trunk's version at merge time, NOT by deleting or
+      # muting the step. They stay hard steps with if: always() below.
+
+      - name: 📋 Step results — every suite on one line (a red must never hide the tail)
+        if: always()
+        env:
+          RADD_STEP_RESULTS: ${{ toJSON(steps) }}
+        run: |
+          python3 -S - <<'PYEOF'
+          import json, os
+          results = json.loads(os.environ.get("RADD_STEP_RESULTS") or "{}")
+          failed = 0
+          for step_id in sorted(results):
+              outcome = results[step_id].get("outcome", "?")
+              if outcome not in ("success", "skipped"):
+                  failed += 1
+              print(f"{outcome:12} {step_id}")
+          print(f"TOTAL {len(results)} steps, {failed} not green "
+                "(missing-file reds name this branch's fork gap, not code failures)")
+          PYEOF

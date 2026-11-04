@@ -2524,3 +2524,58 @@ a branch push cannot exclude descendants; disclosed, not repeated).
   NOT AUTHORED BY ME, left unstaged: fast_fetch.py (freeze HELD, never added),
   test_vidout.py, test_ci_manifest.py, .github/workflows/backend-ci.yml,
   GOFILE_API.md + test_fast_fetch_domains.py (qoder14's, now committed by them).
+
+## 2026-11-05 — qoder12, crown order qoder12_ci_retarget: the CI change is re-targeted onto origin/master's file, and the two "known-reds" were mis-attributed
+
+CORRECTIONS to my previous entry, in the order the crown measured them:
+  * "Phase-1 modules enter CI" (24e5d73) was misleading. Hosted run
+    41913606536 died at step 10 (test_evidence_writeback) and steps 11–24
+    reported SKIPPED — NONE of the 6 new Phase-1 suite steps has ever
+    actually run in hosted CI. With `if: always()` and a per-step summary
+    they now do, and a single red can no longer hide the tail.
+  * "pre-existing repo debt, red at clean bf9e565" for test_evidence_writeback
+    (3 failures) and test_merge_catalogs (1 failure) is the WRONG attribution.
+    Both are GREEN on trunk b99814e (crown: 12 tests OK there with
+    byte-identical test file; trunk's checkpoint records hosted run
+    41156831610 = 39/39 steps success including test_merge_catalogs).
+    Measured cause of the fork-only reds tonight, per file:
+      - evidence_writeback — Fast_Fetch/catalog_v2.py `_link_state_of()`:
+        trunk folds the wide scraper status 'unverified' into the closed
+        cat_links vocabulary ('' / 'unverified' / unmeasured 'active' →
+        'unchecked'); the fork base predates that fix and projects the raw
+        'unverified', which is exactly the 3 assertEqual('unchecked', …)
+        failures. Taking trunk's catalog_v2.py clears all three.
+      - merge_catalogs — the TEST FILE ITSELF: trunk's test_merge_catalogs.py
+        was rewritten to assert the honest absence (`src["status"] ==
+        "unverified"` — a merged source nobody probed must not claim
+        'active'); the fork's older file asserts 'active'. Trunk's version
+        clears it.
+    Neither is eternal debt and neither is xfail/skip material: both stay
+    hard steps; the fix comes by taking trunk's version at merge time.
+
+RE-TARGET. `.github/workflows/backend-ci.yml` is now origin/master's 38-suite
+file VERBATIM plus the Phase-1 change, purely additive: `git diff --stat
+origin/master -- <file>` = 203 insertions, 0 deletions. The additions: `id` +
+`if: always()` on every suite step; the 6 Phase-1 steps (resolved_cache,
+host_classifier, catalog_exporter, domain_resolver, fast_fetch_domains,
+ci_manifest last); a one-line-per-step results summary; the machine-readable
+EXCLUDED block the guard parses; the corrected attribution above; and
+`fetch-depth: 0` on checkout, because the drift guard compares against
+`git show origin/master:.github/workflows/backend-ci.yml` and fails loudly
+when that read is unavailable.
+
+GUARD (Fast_Fetch/test_ci_manifest.py, 9 tests OK) additionally pins: every
+run:-named module is TRACKED in the commit CI checks out — the untracked
+test_fast_fetch_domains.py passed the old disk-glob guard locally while a
+clean checkout would fail it with exit 2 (qoder14 has since tracked it,
+96c689e); a run-module absent from disk must exist in origin/master's tree
+or it is a typo'd ghost; this manifest's run set is never a proper subset of
+trunk's; and if git cannot answer, the test FAILS with a stated reason
+instead of skipping.
+
+NOTE: Fast_Fetch/test_transient_dead_heal.py is UNTRACKED qoder13 work
+sitting on the lane disk; it is excluded with a named reason, not silently,
+and gets a real step once its owner commits it.
+
+Freeze honored: Fast_Fetch/fast_fetch.py NOT staged; lane branch only; no
+trunk push, no merge, no rebase, no restart.
