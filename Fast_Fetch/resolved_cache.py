@@ -280,8 +280,10 @@ def note_failure(conn: sqlite3.Connection, link_id: int) -> int:
     re-probed indefinitely (addendum defect 2). The request path calls it
     exactly where a dead URL is *measured*, not assumed: after
     ``resolve_live_source`` has run its probes and answered without a playable
-    URL (or with a stale one). Returns the number of rows touched (0 when the
-    link has no cache row — a failure of an uncached link is not circuit
+    URL (or with a stale one). The request path calls ``note_failure_from_probe``,
+    which enforces that rule against the envelope; call this directly only with
+    a measured probe failure in hand. Returns the number of rows touched (0 when
+    the link has no cache row — a failure of an uncached link is not circuit
     evidence). Like ``record_resolved_cache`` this does NOT commit; the
     caller's transaction owns it."""
     _ensure_schema(conn)
@@ -289,6 +291,22 @@ def note_failure(conn: sqlite3.Connection, link_id: int) -> int:
         "UPDATE resolved_cache SET fail_count = fail_count + 1 "
         "WHERE link_id = ?", (int(link_id),))
     return cur.rowcount
+
+
+def note_failure_from_probe(conn: sqlite3.Connection, link_id: int,
+                            res: dict) -> int:
+    """Increment the circuit for a resolve answer — ONLY if the answer is
+    measured evidence. ``resolve_live_source`` sets ``unprobed: True`` when
+    its dispatch chain matched no unpacker branch: nothing was contacted,
+    nothing was measured, and counting it would open the circuit one-way on
+    fabricated proof (crown order qoder12_unprobed). An absent field means a
+    resolver old enough to predate the signal — treated as probed, which is
+    the conservative direction for genuinely dead rows. Returns rows touched
+    (0 for a refused unprobed answer, exactly like a failure that never ran).
+    The request path must call THIS, not bare ``note_failure``."""
+    if res.get("unprobed"):
+        return 0
+    return note_failure(conn, link_id)
 
 
 def lookup_cache(conn: sqlite3.Connection, link_id: int, want: str = "watch", *,

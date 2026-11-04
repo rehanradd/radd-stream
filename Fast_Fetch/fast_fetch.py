@@ -5313,6 +5313,12 @@ def resolve_live_source(source_id: int, *, v2: bool = False) -> dict:
     fresh_url = None
     fresh_temp = src["is_temporary"]
     embed_verdict = None
+    # The dispatch chain below is a matcher, not a probe: when no branch
+    # matches, nothing was contacted and nothing was measured. The failure
+    # circuit in resolved_cache may only open on measured evidence, so the
+    # fall-through is recorded as a distinct outcome (crown order
+    # qoder12_unprobed) and rides in both fallback envelopes.
+    unprobed = False
 
     def hoster_input(marker):
         """The stored address that actually names this hoster.
@@ -5449,6 +5455,11 @@ def resolve_live_source(source_id: int, *, v2: bool = False) -> dict:
                 if candidate:
                     fresh_url = candidate
                     fresh_temp = 1
+        else:
+            # No unpacker exists for this service. This is NOT a probe that
+            # returned nothing: the honest distinction the failure circuit
+            # needs (crown order qoder12_unprobed).
+            unprobed = True
     except Exception:
         pass
 
@@ -5554,6 +5565,7 @@ def resolve_live_source(source_id: int, *, v2: bool = False) -> dict:
             "code": "no_playable_source",
             "reason": "bridge_unresolved" if bridge_stale else "re_resolve_failed",
             "stale": True,
+            "unprobed": unprobed,
         }
     return {
         "success": True,
@@ -5562,6 +5574,7 @@ def resolve_live_source(source_id: int, *, v2: bool = False) -> dict:
         "cached": True,
         "refreshed": False,
         "stale": True,
+        "unprobed": unprobed,
         "service": src["service"],
         "is_temporary": bool(src["is_temporary"]),
         "is_resumable": bool(src["is_resumable"]),
