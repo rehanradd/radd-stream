@@ -147,7 +147,6 @@ name: 🐍 Backend CI — Stdlib Python Tests
 #     EXCLUDED: importers/test_5movierulz_import.py  — per-site parser; fixture layout follows the site, run by that site's own agent at edit time
 #     EXCLUDED: importers/test_animahd_import.py  — per-site parser; fixture layout follows the site, run by that site's own agent at edit time
 #     EXCLUDED: importers/test_aryplus_import.py  — per-site parser; fixture layout follows the site, run by that site's own agent at edit time
-#     EXCLUDED: importers/test_convert_mp4moviez.py  — per-site parser (mp4moviez conversion fixtures)
 #     EXCLUDED: importers/test_desiserials_import.py  — per-site parser; fixture layout follows the site, run by that site's own agent at edit time
 #     EXCLUDED: importers/test_dramacool_import.py  — per-site parser; fixture layout follows the site, run by that site's own agent at edit time
 #     EXCLUDED: importers/test_filmiyin_import.py  — per-site parser; fixture layout follows the site, run by that site's own agent at edit time
@@ -646,6 +645,21 @@ jobs:
         id: importers_test_stream_resolvers
         if: always()
         run: python3 -S Fast_Fetch/importers/test_stream_resolvers.py
+
+      # PROMOTED FROM THE EXCLUDED LEDGER BY EMPEROR RULING 03:49 PKT, NOT by
+      # this lane's judgement. The ruling: RUN, do not exclude. Measured twice
+      # before this step was written — the Emperor in a scratch worktree (10
+      # tests OK, 0.580 s, zero network) and this lane independently (10 tests
+      # OK at load 4.25). Its ledger line called it a per-site parser, but an
+      # exclusion must be a human act resting on a true reason, and "needs the
+      # site agent / might touch the network" is false for an offline-green
+      # suite: keeping it excluded would have been the silent-exclusion bug
+      # this ledger exists to make deliberate. The line is now a run step; the
+      # other 16 importer ledger lines stand as written.
+      - name: 🧪 importers/test_convert_mp4moviez.py
+        id: importers_test_convert_mp4moviez
+        if: always()
+        run: python3 -S Fast_Fetch/importers/test_convert_mp4moviez.py
 
       # The drift guard itself — last, so it judges a run whose steps it pins.
       - name: 🧪 test_ci_manifest.py
