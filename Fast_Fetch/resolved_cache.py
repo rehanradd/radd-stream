@@ -209,6 +209,7 @@ def record_resolved_cache(conn: sqlite3.Connection, link_id: int,
     url = data.get("url")
     if not url:
         return None
+    _ensure_schema(conn)
     if source not in ("pool", "jit"):
         raise ValueError(f"invalid source {source!r}")
     resolved_at = _epoch(data.get("resolved_at")) or now or time.time()

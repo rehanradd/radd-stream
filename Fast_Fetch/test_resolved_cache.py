@@ -347,6 +347,22 @@ class TestAddendumDefects(unittest.TestCase):
         resolved_cache.record_resolved_cache(conn, 77, file_resolve(), now=now + 1)
         self.assertIsNotNone(resolved_cache.lookup_cache(conn, 77, now=now + 1))
 
+    def test_record_on_a_virgin_database_creates_the_schema(self):
+        """The WAL stress (12 threads, cold file, writes before any read)
+        reproduced this: lookup_cache and note_failure probed-and-created,
+        but record_resolved_cache assumed the table existed, so the first
+        writer of a fresh database died with 'no such table: resolved_cache'
+        and the resolve it had just paid for was thrown away."""
+        conn = sqlite3.connect(":memory:")          # virgin: no schema yet
+        now = time.time()
+        row = resolved_cache.record_resolved_cache(conn, 77, file_resolve(), now=now)
+        self.assertIsNotNone(row)
+        self.assertIsNotNone(resolved_cache.lookup_cache(conn, 77, now=now))
+        conn.rollback()
+        self.assertIsNone(resolved_cache.lookup_cache(conn, 77, now=now),
+                          "record still must not commit — the caller's "
+                          "transaction owns the write")
+
 
 class TestViewerRouteContract(unittest.TestCase):
     """These tests pin the SECURITY ORDERING of the two HTTP routes that read
