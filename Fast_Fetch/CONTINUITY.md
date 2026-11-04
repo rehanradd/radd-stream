@@ -1909,3 +1909,24 @@ this worktree and integration is their owner's call.
 **Next for this lane:** wire `prepare_request()` into the resolver/probe fetch
 paths (`fast_fetch.resolve_live_source`, `link_health` probes) so the PixelDrain
 and Vidrift rules are applied at request time, not just available as a helper.
+
+**Phase-1 ruling addendum (same lane, later session, 2026-11-04).** Crown-Prince
+integration ruling on the A/B letter collision between this lane's
+`host_classifier.py` (host kind) and `resolved_cache.py` (cache horizon) landed
+in `3ae6dd3`: bool predicates `is_direct_file` / `is_playable_category` /
+`is_bridge_category` (both playable gates False for bridge + unknown), a
+docstring ban on ever passing `CATEGORY_LABELS` letters into
+`resolved_cache.category`, and a pinned cross-check of all 18 Category-A hosts
+against `_derive_category` — 4 agree, 14 documented disagreements
+(gofile/1fichier/megaup/hexload/desiupload per the ruling, plus vikingfile,
+dailyuploads, frdl, mega.nz, bare drive.google, googleusercontent,
+drive.usercontent.google and the two cloudflarestorage shapes — all
+direct_file kind, conservative horizon B). Reversed case pinned: **hubcloud is
+kind C here but horizon A in `resolved_cache`** — storage must be gated by the
+predicates, never by letters; flag to qoder12 that a raw hubcloud bridge URL
+carries horizon-A freshness if anything ever records it pre-unwrap. No
+behaviour change to `resolved_cache`. Tests: 44/44 `test_host_classifier`,
+gate suites green. Staged only `host_classifier.py` +
+`test_host_classifier.py`; `viewer.py`/`test_resolved_cache.py`/`prefetch_worker.py`
+left as qoder12's. Push `eb630c2..3ae6dd3` carried qoder12's `5aace48` to the
+remote as part of the fast-forward.
