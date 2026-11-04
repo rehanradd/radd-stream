@@ -2131,3 +2131,42 @@ RED with 5 failures carried by qoder12's AND-rule commit — now resolved).
   helpers (`domain_resolver._get_ssl_context`, `site_scout`'s context) skip
   certificate verification, inherited from the original modules. Not
   changed; recorded here so the deviation is owned, not hidden.
+
+## Session 2026-11-05 (qoder12 lane) — night roadmap LANE 1: Step 0 race fix, full gate, bench triplet
+Commits `b3962f6` + `865d6e8` on `feat/phase1-resolved-cache` (both now on the
+remote — qoder14's re-pin push `95fd139` sits on my HEAD; `git diff FETCH_HEAD..HEAD`
+empty, so Step 2's hold is lifted and there is nothing left to push).
+- **Step 0 (night order):** `record_resolved_cache` was missing `_ensure_schema`
+  (WAL stress proved it: 7x `no such table` on cold boot) — fixed `b396226`→`b3962f6`
+  with a virgin-DB regression test. Then safe-by-construction per the order:
+  verified every `_DDL_STATEMENTS` entry is `IF NOT EXISTS`, `init_resolved_cache`
+  now tolerates ONLY the `already exists` concurrent-creator error (helper
+  `_is_concurrent_create`; a typo'd column or any other OperationalError re-raises
+  unchanged), and `TestColdStartRace` runs 8 threads barrier-released onto ONE fresh
+  DB doing record+lookup, 5 rounds: zero exceptions of any kind, schema whole
+  (table + both indexes) after every round. 41/41 green.
+- **Step 1 — FULL 17-module gate, measured this session (one invocation each):**
+  database 76 OK, vidout 6 OK, catalog_v2 91 OK, release_descriptor 24 OK,
+  link_health 57 OK, link_state 28 OK, **evidence_writeback 12 FAILED(3)**,
+  api_v2 46 OK, redact 49 OK, tiers 23 OK, catalog_api 114 OK,
+  provenance_stamping 12 OK, **merge_catalogs 5 FAILED(1)**, site_scout 25 OK,
+  backup_manager 14 OK, resolved_cache 41 OK, host_classifier 64 OK (qoder14's
+  re-pin `4ab594f` — the 5 red cross-checks are gone). The two red modules are
+  the recorded pre-existing repo debt, identical on clean `bf9e565`; not relaxed.
+- **Step 3 — bench triplet vs the lane server (`:8099`, scratch DB, cache wiped
+  before run 2, all hits route-banked):** COLD 3/3 `302` at 60.1/54.7/78.0 ms,
+  zero 504s. WARM seq p95 **104.71 ms vs the 10 ms gate -> FAIL, and the honest
+  attribution**: the resolver answers 2 of 3 handles `stale: True` (dead upstream
+  tokens) and the bank policy correctly refuses stale rows — the cache held
+  exactly 1 row after the run; isolated measurement of a true cache hit was
+  13-36 ms p50 24.9 ms (stdlib single-connection HTTPServer floor on 1 core;
+  the SQLite read itself is 0.008-0.010 ms p95 per the standalone bench). WARM
+  conc 8/8 `302`, 0 limiter answers, 0 hard errors. Adult probe `404` PASS.
+  WAL stress post-fix: delete 209 ops / wal 511 ops, busy=0, NO errors (was
+  832 ops/7 errors pre-fix). Concurrent-phase absolute latencies are
+  **load-unrealistic on this box** (live crawler + test runs share the core) —
+  recorded as such per the order rather than flattered.
+- **Next:** nothing held in this lane. Remaining candidates from the roadmap:
+  server-side keepalive/threading if the end-to-end warm gate is to be met,
+  and the `stale`-link healing (pool re-probe) that would let those two handles
+  ever become cacheable.
