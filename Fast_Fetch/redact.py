@@ -998,8 +998,13 @@ def public_image_value(url) -> str | None:
     text = str(url or "").strip()
     if not text:
         return None
-    host = text.split("//", 1)[-1].split("/", 1)[0].split("@")[-1].lower()
-    host = host.split(":", 1)[0]
+    authority = text.split("//", 1)[-1].split("/", 1)[0]
+    if "@" in authority:
+        # userinfo before the host can masquerade an allowed CDN while naming an
+        # upstream in the bytes we hand out (`https://scraper.tld@image.tmdb.org/…`);
+        # no ledger art is stored that way, so it is refused, not rewritten.
+        return None
+    host = authority.lower().split(":", 1)[0]
     return text if host in PUBLIC_IMAGE_HOSTS else None
 
 

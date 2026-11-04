@@ -117,6 +117,13 @@ def count_twin_suppressed(conn: sqlite3.Connection) -> int:
 def export_page(conn: sqlite3.Connection, sort: str, page: int, per_page: int) -> dict:
     """One browse page, projected through the same view the live API emits."""
     where_sql = guarded_posts_where()
+    # The column list is deliberately NARROWER than the `post_brief` view:
+    # the live browse route never selects `synopsis` either, and a stored
+    # synopsis is scraper prose that can name hosters ("G-Direct", "PikaHD" —
+    # proven by sweep_public_edge --export on 2026-11-05), which `scrub_text`
+    # cannot remove because its list is curated known brands only. A pre-
+    # rendered file has no runtime gate and no curated-list update can reach a
+    # copy already cached at the edge, so free prose stays off the export.
     total = conn.execute(
         f"SELECT COUNT(*) FROM posts p WHERE {where_sql}", ()).fetchone()[0]
     total_pages = max(1, (total + per_page - 1) // per_page)

@@ -2170,3 +2170,50 @@ empty, so Step 2's hold is lifted and there is nothing left to push).
   server-side keepalive/threading if the end-to-end warm gate is to be met,
   and the `stale`-link healing (pool re-probe) that would let those two handles
   ever become cacheable.
+
+## Session 2026-11-05 (phase1 prefetcher lane) — LANE 3 night order: Item 1 PROVEN, with two real findings
+
+**Item 1 verdict: the projection is clean — and the proof harness now exists to keep it that way.**
+
+1. **`redact.project` semantics pinned in tests** (`test_export_tree_contains_no_provenance_key`
+   + `test_off_view_keys_are_dropped_not_kept`): off-view keys are dropped silently (acceptable),
+   unpublished views raise (acceptable), silent KEEPING is impossible for
+   `source_site/url/slug/final_url/origin_url/intermediate_url` — asserted per column. The export's
+   result-key set is checked against `redact.VIEWS["post_brief"] ∪ art keys` dynamically, so a view
+   edit cannot silently widen the static surface.
+2. **Adversarial CDN audit — one LATENT bypass found and hardened** (`redact.public_image_value`):
+   `https://scraper.tld@image.tmdb.org/…` passed the old scan (authority was parsed
+   `split("@")[-1]`) AND the returned URL carried the upstream host in its userinfo. No real
+   catalog row uses that shape today (measured: 0 in 6,662 at-art URLs containing '@'), so this is
+   a planted-content hole, not live damage. Guard now refuses any authority containing `@`
+   (test_redact stays 49/49). Lookalike-suffix (`image.tmdb.org.evil.tld`) and scraped-host paths
+   verified refused; real TMDB/Amazon hosts verified allowed.
+3. **`sweep_public_edge.py --export` shipped**: the pre-rendered staging bytes are asked the exact
+   same needle/host/provenance questions as live routes, plus view-subset and flagged-work-id
+   assertions. This is what caught finding #4.
+4. **The proof caught a defect I introduced 5 minutes earlier — and it is reported as-is**: I added
+   `p.synopsis` for "API parity"; the sweep immediately flagged brand text (`G-Direct`, `PikaHD`,
+   `gostream`) inside exported synopsis bytes. Root cause: the live browse route does **not** select
+   synopsis at all (the view merely allows the key), stored synopsis is scraper prose, and
+   `scrub_text` cannot delete brands outside its curated list. The column was removed; a comment in
+   `export_page` records why a pre-rendered public file must never carry scraper prose. Regression
+   test: `test_scraper_prose_synopsis_stays_out_of_the_export` (planted brand, asserts on bytes).
+5. **Final sweep**: `sweep_public_edge.py --db /tmp/edge_snapshot.db --posts 20 --export` →
+   **OK, 0 leaks** across 47 sampled posts, every live route, and 13 staging files. (The snapshot's
+   subset has no surviving unflagged twins, so it reports 0 suppressed there; the production catalog
+   measures 394 — the manifest reports whichever database is exported, which is the point.)
+
+**CI list (standing limit, per-module):** test_database 76 OK · test_vidout 6 OK · test_catalog_v2 91
+OK · test_release_descriptor 24 OK · test_link_health 57 OK · test_link_state 28 OK ·
+test_evidence_writeback 12 **FAILED(3)** · test_api_v2 46 OK · test_redact 49 OK · test_tiers 23 OK ·
+test_catalog_api 114 OK · test_provenance_stamping 12 OK · test_merge_catalogs 5 **FAILED(1)** ·
+test_site_scout 25 OK · test_backup_manager 14 OK. The two reds are **pre-existing at master base
+`bf9e565`** (proven in a clean temp worktree at `bf9e565` AND at branch `15d3732`, with zero
+working-tree edits): all four failures are one vocabulary drift — link `state`/`status` answering
+`unverified` where the tests expect `unchecked`/`active`. Not introduced by any phase-1 lane this
+night; belongs to whoever owns the link-state projection contract. My 16/16
+`test_catalog_exporter.py` suite is green.
+
+**Standing limits honored:** staging dir only (`/tmp/radd-sweep-export-stage`), no /var/www, no
+nginx, no sudo; commit stages only this lane's paths (the lane's other agents'
+host_classifier/resolved_cache edits stayed unstaged).
