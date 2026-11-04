@@ -855,10 +855,12 @@ class TestViewerShapeGate(unittest.TestCase):
         # the handoff lands; its XPASS is the acceptance signal.
         self.skipTest("covered by test_kind_gate_expectations below")
 
-    @unittest.expectedFailure
     def test_kind_gate_expectations(self):
         # THE HANDOFF ASSERTIONS (resolved_cache._derive_kind + fragment
         # handling — qoder12's file, NOT edited here):
+        # MARKER REMOVED 2026-11-05: the handoff landed (task #24). It XPASSed
+        # first, exactly as the comment predicted — that was the acceptance
+        # signal, confirmed by the Crown Prince in the task order.
         import sqlite3 as _sql
         import time as _t
         conn = _sql.connect(":memory:")

@@ -22,9 +22,16 @@ Category / kind are ORTHOGONAL, deliberately:
     URL host (pixeldrain, r2/google_cdn, fastdl.beer — never hubcloud, whose
     unwrap fails open onto an HTML page), ``'B'`` everything the classifier
     does not vouch for as a direct file. It chooses the freshness cap.
-  * ``kind`` — what the answer *is*: ``'file'`` or ``'playlist'``. mxdrop and
-    pkembed are category B but sign category-A-shaped *file* URLs, and the
-    stage-2 rule "a playlist is never a download" is enforced on ``kind``.
+  * ``kind`` — what the answer *is*: ``'file'``, ``'playlist'``, or
+    ``'viewer'``. mxdrop and pkembed are category B but sign category-A-shaped
+    *file* URLs, and the stage-2 rule "a playlist is never a download" is
+    enforced on ``kind``. ``'viewer'`` (task #24) is the HTML page / player
+    surface — a Google Drive ``/view`` page, a mega client-side-encrypted
+    share, an ``.html`` path: banked for audit, but it must NEVER carry
+    ``'file'`` weight, because ``/api/v1/download`` gates on exactly
+    ``kind='file'``. A URL with a ``#`` fragment (mega's AES key lives after
+    the ``#``) has the fragment stripped at banking AND at read: it is never
+    banked and never handed out in a public play_url.
 
 Freshness is epoch REAL everywhere — never a localized timestamp string. The
 v1 staleness check (``fast_fetch.py`` ``resolve_live_source``, the
@@ -83,7 +90,7 @@ _DDL_STATEMENTS = (
         link_id           INTEGER PRIMARY KEY,        -- download_sources.id
         url               TEXT NOT NULL,
         category          TEXT NOT NULL CHECK (category IN ('A','B')),
-        kind              TEXT NOT NULL CHECK (kind IN ('file','playlist')),
+        kind              TEXT NOT NULL CHECK (kind IN ('file','playlist','viewer')),
         mime_type         TEXT,
         file_size_bytes   INTEGER,
         resolved_at       REAL NOT NULL,              -- epoch seconds (time.time)
@@ -143,9 +150,56 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
         init_resolved_cache(conn)
 
 
+def _strip_fragment(url: str) -> str:
+    """Law (b) of task #24: a ``#`` fragment is never sent to a server, so it
+    is never part of a replayable byte GET — and mega hides its AES key in
+    one. Whatever survives the ``#`` is what we bank and what we hand out."""
+    try:
+        split = urllib.parse.urlsplit(url)
+    except ValueError:
+        return url
+    if not split.fragment:
+        return url
+    return urllib.parse.urlunsplit(
+        (split.scheme, split.netloc, split.path, split.query, ""))
+
+
+def _viewer_shaped(url: str) -> bool:
+    """Does this URL name an HTML page / player surface rather than a
+    replayable byte GET? The HOST knowledge (every mega path needs the
+    fragment key; drive/docs ``view``-like segments are player pages) lives
+    in ``host_classifier`` — this module keeps no host list of its own.
+    ``_direct_file_shape_ok`` is the authority's pure-SHAPE gate; the public
+    ``is_direct_file`` ANDs host trust onto it, which would misclassify a
+    real ``.mp4`` from an unknown host as non-file, so the shape half is
+    what kind derivation needs. (Boundary note: host_classifier.py is
+    qoder14's file — if they prefer, promoting that helper to a public name
+    is their call, not this module's.)
+
+    Two rules wrap it without host knowledge: an ``.html``/``.htm`` path is
+    a page on ANY host, and if the authority cannot be imported we trust
+    NOTHING about file-ness — the same degraded direction as
+    ``_derive_category``'s cap-to-B: a wrongly-viewer row just re-resolves,
+    a wrongly-file row answers /api/v1/download with an HTML page.
+    """
+    if not url:
+        return False
+    try:
+        path = urllib.parse.urlsplit(_strip_fragment(url)).path.lower()
+    except ValueError:
+        return True
+    if path.endswith((".html", ".htm")):
+        return True
+    try:
+        import host_classifier
+    except Exception:      # noqa: BLE001 — degraded: name it nothing, not file
+        return True
+    return not host_classifier._direct_file_shape_ok(_strip_fragment(url))
+
+
 def _derive_kind(data: dict, url: str) -> str:
     kind = data.get("kind")
-    if kind in ("file", "playlist"):
+    if kind == "playlist":
         return kind
     mime = (data.get("mime_type") or "").lower().split(";")[0].strip()
     if mime in _PLAYLIST_MIMES or "mpegurl" in mime or "dash+xml" in mime:
@@ -153,6 +207,13 @@ def _derive_kind(data: dict, url: str) -> str:
     path = urllib.parse.urlsplit(url).path.lower()
     if path.endswith(".m3u8") or path.endswith(".mpd") or path.endswith(".m3u"):
         return "playlist"
+    if _viewer_shaped(url):
+        # Task #24, the shape law: an HTML viewer page or fragment-bearing
+        # packer URL is NOT a single-file download candidate, and a declared
+        # kind='file' cannot outvote it — labels lie, shapes don't.
+        return "viewer"
+    if kind == "file":
+        return kind
     return "file"
 
 
@@ -229,6 +290,11 @@ def record_resolved_cache(conn: sqlite3.Connection, link_id: int,
         # v2 contract already refuses it; this makes the cache independent
         # of the caller remembering (emperor order, pool healing).
         return None
+    # Task #24 law (b): the fragment is stripped AT BANKING, so every derived
+    # decision below (shape, category, horizon) judges the URL that is
+    # actually stored and can actually be replayed — and no row, summary or
+    # later play_url ever carries the part after the '#'.
+    url = _strip_fragment(url)
     _ensure_schema(conn)
     if source not in ("pool", "jit"):
         raise ValueError(f"invalid source {source!r}")
@@ -339,6 +405,16 @@ def lookup_cache(conn: sqlite3.Connection, link_id: int, want: str = "watch", *,
     if row is None:
         return None
     hit = dict(zip((c for c in _ROW_COLUMNS), tuple(row)))
+    # Task #24 law (c), the legacy-row defence: ~185,000 rows were banked with
+    # kind='file' BEFORE the shape law existed, so the stored kind is not
+    # evidence for them. The download gate re-checks the URL shape at read
+    # time, and law (b) is re-applied on the way out: a fragment banked by an
+    # older build never reaches a public play_url either.
+    if isinstance(hit.get("url"), str):
+        if "#" in hit["url"]:
+            hit["url"] = _strip_fragment(hit["url"])
+        if want == "download" and _viewer_shaped(hit["url"]):
+            return None
     hit["expires_in"] = (max(0.0, round(hit["expires_at"] - now, 3))
                          if hit["expires_at"] is not None else None)
     return hit

@@ -2674,3 +2674,43 @@ still on disk and safe to delete: `/tmp/mutation_check.py`,
    reaches `note_failure` as measured evidence (3 strikes, cleared on next
    success). Fix (widen `unprobed` to transport errors) or accept? Not mine to
    decide, and `fast_fetch.py` needs the freeze settled first.
+
+## 2026-11-05 — qoder12, task #24: viewer-shaped URLs stop carrying file weight (the ~185k `kind='file'` blast radius)
+
+Trunk re-verify done as ordered: `ls /tmp/crown_trunk/Fast_Fetch` shows NO
+resolved_cache / host_classifier / prefetch / catalog_exporter module at all —
+new work, no upstream equivalent. (One precision: `domain_resolver.py` DOES
+exist on trunk b99814e; it was the only Phase-1-named module the grep hit.)
+
+THE FIX (Fast_Fetch/resolved_cache.py, all laws in the cache module — viewer.py
+and fast_fetch.py untouched per boundary):
+  * kind vocabulary widened to `file|playlist|viewer` (DDL CHECK updated; a
+    scratch DB created with the OLD CHECK keeps it — the table is a regenerating
+    cache and the feature is not deployed, so the only affected file here is
+    /tmp/phase1_bench.db, whose single old row stays as-is).
+  * `_viewer_shaped(url)` — pure shape: ANY `.html/.htm` path locally, and the
+    host knowledge (every mega path needs the fragment key; drive/docs
+    view-segments are pages) delegated to host_classifier's OWN shape gate
+    `_direct_file_shape_ok` — no duplicated host table, per the taxonomy law.
+    Degraded (import fails) direction: refuse file-ness, never grant it.
+  * `_derive_kind` runs the shape veto BEFORE any declared kind='file' — labels
+    lie, shapes don't. Playlist rules still win first.
+  * Law (b): `record_resolved_cache` strips the `#` fragment AT BANKING, so the
+    key part never enters a row, a return summary, or a later play_url.
+  * Law (c): `lookup_cache` defends the ALREADY-BANKED ~185k rows — stored
+    `kind='file'` is not evidence for them, so the download gate re-checks the
+    URL shape at read, and a legacy fragment is stripped on the way out.
+
+PROOF, in order: test_resolved_cache.py gained TestViewerKindGate (12 tests,
+laws a/b/c incl. legacy-row injections and the mxdrop-signed-mp4 counterweight
+that MUST still pass the download gate) — 10 red before the fix, then
+`Ran 64 tests OK`. qoder14's acceptance gate behaved exactly as the crown
+predicted: test_host_classifier.py::test_kind_gate_expectations went
+`UNEXPECTED SUCCESS` (FAILED exit) with the marker in place; the
+`@unittest.expectedFailure` marker is now removed (the crown's authorization
+for the one-line touch of qoder14's file; the marker comment itself asked for
+it) — `Ran 71 tests OK (skipped=1)`. test_ci_manifest stays 9 OK.
+
+Boundary honored: no viewer.py, no fast_fetch.py, no trunk push, no merge, no
+restart, no production DB apply; stdlib only; suites run serialized under
+load ~5-6.

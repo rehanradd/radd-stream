@@ -919,5 +919,173 @@ class TestEpochHygiene(unittest.TestCase):
             self.assertGreater(value, 1_600_000_000.0)  # epoch seconds, sane
 
 
+class TestViewerKindGate(unittest.TestCase):
+    """Task #24 (crown order 2026-11-05): mega crypto-share URLs (the `#`
+    fragment IS the AES key) and Google Drive ``/view`` HTML pages banked as
+    kind='file' Category A — ~185,000 measured rows — and ``/api/v1/download``
+    gates on exactly ``kind='file'``, so a viewer page could answer the
+    single-file download route. Three laws, each with its own test:
+
+      (a) an HTML viewer-shaped URL is NOT kind='file';
+      (b) a `#` fragment is never banked and never handed out in a play_url;
+      (c) ``lookup_cache(want="download")`` refuses viewer-shaped rows —
+          INCLUDING rows banked as 'file' before this fix — while real direct
+          files still pass.
+
+    Acceptance is doubled by qoder14's expectedFailure gate in
+    test_host_classifier.py::test_kind_gate_expectations; when these go green
+    that one XPASSes and the marker comes off there.
+    """
+
+    VIEWER = "https://drive.google.com/file/d/1abc/view"
+    MEGA = "https://mega.nz/file/AbCd#AESkeymaterial"
+    REAL = "https://pixeldrain.com/api/file/s2yMcLkb"
+
+    def _row(self, conn, link_id):
+        return conn.execute(
+            "SELECT kind, url FROM resolved_cache WHERE link_id = ?",
+            (link_id,)).fetchone()
+
+    def test_law_a_viewer_page_is_not_banked_as_file(self):
+        conn = fresh_conn()
+        now = time.time()
+        resolved_cache.record_resolved_cache(conn, 1, {"url": self.VIEWER,
+                                                      "service": "google_cdn"},
+                                             now=now)
+        self.assertNotEqual(self._row(conn, 1)[0], "file",
+                            "an HTML viewer page is not a single-file "
+                            "download candidate")
+
+    def test_law_a_declared_file_kind_cannot_outvote_viewer_shape(self):
+        """Labels lie (the module's own founding rule): a resolver envelope
+        that CLAIMS kind='file' for a /view URL gets overruled by the shape."""
+        conn = fresh_conn()
+        now = time.time()
+        resolved_cache.record_resolved_cache(
+            conn, 2, {"url": self.VIEWER, "kind": "file"}, now=now)
+        self.assertNotEqual(self._row(conn, 2)[0], "file")
+
+    def test_law_a_mega_packer_url_is_not_a_file(self):
+        conn = fresh_conn()
+        now = time.time()
+        resolved_cache.record_resolved_cache(conn, 3,
+                                            {"url": self.MEGA, "service": "mega"},
+                                            now=now)
+        self.assertNotEqual(self._row(conn, 3)[0], "file",
+                            "mega shares are client-side-encrypted pages; no "
+                            "naive byte GET exists on the host at all")
+
+    def test_law_b_mega_key_fragment_is_never_banked(self):
+        conn = fresh_conn()
+        now = time.time()
+        summary = resolved_cache.record_resolved_cache(
+            conn, 4, {"url": self.MEGA, "service": "mega"}, now=now)
+        stored = self._row(conn, 4)[1]
+        self.assertNotIn("#", stored,
+                         "the fragment (mega's AES key) must not sit in a "
+                         "banked row that other code paths read as a play_url")
+        self.assertNotIn("#", summary["url"])
+        self.assertEqual(stored, "https://mega.nz/file/AbCd")
+
+    def test_law_b_media_fragment_on_a_real_file_is_stripped_but_stays_file(self):
+        """#t=10,60 is a client-side seek hint, never sent to the server: the
+        stripped URL IS the replayable byte GET, so kind stays 'file' and the
+        fragment is still not banked."""
+        conn = fresh_conn()
+        now = time.time()
+        resolved_cache.record_resolved_cache(
+            conn, 5, {"url": "https://cdn.example/a.mp4#t=10,60",
+                      "mime_type": "video/mp4"}, now=now)
+        kind, stored = self._row(conn, 5)
+        self.assertEqual(kind, "file")
+        self.assertEqual(stored, "https://cdn.example/a.mp4")
+
+    def test_law_b_lookup_never_hands_a_fragment_to_a_play_url(self):
+        """Legacy rows — banked BEFORE the strip — must not leak the fragment
+        through watch either: the read path strips defensively."""
+        conn = fresh_conn()
+        now = time.time()
+        conn.execute(
+            "INSERT INTO resolved_cache (link_id, url, category, kind, "
+            "resolved_at, reverify_after, source, fail_count) "
+            "VALUES (99, ?, 'A', 'file', ?, ?, 'jit', 0)",
+            (self.MEGA, now, now + 3600))
+        hit = resolved_cache.lookup_cache(conn, 99, want="watch", now=now)
+        self.assertIsNotNone(hit)
+        self.assertNotIn("#", hit["url"],
+                         "a fragment-bearing banked URL must reach the wire "
+                         "fragment-free even for rows this fix predates")
+
+    def test_law_c_download_route_refuses_viewer_rows_banked_before_the_fix(self):
+        """The 185k blast radius: rows ALREADY stored kind='file' for viewer
+        shapes. The stored kind cannot be trusted for old rows, so the
+        download gate re-checks the URL shape at read time."""
+        conn = fresh_conn()
+        now = time.time()
+        for link_id, url in ((101, self.VIEWER), (102, self.MEGA)):
+            conn.execute(
+                "INSERT INTO resolved_cache (link_id, url, category, kind, "
+                "resolved_at, reverify_after, source, fail_count) "
+                "VALUES (?, ?, 'A', 'file', ?, ?, 'jit', 0)",
+                (link_id, url, now, now + 3600))
+        self.assertIsNone(
+            resolved_cache.lookup_cache(conn, 101, want="download", now=now),
+            "/api/v1/download's own gate: a viewer-shaped row must not answer "
+            "the download route, however it was banked")
+        self.assertIsNone(
+            resolved_cache.lookup_cache(conn, 102, want="download", now=now))
+
+    def test_law_c_real_direct_files_still_pass_download(self):
+        conn = fresh_conn()
+        now = time.time()
+        resolved_cache.record_resolved_cache(
+            conn, 110, {"url": self.REAL, "mime_type": "video/mp4",
+                        "service": "pixeldrain"}, now=now)
+        hit = resolved_cache.lookup_cache(conn, 110, want="download", now=now)
+        self.assertIsNotNone(hit, "the fix must not fence real byte GETs out "
+                             "of /api/v1/download")
+        self.assertEqual(hit["kind"], "file")
+        self.assertEqual(hit["url"], self.REAL)
+
+    def test_law_c_mxdrop_packer_signed_mp4_still_passes(self):
+        """The measured counterweight: mxdrop is an embed packer but signs a
+        real mp4 URL — viewer-shaped means HTML/fragment surfaces, NOT every
+        non-direct host (category already caps that at B)."""
+        conn = fresh_conn()
+        now = time.time()
+        resolved_cache.record_resolved_cache(
+            conn, 111, playlist_resolve(url="https://mxdrop.example/v/1234.mp4?s=9&e=999",
+                                       mime_type="video/mp4", service="mxdrop"),
+            now=now)
+        hit = resolved_cache.lookup_cache(conn, 111, want="download", now=now)
+        self.assertIsNotNone(hit)
+        self.assertEqual(hit["kind"], "file")
+
+    def test_html_path_is_viewer_shaped(self):
+        conn = fresh_conn()
+        now = time.time()
+        resolved_cache.record_resolved_cache(
+            conn, 120, {"url": "https://packer.example/watch.html?id=5",
+                        "mime_type": "text/html"}, now=now)
+        self.assertNotEqual(self._row(conn, 120)[0], "file",
+                            "an .html path is a page, not a byte GET")
+
+    def test_viewer_is_in_the_closed_kind_vocabulary(self):
+        """The CHECK constraint must know the new letter, or every viewer
+        banking is an IntegrityError on the request path."""
+        ddl = " ".join(resolved_cache._DDL_STATEMENTS)
+        self.assertIn("'viewer'", ddl.replace('"', "'"),
+                      "kind CHECK widened to file|playlist|viewer")
+
+    def test_viewer_rows_never_answer_download_even_freshly_banked(self):
+        conn = fresh_conn()
+        now = time.time()
+        resolved_cache.record_resolved_cache(conn, 130,
+                                            {"url": self.VIEWER,
+                                             "service": "google_cdn"}, now=now)
+        self.assertIsNone(
+            resolved_cache.lookup_cache(conn, 130, want="download", now=now))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
