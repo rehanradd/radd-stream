@@ -1968,3 +1968,38 @@ restored. The old code is the control; the tests can detect the defect they name
 from yesterday's run and still fixed only by the uncommitted `catalog_v2.py` in the
 live tree (see the 2026-11-04 gate note). `test_redact` 57 OK (incl. the 8 new
 guard tests), `test_reconcile_adult` 11 OK (incl. the composition test).
+
+---
+
+## Session — qoder11 lane, 2026-11-05 (LANE 2 night roadmap)
+
+**Item 1 — nginx edge audit (read-only; nothing under /etc/nginx touched).**
+Report: `/tmp/q11_nginx_edge_audit.md`. The Prince's preliminary verdict is
+CONFIRMED: config correct at all five checkpoints. Both server blocks extracted
+and compared programmatically — 24 location blocks, pairwise identical. Cache
+scope exact (posts/stats/remote-config only; none on stream/download/art/
+v2/account/operator). Bypasses verified live (?full=1→BYPASS, Authorization→
+BYPASS) AND at the source: `full` is listener-derived (`viewer.py:2998`), so the
+public port cannot emit operator rows regardless of nginx — remote-config's
+missing `$arg_full` bypass is inert, not a hole. Default cache key includes the
+query string (distinct q values measured MISS/HIT); 24h churn is 180 distinct
+posts URIs against ~260k key slots — not undersized. Adult TTL lag measured:
+≤60s (proxy_cache_valid), `inactive=10m` only matters if the origin is down
+(use_stale); no purge path needed for --apply. CGNAT numbers: 10 r/s/IP sustains
+~600 polling devices at the app's 60s poll; 24h reality = 259,345 requests,
+0.10% rejected, and only 10 of those on radd routes — recommendation is KEEP the
+current limits, revisit only with device-id keying if real traffic changes.
+
+**Item 2 — reconcile_adult on a FULL scratch copy of production.** VACUUM INTO
+to `/tmp/q11_night_scratch/reconcile_scratch.db` (prod opened mode=ro only);
+dry-run, --apply with the backup gate, idempotent re-run, and the orphan case on
+real data. Number reconciliation settled (file
+`/tmp/q11_night_scratch/number_reconciliation.md`): 394 = flagged WORKS still
+public via an unflagged twin (= my mixed_keys = qoder13's independent 394);
+407 = unflagged twin ROWS the apply flips; AGENTS.md's 442/455 is the same two
+quantities on the older 09058ef snapshot. Three figures, two definitions, zero
+contradiction.
+
+**CI (night run):** 14/16 OK — unchanged: only the two known `bf9e565` baseline
+failures (`test_evidence_writeback`, `test_merge_catalogs`), fix still uncommitted
+in the live tree's `catalog_v2.py`.
