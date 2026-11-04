@@ -4533,16 +4533,19 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 except Exception:      # noqa: BLE001
                     pass
 
-            # The measured-dead counterpart of the bank above: the resolver
-            # just PROBED this link and found nothing playable (or only a
-            # stale fallback) — that is exactly the evidence the cache's
-            # failure circuit reads. It can only make future answers refuse a
-            # dead row; it never changes this response.
+            # The measured-dead counterpart of the bank above — with the
+            # qoder12_unprobed distinction: an answer whose service has no
+            # unpacker branch (unprobed) measured NOTHING and must not move
+            # the circuit, or unsupported hosts would self-break their rows
+            # one request at a time on fabricated evidence. Only a probe that
+            # actually ran and came back without playable media counts — and
+            # it can never change this response.
             elif not full:
                 try:
                     import resolved_cache
                     with get_db() as conn:
-                        resolved_cache.note_failure(conn, int(source_id))
+                        resolved_cache.note_failure_from_probe(
+                            conn, int(source_id), res)
                 except Exception:      # noqa: BLE001
                     pass
 
@@ -4679,12 +4682,15 @@ class DashboardHandler(BaseHTTPRequestHandler):
                         pass
                 elif not full:
                     # Measured-dead evidence for the failure circuit — same
-                    # rule as the stream route: only a PROBED failure counts,
-                    # and it can never change this answer.
+                    # rule as the stream route: an unprobed answer (no
+                    # unpacker branch matched, nothing measured) must not
+                    # count, only a probe that ran and failed may, and it can
+                    # never change this answer.
                     try:
                         import resolved_cache
                         with get_db() as conn:
-                            resolved_cache.note_failure(conn, int(source_id))
+                            resolved_cache.note_failure_from_probe(
+                                conn, int(source_id), res)
                     except Exception:      # noqa: BLE001
                         pass
 

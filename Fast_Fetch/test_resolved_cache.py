@@ -528,12 +528,19 @@ class TestViewerRouteContract(unittest.TestCase):
     def test_routes_incremente_the_circuit_on_measured_death(self):
         """The circuit's incrementer must sit where a probe FOUND the URL
         dead (resolver answered without a playable/stale URL) on both public
-        routes — addendum defect 2's wiring, pinned as a source invariant."""
+        routes — addendum defect 2's wiring, pinned as a source invariant.
+        Updated for crown order qoder12_unprobed: the routes must call the
+        GUARDED incrementer (which reads the envelope's unprobed signal),
+        never the bare one."""
         for route in ("/api/v1/stream", "/api/v1/download"):
             with self.subTest(route=route):
                 body = self._route_source(route)
-                self.assertIn("resolved_cache.note_failure(", body,
+                self.assertIn("resolved_cache.note_failure_from_probe(", body,
                               f"{route}: a probed-dead link must close the circuit")
+                self.assertNotIn("resolved_cache.note_failure(",
+                                 _strip_from_probe(body),
+                                 f"{route}: bare increment without the evidence "
+                                 "guard is the qoder12_unprobed defect")
 
 
 class TestCrownPrinceCategoryHardening(unittest.TestCase):
@@ -731,6 +738,181 @@ def sqlite3_conn_row(conn, link_id):
                             (link_id,)).fetchone()
     finally:
         conn.row_factory = None
+
+
+class TestUnprobedIsNotEvidence(unittest.TestCase):
+    """Crown order qoder12_unprobed. The failure circuit may only open on
+    MEASURED evidence: a probe that reached upstream and came back without
+    media. When the resolver's dispatch chain matches no unpacker branch
+    (1fichier, nexdrive — zero branches exist), nothing was
+    contacted, nothing was measured, and incrementing `fail_count` on every
+    request is fabricated evidence that circuit-breaks the row one-way: only
+    a fresh resolve can re-close it, and for this class no fresh resolve is
+    reachable. Both behaviours live in this one class so nobody can
+    "simplify" the distinction away later. MAX_FAIL_COUNT stays 3."""
+
+    UNSUPPORTED_ENVELOPE = {"success": False, "code": "no_playable_source",
+                            "reason": "re_resolve_failed", "stale": True,
+                            "unprobed": True}
+    PROBED_DEAD_ENVELOPE = {"success": False, "code": "no_playable_source",
+                            "reason": "re_resolve_failed", "stale": True,
+                            "unprobed": False}
+
+    def test_unprobed_answers_leave_fail_count_unchanged(self):
+        """6 simulated requests on a link WITH a cache row, each answered by
+        the route's guard, must leave the row servable and the counter at 0
+        — the exact scenario the order measured at viewer.py:3246."""
+        conn = fresh_conn()
+        now = time.time()
+        resolved_cache.record_resolved_cache(conn, 77, file_resolve(), now=now)
+        for _ in range(6):
+            self.assertEqual(
+                resolved_cache.note_failure_from_probe(conn, 77,
+                                                       self.UNSUPPORTED_ENVELOPE),
+                0, "an unprobed answer may not touch the circuit")
+        self.assertEqual(sqlite3_conn_row(conn, 77)["fail_count"], 0)
+        self.assertIsNotNone(resolved_cache.lookup_cache(conn, 77, now=now),
+                             "the row must still serve: nothing about the link "
+                             "changed and nothing was measured")
+
+    def test_v1_stale_success_envelope_is_equally_unbankable_as_evidence(self):
+        """The stream route sees v1 shapes too: success+stale on an
+        unsupported host is the frozen-URL answer, and its non-bank branch
+        used to increment every single time. unprobed must ride in BOTH
+        fallback envelopes, and the guard must read it in both."""
+        conn = fresh_conn()
+        now = time.time()
+        resolved_cache.record_resolved_cache(conn, 77, file_resolve(), now=now)
+        v1_frozen = {"success": True, "url": "https://old.example/f.m3u8",
+                     "cached": True, "refreshed": False, "stale": True,
+                     "unprobed": True}
+        for _ in range(resolved_cache.MAX_FAIL_COUNT + 3):
+            self.assertEqual(
+                resolved_cache.note_failure_from_probe(conn, 77, v1_frozen), 0)
+        self.assertEqual(sqlite3_conn_row(conn, 77)["fail_count"], 0)
+
+    def test_probed_dead_answers_still_trip_the_circuit_at_three(self):
+        """The other half of the distinction, kept in this module so a
+        future edit cannot trade one behaviour for the other: an answer from
+        a branch that DID run and failed (unprobed False — including the
+        legacy shape with no field at all) increments exactly as before and
+        opens the circuit at MAX_FAIL_COUNT = 3."""
+        conn = fresh_conn()
+        now = time.time()
+        resolved_cache.record_resolved_cache(conn, 77, file_resolve(), now=now)
+        legacy = dict(self.PROBED_DEAD_ENVELOPE)
+        del legacy["unprobed"]                    # old resolvers: absent = probed
+        self.assertEqual(
+            resolved_cache.note_failure_from_probe(conn, 77, legacy), 1)
+        for _ in range(resolved_cache.MAX_FAIL_COUNT - 1):
+            self.assertEqual(
+                resolved_cache.note_failure_from_probe(
+                    conn, 77, self.PROBED_DEAD_ENVELOPE), 1)
+        self.assertEqual(sqlite3_conn_row(conn, 77)["fail_count"],
+                         resolved_cache.MAX_FAIL_COUNT)
+        self.assertIsNone(resolved_cache.lookup_cache(conn, 77, now=now),
+                          "genuinely probed-dead must retire, exactly as designed")
+
+    def test_resolver_fallthrough_marks_the_answer_unprobed_for_real(self):
+        """Not my prose — the shipped boundary: a scratch DB with links
+        whose services have no unpacker branch (1fichier for v2, nexdrive
+        for v1; the chain cannot touch the network here), resolve v2 and
+        v1 must both carry unprobed=True in the refusal envelope. Rebased
+        onto main: the branch's vidbolt/cineverse fixtures are cracked
+        since Session 112 (vidbolt resolves live), so they no longer serve
+        as the unprobed boundary; the v1 row's bridge final_url lands in
+        the bridge refusal, which carries the same signal the frozen
+        answer carried before main's stale-probe gate."""
+        fd, path = tempfile.mkstemp(suffix=".db")
+        os.close(fd)
+        old_env = os.environ.get("RADD_DB_PATH")
+        saved = {name: sys.modules.get(name)
+                 for name in ("fast_fetch", "config")}
+        for name in saved:
+            sys.modules.pop(name, None)
+        os.environ["RADD_DB_PATH"] = path
+        try:
+            import fast_fetch as ff
+            ff.init_db()
+            conn = sqlite3.connect(path)
+            conn.execute("INSERT INTO posts (id, url, title, is_18_plus) "
+                         "VALUES (1, 'https://qa.local/p/1', 'QA', 0)")
+            conn.execute("INSERT INTO posts (id, url, title, is_18_plus) "
+                         "VALUES (2, 'https://qa.local/p/2', 'QA2', 0)")
+            conn.execute("INSERT INTO releases (id, post_id) VALUES (1, 1)")
+            conn.execute("INSERT INTO releases (id, post_id) VALUES (2, 2)")
+            # NOTE: the rows live in different posts on purpose. Same-post
+            # rows are failover siblings, and resolving the first would
+            # leave a fresh negative-cache record that short-circuits the
+            # second with main's all_siblings_negative_cached refusal —
+            # an envelope that predates the unprobed signal and does not
+            # carry it. Separate posts keep each resolve on the dispatch
+            # path this test pins.
+            conn.execute(
+                "INSERT INTO download_sources (id, release_id, service, "
+                "source_url, final_url, playback_type, is_temporary, status) "
+                "VALUES (42, 1, '1fichier', 'https://1fichier.com/?abc123', "
+                "'https://dash-hls-bridge.johndoesjkc.workers.dev/?url=https"
+                "%3A%2F%2Fsacdn.local%2Fmaster.m3u8&Policy=zz', "
+                "'iframe', 1, 'expired')")
+            conn.execute(
+                "INSERT INTO download_sources (id, release_id, service, "
+                "source_url, final_url, playback_type, is_temporary, status) "
+                "VALUES (43, 2, 'nexdrive', "
+                "'https://nexdrive.net/file/abc123', "
+                "'https://nexdrive.net/file/abc123', "
+                "'iframe', 1, 'expired')")
+            conn.commit()
+            conn.close()
+            res2 = ff.resolve_live_source(42, v2=True)
+            self.assertFalse(res2.get("success"))
+            self.assertTrue(res2.get("unprobed"),
+                            "no branch matched: the v2 refusal must say it "
+                            "measured nothing")
+            res1 = ff.resolve_live_source(43, v2=False)
+            self.assertTrue(res1.get("stale"),
+                            "fixture: v1 refuses the bridge stale URL too")
+            self.assertTrue(res1.get("unprobed"),
+                            "and the refusal must carry the same signal")
+        finally:
+            for name, mod in saved.items():
+                if mod is not None:
+                    sys.modules[name] = mod
+                else:
+                    sys.modules.pop(name, None)
+            if old_env is None:
+                os.environ.pop("RADD_DB_PATH", None)
+            else:
+                os.environ["RADD_DB_PATH"] = old_env
+            for suffix in ("", "-wal", "-shm"):
+                try:
+                    os.unlink(path + suffix)
+                except OSError:
+                    pass
+
+    def test_viewer_call_sites_route_through_the_evidence_guard(self):
+        """Both failure paths in viewer.py must call note_failure_from_probe
+        (the guarded API) and none may keep calling the bare incrementer —
+        the guard lives in resolved_cache so the rule has exactly one
+        definition, but the routes must actually use it."""
+        with open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                               "viewer.py"), encoding="utf-8") as fh:
+            src = fh.read()
+        self.assertEqual(src.count("resolved_cache.note_failure_from_probe("), 2,
+                         "stream + download failure paths, guarded")
+        self.assertNotIn("resolved_cache.note_failure(", _strip_from_probe(src),
+                         "no call site may increment without the evidence check")
+
+    def test_note_failure_docstring_owns_the_evidence_rule(self):
+        doc = resolved_cache.note_failure.__doc__ or ""
+        self.assertIn("probed", doc.lower())
+        doc2 = resolved_cache.note_failure_from_probe.__doc__ or ""
+        self.assertIn("unprobed", doc2)
+
+
+def _strip_from_probe(src: str) -> str:
+    """Blank out the guarded calls so a leftover bare note_failure( is visible."""
+    return src.replace("resolved_cache.note_failure_from_probe(", "GUARDED(")
 
 
 class TestEpochHygiene(unittest.TestCase):

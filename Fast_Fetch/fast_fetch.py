@@ -6664,6 +6664,12 @@ def resolve_live_source(source_id: int, *, v2: bool = False,
     # request proving it again. Every other branch keeps the generic gate
     # unchanged.
     _gate_from_verdict = False
+    # The dispatch chain below is a matcher, not a probe: when no branch
+    # matches, nothing was contacted and nothing was measured. The failure
+    # circuit in resolved_cache may only open on measured evidence, so the
+    # fall-through is recorded as a distinct outcome (crown order
+    # qoder12_unprobed) and rides in both fallback envelopes.
+    unprobed = False
 
     def hoster_input(marker):
         """The stored address that actually names this hoster.
@@ -7276,6 +7282,16 @@ def resolve_live_source(source_id: int, *, v2: bool = False,
         _last_failure_verdict = verdict
     elif stage1_tried and stage1_result is not None:
         _last_failure_verdict = stage1_result
+    # Phase-1 (crown order qoder12_unprobed): the dispatch chain is a
+    # matcher, not a probe. When no branch ran -- no Stage-1 dispatch and
+    # no legacy unwrap branch -- nothing was contacted and nothing was
+    # measured. That is exactly the condition the negative cache below
+    # records as `no_unwrapper` (as opposed to `unwrap_failed`); the
+    # failure circuit may only open on measured evidence, so the
+    # fall-through is recorded as a distinct outcome and rides in both
+    # fallback envelopes.
+    if not _unwrap_branch_taken and not stage1_tried:
+        unprobed = True
 
     # A resolver that answered with another landing page has not resolved
     # anything. Never persist it as the playable address: the callers below treat
@@ -7665,6 +7681,7 @@ def resolve_live_source(source_id: int, *, v2: bool = False,
             "code": "no_playable_source",
             "reason": "bridge_unresolved" if bridge_stale else "re_resolve_failed",
             "stale": True,
+            "unprobed": unprobed,
         }
     # Stage-2: v1's last-resort stale answer is no longer served blind.
     # Probe it: a passing probe of an acceptable kind keeps the old
@@ -7709,6 +7726,7 @@ def resolve_live_source(source_id: int, *, v2: bool = False,
         "cached": True,
         "refreshed": False,
         "stale": True,
+        "unprobed": unprobed,
         "service": src["service"],
         "is_temporary": bool(src["is_temporary"]),
         "is_resumable": bool(src["is_resumable"]),
