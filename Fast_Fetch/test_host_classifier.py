@@ -527,6 +527,17 @@ class TestCategoryACrossCheckWithResolvedCache(unittest.TestCase):
          "https://pixeldrain.dev/u/AbC", "B"),
     )
 
+    def test_cross_check_tables_are_not_empty(self):
+        # Sibling literal pins (crown self-audit order 2026-11-05): the two
+        # class collections feed every loop below. The markers/covered equality
+        # is bidirectional but a BOTH-empty mutant passes it; SINGLE rows had
+        # NO pin at all and was MEASURED vacuous — emptied, the whole 73-test
+        # suite stayed OK (illusion proven, then pinned). Counts are today's
+        # literals; a deliberate row addition updates these numbers in the
+        # same commit.
+        self.assertEqual(len(self.CROSS_CHECK), 18)
+        self.assertEqual(len(self.SINGLE_EVIDENCE_ROWS), 7)
+
     def test_every_category_a_marker_has_a_cross_check_row(self):
         markers_a = {marker for marker, category, _ in hc._HOST_TABLE
                      if category == hc.CATEGORY_DIRECT_FILE}
@@ -585,7 +596,13 @@ class TestSiteScoutConsumesAuthority(unittest.TestCase):
 
     def test_every_authority_token_classifies_identically_in_scout(self):
         kinds = _ss.build_kinds_map({})
-        for token, kind in hc.as_scout_hoster_kinds():
+        authority = list(hc.as_scout_hoster_kinds())
+        # Floor pin (self-audit): emptied, this loop was a pass-on-nothing
+        # candidate; the merged/legacy equality above only catches a SIMULTANEOUS
+        # authority+DEFAULT edit. 62 = measured today; deletions are forbidden
+        # (AGENTS rule 4) so a shrink here is always a defect.
+        self.assertGreaterEqual(len(authority), 62)
+        for token, kind in authority:
             # Dotted markers are registrable domains (host IS the marker);
             # bare-label markers match <label>.<any-tld> exactly.
             host = token if "." in token else f"{token}.test"
@@ -738,6 +755,10 @@ class TestAdversarialHostTrust(unittest.TestCase):
                                  hc.CATEGORY_UNKNOWN)
 
     def test_marker_names_are_all_valid_host_shapes(self):
+        # Floor pin (self-audit): the table is the loop's collection — empty
+        # it and every shape check below passes on nothing. 62 = measured
+        # today; rows are never deleted, so a shrink is a defect.
+        self.assertGreaterEqual(len(hc._HOST_TABLE), 62)
         for marker, _cat, _be in hc._HOST_TABLE:
             with self.subTest(marker=marker):
                 self.assertNotIn("/", marker)
