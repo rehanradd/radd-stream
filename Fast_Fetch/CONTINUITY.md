@@ -2875,3 +2875,41 @@ test_host_resolvers a standing local push gate (3-command list) yet CI never
 runs it — same unfed-sweep class as 5446771. backend-ci.yml untouched, the
 Emperor decides steps; report delivered to crown. Pen held (granted this
 session); CONTINUITY.md was porcelain-clean before append.
+
+## 2026-11-05 — qoder14: e9f5019 review record + vacuous-loop SELF-AUDIT (pen held)
+
+REVIEW (crown order, report-only): qoder11's e9f5019 on
+q11-adult-reconcile-20261104. (1) art_is_adult now fails closed on a
+vanished/unknown row (row is None -> True) while an existing NULL flag is NOT
+adult — mirrors link_is_adult; a bogus t= falls back to posts and a CLEAN
+posts id still shows (no blanket-hide); ART_TABLES whitelist pinned
+["posts","works"] so the f-string table SQL can name nothing else; judge
+and serve always resolve the SAME table in _serve_art (no mismatch
+expressible). (2) Operator-panel exception byte-identical: the diff touches
+only the missing-row branch; panel badge/audit surface via /api/data
+untouched; no new playable or listable path. Observation (pre-existing, not
+this commit): _serve_art gates art_is_adult regardless of full — flagged
+art 404s even on loopback; safe direction, reported not flagged. (3) THE
+CROSS-KEY HOLE IS STILL OPEN: every list/search filter on the branch is
+per-row adult_clause (viewer.py:573/:2499); MAX(is_18_plus) exists only as
+the unreconciled CLI (reconcile_adult.py, retired per 7eb2ac2 for trunk
+backfill_adult_key) — 442 mixed keys/455 works still reachable via
+unflagged twins; AGENTS.md sentence stands. Test 8 is COMPOSITION
+(self-applies the fold to its fixture), NOT reconciliation — nobody may
+cite it as the hole closed. No edits to redact.py/test_redact.py; e9f5019
+CONTINUITY conflict (+19 predates the pen grant) parked for additive
+resolution at an unauthorized merge.
+
+SELF-AUDIT (crown: systemic class, every lane): test_host_classifier loops
+over class tables CROSS_CHECK (18), SINGLE_EVIDENCE_ROWS (7) and authority
+collections hc._HOST_TABLE (62), as_scout_hoster_kinds (62); domains file
+over NEEDLES_BEFORE (71), fixture mirrors (4), registry sites (18),
+driftprobe probes (4). MEASURED ILLUSION, REPORTED NOT HIDDEN: emptied
+SINGLE_EVIDENCE_ROWS passed 73 OK pre-pin. Fixes dc3e2b0 + 9a7ede4: literal
+row-count pins (break the BOTH-empty mutant the markers/covered equality
+cannot see), authority floors 62/62 (rows never deleted = any shrink is a
+defect), NEEDLES_BEFORE==71 pinned from outside the snapshot, mirrors>=4,
+sites>=18, probes==4. Post-pin mutants RUN and RED: emptied SINGLE rows ->
+FAILED(1); emptied NEEDLES_BEFORE -> FAILED(1). Suites green: host_classifier
+74 OK zero skips, domains 29 OK. VIEWER/FRAGMENT vocab mutants were proven
+RED earlier (0bf21f6). One file per commit verified in git diff --cached.
