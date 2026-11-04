@@ -195,5 +195,125 @@ class TestRefusesProductionRoot(_Fixture):
             catalog_exporter.main(["--db", self.db, "--out", "/var/www/radd-static"])
 
 
+class TestProjectionSemantics(unittest.TestCase):
+    """Order LANE-3 §1: make `redact.project`'s drop-vs-raise behaviour explicit.
+
+    Silent DROPPING of an off-view key is acceptable; silent KEEPING is not.
+    An unpublished view name raises rather than answering with everything.
+    """
+
+    def test_off_view_keys_are_dropped_not_kept(self):
+        import redact
+        row = {"id": 1, "title": "Fine", "clean_title": "Fine", "year": "2024",
+               "source_site": "vegamovies", "url": "https://vegamovies.tld/p/1",
+               "slug": "taken-from-vegamovies", "final_url": "https://hoster/x",
+               "origin_url": "https://upstream", "intermediate_url": "x"}
+        out = redact.project(row, "post_brief")
+        self.assertIn("title", out)
+        for leak in ("source_site", "url", "slug", "final_url", "origin_url",
+                     "intermediate_url"):
+            self.assertNotIn(leak, out, f"projection KEPT private column {leak}")
+
+    def test_unpublished_view_raises_instead_of_passthrough(self):
+        import redact
+        with self.assertRaises(redact.ProjectionError):
+            redact.project({"id": 1, "source_site": "x"}, "post_everything")
+
+    def test_export_tree_contains_no_provenance_key(self):
+        import redact
+        tmp = tempfile.TemporaryDirectory(prefix="exporter-proof-")
+        self.addCleanup(tmp.cleanup)
+        db = str(Path(tmp.name) / "d.db")
+        conn = sqlite3.connect(db)
+        TestProjectionSemantics._schema(conn)
+        conn.execute("INSERT INTO posts (id, title, clean_title, is_18_plus,"
+                     " source_site, canonical_key) VALUES (9001,'A','A',0,"
+                     "'vegamovies','w1')")
+        conn.commit(); conn.close()
+        catalog_exporter.export_catalog(db, str(Path(tmp.name) / "s"),
+                                        pages=1, per_page=5, verbose=False)
+        for f in Path(tmp.name).rglob("browse/trending/*.json"):
+            tree = json.loads(f.read_text(encoding="utf-8"))
+            self.assertEqual([], redact.provenance_keys(tree),
+                             f"{f}: provenance key present in export bytes")
+            for item in tree["results"]:
+                allowed = set(redact.VIEWS["post_brief"]) | {"poster_url",
+                                                             "backdrop_urls"}
+                extra = set(item) - allowed
+                self.assertEqual(set(), extra,
+                                 f"{f}: un-projected column {extra} reached output")
+
+    @staticmethod
+    def _schema(conn):
+        conn.executescript("""
+            CREATE TABLE posts (id INTEGER PRIMARY KEY, url TEXT, slug TEXT,
+                title TEXT, clean_title TEXT, year TEXT, content_type TEXT,
+                seasons TEXT, poster_url TEXT, backdrop_urls TEXT,
+                imdb_rating TEXT, synopsis TEXT, is_18_plus INTEGER,
+                is_animated INTEGER, genres TEXT, lastmod TEXT, created_at TEXT,
+                updated_at TEXT, source_site TEXT, industry TEXT, country TEXT,
+                language TEXT, canonical_key TEXT, tmdb_id TEXT, imdb_id TEXT);
+            CREATE TABLE releases (id INTEGER PRIMARY KEY, post_id INTEGER,
+                release_title TEXT, season TEXT, episode TEXT, quality TEXT,
+                codec TEXT, size TEXT, languages TEXT, intermediate_url TEXT,
+                source_site TEXT, origin_url TEXT, created_at TEXT);
+            CREATE TABLE download_sources (id INTEGER PRIMARY KEY,
+                release_id INTEGER, source_name TEXT, service TEXT,
+                resource_id TEXT, source_url TEXT, final_url TEXT,
+                playback_type TEXT, is_temporary INTEGER, status TEXT,
+                is_resumable INTEGER, http_status INTEGER, file_size_bytes INTEGER,
+                mime_type TEXT, last_checked_at TEXT, created_at TEXT,
+                updated_at TEXT);
+        """)
+
+
+class TestArtGuardAdversarial(_Fixture):
+    """Order LANE-3 §2: audit the CDN allowlist adversarially — direct cases and
+    the exporter end-to-end with a planted userinfo URL that passes the naive
+    host scan (`https://scraper.tld@image.tmdb.org/…`)."""
+
+    def test_direct_guard_cases(self):
+        import redact
+        allowed = ["https://m.media-amazon.com/images/I/x.jpg",
+                   "https://image.tmdb.org/t/p/w500/x.jpg"]
+        refused = ["https://vegamovies.tld/wp-content/uploads/x.jpg",
+                   "https://image.tmdb.org.evil.tld/x.jpg",
+                   "https://vegamovies.tld@image.tmdb.org/x.jpg",
+                   "https://x@image.tmdb.org@vegamovies.tld/y.jpg",
+                   "https://tmdb.org/x.jpg"]  # lookalike without the `image.` host
+        for url in allowed:
+            self.assertEqual(url, redact.public_image_value(url),
+                             f"allowed CDN refused: {url}")
+        for url in refused:
+            self.assertIsNone(redact.public_image_value(url),
+                              f"non-CDN host ACCEPTED: {url}")
+
+    def test_planted_userinfo_art_never_reaches_export_bytes(self):
+        conn = sqlite3.connect(self.db)
+        conn.execute("UPDATE posts SET poster_url = ? WHERE id = ?",
+                     ("https://vegamovies.tld@image.tmdb.org/t/p/x.jpg",
+                      CLEAN_POST_ID))
+        conn.commit(); conn.close()
+        self._export()
+        blob = self._all_bytes()
+        self.assertNotIn("vegamovies.tld", blob)
+        self.assertNotIn("vegamovies.tld@image.tmdb.org", blob)
+
+    def test_scraper_prose_synopsis_stays_out_of_the_export(self):
+        """The sweep caught 'G-Direct'/'PikaHD' inside a stored synopsis: the
+        curated scrubber cannot delete unknown brands, so the export simply
+        never selects the column — asserted here on planted bytes."""
+        conn = sqlite3.connect(self.db)
+        conn.execute("UPDATE posts SET synopsis = ? WHERE id = ?",
+                     ("Watch Online G-Directs Xxxtreme PikaHD Links | " +
+                      "A Totally Normal Documentary 2024 1080p", CLEAN_POST_ID))
+        conn.commit(); conn.close()
+        self._export()
+        blob = self._all_bytes()
+        self.assertNotIn("G-Directs Xxxtreme", blob)
+        self.assertNotIn("PikaHD", blob)
+        self.assertIn("A Totally Normal Documentary", blob)  # row still exported
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

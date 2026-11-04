@@ -120,6 +120,26 @@ class Sweep:
         return status, headers, body
 
     # ── the four questions every route gets asked ────────────────────────────
+    def assert_clean(self, label: str, body: str) -> None:
+        """The leak assertions, independent of transport: a live route body and a
+        pre-rendered export file get asked the exact same questions."""
+        for match in self.brand_re.finditer(body):
+            self.report(label, match.group(0), body)
+        for match in self.plain_re.finditer(body):
+            self.note_plain_word(label, match.group(0), body)
+        for match in re.finditer(r"https?://([A-Za-z0-9._-]+)", body):
+            host = match.group(1).lower()
+            self.url_hosts.add(host)
+            if host not in OUR_HOSTS and not host.startswith("127."):
+                self.flag(f"{label}: hands out upstream host {host}")
+        import redact
+        try:
+            keys = redact.provenance_keys(json.loads(body))
+        except (json.JSONDecodeError, ValueError):
+            return
+        if keys:
+            self.flag(f"{label}: publishes keys {sorted(set(keys))}")
+
     def scan(self, path: str, port: int | None = None, expect=(200, 302),
              label="public"):
         port = self.public if port is None else port
@@ -129,28 +149,59 @@ class Sweep:
             return status, {}, body
         if label == "operator":
             return status, {}, body
-        for match in self.brand_re.finditer(body):
-            self.report(f"{label} {path}", match.group(0), body)
-        for match in self.plain_re.finditer(body):
-            self.note_plain_word(path, match.group(0), body)
-        for match in re.finditer(r"https?://([A-Za-z0-9._-]+)", body):
-            host = match.group(1).lower()
-            self.url_hosts.add(host)
-            if host not in OUR_HOSTS and not host.startswith("127."):
-                self.flag(f"{label} {path}: hands out upstream host {host}")
-        import redact
-        try:
-            keys = redact.provenance_keys(json.loads(body))
-        except (json.JSONDecodeError, ValueError):
-            return status, {}, body
-        if keys:
-            self.flag(f"{label} {path}: publishes keys {sorted(set(keys))}")
+        self.assert_clean(f"{label} {path}", body)
         return status, {}, body
 
     def must_be_404(self, path: str, port: int | None = None, why: str = "route"):
         status, _, _ = self.get(self.public if port is None else port, path)
         if status != 404:
             self.flag(f"public answered {why} {path} with {status}")
+
+    def sweep_export(self, conn, db: str, hidden_ids, hidden_titles) -> None:
+        """Ask the export the same questions as the live edge — qoder13 night order.
+
+        The static JSON has no runtime gate: whatever lands on disk is public
+        forever. So the exporter's staging output gets the identical needle,
+        host, provenance-key assertions as a route body, plus two checks a
+        route does not need: every result key must be inside the projected
+        view, and no flagged work may appear by id — with the twin-title
+        subtlety handled the same way by-media handles it (an identical
+        unflagged title elsewhere is not a leak of THIS work)."""
+        import catalog_exporter
+        import redact
+        allowed = set(redact.VIEWS["post_brief"]) | {"poster_url", "backdrop_urls"}
+        stage = "/tmp/radd-sweep-export-stage"  # staging only; /var/www is not authorized
+        manifest = catalog_exporter.export_catalog(
+            db, stage, pages=3, per_page=20, verbose=False)
+        blob_parts = []
+        for f in sorted(Path(stage).rglob("*.json")):
+            text = f.read_text(encoding="utf-8")
+            blob_parts.append(text)
+            self.assert_clean(f"export {f.relative_to(stage)}", text)
+            if f.name == "manifest.json":
+                continue
+            for item in json.loads(text).get("results", []):
+                extra = set(item) - allowed
+                if extra:
+                    self.flag(f"export {f.name}: un-projected columns {sorted(extra)}")
+                if item.get("id") in hidden_ids:
+                    self.flag(f"export {f.name}: publishes flagged post {item['id']}")
+        blob = "\n".join(blob_parts)
+        for hid, title in hidden_titles:
+            if title and title in blob:
+                twins = conn.execute(
+                    "SELECT COUNT(*) FROM posts WHERE is_18_plus = 0"
+                    " AND (title = ? OR clean_title = ?)", (title, title)).fetchone()[0]
+                if twins == 0:
+                    self.flag(f"export bytes: flagged work {hid} title {title!r} present")
+                else:
+                    self.notes.append(
+                        f"export contains {title!r} but it is an unflagged same-title "
+                        f"work ({twins} rows), not flagged post {hid}")
+        self.notes.append(
+            f"exported {len(manifest['files'])} staging files to {stage}; "
+            f"twin clause suppressed "
+            f"{manifest['works_suppressed_by_canonical_key_clause']} works")
 
     # ── vocabulary ───────────────────────────────────────────────────────────
     def harvest(self, conn, redact, db: str, cache: str | None) -> tuple:
@@ -204,7 +255,8 @@ class Sweep:
               f"reviewed-by-hand {len(plain)}, sites {len(sites)}")
 
     # ── the walk ─────────────────────────────────────────────────────────────
-    def run(self, db: str, probe: bool, sample_posts: int, secret: str) -> int:
+    def run(self, db: str, probe: bool, sample_posts: int, secret: str,
+            export: bool = False) -> int:
         os.environ["RADD_DB_PATH"] = db
         import redact
         OUR_HOSTS.update(redact.PUBLIC_IMAGE_HOSTS)
@@ -360,6 +412,9 @@ class Sweep:
                 status, _, _ = self._get(self.operator, path)
                 if status != 401:
                     self.flag(f"operator {path} answered {status} with no credential")
+
+            if export:
+                self.sweep_export(conn, db, {int(h) for h in hidden}, hidden_titles)
         finally:
             server.terminate()
             try:
@@ -410,6 +465,9 @@ def main() -> int:
                         help="random posts to sample on top of one per site")
     parser.add_argument("--probe", action="store_true",
                         help="also resolve a handful of stream handles (network-bound)")
+    parser.add_argument("--export", action="store_true",
+                        help="also sweep catalog_exporter staging bytes (LANE 3: the "
+                             "static JSON is a public surface with no runtime gate)")
     args = parser.parse_args()
 
     if not Path(args.db).exists():
@@ -417,7 +475,8 @@ def main() -> int:
         return 2
     sweep = Sweep(args.public, args.operator)
     return sweep.run(args.db, args.probe, args.posts,
-                     os.environ.get("RADD_STREAM_SECRET", "sweep-secret-not-production"))
+                     os.environ.get("RADD_STREAM_SECRET", "sweep-secret-not-production"),
+                     export=args.export)
 
 
 if __name__ == "__main__":
