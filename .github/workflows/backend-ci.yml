@@ -25,13 +25,67 @@ name: 🐍 Backend CI — Stdlib Python Tests
 #     - Fast_Fetch/test_merge_catalogs.py    (staging → unified merge)
 #     - Fast_Fetch/test_site_scout.py        (site discovery / spec phases)
 #     - Fast_Fetch/test_backup_manager.py    (offsite backup tooling)
+#   Phase-1 additions (crown order qoder12_cigate — these modules existed in
+#   NO gate before; a change could break them and still show a green tick):
+#     - Fast_Fetch/test_resolved_cache.py    (JIT cache: serving rules, cold-start
+#                                             race, evidence-guarded failure circuit)
+#     - Fast_Fetch/test_host_classifier.py   (single host-trust authority, AND rule)
+#     - Fast_Fetch/test_catalog_exporter.py  (static export + adult reconciliation)
+#     - Fast_Fetch/test_domain_resolver.py   (live-domain registry writer)
+#     - Fast_Fetch/test_fast_fetch_domains.py(qoder14: static/DB domain drift)
+#     - Fast_Fetch/test_ci_manifest.py       (drift guard: fails if any top-level
+#                                             test_*.py is neither run here nor
+#                                             EXCLUDED below — the list cannot
+#                                             silently rot again)
 #
-#   Deliberately EXCLUDED:
-#     - Fast_Fetch/test_all_sites.py  — live 10-site network audit; needs the
-#       internet and would make CI flaky/non-deterministic.
-#     - test_<site>_import.py / per-site parser tests — several read fixture
-#       files whose layout changes with the site, so they are run by the
-#       scraper's own agent at edit time rather than gating every push.
+#   KNOWN-RED, KEPT RUNNING ON PURPOSE (pre-existing debt, proven identical on
+#   clean bf9e565 — do not drop, do not xfail, do not "make CI green" around them):
+#     - test_evidence_writeback.py  3 failures (ApplyEvidenceTests x2,
+#                                    LedgerColumnFidelity x1) — ledger-column
+#                                    territory, owner TBD.
+#     - test_merge_catalogs.py      1 failure (StagingFamilyMergeTests,
+#                                    'unverified' != 'active').
+#
+#   Deliberately EXCLUDED — MACHINE-CHECKED by Fast_Fetch/test_ci_manifest.py:
+#   every top-level Fast_Fetch/test_*.py must appear in a run step above or in
+#   this block; a new test file matching neither fails CI. (Live audit: needs
+#   the internet and would make CI flaky/non-deterministic. Per-site parser
+#   tests: read fixture files whose layout changes with the site — run by the
+#   scraper's own agent at edit time. The remaining feature suites were not
+#   verified by this lane; unverified is not a green — promoting one to a run
+#   step requires the owner proving it offline first.)
+#     EXCLUDED: test_all_sites.py  — live 10-site network audit
+#     EXCLUDED: test_10xflix_import.py  — per-site parser
+#     EXCLUDED: test_7starhd_import.py  — per-site parser
+#     EXCLUDED: test_9xmovies.py  — per-site parser
+#     EXCLUDED: test_accounts.py  — owner not yet verified offline
+#     EXCLUDED: test_accounts_api.py  — owner not yet verified offline
+#     EXCLUDED: test_admin_panel.py  — owner not yet verified offline
+#     EXCLUDED: test_audit_staging.py  — owner not yet verified offline
+#     EXCLUDED: test_backfill_animated_flag.py  — owner not yet verified offline
+#     EXCLUDED: test_backfill_tmdb.py  — owner not yet verified offline
+#     EXCLUDED: test_bolly4u_import.py  — per-site parser
+#     EXCLUDED: test_desicinemas.py  — per-site parser
+#     EXCLUDED: test_download_endpoint.py  — owner not yet verified offline
+#     EXCLUDED: test_filmyzilla_import.py  — per-site parser
+#     EXCLUDED: test_hdhub4u_import.py  — per-site parser
+#     EXCLUDED: test_hdtvb_import.py  — per-site parser
+#     EXCLUDED: test_hindilinks4u.py  — per-site parser
+#     EXCLUDED: test_hindilinks4u_retry.py  — per-site parser
+#     EXCLUDED: test_import_katmoviehd.py  — per-site parser
+#     EXCLUDED: test_katmoviehd.py  — per-site parser
+#     EXCLUDED: test_katmoviehd_import.py  — per-site parser
+#     EXCLUDED: test_media_search.py  — owner not yet verified offline
+#     EXCLUDED: test_moviezguru.py  — per-site parser
+#     EXCLUDED: test_multimovies_import.py  — per-site parser
+#     EXCLUDED: test_operator_isolation.py  — owner not yet verified offline
+#     EXCLUDED: test_payments.py  — owner not yet verified offline
+#     EXCLUDED: test_rareanimes_import.py  — per-site parser
+#     EXCLUDED: test_rogmovies_import.py  — per-site parser
+#     EXCLUDED: test_ssrmovies_import.py  — per-site parser
+#     EXCLUDED: test_toonworld4all.py  — per-site parser
+#     EXCLUDED: test_vegamovies_import.py  — per-site parser
+#     EXCLUDED: test_world4ufree_import.py  — per-site parser
 #
 # KNOWN FAILURE MODES THIS FILE FIXES
 #   GitHub never ran any pipeline for this repo because the workflow files lived
@@ -61,7 +115,7 @@ jobs:
   tests:
     name: python3 -S offline suites
     runs-on: ubuntu-24.04   # system python 3.12 — same minor as the Oracle VM
-    timeout-minutes: 15
+    timeout-minutes: 25   # was 15; the suite list grew from 15 to 21 modules
 
     steps:
       - name: 📥 Checkout
@@ -120,3 +174,26 @@ jobs:
 
       - name: 🧪 test_backup_manager.py
         run: python3 -S Fast_Fetch/test_backup_manager.py
+
+      # Phase-1 modules (crown order qoder12_cigate): all offline, zero network,
+      # each verified on the Oracle VM (python 3.12, -S) before being listed here.
+      - name: 🧪 test_resolved_cache.py
+        run: python3 -S Fast_Fetch/test_resolved_cache.py
+
+      - name: 🧪 test_host_classifier.py
+        run: python3 -S Fast_Fetch/test_host_classifier.py
+
+      - name: 🧪 test_catalog_exporter.py
+        run: python3 -S Fast_Fetch/test_catalog_exporter.py
+
+      - name: 🧪 test_domain_resolver.py
+        run: python3 -S Fast_Fetch/test_domain_resolver.py
+
+      - name: 🧪 test_fast_fetch_domains.py
+        run: python3 -S Fast_Fetch/test_fast_fetch_domains.py
+
+      # The manifest gate goes last: it reads this file and fails if the real
+      # suite list and the disk have drifted — including if THIS step itself
+      # were ever removed.
+      - name: 🧪 test_ci_manifest.py
+        run: python3 -S Fast_Fetch/test_ci_manifest.py

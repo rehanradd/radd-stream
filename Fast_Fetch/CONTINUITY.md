@@ -2333,3 +2333,30 @@ a branch push cannot exclude descendants; disclosed, not repeated).
   uncommitted in the worktree, untouched. Discipline: on this lane, `git diff
   --cached --stat` against expectation per FILE is mandatory — files here are
   not single-owner.
+
+## Session 2026-11-05 (qoder12) — crown order qoder12_cigate: CI runs what CI did not run
+- **Quoted the gate first** (it was 15 run steps; Phase-1 modules appeared in
+  NO gate): now **21 steps**, one module per invocation. Added
+  test_resolved_cache (52) · test_host_classifier (64) · test_catalog_exporter (20)
+  · test_domain_resolver (18) · test_fast_fetch_domains (25, qoder14's file —
+  UNTRACKED at my push; its step and the manifest's ghost-check go red on the
+  hosted run until qoder14 ships it — disclosed, not skipped) ·
+  test_ci_manifest (7, new drift guard).
+- **`test_reconcile_adult.py` does not exist** anywhere in the tree (measured:
+  find + grep; `reconcile_adult` is a catalog_exporter function covered by
+  test_catalog_exporter). Not fabricated into the list; reported instead.
+- **Two known-red kept running**: evidence_writeback FAILED(3) + merge_catalogs
+  FAILED(1) — recorded as a KNOWN-RED comment block, NOT dropped, NOT xfailed.
+- **Drift guard** (Fast_Fetch/test_ci_manifest.py, stdlib, reads the YAML as
+  text): every top-level Fast_Fetch/test_*.py must be RUN or listed in the
+  machine-parsed `EXCLUDED:` block (32 entries with reasons); no overlap; no
+  ghost names; crown-mandated modules unremovable; one module per run step;
+  paths:-triggers intact; no pip in steps. PROVEN to bite: an unlisted
+  test_zz_drift_probe.py turned it red, removal turned it green.
+- **Full 21-step list proven locally in order** on this box: 768 tests, 4
+  failures — exactly the two debt modules. Per-module numbers in the report.
+- **Freeze respected**: staged only backend-ci.yml + test_ci_manifest.py by
+  exact path; CONTINUITY.md staged surgically (my append only — qoder14's 86
+  uncommitted lines at EOF untouched); fast_fetch.py NOT added/committed at
+  any point. timeout-minutes 15→25 (21 steps). No trunk push, no big temp
+  files (disk 98%).
