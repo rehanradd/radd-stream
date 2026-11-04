@@ -92,7 +92,12 @@ class VidoutPlaylistTests(unittest.TestCase):
         episode_config = {
             "initialServers": [{"name": "VIDOUT", "url": embed_url}]
         }
-        episode_url = "https://multimovies.garden/series/example-123/season/1/episode/1"
+        # Episode URLs are built from DOMAINS["multimovies"] (the live origin,
+        # registry overlay wins at read time since the 2026-11-05 drift
+        # reconciliation). Derive the expectation from the same authority
+        # instead of pinning a literal that TLD rotations will stale again.
+        mm_base = fast_fetch.DOMAINS.get("multimovies", "https://multimovies.garden")
+        episode_url = mm_base.rstrip("/") + "/series/example-123/season/1/episode/1"
 
         def fake_http_get(url, timeout=12):
             if url == episode_url:
@@ -107,7 +112,7 @@ class VidoutPlaylistTests(unittest.TestCase):
 
         with patch.object(fast_fetch, "http_get", side_effect=fake_http_get):
             result = fast_fetch.extract_post_data_multimovies(
-                "https://multimovies.garden/series/example-123",
+                mm_base.rstrip("/") + "/series/example-123",
                 '<title>Example Series (2024)</title>'
                 '<a href="/series/example-123/season/1/episode/1">Episode 1</a>'
                 '<script>watchConfig = {"initialServers":[]};</script>',
