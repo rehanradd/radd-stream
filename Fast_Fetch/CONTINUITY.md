@@ -2469,3 +2469,13 @@ a branch push cannot exclude descendants; disclosed, not repeated).
   re-proven red at clean HEAD in a throwaway worktree with zero working-tree
   edits (unverified-vs-active vocabulary from the unprobed-evidence commits;
   not mine, not fixed). Handoff text for _derive_kind delivered to crown.
+- **qoder14 registry->scrubber wiring guard (crown order 2026-11-05, post-9bc1e9e):**
+  trunk checked first per lesson — /tmp/crown_trunk has _registry_needles in
+  redact.py but NO test protecting the harvest or the wire (test_docs_invariants
+  "needles" = doc filenames, unrelated; test_redact never touches it). Guard
+  built in my tracked module (test_fast_fetch_domains.py, +3 tests, 25->28 OK):
+  baseline+hdtvb survive into site_needles() AND site_text_needles(); synthetic
+  end-to-end (driftprobe hosts reach both vocabularies through the real wire);
+  never-bare-TLD pin. MUTATION-PROVEN to bite: exec'ing redact.py with both
+  needles.update(_registry_needles()) calls removed fails all 3 tests (54
+  needles lost incl. hdtvb.net). No redact.py edit; fast_fetch.py freeze held.

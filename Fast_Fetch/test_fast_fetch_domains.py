@@ -330,6 +330,92 @@ class TestNeedleSuperset(unittest.TestCase):
                 self.assertIsInstance(mirror, str)
 
 
+class TestRegistryScrubberWiring(unittest.TestCase):
+    """The registry->scrubber drift guard proper. The needle baseline above
+    protects the HARVEST SOURCE; these tests protect the WIRE. redact
+    site_needles() (detection) and site_text_needles() (rewriting) each pull
+    _registry_needles() into the public scrubber (redact.py:1191/:1236). If
+    either `needles.update(...)` call is ever removed — or a registry prune
+    quietly deletes a public needle — redaction shrinks with no other test
+    noticing, and the public edge starts leaking host strings. A needle
+    disappearing from EITHER public vocabulary fails here, in CI, on the
+    live registry file, not just in the snapshot."""
+
+    @staticmethod
+    def _eligible(needles):
+        """Exactly redact's own drop rules at redact.py:1220-1223/:1246-1249,
+        so this guard can never demand a string the scrubber legitimately
+        refuses (short tokens, null-words, GENERIC_TOKENS)."""
+        return frozenset(
+            n for n in needles
+            if n and len(n) >= 4 and n not in {"unknown", "null", "none"}
+            and n not in redact.GENERIC_TOKENS)
+
+    def test_live_registry_harvest_survives_into_both_public_vocabularies(self):
+        harvest = self._eligible(redact._registry_needles())
+        self.assertTrue(harvest, "registry harvested nothing — CI checkout "
+                                 "is missing domain_registry.json")
+        lost_detect = harvest - set(redact.site_needles())
+        lost_rewrite = harvest - set(redact.site_text_needles())
+        self.assertFalse(lost_detect,
+                         f"registry needles vanished from the DETECTION "
+                         f"vocabulary (wire cut at redact.py:1191?): "
+                         f"{sorted(lost_detect)}")
+        self.assertFalse(lost_rewrite,
+                         f"registry needles vanished from the REWRITE "
+                         f"vocabulary (wire cut at redact.py:1236?): "
+                         f"{sorted(lost_rewrite)}")
+
+    def test_baseline_snapshot_survives_into_both_public_vocabularies(self):
+        eligible = self._eligible(NEEDLES_BEFORE)
+        missing_detect = eligible - set(redact.site_needles())
+        missing_rewrite = eligible - set(redact.site_text_needles())
+        self.assertFalse(missing_detect,
+                         f"public scrubber lost baseline needles: "
+                         f"{sorted(missing_detect)}")
+        self.assertFalse(missing_rewrite,
+                         f"public rewrite vocabulary lost baseline needles: "
+                         f"{sorted(missing_rewrite)}")
+
+    def test_synthetic_registry_needle_reaches_the_public_scrubber(self):
+        # End-to-end proof of the wire itself: a host that exists ONLY in a
+        # synthetic registry must still reach both vocabularies. Immune to
+        # baseline re-pinning — if someone un-plugs _registry_needles() from
+        # site_needles()/site_text_needles(), this goes red even when every
+        # snapshot test above was re-pinned away.
+        sites = {"driftprobe": {"active_base_url": "https://driftprobe.example",
+                                "status": "live",
+                                "known_mirrors": ["https://driftprobe.example",
+                                                  "https://driftprobe-mirror.example",
+                                                  "https://cdn.deep.driftprobe.example"]}}
+        with _temp_registry(sites) as reg:
+            real_path = pathlib.Path
+
+            class _FakePath:
+                def __init__(self, value):
+                    self._p = real_path(value)
+
+                def with_name(self, name):
+                    return reg
+
+            with mock.patch.object(redact, "Path", _FakePath):
+                det = set(redact.site_needles())
+                rew = set(redact.site_text_needles())
+        for needle in ("driftprobe", "driftprobe.example",
+                       "driftprobe-mirror.example",
+                       "cdn.deep.driftprobe.example"):
+            self.assertIn(needle, det,
+                          f"{needle!r} harvested from the registry but absent "
+                          "from site_needles() — detection wire cut")
+            self.assertIn(needle, rew,
+                          f"{needle!r} harvested from the registry but absent "
+                          "from site_text_needles() — rewrite wire cut")
+        # The never-bare-the-TLD rule (redact.py:1263): "example" is a plain
+        # English-ish token that must NOT join the vocabulary on its own.
+        self.assertNotIn("example", det)
+        self.assertNotIn("example", rew)
+
+
 class TestKatmovieBlockShadowing(unittest.TestCase):
     """Proof the second ``katmovie`` block in normalize_url has no live
     reference: ``DEFAULT_DOMAINS`` always carries the ``katmoviehd`` key,
