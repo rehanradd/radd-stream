@@ -173,7 +173,11 @@ class TestCategoryC(unittest.TestCase):
             ("https://linkrit.pro/x", "greenmotors"),
             ("https://gdflix.to/d/abc", "gdflix"),
             ("https://filebee.xyz/d/abc", "filebee"),
-            ("https://50filebee.xyz/d/abc", "filebee"),
+            # 50filebee-style prefix-mashed domains intentionally NO LONGER
+            # match (strict SLD since order qoder14_repin item 3); if the
+            # family really moves to those, domain_registry.json 'hosters'
+            # overrides are the sanctioned way to bless them.
+            ("https://new5.filebee.xyz/d/abc", "filebee"),
             ("https://filepress.to/d/abc", "filebee"),
             ("https://vegadrive.xyz/f/abc", "vegadrive"),
             ("https://direct-cloud.to/x", "direct-cloud"),
@@ -396,97 +400,146 @@ class TestTaxonomyCollisionGuard(unittest.TestCase):
                         (value,))
 
     def test_kind_letters_are_not_horizon_letters(self):
-        # A bare CATEGORY_LABELS "C"/"?" would be CHECK-rejected by the cache,
-        # but "A"/"B" would pass through with the WRONG meaning — which is why
-        # gating must use the bool predicates, never letters. hubcloud is the
-        # sharpest case: host kind C (bridge) here, cache horizon A there,
-        # because resolved_cache trusts the hubcloud *service* as a file
-        # minteer. The predicates still refuse to treat the raw bridge page
-        # as playable; that refusal is the storage gate, not the letter.
+        # Re-pinned 2026-11-05 (crown order qoder14_repin item 1): the old
+        # assertion here (hubcloud service + bridge URL == horizon A) pinned
+        # THE DEFECT ITSELF — it has since been fixed to an AND rule
+        # (trusted label AND direct-file host). The vocabularies are still
+        # different axes — kind words vs horizon letters — and the hubcloud
+        # kind-C/horizon-A reversal has collapsed into agreement: a bridge
+        # is now capped B on BOTH sides. Storage gating remains the bool
+        # predicates, never letters.
         bridge = "https://hubcloud.ist/drive/ABC"
         self.assertEqual(hc.classify(bridge).letter, "C")
         self.assertEqual(_rc._derive_category({"service": "hubcloud"}, bridge),
-                         "A")
+                         "B")
         self.assertFalse(hc.is_playable_category(bridge))
         self.assertFalse(hc.is_direct_file(bridge))
 
 
 @unittest.skipUnless(HAS_RC, _RC_REASON)
 class TestCategoryACrossCheckWithResolvedCache(unittest.TestCase):
-    """Ruling item 3: for EVERY host in the Category-A table, pin what
-    resolved_cache._derive_category returns on the same URL (no service
-    label) and document each deliberate disagreement. Deliberate, because
-    resolved_cache is qoder12's module and gets no behaviour change without
-    a Crown-Prince ruling; its letters choose a freshness cap, ours name the
-    host kind, and a classic file host the cache has never seen simply
-    defaults to the conservative short-lived horizon B."""
+    """Re-pinned 2026-11-05 to qoder12's AND rule (crown order
+    qoder14_repin item 1). resolved_cache now mints horizon A only when
+    BOTH hold: (1) the service label maps to direct_file in our
+    _SERVICE_TABLE, and (2) the URL host classifies direct_file. Every
+    expected value below carries a correctness verdict, not a copied
+    output:
 
-    # (marker in _HOST_TABLE, real-world URL, resolved_cache's answer, why)
+    * label + host agree -> A is CORRECT: two independent pieces of
+      evidence for a 24h trust promise — the bar the hubcloud fail-open
+      proved necessary.
+    * shape-only (no label) -> B is CORRECT and the AND rule is NOT wrong
+      for it: every real cache row is written from a resolve_live_source
+      answer carrying download_sources.service, so a label-less URL is
+      degenerate input; horizon A is a *cache trust claim*, distinct from
+      the *host kind* claim (is_direct_file stays True for a bare
+      pixeldrain.com/u/ link — only the horizon caps at the conservative
+      6h, whose sole cost is an earlier pool re-verify).
+    * label-only (trusted label, non-direct host) -> B is CORRECT: that is
+      precisely the label-lie class (gd-mirror rows are iqsmart pages).
+
+    The 14 rows the previous pin documented as URL-shape-only DISAGREE did
+    not weaken: they were B with no label before and are B with no label
+    now; with their true ledger label + true direct host they STRENGTHEN
+    to A (a capability the old marker list had no way to earn for
+    gofile/1fichier/megaup/hexload/desiupload-class hosts).
+    """
+
+    # (marker, real-world URL, ledger service label, resolved_cache answer, why)
     CROSS_CHECK = (
-        ("pixeldrain", "https://pixeldrain.com/u/AbC", "A", "agree"),
-        ("drive.google", "https://drive.google.com/file/d/1x/view", "B",
-         "DISAGREE: rc only trusts the google_cdn/gdmirror SERVICE label or "
-         "the googleusercontent endpoint, never the bare drive.google host"),
-        ("googleusercontent", "https://video-downloads.googleusercontent.com/abc",
-         "B", "DISAGREE: no rc marker covers googleusercontent; needs "
-         "service=google_cdn to reach horizon A"),
-        ("drive.usercontent.google",
-         "https://drive.usercontent.google.com/download?id=1x", "B",
-         "DISAGREE: not in rc's marker list (fast_fetch's "
-         "_DIRECT_MEDIA_HOSTS knows it, rc does not)"),
-        ("firebasestorage.googleapis",
-         "https://firebasestorage.googleapis.com/v0/b/x/o/y", "A",
-         "agree — via rc's 'storage.googleapis' substring marker"),
-        ("r2.dev", "https://pub-abc.r2.dev/movie.mp4", "A", "agree"),
-        ("r2.cloudflarestorage",
-         "https://b.r2.cloudflarestorage.com/k?X-Amz=1", "B",
-         "DISAGREE: rc marks only 'r2.dev'; the cloudflarestorage endpoint "
-         "is direct-file kind here but conservative horizon B there"),
-        ("cloudflarestorage", "https://b.cloudflarestorage.com/k", "B",
-         "DISAGREE: same reason as r2.cloudflarestorage"),
-        ("fastdl.beer", "https://fastdl.beer/file/a/movie.mkv", "A",
-         "agree — rc's 'fastdl' marker matches"),
-        ("gofile", "https://gofile.io/d/abc", "B",
-         "DISAGREE (documented by ruling): direct_file kind, horizon B"),
-        ("1fichier", "https://1fichier.com/?abc", "B",
-         "DISAGREE (documented by ruling): direct_file kind, horizon B"),
-        ("megaup", "https://megaup.net/abc", "B",
-         "DISAGREE (documented by ruling): direct_file kind, horizon B"),
-        ("vikingfile", "https://vikingfile.com/f/abc", "B",
-         "DISAGREE: direct_file kind, horizon B"),
-        ("desiupload", "https://desiupload.co/abc", "B",
-         "DISAGREE (documented by ruling): direct_file kind, horizon B"),
-        ("hexload", "https://hexload.com/f-abc.html", "B",
-         "DISAGREE (documented by ruling): direct_file kind, horizon B"),
-        ("dailyuploads", "https://dailyuploads.net/abc", "B",
-         "DISAGREE: direct_file kind, horizon B"),
-        ("frdl", "https://frdl.to/abc", "B",
-         "DISAGREE: direct_file kind, horizon B"),
-        ("mega.nz", "https://mega.nz/file/abc", "B",
-         "DISAGREE: direct_file kind, horizon B"),
+        ("pixeldrain.com", "https://pixeldrain.com/u/AbC", "pixeldrain", "A",
+         "label+host agree"),
+        ("drive.google.com", "https://drive.google.com/file/d/1x/view",
+         "google_cdn", "A", "label+host agree"),
+        ("googleusercontent.com",
+         "https://video-downloads.googleusercontent.com/abc", "google_cdn",
+         "A", "label+host agree"),
+        ("drive.usercontent.google.com",
+         "https://drive.usercontent.google.com/download?id=1x", "google_cdn",
+         "A", "label+host agree"),
+        ("firebasestorage.googleapis.com",
+         "https://firebasestorage.googleapis.com/v0/b/x/o/y", "google_cdn",
+         "A", "label+host agree"),
+        ("r2.dev", "https://pub-abc.r2.dev/movie.mp4", "fsl_r2", "A",
+         "label+host agree"),
+        ("r2.cloudflarestorage.com",
+         "https://b.r2.cloudflarestorage.com/k?X-Amz=1", "fsl_r2", "A",
+         "label+host agree"),
+        ("cloudflarestorage.com", "https://b.cloudflarestorage.com/k",
+         "fsl_r2", "A", "label+host agree"),
+        ("fastdl.beer", "https://fastdl.beer/file/a/movie.mkv", "fastdl-beer",
+         "A", "item-2 gap closed: without the fastdl-beer service spelling "
+         "in _SERVICE_TABLE this row fell to B"),
+        ("gofile.io", "https://gofile.io/d/abc", "gofile", "A",
+         "label+host agree (was unreachable before the label was added)"),
+        ("1fichier.com", "https://1fichier.com/?abc", "1fichier", "A",
+         "label+host agree"),
+        ("megaup.net", "https://megaup.net/abc", "megaup", "A",
+         "label+host agree"),
+        ("vikingfile.com", "https://vikingfile.com/f/abc", "vikingfile", "A",
+         "label+host agree"),
+        ("desiupload.co", "https://desiupload.co/abc", "desiupload", "A",
+         "label+host agree"),
+        ("hexload.com", "https://hexload.com/f-abc.html", "hexload", "A",
+         "label+host agree"),
+        ("dailyuploads.net", "https://dailyuploads.net/abc", "dailyuploads",
+         "A", "label+host agree"),
+        ("frdl.to", "https://frdl.to/abc", "frdl", "A", "label+host agree"),
+        ("mega.nz", "https://mega.nz/file/abc", "mega", "A",
+         "label+host agree"),
+    )
+
+    # Degenerate single-evidence rows: each must cap at B, by verdict above.
+    SINGLE_EVIDENCE_ROWS = (
+        ("shape only (no service label)", {},
+         "https://pixeldrain.com/u/AbC", "B"),
+        ("shape only (no service label)", {},
+         "https://pub-abc.r2.dev/movie.mp4", "B"),
+        ("shape only (no service label)", {},
+         "https://fastdl.beer/file/a/movie.mkv", "B"),
+        ("shape only (no service label)", {},
+         "https://firebasestorage.googleapis.com/v0/b/x/o/y", "B"),
+        ("label only (host is not a direct file)", {"service": "pixeldrain"},
+         "https://viewer.evil.tld/watch/x", "B"),
+        ("label only (host is an embed player)", {"service": "fastdl"},
+         "https://player.mixdrop.co/e/abc", "B"),
+        ("impostor host buys nothing", {"service": "pixeldrain"},
+         "https://pixeldrain.dev/u/AbC", "B"),
     )
 
     def test_every_category_a_marker_has_a_cross_check_row(self):
         markers_a = {marker for marker, category, _ in hc._HOST_TABLE
                      if category == hc.CATEGORY_DIRECT_FILE}
-        covered = {name for name, _url, _rc_exp, _why in self.CROSS_CHECK}
+        covered = {name for name, _u, _s, _e, _w in self.CROSS_CHECK}
         self.assertEqual(markers_a, covered,
                          "a Category-A host was added without a "
                          "resolved_cache cross-check row")
 
-    def test_cross_check_pinned_to_measured_behaviour(self):
-        for name, url, expected_rc, why in self.CROSS_CHECK:
+    def test_label_and_host_agreement_mints_horizon_a(self):
+        for name, url, service, expected, why in self.CROSS_CHECK:
             with self.subTest(name=name):
                 self.assertTrue(hc.is_direct_file(url),
                                 f"{name} must be Category A kind")
-                self.assertEqual(_rc._derive_category({}, url), expected_rc,
-                                 f"{name}: {why}")
+                self.assertTrue(hc.is_direct_file("", service),
+                                f"{name}: service {service!r} must map "
+                                "direct_file in _SERVICE_TABLE")
+                self.assertEqual(
+                    _rc._derive_category({"service": service}, url), expected,
+                    why)
 
-    def test_agree_and_disagree_split_is_accurate(self):
-        disagreements = [row for row in self.CROSS_CHECK if row[2] != "A"]
-        agreements = [row for row in self.CROSS_CHECK if row[2] == "A"]
-        self.assertEqual(len(disagreements), 14)
-        self.assertEqual(len(agreements), 4)
+    def test_single_evidence_never_mints_horizon_a(self):
+        for why, data, url, expected in self.SINGLE_EVIDENCE_ROWS:
+            with self.subTest(why=why, url=url):
+                self.assertEqual(
+                    _rc._derive_category(data, url), expected, why)
+
+    def test_kind_claim_survives_the_horizon_cap(self):
+        # The shape-only verdict must NOT have weakened the KIND side:
+        # a bare pixeldrain.com link is still Category A for every caller
+        # of the predicates; only the cache horizon is conservative.
+        self.assertTrue(hc.is_direct_file("https://pixeldrain.com/u/AbC"))
+        self.assertTrue(hc.is_playable_category(
+            "https://fastdl.beer/file/a/movie.mkv"))
 
 
 @unittest.skipUnless(HAS_SS, _SS_REASON)
@@ -509,12 +562,29 @@ class TestSiteScoutConsumesAuthority(unittest.TestCase):
     def test_every_authority_token_classifies_identically_in_scout(self):
         kinds = _ss.build_kinds_map({})
         for token, kind in hc.as_scout_hoster_kinds():
-            url = f"https://{token}.test/x"
+            # Dotted markers are registrable domains (host IS the marker);
+            # bare-label markers match <label>.<any-tld> exactly.
+            host = token if "." in token else f"{token}.test"
+            url = f"https://{host}/x"
             with self.subTest(token=token):
                 self.assertEqual(_ss.classify_href(url, kinds), kind)
                 # and the authority agrees on the same URL
                 self.assertEqual(hc.SITE_SCOUT_KINDS.get(
                     hc.classify(url).category), kind)
+
+    def test_scout_substring_matcher_is_the_residual_loose_side(self):
+        # DOCUMENTED, not fixed: site_scout.classify_href matches tokens as
+        # substrings of the whole URL — a pre-existing, CI-pinned behaviour
+        # of the scout. The authority is strict, so on an impostor host the
+        # two deliberately diverge and the STRICT answer governs storage
+        # (is_direct_file / is_playable_category). Tightening scout's matcher
+        # semantics too would be a crown order against test_site_scout's
+        # pinned cases, not a side effect of this file.
+        impostor = "https://pixeldrain.com.attacker.tld/u/AbC"
+        self.assertEqual(hc.classify(impostor).category, hc.CATEGORY_UNKNOWN)
+        self.assertFalse(hc.is_direct_file(impostor))
+        self.assertEqual(
+            _ss.classify_href(impostor, _ss.build_kinds_map({})), "direct")
 
     def test_vcloud_semantic_disagreement_resolved_to_bridge(self):
         # host-power-weakness.md: "VCloud / VegaCloud | Bridge -> Generate
@@ -574,6 +644,108 @@ class TestSiteScoutConsumesAuthority(unittest.TestCase):
                     "https://randomhoster.example/file/xyz"):
             with self.subTest(url=url):
                 self.assertEqual(_ss.classify_href(url, kinds), "unknown")
+
+
+class TestAdversarialHostTrust(unittest.TestCase):
+    """Crown order qoder14_repin item 3: substring host trust was the same
+    class of hole as the hubcloud horizon bug, arriving from the other
+    direction. The demanded impostors must NOT earn Category A — or any
+    trust — while every legitimate subdomain of a trusted registrable
+    domain still classifies."""
+
+    def test_pixeldrain_impostors_are_not_category_a(self):
+        for bad in (
+            "https://pixeldrain.dev/u/AbC",
+            "https://pixeldrain.dev/api/file/AbC?download",
+            "https://xpixeldrain.com/u/AbC",
+            "https://pixeldrain.com.attacker.tld/u/AbC",
+            "https://notreallypixeldrain.net/u/AbC",
+        ):
+            with self.subTest(url=bad):
+                c = hc.classify(bad)
+                self.assertEqual(c.category, hc.CATEGORY_UNKNOWN, bad)
+                self.assertFalse(hc.is_direct_file(bad))
+                self.assertFalse(hc.is_playable_category(bad))
+                self.assertFalse(hc.is_pixeldrain(bad))
+
+    def test_trusted_pixeldrain_host_and_subdomains(self):
+        for good in ("https://pixeldrain.com/u/AbC",
+                     "https://api.pixeldrain.com/file/AbC"):
+            with self.subTest(url=good):
+                self.assertTrue(hc.is_pixeldrain(good))
+                self.assertTrue(hc.is_direct_file(good))
+
+    def test_impostor_page_is_not_rewritten_to_an_api_endpoint(self):
+        url, headers = hc.prepare_request(
+            "https://pixeldrain.dev/u/AbC",
+            {"Referer": "https://multimovies.example/watch"})
+        self.assertEqual(url, "https://pixeldrain.dev/u/AbC")
+        self.assertEqual(headers.get("Referer"),
+                         "https://multimovies.example/watch")
+
+    def test_wrong_tld_on_strict_single_domain_hosts_classifies_unknown(self):
+        # Deliberate conservatism: the docs prove exactly ONE registered
+        # domain for these; an unexpected TLD is an unexpected service.
+        for bad in ("https://gofile.xyz/d/abc", "https://megaup.com/x",
+                    "https://1fichier.to/x", "https://drive.google.ru/x"):
+            with self.subTest(url=bad):
+                self.assertEqual(hc.classify(bad).category,
+                                 hc.CATEGORY_UNKNOWN)
+
+    def test_tld_rotating_families_match_any_tld_on_the_exact_label(self):
+        for good, category in (
+            ("https://hubcloud.foo/drive/x", hc.CATEGORY_BRIDGE),
+            ("https://vidly.io/embed/x", hc.CATEGORY_HLS_EMBED),
+            ("https://bingr.pw/e/x", hc.CATEGORY_HLS_EMBED),
+            ("https://new5.filebee.xyz/d/x", hc.CATEGORY_BRIDGE),
+            ("https://embed.vidrift.net/api/orion/master.m3u8",
+             hc.CATEGORY_HLS_EMBED),
+            ("https://rozgarlelo.modiplay.xyz/embed/tmdb/movie?id=1",
+             hc.CATEGORY_HLS_EMBED),
+        ):
+            with self.subTest(url=good):
+                self.assertEqual(hc.classify(good).category, category)
+        for bad in ("https://xhubcloud.ist/drive/x",
+                    "https://hubcloud.com.attacker.tld/f/x",
+                    "https://evil-hubcloud.ist/f/x",
+                    "https://notvidrift.net/x"):
+            with self.subTest(rejected=bad):
+                self.assertEqual(hc.classify(bad).category,
+                                 hc.CATEGORY_UNKNOWN)
+
+    def test_marker_names_are_all_valid_host_shapes(self):
+        for marker, _cat, _be in hc._HOST_TABLE:
+            with self.subTest(marker=marker):
+                self.assertNotIn("/", marker)
+                self.assertFalse(marker.startswith("."))
+
+
+class TestServiceLabelSpellings(unittest.TestCase):
+    """Order qoder14_repin item 2: the label spellings the ledger writes must
+    map to the same kind the host table gives — or single-evidence AND rows
+    fall to the conservative cap for no reason."""
+
+    def test_fastdl_beer_spelling_closes_the_gap(self):
+        for label in ("fastdl-beer", "fastdl"):
+            with self.subTest(label=label):
+                self.assertTrue(hc.is_direct_file("", service=label))
+
+    def test_classic_file_host_label_spellings_map_direct(self):
+        for label in ("gofile", "1fichier", "megaup", "vikingfile",
+                      "desiupload", "hexload", "dailyuploads", "frdl",
+                      "mega", "pixeldrain", "fsl_r2", "google_cdn"):
+            with self.subTest(label=label):
+                self.assertTrue(hc.is_direct_file("", service=label))
+
+    def test_no_service_label_maps_bridge_to_direct_or_vice_versa(self):
+        for label, expect in (("hubcloud", hc.CATEGORY_BRIDGE),
+                              ("hubcloud_10g", hc.CATEGORY_BRIDGE),
+                              ("vegadrive", hc.CATEGORY_BRIDGE),
+                              ("cineverse", hc.CATEGORY_HLS_EMBED),
+                              ("gd-mirror", hc.CATEGORY_HLS_EMBED)):
+            with self.subTest(label=label):
+                c = hc.classify("", service=label)
+                self.assertEqual(c.category, expect)
 
 
 if __name__ == "__main__":

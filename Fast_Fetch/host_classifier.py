@@ -44,17 +44,19 @@ on the modiplay/bingr path).
 ⚠ TAXONOMY COLLISION (Phase-1 integration ruling, 2026-11-04): the letters
 ``A``/``B``/``C``/``?`` in :data:`CATEGORY_LABELS` name the **host kind**.
 ``resolved_cache.category`` reuses the same letters for a **different axis**
-— the cache-horizon trust class its ``_derive_category`` derives from the
-service label and URL markers (A = permanent-file trust, B = short-lived
-packer trust). They are NOT interchangeable: ``gofile``/``1fichier``/
-``megaup``/``hexload``/``desiupload`` and the raw Google-Drive host family
-are kind-A here but horizon-B over there, while ``hubcloud`` is kind-C (a
-bridge!) here yet horizon-A there. No caller may ever pass a
-:data:`CATEGORY_LABELS` value into ``resolved_cache.category``; gating a
-store happens through :func:`is_direct_file` / :func:`is_playable_category`
-(bools), never through letters. See ``test_host_classifier.py``
-``TestCategoryACrossCheckWithResolvedCache`` for the full measured
-disagreement table.
+— the cache-horizon trust class its ``_derive_category`` computes. They are
+NOT interchangeable and no caller may ever pass a :data:`CATEGORY_LABELS`
+value into ``resolved_cache.category``; gating a store happens through
+:func:`is_direct_file` / :func:`is_playable_category` (bools), never through
+letters. Since the crown-order-hubcloud fix (2026-11-05) the horizon rule is
+an AND: a row earns horizon A only when a trusted direct-file **service
+label** from :data:`_SERVICE_TABLE` AND a direct-file **host** agree — a
+label alone (hubcloud's old 24h trust) or a URL shape alone (bare
+``pixeldrain.com/u/…`` with no label → conservative 6h) cannot mint it. The
+kind-C/horizon-A reversal that once made hubcloud the sharpest collision
+case now collapses into agreement (C here, capped B there). See
+``test_host_classifier.py`` ``TestCategoryACrossCheckWithResolvedCache`` for
+the full measured table.
 
 And per Crown-Prince order qoder14 (Task A): this table is now the **single
 authority for hoster classification** — ``site_scout.DEFAULT_HOSTER_KINDS``
@@ -90,44 +92,62 @@ CATEGORY_LABELS = {
 # ---------------------------------------------------------------------------
 # Host table — (hostname marker, category, canonical backend)
 #
-# Matching is substring against the lower-cased hostname, first match wins,
-# so more specific markers must come first. Families with "dozens of domains"
-# (gdflix, hubcloud) match on the family substring, per host-power-weakness:
-# one domain dying must not kill the family, but they share the pattern here;
-# per-domain pass rates belong to the probe layer, not the classifier.
+# Marker semantics are STRICT host matching, never substring (crown order
+# qoder14_repin item 3): a dotted marker is a registrable domain and matches
+# only the host itself or one of its subdomains ("pixeldrain.com" accepts
+# pixeldrain.com and embed.example.pixeldrain.com but rejects pixeldrain.dev,
+# xpixeldrain.com and pixeldrain.com.attacker.tld); a bare-label marker is a
+# second-level domain and matches <label>.<any-tld> plus subdomains of it —
+# reserved for the TLD-rotating families the docs prove to move across TLDs
+# (hubcloud.ist/.foo, gdflix's dozens of domains, bingr, vidly...). A bare
+# label is NOT used where the docs prove a stable registered domain: that is
+# precisely how pixeldrain.dev could buy Category A's 24h trust under the old
+# substring matcher. First match wins, so more specific rows come first.
 # ---------------------------------------------------------------------------
 
+def _host_matches(marker: str, host: str) -> bool:
+    """Registrable-domain (dotted marker) or exact-SLD (bare marker) match.
+    Never substring: an attacker-controlled suffix can never imitate a
+    trusted label."""
+    if "." in marker:
+        return host == marker or host.endswith("." + marker)
+    parts = host.split(".")
+    return len(parts) >= 2 and parts[-2] == marker
+
+
 _HOST_TABLE: Tuple[Tuple[str, str, str], ...] = (
-    # --- Category A: direct file hosts ---
-    ("pixeldrain", CATEGORY_DIRECT_FILE, "pixeldrain"),
-    ("drive.google", CATEGORY_DIRECT_FILE, "gdrive"),
-    ("googleusercontent", CATEGORY_DIRECT_FILE, "gdrive"),
-    ("drive.usercontent.google", CATEGORY_DIRECT_FILE, "gdrive"),
-    ("firebasestorage.googleapis", CATEGORY_DIRECT_FILE, "gdrive"),
+    # --- Category A: direct file hosts (all proven single registered
+    # domains — an unexpected TLD means an unexpected service) ---
+    ("pixeldrain.com", CATEGORY_DIRECT_FILE, "pixeldrain"),
+    ("drive.google.com", CATEGORY_DIRECT_FILE, "gdrive"),
+    ("googleusercontent.com", CATEGORY_DIRECT_FILE, "gdrive"),
+    ("drive.usercontent.google.com", CATEGORY_DIRECT_FILE, "gdrive"),
+    ("firebasestorage.googleapis.com", CATEGORY_DIRECT_FILE, "gdrive"),
     ("r2.dev", CATEGORY_DIRECT_FILE, "r2"),
-    ("r2.cloudflarestorage", CATEGORY_DIRECT_FILE, "r2"),
-    ("cloudflarestorage", CATEGORY_DIRECT_FILE, "r2"),
+    ("r2.cloudflarestorage.com", CATEGORY_DIRECT_FILE, "r2"),
+    ("cloudflarestorage.com", CATEGORY_DIRECT_FILE, "r2"),
     ("fastdl.beer", CATEGORY_DIRECT_FILE, "fastdl"),
-    ("gofile", CATEGORY_DIRECT_FILE, "gofile"),
-    ("1fichier", CATEGORY_DIRECT_FILE, "1fichier"),
-    ("megaup", CATEGORY_DIRECT_FILE, "megaup"),
-    ("vikingfile", CATEGORY_DIRECT_FILE, "vikingfile"),
-    ("desiupload", CATEGORY_DIRECT_FILE, "desiupload"),
-    ("hexload", CATEGORY_DIRECT_FILE, "hexload"),
-    ("dailyuploads", CATEGORY_DIRECT_FILE, "dailyuploads"),
-    ("frdl", CATEGORY_DIRECT_FILE, "frdl"),
+    ("gofile.io", CATEGORY_DIRECT_FILE, "gofile"),
+    ("1fichier.com", CATEGORY_DIRECT_FILE, "1fichier"),
+    ("megaup.net", CATEGORY_DIRECT_FILE, "megaup"),
+    ("vikingfile.com", CATEGORY_DIRECT_FILE, "vikingfile"),
+    ("desiupload.co", CATEGORY_DIRECT_FILE, "desiupload"),
+    ("hexload.com", CATEGORY_DIRECT_FILE, "hexload"),
+    ("dailyuploads.net", CATEGORY_DIRECT_FILE, "dailyuploads"),
+    ("frdl.to", CATEGORY_DIRECT_FILE, "frdl"),
     ("mega.nz", CATEGORY_DIRECT_FILE, "mega"),
 
     # --- Category B: HLS streams / embed players ---
-    # vidrift before anything else so a modiplay-proxied master on
-    # embed.vidrift.net is still backend "vidrift".
-    ("vidrift", CATEGORY_HLS_EMBED, "vidrift"),
+    # vidrift.net is the proven embed + api/orion master domain (vidrift.md,
+    # verified twice on two networks); bingr/hanerix/vibuxer/streamhg move
+    # across TLDs/CDNs, so they keep exact-SLD matching.
+    ("vidrift.net", CATEGORY_HLS_EMBED, "vidrift"),
     ("bingr", CATEGORY_HLS_EMBED, "vidrift"),
     ("hanerix", CATEGORY_HLS_EMBED, "streamhg"),
     ("vibuxer", CATEGORY_HLS_EMBED, "streamhg"),
     ("streamhg", CATEGORY_HLS_EMBED, "streamhg"),
-    ("iqsmartgames", CATEGORY_HLS_EMBED, "streamhg"),
-    ("modiplay", CATEGORY_HLS_EMBED, "modiplay"),
+    ("iqsmartgames.com", CATEGORY_HLS_EMBED, "streamhg"),
+    ("modiplay.xyz", CATEGORY_HLS_EMBED, "modiplay"),
     ("vidbolt", CATEGORY_HLS_EMBED, "vidbolt"),
     ("vidly", CATEGORY_HLS_EMBED, "vidly"),
     ("filmu", CATEGORY_HLS_EMBED, "vidly"),
@@ -145,7 +165,9 @@ _HOST_TABLE: Tuple[Tuple[str, str, str], ...] = (
     ("autoembed", CATEGORY_HLS_EMBED, "autoembed"),
 
     # --- Category C: bridges (need unwrapping) ---
-    # direct-cloud before generic "cloud" style markers on purpose.
+    # Every family here is documented multi-TLD (host-power-weakness.md:
+    # "many domains = many backups", "dozens of domains"), so exact-SLD
+    # label matching — any TLD on the SAME label — is the correct strictness.
     ("direct-cloud", CATEGORY_BRIDGE, "direct-cloud"),
     ("hubcloud", CATEGORY_BRIDGE, "hubcloud"),
     ("hubdrive", CATEGORY_BRIDGE, "hubcloud"),
@@ -171,7 +193,12 @@ _HOST_TABLE: Tuple[Tuple[str, str, str], ...] = (
 )
 
 #: Service labels -> (category, backend). Only consulted when there is no URL,
-#: and marked as label-derived — labels lie, hostnames don't.
+#: and marked as label-derived — labels lie, hostnames don't. The direct-file
+#: spellings here also feed resolved_cache._derive_category's AND rule (a
+#: horizon-A row needs BOTH a trusted label here AND a direct-file host).
+#: "fastdl-beer" is the exact spelling the ledger uses (crown order
+#: qoder14_repin item 2): without it, genuine fastdl.beer resolves carried the
+#: fastdl-beer service label yet fell to the conservative 6h horizon.
 _SERVICE_TABLE: Dict[str, Tuple[str, str]] = {
     "cineverse": (CATEGORY_HLS_EMBED, "modiplay"),
     "modiplay": (CATEGORY_HLS_EMBED, "modiplay"),
@@ -192,6 +219,16 @@ _SERVICE_TABLE: Dict[str, Tuple[str, str]] = {
     "hubcloud": (CATEGORY_BRIDGE, "hubcloud"),
     "hubcloud_10g": (CATEGORY_BRIDGE, "hubcloud"),
     "fastdl": (CATEGORY_DIRECT_FILE, "fastdl"),
+    "fastdl-beer": (CATEGORY_DIRECT_FILE, "fastdl"),
+    "gofile": (CATEGORY_DIRECT_FILE, "gofile"),
+    "1fichier": (CATEGORY_DIRECT_FILE, "1fichier"),
+    "megaup": (CATEGORY_DIRECT_FILE, "megaup"),
+    "vikingfile": (CATEGORY_DIRECT_FILE, "vikingfile"),
+    "desiupload": (CATEGORY_DIRECT_FILE, "desiupload"),
+    "hexload": (CATEGORY_DIRECT_FILE, "hexload"),
+    "dailyuploads": (CATEGORY_DIRECT_FILE, "dailyuploads"),
+    "frdl": (CATEGORY_DIRECT_FILE, "frdl"),
+    "mega": (CATEGORY_DIRECT_FILE, "mega"),
     "direct-cloud": (CATEGORY_BRIDGE, "direct-cloud"),
     "greenmotors": (CATEGORY_BRIDGE, "greenmotors"),
     "gamerxyt": (CATEGORY_BRIDGE, "gamerxyt"),
@@ -257,7 +294,14 @@ def pixeldrain_file_id(url: str) -> Optional[str]:
 
 
 def is_pixeldrain(url: str) -> bool:
-    return "pixeldrain" in _hostname(url)
+    """Strict registrable-domain check — NOT a substring test.
+
+    ``pixeldrain.dev``, ``xpixeldrain.com`` and ``pixeldrain.com.attacker.tld``
+    are different services (or hostile hosts) and must not buy the Category A
+    treatment or the /api/file/ rewrite (crown order qoder14_repin item 3).
+    """
+    host = _hostname(url)
+    return host == "pixeldrain.com" or host.endswith(".pixeldrain.com")
 
 
 # ---------------------------------------------------------------------------
@@ -277,7 +321,7 @@ def classify(url: str = "", service: str = "") -> Classification:
     host = _hostname(url)
     if host:
         for marker, category, backend in _HOST_TABLE:
-            if marker in host:
+            if _host_matches(marker, host):
                 return Classification(
                     url=str(url or ""), host=host, category=category,
                     backend=backend, source="host",
