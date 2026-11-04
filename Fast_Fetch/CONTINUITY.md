@@ -1930,3 +1930,60 @@ gate suites green. Staged only `host_classifier.py` +
 `test_host_classifier.py`; `viewer.py`/`test_resolved_cache.py`/`prefetch_worker.py`
 left as qoder12's. Push `eb630c2..3ae6dd3` carried qoder12's `5aace48` to the
 remote as part of the fast-forward.
+
+## Session 2026-11-04 (phase1 prefetcher lane) — Background Prefetcher Architect: `prefetch_worker.py` drafted and tested
+
+**Shipped:** `Fast_Fetch/prefetch_worker.py` — the stdlib-only prefetch pool that
+`resolved_cache.py`'s docstring predicted ("or in the prefetch pool, later, with
+`source='pool'`"). It sweeps the top N (default 200) priority titles, finds each
+title's Tier-1 link via `tiers.for_release` (best play-mode band winner — the link
+the Auto player starts at), checks warmth with `resolved_cache.lookup_cache` +
+its own `reverify_after` horizon (refuses rows whose horizon is inside the 1-hour
+fresh window), re-resolves misses through `fast_fetch.resolve_live_source(id,
+v2=True)`, and stores with `record_resolved_cache(..., source="pool")`.
+
+**Design decisions, measured against the lane at `d13801e`:**
+- Priority = `release_count + source_count` DESC — the ledger has no play-count
+  column and `viewer.py` refuses to invent one; this is the published "trending"
+  sort, reused rather than invented again.
+- Adult exclusion happens **before** resolve: the priority query drops
+  `is_18_plus=1` posts and every `canonical_key` twin of a flagged post (the
+  AGENTS.md known hole), so no pool row is ever warmed for a hidden work.
+- No table row for failures (the canonical schema only holds accepted URLs);
+  failed links back off in-process for `--fail-backoff` (default 900s).
+- Politeness: one resolve at a time, 2 s between resolves, and a `/proc/loadavg`
+  gate (1-min avg > ceiling → park) re-checked every 15 s before **each** resolve.
+- **Measured host fact:** this VM idles at loadavg 6–8.5. With the spec's
+  ceiling of 2.0 the worker correctly resolves *nothing* (proven live: a sweep
+  blocked ~300 s and did zero resolves). As a deployed daemon it needs
+  `--load-ceiling` tuned for the box, or quiet-window scheduling — recorded so
+  the next agent does not mistake the silence for a broken worker.
+
+**Test evidence (scratch DBs under /tmp, built by ATTACH-copying the top-3
+priority posts + their releases/sources from the merged production catalog; the
+live tree was not touched):**
+- Selection: top-3 = One Piece (19034), Pokémon (13804), Lock Upp (12233); the
+  canonical_key adult filter demonstrably ran.
+- Dry-run lists planned resolves without network.
+- Resolve + cache: 2 Tier-1 links warmed, rows carry `source='pool'`,
+  `category='A'`, `kind='file'`, 24 h horizon (permanent ceiling) — written in
+  the canonical `resolved_cache` schema, not a rival one.
+- Fresh-skip: rerun swept `warm=2 resolved=0`.
+- Expiry-inside-1h: horizon shortened to 20 min → re-resolved, horizon restored.
+- Failure honesty: unresolvable fake bridge → `no_playable_source` (v2 contract),
+  nothing cached, `failed=1`, backoff applied.
+- Load gate: `gated` semantics unit-tested ((blocked, stopping)).
+
+**Gate:** `test_database` 76 OK, `test_vidout` 6 OK, `test_resolved_cache` OK,
+`test_tiers` OK.
+
+**Push state:** committed to `feat/phase1-resolved-cache` (prefetch_worker.py +
+this log only — the lane's uncommitted `viewer.py` / `test_resolved_cache.py`
+changes belong to another agent and were left unstaged). NOT pushed: the branch
+head had moved twice mid-session under this worktree; the lane owner should
+rebase and push.
+
+**Next for this lane:** decide the deployed `--load-ceiling` (or schedule),
+add a systemd unit, and widen the pool beyond Tier-1 winners (backups per band)
+once the request path reads pool rows. A `test_prefetch_worker.py` offline suite
+should follow before merge.
