@@ -6,20 +6,42 @@ Backlog #3: render the browse surfaces to disk so a static file server can
 answer them with zero request-path load. GATED by the Crown Prince (order
 qoder13): this module builds and tests against a STAGING directory only. It
 must not be pointed at `/var/www` or wired into nginx until (a) the Emperor
-approves the web root and (b) qoder11's `reconcile_adult.py` lands, because a
-static JSON is a new public display surface with no runtime gate behind it.
+approves the web root and (b) the adult key-reconciliation has run on the
+deploying database — trunk's own tool,
+``Fast_Fetch/backfill_adult_key.py --corroborate --apply`` (read-only by
+default; ``--audit`` to see the numbers, ``--undo`` to take them back), folded
+only on reproducible evidence — because a static JSON is a new public display
+surface with no runtime gate behind it.
+
+HONEST LIMIT, stated here rather than discovered later. The exclusion below
+closes the **same-key** class: one work, one ``canonical_key``, any number of
+rows, hidden if any row of that key is flagged. It does NOT close the
+**cross-key** class — the same film filed under two different ``canonical_key``
+values, or under none. That class stays exported-unhidden until
+``backfill_adult_key.py`` has actually run on the database being exported from,
+and this module cannot detect it: from inside a query, a cross-key twin is just
+another work. So the export's safety is exactly as good as the key hygiene of
+the ledger it reads, and an export from a stale ledger is a stale shield.
 
 Safe by construction, so publishing is a config change and not a code change:
 
 * **The adult law is in the export query, not bolted on after it.** The row
   clause is `redact.adult_clause` — the one predicate every public emitter
   already shares — AND-ed with the canonical-key twin exclusion (a work with
-  any flagged row is a flagged work, 442 keys / 455 works today, see AGENTS.md
-  "known hole"). The same exclusion the prefetch worker applies at selection.
+  any flagged row is a flagged work; measured on production `posts`: **394
+  mixed-flag keys, 394 flagged rows, 407 unflagged twins** — AGENTS.md's older
+  "442 / 455" figure is stale and must not be reconciled to). The same
+  exclusion the prefetch worker applies at selection. See the HONEST LIMIT
+  above for the class this does NOT reach.
 * **The suppression is measured and reported**, not assumed: every sweep
   returns how many unflagged works the twin clause removed. If that number
-  ever goes to zero in production it means the ledger reconciled; the exporter
-  stays correct either way (the clause is belt, reconciliation is braces).
+  ever goes to zero in production it means the ledger reconciled *on the
+  database being exported from*; the exporter stays correct either way (the
+  clause is belt, reconciliation is braces) — and trunk's evidence-fold makes
+  the braces a measured thing rather than a promise: of 15,068 stored flags,
+  only those reproducible from `is_adult_title()` fold, so a naive blanket fold
+  would have hidden 3,490 works that are not adult, while
+  `--corroborate --apply` hides the 12 that genuinely stand on evidence.
 * **Nothing signed ever leaves this module.** No import of `signing_secret`,
   no `mint_token`, no art handles, no stream/download URLs. Rows are projected
   through `redact.project(row, "post_brief")` — the exact allowlist the live
@@ -84,7 +106,7 @@ def guarded_posts_where() -> str:
     Composed from `redact.adult_clause("p")` so there remains exactly one
     definition of the row-level rule in the repo, plus the canonical-key twin
     exclusion which the clause itself does not yet carry (until
-    `reconcile_adult.py` folds it into the ledger).
+    `backfill_adult_key.py --corroborate --apply` folds it into the ledger).
     """
     return (
         f"({redact.adult_clause('p')})"
@@ -99,7 +121,8 @@ def count_twin_suppressed(conn: sqlite3.Connection) -> int:
 
     Counts unflagged ROWS that the row-level `adult_clause` would happily pass
     but whose `canonical_key` names a flagged work: exactly the AGENTS.md
-    "455 flagged works reachable under an unflagged twin" population. A work
+    "flagged works reachable under an unflagged twin" population — measured on
+    production `posts` as 407 unflagged twin rows across 394 mixed keys. A work
     with no key is counted by row id, so the number is works, not rows.
     """
     row = conn.execute(
