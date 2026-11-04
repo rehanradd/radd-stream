@@ -1054,15 +1054,25 @@ def art_url_for(post_id: int, kind: str, index: int, db_path,
 
 
 def art_is_adult(target_id: int, db_path, table: str = "posts") -> bool:
-    """Adult rule for the artwork redirector, in whichever table the art lives."""
+    """Adult rule for the artwork redirector, in whichever table the art lives.
+
+    FAIL CLOSED, mirroring ``link_is_adult``: an absent row — a vanished work, a
+    typo, or a target id the resolved table does not hold — answers True, so none
+    of them shows art. Only an EXISTING row may be judged, and a NULL/0 flag is
+    not adult (same semantics as ``adult_clause``). An unknown ``table`` name is
+    not an error: ``ART_TABLES.get`` falls back to ``posts``, so the id is judged
+    against the posts ledger rather than blanket-hidden — a bogus ``t=`` must not
+    eat legitimate catalog, it just resolves nowhere else."""
     from_table = ART_TABLES.get(str(table or "posts"), "posts")
     with sqlite3.connect(db_path) as conn:
         try:
             row = conn.execute(f"SELECT is_18_plus FROM {from_table} WHERE id = ?",
                                (target_id,)).fetchone()
         except sqlite3.Error:
-            return True          # unknown table or vanished row: show nothing
-    return bool(row and row[0])
+            return True          # broken schema or unreadable row: show nothing
+    if row is None:
+        return True              # unknown id / vanished row: show nothing
+    return bool(row[0])
 
 
 def adult_clause(alias: str = "posts") -> str:

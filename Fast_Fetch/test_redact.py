@@ -276,6 +276,81 @@ class LinkIsAdultGuardTests(unittest.TestCase):
         self.assertTrue(redact.link_is_adult(500, self.db_path))
 
 
+class ArtIsAdultGuardTests(unittest.TestCase):
+    """The fail-closed rule of ``art_is_adult`` — same shape as the link guard:
+    only a MISSING row flips to True; an existing NULL/0 flag still shows its
+    art. Over-hiding art is a catalog regression, not a safety win."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.db_path = Path(self.temp.name) / "art.db"
+        with sqlite3.connect(self.db_path) as conn:
+            conn.executescript(
+                "CREATE TABLE posts (id INTEGER PRIMARY KEY, is_18_plus INTEGER,"
+                " canonical_key TEXT, poster_url TEXT, backdrop_urls TEXT);"
+                "CREATE TABLE cat_works (id INTEGER PRIMARY KEY,"
+                " is_18_plus INTEGER, poster_url TEXT, backdrop_urls TEXT);")
+            conn.executescript(
+                "INSERT INTO posts VALUES"
+                " (1, 1, 'seed-key', 'http://cdn.example/1.jpg', '[]'),"
+                " (2, 0, 'seed-key', 'http://cdn.example/2.jpg', '[]'),"
+                " (3, NULL, 'solo', 'http://cdn.example/3.jpg', '[]');"
+                "INSERT INTO cat_works VALUES (1, 1, 'http://cdn.example/w1.jpg', '[]');")
+
+    def test_flagged_row_hides_art(self):
+        self.assertTrue(redact.art_is_adult(1, self.db_path))
+
+    def test_unflagged_row_shows_art(self):
+        self.assertFalse(redact.art_is_adult(2, self.db_path))
+
+    def test_null_flag_on_existing_row_is_not_adult(self):
+        """Mirrors adult_clause: NULL is an unlabelled row, not a vanished one."""
+        self.assertFalse(redact.art_is_adult(3, self.db_path))
+
+    def test_unknown_id_fails_closed(self):
+        self.assertTrue(redact.art_is_adult(999999999, self.db_path))
+
+    def test_works_table_is_queried_as_itself(self):
+        """t=maps to cat_works via ART_TABLES; an id only posts holds is not
+        judged there, and a flagged cat_works row hides its art."""
+        self.assertTrue(redact.art_is_adult(1, self.db_path, table="works"))
+        self.assertTrue(redact.art_is_adult(999999999, self.db_path, table="works"))
+
+    def test_bogus_table_falls_back_to_posts_not_blanket_hidden(self):
+        """ART_TABLES.get(table, 'posts') means a typo'd t= judges the id against
+        the ledger: a clean posts id still shows (no over-hide), a posts-absent
+        id still fails closed."""
+        self.assertFalse(redact.art_is_adult(2, self.db_path, table="nonsense"))
+        self.assertTrue(redact.art_is_adult(999999999, self.db_path, table="nonsense"))
+        # and it cannot reach an arbitrary table: the fallback never names one
+        self.assertEqual(sorted(redact.ART_TABLES), ["posts", "works"])
+
+    def test_missing_column_or_schema_fails_closed(self):
+        """A db without the art tables at all: sqlite3.Error branch → True."""
+        bare = Path(self.temp.name) / "bare.db"
+        with sqlite3.connect(bare) as conn:
+            conn.execute("CREATE TABLE unrelated (id INTEGER PRIMARY KEY)")
+        self.assertTrue(redact.art_is_adult(1, bare))
+
+    def test_reconciled_twin_shows_no_art_and_control_still_shows(self):
+        """Composition: after MAX(is_18_plus) folds across a shared canonical_key
+        (the reconciliation rule), BOTH twins hide art — the flagged one and the
+        formerly-visible one. A control work outside any mixed key keeps its
+        poster: over-hide would be a catalog regression."""
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute("UPDATE posts SET is_18_plus = 1 WHERE canonical_key IN"
+                         " (SELECT canonical_key FROM posts GROUP BY canonical_key"
+                         "  HAVING SUM(is_18_plus) > 0 AND SUM(is_18_plus) < COUNT(*))")
+        # committed on block exit: the guard opens its own connection and sees the fold
+        self.assertTrue(redact.art_is_adult(1, self.db_path))    # flagged twin
+        self.assertTrue(redact.art_is_adult(2, self.db_path))    # folded twin
+        self.assertFalse(redact.art_is_adult(3, self.db_path))   # control
+        # the control still resolves a real poster through the redirector path
+        self.assertEqual(redact.art_url_for(3, "poster", 0, self.db_path),
+                         "http://cdn.example/3.jpg")
+
+
 class DisplayTextTests(unittest.TestCase):
     """The rules that clean a *sentence*, not a word.
 

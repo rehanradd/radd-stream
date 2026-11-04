@@ -2103,3 +2103,22 @@ past our merge-base `19abff7`). Do not push these as new work; do not delete any
   `viewer.py` (lane viewer unmodified — no hunks of mine to reconcile; hazard report:
   trunk 4306 lines vs base bf9e565 3576 vs lane 3494, measured), `/etc/nginx`,
   `/tmp/crown_trunk` (read-only), `/opt/radd-stream` live tree.
+
+## 2026-11-05 ~02:35 — qoder11: art_is_adult fail-closed (qoder11_artfailopen)
+
+- Lane `redact.py art_is_adult`: `row is None → True`, existing `NULL/0` → show, `1` →
+  hide — same rule as `link_is_adult`. Docstring corrected: the old inline comment
+  claimed "unknown table or vanished row: show nothing" while the code showed art for a
+  vanished row; the real fallback semantics (bogus `t=` → judged against `posts`, NOT
+  blanket-hidden) are now stated.
+- Sweep list, `grep -n "bool(row and row" Fast_Fetch/redact.py`: **before = 1 hit**
+  (`art_is_adult`, the one just fixed); **after = 0 hits**. Trunk has exactly one hit at
+  its `redact.py:1074` (same function) — the fix belongs upstream too; trunk's art route
+  double-guards (`art_url_for` → None → 404 for vanished rows), so severity there is
+  LATENT defense-in-depth, not a live leak. Reported that way.
+- Tests: `ArtIsAdultGuardTests` ×8 (flagged/0/NULL/unknown-id/works-table/bogus-table-
+  fallback/broken-schema/composition). Composition proves a folded twin hides art, the
+  control keeps its poster, and one trap worth keeping: the fold UPDATE must be
+  committed before the guard's own connection re-reads it. `test_redact` 65 OK (was 57),
+  `test_reconcile_adult` 15 OK, run one at a time at loadavg 5.4–6.4 on nproc=1.
+- Synthetic fixtures only; zero catalog copies. fast_fetch.py untouched (freeze).
