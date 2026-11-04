@@ -2602,3 +2602,75 @@ and gets a real step once its owner commits it.
 
 Freeze honored: Fast_Fetch/fast_fetch.py NOT staged; lane branch only; no
 trunk push, no merge, no rebase, no restart.
+
+## qoder13 LANE 3 — FRESH-SESSION BRIEF (parked at 88% ctx, 2026-11-05 ~03:2x PKT)
+
+**What I changed (all committed at `1cfea81`, pushed `4b1daf1..1cfea81` to
+`feat/phase1-resolved-cache`):**
+- `catalog_exporter.py` — docstring only, adult law untouched (still
+  `redact.adult_clause('p')` + same-key `EXISTS`, consumed at read time).
+- `PUBLISH_RUNBOOK.md` — prereq 0.1 → trunk's `backfill_adult_key.py`; §4
+  cross-key limit; §3 `proxy_cache off`; my own proxy_cache claim corrected.
+- `PIXELDRAIN_API.md` — new hoster doc (domain authority, Range/206, errors).
+- `test_catalog_exporter.py` — dynamic-suppression suite (4 new tests, 20/20).
+- `test_transient_dead_heal.py` — new, 5 tests, tracked and on the remote ref
+  (the Crown saw it `??` before my commit; re-verified: `git ls-files` + present
+  in `origin/feat/phase1-resolved-cache`).
+
+**Committed vs uncommitted:** nothing of mine is uncommitted. The only pending
+edit in the lane that I did not author is `Fast_Fetch/test_vidout.py` (M). Also
+NOT mine, and I never staged them: `fast_fetch.py` (committed by qoder14 at
+`97288fb` — the freeze was lifted/broken by another lane, not me),
+`.github/workflows/backend-ci.yml` + `test_ci_manifest.py` (qoder12's
+`3212b23`). Lane head has moved repeatedly during my session (`4b1daf1` →
+`1cfea81` → `97288fb` → `3212b23` → `0f1acde`); expect it to have moved again.
+
+**VERIFIED from this box (evidence, cite-able):** one TLS cert covers
+pixeldrain .com/.dev/.net/.nl/.biz/.tech + wildcards (so `.dev` is the SAME
+operator, not a lookalike — refusal #12's premise is wrong, its conclusion
+stands); `api.pixeldrain.com` = NXDOMAIN; `/api/file/{id}` answers `200` with
+`accept-ranges: bytes`, and `206` + `content-range` on a Range request (so
+`is_resumable=1` is right); `/api/file/{id}/info` = 200 JSON, 676 B, no auth,
+no expiry field anywhere; `404 not_found` for a bad id; the production counts
+23 dead / 61 expired / 4,006,773 active, ALL with `http_status NULL` AND
+`last_checked_at NULL`, via `idx_sources_status_temp` as a COVERING index
+(EXPLAIN confirmed), `mode=ro`; `proxy_cache radd_micro` live on the API
+locations (`conf.d/radd-stream-cache.conf:5`,
+`sites-enabled/radd-stream:31-36/50-55/91-92`); my two suites green locally
+(20/20 and 5/5).
+
+**ASSUMED, not verified — do not quote these as mine:** the trunk fold figures
+(10,816 non-reproducing of 15,068 / 3,490 naive-fold / 12 corroborated) are the
+Crown's numbers, transcribed into docstrings, not re-derived here; likewise
+394 keys / 394 flagged / 407 twins. UNVERIFIABLE from here and labelled in the
+doc: `?download` behaviour (every attempt reset, I stopped), the response shape
+of a private/restricted file (we hold none and I did not probe a third party's),
+`429` as a status (throttling reached us as a TCP reset), and whether the resets
+were them or this 1-core box at load ~6. Neither of my test modules has ever run
+in hosted CI — the last run died at step 10 and skipped 11-24.
+
+**EXACT next command (do this first, in a fresh session):**
+`cd /tmp/lane_phase1 && cat /proc/loadavg && git log --oneline -1 &&
+git fetch https://github.com/rehanradd/radd-stream.git feat/phase1-resolved-cache
+&& git merge-base --is-ancestor HEAD FETCH_HEAD && echo "lane ahead-check OK" &&
+timeout 300 python3 -S Fast_Fetch/test_transient_dead_heal.py &&
+timeout 300 python3 -S Fast_Fetch/test_catalog_exporter.py`
+Then, ONLY after the Crown posts the all-clear (qoder12's sweep was live; stats
+hit 16.97 s): re-run the three modules whose "errors" were disk-full artifacts —
+`test_vidout`, `test_catalog_v2`, `test_api_v2`, one at a time. Scratch files
+still on disk and safe to delete: `/tmp/mutation_check.py`,
+`/tmp/mutation_check2.py`, `/tmp/probe_empty_key.py`, `/tmp/lane3_proof/`.
+
+**TWO OPEN QUESTIONS for the Crown:**
+1. Fork vs trunk: this lane is 220 commits behind trunk (merge-base `19abff7`).
+   Trunk ships `backfill_adult_key.py`, `inherit_key_adult()` and the merge-time
+   corroborated fold. Once the backfill has run on the deploying DB, does the
+   Crown want the exporter's same-key `EXISTS` to STAY (belt-and-braces, my
+   docstring's claim), or to be re-scoped once the ledger is per-work? It changes
+   what the manifest's suppression count means, so I want the ruling before
+   anyone reads a falling number as "self-healing".
+2. `fail_count` accepts transport resets: `unprobed` is set ONLY for the
+   no-unpacker branch (`fast_fetch.py:5559-5563`), so a `conn_reset` from OUR box
+   reaches `note_failure` as measured evidence (3 strikes, cleared on next
+   success). Fix (widen `unprobed` to transport errors) or accept? Not mine to
+   decide, and `fast_fetch.py` needs the freeze settled first.
