@@ -28,8 +28,14 @@ Tests:
   4. Importer wiring: every import_*.py reads the registry
      (get_active_base_url), and three real clients resolve their base
      from the shipped registry.
+  5. Phase-1 registry hardening (ported from feat/phase1-resolved-cache):
+     atomic save_registry, lock-protected update_site_registry,
+     blocked-vs-down (WAF refusal never demotes a domain). Main's
+     discovery chain already subsumes the branch's TLD-rotation sweep,
+     so the rotation tests were not ported.
 """
 
+import fcntl
 import json
 import sys
 import tempfile
@@ -641,6 +647,124 @@ class ImporterWiringTests(unittest.TestCase):
                          reg["sites"]["ssrmovies"]["active_base_url"])
         self.assertEqual(import_vegamovies.VegamoviesClient().base_url,
                          reg["sites"]["vegamovies"]["active_base_url"])
+
+
+class Phase1RegistryHardeningTests(unittest.TestCase):
+    """Ported hardening pins from feat/phase1-resolved-cache (e33376c),
+    adapted to main's Session 106 API (registry_path= + fetcher stub)."""
+
+    def test_crash_during_dump_leaves_previous_file_intact(self):
+        tmp, path = temp_registry(
+            {"alpha": {"active_base_url": "https://alpha.foo"}})
+        good = path.read_text(encoding="utf-8")
+        boom = {"bad": {k: object() for k in ("x",)}}  # not JSON-serialisable
+        with self.assertRaises(TypeError):
+            dr.save_registry(boom, path)
+        self.assertEqual(path.read_text(encoding="utf-8"), good,
+                         "atomic replace must leave the target untouched")
+        leftovers = [p for p in Path(tmp.name).iterdir()
+                     if p.name.endswith(".tmp")]
+        self.assertEqual(leftovers, [], "temp file must be cleaned on failure")
+        tmp.cleanup()
+
+    def test_lock_is_exclusive(self):
+        tmp, path = temp_registry(
+            {"alpha": {"active_base_url": "https://alpha.foo"}})
+        lock_path = str(path) + ".lock"
+        held = open(lock_path, "w")
+        fcntl.flock(held.fileno(), fcntl.LOCK_EX)
+        try:
+            with self.assertRaises(BlockingIOError):
+                fh = open(lock_path, "w")
+                try:
+                    fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                finally:
+                    fh.close()
+        finally:
+            fcntl.flock(held.fileno(), fcntl.LOCK_UN)
+            held.close()
+        tmp.cleanup()
+
+    def test_update_merges_mirrors_newest_first(self):
+        tmp, path = temp_registry(
+            {"alpha": {"active_base_url": "https://alpha.foo",
+                       "known_mirrors": ["https://alpha.foo",
+                                         "https://alpha.bar"]}})
+        dr.update_site_registry("alpha", {
+            "known_mirrors": ["https://alpha.new"],
+            "status": "active"}, path)
+        site = dr.load_registry(path)["sites"]["alpha"]
+        self.assertEqual(site["known_mirrors"],
+                         ["https://alpha.new", "https://alpha.foo",
+                          "https://alpha.bar"])
+        self.assertEqual(site["status"], "active")
+        tmp.cleanup()
+
+    def test_update_reloads_under_lock_not_caller_snapshot(self):
+        # Simulate the lost-update hazard: a second writer lands a change for
+        # ANOTHER site between our read and our update_site_registry call.
+        tmp, path = temp_registry(
+            {"alpha": {"active_base_url": "https://alpha.foo"},
+             "beta": {"active_base_url": "https://beta.foo"}})
+        stale = dr.load_registry(path)  # snapshot before the other writer runs
+        dr.update_site_registry("beta", {"status": "down"}, path)
+        dr.update_site_registry("alpha", {"status": "active"}, path)
+        # the stale snapshot is never written back wholesale:
+        final = dr.load_registry(path)
+        self.assertEqual(final["sites"]["beta"]["status"], "down")
+        self.assertEqual(final["sites"]["alpha"]["status"], "active")
+        self.assertIn("beta", stale["sites"])  # (snapshot itself untouched)
+        tmp.cleanup()
+
+    def test_blocked_active_is_not_down_and_registry_untouched(self):
+        tmp, path = temp_registry({"alpha": {
+            "site_name": "alpha", "slug_variants": ["alpha"],
+            "api_type": "homepage",
+            "active_base_url": "https://alpha.foo",
+            "known_mirrors": ["https://alpha.foo", "https://alpha-mirror.foo"],
+            "status": "active"}})
+        stub = StubFetch({
+            "https://alpha.foo/": (403, "https://alpha.foo/", "Forbidden", None),
+            "https://alpha-mirror.foo/": (429, "https://alpha-mirror.foo/",
+                                          "Too many requests", None),
+        })
+        before = path.read_text(encoding="utf-8")
+        res = dr.probe_site("alpha", registry_path=path, fetcher=stub)
+        self.assertEqual(res["status"], "blocked")
+        self.assertEqual(path.read_text(encoding="utf-8"), before,
+                         "a WAF refusal must not mutate the registry")
+        tmp.cleanup()
+
+    def test_http_error_500_is_a_failed_candidate_not_blocked(self):
+        tmp, path = temp_registry({"alpha": {
+            "site_name": "alpha", "slug_variants": ["alpha"],
+            "api_type": "homepage",
+            "active_base_url": "https://alpha.foo",
+            "known_mirrors": ["https://alpha.foo", "https://alpha-mirror.foo"],
+            "status": "active"}})
+        mirror_body = (
+            "<html><head><title>Alpha - Watch Movies Online</title></head><body>"
+            + "<p>" + ("Alpha movie news, reviews and download updates. " * 80) + "</p>"
+            + "".join(f'<a href="https://alpha-mirror.foo/movie-{i}/">Movie {i}</a>'
+                      for i in range(5))
+            + "</body></html>"
+        )
+        stub = StubFetch({
+            "https://alpha.foo/": (500, "https://alpha.foo/", "Server error", None),
+            "https://alpha-mirror.foo/": (200, "https://alpha-mirror.foo/",
+                                          mirror_body, None),
+        })
+        res = dr.probe_site("alpha", registry_path=path, fetcher=stub)
+        self.assertEqual(res["status"], "active")
+        self.assertEqual(res["final_base_url"], "https://alpha-mirror.foo")
+        tmp.cleanup()
+
+    def test_blocked_reason_from_verify_candidate(self):
+        _ok, reason, _ = dr.verify_candidate(
+            {"site_name": "alpha", "slug_variants": ["alpha"],
+             "api_type": "homepage"},
+            "https://alpha.foo", 429, "https://alpha.foo", "Too many requests")
+        self.assertEqual(reason, "blocked http429")
 
 
 if __name__ == "__main__":

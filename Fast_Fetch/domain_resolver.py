@@ -47,12 +47,15 @@ timeout per probe, 200KB read cap, one probe per candidate per run.
 100% Python Standard Library. Zero external dependencies.
 """
 
+import contextlib
+import fcntl
 import http.client
 import json
 import os
 import re
 import ssl
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.parse
@@ -78,6 +81,14 @@ KNOWN_MIRRORS_CAP = 8
 
 GENERIC_TLDS = ["com", "net", "org", "xyz", "top", "click", "lol", "buzz",
                 "vip", "one", "im", "io"]
+
+#: HTTP answers that mean "a server is there and refusing our client", not
+#: "the domain died". A challenge/WAF must never retire a working domain.
+#: (Phase-1 hardening, ported from feat/phase1-resolved-cache.) Main's
+#: discovery chain already does the bounded TLD-rotation sweep the branch
+#: added, via _tld_candidates + resolve_site, so only the blocked-vs-down
+#: rule and the write hardening are ported — not the rotation sweep.
+BLOCKED_STATUS_CODES = frozenset({401, 403, 405, 429})
 
 GITHUB_LISTS = [
     ("saurabh", "https://raw.githubusercontent.com/SaurabhKaperwan/Utils/refs/heads/main/urls.json"),
@@ -154,10 +165,79 @@ def load_registry(registry_path: str | Path | None = None) -> dict:
 
 
 def save_registry(data: dict, registry_path: str | Path | None = None) -> None:
+    """Atomic write: temp file in the target directory + fsync + os.replace.
+
+    json.dump runs BEFORE the replace, so a serialisation crash — or a
+    cut mid-write — leaves the previous good file untouched. The temp
+    file is unlinked on failure. The registry is read by the running
+    service, so a truncated file is a live defect, not a cosmetic one.
+    """
     path = Path(registry_path) if registry_path else REGISTRY_PATH
     data["updated_at"] = _now_iso()
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2)
+    tmp = None
+    try:
+        with tempfile.NamedTemporaryFile(
+                "w", encoding="utf-8", dir=str(path.parent),
+                prefix=path.name + ".", suffix=".tmp", delete=False) as fh:
+            tmp = Path(fh.name)
+            json.dump(data, fh, indent=2)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        if tmp is not None:
+            with contextlib.suppress(OSError):
+                tmp.unlink()
+        raise
+
+
+@contextlib.contextmanager
+def _registry_lock(registry_path: str | Path | None = None):
+    """Advisory exclusive flock on a sidecar ``<registry>.lock`` file.
+
+    Never locks the registry itself: the replace in save_registry swaps
+    the inode, which silently detaches any lock held on it.
+    """
+    path = Path(registry_path) if registry_path else REGISTRY_PATH
+    lock_path = Path(str(path) + ".lock")
+    fh = open(lock_path, "w")
+    try:
+        fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+        yield
+    finally:
+        with contextlib.suppress(OSError):
+            fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+        fh.close()
+
+
+def update_site_registry(site_name: str, changes: dict,
+                         registry_path: str | Path | None = None) -> dict:
+    """Reload under lock, merge ``changes`` into that site's record, atomic
+    save. Returns the merged site record.
+
+    This is the ONLY sanctioned mutation path for single-site updates:
+    reload-after-lock means the snapshot a caller read before its network
+    work can never be written back wholesale over another run's updates.
+    ``known_mirrors`` merges set-wise with the update's entries first
+    (newest first, matching the rest of this module); every other key
+    overwrites; the merged mirror list is capped at KNOWN_MIRRORS_CAP.
+    """
+    with _registry_lock(registry_path):
+        reg = load_registry(registry_path)
+        sites = reg.setdefault("sites", {})
+        site = sites.setdefault(site_name, {})
+        site.setdefault("site_name", site_name)
+        for key, value in changes.items():
+            if key == "known_mirrors" and isinstance(value, list):
+                merged = [m for m in value if m]
+                for item in site.get("known_mirrors", []):
+                    if item and item not in merged:
+                        merged.append(item)
+                site["known_mirrors"] = merged[:KNOWN_MIRRORS_CAP]
+            else:
+                site[key] = value
+        save_registry(reg, registry_path)
+        return site
 
 
 def get_active_base_url(site_name: str, fallback_default: str | None = None,
@@ -243,7 +323,9 @@ def verify_candidate(entry: dict, candidate_base: str, status: int,
     Returns (ok, reason, verified_by). verified_by is "wp-json" / "sitemap" /
     "homepage" on a pass, "" on a fail. A Cloudflare challenge is a fail
     with reason "cloudflare-challenge http403|503" — the caller records the
-    site "unverifiable", not dead.
+    site "unverifiable", not dead. A WAF refusal (401/403/405/429 without
+    challenge markers) is a fail with reason "blocked httpNNN" — the caller
+    reports the site "blocked" and never demotes it.
     """
     slugs = _slugs_of(entry, entry.get("site_name", ""))
     final_host = _host_of(final_url)
@@ -253,6 +335,8 @@ def verify_candidate(entry: dict, candidate_base: str, status: int,
     if status in (403, 503) and (
             "just a moment" in text.lower() or "attention required" in text.lower()):
         return False, f"cloudflare-challenge http{status}", ""
+    if status in BLOCKED_STATUS_CODES:
+        return False, f"blocked http{status}", ""
     if status != 200:
         return False, f"http{status}", ""
     # Session 106 fix (live catch 2026-11-08): the final host must carry a
@@ -529,35 +613,57 @@ def _numeric_candidates(entry: dict) -> list:
 
 def _record_verified(reg: dict, site_name: str, entry: dict, hit: dict,
                      registry_path) -> str:
-    """Write a verified domain back to the registry entry and save."""
+    """Write a verified domain back to the registry entry and save.
+
+    Reloads under the registry lock: resolve_site() loads its snapshot
+    before a long discovery chain, and a concurrent probe must not lose
+    its updates to a stale write-back. ``reg``/``entry`` are the caller's
+    snapshot (kept for signature compatibility); the write goes to the
+    freshly loaded record, so the rotation history reflects the actual
+    transition, not the snapshot's.
+    """
     new_base = hit["live"]
-    old_base = entry.get("active_base_url", "")
-    entry["active_base_url"] = new_base
-    entry["last_verified"] = _now_iso()
-    entry["verified_by"] = hit.get("verified_by", "")
-    entry["status"] = "active"
-    entry["last_checked"] = entry["last_verified"]
-    mirrors = entry.setdefault("known_mirrors", [])
-    if new_base in mirrors:
-        mirrors.remove(new_base)
-    mirrors.insert(0, new_base)
-    del mirrors[KNOWN_MIRRORS_CAP:]
-    if old_base and old_base != new_base:
-        history = entry.setdefault("rotation_history", [])
-        history.append({"domain": old_base,
-                        "seen_until": entry["last_verified"]})
-        history.append({"domain": new_base,
-                        "seen_from": entry["last_verified"]})
-    save_registry(reg, registry_path)
+    with _registry_lock(registry_path):
+        fresh = load_registry(registry_path)
+        fresh_entry = fresh.setdefault("sites", {}).setdefault(site_name, {})
+        fresh_entry.setdefault("site_name", site_name)
+        old_base = fresh_entry.get("active_base_url", "")
+        fresh_entry["active_base_url"] = new_base
+        fresh_entry["last_verified"] = _now_iso()
+        fresh_entry["verified_by"] = hit.get("verified_by", "")
+        fresh_entry["status"] = "active"
+        fresh_entry["last_checked"] = fresh_entry["last_verified"]
+        mirrors = fresh_entry.setdefault("known_mirrors", [])
+        if new_base in mirrors:
+            mirrors.remove(new_base)
+        mirrors.insert(0, new_base)
+        del mirrors[KNOWN_MIRRORS_CAP:]
+        if old_base and old_base != new_base:
+            history = fresh_entry.setdefault("rotation_history", [])
+            history.append({"domain": old_base,
+                            "seen_until": fresh_entry["last_verified"]})
+            history.append({"domain": new_base,
+                            "seen_from": fresh_entry["last_verified"]})
+        save_registry(fresh, registry_path)
     return new_base
 
 
 def _record_unresolved(reg: dict, entry: dict, status: str, registry_path) -> None:
     """Record a failed chain run. The active base is NEVER overwritten with
-    a guess — it stays until a later run verifies a replacement."""
-    entry["status"] = status
-    entry["last_checked"] = _now_iso()
-    save_registry(reg, registry_path)
+    a guess — it stays until a later run verifies a replacement.
+
+    Reloads under the registry lock, same reason as _record_verified.
+    """
+    site_name = entry.get("site_name")
+    if not site_name:
+        return
+    with _registry_lock(registry_path):
+        fresh = load_registry(registry_path)
+        fresh_entry = fresh.setdefault("sites", {}).setdefault(site_name, {})
+        fresh_entry.setdefault("site_name", site_name)
+        fresh_entry["status"] = status
+        fresh_entry["last_checked"] = _now_iso()
+        save_registry(fresh, registry_path)
 
 
 def resolve_site(site_name: str, registry_path: str | Path | None = None,
@@ -598,7 +704,7 @@ def resolve_site(site_name: str, registry_path: str | Path | None = None,
     if hit and hit["ok"]:
         return _record_verified(reg, site_name, entry, hit, registry_path)
     if hit:
-        cf_only = cf_only and hit["reason"].startswith("cloudflare-challenge")
+        cf_only = cf_only and hit["reason"].startswith(("cloudflare-challenge", "blocked"))
 
     # 3. known mirrors.
     for mirror in list(entry.get("known_mirrors") or []):
@@ -606,7 +712,7 @@ def resolve_site(site_name: str, registry_path: str | Path | None = None,
         if hit and hit["ok"]:
             return _record_verified(reg, site_name, entry, hit, registry_path)
         if hit:
-            cf_only = cf_only and hit["reason"].startswith("cloudflare-challenge")
+            cf_only = cf_only and hit["reason"].startswith(("cloudflare-challenge", "blocked"))
 
     # 4. bookmark domain (stable 301 anchor).
     bookmark = entry.get("bookmark_domain")
@@ -622,7 +728,7 @@ def resolve_site(site_name: str, registry_path: str | Path | None = None,
                 if hit and hit["ok"]:
                     return _record_verified(reg, site_name, entry, hit, registry_path)
                 if hit:
-                    cf_only = cf_only and hit["reason"].startswith("cloudflare-challenge")
+                    cf_only = cf_only and hit["reason"].startswith(("cloudflare-challenge", "blocked"))
 
     # 5. GitHub community lists (fetched once an hour, shared by all sites).
     github = fetch_github_lists(fetcher=fetch)
@@ -646,7 +752,7 @@ def resolve_site(site_name: str, registry_path: str | Path | None = None,
             if hit and hit["ok"]:
                 return _record_verified(reg, site_name, entry, hit, registry_path)
             if hit:
-                cf_only = cf_only and hit["reason"].startswith("cloudflare-challenge")
+                cf_only = cf_only and hit["reason"].startswith(("cloudflare-challenge", "blocked"))
 
     # 6. TLD probe (history first, then generic, www variants) + numeric.
     for cand in _tld_candidates(entry):
@@ -654,13 +760,13 @@ def resolve_site(site_name: str, registry_path: str | Path | None = None,
         if hit and hit["ok"]:
             return _record_verified(reg, site_name, entry, hit, registry_path)
         if hit:
-            cf_only = cf_only and hit["reason"].startswith("cloudflare-challenge")
+            cf_only = cf_only and hit["reason"].startswith(("cloudflare-challenge", "blocked"))
     for cand in _numeric_candidates(entry):
         hit = try_probe(cand, "numeric-probe")
         if hit and hit["ok"]:
             return _record_verified(reg, site_name, entry, hit, registry_path)
         if hit:
-            cf_only = cf_only and hit["reason"].startswith("cloudflare-challenge")
+            cf_only = cf_only and hit["reason"].startswith(("cloudflare-challenge", "blocked"))
 
     # 7. sister cross-links from pages fetched above. The probe bodies were
     # not retained (memory), so re-fetch the cached base's homepage once as
@@ -674,7 +780,7 @@ def resolve_site(site_name: str, registry_path: str | Path | None = None,
         if hit and hit["ok"]:
             return _record_verified(reg, site_name, entry, hit, registry_path)
         if hit:
-            cf_only = cf_only and hit["reason"].startswith("cloudflare-challenge")
+            cf_only = cf_only and hit["reason"].startswith(("cloudflare-challenge", "blocked"))
 
     # 8. DuckDuckGo search (last resort, one query).
     hosts, why = ddg_search(_slugs_of(entry, site_name)[0], fetcher=fetch)
@@ -685,7 +791,7 @@ def resolve_site(site_name: str, registry_path: str | Path | None = None,
         if hit and hit["ok"]:
             return _record_verified(reg, site_name, entry, hit, registry_path)
         if hit:
-            cf_only = cf_only and hit["reason"].startswith("cloudflare-challenge")
+            cf_only = cf_only and hit["reason"].startswith(("cloudflare-challenge", "blocked"))
 
     # 9. Telegram channel (verified channels only, from the registry).
     found, why = telegram_candidates(entry, fetcher=fetch)
@@ -696,7 +802,7 @@ def resolve_site(site_name: str, registry_path: str | Path | None = None,
         if hit and hit["ok"]:
             return _record_verified(reg, site_name, entry, hit, registry_path)
         if hit:
-            cf_only = cf_only and hit["reason"].startswith("cloudflare-challenge")
+            cf_only = cf_only and hit["reason"].startswith(("cloudflare-challenge", "blocked"))
 
     # 10. give up: record it, never write a guessed domain.
     status = "unverifiable" if (cf_only and attempts) else "down"
@@ -749,6 +855,7 @@ def probe_site(site_name: str, auto_update: bool = True,
     active_url = site_info.get("active_base_url", "")
     known_mirrors = site_info.get("known_mirrors", [active_url])
     candidates = [active_url] + [m for m in known_mirrors if m != active_url]
+    blocked_seen = False
 
     for candidate in candidates:
         if not candidate:
@@ -759,25 +866,28 @@ def probe_site(site_name: str, auto_update: bool = True,
         if not result["ok"]:
             if result["reason"].startswith("cloudflare-challenge"):
                 if auto_update:
-                    site_info["status"] = "unverifiable"
-                    site_info["last_checked"] = _now_iso()
-                    save_registry(reg, registry_path)
+                    update_site_registry(site_name, {
+                        "status": "unverifiable",
+                        "last_checked": _now_iso(),
+                    }, registry_path)
                 return {"site": site_name, "status": "unverifiable",
                         "error": result["reason"], "tested_candidates": candidates}
+            if (result["reason"].startswith("blocked")
+                    and candidate == active_url):
+                blocked_seen = True
             continue
         final_base = result["live"]
         domain_shifted = _host_of(final_base) != _host_of(active_url)
         if auto_update and (domain_shifted or final_base != active_url):
-            site_info["active_base_url"] = final_base
-            site_info["last_verified"] = _now_iso()
-            site_info["verified_by"] = result.get("verified_by", "")
-            site_info["status"] = "active"
-            site_info["last_checked"] = site_info["last_verified"]
-            mirrors = site_info.setdefault("known_mirrors", [])
-            if final_base not in mirrors:
-                mirrors.insert(0, final_base)
-                del mirrors[KNOWN_MIRRORS_CAP:]
-            save_registry(reg, registry_path)
+            now = _now_iso()
+            update_site_registry(site_name, {
+                "active_base_url": final_base,
+                "last_verified": now,
+                "verified_by": result.get("verified_by", ""),
+                "status": "active",
+                "last_checked": now,
+                "known_mirrors": [final_base],
+            }, registry_path)
         return {
             "site": site_name,
             "status": "active",
@@ -789,10 +899,22 @@ def probe_site(site_name: str, auto_update: bool = True,
             "latency_sec": round(elapsed, 2),
         }
 
+    if blocked_seen:
+        # The active domain answered with a WAF refusal: the site is not
+        # dead, its health is just unknown to this client. Report it and
+        # touch nothing — a blocked probe must never demote a domain.
+        return {
+            "site": site_name,
+            "status": "blocked",
+            "error": "active domain refuses our client; health unknown, registry untouched",
+            "tested_candidates": candidates,
+        }
+
     if auto_update:
-        site_info["status"] = "down"
-        site_info["last_checked"] = _now_iso()
-        save_registry(reg, registry_path)
+        update_site_registry(site_name, {
+            "status": "down",
+            "last_checked": _now_iso(),
+        }, registry_path)
 
     return {
         "site": site_name,
