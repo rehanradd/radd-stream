@@ -789,20 +789,36 @@ class TestViewerShapeGate(unittest.TestCase):
     MEGA_KEY = "https://mega.nz/file/AbCd#AESkeymaterial"
     PIXELDRAIN_REAL = "https://pixeldrain.com/u/abc123"
     EXT_REAL = "https://pub-abc.r2.dev/movies/folder/clip.mp4"
-
-    def test_viewer_paths_rejected(self):
-        for url in (self.VIEWER,
+    # Named vocabularies (FLEET_NOTICE_vacuous_loops): a loop over an emptied
+    # collection is VACUOUSLY GREEN, so each vocabulary is a literal here with
+    # its length pinned by test_loop_vocabs_are_not_empty — an
+    # empty-the-collection mutant turns that test RED, by construction.
+    VIEWER_VOCAB = (VIEWER,
                     "https://drive.google.com/open?id=x&foo=bar#frag",
                     "https://drive.google.com/folderview?id=x",
                     "https://drive.google.com/fileview/x",
-                    "https://docs.google.com/preview/x"):
+                    "https://docs.google.com/preview/x")
+    FRAGMENT_VOCAB = (MEGA_KEY, PIXELDRAIN_REAL + "#note",
+                      "https://pub-abc.r2.dev/movie.mp4#t=0,60")
+
+    def test_loop_vocabs_are_not_empty(self):
+        # Sibling non-emptiness assertion for every literal-vocabulary loop in
+        # this class (crown fleet notice: "one of your mutants must be
+        # empty-the-collection"). If someone deletes vocabulary entries, THIS
+        # fails; the loops below would silently pass on nothing.
+        self.assertEqual(len(self.VIEWER_VOCAB), 5)
+        self.assertEqual(len(self.FRAGMENT_VOCAB), 3)
+        self.assertEqual(len((self.VIEWER, self.MEGA_KEY,
+                              self.PIXELDRAIN_REAL, self.EXT_REAL)), 4)
+
+    def test_viewer_paths_rejected(self):
+        for url in self.VIEWER_VOCAB:
             with self.subTest(url=url):
                 self.assertFalse(hc.is_direct_file(url))
                 self.assertFalse(hc.is_direct_file(url, "google_cdn"))
 
     def test_any_fragment_rejected_on_any_host(self):
-        for url in (self.MEGA_KEY, self.PIXELDRAIN_REAL + "#note",
-                    "https://pub-abc.r2.dev/movie.mp4#t=0,60"):
+        for url in self.FRAGMENT_VOCAB:
             with self.subTest(url=url):
                 self.assertFalse(hc.is_direct_file(url))
 
@@ -898,22 +914,34 @@ class TestViewerShapeGate(unittest.TestCase):
         db.execute("CREATE TABLE releases (id INTEGER PRIMARY KEY, post_id INTEGER)")
         db.execute("CREATE TABLE download_sources (id INTEGER PRIMARY KEY, release_id INTEGER)")
         _rc.init_resolved_cache(db)
-        for lid in (11, 12, 13, 14):
+        for lid in (11, 12, 13, 14, 15, 16):
             db.execute("INSERT INTO posts (id, is_18_plus) VALUES (?, 0)", (lid,))
             db.execute("INSERT INTO releases (id, post_id) VALUES (?, ?)", (lid, lid))
             db.execute("INSERT INTO download_sources (id, release_id) VALUES (?, ?)", (lid, lid))
         future = time.time() + 86400
         poison = (
-            (11, self.VIEWER),                    # drive /view as 'file' A
-            (12, self.PIXELDRAIN_REAL),          # genuine direct file
-            (13, self.MEGA_KEY),                 # banked WITH fragment
-            (14, "https://pub-zzz.r2.dev/folder/clip.mp4"),  # object key w/ folder segment
+            (11, self.VIEWER, "file"),            # drive /view as 'file' A
+            (12, self.PIXELDRAIN_REAL, "file"),   # genuine direct file
+            (13, self.MEGA_KEY, "file"),          # banked WITH fragment
+            (14, "https://pub-zzz.r2.dev/folder/clip.mp4", "file"),  # object key w/ folder segment
+            (15, "https://cdn.example.invalid/manifest.m3u8", "playlist"),  # legit playlist row
+            (16, self.VIEWER, "file"),            # banked viewer URL, for the fault drill
         )
-        for lid, url in poison:
+        for lid, url, kind in poison:
             db.execute("INSERT INTO resolved_cache (link_id, url, category, kind,"
-                       " resolved_at, reverify_after) VALUES (?,?,'A','file',?,?)",
-                       (lid, url, time.time(), future))
+                       " resolved_at, reverify_after) VALUES (?,?,'A',?,?,?)",
+                       (lid, url, kind, time.time(), future))
         db.commit()
+        # Sibling non-emptiness assertion (FLEET_NOTICE_vacuous_loops): the
+        # bank fixture is the collection every claim below loops its requests
+        # over; emptied, the refusals would pass on absent rows. Pinned by
+        # literal count AND by the DB itself.
+        self.assertEqual(len(poison), 6)
+        self.assertEqual(
+            db.execute("SELECT count(*) FROM resolved_cache").fetchone()[0], 6)
+        self.assertEqual(
+            db.execute("SELECT count(*) FROM resolved_cache "
+                       "WHERE kind='file'").fetchone()[0], 5)
 
         saved_db, saved_secret = _viewer.DB_PATH, _viewer._SIGNING_SECRET
         _viewer.DB_PATH = tmp_path
@@ -923,7 +951,15 @@ class TestViewerShapeGate(unittest.TestCase):
         resolved_calls = []
 
         def fake_resolver(link_id, *a, **k):
-            resolved_calls.append(int(link_id))
+            lid = int(link_id)
+            resolved_calls.append(lid)
+            if lid == 16:
+                # The fault drill's live answer: a URL that exists ONLY in
+                # the resolver, so any 302 carrying the banked viewer URL is
+                # provably not the live answer.
+                return {"success": True,
+                        "url": "https://pixeldrain.com/api/file/liveanswer16",
+                        "mime_type": "video/mp4"}
             return {"success": False, "error": "offline-stub"}
 
         saved_resolve = getattr(_ff, "resolve_live_source")
@@ -997,6 +1033,70 @@ class TestViewerShapeGate(unittest.TestCase):
                          "r2 object keys with folder segments must stay "
                          f"downloadable (got {status}: {body[:120]})")
         self.assertIn("r2.dev", hdrs.get("Location", ""))
+
+        # 5. THE DOUBLE GATE, half two (crown ruling 2026-11-05: "prove BOTH
+        #    halves refuse a viewer row"). The cache's half is SQL
+        #    `AND kind='file'` (resolved_cache.lookup_cache) — a legit
+        #    playlist row (link 15) must fall through on its own:
+        status, hdrs, body = request(15)
+        self.assertIn(15, resolved_calls,
+                      "kind='playlist' must not answer want='download'")
+        self.assertNotEqual(status, 302,
+                            "a banked playlist row answered the download "
+                            "route: " + hdrs.get("Location", ""))
+        # …but that fallthrough cannot tell WHICH half refused, so lie:
+        # stub lookup_cache to hand the route exactly what its own SQL would
+        # never return — a non-'file' hit — and prove the route's SECOND,
+        # independent veto (viewer.py:3330 `hit.get("kind") == "file"`)
+        # refuses it too. Defense-in-depth must be proven, not assumed.
+        saved_lookup = _rc.lookup_cache
+
+        def lying_lookup(conn, link_id, want="watch", **kw):
+            if int(link_id) == 15:
+                return {"kind": "playlist", "url": self.VIEWER,
+                        "mime_type": None, "file_size_bytes": None,
+                        "is_resumable": 0, "category": "A",
+                        "expires_at": None, "expires_in": None,
+                        "reverify_after": time.time() + 60}
+            return saved_lookup(conn, link_id, want=want, **kw)
+        _rc.lookup_cache = lying_lookup
+        try:
+            status, hdrs, body = request(15)
+        finally:
+            _rc.lookup_cache = saved_lookup
+        self.assertNotEqual(status, 302,
+                            "the route served a non-'file' cache hit it was "
+                            "independently gated against")
+        self.assertNotIn(self.VIEWER, hdrs.get("Location", "") + body,
+                         "the vetoed hit's URL leaked into the answer")
+
+        # 6. EXCEPT-FAULT drill (crown ruling item 3): the bare
+        #    `except Exception: hit = None` at viewer.py:3328 falls through
+        #    to the live resolver BY DESIGN — prove a raising cache yields
+        #    the live answer and never the banked URL. Link 16 is banked
+        #    with the viewer URL; the stub resolver answers a different,
+        #    live URL; the 302 must carry the live one.
+        def raising_lookup(conn, link_id, want="watch", **kw):
+            if int(link_id) == 16:
+                raise RuntimeError("drill: the cache itself is down")
+            return saved_lookup(conn, link_id, want=want, **kw)
+        _rc.lookup_cache = raising_lookup
+        try:
+            status, hdrs, body = request(16)
+        finally:
+            _rc.lookup_cache = saved_lookup
+        self.assertIn(16, resolved_calls,
+                      "a cache fault must fall through to the live resolver")
+        self.assertEqual(status, 302,
+                          f"the live answer must be served on a cache fault "
+                          f"(got {status}: {body[:120]})")
+        loc = hdrs.get("Location", "")
+        self.assertIn("liveanswer16", loc,
+                      "the fault fallback must serve the resolver's live URL")
+        self.assertNotIn(self.VIEWER, loc + body,
+                         "a cache fault must NEVER serve the banked viewer "
+                         "URL — this is the exact half-truth the double gate "
+                         "exists to prevent")
 
     @unittest.skipUnless(HAS_VIEWER, _VIEWER_REASON)
     def test_hit_path_connection_count_is_pinned(self):
