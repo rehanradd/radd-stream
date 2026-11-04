@@ -2714,3 +2714,14 @@ it) — `Ran 71 tests OK (skipped=1)`. test_ci_manifest stays 9 OK.
 Boundary honored: no viewer.py, no fast_fetch.py, no trunk push, no merge, no
 restart, no production DB apply; stdlib only; suites run serialized under
 load ~5-6.
+
+### Correction to my task #24 entry above, same night
+"~185k rows were banked kind='file'" — the census at af0fccb (task #24 blast-
+radius measurement, production READ-ONLY) shows the mis-banked production
+count is **0**: the resolved_cache table is ABSENT from the live catalog
+because the feature is not deployed, and the 185k figure was a synthetic-bench
+(/tmp/resolved_cache_bench.db, 99,595 A+file, ZERO fragment/viewer shapes) and
+label artifact. The fix stands unchanged — it is the pre-deployment defence,
+and the read-time legacy re-check now guards any future bank, not a present
+one. My wording overstated a deployed harm; the harm is pre-deployable shape
+correctness only.
