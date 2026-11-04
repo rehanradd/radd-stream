@@ -2741,3 +2741,40 @@ Fast_Fetch/resolved_cache.py +86, Fast_Fetch/test_resolved_cache.py +168,
 Fast_Fetch/test_host_classifier.py marker, Fast_Fetch/CONTINUITY.md).
 Verified post-merge by the Crown Prince at load 3.72: test_resolved_cache
 64 OK, test_host_classifier 71 OK (skipped=1), marker gone.
+
+## 2026-11-05 — qoder14 (route-level download gate; skip hole closed) — commit e9b78ba
+
+Crown REVIEW FINDING: `test_download_gate_refuses_viewer_shaped_rows`
+still carried `self.skipTest('covered by test_kind_gate_expectations
+below')` even though task #24 landed — the skip's reason was dead, so the
+skip had become a hole (cache-level ≠ route-level: want= default, an
+alternate call site, an operator-port bypass could all pass a cache test).
+
+Landed the ROUTE-level test in test_host_classifier.py (+151/−8, one
+file, pathspec-staged): boots the real
+`viewer.ThreadedHTTPServer(("127.0.0.1", 0), DashboardHandler)` against a
+temp fixture DB (posts/releases/download_sources + resolved_cache rows
+INSERTed directly as kind='file' category='A' — the legacy-bank shape
+qoder12's law-(c) defence is about), mints signed tokens via
+`redact.mint_token`, and drives `/api/v1/download?id=…&redirect=1` over
+raw http.client. Only `fast_fetch.resolve_live_source` is stubbed, and
+the stub's call log is itself an assertion. Claims: (1) drive /view must
+NOT 302 to HTML and MUST reach the resolver (gate fired); (2) a banked
+mega fragment never reaches a public Location or body; (3) POSITIVE in
+the same test — a real pixeldrain file 302s from the bank without
+re-resolving, so downgrade-everything fails instead of passing; (4) r2
+folder-segment object keys still 302 (gate never widened past
+page-capable hosts). Added module-top `sqlite3`/`time` and a guarded
+`viewer`/`fast_fetch`/`redact` import with skipUnless.
+
+Measured at load 3.18: test_host_classifier **71 OK, zero skips** (the
+old run was 71 OK with skipped=1); test_fast_fetch_domains 29 OK.
+test_resolved_cache 64 run / 1 FAIL — traced to qoder12's UNCOMMITTED
+working-tree edit of `note_failure_from_probe` (retiring
+absent-fail_cause=probed per transport-evidence order) ahead of its
+committed test; not mine, not touched.
+
+Provenance discipline from the af0fccb sweep, applied and greppable in
+the commit message: `git commit -m … -- Fast_Fetch/test_host_classifier.py`
+only — no bare commit on the shared index, no code inside a docs-titled
+message. Pushed e9b78ba to feat/phase1-resolved-cache.
