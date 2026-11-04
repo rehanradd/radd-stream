@@ -122,6 +122,19 @@ class ReconcileAdultTests(unittest.TestCase):
         self.assertTrue(redact.link_is_adult(205, self.db))
         self.assertFalse(redact.link_is_adult(203, self.db))  # control still plays
 
+    def test_reconciled_then_orphaned_twin_is_unreachable_both_ways(self):
+        """Composition: reconciliation hides the twin on the list route, and if a
+        later merge orphans its release chain, the fail-closed guard keeps the
+        redirector shut too — no row to judge is adult-capable, not servable."""
+        reconcile_adult.reconcile(self.db, apply=True, backup_dir=self.bdir)
+        conn = sqlite3.connect(self.db)
+        conn.execute("UPDATE download_sources SET release_id = 99998 WHERE id = 202")
+        conn.commit()
+        conn.close()
+        self.assertNotIn(2, self._public_list_ids())            # list: still hidden
+        self.assertTrue(redact.link_is_adult(202, self.db))     # redirector: no play
+        self.assertFalse(redact.link_is_adult(203, self.db))    # control still plays
+
     def test_apply_requires_a_verified_backup_and_refuses_without(self):
         locked = "/proc/definitely-not-writable/backups"
         with self.assertRaises(reconcile_adult.BackupRefused):

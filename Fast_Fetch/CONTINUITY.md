@@ -1919,3 +1919,45 @@ code) and both are **OK on the live `/opt/radd-stream` dirty tree**, whose uncom
 out-of-vocabulary -> `"unchecked"`) carries the fix. That fix is not in any pushed commit;
 whoever owns it must commit it or every fresh worktree stays red on these two modules.
 `test_reconcile_adult` (this lane's new module): OK, 10 tests.
+
+---
+
+## Session — qoder11 lane, 2026-11-05 (Crown Prince order: `link_is_adult` fails closed)
+
+**The false safety claim, recorded plainly.** Root `AGENTS.md` ("by
+`redact.link_is_adult` … which answers True for an unknown link id so a typo
+cannot play") and the `link_is_adult` docstring at `redact.py:1079` both promised a
+fail-closed guard that the code did not have: `True` was returned only on
+`sqlite3.Error`; the normal path was `return bool(row and row[0])`, and `row is
+None` (unknown id, vanished row, or an orphaned `download_sources` whose
+release/post join broke in a merge) answered **False — not adult — and played**.
+Confirmed independently by the Crown Prince. This is the dangerous class of doc
+defect: it stopped agents from checking.
+
+**Fixed surgically (`redact.py` `link_is_adult`):** `row is None` → True (no row to
+judge is adult-capable); an EXISTING row keeps NULL semantics — `row[0] is None` →
+False, matching `adult_clause` (`is_18_plus IS NULL` = not adult; `save_scraped_data`
+re-derives the flag). Only the missing-row case flipped. Docstring corrected to state
+the real rule. The AGENTS.md claim is now true of the code again; the historical
+record that it was false for all of `bf9e565` lives here.
+
+**Tests (all through `redact.py`, none around it).** `test_redact.py`: new
+`LinkIsAdultGuardTests` (flagged True / 0 False / existing-NULL False / unknown id
+True / dangling source join True / dangling release join True) and two HTTP tests on
+the real redirector: an orphaned unflagged link's valid handle gets 404, and an
+unknown-link handle gets 404. `test_reconcile_adult.py`: composition test — after
+canonical-key reconciliation, orroring the hidden twin's chain keeps it unreachable
+through BOTH the list predicate and the redirector; control link still plays.
+
+**Sibling found, NOT fixed (out of order scope):** `art_is_adult` (`redact.py:1055`)
+has the identical shape — docstring says "vanished row: show nothing", code returns
+False for a vanished row via the same `bool(row and row[0])`. Filed for a future
+order; no parser or filter touched.
+
+**Production untouched:** all work in `/tmp/q11_adult`; `/opt/radd-stream` not
+written, live DB never opened writable.
+
+**Verification the tests are real:** with the fix temporarily stashed,
+`LinkIsAdultGuardTests` fails 3/6 on the old code — exactly `unknown_link`,
+`dangling_source_join`, `dangling_release_join` — then 6/6 green with the fix
+restored. The old code is the control; the tests can detect the defect they name.

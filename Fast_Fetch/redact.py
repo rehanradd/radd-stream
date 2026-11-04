@@ -1076,8 +1076,11 @@ def link_is_adult(source_id: int, db_path) -> bool:
 
     Every list route hides a flagged title, but a redirector addressed by a bare
     link id never sees the list: without this, the play route alone would be an
-    adult viewer. An unknown link answers True too, so a vanished row, a typo and
-    a flagged title are indistinguishable — and none of them plays."""
+    adult viewer. The guard is FAIL CLOSED: a link whose row is missing — a
+    vanished row, a typo, or a download_sources whose release/post join broke
+    (orphaned by a merge) — answers True too, so none of them plays. Only an
+    EXISTING row may be judged, and a NULL flag is not adult (mirroring
+    ``adult_clause``; save_scraped_data re-derives the flag from the title)."""
     with sqlite3.connect(db_path) as conn:
         try:
             row = conn.execute(
@@ -1089,7 +1092,9 @@ def link_is_adult(source_id: int, db_path) -> bool:
                 """, (source_id,)).fetchone()
         except sqlite3.Error:
             return True
-    return bool(row and row[0])
+    if row is None:
+        return True              # no row to judge: unknown id or broken join
+    return bool(row[0])          # existing row: NULL/0 plays, 1 does not
 
 
 # ── rate limiting: the documented buckets, in-app ────────────────────────────

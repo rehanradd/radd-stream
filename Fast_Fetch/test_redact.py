@@ -231,6 +231,51 @@ class ProjectionTests(FixtureMixin):
                          "(posts.is_18_plus IS NULL OR posts.is_18_plus = 0)")
 
 
+class LinkIsAdultGuardTests(unittest.TestCase):
+    """The fail-closed rule of ``link_is_adult``, on a hand-built minimal ledger:
+    only a MISSING row flips to True; an existing NULL flag stays servable,
+    mirroring ``adult_clause``."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.db_path = Path(self.temp.name) / "guard.db"
+        with sqlite3.connect(self.db_path) as conn:
+            conn.executescript(
+                "CREATE TABLE posts (id INTEGER PRIMARY KEY, is_18_plus INTEGER);"
+                "CREATE TABLE releases (id INTEGER PRIMARY KEY, post_id INTEGER);"
+                "CREATE TABLE download_sources (id INTEGER PRIMARY KEY,"
+                " release_id INTEGER);")
+            conn.executescript(
+                "INSERT INTO posts VALUES (1, 1), (2, 0), (3, NULL);"
+                "INSERT INTO releases VALUES (10, 1), (20, 2), (30, 3), (40, 999);"
+                "INSERT INTO download_sources VALUES "
+                "(100, 10), (200, 20), (300, 30), (400, 888), (500, 40);")
+
+    def test_flagged_row_is_adult(self):
+        self.assertTrue(redact.link_is_adult(100, self.db_path))
+
+    def test_unflagged_row_plays(self):
+        self.assertFalse(redact.link_is_adult(200, self.db_path))
+
+    def test_null_flag_on_existing_row_is_not_adult(self):
+        """adult_clause treats IS NULL as not-adult; the guard must agree —
+        save_scraped_data re-derives the flag, a NULL is an unlabelled row, not
+        a vanished one."""
+        self.assertFalse(redact.link_is_adult(300, self.db_path))
+
+    def test_unknown_link_fails_closed(self):
+        self.assertTrue(redact.link_is_adult(999999999, self.db_path))
+
+    def test_dangling_source_join_fails_closed(self):
+        """download_sources.release_id points at nothing (orphaned by a merge)."""
+        self.assertTrue(redact.link_is_adult(400, self.db_path))
+
+    def test_dangling_release_join_fails_closed(self):
+        """The source→release chain is intact but releases.post_id vanished."""
+        self.assertTrue(redact.link_is_adult(500, self.db_path))
+
+
 class DisplayTextTests(unittest.TestCase):
     """The rules that clean a *sentence*, not a word.
 
@@ -673,6 +718,26 @@ class PublicEdgeHttpTests(FixtureMixin):
         self.assertEqual(self.one("SELECT is_18_plus FROM posts WHERE id = ?",
                                  (self.adult_id,))[0], 1,
                          "hidden is not deleted")
+
+    def test_an_orphaned_link_fails_closed_on_the_redirector(self):
+        """A link whose release/post join broke (merge, replaced release) yields
+        no row for the guard. It must be indistinguishable from a flagged title
+        at the play route — 404, not a redirect."""
+        link = self.source_id(self.post_id)                  # unflagged work
+        self.assertEqual(redact.link_is_adult(link, self.db_path), False)
+        handle = redact.mint_token(link, viewer.signing_secret())
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute("UPDATE download_sources SET release_id = 999999 "
+                         "WHERE id = ?", (link,))
+            conn.commit()
+        status, _, _ = self.get(f"/api/v1/stream?id={handle}", self.public_port)
+        self.assertEqual(status, 404, "broken join must not play")
+
+    def test_an_unknown_link_handle_does_not_play(self):
+        """A vanished row or a typo is the same case: no row to judge → True."""
+        handle = redact.mint_token(999999999, viewer.signing_secret())
+        status, _, _ = self.get(f"/api/v1/stream?id={handle}", self.public_port)
+        self.assertEqual(status, 404, "unknown link id must not play")
 
     def test_operator_only_routes_are_invisible_on_the_public_port(self):
         for path in ("/api/sitemap", "/api/fetch", "/api/heal", "/api/health-check",
