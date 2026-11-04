@@ -2217,3 +2217,37 @@ night; belongs to whoever owns the link-state projection contract. My 16/16
 **Standing limits honored:** staging dir only (`/tmp/radd-sweep-export-stage`), no /var/www, no
 nginx, no sudo; commit stages only this lane's paths (the lane's other agents'
 host_classifier/resolved_cache edits stayed unstaged).
+
+## Session 2026-11-05 (qoder12) — pool re-probe healing for the two dead-token links: DID NOT HEAL, why is structural
+Emperor night order, scratch-only (`/tmp/lane_phase1`, `/tmp/phase1_bench.db`,
+server :8099; live tree untouched, prod DB opened read-only at most, no nginx).
+- **Test first** (`2ad1490`): `TestPoolHealing` (5 tests) pins the heal contract
+  before touching the links — pool success (v2, `source="pool"`) heals a
+  circuit-retired link end-to-end; a healed playlist serves watch but never
+  download; `record_resolved_cache` now refuses ANY `stale`-flagged answer at
+  the cache itself (the v2 contract was the only thing enforcing that; a
+  future caller forgetting it cannot re-poison the pool); read-only pin of
+  prefetch_worker's bank guard shape; the exact v2 refusal envelope is
+  unbankable. 46/46 `test_resolved_cache`.
+- **The heal run** (`/tmp/heal_two_links.py`, prefetch_worker's per-link body
+  for exactly the two ids): BOTH refuse —
+  `1617406` (cineverse/modiplay): `no_playable_source` / `re_resolve_failed`;
+  `3702888` (vidbolt/dash-hls-bridge): `no_playable_source` / `re_resolve_failed`.
+  Cache rows unchanged (still only link 5). Scratch DB only.
+- **WHY, plainly:** the JIT refresh path is a service dispatch chain
+  (`fast_fetch.py:5346` onward: hubcloud, direct-cloud, greenmotors, vcloud,
+  fastdl, gdflix, pixeldrain, vegadrive, then `host_resolvers` for mxdrop,
+  pkembed, animahd, then gamerxyt). **No branch exists for vidbolt, cineverse,
+  modiplay, or vibuxer/hakunaymatata** — grepped, zero matches in `fast_fetch.py`
+  and in `importers/host_resolvers.py`. For these two links `fresh_url` is
+  therefore *always* None on refresh, v1 answers `stale: True` (that is the
+  warm-bench behavior), v2 honestly refuses, and the pool has nothing it could
+  bank. Re-probe cannot heal what cannot be unwrapped; the pool machinery is
+  not the gap — the unpacker is.
+- **Consequence for the warm gate:** these two handles will keep paying the
+  full resolver on every request until someone writes their embed unpackers
+  (host_resolvers territory, qoder14's file — NOT touched here). Per order:
+  **stopped at the diagnosis.**
+- **Push held:** `2ad1490` sits on top of qoder13's local-only `4f7c17d`;
+  pushing my commit would publish theirs without their report. Branch is
+  fast-forwardable the moment `4f7c17d` ships on its own merits.
