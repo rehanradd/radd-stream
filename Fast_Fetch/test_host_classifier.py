@@ -33,6 +33,16 @@ else:
 
 HAS_RC = _rc is not None
 
+try:
+    import site_scout as _ss
+except ImportError:  # pragma: no cover
+    _ss = None
+    _SS_REASON = "site_scout.py not importable"
+else:
+    _SS_REASON = ""
+
+HAS_SS = _ss is not None
+
 
 class TestCategoryA(unittest.TestCase):
     """Category A — direct file hosts."""
@@ -477,6 +487,93 @@ class TestCategoryACrossCheckWithResolvedCache(unittest.TestCase):
         agreements = [row for row in self.CROSS_CHECK if row[2] == "A"]
         self.assertEqual(len(disagreements), 14)
         self.assertEqual(len(agreements), 4)
+
+
+@unittest.skipUnless(HAS_SS, _SS_REASON)
+class TestSiteScoutConsumesAuthority(unittest.TestCase):
+    """Order qoder14 Task A: host_classifier is the single authority for
+    hoster classification; site_scout consumes it, legacy rows are kept."""
+
+    def test_authority_flag_is_live(self):
+        self.assertEqual(_ss.HOSTER_AUTHORITY, "host_classifier")
+
+    def test_authority_rows_lead_and_legacy_is_never_deleted(self):
+        authority = hc.as_scout_hoster_kinds()
+        merged = _ss.DEFAULT_HOSTER_KINDS
+        self.assertEqual(merged[:len(authority)], authority)
+        tail = merged[len(authority):]
+        self.assertEqual(set(_ss._LEGACY_HOSTER_KINDS), set(tail),
+                         "a legacy hoster row was deleted or altered — "
+                         "AGENTS.md rule 4: extend, never remove")
+
+    def test_every_authority_token_classifies_identically_in_scout(self):
+        kinds = _ss.build_kinds_map({})
+        for token, kind in hc.as_scout_hoster_kinds():
+            url = f"https://{token}.test/x"
+            with self.subTest(token=token):
+                self.assertEqual(_ss.classify_href(url, kinds), kind)
+                # and the authority agrees on the same URL
+                self.assertEqual(hc.SITE_SCOUT_KINDS.get(
+                    hc.classify(url).category), kind)
+
+    def test_vcloud_semantic_disagreement_resolved_to_bridge(self):
+        # host-power-weakness.md: "VCloud / VegaCloud | Bridge -> Generate
+        # -> servers". The authority says bridge; the legacy embed row exists
+        # but must never win.
+        self.assertEqual(hc.classify("https://vcloud.vote/embed-x").category,
+                         hc.CATEGORY_BRIDGE)
+        self.assertEqual(
+            _ss.classify_href("https://vcloud.vote/embed-x",
+                              _ss.build_kinds_map({})), "bridge")
+        self.assertIn(("vcloud", "embed"), _ss._LEGACY_HOSTER_KINDS)
+
+    def test_fastdl_split_family(self):
+        kinds = _ss.build_kinds_map({})
+        # measured: fastdl.beer serves a direct MKV; the legacy generic
+        # 'fastdl' -> embed row keeps the rest of the family classified.
+        self.assertEqual(
+            _ss.classify_href("https://fastdl.beer/file/a/movie.mkv", kinds),
+            "direct")
+        self.assertEqual(
+            _ss.classify_href("https://fastdl.example.com/f/abc", kinds),
+            "embed")
+
+    def test_registry_overrides_still_outrank_the_authority(self):
+        kinds = _ss.build_kinds_map({"hosters": {"vcloud": "embed"}})
+        self.assertEqual(
+            _ss.classify_href("https://vcloud.vote/embed-x", kinds), "embed")
+
+    def test_scout_kind_vocabulary_matches_categories(self):
+        self.assertEqual(hc.SITE_SCOUT_KINDS, {
+            hc.CATEGORY_DIRECT_FILE: "direct",
+            hc.CATEGORY_HLS_EMBED: "embed",
+            hc.CATEGORY_BRIDGE: "bridge",
+        })
+        self.assertNotIn(hc.CATEGORY_UNKNOWN, hc.SITE_SCOUT_KINDS)
+
+    def test_new_hosts_now_known_to_scout(self):
+        # Hosts the order measured as host_classifier-only must classify.
+        kinds = _ss.build_kinds_map({})
+        for url, expected in (
+            ("https://gofile.io/d/abc", "direct"),
+            ("https://1fichier.com/?abc", "direct"),
+            ("https://embed.vidrift.net/embed/movie/1", "embed"),
+            ("https://rozgarlelo.modiplay.xyz/embed/tmdb/movie?id=1", "embed"),
+            ("https://hanerix.com/e/abc", "embed"),
+            ("https://gdflix.to/d/abc", "bridge"),
+            ("https://bingr.xyz/e/abc", "embed"),
+        ):
+            with self.subTest(url=url):
+                self.assertEqual(_ss.classify_href(url, kinds), expected)
+
+    def test_unknown_hosts_stay_unknown_in_scout(self):
+        # The CI-pinned sanity from test_site_scout must survive the merge:
+        # authority tokens must not substring-collide with random paths.
+        kinds = _ss.build_kinds_map({})
+        for url in ("https://totally-unknown-xyz.example/a",
+                    "https://randomhoster.example/file/xyz"):
+            with self.subTest(url=url):
+                self.assertEqual(_ss.classify_href(url, kinds), "unknown")
 
 
 if __name__ == "__main__":

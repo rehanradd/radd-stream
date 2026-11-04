@@ -121,7 +121,17 @@ BAD_IMAGE_TOKENS = (
 # Known hoster registry (AGENTS.md section 4). ``domain_registry.json`` currently
 # lists origin SITES, not hosters; the classifier merges this default table with any
 # ``hosters``/``link_kinds`` section the registry file may add later.
-DEFAULT_HOSTER_KINDS = (
+#
+# Since Crown-Prince order qoder14 this literal is the LEGACY fallback only:
+# ``host_classifier._HOST_TABLE`` is the single authority for hoster
+# classification, its rows are prepended below (first match wins), and these
+# entries are kept un-deleted as fallback for domains the authority does not
+# name (1xplayer, uprot, viduo, autoembed, dropgalaxy, the generic fastdl
+# family...). Where the two disagree the authority decides — deliberately for
+# ``vcloud`` (bridge per host-power-weakness.md, not embed) and decisively for
+# ``fastdl.beer`` (direct per the measured SPLIT family) while the legacy
+# generic ``fastdl`` -> embed row keeps serving the rest of that family.
+_LEGACY_HOSTER_KINDS = (
     # --- direct cloud hosts ---
     ("pixeldrain.com", "direct"),
     ("drive.google.com", "direct"),
@@ -167,6 +177,24 @@ DEFAULT_HOSTER_KINDS = (
     ("filemoon", "embed"),
     ("uprot", "embed"),
 )
+
+# The authority table lives in host_classifier (stdlib-only, no I/O). If it is
+# absent — e.g. this file copied onto a tree that predates it — the legacy
+# table alone still classifies, so the scout degrades instead of crashing.
+try:
+    import host_classifier as _host_authority
+except ImportError:  # pragma: no cover - legacy tree without the classifier
+    _host_authority = None
+
+if _host_authority is not None:
+    #: Authority rows first (decisive), legacy rows after (fallback, never
+    #: deleted). Registry overrides still outrank both via build_kinds_map.
+    DEFAULT_HOSTER_KINDS = (_host_authority.as_scout_hoster_kinds()
+                            + _LEGACY_HOSTER_KINDS)
+    HOSTER_AUTHORITY = "host_classifier"
+else:  # pragma: no cover - legacy tree without the classifier
+    DEFAULT_HOSTER_KINDS = _LEGACY_HOSTER_KINDS
+    HOSTER_AUTHORITY = "legacy-only"
 
 # Cloudflare / DDoS-Guard / Turnstile interstitial markers (detection only, never bypassed).
 CHALLENGE_MARKERS = (

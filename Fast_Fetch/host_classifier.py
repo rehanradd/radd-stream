@@ -56,6 +56,11 @@ store happens through :func:`is_direct_file` / :func:`is_playable_category`
 ``TestCategoryACrossCheckWithResolvedCache`` for the full measured
 disagreement table.
 
+And per Crown-Prince order qoder14 (Task A): this table is now the **single
+authority for hoster classification** — ``site_scout.DEFAULT_HOSTER_KINDS``
+is built from :func:`as_scout_hoster_kinds` with the legacy scout rows
+appended as never-deleted fallback, not maintained beside it.
+
 Python standard library only. No I/O in this module: it classifies and
 prepares headers, it never fetches.
 """
@@ -398,3 +403,44 @@ def is_bridge_category(url_or_class, service: str = "") -> bool:
     """True only for Category C — the URL is an HTML landing page that must
     be unwrapped before it means anything."""
     return _to_classification(url_or_class, service).category == CATEGORY_BRIDGE
+
+
+# ---------------------------------------------------------------------------
+# site_scout bridge — host_classifier is the SINGLE AUTHORITY for hoster
+# classification (Crown-Prince order qoder14, Task A). site_scout keeps its
+# own vocabulary ('direct'/'embed'/'bridge') and its legacy table for
+# historical reasons; both are now derived from this table instead of
+# drifting beside it. Legacy rows are never deleted (AGENTS.md rule 4) —
+# site_scout appends them after these rows, and first-match-wins ordering
+# makes the authority decisive.
+# ---------------------------------------------------------------------------
+
+#: This module's categories -> site_scout's kind words. ``unknown`` maps to
+#: nothing: site_scout answers "unknown" only for hosts neither table knows.
+SITE_SCOUT_KINDS = {
+    CATEGORY_DIRECT_FILE: "direct",
+    CATEGORY_HLS_EMBED: "embed",
+    CATEGORY_BRIDGE: "bridge",
+}
+
+#: Resolved semantic disagreement (order qoder14): ``vcloud`` was
+#: ``("vcloud", "embed")`` in site_scout's legacy table, but
+#: host-power-weakness.md records VCloud as "Bridge -> Generate -> servers"
+#: — a landing page whose server list is minted by a generate step, exactly
+#: this table's Category C. The authority row (bridge) outranks the legacy
+#: row; the legacy row stays in place, shadowed, un-deleted. The same logic
+#: refined ``fastdl``: the family was SPLIT on evidence (fastdl.beer is a
+#: direct file host; fastdlserver.site samples 404), so the authority names
+#: only fastdl.beer direct and the legacy generic ``fastdl`` -> embed row
+#: survives as fallback for the rest of the family.
+
+
+def as_scout_hoster_kinds() -> Tuple[Tuple[str, str], ...]:
+    """The authority table rendered in site_scout's ``(token, kind)``
+    vocabulary, in decisive first-match order."""
+    rows = []
+    for marker, category, _backend in _HOST_TABLE:
+        kind = SITE_SCOUT_KINDS.get(category)
+        if kind is not None:
+            rows.append((marker, kind))
+    return tuple(rows)
