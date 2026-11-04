@@ -2137,7 +2137,7 @@ Commits `b3962f6` + `865d6e8` on `feat/phase1-resolved-cache` (both now on the
 remote — qoder14's re-pin push `95fd139` sits on my HEAD; `git diff FETCH_HEAD..HEAD`
 empty, so Step 2's hold is lifted and there is nothing left to push).
 - **Step 0 (night order):** `record_resolved_cache` was missing `_ensure_schema`
-  (WAL stress proved it: 7x `no such table` on cold boot) — fixed `b396226`→`b3962f6`
+  (WAL stress proved it: 7x `no such table` on cold boot) — fixed `b3962f6`
   with a virgin-DB regression test. Then safe-by-construction per the order:
   verified every `_DDL_STATEMENTS` entry is `IF NOT EXISTS`, `init_resolved_cache`
   now tolerates ONLY the `already exists` concurrent-creator error (helper
