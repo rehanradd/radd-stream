@@ -2017,3 +2017,43 @@ idempotent_check=0; public `adult_clause` hides 15,475 (+407); redirector:
 flagged post 159's real link 13451 → True and unlisted; ORPHAN: deleting that
 link's release row (join broken) still → True (fail-closed holds on real data);
 control link → False.
+
+---
+
+## Session — qoder11 lane, 2026-11-05 late night (STOP-AND-READ rescope order)
+
+**Premise correction, accepted with measurements.** The key-grouped pass closes
+a real class (re-measured with the Crown's own SQL shape: 394 mixed keys / 394
+flagged rows — exactly one per key / 407 twins / 13 multi-twin keys) but it
+CANNOT close the directive's named example: `4 Play` 23519 key `4-play_2021`
+vs flagged twin 149883 key `4-play-2021-hindi-movie-free-download` are under
+DIFFERENT keys. Re-verified live at the edge late tonight: `?q=4+Play` still
+lists 23519 (an earlier False reading was a 429 artifact of my own hammering —
+recorded as a measurement error, then re-probed after cooldown). Root cause is
+inconsistent `canonical_key` generation across importers; the real fix is an
+upstream deterministic normalizer, which I did NOT build (not ordered).
+
+**Cross-key class measured (one read-only scan, strict de-overlap):** 650 extra
+groups / 795 extra rows beyond the key class (the Crown's gross count 721/946
+differs by definition, not data). Splits: 50 of 795 in season-suffixed groups
+(Naruto s01/s02, My Dress, Secret Level — title-MAX would hide whole seasons;
+forbidden), 14 in ≤3-char-title groups (11 groups — collision risk). Proposal
+(candidate rule a–e + human-reviewed CSV gating) in
+`/tmp/q11_crosskey_proposal.md`; no propagation code written.
+
+**link_is_adult severity, stated as measured:** latent hardening only — prod
+anti-join reproduced: ds 4,073,865, NULL release_id 0, orphan ds→r 0, orphan
+r→p 0; no real row walks the fail-open path today. Guard matrix on temp DB:
+lane(fixed) True/True/True/True, live(deployed) True/False/False/False —
+the fix is on the branch, NOT deployed, and `redact.py` in the live tree is
+qoder13's active file (public_image_value at live :996 + uncommitted edits);
+integration owner merges `cbeb553`; I touched redact.py zero times this segment.
+
+**Script changes (lane only, stdlib only):** `--apply` now REFUSES any resolved
+realpath under `/home/ubuntu/radd-stream-data/` or on PRODUCTION_PATHS
+(ProductionRefused, CLI exit 3) before opening the file; every report carries
+`resolved_target`; `keys_affected` + `mixed_keys_after` per-key idempotency
+(second run: 0 keys, 0 mixed); new never-over-hide test proves unflagged
+non-twin public set is byte-identical after apply. Tests now 15 (all green).
+Disk rule honored: / at 99% — zero catalog copies this segment; synthetic
+fixtures + read-only scans only.

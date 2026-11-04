@@ -40,9 +40,22 @@ Policy (deliberate, read before changing)
   can arrive unflagged again. This tool is meant to run periodically (the same
   cadence as the identity backfill), not once.
 
+SCOPE, measured 2026-11-05 (Crown Prince rescope order): this closes the
+KEY class only — 394 mixed ``canonical_key`` groups / 407 twin rows. The
+directive's own worked example (`4 Play` 23519 key ``4-play_2021`` vs flagged
+twin 149883 key ``4-play-2021-hindi-movie-free-download``) is a CROSS-KEY
+identity hole a key-grouped pass cannot see; the cross-key class measures
+~650 extra groups / ~795 extra rows (Crown's looser count: 721/946) and its
+real fix is a deterministic key normalizer at import/merge time, NOT broader
+propagation here — title matching over-hides series seasons (50 of those rows
+sit in ``_s\\d+``-suffixed groups) and collides on generic short titles.
+
 This is a data migration that makes content disappear from public routes.
 Re-measure, back up, apply to a scratch copy first. Never run ``--apply``
-against the live production catalog from an agent lane.
+against the live production catalog from an agent lane: ``--apply`` refuses
+paths that resolve (realpath, symlinks included) to the production catalogs,
+and every report carries ``resolved_target`` so the file actually written is
+never a surprise.
 
 Standard library only. Never deletes a parser or a filter.
 """
@@ -64,15 +77,28 @@ except ImportError:  # pragma: no cover - running from inside Fast_Fetch/
     import backup_manager  # type: ignore
 
 __all__ = [
-    "DEFAULT_DB", "DEFAULT_BUSY_TIMEOUT_MS",
+    "DEFAULT_DB", "DEFAULT_BUSY_TIMEOUT_MS", "PRODUCTION_PATHS",
     "build_plan", "reconcile", "take_verified_backup", "BackupRefused",
+    "ProductionRefused", "resolve_target",
 ]
+
+#: Paths --apply must NEVER write, from any lane. Resolved with realpath so a
+#: symlink (Fast_Fetch/fast_fetch.db -> the merged catalog) cannot smuggle one
+#: of these past the check.
+PRODUCTION_PATHS = frozenset({
+    "/home/ubuntu/radd-stream-data/merged_catalog_20261025.db",
+    "/opt/radd-stream/Fast_Fetch/fast_fetch.db",
+})
 
 #: Same resolution order the running service uses, but never assumed: an
 #: operator points --db at whatever catalog they intend to audit.
 DEFAULT_DB = os.environ.get(
     "RADD_DB_PATH", "/home/ubuntu/radd-stream-data/merged_catalog_20261025.db")
 DEFAULT_BUSY_TIMEOUT_MS = 5000
+#: Everything under the live data dir is production data; --apply refuses any
+#: realpath inside it, which also covers Fast_Fetch/fast_fetch.db's symlink
+#: target without enumerating where the link points.
+_DATA_DIR = "/home/ubuntu/radd-stream-data/"
 
 # ── the plan (pure reads) ────────────────────────────────────────────────────
 
@@ -128,6 +154,7 @@ def build_plan(conn: sqlite3.Connection) -> dict:
         "mixed_keys": conn.execute(_MIXED_KEY_COUNT_SQL).fetchone()[0],
         "rows_to_flip": [{"post_id": int(r[0]), "canonical_key": r[1]} for r in rows],
         "flip_count": len(rows),
+        "keys_affected": len({r[1] for r in rows}),
         "keyless_rows_excluded": int(keyless),
         "total_posts": int(total),
         "flagged_before": conn.execute(
@@ -172,6 +199,17 @@ def take_verified_backup(db_path: str | Path, backup_dir: str | Path | None = No
 
 # ── the migration ────────────────────────────────────────────────────────────
 
+class ProductionRefused(RuntimeError):
+    """--apply will not write to a known production catalog path, through a
+    symlink, or at all from an agent lane."""
+
+
+def resolve_target(db_path: str | Path) -> str:
+    """Realpath of the file we would write — printed before any apply so the
+    operator always sees which file a symlink actually names."""
+    return os.path.realpath(str(db_path))
+
+
 def reconcile(db_path: str | Path, *, apply: bool = False,
               backup_dir: str | Path | None = None,
               busy_timeout_ms: int = DEFAULT_BUSY_TIMEOUT_MS,
@@ -183,7 +221,13 @@ def reconcile(db_path: str | Path, *, apply: bool = False,
     data. ``apply=True`` first takes a verified backup (refusing everything on
     failure), then performs the flips in one short ``BEGIN IMMEDIATE``.
     """
-    report = {"mode": "apply" if apply else "dry-run", "db": str(db_path)}
+    report = {"mode": "apply" if apply else "dry-run", "db": str(db_path),
+              "resolved_target": resolve_target(db_path)}
+    if apply and (report["resolved_target"] in PRODUCTION_PATHS
+                  or report["resolved_target"].startswith(_DATA_DIR)):
+        raise ProductionRefused(
+            "--apply refuses the production catalog. resolved target: "
+            f"{report['resolved_target']}. Copy first, act on the copy.")
     uri = f"file:{db_path}?mode=ro"
     try:
         conn = sqlite3.connect(uri, uri=True) if not apply else sqlite3.connect(str(db_path))
@@ -200,9 +244,11 @@ def reconcile(db_path: str | Path, *, apply: bool = False,
             report["applied"] = False
             return report
         if not plan["rows_to_flip"]:
-            report.update({"changed": 0, "applied": True,
+            report.update({"changed": 0, "keys_affected": 0,
+                           "applied": True,
                            "flagged_after": plan["flagged_before"],
                            "idempotent_check": 0,
+                           "mixed_keys_after": plan["mixed_keys"],
                            "backup": "skipped: nothing to flip"})
             return report
         report["backup"] = take_verified_backup(db_path, backup_dir)
@@ -215,13 +261,18 @@ def reconcile(db_path: str | Path, *, apply: bool = False,
         after = build_plan(conn)
         report.update({
             "changed": int(changed),
+            "keys_affected": plan["keys_affected"],
             "applied": True,
             "flagged_after": after["flagged_before"],
             "idempotent_check": after["flip_count"],          # must be 0
+            "mixed_keys_after": after["mixed_keys"],          # must be 0
         })
-        if after["flip_count"] != 0:
+        # idempotency is PER KEY: every mixed key must be resolved, not just
+        # the row set — a key left half-flipped means repeat work next run.
+        if after["flip_count"] != 0 or after["mixed_keys"] != 0:
             raise sqlite3.DatabaseError(
-                "post-apply check failed: twins still unflagged")
+                "post-apply check failed: twins still unflagged or "
+                "mixed keys remain")
         return report
     finally:
         conn.close()
@@ -247,6 +298,10 @@ def main(argv=None) -> int:
     try:
         report = reconcile(args.db, apply=args.apply, backup_dir=args.backup_dir,
                            busy_timeout_ms=args.busy_timeout_ms, list_limit=args.list_limit)
+    except ProductionRefused as exc:
+        print(f"REFUSED: {exc}", file=sys.stderr)
+        print("No rows were written.", file=sys.stderr)
+        return 3
     except BackupRefused as exc:
         print(f"REFUSED: {exc}", file=sys.stderr)
         print("No rows were written.", file=sys.stderr)
@@ -260,7 +315,8 @@ def main(argv=None) -> int:
         print(f"  posts total ................ {report['total_posts']:,}")
         print(f"  currently flagged .......... {report['flagged_before']:,}")
         print(f"  keys with a flagged twin ... {report['mixed_keys']:,}")
-        print(f"  rows that would flip ....... {report['flip_count']:,}")
+        print(f"  rows that would flip ....... {report['flip_count']:,}"
+              f"  (across {report['keys_affected']:,} keys)")
         print(f"  keyless rows EXCLUDED ...... {report['keyless_rows_excluded']:,}"
               "  (never propagated — no identity to reconcile on)")
         for row in report.get("rows_to_flip_sample", []):
@@ -268,7 +324,9 @@ def main(argv=None) -> int:
         if report["flip_count"] > len(report.get("rows_to_flip_sample", [])):
             print(f"    … {report['flip_count']} total (--list-limit to see more)")
         if report.get("applied"):
-            print(f"  changed = {report['changed']:,}, flagged after = {report['flagged_after']:,}")
+            print(f"  resolved symlink target .. {report['resolved_target']}")
+            print(f"  changed = {report['changed']:,} across {report['keys_affected']:,} keys,"
+                  f" flagged after = {report['flagged_after']:,}")
             print(f"  idempotent: re-plan flips {report['idempotent_check']} rows (want 0)")
             print(f"  backup: {report.get('backup', {}).get('path', 'skipped')}")
     return 0

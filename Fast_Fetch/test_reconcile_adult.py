@@ -155,6 +155,61 @@ class ReconcileAdultTests(unittest.TestCase):
         self.assertEqual(twin, 0)
         self.assertGreaterEqual(report["backup"]["counts"]["posts"], len(ROWS))
 
+    def test_apply_refuses_protected_production_path(self):
+        """--apply must refuse any path whose RESOLVED target is on the
+        protected production list — even a temp db whose realpath was added to
+        the list (that is exactly how the real merged catalog matches)."""
+        import unittest.mock as mock
+        real = os.path.realpath(self.db)
+        with mock.patch.object(reconcile_adult, "PRODUCTION_PATHS",
+                               frozenset({real})):
+            with self.assertRaises(reconcile_adult.ProductionRefused):
+                reconcile_adult.reconcile(self.db, apply=True,
+                                          backup_dir=self.bdir)
+            rc = reconcile_adult.main(["--db", self.db, "--apply"])
+            self.assertEqual(rc, 3)            # CLI exits 3 on refusal
+        flags = dict(sqlite3.connect(self.db).execute(
+            "SELECT id, is_18_plus FROM posts").fetchall())
+        self.assertEqual(flags[2], 0)          # refusal wrote nothing
+
+    def test_report_always_names_the_resolved_target(self):
+        """A symlink must be resolved in the report, so nobody is surprised
+        about which file --apply actually wrote."""
+        link = os.path.join(self.dir.name, "catalog-link.db")
+        os.symlink(self.db, link)
+        rep = reconcile_adult.reconcile(link, apply=True, backup_dir=self.bdir)
+        self.assertEqual(rep["resolved_target"], os.path.realpath(self.db))
+        self.assertEqual(rep["changed"], 2)    # and it applied to the target
+
+    def test_keys_affected_and_per_key_idempotency(self):
+        first = reconcile_adult.reconcile(self.db, apply=True,
+                                          backup_dir=self.bdir)
+        self.assertEqual(first["keys_affected"], 2)        # shared-key-a + -c
+        self.assertEqual(first["mixed_keys_after"], 0)     # every key resolved
+        second = reconcile_adult.reconcile(self.db, apply=True,
+                                           backup_dir=self.bdir)
+        self.assertEqual(second["keys_affected"], 0)
+
+    def test_never_over_hides_non_twins(self):
+        """Public unflagged, non-twin works before == after. If this drops by
+        anything other than the twin set, the migration is eating catalog."""
+        conn = sqlite3.connect(self.db)
+        clause = redact.adult_clause("posts")
+        before_unflagged_non_twin = conn.execute(
+            f"SELECT id FROM posts WHERE {clause} AND COALESCE(is_18_plus,0)=0 "
+            "AND NOT (canonical_key IS NOT NULL AND canonical_key != '' AND "
+            "canonical_key IN (SELECT canonical_key FROM posts "
+            "WHERE canonical_key IS NOT NULL AND canonical_key != '' "
+            "GROUP BY canonical_key HAVING MAX(is_18_plus)=1))").fetchall()
+        conn.close()
+        reconcile_adult.reconcile(self.db, apply=True, backup_dir=self.bdir)
+        conn = sqlite3.connect(self.db)
+        after = {r[0] for r in conn.execute(
+            f"SELECT id FROM posts WHERE {clause} AND COALESCE(is_18_plus,0)=0")}
+        conn.close()
+        expected = {r[0] for r in before_unflagged_non_twin}
+        self.assertEqual(after, expected)      # zero collateral hiding
+
     def test_idempotent_second_run_changes_nothing(self):
         first = reconcile_adult.reconcile(self.db, apply=True, backup_dir=self.bdir)
         second = reconcile_adult.reconcile(self.db, apply=True, backup_dir=self.bdir)
