@@ -43,8 +43,43 @@ class ServerSettingsRepository @Inject constructor(
             ?: Brand.defaultServerUrl.takeIf { it.isNotBlank() }
     }
 
+    /**
+     * Point this install at a server, and drop every stored answer that belongs to the one
+     * being replaced.
+     *
+     * The key, the mirrored entitlement, the trial clock and the operator's switch board are
+     * all facts the PREVIOUS server asserted about itself. "Test & Save" used to write only
+     * the address, so after a switch the Account card sent a bearer key the new server never
+     * minted and showed a VIP badge the new ledger had not granted, while the old operator's
+     * maintenance and feature flags kept governing screens they have no authority over.
+     * Falling back to the defaults each reader already defines — signed out, no VIP, no
+     * maintenance, features on — is the honest state between two servers, and the watchers
+     * repopulate it from the new one. Writing the same effective address again changes
+     * nothing, because nothing about the server changed.
+     */
     suspend fun saveServerUrl(url: String) {
-        dataStore.edit { preferences -> preferences[SERVER_URL_KEY] = url }
+        dataStore.edit { preferences ->
+            val previous = preferences[SERVER_URL_KEY]?.takeIf { it.isNotBlank() }
+                ?: Brand.defaultServerUrl.takeIf { it.isNotBlank() }
+            if (previous != url) {
+                preferences.remove(SYNC_KEY_KEY)
+                preferences.remove(ACCOUNT_LABEL_KEY)
+                preferences.remove(TRIAL_SECONDS_REMAINING_KEY)
+                preferences.remove(TRIAL_RECORDED_AT_MS_KEY)
+                preferences.remove(TRIAL_KEY_UNSEEN_KEY)
+                preferences.remove(VIP_ACTIVE_KEY)
+                preferences.remove(VIP_UNTIL_KEY)
+                preferences.remove(VIP_PENDING_CLAIM_KEY)
+                preferences.remove(MAINTENANCE_MODE_KEY)
+                preferences.remove(FEATURE_DOWNLOADS_KEY)
+                preferences.remove(FEATURE_SHARING_KEY)
+                preferences.remove(FEATURE_SEARCH_KEY)
+                preferences.remove(FEATURE_PURE_CINEMA_KEY)
+                preferences.remove(FEATURE_QUALITY_GATE_KEY)
+                preferences.remove(FEATURE_ADS_KEY)
+            }
+            preferences[SERVER_URL_KEY] = url
+        }
     }
 
     /**

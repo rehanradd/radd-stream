@@ -30,6 +30,8 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.isActive
@@ -109,6 +111,23 @@ class SyncAccountRepository @Inject constructor(
                 settingsRepository.storedEntitlement.first()
             }.getOrNull()
         }
+        // Everything above this line that lives only in memory was learned from whichever
+        // server the address names, so a switch drops it exactly as a sign-out would. The
+        // DataStore half of that cleanup happens inside saveServerUrl itself; this covers
+        // the mirrored badge, the throttle pause and the synced-progress cache here.
+        scope.launch {
+            settingsRepository.serverUrl
+                .distinctUntilChanged()
+                .drop(1)
+                .collect { forgetCurrentAccountState() }
+        }
+    }
+
+    private suspend fun forgetCurrentAccountState() {
+        pausedByThrottle = false
+        progressThrottle.reset()
+        syncedProgressDao.clear()
+        clearEntitlement()
     }
 
     // ── account lifecycle ────────────────────────────────────────────────────────

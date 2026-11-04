@@ -9,6 +9,8 @@ import javax.inject.Singleton
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
@@ -44,6 +46,16 @@ class RemoteConfigWatcher @Inject constructor(
                 refreshOnce()
                 delay(REFRESH_INTERVAL_MS)
             }
+        }
+        // The operator's board is this server's answer, so a switch to a different address is
+        // the one change that cannot wait out the five-minute tick. The interval loop still
+        // covers a cold start and a new server that is briefly unreachable; this covers the
+        // window where the old server's flags would otherwise sit on screen as if inherited.
+        scope.launch {
+            settings.serverUrl
+                .distinctUntilChanged()
+                .drop(1)
+                .collect { refreshOnce() }
         }
     }
 
