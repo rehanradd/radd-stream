@@ -2854,3 +2854,24 @@ message. Pushed e9b78ba to feat/phase1-resolved-cache.
   no add -A/-u. Not touched: qoder12's in-flight fast_fetch/resolved_cache/
   test_resolved_cache hunks, HELD viewer.py. Pushed a943e15..a6b0678 to
   feat/phase1-resolved-cache.
+
+## 202626-11-05 — qoder14: CI-blind-spot audit (crown order: audit only, no backend-ci.yml edit)
+
+Three TRACKED suites named NOWHERE in backend-ci.yml — not a run step, not on
+the EXCLUDED ledger: Fast_Fetch/importers/{test_host_resolvers,
+test_stream_resolvers,test_convert_mp4moviez}.py. Root cause of the silence:
+the machine-readable EXCLUDED block declares its scope as "one line per
+TOP-LEVEL Fast_Fetch/test_*.py", so test_ci_manifest.py's drift guard cannot
+represent the importers/ subtree at all — an importers test is invisible to
+the guard both ways. Measured offline at lane head, one at a time,
+loadavg first (5.6–5.8): test_host_resolvers **171 OK in 1.77 s**,
+test_stream_resolvers **45 OK in 0.91 s**, test_convert_mp4moviez **10 OK in
+1.32 s** — all three pass offline, none needs network (host_resolvers mocks
+its sockets; the others never reach the wire). Duplication: NONE —
+test_database.py only shape/smoke-checks host_resolvers' existence
+(:779,:1033), not its 171 behaviors; stream_resolvers and
+convert_mp4moviez appear in no CI-run suite. AGENTS.md calls
+test_host_resolvers a standing local push gate (3-command list) yet CI never
+runs it — same unfed-sweep class as 5446771.backend-ci.yml untouched, the
+Emperor decides steps; report delivered to crown. Pen held (granted this
+session); CONTINUITY.md was porcelain-clean before append.
