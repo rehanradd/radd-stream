@@ -296,9 +296,15 @@ def pixeldrain_file_id(url: str) -> Optional[str]:
 def is_pixeldrain(url: str) -> bool:
     """Strict registrable-domain check — NOT a substring test.
 
-    ``pixeldrain.dev``, ``xpixeldrain.com`` and ``pixeldrain.com.attacker.tld``
-    are different services (or hostile hosts) and must not buy the Category A
-    treatment or the /api/file/ rewrite (crown order qoder14_repin item 3).
+    ``pixeldrain.dev`` is run by the SAME operators as ``pixeldrain.com``
+    (correction flagged by qoder13, crown ruling 2026-11-05), but the refusal
+    stands and the ground is now named honestly: the .dev front is where the
+    measured ``hotlink_detected`` failure lives, so it must not buy the
+    Category A treatment or the /api/file/ rewrite — the ban rests on the
+    hotlink-bypass ground, not on a claim of different ownership.
+    ``xpixeldrain.com`` and ``pixeldrain.com.attacker.tld`` are different
+    services (or hostile hosts) and stay out for the original reason
+    (crown order qoder14_repin item 3). Text-only change, no behaviour.
     """
     host = _hostname(url)
     return host == "pixeldrain.com" or host.endswith(".pixeldrain.com")
