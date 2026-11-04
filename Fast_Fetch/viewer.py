@@ -3290,11 +3290,67 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 return
 
             import fast_fetch
-            # The honest resolver contract: a bridge that no longer unwraps, or a
-            # stale landing page, is a failure — never a "download" of HTML. The
-            # v1 stale-URL behaviour exists for the shipped player, and no client
-            # of this route has that history.
-            res = fast_fetch.resolve_live_source(int(source_id), v2=True)
+            # Phase-1 resolved_cache on the download twin. Same ordering rule
+            # the stream route proved: the adult gate ABOVE always runs before
+            # any cache lookup, and the cache is consulted on the public port
+            # only — the operator port keeps the live resolver's diagnostics.
+            # A cached row may answer a download ONLY as a single file:
+            # lookup_cache(want="download") refuses kind='playlist' rows (a
+            # playlist is segments, not a file — the stage-2 rule), and a
+            # refused or missing row falls through to the live resolver below.
+            # The hit is injected as a resolver-shaped `res`, so the shortener
+            # waterfall and attachment-header logic run identically for it:
+            # monetization cannot be skipped by a warm cache.
+            res = None
+            if not full:
+                hit = None
+                try:
+                    import resolved_cache
+                    with get_db() as conn:
+                        hit = resolved_cache.lookup_cache(
+                            conn, int(source_id), want="download")
+                except Exception:      # noqa: BLE001
+                    hit = None         # a cache fault must not change the answer
+                if hit and hit.get("kind") == "file":
+                    _now = time.time()
+                    res = {
+                        "success": True,
+                        "id": int(source_id),
+                        "url": hit["url"],
+                        "cached": True,
+                        "cache_hit": True,
+                        "mime_type": hit["mime_type"],
+                        "file_size_bytes": hit["file_size_bytes"],
+                        "is_resumable": bool(hit["is_resumable"]),
+                        "is_temporary": hit["category"] == "B",
+                        "expires_at": hit["expires_at"],
+                        # Measured window when we have one; otherwise our own
+                        # honest horizon — never a promised life longer than
+                        # the row is guaranteed servable.
+                        "expires_in": (hit["expires_in"] if hit["expires_in"]
+                                       is not None else
+                                       max(0.0, round(hit["reverify_after"] - _now, 3))),
+                    }
+
+            if res is None:
+                # The honest resolver contract: a bridge that no longer unwraps, or a
+                # stale landing page, is a failure — never a "download" of HTML. The
+                # v1 stale-URL behaviour exists for the shipped player, and no client
+                # of this route has that history.
+                res = fast_fetch.resolve_live_source(int(source_id), v2=True)
+                # Bank the fresh answer for the next downloader (and player —
+                # the watch route accepts file rows too). Stale URLs are never
+                # stored, and a cache write must never alter this response.
+                if (not full and res.get("success") and res.get("url")
+                        and not res.get("stale")):
+                    try:
+                        import resolved_cache
+                        with get_db() as conn:
+                            resolved_cache.record_resolved_cache(
+                                conn, int(source_id), res)
+                    except Exception:      # noqa: BLE001
+                        pass
+
             redirect_flag = query_params.get("redirect", ["1"])[0]
 
             if res.get("success") and res.get("url"):
