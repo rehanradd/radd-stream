@@ -136,6 +136,31 @@ name: 🐍 Backend CI — Stdlib Python Tests
 #       1cfea81, and the step below is that promotion.
 #     EXCLUDED: test_vegamovies_import.py  — per-site parser
 #     EXCLUDED: test_world4ufree_import.py  — per-site parser
+#     Widened under order qoder12_ci_manifest_widen (2026-11-05): the guard's
+#     accounting used to glob TOP LEVEL ONLY, which is why every importers/
+#     suite below was named nowhere and nothing complained. Each now carries an
+#     explicit human-chosen line — a per-module decision, never a pattern that
+#     auto-excludes a directory. (The two importers RESOLVER suites that are
+#     offline-green got real run steps instead: test_host_resolvers.py, 171
+#     tests, and test_stream_resolvers.py, 45 tests, both verified offline on
+#     this lane before promotion.)
+#     EXCLUDED: importers/test_5movierulz_import.py  — per-site parser; fixture layout follows the site, run by that site's own agent at edit time
+#     EXCLUDED: importers/test_animahd_import.py  — per-site parser; fixture layout follows the site, run by that site's own agent at edit time
+#     EXCLUDED: importers/test_aryplus_import.py  — per-site parser; fixture layout follows the site, run by that site's own agent at edit time
+#     EXCLUDED: importers/test_convert_mp4moviez.py  — per-site parser (mp4moviez conversion fixtures)
+#     EXCLUDED: importers/test_desiserials_import.py  — per-site parser; fixture layout follows the site, run by that site's own agent at edit time
+#     EXCLUDED: importers/test_dramacool_import.py  — per-site parser; fixture layout follows the site, run by that site's own agent at edit time
+#     EXCLUDED: importers/test_filmiyin_import.py  — per-site parser; fixture layout follows the site, run by that site's own agent at edit time
+#     EXCLUDED: importers/test_filmyhit_import.py  — per-site parser; fixture layout follows the site, run by that site's own agent at edit time
+#     EXCLUDED: importers/test_filmywap_import.py  — per-site parser; fixture layout follows the site, run by that site's own agent at edit time
+#     EXCLUDED: importers/test_import_wp_family.py  — per-site parser family (captured Dooplay/WP page shapes, offline fixtures)
+#     EXCLUDED: importers/test_kisskh_import.py  — per-site parser; fixture layout follows the site, run by that site's own agent at edit time
+#     EXCLUDED: importers/test_kuttymovies_import.py  — per-site parser; fixture layout follows the site, run by that site's own agent at edit time
+#     EXCLUDED: importers/test_levidia_import.py  — per-site parser; fixture layout follows the site, run by that site's own agent at edit time
+#     EXCLUDED: importers/test_moviecok_import.py  — per-site parser; fixture layout follows the site, run by that site's own agent at edit time
+#     EXCLUDED: importers/test_moviesmela_import.py  — per-site parser; fixture layout follows the site, run by that site's own agent at edit time
+#     EXCLUDED: importers/test_mp4moviez_import.py  — per-site parser; fixture layout follows the site, run by that site's own agent at edit time
+#     EXCLUDED: importers/test_pagalmovies_import.py  — per-site parser; fixture layout follows the site, run by that site's own agent at edit time
 # KNOWN FAILURE MODES THIS FILE FIXES
 #   GitHub never ran any pipeline for this repo because the workflow files lived
 #   in App/.github/workflows/ and radd-stream/.github/workflows/ — discovery
@@ -604,6 +629,23 @@ jobs:
         id: test_fast_fetch_domains
         if: always()
         run: python3 -S Fast_Fetch/test_fast_fetch_domains.py
+
+      # Promoted to real CI steps under order qoder12_ci_manifest_widen: these
+      # two importers suites were named NEITHER in a step NOR in the ledger —
+      # the blind spot existed because the guard globbed top level only. Both
+      # verified offline on this lane at load 5.9 before promotion, stdlib,
+      # zero network: test_host_resolvers.py (171 tests, one of AGENTS.md's
+      # three standing push-gate modules) and test_stream_resolvers.py
+      # (45 tests, header: "no network, no catalog writes").
+      - name: 🧪 importers/test_host_resolvers.py
+        id: importers_test_host_resolvers
+        if: always()
+        run: python3 -S Fast_Fetch/importers/test_host_resolvers.py
+
+      - name: 🧪 importers/test_stream_resolvers.py
+        id: importers_test_stream_resolvers
+        if: always()
+        run: python3 -S Fast_Fetch/importers/test_stream_resolvers.py
 
       # The drift guard itself — last, so it judges a run whose steps it pins.
       - name: 🧪 test_ci_manifest.py
