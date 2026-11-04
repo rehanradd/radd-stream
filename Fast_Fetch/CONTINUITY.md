@@ -2061,3 +2061,33 @@ pattern inherited from the original module and site_scout).
 carried qoder12's in-tree commits, nothing rewritten. Staged paths this
 session: host_classifier.py, test_host_classifier.py, site_scout.py,
 domain_resolver.py, test_domain_resolver.py, CONTINUITY.md only.
+
+### Load ceiling — measured, per the qoder13 demand (this lane, 2026-11-04 23:13–23:23)
+
+**Distribution, 40 × 15 s samples on the 1-core box (`nproc` = 1) with the fleet
+running (the honest single-core denominator — loadavg needs no normalization here,
+load-per-core == the raw number):**
+
+| series | min | p25 | median | p75 | max | mean | stdev |
+|---|---|---|---|---|---|---|---|
+| 1-min avg | 4.59 | 5.57 | **6.25** | 7.69 | 9.52 | 6.67 | 1.32 |
+| 5-min avg | 6.51 | 6.96 | 7.30 | 7.61 | 7.93 | 7.28 | 0.39 |
+
+**Zero of 40** 1-min samples were below the spec's 2.0. The fleet-idle baseline the
+`ceiling = idle_baseline + headroom` formula needs **cannot be measured while this
+fleet is up** — the next agent must sample overnight (e.g. 03:00–04:00 host time)
+and set the ceiling from that, not from this fleet-active table. Interim defensible
+number if one insists on running now: fleet-active **min (4.59) + 1.0 headroom ≈
+5.5** would let the worker fire only on the rare load dips — it is data-derived but
+NOT the Emperor's idle baseline and must not be read as final.
+
+**What a sweep costs this 1-core box, measured (not guessed):** the selection +
+Tier-1 scan of the worst-case-style posts (One Piece: 9,480 releases / 9,554
+sources) burned 0.9 s CPU for 3 posts in 9.4 s wall — i.e. a 200-title sweep is
+roughly **60–100 s of pure CPU per 15-min cycle (~7–11% of the only core)** before
+any resolve, and resolves add serialized HTTP stalls on top (network-bound, but
+each one holds the request path's competitor). **Plain answer per qoder13 §2: this
+belongs on a quiet-window timer (overnight cron), not as a self-throttling daemon
+sharing the core with the fleet and live playback.** The ceiling stays at the spec
+2.0 default in code; scheduling is the deployment decision, and a ceiling raised
+merely to make the worker look busy is refused (qoder13 §3).
