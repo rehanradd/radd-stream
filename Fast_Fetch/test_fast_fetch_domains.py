@@ -200,6 +200,52 @@ class TestGetDomainsOverlay(unittest.TestCase):
         self.assertEqual(domains["multimovies"], "https://m1.multimovies.courses")
         self.assertEqual(domains["filmyzilla"], "https://thefilmyzilla.in")
 
+    def test_multimovies_precedence_is_pinned_from_outside(self):
+        # Review note (crown, 2026-11-05 ~03:00): test_vidout derives its
+        # expectation from fast_fetch.DOMAINS, so code and test could agree on
+        # garbage. This test knows the answer independently: the registry is
+        # the authority because domain_resolver is the only probe-verified
+        # writer, so the expected host is written literally here, and BOTH
+        # losing directions are pinned — the answer must equal the registry
+        # fixture, and must NOT equal the DEFAULT_DOMAINS literal or the
+        # stale domains_config row.
+        stale_garden = "https://multimovies.garden"
+        registry_live = "https://m1.multimovies.courses"
+        self.assertEqual(ff.DEFAULT_DOMAINS.get("multimovies"), stale_garden,
+                         "the static literal moved — this test's independence "
+                         "claim needs re-checking before it can keep pinning it")
+        conn = _memory_db([("multimovies", stale_garden)])
+        self.addCleanup(conn.close)
+
+        @contextlib.contextmanager
+        def fake_get_db(*a, **k):
+            yield conn
+
+        with _temp_registry({"multimovies": {"active_base_url": registry_live,
+                                             "status": "active"}}) as reg:
+            with mock.patch.object(ff, "REGISTRY_PATH", reg), \
+                 mock.patch.object(ff, "get_db", fake_get_db):
+                domains = ff.get_domains()
+        self.assertEqual(domains["multimovies"], registry_live)
+        self.assertNotEqual(domains["multimovies"], stale_garden)
+        self.assertNotEqual(domains["multimovies"],
+                            ff.DEFAULT_DOMAINS.get("multimovies"))
+
+        # The other precedence direction, so the test can actually fail: with
+        # NO registry entry for the site, the stale DB row must win over the
+        # static literal (that is today's documented behaviour — DB overrides
+        # static, registry overrides DB only when it speaks). If someone
+        # inverted the overlay order, this half goes red.
+        with _temp_registry({"othersite": {"active_base_url":
+                                           "https://other.example",
+                                           "status": "active"}}) as reg:
+            with mock.patch.object(ff, "REGISTRY_PATH", reg), \
+                 mock.patch.object(ff, "get_db", fake_get_db):
+                domains = ff.get_domains()
+        self.assertEqual(domains["multimovies"], stale_garden,
+                         "registry silence must NOT invent a value for a "
+                         "site it does not name")
+
     def test_hdhub4u_mispointer_is_outranked_not_rewritten(self):
         domains = self._get_domains()
         # The hdtvb.net row was a pointer at a DIFFERENT site's domain; the
