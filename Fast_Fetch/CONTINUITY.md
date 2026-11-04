@@ -2204,3 +2204,39 @@ not a pass/fail):
   the cause — qoder12's file, qoder12's queued order, not mine.
 - lane_phase1 CONTINUITY entry: still withheld per Prince's hold (MM file, 11 staged
   deletions being unstaged by qoder12).
+
+## 2026-11-05 ~05:30 — qoder11: LANE 2 single-flight gate BUILT (order qoder11_single_flight)
+
+New files, owned by name: `Fast_Fetch/single_flight.py` + `Fast_Fetch/test_single_flight.py`.
+**No other file touched** — fast_fetch.py / resolved_cache.py (qoder12, dirty) and viewer.py
+(HELD) untouched; the gate is route-boundary-wireable but NOT wired anywhere tonight.
+
+Module: stdlib threading only; per-key in-flight table behind a µs-held global lock; ONE
+upstream attempt per id; process ceiling `global_cap` (default 4) concurrent attempts —
+over-cap callers get `busy` with ZERO egress (the stated self-DDOS bound; fn() itself does
+all I/O, the gate does none). Negative cache with adaptive window `base*2^(strikes-1)`
+capped, cleared+reset on success. Stale = unservable AND unbankable (mirrors the cache
+law): dropped, re-probed exactly once, concurrent callers collapse onto that probe.
+Waiters wake on an Event (bounded `wait_timeout` → `inflight_timeout`, never a hang,
+never a re-probe); raising attempt releases slot + sem in `finally` and wakes waiters.
+DISTINCT from resolved_cache.fail_count: never opens SQLite (`fail_count_touched` is a
+constant 0; unsupported verdicts stay their own class).
+
+Tests: 14, offline, injected clock — collapse (attempts==1 for 9 callers), isolation,
+stress **50 threads × 20 ids → attempts == 20 exactly** (in-process only; the
+50-concurrent-socket run stays NOT RUN, no port touched), negative caching (5 hits,
+0 attempts), expiry re-probe, unsupported-distinct, success-clears, adaptive growth+
+cap+recovery, raise-releases-slot + wakes waiter, bounded waiter timeout, cap-busy,
+adult-before-gate composition (flagged id: 0 attempts, no table entries), no-sqlite,
+bounded staleness (8 concurrent after expiry → exactly 1 re-probe, stale never served).
+
+MUTATION PROOF (/tmp/q11_mutation_proof.sh, output /tmp/q11_mutation_proof_output.txt),
+each break → its test red → pristine restored → 14 OK again:
+1. global in-flight key ("the global lock passes test 1 and fails the job")
+   → test_distinct_ids_do_not_serialize FAILED(1) at 5.0s.
+2. no event.set on abandoned flight → test_raise_in_flight_releases_slot FAILED(1).
+3. negative cache disabled → test_failure_cached_next_callers FAILED(1) in 0.003s
+   (attempts grew past 1).
+4. success keeps the cooldown → test_success_clears_negative_entry FAILED(1).
+5. stale entries servable (`if True`) → test hung, killed at 25s, exit=124, zero test
+   progress — the unbankable-stale law is load-bearing.
