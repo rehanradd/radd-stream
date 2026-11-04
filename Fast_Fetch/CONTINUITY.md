@@ -2149,3 +2149,34 @@ past our merge-base `19abff7`). Do not push these as new work; do not delete any
   * Push mechanics: build GIT_ASKPASS with the Write tool, never outer printf (its
     format eats %s → silent anonymous pushes). No export of GITHUB_TOKEN needed in the
     child if you print via "$GITHUB_TOKEN" in the helper script itself.
+
+## 2026-11-05 ~04:10 — qoder11: bench_reuse_and_hitpath Task 2 — hit path PROFILED (load ~5, provisional)
+
+Harness fixed in `/tmp/bench_stream_cache.py` (phase 2 now runs BOTH: fresh
+connection per request AND one reused `http.client.HTTPConnection`, printing both
+p50/p95 + client-side reconnect count). Per-stage profiler is my own
+`/tmp/q11_hitpath_profile.py`: in-process lane server (port 8123) on the 168 KB
+`/tmp/phase1_bench.db`, link 5 (clean twin; flagged control 13451 untouched),
+callables wrapped ONLY in the script — viewer.py / resolved_cache.py /
+fast_fetch.py NOT edited. Each mode ran in a fresh process (app limiter bucket is
+in-process; ~24 of 60 pass per window at 0.12 s pacing — 36×429 per mode is the
+limiter working, stats computed over the 24 real hits only).
+
+Measured at loadavg 4.6–5.2 (NOT the <3 quiet gate — provisional attribution,
+not a pass/fail):
+- client p50 hits-only: reused-302 **17.2** / fresh-302 **18.6** / reused-JSON
+  **20.3** / fresh-JSON **19.1** ms — reused ≈ fresh because **the server sends
+  `Connection: close` on EVERY response** (`send_bytes` viewer.py:2884, base of
+  send_json; the 302 paths close again at :3203/:3266). Keep-alive is dead at the
+  emitter, not at the client. The Prince's floor probe (p50 2.19 reused) is only
+  reachable once that one header goes — one-line viewer.py change, NOT made by me.
+- stage p50/p95 (hits, across modes): parse_token 0.05/~1 ·
+  **link_is_adult 0.9–3.4 / 6.6–10.2** (its own fresh sqlite3.connect + join) ·
+  **lookup_cache 3.1–4.9 / 9.5–13.2** (get_db open + select) ·
+  resp_flush 0.7–2.0/7–10 · remainder small. The ~10–15 ms mystery is now NAMED:
+  two per-request SQLite connection opens ≈ 4–8 ms p50, 16–20 ms p95 combined —
+  vs the 0.008–0.010 ms query itself. Not "the stdlib floor".
+- Triplet (cold/warm/conc): **not measurable at load ~5** — rerun only <3.
+- `lane_phase1/Fast_Fetch/CONTINUITY.md` is `MM` (another agent mid-edit): I did
+  NOT append there to avoid staging their in-progress hunks; entry lives here and
+  in `/tmp/q11_hitpath_profile_*.json` (+ /tmp/q11_hitpath_run.log) until they land.
