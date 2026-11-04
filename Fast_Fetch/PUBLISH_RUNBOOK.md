@@ -25,7 +25,7 @@ says how long a mistake survives and how to end it.
 
 | # | Condition | How to check | Status today |
 |---|---|---|---|
-| 0.1 | `reconcile_adult.py` merged, so ledger flags are per-*work* not per-row | `git log --oneline -- Fast_Fetch/reconcile_adult.py` on `master` | ❌ lives on `q11-adult-reconcile-20261104`, **not merged** |
+| 0.1 | the adult key-reconciliation has **run on the deploying database**, so ledger flags are per-*work* not per-row. Tool: trunk's `Fast_Fetch/backfill_adult_key.py` (read-only by default; `--audit` first, then `--corroborate --apply`, `--undo` reverses). `reconcile_adult.py` is **retired as a duplicate** — it was qoder11's from-scratch build and trunk already ships the real thing, along with `audit_adult_flags.py`, `fast_fetch.inherit_key_adult()`, the merge-time corroborated fold + `adult_fold_journal`, and `test_adult_twin_probe.py` / `test_adult_corroborated_fold.py` in trunk's 38-step CI. | `python3 -S Fast_Fetch/backfill_adult_key.py <db> --audit` (read-only) on the DB you are exporting from | 🟡 **tool exists on trunk; still must be RUN on the deploying DB.** Trunk's own measurement: only the flags reproducible from `is_adult_title()` fold — 10,816 of 15,068 stored flags do NOT reproduce, a naive blanket fold would have hidden 3,490 non-adult works, `--corroborate` hides the 12 that stand on evidence. Do not `--apply` to a production DB without the Emperor's explicit go. |
 | 0.2 | Emperor has explicitly approved the web root | written in a crown order | ❌ asked, not answered |
 | 0.3 | `sweep_public_edge.py --export` OK on a snapshot | `python3 -S Fast_Fetch/sweep_public_edge.py --db /tmp/edge_snapshot.db --posts 20 --export` | ✅ 2026-11-05 (`4f7c17d`): 0 leaks |
 | 0.4 | `test_catalog_exporter` green | `python3 -S Fast_Fetch/test_catalog_exporter.py` | ✅ 16/16 |
@@ -111,7 +111,11 @@ location ^~ /static-catalog/ {
     expires 15m;
     add_header Cache-Control "public, max-age=900, must-revalidate";
 
-    # A static catalog never needs to execute or proxy anything.
+    # A static catalog never needs to execute or proxy anything. These files
+    # come off disk, so an upstream cache buys nothing and would add a purge
+    # story this runbook has not written — and note the API locations DO run
+    # `proxy_cache radd_micro` (see §4's correction). Do not inherit it here.
+    proxy_cache off;
     gzip on;
     types { application/json json; }
 }
@@ -149,11 +153,14 @@ reading §4.
    (time until next scheduled export run)
  + (build+copy step cadence; ~0 if cron'd together)
  + 15 minutes  (browser-held max-age)
+ + 0 as written (§3 ships `proxy_cache off`); +60 s, or more with
+   `use_stale … updating`, if anyone later inherits the API zones — see the
+   correction below
 ```
 
-With an hourly export: **≤ 75 minutes**, and every minute of that is a window
-that the live API does not have. With the export never scheduled: **forever** —
-which is why §0.1/§6 exist.
+With an hourly export: **≤ 75 minutes** as this runbook proposes to serve it,
+and every minute of that is a window that the live API does not have. With the
+export never scheduled: **forever** — which is why §0.1/§6 exist.
 
 **Kill switch (bytes-level, immediate, no rebuild):** repoint the symlink at an
 empty quarantined release; nginx starts answering 404 on the next request.
@@ -165,16 +172,52 @@ mv -Tf /var/www/radd-static.new /var/www/radd-static   # [APPROVAL-GATED]
 ```
 
 Remaining exposure after the kill: only client-side copies already handed out —
-≤ 15 min by design. (No `proxy_cache` is configured for this location; if one
-is ever added upstream of nginx, its purge story must be written here first or
-this runbook's numbers are wrong.)
+≤ 15 min by design.
+
+**CORRECTION, verified after the first draft.** I wrote that no `proxy_cache` was
+configured. That was wrong, and I checked the live files instead of repeating
+myself: `radd_micro` is a real zone (`/etc/nginx/conf.d/radd-stream-cache.conf:5`,
+`proxy_cache_path /var/cache/nginx/radd levels=1:2 keys_zone=radd_micro:16m`) and
+it is **enabled on the API locations** — `sites-enabled/radd-stream:31-36`,
+`:50-55`, `:91-92`, each with `proxy_cache_valid 200 60s`, `proxy_cache_lock on`
+and `proxy_cache_use_stale error timeout updating http_500 http_502 http_503`,
+bypassed only by `$arg_full`, `$http_authorization` or `$http_x_admin_token`.
+
+Consequences for this runbook's numbers, stated plainly:
+* If the proposed `/static-catalog/` block copies that existing pattern, an
+  export swap is **not** visible at the edge for up to 60 s, and
+  `proxy_cache_use_stale … updating` can keep serving the *previous* page while
+  the refresh happens — so worst-case exposure is `export interval + 15 min
+  browser max-age + 60 s proxy (+ a stale-serving window on a failing
+  origin)`, not the `+15 min` the first draft claimed. At an hourly cadence that
+  is **≤ 76 min, not 75**.
+* The §3 snippet therefore ships with `proxy_cache off` (or no `proxy_cache`
+  directive at all) for `/static-catalog/`: these files are already pre-rendered
+  and served from disk by `alias`, so there is nothing for an upstream cache to
+  protect, and inheriting the API's zone would add a purge story we have not
+  written. If the Emperor wants the zone anyway, the purge/key scheme must be
+  documented here first — the numbers above are wrong until it is.
 
 **Serving a flagged row is a defect, not a policy** (AGENTS.md invariant), so
 §0.1 (per-work reconciliation) is what makes step 2 complete: until the ledger
 reconciles twins, an unflagged twin of a flagged work passes both the export
 query's *row* clause and the prefetcher — and the export's twin clause is the
 only thing hiding it. That clause exists (`catalog_exporter.guarded_posts_where`,
-belt); `reconcile_adult.py` is the braces. Both must be true before publish.
+belt); `backfill_adult_key.py --corroborate --apply` is the braces. Both must be
+true before publish.
+
+**The limit of the belt, in its own words.** The clause closes the **same-key**
+class only: one `canonical_key`, any number of rows, hidden if any one of them is
+flagged (measured on production `posts`: 394 mixed keys, 394 flagged rows, 407
+unflagged twins). It cannot see the **cross-key** class — the same film filed
+under two different `canonical_key` values, or under none — because from inside a
+query a cross-key twin is simply another work. So a cross-key twin is
+**exported unhidden** until `backfill_adult_key.py` has run on the database being
+exported from, and no re-export frequency, kill switch, or `max-age` shortens that
+window: the row is not hidden yet, so there is nothing to invalidate. This is why
+§0.1 is a prerequisite and not a nicety. It is written here because a static
+export is a public surface and this must be discovered by reading, not by
+auditing a live page.
 
 ## 5. Rollback
 

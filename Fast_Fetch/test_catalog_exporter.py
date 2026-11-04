@@ -24,6 +24,7 @@ if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
 
 import catalog_exporter  # noqa: E402
+import redact  # noqa: E402  (reused to state the counter-factual, not re-declared)
 
 
 # Distinctive ids so a digit substring cannot collide with a count or a year.
@@ -313,6 +314,213 @@ class TestArtGuardAdversarial(_Fixture):
         self.assertNotIn("G-Directs Xxxtreme", blob)
         self.assertNotIn("PikaHD", blob)
         self.assertIn("A Totally Normal Documentary", blob)  # row still exported
+
+
+class TestSuppressionIsDynamic(unittest.TestCase):
+    """Order qoder13_twinproof: prove the twin exclusion is DYNAMIC, not
+    decorative, on a SYNTHETIC scratch DB only — no production file is read,
+    no production scan runs (fleet load rule: 4M rows, one core).
+
+    The failure mode the Crown cares about is a counter and a query that
+    disagree: `count_twin_suppressed` reports what the WHERE must remove, so
+    if either ever drifts the static file hides a different set than the live
+    API while the manifest still looks healthy. The whole point is the last
+    invariant: `reconcile_adult` may change WHY a work is hidden, it must
+    never change WHAT a user can reach — in either direction.
+    """
+
+    KEY = "work:reconcile-me"
+    ADULT_ID = 9207001                      # the flagged row itself
+    TWIN_IDS = (9207002, 9207003)           # unflagged twins — today's leak
+    CLEAN_ID = 9207004                      # unrelated visible work, keyed
+    KEYLESS_ID = 9207005                    # visible work with no key at all
+    TWIN_TITLES = ("Twin Alpha Qz", "Twin Beta Qz")
+    ADULT_TITLE = "Parent Flagged Qz"
+    CLEAN_TITLE = "Visible Clean Work Qz"
+    KEYLESS_TITLE = "Keyless Stranger Qz"
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory(prefix="exporter-dyn-")
+        self.addCleanup(self._tmp.cleanup)
+        self.db = str(Path(self._tmp.name) / "scratch.db")
+        self.stage = str(Path(self._tmp.name) / "stage")
+        conn = sqlite3.connect(self.db)
+        TestProjectionSemantics._schema(conn)
+        rows = [
+            (self.ADULT_ID, self.ADULT_TITLE, 1, self.KEY),
+            (self.TWIN_IDS[0], self.TWIN_TITLES[0], 0, self.KEY),
+            (self.TWIN_IDS[1], self.TWIN_TITLES[1], 0, self.KEY),
+            (self.CLEAN_ID, self.CLEAN_TITLE, 0, "work:seen"),
+            (self.KEYLESS_ID, self.KEYLESS_TITLE, 0, None),
+        ]
+        for pid, title, flag, key in rows:
+            conn.execute(
+                "INSERT INTO posts (id, title, clean_title, year, content_type,"
+                " is_18_plus, canonical_key, poster_url, created_at)"
+                " VALUES (?,?,?,?,?,?,?,?,?)",
+                (pid, title, title, "2024", "movie", flag, key, TMDB_ART,
+                 "2024-01-01 00:00:00"))
+            rel = conn.execute("INSERT INTO releases (post_id, release_title,"
+                               " quality) VALUES (?,?,?)",
+                               (pid, title + " 1080p", "1080p")).lastrowid
+            conn.execute(
+                "INSERT INTO download_sources (release_id, source_name, service,"
+                " source_url, final_url, playback_type, status)"
+                " VALUES (?,?,?,?,?,?,?)",
+                (rel, "x", "pixeldrain", "https://p.example/1",
+                 f"https://p.example/stream-{pid}.mp4", "direct", "active"))
+        conn.commit(); conn.close()
+
+    # ── reading the artifact and the DB the same way for every assertion ─────
+    def _export(self) -> dict:
+        return catalog_exporter.export_catalog(self.db, self.stage, pages=2,
+                                               per_page=10, verbose=False)
+
+    def _served(self) -> dict:
+        """What a user can actually reach: the id -> title map across every
+        exported page (browse covers home, so a de-dup union is enough)."""
+        served = {}
+        for f in sorted(Path(self.stage).rglob("browse/trending/*.json")):
+            for item in json.loads(f.read_text(encoding="utf-8"))["results"]:
+                served[int(item["id"])] = item.get("clean_title") or item.get("title")
+        return served
+
+    def _db_served(self, where: str) -> set:
+        conn = sqlite3.connect(f"file:{self.db}?mode=ro", uri=True)
+        try:
+            return {r[0] for r in conn.execute(
+                f"SELECT p.id FROM posts p WHERE {where}")}
+        finally:
+            conn.close()
+
+    def _reconcile(self) -> None:
+        """reconcile_adult's effect on this group: MAX(is_18_plus) per key."""
+        conn = sqlite3.connect(self.db)
+        conn.execute("UPDATE posts SET is_18_plus = 1 WHERE canonical_key = ?",
+                     (self.KEY,))
+        conn.commit(); conn.close()
+
+    def _count(self) -> int:
+        conn = sqlite3.connect(f"file:{self.db}?mode=ro", uri=True)
+        try:
+            return catalog_exporter.count_twin_suppressed(conn)
+        finally:
+            conn.close()
+
+    def _flagged(self) -> int:
+        conn = sqlite3.connect(f"file:{self.db}?mode=ro", uri=True)
+        try:
+            return conn.execute("SELECT COUNT(*) FROM posts WHERE is_18_plus = 1"
+                                ).fetchone()[0]
+        finally:
+            conn.close()
+
+    def _pages(self) -> str:
+        return "\n".join(f.read_text(encoding="utf-8") for f in sorted(
+            Path(self.stage).rglob("browse/trending/*.json")))
+
+    def _blob(self) -> str:
+        return "\n".join(f.read_text(encoding="utf-8")
+                         for f in sorted(Path(self.stage).rglob("*.json"))
+                         if f.name != "manifest.json")
+
+    # ── assertions 1 + 2: exclusion applied, counter matches it exactly ──────
+    def test_twin_group_excluded_and_counter_matches_the_applied_exclusion(self):
+        manifest = self._export()
+        served = self._served()
+        blob = self._blob()
+        # all three twin-group rows excluded, on ids AND on bytes
+        for pid in (self.ADULT_ID, *self.TWIN_IDS):
+            self.assertNotIn(pid, served)
+            self.assertNotIn(str(pid), blob)
+        for title in (self.ADULT_TITLE, *self.TWIN_TITLES):
+            self.assertNotIn(title, blob)
+        # both visible works included — keyed AND keyless
+        self.assertEqual({self.CLEAN_ID, self.KEYLESS_ID}, set(served))
+        self.assertIn(self.CLEAN_TITLE, blob)
+        self.assertIn(self.KEYLESS_TITLE, blob)
+        # the counter reports the same number of WORKS the exclusion applied:
+        # one distinct key, carrying two leaked rows under it.
+        self.assertEqual(1, manifest["works_suppressed_by_canonical_key_clause"])
+        self.assertEqual(1, self._count())
+        self.assertEqual(2, len(self.TWIN_IDS))
+        self.assertEqual(
+            self._db_served(catalog_exporter.guarded_posts_where()), set(served),
+            "counter and query disagree: the page served a different set than "
+            "the guarded WHERE defines")
+
+    # ── assertion 3: simulate reconciliation — why changes, what does not ───
+    def test_reconciliation_flips_why_not_what(self):
+        before = self._export()
+        before_served = self._served()
+        before_bytes = self._pages()
+        self.assertEqual(1, before["works_suppressed_by_canonical_key_clause"])
+        self.assertEqual(1, self._flagged())
+
+        self._reconcile()
+        after = self._export()
+
+        # THE invariant: the served set — in fact the whole page byte stream —
+        # is unchanged. Reconciliation moved the rows from the twin clause's
+        # jurisdiction to the adult clause's and nothing else.
+        self.assertEqual(before_served, self._served())
+        self.assertEqual(before_bytes, self._pages())
+        self.assertEqual(3, self._flagged())
+        # the counter moves from "twin-suppressed" to "flagged-directly": all
+        # three rows now fail adult_clause, so the twin clause applies to zero
+        # works — while the exclusion still removes all three rows.
+        self.assertEqual(0, after["works_suppressed_by_canonical_key_clause"])
+        self.assertEqual(0, self._count())
+        self.assertEqual(self._db_served(catalog_exporter.guarded_posts_where()),
+                         set(self._served()))
+
+    # ── assertion 3b: the over-hide direction, same invariant ────────────────
+    def test_partial_reconciliation_never_exposes_nor_hides_more(self):
+        """The other direction of the same invariant: reconcile the group, then
+        un-reconcile ONLY the parent so the flag now lives on the twins instead.
+        The group must stay fully excluded (a flagged row still names the key)
+        and the two visible works must stay served — so hiding never depends on
+        WHICH row of the group carries the flag, only on whether one exists."""
+        self._export()
+        before = dict(self._served())
+        self._reconcile()
+        self._export()
+        conn = sqlite3.connect(self.db)
+        conn.execute("UPDATE posts SET is_18_plus = 0 WHERE id = ?",
+                     (self.ADULT_ID,))
+        conn.commit(); conn.close()
+        manifest = self._export()
+        self.assertEqual(before, self._served())
+        self.assertEqual({self.CLEAN_ID, self.KEYLESS_ID}, set(self._served()))
+        # the parent passes adult_clause on its own now, so the twin clause is
+        # the only thing keeping it out — and it counts exactly that one work.
+        self.assertEqual(2, self._flagged())
+        self.assertEqual(1, manifest["works_suppressed_by_canonical_key_clause"])
+        self.assertEqual(1, self._count())
+        self.assertNotIn(self.ADULT_ID, self._served())
+
+    # ── assertion 4: the leak is real — the test cannot pass by accident ─────
+    def test_without_the_twin_clause_the_leak_is_open(self):
+        """If the twins' OWN flag were the reason they vanish, every exclusion
+        test above would be vacuous. So prove the counter-factual: the row-level
+        adult rule alone happily serves both twins."""
+        self._export()
+        blob = self._blob()
+        for title in self.TWIN_TITLES:
+            self.assertNotIn(title, blob)
+        adult_only = f"({redact.adult_clause('p')})"
+        leaky = self._db_served(adult_only)
+        self.assertTrue(set(self.TWIN_IDS) <= leaky,
+                        "the fixture's twins are hidden by their own flag, so "
+                        "the exclusion tests prove nothing")
+        guarded = self._db_served(catalog_exporter.guarded_posts_where())
+        self.assertTrue(guarded < leaky,
+                        "the twin clause removed nothing the adult clause kept — "
+                        "it is decorative here")
+        self.assertEqual(set(leaky) - set(self.TWIN_IDS), guarded)
+        # and the artifact matches the guarded query, never the leaky one
+        self.assertEqual(guarded, set(self._served()))
+        self.assertNotIn(self.TWIN_IDS[0], guarded)
 
 
 if __name__ == "__main__":

@@ -2479,3 +2479,48 @@ a branch push cannot exclude descendants; disclosed, not repeated).
   never-bare-TLD pin. MUTATION-PROVEN to bite: exec'ing redact.py with both
   needles.update(_registry_needles()) calls removed fails all 3 tests (54
   needles lost incl. hdtvb.net). No redact.py edit; fast_fetch.py freeze held.
+- **qoder13 commit_and_proofs (LANE 3, 2026-11-05 ~02:4x PKT):** exporter design
+  confirmed NOT the duplicate; kept the read-time adult law untouched
+  (`redact.adult_clause('p')` + same-key `EXISTS`). Two doc-grade fixes only:
+  (1) every `reconcile_adult.py` pointer replaced with trunk's real
+  `backfill_adult_key.py --corroborate --apply` (verified present in
+  /tmp/crown_trunk at b99814e: `--audit/--corroborate/--apply/--undo` flags read
+  off its own argparse; read-only scratch, no worktree created, never written) —
+  stale 442/455 replaced with the Crown's measured 394 keys / 394 flagged / 407
+  twins; (2) the HONEST LIMIT written into the module docstring AND
+  PUBLISH_RUNBOOK §4: the EXISTS closes the SAME-key class only, the cross-key
+  class stays exported-unhidden until the backfill runs on the deploying DB, and
+  no export cadence/kill-switch/max-age shortens that window because there is
+  nothing yet to invalidate.
+  RUNBOOK SELF-CORRECTION: my earlier "no proxy_cache is configured" was WRONG —
+  verified in the live files (conf.d/radd-stream-cache.conf:5 defines
+  radd_micro; sites-enabled/radd-stream:31-36/50-55/91-92 enable it with
+  proxy_cache_valid 200 60s + use_stale updating). §3 snippet now ships
+  `proxy_cache off` and §4's math is ≤75 min as written, ≤76 min + stale window
+  if the zone is ever inherited. Read-only nginx inspection; nothing touched.
+  TASK 2 proofs: (a) new `test_transient_dead_heal.py`, 5 tests offline/stdlib,
+  per-test mini-catalog via `fast_fetch.DB_PATH` rebinding (a SHARED WAL catalog
+  across 5 tests deadlocks the write path — that was the real cause of my first
+  3 failing runs, not heal), 5/5 OK 1.5s; asserts a later successful probe
+  overwrites dead->active with its real http_status/is_resumable, keeps
+  url/resource_id/service intact, that heal's queue selects those rows, and the
+  honest limit: heal bails BEFORE re-probing if extract_post_data returns None,
+  so `dead` can never be read as "heal tried and failed". (b) measured through
+  idx_sources_status_temp as a COVERING index (EXPLAIN confirmed; 0.0s dead
+  count at load 5.3, mode=ro): catalog 4,073,865 rows, dead=23 (0.000565%),
+  expired=61, active=4,006,773 — and ALL 23 dead + ALL 61 expired carry
+  http_status NULL AND last_checked_at NULL, i.e. never probed. So the transient
+  mislabel population I argued for is **ZERO**, reported as a zero instead of
+  defending the adjective; the real exposure one layer over is 4,006,763 of
+  4,006,773 `active` rows with last_checked_at NULL (98.35% asserting unmeasured
+  liveness). /tmp/edge_snapshot.db measured first (12,288 rows, all active) and
+  rejected as too small to mean anything.
+  CI re-attribution per task 3 (written, not "fixed"): hosted 41913606536 died
+  at step 10, steps 11-24 SKIPPED, so test_catalog_exporter.py has NEVER run in
+  CI; evidence_writeback/merge_catalogs reds are a stale-fork artifact since
+  trunk at 4a8c163 is 39/39 with identical evidence_writeback bytes. No step
+  dropped or xfail'd. 20/20 exporter tests + 5/5 new tests run locally, one
+  suite at a time, load checked before each.
+  NOT AUTHORED BY ME, left unstaged: fast_fetch.py (freeze HELD, never added),
+  test_vidout.py, test_ci_manifest.py, .github/workflows/backend-ci.yml,
+  GOFILE_API.md + test_fast_fetch_domains.py (qoder14's, now committed by them).
