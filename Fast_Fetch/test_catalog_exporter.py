@@ -450,15 +450,58 @@ class TestSuppressionIsDynamic(unittest.TestCase):
             "the guarded WHERE defines")
 
     # ── assertion 3: simulate reconciliation — why changes, what does not ───
+    def test_the_iterated_collections_are_pinned_by_literal_values(self):
+        """FLEET_NOTICE_vacuous_loops. Three of the loops in this class iterate a
+        module-level constant (`TWIN_IDS`, `TWIN_TITLES`, the `rows` fixture table),
+        so if any of them is ever emptied the loop body stops running and the
+        assertions inside it stop being assertions. The loop checks each member;
+        THIS pins the membership. Mutating a constant to `()` must turn this red,
+        and it does — see the mutant record in the session log."""
+        self.assertEqual((9207002, 9207003), self.TWIN_IDS)
+        self.assertEqual(("Twin Alpha Qz", "Twin Beta Qz"), self.TWIN_TITLES)
+        self.assertEqual(9207001, self.ADULT_ID)
+        self.assertEqual(9207004, self.CLEAN_ID)
+        self.assertEqual(9207005, self.KEYLESS_ID)
+        self.assertEqual("work:reconcile-me", self.KEY)
+        # the fixture table itself: five posts, exactly one of them flagged, and all
+        # three twin-group rows sharing one key. `setUp` inserts `rows`; nothing else
+        # asserts that `rows` was non-empty or correctly shaped.
+        conn = sqlite3.connect(f"file:{self.db}?mode=ro", uri=True)
+        try:
+            total, flagged = conn.execute(
+                "SELECT COUNT(*), SUM(is_18_plus) FROM posts").fetchone()
+            keyed = conn.execute("SELECT COUNT(*) FROM posts WHERE canonical_key = ?",
+                                 (self.KEY,)).fetchone()[0]
+            keyless = conn.execute("SELECT COUNT(*) FROM posts WHERE canonical_key IS NULL"
+                                   ).fetchone()[0]
+        finally:
+            conn.close()
+        self.assertEqual(5, total, "setUp's `rows` table must hold all five fixtures")
+        self.assertEqual(1, flagged)
+        self.assertEqual(3, keyed, "parent + two twins under one canonical_key")
+        self.assertEqual(1, keyless, "the keyless row is what proves COALESCE still serves")
+
     def test_reconciliation_flips_why_not_what(self):
         before = self._export()
         before_served = self._served()
         before_bytes = self._pages()
         self.assertEqual(1, before["works_suppressed_by_canonical_key_clause"])
         self.assertEqual(1, self._flagged())
+        # Vacuity guard on the two invariants this test is NAMED for. Both compare a
+        # BEFORE to an AFTER, and two empty things are equal: under the mutant where
+        # the exporter writes its artifact to a directory the test never reads, this
+        # test still failed — but only at its trailing cross-check below, so :466 and
+        # :467 had already passed against nothing. Pin the bytes as non-empty and
+        # carrying the two known works before comparing them to anything.
+        self.assertEqual({self.CLEAN_ID, self.KEYLESS_ID}, set(before_served))
+        self.assertIn(self.CLEAN_TITLE, before_bytes)
+        self.assertIn(self.KEYLESS_TITLE, before_bytes)
+        self.assertNotIn(str(self.ADULT_ID), before_bytes)
 
         self._reconcile()
         after = self._export()
+        self.assertEqual({self.CLEAN_ID, self.KEYLESS_ID}, set(self._served()))
+        self.assertIn(self.CLEAN_TITLE, self._pages())
 
         # THE invariant: the served set — in fact the whole page byte stream —
         # is unchanged. Reconciliation moved the rows from the twin clause's
@@ -506,6 +549,10 @@ class TestSuppressionIsDynamic(unittest.TestCase):
         adult rule alone happily serves both twins."""
         self._export()
         blob = self._blob()
+        # blob is built by a loop over the stage directory, so `assertNotIn` below
+        # would pass against an empty string. Pin it non-empty with a known work.
+        self.assertIn(self.CLEAN_TITLE, blob)
+        self.assertEqual(2, len(self.TWIN_TITLES))
         for title in self.TWIN_TITLES:
             self.assertNotIn(title, blob)
         adult_only = f"({redact.adult_clause('p')})"

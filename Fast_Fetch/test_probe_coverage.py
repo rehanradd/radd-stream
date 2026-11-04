@@ -250,6 +250,13 @@ class TestLinkStateAgreement(ProbeCoverageBase):
             self.probed_active()
         summary = link_state.status_summary(self.conn)
         row = self.coverage()
+        # Literal pins first: two cross-checks that only compare one module to another
+        # are satisfied by 0 == 0, which is what a broken classifier AND a broken query
+        # would produce together. Pin the values, then pin the agreement.
+        self.assertEqual(2, row["checked_active_sources"])
+        self.assertEqual(4, row["unchecked_active_sources"])
+        self.assertEqual(6, row["sources"])
+        self.assertEqual(2, summary["by_status"].get("active", 0))
         self.assertEqual(row["checked_active_sources"], summary["by_status"].get("active", 0),
                          "link_state's 'active' bucket is evidence-backed; it must equal the "
                          "shipped query's checked_active_sources or the two emitters disagree")
@@ -325,6 +332,11 @@ class TestReadOnlySafety(ProbeCoverageBase):
         plan = [r[3] for r in self.conn.execute(
             "EXPLAIN QUERY PLAN SELECT d.last_checked_at, d.http_status, d.status"
             " FROM download_sources d")]
+        self.assertTrue(plan,
+                        "FLEET_NOTICE_vacuous_loops: every assertion below is "
+                        "assertFalse(any(...)) over this list, and any() over an "
+                        "empty plan is False — an empty plan would pass this test "
+                        "by checking nothing")
         # The alias is what SQLite names the scan target, so match `SCAN d`, not `SCAN
         # download_sources` — asserted loosely enough to still fail if an index appears.
         self.assertTrue(any(p.startswith("SCAN d") and "USING INDEX" not in p for p in plan),

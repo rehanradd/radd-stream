@@ -402,9 +402,60 @@ writes the label-only `dead`/`unknown`/`js_required` statuses.
 4. **Reconcile the `service` taxonomy** before any per-service view is built on it.
 5. `cat_link_evidence` is **empty on the production merged catalog** while `link_state.py`
    writes probe rows into it. Probe evidence therefore has no history here — a `dead` today
-   silently overwrites whatever was true yesterday. Worth a look at whether the merge
-   dropped it or the writer never ran against this DB. **Not measured which.**
+   silently overwrites whatever was true yesterday. **Answered by the follow-up read
+   (2026-11-05): the merge dropped nothing — the writer never ran.** All 7 staging DBs
+   holding a `download_sources` table (2,952,016 ids) have zero populated evidence, the
+   other 22 staging DBs keep links in a `sources` table that has **no evidence columns at
+   all**, and the 6.4 GB `preapply_20261029_1726.db` snapshot has 0 timestamps / 0 codes /
+   0 journal rows. Evidence went 0 → 71 forward in time. The only `INSERT` into the journal
+   is reachable exclusively from `link_state.main()` — a CLI nothing in the pipeline calls —
+   and `run_health_check` does a single `UPDATE download_sources` with no append.
 
 **Not done, on order:** no change to `viewer.py`, `link_state.py`, `resolved_cache.py`,
 `fast_fetch.py`, `config.py`; no index; no `--apply`; no nginx change; no restart; no
 `/opt` edit; no deploy. This is a doc and a test.
+
+---
+
+## 13. Vacuity audit of this suite (FLEET_NOTICE_vacuous_loops)
+
+One assertion in the version shipped at `a943e15` was **vacuous**, and it was mine:
+
+`test_the_shipped_query_and_the_classifier_agree_on_verified_liveness` compared
+`row["checked_active_sources"] == summary["by_status"]["active"]` with no literal on either
+side. Under the mutant *"nothing is ever probed"* both sides are `0`, so the agreement test
+passed by agreeing about nothing:
+
+| file under mutant *nothing-probed* | result |
+|---|---|
+| `a943e15` (shipped), class alone | **Ran 4 tests — OK** ← the illusion |
+| `a943e15` (shipped), full suite | FAILED (failures=2) — siblings caught it |
+| this sha, class alone | FAILED (failures=1) at `assertEqual(2, …)` |
+| this sha, full suite | FAILED (failures=3) |
+
+The suite was never green on that mutant, but the assertion *named* for emitter agreement
+was — which is the thing the notice is about. Fixed by pinning literals first
+(2 checked / 4 unchecked / 6 total) and only then the cross-module equality.
+
+Also pinned, same treatment:
+
+* `TestReadOnlySafety.test_the_measurement_never_depends_on_an_index_that_does_not_exist`
+  — every one of its checks is `assertFalse(any(… for p in plan))`, and `any()` over an
+  empty plan is `False`, so **an empty query plan would have passed it while checking
+  nothing.** Now asserts `plan` non-empty first; proven by the `plan = []` mutant failing
+  with `[] is not true`.
+* The `for _ in range(n)` builders are each followed by a literal count (`5`, `40.0`, `2`),
+  never only by a relational claim.
+
+**A second illusion, in the verification harness rather than the suite** — and it is the
+more transferable one, because it makes a broken battery report *every* mutant killed: my
+first run marked `M5`/`M6` as killed, but `test_probe_coverage.py` resolves imports from
+`Path(__file__).parent`, so copying it to `/tmp` killed it at
+`ModuleNotFoundError: No module named 'link_state'` before any test ran. `grep -v OK`
+reads an import crash as a red. A mutant that cannot load its own module proves nothing.
+Rebuilt with the path pinned; every number above is from the corrected harness.
+**Check that each mutant fails on an assertion, not on setup.**
+
+`test_catalog_exporter.py` was audited the same way; its record (5 mutants, including both
+empty-the-collection mutants) is in that file's `TestSuppressionIsDynamic` and the session
+report.
