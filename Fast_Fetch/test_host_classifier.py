@@ -998,6 +998,105 @@ class TestViewerShapeGate(unittest.TestCase):
                          f"downloadable (got {status}: {body[:120]})")
         self.assertIn("r2.dev", hdrs.get("Location", ""))
 
+    @unittest.skipUnless(HAS_VIEWER, _VIEWER_REASON)
+    def test_hit_path_connection_count_is_pinned(self):
+        # CROWN ORDER qoder14 (2026-11-05): pin the number of distinct sqlite
+        # connections ONE cache-hit /api/v1/download request opens, so a later
+        # refactor cannot silently add another connect per request. Full audit
+        # and per-line provenance: Fast_Fetch/HITPATH_CONNECTIONS.md. Measured
+        # today = 3: redact.link_is_adult (redact.py:1086, own connect),
+        # the cache lookup (viewer.py:3325 -> get_db viewer.py:140), the
+        # free-tier shortener tail (viewer.py:3398 -> get_db again). The route
+        # does NOT call _ensure_schema on this branch (only the accounts/v2
+        # branches do, :3024/:3037), signing_secret() is process-cached, and
+        # the limiter is in-memory — all verified against the same lines.
+        #
+        # The counter wraps the stdlib sqlite3.connect attribute itself, so
+        # every module that calls sqlite3.connect (viewer, redact, admin_panel
+        # — one shared module object) is observed; a new per-request opener
+        # anywhere in the hit path fails THIS pin, not just a viewer.py grep.
+        import http.client
+        import os
+        import tempfile
+        import threading
+
+        tmp_fd, tmp_path = tempfile.mkstemp(suffix=".db")
+        os.close(tmp_fd)
+        self.addCleanup(os.unlink, tmp_path)
+        db = sqlite3.connect(tmp_path)
+        db.execute("CREATE TABLE posts (id INTEGER PRIMARY KEY, is_18_plus INTEGER DEFAULT 0)")
+        db.execute("CREATE TABLE releases (id INTEGER PRIMARY KEY, post_id INTEGER)")
+        db.execute("CREATE TABLE download_sources (id INTEGER PRIMARY KEY, release_id INTEGER)")
+        _rc.init_resolved_cache(db)
+        db.execute("INSERT INTO posts (id, is_18_plus) VALUES (21, 0)")
+        db.execute("INSERT INTO releases (id, post_id) VALUES (21, 21)")
+        db.execute("INSERT INTO download_sources (id, release_id) VALUES (21, 21)")
+        # The warm-hit row: a genuine direct file inside its horizon.
+        db.execute("INSERT INTO resolved_cache (link_id, url, category, kind,"
+                   " resolved_at, reverify_after) VALUES (?,?,'A','file',?,?)",
+                   (21, self.PIXELDRAIN_REAL, time.time(), time.time() + 86400))
+        db.commit()
+        db.close()   # fixture setup done — no setup connect may sit in the count
+
+        saved_db, saved_secret = _viewer.DB_PATH, _viewer._SIGNING_SECRET
+        saved_log = _viewer.DashboardHandler.log_message
+        _viewer.DB_PATH = tmp_path
+        _viewer._SIGNING_SECRET = "conn-count-test-secret"
+        _viewer.DashboardHandler.log_message = lambda *a, **k: None
+
+        def restore_globals():
+            _viewer.DB_PATH = saved_db
+            _viewer._SIGNING_SECRET = saved_secret
+            _viewer.DashboardHandler.log_message = saved_log
+        self.addCleanup(restore_globals)
+
+        def boom(*a, **k):
+            raise AssertionError("the hit path must not reach the live resolver")
+        saved_resolve = getattr(_ff, "resolve_live_source")
+        _ff.resolve_live_source = boom
+        self.addCleanup(setattr, _ff, "resolve_live_source", saved_resolve)
+
+        srv = _viewer.ThreadedHTTPServer(("127.0.0.1", 0), _viewer.DashboardHandler)
+        srv.operator = False
+        thread = threading.Thread(target=srv.serve_forever, daemon=True)
+        thread.start()
+        self.addCleanup(srv.shutdown)
+        self.addCleanup(srv.server_close)
+        port = srv.server_address[1]
+
+        connects = []
+        real_connect = sqlite3.connect
+
+        def counting_connect(*a, **k):
+            connects.append(str(a[0] if a else k.get("database", "")))
+            return real_connect(*a, **k)
+
+        sqlite3.connect = counting_connect
+        try:
+            token = _redact.mint_token(21, _viewer._SIGNING_SECRET)
+            conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+            conn.request("GET", f"/api/v1/download?id={token}&redirect=1",
+                         headers={"Host": "127.0.0.1"})
+            resp = conn.getresponse()
+            body = resp.read()
+            conn.close()
+        finally:
+            sqlite3.connect = real_connect
+
+        self.assertEqual(resp.status, 302,
+                         f"the pinned path must be a warm cache hit, not a "
+                         f"fallthrough (got {resp.status}: {body[:120]!r})")
+        self.assertEqual(
+            len(connects), 3,
+            "a cache-hit /api/v1/download request opened "
+            f"{len(connects)} sqlite connections (pinned 3: adult gate, "
+            "cache lookup, shortener tail — see HITPATH_CONNECTIONS.md); "
+            "changing this number requires updating that doc WITH the "
+            "code change, not silently")
+        self.assertTrue(all(p == tmp_path for p in connects),
+                        f"every counted connect must target the fixture DB, "
+                        f"got {connects}")
+
     def test_kind_gate_expectations(self):
         # THE HANDOFF ASSERTIONS (resolved_cache._derive_kind + fragment
         # handling — qoder12's file, NOT edited here):
