@@ -32,6 +32,7 @@ import argparse
 import threading
 import urllib.request
 import urllib.parse
+import ssl
 import html as html_module
 from contextlib import contextmanager
 from pathlib import Path
@@ -6471,6 +6472,40 @@ def _clear_resolve_failure(source_id: int) -> None:
         pass
 
 
+def _transport_cause_of(exc):
+    """Map a dispatch exception onto link_state's transport vocabulary — those
+    exact words, never a new taxonomy, so the ledger surface and the cache
+    surface cannot disagree about what a failure means. Returns None for an
+    exception that is none of the five: ambiguous evidence, and the circuit
+    rule for ambiguous is DO NOT STRIKE (crown order
+    qoder12_transport_evidence; the direction is asserted in
+    resolved_cache.note_failure_from_probe's tests)."""
+    if isinstance(exc, TimeoutError):        # socket.timeout is an alias 3.10+
+        return "timeout"
+    if isinstance(exc, ssl.SSLError):
+        return "tls"
+    if isinstance(exc, (ConnectionResetError, BrokenPipeError)):
+        return "conn_reset"
+    reason = getattr(exc, "reason", None)
+    if isinstance(exc, urllib.error.URLError):
+        if isinstance(reason, TimeoutError):
+            return "timeout"
+        if isinstance(reason, ssl.SSLError):
+            return "tls"
+        if isinstance(reason, (ConnectionResetError, BrokenPipeError)):
+            return "conn_reset"
+        if type(reason).__name__ == "gaierror" or str(reason).startswith(
+                ("[Errno -2]", "[Errno -3]")):
+            return "dns"
+        return "conn_error"
+    if isinstance(exc, OSError):
+        if type(exc).__name__ == "gaierror":
+            return "dns"
+        if exc.errno in (104, 111, 113):     # ECONNRESET/ECONNREFUSED/EHOSTUNREACH
+            return "conn_error"
+    return None
+
+
 def resolve_live_source(source_id: int, *, v2: bool = False,
                         want: str = "either", _failover: bool = True) -> dict:
     """
@@ -6768,6 +6803,13 @@ def resolve_live_source(source_id: int, *, v2: bool = False,
     # fall-through is recorded as a distinct outcome (crown order
     # qoder12_unprobed) and rides in both fallback envelopes.
     unprobed = False
+    # HOW the probe failed (crown order qoder12_transport_evidence): the
+    # circuit also refuses to strike on a transport failure from OUR side —
+    # a timeout is a verdict about our bad night, not about their link.
+    # Reaching the end of the chain without an exception means the fetches
+    # returned pages that simply did not yield a playable URL: the endpoint
+    # answered. That is link_state's `not_media`, and it may strike.
+    probe_fail_cause = "not_media"
 
     def hoster_input(marker):
         """The stored address that actually names this hoster.
@@ -7368,8 +7410,12 @@ def resolve_live_source(source_id: int, *, v2: bool = False,
                     fresh_temp = 1
                     embed_verdict = verdict
                     _gate_from_verdict = True
-        except Exception:
-            pass
+        except urllib.error.HTTPError as exc:
+            # The endpoint ANSWERED, with a status we can name — this is evidence
+            # about their link, and the circuit may strike on it.
+            probe_fail_cause = int(exc.code)
+        except Exception as exc:  # noqa: BLE001 — naming the cause IS the point
+            probe_fail_cause = _transport_cause_of(exc)
 
     # Session 107: the dispatch's own verdict is the evidence the
     # fall-through judges. A branch verdict (an unwrapper's http_status) or
@@ -7780,6 +7826,7 @@ def resolve_live_source(source_id: int, *, v2: bool = False,
             "reason": "bridge_unresolved" if bridge_stale else "re_resolve_failed",
             "stale": True,
             "unprobed": unprobed,
+            "fail_cause": probe_fail_cause,
         }
     # Stage-2: v1's last-resort stale answer is no longer served blind.
     # Probe it: a passing probe of an acceptable kind keeps the old
@@ -7825,6 +7872,7 @@ def resolve_live_source(source_id: int, *, v2: bool = False,
         "refreshed": False,
         "stale": True,
         "unprobed": unprobed,
+        "fail_cause": probe_fail_cause,
         "service": src["service"],
         "is_temporary": bool(src["is_temporary"]),
         "is_resumable": bool(src["is_resumable"]),

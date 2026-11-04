@@ -14,12 +14,15 @@ No network, no production DB: every test runs against an in-memory SQLite.
 from __future__ import annotations
 
 import os
+import socket
 import sqlite3
+import ssl
 import sys
 import tempfile
 import threading
 import time
 import unittest
+import urllib.error
 
 os.environ.setdefault("RADD_SKIP_LIVE_ENRICH", "1")
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -756,7 +759,11 @@ class TestUnprobedIsNotEvidence(unittest.TestCase):
                             "unprobed": True}
     PROBED_DEAD_ENVELOPE = {"success": False, "code": "no_playable_source",
                             "reason": "re_resolve_failed", "stale": True,
-                            "unprobed": False}
+                            "unprobed": False,
+                            # qoder12_transport_evidence: an endpoint status we
+                            # actually received — the affirmative shape every
+                            # strikable answer now carries.
+                            "fail_cause": 404}
 
     def test_unprobed_answers_leave_fail_count_unchanged(self):
         """6 simulated requests on a link WITH a cache row, each answered by
@@ -794,17 +801,27 @@ class TestUnprobedIsNotEvidence(unittest.TestCase):
     def test_probed_dead_answers_still_trip_the_circuit_at_three(self):
         """The other half of the distinction, kept in this module so a
         future edit cannot trade one behaviour for the other: an answer from
-        a branch that DID run and failed (unprobed False — including the
-        legacy shape with no field at all) increments exactly as before and
-        opens the circuit at MAX_FAIL_COUNT = 3."""
+        a branch that DID run and failed, naming an endpoint status
+        (``fail_cause`` an int), increments exactly as before and opens the
+        circuit at MAX_FAIL_COUNT = 3. The circuit must never stop
+        accruing — a fix that disabled it entirely is a defect, not a win
+        (crown order qoder12_transport_evidence, Boundaries)."""
         conn = fresh_conn()
         now = time.time()
         resolved_cache.record_resolved_cache(conn, 77, file_resolve(), now=now)
         legacy = dict(self.PROBED_DEAD_ENVELOPE)
-        del legacy["unprobed"]                    # old resolvers: absent = probed
+        del legacy["unprobed"]
+        del legacy["fail_cause"]
+        # Direction RE-DECIDED 2026-11-05 by qoder12_transport_evidence:
+        # the old rule "absent field = probed" is RETIRED. Once transport
+        # causes exist an absent cause means "cannot tell which side
+        # failed", and a strike accuses a third party's link — ambiguous
+        # accrues nothing. Asserted here so nobody trades it back without
+        # seeing exactly which invariant they flipped.
         self.assertEqual(
-            resolved_cache.note_failure_from_probe(conn, 77, legacy), 1)
-        for _ in range(resolved_cache.MAX_FAIL_COUNT - 1):
+            resolved_cache.note_failure_from_probe(conn, 77, legacy), 0,
+            "absent cause is ambiguous evidence — it may not strike")
+        for _ in range(resolved_cache.MAX_FAIL_COUNT):
             self.assertEqual(
                 resolved_cache.note_failure_from_probe(
                     conn, 77, self.PROBED_DEAD_ENVELOPE), 1)
@@ -869,11 +886,24 @@ class TestUnprobedIsNotEvidence(unittest.TestCase):
             self.assertTrue(res2.get("unprobed"),
                             "no branch matched: the v2 refusal must say it "
                             "measured nothing")
+            self.assertIn("fail_cause", res2,
+                          "qoder12_transport_evidence: every shipped failure "
+                          "envelope names HOW it failed — the circuit's "
+                          "ambiguous-never-strikes rule only works because "
+                          "strikable answers affirmatively carry a cause")
+            self.assertEqual(res2["fail_cause"], "not_media",
+                              "a chain that matched no branch reached the end "
+                              "without an exception: link_state's own word "
+                              "for 'answered, no media', and unprobed wins "
+                              "the guard first anyway")
             res1 = ff.resolve_live_source(43, v2=False)
             self.assertTrue(res1.get("stale"),
                             "fixture: v1 refuses the bridge stale URL too")
             self.assertTrue(res1.get("unprobed"),
                             "and the refusal must carry the same signal")
+            self.assertIn("fail_cause", res1,
+                          "fail_cause must ride in BOTH fallback envelopes, "
+                          "same law as unprobed")
         finally:
             for name, mod in saved.items():
                 if mod is not None:
@@ -913,6 +943,193 @@ class TestUnprobedIsNotEvidence(unittest.TestCase):
 def _strip_from_probe(src: str) -> str:
     """Blank out the guarded calls so a leftover bare note_failure( is visible."""
     return src.replace("resolved_cache.note_failure_from_probe(", "GUARDED(")
+
+
+class TestTransportIsNotEvidence(unittest.TestCase):
+    """Crown order qoder12_transport_evidence. `unprobed` closed one class of
+    fabricated evidence (nothing was contacted); this closes the second: a
+    probe that DID dispatch and failed at the TRANSPORT layer on OUR side —
+    timeout, DNS, TLS, reset, connection error. `link_state.classify` maps
+    every one of those to `dead`, and before this guard the same answer
+    flowed into `note_failure`, so three of our bad nights opened the
+    circuit (MAX_FAIL_COUNT) and `lookup_cache` refused a link that may be
+    perfectly alive — on a 1-CPU box, precisely when the machine is busiest.
+    A verdict about OUR probe must never be recorded as a verdict about
+    THEIR endpoint. The accrual side is asserted with equal force: endpoint-
+    answered dead (an HTTP status int, or the endpoint word `not_media`)
+    still strikes and still retires the row at three. If transport causes
+    stopped being strikable WITHOUT that holding, the circuit would be
+    disabled, not fixed."""
+
+    BASE = {"success": False, "code": "no_playable_source",
+            "reason": "re_resolve_failed", "stale": True, "unprobed": False}
+
+    def _envelope(self, cause):
+        env = dict(self.BASE)
+        env["fail_cause"] = cause
+        return env
+
+    def _banked_conn(self):
+        conn = fresh_conn()
+        resolved_cache.record_resolved_cache(conn, 77, file_resolve(),
+                                             now=time.time())
+        return conn
+
+    def test_transport_cause_never_touches_fail_count(self):
+        for cause in sorted(resolved_cache.TRANSPORT_CAUSES):
+            with self.subTest(cause=cause):
+                conn = self._banked_conn()
+                for _ in range(resolved_cache.MAX_FAIL_COUNT + 2):
+                    self.assertEqual(
+                        resolved_cache.note_failure_from_probe(
+                            conn, 77, self._envelope(cause)), 0,
+                        f"our own {cause} may not strike a third party's link")
+                self.assertEqual(sqlite3_conn_row(conn, 77)["fail_count"], 0)
+
+    def test_three_transport_failures_do_not_refuse_the_row(self):
+        """The order's named scenario, end to end: three transport failures
+        (timeout, dns, tls) and `lookup_cache` must STILL hand out the row —
+        the exact mirror of the endpoint-dead test below."""
+        conn = self._banked_conn()
+        now = time.time()
+        for cause in ("timeout", "dns", "tls"):
+            resolved_cache.note_failure_from_probe(conn, 77,
+                                                   self._envelope(cause))
+        self.assertEqual(sqlite3_conn_row(conn, 77)["fail_count"], 0)
+        self.assertIsNotNone(resolved_cache.lookup_cache(conn, 77, now=now),
+                             "our bad night must not close the shop on a link "
+                             "that was never measured dead")
+
+    def test_endpoint_status_int_still_trips_at_three(self):
+        """Boundary of the order, non-negotiable: a genuinely dead endpoint
+        (we received the status) accrues MAX_FAIL_COUNT endpoint-answered
+        verdicts and `lookup_cache` refuses it, exactly as before this fix."""
+        conn = self._banked_conn()
+        now = time.time()
+        for _ in range(resolved_cache.MAX_FAIL_COUNT):
+            self.assertEqual(
+                resolved_cache.note_failure_from_probe(
+                    conn, 77, self._envelope(404)), 1)
+        self.assertEqual(sqlite3_conn_row(conn, 77)["fail_count"],
+                         resolved_cache.MAX_FAIL_COUNT)
+        self.assertIsNone(resolved_cache.lookup_cache(conn, 77, now=now),
+                          "endpoint-answered dead must still retire")
+
+    def test_not_media_still_strikes(self):
+        """An endpoint that ANSWERED and simply did not hand us media is
+        evidence about them — link_state's own word, and the resolver's
+        affirmative default when its chain ran to the end without raising."""
+        conn = self._banked_conn()
+        self.assertEqual(
+            resolved_cache.note_failure_from_probe(
+                conn, 77, self._envelope("not_media")), 1)
+
+    def test_absent_cause_is_ambiguous_and_never_strikes(self):
+        """The written re-decision (crown item 3): the retired direction was
+        "absent field = probed". Absent now means we cannot tell which side
+        failed, and a strike accuses a third party's link — so it accrues
+        nothing. Pinning the refusal AND the docstring that owns it."""
+        conn = self._banked_conn()
+        now = time.time()
+        for _ in range(resolved_cache.MAX_FAIL_COUNT + 2):
+            self.assertEqual(
+                resolved_cache.note_failure_from_probe(conn, 77,
+                                                       dict(self.BASE)), 0,
+                "absent fail_cause is ambiguous evidence")
+        self.assertIsNotNone(resolved_cache.lookup_cache(conn, 77, now=now),
+                             "ambiguous answers must not retire a servable row")
+        doc = resolved_cache.note_failure_from_probe.__doc__ or ""
+        self.assertIn("RETIRED", doc,
+                      "the direction change must stay written where a reader "
+                      "of the guard will meet it")
+
+    def test_unprobed_refusal_survives_the_new_field(self):
+        """unprobed and a transport cause can ride the same envelope; the
+        older refusal is checked first and still returns 0."""
+        env = dict(self.BASE)
+        env["unprobed"] = True
+        env["fail_cause"] = "timeout"
+        conn = self._banked_conn()
+        self.assertEqual(
+            resolved_cache.note_failure_from_probe(conn, 77, env), 0)
+        self.assertEqual(sqlite3_conn_row(conn, 77)["fail_count"], 0)
+
+    def test_transport_vocabulary_is_link_states_own_words(self):
+        """No new taxonomy (crown item 1): every refused cause must be a word
+        `link_state` already uses AND already maps to `dead` — which is
+        exactly why these answers used to strike. If link_state ever grows a
+        transport word this guard misses, the subset pin does not catch it;
+        the direction of that drift (an endpoint word mis-refused) is caught
+        by the accrual tests above instead."""
+        import link_state
+        for word in sorted(resolved_cache.TRANSPORT_CAUSES):
+            with self.subTest(word=word):
+                self.assertIn(word, link_state._ERROR_CODES,
+                              "resolved_cache must not invent a vocabulary")
+                self.assertEqual(
+                    link_state.classify({"ok": False, "error": word}),
+                    link_state.STATUS_DEAD,
+                    "the word must be one whose dead verdict used to flow "
+                    "into the circuit unchecked")
+
+
+class TestTransportCauseNaming(unittest.TestCase):
+    """The naming half of qoder12_transport_evidence lives in the resolver:
+    `_transport_cause_of` must answer in link_state's words, so the cache
+    surface and the ledger surface cannot disagree about a failure. Pure
+    function, no sockets, no DB."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls._saved = sys.modules.get("fast_fetch")
+        os.environ.setdefault("RADD_SKIP_LIVE_ENRICH", "1")
+        import fast_fetch as ff
+        cls.ff = ff
+
+    def _maps(self, exc, expected):
+        self.assertEqual(self.ff._transport_cause_of(exc), expected,
+                         f"{exc!r} must map to {expected!r}")
+
+    def test_direct_exception_classes(self):
+        self._maps(TimeoutError("slow"), "timeout")
+        self._maps(ConnectionResetError(104, "reset by peer"), "conn_reset")
+        self._maps(BrokenPipeError(32, "pipe"), "conn_reset")
+        self._maps(ssl.SSLError("handshake failure"), "tls")
+
+    def test_urlerror_wrapped_reasons(self):
+        self._maps(urllib.error.URLError(TimeoutError()), "timeout")
+        self._maps(urllib.error.URLError(ssl.SSLError("x")), "tls")
+        self._maps(urllib.error.URLError(ConnectionResetError(104, "r")),
+                   "conn_reset")
+        self._maps(urllib.error.URLError(
+            socket.gaierror(-2, "Name or service not known")), "dns")
+        self._maps(urllib.error.URLError(OSError(111, "Connection refused")),
+                   "conn_error")
+        self._maps(urllib.error.URLError("some unknown failure"), "conn_error")
+
+    def test_bare_gaierror_and_errno_oserrors(self):
+        self._maps(socket.gaierror(-3, "Temporary failure"), "dns")
+        self._maps(OSError(111, "refused"), "conn_error")
+
+    def test_unmappable_exception_is_ambiguous_not_a_invented_cause(self):
+        """None is the honest answer for "this maps to no link_state word" —
+        and the circuit treats ambiguous as non-evidence. A made-up cause
+        string here would be the new taxonomy the order forbade."""
+        self.assertEqual(self.ff._transport_cause_of(ValueError("nope")),
+                         None)
+
+    def test_shipped_refusal_envelope_names_its_cause(self):
+        """fast_fetch must set fail_cause in BOTH fallback envelopes at the
+        point of failure, not have viewer.py guess later (no new control
+        flow: one field, two carriers)."""
+        import inspect
+        src = inspect.getsource(self.ff.resolve_live_source)
+        self.assertGreaterEqual(src.count('"fail_cause": probe_fail_cause'), 2,
+                                "v2 refusal and v1 stale envelopes both carry "
+                                "the named cause")
+        self.assertIn('probe_fail_cause = int(exc.code)', src,
+                      "an HTTPError answered — the status must be named as an "
+                      "int, strikable evidence about the endpoint")
 
 
 class TestEpochHygiene(unittest.TestCase):
