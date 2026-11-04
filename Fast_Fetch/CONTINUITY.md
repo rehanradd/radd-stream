@@ -2778,3 +2778,52 @@ Provenance discipline from the af0fccb sweep, applied and greppable in
 the commit message: `git commit -m … -- Fast_Fetch/test_host_classifier.py`
 only — no bare commit on the shared index, no code inside a docs-titled
 message. Pushed e9b78ba to feat/phase1-resolved-cache.
+
+## 2026-11-05 — qoder12, crown order qoder12_transport_evidence (our transport
+## failure must not open the circuit on their link)
+
+- Defect: `note_failure_from_probe` guarded only `unprobed`. A probe that DID
+  dispatch and failed on OUR side (timeout/dns/tls/conn_reset/conn_error) maps
+  to `dead` in `link_state.classify` and flowed straight into the strike
+  counter — three of our bad nights opened MAX_FAIL_COUNT and `lookup_cache`
+  refused a link that may be perfectly alive, worst exactly when the 1-core
+  box is busiest (load 5.52 during this session's runs).
+- Fix, one field set at the point of failure, no new control flow:
+  `fast_fetch.resolve_live_source` now names `fail_cause` in BOTH fallback
+  envelopes — an HTTP status `int` (endpoint answered; strikable), a transport
+  word via the new `_transport_cause_of` (link_state's own words only, no new
+  taxonomy), or `"not_media"` as the affirmative chain-end default.
+  `resolved_cache.TRANSPORT_CAUSES` is pinned as a subset of
+  `link_state._ERROR_CODES` by test.
+- Direction RE-DECIDED in writing (crown item 3): the docstring's old
+  "absent field = probed" is RETIRED. Absent `fail_cause` now means
+  "cannot tell which side failed" — ambiguous, accrues nothing, because a
+  strike accuses a third party's link. The reversal is asserted by
+  `test_absent_cause_is_ambiguous_never_strikes` and by the flipped legacy
+  half of `test_probed_dead_answers_still_trip_the_circuit_at_three`.
+- The circuit is NOT disabled: endpoint-answered dead (status int, `not_media`)
+  still accrues and still trips at MAX_FAIL_COUNT = 3, and `lookup_cache`
+  still refuses then — asserted in both directions in
+  `TestTransportIsNotEvidence`/`TestUnprobedIsNotEvidence`.
+- Counts: `test_resolved_cache.py` 64 → 76 OK (before: committed 0e8be87 code
+  + working tests = 64 with 1 failure, the retired-direction tripping test,
+  which only this sha closes). `test_ci_manifest.py` 9 OK against a HEAD that
+  moved twice under me (e9b78ba, a943e15 — qoder14's; neither swept my files,
+  verified `git log -S fail_cause 0e8be87..HEAD` prose-only).
+- Mutation proof (qoder14's style, /tmp/mutation_proof_transport.py):
+  baseline green; A = pre-order guard (fail_cause branches removed) → 9 names
+  lost; B = TRANSPORT_CAUSES emptied → caught by the hard-coded-cause test
+  (the per-vocab test goes vacuously green under B — an iteration-mutant blind
+  spot worth knowing); C = bare incrementer → 12 names lost. Guard is
+  load-bearing both ways.
+- Census (RESOLVED_BANK_CENSUS.md item 4): production banked rows with
+  `fail_count > 0` = 0 — the resolved_cache table is ABSENT (feature
+  undeployed), so this fix ships pre-deploy; size of harm prevented is 0 rows
+  today and bounded by MAX_FAIL_COUNT-per-link thereafter, measured not
+  estimated.
+- Fleet index hygiene (notice 02:53): this sha was built with the temp-index
+  `commit-tree` procedure — shared index never read or written, `git diff
+  --cached` empty before and after, no path ever appeared in both status
+  columns. Files committed by name: fast_fetch.py, resolved_cache.py,
+  test_resolved_cache.py, CONTINUITY.md. qoder14's ` M test_host_classifier.py`
+  and `?? PROBE_COVERAGE.md`/`HITPATH_CONNECTIONS.md` stays theirs, untouched.

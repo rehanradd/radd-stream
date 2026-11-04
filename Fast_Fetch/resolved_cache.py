@@ -359,19 +359,59 @@ def note_failure(conn: sqlite3.Connection, link_id: int) -> int:
     return cur.rowcount
 
 
+#: Transport causes — OUR side failing to reach the endpoint (timeout, DNS,
+#: TLS, resets, connection errors). Words reused from ``link_state._ERROR_CODES``
+#: so the two surfaces can never invent divergent vocabularies; the test suite
+#: pins this set as a subset of link_state's. A cause in here is a verdict
+#: about our night, not about their link, and the circuit must not strike on it
+#: (crown order qoder12_transport_evidence).
+TRANSPORT_CAUSES = frozenset(("timeout", "dns", "tls", "conn_reset", "conn_error"))
+
+
 def note_failure_from_probe(conn: sqlite3.Connection, link_id: int,
                             res: dict) -> int:
-    """Increment the circuit for a resolve answer — ONLY if the answer is
-    measured evidence. ``resolve_live_source`` sets ``unprobed: True`` when
-    its dispatch chain matched no unpacker branch: nothing was contacted,
-    nothing was measured, and counting it would open the circuit one-way on
-    fabricated proof (crown order qoder12_unprobed). An absent field means a
-    resolver old enough to predate the signal — treated as probed, which is
-    the conservative direction for genuinely dead rows. Returns rows touched
-    (0 for a refused unprobed answer, exactly like a failure that never ran).
-    The request path must call THIS, not bare ``note_failure``."""
+    """Increment the circuit for a resolve answer — ONLY on an affirmative
+    verdict ABOUT THE ENDPOINT.
+
+    Two exclusions, same contract, one per class of non-evidence:
+      * ``unprobed`` (crown order qoder12_unprobed): the dispatch chain
+        matched no unpacker — nothing was contacted, nothing measured.
+      * transport ``fail_cause`` (crown order qoder12_transport_evidence):
+        the probe contacted the target and OUR side failed — timeout, DNS,
+        TLS, reset. Three of our bad nights must not open the circuit on a
+        link that may be perfectly alive, on a box whose load makes exactly
+        this class most likely when the cache matters most.
+
+    What may strike is an AFFIRMATIVE endpoint-answered verdict: an HTTP
+    status we actually received (``fail_cause`` an int) or an endpoint word
+    from link_state's own vocabulary (``"not_media"`` today, and any further
+    answered-verdict word it grows — the refusals below are the exact,
+    enumerated exceptions, so a new *endpoint* cause stays strikable without
+    touching this function). What may never strike is non-evidence: an
+    absent cause, or any word in ``TRANSPORT_CAUSES``.
+
+    ABSENT ``fail_cause`` is deliberately NOT treated as probed-dead. That
+    was the old documented direction ("absent = probed") and it is RETIRED
+    here, in writing, per the order: once transport causes exist, an absent
+    field no longer means "there was a probe and it was dead" — it means
+    "we cannot tell which side failed", and a strike is an accusation about
+    a third party's link. Ambiguity accrues nothing. The circuit stays
+    real, not weakened: every current resolver failure path names its cause
+    affirmatively (``fast_fetch.resolve_live_source`` sets ``fail_cause`` on
+    the envelope in ALL three outcomes — status int, transport word, or
+    ``not_media``), and an endpoint genuinely answering dead accrues
+    MAX_FAIL_COUNT strikes exactly as before. If strikes ever stopped
+    accumulating at all, that would be a disabled circuit, not a fixed one —
+    the companion tests assert the accrual side, not only the refusal side.
+    Returns rows touched (0 for every refused answer). The request path must
+    call THIS, not bare ``note_failure``."""
     if res.get("unprobed"):
         return 0
+    cause = res.get("fail_cause")
+    if cause is None:
+        return 0          # ambiguous: absent cause never strikes (see above)
+    if isinstance(cause, str) and cause in TRANSPORT_CAUSES:
+        return 0          # our transport failed — not evidence about the link
     return note_failure(conn, link_id)
 
 
