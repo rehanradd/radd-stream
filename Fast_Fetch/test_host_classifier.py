@@ -10,7 +10,9 @@ failure of 2026-11-04. No network, stdlib only.
 
 from __future__ import annotations
 
+import sqlite3
 import sys
+import time
 import unittest
 from pathlib import Path
 
@@ -42,6 +44,21 @@ else:
     _SS_REASON = ""
 
 HAS_SS = _ss is not None
+
+# The route-level download-gate test boots the real HTTP handler, so it needs
+# the whole viewer stack importable. Guard it the same way resolved_cache is
+# guarded: the rest of the suite must not depend on it.
+try:
+    import viewer as _viewer
+    import fast_fetch as _ff
+    import redact as _redact
+except Exception as _viewer_exc:  # noqa: BLE001 - import fault = skip, not error
+    _viewer = _ff = _redact = None
+    HAS_VIEWER = False
+    _VIEWER_REASON = f"viewer stack not importable: {_viewer_exc}"
+else:
+    HAS_VIEWER = True
+    _VIEWER_REASON = ""
 
 
 class TestCategoryA(unittest.TestCase):
@@ -845,15 +862,141 @@ class TestViewerShapeGate(unittest.TestCase):
                            "a real direct file must keep the 24h horizon")
         self.assertLessEqual(p[1], 24 * 3600)
 
+    @unittest.skipUnless(HAS_VIEWER, _VIEWER_REASON)
     def test_download_gate_refuses_viewer_shaped_rows(self):
-        # Route-level in the sense the route decides: /api/v1/download calls
-        # lookup_cache(want="download"), whose SQL requires kind='file'.
-        # The HORIZON half (B/6h) works today; the KIND half is qoder12's
-        # _derive_kind change (handed to crown) — until that lands, a
-        # viewer row is still kind='file' and the gate lets it through, so
-        # this is marked expectedFailure ON PURPOSE. Remove the marker when
-        # the handoff lands; its XPASS is the acceptance signal.
-        self.skipTest("covered by test_kind_gate_expectations below")
+        # ROUTE-level (order qoder14_viewerA item 1): /api/v1/download
+        # actually refuses a viewer-shaped link — not lookup_cache in
+        # isolation. The skip's reason (the KIND half blocked on
+        # _derive_kind) died with task #24; keeping it skipped would have
+        # left the route claim untested while a cache test borrowed its
+        # name. Drives viewer.DashboardHandler.do_GET for real: temp
+        # fixture DB (not a catalog copy), real socket on an ephemeral
+        # port, signed stream tokens, the adult walk, the cache gate and
+        # the 302 tail all run production code; ONLY the live resolver
+        # (the network half) is stubbed, and the stub's call log is
+        # itself an assertion — the route must reach it exactly when the
+        # cache refuses.
+        #
+        # Legacy-bank simulation: rows are INSERTed with kind='file'
+        # directly, bypassing record_resolved_cache — qoder12's own
+        # lookup defence (law c) says stored kind is not evidence for
+        # pre-shape-law rows, and THIS is the row shape that claim is
+        # about. The positive case lives in the same test: a fix that
+        # downgrades everything to non-file fails here instead of
+        # passing (order item 4).
+        import http.client
+        import os
+        import tempfile
+        import threading
+
+        tmp_fd, tmp_path = tempfile.mkstemp(suffix=".db")
+        os.close(tmp_fd)
+        self.addCleanup(os.unlink, tmp_path)
+        db = sqlite3.connect(tmp_path)
+        self.addCleanup(db.close)
+        db.execute("CREATE TABLE posts (id INTEGER PRIMARY KEY, is_18_plus INTEGER DEFAULT 0)")
+        db.execute("CREATE TABLE releases (id INTEGER PRIMARY KEY, post_id INTEGER)")
+        db.execute("CREATE TABLE download_sources (id INTEGER PRIMARY KEY, release_id INTEGER)")
+        _rc.init_resolved_cache(db)
+        for lid in (11, 12, 13, 14):
+            db.execute("INSERT INTO posts (id, is_18_plus) VALUES (?, 0)", (lid,))
+            db.execute("INSERT INTO releases (id, post_id) VALUES (?, ?)", (lid, lid))
+            db.execute("INSERT INTO download_sources (id, release_id) VALUES (?, ?)", (lid, lid))
+        future = time.time() + 86400
+        poison = (
+            (11, self.VIEWER),                    # drive /view as 'file' A
+            (12, self.PIXELDRAIN_REAL),          # genuine direct file
+            (13, self.MEGA_KEY),                 # banked WITH fragment
+            (14, "https://pub-zzz.r2.dev/folder/clip.mp4"),  # object key w/ folder segment
+        )
+        for lid, url in poison:
+            db.execute("INSERT INTO resolved_cache (link_id, url, category, kind,"
+                       " resolved_at, reverify_after) VALUES (?,?,'A','file',?,?)",
+                       (lid, url, time.time(), future))
+        db.commit()
+
+        saved_db, saved_secret = _viewer.DB_PATH, _viewer._SIGNING_SECRET
+        _viewer.DB_PATH = tmp_path
+        _viewer._SIGNING_SECRET = "route-gate-test-secret"
+        saved_log = _viewer.DashboardHandler.log_message
+        _viewer.DashboardHandler.log_message = lambda *a, **k: None
+        resolved_calls = []
+
+        def fake_resolver(link_id, *a, **k):
+            resolved_calls.append(int(link_id))
+            return {"success": False, "error": "offline-stub"}
+
+        saved_resolve = getattr(_ff, "resolve_live_source")
+        _ff.resolve_live_source = fake_resolver
+
+        def restore():
+            _viewer.DB_PATH = saved_db
+            _viewer._SIGNING_SECRET = saved_secret
+            _viewer.DashboardHandler.log_message = saved_log
+            _ff.resolve_live_source = saved_resolve
+        self.addCleanup(restore)
+
+        srv = _viewer.ThreadedHTTPServer(("127.0.0.1", 0), _viewer.DashboardHandler)
+        srv.operator = False
+        thread = threading.Thread(target=srv.serve_forever, daemon=True)
+        thread.start()
+        self.addCleanup(srv.shutdown)
+        self.addCleanup(srv.server_close)
+        port = srv.server_address[1]
+
+        def request(link_id):
+            token = _redact.mint_token(link_id, _viewer._SIGNING_SECRET)
+            conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+            self.addCleanup(conn.close)
+            conn.request("GET", f"/api/v1/download?id={token}&redirect=1",
+                         headers={"Host": "127.0.0.1"})
+            resp = conn.getresponse()
+            body = resp.read().decode("utf-8", "replace")
+            return resp.status, dict(resp.getheaders()), body
+
+        # 1. viewer-shaped legacy bank row: the route must NOT 302 to the
+        #    viewer page, and must fall through to the resolver (cache gate
+        #    fired) rather than silently serving the HTML.
+        status, hdrs, body = request(11)
+        loc = hdrs.get("Location", "")
+        self.assertFalse(status == 302 and ("drive.google.com" in loc or "/view" in loc),
+                         f"/api/v1/download 302'd an HTML viewer page as a file "
+                         f"(status {status}, Location {loc!r}) — order item 1")
+        self.assertNotIn(self.VIEWER, loc)
+        self.assertNotIn(self.VIEWER, body,
+                         "the viewer URL must not be handed out in the JSON answer either")
+        self.assertIn(11, resolved_calls,
+                      "the route never reached the resolver — the cache gate "
+                      "did not refuse as expected (or the route broke earlier)")
+
+        # 2. mega cryptolink banked with its fragment: the key must never
+        #    reach a public Location (order item 3).
+        status, hdrs, body = request(13)
+        self.assertNotIn("#", hdrs.get("Location", ""),
+                         "a banked fragment (mega key) leaked into a public "
+                         "302 Location")
+        self.assertNotIn("#", body)
+
+        # 3. POSITIVE, same route, same gate: a genuine direct file must
+        #    still 302 to its bytes. Without this half, "refuse everything"
+        #    would pass and the feature would be silently disabled.
+        status, hdrs, body = request(12)
+        self.assertEqual(status, 302,
+                         f"a real pixeldrain direct file must answer the download "
+                         f"route with a 302 (got {status}: {body[:120]})")
+        self.assertIn("pixeldrain.com", hdrs.get("Location", ""))
+        self.assertNotIn(12, resolved_calls,
+                         "the cached real file must be served from the bank, "
+                         "not re-resolved")
+
+        # 4. object-store key with a folder segment (the rule's known safe
+        #    zone): still downloadable — the shape gate must not have
+        #    widened past page-capable hosts.
+        status, hdrs, body = request(14)
+        self.assertEqual(status, 302,
+                         "r2 object keys with folder segments must stay "
+                         f"downloadable (got {status}: {body[:120]})")
+        self.assertIn("r2.dev", hdrs.get("Location", ""))
 
     def test_kind_gate_expectations(self):
         # THE HANDOFF ASSERTIONS (resolved_cache._derive_kind + fragment
