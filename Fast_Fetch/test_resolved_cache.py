@@ -975,6 +975,36 @@ class TestTransportIsNotEvidence(unittest.TestCase):
                                              now=time.time())
         return conn
 
+    NAMED_TRANSPORT_CAUSES = ("timeout", "dns", "tls", "conn_reset",
+                              "conn_error")
+
+    def test_each_named_transport_cause_by_literal_is_refused(self):
+        """Literal-cause duplicate of the per-vocabulary loop below, because
+        a loop over `TRANSPORT_CAUSES` is vacuously green when that set is
+        emptied (crown-found mutation blind spot, 2026-11-05). These five
+        words are hardcoded HERE, so an emptied production vocabulary has
+        nowhere to hide: the refusal must survive a set that shrank."""
+        for cause in self.NAMED_TRANSPORT_CAUSES:
+            with self.subTest(cause=cause):
+                conn = self._banked_conn()
+                self.assertEqual(
+                    resolved_cache.note_failure_from_probe(
+                        conn, 77, self._envelope(cause)), 0,
+                    f"our own {cause} may not strike a third party's link")
+                self.assertEqual(sqlite3_conn_row(conn, 77)["fail_count"], 0)
+
+    def test_transport_cause_set_is_closed_against_the_named_literals(self):
+        """Non-empty AND exactly these words: a later lane cannot silently
+        drop one (that re-opens the circuit on a transport failure) nor add
+        one (that could mute a genuine endpoint verdict). Membership changes
+        here must be a deliberate, argued edit to BOTH this literal and
+        fast_fetch._transport_cause_of's mapping."""
+        self.assertEqual(
+            set(resolved_cache.TRANSPORT_CAUSES),
+            set(self.NAMED_TRANSPORT_CAUSES),
+            "TRANSPORT_CAUSES must contain exactly "
+            f"{sorted(self.NAMED_TRANSPORT_CAUSES)}")
+
     def test_transport_cause_never_touches_fail_count(self):
         for cause in sorted(resolved_cache.TRANSPORT_CAUSES):
             with self.subTest(cause=cause):
