@@ -2251,3 +2251,40 @@ server :8099; live tree untouched, prod DB opened read-only at most, no nginx).
 - **Push held:** `2ad1490` sits on top of qoder13's local-only `4f7c17d`;
   pushing my commit would publish theirs without their report. Branch is
   fast-forwardable the moment `4f7c17d` ships on its own merits.
+
+## Session 2026-11-05 (phase1 prefetcher lane) — push hold released & used; `PUBLISH_RUNBOOK.md` written, nothing published
+
+- **Pushed exactly `4f7c17d`** to `feat/phase1-resolved-cache` (`2c04977..4f7c17d`,
+  FF-verified first, temp askpass per ORACLE_DEPLOYMENT.md, clean URL). qoder12's
+  two later local commits (`2ad1490`, `26ac013`) were deliberately NOT pushed —
+  the hold named only `4f7c17d` and pushing the branch head would have shipped
+  another lane's work under my authorization.
+- **`Fast_Fetch/PUBLISH_RUNBOOK.md` written only.** No directory created, no
+  `/etc/nginx` write, no reload — §2/§3/§5 and the quarantine step are tagged
+  `[APPROVAL-GATED]` and unexecuted. Contents: prereq table (reconcile_adult
+  merge and Emperor approval are BOTH still ❌ — publish is blocked on them),
+  staging build + gates 1a/1b, immutable-release symlink layout (releases under
+  `/var/lib/radd-static`, `/var/www/radd-static` is a symlink only — the draft's
+  first version created it as a directory, which would have silently swallowed
+  the swap `mv`; caught in self-review), the proposed nginx `location` snippet
+  (alias, autoindex off, `expires 15m` + `must-revalidate`), reload gate.
+- **Invalidation story, plainly:** the live API's adult surface has zero TTL lag
+  (clause runs per request; code-cited `redact.py:1068` ← `viewer.py:2516`); the
+  static copy self-heals ONLY at the next export run — max exposure =
+  export-interval + 15 min browser max-age = **≤75 min at the recommended hourly
+  cadence**, and **∞ if the export is never scheduled** (hence the §7 checklist).
+  Kill switch = symlink to an empty quarantine release; residual = client-held
+  copies aging out ≤15 min; note that any future `proxy_cache` invalidates these
+  numbers and must be re-documented first.
+- **Rollback:** last-3 immutable releases; one `ln -sfn` + `mv -Tf`, no reload.
+- **Ceiling, verbatim from §6:** `nproc` = 1, loadavg min/p25/median/p75/max =
+  4.59/5.57/6.25/7.69/9.52, 0/40 samples under 2.0 — the mandated throttle parks
+  the prefetcher; the exporter (read-only SQL, sub-minute CPU at 20 pages) is the
+  part that IS safe on this box even at median load. Deployment truth recorded:
+  prefetcher on a quiet-hours timer, ceiling only after an overnight idle sample.
+
+**Lane state after this session:** `feat/phase1-resolved-cache` local head has
+qoder12's 2 unpushed commits (not mine to push); `4f7c17d` + the runbook commit
+are mine. The runbook itself is committed locally and not pushed — pushing it
+now would move the remote past `4f7c17d` only by also carrying qoder12's work;
+the Crown can push both or hold — either is safe, the file is readable in-lane.
