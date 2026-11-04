@@ -2855,7 +2855,7 @@ message. Pushed e9b78ba to feat/phase1-resolved-cache.
   test_resolved_cache hunks, HELD viewer.py. Pushed a943e15..a6b0678 to
   feat/phase1-resolved-cache.
 
-## 202626-11-05 — qoder14: CI-blind-spot audit (crown order: audit only, no backend-ci.yml edit)
+## 2026-11-05 — qoder14: CI-blind-spot audit (crown order: audit only, no backend-ci.yml edit)
 
 Three TRACKED suites named NOWHERE in backend-ci.yml — not a run step, not on
 the EXCLUDED ledger: Fast_Fetch/importers/{test_host_resolvers,
@@ -2872,6 +2872,6 @@ test_database.py only shape/smoke-checks host_resolvers' existence
 (:779,:1033), not its 171 behaviors; stream_resolvers and
 convert_mp4moviez appear in no CI-run suite. AGENTS.md calls
 test_host_resolvers a standing local push gate (3-command list) yet CI never
-runs it — same unfed-sweep class as 5446771.backend-ci.yml untouched, the
+runs it — same unfed-sweep class as 5446771. backend-ci.yml untouched, the
 Emperor decides steps; report delivered to crown. Pen held (granted this
 session); CONTINUITY.md was porcelain-clean before append.
