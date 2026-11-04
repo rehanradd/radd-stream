@@ -2014,3 +2014,50 @@ rejected by the CLI itself so a flag typo cannot make the decision.
 absent from home/browse/embedded ids (asserted on emitted bytes per order);
 suppression count == live WHERE result; no-token byte scan; double-export
 byte-identical; no `.tmp` strays; `/var/www` refusal. All OK. `test_redact` OK.
+
+## Session 2026-11-04 (qoder14 lane) — order qoder14: hoster-table merge + domain_resolver audit
+**Backlog #2 corrected per Crown-Prince ruling: NO parallel `domain_monitor.py`.**
+The single registry writer stays `domain_resolver.py`; its `__main__` is the
+monitor CLI. Measured: registry holds **18** sites (not 25), and readers
+(`import_hindilinks4u`, `import_toonworld4all` via `get_active_base_url`,
+`site_scout.load_registry`) are unaffected — signature-compatible changes only.
+
+**Task A — `dc7ef18`.** `host_classifier._HOST_TABLE` (62 rows) is now the
+single authority for hoster classification. `site_scout.DEFAULT_HOSTER_KINDS`
+= `as_scout_hoster_kinds()` (62 authority rows in site_scout's
+direct/embed/bridge vocabulary) prepended to `_LEGACY_HOSTER_KINDS` (41 rows,
+kept byte-identical — extend, never delete; the merge degrades to legacy-only
+if host_classifier is absent from the tree). Registry `hosters`/`link_kinds`
+overrides still outrank both. **vcloud disagreement RESOLVED to bridge** with
+evidence (host-power-weakness.md: "Bridge -> Generate -> servers"); legacy
+embed row stays, shadowed. fastdl split family pinned by test: fastdl.beer
+direct (authority), generic fastdl still embed (legacy fallback). New parity
+tests prove token-by-token agreement between the two classifiers for every
+authority row, and the CI-pinned unknowns stay unknown. 53/53 classifier +
+25/25 site_scout + gate suites green (one 5-failure batch run of
+test_site_scout did not reproduce standalone or under repeat — logged as a
+flake; registry file and tree verified untouched).
+
+**Task B — `e33376c`.** Audit verdict: `probe_site` did redirect-shift
+detection and mirror failover, but (1) `save_registry` was a non-atomic
+`open(w)+dump` on the file the live service reads — crash mid-write =
+corruption; (2) it wrote back the **pre-network snapshot**, losing concurrent
+updates; (3) any HTTPError counted toward `status=down`, so a WAF 403 could
+retire a healthy domain, and a redirecting-but-healthy active could be
+re-pointed onto a mirror; (4) the backlog's headline feature — TLD rotation
+detection — **did not exist**: a vegamovies.foo→.bar swap carries no redirect,
+so redirect-following can never see it. Fixed all four in place: atomic
+temp+fsync+`os.replace`; `update_site_registry` = reload under sidecar
+`.lock` flock + per-site merge; blocked (401/403/405/429) reports `blocked`
+and writes NOTHING; re-point only when the stored active failed this run;
+bounded 23-TLD same-label sweep on a fully-dead candidate set, recording
+`status=rotated` + `last_rotated_at` and keeping the dead base as a mirror.
+New `test_domain_resolver.py` 18/18 offline (injectable opener).
+
+**Flagged, not changed:** probe TLS skips cert verification (pre-existing
+pattern inherited from the original module and site_scout).
+
+**Push state:** `feat/phase1-resolved-cache` remote tip `e33376c`; fast-forward
+carried qoder12's in-tree commits, nothing rewritten. Staged paths this
+session: host_classifier.py, test_host_classifier.py, site_scout.py,
+domain_resolver.py, test_domain_resolver.py, CONTINUITY.md only.
