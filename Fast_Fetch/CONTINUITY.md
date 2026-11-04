@@ -2725,3 +2725,19 @@ label artifact. The fix stands unchanged — it is the pre-deployment defence,
 and the read-time legacy re-check now guards any future bank, not a present
 one. My wording overstated a deployed harm; the harm is pre-deployable shape
 correctness only.
+
+### Provenance pin (crown item 1, 2026-11-05)
+The task #24 BEHAVIOURAL fix — `_derive_kind` viewer veto, `_strip_fragment`,
+`_viewer_shaped`, the `kind` CHECK widening to `file|playlist|viewer`, the
+`lookup_cache` read-time download re-check, `TestViewerKindGate` (12 tests),
+and the removal of qoder14's `@unittest.expectedFailure` on
+`test_kind_gate_expectations` (whose XPASS was the acceptance signal) —
+is carried inside **`af0fccb`**, whose own message is `docs(census): ...`.
+That was the shared-index sweep, not a choice; history is not rewritten.
+This follow-up commit is the greppable record: bisect or safety review for
+"what changed /api/v1/download's kind gate" must land on af0fccb via
+`git log --oneline -- Fast_Fetch/resolved_cache.py` (task #24, files:
+Fast_Fetch/resolved_cache.py +86, Fast_Fetch/test_resolved_cache.py +168,
+Fast_Fetch/test_host_classifier.py marker, Fast_Fetch/CONTINUITY.md).
+Verified post-merge by the Crown Prince at load 3.72: test_resolved_cache
+64 OK, test_host_classifier 71 OK (skipped=1), marker gone.
