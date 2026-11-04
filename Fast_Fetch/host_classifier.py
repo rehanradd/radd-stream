@@ -41,6 +41,21 @@ from the request. Vidrift has the mirror-image rule: its master fetches
 **require** ``Referer: https://embed.vidrift.net/`` (403 without it — proven
 on the modiplay/bingr path).
 
+⚠ TAXONOMY COLLISION (Phase-1 integration ruling, 2026-11-04): the letters
+``A``/``B``/``C``/``?`` in :data:`CATEGORY_LABELS` name the **host kind**.
+``resolved_cache.category`` reuses the same letters for a **different axis**
+— the cache-horizon trust class its ``_derive_category`` derives from the
+service label and URL markers (A = permanent-file trust, B = short-lived
+packer trust). They are NOT interchangeable: ``gofile``/``1fichier``/
+``megaup``/``hexload``/``desiupload`` and the raw Google-Drive host family
+are kind-A here but horizon-B over there, while ``hubcloud`` is kind-C (a
+bridge!) here yet horizon-A there. No caller may ever pass a
+:data:`CATEGORY_LABELS` value into ``resolved_cache.category``; gating a
+store happens through :func:`is_direct_file` / :func:`is_playable_category`
+(bools), never through letters. See ``test_host_classifier.py``
+``TestCategoryACrossCheckWithResolvedCache`` for the full measured
+disagreement table.
+
 Python standard library only. No I/O in this module: it classifies and
 prepares headers, it never fetches.
 """
@@ -345,3 +360,41 @@ def strip_hotlink_headers(headers: Dict[str, str]) -> Dict[str, str]:
     _pop_case_insensitive(out, "Referer")
     _pop_case_insensitive(out, "Origin")
     return out
+
+
+# ---------------------------------------------------------------------------
+# Storage predicates (Phase-1 integration ruling, item 2)
+#
+# These bools — never the CATEGORY_LABELS letters — are the gate that decides
+# whether a URL may enter a playable cache row. Both return False for
+# CATEGORY_BRIDGE and CATEGORY_UNKNOWN, so a bridge/HTML landing page or an
+# unrecognised host can never be stored as a cached playable row.
+# ---------------------------------------------------------------------------
+
+
+def _to_classification(url_or_class, service: str = "") -> Classification:
+    if isinstance(url_or_class, Classification):
+        return url_or_class
+    return classify(str(url_or_class or ""), service)
+
+
+def is_direct_file(url_or_class, service: str = "") -> bool:
+    """True only for Category A (the URL names a direct-file host)."""
+    return _to_classification(url_or_class, service).category == CATEGORY_DIRECT_FILE
+
+
+def is_playable_category(url_or_class, service: str = "") -> bool:
+    """True for Category A and B (direct file or HLS/embed chain); False for
+    Category C (bridge) and for unknown hosts.
+
+    A False answer means: do NOT write this link into a playable cache row and
+    do NOT 302 a player at it — unwrap (bridge) or refuse (unknown) first.
+    """
+    return _to_classification(url_or_class, service).category in (
+        CATEGORY_DIRECT_FILE, CATEGORY_HLS_EMBED)
+
+
+def is_bridge_category(url_or_class, service: str = "") -> bool:
+    """True only for Category C — the URL is an HTML landing page that must
+    be unwrapped before it means anything."""
+    return _to_classification(url_or_class, service).category == CATEGORY_BRIDGE
