@@ -267,6 +267,75 @@ class TestConstraints(unittest.TestCase):
             resolved_cache.record_resolved_cache(conn, 1, file_resolve(), source="x")
 
 
+class TestViewerRouteContract(unittest.TestCase):
+    """These tests pin the SECURITY ORDERING of the two HTTP routes that read
+    the cache. The invariants are properties of viewer.py's request path:
+
+      * ``redact.link_is_adult`` must run BEFORE any ``lookup_cache`` call —
+        a hidden title must stay hidden from the cache exactly as it is from
+        the resolver, so a cached row can never answer for an adult link;
+      * the cache path is public-port-only (guarded by ``not full``) — the
+        operator port must keep seeing live resolver diagnostics;
+      * the download route asks for ``want="download"`` and re-checks
+        ``kind == "file"`` — a playlist row, however fresh, must never be
+        served as a single-file download; it falls through to the resolver;
+      * every cache call sits inside a ``try`` — a cache fault can only make
+        an answer slower, never different.
+
+    They read the source because instantiating the HTTP handler offline would
+    mock more machinery than the assertion is worth; if anyone reorders the
+    handler, these go red before a reviewer has to find it by eye.
+    """
+
+    VIEWER_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                               "viewer.py")
+
+    @classmethod
+    def _route_source(cls, route: str) -> str:
+        with open(cls.VIEWER_PATH, encoding="utf-8") as fh:
+            src = fh.read()
+        start = src.index(f'path == "{route}"')
+        end = src.index('\n        elif path ==', start)
+        return src[start:end]
+
+    @classmethod
+    def _lookup_at(cls, body: str) -> int:
+        # the call site, not the prose that mentions it in a comment
+        return body.index("resolved_cache.lookup_cache(")
+
+    def test_adult_gate_precedes_cache_lookup(self):
+        for route in ("/api/v1/stream", "/api/v1/download"):
+            with self.subTest(route=route):
+                body = self._route_source(route)
+                self.assertLess(body.index("link_is_adult"),
+                                self._lookup_at(body),
+                                f"{route}: the cache must never be consulted "
+                                f"before the adult gate has refused a hidden link")
+
+    def test_cache_lookup_is_public_port_only(self):
+        for route in ("/api/v1/stream", "/api/v1/download"):
+            with self.subTest(route=route):
+                body = self._route_source(route)
+                self.assertLess(body.index("if not full:"),
+                                self._lookup_at(body),
+                                f"{route}: the operator port must bypass the cache")
+
+    def test_download_route_refuses_playlist_rows(self):
+        body = self._route_source("/api/v1/download")
+        self.assertIn('want="download"', body,
+                      "the download route must ask the cache with the stage-2 contract")
+        self.assertIn('hit.get("kind") == "file"', body,
+                      "a cached playlist must fall through to the live resolver, "
+                      "never be served as a single-file download")
+
+    def test_cache_faults_are_wrapped(self):
+        for route in ("/api/v1/stream", "/api/v1/download"):
+            with self.subTest(route=route):
+                body = self._route_source(route)
+                self.assertIn("except Exception", body,
+                              f"{route}: cache errors must degrade to the old path")
+
+
 class TestEpochHygiene(unittest.TestCase):
     def test_all_stamps_are_epoch_real(self):
         """No localized timestamp strings anywhere: the v1 staleness check's
