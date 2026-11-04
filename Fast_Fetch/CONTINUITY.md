@@ -2303,3 +2303,34 @@ qoder12's `note_failure_from_probe` law (49feb8e) exactly:
 - Push mechanics: GIT_ASKPASS file via Write tool (printf traps documented above);
   token rotation is with the Emperor; NEVER expand a credential in any diagnostic.
 - Load was ~5 all night; disk 9.9 G free; no catalog copies, ever.
+
+### PICK-UP-COLD POINTERS (stand-down addendum, 2026-11-05 ~07:00, files as of 2f93ac1)
+
+Where a transport-cause failure enters the gate's negative-cache decision — all in
+`Fast_Fetch/single_flight.py` (q11 lane worktree `/tmp/q11_adult`, line numbers verified):
+- `:201`  in-flight raise → `transient("exception:TYPE")` — ambiguity is short-window.
+- `:74`   `classify_fail_cause(cause)` — THE cause-vs-verdict fork: int→`fail`
+          (endpoint answered, full adaptive) · TRANSPORT word→`transient` ·
+          None→`transient("ambiguous:absent_cause")` · unknown word→`fail`.
+- `:90`   `outcome_from_resolve(res)` — the boundary a wired viewer call would hit first;
+          `unprobed` checked before everything (unsupported class, `:88` region).
+- `:228`  `_settle()` `elif res.status == STATUS_TRANSIENT:` — where the window is
+          ACTUALLY decided: fixed `transient_ttl` (default 2.0 s, `__init__`
+          `transient_ttl: float = 2.0` ~`:140`), no strikes, and the cannot-erase-
+          an-unexpired-verdict guard; the adaptive `else` right after it is the
+          full-window path. `:45`/`:66` define `STATUS_TRANSIENT`/`transient()`.
+qoder12's counterpart (do NOT edit; read-only): `Fast_Fetch/resolved_cache.py` in
+lane_phase1, commit `49feb8e` — symbols `TRANSPORT_CAUSES` and
+`note_failure_from_probe` (my `:74` is the verbatim mirror; drift = my literal test
+at `TransientVsVerdictTests.test_cause_classification_pinned_to_qoder12_law` goes red).
+
+Reproduce cold (exact lines):
+    cd /tmp/q11_adult/Fast_Fetch && timeout 120 python3 -S test_single_flight.py        # 21 OK expected
+    cd /tmp/q11_adult/Fast_Fetch && timeout 120 python3 -S -m unittest -v test_single_flight.TransientVsVerdictTests   # the 7 cause-vs-verdict tests
+Mutation that proves :228 bites (restore with git checkout -- single_flight.py):
+    replace `elif res.status == STATUS_TRANSIENT:` with `elif False:` → transport tests
+    go red (window becomes 30 s adaptive).
+
+STANDING: no new behavioural work; viewer.py HELD; triplet behind load<3 + Crown word;
+50-socket stress NOT RUN; hard requirement PENDING from Crown = qoder12's rule-3
+literal-words on the gate OUTPUT ENVELOPE, to be applied before any viewer wiring.
