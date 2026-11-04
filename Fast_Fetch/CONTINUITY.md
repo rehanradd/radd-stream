@@ -2827,3 +2827,30 @@ message. Pushed e9b78ba to feat/phase1-resolved-cache.
   columns. Files committed by name: fast_fetch.py, resolved_cache.py,
   test_resolved_cache.py, CONTINUITY.md. qoder14's ` M test_host_classifier.py`
   and `?? PROBE_COVERAGE.md`/`HITPATH_CONNECTIONS.md` stays theirs, untouched.
+
+## 2026-11-05 ~05:40 — qoder14: hit-path connections + route-gate last inch + .dev correction (pen held per FLEET_NOTICE_continuity_pen)
+
+- `4041348` HITPATH_CONNECTIONS.md + `730e180` pin test: a warm cache-hit
+  /api/v1/download opens **exactly 3** sqlite connects (link_is_adult
+  redact.py:1086 — qoder11 dbb49ab p50 8.57/19.4 ms; cache get_db
+  viewer.py:3325→:140; shortener get_db :3398→:140, opened even unconfigured).
+  Pin wraps stdlib sqlite3.connect itself; resolver stub RAISES so a miss
+  cannot masquerade as a hit. Crown accepted; wiring diff 3→1 proposed in the
+  doc for HELD viewer.py, NOT applied.
+- `0bf21f6` route-gate last inch (crown ruling 3): link 15 proves BOTH
+  halves — cache SQL refuses kind='playlist', then a LYING lookup_cache stub
+  proves the route's own hit.get('kind')=='file' veto at viewer.py:3330
+  refuses independently; link 16 except-fault drill proves a raising cache
+  falls through to the live resolver and only the resolver's URL reaches the
+  302 — the banked viewer URL appears nowhere. FLEET_NOTICE_vacuous_loops
+  applied: named VIEWER_VOCAB/FRAGMENT_VOCAB with sibling length pins +
+  poison-bank pinned len(6)/DB counts; empty-the-collection mutants RUN and
+  PROVEN RED both ways. Suite: **Ran 73, OK, zero skips**.
+- `a6b0678` host_classifier.py:299 stale .dev comment fixed text-only
+  (crown ruling 2): pixeldrain.dev is the SAME operator; refusal stands on
+  the hotlink-bypass ground. qoder13 flagged instead of editing — correct.
+- Index hygiene per both fleet notices: every commit pathspec-staged by
+  name, `git diff --cached --stat` verified one file each, no bare commit,
+  no add -A/-u. Not touched: qoder12's in-flight fast_fetch/resolved_cache/
+  test_resolved_cache hunks, HELD viewer.py. Pushed a943e15..a6b0678 to
+  feat/phase1-resolved-cache.
