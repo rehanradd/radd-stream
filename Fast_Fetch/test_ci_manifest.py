@@ -28,6 +28,14 @@ The failure this exists to kill, in the order it was measured:
          trunk's 38-step file, and had it won a merge, trunk would have lost
          ~20 suites including adult guards — so the manifest must never be a
          subset of ``git show origin/master:.github/workflows/backend-ci.yml``.
+  3. Order qoder12_ci_manifest_widen closed the scope hole qoder14 proved:
+     the accounting globbed TOP LEVEL ONLY, so 19 tracked ``importers/``
+     suites — including the 171-test ``test_host_resolvers.py`` — were named
+     nowhere and nothing complained. Every test module TRACKED ANYWHERE under
+     ``Fast_Fetch`` must now have a real run step or an explicit named
+     ``EXCLUDED:`` line; the guard never auto-excludes (silence is the bug),
+     an unlisted module stays RED, and a bare ledger name can only account
+     for a top-level module — deeper ones must be excluded by PATH.
 
 Stdlib only. Reads files and runs read-only git queries; no network, no DB.
 """
@@ -54,7 +62,7 @@ MANIFEST_REF = os.environ.get("RADD_CI_MANIFEST_REF", "HEAD")
 RUN_STEP_RE = re.compile(r"^\s*run:\s*((?:time\s+)?python3 -S .*)$")
 MODULE_PATH_RE = re.compile(r"(Fast_Fetch/(?:importers/)?test_\w+\.py)")
 MODULE_RE = re.compile(r"^(?:time )?python3 -S Fast_Fetch/(?:importers/)?test_\w+\.py$")
-EXCLUDED_RE = re.compile(r"^\s*#\s*EXCLUDED:\s*(test_\w+\.py)\b")
+EXCLUDED_RE = re.compile(r"^\s*#\s*EXCLUDED:\s*((?:[a-z_]+/)?test_\w+\.py)\b")
 
 # Modules the crown ordered into CI (qoder12_cigate), including the two that
 # are red at this fork's base but green on trunk and must KEEP RUNNING
@@ -69,6 +77,11 @@ MANDATORY_RUN = (
     "test_ci_manifest.py",
     "test_evidence_writeback.py",
     "test_merge_catalogs.py",
+    # Promoted by order qoder12_ci_manifest_widen: AGENTS.md's standing
+    # push-gate resolver suite and its stream twin, both verified offline
+    # green on the lane (171 and 45 tests) before they became steps.
+    "test_host_resolvers.py",
+    "test_stream_resolvers.py",
 )
 
 
@@ -119,8 +132,53 @@ class TestCiManifest(unittest.TestCase):
                          "unlisted test module(s) — promote to a CI step or add "
                          "an 'EXCLUDED:' line with a reason: " + ", ".join(missing))
 
+    def _tracked_test_mods(self):
+        """Every test module tracked ANYWHERE under Fast_Fetch, as paths
+        relative to it, in the commit CI checks out (MANIFEST_REF). Tracked,
+        not disk: the tree is what CI gets. git unreadable FAILS loudly via
+        _tree_files — same law as the tracked-module check."""
+        files = self._tree_files(MANIFEST_REF, "tracked-module accounting")
+        rels = [p[len("Fast_Fetch/"):] for p in files
+                if p.startswith("Fast_Fetch/") and p.endswith(".py")
+                and p.rsplit("/", 1)[1].startswith("test_")]
+        return sorted(rels)
+
+    def test_every_tracked_test_module_anywhere_is_accounted_for(self):
+        """Order qoder12_ci_manifest_widen (2026-11-05). The accounting above
+        globbed TOP LEVEL ONLY — which is exactly why 19 tracked importers/
+        suites, including the 171-test test_host_resolvers.py, were named
+        NOWHERE and nothing complained. Now a tracked test module at ANY
+        depth under Fast_Fetch must have a real run step or an explicit
+        EXCLUDED: line, and having neither fails RED. Two hard laws:
+          * NO AUTO-EXCLUSION: this check never consults a pattern or a
+            directory rule; only a named, human-written ledger line counts.
+            A silent exclusion IS the bug.
+          * A BARE ledger name accounts for the TOP-LEVEL module only; a
+            module below Fast_Fetch must be excluded by its PATH, so a 2026
+            fossil line can never silently swallow a new same-named suite.
+        The top-level disk test above stays: untracked-but-present files are
+        its job (a clean checkout would 404 them); this test's job is the
+        tree CI actually runs."""
+        run_rels = {p[len("Fast_Fetch/"):] for p in self.run_paths}
+        excluded = set(self.excluded)
+        unaccounted = []
+        for rel in self._tracked_test_mods():
+            if rel in run_rels:
+                continue
+            if rel in excluded:
+                continue          # bare ledger name == top-level rel; path
+                                  # ledger line == deeper module's rel
+            unaccounted.append(rel)
+        self.assertEqual(unaccounted, [],
+                         "tracked test module(s) with NEITHER a run step NOR an "
+                         "EXCLUDED line — a human must choose, by name, per "
+                         "module (never by pattern): " + ", ".join(unaccounted))
+
     def test_no_overlap_between_run_and_excluded(self):
-        both = {os.path.basename(p) for p in self.run_paths} & set(self.excluded)
+        run_rels = {p[len("Fast_Fetch/"):] for p in self.run_paths}
+        both = run_rels & set(self.excluded)
+        bare = {e for e in self.excluded if "/" not in e}
+        both |= {r for r in run_rels if "/" not in r and r in bare}
         self.assertEqual(both, set(), "a module cannot be both run and excluded")
 
     def test_mandated_modules_are_run_not_droppable(self):
@@ -167,12 +225,36 @@ class TestCiManifest(unittest.TestCase):
     def test_every_excluded_name_exists_somewhere(self):
         """The other drift direction: an EXCLUDED: line pointing at a file
         that exists on neither disk nor trunk is a fossil of a deleted test
-        (or a typo) and must not linger in the manifest."""
+        (or a typo) and must not linger in the manifest. Path lines (added by
+        the widen order) are checked AS PATHS — `importers/test_x.py` must
+        live at that path somewhere; a bare name may only ever have meant
+        top-level, matching the accounting rule that a bare line cannot
+        exclude a deeper module."""
         disk = set(self.top_level)
-        trunk_names = {os.path.basename(p)
-                       for p in self._tree_files(TRUNK_REF, "excluded-ghost check")}
-        ghost = sorted(m for m in set(self.excluded)
-                       if m not in disk and m not in trunk_names)
+        disk_paths = {os.path.relpath(p, os.path.join(ROOT, "Fast_Fetch"))
+                      for p in glob.glob(os.path.join(HERE, "**", "test_*.py"),
+                                         recursive=True)}
+        # MANIFEST_REF counts too: an author may add a module and its ledger
+        # line in the SAME candidate commit and prove it with
+        # RADD_CI_MANIFEST_REF before the ref moves — the file exists in that
+        # tree even when this worktree does not carry it yet.
+        manifest_rels = {p[len("Fast_Fetch/"):]
+                         for p in self._tree_files(MANIFEST_REF,
+                                                   "excluded-ghost check")
+                         if p.startswith("Fast_Fetch/")}
+        trunk_files = self._tree_files(TRUNK_REF, "excluded-ghost check")
+        trunk_rels = {p[len("Fast_Fetch/"):] for p in trunk_files
+                      if p.startswith("Fast_Fetch/")}
+        trunk_names = {os.path.basename(p) for p in trunk_rels}
+        ghost = []
+        for m in sorted(set(self.excluded)):
+            if "/" in m:
+                if (m not in disk_paths and m not in trunk_rels
+                        and m not in manifest_rels):
+                    ghost.append(m)
+            elif (m not in disk and m not in trunk_names
+                  and m not in {os.path.basename(p) for p in manifest_rels}):
+                ghost.append(m)
         self.assertEqual(ghost, [],
                          "EXCLUDED lines naming a file on neither disk nor "
                          + TRUNK_REF + ": " + ", ".join(ghost))
