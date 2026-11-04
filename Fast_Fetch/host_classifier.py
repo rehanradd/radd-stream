@@ -427,9 +427,75 @@ def _to_classification(url_or_class, service: str = "") -> Classification:
     return classify(str(url_or_class or ""), service)
 
 
+#: URL path segments that name an HTML viewer/player PAGE, never bytes.
+_VIEWER_SEGMENTS = frozenset({"view", "preview", "edit", "folder", "folders"})
+
+#: Hosts that serve BOTH human pages and file bytes, so the path decides.
+#: Pure object stores (r2.cloudflarestorage, firebasestorage, CDNs) serve any
+#: key as bytes — rejecting a segment like "folder" there would kill
+#: legitimate 24 h files over an object-name coincidence (measured blowback:
+#: bucket.r2.dev/folder/clip.mp4). pixeldrain's /u/ page-form stays trusted
+#: because prepare_request rewrites it to /api/file/ BEFORE any banking, and
+#: stage-2 probe acceptance gates the rest.
+_PAGE_CAPABLE_HOSTS = ("drive.google.com", "docs.google.com", "mega.nz")
+
+
+def _direct_file_shape_ok(url: str) -> bool:
+    """Shape gate for the horizon: does this URL NAME a GET that yields bytes?
+
+    A trusted direct-file HOST is necessary but not sufficient — the same host
+    serves player pages and client-side-encrypted shares, and banking those
+    buys a landing page the permanent-file trust (Crown order qoder14_viewerA,
+    after the hubcloud HIGH class: drive ``/file/d/<id>/view`` and mega
+    ``/file/<id>#key`` were earning category A + kind 'file').
+
+    Decisions, each justified:
+      * ANY fragment → False, on EVERY host. The fragment is never sent to the
+        server, so a URL whose payload needs one (mega's AES key after '#')
+        cannot replay to bytes under any header set, and a fragment-bearing
+        cache row also risks leaking the key through a public play_url.
+      * mega.nz → False for every path: all mega downloads require the
+        fragment key; the host can NEVER serve a naive byte GET.
+      * viewer segments (view/preview/edit/folder) → False, but ONLY on
+        page-capable hosts (see _PAGE_CAPABLE_HOSTS). ``drive…/file/d/x/view``
+        is a player page by definition.
+      * drive.google.com/uc?export=download&id= → KEPT True: unlike /view it
+        returns bytes (200 or a 302 to them); the large-file confirmation
+        interstitial is HTML, but stage-2 probe acceptance runs before any
+        banking, so a non-answering uc URL never enters the cache at all.
+        (``/open?id=`` judged the same way — both are legacy byte-redirect
+        endpoints, unlike the /view player surface.)
+    Empty url (label-only checks, e.g. resolved_cache's service half of the
+    AND rule) passes — this gate is about URL shape, not the label.
+    """
+    if not url:
+        return True
+    try:
+        split = urllib.parse.urlsplit(url)
+    except ValueError:
+        return False
+    if split.fragment:
+        return False
+    host = (split.hostname or "").lower()
+    if host == "mega.nz" or host.endswith(".mega.nz"):
+        return False   # every mega download needs the fragment key; no naive
+                       # byte GET exists on this host, with ANY path (§ above)
+    if any(host == d or host.endswith("." + d) for d in _PAGE_CAPABLE_HOSTS):
+        segments = {s for s in split.path.lower().split("/") if s}
+        # folderview/galleryview/fileview are the same HTML surface as /view
+        if segments & _VIEWER_SEGMENTS or any(
+                s.endswith("view") or s.endswith("preview") for s in segments):
+            return False
+    return True
+
+
 def is_direct_file(url_or_class, service: str = "") -> bool:
-    """True only for Category A (the URL names a direct-file host)."""
-    return _to_classification(url_or_class, service).category == CATEGORY_DIRECT_FILE
+    """True only for Category A: the URL names a direct-file host AND its
+    shape is a replayable byte GET (see _direct_file_shape_ok)."""
+    cls = _to_classification(url_or_class, service)
+    if cls.category != CATEGORY_DIRECT_FILE:
+        return False
+    return _direct_file_shape_ok(cls.url or "")
 
 
 def is_playable_category(url_or_class, service: str = "") -> bool:

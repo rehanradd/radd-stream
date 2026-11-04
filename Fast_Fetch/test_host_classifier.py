@@ -449,8 +449,9 @@ class TestCategoryACrossCheckWithResolvedCache(unittest.TestCase):
     CROSS_CHECK = (
         ("pixeldrain.com", "https://pixeldrain.com/u/AbC", "pixeldrain", "A",
          "label+host agree"),
-        ("drive.google.com", "https://drive.google.com/file/d/1x/view",
-         "google_cdn", "A", "label+host agree"),
+        ("drive.google.com",
+         "https://drive.google.com/uc?export=download&id=1x",
+         "google_cdn", "A", "label+host agree, byte path"),
         ("googleusercontent.com",
          "https://video-downloads.googleusercontent.com/abc", "google_cdn",
          "A", "label+host agree"),
@@ -485,8 +486,10 @@ class TestCategoryACrossCheckWithResolvedCache(unittest.TestCase):
         ("dailyuploads.net", "https://dailyuploads.net/abc", "dailyuploads",
          "A", "label+host agree"),
         ("frdl.to", "https://frdl.to/abc", "frdl", "A", "label+host agree"),
-        ("mega.nz", "https://mega.nz/file/abc", "mega", "A",
-         "label+host agree"),
+        ("mega.nz", "https://mega.nz/file/abc#keyfrag", "mega", "B",
+         "SHAPE-REJECTED (order qoder14_viewerA): mega downloads need the "
+         "client-side fragment key, which never reaches the server — even "
+         "label+host agreement must not earn the 24h horizon."),
     )
 
     # Degenerate single-evidence rows: each must cap at B, by verdict above.
@@ -518,11 +521,15 @@ class TestCategoryACrossCheckWithResolvedCache(unittest.TestCase):
     def test_label_and_host_agreement_mints_horizon_a(self):
         for name, url, service, expected, why in self.CROSS_CHECK:
             with self.subTest(name=name):
-                self.assertTrue(hc.is_direct_file(url),
-                                f"{name} must be Category A kind")
+                # The label half is always trusted-kind (that is the row's
+                # point); the URL half is shape-checked by qoder14_viewerA's
+                # gate, so rows whose sample URL is a viewer/fragment shape
+                # correctly cap at B despite label+host agreement.
                 self.assertTrue(hc.is_direct_file("", service),
                                 f"{name}: service {service!r} must map "
                                 "direct_file in _SERVICE_TABLE")
+                self.assertEqual(hc.is_direct_file(url), expected == "A",
+                                 f"{name}: {why}")
                 self.assertEqual(
                     _rc._derive_category({"service": service}, url), expected,
                     why)
@@ -746,6 +753,135 @@ class TestServiceLabelSpellings(unittest.TestCase):
             with self.subTest(label=label):
                 c = hc.classify("", service=label)
                 self.assertEqual(c.category, expect)
+
+
+@unittest.skipUnless(HAS_RC, _RC_REASON)
+class TestViewerShapeGate(unittest.TestCase):
+    """CROWN ORDER qoder14_viewerA (2026-11-05).
+
+    Volume named explicitly (test 5): this gate governs the two families
+    measured in the coverage pass — google_cdn 116,604 links + mega 68,502
+    links = 185,106 rows. Before the gate, ``drive…/file/d/x/view`` and
+    ``mega.nz/file/x#key`` passed is_direct_file, banked horizon A (24 h)
+    and were offered as kind='file' by /api/v1/download — the same class as
+    the hubcloud HIGH defect, ~185k links instead of one family. If someone
+    re-widens the gate, THESE subTests go red before that can miscache again.
+    """
+
+    VIEWER = "https://drive.google.com/file/d/1abc/view"
+    MEGA_KEY = "https://mega.nz/file/AbCd#AESkeymaterial"
+    PIXELDRAIN_REAL = "https://pixeldrain.com/u/abc123"
+    EXT_REAL = "https://pub-abc.r2.dev/movies/folder/clip.mp4"
+
+    def test_viewer_paths_rejected(self):
+        for url in (self.VIEWER,
+                    "https://drive.google.com/open?id=x&foo=bar#frag",
+                    "https://drive.google.com/folderview?id=x",
+                    "https://drive.google.com/fileview/x",
+                    "https://docs.google.com/preview/x"):
+            with self.subTest(url=url):
+                self.assertFalse(hc.is_direct_file(url))
+                self.assertFalse(hc.is_direct_file(url, "google_cdn"))
+
+    def test_any_fragment_rejected_on_any_host(self):
+        for url in (self.MEGA_KEY, self.PIXELDRAIN_REAL + "#note",
+                    "https://pub-abc.r2.dev/movie.mp4#t=0,60"):
+            with self.subTest(url=url):
+                self.assertFalse(hc.is_direct_file(url))
+
+    def test_mega_never_replayable_shape(self):
+        self.assertFalse(hc.is_direct_file("https://mega.nz/file/AbCd"))
+        # KIND stays honest: the host letter is still A for callers that ask
+        # "what family is this" — only the byte-replay predicate says False.
+        self.assertEqual(hc.classify("https://mega.nz/file/AbCd#k").category,
+                         hc.CATEGORY_DIRECT_FILE)
+
+    def test_real_direct_files_STILL_pass_the_gate(self):
+        # Regression the other way (order: "I will reject a fix that
+        # downgrades everything to B"): genuine byte GETs keep A.
+        self.assertTrue(hc.is_direct_file(self.PIXELDRAIN_REAL))
+        self.assertTrue(hc.is_direct_file(
+            "https://drive.google.com/uc?export=download&id=1abc"))
+        self.assertTrue(hc.is_direct_file(
+            "https://video-downloads.googleusercontent.com/ADGPM2abc"))
+        # Object-storage hosts are NOT page-capable: /folder//preview/ as an
+        # object key must not be penalised (measured blowback when the rule
+        # was host-agnostic).
+        self.assertTrue(hc.is_direct_file(self.EXT_REAL))
+        self.assertTrue(hc.is_direct_file(
+            "https://x.r2.cloudflarestorage.com/preview/a.mp4"))
+        # Label-only checks (the service half of the AND rule) see no URL
+        # shape and must keep passing.
+        self.assertTrue(hc.is_direct_file("", "google_cdn"))
+        self.assertTrue(hc.is_direct_file("", "mega"))
+
+    def _bank(self, conn, link_id, url, service, now):
+        _rc.record_resolved_cache(conn, link_id,
+                                  {"url": url, "service": service},
+                                  now=now)
+        return conn.execute(
+            "SELECT category, reverify_after - resolved_at AS horizon, "
+            "kind, url FROM resolved_cache WHERE link_id = ?",
+            (link_id,)).fetchone()
+
+    def test_horizon_deltas_measured_not_just_letters(self):
+        # Assert the ACTUAL reverify_after delta (order item 2), not letters.
+        import sqlite3 as _sql
+        import time as _t
+        conn = _sql.connect(":memory:")
+        self.addCleanup(conn.close)
+        _rc.init_resolved_cache(conn)
+        now = _t.time()
+        v = self._bank(conn, 1, self.VIEWER, "google_cdn", now)
+        self.assertEqual(v[0], "B")
+        self.assertLess(v[1], 7 * 3600, "viewer page must sit on the ~6h cap")
+        self.assertGreater(v[1], 5 * 3600)
+        m = self._bank(conn, 2, self.MEGA_KEY, "mega", now)
+        self.assertEqual(m[0], "B")
+        self.assertLess(m[1], 7 * 3600)
+        p = self._bank(conn, 3, self.PIXELDRAIN_REAL, "pixeldrain", now)
+        self.assertEqual(p[0], "A")
+        self.assertGreater(p[1], 23 * 3600,
+                           "a real direct file must keep the 24h horizon")
+        self.assertLessEqual(p[1], 24 * 3600)
+
+    def test_download_gate_refuses_viewer_shaped_rows(self):
+        # Route-level in the sense the route decides: /api/v1/download calls
+        # lookup_cache(want="download"), whose SQL requires kind='file'.
+        # The HORIZON half (B/6h) works today; the KIND half is qoder12's
+        # _derive_kind change (handed to crown) — until that lands, a
+        # viewer row is still kind='file' and the gate lets it through, so
+        # this is marked expectedFailure ON PURPOSE. Remove the marker when
+        # the handoff lands; its XPASS is the acceptance signal.
+        self.skipTest("covered by test_kind_gate_expectations below")
+
+    @unittest.expectedFailure
+    def test_kind_gate_expectations(self):
+        # THE HANDOFF ASSERTIONS (resolved_cache._derive_kind + fragment
+        # handling — qoder12's file, NOT edited here):
+        import sqlite3 as _sql
+        import time as _t
+        conn = _sql.connect(":memory:")
+        self.addCleanup(conn.close)
+        _rc.init_resolved_cache(conn)
+        now = _t.time()
+        v = self._bank(conn, 10, self.VIEWER, "google_cdn", now)
+        self.assertNotEqual(v[2], "file",
+                            "an HTML viewer page is not a single-file "
+                            "download candidate (order qoder14_viewerA #2)")
+        m = self._bank(conn, 11, self.MEGA_KEY, "mega", now)
+        self.assertNotEqual(m[2], "file")
+        self.assertNotIn("#", m[3],
+                         "fragment (mega key) must never be handed out in a "
+                         "banked/public play_url (order item 3)")
+        hit = _rc.lookup_cache(conn, 10, "download", now=now)
+        self.assertIsNone(hit,
+                          "/api/v1/download's own gate: a viewer-shaped row "
+                          "must not answer the download route")
+        # and the real file still passes the same route gate:
+        real = self._bank(conn, 12, self.PIXELDRAIN_REAL, "pixeldrain", now)
+        self.assertEqual(real[2], "file")
+        self.assertIsNotNone(_rc.lookup_cache(conn, 12, "download", now=now))
 
 
 if __name__ == "__main__":
