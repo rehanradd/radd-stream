@@ -1874,3 +1874,38 @@ Residue: one early post (`Aghori Baba`) has no releases, carried over from the f
 lane — so `HEAD:master` is intentionally not pushed. The lane's commits are pushed to
 `refs/heads/qoder2-fleet-20261029` instead; master integration of the doc conflicts is
 still open.
+
+## Session 2026-11-04 (phase1 lane) — host classifier + PixelDrain header sanitizer
+**Lane:** `/tmp/lane_phase1`, branch `feat/phase1-resolved-cache` (other lanes'
+uncommitted work in the tree — `viewer.py`, `resolved_cache.py`,
+`prefetch_worker.py` — was left untouched; only my two files were staged).
+
+**Shipped `7812fd1`** — `Fast_Fetch/host_classifier.py` + `test_host_classifier.py`,
+stdlib only, no I/O:
+- Categories per the Phase 1 brief: A direct file (R2, fastdl.beer, G-Drive family,
+  GoFile, PixelDrain, classic file hosts), B HLS/embed (Vidrift, StreamHG/hanerix,
+  Vidly/Filmu, Modiplay, Vidbolt, streamtape/mixdrop/dood/voe family), C bridge
+  (HubCloud, NexDrive, MobileJSR, Linkszilla, GreenMotors/Linkrit, GDFlix/GDTot,
+  FileBee/FilePress, VCloud, direct-cloud). Unrecognised hosts are `unknown`, never
+  auto-blessed as direct (mirrors `is_direct_media_url`'s evidence rule).
+- **Classify by host, label only as fallback** ("labels lie": gd-mirror ≈ 87.7k rows
+  are iqsmart pages) and `backend_of()` returns the dedup key so modiplay/bingr and
+  vidrift, modiplay/streamhg and iqsmart count as ONE backup per title (vidrift.md /
+  modiplay.md rank-by-backend rule).
+- **PixelDrain hotlink fix** (measured 2026-11-04 browser `hotlink_detected`):
+  `prepare_request()` rewrites `/u|/d/<id>` → `/api/file/<id>` (same id regex as
+  `fast_fetch.unwrap_pixeldrain`) and strips foreign `Referer`/`Origin`
+  case-insensitively; a pixeldrain-own Referer is kept. Vidrift gets the hard rule
+  `Referer: https://embed.vidrift.net/` (403 without it — proven).
+
+**Gate:** `test_host_classifier` 33/33 new; `test_database` 76, `test_vidout` 6,
+`test_host_resolvers` 171 — all OK, no regressions.
+
+**Push state:** `feat/phase1-resolved-cache` **pushed to GitHub as a new branch**
+at `7812fd1` via the askpass helper — the token that 401'd at `bf9e565` now writes.
+Not merged to master; the resolved-cache lane's uncommitted files still live in
+this worktree and integration is their owner's call.
+
+**Next for this lane:** wire `prepare_request()` into the resolver/probe fetch
+paths (`fast_fetch.resolve_live_source`, `link_health` probes) so the PixelDrain
+and Vidrift rules are applied at request time, not just available as a helper.
