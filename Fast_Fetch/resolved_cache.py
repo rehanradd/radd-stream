@@ -17,9 +17,11 @@ gate) or after a pool worker probes it.  Unprobed scraper defaults never enter
 this table; that is the whole point (see the 4.0M-`active`-vs-21-probed audit).
 
 Category / kind are ORTHOGONAL, deliberately:
-  * ``category`` — who minted the URL: ``'A'`` a direct-CDN file (pixeldrain,
-    fsl_r2, google_cdn, hubcloud, fastdl), ``'B'`` a packer/embed (streamhg,
-    vidrift, vidly, vidbolt, mxdrop, pkembed...). It chooses the freshness cap.
+  * ``category`` — who minted the URL: ``'A'`` a direct-CDN file host that
+    ``host_classifier.is_direct_file`` recognizes by BOTH service label and
+    URL host (pixeldrain, r2/google_cdn, fastdl.beer — never hubcloud, whose
+    unwrap fails open onto an HTML page), ``'B'`` everything the classifier
+    does not vouch for as a direct file. It chooses the freshness cap.
   * ``kind`` — what the answer *is*: ``'file'`` or ``'playlist'``. mxdrop and
     pkembed are category B but sign category-A-shaped *file* URLs, and the
     stage-2 rule "a playlist is never a download" is enforced on ``kind``.
@@ -65,11 +67,7 @@ HEURISTIC_CAP_PERMANENT_SECONDS = 24 * 3600.0
 #: revoke mid-window; only the pool re-probe refreshes it).
 POOL_RECHECK_SECONDS = 24 * 3600.0
 
-#: service labels (download_sources.service) that name a direct-CDN file host.
-_CATEGORY_A_SERVICES = {
-    "pixeldrain", "fsl_r2", "google_cdn", "hubcloud", "hubcloud_10g",
-    "fastdl", "fastdl-beer", "direct-cloud", "directcloud", "gdmirror",
-}
+#: Playlist media types — kind derivation only.
 _PLAYLIST_MIMES = ("application/vnd.apple.mpegurl", "application/x-mpegurl",
                    "audio/mpegurl", "application/dash+xml")
 
@@ -131,19 +129,31 @@ def _derive_kind(data: dict, url: str) -> str:
 
 
 def _derive_category(data: dict, url: str) -> str:
-    service = (data.get("service") or "").lower()
-    if service in _CATEGORY_A_SERVICES:
-        return "A"
-    host = (urllib.parse.urlsplit(url).hostname or "").lower()
-    a_markers = ("pixeldrain.com", "/api/file/", "fastdl", "r2.dev",
-                 "storage.googleapis", "fsl_ae", "fsl_r2", "hubcloud")
-    if service.startswith(("hubcloud", "fastdl", "pixeldrain", "gdmirror")):
-        return "A"
-    if any(m in host or m in url for m in a_markers):
-        return "A"
-    # Unknown provenance is trusted like the short-lived packers, not like a
-    # permanent file host: category B, capped hard.
-    return "B"
+    """Cache horizon A only when BOTH hold — this is the Crown-Prince HIGH-fix:
+
+      1. the service label is itself a trusted direct-file kind, per
+         ``host_classifier`` (the single authority — this module keeps no host
+         list of its own; the taxonomy-collision ruling says kind letters and
+         horizon letters are decided by predicates, not by duplicated tables);
+      2. the resolved URL's HOST names a direct-file host (``is_direct_file``).
+
+    A service name alone no longer mints A. That was the defect: the HubCloud
+    unwrap (``fast_fetch.unwrap_hubcloud``) fails open — it hands back the
+    HTML landing page with ``service="hubcloud", is_temporary=0`` — and the
+    old marker list gave that bridge 24h of permanent-file trust. A bridge,
+    a drive-viewer page, or an unrecognised host now caps at the 6h
+    temporary horizon, the safe direction.
+    """
+    service = (data.get("service") or "").strip().lower()
+    if not service:
+        return "B"
+    try:
+        import host_classifier
+    except Exception:      # noqa: BLE001 — degraded: trust nothing, cap B
+        return "B"
+    if not host_classifier.is_direct_file("", service):
+        return "B"
+    return "A" if host_classifier.is_direct_file(url) else "B"
 
 
 def _epoch(value) -> float | None:

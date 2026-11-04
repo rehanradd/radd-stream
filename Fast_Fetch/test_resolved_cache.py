@@ -336,6 +336,104 @@ class TestViewerRouteContract(unittest.TestCase):
                               f"{route}: cache errors must degrade to the old path")
 
 
+class TestCrownPrinceCategoryHardening(unittest.TestCase):
+    """HIGH-fix (/tmp/crown_orders/qoder12.md): fast_fetch.unwrap_hubcloud
+    FAILS OPEN — it hands back the raw HTML landing page with
+    service="hubcloud", is_temporary=0. The old marker list minted that a
+    category-A permanent file with 24h of trust, and the cache then 302'd
+    every player at a bridge for a day. Category A now requires BOTH a
+    trusted direct-file service label AND a direct-file URL host, with
+    host_classifier.is_direct_file as the single authority."""
+
+    PERMANENT = resolved_cache.HEURISTIC_CAP_PERMANENT_SECONDS
+    TEMPORARY = resolved_cache.HEURISTIC_CAP_TEMPORARY_SECONDS
+
+    def _recorded(self, conn, link_id, data, now):
+        resolved_cache.record_resolved_cache(conn, link_id, data, now=now)
+        return conn.execute(
+            "SELECT category, reverify_after - resolved_at FROM resolved_cache "
+            "WHERE link_id = ?", (link_id,)).fetchone()
+
+    def test_order_measured_cases_all_denied_a(self):
+        """The four lines the Crown Prince measured against the old module."""
+        cases = [
+            ({"service": "hubcloud"}, "https://hubcloud.foo/dr/xyz"),
+            ({}, "https://hubcloud.foo/d/abc"),
+            ({}, "https://hubcloud.io/file/1"),
+            ({}, "https://drive.google.com/file/d/x/view"),
+        ]
+        for data, url in cases:
+            with self.subTest(service=data.get("service"), url=url):
+                self.assertEqual(resolved_cache._derive_category(data, url), "B")
+
+    def test_hubcloud_landing_never_gets_24h_horizon(self):
+        conn = fresh_conn()
+        now = time.time()
+        for path in ("/dr/xyz", "/drive/ABC123", "/d/abc"):
+            row = self._recorded(
+                conn, 1, {"url": f"https://hubcloud.foo{path}",
+                          "service": "hubcloud", "is_temporary": False,
+                          "mime_type": "text/html"}, now)
+            with self.subTest(path=path):
+                self.assertEqual(row[0], "B")
+                self.assertLess(row[1], self.TEMPORARY + 1,
+                                "a bridge-shaped URL must cap at the 6h "
+                                "temporary horizon, never 24h")
+
+    def test_failed_unwrap_stored_with_temporary_cap(self):
+        """The exact fail-open answer unwrap_hubcloud returns for a non-gpdl
+        URL: the landing page itself, service stamped hubcloud, not marked
+        temporary. Stored is fine — but only ever trusted for 6h, not a day."""
+        conn = fresh_conn()
+        now = time.time()
+        row = self._recorded(conn, 42, {
+            "url": "https://hubcloud.bar/drive/HB789", "service": "hubcloud",
+            "is_temporary": False, "mime_type": "video/mp4",  # even a lying mime
+        }, now)
+        self.assertEqual(row[0], "B")
+        self.assertAlmostEqual(row[1], self.TEMPORARY - resolved_cache.REVERIFY_MARGIN_SECONDS,
+                               delta=2)
+        self.assertLess(row[1], self.PERMANENT / 2)
+
+    def test_service_label_alone_is_not_sufficient(self):
+        conn = fresh_conn()
+        now = time.time()
+        # trusted direct-file label on an unrecognised host
+        row = self._recorded(conn, 1, {"url": "https://weird.example/v.mp4",
+                                       "service": "pixeldrain"}, now)
+        self.assertEqual(row[0], "B")
+        # trusted host with no service marker at all
+        row = self._recorded(conn, 2, {"url": "https://pixeldrain.com/api/file/x"}, now)
+        self.assertEqual(row[0], "B")
+
+    def test_genuine_direct_files_keep_24h_trust(self):
+        conn = fresh_conn()
+        now = time.time()
+        for link_id, url, service in (
+            (1, "https://pixeldrain.com/api/file/s2yMcLkb", "pixeldrain"),
+            (2, "https://bucket.r2.dev/movie.mp4", "fsl_r2"),
+            (3, "https://video.x.googleusercontent.com/videoplay?id=1", "google_cdn"),
+            (4, "https://dl.fastdl.beer/file/abc.mp4", "fastdl"),
+        ):
+            row = self._recorded(conn, link_id, {"url": url, "service": service,
+                                                 "mime_type": "video/mp4"}, now)
+            with self.subTest(url=url):
+                self.assertEqual(row[0], "A")
+                self.assertAlmostEqual(row[1],
+                                       self.PERMANENT - resolved_cache.REVERIFY_MARGIN_SECONDS,
+                                       delta=2)
+
+    def test_host_classifier_is_the_single_authority(self):
+        """No duplicated host table survives in resolved_cache: the module
+        must not carry _CATEGORY_A_SERVICES or substring marker lists."""
+        with open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                               "resolved_cache.py"), encoding="utf-8") as fh:
+            src = fh.read()
+        self.assertNotIn("_CATEGORY_A_SERVICES", src)
+        self.assertNotIn('a_markers', src)
+        self.assertIn("host_classifier.is_direct_file", src)
+
+
 class TestEpochHygiene(unittest.TestCase):
     def test_all_stamps_are_epoch_real(self):
         """No localized timestamp strings anywhere: the v1 staleness check's
