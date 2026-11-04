@@ -3234,6 +3234,19 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 except Exception:      # noqa: BLE001
                     pass
 
+            # The measured-dead counterpart of the bank above: the resolver
+            # just PROBED this link and found nothing playable (or only a
+            # stale fallback) — that is exactly the evidence the cache's
+            # failure circuit reads. It can only make future answers refuse a
+            # dead row; it never changes this response.
+            elif not full:
+                try:
+                    import resolved_cache
+                    with get_db() as conn:
+                        resolved_cache.note_failure(conn, int(source_id))
+                except Exception:      # noqa: BLE001
+                    pass
+
             if res.get("success") and res.get("url"):
                 if redirect_flag in ("1", "true", "yes"):
                     # The player follows this and gets bytes; the VM moves none of
@@ -3348,6 +3361,16 @@ class DashboardHandler(BaseHTTPRequestHandler):
                         with get_db() as conn:
                             resolved_cache.record_resolved_cache(
                                 conn, int(source_id), res)
+                    except Exception:      # noqa: BLE001
+                        pass
+                elif not full:
+                    # Measured-dead evidence for the failure circuit — same
+                    # rule as the stream route: only a PROBED failure counts,
+                    # and it can never change this answer.
+                    try:
+                        import resolved_cache
+                        with get_db() as conn:
+                            resolved_cache.note_failure(conn, int(source_id))
                     except Exception:      # noqa: BLE001
                         pass
 

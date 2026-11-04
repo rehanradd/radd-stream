@@ -47,6 +47,7 @@ __all__ = [
     "init_resolved_cache",
     "lookup_cache",
     "record_resolved_cache",
+    "note_failure",
     "REVERIFY_MARGIN_SECONDS",
     "MAX_FAIL_COUNT",
 ]
@@ -71,28 +72,35 @@ POOL_RECHECK_SECONDS = 24 * 3600.0
 _PLAYLIST_MIMES = ("application/vnd.apple.mpegurl", "application/x-mpegurl",
                    "audio/mpegurl", "application/dash+xml")
 
-_DDL = """
-CREATE TABLE IF NOT EXISTS resolved_cache (
-    link_id           INTEGER PRIMARY KEY,        -- download_sources.id
-    url               TEXT NOT NULL,
-    category          TEXT NOT NULL CHECK (category IN ('A','B')),
-    kind              TEXT NOT NULL CHECK (kind IN ('file','playlist')),
-    mime_type         TEXT,
-    file_size_bytes   INTEGER,
-    resolved_at       REAL NOT NULL,              -- epoch seconds (time.time)
-    expires_at        REAL,                       -- epoch; NULL = never measured
-    reverify_after    REAL NOT NULL,              -- hit is valid while now < this
-    is_resumable      INTEGER NOT NULL DEFAULT 0 CHECK (is_resumable IN (0,1)),
-    http_status       INTEGER,
-    source            TEXT NOT NULL DEFAULT 'jit'
-                          CHECK (source IN ('pool','jit')),
-    ip_bound          INTEGER CHECK (ip_bound IN (0,1)),   -- NULL = untested
-    fail_count        INTEGER NOT NULL DEFAULT 0
-);
-CREATE INDEX IF NOT EXISTS idx_rc_reverify ON resolved_cache(reverify_after);
-CREATE INDEX IF NOT EXISTS idx_rc_expiry
-    ON resolved_cache(expires_at) WHERE expires_at IS NOT NULL;
-"""
+#: One statement per entry — NEVER conn.executescript(): it issues an
+#: implicit COMMIT first, which would hijack whatever the calling transaction
+#: had pending on this shared connection (crown order qoder12_addendum,
+#: defect 1; the record path's "the caller's transaction owns it" contract
+#: depends on every statement here running WITHOUT committing).
+_DDL_STATEMENTS = (
+    """
+    CREATE TABLE IF NOT EXISTS resolved_cache (
+        link_id           INTEGER PRIMARY KEY,        -- download_sources.id
+        url               TEXT NOT NULL,
+        category          TEXT NOT NULL CHECK (category IN ('A','B')),
+        kind              TEXT NOT NULL CHECK (kind IN ('file','playlist')),
+        mime_type         TEXT,
+        file_size_bytes   INTEGER,
+        resolved_at       REAL NOT NULL,              -- epoch seconds (time.time)
+        expires_at        REAL,                       -- epoch; NULL = never measured
+        reverify_after    REAL NOT NULL,              -- hit is valid while now < this
+        is_resumable      INTEGER NOT NULL DEFAULT 0 CHECK (is_resumable IN (0,1)),
+        http_status       INTEGER,
+        source            TEXT NOT NULL DEFAULT 'jit'
+                              CHECK (source IN ('pool','jit')),
+        ip_bound          INTEGER CHECK (ip_bound IN (0,1)),   -- NULL = untested
+        fail_count        INTEGER NOT NULL DEFAULT 0
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_rc_reverify ON resolved_cache(reverify_after)",
+    ("CREATE INDEX IF NOT EXISTS idx_rc_expiry "
+     "ON resolved_cache(expires_at) WHERE expires_at IS NOT NULL"),
+)
 
 # A missing table is the common case (fresh DB), a present table the hot case;
 # probe with a prepared no-op read rather than running DDL on every request.
@@ -100,8 +108,14 @@ _SCHEMA_OK = "resolved_cache"
 
 
 def init_resolved_cache(conn: sqlite3.Connection) -> None:
-    """Create the table and its indexes. Idempotent; safe to call per-request."""
-    conn.executescript(_DDL)
+    """Create the table and its indexes, one statement per ``execute``.
+
+    Deliberately NOT ``executescript`` — that commits the caller's pending
+    transaction first (addendum defect 1). Idempotent; safe to call per
+    request; never commits anything by itself.
+    """
+    for statement in _DDL_STATEMENTS:
+        conn.execute(statement)
 
 
 def _ensure_schema(conn: sqlite3.Connection) -> None:
@@ -235,6 +249,25 @@ def record_resolved_cache(conn: sqlite3.Connection, link_id: int,
     return {"link_id": int(link_id), "url": url, "category": category,
             "kind": kind, "expires_at": expires_at,
             "reverify_after": reverify_after}
+
+
+def note_failure(conn: sqlite3.Connection, link_id: int) -> int:
+    """Close the circuit for one link whose URL was just probed and found dead.
+
+    This is the incrementer the guard in ``lookup_cache`` reads — without it
+    ``fail_count`` stays 0 forever and a known-dead URL is re-served and
+    re-probed indefinitely (addendum defect 2). The request path calls it
+    exactly where a dead URL is *measured*, not assumed: after
+    ``resolve_live_source`` has run its probes and answered without a playable
+    URL (or with a stale one). Returns the number of rows touched (0 when the
+    link has no cache row — a failure of an uncached link is not circuit
+    evidence). Like ``record_resolved_cache`` this does NOT commit; the
+    caller's transaction owns it."""
+    _ensure_schema(conn)
+    cur = conn.execute(
+        "UPDATE resolved_cache SET fail_count = fail_count + 1 "
+        "WHERE link_id = ?", (int(link_id),))
+    return cur.rowcount
 
 
 def lookup_cache(conn: sqlite3.Connection, link_id: int, want: str = "watch", *,

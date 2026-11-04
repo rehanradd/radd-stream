@@ -267,6 +267,87 @@ class TestConstraints(unittest.TestCase):
             resolved_cache.record_resolved_cache(conn, 1, file_resolve(), source="x")
 
 
+class TestAddendumDefects(unittest.TestCase):
+    """The two defects from /tmp/crown_orders/qoder12_addendum.md, each
+    reproduced experimentally by the Crown Prince before being ordered here.
+
+    1. ``executescript`` issues an implicit COMMIT before running — on the
+       shared-connection contract ("record does not commit; the caller's
+       transaction owns it") that was a one-shot-per-restart landmine: the
+       first lookup of a cold process committed whatever the caller had
+       pending, so a later rollback kept a write it believed discarded.
+    2. ``fail_count`` had a reader (the guard) and a resetter (the upsert)
+       but NO incrementer anywhere — a circuit that can never open is dead
+       code wearing a safety promise.
+    """
+
+    def test_ensure_schema_does_not_commit_caller_transaction(self):
+        conn = sqlite3.connect(":memory:")
+        conn.execute("CREATE TABLE scratch(x INTEGER)")
+        conn.execute("INSERT INTO scratch VALUES (1)")   # opens an implicit txn
+        self.assertTrue(conn.in_transaction,
+                        "fixture: caller must hold a pending transaction")
+        # cold path: no resolved_cache table yet, so the probe fails and the
+        # DDL runs INSIDE the caller's transaction
+        self.assertIsNone(resolved_cache.lookup_cache(conn, 1))
+        self.assertTrue(conn.in_transaction,
+                        "schema init must run inside the caller's transaction, "
+                        "never commit it (executescript would have)")
+        conn.rollback()
+        left = conn.execute("SELECT COUNT(*) FROM scratch").fetchone()[0]
+        self.assertEqual(left, 0,
+                         "the caller's rolled-back write must have actually died")
+
+    def test_init_resolved_cache_keeps_transaction_open(self):
+        conn = sqlite3.connect(":memory:")
+        conn.execute("CREATE TABLE scratch(x INTEGER)")
+        conn.execute("INSERT INTO scratch VALUES (1)")
+        resolved_cache.init_resolved_cache(conn)
+        self.assertTrue(conn.in_transaction)
+        conn.commit()
+
+    def test_note_failure_opens_the_circuit_end_to_end(self):
+        """record fresh -> served; note_failure MAX times (each one a
+        measured probe-failure, exactly like the routes' failure path calls
+        it) -> refused. No hand-edited SQL: the circuit is now reachable
+        through the module's own API alone."""
+        conn = fresh_conn()
+        now = time.time()
+        resolved_cache.record_resolved_cache(conn, 77, file_resolve(), now=now)
+        self.assertIsNotNone(resolved_cache.lookup_cache(conn, 77, now=now))
+        for i in range(resolved_cache.MAX_FAIL_COUNT):
+            self.assertEqual(resolved_cache.note_failure(conn, 77), 1,
+                             f"note_failure {i + 1} must touch the cached row")
+        self.assertIsNone(resolved_cache.lookup_cache(conn, 77, now=now),
+                          "after MAX_FAIL_COUNT probed-dead failures the row "
+                          "must be retired, not re-served and re-probed forever")
+
+    def test_note_failure_below_threshold_still_serves(self):
+        conn = fresh_conn()
+        now = time.time()
+        resolved_cache.record_resolved_cache(conn, 77, file_resolve(), now=now)
+        for _ in range(resolved_cache.MAX_FAIL_COUNT - 1):
+            resolved_cache.note_failure(conn, 77)
+        self.assertIsNotNone(resolved_cache.lookup_cache(conn, 77, now=now))
+
+    def test_note_failure_on_uncached_link_is_harmless(self):
+        conn = fresh_conn()
+        self.assertEqual(resolved_cache.note_failure(conn, 424242), 0)
+
+    def test_fresh_resolve_closes_the_circuit_again(self):
+        """A newly verified URL must clear the failures of the URL it
+        replaces — already the upsert contract, now proven via note_failure
+        instead of a hand-set column."""
+        conn = fresh_conn()
+        now = time.time()
+        resolved_cache.record_resolved_cache(conn, 77, file_resolve(), now=now)
+        for _ in range(resolved_cache.MAX_FAIL_COUNT):
+            resolved_cache.note_failure(conn, 77)
+        self.assertIsNone(resolved_cache.lookup_cache(conn, 77, now=now))
+        resolved_cache.record_resolved_cache(conn, 77, file_resolve(), now=now + 1)
+        self.assertIsNotNone(resolved_cache.lookup_cache(conn, 77, now=now + 1))
+
+
 class TestViewerRouteContract(unittest.TestCase):
     """These tests pin the SECURITY ORDERING of the two HTTP routes that read
     the cache. The invariants are properties of viewer.py's request path:
@@ -334,6 +415,16 @@ class TestViewerRouteContract(unittest.TestCase):
                 body = self._route_source(route)
                 self.assertIn("except Exception", body,
                               f"{route}: cache errors must degrade to the old path")
+
+    def test_routes_incremente_the_circuit_on_measured_death(self):
+        """The circuit's incrementer must sit where a probe FOUND the URL
+        dead (resolver answered without a playable/stale URL) on both public
+        routes — addendum defect 2's wiring, pinned as a source invariant."""
+        for route in ("/api/v1/stream", "/api/v1/download"):
+            with self.subTest(route=route):
+                body = self._route_source(route)
+                self.assertIn("resolved_cache.note_failure(", body,
+                              f"{route}: a probed-dead link must close the circuit")
 
 
 class TestCrownPrinceCategoryHardening(unittest.TestCase):
