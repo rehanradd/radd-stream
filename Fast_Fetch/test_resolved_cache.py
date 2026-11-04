@@ -634,6 +634,105 @@ class TestCrownPrinceCategoryHardening(unittest.TestCase):
         self.assertIn("host_classifier.is_direct_file", src)
 
 
+class TestPoolHealing(unittest.TestCase):
+    """Emperor order 2026-11-05 night (LANE 1, pool re-probe): the pool may
+    heal a dead-token link ONLY by arriving with a genuinely fresh answer.
+
+    The pool's per-link body (prefetch_worker.prefetch_once) is:
+    resolve_live_source(id, v2=True) -> success? -> record(source="pool").
+    The v2 contract refuses stale answers with `no_playable_source`, but the
+    cache must not depend on the caller's honesty: a stale result must be
+    unbankable HERE too, or a future caller that forgets the flag re-poisons
+    the pool with a URL we believe is dead.
+    """
+
+    def test_record_refuses_a_stale_v1_fallback(self):
+        """success+stale is v1's frozen-URL envelope. It is servable to a
+        player (maybe) but it is NEVER bankable: caching it would promote an
+        unverified URL into the pool's fresh-by-construction state."""
+        conn = fresh_conn()
+        now = time.time()
+        stale_answer = file_resolve(cached=True, refreshed=False, stale=True)
+        self.assertIsNone(
+            resolved_cache.record_resolved_cache(conn, 77, stale_answer,
+                                                 source="pool", now=now),
+            "a stale resolve must not be banked, whatever flag the caller forgot")
+        self.assertIsNone(resolved_cache.lookup_cache(conn, 77, now=now))
+
+    def test_pool_success_heals_a_link_the_circuit_had_retired(self):
+        """The heal sequence, end to end through the module's own API:
+        served -> probed dead x MAX -> refused -> pool re-probe succeeds with
+        a fresh URL -> served again, marked source='pool'. This is what the
+        two dead-token links need, and it must not need a hand-edited row."""
+        conn = fresh_conn()
+        now = time.time()
+        resolved_cache.record_resolved_cache(conn, 77, file_resolve(), now=now)
+        for _ in range(resolved_cache.MAX_FAIL_COUNT):
+            resolved_cache.note_failure(conn, 77)
+        self.assertIsNone(resolved_cache.lookup_cache(conn, 77, now=now))
+        stored = resolved_cache.record_resolved_cache(
+            conn, 77, file_resolve(url="https://pixeldrain.com/api/file/NEW123"),
+            source="pool", now=now + 1)
+        self.assertIsNotNone(stored)
+        self.assertEqual(stored["source"], "pool")
+        hit = resolved_cache.lookup_cache(conn, 77, now=now + 1)
+        self.assertIsNotNone(hit, "a healed row must serve immediately")
+        self.assertTrue(hit["url"].endswith("/NEW123"))
+
+    def test_pool_healed_playlist_serves_watch_not_download(self):
+        conn = fresh_conn()
+        now = time.time()
+        resolved_cache.record_resolved_cache(conn, 88, playlist_resolve(),
+                                             source="pool", now=now)
+        self.assertIsNotNone(resolved_cache.lookup_cache(conn, 88, "watch", now=now))
+        self.assertIsNone(resolved_cache.lookup_cache(conn, 88, "download", now=now),
+                          "the pool cannot heal a playlist into a downloadable file")
+        row = sqlite3_conn_row(conn, 88)
+        self.assertEqual(row["category"], "B")
+        self.assertLessEqual(row["reverify_after"] - now,
+                             resolved_cache.HEURISTIC_CAP_TEMPORARY_SECONDS)
+
+    def test_worker_bank_guard_is_v2_and_pool_marked(self):
+        """Pin prefetch_worker.py (READ ONLY here — qoder13's file): it must
+        resolve under the honest v2 contract and bank under source="pool"
+        inside the success branch only. If either pin breaks, the pool has
+        started trusting v1 envelopes."""
+        import re
+        with open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                               "prefetch_worker.py"), encoding="utf-8") as fh:
+            src = fh.read()
+        self.assertIn("resolve_live_source(source_id, v2=True)", src)
+        self.assertIn('source="pool"', src)
+        success_at = src.index("if result.get(\"success\"):")
+        bank_at = src.index("resolved_cache.record_resolved_cache(")
+        self.assertGreater(bank_at, success_at,
+                           "record must run inside the success branch")
+        self.assertNotIn("record_resolved_cache(",
+                         src[src.index("stats[\"failed\"] += 1"):],
+                         "the failure branch must not bank anything")
+
+    def test_v2_refusal_envelope_is_unbankable(self):
+        """The exact shape resolve_live_source v2 returns on re-resolve
+        failure (fast_fetch.py: re_resolve_failed / bridge_unresolved): no
+        url at all. record returns None and the ledger of refusals stays
+        empty — nothing for the circuit to even increment."""
+        conn = fresh_conn()
+        refusal = {"success": False, "code": "no_playable_source",
+                   "reason": "re_resolve_failed", "stale": True}
+        self.assertIsNone(resolved_cache.record_resolved_cache(
+            conn, 1617406, refusal, source="pool"))
+        self.assertIsNone(resolved_cache.lookup_cache(conn, 1617406))
+
+
+def sqlite3_conn_row(conn, link_id):
+    conn.row_factory = sqlite3.Row
+    try:
+        return conn.execute("SELECT * FROM resolved_cache WHERE link_id = ?",
+                            (link_id,)).fetchone()
+    finally:
+        conn.row_factory = None
+
+
 class TestEpochHygiene(unittest.TestCase):
     def test_all_stamps_are_epoch_real(self):
         """No localized timestamp strings anywhere: the v1 staleness check's

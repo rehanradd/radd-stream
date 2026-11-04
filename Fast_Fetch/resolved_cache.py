@@ -223,6 +223,12 @@ def record_resolved_cache(conn: sqlite3.Connection, link_id: int,
     url = data.get("url")
     if not url:
         return None
+    if data.get("stale"):
+        # v1's frozen-URL envelope (success+stale): a URL we could NOT
+        # re-resolve is never bankable, whoever the caller is. The pool's
+        # v2 contract already refuses it; this makes the cache independent
+        # of the caller remembering (emperor order, pool healing).
+        return None
     _ensure_schema(conn)
     if source not in ("pool", "jit"):
         raise ValueError(f"invalid source {source!r}")
@@ -262,7 +268,7 @@ def record_resolved_cache(conn: sqlite3.Connection, link_id: int,
          1 if data.get("is_resumable") else 0, data.get("http_status"),
          source, ip_bound))
     return {"link_id": int(link_id), "url": url, "category": category,
-            "kind": kind, "expires_at": expires_at,
+            "kind": kind, "expires_at": expires_at, "source": source,
             "reverify_after": reverify_after}
 
 
