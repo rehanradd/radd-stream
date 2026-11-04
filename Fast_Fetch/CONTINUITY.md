@@ -2057,3 +2057,49 @@ realpath under `/home/ubuntu/radd-stream-data/` or on PRODUCTION_PATHS
 non-twin public set is byte-identical after apply. Tests now 15 (all green).
 Disk rule honored: / at 99% — zero catalog copies this segment; synthetic
 fixtures + read-only scans only.
+
+## 2026-11-05 ~02:20 — qoder11: SUPERSESSION record + handoff state (addendum order)
+
+**Superseded by trunk `b99814e` (read-only checkout at `/tmp/crown_trunk`, 220 commits
+past our merge-base `19abff7`). Do not push these as new work; do not delete anything:**
+- `Fast_Fetch/reconcile_adult.py` (my `5372168`→`2abf8fd` chain) is superseded by trunk's
+  `Fast_Fetch/backfill_adult_key.py` + `audit_adult_flags.py` +
+  `fast_fetch.inherit_key_adult()` + `adult_fold_journal` (ledger `posts` AND projection
+  `cat_works`, `--audit`/`--corroborate --apply`/`--undo`). Trunk's corroborated fold is
+  strictly safer than my key-grouped MAX: it propagates only on reproducible
+  `is_adult_title()` evidence (naive folding hides 3,490; corroborated hides 12), and it
+  refuses cross-key title matching outright. My cross-key proposal
+  (`/tmp/q11_crosskey_proposal.md`) stands as measurement only; trunk already declines
+  the naive version of it.
+- `cbeb553` (fail-closed `link_is_adult`) duplicates trunk's fix — verified at
+  `/tmp/crown_trunk/Fast_Fetch/redact.py:1107` (`if row is None or row[0]: return True`).
+  Semantically identical to mine; trunk's version is the one that ships.
+- Branch `q11-adult-reconcile-20261104` left exactly as-is. Push-state correction on the
+  record: the Prince's "never pushed, remote at 0700524" is contradicted by my
+  `git ls-remote` (remote tip `2abf8fd`, and `git branch -r --contains f4d57c7` lists
+  `origin/q11-adult-reconcile-20261104`). Likely checked before my push landed; say so
+  humbly, change nothing.
+
+**Live tasks, in priority order:**
+1. `art_is_adult` fail-closed fix in lane `redact.py` (`:1056-1065`,
+   `return bool(row and row[0])` — vanished/absent row answers False = shows art) +
+   mirror of the link test set + unknown-`ART_TABLES`-table fallback proof + composition
+   (reconcile-hidden work shows no art; control still shows poster). Trunk has this defect
+   too (`/tmp/crown_trunk/Fast_Fetch/redact.py:1074`); on trunk the route double-guards
+   (`art_url_for` → None → 404), so severity is LATENT, report it that way. Then the sweep
+   `grep -n "bool(row and row" Fast_Fetch/redact.py` as a list (lane: exactly 1 hit, this
+   one; after the fix: zero).
+2. Heavy-resolver single-flight gate DESIGN + module + 8 named unit tests per
+   `/tmp/crown_orders/qoder11_heavy_resolver.md`. Stdlib only, own module wired at the
+   route boundary, NOT inside `fast_fetch.py` (freeze holds). 50-concurrent stress run:
+   **NOT RUN** (disk 98%, load ~4.7-8.6 on nproc=1) — report as "not run", never "passed".
+
+**Files touched, commit state (verified `git status --short` clean at this point):**
+- Committed & pushed on lane branch: `redact.py` (cbeb553, superseded),
+  `reconcile_adult.py` + `test_reconcile_adult.py` (15 tests green), `test_redact.py`
+  (57 tests green), `CONTINUITY.md` through `2abf8fd`.
+- UNCOMMITTED: none right now. The art fix + its tests will be the next commit.
+- Files I have NOT touched and must not: `fast_fetch.py` (frozen, qoder14/qoder12 hunks),
+  `viewer.py` (lane viewer unmodified — no hunks of mine to reconcile; hazard report:
+  trunk 4306 lines vs base bf9e565 3576 vs lane 3494, measured), `/etc/nginx`,
+  `/tmp/crown_trunk` (read-only), `/opt/radd-stream` live tree.
