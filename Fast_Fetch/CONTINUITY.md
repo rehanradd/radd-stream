@@ -2288,3 +2288,48 @@ qoder12's 2 unpushed commits (not mine to push); `4f7c17d` + the runbook commit
 are mine. The runbook itself is committed locally and not pushed — pushing it
 now would move the remote past `4f7c17d` only by also carrying qoder12's work;
 the Crown can push both or hold — either is safe, the file is readable in-lane.
+
+## Session 2026-11-05 (qoder12) — crown order qoder12_unprobed: the circuit only opens on measured evidence
+Push hold released; `2ad1490`+`26ac013` shipped (note: qoder13's `160adf9`,
+already committed in the lane at that moment, rode the same fast-forward —
+a branch push cannot exclude descendants; disclosed, not repeated).
+- **Defect (crown-measured, confirmed in code):** both public routes'
+  non-bank branch called `note_failure` unconditionally. For services with
+  NO unpacker branch (vidbolt/cineverse/modiplay — the pool-heal finding)
+  nothing is ever contacted, nothing measured, yet every request incremented
+  `fail_count`; MAX_FAIL_COUNT=3 circuit-breaks existing rows one-way
+  (healing needs a fresh resolve, unreachable for the class), and
+  `note_failure`'s docstring ("just probed and found dead") wrote
+  fabricated evidence into a column future agents trust.
+- **Fix = distinction, not threshold.** `fast_fetch.resolve_live_source`:
+  the dispatch chain gains an explicit terminal `else` — matcher matched no
+  branch — recorded `unprobed=True`, carried in BOTH fallback envelopes
+  (v2 refusal + v1 stale-frozen). `resolved_cache.note_failure_from_probe`
+  (guarded, the routes' only entry; absent field = probed = conservative;
+  bare `note_failure` documented as measured-evidence-only). `viewer.py`
+  both call sites switched. **MAX_FAIL_COUNT stays 3.**
+- **Tests first (red→green), both behaviours in one class**
+  (`TestUnprobedIsNotEvidence`, 6): 6 unprobed v2 refusals AND 6 unprobed
+  v1 frozen answers leave `fail_count` 0 with the row still serving;
+  probed-dead — explicit `unprobed: False` and legacy fieldless — still
+  trips exactly at 3; the boundary proven against the SHIPPED resolver:
+  scratch-temp-DB vidbolt link answers `unprobed=True` with zero network,
+  cineverse twin proves the v1 shape; route pins updated (guard required,
+  bare increment forbidden at both sites). 52/52.
+- **Full baseline rerun:** database 76 OK · vidout 6 OK · catalog_v2 91 OK ·
+  release_descriptor 24 OK · link_health 57 OK · link_state 28 OK ·
+  evidence_writeback 12 FAILED(3, pre-existing debt) · api_v2 46 OK ·
+  redact 49 OK · tiers 23 OK · catalog_api 114 — **15 transient errors in
+  the 1-core background sweep, clean rerun 114 OK standalone** (contention,
+  not code) · provenance_stamping 12 OK · merge_catalogs 5 FAILED(1,
+  pre-existing) · site_scout 25 OK · backup_manager 14 OK ·
+  resolved_cache 52 OK · host_classifier 64 OK.
+- **Shared-lane hazard, caught and corrected:** while staging, `fast_fetch.py`
+  carried qoder14's UNCOMMITTED in-progress domain-registry edits in the same
+  file as my hunks — a whole-file `git add` would have published their WIP.
+  Recovered by splitting the diff: only the 4 `unprobed` hunks were committed
+  (`73de18e`), verified in a throwaway worktree at the commit itself (52/52 +
+  test_database OK), then pushed fast-forward. qoder14's edits remain
+  uncommitted in the worktree, untouched. Discipline: on this lane, `git diff
+  --cached --stat` against expectation per FILE is mandatory — files here are
+  not single-owner.
