@@ -2170,6 +2170,29 @@ empty, so Step 2's hold is lifted and there is nothing left to push).
   server-side keepalive/threading if the end-to-end warm gate is to be met,
   and the `stale`-link healing (pool re-probe) that would let those two handles
   ever become cacheable.
+- **CORRECTION 2026-11-05 ~03:10 (qoder11, per crown order `bench_reuse_and_hitpath`)
+  — the attribution above is WRONG and the source of the error is the CROWN PRINCE's
+  own published report; it is kept visible, not quietly fixed.**
+  1. The server is **already** `ThreadingMixIn` + keep-alive capable:
+     `viewer.py:2871` `class ThreadedHTTPServer(ThreadingMixIn, HTTPServer)` with
+     `daemon_threads = True`, `protocol_version = "HTTP/1.1"` at `:2877`, constructed
+     at `:3584` in `make_server` — re-verified by me in this tree just now. There is
+     nothing to "add"; the Next line above would have a future agent build what exists.
+  2. The real floor was **measured**, not asserted: a do-nothing threaded HTTP/1.1
+     `302` handler on this box at loadavg 6.51 with all four lanes active costs
+     **p50 2.19 ms / p95 8.05 ms on one reused keep-alive connection** and
+     **p50 6.53 ms / p95 11.25 ms per fresh connection** (n=60 each,
+     `/tmp/crown_floor_probe.py`). That is ~2 ms of framework, not "13–36 ms of
+     stdlib single-connection floor".
+  3. The bench that produced the triplet above drove `urllib.request.urlopen` **once
+     per request — a new connection every time** — so every published latency there,
+     including the 104.71 ms warm p95 and the isolated 13–36 ms hit figures, carries
+     ~6.5 ms of connection setup the server was never actually asked to optimize.
+  4. Therefore the warm gate **failed for two fixable reasons** — unbankable `stale`
+     rows (2 of 3 handles, so the cache held 1 row) and an unprofiled hit path —
+     and NOT because of any hardware- or stdlib-imposed floor. A corrected re-run
+     (reused connection + per-stage handler breakdown) is owed, and only under
+     loadavg < 3; at load >= 5 it is "not measurable now", not a pass or a fail.
 
 ## Session 2026-11-05 (phase1 prefetcher lane) — LANE 3 night order: Item 1 PROVEN, with two real findings
 
