@@ -164,6 +164,19 @@ class DownloadService : Service() {
             target = prepareOutput(entry)
             repo.setOutputUri(id, target.uri.toString())
 
+            // A resume is only safe when the stored offset is the destination's EXACT length.
+            // A kill mid-write can leave the file ahead of the last persisted figure (append
+            // would then duplicate the difference inside the video) or behind it (a gap). The
+            // same rule as a provider's append refusal: the only correct restart is a fresh
+            // request from zero. An unmeasurable length is trusted and proceeds.
+            if (downloaded > 0) {
+                val onDisk = outputLength(target)
+                if (onDisk >= 0 && onDisk != downloaded) {
+                    repo.resetResume(id)
+                    downloaded = 0L
+                }
+            }
+
             val builder = Request.Builder()
                 .url(entry.url)
                 .header("User-Agent", Brand.userAgent)
@@ -213,8 +226,15 @@ class DownloadService : Service() {
             notifyCompleted(entry.title)
         } catch (cancelled: CancellationException) {
             closeQuietly(output)
-            val now = repo.entity(id)
-            if (now != null && now.state != DeviceDownloadState.PAUSED) {
+            // The coroutine owns the exact byte count it wrote, so its pause offset is the only
+            // authoritative one. The service's pause handler already stamped PAUSED with a value
+            // from the throttled snapshot (up to NOTIFY_INTERVAL_MS + one chunk behind this
+            // local); overwriting it here is what keeps a resumed Range request aligned with the
+            // file's real end. A resumed download opens in append mode, so an offset SHORTER
+            // than the file duplicates the gap between the two inside the video — which is why
+            // this write must not be skipped just because the state already reads PAUSED.
+            // A deleted row (cancel) is gone from the store, so it is not resurrected here.
+            if (repo.entity(id) != null) {
                 repo.markPaused(id, downloaded)
             }
             throw cancelled
@@ -253,6 +273,16 @@ class DownloadService : Service() {
         file.parentFile?.mkdirs()
         if (!file.exists()) file.createNewFile()
         return OutputTarget(Uri.fromFile(file), false)
+    }
+
+    /** The destination's current byte length, or -1 when the provider will not say. */
+    private fun outputLength(target: OutputTarget): Long = when {
+        !target.isMediaStore -> runCatching { File(requireNotNull(target.uri.path)).length() }.getOrDefault(-1L)
+        else -> runCatching {
+            contentResolver.openAssetFileDescriptor(target.uri, "r")?.use { afd ->
+                if (afd.length >= 0) afd.length else -1L
+            } ?: -1L
+        }.getOrDefault(-1L)
     }
 
     private fun openOutput(uri: Uri, append: Boolean): OutputStream {

@@ -327,8 +327,18 @@ class DeviceDownloadsRepository @Inject constructor(
         emit(updated)
     }
 
+    /**
+     * Progress is held in memory and flushed at a human pace, so durability must not be a lie:
+     * the memory snapshot itself has to advance, or every throttled `persist(currentEntities())`
+     * rewrites the stale pre-download state and a resumed download restarts from zero bytes.
+     * That made this the ONLY writer that keeps a running byte count durable — every state an
+     * entity can carry (DOWNLOADING included) is therefore what the boot normalization and the
+     * pause handler will actually find in the store.
+     */
+    @Synchronized
     private fun updateInMemory(id: String, transform: (DeviceDownloadEntity) -> DeviceDownloadEntity) {
         val updated = currentEntities().map { if (it.id == id) transform(it) else it }
+        memory = updated
         emit(updated)
     }
 
