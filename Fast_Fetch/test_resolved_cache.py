@@ -459,6 +459,28 @@ class TestColdStartRace(unittest.TestCase):
             self.assertIn("IF NOT EXISTS", head,
                           f"DDL must be re-runnable by construction: {head}")
 
+    def test_ddl_statement_set_is_pinned_non_empty_and_exact(self):
+        """Vacuous-loop backstop (crown grant 2026-11-05): the sweep above
+        ITERATES `_DDL_STATEMENTS`, so an emptied or restructured list sails
+        through it green — the same blind spot as M1 and TRANSPORT_CAUSES.
+        Pinned here: non-empty, exactly THREE statements (one table + the
+        reverify and expiry indexes). A legitimate fourth statement is
+        allowed only as a deliberate edit that moves this number too —
+        silence-by-shrink is what dies."""
+        stmts = list(resolved_cache._DDL_STATEMENTS)
+        self.assertTrue(stmts, "_DDL_STATEMENTS must never be empty")
+        self.assertEqual(len(stmts), 3,
+                         "expected exactly: CREATE TABLE resolved_cache + "
+                         "idx_rc_reverify + idx_rc_expiry")
+        heads = [s.strip().upper() for s in stmts]
+        self.assertEqual(sum(h.startswith("CREATE TABLE") for h in heads), 1)
+        self.assertEqual(sum(h.startswith("CREATE INDEX") for h in heads), 2)
+        joined = " ".join(heads)
+        for letter in ("'FILE'", "'PLAYLIST'", "'VIEWER'"):
+            self.assertIn(letter, joined.replace('"', "'"),
+                          "the kind CHECK vocabulary must survive any DDL "
+                          "restructure — this is what the sweep cannot see")
+
 
 class TestViewerRouteContract(unittest.TestCase):
     """These tests pin the SECURITY ORDERING of the two HTTP routes that read
