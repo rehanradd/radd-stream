@@ -4459,11 +4459,56 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 return
 
             import fast_fetch
+            redirect_flag = query_params.get("redirect", ["1"])[0]
+
+            # Phase-1 resolved_cache: a fresh, probe-accepted row answers the
+            # play as an instant 302 with zero resolver work in the request
+            # path. Public port only — the operator port must keep seeing the
+            # live resolver's diagnostics. The adult gate above ALWAYS runs
+            # first; a cache hit can never bypass it.
+            hit = None
+            if not full:
+                try:
+                    import resolved_cache
+                    with get_db() as conn:
+                        hit = resolved_cache.lookup_cache(conn, int(source_id),
+                                                          want="watch")
+                except Exception:      # noqa: BLE001
+                    hit = None         # a cache problem must never break playback
+
+            if hit:
+                if redirect_flag in ("1", "true", "yes"):
+                    self.send_response(302)
+                    self.send_header("Location", hit["url"])
+                    # Same rule as the resolver's 302: it points at somebody
+                    # else's signed token — never cacheable, whatever the TTL.
+                    self.send_header("Cache-Control", "no-store")
+                    for name, value in cors_headers_for(self.headers.get("Origin", "")):
+                        self.send_header(name, value)
+                    self.send_header("Connection", "close")
+                    self.end_headers()
+                    return
+                # Descriptor from the cache row. `kind` keeps the legacy wire
+                # value "url" for files (the shipped app branches on it); only
+                # the genuinely-new playlist case differs.
+                expires_in = hit["expires_in"]
+                if expires_in is None:
+                    expires_in = max(0.0, round(hit["reverify_after"] - time.time(), 3))
+                self.send_json({
+                    "success": True,
+                    "stream_id": redact.mint_token(int(source_id), signing_secret()),
+                    "kind": "playlist" if hit["kind"] == "playlist" else "url",
+                    "mime_type": hit["mime_type"],
+                    "file_size_bytes": hit["file_size_bytes"],
+                    "resumable": bool(hit["is_resumable"]),
+                    "expires_in": expires_in,
+                })
+                return
+
             # Stage-2: the stream caller needs watch media — a playlist
             # or a single file. A playlist is never a download, and a
             # page is never either; the resolver enforces both.
             res = fast_fetch.resolve_live_source(int(source_id), want="watch")
-            redirect_flag = query_params.get("redirect", ["1"])[0]
 
             if res.get("success") and res.get("stale"):
                 # Audit critical 2: the v1 resolver answers a failed re-resolve with
@@ -4475,6 +4520,18 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 # ladder moves to the next source. The operator port still sees the
                 # full body, url and `stale` included, which is what healing reads.
                 res = dict(res, success=False)
+
+            # On a miss we just paid for a full resolve — bank it for the next
+            # player. Never store a stale v1 fallback URL, and a write failure
+            # must never change the answer the user gets.
+            if (not full and res.get("success") and res.get("url")
+                    and not res.get("stale")):
+                try:
+                    import resolved_cache
+                    with get_db() as conn:
+                        resolved_cache.record_resolved_cache(conn, int(source_id), res)
+                except Exception:      # noqa: BLE001
+                    pass
 
             if res.get("success") and res.get("url"):
                 if redirect_flag in ("1", "true", "yes"):
