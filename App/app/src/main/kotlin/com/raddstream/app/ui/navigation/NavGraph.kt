@@ -140,8 +140,15 @@ fun RaddStreamNavGraph(
         ) {
             composable(Screen.Setup.route) {
                 SetupScreen(
-                    onConnected = {
-                        navController.navigate(Screen.Home.route) {
+                    onConnected = { askRegion ->
+                        // A fresh install that has just connected has never been asked what it
+                        // watches, and the region screen is the one thing MainActivity's launch
+                        // gate already promises to serve — it must be served HERE, on this first
+                        // launch, not held back for the second. An install that already answered
+                        // goes straight to Home, exactly as before. Setup leaves the stack either
+                        // way, so pressing back from what follows does not bounce into it.
+                        val next = if (askRegion) Screen.Region.route else Screen.Home.route
+                        navController.navigate(next) {
                             popUpTo(Screen.Setup.route) { inclusive = true }
                         }
                     },
