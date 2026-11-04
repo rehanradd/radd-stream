@@ -1874,3 +1874,48 @@ Residue: one early post (`Aghori Baba`) has no releases, carried over from the f
 lane — so `HEAD:master` is intentionally not pushed. The lane's commits are pushed to
 `refs/heads/qoder2-fleet-20261029` instead; master integration of the doc conflicts is
 still open.
+
+---
+
+## Session — qoder11 lane, 2026-11-04 (Crown Prince order: `reconcile_adult.py`, backlog #4)
+
+**Built.** `Fast_Fetch/reconcile_adult.py` + `test_reconcile_adult.py` (10 tests, green)
+in worktree `/tmp/q11_adult` on branch `q11-adult-reconcile-20261104` from `bf9e565`.
+Dry-run is the default; `--apply` refuses without a fresh `backup_manager.safe_vacuum_sqlite`
+snapshot that reads back with its row counts and sha256; idempotent (verified twice);
+keyless rows (`NULL`/`''`) are excluded from propagation **by policy, stated in the
+docstring** — an empty-key join would flag the whole catalog in one UPDATE.
+
+**Re-measured against the real catalog (read-only).** AGENTS.md's "442 keys / 455 works"
+is stale: the live `merged_catalog_20261025.db` has **394 mixed `canonical_key`s and 407
+unflagged twins** (150,799 posts, 15,068 flagged, 0 keyless rows). No over-hide risk: the
+largest mixed key has 3 members (same work, different sites); zero mixed keys above 3.
+
+**Real-data apply drill (scratch subset, `/tmp/q11_adult_scratch/`).** Subset copy of the
+affected rows + 300 controls + their releases/sources: dry-run 407 → apply `changed=407`,
+flagged 394→801, second run flips 0, backup froze the pre-apply state (394). Invariant
+proved with `redact.py` itself, not around it: public-list predicate hides exactly the 407
+twins more, and `redact.link_is_adult` returns True on a flipped twin's real link id
+(stream token unreachable). Production was only ever opened `?mode=ro`.
+
+**New finding filed.** `redact.link_is_adult` docstring promises "an unknown link answers
+True" but `row is None` returns False (`bool(row and row[0])`) — measured on the subset.
+Behavior stays safe via the resolver's strict gate, but the fail-closed claim is docstring,
+not code. Deliberately NOT fixed here (out of order scope, `redact.py` untouched).
+
+**Phase-1 audit defects** kept in writing at `/tmp/phase1_audit_defects.md` (five + four
+benchmark findings), per the order.
+
+**Gate.** CI module list running at session end; result recorded in the push note below.
+
+**Gate result (full 15-module CI list, run in this lane at `bf9e565` + these two files).**
+13/15 green. The two failures are **baseline defects of `bf9e565`, not of this lane**:
+- `test_evidence_writeback` FAILED(3) — `'unchecked' != 'unverified'` state projection.
+- `test_merge_catalogs` FAILED(1) — staging link `status` stays `'unverified'`, merge
+  expects `'active'`.
+Both reproduce identically in `/tmp/lane_phase1` (clean `bf9e565`, no qoder12 or qoder11
+code) and both are **OK on the live `/opt/radd-stream` dirty tree**, whose uncommitted
+`Fast_Fetch/catalog_v2.py` rewrite (`status in ("", "unverified", "active") -> "active"`,
+out-of-vocabulary -> `"unchecked"`) carries the fix. That fix is not in any pushed commit;
+whoever owns it must commit it or every fresh worktree stays red on these two modules.
+`test_reconcile_adult` (this lane's new module): OK, 10 tests.
