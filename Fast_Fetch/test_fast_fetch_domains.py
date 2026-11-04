@@ -332,6 +332,11 @@ class TestNeedleSuperset(unittest.TestCase):
 
     def test_needle_set_is_a_superset_of_the_pre_change_snapshot(self):
         current = set(redact._registry_needles())
+        # Sibling literal pin (self-audit, crown order 2026-11-05): the
+        # superset test alone is VACUOUS on an emptied NEEDLES_BEFORE — an
+        # empty baseline loses nothing and the len floor below compares to
+        # itself. 71 is the snapshot's own count, pinned from outside it.
+        self.assertEqual(len(NEEDLES_BEFORE), 71)
         lost = NEEDLES_BEFORE - current
         self.assertFalse(lost,
                          f"redactor needles disappeared: {sorted(lost)}")
@@ -341,7 +346,12 @@ class TestNeedleSuperset(unittest.TestCase):
         data = json.loads(ff.REGISTRY_PATH.read_text(encoding="utf-8"))
         sites = data["sites"]
         self.assertIn("https://hdtvb.net", sites["hdtvb"]["known_mirrors"])
-        for mirror in sites["hdhub4u"]["known_mirrors"]:
+        mirrors = sites["hdhub4u"]["known_mirrors"]
+        # Floor pin (self-audit): the assertNotIn loop below is a
+        # pass-on-nothing candidate if hdhub4u's mirror list is ever emptied.
+        # 4 = measured 2026-11-05; mirrors are added, never removed.
+        self.assertGreaterEqual(len(mirrors), 4)
+        for mirror in mirrors:
             self.assertNotIn("hdtvb", mirror)
 
     def test_retired_rows_are_still_harvested(self):
@@ -370,6 +380,9 @@ class TestNeedleSuperset(unittest.TestCase):
 
     def test_registry_host_strings_survive_the_reconciliation(self):
         data = json.loads(ff.REGISTRY_PATH.read_text(encoding="utf-8"))
+        # Floor pin (self-audit): the type-check loops below pass on nothing
+        # if the sites map is ever emptied. 18 = measured 2026-11-05.
+        self.assertGreaterEqual(len(data["sites"]), 18)
         for name, entry in data["sites"].items():
             self.assertIsInstance(entry, dict)
             for mirror in entry.get("known_mirrors") or []:
@@ -447,9 +460,14 @@ class TestRegistryScrubberWiring(unittest.TestCase):
             with mock.patch.object(redact, "Path", _FakePath):
                 det = set(redact.site_needles())
                 rew = set(redact.site_text_needles())
-        for needle in ("driftprobe", "driftprobe.example",
-                       "driftprobe-mirror.example",
-                       "cdn.deep.driftprobe.example"):
+        probes = ("driftprobe", "driftprobe.example",
+                  "driftprobe-mirror.example",
+                  "cdn.deep.driftprobe.example")
+        # Literal pin (self-audit): four harvest points — full domain, brand
+        # label, mirror and deep-subdomain — so the loop cannot be quietly
+        # shrunk to a vacuous pass-on-nothing.
+        self.assertEqual(len(probes), 4)
+        for needle in probes:
             self.assertIn(needle, det,
                           f"{needle!r} harvested from the registry but absent "
                           "from site_needles() — detection wire cut")
