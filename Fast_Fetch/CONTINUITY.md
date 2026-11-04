@@ -1987,3 +1987,30 @@ rebase and push.
 add a systemd unit, and widen the pool beyond Tier-1 winners (backups per band)
 once the request path reads pool rows. A `test_prefetch_worker.py` offline suite
 should follow before merge.
+
+## Session 2026-11-04 (phase1 prefetcher lane, cont.) — backlog #3 PARTLY GATED: `catalog_exporter.py` built staging-only
+
+**Crown order qoder13 received and honored:** no `/var/www`, no `/etc/nginx`,
+staging directory (`/tmp/radd-static-stage`) only; `--out` under `/var/www` is
+rejected by the CLI itself so a flag typo cannot make the decision.
+
+**Shipped:** `Fast_Fetch/catalog_exporter.py` + `Fast_Fetch/test_catalog_exporter.py`.
+- Adult law lives **inside the export query**: `redact.adult_clause("p")`
+  (the shared row predicate — reused, not re-declared) AND the canonical-key
+  twin exclusion. `qoder11`'s `reconcile_adult.py` is still the publish gate;
+  the exporter is correct before and after it lands (belt and braces).
+- **Measured on the production catalog:** the twin clause suppresses **394
+  works** today (AGENTS.md's snapshot said 442 keys / 455 works at `09058ef`;
+  394 is what the live ledger shows now — the number is reported in every
+  manifest, so it is watched, not trusted).
+- Zero credentials by construction: no import of `signing_secret`/`mint_token`;
+  art passes only via `redact.public_image_value` (public CDN URLs kept,
+  scraped-site image paths dropped); the staged `home.json` greps 0 for
+  `/api/v1/art?id=`, `/api/v1/stream`, `/api/v1/download`, `token`.
+- Deterministic (`sort_keys=True`, SQL tie-break on `p.id`) and atomic
+  (same-dir temp + `os.replace`, temp removed on any failure).
+
+**Test evidence:** 10 tests — flagged row absent from bytes; unflagged twin
+absent from home/browse/embedded ids (asserted on emitted bytes per order);
+suppression count == live WHERE result; no-token byte scan; double-export
+byte-identical; no `.tmp` strays; `/var/www` refusal. All OK. `test_redact` OK.
