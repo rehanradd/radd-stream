@@ -54,20 +54,32 @@ except ImportError:
     PROJECT_NAME = "radd-stream"
 
 ## ── Dynamic Domain Mapping & Configuration ─────────────────────────────────────
+# RETIRED-IN-PLACE (2026-11-05, drift audit): the seven origins below are stale
+# in BOTH this static table and the domains_config DB rows (stale in agreement),
+# and the live values live in domain_registry.json, which get_domains() applies
+# LAST at read time. The stale strings are KEPT — never delete a host string:
+# normalize_url treats them as rewrite history and redact._registry_needles()
+# harvests registry hosts into the PUBLIC SCRUBBER, so erasure shrinks redaction
+# invisibly. domain_resolver is the sole live-domain writer.
 DEFAULT_DOMAINS = {
+    # RETIRED origin: live = https://new1.vegamovies.lease (registry)
     "vegamovies": "https://vegamovies.gallery",
     "vegamovies_sitemap": "https://vegamovies.gallery/sitemap.xml",
     "sitemap": "https://vegamovies.gallery/sitemap.xml",
     "rogmovies": "https://rogmovies.one",
     "rogmovies_sitemap": "https://rogmovies.one/sitemap.xml",
+    # RETIRED origin: live = https://ssrmovies.surf (registry)
     "ssrmovies": "https://ssrmovies.gripe",
     "ssrmovies_sitemap": "https://ssrmovies.gripe/post-sitemap.xml",
+    # RETIRED origin: live = https://7starhd.dentist (registry)
     "7starhd": "https://7starhd.rich",
     "7starhd_sitemap": "https://7starhd.rich/post-sitemap.xml",
     "katmoviehd": "https://new.katmoviehd.top",
     "katmoviehd_landing": "https://katmovieshd.net",
+    # RETIRED origin: live = https://m1.multimovies.courses (registry)
     "multimovies": "https://multimovies.garden",
     "multimovies_sitemap": "https://multimovies.garden/sitemap.xml",
+    # RETIRED origin: live = https://10xflix.hair (registry)
     "10xflix": "https://10xflix.help",
     "10xflix_sitemap": "https://10xflix.help/sitemap.xml",
     "cinemeta": "https://v3-cinemeta.strem.io",
@@ -81,10 +93,16 @@ DEFAULT_DOMAINS = {
     "hubcloud": "https://hubcloud.ist",
     "directcloud": "https://dl.direct-cloud.top",
     "mobilejsr": "https://mobilejsr.com",
+    # MIS-MAPPING (not a retired domain): hdtvb.net is a DIFFERENT site — the
+    # registry owns it (sites["hdtvb"], mirror https://hdtvb.net, live hdutv.com).
+    # Zero hdhub4u posts/download_sources ever came from hdtvb.net; the live
+    # value https://new8.hdhub4u.cl (registry) overrides this at read time.
+    # String kept: "hdtvb.net" is a scrubber needle and rewrite history.
     "hdhub4u": "https://hdtvb.net",
     "hdhub4u_sitemap": "https://hdtvb.net/sitemap.xml",
     "bollyshares": "https://bollyshares.xyz",
     "bollyshares_sitemap": "https://bollyshares.xyz/post-sitemap.xml",
+    # RETIRED origin: live = https://thefilmyzilla.in (registry)
     "filmyzilla": "https://www.filmyzilla74.com",
     "filmyzilla_sitemap": "https://www.filmyzilla74.com/sitemap.xml",
 }
@@ -102,9 +120,58 @@ SITE_CANDIDATE_TLDS = {
     "vcloud": ["beer", "live", "lol", "one"],
 }
 
+#: domain_resolver.py is the SOLE writer of this file (flock + atomic replace).
+#: Here it is a READ-ONLY live authority — see get_domains() below. It is also
+#: an input to redact._registry_needles() (the PUBLIC SCRUBBER harvests every
+#: site name and known_mirrors host from it), so no host string may ever be
+#: deleted here; rows are retired IN PLACE (status: "retired", mirrors kept).
+REGISTRY_PATH = BASE_DIR / "domain_registry.json"
+
+
+def registry_live_domains() -> dict[str, str]:
+    """site_name -> live base URL from domain_registry.json; {} on any failure.
+
+    Entries with status == "down" are skipped (a measured death must not
+    shadow the DB); a missing status counts as untested, not down. Never
+    raises — a broken registry must degrade to the old static+DB behavior,
+    not break every scraper."""
+    try:
+        data = json.loads(REGISTRY_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    live: dict[str, str] = {}
+    for name, entry in (data.get("sites") or {}).items():
+        if not isinstance(entry, dict):
+            continue
+        if str(entry.get("status") or "").lower() == "down":
+            continue
+        base = str(entry.get("active_base_url") or "").rstrip("/")
+        if base.startswith("https://"):
+            live[str(name).lower()] = base
+    return live
+
+
+def _swap_host(url: str, base: str) -> str:
+    """Re-point ``url`` at ``base``'s scheme://host, keeping path/query intact."""
+    if not url or not url.startswith("http"):
+        return base
+    p = urllib.parse.urlsplit(url)
+    q = urllib.parse.urlsplit(base)
+    return urllib.parse.urlunsplit((q.scheme, q.netloc, p.path, p.query, p.fragment))
+
 
 def get_domains() -> dict[str, str]:
-    """Retrieves domains dynamically from database with fallback to defaults."""
+    """Retrieves domains: DEFAULT_DOMAINS, overridden by domains_config rows,
+    then overridden LAST by domain_registry.json's live resolution.
+
+    Three tables, ordered by trustworthiness at read time (measured 2026-11-05):
+    the static table and the DB agree on SEVEN stale origins (vegamovies,
+    ssrmovies, 7starhd, 10xflix, multimovies, hdhub4u -> hdtvb.net, filmyzilla),
+    and the DB rows override the static values — so fixing only the static
+    table is a no-op. The registry is the only table a probe-verified writer
+    (domain_resolver) updates; it wins last. No row in any table is deleted;
+    stale strings stay as history for normalize_url/needle purposes.
+    """
     domains = dict(DEFAULT_DOMAINS)
     try:
         with get_db() as conn:
@@ -115,7 +182,26 @@ def get_domains() -> dict[str, str]:
                     domains["sitemap"] = r["url"]
     except Exception:
         pass
+    for name, base in registry_live_domains().items():
+        domains[name] = base
+        for key in list(domains):
+            if (key.startswith(name + "_") and key.endswith("_sitemap")) or \
+               (name == "vegamovies" and key == "sitemap"):
+                domains[key] = _swap_host(domains[key], base)
     return domains
+
+
+def refresh_domains() -> dict[str, str]:
+    """Re-read the three tables and update the import-time DOMAINS snapshot.
+
+    LIMITATION, deliberately not fixed: ``DOMAINS = get_domains()`` below is an
+    IMPORT-TIME snapshot. A long-lived ``fast_fetch.py serve`` process cannot
+    observe a rotation written by another process (registry or DB) until it is
+    restarted — the restart gate. This helper exists for CLI/sync entry points
+    only; no hot-reload mechanism was added, per crown ruling 2026-11-05.
+    """
+    DOMAINS.update(get_domains())
+    return DOMAINS
 
 
 def set_domain(name: str, url: str) -> None:
@@ -132,7 +218,9 @@ def set_domain(name: str, url: str) -> None:
         DOMAINS[name] = clean_url
 
 
-# Module-level domain dictionary
+# Module-level domain dictionary — IMPORT-TIME snapshot. Long-lived processes
+# (serve) do not see another process's rotations until restart; CLI/sync call
+# refresh_domains() (see its docstring). Do not "fix" this with hot reload.
 DOMAINS = get_domains()
 
 USER_AGENT = (
@@ -257,7 +345,15 @@ def normalize_url(url: str) -> str:
         if host != active_host:
             return urllib.parse.urlunparse((p.scheme or "https", active_host, p.path, p.params, p.query, p.fragment))
 
-    # Check KatMovieHD
+    # RETIRED-IN-PLACE duplicate KatMovieHD block (kept, deletion withheld by
+    # crown ruling 2026-11-05). No live scraper path depends on it: the
+    # "katmoviehd" key is always present in DOMAINS (DEFAULT_DOMAINS seeds it,
+    # domains_config is only ever INSERT/UPDATE — no DELETE path exists), so
+    # this block computes the SAME active_host as the first katmovie block
+    # above and can only fire when that first block's guard ("links.kmhd",
+    # "api.dandndn") skipped a host that still contains "katmovie" — a
+    # guard-escape, pinned as a bug-shape in test_fast_fetch_domains.py, not a
+    # feature. Check KatMovieHD
     if "katmovie" in host:
         active_km = DOMAINS.get("katmoviehd", "https://new.katmoviehd.top")
         active_host = urllib.parse.urlparse(active_km).netloc.lower()
@@ -896,6 +992,11 @@ def sync_sitemaps(site: str = "all", max_sub_sitemaps: int | None = None, includ
     Supports site='vegamovies', 'rogmovies', 'ssrmovies', '7starhd', 'katmoviehd', or 'all'.
     """
     init_db()
+    # Hunk G (crown ruling 2026-11-05): fresh read of the three tables at every
+    # CLI/sync entry, so a rotation landed by domain_resolver in another process
+    # is used at once. The long-lived `serve` unit still reads the import-time
+    # DOMAINS snapshot — restart gate, documented in refresh_domains().
+    refresh_domains()
     total_added_global = 0
 
     # 1. Standard XML sitemap sites (Vegamovies, RogMovies)
