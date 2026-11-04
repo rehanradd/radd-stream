@@ -2240,3 +2240,21 @@ each break → its test red → pristine restored → 14 OK again:
 4. success keeps the cooldown → test_success_clears_negative_entry FAILED(1).
 5. stale entries servable (`if True`) → test hung, killed at 25s, exit=124, zero test
    progress — the unbankable-stale law is load-bearing.
+
+## 2026-11-05 ~06:00 — qoder11: fleet notice vacuous_loops applied to test_single_flight
+
+Audit result, stated plainly: the suite has NO loop over a module-level constant
+collection; the real vacuity risks were (1) three `all(...)` loops over RUNTIME lists —
+collapse and stress already had literal length guards, **bounded-staleness did not** —
+and (2) the source-scan test, which would pass on an emptied module file. Both fixed:
+`assertEqual(len(outs), 8)` before the all(); `assertGreater(len(src), 2000)` +
+`assertIn("def run(self, key, fn)", src)` before the assertNotIn's.
+Two new mutants per the notice, output pasted to the crown:
+- **M6 EMPTY-THE-COLLECTION** (in-flight registration removed → every caller becomes an
+  owner): collapse `AssertionError: 9 != 1`, stress `AssertionError: 50 != 20 (upstream
+  attempts must equal distinct ids, never more)` — FAILED(2) in 0.146s. The literals
+  catch what loops would miss.
+- **M7 wake-empty** (waiters get None): collapse FAILED with AttributeError — the
+  non-empty guard makes a silently-emptied result set impossible to pass over.
+Restored pristine (`diff -q` clean), 14 OK again. No module behaviour changed this
+segment — test hardening only.

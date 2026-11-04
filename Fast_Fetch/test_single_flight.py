@@ -277,6 +277,9 @@ class BoundaryCompositionTests(unittest.TestCase):
     def test_module_needs_no_sqlite_table_at_all(self):
         src = open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                 "single_flight.py")).read()
+        self.assertGreater(len(src), 2000)               # non-empty: an emptied
+        # module would make every assertNotIn below vacuously green (fleet notice)
+        self.assertIn("def run(self, key, fn)", src)     # the API still exists
         self.assertNotIn("sqlite3", src)
         self.assertNotIn("import requests", src)
         g = SingleFlight()                                # no DB, no dir, works
@@ -316,6 +319,8 @@ class BoundaryCompositionTests(unittest.TestCase):
         for t in ts:
             t.join(5)
         self.assertEqual(g.stats["attempts"], 2)          # and still just one
+        self.assertEqual(len(outs), 8)                    # non-empty guard: an
+        # empty outs would make the all() below vacuously green (fleet notice)
         self.assertTrue(all(r.status == "ok" and r.value == "v3" for r in outs))
         # stale answer was NOT served: nothing in flight, banked value is v3;
         # a caller arriving after settle may legitimately hit the FRESH v3 entry
