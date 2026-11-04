@@ -2003,3 +2003,17 @@ contradiction.
 **CI (night run):** 14/16 OK — unchanged: only the two known `bf9e565` baseline
 failures (`test_evidence_writeback`, `test_merge_catalogs`), fix still uncommitted
 in the live tree's `catalog_v2.py`.
+
+**Item 2 — drill executed on FULL posts table.** Prod is 6.4 GB; the first
+full-VACUUM scratch attempt filled the 4 GB free disk (ENOSPC at 99-100% —
+services verified unharmed afterward: `quick_check ok`, flagged count unchanged
+15,068, edge routes 200, space reclaimed). Re-ran against a 308 MB scratch whose
+`posts` table is the ENTIRE production posts table (150,799 rows, exact schema)
+plus 147,168 releases / 417,839 links of every flagged/mixed-key post and 500
+controls. Results: dry-run flip_count=407 writes nothing; --apply changed=407,
+flagged 15,068→15,475, leaking twins 407→0, verified backup froze pre-apply
+state (15,068) and passed the sha256/row-count gate; second run changed=0 /
+idempotent_check=0; public `adult_clause` hides 15,475 (+407); redirector:
+flagged post 159's real link 13451 → True and unlisted; ORPHAN: deleting that
+link's release row (join broken) still → True (fail-closed holds on real data);
+control link → False.
