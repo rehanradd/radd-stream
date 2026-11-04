@@ -63,6 +63,11 @@ authority for hoster classification** — ``site_scout.DEFAULT_HOSTER_KINDS``
 is built from :func:`as_scout_hoster_kinds` with the legacy scout rows
 appended as never-deleted fallback, not maintained beside it.
 
+And per Crown-Prince order qoder14 (Task A): this table is now the **single
+authority for hoster classification** — ``site_scout.DEFAULT_HOSTER_KINDS``
+is built from :func:`as_scout_hoster_kinds` with the legacy scout rows
+appended as never-deleted fallback, not maintained beside it.
+
 Python standard library only. No I/O in this module: it classifies and
 prepares headers, it never fetches.
 """
