@@ -18,6 +18,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
@@ -91,6 +92,10 @@ fun BrowseScreen(
                 title = "Nothing here yet",
                 message = "This category has no titles on the connected server.",
                 modifier = Modifier.padding(contentPadding),
+                action = {
+                    // The category is empty, not the app. The way forward is back to the picker.
+                    OutlinedButton(onClick = onBackClick) { Text("Pick another category") }
+                },
             )
             else -> LazyVerticalGrid(
                 state = gridState,

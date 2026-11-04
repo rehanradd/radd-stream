@@ -31,7 +31,6 @@ import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -56,6 +55,7 @@ import androidx.compose.ui.platform.LocalContext
 import android.provider.Settings
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import com.raddstream.app.ui.layout.CardGeometry
 
 /**
  * Shared page-level building blocks: section headers, empty/error/loading states,
@@ -207,11 +207,77 @@ fun PosterGridSkeleton(modifier: Modifier = Modifier) {
     ) {
         items(SKELETON_CELLS) {
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                SkeletonBox(aspectRatioValue = 0.68f)
+                SkeletonBox(aspectRatioValue = CardGeometry.POSTER_ASPECT)
                 SkeletonBox(Modifier.height(14.dp))
                 SkeletonBox(Modifier.height(10.dp).width(60.dp))
             }
         }
+    }
+}
+
+/**
+ * The loading stand-in for a horizontal rail: the same tile width, the same poster box and the
+ * same two text lines as the [PosterCard]s that replace it, so a row that fills in does not
+ * change height under the viewer's thumb. [cells] is a fixed handful for the same reason
+ * [PosterGridSkeleton] uses [SKELETON_CELLS] — a rail does not know how many tiles fit until it
+ * is measured.
+ */
+@Composable
+fun PosterRailSkeleton(
+    modifier: Modifier = Modifier,
+    cells: Int = 4,
+) {
+    Row(
+        modifier = modifier.padding(horizontal = 16.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        repeat(cells) {
+            Column(
+                modifier = Modifier.width(CardGeometry.RAIL_CARD_WIDTH_DP.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                SkeletonBox(
+                    Modifier
+                        .fillMaxWidth()
+                        .aspectRatio(CardGeometry.POSTER_ASPECT)
+                )
+                SkeletonBox(Modifier.height(14.dp))
+                SkeletonBox(Modifier.height(10.dp).width(60.dp))
+            }
+        }
+    }
+}
+
+/**
+ * The loading stand-in for the detail header: poster box on the left, the title and metadata
+ * lines on the right, and the shape of the action row underneath. Detail used to answer a tap
+ * on a tile with one spinner floating in the middle of an empty screen, which told the viewer
+ * nothing about what was arriving and left the whole page to be re-laid out when it did.
+ */
+@Composable
+fun DetailSkeleton(modifier: Modifier = Modifier) {
+    Column(modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
+        Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+            SkeletonBox(
+                Modifier
+                    .width(CardGeometry.DETAIL_POSTER_WIDTH_DP.dp)
+                    .aspectRatio(CardGeometry.POSTER_ASPECT)
+            )
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                SkeletonBox(Modifier.fillMaxWidth().height(22.dp))
+                SkeletonBox(Modifier.width(140.dp).height(14.dp))
+                SkeletonBox(Modifier.width(96.dp).height(14.dp))
+            }
+        }
+        Spacer(Modifier.height(16.dp))
+        SkeletonBox(Modifier.fillMaxWidth().height(44.dp))
+        Spacer(Modifier.height(8.dp))
+        SkeletonBox(Modifier.fillMaxWidth().height(14.dp))
+        SkeletonBox(Modifier.fillMaxWidth().height(14.dp))
+        SkeletonBox(Modifier.width(200.dp).height(14.dp))
     }
 }
 
@@ -293,13 +359,6 @@ fun ErrorState(
     )
 }
 
-@Composable
-fun LoadingState(modifier: Modifier = Modifier) {
-    Box(modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
-    }
-}
-
 /**
  * The compact cousin of [ErrorState]: a page that already shows content but could not
  * finish loading — a failed next page, a detail reload that came back empty — says so in
@@ -363,7 +422,7 @@ fun <T> MediaRail(
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         items(items, key = key) { item ->
-            Box(Modifier.width(132.dp)) { itemContent(item) }
+            Box(Modifier.width(CardGeometry.RAIL_CARD_WIDTH_DP.dp)) { itemContent(item) }
         }
     }
 }

@@ -202,6 +202,7 @@ fun RaddStreamNavGraph(
             composable(Screen.MyList.route) {
                 MyListScreen(
                     onPostClick = { postId -> navController.navigate(Screen.Detail.createRoute(postId)) },
+                    onBrowseClick = { navController.navigate(Screen.Browse.createRoute(null)) },
                 )
             }
 

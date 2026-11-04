@@ -81,17 +81,18 @@ import com.raddstream.app.ui.components.AudioBadge
 import com.raddstream.app.ui.components.CapabilityChip
 import com.raddstream.app.ui.components.CamBadge
 import com.raddstream.app.ui.components.CatalogImage
+import com.raddstream.app.ui.components.DetailSkeleton
 import com.raddstream.app.ui.components.ErrorState
 import com.raddstream.app.ui.components.HdrBadge
 import com.raddstream.app.ui.components.ImageFallbackCard
 import com.raddstream.app.ui.components.InlineLoadFailure
-import com.raddstream.app.ui.components.LoadingState
 import com.raddstream.app.ui.components.Pill
 import com.raddstream.app.ui.components.PrintQualityBadge
 import com.raddstream.app.ui.components.PrintSourceBadge
 import com.raddstream.app.ui.components.QualityRungCard
 import com.raddstream.app.ui.components.SectionHeader
 import com.raddstream.app.ui.components.SubtitleBadge
+import com.raddstream.app.ui.layout.CardGeometry
 import com.raddstream.app.player.LadderForScope
 import com.raddstream.app.player.QualityOption
 import com.raddstream.app.viewmodel.DetailNavigationEvent
@@ -225,7 +226,7 @@ fun DetailScreen(
     ) { paddingValues ->
         val post = state.post
         when {
-            state.isLoading -> LoadingState(Modifier.padding(paddingValues))
+            state.isLoading -> DetailSkeleton(Modifier.padding(paddingValues))
             state.error != null && post == null -> ErrorState(
                 message = state.error ?: "Unable to load title.",
                 onRetry = viewModel::loadDetail,
@@ -449,8 +450,8 @@ private fun PosterHeader(post: PostDetail, capabilities: List<String>) {
     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
         Box(
             modifier = Modifier
-                .width(120.dp)
-                .aspectRatio(0.68f)
+                .width(CardGeometry.DETAIL_POSTER_WIDTH_DP.dp)
+                .aspectRatio(CardGeometry.POSTER_ASPECT)
                 .clip(RoundedCornerShape(12.dp))
                 .background(MaterialTheme.colorScheme.surfaceVariant),
             contentAlignment = Alignment.Center,
@@ -726,7 +727,7 @@ private fun SeasonHeader(season: SeasonGroup) {
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .aspectRatio(3.2f)
+            .aspectRatio(CardGeometry.SEASON_ART_ASPECT)
             .clip(RoundedCornerShape(12.dp))
             .background(MaterialTheme.colorScheme.surfaceVariant),
     ) {
@@ -834,7 +835,7 @@ private fun EpisodeRow(
             Box(
                 modifier = Modifier
                     .width(88.dp)
-                    .aspectRatio(16f / 9f)
+                    .aspectRatio(CardGeometry.WIDE_ART_ASPECT)
                     .clip(RoundedCornerShape(8.dp))
                     .background(MaterialTheme.colorScheme.surfaceVariant),
                 contentAlignment = Alignment.Center,

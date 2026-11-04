@@ -18,6 +18,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -39,6 +40,8 @@ import com.raddstream.app.viewmodel.MyListViewModel
 @Composable
 fun MyListScreen(
     onPostClick: (Int) -> Unit,
+    /** The empty list's way out: the catalog, not a sentence telling the user to go find it. */
+    onBrowseClick: () -> Unit = {},
     viewModel: MyListViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsState()
@@ -68,6 +71,9 @@ fun MyListScreen(
                     )
                 },
                 modifier = Modifier.padding(contentPadding),
+                action = {
+                    OutlinedButton(onClick = onBrowseClick) { Text("Browse the catalog") }
+                },
             )
             state.favorites.isEmpty() -> EmptyState(
                 title = "Your list is empty",
@@ -81,6 +87,11 @@ fun MyListScreen(
                     )
                 },
                 modifier = Modifier.padding(contentPadding),
+                action = {
+                    // "Tap the heart on any movie" is advice the viewer cannot follow from here;
+                    // the button is the same instruction with a destination.
+                    OutlinedButton(onClick = onBrowseClick) { Text("Find something to save") }
+                },
             )
             else -> Column(Modifier.fillMaxSize().padding(contentPadding)) {
                 state.hiddenNotice?.let { notice ->

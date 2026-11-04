@@ -165,6 +165,11 @@ fun DownloadsScreen(
                                 )
                             },
                             modifier = Modifier.fillMaxSize(),
+                            action = {
+                                // A downloads tab nobody has used yet is not a dead end: the way
+                                // to fill it is one tap away, on the title they came from.
+                                OutlinedButton(onClick = onBackClick) { Text("Find something to keep") }
+                            },
                         )
                     }
                 }

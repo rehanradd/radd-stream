@@ -52,9 +52,9 @@ import com.raddstream.app.ui.components.HeroSkeleton
 import com.raddstream.app.ui.components.InlineLoadFailure
 import com.raddstream.app.ui.components.MediaRail
 import com.raddstream.app.ui.components.PosterCard
+import com.raddstream.app.ui.components.PosterRailSkeleton
 import com.raddstream.app.ui.components.SectionHeader
 import com.raddstream.app.ui.components.SeeAllButton
-import com.raddstream.app.ui.components.SkeletonBox
 import com.raddstream.app.ui.theme.RaddStreamMark
 import com.raddstream.app.viewmodel.HomeSection
 import com.raddstream.app.viewmodel.HomeViewModel
@@ -288,12 +288,7 @@ private fun HomeRailSection(
         section.loading && section.items.isEmpty() -> {
             Column {
                 SectionHeader(title = section.title, modifier = Modifier.padding(horizontal = 16.dp))
-                Row(
-                    modifier = Modifier.padding(horizontal = 16.dp),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
-                ) {
-                    repeat(4) { SkeletonBox(Modifier.height(190.dp).width(132.dp)) }
-                }
+                PosterRailSkeleton()
             }
         }
         section.items.isNotEmpty() -> {

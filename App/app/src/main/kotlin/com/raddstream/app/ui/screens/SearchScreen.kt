@@ -57,7 +57,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import com.raddstream.app.ui.components.EmptyState
 import com.raddstream.app.ui.components.InlineLoadFailure
 import com.raddstream.app.ui.components.ErrorState
-import com.raddstream.app.ui.components.LoadingState
+import com.raddstream.app.ui.components.PosterRailSkeleton
 import com.raddstream.app.ui.components.MediaRail
 import com.raddstream.app.ui.components.Pill
 import com.raddstream.app.ui.components.PosterCard
@@ -275,8 +275,8 @@ private fun SearchBody(
                 )
             }
         }
-        state.isLoading && state.groups.isEmpty() -> LoadingState(
-            Modifier.fillMaxWidth().height(160.dp),
+        state.isLoading && state.groups.isEmpty() -> PosterRailSkeleton(
+            Modifier.fillMaxWidth().padding(top = 16.dp),
         )
         state.error != null && state.groups.isEmpty() -> ErrorState(message = state.error ?: "Search failed.", onRetry = viewModel::submitCurrentQuery)
         state.groups.isEmpty() -> EmptyState(
@@ -290,6 +290,12 @@ private fun SearchBody(
             action = {
                 if (state.hasActiveFilters) {
                     OutlinedButton(onClick = viewModel::resetFilters) { Text("Clear filters") }
+                } else {
+                    // An empty result screen with no way out is a dead end: the viewer either
+                    // loosens a filter or starts from a different word. Both are one tap.
+                    OutlinedButton(onClick = { viewModel.onQueryChanged("") }) {
+                        Text("Search another title")
+                    }
                 }
             },
         )

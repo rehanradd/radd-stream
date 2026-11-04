@@ -1313,3 +1313,43 @@ revalidation must find first. Backend run `41394696505` at the same sha was alre
 `completed success` (46/46 steps, including the `test_docs_invariants` claim corrected above).
 Trunk untouched, no tag, no release, no service restart, no live-tree edit, no credential value read
 or printed. Gating is qoder1's call after fresh green CI.
+
+### Session 40 — redesign batch 1: one card geometry, skeletons on first paint, a way out of every empty state (qoder2, 2026-11-04)
+
+Owner approval 04:09 PKT put the 87-idea shortlist into force (`/tmp/qoder9_ledger_design1.txt` is the
+list, `qoder9_ledger_design_impl_order.txt` the order). This branch, `redesign-simple-batch1` off trunk
+`37ae67b`, takes three PHASE-1 ideas and no others: **#7** one fixed card aspect ratio
+everywhere, **#84** skeletons rather than spinners on first paint, **#86** every empty state gets a next
+action. Screens, layout and styling only — no catalog source, no content source, no API endpoint, no
+rights question touched; the sourcing question stays parked with qoder9.
+
+**#7** — `ui/layout/CardGeometry.kt` now owns the poster ratio (0.68, the value the code already drew at
+all three call sites — no pixel moves), the rail tile width (132dp), the detail header's poster column
+(120dp), the season art band (3.2) and the 16:9 class. `PosterCard`, `MediaRail`, the two skeletons in
+`CommonUi` and `DetailScreen` (its poster column, the season band and an episode still) read the token
+instead of repeating the number.
+`CardGeometryTest` (plain JUnit4, the `BrandDriftTest` shape) walks the UI sources and fails on any
+`aspectRatio(…)` literal that is not a token, on a second copy of the poster ratio, and on a pinned rail
+height — because the drift it is guarding is the kind that looks fine on screen: the home rail placeholder
+was a 190dp box standing in for a 194dp card. `design/DESIGN_SYSTEM.md` §8 said `2f/3f` while three call
+sites said `0.68f`; that discrepancy is recorded as an open owner question rather than silently decided.
+
+**#84** — Detail's first paint was a full-screen spinner; it draws `DetailSkeleton` (poster box, title
+lines, action row) now. Search's first paint drew `LoadingState` and draws `PosterRailSkeleton`, the new
+rail placeholder built from the same `CardGeometry` cell as the cards that replace it. `LoadingState`
+itself is gone: after these two swaps it had no callers, and the point of the idea is that a first-paint
+spinner should not be available. Load-more footers keep their spinner — that is content already on screen
+finishing, not a blank page.
+
+**#86** — Browse ("Pick another category" → back to the picker), Downloads ("Find something to keep"),
+both My List empties ("Browse the catalog" / "Find something to save", wired through a new `onBrowseClick`
+in `NavGraph`) and Search's no-match-with-no-filters ("Search another title" → `onQueryChanged("")`, which
+the view model already exposed). One deliberate non-change: the search screen's *idle* panel (no recents
+yet) stays buttonless, because the text field above it is the action and a second one would be noise.
+
+Not done here, deliberately: **#85** (reserve the accent colour for playable/active) is a repo-wide sweep
+with a design decision at every badge, chip and hero CTA — it belongs in its own reviewable batch, not
+tucked behind three layout changes. No local Gradle: nothing on this box built. No tag, no release, no
+trunk push, no live-tree edit, no restart, no deletion, no credential value read or printed. The gate is
+the hosted `ci.yml` run for this branch — its id and the debug APK artifact it uploads are reported to
+the supervisor, and are the only build this batch has.
