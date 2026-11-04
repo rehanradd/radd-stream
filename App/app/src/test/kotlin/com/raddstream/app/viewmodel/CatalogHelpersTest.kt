@@ -1,5 +1,6 @@
 package com.raddstream.app.viewmodel
 
+import com.raddstream.app.network.models.Post
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -81,5 +82,61 @@ class CatalogHelpersTest {
         assertEquals("1 result", resultsSummary(loaded = 1, serverTotal = 1, hasMore = false))
         assertEquals("12 results", resultsSummary(loaded = 12, serverTotal = 12, hasMore = false))
         assertEquals("0 results", resultsSummary(loaded = 0, serverTotal = 0, hasMore = false))
+    }
+
+    @Test
+    fun `a mixed search keeps one rail per content type`() {
+        // Rails were grouped by the raw content_type but ordered by the display label, so every
+        // key ranked alike, the sorted map read them as one entry and overwrote them, and a query
+        // matching movies AND series showed a single rail.
+        val posts = listOf(
+            Post(id = 1, title = "Film", contentType = "movie"),
+            Post(id = 2, title = "Show", contentType = "series"),
+            Post(id = 3, title = "Boxed", contentType = "complete_season"),
+            Post(id = 4, title = "Running", contentType = "ongoing_season"),
+            Post(id = 5, title = "Toon", contentType = "anime"),
+            Post(id = 6, title = "Mystery", contentType = null),
+        )
+        val groups = buildTypeGroups(posts, SearchSort.NEWEST)
+        assertEquals(listOf("Movies", "Series", "Seasons", "Anime", "Other"), groups.map { it.label })
+        assertEquals(2, groups.first { it.label == "Seasons" }.items.size)
+        assertEquals(1, groups.first { it.label == "Movies" }.items.size)
+    }
+
+    @Test
+    fun `an unranked content type never steals a rail from its neighbour`() {
+        // Two keys the ordering does not know both ranked 4: the comparator returned 0 for them
+        // and the map merged them. Every unknown now reads as one honest "Other" rail, and a
+        // rank-only comparator still must not merge distinct keys.
+        val posts = listOf(
+            Post(id = 1, title = "Doc", contentType = "documentary"),
+            Post(id = 2, title = "Match", contentType = "sport_event"),
+            Post(id = 3, title = "Film", contentType = "movie"),
+        )
+        val groups = buildTypeGroups(posts, SearchSort.NEWEST)
+        assertEquals(listOf("Movies", "Other"), groups.map { it.label })
+        assertEquals(2, groups.first { it.label == "Other" }.items.size)
+    }
+
+    @Test
+    fun `animated rows rail under anime, not under their content type`() {
+        assertEquals("Anime", typeRailKey(Post(id = 1, title = "Toon", contentType = "series", isAnimated = true)))
+        assertEquals("Series", typeRailKey(Post(id = 2, title = "Show", contentType = "series", isAnimated = false)))
+    }
+
+    @Test
+    fun `each rail sorts by the chosen sort`() {
+        val posts = listOf(
+            Post(id = 1, title = "zeta", contentType = "movie", year = 2001),
+            Post(id = 2, title = "alpha", contentType = "movie", year = 2020),
+        )
+        assertEquals(
+            listOf("alpha", "zeta"),
+            buildTypeGroups(posts, SearchSort.TITLE).single().items.map { it.title },
+        )
+        assertEquals(
+            listOf("alpha", "zeta"),
+            buildTypeGroups(posts, SearchSort.NEWEST).single().items.map { it.title },
+        )
     }
 }

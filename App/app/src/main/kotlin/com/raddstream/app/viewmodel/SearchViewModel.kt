@@ -334,31 +334,7 @@ class SearchViewModel @Inject constructor(
             yearOk
         }
 
-        val groups = filtered
-            .groupBy { typeGroupKey(it) }
-            .toSortedMap(typeComparator)
-            .map { (key, posts) ->
-                TypeGroup(
-                    label = normalizeTypeLabel(key),
-                    typeKey = key,
-                    items = when (sort) {
-                        SearchSort.TITLE -> posts.sortedBy { (it.cleanTitle ?: it.title).lowercase() }
-                        SearchSort.HIGHEST_IMDB -> posts.sortedWith(
-                            compareByDescending<Post> { it.imdbRating?.toDoubleOrNull() ?: -1.0 }
-                                .thenByDescending { it.id },
-                        )
-                        SearchSort.NEWEST -> posts.sortedWith(
-                            compareByDescending<Post> { it.year ?: 0 }
-                                .thenByDescending { it.id },
-                        )
-                        // Mirrors the server's coverage ranking: no play counts exist.
-                        SearchSort.MOST_SOURCES -> posts.sortedWith(
-                            compareByDescending<Post> { (it.releaseCount ?: 0) + (it.sourceCount ?: 0) }
-                                .thenByDescending { it.id },
-                        )
-                    },
-                )
-            }
+        val groups = buildTypeGroups(filtered, sort)
 
         _uiState.update {
             it.copy(
@@ -382,16 +358,6 @@ class SearchViewModel @Inject constructor(
     private companion object {
         const val DEBOUNCE_MS = 300L
         const val PAGE_SIZE = 100
-
-        val typeComparator = compareBy<String> { typeOrder(it) }
-
-        fun typeOrder(label: String): Int = when (label) {
-            "Movies" -> 0
-            "Series" -> 1
-            "Seasons" -> 2
-            "Anime" -> 3
-            else -> 4
-        }
     }
 }
 
@@ -423,3 +389,56 @@ internal fun typeGroupKey(post: Post): String =
     } else {
         post.contentType.orEmpty()
     }
+
+/**
+ * Which rail a row is drawn under. The rail's identity has to be the same answer that paints its
+ * header, so this is [normalizeTypeLabel] of [typeGroupKey] rather than the raw `content_type`:
+ * grouping by the raw key while ordering by the label made two different keys compare equal, a
+ * sorted map then read them as one entry, and a search matching both movies and series collapsed
+ * into a single rail. It also folds `complete_season` and `ongoing_season` into one Seasons rail,
+ * which is what the header already says they are.
+ */
+internal fun typeRailKey(post: Post): String = normalizeTypeLabel(typeGroupKey(post))
+
+private fun typeRailOrder(railKey: String): Int = when (railKey) {
+    "Movies" -> 0
+    "Series" -> 1
+    "Seasons" -> 2
+    "Anime" -> 3
+    else -> 4
+}
+
+/**
+ * The tiebreak on the key itself is not decoration: a comparator that returns 0 for two different
+ * keys makes the sorted map overwrite the first with the second, which is exactly how whole rails
+ * went missing. Keys that share a rank must still stay separate entries.
+ */
+private val typeRailComparator = compareBy<String> { typeRailOrder(it) }.thenBy { it }
+
+/** One rail per content type, in [typeRailOrder], each sorted by the chosen [sort]. */
+internal fun buildTypeGroups(posts: List<Post>, sort: SearchSort): List<TypeGroup> =
+    posts
+        .groupBy { typeRailKey(it) }
+        .toSortedMap(typeRailComparator)
+        .map { (railKey, group) ->
+            TypeGroup(
+                label = railKey,
+                typeKey = railKey,
+                items = when (sort) {
+                    SearchSort.TITLE -> group.sortedBy { (it.cleanTitle ?: it.title).lowercase() }
+                    SearchSort.HIGHEST_IMDB -> group.sortedWith(
+                        compareByDescending<Post> { it.imdbRating?.toDoubleOrNull() ?: -1.0 }
+                            .thenByDescending { it.id },
+                    )
+                    SearchSort.NEWEST -> group.sortedWith(
+                        compareByDescending<Post> { it.year ?: 0 }
+                            .thenByDescending { it.id },
+                    )
+                    // Mirrors the server's coverage ranking: no play counts exist.
+                    SearchSort.MOST_SOURCES -> group.sortedWith(
+                        compareByDescending<Post> { (it.releaseCount ?: 0) + (it.sourceCount ?: 0) }
+                            .thenByDescending { it.id },
+                    )
+                },
+            )
+        }
