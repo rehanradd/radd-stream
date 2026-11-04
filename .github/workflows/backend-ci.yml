@@ -127,11 +127,13 @@ name: 🐍 Backend CI — Stdlib Python Tests
 #     EXCLUDED: test_rogmovies_import.py  — per-site parser
 #     EXCLUDED: test_ssrmovies_import.py  — per-site parser
 #     EXCLUDED: test_toonworld4all.py  — per-site parser
-#     EXCLUDED: test_transient_dead_heal.py  — UNTRACKED qoder13 work sitting in
-#       the lane worktree (same class as test_fast_fetch_domains.py was at
-#       96c689e); its owner must commit it, then it gets a real step. The drift
-#       guard would fail a run: step on it today; this line is the honest
-#       hold, not a mute.
+#     PROMOTED (this line replaces the old hold entry, which the guard's EXCLUDED_RE
+#     would otherwise read as a live exclusion and call an overlap):
+#     test_transient_dead_heal.py — NO LONGER EXCLUDED. History: it was UNTRACKED qoder13
+#       work sitting in the lane worktree (same class as test_fast_fetch_domains.py was at
+#       96c689e) and the old line was the honest hold, not a mute; the hold's own rule was
+#       "its owner must commit it, then it gets a real step", it committed tracked at
+#       1cfea81, and the step below is that promotion.
 #     EXCLUDED: test_vegamovies_import.py  — per-site parser
 #     EXCLUDED: test_world4ufree_import.py  — per-site parser
 # KNOWN FAILURE MODES THIS FILE FIXES
@@ -569,6 +571,25 @@ jobs:
         id: test_catalog_exporter
         if: always()
         run: python3 -S Fast_Fetch/test_catalog_exporter.py
+
+      # Promoted from the EXCLUDED ledger by its owner (qoder13), as that line's own
+      # rule required: "its owner must commit it, then it gets a real step." Committed
+      # tracked at 1cfea81; the EXCLUDED entry below is now a note, not a hold. Offline,
+      # stdlib, per-test isolated scratch DB, ~2.5 s. Proves a transient probe failure is
+      # healable and that nothing else consumes status=dead as measured absence.
+      - name: 🧪 test_transient_dead_heal.py
+        id: test_transient_dead_heal
+        if: always()
+        run: python3 -S Fast_Fetch/test_transient_dead_heal.py
+
+      # PROBE_COVERAGE.md §6 as an executable. Offline, synthetic scratch DB, ~1.3 s,
+      # never opens the production catalog. It is also the test that caught the operator-
+      # precedence double-count in the shipped coverage predicate (5 rows reporting as 7),
+      # so it is a load-bearing step, not documentation.
+      - name: 🧪 test_probe_coverage.py
+        id: test_probe_coverage
+        if: always()
+        run: python3 -S Fast_Fetch/test_probe_coverage.py
 
       - name: 🧪 test_domain_resolver.py
         id: test_domain_resolver
