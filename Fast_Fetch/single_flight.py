@@ -40,10 +40,17 @@ import time
 from collections import namedtuple
 
 STATUS_OK = "ok"
-STATUS_FAIL = "fail"
+STATUS_FAIL = "fail"                    # affirmative endpoint verdict — full window
 STATUS_UNSUPPORTED = "unsupported"
+STATUS_TRANSIENT = "transient"          # OUR side failed / ambiguous — short window only
 STATUS_BUSY = "busy"                    # cap or wait: 0 upstream attempts
 STATUS_TIMEOUT = "inflight_timeout"     # waiter gave up: 0 upstream attempts
+
+#: Verbatim mirror of qoder12's ``resolved_cache.TRANSPORT_CAUSES`` (49feb8e):
+#: our timeout/DNS/TLS/reset/connection errors are a verdict about OUR night,
+#: not about their link. Pinned by a literal test — if the two sets ever
+#: diverge, that test goes red before the drift ships.
+TRANSPORT_CAUSES = frozenset(("timeout", "dns", "tls", "conn_reset", "conn_error"))
 
 Outcome = namedtuple("Outcome", "status value cached")
 
@@ -56,8 +63,45 @@ def fail(reason):
     return Outcome(STATUS_FAIL, reason, False)
 
 
+def transient(reason):
+    return Outcome(STATUS_TRANSIENT, reason, False)
+
+
 def unsupported(reason):
     return Outcome(STATUS_UNSUPPORTED, reason, False)
+
+
+def classify_fail_cause(cause):
+    """Map a resolver ``fail_cause`` to a gate outcome, qoder12's exact law:
+    an int (an HTTP status we actually received) or an unknown endpoint word is
+    an AFFIRMATIVE verdict about the endpoint (full adaptive window); a word in
+    TRANSPORT_CAUSES is our-side transport (short window, no strikes); an
+    absent cause is AMBIGUOUS — ambiguity accrues nothing long (49feb8e retired
+    'absent = probed-dead')."""
+    if cause is None:
+        return transient("ambiguous:absent_cause")
+    if isinstance(cause, int):
+        return fail(f"http_{cause}")
+    if str(cause) in TRANSPORT_CAUSES:
+        return transient(str(cause))
+    return fail(str(cause))              # new endpoint vocabulary stays verdict
+
+
+def outcome_from_resolve(res: dict):
+    """The route-boundary interface (viewer wiring, when it is authorized):
+    map ONE ``resolve_live_source`` answer dict to a gate Outcome.
+
+    Order of tests mirrors qoder12's ``note_failure_from_probe`` (49feb8e)
+    exactly: unprobed is its own non-evidence class; success-with-url banks ok;
+    every failure is CLASSIFIED BY CAUSE — transport/ambiguous gets the short
+    window, an answered endpoint verdict the full adaptive one. This function
+    imports nothing from ``resolved_cache`` (qoder12 owns that file tonight);
+    the vocabulary is pinned by literal in the test suite."""
+    if res.get("unprobed"):
+        return unsupported(res.get("fail_cause") or "no_branch_matched")
+    if res.get("success") and res.get("url"):
+        return ok(res)
+    return classify_fail_cause(res.get("fail_cause"))
 
 
 class _Flight:
@@ -88,11 +132,13 @@ class SingleFlight:
 
     def __init__(self, *, result_ttl: float = 30.0,
                  neg_ttl_base: float = 30.0, neg_ttl_max: float = 600.0,
+                 transient_ttl: float = 2.0,
                  global_cap: int = 4, cap_wait: float = 2.0,
                  wait_timeout: float = 75.0, clock=time.monotonic):
         self._result_ttl = result_ttl
         self._neg_base = neg_ttl_base
         self._neg_max = neg_ttl_max
+        self._trans_ttl = float(transient_ttl)
         self._wait_timeout = wait_timeout
         self._clock = clock
         self._lock = threading.Lock()          # guards tables ONLY, held µs
@@ -103,7 +149,7 @@ class SingleFlight:
         self._sem = threading.Semaphore(max(1, int(global_cap)))
         self._cap_wait = cap_wait
         self.stats = {"attempts": 0, "collapses": 0, "negative_hits": 0,
-                      "entry_hits": 0, "busy": 0, "wait_timeouts": 0,
+                      "entry_hits": 0, "busy": 0, "wait_timeouts": 0, "transient_windows": 0,
                       "upstream_exceptions": 0, "fail_count_touched": 0}
 
     # ── public API ───────────────────────────────────────────────────────────
@@ -147,10 +193,12 @@ class SingleFlight:
             try:
                 res = fn()
                 if not isinstance(res, Outcome):
-                    res = fail(f"bad_result_shape:{type(res).__name__}")
+                    res = transient(f"bad_result_shape:{type(res).__name__}")
             except Exception as exc:            # noqa: BLE001 — never strand waiters
+                # A raise tells us nothing about the endpoint — ambiguity
+                # accrues a SHORT window only (qoder12 49feb8e law).
                 self.stats["upstream_exceptions"] += 1
-                res = fail(f"exception:{type(exc).__name__}")
+                res = transient(f"exception:{type(exc).__name__}")
             self._settle(key, res)
             return res
         finally:
@@ -176,6 +224,15 @@ class SingleFlight:
                 self._entries[key] = _Entry(res.value, now + self._result_ttl)
                 self._neg.pop(key, None)
                 self._strikes.pop(key, None)    # recovery on success
+                flight_outcome = res
+            elif res.status == STATUS_TRANSIENT:
+                existing = self._neg.get(key)
+                if (existing is not None and existing[0] != STATUS_TRANSIENT
+                        and now < existing[2]):
+                    pass    # a blip cannot erase an affirmative verdict on file
+                else:
+                    self._neg[key] = (res.status, res.value, now + self._trans_ttl)
+                    self.stats["transient_windows"] += 1
                 flight_outcome = res
             else:
                 strikes = self._strikes.get(key, 0) + 1

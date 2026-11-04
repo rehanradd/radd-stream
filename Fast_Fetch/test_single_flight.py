@@ -127,12 +127,12 @@ class NegativeCacheTests(unittest.TestCase):
     def test_failure_cached_next_callers_make_zero_attempts(self):
         clk = FakeClock()
         g = SingleFlight(clock=clk)
-        r1 = g.run("dead-1", lambda: fail("timeout"))
+        r1 = g.run("dead-1", lambda: fail("http_404_gone"))
         self.assertEqual(r1.status, "fail")
         self.assertFalse(r1.cached)
         n = 0
         for _ in range(5):
-            r = g.run("dead-1", lambda: fail("timeout"))
+            r = g.run("dead-1", lambda: fail("http_404_gone"))
             n += 1 if r.status == "fail" and r.cached else 0
         self.assertEqual(n, 5)
         self.assertEqual(g.stats["attempts"], 1)          # 0 further upstream
@@ -141,12 +141,12 @@ class NegativeCacheTests(unittest.TestCase):
     def test_negative_entry_expires_and_reprobes(self):
         clk = FakeClock()
         g = SingleFlight(neg_ttl_base=10.0, clock=clk)
-        g.run("k", lambda: fail("dns"))
+        g.run("k", lambda: fail("not_media"))
         clk.advance(9.0)
-        g.run("k", lambda: fail("dns"))
+        g.run("k", lambda: fail("not_media"))
         self.assertEqual(g.stats["attempts"], 1)          # still inside window
         clk.advance(2.0)
-        g.run("k", lambda: fail("dns"))
+        g.run("k", lambda: fail("not_media"))
         self.assertEqual(g.stats["attempts"], 2)          # window passed: re-probe
 
     def test_unsupported_is_a_distinct_class_and_touches_no_fail_count(self):
@@ -212,9 +212,10 @@ class SlotSafetyTests(unittest.TestCase):
         t_owner.join(5); t_w.join(5)
         self.assertFalse(t_owner.is_alive() or t_w.is_alive(), "slot stuck")
         self.assertEqual(len(waiter_got), 1)
-        self.assertEqual(waiter_got[0].status, "fail")     # exception folded to fail
-        # the fail opened an adaptive cooldown (by design, not a stuck slot):
-        self.assertIn("k", g._neg)
+        self.assertEqual(waiter_got[0].status, "transient")  # raise = ambiguity
+        # a SHORT ambiguous window, NOT the adaptive cooldown (blip != outage):
+        self.assertEqual(g._neg["k"][0], "transient")
+        self.assertAlmostEqual(g.window_for("k"), g._trans_ttl, places=3)
         # slot released: after the window the SAME key is attempted again, ok
         clk.advance(11)
         r = g.run("k", lambda: ok("healed"))
@@ -327,6 +328,84 @@ class BoundaryCompositionTests(unittest.TestCase):
         self.assertEqual(g._entries["k"].value, "v3")
         self.assertEqual(g._inflight, {})
 
+
+class TransientVsVerdictTests(unittest.TestCase):
+    """Crown integration-risk order: qoder12's 49feb8e says a transport fault
+    is healable and must not strike the circuit. The gate's own negative cache
+    must not convert a 200 ms blip into a link-wide refusal window either."""
+
+    def setUp(self):
+        self.clk = FakeClock()
+        self.g = SingleFlight(neg_ttl_base=30.0, transient_ttl=2.0, clock=self.clk)
+
+    def test_transport_failure_opens_only_the_short_window(self):
+        r = self.g.run("k", lambda: transient("conn_reset"))
+        self.assertEqual(r.status, "transient")
+        self.assertAlmostEqual(self.g.window_for("k"), 2.0, places=3)
+        # still inside 2s: short-circuited (collapse keeps its teeth)
+        r2 = self.g.run("k", lambda: ok("early"))
+        self.assertTrue(r2.cached and r2.status == "transient")
+        self.assertEqual(self.g.stats["attempts"], 1)
+        # blip passed: the NEXT caller re-probes immediately at 2.5s — no outage
+        self.clk.advance(2.5)
+        r3 = self.g.run("k", lambda: ok("healed"))
+        self.assertEqual(r3.status, "ok")
+        self.assertEqual(self.g.stats["attempts"], 2)
+
+    def test_transport_failures_never_grow_adaptively(self):
+        for i in range(4):
+            if i:
+                self.clk.advance(3.0)      # past the short window: re-probe
+            self.g.run("k", lambda: transient("timeout"))
+            self.assertAlmostEqual(self.g.window_for("k"), 2.0, places=3)
+        self.assertEqual(self.g.stats["attempts"], 4)     # re-probe = healability
+        self.assertNotIn("k", self.g._strikes)             # strikes never accrued
+
+    def test_endpoint_verdict_keeps_the_full_adaptive_window(self):
+        self.g.run("k", lambda: fail("http_404_gone"))
+        self.assertAlmostEqual(self.g.window_for("k"), 30.0, places=3)
+        self.clk.advance(2.5)              # way past the transient window
+        r = self.g.run("k", lambda: ok("should-not-run"))
+        self.assertTrue(r.cached and r.status == "fail")   # verdict stands 30s
+        self.assertEqual(self.g.stats["attempts"], 1)
+
+    def test_blip_cannot_erase_a_dead_verdict(self):
+        self.g.run("k", lambda: fail("http_410_gone"))     # full window opens
+        self.clk.advance(1)
+        self.g.run("k", lambda: transient("timeout"))      # late blip settles
+        neg = self.g._neg["k"]
+        self.assertEqual(neg[0], "fail")                   # verdict NOT overwritten
+        self.assertAlmostEqual(self.g.window_for("k"), 29.0, places=3)
+
+    def test_verdict_still_wins_over_an_earlier_blip(self):
+        self.g.run("k", lambda: transient("dns"))
+        self.clk.advance(3)
+        self.g.run("k", lambda: fail("not_media"))
+        self.assertEqual(self.g._neg["k"][0], "fail")
+        self.assertAlmostEqual(self.g.window_for("k"), 30.0, places=3)
+
+    def test_cause_classification_pinned_to_qoder12_law(self):
+        # literal set, non-empty, NOT read from their dirty file (fleet hygiene)
+        self.assertEqual(sf.TRANSPORT_CAUSES,
+                         frozenset({"timeout", "dns", "tls", "conn_reset", "conn_error"}))
+        self.assertEqual(len(sf.TRANSPORT_CAUSES), 5)
+        self.assertEqual(sf.classify_fail_cause(404).status, "fail")      # answered
+        self.assertEqual(sf.classify_fail_cause("timeout").status, "transient")
+        self.assertEqual(sf.classify_fail_cause(None).status, "transient")  # ambiguous
+        self.assertEqual(sf.classify_fail_cause("not_media").status, "fail")
+
+    def test_outcome_from_resolve_needs_no_extra_files(self):
+        """The interface handed to the viewer wiring: one call maps a resolve
+        answer dict to a gate Outcome, unprobed first (never evidence)."""
+        r = sf.outcome_from_resolve({"success": True, "url": "https://x/y"})
+        self.assertEqual(r.status, "ok")
+        self.assertEqual(r.value["url"], "https://x/y")   # banks the full envelope
+        self.assertEqual(sf.outcome_from_resolve(
+            {"success": False, "unprobed": True}).status, "unsupported")
+        self.assertEqual(sf.outcome_from_resolve(
+            {"success": False, "fail_cause": "conn_reset"}).status, "transient")
+        self.assertEqual(sf.outcome_from_resolve(
+            {"success": False, "fail_cause": 503}).status, "fail")
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -2258,3 +2258,48 @@ Two new mutants per the notice, output pasted to the crown:
   non-empty guard makes a silently-emptied result set impossible to pass over.
 Restored pristine (`diff -q` clean), 14 OK again. No module behaviour changed this
 segment — test hardening only.
+
+## 2026-11-05 ~06:40 — qoder11: transient-vs-verdict in the gate (integration with 49feb8e) + FRESH-SESSION BRIEF
+
+**Change**: `single_flight.py` now separates CAUSE from VERDICT, mirroring
+qoder12's `note_failure_from_probe` law (49feb8e) exactly:
+- new `STATUS_TRANSIENT` + `transient()` ctor + `TRANSPORT_CAUSES` frozenset —
+  verbatim mirror of qoder12's five words, pinned by LITERAL in tests (not read
+  from their dirty file); `classify_fail_cause`: int→fail(endpoint answered,
+  FULL adaptive window) · transport word→transient · **absent→transient
+  "ambiguous" (49feb8e retired absent=dead; ambiguity accrues short only)** ·
+  unknown word→fail (new endpoint vocab stays verdict).
+- transient window = fixed `transient_ttl` (default **2.0 s**), NEVER grows with
+  strikes; a transient answer cannot overwrite an unexpired full-window verdict;
+  success clears as before. A raise / bad result shape = ambiguity → transient.
+- `outcome_from_resolve(res)` — the ONE call the future viewer wiring needs:
+  unprobed→unsupported, success+url→ok(envelope dict), else classify(fail_cause).
+  Imports NOTHING from resolved_cache (qoder12 owns it).
+- Tests 14→**21 OK** (0.38 s, offline, FakeClock): blip opens only the 2 s window
+  and the next caller re-probes at 2.5 s (no self-inflicted outage); 4 consecutive
+  transport fails never grow (window stays 2.0, strikes absent); endpoint 404/410
+  keeps 30 s full window; blip-cannot-erase-verdict + verdict-beats-blip; the
+  classification pins + envelope contract.
+- Answer to the Prince's question in one line: BEFORE this change a transport
+  raise DID serve a refusal for base 30 s growing to 600 s; now it serves at most
+  2 s and re-probes after — collapse still serializes the concurrent callers
+  during the blip, but the blip can no longer blackhole a healed link.
+
+**FRESH-SESSION BRIEF (ctx was near limit) — state of qoder11 tonight**:
+- Branch `q11-adult-reconcile-20261104` tip = this commit; all work pushed; tree clean.
+  Files owned+committed by me: single_flight.py, test_single_flight.py, CONTINUITY.md,
+  redact.py art fix (e9f5019), reconcile_adult chain (SUPERSEDED by trunk b99814e —
+  see 7eb2ac2, do not push/merge it).
+- HELD, awaiting Crown word: (1) viewer.py wiring of the gate — viewer.py is HELD,
+  ask first; the wiring diff is one `gate.run(link_id, lambda: outcome_from_resolve(
+  fast_fetch.resolve_live_source(id)))` at the stream/download miss path, adult gate
+  BEFORE (composition is tested). (2) quiet-box triplet re-run ONLY at loadavg<3 +
+  explicit order; harness ready (/tmp/bench_stream_cache.py both-modes,
+  /tmp/q11_hitpath_profile.py 21-test-style stages); everything so far labeled
+  provisional or NOT-A-GATE; 50-socket stress NOT RUN.
+- Fleet rules in force: stage by name, read `git status --porcelain` +
+  `git diff --cached --stat`, stop on double-column path; no add -A/-u/commit -a;
+  never touch another lane's hunk; literal guards before every loop-over-collection.
+- Push mechanics: GIT_ASKPASS file via Write tool (printf traps documented above);
+  token rotation is with the Emperor; NEVER expand a credential in any diagnostic.
+- Load was ~5 all night; disk 9.9 G free; no catalog copies, ever.
