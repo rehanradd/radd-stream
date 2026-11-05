@@ -466,8 +466,14 @@ jobs:
       # here rather than inside a regex — contradicting years quarantine, an unrecorded year is
       # silence — and so do the two directions of the error: a refused key stays public for a
       # human, a folded key moves the public total by exactly its own row count. `--undo`
-      # restores each row byte-exactly (NULL and 0 are different stored values). Offline —
-      # temp SQLite files, no network, no catalog read.
+      # restores each row byte-exactly (NULL and 0 are different stored values). Order #71 added
+      # the empty-token invariant to the same file: growing `BOILERPLATE_TOKENS` can delete a
+      # work's name, and a title whose tokens are entirely vocabulary is REFUSED in both
+      # directions (empty-vs-empty and empty-vs-nonempty) rather than folded — measured, 3 of
+      # 108,907 distinct `clean_title` values empty out under the shipped set, and `aka` was
+      # kept out of that set because *Aka* (2023) is one of the five it would have erased
+      # (rows 10892/13609/145867). 27 tests. Offline — temp SQLite files, no network, no
+      # catalog read.
       - name: 🧪 test_adult_fold_guard.py
         run: python3 -S Fast_Fetch/test_adult_fold_guard.py
 

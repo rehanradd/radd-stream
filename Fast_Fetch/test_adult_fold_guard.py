@@ -313,6 +313,90 @@ class ProjectionIndependenceTests(Fixture):
             "SELECT is_18_plus FROM cat_works WHERE id = 7").fetchone()[0], 1)
 
 
+class EmptyTokenRefusalTests(Fixture):
+    """A title made entirely of distribution vocabulary corroborates NOTHING — and the
+    gate must say so, in both directions, because growing `BOILERPLATE_TOKENS` is how a
+    live work gets silently blinded.
+
+    This is order #71's defect turned into a test. `CROWN_VERIFY_70` §4 measured that the
+    23-word vocabulary filed with order #70 empties the token set of five distinct
+    `clean_title` values in the production catalog, one of which is a real film: `AKA`
+    (2023, Netflix Original — rows 10892 hdtvb, 13609 moviezguru, 145867 filmiyin).
+    `titles_corroborate` bails on an empty set, so the effect is a permanent MISSED hide,
+    never a mis-hide — the safe direction, and the reason `aka` came out of the patch
+    rather than the fixtures being edited. Three titles still empty under the 22-word
+    version and they are pinned here so a future word cannot empty a fourth quietly.
+
+    Offline: temp SQLite files, no network, no catalog read.
+    """
+
+    # Re-measured on merged_catalog_20261025.db (108,907 distinct non-empty clean_title
+    # values) against THIS module's vocabulary: exactly these three empty out.
+    BOILERPLATE_ONLY = ["(2023) Unofficial", "(2024) HQ", "(2024) Unofficial"]
+
+    def test_boilerplate_only_titles_tokenise_to_nothing(self):
+        for text in self.BOILERPLATE_ONLY:
+            with self.subTest(title=text):
+                self.assertEqual(backfill_adult_key.title_tokens(text), frozenset())
+
+    def test_corroborate_refuses_an_empty_set_even_against_itself(self):
+        """The direction that matters: empty vs empty is NOT "the same title"."""
+        self.assertFalse(backfill_adult_key.titles_corroborate(frozenset(), frozenset()))
+        self.assertFalse(
+            backfill_adult_key.titles_corroborate(frozenset(), frozenset(["kaduva"])))
+
+    def test_empty_against_empty_is_refused_not_folded(self):
+        a = row(1, "(2024) HQ", "(2024) HQ", "2024", "hq_2024", 0)
+        b = row(2, "(2023) Unofficial", "(2023) Unofficial", "2023", "hq_2024", 1)
+        ok, reason = backfill_adult_key.titles_agree_with_reason(a, b)
+        self.assertFalse(ok)
+        self.assertEqual(reason, "no_title")
+
+    def test_empty_against_a_named_work_is_refused(self):
+        a = row(1, "Kaduva", "Kaduva", "2022", "kaduva_2022", 0)
+        b = row(2, "(2024) HQ", "(2024) HQ", "2024", "kaduva_2022", 1)
+        ok, reason = backfill_adult_key.titles_agree_with_reason(a, b)
+        self.assertFalse(ok)
+        self.assertEqual(reason, "no_title")
+
+    def test_a_key_whose_rows_are_all_boilerplate_never_folds(self):
+        self.add(1, "(2024) HQ", "(2024) HQ", "2024", "boilerplate_only_key", 0)
+        self.add(2, "(2023) Unofficial", "(2023) Unofficial", "2023",
+                 "boilerplate_only_key", 1)
+        out = self.classify()
+        self.assertEqual(out["agree_rows"], 0)
+        self.assertEqual(out["quarantine_rows"], 1)
+        exposed_id, agreed, why, source = out["verdicts"]["boilerplate_only_key"][0]
+        self.assertEqual(exposed_id, 1)
+        self.assertFalse(agreed)
+        self.assertEqual(why, "no_title")
+        self.assertIsNone(source)
+        self.assertEqual(self.flags()[1], 0)      # refused outright: nothing written
+
+    def test_aka_stays_a_title_and_its_twin_still_folds(self):
+        """The regression this patch is named for: `aka` is NOT distribution vocabulary."""
+        self.assertNotIn("aka", backfill_adult_key.BOILERPLATE_TOKENS)
+        self.assertEqual(backfill_adult_key.title_tokens("AKA"), frozenset(["aka"]))
+        self.add(1, "AKA", "AKA", "2023", "aka_2023", 0)
+        self.add(2, "AKA Hindi Dubbed", "AKA", "2023", "aka_2023", 1)
+        out = self.classify()
+        self.assertEqual(out["agree_rows"], 1)
+        self.assertEqual(out["quarantine_rows"], 0)
+
+    def test_a_growth_of_the_vocabulary_folds_the_work_it_is_for(self):
+        """`malayalam` is a tag one site adds; the 2022 film under both spellings folds."""
+        self.assertEqual(
+            backfill_adult_key.title_tokens("Kaduva Malayalam"),
+            backfill_adult_key.title_tokens("Kaduva"))
+        self.add(1, "Kaduva (2022) Malayalam Full Movie", "Kaduva Malayalam", "2022",
+                 "kaduva_2022", 0)
+        self.add(2, "Kaduva 2022 Dual Audio Hindi (Cleaned)", "Kaduva", "2022",
+                 "kaduva_2022", 1)
+        out = self.classify()
+        self.assertEqual(out["agree_rows"], 1)
+        self.assertEqual(out["quarantine_rows"], 0)
+
+
 class SplitLineTests(Fixture):
     def test_report_mode_prints_the_agree_quarantine_split(self):
         self.add(1, "Alpha", "Alpha", "2001", "alpha_2001", 0)

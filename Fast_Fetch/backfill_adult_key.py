@@ -151,6 +151,18 @@ BOILERPLATE_TOKENS = frozenset({
     "org", "line", "orgline", "full", "movie", "hd", "esubs", "subs", "subtitles",
     "uncut", "unrated", "x264", "x265", "hevc", "webrip", "web", "dl", "bluray",
     "hdrip", "dvdrip", "ts", "cam",
+    # Order #70 classified the 30 subset refusals: 22 are one work whose longer side
+    # carries a tag this set did not know. Order #71 lands those words. Language names
+    # were the gap — only hindi/tamil/telugu/english were listed, so `Kaduva (2022)
+    # Malayalam` and `The Devil … [Hindi HQ-Dubbed + Kannada]` refused as subsets.
+    # "aka" is deliberately NOT here: it is a film title in this catalog (`AKA`, 2023,
+    # rows 10892/13609/145867) and stripping it empties their token set, which blinds
+    # the gate to that work forever; `fast_fetch.py` already treats it as a segment
+    # separator in `canonical_key_corroborates`, so a second meaning here is drift.
+    "malayalam", "kannada", "tagalog", "french", "korean", "japanese", "chinese",
+    "marathi", "bengali", "punjabi", "south", "italian", "german", "spanish",
+    "hq", "unofficial", "studio", "reloaded", "version", "remastered", "extended",
+    "complete",
 })
 
 _PUA_RE = re.compile(r"[\ue000-\uf8ff]")
