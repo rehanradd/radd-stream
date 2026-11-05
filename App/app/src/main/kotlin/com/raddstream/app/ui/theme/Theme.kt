@@ -219,7 +219,7 @@ fun RaddStreamTheme(
             primaryContainer = mixColors(accent, baseScheme.primaryContainer),
             // A light accent needs dark ink on it, a dark accent white: the
             // same luminance rule the brand's own on-primary pair follows.
-            onPrimary = if (accent.luminance() > 0.5f) Color(0xFF00281D) else Color.White,
+            onPrimary = accentOnPrimary(accent),
         )
     }
     MaterialTheme(

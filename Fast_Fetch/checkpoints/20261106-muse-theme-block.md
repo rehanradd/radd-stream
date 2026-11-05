@@ -72,3 +72,18 @@ everything one by one, 01:00 PKT 2026-11-06). No qoder lane. Branch
 - Next one-by-one steps: tabs control, contact form, Live control page,
   per-region sections + disclaimer versioning, P0 bug fixes (heal shape,
   HLS download), remaining ideas sweep, research-rule screens.
+
+## Addendum — Android CI failure on 76f7ef4, fixed
+- Backend CI GREEN (run 42102651068). Android CI FAILED (run 42102651008,
+  step 7): `compileDebugKotlin` — `Theme.kt:222:36 Unresolved reference
+  'luminance'`. `Color.luminance()` is not a member in this Compose version;
+  the codebase already owns the WCAG formula as a private helper in
+  ArtworkAccent.kt.
+- Fix (separate commit): ArtworkAccent's `luminance` is now `internal` and
+  shared; `accentOnPrimary(accent)` is a pure function in ThemeResolution.kt
+  (same 0.5 rule); Theme.kt calls it. Two new ThemeResolutionTest cases
+  (jade/black -> white ink, white/cream -> dark ink; values checked against
+  an independent WCAG computation: jade 0.437, cream 0.802). Test count 9 -> 11.
+- Heal fix (separate commit, same push): `/api/heal` for a missing post now
+  answers 404 `{"success": false, "error": "Post not found"}` instead of
+  success:true + error; new test; test_operator_isolation 41 OK.

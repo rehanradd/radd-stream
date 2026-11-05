@@ -34,3 +34,12 @@ fun parseAccentHex(accent: String): Color? {
         null
     }
 }
+
+/**
+ * The ink that stays readable on an operator accent: a light accent gets the
+ * brand's dark ink, a dark accent gets white — the same 0.5 luminance rule the
+ * brand's own on-primary pair follows. Pure, so a unit test can judge it
+ * without a composition.
+ */
+fun accentOnPrimary(accent: Color): Color =
+    if (luminance(accent) > 0.5f) Color(0xFF00281D) else Color.White
