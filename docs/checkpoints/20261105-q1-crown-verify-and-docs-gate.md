@@ -167,6 +167,14 @@ space is under 2× the expected staging, honouring `RADD_BACKUP_STAGING`, and a 
 exception still leaves no staging directory behind. Freeing 66 GB without that change buys one clean
 week, not a fix.
 
+**A second leak of the same shape, measured while the HF push ran:** `upload_to_huggingface()` clones
+the dataset with LFS smudge **enabled**, so every single upload materialises the content of every file
+already in the dataset into a fresh `/tmp` directory — `/tmp/tmpvgpjzyhv/hf_repo` was **7.1 GB** while
+one 3.5 GB archive was being pushed. `TemporaryDirectory()` reclaims it on a clean exit, but a
+SIGKILL or an OOM leaves it forever, which is precisely how the 66 GB appeared. Fix: `GIT_LFS_SKIP_SMUDGE=1`
+in `_hf_git_env()` — the push never needs the existing objects locally — plus a janitor for stale clone
+dirs. Filed as task #16 with task #14.
+
 **Hugging Face:** the push resumed only once the box could carry it (`/tmp/crown_hf_upload63.py`, my own
 wrapper: sha256 + a rebuild manifest honestly stamped `source_commit: "not-recorded-at-upload-time"`,
 then `backup_manager.upload_to_huggingface()`). A first attempt looked hung because I piped it through
@@ -222,3 +230,33 @@ names the four invalidated items and the rule *"do not cite `b99814e`, `master`,
   `HANDOFF_apidocs.md:250` → `viewer.py:2526` is a `<div>` in the dashboard HTML. Warnings only
   (`check_doc_citations.py` exits 0 on a suspect), so they do not gate; recorded as a named backlog item
   instead of being fixed blind at load 9 or silently left.
+
+---
+
+## Phase 5 — landed on real trunk: `37ae67b → 967a05d`, and the deploy this lane will not perform
+
+**The two commits, on trunk soil:** `6a5531c` (the guides, re-measured) then `967a05d` (the hubcdn
+trust gate re-derived additively, plus both suite registrations). `main` **fast-forwarded**
+`37ae67b..967a05d`, and both gates are green **at that exact sha**: Backend CI
+`python3 -S offline suites` — 49 steps, none non-green, last real step `📎 Docs citation drift check` —
+and `🔨 CI — Android Build & Test` (`assembleDebug + testDebugUnitTest + lintDebug`), which fired only
+because the App guide edit touches the `App/**` filter, so the App lane's gate proved this docs change
+too. `crown/64-docs-and-hubcdn-on-trunk` carries the same sha and is now redundant; **deleting it is an
+owner action, not a cleanup I make silently.**
+
+**Why the split, and the failure that produced it.** The first attempt at two commits was one commit
+wearing a docs message: `git apply -3` **and** `git checkout <sha> -- <paths>` both *stage* what they
+write, so the "docs" commit swallowed the entire hubcdn set — and its own coverage guard went red on
+`test_host_classifier.py` / `test_hubcdn_unwrap.py` running on no one's push. `git reset --soft HEAD~1`,
+`git restore --staged .`, then stage by name, twice. Recorded because the failure is invisible from the
+message and obvious from `--stat`: 2,943 insertions in a commit that claimed to touch markdown. Commit 1
+now stands alone — `test_docs_invariants` **22 OK** measured in a clean worktree at `6a5531c`, before
+the second commit existed.
+
+**Deploy: refused, with the measurement.** `/opt/radd-stream` sits at `bf9e565` — **not an ancestor of
+`main`** — with **39 modified tracked files and 30 untracked** in it and four lanes working there.
+Checking `967a05d` over that tree is the exact thing `AGENTS.md` forbids ("a silent revert of a pushed
+fix"), so the ruling's *deploy live* step stops at the owner's decision about those files. Nothing was
+restarted, nothing was copied to the host. And the fold the ruling was about needed no deploy at all:
+it already ships in `catalog_v2._link_state_of` and already runs live — the residual there is the
+`unknown` divergence in `link_state.state_for()`, latent, not a live defect.
