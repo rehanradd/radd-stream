@@ -256,6 +256,13 @@ jobs:
       - name: 🧪 test_key_refusal_guard.py
         run: python3 -S Fast_Fetch/test_key_refusal_guard.py
 
+      # Order #75 (2026-11-06): the three producer defects whose own code documents them
+      # as unintended — `_LEADING_DANGLE_RE`'s `and`, the hl4u bracket class with no `\)`,
+      # and the bare `Season` noise alternative. Each fix ships with the assertion that
+      # was red before it, so the gate has to run them or the regression is free.
+      - name: 🧪 test_producer_cleaner_fixes.py
+        run: python3 -S Fast_Fetch/test_producer_cleaner_fixes.py
+
       # The dub-collision census (q2, landed as a424ffc). Staging vaults make
       # `canonical_key` PRIMARY KEY, so a dubbed print and its original can only
       # collide ACROSS databases — the shape the merged ledger carries. The suite

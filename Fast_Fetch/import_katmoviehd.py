@@ -941,7 +941,8 @@ _TITLE_NOISE_PATTERNS = (
     r"|Stream\s+Online|Download|Watch|Streaming|Series\s+Download|Season\s+Download|Online)\b",
     r"\b(?:Complete|All\s+(?:New\s+)?Episodes?|\d+\s+Episodes?|Episode\s*\d+(?:\s+Added)?"
     r"|Episodes|New\s+Episode(?:s)?|Completed)\b",
-    r"\b(?:Season\s*\d+|Season|TV\s*Series|Web\s*Series|Mini\s*Series|K-Drama|KDrama|CDrama"
+    # `Season` is packaging only when a numeral follows; a word-final `Season` is a title word ("Mating Season").
+    r"\b(?:Season\s*\d+|Season\s+[IVXLC]+\b|TV\s*Series|Web\s*Series|Mini\s*Series|K-Drama|KDrama|CDrama"
     r"|C-Drama|Anime)\b",
     r"\b(?:1xbet|1xbit|4rabet|4rab3t|melbet|parimatch|1win|1winbet|mostbet)\b",
     r"#\s*\w*(?:ads?|apks?|urls?|shorts?)\b",
@@ -959,7 +960,7 @@ _DANGLING_TAIL_RE = re.compile(
 )
 # Leading leftovers.  Deliberately *not* "the"/"a"/"an"/"and": those open real titles.
 _LEADING_DANGLE_RE = re.compile(
-    r"^(?:\s*(?:in|with|of|for|to|at|by|on|and|&|\+|-|,)\b)+", re.I
+    r"^(?:\s*(?:in|with|of|for|to|at|by|on|&|\+|-|,)\b)+", re.I
 )
 _ANNOTATION_GROUPS_RE = re.compile(r"[\(\[\{]([^\(\[\]\{\}]*)[\)\]\}]")
 

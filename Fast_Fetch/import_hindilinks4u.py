@@ -325,7 +325,7 @@ def clean_hl4u_title(raw_title: str) -> tuple[str, int | None, str]:
         clean = re.sub(r"\s*\b" + str(year) + r"\b\s*", " ", clean)
 
     clean = re.sub(r"(?<![A-Za-z0-9])\b(?:" + _HL4U_NOISE + r")\b.*$", "", clean, flags=re.I)
-    clean = re.sub(r"[\(\[\]\{\}<>&]", " ", clean)
+    clean = re.sub(r"[\(\[\)\]\{\}<>&]", " ", clean)
     clean = re.sub(r"\s+", " ", clean).strip(" -:|·•")
     if not clean:
         clean = html.unescape(raw_title or "").strip()
