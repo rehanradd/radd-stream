@@ -29,7 +29,17 @@ were taken before the flip, and `_get_cached_stats()` treats a missing stamp as
 "count it live" rather than publishing a stale public number. That invalidation is
 the honest half of this shortcut.
 
-Read-only by default. The residual it used to leave unwritten — a work flagged on one
+Read-only by default. The ledger fold is **agreement-gated** since order #60: a key folds
+only when every row it would flip corroborates a flagged sibling by title, with no
+derivable year contradicting it. The
+43-row hazard measurement (crown, `CROWN_ADULT_MEASUREMENT.md` §3) showed a literal
+`MAX(is_18_plus)` per key hides legitimate works when the adult row's own `canonical_key`
+contradicts its own title — `100-bullets_2016` holding public "100 Bullets" beside flagged
+"Frank Phoenix UNRATED" is two works under one wrong key, not one work filed twice. The
+gate refuses those keys; `--apply-all` keeps the old ungated fold as an explicit, printed
+legacy path.
+
+The residual it used to leave unwritten — a work flagged on one
 site and served by another under a *different* key — is reachable without re-keying
 anything, by grouping on `(clean_title, year)` instead of `canonical_key`. It must be
 reached only with `--corroborate`, because propagation multiplies one row's verdict across
@@ -39,26 +49,33 @@ catalog 2026-10-30 (`--audit`), 10,816 of 15,068 flags cannot be reproduced by
 those would hide 3,490 further rows; `--corroborate` hides the 12 that stand on
 reproducible evidence.
 
-Do not read the unconditional `--apply` as safe merely because it is older. It propagates
-asserted-only flags too, one key at a time; it was gated before provenance was measurable,
-and `--audit` is what tells you how much of a catalog is in that state. Re-keying stored
+Do not read `--apply-all` as safe merely because it is the older shape. It is the printed
+un-gated legacy fold: it propagates asserted-only flags too, one key at a time, over every
+collision the gate would have refused; `--audit` is what tells you how much of a catalog is
+in that asserted-only state. Re-keying stored
 rows stays out of scope: `find_existing_post` raises once a `canonical_key` matches more
 than one record, so rewriting 150k keys into the title+year scheme would put thousands of
 works over that threshold and break ingest.
 
-    python3 -S Fast_Fetch/backfill_adult_key.py <db.path>                        # report
+    python3 -S Fast_Fetch/backfill_adult_key.py <db.path>                        # report (+gate split)
     python3 -S Fast_Fetch/backfill_adult_key.py <db.path> --audit                 # provenance
     python3 -S Fast_Fetch/backfill_adult_key.py <db.path> --corroborate           # report
     python3 -S Fast_Fetch/backfill_adult_key.py <db.path> --corroborate --apply   # fold
-    python3 -S Fast_Fetch/backfill_adult_key.py <db.path> --undo                  # reverse it
-    python3 -S Fast_Fetch/backfill_adult_key.py <db.path> --apply                # ledger
+    python3 -S Fast_Fetch/backfill_adult_key.py <db.path> --corroborate --undo    # reverse it
+    python3 -S Fast_Fetch/backfill_adult_key.py <db.path> --apply                # ledger, agree-gated
+    python3 -S Fast_Fetch/backfill_adult_key.py <db.path> --apply-all            # UN-GATED legacy fold
     python3 -S Fast_Fetch/backfill_adult_key.py <db.path> --apply --projection   # + cat_*/stats
+    python3 -S Fast_Fetch/backfill_adult_key.py <db.path> --undo                 # reverse the key fold
+                                                                                  # (falls back to the
+                                                                                  # corroborated undo)
 
 Stdlib only. Never run it while a projection is reading the same database.
 """
 from __future__ import annotations
 
 import argparse
+import html
+import re
 import sqlite3
 import sys
 import time
@@ -111,6 +128,290 @@ SAFE_STAMP_KEYS = ("works_safe", "adult_works", "releases_safe", "links_safe",
                    "links_active_safe", "links_resumable_safe", "links_temporary_safe",
                    "links_by_state_safe")
 
+# ───────────────────────────── the agreement gate (order #60) ─────────────────────────
+# A key may fold only when every exposed row under it *corroborates* a flagged sibling:
+# the row's own title must name the same work as the sibling's, and no derivable year
+# may contradict. Title alone is not identity ("Dom" 2021 and "Dom" 2024 are two films);
+# year alone is not identity ("Death Race" 2000 vs "Death Race 2000" 1975). A year that
+# is PRESENT on both sides and different quarantines; a year nobody recorded is silence,
+# not contradiction — the `year` column is empty on 269 of the 407 exposed rows, so
+# requiring a present year would quarantine the very reconciliation AGENTS.md prescribes. The quarantine bias applies to evidence that
+# CONTRADICTS, not to evidence that is absent — and a row with no title at all is
+# refused outright, because it corroborates nothing. The bias direction is deliberate:
+# a false quarantine leaves a row public for a human; a false agree hides a legitimate
+# work on a mis-keyed sibling's verdict. That is the 43-row hazard of
+# CROWN_ADULT_MEASUREMENT.md §3, encoded as a refusal.
+
+#: Scraper distribution vocabulary that says nothing about work identity. Kept short and
+#: named: every entry must be a tag a release adds, never a word that can be part of the
+#: work's name ("season" and "part" are work-bearing and deliberately absent; digits stay too, so
+#: "Death Race 2000" ≠ "Death Race").
+BOILERPLATE_TOKENS = frozenset({
+    "dual", "audio", "hindi", "english", "tamil", "telugu", "dubbed", "dub",
+    "org", "line", "orgline", "full", "movie", "hd", "esubs", "subs", "subtitles",
+    "uncut", "unrated", "x264", "x265", "hevc", "webrip", "web", "dl", "bluray",
+    "hdrip", "dvdrip", "ts", "cam",
+})
+
+_PUA_RE = re.compile(r"[\ue000-\uf8ff]")
+_YEAR_IN_PAREN_RE = re.compile(r"[\[\(](?:19|20)\d{2}[\]\)]")
+_QUALITY_RE = re.compile(r"\b(?:480p|720p|1080p|2160p|4k|uhd)\b")
+_NONWORD_RE = re.compile(r"[^a-z0-9 ]+")
+
+
+def title_tokens(text) -> frozenset:
+    """Normalised identity tokens of one title string; empty set when nothing remains."""
+    t = html.unescape(str(text or "")).lower()
+    t = _PUA_RE.sub(" ", t)
+    t = _YEAR_IN_PAREN_RE.sub(" ", t)
+    t = _QUALITY_RE.sub(" ", t)
+    t = t.replace("&", " and ")
+    t = _NONWORD_RE.sub(" ", t)
+    return frozenset(w for w in t.split() if w not in BOILERPLATE_TOKENS)
+
+
+def _edit_distance_le_one(a: str, b: str) -> bool:
+    """Cheap ≤1 check (substitution, one insert/delete) — the typo tolerance for pairs
+    like schor/chor, adhigaram/adhigaaram. Returns False for anything beyond one edit."""
+    if a == b:
+        return True
+    la, lb = len(a), len(b)
+    if abs(la - lb) > 1:
+        return False
+    if la == lb:
+        return sum(1 for x, y in zip(a, b) if x != y) == 1
+    long_s, short_s = (a, b) if la > lb else (b, a)
+    i = j = skipped = 0
+    while i < len(long_s) and j < len(short_s):
+        if long_s[i] != short_s[j]:
+            skipped += 1
+            if skipped > 1:
+                return False
+            i += 1
+        else:
+            i += 1
+            j += 1
+    return True
+
+
+def titles_corroborate(a_tokens: frozenset, b_tokens: frozenset) -> bool:
+    """True when two token sets name one work: exact, compact ("Rangi Taranga" =
+    "RangiTaranga"), or one-typo apart with equal token counts. A subset is NOT an
+    agreement — "Death Race" ⊂ "Death Race 2000" is the collision the year rule exists
+    to catch, and dropping the subset rule is what keeps mis-keyed siblings out."""
+    if not a_tokens or not b_tokens:
+        return False
+    if a_tokens == b_tokens:
+        return True
+    if "".join(sorted(a_tokens)) == "".join(sorted(b_tokens)):
+        return True
+    if len(a_tokens) != len(b_tokens):
+        return False
+    ta, tb = sorted(a_tokens), sorted(b_tokens)
+    diff = [x for x, y in zip(ta, tb) if x != y]
+    if len(diff) != 1:
+        return False
+    i = ta.index(diff[0])
+    return _edit_distance_le_one(ta[i], tb[i])
+
+
+def row_year(row) -> str:
+    y = str(row["year"] or "").strip()
+    return y if y.isdigit() else ""
+
+
+_YEAR_IN_TEXT_RE = re.compile(r"\b(?:19|20)\d{2}\b")
+
+
+def derivable_year(row) -> str:
+    """The year this row claims, or "" when it claims none.
+
+    The `year` column first; then the LAST four-digit 19xx/20xx in the row's own title
+    (last, because a scraper writes "Foo (2019) Dual Audio 720p" and the trailing
+    release-year is the one that survives boilerplate stripping). Empty is silence, not
+    evidence: most exposed rows in this catalog carry no year at all, and demanding one
+    would quarantine the reconciliation AGENTS.md prescribes.
+    """
+    y = row_year(row)
+    if y:
+        return y
+    raw = str(row["clean_title"] or "") + " " + str(row["title"] or "")
+    found = _YEAR_IN_TEXT_RE.findall(raw)
+    return found[-1] if found else ""
+
+
+def title_agrees(a, b) -> bool:
+    """Row-level corroboration (the order's named, importable gate): same normalised
+    title, and no derivable year that contradicts. `clean_title` first, `title` fallback;
+    a row with neither can corroborate nothing and disagrees with everything."""
+    return titles_agree_with_reason(a, b)[0]
+
+
+def titles_agree_with_reason(a, b) -> tuple[bool, str]:
+    """`title_agrees` with the reason, so a refusal is auditable instead of mysterious.
+
+    Reasons: `agree`, `no_title`, `title_disagree`, `year_drift` — the four labels the
+    report prints and the suite pins.
+    """
+    ta = title_tokens(a["clean_title"] or a["title"])
+    tb = title_tokens(b["clean_title"] or b["title"])
+    if not ta or not tb:
+        return False, "no_title"
+    if not titles_corroborate(ta, tb):
+        return False, "title_disagree"
+    ya, yb = derivable_year(a), derivable_year(b)
+    if ya and yb and ya != yb:
+        return False, "year_drift"
+    return True, "agree"
+
+
+#: One row per exposed sibling the gate folded, with the pre-state needed to restore it
+#: byte-exactly (NULL and 0 are different stored values; `prior IS NOT 1` covers both).
+KEY_FOLD_JOURNAL_DDL = """
+CREATE TABLE IF NOT EXISTS adult_key_fold_journal (
+    post_id INTEGER PRIMARY KEY,
+    canonical_key TEXT NOT NULL,
+    prior_is_18_plus INTEGER,
+    source_post_id INTEGER,
+    evidence TEXT,
+    decided_at REAL NOT NULL
+)
+"""
+
+#: The columns the gate reads — one bounded scan, no regex against the whole ledger.
+GATE_FIELDS = ("id", "title", "clean_title", "year", "canonical_key", "is_18_plus")
+
+
+def classify_exposures(conn) -> dict:
+    """Split every exposed row under an exposure key into agree / quarantine, per key.
+
+    Read-only, one grouped pass. A key folds only when EVERY exposed row under it
+    corroborates SOME flagged sibling (`all-rows-or-nothing`, because `inherit_key_adult`
+    semantics are per-key: a half-folded key is not a thing this law writes).
+    Returns {"exposed_keys", "exposed_rows", "agree_keys", "quarantine_keys",
+    "agree_rows", "quarantine_rows", "verdicts": {key: [row verdicts]},
+    "fold_targets": [(post_id, key, source_post_id, evidence)]}.
+    """
+    rows = conn.execute(
+        "SELECT %s FROM posts"
+        " WHERE canonical_key IS NOT NULL AND canonical_key <> '' AND canonical_key <> 'unknown'"
+        % ", ".join(GATE_FIELDS)).fetchall()
+    buckets: dict = {}
+    for row in rows:
+        buckets.setdefault(str(row["canonical_key"]).strip().lower(), []).append(row)
+
+    verdicts: dict = {}
+    agree_keys: list = []
+    quarantine_keys: list = []
+    targets: list = []
+    agree_rows = quarantine_rows = exposed_rows = 0
+    for key, members in sorted(buckets.items()):
+        flagged = [r for r in members if int(r["is_18_plus"] or 0) == 1]
+        exposed = [r for r in members if int(r["is_18_plus"] or 0) == 0]
+        if not flagged or not exposed:
+            continue
+        exposed_rows += len(exposed)
+        key_rows = []
+        key_targets = []
+        key_clean = True
+        for e in exposed:
+            best = (False, "title_disagree")
+            source = None
+            for f in flagged:
+                ok, reason = titles_agree_with_reason(e, f)
+                if ok:
+                    best = (True, "agree")
+                    source = f
+                    break
+                if reason == "year_drift" and best[0] is False:
+                    best = (False, reason)
+                    source = None
+                elif reason == "no_title" and best[1] == "title_disagree":
+                    best = (False, reason)
+            key_rows.append((int(e["id"]), best[0], best[1],
+                             int(source["id"]) if source else None))
+            if best[0]:
+                key_targets.append((int(e["id"]), key, int(source["id"]),
+                                    "agreement-gated fold: row %d corroborates flagged "
+                                    "sibling %d under key %s" % (e["id"], source["id"], key)))
+            else:
+                key_clean = False
+        # a row on a refused key stays QUARANTINED too: the row count follows the
+        # key verdict, because a half-folded key is not a write this law performs.
+        agree_rows += len(key_targets) if key_clean else 0
+        quarantine_rows += (len(exposed) - len(key_targets)) if key_clean else len(exposed)
+        if key_clean:
+            targets.extend(key_targets)
+        verdicts[key] = key_rows
+        (agree_keys if key_clean else quarantine_keys).append(key)
+    return {
+        "exposed_keys": len(verdicts),
+        "exposed_rows": exposed_rows,
+        "agree_keys": agree_keys,
+        "quarantine_keys": quarantine_keys,
+        "agree_rows": agree_rows,
+        "quarantine_rows": quarantine_rows,
+        "verdicts": verdicts,
+        "fold_targets": targets,
+    }
+
+
+def fold_rows(conn, targets) -> int:
+    """Flip the named rows to flagged, journaling the pre-state of each. Returns flips.
+
+    Per-row primary-key updates, not `inherit_key_adult`, because the gate is per-row
+    even though its refusal is per-key: a key in the agree set has every exposed row
+    corroborated, so row-by-row flipping writes exactly the same set as the key-level
+    MAX would — and keeps the pre-state to undo it from.
+    """
+    conn.execute(KEY_FOLD_JOURNAL_DDL)
+    flipped = 0
+    now = time.time()
+    for post_id, key, source_id, evidence in targets:
+        prior = conn.execute(
+            "SELECT is_18_plus FROM posts WHERE id = ?", (post_id,)).fetchone()
+        if prior is None:
+            continue
+        cur = conn.execute(
+            "UPDATE posts SET is_18_plus = 1 WHERE id = ? AND is_18_plus IS NOT 1",
+            (post_id,))
+        if cur.rowcount:
+            conn.execute(
+                "INSERT OR REPLACE INTO adult_key_fold_journal"
+                " (post_id, canonical_key, prior_is_18_plus, source_post_id, evidence,"
+                " decided_at) VALUES (?, ?, ?, ?, ?, ?)",
+                (post_id, key, prior[0], source_id, evidence, now))
+            flipped += 1
+    return flipped
+
+
+def undo_key_fold(conn) -> dict:
+    """Restore every journaled row to its byte-exact pre-state (NULL stays NULL).
+
+    Unlike the corroborated undo this keeps no row hidden on independent evidence: the
+    key fold is a repair of a stated pre-condition, and an undo that silently differs
+    from the pre-state is a second write nobody authorised. The projection roll-up is
+    not reversed here — it never was, in either fold — and stamp invalidation is not
+    undone because a missing stamp only costs a live recount.
+    """
+    out = {"restored": 0, "kept": 0}
+    if conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table'"
+                    " AND name = 'adult_key_fold_journal'").fetchone() is None:
+        return out
+    entries = conn.execute(
+        "SELECT post_id, prior_is_18_plus FROM adult_key_fold_journal"
+        " ORDER BY post_id").fetchall()
+    for post_id, prior in entries:
+        cur = conn.execute(
+            "UPDATE posts SET is_18_plus = ? WHERE id = ? AND is_18_plus IS 1",
+            (prior, post_id))
+        conn.execute("DELETE FROM adult_key_fold_journal WHERE post_id = ?", (post_id,))
+        if cur.rowcount:
+            out["restored"] += 1
+        else:
+            out["kept"] += 1
+    return out
+
 
 def _has_table(conn, name: str) -> bool:
     return conn.execute(
@@ -152,6 +453,12 @@ def apply_ledger(conn, keys) -> int:
 
 def apply_projection(conn) -> tuple[int, int]:
     """Fold the ledger's flags into `cat_works`, then retire the safe stamps.
+
+    Independent of the agreement gate (order #60): this roll-up is `any()` over posts
+    already folded INTO the work, so it cannot invent a collision the ledger refused —
+    it can only inherit flags the ledger already carries. Crown measured its over-flag
+    direction at 0 (`CROWN_ADULT_MEASUREMENT.md` §2), so it keeps its own flag and never
+    consults `classify_exposures`.
 
     Returns (works hidden, stamp keys deleted).
     """
@@ -282,22 +589,31 @@ def run_corroborated(db_path: Path, *, apply: bool, undo: bool = False) -> int:
         conn.close()
 
 
-def report(db_path: Path, *, apply: bool = False, projection: bool = False) -> dict:
+def report(db_path: Path, *, apply: bool = False, projection: bool = False,
+           apply_all: bool = False) -> dict:
     started = time.time()
-    conn = sqlite3.connect(db_path)
+    conn = sqlite3.connect(
+        f"file:{db_path}?mode=ro" if not (apply or apply_all) else str(db_path),
+        uri=not (apply or apply_all))
     conn.row_factory = sqlite3.Row
     try:
         before = public_total(conn)
         keys = exposed_keys(conn)
         exposed_rows = sum(count for _, count in keys)
+        gate = classify_exposures(conn)
         summary = {
             "db": str(db_path),
             "public_total_before": before,
             "exposed_keys": len(keys),
             "exposed_rows": exposed_rows,
+            "agree_keys": len(gate["agree_keys"]),
+            "quarantine_keys": len(gate["quarantine_keys"]),
+            "agree_rows": gate["agree_rows"],
+            "quarantine_rows": gate["quarantine_rows"],
             "residual_other_key": residual_exposures(conn),
             "residual_after": None,
             "flipped": 0,
+            "verified": None,
             "works_hidden_by_projection": 0,
             "stamps_dropped": 0,
             "public_total_after": before,
@@ -305,6 +621,15 @@ def report(db_path: Path, *, apply: bool = False, projection: bool = False) -> d
         print(f"[i] {db_path}: public posts {before:,}; "
               f"{len(keys):,} keys hold a flagged and an unflagged row; "
               f"{exposed_rows:,} rows are exposed")
+        print(f"[i] gate: exposed rows {gate['exposed_rows']:,} = "
+              f"agree {gate['agree_rows']:,} + quarantine {gate['quarantine_rows']:,} "
+              f"({len(gate['agree_keys'])} keys fold, {len(gate['quarantine_keys'])} refused)")
+        for key in gate["quarantine_keys"][:60]:
+            for post_id, ok, reason, _src in gate["verdicts"][key]:
+                if not ok:
+                    print(f"      QUARANTINE key={key} post={post_id} reason={reason}")
+        if len(gate["quarantine_keys"]) > 60:
+            print(f"      … {len(gate['quarantine_keys']) - 60} more quarantined keys")
         if summary["residual_other_key"] is None:
             print("[i] residual (same work, different key): no projection in this db")
         else:
@@ -315,17 +640,36 @@ def report(db_path: Path, *, apply: bool = False, projection: bool = False) -> d
         if len(keys) > 10:
             print(f"      … {len(keys) - 10} more keys")
 
-        if not apply:
-            print("[i] report only; pass --apply to reconcile the ledger")
+        if not (apply or apply_all):
+            print("[i] report only; pass --apply for the agree-gated fold, "
+                  "--apply-all for the UN-GATED legacy fold")
             return summary
 
-        summary["flipped"] = apply_ledger(conn, keys=[k for k, _ in keys])
+        if apply_all:
+            print("[!] UN-GATED legacy fold (--apply-all): hiding EVERY exposed row, "
+                  "including the quarantined keys the agreement gate refused")
+            targets = []
+            for k, _c in keys:
+                for r in conn.execute(
+                        "SELECT id FROM posts WHERE canonical_key = ?"
+                        " AND is_18_plus IS NOT 1", (k,)):
+                    targets.append((int(r["id"]), k, None,
+                                    "un-gated --apply-all legacy fold"))
+        else:
+            targets = gate["fold_targets"]
+            print(f"[i] agree-gated fold: {len(targets):,} rows under "
+                  f"{len(gate['agree_keys']):,} keys")
+        summary["flipped"] = fold_rows(conn, targets)
         after = public_total(conn)
         summary["public_total_after"] = after
-        if summary["flipped"] != before - after:
+        summary["verified"] = (summary["flipped"] == before - after)
+        if not summary["verified"]:
             print(f"[!] VERIFICATION FAILED: flipped {summary['flipped']} rows but the "
                   f"public total moved {before - after}", file=sys.stderr)
             conn.rollback()
+            # the write never happened — say so with the post-ROLLBACK number, not
+            # the uncommitted one the check itself measured:
+            summary["public_total_after"] = public_total(conn)
             return summary
         print(f"[✓] ledger: {summary['flipped']:,} rows flagged; "
               f"public total {before:,} -> {after:,} (exactly the rows flipped)")
@@ -352,9 +696,13 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("db", type=Path)
     parser.add_argument("--apply", action="store_true",
-                        help="write the ledger reconciliation (default: report only)")
+                        help="write the ledger reconciliation, agree-gated keys only "
+                             "(default: report only)")
+    parser.add_argument("--apply-all", action="store_true",
+                        help="UN-GATED legacy fold: reconcile EVERY exposed key, "
+                             "quarantined collisions included; prints its own warning")
     parser.add_argument("--projection", action="store_true",
-                        help="with --apply, also fold flags into cat_works")
+                        help="with --apply/--apply-all, also fold flags into cat_works")
     parser.add_argument("--audit", action="store_true",
                         help="read-only: how many stored flags the central rule still "
                              "reproduces, and how many are asserted-only")
@@ -362,18 +710,50 @@ def main(argv=None) -> int:
                         help="propagate only flags the central rule reproduces "
                              "(report; combine with --apply to write)")
     parser.add_argument("--undo", action="store_true",
-                        help="reverse the corroborated fold, keeping any flag that has "
-                             "since gained independent evidence")
+                        help="reverse the key fold (--undo), exactly restoring each "
+                             "journaled row's pre-state; with --corroborate, reverses "
+                             "the corroborated pass instead (falls back to it when no "
+                             "key-fold journal exists)")
     args = parser.parse_args(argv)
     if not args.db.exists():
         print(f"[!] no such database: {args.db}", file=sys.stderr)
         return 2
     if args.audit:
         return run_audit(args.db)
-    if args.corroborate or args.undo:
+    if args.corroborate:
         return run_corroborated(args.db, apply=args.apply, undo=args.undo)
-    report(args.db, apply=args.apply, projection=args.projection)
+    if args.undo:
+        return run_key_undo(args.db)
+    report(args.db, apply=args.apply, projection=args.projection,
+           apply_all=args.apply_all)
     return 0
+
+
+def run_key_undo(db_path: Path) -> int:
+    """Plain `--undo`: reverse the agreement-gated/`--apply-all` key fold, byte-exactly.
+
+    Backwards shape kept on purpose: when this database holds no key-fold journal
+    entries, the argument still means exactly what it meant before order #60 — the
+    corroborated undo runs, with its memory gate and its output wording untouched —
+    so old runbooks neither no-op nor change shape.
+    """
+    conn = sqlite3.connect(str(db_path))
+    conn.row_factory = sqlite3.Row
+    try:
+        out = undo_key_fold(conn)
+        if out["restored"] or out["kept"]:
+            conn.commit()
+            print(f"[✓] key-fold undo: {out['restored']:,} rows restored byte-exactly "
+                  f"to their journaled pre-state, {out['kept']:,} untouched "
+                  f"(no longer flagged — nothing was double-written)")
+            dropped = invalidate_safe_stamp(conn)
+            conn.commit()
+            if dropped:
+                print(f"[i] {dropped:,} adult-excluded stamps retired")
+            return 0
+    finally:
+        conn.close()
+    return run_corroborated(db_path, apply=False, undo=True)
 
 
 if __name__ == "__main__":

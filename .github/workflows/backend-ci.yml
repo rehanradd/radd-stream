@@ -435,10 +435,24 @@ jobs:
       - name: 🧪 test_hubcdn_unwrap.py
         run: python3 -S Fast_Fetch/test_hubcdn_unwrap.py
 
-      # Docs drift is a code property, not a prose one. Root `AGENTS.md` cites `viewer.py` line
-      # numbers and four of them pointed at unrelated code at `b99814e` (measured 2026-11-05) while
-      # every suite stayed green, because `WorkflowSuiteCoverageTests`' RUN regex matches `test_*.py`
-      # only and cannot see this module. Hard failure = a cited path that does not exist or a line
-      # past EOF; a named token missing near the cited line is reported and does not fail the build.
+      # The agreement gate on the key-level fold (order #60, 2026-11-05). `--apply` hides a
+      # work only when every row it would flip corroborates the flagged sibling by title, with
+      # no derivable year contradicting it: a literal `MAX(is_18_plus)` per `canonical_key`
+      # would have propagated "Frank Phoenix UNRATED" onto the legitimate film *100 Bullets*,
+      # because the ADULT row's own key contradicts its own title. Both pinned decisions live
+      # here rather than inside a regex — contradicting years quarantine, an unrecorded year is
+      # silence — and so do the two directions of the error: a refused key stays public for a
+      # human, a folded key moves the public total by exactly its own row count. `--undo`
+      # restores each row byte-exactly (NULL and 0 are different stored values). Offline —
+      # temp SQLite files, no network, no catalog read.
+      - name: 🧪 test_adult_fold_guard.py
+        run: python3 -S Fast_Fetch/test_adult_fold_guard.py
+
+      # Docs drift is a code property, not a prose one. Root `AGENTS.md` cited `viewer.py` line
+      # numbers and four of them pointed at unrelated code on trunk `37ae67b` (measured 2026-11-05)
+      # while every suite stayed green, because `WorkflowSuiteCoverageTests`' RUN regex matches
+      # `test_*.py` only and cannot see this module. Hard failure = a cited path that does not exist
+      # or a line past EOF; a named token missing near the cited line is reported and does not fail
+      # the build.
       - name: 📎 Docs citation drift check
         run: python3 -S Fast_Fetch/check_doc_citations.py
