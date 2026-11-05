@@ -19,6 +19,7 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
@@ -1400,6 +1401,7 @@ private val MinControlTarget = 48.dp
  * description is deliberately null, so the sixteen named lane controls announced nothing at
  * all. A preference a viewer cannot hear is a preference only sighted users can set.
  */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun ControlTarget(
     label: String,
