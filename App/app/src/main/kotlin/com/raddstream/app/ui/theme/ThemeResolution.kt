@@ -42,4 +42,4 @@ fun parseAccentHex(accent: String): Color? {
  * without a composition.
  */
 fun accentOnPrimary(accent: Color): Color =
-    if (luminance(accent) > 0.5f) Color(0xFF00281D) else Color.White
+    if (luminance(accent) > 0.5f) RaddDeepCurrentInk else Color.White

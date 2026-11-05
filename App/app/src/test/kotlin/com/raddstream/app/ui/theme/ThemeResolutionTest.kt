@@ -60,13 +60,13 @@ class ThemeResolutionTest {
 
     @Test
     fun theBrandJadeAccentTakesWhiteInk() {
-        assertEquals(Color.White, accentOnPrimary(Color(0xFF2BC79A)))
+        assertEquals(Color.White, accentOnPrimary(RaddCurrent500))
         assertEquals(Color.White, accentOnPrimary(Color.Black))
     }
 
     @Test
     fun aLightAccentTakesTheDarkBrandInk() {
-        assertEquals(Color(0xFF00281D), accentOnPrimary(Color.White))
-        assertEquals(Color(0xFF00281D), accentOnPrimary(Color(0xFFF5E6C8)))
+        assertEquals(RaddDeepCurrentInk, accentOnPrimary(Color.White))
+        assertEquals(RaddDeepCurrentInk, accentOnPrimary(Color(0xFFF5E6C8)))
     }
 }
