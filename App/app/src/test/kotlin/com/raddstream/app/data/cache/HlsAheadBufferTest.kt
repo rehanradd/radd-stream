@@ -37,7 +37,7 @@ class HlsAheadBufferTest {
     }
 
     /** Interceptor serving fixed playlist bodies and segment bytes, recording every URL. */
-    private class ScriptedClient(
+    private inner class ScriptedClient(
         private val playlists: Map<String, String>,
         /** The URL the playlist body actually came from (after a redirect), per asked URL. */
         private val finalUrlFor: Map<String, String> = emptyMap(),
