@@ -25,6 +25,7 @@ import json
 import time
 import base64
 import codecs
+import difflib
 import http.cookiejar
 import sqlite3
 import argparse
@@ -640,6 +641,265 @@ def inherit_key_adult(conn, canonical_key) -> int:
         " WHERE canonical_key = ? AND is_18_plus IS NOT 1",
         (key,),
     ).rowcount
+
+
+#: Title-similarity threshold for :func:`canonical_key_corroborates`. Measured
+#: 2026-11-05 on the rows named in `CROWN_KEY_CENSUS_13` / `CROWN_ADULT_MEASUREMENT`:
+#: the titles that *do* name their own key score 0.69–1.00 (the low end is the
+#: transliteration pair *Kapatadhaari* / *Kabadadaari*, which a human reads as one film),
+#: and the different-work collisions score 0.12–0.29 (*Hi Zindagi* / *Maanaadu*,
+#: *A Perfect Murder* / *Van Wilder*, *Mathu Vadalara* / *Robinhood*). 0.50 sits in the
+#: empty band between the two measured populations; it is a statement about this
+#: catalog's data, not a guess about where language similarity ends.
+KEY_TITLE_AGREE_RATIO = 0.50
+
+#: A `canonical_key` is `<title-slug>[_<year>]` (`generate_canonical_key`), so the year
+#: is the trailing underscore group when it is a plausible film year.
+_KEY_YEAR_TAIL = re.compile(r"^(.*)_((?:19|20)\d{2})$")
+#: Year-shaped tokens survive `generate_canonical_key` inside a title ("Kapatadhaari
+#: 2021 UNCUT"), and they are year evidence, not title evidence.
+_YEAR_TOKEN = re.compile(r"^(?:19|20)\d{2}$")
+#: `aka` tails and bracketed segments are alternate release names, not noise:
+#: "Ninnu Kori (Aaj Ka Khiladi)" names the same work as the key `aaj-ka-khiladi_2020`,
+#: and dropping the bracket contents — which is what `generate_canonical_key` does to
+#: build a key — would make that row look like a collision.
+_TITLE_ALIAS_SPLIT = re.compile(r"\s+aka\s+|[()\[\]]", re.IGNORECASE)
+
+
+def _title_token_sets(title) -> list[frozenset[str]]:
+    """Every title reading a row offers, as slug tokens (year tokens removed).
+
+    Index 0 is the main name — the same normalization `generate_canonical_key` uses, so
+    this cannot disagree with the key builder about what a title slug is. The rest are
+    the alias segments it strips (bracketed release names, `aka` doubles), so an
+    alternate title corroborates rather than looking like a foreign work.
+    """
+    raw = str(title or "").strip()
+    if not raw:
+        return []
+    sets: list[frozenset[str]] = []
+    main = generate_canonical_key(raw)
+    pieces = [main]
+    for alias in _TITLE_ALIAS_SPLIT.split(raw):
+        if not alias or alias.strip().lower() == "aka":
+            continue
+        slug = generate_canonical_key(alias)
+        if slug and slug != "unknown" and slug != main:
+            pieces.append(slug)
+    for piece in pieces:
+        tokens = frozenset(
+            t for t in piece.lower().split("-")
+            if t and not _YEAR_TOKEN.match(t)
+        )
+        if tokens and tokens not in sets:
+            sets.append(tokens)
+    return sets
+
+
+def key_title_tokens(canonical_key) -> frozenset[str]:
+    """The title part of a key, as tokens — the key's own claim about what it names."""
+    key = str(canonical_key or "").strip().lower()
+    match = _KEY_YEAR_TAIL.match(key)
+    slug = match.group(1) if match else key
+    return frozenset(t for t in slug.split("-") if t and not _YEAR_TOKEN.match(t))
+
+
+def key_year(canonical_key):
+    """The year a key claims, or None when it makes no year claim (`black-mirror`)."""
+    match = _KEY_YEAR_TAIL.match(str(canonical_key or "").strip().lower())
+    return int(match.group(2)) if match else None
+
+
+def _titles_agree(key_tokens, row_sets) -> bool:
+    for own in row_sets:
+        if not own:
+            continue
+        # Unambiguous-subset arm: one name inside the other is the same work with
+        # boilerplate or an extra word, not a collision. Both sides single-token
+        # ("thambi" / "thimiru") is NOT a subset relation, so it falls to ratio.
+        if own <= key_tokens or key_tokens <= own:
+            if own & key_tokens:
+                return True
+        ratio = difflib.SequenceMatcher(
+            None, " ".join(sorted(own)), " ".join(sorted(key_tokens))
+        ).ratio()
+        if ratio >= KEY_TITLE_AGREE_RATIO:
+            return True
+    return False
+
+
+def canonical_key_corroborates(canonical_key, titles, year=None):
+    """Does `canonical_key` name the work these titles and this year describe?
+
+    (True, evidence) when it does — including every case this rule deliberately does
+    NOT judge: a degenerate or year-less key making no claim that can be contradicted,
+    a row with no title text to check, a title that disagrees while the year confirms
+    the key. (False, evidence) only for the unambiguous shape: no title reading agrees
+    AND the row's own year contradicts the year the key carries. That conjunction is
+    the requirement of task #13 ("spelling-variant tolerant, different-work strict"),
+    and it is why *Kapatadhaari* / *Kabadadaari* (2021, one film, two spellings) still
+    folds while *Maanaadu* (2021) inside `hi-zindagi_2025` (2025) does not.
+
+    Returns a tuple so a caller cannot silently treat "no evidence" as "verified".
+    """
+    key = str(canonical_key or "").strip().lower()
+    if not key or key == "unknown":
+        return True, f"key {key!r} is degenerate and names no work"
+    key_tokens = key_title_tokens(key)
+    if not key_tokens:
+        return True, f"key {key!r} carries no title claim"
+    claimed_year = key_year(key)
+    row_sets: list[frozenset[str]] = []
+    for title in (titles if isinstance(titles, (list, tuple, set)) else [titles]):
+        row_sets.extend(_title_token_sets(title))
+    if not row_sets:
+        return True, f"row carries no title text to check against {key!r}"
+    if _titles_agree(key_tokens, row_sets):
+        return True, f"title corroborates {key!r}"
+    if claimed_year is None:
+        return True, f"title disagrees but key {key!r} claims no year to contradict"
+    row_year = None
+    try:
+        row_year = int(str(year).strip()[:4]) if year not in (None, "") else None
+    except (TypeError, ValueError):
+        row_year = None
+    if row_year is None or not 1000 <= row_year <= 2999:
+        return True, f"title disagrees but the row carries no year to contradict {key!r}"
+    if row_year == claimed_year:
+        return True, f"title disagrees and year {row_year} corroborates {key!r}"
+    return False, (
+        f"title {sorted(row_sets[0])!r} and year {row_year} both disagree with "
+        f"key {key!r} (year {claimed_year})"
+    )
+
+
+#: `clean_title` values that name the site rather than the work. The matched-record
+#: UPDATE in `save_scraped_data` and :func:`_effective_clean_title` are one rule, spelled
+#: once: the guard judges the title the row will actually carry, so a drift between the
+#: two would judge evidence that never reaches the row.
+JUNK_CLEAN_TITLES = ("", "10xflix", "7starhd", "katmoviehd", "multimovies", "rogmovies",
+                     "ssrmovies", "vegamovies")
+_JUNK_CLEAN_TITLE_SQL = ", ".join("'%s'" % t for t in JUNK_CLEAN_TITLES)
+
+
+def _effective_clean_title(existing, incoming_clean_title) -> str:
+    """The `clean_title` this row reads after the matched-record UPDATE: what it already
+    carries, unless that is a site name, in which case the new page's."""
+    stored = str(existing["clean_title"] or "").strip()
+    if not stored or stored.lower() in JUNK_CLEAN_TITLES:
+        return str(incoming_clean_title or "").strip()
+    return stored
+
+
+def guard_canonical_key(candidate_key, clean_title, title=None, year=None, fallback=None):
+    """The key this row should carry, after testing `candidate_key` against its own page.
+
+    The matched-previous-record path adopts the stored row's key, and `MAX(is_18_plus)`
+    plus :func:`inherit_key_adult` then propagate a hiding verdict across whatever that
+    key names. When the row's own title+year contradict the adopted key, the row is kept
+    and filed under the key its own page derives: a mis-stamp must not be reproduced, and
+    it must not be repaired by deleting a row either. When the derived key is unusable
+    (`unknown`), the adopted key is left alone rather than filed in the shared bucket that
+    :func:`inherit_key_adult` refuses to propagate from.
+
+    It only ever *replaces* a key it has refused, never invents one: a candidate that
+    corroborates, or that is degenerate, is returned verbatim, so this cannot re-key a row
+    whose stored key is missing.
+
+    Returns `(key_to_write, journaled)`, `journaled` being None or `(refused_key, why)`.
+    """
+    key = str(candidate_key or "").strip().lower()
+    # `canonical_key_corroborates` already answers True for a degenerate key, so the
+    # guard keeps no second copy of that rule: mutant M5 proved the copy was dead code.
+    corroborated, why = canonical_key_corroborates(
+        key, [t for t in (clean_title, title) if t], year=year)
+    if corroborated:
+        return candidate_key, None
+    derived = ledger_canonical_key(clean_title, year, fallback)
+    if not derived or derived == "unknown" or not key_title_tokens(derived):
+        # A key with no title tokens ("_2024", a bare slug) is not a better home than
+        # the foreign key it would replace, and `inherit_key_adult` refuses to
+        # propagate from the shared `unknown` bucket at all.
+        return candidate_key, None
+    return derived, (key, why)
+
+
+#: Journal for refused keys, so a re-file is auditable and reversible. No public surface
+#: reads it, and the `canonical_key` column stays the single source of truth: this records
+#: which stamp was refused and on what evidence — the same shape as `adult_fold_journal`.
+KEY_REFUSAL_JOURNAL_DDL = """
+CREATE TABLE IF NOT EXISTS key_refusal_journal (
+    post_id INTEGER PRIMARY KEY,
+    refused_key TEXT NOT NULL,
+    filed_under TEXT NOT NULL,
+    evidence TEXT NOT NULL,
+    decided_at REAL NOT NULL
+)
+"""
+
+
+def journal_key_refusal(conn, post_id, refused_key, filed_under, evidence) -> None:
+    """Record the refusal in the caller's transaction (a re-ingest replaces its record)."""
+    conn.execute(KEY_REFUSAL_JOURNAL_DDL)
+    conn.execute(
+        "INSERT OR REPLACE INTO key_refusal_journal"
+        " (post_id, refused_key, filed_under, evidence, decided_at) VALUES (?, ?, ?, ?, ?)",
+        (int(post_id), str(refused_key), str(filed_under), str(evidence), time.time()),
+    )
+
+
+def census_key_refusals(conn, *, sample_limit=25):
+    """Read-only census: which stored rows :func:`guard_canonical_key` would re-file.
+
+    Reports the guard's own population, which is NOT the population in
+    `CROWN_KEY_CENSUS_13` §1: crown's metric is title-only and counts a row as mis-keyed
+    whenever its title fails to name the key; this rule refuses only when the title AND
+    the year both fail. The two counts are reported side by side, under different names,
+    so the narrower rule cannot be read as having measured the wider one.
+    """
+    rows = conn.execute(
+        "SELECT id, canonical_key, clean_title, title, year, COALESCE(is_18_plus, 0) AS flag"
+        " FROM posts"
+        " WHERE canonical_key IS NOT NULL AND canonical_key <> '' AND canonical_key <> 'unknown'"
+        " ORDER BY id").fetchall()
+    out = {
+        "rows_with_key": len(rows),
+        "would_refuse": 0,
+        "would_refuse_flagged": 0,
+        "title_only_disagree": 0,
+        "keys_affected": set(),
+        "title_fails_but_year_or_no_self_key_carries_it": 0,
+        "samples": [],
+    }
+    for row in rows:
+        key = str(row["canonical_key"] or "").strip().lower()
+        titles = [row["clean_title"], row["title"]]
+        sets = []
+        for title in titles:
+            sets.extend(_title_token_sets(title))
+        if not sets or _titles_agree(key_title_tokens(key), sets):
+            continue
+        # crown's metric: the title alone fails to name the key.
+        out["title_only_disagree"] += 1
+        # this rule's metric: the title AND the year both fail, so the row moves.
+        filed, refused = guard_canonical_key(
+            key, row["clean_title"], row["title"], row["year"], key)
+        if refused is None:
+            out["title_fails_but_year_or_no_self_key_carries_it"] += 1
+            continue
+        out["would_refuse"] += 1
+        out["keys_affected"].add(key)
+        if row["flag"]:
+            out["would_refuse_flagged"] += 1
+        if len(out["samples"]) < sample_limit:
+            out["samples"].append({
+                "id": row["id"], "refused_key": key, "filed_under": filed,
+                "title": str(row["clean_title"] or row["title"] or ""),
+                "year": row["year"], "flagged": bool(row["flag"]),
+                "evidence": refused[1],
+            })
+    out["keys_affected"] = sorted(out["keys_affected"])
+    return out
 
 
 #: Every key that carries both a flagged row and an unflagged one, and how many rows
@@ -4846,12 +5106,16 @@ def _save_scraped_data(data: dict, *, ensure_db: bool = True) -> int:
         if existing:
             post_id = existing["id"]
 
-            # A stored row keeps the key it was filed under. Writing the derived key
-            # here would re-key rows that `releases` and `post_sources` already point
-            # at as a side effect of an ingest; that migration is its own reviewed
-            # change with its own snapshot. The adult reconciliation below runs on
-            # whichever key the row actually carries, which is the only key its
-            # siblings can be found by.
+            # A stored row keeps the key it was filed under — writing the derived key
+            # here would re-key rows that `releases` and `post_sources` already point at
+            # as a side effect of an ingest, and a bulk version of that is its own
+            # reviewed migration with its own snapshot. The adoption is not unconditional
+            # though: `guard_canonical_key` below refuses an adopted key that the row's
+            # own title and year contradict, because an unconditional adoption is how
+            # `a-perfect-murder_1998` came to carry "Van Wilder UNRATED" and hide a
+            # mainstream work through `MAX(is_18_plus)` + `inherit_key_adult`. The adult
+            # reconciliation runs on whichever key the row actually ends up carrying,
+            # which is the only key its siblings can be found by.
             stored_key = str(existing["canonical_key"] or "").strip().lower()
             if stored_key and stored_key != "unknown":
                 canonical_key = stored_key
@@ -4885,13 +5149,26 @@ def _save_scraped_data(data: dict, *, ensure_db: bool = True) -> int:
             )
             chosen_year = existing["year"] if existing["year"] is not None else year
 
+            # Refuse-and-log before the stamp: an adopted key must still name the work
+            # this row describes. `clean_title` is what the row will read after the
+            # UPDATE below, so that is the title evidence the guard tests.
+            canonical_key, refusal = guard_canonical_key(
+                canonical_key,
+                _effective_clean_title(existing, clean_title),
+                title=title or existing["title"],
+                year=chosen_year,
+                fallback=data.get("canonical_key"),
+            )
+            if refusal:
+                journal_key_refusal(conn, post_id, refusal[0], canonical_key, refusal[1])
+
             # Update existing post row
             conn.execute(
-                """
+                f"""
                 UPDATE posts SET
                     canonical_key = ?,
                     title = CASE WHEN length(COALESCE(title, '')) > length(?) THEN title ELSE ? END,
-                    clean_title = CASE WHEN lower(clean_title) IN ('7starhd', 'rogmovies', 'vegamovies', 'katmoviehd', 'ssrmovies', '10xflix', 'multimovies', '') OR clean_title IS NULL THEN ? ELSE clean_title END,
+                    clean_title = CASE WHEN lower(clean_title) IN ({_JUNK_CLEAN_TITLE_SQL}) OR clean_title IS NULL THEN ? ELSE clean_title END,
                     year = ?,
                     content_type = COALESCE(NULLIF(content_type, ''), ?),
                     poster_url = ?,

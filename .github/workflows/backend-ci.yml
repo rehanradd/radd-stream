@@ -247,6 +247,15 @@ jobs:
       - name: 🧪 test_adult_twin_probe.py
         run: python3 -S Fast_Fetch/test_adult_twin_probe.py
 
+      # Task #13 (2026-11-05): a `canonical_key` may only be stamped on a row whose own
+      # title AND year name it. The census population it was written against is the 164
+      # keys / 19 flagged rows in `CROWN_KEY_CENSUS_13`; the write-path arm drives the real
+      # `save_scraped_data` stamp site, and the counterfactual shows the legitimate twin
+      # goes hidden when the guard is neutered, so a green run means the refusal happened.
+      # Offline: temp SQLite files only, no network, no production catalog read.
+      - name: 🧪 test_key_refusal_guard.py
+        run: python3 -S Fast_Fetch/test_key_refusal_guard.py
+
       # The dub-collision census (q2, landed as a424ffc). Staging vaults make
       # `canonical_key` PRIMARY KEY, so a dubbed print and its original can only
       # collide ACROSS databases — the shape the merged ledger carries. The suite
