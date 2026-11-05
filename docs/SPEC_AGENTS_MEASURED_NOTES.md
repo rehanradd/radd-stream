@@ -133,3 +133,30 @@ recollection; each is reproducible with the command printed under it.
   `🔨 CI — Android Build & Test`. Do not call it a release, and do not re-cut or move a tag to make
   the row true — the tag is the owner's, and the fix is re-entering `KEYSTORE_BASE64` with its
   padding intact.
+
+## 2026-11-05 — the block above is superseded: signing works, and `v1.0.4` is public
+
+Measured by the crown supervisor over HTTPS with the **unauthenticated** public API (no token, so
+nothing here depends on a lane's permissions):
+
+- `GET /repos/rehanradd/radd-stream/releases` → **1 release**: `v1.0.4`, `draft: false`,
+  `prerelease: false`, assets `radd-stream-1.0.4.apk`, `radd-stream-1.0.4.aab`,
+  `radd-stream-1.0.4-SHA256SUMS.txt`.
+- `GET /repos/rehanradd/radd-stream/tags` → **5**: `v1.0.0`, `v1.0.1`, `v1.0.2`, `v1.0.3`, `v1.0.4`.
+- `GET .../actions/workflows/398476978/runs` → **8** runs: `41323174024` (`push`, `v1.0.4`,
+  `completed success`, 2026-11-01T15:49:38Z) and **runs 1–7 `failure`** —
+  `41321278817` (`v1.0.3`), `41320017558` (`v1.0.2`), `41233720264` (`v1.0.1`), `41104231187`
+  (`workflow_dispatch`, `v1.0.0`), `41104217171` (`v1.0.0`), `41102348096` (`v1.0.0`),
+  `40876596427` (`workflow_dispatch`, `master`).
+
+Every claim in the preceding section — `GET /releases` is `[]`, "no signed APK or AAB has ever been
+produced", "installable bytes are the **debug** APK" — was true when it was measured and is false
+now. Keep it for the receipts and the method (the anonymous step-name read, the strict-decoder
+diagnosis); do not quote it as state. The owner-side fix was re-entering `KEYSTORE_BASE64` with its
+padding intact, not editing a build script; the procedure is
+[`SPEC_APP_SIGNING_RUNBOOK.md`](SPEC_APP_SIGNING_RUNBOOK.md).
+
+Verbatim copy of the root-guide paragraph this retired, so the chain is not lost when `AGENTS.md`
+shrank:
+
+> **UPDATE (Measured 2026-10-30 22:53, then re-measured 2026-10-31 07:5x):** All four release signing secrets (`KEYSTORE_BASE64`, `KEY_ALIAS`, `KEY_PASSWORD`, `KEY_STORE_PASSWORD`) were generated, backed up on Oracle VM (`/home/ubuntu/raddstream-release.jks`), and configured in GitHub Actions Secrets by the repository owner. **That half is confirmed by execution:** the release run at the tag (`41104217171`) cleared `🗝️ Verify signing secrets are present` at `18:08:05Z` — the preflight that killed the 2026-10-29 attempt in 10 s. **The rest of that sentence was false and is retired:** the workflow is *not* "producing signed release artifacts". Measured on the API: `GET /releases` returns `[]`, all five release runs in history are `failure`, and `tag v1.0.0` resolves to commit `6a441ec77` — a trunk point that predates the adult merge-time fold (`4a8c163`), so re-running that tag would ship pre-law code. **No signed APK or AAB has ever existed for this product.** The cause is now read from the run log, not guessed: `java.lang.IllegalArgumentException: Last unit does not have enough valid bits` at `App/app/build.gradle.kts:120`, `BUILD FAILED in 4s` — it died during *configuration*, in `signingConfigs`, before any Kotlin compiled. That exception is `java.util.Base64.getDecoder()` refusing the **stored `KEYSTORE_BASE64` value**, whose length is not a clean base64 quantum (padding lost in the paste); the keystore itself is sound — re-encoding `/home/ubuntu/raddstream-release.jks` (2,752 bytes → 3,672 chars, ends `==`) round-trips strictly. So the fix is owner-side secret re-entry, **not** a build-script edit, and the `android.util.Base64` story in §10 was never what this file runs. **Moving or re-cutting a tag is an owner action: no agent may create, move or delete a tag.**

@@ -118,70 +118,23 @@ verification, not implementation.
 
 ## 10. Signing Configuration
 
-This section previously printed a sample `app/build.gradle.kts` does not contain:
-`android.util.Base64.decode(...)` is an **Android runtime API, not on the Gradle classpath**, so
-that block could never have configured a build. What actually runs
-(`App/app/build.gradle.kts:110-126`, verified at `a51c0c4`):
+The sample `signingConfigs` block, the one-time keystore generation, and the retired failure history
+rotated out 2026-11-05 to [`../docs/SPEC_APP_SIGNING_RUNBOOK.md`](../docs/SPEC_APP_SIGNING_RUNBOOK.md)
+under this file's byte ceiling. The law stays here:
 
-```kotlin
-signingConfigs {
-    create("release") {
-        val keystoreBase64 = System.getenv("KEYSTORE_BASE64") ?: ""
-        val storePassword  = System.getenv("KEY_STORE_PASSWORD") ?: ""
-        val keyAlias       = System.getenv("KEY_ALIAS") ?: ""
-        val keyPassword    = System.getenv("KEY_PASSWORD") ?: ""
-
-        if (keystoreBase64.isNotEmpty() && storePassword.isNotEmpty()) {
-            val keystoreFile = File(layout.buildDirectory.asFile.get(), "radd-release.jks")
-            keystoreFile.parentFile?.mkdirs()
-            keystoreFile.writeBytes(Base64.getDecoder().decode(keystoreBase64))  // java.util, imported at :3
-            storeFile = keystoreFile
-            this.storePassword = storePassword
-            this.keyAlias = keyAlias
-            this.keyPassword = keyPassword
-        }
-    }
-}
-```
-
-Two consequences to know before spending a release run:
-
-- Applied **only when both** `KEYSTORE_BASE64` and `KEY_STORE_PASSWORD` are non-empty; the keystore
-  is written under `app/build/`, never the source tree, never committed.
+- Release signing reads `KEYSTORE_BASE64`, `KEY_STORE_PASSWORD`, `KEY_ALIAS`, `KEY_PASSWORD`, is
+  applied **only when** the first two are non-empty, and writes the keystore under `app/build/` —
+  never the source tree, never committed.
 - `Base64.getDecoder()` is the strict **basic** codec: no line breaks, and a value whose length is
-  not a whole base64 quantum throws. Measured:
-  `java.lang.IllegalArgumentException: Last unit does not have enough valid bits` at
-  `build.gradle.kts:120`, `BUILD FAILED in 4s` — it dies during **configuration**, before any Kotlin
-  compiles, so no compile or lint error is reached. That exception is the *stored secret* being
-  malformed, not this code: the VM's keystore re-encodes cleanly
-  (`/home/ubuntu/raddstream-release.jks`, 2,752 bytes → 3,672 base64 chars ending `==`, strict
-  round-trip OK). **Fix it by re-entering the secret, not by editing this block** —
-  `getMimeDecoder()` would silently accept a truncated keystore instead of refusing it.
-
-**One-time keystore generation** (GitHub Codespaces terminal — no local install):
-```bash
-# Codespaces terminal:
-keytool -genkey -v \
-  -keystore radd-release-key.jks \
-  -keyalg RSA -keysize 2048 \
-  -validity 10000 \
-  -alias radd-key \
-  -dname "CN=RADD Stream, O=RADD, C=US"
-
-# Encode for the Secret:
-base64 -w 0 radd-release-key.jks
-
-# GitHub: Settings → Secrets → Actions:
-#   KEYSTORE_BASE64 = (paste output above)
-#   KEY_STORE_PASSWORD = (the password you chose)
-#   KEY_ALIAS = raddstream
-#   KEY_PASSWORD = (the key password you chose)
-```
-
-> **Status (measured 2026-10-30):** all 4 release signing secrets are active in GitHub Actions
-> Secrets; the keystore is backed up on the Oracle VM at `/home/ubuntu/raddstream-release.jks`.
-> A `v*.*.*` tag triggers `.github/workflows/release.yml`: build, sign, verify, publish APKs + AABs.
-
+  not a whole quantum throws. That refusal is the feature — `getMimeDecoder()` would silently accept
+  a truncated keystore. **Fix a decode failure by re-entering the secret, never by editing the block.**
+- **Measured 2026-11-05, unauthenticated public API: signing works.** Release `v1.0.4` is public with
+  `radd-stream-1.0.4.apk`, `radd-stream-1.0.4.aab`, `radd-stream-1.0.4-SHA256SUMS.txt`; tags
+  `v1.0.0`–`v1.0.4` exist; the publishing run is `41323174024` (`completed success`). Runs 1–7 of
+  `release.yml` failed on the malformed secret — the state every older sentence in the guides
+  describes. Those sentences are retired in place, not rewritten.
+- **No agent may create, move, or delete a tag.** A `v*.*.*` tag triggers `release.yml`; cutting one
+  is the owner's call, not a build step.
 ---
 
 ## 11. Git and Credential Safety
@@ -234,6 +187,7 @@ never persist the token in the repository.
 
 - 5. REST API Contract (Verified Against viewer.py) → [`../docs/SPEC_APP_API_CONTRACT.md`](../docs/SPEC_APP_API_CONTRACT.md) (214 lines) — endpoint contract
 - 9. Phase 0 Implementation Notes (Historical) → [`../docs/SPEC_APP_PHASE0_NOTES.md`](../docs/SPEC_APP_PHASE0_NOTES.md) (74 lines)
+- 10. Signing Configuration (the sample block, the decode diagnosis, the failed runs) → [`../docs/SPEC_APP_SIGNING_RUNBOOK.md`](../docs/SPEC_APP_SIGNING_RUNBOOK.md) (80 lines) — signing runbook
 - 12. Session Log — Append Here → [`docs/SESSION_HISTORY.md`](docs/SESSION_HISTORY.md) (19 lines) — session log
 - 14. Session Log → [`docs/SESSION_HISTORY.md`](docs/SESSION_HISTORY.md) (235 lines) — session log (cont.)
 - 15. Re-Skinning From ONE File (`/brand.properties`) → [`../docs/SPEC_APP_RESKIN_BRAND_PROPERTIES.md`](../docs/SPEC_APP_RESKIN_BRAND_PROPERTIES.md) (1686 lines) — re-skin reference
@@ -262,10 +216,11 @@ cannot reach `http://92.4.95.252` over plain HTTP at all — a deployment fact a
 testable, not a reason to loosen release policy.
 
 **How to get a signed release:** push a `v*.*.*` tag → `release.yml`. It needs
-`KEYSTORE_BASE64`, `KEY_STORE_PASSWORD`, `KEY_ALIAS`, `KEY_PASSWORD`. Measured cause of every
-release failure so far, recorded in the `signingConfigs` block itself: the stored
-`KEYSTORE_BASE64` is **malformed** — the strict-decode failure measured in §10; the tolerant MIME
-decoder throws identically on the same input, so this is a corrupt secret value, not a Gradle bug. The block now refuses
+`KEYSTORE_BASE64`, `KEY_STORE_PASSWORD`, `KEY_ALIAS`, `KEY_PASSWORD`, **and it works**: `v1.0.4` is
+public with APK + AAB + SHA256SUMS assets (measured 2026-11-05, unauthenticated API, run
+`41323174024`). Runs 1–7 failed on a malformed stored `KEYSTORE_BASE64` — the strict-decode failure
+in §10; the tolerant MIME decoder throws identically on the same input, so it was a corrupt secret
+value, not a Gradle bug, and the owner re-entered it. The block refuses
 *before* signing, printing only the value's shape (length, index, code point, decoded byte count,
 keystore alias count) and never its contents. The correct export is `base64 -w 0 <keystore-file>`
 pasted straight into Settings → Secrets and variables → Actions, replacing the stored value.

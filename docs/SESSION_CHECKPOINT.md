@@ -4,7 +4,7 @@ Update this file after each independently verified milestone so work can resume 
 
 ## ✅ Open items — index (q3, 2026-10-30; pointers only)
 
-1. **This file is a pointer, not a history.** 61 files cover 2026-10-20 → 2026-11-01: 59 dated
+1. **This file is a pointer, not a history.** 62 files cover 2026-10-20 → 2026-11-05: 60 dated
    session blocks, one undated block, the entry template — every one verbatim. Newest first in
    [`checkpoints/README.md`](checkpoints/README.md). The count is `ls docs/checkpoints/*.md` minus
    `README.md`, and `Fast_Fetch/test_docs_invariants.py` checks the number written here against that
@@ -86,7 +86,7 @@ Update this file after each independently verified milestone so work can resume 
 ## Rotated session history
 
 Session blocks moved verbatim to [`docs/checkpoints/`](checkpoints/README.md); nothing was deleted or reworded.
-The newest 14 are listed here; the complete index (all 54) is in `docs/checkpoints/README.md`.
+The list below is the rotation window (2026-10-29 → 2026-10-31), not the newest work; the full newest-first index is in `checkpoints/README.md`.
 
 - [2026-10-31 09:05 — q4 App lane `[Q4-ONBOARD-GREEN]`: onboarding went hosted-green at `03e926b`, the favourites rescue is provably not self-contained, and both lines own Room version 7](checkpoints/20261031-0905-q4-onboarding-hosted-green-and-the-favourites-version-collision.md) — three run ids measured, one destructive-migration trap found by reading
 - [2026-10-30 22:55 — Release signing secrets active on GitHub, tag v1.0.0 triggered `[RELEASE-SIGNING-ACTIVE]`](checkpoints/20261030-2255-signing-keys-active-release-triggered.md) — release pipeline live

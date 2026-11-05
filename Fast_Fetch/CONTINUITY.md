@@ -86,6 +86,8 @@ The newest are listed here; `Fast_Fetch/checkpoints/README.md` is the complete i
 - [2026-10-30 04:0x→ — q3 lane, THE DOCUMENTATION DIET: split, not delete](checkpoints/20261030-04xx-q3-lane-the-documentation-diet-split-not-delet.md)
 - 2026-11-01 q5 `[Q5-PROBE-TOTAL]` RECORD: this branch had no commit and no push before `11c1008` (02:54); Backend CI run `41245756423` at that sha is completed success, 45 steps, none non-green, step 43 being the new suite. The identifiers `226737e`, `41245142329`, `q5-config-probe-20261101` and a 35-test `test_database` figure appear in none of this lane's turns; the true set is above.
 
+- 2026-11-05 q1 `[Q1-CROWN-VERIFY-AND-DOCS-GATE]`: trunk is `main`@`37ae67b`; 8 guide claims fixed, 66 GB staging freed, hubcdn trust gate re-derived — see `docs/checkpoints/20261105-q1-crown-verify-and-docs-gate.md`
+
 ## Moved out (reference prose, verbatim)
 
 - ✍️ Incoming Agent Checklist → [`../docs/SPEC_INCOMING_AGENT_CHECKLIST.md`](../docs/SPEC_INCOMING_AGENT_CHECKLIST.md) (294 lines) — the onboarding procedure, unchanged
