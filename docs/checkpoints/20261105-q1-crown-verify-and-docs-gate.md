@@ -213,9 +213,19 @@ names the four invalidated items and the rule *"do not cite `b99814e`, `master`,
   bytes. `App/AGENTS.md` **13,634/15,000**, `Fast_Fetch/AGENTS.md` **15,815/18,000**,
   `docs/SESSION_CHECKPOINT.md` **11,993/12,000**, `Fast_Fetch/CONTINUITY.md` **11,998/12,000**, and
   `grep -c 'name: 🧪'` **43**.
-- **The hubcdn set re-derived as an addition, not a revert.** Trunk already ships `_tls_context` (the
-  Phase-1 finding that `/tmp/crown_62_HUBCDN.patch` would have deleted it is exactly why that patch must
-  never be applied here). The delta is `git diff b99814e 0e8f74d -- fast_fetch.py site_scout.py` — 3 new
+- **The hubcdn set re-derived as an addition, not a revert.** Trunk already ships `_tls_context`.
+  **A claim I made in Phase 1 and repeated in this landing's own commit message is retired here: the
+  `/tmp/crown_62_HUBCDN.patch` would NOT have reverted the TLS fix.** q13-63 measured it and crown
+  re-measured it independently — `git apply --check --include='Fast_Fetch/fast_fetch.py'` on a clean
+  `37ae67b` worktree **applies**, the result is **byte-identical to the landed tip**, and
+  `_tls_context` counts **12** in it. What that patch genuinely cannot do is apply *wholesale*: its doc
+  hunks fail loudly at `App/AGENTS.md:129`, `docs/SESSION_CHECKPOINT.md:4`,
+  `docs/checkpoints/README.md:5`. The "silent revert of a security fix" story was an inference from
+  `_tls_context` counts on `b99814e` (9) versus trunk (10) — and the patch's code slice is not
+  `b99814e`-derived. `967a05d`'s message still carries the wrong sentence because a pushed message is
+  not amended; this file is where the record is corrected, and a warning that is *right about the
+  danger and wrong about the artifact* is how good guards become noise.
+  The delta is `git diff b99814e 0e8f74d -- fast_fetch.py site_scout.py` — 3 new
   files (`host_classifier.py`, `test_host_classifier.py`, `test_hubcdn_unwrap.py`), `is_bridge_url`
   learning `hubcdn.io`, `_HubcdnNoRedirect` + `_hubcdn_page` + the asset-role gate, and the
   `site_scout` authority-merge block — every hunk additive; `grep -n "ssl._create_unverified\|CERT_NONE"`
@@ -260,3 +270,35 @@ fix"), so the ruling's *deploy live* step stops at the owner's decision about th
 restarted, nothing was copied to the host. And the fold the ruling was about needed no deploy at all:
 it already ships in `catalog_v2._link_state_of` and already runs live — the residual there is the
 `unknown` divergence in `link_state.state_for()`, latent, not a live defect.
+
+---
+
+## Phase 6 — two lane filings judged by re-measurement, and 16 gates that report green while asleep
+
+**q13-63 (hubcdn re-derive on trunk) — CLOSED as already satisfied, and it corroborates the landing.**
+Its `/tmp/q13_hubcdn37` lane ported the six paths from `967a05d` and `cmp` says all six are
+byte-identical to trunk; `test_hubcdn_unwrap` 34 OK, `test_host_classifier` 74 OK (skipped=16). It also
+caught my own false warning about `crown_62_HUBCDN.patch`, retired in Phase 4 above.
+
+**The 16 skips are the finding, not the green.** All 16 share one reason —
+`'resolved_cache.py not present in this tree'` — across `TestViewerShapeGate` (9),
+`TestCategoryACrossCheckWithResolvedCache` (5), `TestTaxonomyCollisionGuard` (2). `resolved_cache.py`
+exists **only as uncommitted work in `/tmp/lane_phase1`**. So Backend CI prints two green suite names
+while sixteen assertions — viewer-shape rejection, category-A cross-checks, the horizon/kind taxonomy
+collision guard — never execute on anyone's push. That is the precise failure class
+`CROWN_VERIFY_54` §5 was written about, but inverted: the suite *is* registered, and its protection is
+skipping. Whoever lands the resolved-cache lane must say so in the same commit, or the register keeps
+claiming coverage it does not have.
+
+**q12-60 (the adult agreement gate) — ACCEPTED, `/tmp/crown_orders/CROWN_VERIFY_60.md`.** Crown
+re-measured: three sha256 values, the 760/329 line counts, `nothing indexed`, and
+`test_adult_fold_guard.py` **Ran 20 OK** on this box; the 135,731 / 394 / 407 / 1,190 census matches my
+own measurement exactly. The 330-agree/77-quarantine split (mine was 364/43) was **not** re-run and is
+labelled unverified. **Their rule beats mine**: my 43-row quarantine came from a subset rule, and the 30
+rows they refuse are `row ⊂ sib` shapes like *"Dom (Season 1 - 3) Dual Audio"* versus the film *"Dom"* —
+exactly the mis-hide the collision CSV was hunting. Accepted law: **a subset is not an agreement**, one
+refusing row refuses the whole key, and 7 corroborating rows stay public as the honest direction of
+error. The stale base cost nothing here: trunk's `backfill_adult_key.py` is **byte-identical to
+`b99814e`'s**, so the 760 lines port with zero re-base work. Landing with
+`🧪 test_adult_fold_guard.py` registered (43 → 44); **`--apply` on the production catalog is not
+authorised by any document in this session** — the tool landing flips no row.
