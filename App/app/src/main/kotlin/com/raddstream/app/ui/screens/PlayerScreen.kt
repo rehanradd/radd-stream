@@ -476,6 +476,8 @@ private fun PlayerScreenContent(
                     null
                 },
             )
+        } else {
+            // Neither a give-up nor a deadline expiry is showing.
         }
 
         state.connectionError?.let { err ->
@@ -1570,7 +1572,6 @@ private fun ConnectionErrorCard(message: String, onRetry: () -> Unit) {
 
 // ── Give-up card (§5 handoff reasons) ──────────────────────────────────────────
 
-@Composable
 @Composable
 private fun StartNoticeCard(
     phase: StartPhase,
