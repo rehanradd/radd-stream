@@ -122,6 +122,28 @@ class PlayerControlSemanticsTest {
     }
 
     @Test
+    fun `volume and fullscreen are real buttons, not gestures alone`() {
+        assertTrue("the bottom row needs a Volume button", source.contains("vm.toggleMute()"))
+        assertTrue("the bottom row needs a Fullscreen button", source.contains("vm.toggleFullscreen()"))
+        assertTrue("the Volume button must say its level", source.contains("R.string.player_volume"))
+        assertTrue("a muted player must say it is muted", source.contains("R.string.player_volume_muted"))
+        assertTrue("the Fullscreen button must be named", source.contains("R.string.player_fullscreen"))
+        assertTrue("leaving fullscreen must be named too", source.contains("R.string.player_exit_fullscreen"))
+    }
+
+    @Test
+    fun `a long press on volume opens the level slider`() {
+        assertTrue(
+            "the Volume button must offer its level on a long press",
+            source.contains("onLongClick = { showVolumeDialog = true }"),
+        )
+        assertTrue(
+            "the slider must write the same volume the gesture writes",
+            source.contains("onValueChange = { vm.setUserVolume(it) }"),
+        )
+    }
+
+    @Test
     fun `nothing is announced while no text track is loaded`() {
         assertEquals(OFF_WORD, subtitleStatusLabel(PlayerUiState(), OFF_WORD))
     }

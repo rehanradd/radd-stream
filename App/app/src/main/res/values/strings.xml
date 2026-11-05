@@ -11,6 +11,10 @@
     <string name="player_audio_only_paused">Audio only — paused</string>
     <string name="player_brightness">Brightness %1$d%%</string>
     <string name="player_volume">Volume %1$d%%</string>
+    <string name="player_volume_muted">Volume muted</string>
+    <string name="player_volume_title">Volume</string>
+    <string name="player_fullscreen">Fullscreen</string>
+    <string name="player_exit_fullscreen">Exit fullscreen</string>
     <string name="player_boost_hint">Boosting — release to restore</string>
     <string name="player_time_of">%1$s / %2$s</string>
     <string name="player_boost_badge">Boosting speed</string>

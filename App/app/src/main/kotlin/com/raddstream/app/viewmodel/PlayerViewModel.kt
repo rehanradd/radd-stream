@@ -880,8 +880,27 @@ class PlayerViewModel @Inject constructor(
      */
     fun setUserVolume(volume: Float) {
         val clamped = if (volume.isFinite()) volume.coerceIn(0f, 1f) else 1f
+        if (clamped > 0f) lastAudibleVolume = clamped
         _ui.update { it.copy(userVolume = clamped) }
         applyPlayerVolume()
+    }
+
+    /** The last audible level, so un-muting restores what the viewer had, not full blast. */
+    private var lastAudibleVolume: Float = 1f
+
+    /**
+     * Mute / un-mute from the Volume button. Muting keeps the last audible level aside;
+     * un-muting restores it. A gesture drag to silence is the same act, so [setUserVolume]
+     * is what records the restore point, not this function.
+     */
+    fun toggleMute() {
+        if (_ui.value.userVolume > 0f) setUserVolume(0f)
+        else setUserVolume(lastAudibleVolume)
+    }
+
+    /** Fullscreen (immersive, system bars hidden) ↔ normal (system bars shown). */
+    fun toggleFullscreen() {
+        _ui.update { it.copy(fullscreen = !it.fullscreen) }
     }
 
     /**
@@ -1487,17 +1506,6 @@ class PlayerViewModel @Inject constructor(
         }
     }
 
-    /**
-     * The language a live track pick writes back to Settings, or null when the pick
-     * says nothing about the standing preference. A picked track's language is the
-     * viewer's choice for this show and the next visit; turning subtitles off is
-     * viewing-scoped — it must not delete the stored language, or the next episode
-     * would start silent for a viewer who wants Hindi. A track with no language tag
-     * has nothing to persist either.
-     */
-    internal fun persistedLanguageFor(option: TrackUiOption?): String? =
-        option?.language?.trim()?.takeIf { it.isNotEmpty() }
-
     // ── Subtitles: settings + external files ─────────────────────────────────────
 
     /**
@@ -1919,3 +1927,17 @@ internal object TrackMapper {
         return null
     }
 }
+
+/**
+ * The language a live track pick writes back to Settings, or null when the pick
+ * says nothing about the standing preference. A picked track's language is the
+ * viewer's choice for this show and the next visit; turning subtitles off is
+ * viewing-scoped — it must not delete the stored language, or the next episode
+ * would start silent for a viewer who wants Hindi. A track with no language tag
+ * has nothing to persist either.
+ *
+ * Top-level (not a ViewModel member) so the unit test can call it directly — the
+ * ViewModel's eight injected deps have no fakes anywhere in the repo.
+ */
+internal fun persistedLanguageFor(option: TrackUiOption?): String? =
+    option?.language?.trim()?.takeIf { it.isNotEmpty() }

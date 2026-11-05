@@ -21,6 +21,7 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -55,6 +56,8 @@ import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.FastForward
 import androidx.compose.material.icons.filled.HighQuality
 import androidx.compose.material.icons.filled.Forward10
+import androidx.compose.material.icons.filled.Fullscreen
+import androidx.compose.material.icons.filled.FullscreenExit
 import androidx.compose.material.icons.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.ListAlt
@@ -282,6 +285,16 @@ private fun PlayerScreenContent(
             }
             activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
         }
+    }
+
+    // Fullscreen toggle: immersive (bars hidden) ↔ normal (bars shown). Entry hides
+    // them in the DisposableEffect above; this effect applies every later flip, and
+    // the dispose step still restores the bars when the player leaves.
+    LaunchedEffect(state.fullscreen) {
+        val window = activity?.window ?: return@LaunchedEffect
+        val insets = WindowInsetsControllerCompat(window, window.decorView)
+        if (state.fullscreen) insets.hide(WindowInsetsCompat.Type.systemBars())
+        else insets.show(WindowInsetsCompat.Type.systemBars())
     }
 
     // Brightness override from the left-half vertical gesture.
@@ -1191,6 +1204,7 @@ private fun BottomControls(
     onEnterPip: () -> Unit,
     onActivity: () -> Unit,
 ) {
+    var showVolumeDialog by remember { mutableStateOf(false) }
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.BottomCenter) {
         Column(
             Modifier
@@ -1227,6 +1241,33 @@ private fun BottomControls(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 val subtitleWord = subtitleStatusLabel(state, stringResource(R.string.player_off))
+                val volumePercent = (state.userVolume * 100).toInt()
+                // Volume first, Fullscreen second: the two controls the old row never
+                // had as buttons. Volume tap mutes / restores; long-press opens the
+                // level slider. Fullscreen toggles the immersive bars.
+                PlayerControlButton(
+                    { vm.toggleMute() },
+                    if (state.userVolume > 0f) stringResource(R.string.player_volume, volumePercent)
+                    else stringResource(R.string.player_volume_muted),
+                    onLongClick = { showVolumeDialog = true },
+                ) {
+                    Icon(
+                        if (state.userVolume > 0f) Icons.Default.VolumeUp else Icons.Default.VolumeMute,
+                        null,
+                        tint = Color.White,
+                    )
+                }
+                PlayerControlButton(
+                    { vm.toggleFullscreen() },
+                    if (state.fullscreen) stringResource(R.string.player_exit_fullscreen)
+                    else stringResource(R.string.player_fullscreen),
+                ) {
+                    Icon(
+                        if (state.fullscreen) Icons.Default.FullscreenExit else Icons.Default.Fullscreen,
+                        null,
+                        tint = Color.White,
+                    )
+                }
                 if (state.canSwitchQuality) {
                     PlayerControlButton({ vm.showQualitySheet() }, stringResource(R.string.player_quality_label, state.qualityLabel)) {
                         Icon(
@@ -1306,6 +1347,31 @@ private fun BottomControls(
                 }
             }
         }
+        // Volume long-press: a level slider with the % in words, so the exact level
+        // is reachable without the gesture. Dragging writes straight to the same
+        // setUserVolume the gesture uses, so mute remembers the restore point.
+        if (showVolumeDialog) {
+            AlertDialog(
+                onDismissRequest = { showVolumeDialog = false },
+                title = { Text(stringResource(R.string.player_volume_title)) },
+                text = {
+                    Column {
+                        Text(stringResource(R.string.player_volume, (state.userVolume * 100).toInt()))
+                        Slider(
+                            value = state.userVolume,
+                            onValueChange = { vm.setUserVolume(it) },
+                            valueRange = 0f..1f,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
+                },
+                confirmButton = {
+                    TextButton({ showVolumeDialog = false }) {
+                        Text(stringResource(R.string.player_close))
+                    }
+                },
+            )
+        }
     }
 }
 
@@ -1339,15 +1405,27 @@ private fun ControlTarget(
     label: String,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
+    onLongClick: (() -> Unit)? = null,
     content: @Composable () -> Unit,
 ) {
     val spoken = label
-    Box(
-        modifier = modifier
+    // Long-press is opt-in per control (the Volume button's level slider). A control
+    // without one keeps the plain clickable below — the press the semantics test pins.
+    val pressModifier = if (onLongClick != null) {
+        modifier
+            .size(MinControlTarget)
+            .clip(CircleShape)
+            .combinedClickable(onClick = onClick, onLongClick = onLongClick, role = Role.Button)
+            .semantics { contentDescription = spoken }
+    } else {
+        modifier
             .size(MinControlTarget)
             .clip(CircleShape)
             .clickable(onClick = onClick, role = Role.Button)
-            .semantics { contentDescription = spoken },
+            .semantics { contentDescription = spoken }
+    }
+    Box(
+        pressModifier,
         contentAlignment = Alignment.Center,
     ) { content() }
 }
@@ -1356,9 +1434,10 @@ private fun ControlTarget(
 private fun PlayerControlButton(
     onClick: () -> Unit,
     label: String,
+    onLongClick: (() -> Unit)? = null,
     content: @Composable () -> Unit,
 ) {
-    ControlTarget(label = label, onClick = onClick) {
+    ControlTarget(label = label, onClick = onClick, onLongClick = onLongClick) {
         Box(Modifier.size(26.dp), contentAlignment = Alignment.Center) { content() }
     }
 }

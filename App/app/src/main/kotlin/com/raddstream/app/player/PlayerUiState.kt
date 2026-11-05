@@ -218,6 +218,8 @@ data class PlayerUiState(
     val locked: Boolean = false,
     val aspect: AspectMode = AspectMode.FIT,
     val orientation: PlayerOrientation = PlayerOrientation.LANDSCAPE,
+    /** Immersive fullscreen (system bars hidden) or normal (system bars shown). */
+    val fullscreen: Boolean = true,
     /** Ghost mode or the full MX chrome. Persisted, because nobody wants it reset per episode. */
     val viewMode: ViewMode = ViewMode.STANDARD,
     /**
