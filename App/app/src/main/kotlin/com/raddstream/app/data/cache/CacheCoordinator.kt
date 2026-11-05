@@ -100,7 +100,7 @@ class CacheCoordinator(
             task = taskDao.getById(taskId) ?: return
             mode = fetchModeFor(task)
             val outcome = if (task.linkKind == KIND_HLS) {
-                runHlsPass(task)
+                runHlsPass(task, mode)
             } else {
                 val headByte = playheadBytes[taskId] ?: task.verifiedPrefixBytes
                 aheadFetcher.run(task, mode) { headByte }
@@ -167,13 +167,19 @@ class CacheCoordinator(
         if (task.priorityEnum == CachePriority.USER_REQUESTED) FetchMode.FULL_DOWNLOAD
         else FetchMode.AUTO_PREVIEW_AHEAD
 
-    private suspend fun runHlsPass(task: CacheTaskEntity): FetchOutcome {
+    /**
+     * One HLS pass. A preview fills the window ahead of the playhead and parks; a full
+     * download fetches the whole playlist in one pass, from segment 0. The old code always
+     * started at the playhead and always took 20 segments, so a keep that was never played
+     * re-covered segments 0..20 forever and never reached segment 21.
+     */
+    private suspend fun runHlsPass(task: CacheTaskEntity, mode: FetchMode): FetchOutcome {
         val workDir = File(storage.openForWrite(task.sourceKey, task.totalSizeBytes.takeIf { it > 0 }).parentFile, task.sourceKey)
         val result = hlsBuffer.run(
             manifestUrl = task.currentUrl,
             workDir = workDir,
-            startSegmentIndex = task.playOffsetSeconds.toInt(), // segment index tracked by player
-            aheadSegments = AHEAD_SEGMENTS,
+            startSegmentIndex = if (mode == FetchMode.FULL_DOWNLOAD) 0 else task.playOffsetSeconds.toInt(), // segment index tracked by player
+            aheadSegments = if (mode == FetchMode.FULL_DOWNLOAD) Int.MAX_VALUE else AHEAD_SEGMENTS,
         )
         return when {
             result.sourceDead -> FetchOutcome.NEEDS_RERESOLVE

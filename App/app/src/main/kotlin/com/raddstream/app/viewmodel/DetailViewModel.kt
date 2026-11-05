@@ -5,12 +5,22 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.raddstream.app.data.ServerSettingsRepository
 import com.raddstream.app.data.UserRegion
+import com.raddstream.app.data.cache.CacheCoordinator
+import com.raddstream.app.data.cache.KeepIdentity
 import com.raddstream.app.data.downloads.DeviceDownloadResult
 import com.raddstream.app.data.downloads.DeviceDownloadsRepository
 import com.raddstream.app.data.local.WatchHistoryDao
 import com.raddstream.app.data.local.WatchHistoryEntity
+import com.raddstream.app.network.ApiProvider
 import com.raddstream.app.network.friendlyNetworkError
 import com.raddstream.app.network.models.PostDetail
+import com.raddstream.app.network.models.StreamResponse
+import com.raddstream.app.network.streamRedirectUrl
+import com.raddstream.app.player.AdoptRequest
+import com.raddstream.app.player.CacheAffordance
+import com.raddstream.app.player.CacheEngineHolder
+import com.raddstream.app.player.CacheSessionKey
+import com.raddstream.app.player.KeepResult
 import com.raddstream.app.player.LadderForScope
 import com.raddstream.app.player.LadderRung
 import com.raddstream.app.player.PlayerSessionStore
@@ -94,6 +104,7 @@ class DetailViewModel @Inject constructor(
     private val catalogRepository: CatalogRepository,
     private val favoritesRepository: FavoritesRepository,
     private val deviceDownloads: DeviceDownloadsRepository,
+    private val apiProvider: ApiProvider,
     private val syncAccountRepository: SyncAccountRepository,
     private val settingsRepository: ServerSettingsRepository,
     private val watchHistoryDao: WatchHistoryDao,
@@ -376,13 +387,18 @@ class DetailViewModel @Inject constructor(
             (!premiumAccess && VipQualityGate.isPremiumLabel(option.title))
 
     /**
-     * Ask Android's DownloadManager for one public file, by OUR opaque handle.
+     * Keep one rung for offline playback, by OUR opaque handle.
      *
-     * Every branch answers out loud: an accepted download routes to the Downloads screen where
-     * its row is already moving; a legacy device learns it must grant storage first, because a
-     * button that quietly does nothing is worse than one that says no. The address handed to
-     * DownloadManager is our own redirector — the server verified the handle, and the upstream
-     * location never enters this app.
+     * Which system owns the copy depends on what it is: a single file goes to the
+     * device download (a public file in Movies/RaddStream); a segmented playlist
+     * goes to the keep engine, which fetches the segments and plays them back
+     * offline in-app. A page is neither and is refused before either is asked.
+     *
+     * Every branch answers out loud: an accepted download routes to the Downloads
+     * screen where its row is already moving; a legacy device learns it must grant
+     * storage first, because a button that quietly does nothing is worse than one
+     * that says no. The address handed to either system is our own redirector —
+     * the server verified the handle, and the upstream location never enters this app.
      */
     private fun keep(handle: String, printLabel: String) {
         lastDownload = handle to printLabel
@@ -397,6 +413,16 @@ class DetailViewModel @Inject constructor(
         }
         val workTitle = _uiState.value.post?.let { it.cleanTitle ?: it.title } ?: "Stream"
         viewModelScope.launch {
+            // One metadata ask decides which download system owns this copy. A failed
+            // ask falls through to the device path, which refuses with the same words it
+            // always used — no new failure shape for a server that cannot answer.
+            val meta = runCatching { catalogRepository.resolveStream(handle) }.getOrNull()
+            if (meta != null && meta.success &&
+                keepTargetFor(meta.mimeType) == KeepTarget.EngineHls
+            ) {
+                keepViaEngine(handle, printLabel, meta)
+                return@launch
+            }
             when (val outcome = deviceDownloads.enqueue(handle, workTitle, printLabel)) {
                 is DeviceDownloadResult.Enqueued -> {
                     lastDownload = null
@@ -408,6 +434,73 @@ class DetailViewModel @Inject constructor(
                     lastDownload = null
                     _uiState.update { it.copy(actionMessage = outcome.message) }
                 }
+            }
+        }
+    }
+
+    /**
+     * Keep one HLS title through the in-app keep engine: it fetches the playlist's
+     * segments from our redirector and plays them back offline. Adopt pins the row,
+     * so the sweeper never ages out a file the Downloads list calls kept.
+     */
+    private suspend fun keepViaEngine(handle: String, printLabel: String, meta: StreamResponse) {
+        val engine = CacheEngineHolder.engine
+        if (engine == null) {
+            lastDownload = null
+            _uiState.update { it.copy(actionMessage = "Download engine not wired into this build yet") }
+            return
+        }
+        val baseUrl = runCatching { apiProvider.currentBaseUrl() }.getOrNull()
+        if (baseUrl == null) {
+            lastDownload = null
+            _uiState.update { it.copy(actionMessage = "Connect to a catalog server before downloading.") }
+            return
+        }
+        val url = streamRedirectUrl(baseUrl, handle)
+        val request = AdoptRequest(
+            key = CacheSessionKey(renditionKey = handle, url = url),
+            url = url,
+            fetchedBytesSoFar = 0L,
+            isByteCursorKnown = false,
+            positionMs = 0L,
+            bufferedMs = 0L,
+            durationMs = 0L,
+            expectedTotalBytes = meta.fileSizeBytes?.takeIf { it > 0 },
+            resumable = meta.resumable ?: false,
+            printLabel = printLabel,
+            sharesCacheStorage = false,
+        )
+        val result = try {
+            engine.adopt(request)
+        } catch (t: Throwable) {
+            KeepResult.Failed(t.message ?: "engine error")
+        }
+        when (result) {
+            is KeepResult.Stored, is KeepResult.OnlyPlayableInApp -> {
+                lastDownload = null
+                _navEvents.emit(DetailNavigationEvent.DownloadStarted(printLabel))
+            }
+            is KeepResult.StorageFull -> {
+                lastDownload = null
+                _uiState.update {
+                    it.copy(
+                        actionMessage = "Not enough space to keep this title — needs " +
+                            CacheAffordance.formatBytes(result.requiredBytes) + ", " +
+                            CacheAffordance.formatBytes(result.availableBytes) + " free.",
+                    )
+                }
+            }
+            is KeepResult.Failed -> {
+                lastDownload = null
+                _uiState.update { it.copy(actionMessage = result.message) }
+            }
+            is KeepResult.Interrupted -> {
+                lastDownload = null
+                _uiState.update { it.copy(actionMessage = "Download paused — it will resume on its own.") }
+            }
+            KeepResult.EngineNotWired -> {
+                lastDownload = null
+                _uiState.update { it.copy(actionMessage = "Download engine not wired into this build yet") }
             }
         }
     }
@@ -635,3 +728,19 @@ class DetailViewModel @Inject constructor(
         )
     }
 }
+
+/** Which download system owns a copy. */
+internal enum class KeepTarget { DeviceFile, EngineHls }
+
+/**
+ * Which download system owns a copy, from its resolved mime alone. A segmented
+ * playlist goes to the keep engine, which fetches segments; everything else stays
+ * a device file. The rule is the engine's own [KeepIdentity.linkKindFor], so the
+ * detail screen and the engine can never disagree about what HLS is.
+ */
+internal fun keepTargetFor(mimeType: String?): KeepTarget =
+    if (KeepIdentity.linkKindFor(mimeType, null) == CacheCoordinator.KIND_HLS) {
+        KeepTarget.EngineHls
+    } else {
+        KeepTarget.DeviceFile
+    }
