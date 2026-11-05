@@ -47,6 +47,14 @@ except ImportError:
     DB_PATH = Path(os.environ.get("RADD_DB_PATH", str(BASE_DIR / "fast_fetch.db")))
     PROJECT_NAME = "radd-stream"
 
+# The host-kind authority (stdlib-only, no I/O). Same guarded import site_scout
+# uses: if the module is absent the engine still runs, and every consumer below
+# refuses to trust what it cannot classify rather than trusting it by default.
+try:
+    import host_classifier as _hc
+except ImportError:  # pragma: no cover - legacy tree without the classifier
+    _hc = None
+
 
 def _tls_context(*targets):
     """Every HTTPS request in this module asks the ONE TLS policy about its peer.
@@ -2441,6 +2449,12 @@ def is_bridge_url(url: str) -> bool:
         return "/file/" in path or path in ("", "/")
     if "pixeldrain" in host:
         return "/api/file/" not in path
+    if host == "hubcdn.io" or host.endswith(".hubcdn.io"):
+        # hubcdn.io is the hdhub4u/hdtvb gateway: `/cloud/<id>` is the HTML
+        # page `unwrap_hubcdn` empties, and no other path on the host is a
+        # byte endpoint. host_classifier._HOST_TABLE calls every hubcdn.io
+        # URL a bridge; this function must not disagree with the authority.
+        return True
     return any(marker in host for marker in _BRIDGE_HOST_MARKERS)
 
 
@@ -2750,6 +2764,129 @@ def unwrap_direct_cloud(direct_cloud_url: str, timeout: int = 10) -> tuple[str, 
         return landing_u, "direct_cloud", 0
     except Exception:
         return direct_cloud_url, "direct_cloud", 0
+
+
+class _HubcdnNoRedirect(urllib.request.HTTPRedirectHandler):
+    """Refuse to follow a redirect, so the gateway's ``Location`` is read as
+    evidence instead of being walked into some other page."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+def _hubcdn_page(url: str, timeout: int) -> tuple[str, str]:
+    """The gateway page's HTML and the cookies it set, as a ``Cookie`` header.
+
+    A real :class:`http.cookiejar.CookieJar` rather than the raw ``Set-Cookie``
+    strings: the jar applies the attributes the gateway puts on them (path,
+    expiry), which is what makes the cookie still valid on the button hop.
+    """
+    jar = http.cookiejar.CookieJar()
+    opener = urllib.request.build_opener(
+        urllib.request.HTTPCookieProcessor(jar),
+        urllib.request.HTTPSHandler(context=_tls_context(url)))
+    req = urllib.request.Request(url, headers={
+        "User-Agent": USER_AGENT,
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    })
+    with opener.open(req, timeout=timeout) as resp:
+        page = resp.read().decode("utf-8", errors="replace")
+    return page, "; ".join(f"{c.name}={c.value}" for c in jar)
+
+
+def _hubcdn_hop(url: str, headers: dict, timeout: int) -> tuple:
+    """One redirect-disabled request; returns ``(status, Location)``.
+
+    The ``302`` arrives as an :class:`urllib.error.HTTPError` because the opener
+    refuses to follow it, which is the answer we want; a bare ``200`` means the
+    button redirected nothing and its own URL is the best we get.
+    """
+    opener = urllib.request.build_opener(
+        _HubcdnNoRedirect(), urllib.request.HTTPSHandler(context=_tls_context(url)))
+    try:
+        with opener.open(urllib.request.Request(url, headers=dict(headers)),
+                        timeout=timeout) as resp:
+            return resp.getcode(), resp.geturl()
+    except urllib.error.HTTPError as exc:
+        return int(exc.code), (exc.headers.get("Location") if exc.headers else None)
+
+
+def unwrap_hubcdn(cloud_url: str, timeout: int = 8, *, _fetch=None,
+                  _hop=None) -> dict:
+    """Unwrap a ``hubcdn.io/cloud/<id>`` gateway page to its direct assets.
+
+    Returns ``{ok, r2_url, google_url, title, size_str}`` plus ``error`` on any
+    failure. ``r2_url`` is the public Cloudflare R2 bucket (Category A, tier 1,
+    streamable); ``google_url`` is the Google Cloud CDN front (Category A, tier
+    1, the 10Gbps download). Both are durable byte URLs, so the caller does not
+    need a token window for them.
+
+    ``_fetch`` / ``_hop`` are the two network edges, injectable so the parsing
+    and the trust decision are testable offline. Every target is judged by
+    :func:`host_classifier.hubcdn_asset_role` — the same authority table that
+    judges every other host — never by the button's label and never by a
+    substring of the ``Location``: a gateway that answers with
+    ``r2.dev.attacker.tld``, or with a ``pixeldrain`` button whose Location is
+    something else entirely, buys nothing. Without the classifier module the
+    unwrap reports nothing at all rather than guessing.
+    """
+    out = {"ok": False, "r2_url": None, "google_url": None, "title": None,
+           "size_str": None}
+    if _hc is None:
+        out["error"] = "host_authority_absent"
+        return out
+    if not _hc.is_hubcdn_cloud_page(cloud_url):
+        out["error"] = "not_a_hubcdn_cloud_page"
+        return out
+
+    fetch = _fetch or (lambda u: _hubcdn_page(u, timeout))
+    hop = _hop or (lambda u, h: _hubcdn_hop(u, h, timeout))
+    try:
+        page, cookies = fetch(cloud_url)
+    except Exception as exc:  # noqa: BLE001 — the gateway is a third party
+        out["error"] = f"cloud_fetch_fail: {type(exc).__name__}"
+        return out
+    if not page:
+        out["error"] = "empty_cloud_page"
+        return out
+
+    title_m = re.search(r"<title>(.*?)</title>", page, re.I | re.S)
+    if title_m:
+        out["title"] = re.sub(
+            r"\s*[-–—]\s*HubCDN\s*$", "",
+            html_module.unescape(title_m.group(1)).strip(), flags=re.I) or None
+
+    buttons = _hc.hubcdn_page_buttons(page)
+    if not buttons:
+        out["error"] = "no_dl_trigger_buttons"
+        return out
+
+    headers = {"User-Agent": USER_AGENT, "Referer": cloud_url}
+    if cookies:
+        headers["Cookie"] = cookies
+    token = f"fast_{int(time.time())}"
+    for href, label in buttons:
+        if not out["size_str"]:
+            size_m = re.search(r"([0-9][0-9.]*\s*(?:GB|MB))", label, re.I)
+            if size_m:
+                out["size_str"] = size_m.group(1)
+        try:
+            code, location = hop(
+                _hc.hubcdn_with_token(_hc.hubcdn_resolve_href(href), token), headers)
+        except Exception:
+            continue
+        if code not in (301, 302, 303, 307, 308) or not location:
+            continue
+        role = _hc.hubcdn_asset_role(location)
+        if role == "stream" and not out["r2_url"]:
+            out["r2_url"] = location
+        elif role == "download" and not out["google_url"]:
+            out["google_url"] = location
+
+    out["ok"] = bool(out["r2_url"] or out["google_url"])
+    if not out["ok"] and "error" not in out:
+        out["error"] = "no_trusted_asset_in_any_redirect"
+    return out
 
 
 def decode_greenmotors_payload(payload_b64: str) -> str | None:
@@ -5741,6 +5878,15 @@ def resolve_live_source(source_id: int, *, v2: bool = False) -> dict:
                 if not fresh_url and unwrapped:
                     fresh_url = unwrapped[0].get("final_url")
                     fresh_temp = unwrapped[0].get("is_temporary", fresh_temp)
+        elif (service == "hubcdn" or "hubcdn.io/cloud" in source_u.lower()
+              or "hubcdn.io/cloud" in cached_u.lower()):
+            res = unwrap_hubcdn(hoster_input("hubcdn"))
+            if res.get("ok"):
+                # The R2 bucket copy is the streamable asset; the Google
+                # front is its download twin. Both are durable Category A
+                # bytes, so no token window applies to the refreshed URL.
+                fresh_url = res.get("r2_url") or res.get("google_url")
+                fresh_temp = 0
         elif (service == "direct_cloud" or "direct-cloud" in source_u.lower()
               or "direct-cloud" in cached_u.lower()):
             fresh_url, _, fresh_temp = unwrap_direct_cloud(hoster_input("direct-cloud"))
