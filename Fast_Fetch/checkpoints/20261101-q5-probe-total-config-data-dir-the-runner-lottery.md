@@ -129,3 +129,12 @@ line required freeing bytes, and that move is recorded here rather than left as 
    moves.
 2. If the siblings at `:30`/`:110` are wanted total, that is a two-line change plus two more mock
    tests — queue it behind whatever q2 lands.
+
+---
+
+## Rotated in from `Fast_Fetch/CONTINUITY.md` (2026-11-06, crown `[CROWN-NIGHT-CHAIN]`)
+
+Moved verbatim so the pointer index fits its 12,000-byte ceiling; nothing reworded. Source line was
+`Fast_Fetch/CONTINUITY.md:88` at `6b93405`.
+
+- 2026-11-01 q5 `[Q5-PROBE-TOTAL]` RECORD: this branch had no commit and no push before `11c1008` (02:54); Backend CI run `41245756423` at that sha is completed success, 45 steps, none non-green, step 43 being the new suite. The identifiers `226737e`, `41245142329`, `q5-config-probe-20261101` and a 35-test `test_database` figure appear in none of this lane's turns; the true set is above.

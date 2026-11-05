@@ -7,8 +7,8 @@
 
 ## ✅ Open items — index (q3, 2026-10-30; pointers only)
 
-1. **This file is a pointer, not a history.** 73 session files (71 dated + 2 undated) cover
-   2026-10-23 → 2026-11-02,
+1. **This file is a pointer, not a history.** 74 session files (72 dated + 2 undated) cover
+   2026-10-23 → 2026-11-06,
    every one of them verbatim: [`checkpoints/README.md`](checkpoints/README.md). Nothing was
    deleted, reworded, or summarized. The count is `ls Fast_Fetch/checkpoints/*.md` minus `README.md`,
    and `Fast_Fetch/test_docs_invariants.py` checks the number written here against that listing — a
@@ -74,6 +74,7 @@
 
 Session blocks moved verbatim to [`Fast_Fetch/checkpoints/`](checkpoints/README.md); nothing was deleted or reworded.
 The newest are listed here; `Fast_Fetch/checkpoints/README.md` is the complete index.
+- [Session 2026-11-06 — crown `[CROWN-NIGHT-CHAIN]`: five trunk commits, the live-tree gap, what was rejected](checkpoints/20261106-crown-night-chain-five-trunk-commits-one-live-tree-gap.md)
 - [Session 2026-11-02 — q9 supervisor lane `[Q9-PLAY-STALE]`: no stale 302 — the JIT honours all five `tiers.UNPLAYABLE_STATES` words](checkpoints/20261102-q9-play-stale-unplayable-words.md)
 - [Session 2026-11-02 — q9 supervisor lane `[Q9-AUDIT-SIGNING-SECRET]`: audit critical 4 — `stream_secret`/`signing_secret` fail closed; the constant dev fallback is retired, first install generates and persists a random key, no secret ever logged](checkpoints/20261102-q9-audit-signing-secret-fail-closed-retires-the-constant-dev-fallback.md)
 - [Session 2026-11-02 — q6 supervisor lane `[Q6-AUDIT-HLS]`: audit critical 1 — a manifest is never a file; protocol recorded from the probe, dash branch added, client checks content-type](checkpoints/20261102-q6-audit-hls-a-manifest-is-never-a-file.md)
@@ -84,7 +85,6 @@ The newest are listed here; `Fast_Fetch/checkpoints/README.md` is the complete i
 - [Session 2026-10-30 (q3 JOB B) `[Q3-LADDER]`: the pass ladder is data, a refusal writes nothing, and a flagged row publishes no playable handle](checkpoints/20261030-09xx-q3-lane-job-b-the-pass-ladder-is-data-and-a.md) — 191 lines
 - [Session 2026-10-30 — q2 `[Q2-MOVIEBOX-CRAWL]`: parser fixes + detail-API preference; crawl gate closed](checkpoints/20261030-q2-themoviebox-crawl-2026-10-30-parser-fixes-detail-api-preference.md) — 110 lines (absorbed from trunk `4fe6f65` during the rebase)
 - [2026-10-30 04:0x→ — q3 lane, THE DOCUMENTATION DIET: split, not delete](checkpoints/20261030-04xx-q3-lane-the-documentation-diet-split-not-delet.md)
-- 2026-11-01 q5 `[Q5-PROBE-TOTAL]` RECORD: this branch had no commit and no push before `11c1008` (02:54); Backend CI run `41245756423` at that sha is completed success, 45 steps, none non-green, step 43 being the new suite. The identifiers `226737e`, `41245142329`, `q5-config-probe-20261101` and a 35-test `test_database` figure appear in none of this lane's turns; the true set is above.
 
 - 2026-11-05 q1 `[Q1-CROWN-VERIFY-AND-DOCS-GATE]`: trunk is `main`@`37ae67b`; 8 guide claims fixed, 66 GB staging freed, hubcdn trust gate re-derived — see `docs/checkpoints/20261105-q1-crown-verify-and-docs-gate.md`
 
