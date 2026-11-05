@@ -138,6 +138,13 @@ jobs:
           echo "Runner system Python in use. This workflow must never pip-install."
 
       # One step per suite: a red X names the exact failing suite.
+      # First, deliberately: a lane cut at `b99814e` that ports whole files rather than diffs silently
+      # reverts the hubcdn gate, the paging window and the backup disk guards, and every behaviour suite
+      # below stays green because the code it tests is still there. This one tests that what landed is
+      # still in the tree. Measured: 7 OK at `f3849b8`, FAILED (failures=5) at `b99814e`.
+      - name: 🧪 test_trunk_continuity.py
+        run: python3 -S Fast_Fetch/test_trunk_continuity.py
+
       - name: 🧪 test_database.py
         run: python3 -S Fast_Fetch/test_database.py
 
