@@ -1067,7 +1067,6 @@ class PublicEdgeHttpTests(FixtureMixin):
     def test_a_non_numeric_pager_is_answered_not_crashed(self):
         """`?page=abc` used to raise out of the handler and the edge gave 502."""
         for path in ("/api/v1/posts?page=abc", "/api/v1/posts?page=",
-                     "/api/v1/posts?page=999999999999999999999",
                      "/api/v1/posts?limit=abc", "/api/v1/posts?limit=-5",
                      "/api/v1/posts?limit=100000"):
             status, _, body = self.get(path, self.public_port)
@@ -1076,6 +1075,22 @@ class PublicEdgeHttpTests(FixtureMixin):
             self.assertGreaterEqual(payload["page"], 1, path)
             self.assertLessEqual(payload["limit"], 100, path)
             self.assertGreaterEqual(payload["limit"], 1, path)
+
+    def test_an_absurd_page_is_refused_rather_than_walked(self):
+        """The same invariant one notch further: depth is not a type error.
+
+        `?page=999999999999999999999` is a well-formed number, and `bounded_int`
+        brings it inside its own ceiling — but the offset it implies is a full-ledger
+        walk. The edge now answers the refusal instead of running the scan. Still an
+        answer, still never the 502 this pair of tests exists to pin; the window's
+        boundary in both directions belongs to `test_edge_phase1.py`."""
+        status, _, body = self.get("/api/v1/posts?page=999999999999999999999",
+                                   self.public_port)
+        self.assertEqual(status, 400, body[:120])
+        payload = json.loads(body)
+        self.assertIs(payload["success"], False)
+        self.assertEqual(payload["error"], "page_beyond_range")
+        self.assertGreaterEqual(payload["max_offset"], 1, "max_offset must be a number")
 
 
 # ── 3. zero data loss: hiding must not break healing or the ledger ───────────

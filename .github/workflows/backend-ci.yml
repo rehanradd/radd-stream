@@ -168,6 +168,13 @@ jobs:
       - name: 🧪 test_redact.py
         run: python3 -S Fast_Fetch/test_redact.py
 
+      # Two public-edge decisions, pinned: the /api/v1/posts offset window (a pair of
+      # values that each satisfy bounded_int can still ask SQLite to walk OFFSET
+      # 99,999,900), and which artwork hosts may be named in public. Offline — temp
+      # ledger, loopback servers, no catalog read.
+      - name: 🧪 test_edge_phase1.py
+        run: python3 -S Fast_Fetch/test_edge_phase1.py
+
       - name: 🧪 test_tiers.py
         run: python3 -S Fast_Fetch/test_tiers.py
 

@@ -2907,6 +2907,13 @@ def _subtitled_posts(conn, post_ids) -> dict:
     return flags
 
 
+#: How far into the ledger one public list page may skip. `bounded_int` caps each
+#: number on its own, so `?page=1000000&limit=100` is a pair of legal values whose
+#: product asks SQLite to walk `OFFSET 99,999,900` and pay a full filtered
+#: `COUNT(*)` for it; the product is what has to be bounded.
+POSTS_MAX_OFFSET = 10_000
+
+
 def api_v1_get_posts(query: str = "", content_type: str = "", page: int = 1,
                      limit: int = 20, full: bool = False,
                      base_url: str = "", industry: str = "", genre: str = "",
@@ -3974,6 +3981,11 @@ class DashboardHandler(BaseHTTPRequestHandler):
             ctype = query_params.get("type", [""])[0]
             page = bounded_int(query_params, "page", 1, 1, 1_000_000)
             limit = bounded_int(query_params, "limit", 20, 1, 100)
+            if (page - 1) * limit > POSTS_MAX_OFFSET:
+                # The offset window is the exposure; the two numbers above are not.
+                self.send_json({"success": False, "error": "page_beyond_range",
+                                "max_offset": POSTS_MAX_OFFSET}, status=400)
+                return
             data = api_v1_get_posts(
                 query=q, content_type=ctype, page=page, limit=limit,
                 full=full, base_url=base_url,

@@ -54,10 +54,9 @@ Describe the code's behavior accurately to users and tools. Do not disguise its 
   **The invariant, measured against the code and pinned by tests**
   (`Fast_Fetch/test_redact.py::AdultDenialOnBothPortsTests`,
   `Fast_Fetch/test_database.py::KeyLevelAdultIdentityTests`): no public surface may list *or play* a
-  flagged row. Enforced today by `redact.adult_clause` (`Fast_Fetch/redact.py:1091`) inside
-  `api_v1_get_posts` (`Fast_Fetch/viewer.py:2910`, clause at `:2918`), by the `redact.art_is_adult`
-  bail at `viewer.py:3768`, by `redact.link_is_adult` (`redact.py:1097`) on the stream and download
-  redirectors (`viewer.py:4027`, `:4113`) — which answers True for an unknown link id so a typo
+  flagged row. Enforced today by `redact.adult_clause`, applied inside `viewer.api_v1_get_posts`, by the
+  `redact.art_is_adult` bail on `/api/v1/art`, by `redact.link_is_adult` on the `/api/v1/stream` and
+  `/api/v1/download` redirectors — which answers True for an unknown link id so a typo
   cannot play either — and by nginx, which allow-lists only the public routes. To a public client a
   flagged row is indistinguishable from a row that never existed: the same `not_found`, the same
   status code, no hint that a flag caused the denial.

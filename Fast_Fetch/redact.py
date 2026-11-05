@@ -124,6 +124,49 @@ PUBLIC_IMAGE_HOSTS = frozenset({
     "resizing.flixster.com",
 })
 
+#: Public *upload* buckets: anyone can push a file there, and the filenames come
+#: from whoever pushed it — so the host names nothing while the path might. These
+#: are direct only when the URL text carries no provenance token (see
+#: :func:`_url_names_source`); ``PUBLIC_IMAGE_HOSTS`` paths are provider-minted
+#: hashes, which is why that set needs no such test.
+NEUTRAL_UPLOAD_HOSTS = frozenset({
+    "i.imgur.com",
+    "iili.io",
+    "imgurworld.top",
+    "catimages.org",
+    "i.imageflix.cam",
+})
+
+#: Any subdomain of these is the same provider's own storage, so the host is
+#: named by the provider rather than by whoever uploaded the file.
+NEUTRAL_UPLOAD_DOMAINS = (
+    ".googleusercontent.com",
+)
+
+#: Every token ``is_clean`` would flag in a public body, pre-lowered and
+#: pre-length-filtered, kept as one alternation so the scan is a single pass and
+#: does not rot when ``set_needles`` loads a wider registry.
+_SOURCE_TOKEN_RE = None
+_SOURCE_TOKEN_KEY = None
+
+
+def _source_token_re():
+    global _SOURCE_TOKEN_RE, _SOURCE_TOKEN_KEY
+    current = _NEEDLES
+    if _SOURCE_TOKEN_RE is not None and _SOURCE_TOKEN_KEY is current:
+        return _SOURCE_TOKEN_RE
+    _SOURCE_TOKEN_KEY = current
+    _SOURCE_TOKEN_RE = re.compile(
+        "|".join(re.escape(n) for n in sorted(current)) or r"(?!)"
+    )
+    return _SOURCE_TOKEN_RE
+
+
+def _url_names_source(text: str) -> bool:
+    """True when a neutral-host URL still prints one of our sources in its path."""
+    return _source_token_re().search(str(text or "").lower()) is not None
+
+
 #: Hoster/site tokens a public body must never contain, whatever key hides them.
 #: ``site_needles()`` extends this with whatever the live data actually holds, so
 #: the list cannot rot when a scraper is added.
@@ -1017,13 +1060,21 @@ def public_image_value(url) -> str | None:
     This is the only shape a season poster or an episode still may leave this box
     in: those rows are never routed through ``/api/v1/art`` (that redirector
     resolves a *work's* poster), so a non-public image URL is dropped rather than
-    handed out. The scan is the same one :func:`public_art_value` uses."""
+    handed out. The scan is the same one :func:`public_art_value` uses.
+
+    A neutral upload bucket is a special case: the host is a public provider and
+    names nothing about us, but the filename was written by the uploader, so the
+    whole URL has to clear the token scan before it goes out direct."""
     text = str(url or "").strip()
     if not text:
         return None
     host = text.split("//", 1)[-1].split("/", 1)[0].split("@")[-1].lower()
     host = host.split(":", 1)[0]
-    return text if host in PUBLIC_IMAGE_HOSTS else None
+    if host in PUBLIC_IMAGE_HOSTS:
+        return text
+    if host in NEUTRAL_UPLOAD_HOSTS or host.endswith(NEUTRAL_UPLOAD_DOMAINS):
+        return None if _url_names_source(text) else text
+    return None
 
 
 def public_art_value(url, post_id, secret: str, base_url: str,
