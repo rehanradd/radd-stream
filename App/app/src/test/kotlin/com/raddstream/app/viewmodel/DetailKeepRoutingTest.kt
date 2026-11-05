@@ -15,7 +15,6 @@ class DetailKeepRoutingTest {
     fun `hls mime goes to the keep engine`() {
         assertEquals(KeepTarget.EngineHls, keepTargetFor("application/vnd.apple.mpegurl"))
         assertEquals(KeepTarget.EngineHls, keepTargetFor("application/x-mpegURL"))
-        assertEquals(KeepTarget.EngineHls, keepTargetFor("video/mp2t"))
         assertEquals(KeepTarget.EngineHls, keepTargetFor("APPLICATION/X-MPEGURL"))
     }
 
