@@ -112,6 +112,113 @@ def _git_head_sha() -> str:
         return ""
 
 
+STAGING_ENV = "RADD_BACKUP_STAGING"
+KEEP_ENV = "RADD_BACKUP_KEEP"
+DEFAULT_KEEP = 5
+
+
+class BackupSpaceError(OSError):
+    """Raised before any bytes are written, when the filesystem cannot hold the snapshot."""
+
+
+def staging_root() -> Path:
+    """Where the vacuumed snapshots and the in-progress archive are built.
+
+    Default is the system temp directory, which lives on the same filesystem as the archives
+    and as the databases. RADD_BACKUP_STAGING points it at a filesystem that has the room.
+    """
+    override = os.environ.get(STAGING_ENV, "").strip()
+    if override:
+        root = Path(override)
+        root.mkdir(parents=True, exist_ok=True)
+        return root
+    return Path(tempfile.gettempdir())
+
+
+def free_bytes(path: Path) -> int:
+    return shutil.disk_usage(str(path)).free
+
+
+def required_bytes(db_paths: list[Path]) -> int:
+    """Source bytes plus the compressed archive they produce, generously 2x the inputs."""
+    return 2 * sum(db.stat().st_size for db in db_paths if db.exists())
+
+
+def _check_space(db_paths: list[Path], work_dir: Path, out_dir: Path) -> None:
+    need = required_bytes(db_paths)
+    available = min(free_bytes(work_dir), free_bytes(out_dir))
+    if need > available:
+        raise BackupSpaceError(
+            f"refusing to start: staging + output need {need / 2**30:.2f} GiB, "
+            f"{available / 2**30:.2f} GiB free on {work_dir} / {out_dir}. "
+            f"Set {STAGING_ENV} to a filesystem with room, or prune {out_dir}."
+        )
+
+
+def hf_remote_listing(repo_id: str | None = None) -> dict[str, int] | None:
+    """Name -> size in bytes for the files on the Hugging Face dataset, None if unknown.
+
+    A prune may only forget an archive this confirms exists off-site. None — no token, no
+    network, a non-2xx, a truncated page — means "forget nothing", because a backup we never
+    uploaded is the only copy we have.
+    """
+    repo_id = repo_id or os.environ.get("HF_DATASET_REPO", "")
+    token = os.environ.get("HF_TOKEN", "")
+    if not repo_id or not token:
+        return None
+    url = f"https://huggingface.co/api/datasets/{repo_id}/tree/main?recursive=true&pageSize=1000"
+    request = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
+    try:
+        with urllib.request.urlopen(request, timeout=60) as response:
+            entries = json.loads(response.read().decode("utf-8"))
+    except Exception as e:
+        print(f"[!] Could not list {repo_id}: {e}", file=sys.stderr)
+        return None
+    if not isinstance(entries, list):
+        return None
+    listing: dict[str, int] = {}
+    for entry in entries:
+        if isinstance(entry, dict) and entry.get("type") == "file" and entry.get("path"):
+            listing[entry["path"]] = int(entry.get("size") or 0)
+    return listing
+
+
+def prune_local_archives(
+    out_dir: Path,
+    *,
+    keep: int = DEFAULT_KEEP,
+    offsite: dict[str, int] | None = None,
+) -> int:
+    """Delete all but the newest `keep` archives, and only those confirmed off-site.
+
+    Confirmed means the dataset carries the same name at the same byte length. Returns the
+    number of files deleted; an archive the listing does not vouch for survives forever, which
+    is the whole point — the old prune ranked by filename and deleted files that had failed to
+    upload on the night their own run broke.
+    """
+    if offsite is None:
+        offsite = hf_remote_listing()
+    if offsite is None:
+        print("[*] No off-site listing; keeping every local archive.", flush=True)
+        return 0
+    archives = sorted(out_dir.glob("radd-stream-backup_*.tar.gz"), key=lambda p: p.name, reverse=True)
+    removed = 0
+    for stale in archives[keep:]:
+        try:
+            size = stale.stat().st_size
+        except OSError:
+            continue
+        if offsite.get(stale.name) != size:
+            print(f"    keeping {stale.name}: not confirmed on Hugging Face", flush=True)
+            continue
+        try:
+            stale.unlink()
+            removed += 1
+        except OSError:
+            pass
+    return removed
+
+
 def create_backup_archive(
     db_paths: list[Path],
     output_dir: Path,
@@ -119,8 +226,14 @@ def create_backup_archive(
 ) -> tuple[Path, dict]:
     """
     Creates a compressed tar.gz containing safe snapshots and a manifest.
+
+    Refuses with BackupSpaceError before writing anything if the filesystem cannot hold both
+    the vacuumed copies and the archive, so a full disk fails loudly at the start instead of
+    half-way through every database with "database or disk is full".
     """
     output_dir.mkdir(parents=True, exist_ok=True)
+    work_dir = staging_root()
+    _check_space(db_paths, work_dir, output_dir)
     timestamp = time.strftime("%Y%m%d_%H%M%S", time.gmtime())
     archive_name = f"{prefix}_{timestamp}.tar.gz"
     archive_path = output_dir / archive_name
@@ -132,7 +245,7 @@ def create_backup_archive(
         "databases": {},
     }
 
-    with tempfile.TemporaryDirectory() as tmp_dir:
+    with tempfile.TemporaryDirectory(dir=work_dir, ignore_cleanup_errors=True) as tmp_dir:
         tmp_path = Path(tmp_dir)
         valid_files = []
 
@@ -405,6 +518,12 @@ def _hf_git_env(tmp_dir: Path) -> dict:
         GIT_CONFIG_NOSYSTEM="1",
         HOME=str(home),
         XDG_CONFIG_HOME=str(home),
+        # Every LFS object in the dataset, or none of them. This clone exists only to add one
+        # new archive and push it; nothing here reads a stored blob, and a smudging checkout
+        # downloads the whole dataset into this temporary directory on every run (measured
+        # 2026-11-05: the nightly job pulled ~30 GiB of past archives each night, and the disk
+        # filled). Pointer files are enough to commit and push.
+        GIT_LFS_SKIP_SMUDGE="1",
     )
     return env
 
@@ -427,7 +546,7 @@ def upload_to_huggingface(
     remote_url = f"https://huggingface.co/datasets/{repo_id}"
     print(f"[*] Uploading {archive_path.name} to Hugging Face dataset {repo_id}...", flush=True)
 
-    with tempfile.TemporaryDirectory() as tmp_dir:
+    with tempfile.TemporaryDirectory(dir=staging_root(), ignore_cleanup_errors=True) as tmp_dir:
         tmp_path = Path(tmp_dir)
         env = _hf_git_env(tmp_path)
         repo_dir = tmp_path / "hf_repo"
@@ -502,7 +621,7 @@ def snapshot_code(output_dir: Path) -> Path | None:
     return target
 
 
-def main():
+def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="radd-stream Cloud Backup Manager")
     parser.add_argument("--dir", default="/home/ubuntu/radd-stream-data", help="Directory containing SQLite DBs")
     parser.add_argument("--out", default="/home/ubuntu/radd-stream-backups",
@@ -516,7 +635,7 @@ def main():
     parser.add_argument("--all", action="store_true", help="Upload to all configured services (GitHub + HF + Telegram + R2)")
     parser.add_argument("--dry-run", action="store_true", help="Snapshot & compress only, do not upload")
     parser.add_argument("--no-code", action="store_true", help="Do not pack the tracked source tree alongside the databases")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     data_dir = Path(args.dir)
     if not data_dir.exists():
@@ -526,21 +645,46 @@ def main():
     dbs = sorted(data_dir.glob("*.db"))
     if not dbs:
         print(f"[!] No .db files found in {data_dir}", file=sys.stderr)
-        return
+        return 1
 
     print(f"[*] Found {len(dbs)} databases: {[d.name for d in dbs]}", flush=True)
     out_dir = Path(args.out)
-    archive, manifest = create_backup_archive(dbs, out_dir)
+    try:
+        archive, manifest = create_backup_archive(dbs, out_dir)
+    except BackupSpaceError as e:
+        print(f"[!] {e}", file=sys.stderr)
+        return 1
     print(f"[✓] Created backup archive: {archive} ({manifest['archive']['size_mb']} MB)", flush=True)
     print(f"[*] Archive SHA-256: {manifest['archive']['sha256']}", flush=True)
+    (out_dir / "LATEST_SHA256.txt").write_text(f"{manifest['archive']['sha256']}  {archive.name}\n")
 
     if args.dry_run:
         print("[*] Dry run complete. No off-site uploads requested.", flush=True)
-        return
+        return 0
+
+    failures = 0
+    # A target named on the command line is a promise: if it does not happen, this run failed.
+    # A target triggered only because its token happened to be in the environment stays
+    # best-effort, exactly as it was before, and is reported rather than counted.
+    explicit = {
+        "github": args.github or args.all,
+        "hf": args.hf or args.all,
+        "telegram": args.telegram or args.all,
+        "r2": args.r2 or args.all,
+    }
+
+    def _count(target: str, ok: bool) -> None:
+        nonlocal failures
+        if ok:
+            return
+        if explicit[target]:
+            failures += 1
+        else:
+            print(f"[!] Optional {target} upload failed; not counted against this run.", file=sys.stderr)
 
     # 1. GitHub Releases
     if args.github or args.all or (not args.telegram and not args.r2 and not args.hf and os.environ.get("GITHUB_TOKEN")):
-        upload_to_github_release(archive)
+        _count("github", upload_to_github_release(archive) is not None)
 
     # 2. Hugging Face Datasets
     if args.hf or args.all or os.environ.get("HF_TOKEN"):
@@ -549,18 +693,36 @@ def main():
             code = snapshot_code(out_dir)
             if code:
                 extras.append(code)
-        upload_to_huggingface(archive, manifest=manifest, extra_files=extras)
+        uploaded = upload_to_huggingface(archive, manifest=manifest, extra_files=extras)
+        if uploaded:
+            # Only forget local copies once this run's archive is off-site AND every file being
+            # forgotten is individually confirmed off-site. This is the unit's own cleanup: the
+            # systemd ExecStart runs this module, not run_backup.py, so the retention policy has
+            # to live on the path that actually executes.
+            keep = int(os.environ.get(KEEP_ENV, DEFAULT_KEEP) or DEFAULT_KEEP)
+            gone = prune_local_archives(out_dir, keep=keep)
+            if gone:
+                print(f"[✓] Pruned {gone} local archive(s) confirmed on Hugging Face, keeping {keep}.", flush=True)
+        else:
+            _count("hf", False)
 
     # 3. Telegram
     if args.telegram or args.all:
         caption = f"🚀 Radd-Stream DB Backup ({manifest['archive']['size_mb']} MB)\nDatabases: {', '.join(manifest['databases'].keys())}"
-        upload_to_telegram(archive, caption=caption)
+        _count("telegram", upload_to_telegram(archive, caption=caption))
 
     # 4. Cloudflare R2
     if args.r2 or args.all or os.environ.get("R2_ACCOUNT_ID"):
-        upload_to_cloudflare_r2(archive)
+        _count("r2", upload_to_cloudflare_r2(archive))
+
+    if failures:
+        # Every one of these uploads failing used to exit 0, so `systemctl show -p Result=`
+        # reported a green unit while the catalog had no off-site copy for weeks.
+        print(f"[!] {failures} requested upload(s) failed; keeping every local archive.", file=sys.stderr)
+        return 1
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
 

@@ -94,13 +94,18 @@ def select_databases(data_dir: Path, *, keep_derived: bool = False) -> tuple[lis
 
 
 def prune_local_archives(out_dir: Path, *, keep: int = 5) -> None:
-    """Keep the newest archives in the local scratch directory and drop the rest."""
-    archives = sorted(out_dir.glob("radd-stream-backup_*.tar.gz"), key=lambda p: p.name, reverse=True)
-    for stale in archives[keep:]:
-        try:
-            stale.unlink()
-        except OSError:
-            pass
+    """Drop old local archives — only those the dataset itself confirms are stored off-site.
+
+    The verification lives in backup_manager, which the systemd unit runs; this wrapper used to
+    delete by filename rank alone, so an archive whose own upload had failed could be forgotten
+    the following night.
+    """
+    sys.path.insert(0, str(BASE_DIR))
+    import backup_manager
+
+    removed = backup_manager.prune_local_archives(out_dir, keep=keep)
+    if removed:
+        print(f"[✓] Pruned {removed} local archive(s) confirmed off-site.", flush=True)
 
 
 def main(argv=None) -> int:

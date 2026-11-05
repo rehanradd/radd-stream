@@ -209,6 +209,145 @@ class HuggingFaceUploadTests(unittest.TestCase):
         self.assertEqual(os.stat(helper).st_mode & 0o777, 0o700)
 
 
+class DiskGrowthTests(unittest.TestCase):
+    """The nightly job filled the disk and then lied about it. Each test owns one of the four fixes."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.data = self.root / "data"
+        self.data.mkdir()
+        self.db = self.data / "one.db"
+        self.db.write_bytes(b"\x00" * 4096)
+        self.out = self.root / "out"
+        self.out.mkdir()
+        self.staging = self.root / "staging"
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_preflight_refuses_before_writing_anything(self):
+        from backup_manager import BackupSpaceError
+        with patch("backup_manager.free_bytes", return_value=1024):
+            with self.assertRaises(BackupSpaceError):
+                create_backup_archive([self.db], self.out, prefix="unit-test")
+        self.assertEqual(list(self.out.glob("*.tar.gz")), [])
+
+    def test_staging_honours_the_env_directory(self):
+        seen = {}
+        from backup_manager import safe_vacuum_sqlite as real
+
+        def spy(source, target):
+            seen["parent"] = Path(target).parent
+            return real(source, target)
+
+        with patch.dict(os.environ, {"RADD_BACKUP_STAGING": str(self.staging)}), patch(
+            "backup_manager.safe_vacuum_sqlite", side_effect=spy
+        ):
+            create_backup_archive([self.db], self.out, prefix="unit-test")
+        self.assertEqual(seen["parent"].parent, self.staging)
+
+    def test_a_raised_exception_leaves_no_staging_behind(self):
+        from backup_manager import safe_vacuum_sqlite as real
+
+        def explode(source, target):
+            Path(target).write_bytes(b"half-written snapshot")
+            raise RuntimeError("vacuum died mid-run")
+
+        with patch.dict(os.environ, {"RADD_BACKUP_STAGING": str(self.staging)}), patch(
+            "backup_manager.safe_vacuum_sqlite", side_effect=explode
+        ):
+            with self.assertRaises(RuntimeError):
+                create_backup_archive([self.db], self.out, prefix="unit-test")
+        self.assertEqual(list(self.staging.iterdir()), [])
+
+    def _archives(self, names):
+        made = {}
+        for i, name in enumerate(names, start=1):
+            path = self.out / name
+            path.write_bytes(b"%d" % i * (100 + i))
+            made[name] = path.stat().st_size
+        return made
+
+    def test_prune_forgets_only_what_the_dataset_confirms(self):
+        from backup_manager import prune_local_archives
+
+        days = ["202610%02d" % d for d in range(1, 9)]
+        sizes = self._archives([f"radd-stream-backup_{d}_010101.tar.gz" for d in days])
+        # The second-newest upload failed on its own night, so it is not off-site; the rest are.
+        unconfirmed = "radd-stream-backup_20261007_010101.tar.gz"
+        offsite = {n: s for n, s in sizes.items() if n != unconfirmed}
+        removed = prune_local_archives(self.out, keep=2, offsite=offsite)
+
+        self.assertEqual(removed, 6)
+        surviving = sorted(p.name for p in self.out.glob("radd-stream-backup_*.tar.gz"))
+        self.assertEqual(surviving, [unconfirmed, "radd-stream-backup_20261008_010101.tar.gz"])
+
+    def test_prune_deletes_nothing_without_a_listing(self):
+        from backup_manager import prune_local_archives
+
+        sizes = self._archives([f"radd-stream-backup_2026100{i}_010101.tar.gz" for i in range(1, 7)])
+        with patch("backup_manager.hf_remote_listing", return_value=None):
+            self.assertEqual(prune_local_archives(self.out, keep=2), 0)
+        # An empty listing is a confirmed "nothing is stored", not a transport failure.
+        self.assertEqual(prune_local_archives(self.out, keep=2, offsite={}), 0)
+        self.assertEqual(len(list(self.out.glob("*.tar.gz"))), len(sizes))
+
+    def test_hf_remote_listing_parses_sizes_and_refuses_on_no_token(self):
+        import json as _json
+        from backup_manager import hf_remote_listing
+
+        payload = _json.dumps([
+            {"type": "file", "path": "a.tar.gz", "size": 111},
+            {"type": "directory", "path": "d"},
+            {"type": "file", "path": "b.tar.gz", "size": None},
+        ]).encode()
+        with patch("backup_manager.urllib.request.urlopen") as urlopen, patch.dict(
+            os.environ, {"HF_TOKEN": "t", "HF_DATASET_REPO": "x/y"}
+        ):
+            urlopen.return_value.__enter__ = lambda s: s
+            urlopen.return_value.read = lambda: payload
+            self.assertEqual(hf_remote_listing(), {"a.tar.gz": 111, "b.tar.gz": 0})
+        with patch.dict(os.environ, {"HF_TOKEN": "", "HF_DATASET_REPO": "x/y"}):
+            self.assertIsNone(hf_remote_listing())
+
+    def test_the_clone_never_downloads_the_stored_archives(self):
+        env = _hf_git_env(self.root)
+        self.assertEqual(env["GIT_LFS_SKIP_SMUDGE"], "1")
+
+    def _main_args(self):
+        return ["--dir", str(self.data), "--out", str(self.out), "--hf", "--no-code"]
+
+    def test_main_exits_nonzero_when_the_requested_upload_fails(self):
+        from backup_manager import main
+
+        archive = self.out / "radd-stream-backup_20261105_010101.tar.gz"
+        archive.write_bytes(b"x")
+        manifest = {"archive": {"filename": archive.name, "size_mb": 1, "sha256": "0" * 64},
+                    "databases": {"one.db": {}}}
+        with patch("backup_manager.create_backup_archive", return_value=(archive, manifest)), patch(
+            "backup_manager.upload_to_huggingface", return_value=False
+        ), patch("backup_manager.prune_local_archives") as pruned:
+            code = main(self._main_args())
+        self.assertEqual(code, 1)
+        pruned.assert_not_called()
+        self.assertTrue(archive.exists())
+
+    def test_main_prunes_after_a_successful_upload_and_exits_zero(self):
+        from backup_manager import main
+
+        archive = self.out / "radd-stream-backup_20261105_010101.tar.gz"
+        archive.write_bytes(b"x")
+        manifest = {"archive": {"filename": archive.name, "size_mb": 1, "sha256": "0" * 64},
+                    "databases": {"one.db": {}}}
+        with patch("backup_manager.create_backup_archive", return_value=(archive, manifest)), patch(
+            "backup_manager.upload_to_huggingface", return_value=True
+        ), patch("backup_manager.prune_local_archives", return_value=3) as pruned:
+            code = main(self._main_args())
+        self.assertEqual(code, 0)
+        pruned.assert_called_once()
+
+
 if __name__ == "__main__":
     unittest.main()
 
