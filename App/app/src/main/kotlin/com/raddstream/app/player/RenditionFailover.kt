@@ -27,8 +27,10 @@ data class FailoverRecord(
  * reaches the player: [com.raddstream.app.viewmodel.DetailViewModel] opens the provider-page screen
  * for it before playback starts. Inside a failover bundle, then, [DOWNLOAD_ONLY] and
  * [NO_CANDIDATE_LEFT] are the only honest exits — a link that cannot play here is kept, and says so.
+ * [START_TIMEOUT] is the third: no candidate failed, but none produced a frame within the start
+ * deadline, so the player stops waiting and hands the viewer the choice.
  */
-enum class HandoffWhy { DOWNLOAD_ONLY, NO_CANDIDATE_LEFT }
+enum class HandoffWhy { DOWNLOAD_ONLY, NO_CANDIDATE_LEFT, START_TIMEOUT }
 
 sealed class FailoverDecision {
     /** Keep the same rendition, prepare again after [backoffMs] (policy.retry_same). */

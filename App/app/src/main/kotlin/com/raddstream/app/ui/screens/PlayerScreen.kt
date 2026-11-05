@@ -151,6 +151,8 @@ import com.raddstream.app.player.PlayerUiState
 import com.raddstream.app.player.ScreenZone
 import com.raddstream.app.player.SleepMode
 import com.raddstream.app.player.SleepTimerState
+import com.raddstream.app.player.StartDeadline
+import com.raddstream.app.player.StartDeadlineStage
 import com.raddstream.app.player.StartPhase
 import com.raddstream.app.player.SubtitleColor
 import com.raddstream.app.player.TapCommand
@@ -457,6 +459,23 @@ private fun PlayerScreenContent(
                 onExternal = { vm.openWithExternalPlayer() },
                 onDismiss = { vm.dismissGiveUp() },
             )
+        } ?: if (state.deadlineGiveUp) {
+            // The 30 s hard deadline (§5 P5): no candidate failed, but none produced a
+            // frame in time. The card is the same one the service shows, with the timeout
+            // reason and the third action the plan promises — try another print now.
+            // Dismissing it keeps waiting with a fresh thirty seconds.
+            GiveUpCard(
+                message = stringResource(R.string.player_start_giveup_message),
+                why = HandoffWhy.START_TIMEOUT,
+                onRetry = { vm.retryCurrentCandidates() },
+                onExternal = { vm.openWithExternalPlayer() },
+                onDismiss = { vm.dismissDeadlineGiveUp() },
+                onTryAnother = if (state.canTryAnotherPrint) {
+                    { vm.tryNextPrint() }
+                } else {
+                    null
+                },
+            )
         }
 
         state.connectionError?.let { err ->
@@ -478,9 +497,34 @@ private fun PlayerScreenContent(
         // The window before the first frame is the one a viewer cannot tell apart from a
         // crash, so it is the one window the player narrates out loud. It survives the lock
         // and Ghost mode for the same reason the buffering spinner does: feedback is not
-        // furniture.
-        state.startPhase.takeIf { it != StartPhase.NONE }?.let { phase ->
-            StartNoticeCard(phase = phase, title = state.pendingTitle)
+        // furniture. Past two seconds the card gains the slow line (§5 P5); past eight it
+        // gains something to press. At thirty seconds the deadline card owns the screen
+        // instead, so this notice stands down.
+        if (state.startPhase != StartPhase.NONE &&
+            state.startDeadlineStage != StartDeadlineStage.GIVE_UP
+        ) {
+            val actions = state.startDeadlineStage == StartDeadlineStage.ACTIONS
+            StartNoticeCard(
+                phase = state.startPhase,
+                title = state.pendingTitle,
+                slowHint = state.startDeadlineStage != StartDeadlineStage.SILENT,
+                rungLabel = if (state.startDeadlineStage != StartDeadlineStage.SILENT) {
+                    state.activeRendition?.displayLabel()?.takeIf { it.isNotBlank() }
+                        ?: state.qualityLabel.takeIf { it.isNotBlank() }
+                } else {
+                    null
+                },
+                onRetry = if (actions) {
+                    { vm.retryCurrentCandidates() }
+                } else {
+                    null
+                },
+                onTryAnother = if (actions && state.canTryAnotherPrint) {
+                    { vm.tryNextPrint() }
+                } else {
+                    null
+                },
+            )
         }
 
         if (state.isEnded && controlsVisible && !state.locked && !state.pureCinema) {
@@ -1527,7 +1571,15 @@ private fun ConnectionErrorCard(message: String, onRetry: () -> Unit) {
 // ── Give-up card (§5 handoff reasons) ──────────────────────────────────────────
 
 @Composable
-private fun StartNoticeCard(phase: StartPhase, title: String?) {
+@Composable
+private fun StartNoticeCard(
+    phase: StartPhase,
+    title: String?,
+    slowHint: Boolean = false,
+    rungLabel: String? = null,
+    onRetry: (() -> Unit)? = null,
+    onTryAnother: (() -> Unit)? = null,
+) {
     val label = phase.label
     val spoken = if (title.isNullOrBlank()) label else stringResource(R.string.player_notice_spaced, label, title)
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -1560,6 +1612,43 @@ private fun StartNoticeCard(phase: StartPhase, title: String?) {
                     overflow = TextOverflow.Ellipsis,
                 )
             }
+            // The soft hint (§5 P5, past two seconds): the wait is normal, and here is
+            // which rung is being found — so a long start reads as work, not a freeze.
+            if (slowHint) {
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    stringResource(R.string.player_start_slow),
+                    color = Color.White.copy(alpha = 0.85f),
+                    style = MaterialTheme.typography.bodySmall,
+                    textAlign = TextAlign.Center,
+                )
+                if (!rungLabel.isNullOrBlank()) {
+                    Spacer(Modifier.height(2.dp))
+                    Text(
+                        stringResource(R.string.player_quality_label, rungLabel),
+                        color = Color.White.copy(alpha = 0.6f),
+                        style = MaterialTheme.typography.bodySmall,
+                        textAlign = TextAlign.Center,
+                    )
+                }
+            }
+            // The actions (§5 P5, past eight seconds): retry the same attempt, or jump to
+            // the next print now instead of waiting for the silent failover to get there.
+            if (onRetry != null || onTryAnother != null) {
+                Spacer(Modifier.height(12.dp))
+                Row(horizontalArrangement = Arrangement.Center) {
+                    onRetry?.let {
+                        TextButton(onClick = it) {
+                            Text(stringResource(R.string.player_retry), color = AccentOrange)
+                        }
+                    }
+                    onTryAnother?.let {
+                        TextButton(onClick = it) {
+                            Text(stringResource(R.string.player_start_try_another), color = AccentOrange)
+                        }
+                    }
+                }
+            }
         }
     }
 }
@@ -1571,6 +1660,7 @@ private fun GiveUpCard(
     onRetry: () -> Unit,
     onExternal: () -> Unit,
     onDismiss: () -> Unit,
+    onTryAnother: (() -> Unit)? = null,
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -1580,6 +1670,7 @@ private fun GiveUpCard(
                 when (why) {
                     HandoffWhy.DOWNLOAD_ONLY -> stringResource(R.string.player_giveup_download_only)
                     HandoffWhy.NO_CANDIDATE_LEFT -> stringResource(R.string.player_giveup_no_candidate)
+                    HandoffWhy.START_TIMEOUT -> stringResource(R.string.player_giveup_timeout)
                 },
                 color = Color.White,
                 fontSize = brandSp(16),
@@ -1595,6 +1686,8 @@ private fun GiveUpCard(
                             stringResource(R.string.player_giveup_download_body)
                         HandoffWhy.NO_CANDIDATE_LEFT ->
                             stringResource(R.string.player_giveup_no_candidate_body)
+                        HandoffWhy.START_TIMEOUT ->
+                            stringResource(R.string.player_giveup_timeout_body)
                     },
                     color = Color.White.copy(alpha = 0.6f),
                     fontSize = brandSp(12),
@@ -1604,6 +1697,9 @@ private fun GiveUpCard(
         confirmButton = {
             Row {
                 TextButton(onClick = onRetry) { Text(stringResource(R.string.player_retry), color = AccentOrange) }
+                onTryAnother?.let {
+                    TextButton(onClick = it) { Text(stringResource(R.string.player_start_try_another), color = AccentOrange) }
+                }
                 TextButton(onClick = onExternal) { Text(stringResource(R.string.player_open_external), color = AccentOrange) }
             }
         },
@@ -2361,6 +2457,20 @@ private fun PrintLogSheet(state: PlayerUiState, vm: PlayerViewModel) {
                 fontSize = brandSp(12),
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
             )
+            // The start budget's proof (§5 P5): route-open → first-frame, measured on this
+            // device. Absent until the first start lands — a switch mid-scene must not
+            // overwrite it, so the ViewModel only records genuine starts.
+            state.lastFirstFrameMs?.let { firstFrameMs ->
+                Text(
+                    stringResource(
+                        R.string.player_first_frame,
+                        StartDeadline.formatSeconds(firstFrameMs),
+                    ),
+                    color = Color.White.copy(alpha = 0.6f),
+                    fontSize = brandSp(12),
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                )
+            }
             state.bundle?.renditions?.forEach { r ->
                 val active = r.rank == state.activeRendition?.rank
                 val rankText = stringResource(R.string.player_rune_rank, r.rank, r.displayLabel())

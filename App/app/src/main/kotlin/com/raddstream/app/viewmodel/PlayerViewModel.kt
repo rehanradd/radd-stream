@@ -3,6 +3,7 @@ package com.raddstream.app.viewmodel
 import android.content.ComponentName
 import android.content.Context
 import android.net.Uri
+import android.os.SystemClock
 import androidx.annotation.OptIn
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.ViewModel
@@ -56,6 +57,8 @@ import com.raddstream.app.player.ScreenZone
 import com.raddstream.app.player.SleepMode
 import com.raddstream.app.player.SleepTick
 import com.raddstream.app.player.SleepTimer
+import com.raddstream.app.player.StartDeadline
+import com.raddstream.app.player.StartPhase
 import com.raddstream.app.player.SubtitleTrackDecision
 import com.raddstream.app.player.SubtitleTrackPolicy
 import com.raddstream.app.player.SubtitleUiSettings
@@ -114,6 +117,14 @@ class PlayerViewModel @Inject constructor(
 
     private var controller: MediaController? = null
     private var tickerJob: Job? = null
+
+    /**
+     * Monotonic instant the current load was requested (`elapsedRealtime`, so a sleeping
+     * phone does not gift the deadline free seconds). Stamped in [loadNow] — the one funnel
+     * every play path goes through — and in [retryCurrentCandidates], the one path that
+     * bypasses it. Null once a first frame has rendered, so no stale attempt can fire.
+     */
+    private var startAttemptAtMs: Long? = null
     private var keepJob: Job? = null
     private var settingsJob: Job? = null
     private var bingeResolveJob: Job? = null
@@ -455,12 +466,40 @@ class PlayerViewModel @Inject constructor(
                 val c = controller
                 if (c != null && c.isConnected) {
                     val now = System.currentTimeMillis()
+                    val wasStarting = _ui.value.startPhase != StartPhase.NONE
                     _ui.update {
                         it.copy(
                             positionMs = c.currentPosition,
                             bufferedMs = bufferedOf(c),
                             durationMs = if (c.duration > 0) c.duration else it.durationMs,
                         )
+                    }
+                    // The start deadline (§5 P5): the ticker already visits every 200 ms, so
+                    // it is the clock — no second thread. A first frame disarms the attempt
+                    // and records how long the start took, but only when the player really
+                    // was starting: a quality switch mid-scene must not overwrite the
+                    // route-open measurement with a near-zero one.
+                    val attemptAt = startAttemptAtMs
+                    if (attemptAt != null) {
+                        val elapsed = SystemClock.elapsedRealtime() - attemptAt
+                        val firstFrame = c.isPlaying || c.duration > 0
+                        if (firstFrame) {
+                            startAttemptAtMs = null
+                            _ui.update {
+                                it.copy(
+                                    startElapsedMs = 0,
+                                    lastFirstFrameMs = if (wasStarting) elapsed else it.lastFirstFrameMs,
+                                    deadlineGiveUp = false,
+                                )
+                            }
+                        } else {
+                            _ui.update {
+                                it.copy(
+                                    startElapsedMs = elapsed,
+                                    deadlineGiveUp = elapsed >= StartDeadline.GIVE_UP_AFTER_MS,
+                                )
+                            }
+                        }
                     }
                     // Sleep timer advance + fade (player volume = user volume × fade factor)
                     if (_ui.value.sleep.mode == SleepMode.COUNTDOWN) {
@@ -709,7 +748,17 @@ class PlayerViewModel @Inject constructor(
 
     private fun loadNow(title: String, resumeKey: String, resumePosition: Long, override: Long?) {
         store.requestLoad(title = title, resumePositionMs = resumePosition, startOverrideMs = override)
-        _ui.update { it.copy(resumeOfferMs = null, pendingResumeKey = null, giveUp = null, pendingTitle = title) }
+        startAttemptAtMs = SystemClock.elapsedRealtime()
+        _ui.update {
+            it.copy(
+                resumeOfferMs = null,
+                pendingResumeKey = null,
+                giveUp = null,
+                pendingTitle = title,
+                startElapsedMs = 0,
+                deadlineGiveUp = false,
+            )
+        }
         activeResumeKey = resumeKey
         resumeByTarget[resumeKey] = resumePosition.coerceAtLeast(resumeByTarget[resumeKey] ?: 0L)
     }
@@ -939,7 +988,44 @@ class PlayerViewModel @Inject constructor(
     fun retryCurrentCandidates() {
         val title = _ui.value.activeRendition?.displayLabel() ?: Brand.name
         store.clearGaveUp()
+        startAttemptAtMs = SystemClock.elapsedRealtime()
+        _ui.update { it.copy(deadlineGiveUp = false, startElapsedMs = 0) }
         store.requestLoad(title = title, resumePositionMs = _ui.value.positionMs)
+    }
+
+    /**
+     * Manual failover (§5 P5, the 8 s action): jump to the next print now instead of
+     * waiting for the staged failover to exhaust the one being tried. The next print's own
+     * runner-ups are staged under it first, and its work scope is carried over, exactly
+     * as a quality switch does — so resume points and binge context survive the hop.
+     * A no-op when [PlayerUiState.canTryAnotherPrint] is false; the button is never
+     * offered then, so this is a guard, not a path the viewer can reach.
+     */
+    fun tryNextPrint() {
+        val handle = _ui.value.nextPrintHandle ?: return
+        val active = _ui.value.activeRendition
+        val title = _ui.value.pendingTitle ?: active?.displayLabel() ?: Brand.name
+        val positionMs = controller?.takeIf { it.isConnected }?.currentPosition ?: 0L
+        val next = _ui.value.bundle?.renditions?.firstOrNull { it.playback.streamId == handle }
+        val backups = (next?.playback?.backupStreamIds
+            ?: active?.playback?.backupStreamIds.orEmpty())
+            .filter { it != handle }
+        store.stageFailover(handle, backups)
+        store.peekWorkRef(active?.playback?.streamId)?.let { scope ->
+            store.stageWorkRef(handle, scope)
+            backups.forEach { store.stageWorkRef(it, scope) }
+        }
+        startStreamHandle(handle, title, startOverrideMs = positionMs.takeIf { it > 1_000 })
+    }
+
+    /**
+     * The viewer dismissed the 30 s give-up card: keep waiting, with a fresh thirty
+     * seconds. A dismiss is not a fix — if the copy is truly dead the card comes back —
+     * but a viewer who is still willing to wait should not be nagged every tick.
+     */
+    fun dismissDeadlineGiveUp() {
+        startAttemptAtMs = SystemClock.elapsedRealtime()
+        _ui.update { it.copy(deadlineGiveUp = false, startElapsedMs = 0) }
     }
 
     /** Manual "next episode" button — same event path as auto-advance at media end. */

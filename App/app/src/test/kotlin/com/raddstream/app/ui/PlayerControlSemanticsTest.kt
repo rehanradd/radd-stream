@@ -230,6 +230,77 @@ class PlayerControlSemanticsTest {
     }
 
     @Test
+    fun `a slow start earns a hint and, later, actions`() {
+        val card = functionBody("private fun StartNoticeCard(")
+        assertTrue(
+            "the notice must say the wait is normal once it passes two seconds",
+            card.contains("R.string.player_start_slow"),
+        )
+        assertTrue(
+            "the notice must name the rung being found",
+            card.contains("R.string.player_quality_label"),
+        )
+        assertTrue(
+            "the notice must offer a retry once it passes eight seconds",
+            card.contains("R.string.player_retry"),
+        )
+        assertTrue(
+            "the notice must offer another print once it passes eight seconds",
+            card.contains("R.string.player_start_try_another"),
+        )
+        assertTrue(
+            "the notice must be driven by the deadline stage, not a fixed timer",
+            source.contains("state.startDeadlineStage"),
+        )
+        assertTrue(
+            "the actions must call the manual failover, not just a retry",
+            source.contains("vm.tryNextPrint()"),
+        )
+    }
+
+    @Test
+    fun `the thirty-second give-up is its own reason`() {
+        val card = functionBody("private fun GiveUpCard(")
+        assertTrue(
+            "the give-up card must know the timeout reason",
+            card.contains("HandoffWhy.START_TIMEOUT"),
+        )
+        assertTrue(
+            "the timeout must have its own title, not the no-candidate one",
+            card.contains("R.string.player_giveup_timeout"),
+        )
+        assertTrue(
+            "the timeout must have its own body, not the no-candidate one",
+            card.contains("R.string.player_giveup_timeout_body"),
+        )
+        assertTrue(
+            "the timeout card must offer another print",
+            card.contains("R.string.player_start_try_another"),
+        )
+        assertTrue(
+            "the deadline card must dismiss into a fresh thirty seconds",
+            source.contains("vm.dismissDeadlineGiveUp()"),
+        )
+    }
+
+    @Test
+    fun `the print sheet shows how fast the start was`() {
+        val start = source.indexOf("private fun PrintLogSheet(")
+        assertTrue("PlayerScreen.kt no longer declares PrintLogSheet", start >= 0)
+        val end = source.indexOf("\n@Composable", start)
+        assertTrue("cannot find the end of PrintLogSheet", end >= 0)
+        val sheet = source.substring(start, end)
+        assertTrue(
+            "the print sheet must show the measured first-frame time",
+            sheet.contains("R.string.player_first_frame"),
+        )
+        assertTrue(
+            "the timing must come from the ViewModel's measurement, not a guess",
+            sheet.contains("state.lastFirstFrameMs"),
+        )
+    }
+
+    @Test
     fun `nothing is announced while no text track is loaded`() {
         assertEquals(OFF_WORD, subtitleStatusLabel(PlayerUiState(), OFF_WORD))
     }

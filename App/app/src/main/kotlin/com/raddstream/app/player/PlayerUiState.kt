@@ -236,6 +236,12 @@ data class PlayerUiState(
     val failoverLog: List<FailoverRecord> = emptyList(),
     val settledBanner: String? = null,
     val giveUp: Pair<String, HandoffWhy>? = null,
+    // start deadline (§5 P5): milliseconds since the current load was requested, published
+    // by the ticker; the last measured route-open → first-frame time, for the print sheet;
+    // and the latched 30 s give-up, cleared by a retry, a dismiss, or a first frame.
+    val startElapsedMs: Long = 0,
+    val lastFirstFrameMs: Long? = null,
+    val deadlineGiveUp: Boolean = false,
     // resume prompt ("Playback interrupted! Resume from …?" MX dialog)
     val resumeOfferMs: Long? = null,
     val pendingResumeKey: String? = null,
@@ -317,6 +323,42 @@ data class PlayerUiState(
             durationMs == 0L -> StartPhase.STARTING
             else -> StartPhase.NONE
         }
+
+    /**
+     * Which moment of the start budget the screen is in. The phase decides whether a start
+     * is happening at all; the elapsed time decides what the viewer is owed while it does.
+     * A latched deadline outranks both, so the give-up card — not the notice — owns the
+     * screen at thirty seconds.
+     */
+    val startDeadlineStage: StartDeadlineStage
+        get() = when {
+            deadlineGiveUp -> StartDeadlineStage.GIVE_UP
+            startPhase == StartPhase.NONE -> StartDeadlineStage.SILENT
+            else -> StartDeadline.stage(startElapsedMs, firstFrame = false)
+        }
+
+    /**
+     * The next print the viewer can jump to without waiting for the staged failover: the
+     * next rank after the one being tried — never a rank behind it, because the machine
+     * only moves forward past a print it already failed — and, for a bundle with only one
+     * print, that print's own silent runner-ups. Null means there is nothing left to try,
+     * so no button is ever offered for it.
+     */
+    val nextPrintHandle: String?
+        get() {
+            val renditions = bundle?.renditions.orEmpty()
+                .filter { !it.playback.playUrl.isNullOrBlank() }
+            val activeRank = activeRendition?.rank ?: 0
+            val next = renditions.firstOrNull { it.rank > activeRank }
+            val handle = next?.playback?.streamId?.trim()?.takeIf { it.isNotBlank() }
+            if (handle != null) return handle
+            val backups = activeRendition?.playback?.backupStreamIds
+                ?: renditions.firstOrNull()?.playback?.backupStreamIds
+            return backups.orEmpty().firstOrNull { it.isNotBlank() }
+        }
+
+    /** Whether "Try another print" has anywhere honest to go. */
+    val canTryAnotherPrint: Boolean get() = nextPrintHandle != null
 
     /**
      * This snapshot as the audio-language policy needs it: the same rows without the

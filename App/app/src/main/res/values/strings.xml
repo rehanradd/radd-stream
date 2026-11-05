@@ -59,6 +59,12 @@
     <string name="player_giveup_no_candidate">Nothing playable here right now</string>
     <string name="player_giveup_download_body">This quality can be kept for offline viewing, but it cannot stream here.</string>
     <string name="player_giveup_no_candidate_body">Every option for this print failed. Retry, keep it for offline, or open it in another player.</string>
+    <string name="player_giveup_timeout">Taking too long to start</string>
+    <string name="player_giveup_timeout_body">The link is still being found. Retry, try another print, or open it in another player.</string>
+    <string name="player_start_slow">Taking longer than usual — your link is being found</string>
+    <string name="player_start_try_another">Try another print</string>
+    <string name="player_start_giveup_message">This copy did not start within 30 seconds.</string>
+    <string name="player_first_frame">Started in %1$s</string>
     <string name="player_open_external">Open with another player</string>
     <string name="player_close">Close</string>
     <string name="player_subtitles_for_colour">%1$s subtitles</string>
