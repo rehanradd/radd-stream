@@ -68,6 +68,9 @@ class RemoteConfigWatcher @Inject constructor(
             qualityGateEnabled = flags.qualityGate,
             adsEnabled = config.ads.enabled,
         )
+        // The theme rides the same successful body: a failed poll leaves the
+        // last good theme in place, exactly like the switches above.
+        settings.saveTheme(config.theme)
         // The caps travel with the switch, and only a body that carries them overrides what this
         // build already enforces — a partial body leaves the shipped 25/12/4 windows in force
         // rather than resetting them to something the operator never asked for.

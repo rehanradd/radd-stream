@@ -7,6 +7,7 @@ import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.NavigationBarItemDefaults
@@ -27,6 +28,7 @@ import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.raddstream.app.brand.Brand
 import com.raddstream.app.data.RemoteFeatures
+import com.raddstream.app.network.models.PanelTheme
 import com.raddstream.app.ui.screens.BrowseScreen
 import com.raddstream.app.ui.screens.DetailScreen
 import com.raddstream.app.ui.screens.DownloadsScreen
@@ -39,11 +41,6 @@ import com.raddstream.app.ui.screens.SearchScreen
 import com.raddstream.app.ui.screens.SettingsScreen
 import com.raddstream.app.ui.screens.SetupScreen
 import com.raddstream.app.ui.screens.VipUpgradeScreen
-import com.raddstream.app.ui.theme.AccentPrimary
-import com.raddstream.app.ui.theme.BackgroundDark
-import com.raddstream.app.ui.theme.OnSurfaceMuted
-import com.raddstream.app.ui.theme.SurfaceDark
-import com.raddstream.app.ui.theme.SurfaceVariantDark
 
 private data class BottomNavItem(
     val label: String,
@@ -71,6 +68,8 @@ fun RaddStreamNavGraph(
     navController: NavHostController = rememberNavController(),
     startDestination: String,
     features: RemoteFeatures = RemoteFeatures(),
+    /** The operator's theme, for the hero knobs Home reads from it. */
+    theme: PanelTheme = PanelTheme(),
     openRequest: LocalVideoOpen? = null,
     onOpenConsumed: () -> Unit = {},
 ) {
@@ -97,11 +96,11 @@ fun RaddStreamNavGraph(
     val showBottomBar = currentRoute in bottomNavItems.map { it.route }
 
     Scaffold(
-        containerColor = BackgroundDark,
+        containerColor = MaterialTheme.colorScheme.background,
         bottomBar = {
             if (showBottomBar) {
                 NavigationBar(
-                    containerColor = SurfaceDark,
+                    containerColor = MaterialTheme.colorScheme.surfaceContainer,
                 ) {
                     bottomNavItems.forEach { item ->
                         val selected = currentRoute == item.route
@@ -110,11 +109,11 @@ fun RaddStreamNavGraph(
                             label = { Text(item.label) },
                             selected = selected,
                             colors = NavigationBarItemDefaults.colors(
-                                selectedIconColor = AccentPrimary,
-                                selectedTextColor = AccentPrimary,
-                                unselectedIconColor = OnSurfaceMuted,
-                                unselectedTextColor = OnSurfaceMuted,
-                                indicatorColor = SurfaceVariantDark,
+                                selectedIconColor = MaterialTheme.colorScheme.primary,
+                                selectedTextColor = MaterialTheme.colorScheme.primary,
+                                unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                                unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                                indicatorColor = MaterialTheme.colorScheme.surfaceContainerHighest,
                             ),
                             onClick = {
                                 if (currentRoute != item.route) {
@@ -171,6 +170,9 @@ fun RaddStreamNavGraph(
                     onPostClick = { postId -> navController.navigate(Screen.Detail.createRoute(postId)) },
                     onBrowseType = { type -> navController.navigate(Screen.Browse.createRoute(type)) },
                     onSetupServerClick = { navController.navigate(Screen.Setup.route) },
+                    heroMax = theme.heroMax,
+                    heroAutoplay = theme.heroAutoplay,
+                    heroIntervalMs = theme.heroIntervalS * 1_000L,
                 )
             }
 

@@ -416,5 +416,41 @@ class VipRemoteConfigTest {
         assertTrue(config.sections.isEmpty())
         assertTrue(config.broadcasts.isEmpty())
         assertTrue(config.hiddenWorkIds.isEmpty())
+        assertEquals(PanelTheme(), config.theme)
+    }
+
+    @Test
+    fun `decodes the panel theme block`() {
+        val config = gson.fromJson(
+            """
+            {
+              "success": true,
+              "theme": {
+                "mode": "light", "accent": "#2BC79A", "dynamic_color": true,
+                "hero_autoplay": false, "hero_interval_s": 8, "hero_max": 4
+              }
+            }
+            """.trimIndent(),
+            VipRemoteConfig::class.java,
+        )
+
+        assertEquals("light", config.theme.mode)
+        assertEquals("#2BC79A", config.theme.accent)
+        assertTrue(config.theme.dynamicColor)
+        assertFalse(config.theme.heroAutoplay)
+        assertEquals(8, config.theme.heroIntervalS)
+        assertEquals(4, config.theme.heroMax)
+    }
+
+    @Test
+    fun `a body with no theme decodes to the dark brand defaults`() {
+        val config = gson.fromJson("""{"success": true}""", VipRemoteConfig::class.java)
+
+        assertEquals("dark", config.theme.mode)
+        assertEquals("", config.theme.accent)
+        assertFalse(config.theme.dynamicColor)
+        assertTrue(config.theme.heroAutoplay)
+        assertEquals(5, config.theme.heroIntervalS)
+        assertEquals(6, config.theme.heroMax)
     }
 }

@@ -4,7 +4,8 @@
 The panel (admin v2) owns three things the phone has never read: the home
 sections it builds, the broadcasts it publishes, and the works it hides. This
 module is the one reader that carries them to the public edge, and it is
-deliberately boring:
+deliberately boring. It also carries the operator's theme knobs (dark/light,
+accent, hero behaviour) from the same panel database, read-only the same way.
 
 * Read-only. The panel database is opened ``mode=ro`` and never written, and
   the catalog connection it is handed is only ever SELECTed from.
@@ -192,6 +193,80 @@ def _adult_ok(row):
     except (KeyError, IndexError):
         return True
     return flag is None or int(flag) == 0
+
+
+#: What the app falls back to when the panel has no theme set: dark, the
+#: brand accent (empty means the app's own default), no dynamic colour, a
+#: hero that auto-advances every 5 s, at most 6 slides.
+THEME_DEFAULTS = {
+    "mode": "dark", "accent": "", "dynamic_color": False,
+    "hero_autoplay": True, "hero_interval_s": 5, "hero_max": 6,
+}
+
+_THEMES_MODES = ("dark", "light", "system")
+
+
+def _theme_col(row, name):
+    """One tuning column, or None when the panel predates the column."""
+    try:
+        return row[name]
+    except (KeyError, IndexError):
+        return None
+
+
+def read_theme(panel_path=None):
+    """Operator theme knobs for the app, or safe defaults. Never raises.
+
+    Reads ``tuning_settings`` from the panel database, read-only. A missing
+    database, table, row or column answers defaults; an out-of-range value
+    answers its own default, never the operator's typo. The app treats an
+    empty accent as "use the brand default".
+    """
+    out = dict(THEME_DEFAULTS)
+    conn = _open_panel(panel_path)
+    if conn is None:
+        return out
+    try:
+        if not _has_table(conn, "tuning_settings"):
+            return out
+        try:
+            row = conn.execute(
+                "SELECT theme_mode, theme_accent, theme_dynamic_color, "
+                "theme_hero_autoplay, theme_hero_interval_s, hero_max "
+                "FROM tuning_settings WHERE id = 1").fetchone()
+        except sqlite3.Error:
+            return out
+        if row is None:
+            return out
+        mode = _theme_col(row, "theme_mode")
+        if isinstance(mode, str) and mode in _THEMES_MODES:
+            out["mode"] = mode
+        accent = _theme_col(row, "theme_accent")
+        if isinstance(accent, str) and accent:
+            if (len(accent) == 7 and accent[0] == "#"
+                    and all(c in "0123456789abcdefABCDEF" for c in accent[1:])):
+                out["accent"] = accent
+        for key, col in (("dynamic_color", "theme_dynamic_color"),
+                         ("hero_autoplay", "theme_hero_autoplay")):
+            try:
+                out[key] = int(_theme_col(row, col) or 0) == 1
+            except (TypeError, ValueError):
+                pass
+        try:
+            interval = int(_theme_col(row, "theme_hero_interval_s") or 0)
+            if 1 <= interval <= 30:
+                out["hero_interval_s"] = interval
+        except (TypeError, ValueError):
+            pass
+        try:
+            hero_max = int(_theme_col(row, "hero_max") or 0)
+            if 0 <= hero_max <= 6:
+                out["hero_max"] = hero_max
+        except (TypeError, ValueError):
+            pass
+        return out
+    finally:
+        conn.close()
 
 
 def _resolve_rows(catalog_conn, rule, category_key, curated_ids, limit, hidden):

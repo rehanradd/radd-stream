@@ -1328,3 +1328,16 @@ or printed. Gating is qoder1's call after fresh green CI.
 - Tests: 2 new cases in `VipRemoteConfigTest`, new `PanelFeedMergeTest` (7 cases).
 
 **Not done:** no local Gradle run — the owner order is GitHub Actions only; CI judges. No live deploy in this branch (gate path + `RADD_ADMIN_V2_DB` env on the service at deploy time). Next one-by-one steps: theme block, tabs control, in-app contact form, panel "Live control" page.
+
+---
+
+### Session 41 — Theme block: panel theme controls reach the app (Muse, 2026-11-06)
+
+**Agent:** Muse (BoNzoO), coded directly on the user's order (full audit, then complete everything one by one). No qoder lane. Same branch as Session 40.
+
+**Built:**
+- Panel first, the bug: `_seed` unconditionally reset every tuning column to defaults on every panel start, wiping operator changes. Now it seeds defaults only where a column is still NULL. New tuning keys: `theme_mode` (dark), `theme_accent` (""), `theme_dynamic_color` (0), `theme_hero_autoplay` (1), `theme_hero_interval_s` (5); `hero_max` default 3 → 6, bounds (0,5) → (0,6). `put_tuning` validates mode and accent hex; the theme knobs are labelled "remote-config (app reads it)". 4 new panel tests, 126 tests OK, orphan audit 0.
+- Server: `panel_feed.read_theme()` reads tuning read-only, never raises, invalid values fall back per-field; `viewer.py` merges `theme` into remote-config. 3 new server tests, 18 OK.
+- App: `VipRemoteConfig.theme: PanelTheme` + 3 decode tests; `ServerSettingsRepository.themeSettings` + `saveTheme()`; `RemoteConfigWatcher` saves the theme on a successful poll only. `MainActivity` resolves dark/light/system through pure `resolveThemeDark`, dynamic colour ANDs the panel permission in, accent through pure `parseAccentHex`. `RaddStreamTheme` gains an `accent` that repaints only the `primary` roles. Light migration done in MainActivity, NavGraph and SetupScreen (all `colorScheme` roles now, no hard-painted dark left in those files); `features.light_scheme` flipped on. Hero takes `heroMax`/`heroAutoplay`/`heroIntervalMs` from the theme; 0 hides the slot entirely. New `ThemeResolutionTest` (9 cases).
+
+**Not done:** no local Gradle run — CI judges. Panel workspace changes are not in this repo; they still need posting to the VM panel workspace + a panel restart before theme control works end-to-end. No live deploy of this branch yet. Next: tabs control, contact form, Live control page, P0 bug fixes.

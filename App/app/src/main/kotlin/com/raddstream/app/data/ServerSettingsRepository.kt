@@ -13,6 +13,7 @@ import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.raddstream.app.brand.Brand
 import com.raddstream.app.network.models.AccountEntitlement
+import com.raddstream.app.network.models.PanelTheme
 import com.raddstream.app.player.SubtitleColor
 import com.raddstream.app.player.SubtitleUiSettings
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -361,6 +362,36 @@ class ServerSettingsRepository @Inject constructor(
     }
 
     /**
+     * The operator's theme, mirrored the same way as the remote switches above:
+     * the last body we actually received is what the app paints, so a dead
+     * server on launch leaves the previous theme in force. Every field
+     * defaults to the app this build has always shipped (dark, brand accent,
+     * hero on, 6 slides).
+     */
+    val themeSettings: Flow<PanelTheme> = dataStore.data.map { preferences ->
+        PanelTheme(
+            mode = preferences[THEME_MODE_KEY] ?: "dark",
+            accent = preferences[THEME_ACCENT_KEY] ?: "",
+            dynamicColor = preferences[THEME_DYNAMIC_COLOR_KEY] ?: false,
+            heroAutoplay = preferences[THEME_HERO_AUTOPLAY_KEY] ?: true,
+            heroIntervalS = preferences[THEME_HERO_INTERVAL_S_KEY] ?: 5,
+            heroMax = preferences[THEME_HERO_MAX_KEY] ?: 6,
+        )
+    }
+
+    /** Record one received theme block, from the same successful poll as [saveRemoteFlags]. */
+    suspend fun saveTheme(theme: PanelTheme) {
+        dataStore.edit { preferences ->
+            preferences[THEME_MODE_KEY] = theme.mode
+            preferences[THEME_ACCENT_KEY] = theme.accent
+            preferences[THEME_DYNAMIC_COLOR_KEY] = theme.dynamicColor
+            preferences[THEME_HERO_AUTOPLAY_KEY] = theme.heroAutoplay
+            preferences[THEME_HERO_INTERVAL_S_KEY] = theme.heroIntervalS
+            preferences[THEME_HERO_MAX_KEY] = theme.heroMax
+        }
+    }
+
+    /**
      * The last entitlement the ledger confirmed, mirrored here so a restart does not have to
      * wait for a round trip before it knows what this account may play. It is a CACHE of the
      * server's answer, never a second authority: a signed-out device clears it, and every
@@ -586,6 +617,12 @@ class ServerSettingsRepository @Inject constructor(
         private val FEATURE_PURE_CINEMA_KEY = booleanPreferencesKey("feature_pure_cinema")
         private val FEATURE_QUALITY_GATE_KEY = booleanPreferencesKey("feature_quality_gate")
         private val FEATURE_ADS_KEY = booleanPreferencesKey("feature_ads")
+        private val THEME_MODE_KEY = stringPreferencesKey("theme_mode")
+        private val THEME_ACCENT_KEY = stringPreferencesKey("theme_accent")
+        private val THEME_DYNAMIC_COLOR_KEY = booleanPreferencesKey("theme_dynamic_color")
+        private val THEME_HERO_AUTOPLAY_KEY = booleanPreferencesKey("theme_hero_autoplay")
+        private val THEME_HERO_INTERVAL_S_KEY = intPreferencesKey("theme_hero_interval_s")
+        private val THEME_HERO_MAX_KEY = intPreferencesKey("theme_hero_max")
         private val VIP_ACTIVE_KEY = booleanPreferencesKey("vip_active")
         private val VIP_UNTIL_KEY = doublePreferencesKey("vip_until")
         private val VIP_PENDING_CLAIM_KEY = booleanPreferencesKey("vip_pending_claim")

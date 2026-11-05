@@ -78,6 +78,10 @@ fun HomeScreen(
     onPostClick: (Int) -> Unit = {},
     onBrowseType: (String?) -> Unit = {},
     onSetupServerClick: () -> Unit = {},
+    /** The operator's hero knobs from the panel theme: 0 hides the hero slot. */
+    heroMax: Int = HERO_LIMIT,
+    heroAutoplay: Boolean = true,
+    heroIntervalMs: Long = 5_000L,
     viewModel: HomeViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsState()
@@ -136,15 +140,24 @@ fun HomeScreen(
             } else {
                 // The banner rides the first rail that actually has rows, so it is real
                 // catalog data (freshest additions) and not a hand-picked fake "featured" set.
-                val heroItems = state.sections.firstOrNull { it.visible }?.items.orEmpty().take(HERO_LIMIT)
-                if (heroItems.isNotEmpty()) {
-                    HeroCarousel(posts = heroItems, onPostClick = onPostClick)
-                    Spacer(Modifier.height(12.dp))
-                } else if (state.sections.any { it.loading }) {
-                    // Hold the hero's footprint while the first rail lands, so the page
-                    // never flashes a bare background and then jumps when it fills in.
-                    HeroSkeleton()
-                    Spacer(Modifier.height(12.dp))
+                // heroMax 0 hides the slot entirely — no carousel, no skeleton — because
+                // the operator asked for no hero, not for a hero that never loads.
+                if (heroMax > 0) {
+                    val heroItems = state.sections.firstOrNull { it.visible }?.items.orEmpty().take(heroMax)
+                    if (heroItems.isNotEmpty()) {
+                        HeroCarousel(
+                            posts = heroItems,
+                            onPostClick = onPostClick,
+                            autoplay = heroAutoplay,
+                            intervalMs = heroIntervalMs,
+                        )
+                        Spacer(Modifier.height(12.dp))
+                    } else if (state.sections.any { it.loading }) {
+                        // Hold the hero's footprint while the first rail lands, so the page
+                        // never flashes a bare background and then jumps when it fills in.
+                        HeroSkeleton()
+                        Spacer(Modifier.height(12.dp))
+                    }
                 }
                 if (state.continueWatching.isNotEmpty()) {
                     Column {

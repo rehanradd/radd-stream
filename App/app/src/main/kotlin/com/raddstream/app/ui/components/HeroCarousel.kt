@@ -92,16 +92,19 @@ fun HeroCarousel(
     onPostClick: (Int) -> Unit,
     modifier: Modifier = Modifier,
     backdropFor: (Post) -> String? = { it.heroArtUrl },
+    /** The operator's theme: false pauses the auto-advance, the interval is in ms. */
+    autoplay: Boolean = true,
+    intervalMs: Long = AUTO_ADVANCE_MS,
 ) {
     if (posts.isEmpty()) return
     val reduceMotion = rememberReduceMotion()
     val pagerState = rememberPagerState(pageCount = { posts.size })
     val scrollScope = rememberCoroutineScope()
 
-    LaunchedEffect(posts.size, reduceMotion) {
-        if (posts.size < 2 || reduceMotion) return@LaunchedEffect
+    LaunchedEffect(posts.size, reduceMotion, autoplay, intervalMs) {
+        if (!autoplay || posts.size < 2 || reduceMotion) return@LaunchedEffect
         while (true) {
-            delay(AUTO_ADVANCE_MS)
+            delay(intervalMs)
             if (pagerState.isScrollInProgress) continue
             val next = (pagerState.currentPage + 1) % posts.size
             pagerState.animateScrollToPage(next)

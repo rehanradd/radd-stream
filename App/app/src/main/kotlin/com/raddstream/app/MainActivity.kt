@@ -6,9 +6,11 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.LaunchedEffect
@@ -21,12 +23,14 @@ import androidx.compose.ui.Modifier
 import com.raddstream.app.brand.Brand
 import com.raddstream.app.data.RemoteFeatures
 import com.raddstream.app.data.ServerSettingsRepository
+import com.raddstream.app.network.models.PanelTheme
 import com.raddstream.app.ui.navigation.LocalVideoOpen
 import com.raddstream.app.ui.navigation.Screen
 import com.raddstream.app.ui.navigation.RaddStreamNavGraph
 import com.raddstream.app.ui.screens.MaintenanceScreen
 import com.raddstream.app.ui.theme.RaddStreamTheme
-import com.raddstream.app.ui.theme.BackgroundDark
+import com.raddstream.app.ui.theme.parseAccentHex
+import com.raddstream.app.ui.theme.resolveThemeDark
 import dagger.hilt.android.AndroidEntryPoint
 import javax.inject.Inject
 import kotlinx.coroutines.flow.Flow
@@ -112,7 +116,20 @@ class MainActivity : ComponentActivity() {
             }
             val operatorFeatures by featuresPreference.collectAsState(initial = RemoteFeatures())
 
-            RaddStreamTheme(dynamicColor = effectiveDynamicColor(dynamicColorRequested)) {
+            // The operator's theme, mirrored into DataStore by RemoteConfigWatcher.
+            // Seeded with the app's own defaults (dark, brand accent, hero on) so a
+            // cold start paints the app it always painted; a store that cannot
+            // answer takes no theme away from anybody.
+            val themePreference: Flow<PanelTheme> = remember(serverSettingsRepository) {
+                serverSettingsRepository.themeSettings.catch { emit(PanelTheme()) }
+            }
+            val operatorTheme by themePreference.collectAsState(initial = PanelTheme())
+
+            RaddStreamTheme(
+                darkTheme = resolveThemeDark(operatorTheme.mode, isSystemInDarkTheme()),
+                dynamicColor = effectiveDynamicColor(dynamicColorRequested, operatorTheme.dynamicColor),
+                accent = parseAccentHex(operatorTheme.accent),
+            ) {
                 var startDestination by remember { mutableStateOf<String?>(null) }
                 LaunchedEffect(Unit) {
                     val savedUrl = try {
@@ -132,7 +149,7 @@ class MainActivity : ComponentActivity() {
 
                 Surface(
                     modifier = Modifier.fillMaxSize(),
-                    color = BackgroundDark,
+                    color = MaterialTheme.colorScheme.background,
                 ) {
                     var changingServer by remember { mutableStateOf(false) }
                     LaunchedEffect(underMaintenance) {
@@ -161,6 +178,7 @@ class MainActivity : ComponentActivity() {
                         else -> RaddStreamNavGraph(
                             startDestination = destination,
                             features = operatorFeatures,
+                            theme = operatorTheme,
                             openRequest = pendingLocalOpen,
                             onOpenConsumed = { pendingLocalOpen = null },
                         )
@@ -223,9 +241,13 @@ class MainActivity : ComponentActivity() {
  * a re-skin shipping `features.dynamic_color=true` makes this same toggle live without any code
  * change. Android 12+ is still enforced inside RaddStreamTheme; pre-S devices get the brand scheme
  * no matter what both flags say.
+ *
+ * The panel's theme permission ANDs in as well: the operator can switch dynamic colour off for
+ * every phone at once, and a viewer who turned it on still gets the brand scheme until the
+ * operator allows it again.
  */
-private fun effectiveDynamicColor(storedEnabled: Boolean): Boolean =
-    storedEnabled && Brand.dynamicColorAllowed
+private fun effectiveDynamicColor(storedEnabled: Boolean, panelAllowed: Boolean): Boolean =
+    storedEnabled && Brand.dynamicColorAllowed && panelAllowed
 
 /**
  * Whether this install has never been through the region screen.

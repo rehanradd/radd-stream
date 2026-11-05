@@ -64,6 +64,33 @@ data class VipRemoteConfig(
     val broadcasts: List<PanelBroadcast> = emptyList(),
     @SerializedName("hidden_work_ids")
     val hiddenWorkIds: List<Int> = emptyList(),
+    /**
+     * The operator's theme knobs, published by the admin panel and served on
+     * this same body: dark/light/system, an accent colour, dynamic colour,
+     * and the hero's autoplay behaviour. Absent from an older deployment, it
+     * decodes to [PanelTheme]'s defaults — dark, brand accent, hero on —
+     * which is the app this build has always shipped.
+     */
+    val theme: PanelTheme = PanelTheme(),
+)
+
+/**
+ * The operator's theme, as the panel stores it in `tuning_settings`.
+ * `mode` is "dark", "light" or "system" (anything else decodes but is
+ * treated as dark by the resolver); `accent` is "" (brand default) or a
+ * #RRGGBB hex; `heroMax` is how many slides the hero shows, 0 hides it.
+ */
+data class PanelTheme(
+    val mode: String = "dark",
+    val accent: String = "",
+    @SerializedName("dynamic_color")
+    val dynamicColor: Boolean = false,
+    @SerializedName("hero_autoplay")
+    val heroAutoplay: Boolean = true,
+    @SerializedName("hero_interval_s")
+    val heroIntervalS: Int = 5,
+    @SerializedName("hero_max")
+    val heroMax: Int = 6,
 )
 
 /**

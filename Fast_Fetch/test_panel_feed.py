@@ -83,6 +83,11 @@ def _build_panel(path):
         "CREATE TABLE broadcasts (id INTEGER PRIMARY KEY, title TEXT, body TEXT, "
         "severity TEXT, target TEXT, starts_at INTEGER, ends_at INTEGER, "
         "status TEXT)")
+    conn.execute(
+        "CREATE TABLE tuning_settings (id INTEGER PRIMARY KEY, "
+        "theme_mode TEXT, theme_accent TEXT, theme_dynamic_color INTEGER, "
+        "theme_hero_autoplay INTEGER, theme_hero_interval_s INTEGER, "
+        "hero_max INTEGER)")
     now = 1_791_000_000
     conn.executemany(
         "INSERT INTO home_sections VALUES (?,?,?,?,?,?,?,?,?)", [
@@ -114,6 +119,9 @@ def _build_panel(path):
             (4, "VIP only", "Secret", "info", "vip", now - 10, now + 3600, "published"),
             (5, "Future", "Soon", "info", "all", now + 3600, now + 7200, "published"),
         ])
+    conn.execute(
+        "INSERT INTO tuning_settings VALUES (?,?,?,?,?,?,?)",
+        (1, "light", "#2BC79A", 1, 0, 8, 4))
     conn.commit()
     conn.close()
     return now
@@ -226,6 +234,39 @@ class PanelFeedTests(unittest.TestCase):
         self.assertEqual(len(found), 1)
         self.assertNotIn("<", found[0]["title"])
         self.assertNotIn("<", found[0]["body"])
+
+    def test_theme_reads_operator_values(self):
+        self.assertEqual(
+            panel_feed.read_theme(panel_path=self.panel_path),
+            {"mode": "light", "accent": "#2BC79A", "dynamic_color": True,
+             "hero_autoplay": False, "hero_interval_s": 8, "hero_max": 4})
+
+    def test_theme_defaults_when_nothing_set(self):
+        empty_path = os.path.join(self.tmp.name, "empty.db")
+        sqlite3.connect(empty_path).close()
+        self.assertEqual(
+            panel_feed.read_theme(panel_path=empty_path),
+            panel_feed.THEME_DEFAULTS)
+        self.assertEqual(
+            panel_feed.read_theme(panel_path=os.path.join(self.tmp.name, "nope.db")),
+            panel_feed.THEME_DEFAULTS)
+
+    def test_theme_invalid_values_fall_back_to_defaults(self):
+        conn = sqlite3.connect(self.panel_path)
+        conn.execute(
+            "UPDATE tuning_settings SET theme_mode='pink', "
+            "theme_accent='red', theme_hero_interval_s=99, hero_max=99 "
+            "WHERE id=1")
+        conn.commit()
+        conn.close()
+        theme = panel_feed.read_theme(panel_path=self.panel_path)
+        self.assertEqual(theme["mode"], "dark")
+        self.assertEqual(theme["accent"], "")
+        self.assertEqual(theme["hero_interval_s"], 5)
+        self.assertEqual(theme["hero_max"], 6)
+        # The valid values in the same row still survive the bad ones.
+        self.assertTrue(theme["dynamic_color"])
+        self.assertFalse(theme["hero_autoplay"])
 
 
 class PostsHideTests(unittest.TestCase):

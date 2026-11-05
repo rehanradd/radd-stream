@@ -28,12 +28,6 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.raddstream.app.brand.Brand
-import com.raddstream.app.ui.theme.AccentGreen
-import com.raddstream.app.ui.theme.AccentPrimary
-import com.raddstream.app.ui.theme.AccentRed
-import com.raddstream.app.ui.theme.BackgroundDark
-import com.raddstream.app.ui.theme.OnBackground
-import com.raddstream.app.ui.theme.OnSurfaceMuted
 import com.raddstream.app.viewmodel.SetupViewModel
 
 @Composable
@@ -46,18 +40,18 @@ fun SetupScreen(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(BackgroundDark)
+            .background(MaterialTheme.colorScheme.background)
             .imePadding()
             .padding(horizontal = 28.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
     ) {
-        Text(Brand.name, style = MaterialTheme.typography.headlineLarge, color = OnBackground)
+        Text(Brand.name, style = MaterialTheme.typography.headlineLarge, color = MaterialTheme.colorScheme.onBackground)
         Spacer(Modifier.height(8.dp))
         Text(
             text = "Connect to a catalog server you operate or are authorized to use.",
             style = MaterialTheme.typography.bodyMedium,
-            color = OnSurfaceMuted,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center,
         )
         Spacer(Modifier.height(24.dp))
@@ -80,7 +74,7 @@ fun SetupScreen(
             Spacer(Modifier.height(12.dp))
             Text(
                 text = message,
-                color = if (state.messageIsError) AccentRed else AccentGreen,
+                color = if (state.messageIsError) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
                 style = MaterialTheme.typography.bodySmall,
                 textAlign = TextAlign.Center,
             )
@@ -107,7 +101,10 @@ fun SetupScreen(
             onClick = onConnected,
             enabled = state.isConnected && !state.isChecking,
             modifier = Modifier.fillMaxWidth().height(52.dp),
-            colors = ButtonDefaults.buttonColors(containerColor = AccentPrimary),
+            colors = ButtonDefaults.buttonColors(
+                containerColor = MaterialTheme.colorScheme.primary,
+                contentColor = MaterialTheme.colorScheme.onPrimary,
+            ),
         ) {
             Text("Continue", style = MaterialTheme.typography.labelLarge)
         }
