@@ -449,6 +449,12 @@ jobs:
       - name: 🧪 test_hubcdn_unwrap.py
         run: python3 -S Fast_Fetch/test_hubcdn_unwrap.py
 
+      # The admin panel feed for the app (sections / broadcasts / hides): the
+      # resolver, the adult fail-closed rule, the hide expiry/restore rules,
+      # and the posts-route hide enforcement. Offline — temp SQLite files.
+      - name: 🧪 test_panel_feed.py
+        run: python3 -S Fast_Fetch/test_panel_feed.py
+
       # The agreement gate on the key-level fold (order #60, 2026-11-05). `--apply` hides a
       # work only when every row it would flip corroborates the flagged sibling by title, with
       # no derivable year contradicting it: a literal `MAX(is_18_plus)` per `canonical_key`

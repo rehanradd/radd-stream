@@ -51,6 +51,44 @@ data class VipRemoteConfig(
      * changes nothing: see [VipRemoteAdCadence].
      */
     val engagement: VipRemoteEngagement = VipRemoteEngagement(),
+    /**
+     * The operator's home feed, published by the admin panel and served on this
+     * same body so no second call is needed: the sections the panel built, the
+     * broadcasts it published, and the works it hid. All three default to empty,
+     * which is the honest answer from a deployment with no panel wired — the app
+     * then keeps its own rails, shows no banner, and hides nothing. A section
+     * item is a full [Post], projected by the server exactly like a posts row,
+     * so the rail needs no second fetch to render.
+     */
+    val sections: List<PanelSection> = emptyList(),
+    val broadcasts: List<PanelBroadcast> = emptyList(),
+    @SerializedName("hidden_work_ids")
+    val hiddenWorkIds: List<Int> = emptyList(),
+)
+
+/**
+ * One home rail the admin panel built. `key` is the operator's slug (the panel's
+ * `home_sections.key`); the app prefixes it when it merges, so a panel rail can
+ * never collide with a built-in one by accident. Items arrive resolved — the
+ * server already applied the adult rule and the hide list before projecting.
+ */
+data class PanelSection(
+    val key: String = "",
+    val title: String = "",
+    val items: List<Post> = emptyList(),
+)
+
+/**
+ * One announcement the admin panel published. The server only ever sends a live,
+ * published, all-users broadcast, so the app can show it as-is: no targeting to
+ * interpret, no window to check. An empty title means "nothing to say" and the
+ * banner is skipped.
+ */
+data class PanelBroadcast(
+    val id: Int = 0,
+    val title: String = "",
+    val body: String = "",
+    val severity: String = "info",
 )
 
 /**

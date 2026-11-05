@@ -359,4 +359,62 @@ class VipRemoteConfigTest {
         assertFalse(config.wallet.enabled)
         assertFalse(config.streak.enabled)
     }
+
+    /**
+     * The panel feed rides this same body: sections the operator built, broadcasts it
+     * published, and works it hid. A section item is a full post, so the rail renders
+     * without a second fetch; a deployment with no panel wired sends three empty lists
+     * and the app keeps its own rails.
+     */
+    @Test
+    fun `decodes the panel feed sections broadcasts and hides`() {
+        val config = gson.fromJson(
+            """
+            {
+              "success": true,
+              "sections": [
+                {"key": "latest", "title": "Latest",
+                 "items": [
+                   {"id": 3, "title": "Three", "clean_title": "Three", "year": 2025,
+                    "content_type": "movie", "poster_url": "https://example.invalid/p3.jpg"},
+                   {"id": 2, "title": "Two", "clean_title": "Two", "year": 2023,
+                    "content_type": "movie"}
+                 ]},
+                {"key": "empty", "title": "Empty", "items": []}
+              ],
+              "broadcasts": [
+                {"id": 1, "title": "Hello", "body": "Welcome", "severity": "info"},
+                {"id": 2, "title": "Careful", "body": "", "severity": "warning"}
+              ],
+              "hidden_work_ids": [2]
+            }
+            """.trimIndent(),
+            VipRemoteConfig::class.java,
+        )
+
+        assertEquals(2, config.sections.size)
+        assertEquals("latest", config.sections[0].key)
+        assertEquals("Latest", config.sections[0].title)
+        assertEquals(2, config.sections[0].items.size)
+        assertEquals(3, config.sections[0].items[0].id)
+        assertEquals("Three", config.sections[0].items[0].title)
+        assertEquals("https://example.invalid/p3.jpg", config.sections[0].items[0].posterUrl)
+        assertTrue(config.sections[1].items.isEmpty())
+
+        assertEquals(2, config.broadcasts.size)
+        assertEquals(1, config.broadcasts[0].id)
+        assertEquals("Hello", config.broadcasts[0].title)
+        assertEquals("warning", config.broadcasts[1].severity)
+
+        assertEquals(listOf(2), config.hiddenWorkIds)
+    }
+
+    @Test
+    fun `a body with no panel feed decodes to three empty lists`() {
+        val config = gson.fromJson("""{"success": true}""", VipRemoteConfig::class.java)
+
+        assertTrue(config.sections.isEmpty())
+        assertTrue(config.broadcasts.isEmpty())
+        assertTrue(config.hiddenWorkIds.isEmpty())
+    }
 }

@@ -19,10 +19,13 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -46,6 +49,7 @@ import com.raddstream.app.brand.Brand
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.raddstream.app.network.models.PanelBroadcast
 import com.raddstream.app.ui.components.ErrorState
 import com.raddstream.app.ui.components.HeroCarousel
 import com.raddstream.app.ui.components.HeroSkeleton
@@ -105,6 +109,17 @@ fun HomeScreen(
         ) {
             if (state.isRefreshing) {
                 LinearProgressIndicator(Modifier.fillMaxWidth())
+            }
+
+            // The operator's channel to every phone: a broadcast shows above the
+            // catalog, even when the catalog itself failed to load — that is
+            // exactly when the operator has something to say.
+            state.broadcasts.forEach { broadcast ->
+                BroadcastBanner(
+                    broadcast = broadcast,
+                    onDismiss = { viewModel.dismissBroadcast(broadcast.id) },
+                )
+                Spacer(Modifier.height(8.dp))
             }
 
             // Fatal error only when *every* rail failed and none has data to show.
@@ -192,6 +207,54 @@ private fun openDownload(context: Context, url: String): Boolean = try {
 } catch (_: ActivityNotFoundException) {
     Toast.makeText(context, "No browser is available to open this download.", Toast.LENGTH_LONG).show()
     false
+}
+
+/**
+ * One announcement from the admin panel. The severity picks the container: the
+ * operator's urgent note reads urgent on the phone too, and an info note stays
+ * quiet. A broadcast is plain text from the panel — never a link, never a button —
+ * so there is nothing to tap except the dismiss.
+ */
+@Composable
+private fun BroadcastBanner(broadcast: PanelBroadcast, onDismiss: () -> Unit) {
+    val scheme = MaterialTheme.colorScheme
+    val (container, onContainer) = when (broadcast.severity.lowercase()) {
+        "urgent", "critical" -> scheme.errorContainer to scheme.onErrorContainer
+        "warning" -> scheme.tertiaryContainer to scheme.onTertiaryContainer
+        else -> scheme.primaryContainer to scheme.onPrimaryContainer
+    }
+    Card(
+        colors = CardDefaults.cardColors(containerColor = container),
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(start = 16.dp, top = 12.dp, bottom = 12.dp, end = 4.dp),
+            verticalAlignment = Alignment.Top,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text(
+                    broadcast.title,
+                    style = MaterialTheme.typography.titleSmall,
+                    color = onContainer,
+                )
+                if (broadcast.body.isNotBlank()) {
+                    Spacer(Modifier.height(2.dp))
+                    Text(
+                        broadcast.body,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = onContainer,
+                    )
+                }
+            }
+            IconButton(onClick = onDismiss) {
+                Icon(
+                    Icons.Default.Close,
+                    contentDescription = "Dismiss announcement",
+                    tint = onContainer,
+                )
+            }
+        }
+    }
 }
 
 @Composable

@@ -7,6 +7,7 @@ import com.raddstream.app.data.local.WatchHistoryDao
 import com.raddstream.app.data.local.WatchHistoryMerge
 import com.raddstream.app.network.friendlyNetworkError
 import com.raddstream.app.network.models.Post
+import com.raddstream.app.network.models.PanelBroadcast
 import com.raddstream.app.network.models.VipRemoteConfig
 import com.raddstream.app.network.models.WireText
 import com.raddstream.app.player.AdCadenceGovernor
@@ -44,6 +45,13 @@ data class HomeSection(
     val items: List<Post> = emptyList(),
     val loading: Boolean = false,
     val error: String? = null,
+    /**
+     * True when the rail came from the admin panel, not from a posts call. A
+     * panel rail already has its rows — it is never loaded, retried, or
+     * refreshed through [HomeViewModel.loadSection]; the next remote-config
+     * fetch rebuilds it.
+     */
+    val panelManaged: Boolean = false,
 ) {
     val visible: Boolean get() = items.isNotEmpty() && error == null
 
@@ -63,6 +71,8 @@ data class HomeUiState(
     val continueWatching: List<ResumeTile> = emptyList(),
     /** Set when the operator has published a downloadable build; null means "no news". */
     val updateNotice: AppUpdate? = null,
+    /** Live broadcasts from the admin panel; a dismissed one stays dismissed for this session. */
+    val broadcasts: List<PanelBroadcast> = emptyList(),
 )
 
 /**
@@ -94,6 +104,40 @@ private const val RESERVE_NOTE = """
     None of these render until the backend returns real rows; they are NOT faked.
 """
 
+/**
+ * The operator's feed, merged over the built-in rails. Pure, so the test can pin
+ * the questions that matter without a repository: panel sections first, in the
+ * panel's order, then the built-in rails that no panel section owns by key; every
+ * row the operator hid is dropped from both, because the server hides it too but
+ * a phone must never trust one layer alone; a dismissed broadcast never returns
+ * until the next app start. A panel section with no rows renders nothing — an
+ * empty operator rail is not a loading state.
+ */
+internal fun mergePanelFeed(
+    current: List<HomeSection>,
+    config: VipRemoteConfig,
+    dismissedBroadcastIds: Set<Int>,
+): Pair<List<HomeSection>, List<PanelBroadcast>> {
+    val hidden = config.hiddenWorkIds.toSet()
+    val panelSections = config.sections.map { panel ->
+        HomeSection(
+            key = "panel:${panel.key}",
+            title = panel.title,
+            type = null,
+            items = panel.items.filter { it.id !in hidden },
+            panelManaged = true,
+        )
+    }.filter { it.items.isNotEmpty() }
+    val panelKeys = config.sections.map { it.key }.toSet()
+    val builtIn = current
+        .filter { !it.panelManaged && it.key !in panelKeys }
+        .map { it.copy(items = it.items.filter { post -> post.id !in hidden }) }
+    val broadcasts = config.broadcasts.filter {
+        it.id !in dismissedBroadcastIds && it.title.isNotBlank()
+    }
+    return (panelSections + builtIn) to broadcasts
+}
+
 @HiltViewModel
 class HomeViewModel @Inject constructor(
     private val catalogRepository: CatalogRepository,
@@ -109,6 +153,9 @@ class HomeViewModel @Inject constructor(
 
     /** A URL the viewer already declined stays declined for this app session. */
     private var dismissedUpdateUrl: String? = null
+
+    /** A broadcast the viewer dismissed stays dismissed for this app session. */
+    private val dismissedBroadcastIds = mutableSetOf<Int>()
 
     init {
         observeContinueWatching()
@@ -189,26 +236,40 @@ class HomeViewModel @Inject constructor(
         _uiState.update { it.copy(updateNotice = null) }
     }
 
+    fun dismissBroadcast(id: Int) {
+        dismissedBroadcastIds.add(id)
+        _uiState.update { it.copy(broadcasts = it.broadcasts.filter { broadcast -> broadcast.id != id }) }
+    }
+
     /**
      * Remote config is decoration on Home: an unreachable endpoint or a malformed body
-     * must never turn into an error banner over a catalog that loaded fine.
+     * must never turn into an error banner over a catalog that loaded fine. One fetch
+     * serves three things — the update notice, the panel's sections and broadcasts,
+     * and the hide list — so a phone that got the body has all of them or none.
      */
     private fun checkForUpdate() {
         viewModelScope.launch {
-            val notice = try {
-                AppUpdate.from(catalogRepository.getRemoteConfig())
+            val config = try {
+                catalogRepository.getRemoteConfig()
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (_: Exception) {
                 return@launch
             }
-            if (notice != null && notice.url == dismissedUpdateUrl) return@launch
-            _uiState.update { it.copy(updateNotice = notice) }
+            val notice = AppUpdate.from(config)?.takeUnless { it.url == dismissedUpdateUrl }
+            _uiState.update { state ->
+                val (sections, broadcasts) = mergePanelFeed(state.sections, config, dismissedBroadcastIds)
+                state.copy(sections = sections, broadcasts = broadcasts, updateNotice = notice)
+            }
         }
     }
 
     fun retrySection(key: String) {
         val section = _uiState.value.sections.firstOrNull { it.key == key } ?: return
+        // A panel rail has nothing to retry: its rows come with the config, and the
+        // next refresh re-fetches them. Retrying through the posts route would
+        // overwrite the operator's rail with a generic list.
+        if (section.panelManaged) return
         // loadSection is suspend (it hits the repository); run it on the ViewModel's scope.
         viewModelScope.launch { loadSection(section) }
     }
@@ -219,7 +280,7 @@ class HomeViewModel @Inject constructor(
             try {
                 coroutineScope {
                     _uiState.value.sections
-                        .filter { it.items.isEmpty() || force }
+                        .filter { !it.panelManaged && (it.items.isEmpty() || force) }
                         .map { async { loadSection(it) } }
                         .awaitAll()
                 }
@@ -238,6 +299,7 @@ class HomeViewModel @Inject constructor(
     }
 
     private suspend fun loadSection(section: HomeSection) {
+        if (section.panelManaged) return
         markSection(section.key) { it.copy(loading = true, error = null) }
         try {
             val results = catalogRepository.getPosts(type = section.type, page = 1, limit = 18).results

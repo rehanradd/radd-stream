@@ -32,6 +32,7 @@ import accounts_api
 import payments
 import admin_panel
 import media_search
+import panel_feed
 import usage_stats
 
 if sys.platform.startswith("win"):
@@ -3012,6 +3013,17 @@ def api_v1_get_posts(query: str = "", content_type: str = "", page: int = 1,
             order_sql = "p.id DESC"
 
         where_sql = " AND ".join(where_clauses)
+        # A work the operator hid in the panel stays hidden on every list,
+        # including to an old app that never learned about the panel feed: the
+        # hide is enforced here, at serve time, not only in the section
+        # resolver. Unwired (no panel database) means no hides, never an error.
+        hidden = panel_feed.hidden_work_ids()
+        if hidden:
+            ids = sorted(hidden)[:panel_feed.HIDDEN_IDS_CAP]
+            where_clauses.append(
+                "p.id NOT IN (%s)" % ",".join("?" for _ in ids))
+            params.extend(ids)
+            where_sql = " AND ".join(where_clauses)
         total = conn.execute(f"SELECT COUNT(*) FROM posts p WHERE {where_sql}", params).fetchone()[0]
 
         # `p.source_site`, `p.url` and `p.slug` used to be selected here: the site
@@ -4218,6 +4230,32 @@ class DashboardHandler(BaseHTTPRequestHandler):
             _ensure_schema()
             with get_db() as conn:
                 payload = admin_panel.remote_config(conn)
+                # The panel feed rides the same body the app already polls:
+                # sections the operator built, broadcasts it published, and
+                # works it hid. No new route, so the public allow-list does
+                # not change. Unwired means three empty lists and the app
+                # keeps its own rails; the keys are always present so the
+                # client contract never depends on the panel being up.
+                feed = panel_feed.load_panel_feed(conn)
+                all_ids = [int(r["id"]) for s in feed["sections"]
+                           for r in s["rows"]]
+                subtitled = _subtitled_posts(conn, all_ids)
+
+                def _project_panel_post(row):
+                    item = redact.project(row, "post_brief")
+                    item.update(_art_pair(row, base_url))
+                    item["work_ref"] = _work_ref(row)
+                    item["subtitled"] = bool(
+                        subtitled.get(int(row["id"]), False))
+                    return item
+
+                payload["sections"] = [
+                    {"key": s["key"], "title": s["title"],
+                     "items": [_project_panel_post(r) for r in s["rows"]]}
+                    for s in feed["sections"]
+                ]
+                payload["broadcasts"] = feed["broadcasts"]
+                payload["hidden_work_ids"] = feed["hidden_work_ids"]
             self.send_json(redact.scrub(payload),
                            extra_headers=[("Cache-Control", "public, max-age=60")])
 

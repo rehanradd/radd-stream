@@ -1313,3 +1313,18 @@ revalidation must find first. Backend run `41394696505` at the same sha was alre
 `completed success` (46/46 steps, including the `test_docs_invariants` claim corrected above).
 Trunk untouched, no tag, no release, no service restart, no live-tree edit, no credential value read
 or printed. Gating is qoder1's call after fresh green CI.
+
+---
+
+### Session 40 — The admin panel feed reaches the app (Muse, 2026-11-06)
+
+**Agent:** Muse (BoNzoO), coded directly on the user's order ("connect the app to the admin panel", 00:02 PKT). No qoder lane.
+
+**Built:**
+- `VipRemoteConfig` gains the panel feed: `sections: List<PanelSection>`, `broadcasts: List<PanelBroadcast>`, `hiddenWorkIds: List<Int>` — all default empty, so a deployment with no panel wired decodes unchanged. A section item is a full `Post`, projected by the server exactly like a posts row.
+- `HomeViewModel.mergePanelFeed` (pure, tested): panel sections first in panel order, built-in rails after them minus any key a panel section owns, hidden rows dropped from both, empty panel sections render nothing, a dismissed broadcast never returns this session. Panel rails are `panelManaged`: never loaded, retried, or refreshed through the posts route — the next remote-config fetch rebuilds them. The hero rides the first visible rail, so the operator's top section drives it.
+- `HomeScreen` renders broadcasts as a dismissible banner above the catalog, severity-coloured (info / warning / urgent), even when the catalog failed to load.
+- Server half (same branch): new `Fast_Fetch/panel_feed.py` reads the panel database read-only and resolves sections, broadcasts and hides onto the existing `/api/v1/app/remote-config` body; `api_v1_get_posts` enforces hides at serve time. 15 new server tests, all green locally.
+- Tests: 2 new cases in `VipRemoteConfigTest`, new `PanelFeedMergeTest` (7 cases).
+
+**Not done:** no local Gradle run — the owner order is GitHub Actions only; CI judges. No live deploy in this branch (gate path + `RADD_ADMIN_V2_DB` env on the service at deploy time). Next one-by-one steps: theme block, tabs control, in-app contact form, panel "Live control" page.
