@@ -1475,7 +1475,28 @@ class PlayerViewModel @Inject constructor(
             if (trackType == C.TRACK_TYPE_AUDIO) it.copy(selectedAudioId = option?.id)
             else it.copy(selectedSubtitleId = option?.id)
         }
+        // Remember the pick: the next episode (and the next visit) auto-applies this
+        // language, not the old Settings choice. The sync delay is deliberately never
+        // saved — it belongs to this viewing.
+        val language = persistedLanguageFor(option)
+        if (language != null) {
+            viewModelScope.launch {
+                if (trackType == C.TRACK_TYPE_AUDIO) settingsRepository.savePreferredAudioLanguage(language)
+                else settingsRepository.savePreferredSubtitleLanguage(language)
+            }
+        }
     }
+
+    /**
+     * The language a live track pick writes back to Settings, or null when the pick
+     * says nothing about the standing preference. A picked track's language is the
+     * viewer's choice for this show and the next visit; turning subtitles off is
+     * viewing-scoped — it must not delete the stored language, or the next episode
+     * would start silent for a viewer who wants Hindi. A track with no language tag
+     * has nothing to persist either.
+     */
+    internal fun persistedLanguageFor(option: TrackUiOption?): String? =
+        option?.language?.trim()?.takeIf { it.isNotEmpty() }
 
     // ── Subtitles: settings + external files ─────────────────────────────────────
 
