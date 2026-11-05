@@ -45,7 +45,12 @@ anything, by grouping on `(clean_title, year)` instead of `canonical_key`. It mu
 reached only with `--corroborate`, because propagation multiplies one row's verdict across
 its siblings and a stored flag is not always anybody's evidence: measured on the live
 catalog 2026-10-30 (`--audit`), 10,816 of 15,068 flags cannot be reproduced by
-`is_adult_title()` at all, and the works they hide are mostly mainstream. Folding across
+`is_adult_title()` at all (re-measured 2026-11-06: `audit_flags()` here prints 4,417
+reproducible / 10,651 asserted-only, and the older 10,816 is the *ingest* expression's
+figure — 4,252 re-derivable through `clean_title or title`; the 165 between them is the
+column-order loss, evidence present in a derive-listed column the `or` chain skipped.
+Both are honest; only one belongs to this sentence's function), and the works they hide
+are mostly mainstream. Folding across
 those would hide 3,490 further rows; `--corroborate` hides the 12 that stand on
 reproducible evidence.
 

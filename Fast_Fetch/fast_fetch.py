@@ -963,8 +963,12 @@ def adult_rule_agrees(row) -> bool:
     work's identity, so it may only start from evidence the shared rule still accepts. A
     flag an importer asserted and today's rule cannot re-derive is a review candidate
     (`backfill_adult_key.py --audit`), not a warrant to hide other rows. Measured on the
-    live catalog 2026-10-30: 10,816 of 15,068 flags are of that kind, and the work they
-    name is usually mainstream — *Nenokkadine* (2014), *118* (2019), *24* (2016), *18
+    live catalog 2026-10-30: 10,816 of 15,068 flags are of that kind (re-measured
+    2026-11-06 against the whole flagged ledger: this *ingest* expression cannot reproduce
+    10,816, the wider `adult_rule_agrees()` cannot reproduce 10,651, and the 165-row
+    difference is evidence that sits in a column the `or` chain never reaches — so quote
+    one number with its function, not either number with the other's name), and the work
+    they name is usually mainstream — *Nenokkadine* (2014), *118* (2019), *24* (2016), *18
     Pages* (2022), all flagged on dubbed-release vocabulary. Folding across them would
     have hidden 3,490 more rows the rule says are clean.
 
