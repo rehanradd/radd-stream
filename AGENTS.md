@@ -12,9 +12,10 @@
 ```
 AGENTS.md          ← THIS FILE: the law. Fast_Fetch/ ← 🐍 Python backend. App/ ← 📱 Android (Kotlin/Compose).
 docs/              ← SPEC + rotated LOG (SPEC_*.md, checkpoints/). Fast_Fetch/CONTINUITY.md and
-                     docs/SESSION_CHECKPOINT.md are open-items indexes, not logs — but they are
-                     119 and 54 lines, not the ≤20 this file used to claim. The guard enforces
-                     ≤120 lines / ≤12 KB each; grow them deliberately, never by accretion.
+                     docs/SESSION_CHECKPOINT.md are open-items indexes, not logs. The guard enforces
+                     ≤120 lines / ≤12 KB each; measure with `wc -l` and never quote a line count from
+                     here (this block read "119 and 54" while they were 91 and 112). Grow them
+                     deliberately, never by accretion.
 ```
 
 The annotated inventory (every file, every doc, with what it holds) moved to
@@ -52,18 +53,18 @@ Describe the code's behavior accurately to users and tools. Do not disguise its 
   (`Fast_Fetch/test_redact.py::AdultDenialOnBothPortsTests`,
   `Fast_Fetch/test_database.py::KeyLevelAdultIdentityTests`): no public surface may list *or play* a
   flagged row. Enforced today by `redact.adult_clause` (`Fast_Fetch/redact.py:1077`) inside
-  `api_v1_get_posts` (`Fast_Fetch/viewer.py:2780`), by the per-post bail at `viewer.py:887` and
-  `:2956`, by `redact.link_is_adult` (`redact.py:1083`) on the stream/download redirectors — which
+  `api_v1_get_posts` (`Fast_Fetch/viewer.py:2849`), by the per-post bail at `viewer.py:887` and
+  `:3025`, by `redact.link_is_adult` (`redact.py:1083`) on the stream/download redirectors — which
   answers True for an unknown link id so a typo cannot play either — and by nginx, which allow-lists
   only the public routes. To a public client a flagged row is indistinguishable from a row that never
   existed: the same `not_found`, the same status code, no hint that a flag caused the denial.
   **One exception, deliberately, and it is not a user-facing display surface:** the operator panel.
-  `DASHBOARD_HTML` (`viewer.py:917`) reads `/api/data`, which this process 404s on the public port,
+  `DASHBOARD_HTML` (`viewer.py:966`) reads `/api/data`, which this process 404s on the public port,
   is served only on the loopback operator port, and 403s at the public edge; the trust boundary there
   is the loopback interface, not `RADD_ADMIN_TOKEN` (the token guards `/admin`, and `/` answers 200 on
   `8081` without it — measured 2026-10-29 05:47, see the table below). `fetch_database_payload`
   (`viewer.py:557`) documents `full` as "the operator-only mode (loopback port): raw ledger rows", and
-  the panel renders a `18+ ADULT` badge (`viewer.py:1919`) because an operator auditing flag coverage
+  the panel renders a `18+ ADULT` badge (`viewer.py:1978`) because an operator auditing flag coverage
   has to see which rows carry the flag. That is the *stored* half of this rule, shown to the person who
   owns the storage — never a playable link, and never a public list. `/api/v1/stream` and
   `/api/v1/download` deny a flagged link **on the operator port too**, with the same uniform
@@ -121,10 +122,10 @@ Describe the code's behavior accurately to users and tools. Do not disguise its 
 |---|---|---|
 | `GITHUB_TOKEN` | Replit Configurations (environment variable; user says not Secrets) | GitHub access from Replit; use the temporary Git askpass flow in `ORACLE_DEPLOYMENT.md` |
 | `ORACLE_SSH_KEY` | Replit Configurations (environment variable; user says not Secrets) | SSH private key for `ubuntu@92.4.95.252`; use only via a temporary 0600 file |
-| `KEYSTORE_BASE64` | ⚠️ **CONFIGURED; build step fails** (run 41233720264) | Android signing keystore (base64 encoded) |
-| `KEY_STORE_PASSWORD` | ⚠️ **CONFIGURED, never exercised** | Keystore file password |
-| `KEY_ALIAS` | ⚠️ **CONFIGURED, never exercised** | Key alias inside keystore (`raddstream`) |
-| `KEY_PASSWORD` | ⚠️ **CONFIGURED, never exercised** | Key password |
+| `KEYSTORE_BASE64` | ✅ **CONFIGURED and exercised** — `v1.0.4` is signed (run `41323174024`) | Android signing keystore (base64 encoded) |
+| `KEY_STORE_PASSWORD` | ✅ **CONFIGURED and exercised** | Keystore file password |
+| `KEY_ALIAS` | ✅ **CONFIGURED and exercised** | Key alias inside keystore (`raddstream`) |
+| `KEY_PASSWORD` | ✅ **CONFIGURED and exercised** | Key password |
 
 **Measured 2026-10-29 17:55 — this retires the claim that the four keystore variables are "GitHub
 Repo Secrets".** `GET /repos/rehanradd/radd-stream/actions/secrets` returns
@@ -135,18 +136,28 @@ run `40876596427`) ended `failure` after **10 s**, against the **7m 02s** `BUILD
 Android build takes (measured on run `40874380668`), so it died at the
 `🗝️ Verify signing secrets are present` preflight (`release.yml:53`) and never reached a build,
 a signature check, or the publish step — nothing was released. That preflight is why exercising this
-is safe. **Consequence:** CI cannot produce a signed release APK/AAB until the owner adds all four
+is safe. **Consequence then:** CI could not produce a signed release APK/AAB until the owner added all four
 values under GitHub → Settings → Secrets → Actions. **Do not generate a replacement keystore to work
 around it** — a different signing key makes every later upgrade incompatible with the first install,
 and there is no installed base to protect yet, so the owner's key is the only correct one.
-**Available today with no secret at all:** `🔨 CI — Android Build & Test` uploads a **debug APK** on
-every green run (`📤 Upload debug APK` succeeded at `2caadb3`) — debug-signed and installable for the
-device verification every doc still marks "pending".
+**No-secret fallback:** `🔨 CI — Android Build & Test` uploads a **debug APK** on every green run.
 
-**UPDATE (Measured 2026-10-30 22:53, then re-measured 2026-10-31 07:5x):** All four release signing secrets (`KEYSTORE_BASE64`, `KEY_ALIAS`, `KEY_PASSWORD`, `KEY_STORE_PASSWORD`) were generated, backed up on Oracle VM (`/home/ubuntu/raddstream-release.jks`), and configured in GitHub Actions Secrets by the repository owner. **That half is confirmed by execution:** the release run at the tag (`41104217171`) cleared `🗝️ Verify signing secrets are present` at `18:08:05Z` — the preflight that killed the 2026-10-29 attempt in 10 s. **The rest of that sentence was false and is retired:** the workflow is *not* "producing signed release artifacts". Measured on the API: `GET /releases` returns `[]`, all five release runs in history are `failure`, and `tag v1.0.0` resolves to commit `6a441ec77` — a trunk point that predates the adult merge-time fold (`4a8c163`), so re-running that tag would ship pre-law code. **No signed APK or AAB has ever existed for this product.** The cause is now read from the run log, not guessed: `java.lang.IllegalArgumentException: Last unit does not have enough valid bits` at `App/app/build.gradle.kts:120`, `BUILD FAILED in 4s` — it died during *configuration*, in `signingConfigs`, before any Kotlin compiled. That exception is `java.util.Base64.getDecoder()` refusing the **stored `KEYSTORE_BASE64` value**, whose length is not a clean base64 quantum (padding lost in the paste); the keystore itself is sound — re-encoding `/home/ubuntu/raddstream-release.jks` (2,752 bytes → 3,672 chars, ends `==`) round-trips strictly. So the fix is owner-side secret re-entry, **not** a build-script edit, and the `android.util.Base64` story in §10 was never what this file runs. **Moving or re-cutting a tag is an owner action: no agent may create, move or delete a tag.**
+**UPDATE (measured 2026-11-05, unauthenticated public API), and it retires the signing conclusions
+above it:**
+signing **works**. `GET /releases` returns exactly one release — `v1.0.4` with
+`radd-stream-1.0.4.apk`, `radd-stream-1.0.4.aab`, `radd-stream-1.0.4-SHA256SUMS.txt` — published by
+release run `41323174024` (`push` on tag `v1.0.4`, `completed success`, 2026-11-01T15:49:38Z); five
+tags exist (`v1.0.0`…`v1.0.4`), runs 1–7 of that workflow's eight are `failure`. So "nothing has ever
+been signed" and "`GET /releases` is `[]`" were true when measured and are false now; the base64
+padding failure was fixed by owner-side secret re-entry, **not** by a build-script edit, and the
+re-entry procedure is [`docs/SPEC_APP_SIGNING_RUNBOOK.md`](docs/SPEC_APP_SIGNING_RUNBOOK.md). The
+retired measurement chain (every run id, the strict-decoder diagnosis, the keystore re-encode
+figures) is preserved verbatim in
+[`docs/SPEC_AGENTS_MEASURED_NOTES.md`](docs/SPEC_AGENTS_MEASURED_NOTES.md). **Moving or re-cutting a
+tag is an owner action: no agent may create, move or delete a tag.**
 
 **Backend agents**: use `GITHUB_TOKEN` for GitHub operations and `ORACLE_SSH_KEY` only when connecting to Oracle. Read [`ORACLE_DEPLOYMENT.md`](ORACLE_DEPLOYMENT.md) first.
-**App agents**: the debug build needs no secrets; the *signed release* needs the 4 keystore secrets above **and** a release workflow that builds — which it does not have. A task that needs an installable build today takes the **debug APK** from `🔨 CI — Android Build & Test`.
+**App agents**: the debug build needs no secrets; the *signed release* needs the 4 keystore secrets above **and** a release workflow that builds — which it now has (`v1.0.4`, run `41323174024`). A task that needs an installable build takes the signed `v1.0.4` APK, or the **debug APK** from `🔨 CI — Android Build & Test` for whatever trunk has since.
 Verify only whether the two configured variable names are present; never read or print their values, put them in Git URLs or command arguments, commit them, or copy them to Oracle. Do not ask the user to move them to Replit Secrets.
 
 ---
@@ -199,7 +210,8 @@ rule is memory-led, not load-led:
    requests to `/api/v1/stats` on this single core and burned **22.5 server CPU-seconds**, having
    assumed it was a cheap counter.
 5. **Unchanged absolutes:** never restart/reload/stop `radd-stream.service`; never create or push
-   a git tag (and it cannot succeed anyway — `/actions/secrets` is `[]`); never commit from or
+   a git tag (it *can* succeed now — `v1.0.4` proves it — which is exactly why the ban is the
+   owner's call, not a technical impossibility); never commit from or
    reset `/opt/radd-stream`, which is the live deployment tree; no Gradle until the owner confirms
    load < 0.5; never put a credential in a URL, argv, file or log.
 6. **If your task needs a heavy read, do not run it — queue it.** Write the exact command, the
@@ -237,11 +249,12 @@ older draft and a "green" from it is a weaker claim than CI's. The measurement t
 
 ### For App Sessions:
 1. Ensure Gradle builds pass locally OR wait for GitHub Actions green check
-2. Append a session log to `App/AGENTS.md` (Session History section)
+2. Append a session log to [`App/docs/SESSION_HISTORY.md`](App/docs/SESSION_HISTORY.md) — **never**
+   to `App/AGENTS.md`, which is auto-loaded into every agent's context and must stay instructions-only
 3. Push with Git over HTTPS using the temporary askpass helper in [`ORACLE_DEPLOYMENT.md`](ORACLE_DEPLOYMENT.md)
 4. Tag a release with `git tag vX.Y.Z && ...` if a milestone is complete
    — **superseded by the Fleet Resource Guardrail rule 5: this is the owner's call alone, no agent
-   may create or push a tag, and CI cannot sign one today anyway (`/actions/secrets` is `[]`).**
+   may create, move or push a tag.**
 
 ---
 
@@ -252,8 +265,8 @@ older draft and a "green" from it is a weaker claim than CI's. The measurement t
 | Backend: ingestion, SQLite catalog, resolver, REST API | ✅ **Deployed and running on this host** — `systemctl is-active radd-stream` → `active`, `fast_fetch.py serve --host 127.0.0.1:8080` behind Nginx | Complete |
 | Android App: server setup, metadata catalog, search | ✅ Implemented; device verification pending | Phase 1 |
 | Android App: details and playback | ✅ Implemented (Media3 playback, favorites, keeps, VIP screen); device verification pending | Phase 2 |
-| GitHub Actions | ✅ **Enabled and running** — `/actions/permissions` → `{"enabled": true, "allowed_actions": "all"}`; all three repo-root workflows are `state=active`, and the never-discovered duplicates under `App/.github/workflows` have been deleted (a PR gate exists: `ci.yml:57`, `backend-ci.yml:113`, `raddrelay-ci.yml:37` all carry `pull_request`). The retired "disabled at the account level" claim and the full CI-health measurement history (per-sha run verdicts on both trunk refs, the Android `unfed-not-red` misdiagnosis, the Robolectric #9166 trap) are in [`docs/SPEC_AGENTS_MEASURED_NOTES.md`](docs/SPEC_AGENTS_MEASURED_NOTES.md). | Gate is live |
-| Release signing | ❌ **Secrets configured, nothing signed** — run `41233720264`: the secrets preflight passes, the build step fails; `GET /releases` is `[]` (tags `v1.0.0`, `v1.0.1`). Installable bytes = the CI debug APK. Per-run receipts: `docs/SPEC_AGENTS_MEASURED_NOTES.md`. | Owner |
+| GitHub Actions | ✅ **Enabled and running** — `/actions/permissions` → `{"enabled": true, "allowed_actions": "all"}`; all four repo-root workflows are `state=active` (`backend-ci.yml`, `ci.yml`, `raddrelay-ci.yml`, `release.yml`), and the never-discovered duplicates under `App/.github/workflows` have been deleted (a PR gate exists: `ci.yml:57`, `backend-ci.yml:113`, `raddrelay-ci.yml:37` all carry `pull_request`). The retired "disabled at the account level" claim and the full CI-health measurement history (per-sha run verdicts on both trunk refs, the Android `unfed-not-red` misdiagnosis, the Robolectric #9166 trap) are in [`docs/SPEC_AGENTS_MEASURED_NOTES.md`](docs/SPEC_AGENTS_MEASURED_NOTES.md). | Gate is live |
+| Release signing | ✅ **Signed and published** — `GET /releases` is one release, `v1.0.4`, carrying `radd-stream-1.0.4.apk` + `.aab` + `-SHA256SUMS.txt`, published by run `41323174024` (`completed success`); five tags exist and runs 1–7 of that workflow's eight are `failure`. Trunk-only bytes = the CI debug APK. Receipts: `docs/SPEC_AGENTS_MEASURED_NOTES.md`; re-entry procedure: `docs/SPEC_APP_SIGNING_RUNBOOK.md`. | Owner (tagging) |
 
 The current Oracle host and its HTTP-only limitations are documented in
 [`ORACLE_DEPLOYMENT.md`](ORACLE_DEPLOYMENT.md). The backend is **already deployed there and is the
@@ -320,13 +333,12 @@ python Fast_Fetch/fast_fetch.py search "Inception"
 # GitHub only discovers workflows under the repository-root .github/workflows/. The duplicates
 # that used to sit under App/.github/workflows were never discovered and are now deleted.
 #
-# ⛔ NO AGENT CREATES OR PUSHES A TAG. tags v1.0.0 + v1.0.1 exist and the four secrets are
-# configured (run 41233720264's preflight passes), yet GET /releases is []: all five release runs
-# failed — one at the preflight, one at the unit-test gate, three at the build step. A tag today
-# publishes nothing. Per-run receipts: docs/SPEC_AGENTS_MEASURED_NOTES.md.
+# ⛔ NO AGENT CREATES OR PUSHES A TAG. It is the owner's call, and it is not theoretical: the tag
+# `v1.0.4` published signed `radd-stream-1.0.4.apk` + `.aab` (run `41323174024`, `completed success`);
+# the seven release runs before it failed. Per-run receipts: docs/SPEC_AGENTS_MEASURED_NOTES.md.
 
-# Download APK: github.com/rehanradd/radd-stream/actions (debug)
-#               /releases — measured empty
+# Download APK: github.com/rehanradd/radd-stream/releases (signed `v1.0.4`)
+#               github.com/rehanradd/radd-stream/actions (debug APK from the current trunk run)
 ```
 
 ---
@@ -352,7 +364,7 @@ python Fast_Fetch/fast_fetch.py search "Inception"
 3. **Never break existing tests** — run them before and after changes
 4. **Never delete parsers** — add, fix, extend — never remove
 5. **Never hardcode absolute paths** — use `pathlib.Path` + `BASE_DIR`
-6. **Log every session** in `CONTINUITY.md` (backend) or `App/AGENTS.md` (app)
+6. **Log every session** in `Fast_Fetch/CONTINUITY.md` (backend) or `App/docs/SESSION_HISTORY.md` (app) — **never** in an `AGENTS.md`, which is auto-loaded and must stay instructions-only
 7. **Push securely** — use Git over HTTPS with the temporary askpass helper; never embed or log a token
 8. **Read CONTINUITY.md first** — it has the latest state, last commit SHA, and next tasks
 9. **Per-Site Dedicated Staging Database Rule** — Scrape each streaming site into its own isolated staging database (e.g. `multimovies.db`, `vegamovies.db`). Never run mass scraper ingestion directly into the production catalog (`fast_fetch.db`). Once fully scraped and verified, merge into the unified catalog using `Fast_Fetch/merge_catalogs.py`.

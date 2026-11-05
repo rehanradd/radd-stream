@@ -135,8 +135,14 @@ INVARIANTS = [
      "uploads a **debug APK** on every green run"),
     ("app lane: signed release needs the 4 secrets", ROOT_AGENTS,
      "the *signed release* needs the 4 keystore secrets"),
-    ("no signed artifact has ever been produced", ROOT_AGENTS,
-     "No signed APK or AAB has ever existed for this product"),
+    # A pin on a *measurement* is a trap: it holds the sentence that goes stale first and then
+    # fights whoever re-measures it. "No signed APK or AAB has ever existed for this product" was
+    # true at `41233720264` and this suite pinned it as law; the 2026-11-05 public-API read finds
+    # release `v1.0.4` with a signed `.apk` + `.aab`, so the phrase had to leave AGENTS.md and the
+    # pin left with it. What must survive is the retraction discipline and the owner's tag, not the
+    # expired number — receipt chain preserved in docs/SPEC_AGENTS_MEASURED_NOTES.md.
+    ("a stale measurement is retired in place, not silently rewritten", ROOT_AGENTS,
+     "were true when measured and are false now"),
     ("cutting and moving tags is owner-only", ROOT_AGENTS,
      "Moving or re-cutting a tag is an owner action"),
 

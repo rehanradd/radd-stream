@@ -29,7 +29,16 @@ from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent
 
-DOCS = [BASE_DIR / "API_V2.md", BASE_DIR / "HANDOFF_apidocs.md"]
+REPO_ROOT = BASE_DIR.parent
+
+#: The three auto-loaded guides joined this list on 2026-11-05. They were not covered, and four
+#: citations in root `AGENTS.md` had silently drifted onto unrelated code (`api_v2` prose pointing
+#: at `</html>`, `DASHBOARD_HTML` pointing at a comment, the `18+ ADULT` badge pointing at a JS
+#: array). A guide every agent re-derives its plan from is the most valuable thing to keep honest,
+#: and its citations are the most fragile: `CITED` resolves a bare `viewer.py:NNN` against
+#: `BASE_DIR`, which is also what the guides mean when they write `Fast_Fetch/viewer.py:NNN`.
+DOCS = [BASE_DIR / "API_V2.md", BASE_DIR / "HANDOFF_apidocs.md",
+        REPO_ROOT / "AGENTS.md", BASE_DIR / "AGENTS.md", REPO_ROOT / "App" / "AGENTS.md"]
 
 #: `api_v2.py:565`, `` `catalog_v2.py:1266` ``, `viewer.py:2526-2530`
 CITED = re.compile(r"`?(?!\.)([a-z_0-9]+\.py)`?[:~](\d+)(?:-(\d+))?")

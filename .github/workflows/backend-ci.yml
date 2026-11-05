@@ -425,3 +425,11 @@ jobs:
       # all — it is manufactured by `mock.patch`. This run is its first execution.
       - name: 🧪 test_config_data_dir.py
         run: python3 -S Fast_Fetch/test_config_data_dir.py
+
+      # Docs drift is a code property, not a prose one. Root `AGENTS.md` cites `viewer.py` line
+      # numbers and four of them pointed at unrelated code at `b99814e` (measured 2026-11-05) while
+      # every suite stayed green, because `WorkflowSuiteCoverageTests`' RUN regex matches `test_*.py`
+      # only and cannot see this module. Hard failure = a cited path that does not exist or a line
+      # past EOF; a named token missing near the cited line is reported and does not fail the build.
+      - name: 📎 Docs citation drift check
+        run: python3 -S Fast_Fetch/check_doc_citations.py
