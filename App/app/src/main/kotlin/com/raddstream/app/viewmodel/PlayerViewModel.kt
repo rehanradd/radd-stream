@@ -1313,6 +1313,14 @@ class PlayerViewModel @Inject constructor(
         _ui.update { it.copy(printSheetVisible = false) }
     }
 
+    fun showMoreSheet() {
+        _ui.update { it.copy(moreSheetVisible = true) }
+    }
+
+    fun hideMoreSheet() {
+        _ui.update { it.copy(moreSheetVisible = false) }
+    }
+
     fun showSleepSheet() {
         _ui.update { it.copy(sleepSheetVisible = true) }
     }

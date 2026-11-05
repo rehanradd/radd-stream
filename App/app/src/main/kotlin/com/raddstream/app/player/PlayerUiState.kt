@@ -263,6 +263,7 @@ data class PlayerUiState(
     val sleepSheetVisible: Boolean = false,
     val playFromDialogVisible: Boolean = false,
     val qualitySheetVisible: Boolean = false,
+    val moreSheetVisible: Boolean = false,
     /**
      * The sponsor slot currently on screen, if any. Only [AdSlotPolicy.decide] can raise it,
      * and that policy has no value for a title that is playing — so this field can never be

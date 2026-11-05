@@ -143,6 +143,92 @@ class PlayerControlSemanticsTest {
         )
     }
 
+    /**
+     * The bottom row, from its signature to the next top-level function — the shared
+     * `functionBody` helper would stop at the first blank line inside this long body.
+     */
+    private fun bottomControlsBody(): String {
+        val start = source.indexOf("private fun BottomControls(")
+        assertTrue("PlayerScreen.kt no longer declares BottomControls", start >= 0)
+        val end = source.indexOf("\nprivate fun subtitleActive(", start)
+        assertTrue("cannot find the end of BottomControls", end >= 0)
+        return source.substring(start, end)
+    }
+
+    /** The More sheet, from its signature to the next sheet's opt-in annotation. */
+    private fun moreSheetBody(): String {
+        val start = source.indexOf("private fun MoreSheet(")
+        assertTrue("PlayerScreen.kt no longer declares MoreSheet", start >= 0)
+        val end = source.indexOf("\n@OptIn(ExperimentalMaterial3Api::class)", start)
+        assertTrue("cannot find the end of MoreSheet", end >= 0)
+        return source.substring(start, end)
+    }
+
+    @Test
+    fun `the bottom row is exactly the six primaries`() {
+        val row = bottomControlsBody()
+        listOf(
+            "vm.togglePlayPause()" to "Play/Pause",
+            "vm.toggleMute()" to "Volume",
+            "vm.showSubtitleSheet()" to "Subtitles",
+            "vm.showQualitySheet()" to "Quality",
+            "vm.toggleFullscreen()" to "Fullscreen",
+            "vm.showMoreSheet()" to "More",
+        ).forEach { (call, name) ->
+            assertTrue("the bottom row lost its $name primary", row.contains(call))
+        }
+        assertTrue("the More button must be named", row.contains("R.string.player_more"))
+        assertFalse(
+            "the bottom row must not scroll — six buttons fit every phone, and a " +
+                "hidden seventh would be a button that lies",
+            row.contains("horizontalScroll"),
+        )
+    }
+
+    @Test
+    fun `nothing else lives in the bottom row`() {
+        val row = bottomControlsBody()
+        listOf(
+            "vm.showSubtitleOffsetSheet()", "vm.showTracksSheet()", "vm.showSpeedSheet()",
+            "vm.setLocked(true)", "vm.seekBy(", "vm.stepFrame(", "vm.requestNextEpisode()",
+            "vm.showSleepSheet()", "vm.cycleAspect()", "vm.toggleOrientation()",
+            "vm.toggleAudioOnly()", "vm.toggleStereoOnly()", "vm.toggleViewMode()",
+            "PlayerControlButton(onEnterPip",
+        ).forEach { moved ->
+            assertFalse(
+                "the bottom row still carries $moved — it belongs in the More sheet",
+                row.contains(moved),
+            )
+        }
+    }
+
+    @Test
+    fun `the More sheet carries every moved control, grouped`() {
+        val sheet = moreSheetBody()
+        listOf(
+            // Playback
+            "vm.showSpeedSheet()", "vm.showSleepSheet()", "vm.stepFrame(-1)", "vm.stepFrame(1)",
+            "vm.seekBy(-10_000)", "vm.seekBy(10_000)", "vm.cycleAspect()", "vm.toggleOrientation()",
+            "vm.toggleViewMode()",
+            // Subtitle
+            "vm.showSubtitleSheet()", "vm.showSubtitleOffsetSheet()",
+            // Audio
+            "vm.showTracksSheet()", "vm.cycleAudioTrack()", "vm.toggleAudioOnly()", "vm.toggleStereoOnly()",
+            // Tools
+            "vm.requestNextEpisode()", "vm.showPlayFromDialog()", "vm.openCalibration()",
+            "vm.showPrintSheet()", "vm.retryCurrentCandidates()", "vm.openWithExternalPlayer()",
+            "onEnterPip()",
+        ).forEach { moved ->
+            assertTrue("the More sheet lost $moved", sheet.contains(moved))
+        }
+        listOf(
+            "R.string.player_more_playback", "R.string.player_more_subtitle",
+            "R.string.player_more_audio", "R.string.player_more_tools",
+        ).forEach { title ->
+            assertTrue("the More sheet lost its $title group", sheet.contains(title))
+        }
+    }
+
     @Test
     fun `nothing is announced while no text track is loaded`() {
         assertEquals(OFF_WORD, subtitleStatusLabel(PlayerUiState(), OFF_WORD))

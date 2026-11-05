@@ -65,6 +65,7 @@ import androidx.compose.material.icons.filled.ListAlt
 import androidx.compose.material.icons.filled.LocalMovies
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.LockOpen
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PictureInPicture
@@ -518,6 +519,7 @@ private fun PlayerScreenContent(
         if (state.tracksSheetVisible) TracksSheet(state, vm)
         if (state.printSheetVisible) PrintLogSheet(state, vm)
         if (state.qualitySheetVisible) QualitySheet(state, vm)
+        if (state.moreSheetVisible) MoreSheet(state, vm, onEnterPip = launchPip)
         if (state.adBreak != AdSlot.NONE) {
             SponsorBreakDialog(slot = state.adBreak, onDismiss = { vm.dismissAdBreak() })
         }
@@ -1237,15 +1239,26 @@ private fun BottomControls(
             Row(
                 Modifier
                     .fillMaxWidth()
-                    .horizontalScroll(rememberScrollState())
                     .padding(horizontal = 4.dp, vertical = 2.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 val subtitleWord = subtitleStatusLabel(state, stringResource(R.string.player_off))
                 val volumePercent = (state.userVolume * 100).toInt()
-                // Volume first, Fullscreen second: the two controls the old row never
-                // had as buttons. Volume tap mutes / restores; long-press opens the
-                // level slider. Fullscreen toggles the immersive bars.
+                // Exactly six primaries, frozen left to right (plan §4.2): Play/Pause,
+                // Volume, Subtitles, Quality, Fullscreen, More. Everything else lives
+                // in the More sheet — nothing was deleted, only moved. The row no
+                // longer scrolls: six 48 dp buttons fit every phone, and a hidden
+                // seventh button would be a button that lies.
+                PlayerControlButton(
+                    { if (state.isEnded) vm.playFrom(0) else vm.togglePlayPause() },
+                    if (state.isPlaying) stringResource(R.string.player_pause) else stringResource(R.string.player_play),
+                ) {
+                    Icon(
+                        if (state.isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                        null,
+                        tint = Color.White,
+                    )
+                }
                 PlayerControlButton(
                     { vm.toggleMute() },
                     if (state.userVolume > 0f) stringResource(R.string.player_volume, volumePercent)
@@ -1258,6 +1271,18 @@ private fun BottomControls(
                         tint = Color.White,
                     )
                 }
+                PlayerControlButton({ vm.showSubtitleSheet() }, stringResource(R.string.player_subtitles_label, subtitleWord)) {
+                    Icon(Icons.Default.Subtitles, null, tint = if (subtitleActive(state)) AccentOrange else Color.White)
+                }
+                if (state.canSwitchQuality) {
+                    PlayerControlButton({ vm.showQualitySheet() }, stringResource(R.string.player_quality_label, state.qualityLabel)) {
+                        Icon(
+                            Icons.Default.HighQuality,
+                            null,
+                            tint = if (state.qualityAuto) Color.White else AccentOrange,
+                        )
+                    }
+                }
                 PlayerControlButton(
                     { vm.toggleFullscreen() },
                     if (state.fullscreen) stringResource(R.string.player_exit_fullscreen)
@@ -1269,82 +1294,8 @@ private fun BottomControls(
                         tint = Color.White,
                     )
                 }
-                if (state.canSwitchQuality) {
-                    PlayerControlButton({ vm.showQualitySheet() }, stringResource(R.string.player_quality_label, state.qualityLabel)) {
-                        Icon(
-                            Icons.Default.HighQuality,
-                            null,
-                            tint = if (state.qualityAuto) Color.White else AccentOrange,
-                        )
-                    }
-                }
-                PlayerControlButton({ vm.showSubtitleSheet() }, stringResource(R.string.player_subtitles_label, subtitleWord)) {
-                    Icon(Icons.Default.Subtitles, null, tint = if (subtitleActive(state)) AccentOrange else Color.White)
-                }
-                PlayerControlButton(
-                    { vm.showSubtitleOffsetSheet() },
-                    stringResource(R.string.player_subtitle_sync, SubtitleOffset.format(state.subtitle.delayMs)),
-                ) {
-                    Icon(
-                        Icons.Default.Sync,
-                        null,
-                        tint = if (state.subtitle.delayMs != 0L) AccentOrange else Color.White,
-                    )
-                }
-                PlayerControlButton({ vm.showTracksSheet() }, stringResource(R.string.player_audio_tracks)) {
-                    Icon(
-                        Icons.Default.MusicNote,
-                        null,
-                        tint = if (state.selectedAudioId != null) AccentOrange else Color.White,
-                    )
-                }
-                PlayerControlButton({ vm.showSpeedSheet() }, stringResource(R.string.player_speed_label, state.speed)) {
-                    Icon(Icons.Default.Speed, null, tint = if (state.speed != 1f) AccentOrange else Color.White)
-                }
-                PlayerControlButton({ vm.setLocked(true) }, stringResource(R.string.player_lock)) {
-                    Icon(Icons.Default.Lock, null, tint = Color.White)
-                }
-                PlayerControlButton({ vm.seekBy(-10_000); onActivity() }, stringResource(R.string.player_rewind_10)) {
-                    Icon(Icons.Default.Replay10, null, tint = Color.White)
-                }
-                PlayerControlButton({ vm.seekBy(10_000); onActivity() }, stringResource(R.string.player_forward_10)) {
-                    Icon(Icons.Default.Forward10, null, tint = Color.White)
-                }
-                PlayerControlButton({ vm.stepFrame(-1) }, stringResource(R.string.player_frame_back)) {
-                    Icon(Icons.Default.KeyboardArrowLeft, null, tint = Color.White)
-                }
-                PlayerControlButton({ vm.stepFrame(1) }, stringResource(R.string.player_frame_forward)) {
-                    Icon(Icons.Default.KeyboardArrowRight, null, tint = Color.White)
-                }
-                PlayerControlButton({ vm.requestNextEpisode() }, stringResource(R.string.player_next_episode)) {
-                    Icon(Icons.Default.SkipNext, null, tint = Color.White)
-                }
-                PlayerControlButton({ vm.showSleepSheet() }, stringResource(R.string.player_sleep_timer)) {
-                    Icon(Icons.Default.Bedtime, null, tint = if (state.sleep.mode != SleepMode.OFF) AccentOrange else Color.White)
-                }
-                PlayerControlButton({ vm.cycleAspect(); onActivity() }, stringResource(R.string.player_aspect_label, state.aspect.label)) {
-                    Icon(Icons.Default.AspectRatio, null, tint = if (state.aspect != AspectMode.FIT) AccentOrange else Color.White)
-                }
-                PlayerControlButton({ vm.toggleOrientation(); onActivity() }, stringResource(R.string.player_orientation_label, state.orientation.label)) {
-                    Icon(Icons.Default.RotateRight, null, tint = if (state.orientation == PlayerOrientation.PORTRAIT) AccentOrange else Color.White)
-                }
-                PlayerControlButton({ vm.toggleAudioOnly() }, stringResource(R.string.player_audio_only_toggle)) {
-                    Icon(Icons.Default.MusicNote, null, tint = if (state.audioOnly) AccentOrange else Color.White)
-                }
-                PlayerControlButton({ vm.toggleStereoOnly() }, stringResource(R.string.player_stereo_only_toggle)) {
-                    Icon(Icons.Default.VolumeUp, null, tint = if (state.stereoOnly) AccentOrange else Color.White)
-                }
-                // Enters Ghost mode; the edge HUD's own chip is the only way back out, so
-                // this button is deliberately last-ish and clearly labelled, not a bare icon.
-                // Hidden entirely when the operator's `pure_cinema` switch is off — an entry
-                // point to a frame this build refuses to paint is only a button that lies.
-                if (state.pureCinemaAllowed) {
-                    PlayerControlButton({ vm.toggleViewMode(); onActivity() }, stringResource(R.string.player_cinema_mode)) {
-                        Icon(Icons.Default.LocalMovies, null, tint = Color.White)
-                    }
-                }
-                PlayerControlButton(onEnterPip, stringResource(R.string.player_pip)) {
-                    Icon(Icons.Default.PictureInPicture, null, tint = Color.White)
+                PlayerControlButton({ vm.showMoreSheet() }, stringResource(R.string.player_more)) {
+                    Icon(Icons.Default.MoreVert, null, tint = Color.White)
                 }
             }
         }
@@ -2255,6 +2206,143 @@ private fun TracksSheet(state: PlayerUiState, vm: PlayerViewModel) {
                 fontSize = brandSp(11),
                 modifier = Modifier.padding(horizontal = 16.dp),
             )
+        }
+    }
+}
+
+/**
+ * The More sheet (plan §4.3): every control that is not one of the six primaries,
+ * grouped exactly like MX's overflow — Playback / Subtitle / Audio / Tools. Nothing
+ * was deleted in step 3, only moved here from the bottom row; every row below calls
+ * the same ViewModel function its button used to call. A row that opens another
+ * sheet or dialog hides More first (the PrintLogSheet pattern), so two sheets never
+ * stack; a row that acts directly closes More too, so the viewer sees the picture,
+ * not the menu, after the tap. Lock is not here — it lives in the top bar already.
+ * The audio-level slider lives inside the TracksSheet the Audio tracks row opens.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun MoreSheet(state: PlayerUiState, vm: PlayerViewModel, onEnterPip: () -> Unit) {
+    ModalBottomSheet(
+        onDismissRequest = { vm.hideMoreSheet() },
+        sheetState = rememberModalBottomSheetState(),
+        containerColor = RaddPlayerSheet,
+    ) {
+        Column(
+            Modifier
+                .verticalScroll(rememberScrollState())
+                .padding(bottom = 24.dp),
+        ) {
+            SheetTitle(stringResource(R.string.player_more_playback))
+            SheetRow(label = stringResource(R.string.player_speed_label, state.speed)) {
+                vm.hideMoreSheet()
+                vm.showSpeedSheet()
+            }
+            SheetRow(label = stringResource(R.string.player_sleep_timer)) {
+                vm.hideMoreSheet()
+                vm.showSleepSheet()
+            }
+            SheetRow(label = stringResource(R.string.player_frame_back)) {
+                vm.hideMoreSheet()
+                vm.stepFrame(-1)
+            }
+            SheetRow(label = stringResource(R.string.player_frame_forward)) {
+                vm.hideMoreSheet()
+                vm.stepFrame(1)
+            }
+            SheetRow(label = stringResource(R.string.player_rewind_10)) {
+                vm.hideMoreSheet()
+                vm.seekBy(-10_000)
+            }
+            SheetRow(label = stringResource(R.string.player_forward_10)) {
+                vm.hideMoreSheet()
+                vm.seekBy(10_000)
+            }
+            SheetRow(label = stringResource(R.string.player_aspect_label, state.aspect.label)) {
+                vm.hideMoreSheet()
+                vm.cycleAspect()
+            }
+            SheetRow(label = stringResource(R.string.player_orientation_label, state.orientation.label)) {
+                vm.hideMoreSheet()
+                vm.toggleOrientation()
+            }
+            if (state.pureCinemaAllowed) {
+                SheetRow(label = stringResource(R.string.player_cinema_mode)) {
+                    vm.hideMoreSheet()
+                    vm.toggleViewMode()
+                }
+            }
+            SheetTitle(stringResource(R.string.player_more_subtitle))
+            SheetRow(
+                label = stringResource(
+                    R.string.player_subtitles_label,
+                    subtitleStatusLabel(state, stringResource(R.string.player_off)),
+                ),
+            ) {
+                vm.hideMoreSheet()
+                vm.showSubtitleSheet()
+            }
+            SheetRow(
+                label = stringResource(
+                    R.string.player_subtitle_sync,
+                    SubtitleOffset.format(state.subtitle.delayMs),
+                ),
+            ) {
+                vm.hideMoreSheet()
+                vm.showSubtitleOffsetSheet()
+            }
+            SheetTitle(stringResource(R.string.player_more_audio))
+            SheetRow(label = stringResource(R.string.player_audio_tracks)) {
+                vm.hideMoreSheet()
+                vm.showTracksSheet()
+            }
+            SheetRow(label = stringResource(R.string.player_cycle_audio), enabled = state.canCycleAudio) {
+                vm.hideMoreSheet()
+                vm.cycleAudioTrack()
+            }
+            SheetRow(
+                label = if (state.audioOnly) stringResource(R.string.player_audio_only_on)
+                else stringResource(R.string.player_audio_only_off),
+            ) {
+                vm.hideMoreSheet()
+                vm.toggleAudioOnly()
+            }
+            SheetRow(
+                label = if (state.stereoOnly) stringResource(R.string.player_stereo_on)
+                else stringResource(R.string.player_stereo_off),
+            ) {
+                vm.hideMoreSheet()
+                vm.toggleStereoOnly()
+            }
+            SheetTitle(stringResource(R.string.player_more_tools))
+            SheetRow(label = stringResource(R.string.player_next_episode)) {
+                vm.hideMoreSheet()
+                vm.requestNextEpisode()
+            }
+            SheetRow(label = stringResource(R.string.player_play_from_row)) {
+                vm.hideMoreSheet()
+                vm.showPlayFromDialog()
+            }
+            SheetRow(label = stringResource(R.string.player_calibrate_row)) {
+                vm.hideMoreSheet()
+                vm.openCalibration()
+            }
+            SheetRow(label = stringResource(R.string.player_prints_title)) {
+                vm.hideMoreSheet()
+                vm.showPrintSheet()
+            }
+            SheetRow(label = stringResource(R.string.player_retry_row)) {
+                vm.hideMoreSheet()
+                vm.retryCurrentCandidates()
+            }
+            SheetRow(label = stringResource(R.string.player_open_external_row)) {
+                vm.hideMoreSheet()
+                vm.openWithExternalPlayer()
+            }
+            SheetRow(label = stringResource(R.string.player_pip)) {
+                vm.hideMoreSheet()
+                onEnterPip()
+            }
         }
     }
 }
