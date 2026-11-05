@@ -3983,6 +3983,14 @@ class DashboardHandler(BaseHTTPRequestHandler):
             try:
                 import fast_fetch
                 res = fast_fetch.heal_post_links(post_id, verbose=False)
+                if "error" in res:
+                    # A missing post is the caller's error, not a success:
+                    # `heal_post_links` answers `{"healed": 0, "error": ...}`
+                    # for it, and wrapping that in `success: True` was a 200
+                    # that contradicted itself.
+                    self.send_json({"success": False, "error": res["error"]},
+                                   status=404)
+                    return
                 resp_payload = {"success": True, **res}
             except Exception as ex:
                 resp_payload = {"success": False, "error": str(ex)}
