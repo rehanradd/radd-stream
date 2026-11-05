@@ -222,8 +222,8 @@ class PlayerControlSemanticsTest {
             assertTrue("the More sheet lost $moved", sheet.contains(moved))
         }
         listOf(
-            "R.string.player_more_playback", "R.string.player_more_subtitle",
-            "R.string.player_more_audio", "R.string.player_more_tools",
+            "R.string.player_more_playback", "R.string.player_subtitles_title",
+            "R.string.player_audio_title", "R.string.player_more_tools",
         ).forEach { title ->
             assertTrue("the More sheet lost its $title group", sheet.contains(title))
         }

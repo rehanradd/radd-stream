@@ -2272,7 +2272,7 @@ private fun MoreSheet(state: PlayerUiState, vm: PlayerViewModel, onEnterPip: () 
                     vm.toggleViewMode()
                 }
             }
-            SheetTitle(stringResource(R.string.player_more_subtitle))
+            SheetTitle(stringResource(R.string.player_subtitles_title))
             SheetRow(
                 label = stringResource(
                     R.string.player_subtitles_label,
@@ -2291,7 +2291,7 @@ private fun MoreSheet(state: PlayerUiState, vm: PlayerViewModel, onEnterPip: () 
                 vm.hideMoreSheet()
                 vm.showSubtitleOffsetSheet()
             }
-            SheetTitle(stringResource(R.string.player_more_audio))
+            SheetTitle(stringResource(R.string.player_audio_title))
             SheetRow(label = stringResource(R.string.player_audio_tracks)) {
                 vm.hideMoreSheet()
                 vm.showTracksSheet()
@@ -2300,17 +2300,11 @@ private fun MoreSheet(state: PlayerUiState, vm: PlayerViewModel, onEnterPip: () 
                 vm.hideMoreSheet()
                 vm.cycleAudioTrack()
             }
-            SheetRow(
-                label = if (state.audioOnly) stringResource(R.string.player_audio_only_on)
-                else stringResource(R.string.player_audio_only_off),
-            ) {
+            SheetRow(label = stringResource(R.string.player_audio_only_toggle)) {
                 vm.hideMoreSheet()
                 vm.toggleAudioOnly()
             }
-            SheetRow(
-                label = if (state.stereoOnly) stringResource(R.string.player_stereo_on)
-                else stringResource(R.string.player_stereo_off),
-            ) {
+            SheetRow(label = stringResource(R.string.player_stereo_only_toggle)) {
                 vm.hideMoreSheet()
                 vm.toggleStereoOnly()
             }
