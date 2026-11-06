@@ -96,7 +96,7 @@ data class DetailUiState(
  * the dialog never guesses it; null means the server did not name a size,
  * and the dialog says "Size unknown" instead of inventing one.
  */
-data class PendingKeep(
+internal data class PendingKeep(
     val handle: String,
     val printLabel: String,
     val title: String,
