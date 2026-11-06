@@ -1459,6 +1459,8 @@ or printed. Gating is qoder1's call after fresh green CI.
 
 **Addendum (step-8 CI fix, same night):** CI run 42137443535 FAILED at `processDebugResources` — all 6 vectors: `attr/colorControlNormal not found`. I had copied the `android:tint="?attr/colorControlNormal"` line from the tab vectors, but those vectors were never in the app (they live only in `files/brand-assets/android-vectors/`), and this app has no AppCompat theme attr by that name. Fixed in the fix commit on top of step 9: the tint line removed from all 6 vectors (the Compose `Icon(tint=…)` at each call site is the only tint they need — the black strokes take the tint). Lesson: never copy the tint attr into an app vector; verify an asset is actually in `res/drawable` before copying its house style.
 
+**Addendum 2 (step-8 CI fix, same night):** CI run 42137937113 FAILED at `compileDebugKotlin` — `LoadingWave` used `withTransform` with no import (`Unresolved reference 'withTransform'`, and `scale` with it, since the lambda's receiver was unknown). Fixed in the one-line fix commit: `import androidx.compose.ui.graphics.drawscope.withTransform` (`scale` is a `DrawTransform` member, so it resolves once `withTransform` does). Lesson: every drawscope helper used in a Canvas block needs its own import — `drawPath` is a `DrawScope` member and needs none, `withTransform` is a top-level function and does.
+
 ---
 
 ### Session 50 — Player rebuild step 9: quality sheet MB/hour labels (Muse, 2026-11-06)
