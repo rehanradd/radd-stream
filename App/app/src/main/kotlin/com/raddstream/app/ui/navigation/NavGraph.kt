@@ -33,6 +33,7 @@ import com.raddstream.app.ui.screens.DownloadsScreen
 import com.raddstream.app.ui.screens.EmbedWebViewScreen
 import com.raddstream.app.ui.screens.HelpScreen
 import com.raddstream.app.ui.screens.HomeScreen
+import com.raddstream.app.ui.screens.LanguagesScreen
 import com.raddstream.app.ui.screens.LocalFilesScreen
 import com.raddstream.app.ui.screens.MyListScreen
 import com.raddstream.app.ui.screens.PlayerScreen
@@ -240,12 +241,17 @@ fun RaddStreamNavGraph(
                     onOpenVipUpgrade = { navController.navigate(Screen.VipUpgrade.route) },
                     onOpenRegionChoice = { navController.navigate(Screen.Region.route) },
                     onOpenHelp = { navController.navigate(Screen.Help.route) },
+                    onOpenLanguages = { navController.navigate(Screen.Languages.route) },
                     onOpenWatchHistory = { navController.navigate(Screen.WatchHistory.route) },
                 )
             }
 
             composable(Screen.Help.route) {
                 HelpScreen(onBackClick = { navController.popBackStack() })
+            }
+
+            composable(Screen.Languages.route) {
+                LanguagesScreen(onBackClick = { navController.popBackStack() })
             }
 
             composable(Screen.WatchHistory.route) {
