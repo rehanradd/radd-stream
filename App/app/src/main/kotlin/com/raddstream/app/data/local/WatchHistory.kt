@@ -81,10 +81,6 @@ interface WatchHistoryDao {
     @Query("SELECT * FROM watch_history ORDER BY updatedAt DESC LIMIT :limit")
     fun observeRecent(limit: Int): Flow<List<WatchHistoryEntity>>
 
-    /** Every row, newest first, for the Watch history screen — the rail's cap does not apply here. */
-    @Query("SELECT * FROM watch_history ORDER BY updatedAt DESC")
-    fun observeAll(): Flow<List<WatchHistoryEntity>>
-
     /**
      * Where this device last stopped in one exact scope. The rail reads [observeRecent] to
      * show a position; this is the same number read by the player, so a tile and the tape it
