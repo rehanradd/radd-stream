@@ -2712,7 +2712,7 @@ private fun PrintLogSheet(state: PlayerUiState, vm: PlayerViewModel) {
                 Spacer(Modifier.height(10.dp))
                 SheetTitle(stringResource(R.string.player_chapters_title))
                 chapters.forEach { tick ->
-                    SheetRow(label = "${tick.title}  ·  ${tick.offsetMs.formatTime()}") {
+                    SheetRow(label = stringResource(R.string.player_chapter_row, tick.title, tick.offsetMs.formatTime())) {
                         vm.hidePrintSheet()
                         vm.seekTo(tick.offsetMs)
                     }

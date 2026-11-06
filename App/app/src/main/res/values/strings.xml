@@ -127,6 +127,7 @@
     <string name="player_audio_level">Audio level</string>
     <string name="player_prints_title">Prints &amp; failover</string>
     <string name="player_chapters_title">Chapters</string>
+    <string name="player_chapter_row">%1$s  ·  %2$s</string>
     <string name="player_failover_log">Failover log</string>
     <string name="player_prints_note">Ranked candidates — the first playable one wins; switches happen automatically on playback errors, preserving position.</string>
     <string name="player_rune_rank">"#%1$d  %2$s"</string>
