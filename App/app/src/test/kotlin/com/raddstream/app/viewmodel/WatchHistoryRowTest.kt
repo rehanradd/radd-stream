@@ -20,6 +20,7 @@ import org.junit.Test
 class WatchHistoryRowTest {
 
     private fun row(
+        workRef: String = "work-7",
         postId: Int = 7,
         season: Int = 0,
         episode: Int = 0,
@@ -27,7 +28,7 @@ class WatchHistoryRowTest {
         durationMs: Long = 120_000L,
         updatedAt: Long = 1_791_000_000_000L,
     ) = WatchHistoryEntity(
-        workRef = "work-7",
+        workRef = workRef,
         postId = postId,
         title = "Test Title",
         posterUrl = "https://example.test/poster.jpg",
