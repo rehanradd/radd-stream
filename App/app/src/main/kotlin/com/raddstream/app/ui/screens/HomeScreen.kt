@@ -50,6 +50,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.raddstream.app.network.models.PanelBroadcast
+import com.raddstream.app.ui.components.EmptyState
 import com.raddstream.app.ui.components.ErrorState
 import com.raddstream.app.ui.components.HeroCarousel
 import com.raddstream.app.ui.components.HeroSkeleton
@@ -62,6 +63,7 @@ import com.raddstream.app.ui.components.SkeletonBox
 import com.raddstream.app.ui.theme.RaddStreamMark
 import com.raddstream.app.viewmodel.HomeSection
 import com.raddstream.app.viewmodel.HomeViewModel
+import com.raddstream.app.viewmodel.visibleHomeRows
 
 private data class JumpOff(val label: String, val type: String?)
 
@@ -138,26 +140,16 @@ fun HomeScreen(
                     onSecondary = onSetupServerClick,
                 )
             } else {
-                // The banner rides the first rail that actually has rows, so it is real
-                // catalog data (freshest additions) and not a hand-picked fake "featured" set.
-                // heroMax 0 hides the slot entirely — no carousel, no skeleton — because
-                // the operator asked for no hero, not for a hero that never loads.
-                if (heroMax > 0) {
-                    val heroItems = state.sections.firstOrNull { it.visible }?.items.orEmpty().take(heroMax)
-                    if (heroItems.isNotEmpty()) {
-                        HeroCarousel(
-                            posts = heroItems,
-                            onPostClick = onPostClick,
-                            autoplay = heroAutoplay,
-                            intervalMs = heroIntervalMs,
-                        )
-                        Spacer(Modifier.height(12.dp))
-                    } else if (state.sections.any { it.loading }) {
-                        // Hold the hero's footprint while the first rail lands, so the page
-                        // never flashes a bare background and then jumps when it fills in.
-                        HeroSkeleton()
-                        Spacer(Modifier.height(12.dp))
-                    }
+                // Continue Watching is first and pinned: it is the one rail
+                // this device owns outright, and the research rule is that
+                // Home opens on it — the hero carousel is discovery, not the
+                // first thing. The hero still rides the first rail that has
+                // rows, only now it rides behind the rail that remembers.
+                val shownRows = visibleHomeRows(state.sections, state.continueWatching.isNotEmpty())
+                val hasSaved = state.continueWatching.isNotEmpty() || anyVisible
+                if (state.isOffline && hasSaved) {
+                    OfflineBanner()
+                    Spacer(Modifier.height(8.dp))
                 }
                 if (state.continueWatching.isNotEmpty()) {
                     Column {
@@ -181,15 +173,55 @@ fun HomeScreen(
                         Spacer(Modifier.height(8.dp))
                     }
                 }
+                // The banner rides the first rail that actually has rows, so it is real
+                // catalog data (freshest additions) and not a hand-picked fake "featured" set.
+                // heroMax 0 hides the slot entirely — no carousel, no skeleton — because
+                // the operator asked for no hero, not for a hero that never loads.
+                if (heroMax > 0) {
+                    val heroItems = state.sections.firstOrNull { it.visible }?.items.orEmpty().take(heroMax)
+                    if (heroItems.isNotEmpty()) {
+                        HeroCarousel(
+                            posts = heroItems,
+                            onPostClick = onPostClick,
+                            autoplay = heroAutoplay,
+                            intervalMs = heroIntervalMs,
+                        )
+                        Spacer(Modifier.height(12.dp))
+                    } else if (state.sections.any { it.loading }) {
+                        // Hold the hero's footprint while the first rail lands, so the page
+                        // never flashes a bare background and then jumps when it fills in.
+                        HeroSkeleton()
+                        Spacer(Modifier.height(12.dp))
+                    }
+                }
                 JumpOffRow(onBrowseType = onBrowseType)
                 Spacer(Modifier.height(8.dp))
 
-                state.sections.filter { it.visible || it.loading || it.error != null }.forEach { section ->
+                // At most 10 rows total, CW included: a panel that publishes 12
+                // sections does not get 12 rails on a phone, and the first rails win.
+                val renderedRows = shownRows.filter { it.visible || it.loading || it.error != null }
+                renderedRows.forEach { section ->
                     HomeRailSection(
                         section = section,
                         onPostClick = onPostClick,
                         onSeeAll = { onBrowseType(section.type) },
                         onRetry = { viewModel.retrySection(section.key) },
+                    )
+                }
+                // A successful empty load is a blank page today: no rails, no
+                // error, nothing to tap. Say so, and point at the one fix the
+                // viewer can do — the server address in Settings.
+                if (renderedRows.isEmpty() && state.continueWatching.isEmpty() &&
+                    state.sections.none { it.loading } && state.fatal == null
+                ) {
+                    EmptyState(
+                        title = "Nothing here yet",
+                        message = "This catalog has no titles to show. Check your server in Settings.",
+                        action = {
+                            OutlinedButton(onClick = onSetupServerClick) {
+                                Text("Set up a server")
+                            }
+                        },
                     )
                 }
                 Spacer(Modifier.height(24.dp))
@@ -230,6 +262,31 @@ private fun openDownload(context: Context, url: String): Boolean = try {
  * so there is nothing to tap except the dismiss.
  */
 @Composable
+/**
+ * The offline strip. It only renders when something saved is on screen —
+ * an offline phone with nothing saved gets the error state, not a banner
+ * over a blank page. The copy says what is true: the rails below are the
+ * network's and may have failed, while Continue Watching is this device's
+ * own saved titles and still plays.
+ */
+@Composable
+private fun OfflineBanner() {
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp),
+        shape = RoundedCornerShape(12.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant,
+    ) {
+        Text(
+            text = "You are offline — only titles saved on this device are available.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+        )
+    }
+}
+
 private fun BroadcastBanner(broadcast: PanelBroadcast, onDismiss: () -> Unit) {
     val scheme = MaterialTheme.colorScheme
     val (container, onContainer) = when (broadcast.severity.lowercase()) {

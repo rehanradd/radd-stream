@@ -5,6 +5,8 @@ import androidx.lifecycle.viewModelScope
 import com.raddstream.app.brand.Brand
 import com.raddstream.app.data.ServerSettingsRepository
 import com.raddstream.app.data.UserRegion
+import com.raddstream.app.data.cache.ConnectivityProbe
+import com.raddstream.app.data.cache.NetworkClass
 import com.raddstream.app.data.local.SyncedProgressDao
 import com.raddstream.app.data.local.WatchHistoryDao
 import com.raddstream.app.data.local.WatchHistoryMerge
@@ -44,6 +46,21 @@ import kotlinx.coroutines.launch
  * declared in [RESERVE_NOTE] and intentionally omitted — the endpoint is requested in
  * docs/HANDOFF_appui.md rather than filled with fabricated or client-invented data.
  */
+/**
+ * The rails Home actually renders, in order. Continue Watching counts as a
+ * row: the rule is at most 10 rows total, CW first and pinned, so the
+ * content rails behind it are 9 when CW is showing and 10 when it is not.
+ * A panel that publishes 12 sections does not get 12 rails on a phone —
+ * the cap is the phone's, and the first rails win.
+ */
+fun visibleHomeRows(sections: List<HomeSection>, hasContinueWatching: Boolean): List<HomeSection> {
+    val contentRows = if (hasContinueWatching) MAX_HOME_ROWS - 1 else MAX_HOME_ROWS
+    return sections.take(contentRows)
+}
+
+/** At most 10 rows on Home, Continue Watching included. */
+const val MAX_HOME_ROWS = 10
+
 data class HomeSection(
     val key: String,
     val title: String,
@@ -79,6 +96,13 @@ data class HomeUiState(
     val updateNotice: AppUpdate? = null,
     /** Live broadcasts from the admin panel; a dismissed one stays dismissed for this session. */
     val broadcasts: List<PanelBroadcast> = emptyList(),
+    /**
+     * True when the device had no network at the last load. The banner that
+     * reads this only shows when something saved is on screen — an offline
+     * phone with nothing saved gets the error state, not a banner over a
+     * blank page.
+     */
+    val isOffline: Boolean = false,
 )
 
 /**
@@ -182,6 +206,7 @@ class HomeViewModel @Inject constructor(
     private val adFreeReader: AdFreeReader,
     private val settingsRepository: ServerSettingsRepository,
     private val syncAccountRepository: SyncAccountRepository,
+    private val connectivityProbe: ConnectivityProbe,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(HomeUiState())
@@ -335,7 +360,11 @@ class HomeViewModel @Inject constructor(
 
     private fun loadAll(force: Boolean) {
         viewModelScope.launch {
-            _uiState.update { it.copy(isRefreshing = true, fatal = null) }
+            // Read once per load, not per rail: the banner that reads this
+            // says "offline" about the load that just happened, and four
+            // rails asking the same question would answer four times.
+            val offline = connectivityProbe.current() == NetworkClass.NONE
+            _uiState.update { it.copy(isRefreshing = true, fatal = null, isOffline = offline) }
             try {
                 coroutineScope {
                     _uiState.value.sections

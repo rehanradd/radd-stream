@@ -3116,6 +3116,23 @@ def api_v1_get_post_detail(post_id: int, full: bool = False,
             p_dict.update(_art_pair(post, base_url))
             p_dict["work_ref"] = _work_ref(post)
 
+        # Runtime comes from the v2 work row, keyed exactly the way
+        # `_work_ref` derives it — a post with no matching work simply has
+        # no runtime, and the app shows nothing rather than a guessed one.
+        try:
+            title = post["clean_title"] or post["title"] or ""
+            work_type = catalog_v2.work_type_for(
+                post["content_type"] or "movie", int(post["is_animated"] or 0), title)
+            key = catalog_v2.work_key_for(
+                title, post["year"], work_type, post["imdb_id"] or "", post["tmdb_id"])
+            work = conn.execute(
+                "SELECT runtime_minutes FROM cat_works WHERE work_key = ?",
+                (key,)).fetchone()
+            if work is not None and work["runtime_minutes"]:
+                p_dict["runtime_minutes"] = int(work["runtime_minutes"])
+        except sqlite3.Error:
+            pass
+
         releases = conn.execute("SELECT * FROM releases WHERE post_id = ? ORDER BY id ASC", (post_id,)).fetchall()
         rel_list = []
         for rel in releases:

@@ -92,6 +92,14 @@ interface WatchHistoryDao {
     )
     suspend fun findScope(workRef: String, season: Int, episode: Int): WatchHistoryEntity?
 
+    /**
+     * Every scope this device watched of one work, newest first. The detail
+     * screen reads this once per title: the latest resumable row is the
+     * Resume button, and the rest are the progress marks on episode rows.
+     */
+    @Query("SELECT * FROM watch_history WHERE workRef = :workRef ORDER BY updatedAt DESC")
+    suspend fun findWork(workRef: String): List<WatchHistoryEntity>
+
     @Query("DELETE FROM watch_history")
     suspend fun clear()
 }

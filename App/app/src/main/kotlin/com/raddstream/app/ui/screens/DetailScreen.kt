@@ -46,6 +46,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
@@ -97,8 +98,11 @@ import com.raddstream.app.player.QualityOption
 import com.raddstream.app.viewmodel.DetailNavigationEvent
 import com.raddstream.app.viewmodel.DetailViewModel
 import com.raddstream.app.viewmodel.EpisodeGroup
+import com.raddstream.app.viewmodel.EpisodeProgress
 import com.raddstream.app.viewmodel.RankedPrint
+import com.raddstream.app.viewmodel.ResumePoint
 import com.raddstream.app.viewmodel.SeasonGroup
+import com.raddstream.app.viewmodel.formatRuntimeMinutes
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -239,6 +243,10 @@ fun DetailScreen(
                 officialPrintCount = state.layout?.officialPrintCount ?: 0,
                 camPrintCount = state.layout?.camPrintCount ?: 0,
                 isSeries = state.layout?.isSeriesLike ?: false,
+                resume = state.resume.takeIf { state.resumePlayable },
+                onPlayResume = viewModel::playResume,
+                episodeProgress = state.episodeProgress,
+                includedLine = state.includedLine,
                 selectedSeason = state.selectedSeason,
                 onSelectSeason = viewModel::selectSeason,
                 onPlayPrint = { print -> viewModel.playPrint(print, external = false) },
@@ -292,6 +300,13 @@ private fun DetailContent(
     officialPrintCount: Int,
     camPrintCount: Int,
     isSeries: Boolean,
+    /** The latest scope this device stopped in, if it has a print to play — else null. */
+    resume: ResumePoint?,
+    onPlayResume: () -> Unit,
+    /** Per-episode progress, keyed by (season, episode). */
+    episodeProgress: Map<Pair<Int, Int>, EpisodeProgress>,
+    /** What this viewer can watch of this title, in one line — null when it has no prints. */
+    includedLine: String?,
     selectedSeason: Int?,
     onSelectSeason: (Int) -> Unit,
     onPlayPrint: (RankedPrint) -> Unit,
@@ -337,12 +352,21 @@ private fun DetailContent(
             }
         }
 
-        item { PosterHeader(post = post, capabilities = capabilities) }
+        item {
+            PosterHeader(
+                post = post,
+                capabilities = capabilities,
+                seasonCount = if (isSeries) seasons.size else 0,
+                includedLine = includedLine,
+            )
+        }
 
         item {
             PrimaryActions(
                 bestPrint = bestPrint,
                 hasAnyPrint = allPrints.isNotEmpty(),
+                resume = resume,
+                onPlayResume = onPlayResume,
                 onPlay = { bestPrint?.let(onPlayPrint) },
                 onKeep = { bestPrint?.let(onKeep) },
             )
@@ -408,6 +432,7 @@ private fun DetailContent(
                     val scopeLabel = rungScopeLabel(season.number, episodeKey)
                     EpisodeRow(
                         episode = episode,
+                        progress = episodeProgress[season.number to episode.numberWithinSeason],
                         onPlayPrint = onPlayPrint,
                         onOpenExternal = onOpenExternal,
                         onKeep = onKeep,
@@ -445,7 +470,14 @@ private fun DetailContent(
 }
 
 @Composable
-private fun PosterHeader(post: PostDetail, capabilities: List<String>) {
+private fun PosterHeader(
+    post: PostDetail,
+    capabilities: List<String>,
+    /** Seasons, for a series — 0 for a movie, which has none to count. */
+    seasonCount: Int = 0,
+    /** What this viewer can watch of this title, in one line — null when it has no prints. */
+    includedLine: String? = null,
+) {
     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
         Box(
             modifier = Modifier
@@ -483,9 +515,14 @@ private fun PosterHeader(post: PostDetail, capabilities: List<String>) {
                 post.year?.takeIf { it > 0 }?.toString(),
                 post.typeLabel,
                 post.language?.takeIf(String::isNotBlank),
+                formatRuntimeMinutes(post.runtimeMinutes),
+                if (seasonCount > 0) "$seasonCount ${if (seasonCount == 1) "season" else "seasons"}" else null,
             )
             if (meta.isNotEmpty()) {
                 Text(meta.joinToString(" · "), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            includedLine?.let { line ->
+                Text(line, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
             }
             post.imdbRating?.takeIf(String::isNotBlank)?.let { rating ->
                 Pill(text = "★ $rating IMDb", backgroundColor = MaterialTheme.colorScheme.tertiaryContainer, contentColor = MaterialTheme.colorScheme.onTertiaryContainer)
@@ -515,19 +552,26 @@ private fun PosterHeader(post: PostDetail, capabilities: List<String>) {
 private fun PrimaryActions(
     bestPrint: RankedPrint?,
     hasAnyPrint: Boolean,
+    /** The latest scope this device stopped in — null shows plain Play. */
+    resume: ResumePoint?,
+    onPlayResume: () -> Unit,
     onPlay: () -> Unit,
     onKeep: () -> Unit,
 ) {
     Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
         Button(
-            onClick = onPlay,
-            enabled = bestPrint?.canStart == true,
+            onClick = if (resume != null) onPlayResume else onPlay,
+            enabled = if (resume != null) true else bestPrint?.canStart == true,
             modifier = Modifier.weight(1f).height(52.dp),
             colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
         ) {
             Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(20.dp))
             Spacer(Modifier.width(8.dp))
-            Text(bestPrint?.playLabel() ?: "Play")
+            Text(
+                text = resume?.label ?: (bestPrint?.playLabel() ?: "Play"),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
         }
         OutlinedButton(onClick = onKeep, enabled = hasAnyPrint, modifier = Modifier.height(52.dp)) {
             Icon(Icons.Default.Download, contentDescription = "Download video", modifier = Modifier.size(20.dp))
@@ -546,7 +590,10 @@ private val RankedPrint.canStart: Boolean get() = playableHere || opensProviderP
 private fun RankedPrint.playLabel(): String = when {
     playableHere && isCam -> "Play (cam)"
     playableHere -> "Play"
-    opensProviderPage -> "Open"
+    // Not "Open": a one-word verb hid that this leaves the app's player for the
+    // provider's own page, with its player and its ads. The button says where
+    // the tap goes, so the viewer chooses it knowingly.
+    opensProviderPage -> "Opens the provider's page"
     else -> "Play"
 }
 
@@ -810,6 +857,8 @@ private fun PackedSeasonBanner(season: SeasonGroup, onPlay: (RankedPrint) -> Uni
 @Composable
 private fun EpisodeRow(
     episode: EpisodeGroup,
+    /** This episode's progress on this device — null when never watched. */
+    progress: EpisodeProgress?,
     onPlayPrint: (RankedPrint) -> Unit,
     onOpenExternal: (RankedPrint) -> Unit,
     onKeep: (RankedPrint) -> Unit,
@@ -927,6 +976,33 @@ private fun EpisodeRow(
 
         if (episode.onlyPacked) {
             Pill(text = "Whole season in one file", backgroundColor = MaterialTheme.colorScheme.surfaceVariant, contentColor = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        // The mark this device left: a bar and what is left, or "Watched"
+        // when it ran to the end. A row never watched shows nothing — no
+        // bar, no guess — because an empty bar would claim a position
+        // nobody has.
+        progress?.let { p ->
+            if (p.watched) {
+                Text(
+                    text = "Watched",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+            } else if (p.fraction != null) {
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    LinearProgressIndicator(
+                        progress = { p.fraction },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    p.remainingLabel?.let { label ->
+                        Text(
+                            text = label,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
         }
         // The collapsed ladder replaces the print list wherever the server could fold one
         // best copy per band; a ledger that cannot is still shown as before, not hidden.

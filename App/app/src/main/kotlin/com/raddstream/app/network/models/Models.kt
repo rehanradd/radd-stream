@@ -149,6 +149,9 @@ data class PostDetail(
     @SerializedName("clean_title")
     val cleanTitle: String? = null,
     val year: Int? = null,
+    /** Minutes, from the work row the server matched this post to — null when it has none. */
+    @SerializedName("runtime_minutes")
+    val runtimeMinutes: Int? = null,
     @SerializedName("content_type")
     val contentType: String? = null,
     val seasons: String? = null,

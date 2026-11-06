@@ -142,6 +142,28 @@ class ModelsTest {
     }
 
     @Test
+    fun `detail runtime minutes decode from the work row`() {
+        // The server attaches runtime_minutes from cat_works when a work row
+        // exists; a title with no work row carries no key at all (asserted
+        // server-side in test_database.py). The field is nullable, so a
+        // missing key decodes to null and the header simply shows nothing.
+        val json = """
+            {
+              "success": true,
+              "data": {
+                "id": 303,
+                "title": "Example Film",
+                "runtime_minutes": 142
+              }
+            }
+        """.trimIndent()
+
+        val data = gson.fromJson(json, PostDetailResponse::class.java).data!!
+
+        assertEquals(142, data.runtimeMinutes)
+    }
+
+    @Test
     fun `season artwork decodes into distinct season and episode entries`() {
         val json = """
             {

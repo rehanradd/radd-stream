@@ -1664,3 +1664,19 @@ or printed. Gating is qoder1's call after fresh green CI.
 **kill_switch.** Investigated, no code: the key exists nowhere — not in the panel, not in the server, not in the app. The kill switch is `maintenance_mode`, which the app already honours. Recorded so the audit's "ZERO hits" line is answered, not left open.
 
 **Not done:** push (this commit, then CI judges — the region/disclaimer runs on d541dd4 are both green, so nothing is in flight). The panel label file rides the gate with the tabs / Live page / broadcast / disclaimer edits. Next: research-rule screens.
+
+**Addendum — CI failure on 7483a6b (Android run 42149015453, Backend run 42149015415 SUCCESS).** The Android run failed at `kaptGenerateStubsDebugUnitTestKotlin` — a compile error in `VipQualityGateTest.kt:119-121, 236`, all one cause: the Session 61 edit that inserted the 480p-cap test deleted the `@Test` + `fun` header of the next test (`a free viewer gets the free rungs and a fresh auto pointer`), leaving its body floating at class level ("Expecting member declaration") and one brace too many at the end of the file. Fixed by restoring exactly those two header lines (verified against the parent commit; braces 17/17, 9 @Test functions each followed by a fun). The fix ships in the next commit on this branch, with the Session 62 work below.
+
+---
+
+### Session 62 — Home and Detail research rules (Muse, 2026-11-06)
+
+**Agent:** Muse (BoNzoO), coded directly. Same branch as Sessions 40–61.
+
+**What it is:** the UX plan's Home and Detail rules, built. Home: Continue Watching first and pinned, at most 10 rows total (`visibleHomeRows`, pure — 9 content rails when a saved title takes the first slot), an honest offline banner ("You are offline — only titles saved on this device are available", shown only when something saved is actually on screen), and a real empty state ("Nothing here yet — check your server in Settings", with a button to Setup) instead of a blank page. Detail: a Resume button that names the episode and what is left ("Resume S1:E3 · 23 min left"), runtime and season count in the header, progress marks on episode rows (a bar + "23 min left", or "Watched"), an included line that says what the plan covers ("Included in free — up to 720p", "480p included — 720p, 1080p and 4K need VIP"), and the "Open" button renamed "Opens the provider's page" — one word hid that the tap leaves the app's player for the provider's page.
+
+**Server.** One honest addition: `api_v1_get_post_detail` now carries `runtime_minutes` from the `cat_works` row (looked up by the same work-key derivation the detail route already mints), guarded so a title with no work row simply sends no key. Two tests in `test_database.py` (135 OK).
+
+**App.** Resume is local-only and honest: `findWork` on the watch-history DAO, newest resumable row wins, a finished row is not a resume, and the Resume button only shows when the v2 layout actually has a print for that episode (`resumePrintFor`). The pure helpers (`resumePointFor`, `episodeProgressFor`, `formatRuntimeMinutes`) are tested in `DetailResumeTest`; `visibleHomeRows` in `HomeRowsTest`; `runtime_minutes` decode in `ModelsTest`. No new strings.xml entries — every label is a Kotlin literal in the screens, like the rest of those files, and the player-string guards do not scan them.
+
+**Not done:** push (this commit, then CI judges — the panel-keys runs are finished: Backend green, Android red on the test-header fault fixed above, so nothing is in flight). Next: Settings/Downloads/Search/My List research rules.

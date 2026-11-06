@@ -68,6 +68,18 @@ data class DetailUiState(
     val vip: Boolean = false,
     /** True when this title has 4K/1080p sources that the current viewer cannot play. */
     val premiumSourcesLocked: Boolean = false,
+    /** The latest scope this device stopped in, if any — the Resume button. */
+    val resume: ResumePoint? = null,
+    /** True when the Resume button has a print to play; false shows plain Play. */
+    val resumePlayable: Boolean = false,
+    /** Per-episode progress, keyed by (season, episode) — the marks on episode rows. */
+    val episodeProgress: Map<Pair<Int, Int>, EpisodeProgress> = emptyMap(),
+    /**
+     * What this viewer can actually watch of this title, in one line. Null
+     * when the title has no prints at all — then "no playable releases"
+     * says it instead.
+     */
+    val includedLine: String? = null,
 )
 
 /**
@@ -239,15 +251,66 @@ class DetailViewModel @Inject constructor(
             VipQualityGate.hasPremiumPrints(full, freeQualityCap) ||
                 scope.options.any { VipQualityGate.isPremiumBand(it.band, freeQualityCap) || VipQualityGate.isPremiumLabel(it.title, freeQualityCap) }
             )
+        // What this viewer can watch, in one line — the free cap is the
+        // operator's, so the line names it rather than a hardcoded 720p.
+        val hasPrints = full.workPrints.isNotEmpty() ||
+            full.seasons.any { it.episodes.isNotEmpty() || it.packedPrints.isNotEmpty() }
+        val includedLine = if (!hasPrints) {
+            null
+        } else if (serverVip) {
+            "Included with VIP — up to 4K"
+        } else if (!qualityGateEnabled) {
+            "Included in your plan — up to 4K"
+        } else if (premiumLocked) {
+            if (freeQualityCap == "480p") {
+                "480p included — 720p, 1080p and 4K need VIP"
+            } else {
+                "720p included — 1080p and 4K need VIP"
+            }
+        } else {
+            "Included in free — up to $freeQualityCap"
+        }
         _uiState.update {
             it.copy(
                 layout = VipQualityGate.gate(full, premiumAccess, freeQualityCap),
                 ladder = VipQualityGate.gate(scope, premiumAccess, freeQualityCap),
                 vip = serverVip,
                 premiumSourcesLocked = premiumLocked,
+                includedLine = includedLine,
                 adFree = RewardedVipPass.isAdFree(serverVip, rewardedExpiresAt),
             )
         }
+        loadResume()
+    }
+
+    /**
+     * The resume point and episode marks for this title, from the history
+     * this device wrote. A title never watched has neither, and the screen
+     * shows a plain Play button instead of a Resume one.
+     */
+    private fun loadResume() {
+        val workRef = _uiState.value.post?.workRef?.takeIf { it.isNotBlank() } ?: return
+        viewModelScope.launch {
+            val rows = runCatching { watchHistoryDao.findWork(workRef) }.getOrNull() ?: return@launch
+            val resume = resumePointFor(rows)
+            // The button only shows when its print is still on the page:
+            // a resume whose episode lost every print is a dead button.
+            val playable = _uiState.value.layout?.let { resumePrintFor(it, resume) != null } ?: false
+            _uiState.update {
+                it.copy(
+                    resume = resume,
+                    resumePlayable = playable,
+                    episodeProgress = episodeProgressFor(rows),
+                )
+            }
+        }
+    }
+
+    /** Play the Resume button's episode: its best print, not the work's. */
+    fun playResume() {
+        val layout = _uiState.value.layout ?: return
+        val print = resumePrintFor(layout, _uiState.value.resume) ?: return
+        playPrint(print)
     }
 
     private fun observeFavorite() {
@@ -810,3 +873,74 @@ internal fun keepTargetFor(mimeType: String?): KeepTarget =
     } else {
         KeepTarget.DeviceFile
     }
+
+/**
+ * One scope's progress, as an episode row shows it. `fraction` is null when
+ * the file never reported a duration — the row paints no bar rather than
+ * inventing one. `watched` is true only when the viewer ran to the end, not
+ * when they merely opened it.
+ */
+data class EpisodeProgress(
+    val fraction: Float?,
+    val watched: Boolean,
+    val remainingLabel: String?,
+)
+
+/** The Resume button's target: the latest scope this device stopped in. */
+data class ResumePoint(
+    val season: Int,
+    val episode: Int,
+    val positionMs: Long,
+    val durationMs: Long,
+) {
+    /** "Resume S1:E3 · 23 min left", or "Resume · 23 min left" for a whole work. */
+    val label: String
+        get() = "Resume" +
+            (ContinueWatchingTile.scopeLabel(season, episode)?.let { " $it" } ?: "") +
+            (ContinueWatchingTile.progressLabel(positionMs, durationMs)?.let { " · $it" } ?: "")
+}
+
+/**
+ * The latest resumable row, newest first — a finished row is not a resume.
+ * `rows` arrives newest first from the DAO; a caller passing them in any
+ * other order gets the first resumable row of the list it gave.
+ */
+fun resumePointFor(rows: List<WatchHistoryEntity>): ResumePoint? {
+    val row = rows.firstOrNull { it.resumable } ?: return null
+    return ResumePoint(row.seasonNumber, row.episodeNumber, row.positionMs, row.durationMs)
+}
+
+/** One entry per watched scope, keyed by (season, episode). */
+fun episodeProgressFor(rows: List<WatchHistoryEntity>): Map<Pair<Int, Int>, EpisodeProgress> =
+    rows.associate { row ->
+        (row.seasonNumber to row.episodeNumber) to EpisodeProgress(
+            fraction = ContinueWatchingTile.progressFraction(row.positionMs, row.durationMs),
+            watched = row.durationMs > 0L &&
+                row.positionMs >= row.durationMs - WatchHistoryEntity.END_GUARD_MS,
+            remainingLabel = ContinueWatchingTile.progressLabel(row.positionMs, row.durationMs),
+        )
+    }
+
+/** The print the Resume button would play, or null when it has none. */
+fun resumePrintFor(layout: ReleaseLayout, resume: ResumePoint?): RankedPrint? {
+    if (resume == null) return null
+    return if (resume.season > 0 && resume.episode > 0) {
+        layout.seasons
+            .firstOrNull { it.number == resume.season }
+            ?.episodes?.firstOrNull { it.numberWithinSeason == resume.episode }
+            ?.bestPrint
+    } else {
+        layout.workPrints.maxByOrNull { it.rankKey }
+    }
+}
+
+/** "2 h 10 m", "1 h 40 m", "96 min" — null when the server sent no runtime. */
+fun formatRuntimeMinutes(minutes: Int?): String? {
+    if (minutes == null || minutes <= 0) return null
+    return if (minutes < 60) "$minutes min"
+    else {
+        val hours = minutes / 60
+        val rest = minutes % 60
+        if (rest == 0) "$hours h" else "$hours h $rest m"
+    }
+}
