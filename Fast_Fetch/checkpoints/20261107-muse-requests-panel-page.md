@@ -97,3 +97,7 @@ Checked:
 - Option B last: user's own device test of APK 239, once everything is done.
 - V2 panel port of the requests page (follow-up, gate-deployed).
 - Pass-ladder prices (weekend 1,200 / monthly 5,000) still unanswered.
+
+## CI verdict on 4256d03 (Backend run 42301776615 + Android run 42301776577)
+
+Backend **SUCCESS**; Android **SUCCESS** (job 128181080479 "assembleDebug + testDebugUnitTest + lintDebug"). Session 78 is fully green. Debug APK app-debug-240 (23,330,767 B) + ci-reports-240. (This addendum rode the Session 79 commit — no docs-only push, so it starts no new CI run.)

@@ -98,7 +98,7 @@ fun RegionSelectionScreen(
         )
         Spacer(Modifier.height(6.dp))
         Text(
-            text = "Pick one. You can change it later in Settings.",
+            text = "Pick one — or skip and keep Desi. This only sets which audio and subtitle tracks the app prefers; the catalog is the same either way. You can change it later in Settings.",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center,
@@ -168,6 +168,16 @@ fun RegionSelectionScreen(
                 color = MaterialTheme.colorScheme.error,
                 modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
             )
+        }
+        Spacer(Modifier.height(8.dp))
+        TextButton(
+            onClick = { viewModel.skipAndContinue(onContinue) },
+            enabled = !state.isSaving,
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(48.dp),
+        ) {
+            Text("Skip for now")
         }
         Spacer(Modifier.height(16.dp))
     }
