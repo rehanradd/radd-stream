@@ -379,9 +379,10 @@ class Earn(Wallet):
         self.assertEqual(self.wallet_state(), (0, 0, 0.0))
 
     def test_the_day_seven_milestone_mints_the_pass_the_ladder_promise_it(self):
-        """The streak's one non-coin reward, and the only place a route hands out a
-        signed pass without a coin being spent: day 7 of the ladder, verified against
-        `redact`'s own parser rather than a shape this file invented."""
+        """The streak's jackpot day: the ladder's day-7 coins AND the signed 24-hour
+        pass. The pass is still the only place a route hands out a signed pass
+        without a coin being spent, verified against `redact`'s own parser rather
+        than a shape this file invented."""
         hours = engagement.resolve_streak_grants()["pass_seconds"] // 3600
         self.assertEqual(hours, engagement.STREAK_PASS_SECONDS // 3600)
         with closing(sqlite3.connect(str(self.state))) as conn:
@@ -394,14 +395,19 @@ class Earn(Wallet):
             conn.commit()
         earned = self.body(self.claim())["earned"]
         self.assertEqual(earned["current_streak"], engagement.STREAK_PASS_DAY)
-        self.assertEqual(earned["coins_granted"], 0, earned)
+        self.assertEqual(earned["coins_granted"],
+                         engagement.resolve_streak_grants()["coins"][7], earned)
         expires = earned["pass_expires_at"]
         self.assertAlmostEqual(expires - time.time(),
                                engagement.STREAK_PASS_SECONDS, delta=120)
         self.assertEqual(redact.parse_vip_pass(earned["pass"], SECRET), expires)
-        # Day 7 pays a pass and not a coin: `resolve_streak_grants` has no coin entry for
-        # it, so the milestone must not quietly hand out both.
-        self.assertEqual(self.rows(), [], self.rows())
+        # Day 7 pays the ladder's jackpot coins AND the pass: one ledger row for the
+        # coins, and the pass on top — the milestone hands out both, on purpose.
+        rows = self.rows()
+        self.assertEqual(len(rows), 1, rows)
+        self.assertEqual(rows[0]["delta"],
+                         engagement.resolve_streak_grants()["coins"][7])
+        self.assertEqual(rows[0]["reason"], "streak_day")
 
 
 # ── the read routes ────────────────────────────────────────────────────────────

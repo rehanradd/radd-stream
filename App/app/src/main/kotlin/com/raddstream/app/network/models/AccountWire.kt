@@ -264,7 +264,8 @@ data class EntitlementResponse(
 )
 
 /**
- * The coin wallet the daily check-in pays into (`accounts_api.py` `coins/*`).
+ * The coin wallet the daily check-in pays into (the `coins` routes in
+ * `accounts_api.py`).
  *
  * The server is the only minter: a claim carries `reason` and nothing else, the
  * grant size is the ladder's own, and the day is claimed by one guarded server

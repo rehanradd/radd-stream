@@ -68,6 +68,25 @@ Local: `test_engagement` 27 OK, `test_engagement_ladder` + `test_accounts_api` +
 module (existing suites already registered). `/api/v2/account*` is already in
 the nginx allow-list, so the coins routes need no gate change.
 
+## CI round 1 (bcbf75e) — two failures, both fixed in the follow-up commit
+
+- **Android run 42283963929 FAILED** at `kaptGenerateStubsDebugKotlin`:
+  `AccountWire.kt:333 Unclosed comment` — my KDoc wrote `` `coins/*` `` and
+  Kotlin's nested block comments ate the closing `*/`. Fix: reworded to "the
+  `coins` routes in `accounts_api.py`". Lesson: never write `/*` inside a
+  KDoc/comment, even inside backticks.
+- **Backend run 42283963854 FAILED** at `test_coins_engine.py`: the Day-7 test
+  encoded the OLD contract ("Day 7 pays a pass and not a coin", 0 coins, no
+  ledger rows). Updated to the approved ladder: Day 7 pays the ladder's 150
+  coins (one `streak_day` row) AND mints the pass. The other coins-engine
+  tests are ladder-dynamic and needed no change.
+- Local re-check after both fixes: `test_coins_engine` 36 OK; the cluster
+  (`test_engagement`, `test_engagement_ladder`, `test_accounts_api`,
+  `test_accounts`, `test_redact`, `test_api_v2`, `test_admin_panel`,
+  `test_device_trials_and_webhook`, `test_docs_invariants`) all OK.
+  `test_download_endpoint` still shows only the 2 PRE-EXISTING operator-port
+  401 failures from Session 73 (same two test names, proven pre-existing there).
+
 ## Not done (next builds, one by one)
 
 - Build 3: 24h VIP pass at 500 coins — verify `entitlement` honours a redeemed
