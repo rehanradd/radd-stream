@@ -81,6 +81,10 @@ interface WatchHistoryDao {
     @Query("SELECT * FROM watch_history ORDER BY updatedAt DESC LIMIT :limit")
     fun observeRecent(limit: Int): Flow<List<WatchHistoryEntity>>
 
+    /** Every row, newest first, for the Watch history screen — the rail's cap does not apply here. */
+    @Query("SELECT * FROM watch_history ORDER BY updatedAt DESC")
+    fun observeAll(): Flow<List<WatchHistoryEntity>>
+
     /**
      * Where this device last stopped in one exact scope. The rail reads [observeRecent] to
      * show a position; this is the same number read by the player, so a tile and the tape it
@@ -136,7 +140,32 @@ object WatchHistoryMerge {
         local: List<WatchHistoryEntity>,
         synced: List<SyncedProgressEntity>,
         limit: Int = DEFAULT_LIMIT,
-    ): List<WatchHistoryEntity> {
+    ): List<WatchHistoryEntity> =
+        fold(local, synced).values
+            .filter { it.resumable }
+            .sortedByDescending { it.updatedAt }
+            .take(limit)
+
+    /**
+     * The same newest-wins fold, without the resumable filter: the history screen lists
+     * everything this device watched, newest first — including a title watched to the end,
+     * which the rail correctly hides because there is nothing left to resume. Sharing the
+     * fold means the two surfaces can never disagree about *where* a title stopped, only
+     * about whether it is worth resuming.
+     */
+    fun mergeAll(
+        local: List<WatchHistoryEntity>,
+        synced: List<SyncedProgressEntity>,
+        limit: Int = HISTORY_LIMIT,
+    ): List<WatchHistoryEntity> =
+        fold(local, synced).values
+            .sortedByDescending { it.updatedAt }
+            .take(limit)
+
+    private fun fold(
+        local: List<WatchHistoryEntity>,
+        synced: List<SyncedProgressEntity>,
+    ): Map<String, WatchHistoryEntity> {
         val byScope = local.associateBy { scopeOf(it.workRef, it.seasonNumber, it.episodeNumber) }
             .toMutableMap()
         for (row in synced) {
@@ -150,14 +179,12 @@ object WatchHistoryMerge {
                 updatedAt = syncedUpdatedAt,
             )
         }
-        return byScope.values
-            .filter { it.resumable }
-            .sortedByDescending { it.updatedAt }
-            .take(limit)
+        return byScope
     }
 
     private fun scopeOf(workRef: String, season: Int, episode: Int): String =
         "$workRef|$season|$episode"
 
     const val DEFAULT_LIMIT = 12
+    const val HISTORY_LIMIT = 100
 }

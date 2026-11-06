@@ -41,6 +41,7 @@ import com.raddstream.app.ui.screens.SearchScreen
 import com.raddstream.app.ui.screens.SettingsScreen
 import com.raddstream.app.ui.screens.SetupScreen
 import com.raddstream.app.ui.screens.VipUpgradeScreen
+import com.raddstream.app.ui.screens.WatchHistoryScreen
 
 private data class BottomNavItem(
     val label: String,
@@ -228,6 +229,7 @@ fun RaddStreamNavGraph(
             composable(Screen.MyList.route) {
                 MyListScreen(
                     onPostClick = { postId -> navController.navigate(Screen.Detail.createRoute(postId)) },
+                    onOpenWatchHistory = { navController.navigate(Screen.WatchHistory.route) },
                 )
             }
 
@@ -238,11 +240,19 @@ fun RaddStreamNavGraph(
                     onOpenVipUpgrade = { navController.navigate(Screen.VipUpgrade.route) },
                     onOpenRegionChoice = { navController.navigate(Screen.Region.route) },
                     onOpenHelp = { navController.navigate(Screen.Help.route) },
+                    onOpenWatchHistory = { navController.navigate(Screen.WatchHistory.route) },
                 )
             }
 
             composable(Screen.Help.route) {
                 HelpScreen(onBackClick = { navController.popBackStack() })
+            }
+
+            composable(Screen.WatchHistory.route) {
+                WatchHistoryScreen(
+                    onBackClick = { navController.popBackStack() },
+                    onPostClick = { postId -> navController.navigate(Screen.Detail.createRoute(postId)) },
+                )
             }
 
             composable(Screen.VipUpgrade.route) {

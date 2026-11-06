@@ -23,6 +23,7 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Email
 import androidx.compose.material.icons.filled.Help
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PlayArrow
@@ -95,6 +96,7 @@ fun SettingsScreen(
     onOpenVipUpgrade: () -> Unit = {},
     onOpenRegionChoice: () -> Unit = {},
     onOpenHelp: () -> Unit = {},
+    onOpenWatchHistory: () -> Unit = {},
     viewModel: SettingsViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsState()
@@ -464,6 +466,23 @@ fun SettingsScreen(
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+            }
+
+            // ── Watch history ────────────────────────────────────────────────
+            // The history is this device's own record; Settings is where a viewer
+            // looks for a list that is not a catalog rail.
+            SettingsCard(title = "Watch history", icon = Icons.Default.History) {
+                Text(
+                    "Everything you watched on this phone, newest first — including titles you finished.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                OutlinedButton(
+                    onClick = onOpenWatchHistory,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text("Open watch history")
+                }
             }
 
             // ── Help ───────────────────────────────────────────────────────
