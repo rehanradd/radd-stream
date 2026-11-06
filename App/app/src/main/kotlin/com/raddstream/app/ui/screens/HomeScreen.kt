@@ -261,7 +261,6 @@ private fun openDownload(context: Context, url: String): Boolean = try {
  * quiet. A broadcast is plain text from the panel — never a link, never a button —
  * so there is nothing to tap except the dismiss.
  */
-@Composable
 /**
  * The offline strip. It only renders when something saved is on screen —
  * an offline phone with nothing saved gets the error state, not a banner
@@ -287,6 +286,7 @@ private fun OfflineBanner() {
     }
 }
 
+@Composable
 private fun BroadcastBanner(broadcast: PanelBroadcast, onDismiss: () -> Unit) {
     val scheme = MaterialTheme.colorScheme
     val (container, onContainer) = when (broadcast.severity.lowercase()) {
