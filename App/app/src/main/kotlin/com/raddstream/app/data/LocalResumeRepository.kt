@@ -86,9 +86,11 @@ class LocalResumeRepository @Inject constructor(
             val key = stringPreferencesKey(localResumeKey(uri))
             if (positionMs > 5_000 && positionMs < durationMs) {
                 preferences[key] = formatLocalResume(positionMs, System.currentTimeMillis())
+                // asMap() keys are Key<*>: name them before pruning, which is keyed by name.
                 val stored = preferences.asMap()
                     .filterKeys { it.name.startsWith("local_resume_") }
-                    .mapValues { (it.value as? String).orEmpty() }
+                    .entries
+                    .associate { it.key.name to (it.value as? String).orEmpty() }
                 for (stale in localResumeKeysToPrune(stored)) {
                     preferences.remove(stringPreferencesKey(stale))
                 }
