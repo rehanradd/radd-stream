@@ -95,8 +95,12 @@ data class DetailUiState(
  * metadata ask that also decides which download system owns the copy, so
  * the dialog never guesses it; null means the server did not name a size,
  * and the dialog says "Size unknown" instead of inventing one.
+ *
+ * Public because it is part of the public [DetailUiState] shape (and of the
+ * screen's confirm dialog): a public state class cannot expose an internal
+ * type, and neither can its own `target` — so [KeepTarget] is public too.
  */
-internal data class PendingKeep(
+data class PendingKeep(
     val handle: String,
     val printLabel: String,
     val title: String,
@@ -956,7 +960,7 @@ class DetailViewModel @Inject constructor(
 }
 
 /** Which download system owns a copy. */
-internal enum class KeepTarget { DeviceFile, EngineHls }
+enum class KeepTarget { DeviceFile, EngineHls }
 
 /**
  * Which download system owns a copy, from its resolved mime alone. A segmented

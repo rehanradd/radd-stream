@@ -1901,3 +1901,18 @@ strings.xml / PlayerScreen.kt changes. **Not done:** push (this commit, then CI 
 nothing is in flight). Next: player steps 12/16–18/20, final double-verification. Device
 checks owner-only (see the owner-only list: the region cards on a real phone, Desi
 preselected, tap → jade check, Continue saves).
+
+**Addendum — CI verdict on 69d7bcf (Android run 42159337164; no Backend run — App-only paths).** Android **FAILURE** at `compileDebugKotlin`, two causes:
+- `RegionSelectionScreen.kt` — `animateColorAsState` unresolved: the Session 68 screen
+  imported it from `androidx.compose.animation.core`, but it lives in
+  `androidx.compose.animation` (the import `HeroCarousel.kt` already uses). Fixed by
+  correcting the import; the overload ambiguities below it were downstream of the same
+  missing reference.
+- `DetailViewModel.kt:90` — public `DetailUiState.pendingKeep` exposes internal
+  `PendingKeep`. The 1b88644 fix (Session 65) made `PendingKeep` internal to satisfy a
+  public function, which only moved the exposure onto the public state class — and the
+  error stayed masked behind three earlier runs that died before this check (the combine
+  failure, the hilt-work resolution failure, the CatalogImage KDoc failure). The correct
+  fix is the other direction: `PendingKeep` and `KeepTarget` are public now, because both
+  are part of the public UiState shape (and the screen's confirm dialog). Both fixes ship
+  in the next commit.
