@@ -1,7 +1,6 @@
 package com.raddstream.app.network.models
 
 import com.google.gson.Gson
-import com.raddstream.app.player.CoverageType
 import com.raddstream.app.player.toPlayerCoverage
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse

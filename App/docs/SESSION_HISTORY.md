@@ -1527,6 +1527,8 @@ or printed. Gating is qoder1's call after fresh green CI.
 
 **Not done:** no local Gradle run — CI judges. **The live v2 path is UNVERIFIED until nginx allows /api/v2/play** (the route 403s at the edge today — the gate owns that allow-list change); until then every Play tap takes the v1 fallback, which is the safe behaviour, not a failure. Rung taps (playLadder) stay on the v1 ladder — `QualityOption` carries no release id, so the v2 call has nothing to ask for there; that is a later step. Device check (Play opens, ticks show on a packed title) is owner-only, part of step 20. Next: player step 14 (A-B repeat).
 
+**Addendum (step-13 CI fix, same night):** CI run 42141289228 on cde195f FAILED at `compileDebugUnitTestKotlin` — one error: `V2PlayWireTest.kt:4 Unresolved reference 'CoverageType'`. The test imported it from `com.raddstream.app.player`, but `CoverageType` lives in `com.raddstream.app.network.models.CatalogEnums` — the test's own package, so no import is needed at all. The main code compiled and assembleDebug passed; only the test file was wrong. Fixed in the fix commit on top of step 14: the bad import line deleted. Lesson: a type defined in the test's own package needs no import — and a test-only failure still fails the whole run, so the test file deserves the same review as the code it tests.
+
 ---
 
 ### Session 54 — Player rebuild step 14: A-B repeat (Muse, 2026-11-06)
@@ -1541,3 +1543,19 @@ or printed. Gating is qoder1's call after fresh green CI.
 - **Checks before committing:** prose ratchet replica [] (the "A"/"B" args are single letters, no whitespace); quoting replica []; string guard replica clean (141 defined / 141 used, no orphans, no duplicate values); no composable added or moved (annotation audit not needed).
 
 **Not done:** no local Gradle run — CI judges. Device check (set A and B, the segment loops, Clear stops it, a quality switch keeps it) is owner-only, part of step 20. Next: player step 15 (AudioBoost verify-only) or step 19 (VIP streak display).
+
+---
+
+### Session 55 — Player rebuild step 15: AudioBoost verify-only (Muse, 2026-11-06)
+
+**Agent:** Muse (BoNzoO), verified directly on the user's order. No qoder lane. No code changed — this step was already built; the work was to prove it, twice.
+
+**Verified (two ways: read the code + grep cross-checks):** AudioBoost is exactly as the plan left it.
+
+- **Policy (`player/AudioBoost.kt`):** level 0..2, `plan()` splits a request into device fraction / player gain / software dB, all three safe for their sinks (player gain never exceeds 1.0); the excess above 100% is carried as `gainDb` with a reason that names the DynamicsProcessing preset it needs. `clampLevel` collapses non-finite input to the baseline instead of propagating NaN.
+- **UI (`player/PlayerPolicyBridge.kt`, `AudioBoostUi`):** `effectivePlayerGain` clamps the product to 0..1; `honestSummary` tells the viewer the truth — "Requested 140% — applied at the 100% player ceiling; the extra 40% needs system volume, this build adds no software gain." The slider (`PlayerScreen.kt:2501-2514`) shows `labelFor` + the honest summary and caps at `MAX_OFFERED_LEVEL`.
+- **Persistence:** `audio_boost_level` DataStore key + `saveAudioBoostLevel` + `setAudioBoostLevel` saves the clamped level; `PlayerUiState.audioBoostLevel` defaults to `AudioBoost.BASELINE`.
+- **Tests:** `AudioBoostTest` (11 cases) + `AudioBoostCeilingTest` (7 cases) exist and run in CI.
+- **Parked, confirmed:** no DynamicsProcessing preset exists anywhere in the app — only KDoc/comments naming it as the missing stage. Media3 1.3.1 ships no such renderer, so the >100% excess stays a request the UI honestly reports instead of a gain the player fakes.
+
+**Still owed:** device check (a quiet title at 140% — the summary shows, the sound stays at the ceiling) is owner-only, part of step 20. Next: player step 19 (VIP streak display).
