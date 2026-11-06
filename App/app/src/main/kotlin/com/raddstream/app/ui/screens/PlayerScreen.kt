@@ -318,10 +318,10 @@ private fun PlayerScreenContent(
         }
     }
 
-    // Auto-hide the chrome 3.8 s into uninterrupted playback.
+    // Auto-hide the chrome 3.0 s into uninterrupted playback.
     LaunchedEffect(controlsVisible, state.isPlaying, interactTick, state.dialogBlocking) {
         if (controlsVisible && state.isPlaying && !state.dialogBlocking) {
-            delay(3800)
+            delay(3000)
             if (state.isPlaying) controlsVisible = false
         }
     }
