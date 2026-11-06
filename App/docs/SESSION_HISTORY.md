@@ -1559,3 +1559,20 @@ or printed. Gating is qoder1's call after fresh green CI.
 - **Parked, confirmed:** no DynamicsProcessing preset exists anywhere in the app — only KDoc/comments naming it as the missing stage. Media3 1.3.1 ships no such renderer, so the >100% excess stays a request the UI honestly reports instead of a gain the player fakes.
 
 **Still owed:** device check (a quiet title at 140% — the summary shows, the sound stays at the ceiling) is owner-only, part of step 20. Next: player step 19 (VIP streak display).
+
+---
+
+### Session 56 — Player rebuild step 19: VIP streak display (Muse, 2026-11-06)
+
+**Agent:** Muse (BoNzoO), coded directly on the user's order. No qoder lane. Same branch as Sessions 40–55.
+
+**Built:** the VIP streak, shown on the VIP screen (plan §5 #19, P38).
+
+- **The decision (verified first, not assumed):** the server publishes only the PLAN — `VipRemoteStreak` (enabled, 7 days, reward coins) in the remote config — and no route carries a per-user progress count; `engagement.py` does not exist on the live tree and no streak claim/grant route exists anywhere. So the progress is counted locally, on the device: one open per day. The coin reward is never granted here — the card shows the operator's promise and says the coins go to the wallet when the operator pays them, because no screen in this build can see the wallet. A streak the server never verified is never presented as one it did.
+- **Pure policy:** NEW `player/LoginStreak.kt` — `localEpochDay(nowMs, offsetMs)` (a day is the device's own calendar day, not UTC — a UTC boundary at 05:00 PKT would call two night opens one day; `Math.floorDiv` so a negative day floors instead of truncating to 0), `loginStreakDay(nowMs)`, `nextLoginStreak` (same day: unchanged; next day: +1; missed day: restart at 1; clock moved back: never shortens). NEW `LoginStreakTest` (7 cases, including the offset and the pre-epoch floor).
+- **Storage:** `ServerSettingsRepository` gains `login_streak_last_day` (long, -1 = never) + `login_streak_count` (int) keys, flows, and `recordLoginDay(nowMs)` — the two move together, and a second open the same day changes nothing.
+- **Recording:** `MainActivity` records one open per launch in a `LaunchedEffect(Unit)` at the top of `setContent` — a rotation recreates the activity and re-runs the effect, but the record is idempotent within a day, so the second run is a no-op. No `lifecycleScope` exists in this app (only `lifecycle.viewmodel` is declared), and the Application has no scope of its own, so the composition effect is the launch hook that needs no new dependency.
+- **Display:** `VipUiState` gains `streak` (the plan, mapped in `withConfig`) + `streakCount` (observed from the store; the VIP screen only reads the count, never writes it, so a streak is never earned by opening the VIP screen). NEW `StreakCard` in `VipUpgradeScreen.kt` after the rewarded-pass section, shown only when `streak.isConfigured` — "Day X of 7" + progress bar + reward line + the honesty line; at the target it reads "7-day streak complete". Jade (`RaddCurrent500`), matching the player's accent.
+- **Checks before committing:** every `@Composable` in the file lands on exactly one function (audit: 15 annotations, StreakCard and PricingSection each keep their own); no prose ratchet touches this screen (the copy test scans `PlayerScreen.kt` only) and the screen already hardcodes its copy like the rest of the VIP screen.
+
+**Not done:** NOT pushed — CI run 42142493644 (steps 10/11/13/14) is still in progress and a push would cancel it; this commit waits for its verdict, then pushes with any fix it needs. Device check (open the app on consecutive days, the card counts up) is owner-only, part of step 20. Next: tabs control or the contact form.

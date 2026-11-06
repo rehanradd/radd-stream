@@ -7,6 +7,7 @@ import com.raddstream.app.data.VipPendingSubmission
 import com.raddstream.app.network.friendlyNetworkError
 import com.raddstream.app.network.models.AccountEntitlement
 import com.raddstream.app.network.models.VipRemoteConfig
+import com.raddstream.app.network.models.VipRemoteStreak
 import com.raddstream.app.repository.CatalogRepository
 import com.raddstream.app.sync.PaymentFiled
 import com.raddstream.app.sync.Refusal
@@ -149,6 +150,10 @@ data class VipUiState(
     val pending: VipPendingSubmission? = null,
     val statusMessage: String? = null,
     val rewardedVipExpiresAt: Long = 0L,
+    /** The operator's streak plan (enabled, target days, reward coins) — parsed, never a promise. */
+    val streak: VipRemoteStreak = VipRemoteStreak(),
+    /** Consecutive days this device opened the app, counted locally (MainActivity records it). */
+    val streakCount: Int = 0,
     /** Whether this device holds a sync key — the only thing the ledger can attach a claim to. */
     val signedIn: Boolean = false,
     /** The server's own answer, or null while it has never been read on this device. */
@@ -205,8 +210,22 @@ class VipViewModel @Inject constructor(
     init {
         observePending()
         observeRewardedVip()
+        observeStreak()
         observeAccount()
         loadConfig()
+    }
+
+    /**
+     * The login streak (plan §5 step 19): consecutive days this device opened the app, counted
+     * locally by MainActivity. This screen only reads the count — it never writes it — so a
+     * streak is never earned by opening the VIP screen itself.
+     */
+    private fun observeStreak() {
+        viewModelScope.launch {
+            settingsRepository.loginStreakCount.collect { count ->
+                _uiState.update { it.copy(streakCount = count) }
+            }
+        }
     }
 
     private fun observePending() {
@@ -503,6 +522,7 @@ private fun VipUiState.withConfig(config: VipRemoteConfig): VipUiState {
         jazzCashMobileAccount = config.payments.jazzcash.mobileAccount.trim(),
         easyPaisaMobile = config.payments.easypaisa.mobileNumber.trim(),
         raastInstantId = config.payments.raast.instantId.trim(),
+        streak = config.streak,
     )
     // A channel the viewer already picked stays picked; otherwise the first one the
     // operator actually published is chosen, so a submission never names a channel that

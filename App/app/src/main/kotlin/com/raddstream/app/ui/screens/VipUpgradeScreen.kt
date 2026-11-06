@@ -19,7 +19,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
@@ -29,6 +29,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -58,6 +59,8 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.raddstream.app.data.VipPendingSubmission
+import com.raddstream.app.network.models.VipRemoteStreak
+import com.raddstream.app.ui.theme.RaddCurrent500
 import com.raddstream.app.ui.theme.RaddInk950
 import com.raddstream.app.ui.theme.RaddSignalGold
 import com.raddstream.app.viewmodel.RewardedVipPass
@@ -126,6 +129,9 @@ fun VipUpgradeScreen(
                 expiresAt = state.rewardedVipExpiresAt,
                 onWatchAd = { viewModel.grantRewardedVip() },
             )
+            if (state.streak.isConfigured) {
+                StreakCard(streak = state.streak, count = state.streakCount)
+            }
 
             when {
                 state.isLoading -> LoadingCard()
@@ -380,6 +386,64 @@ private fun RewardedVipSection(expiresAt: Long, onWatchAd: () -> Unit) {
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
+        }
+    }
+}
+
+/**
+ * The login streak (plan §5 step 19): consecutive days this device opened the app, against the
+ * operator's own plan (target days, reward coins). The count is local — MainActivity records one
+ * open per day — and the reward is the operator's: this card shows the promise, it never claims
+ * the coins were paid, because no screen in this build can see the wallet. Hidden entirely when
+ * the operator never configured a streak, so an absent plan is never shown as a zero.
+ */
+@Composable
+private fun StreakCard(streak: VipRemoteStreak, count: Int) {
+    val complete = count >= streak.days
+    Surface(
+        color = RaddCurrent500.copy(alpha = 0.10f),
+        shape = RoundedCornerShape(20.dp),
+        border = BorderStroke(1.dp, RaddCurrent500.copy(alpha = 0.35f)),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(
+            modifier = Modifier.padding(18.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Default.DateRange, contentDescription = null, tint = RaddCurrent500)
+                Spacer(Modifier.width(10.dp))
+                Text(
+                    "Login streak",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onBackground,
+                )
+            }
+            Text(
+                if (complete) "${streak.days}-day streak complete."
+                else "Day $count of ${streak.days} — open the app every day to keep it going.",
+                style = MaterialTheme.typography.headlineSmall,
+                fontWeight = FontWeight.Bold,
+                color = RaddCurrent500,
+            )
+            LinearProgressIndicator(
+                progress = { (count.toFloat() / streak.days).coerceIn(0f, 1f) },
+                modifier = Modifier.fillMaxWidth(),
+                color = RaddCurrent500,
+            )
+            if (streak.rewardCoins > 0) {
+                Text(
+                    "Reward: ${streak.rewardCoins} coins when you reach ${streak.days} days.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Text(
+                "Counted on this device. The coins go to your wallet when the operator pays them.",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
     }
 }

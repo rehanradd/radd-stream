@@ -73,6 +73,13 @@ class MainActivity : ComponentActivity() {
         takeLocalVideoFrom(intent)
         enableEdgeToEdge()
         setContent {
+            // The login streak (plan §5 step 19): one record per day this device opens the app.
+            // A rotation recreates this activity and re-runs this effect, but recordLoginDay is
+            // idempotent within a day, so the second run changes nothing — and a launch that
+            // never reaches a screen still counts, because the streak is about opening the app.
+            LaunchedEffect(Unit) {
+                serverSettingsRepository.recordLoginDay()
+            }
             // Collected as composition state, not snapshotted once: flipping the Settings switch
             // must recompose the theme live, and a `first()` here would freeze whatever the store
             // said at cold start and make the toggle look broken until the process restarted.
