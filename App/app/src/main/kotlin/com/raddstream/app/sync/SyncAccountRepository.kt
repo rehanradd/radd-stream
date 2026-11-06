@@ -29,6 +29,7 @@ import com.raddstream.app.network.models.CoinShareRequest
 import com.raddstream.app.network.models.CoinTheme
 import com.raddstream.app.network.models.CoinThemesResponse
 import com.raddstream.app.network.models.DeviceTrialRequest
+import com.raddstream.app.network.models.DownloadCreditPrice
 import com.raddstream.app.network.models.FavoriteEntry
 import com.raddstream.app.network.models.FavoriteRequest
 import com.raddstream.app.network.models.PassTier

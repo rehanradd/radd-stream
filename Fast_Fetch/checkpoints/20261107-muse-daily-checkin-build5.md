@@ -192,6 +192,21 @@ build" (~01:47 PKT). This build is the last four items on that proposal.
   → the request is queued; buy Midnight at 250 coins → the player wears it
   at once, and the accent that marks a selected control stays jade).
 
+## Fix — Android CI failed on 7899a9d, two missing imports (02:15 PKT)
+
+- Android run 42294440062 FAILED at `:app:compileDebugKotlin`; Backend run
+  42294440031 SUCCESS. The log's `e:` lines: `SyncAccountRepository.kt:759
+  Unresolved reference 'DownloadCreditPrice'` and
+  `VipUpgradeScreen.kt:394/424 Unresolved reference 'PlayArrow'`.
+- Both are Build 5's own import-block edits (the CoinRedeemed trap, again):
+  (1) VipUpgradeScreen lost the pre-existing `PlayArrow` import while
+  gaining Movie/Palette; (2) `loadThemeCatalog` used the
+  `DownloadCreditPrice` type without ever importing it.
+- A full import diff `fc35d4d` → `7899a9d` across all 13 edited Kotlin files
+  proved these were the only two. Fixed with two one-line imports; the fix
+  commit re-runs CI, which also finally exercises the 11 new ModelsTest
+  tests (the failed run died before any test executed).
+
 ## Decisions the user still owns
 
 - The pass-ladder price flag from Build 3 stands: day = 500 coins, weekend
