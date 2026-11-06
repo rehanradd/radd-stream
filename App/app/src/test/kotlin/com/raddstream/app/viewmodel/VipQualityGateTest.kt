@@ -99,7 +99,7 @@ class VipQualityGateTest {
         val ladder = LadderForScope(
             options = listOf(option("1080p"), option("720p"), option("480p")),
             autoBand = "720p",
-            downloadOnlyBands = setOf("720p"),
+            downloadOnlyBands = listOf("720p"),
         )
 
         val gated = VipQualityGate.gate(ladder, isVip = false, freeQualityCap = "480p")
