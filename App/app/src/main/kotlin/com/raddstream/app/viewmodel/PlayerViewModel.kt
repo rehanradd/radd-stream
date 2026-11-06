@@ -2066,6 +2066,7 @@ class PlayerViewModel @Inject constructor(
                 expectedTotalBytes = rendition.print.sizeBytes.takeIf { it > 0 },
                 resumable = rendition.playback.resumable || rendition.playback.acceptsRanges == true,
                 printLabel = rendition.displayLabel(),
+                title = _ui.value.pendingTitle ?: "",
             )
             val result = try {
                 engine.adopt(request)

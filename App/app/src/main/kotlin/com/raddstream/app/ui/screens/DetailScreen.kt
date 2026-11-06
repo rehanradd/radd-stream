@@ -40,6 +40,7 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -99,10 +100,12 @@ import com.raddstream.app.viewmodel.DetailNavigationEvent
 import com.raddstream.app.viewmodel.DetailViewModel
 import com.raddstream.app.viewmodel.EpisodeGroup
 import com.raddstream.app.viewmodel.EpisodeProgress
+import com.raddstream.app.viewmodel.PendingKeep
 import com.raddstream.app.viewmodel.RankedPrint
 import com.raddstream.app.viewmodel.ResumePoint
 import com.raddstream.app.viewmodel.SeasonGroup
 import com.raddstream.app.viewmodel.formatRuntimeMinutes
+import com.raddstream.app.viewmodel.keepSizeLabel
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -270,6 +273,53 @@ fun DetailScreen(
             )
         }
     }
+
+    state.pendingKeep?.let { pending ->
+        KeepConfirmDialog(
+            pending = pending,
+            onConfirm = viewModel::confirmKeep,
+            onDismiss = viewModel::dismissKeep,
+        )
+    }
+}
+
+/**
+ * The size and the quality before the download starts. The size is the one
+ * the metadata ask measured — never a guess — and when the server named no
+ * size the dialog says so instead of inventing one. Nothing downloads until
+ * Confirm; Cancel leaves nothing behind.
+ */
+@Composable
+private fun KeepConfirmDialog(
+    pending: PendingKeep,
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Download this title?") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(pending.title, style = MaterialTheme.typography.titleSmall)
+                Text(
+                    pending.printLabel,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(
+                    keepSizeLabel(pending.sizeBytes),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        },
+        confirmButton = {
+            Button(onClick = onConfirm) { Text("Download") }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Cancel") }
+        },
+    )
 }
 
 /**

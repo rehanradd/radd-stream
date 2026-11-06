@@ -1696,3 +1696,23 @@ or printed. Gating is qoder1's call after fresh green CI.
 **VIP.** The price cards now say the price is the full amount ("This is the full amount you send — no extra charge is added here"): there is no tax field anywhere — not in the panel's monetization row, not in the remote-config body — so no tax breakdown is invented, and the line states what the viewer actually pays by manual transfer. The renewal date was already shown ("Confirmed through …"), so nothing was added there. And there is deliberately **no cancel button**: VIP is a manual payment the operator approves — no stored card, no recurring charge anywhere in the code — so there is nothing to cancel. The active-VIP card says so plainly ("VIP does not renew itself. When it ends, pay again to continue"), and cancelling a *pending* payment request already exists ("Remove request").
 
 **Not done:** push (this commit, then CI judges — the b3cc950 runs are finished: Backend green, Android red on the annotation fault fixed above, so nothing is in flight). The panel workspace files still await the gate. Next: Downloads/Search/My List research rules. Device checks owner-only.
+
+**Addendum — CI failure on 7851b89 (Android run 42152768488; no Backend run — the push touched App only).** The run failed at `compileDebugUnitTestKotlin` — one error, `VipQualityGateTest.kt:102:33`: Session 61's new 480p-cap test passed `setOf("720p")` for `LadderForScope.downloadOnlyBands`, which is a `List<String>` (it always was). The typo was masked until now: the 7483a6b run failed on the missing test header before test compile, and the b3cc950 run failed on the HomeScreen annotation in main compile. Fixed by `listOf("720p")`; the fix ships in the next commit, with the Session 64 work below.
+
+---
+
+### Session 64 — Downloads research rules (Muse, 2026-11-06)
+
+**Agent:** Muse (BoNzoO), coded directly. Same branch as Sessions 40–63.
+
+**What it is:** the UX plan's Downloads rules — one list, size + quality before confirm, real keep titles, watched auto-delete. No server change.
+
+**One list.** The Downloads screen had two sections with two systems' names ("Saved to this device" vs "In-app keeps"). It now has one list under the one word "Downloads": files first (the foreground downloads the viewer is watching), then the in-app keeps, each row keeping its own actions and its own one state word. The two explainer cards became one short line; the dead section-title composable is gone.
+
+**Size + quality before confirm.** Tapping Download used to start the download at once. It now stages the ask first: one metadata call decides which system owns the copy, then a dialog shows the quality and the size — a real measured size, or "Size unknown" when the server named none — and only Confirm starts the download. Cancel leaves nothing behind. The permission-retry path (`retryLastDownload`) still re-enters the same flow.
+
+**Real keep titles.** An engine keep's row used to say "Saved file": `AdoptRequest` carried no title and `adopt` stored `""`. The title now travels with the request — from Detail (the work's title) and from the player (the playing title) — and old blank rows fall back to the print label, then "Untitled download". "Saved file" never appears as a title anywhere now.
+
+**Watched auto-delete.** A finished movie's download deletes itself to free space, with a notice naming it. On by default, with an off-switch in Settings (Offline card). Only a fully downloaded keep is touched, and only a movie — the check reads movie watch-history rows against the rail's own 10-second end-guard, so a half-watched film stays and one watched episode can never delete a season keep.
+
+**Tests:** new `DownloadsRulesTest` (4 cases: watched-title set, end-guard boundary, keep-confirm size labels, one-list order). **Not done:** push (this commit, then CI judges — the 7851b89 run is finished: Android red on the one test typo fixed above, so nothing is in flight). Next: Search/My List research rules. Device checks owner-only.

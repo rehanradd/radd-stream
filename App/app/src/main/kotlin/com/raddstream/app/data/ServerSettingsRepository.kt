@@ -649,6 +649,20 @@ class ServerSettingsRepository @Inject constructor(
         dataStore.edit { preferences -> preferences[WIFI_ONLY_DOWNLOADS_KEY] = enabled }
     }
 
+    /**
+     * Delete a finished movie's download on its own, to free the space. On
+     * by default; the viewer can switch it off in Settings, and a series
+     * keep is never touched — one watched episode does not mean the season
+     * file is done. The notice names what was deleted.
+     */
+    val autoDeleteWatched: Flow<Boolean> = dataStore.data.map { preferences ->
+        preferences[AUTO_DELETE_WATCHED_KEY] ?: true
+    }
+
+    suspend fun saveAutoDeleteWatched(enabled: Boolean) {
+        dataStore.edit { preferences -> preferences[AUTO_DELETE_WATCHED_KEY] = enabled }
+    }
+
     /** How long an offline keep survives before the sweeper deletes it: 3 or 6 hours. */
     val keepTtlHours: Flow<Int> = dataStore.data.map { preferences ->
         preferences[KEEP_TTL_KEY]?.takeIf { it == KEEP_TTL_HOURS_3 || it == KEEP_TTL_HOURS_6 }
@@ -854,6 +868,7 @@ class ServerSettingsRepository @Inject constructor(
         private val MOBILE_DATA_KEY = booleanPreferencesKey("mobile_data_allowed")
         private val DATA_SAVER_KEY = booleanPreferencesKey("data_saver")
         private val WIFI_ONLY_DOWNLOADS_KEY = booleanPreferencesKey("wifi_only_downloads")
+        private val AUTO_DELETE_WATCHED_KEY = booleanPreferencesKey("auto_delete_watched")
         private val KEEP_TTL_KEY = intPreferencesKey("keep_ttl_hours")
         private val PREFERRED_SUBTITLE_LANGUAGE_KEY = stringPreferencesKey("preferred_subtitle_language")
         private val SUBTITLE_SIZE_KEY = intPreferencesKey("subtitle_size_percent")

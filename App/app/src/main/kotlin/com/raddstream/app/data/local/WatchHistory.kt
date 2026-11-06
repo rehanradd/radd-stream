@@ -100,6 +100,14 @@ interface WatchHistoryDao {
     @Query("SELECT * FROM watch_history WHERE workRef = :workRef ORDER BY updatedAt DESC")
     suspend fun findWork(workRef: String): List<WatchHistoryEntity>
 
+    /**
+     * Movie rows only — a series row is one episode, never the whole keep, so
+     * it cannot say the keep is finished. The watched-ness itself is judged
+     * in Kotlin against the same end-guard the rail uses.
+     */
+    @Query("SELECT * FROM watch_history WHERE seasonNumber = 0 AND episodeNumber = 0 AND durationMs > 0")
+    suspend fun findMovieRows(): List<WatchHistoryEntity>
+
     @Query("DELETE FROM watch_history")
     suspend fun clear()
 }

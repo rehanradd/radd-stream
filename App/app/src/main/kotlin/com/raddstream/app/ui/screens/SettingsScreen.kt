@@ -173,6 +173,17 @@ fun SettingsScreen(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                     Spacer(Modifier.height(10.dp))
+                    SwitchRow(
+                        checked = state.prefs.autoDeleteWatched,
+                        onCheckedChange = viewModel::setAutoDeleteWatched,
+                        label = "Delete watched downloads",
+                    )
+                    Text(
+                        "A finished movie deletes itself to free space. Series keeps are never touched — one watched episode does not mean the season is done.",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Spacer(Modifier.height(10.dp))
                     OutlinedButton(onClick = onOpenDownloads, modifier = Modifier.fillMaxWidth()) {
                         Text("Open Downloads")
                     }

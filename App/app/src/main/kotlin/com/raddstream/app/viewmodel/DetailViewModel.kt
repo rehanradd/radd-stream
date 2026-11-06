@@ -17,7 +17,6 @@ import com.raddstream.app.network.ApiProvider
 import com.raddstream.app.network.friendlyNetworkError
 import com.raddstream.app.network.models.LinkState
 import com.raddstream.app.network.models.PostDetail
-import com.raddstream.app.network.models.StreamResponse
 import com.raddstream.app.network.streamRedirectUrl
 import com.raddstream.app.player.AdoptRequest
 import com.raddstream.app.player.CacheAffordance
@@ -83,7 +82,32 @@ data class DetailUiState(
      * says it instead.
      */
     val includedLine: String? = null,
+    /**
+     * A download the viewer has been asked to confirm, with the size and the
+     * quality in front of them. Null when nothing is waiting — the download
+     * only starts on Confirm.
+     */
+    val pendingKeep: PendingKeep? = null,
 )
+
+/**
+ * A download waiting for the viewer's Confirm. The size comes from the one
+ * metadata ask that also decides which download system owns the copy, so
+ * the dialog never guesses it; null means the server did not name a size,
+ * and the dialog says "Size unknown" instead of inventing one.
+ */
+data class PendingKeep(
+    val handle: String,
+    val printLabel: String,
+    val title: String,
+    val sizeBytes: Long?,
+    val resumable: Boolean,
+    val target: KeepTarget,
+)
+
+/** The size line of the keep-confirm dialog: a real size, or an honest unknown. */
+fun keepSizeLabel(sizeBytes: Long?): String =
+    sizeBytes?.takeIf { it > 0 }?.let { CacheAffordance.formatBytes(it) } ?: "Size unknown"
 
 /**
  * What a keep request needs is a file. A page is not one: DownloadManager would fetch HTML and
@@ -510,18 +534,43 @@ class DetailViewModel @Inject constructor(
         viewModelScope.launch {
             // One metadata ask decides which download system owns this copy. A failed
             // ask falls through to the device path, which refuses with the same words it
-            // always used — no new failure shape for a server that cannot answer.
+            // always used — no new failure shape for a server that cannot answer. The
+            // download does NOT start here: the size and the quality go in front of the
+            // viewer first, and only Confirm starts either system.
             val meta = runCatching { catalogRepository.resolveStream(handle) }.getOrNull()
-            if (meta != null && meta.success &&
-                keepTargetFor(meta.mimeType) == KeepTarget.EngineHls
-            ) {
-                keepViaEngine(handle, printLabel, meta)
+            val target = if (meta != null && meta.success) {
+                keepTargetFor(meta.mimeType)
+            } else {
+                KeepTarget.DeviceFile
+            }
+            _uiState.update {
+                it.copy(
+                    pendingKeep = PendingKeep(
+                        handle = handle,
+                        printLabel = printLabel,
+                        title = workTitle,
+                        sizeBytes = meta?.fileSizeBytes?.takeIf { it > 0 },
+                        resumable = meta?.resumable ?: false,
+                        target = target,
+                    ),
+                )
+            }
+        }
+    }
+
+    /** The viewer confirmed the size and the quality: start whichever system owns the copy. */
+    fun confirmKeep() {
+        val pending = _uiState.value.pendingKeep ?: return
+        _uiState.update { it.copy(pendingKeep = null) }
+        viewModelScope.launch {
+            if (pending.target == KeepTarget.EngineHls) {
+                keepViaEngine(pending.handle, pending.printLabel, pending.title, pending.sizeBytes, pending.resumable)
                 return@launch
             }
-            when (val outcome = deviceDownloads.enqueue(handle, workTitle, printLabel)) {
+            when (val outcome = deviceDownloads.enqueue(pending.handle, pending.title, pending.printLabel)) {
                 is DeviceDownloadResult.Enqueued -> {
                     lastDownload = null
-                    _navEvents.emit(DetailNavigationEvent.DownloadStarted(printLabel))
+                    _navEvents.emit(DetailNavigationEvent.DownloadStarted(pending.printLabel))
                 }
                 is DeviceDownloadResult.NeedsPermission ->
                     _navEvents.emit(DetailNavigationEvent.DownloadNeedsPermission)
@@ -533,12 +582,24 @@ class DetailViewModel @Inject constructor(
         }
     }
 
+    /** The viewer declined the download: nothing started, nothing to clean up except the ask. */
+    fun dismissKeep() {
+        lastDownload = null
+        _uiState.update { it.copy(pendingKeep = null) }
+    }
+
     /**
      * Keep one HLS title through the in-app keep engine: it fetches the playlist's
      * segments from our redirector and plays them back offline. Adopt pins the row,
      * so the sweeper never ages out a file the Downloads list calls kept.
      */
-    private suspend fun keepViaEngine(handle: String, printLabel: String, meta: StreamResponse) {
+    private suspend fun keepViaEngine(
+        handle: String,
+        printLabel: String,
+        title: String,
+        sizeBytes: Long?,
+        resumable: Boolean,
+    ) {
         val engine = CacheEngineHolder.engine
         if (engine == null) {
             lastDownload = null
@@ -560,9 +621,10 @@ class DetailViewModel @Inject constructor(
             positionMs = 0L,
             bufferedMs = 0L,
             durationMs = 0L,
-            expectedTotalBytes = meta.fileSizeBytes?.takeIf { it > 0 },
-            resumable = meta.resumable ?: false,
+            expectedTotalBytes = sizeBytes?.takeIf { it > 0 },
+            resumable = resumable,
             printLabel = printLabel,
+            title = title,
             sharesCacheStorage = false,
         )
         val result = try {

@@ -42,11 +42,11 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
-import com.raddstream.app.brand.Brand
 import com.raddstream.app.data.downloads.DeviceDownload
 import com.raddstream.app.data.downloads.DeviceDownloadState
 import com.raddstream.app.ui.components.EmptyState
 import com.raddstream.app.ui.components.Pill
+import com.raddstream.app.viewmodel.DownloadRow
 import com.raddstream.app.viewmodel.DownloadsViewModel
 import com.raddstream.app.viewmodel.KeepState
 import com.raddstream.app.viewmodel.KeepRoute
@@ -101,46 +101,48 @@ fun DownloadsScreen(
                 }
             }
 
-            if (state.deviceDownloads.isNotEmpty()) {
-                item { SectionTitle("Saved to this device") }
+            if (state.hasAnything) {
                 item {
                     NoticeCard(
-                        "Files live in Movies/RaddStream and keep playing after the app closes. " +
-                            "The notification shows live progress; pause or resume here.",
+                        "Files in Movies/RaddStream play anywhere, even after the app closes. " +
+                            "In-app keeps play here.",
                     )
                 }
-                items(state.deviceDownloads, key = { "device-${it.id}" }) { item ->
-                    DeviceDownloadRow(
-                        item = item,
-                        onPlay = { item.localUri?.let { onPlayLocal(it, item.title) } },
-                        onPause = { viewModel.pauseDownload(item) },
-                        onResume = { viewModel.resumeDownload(item) },
-                        onRemove = { viewModel.removeDownload(item) },
-                    )
-                }
-            }
-
-            if (state.items.isNotEmpty()) {
-                item { SectionTitle("In-app keeps") }
-                item { PlayableOnlyNotice() }
-                items(state.items, key = { it.id }) { item ->
-                    KeptItemRow(
-                        item = item,
-                        // Local bytes first, the redirector handle only if the engine could not
-                        // name a complete file: a keep that is really on the device needs no
-                        // network, no resolver round-trip, and no live upstream to play.
-                        onPlay = {
-                            clicks.launch {
-                                when (val route = viewModel.playRoute(item)) {
-                                    is KeepRoute.Local -> onPlayLocal(route.uri, item.title)
-                                    is KeepRoute.Stream -> onPlay(item)
-                                    KeepRoute.NothingPlayable -> viewModel.reportUnplayable()
+                items(
+                    state.allDownloads,
+                    key = { row ->
+                        when (row) {
+                            is DownloadRow.Device -> "device-${row.download.id}"
+                            is DownloadRow.Keep -> "keep-${row.item.id}"
+                        }
+                    },
+                ) { row ->
+                    when (row) {
+                        is DownloadRow.Device -> DeviceDownloadRow(
+                            item = row.download,
+                            onPlay = { row.download.localUri?.let { onPlayLocal(it, row.download.title) } },
+                            onPause = { viewModel.pauseDownload(row.download) },
+                            onResume = { viewModel.resumeDownload(row.download) },
+                            onRemove = { viewModel.removeDownload(row.download) },
+                        )
+                        is DownloadRow.Keep -> KeptItemRow(
+                            item = row.item,
+                            // Local bytes first, the redirector handle only if the engine could not
+                            // name a complete file: a keep that is really on the device needs no
+                            // network, no resolver round-trip, and no live upstream to play.
+                            onPlay = {
+                                clicks.launch {
+                                    when (val route = viewModel.playRoute(row.item)) {
+                                        is KeepRoute.Local -> onPlayLocal(route.uri, row.item.title)
+                                        is KeepRoute.Stream -> onPlay(row.item)
+                                        KeepRoute.NothingPlayable -> viewModel.reportUnplayable()
+                                    }
                                 }
-                            }
-                        },
-                        onCancel = { viewModel.cancel(item) },
-                        onRetry = { viewModel.retry(item) },
-                    )
+                            },
+                            onCancel = { viewModel.cancel(row.item) },
+                            onRetry = { viewModel.retry(row.item) },
+                        )
+                    }
                 }
             }
 
@@ -155,7 +157,7 @@ fun DownloadsScreen(
                         EmptyState(
                             title = "Nothing downloaded yet",
                             message = "Use the download button on a print or episode. " +
-                                "The file is saved to Movies/RaddStream with live progress and plays here when finished.",
+                                "Files go to Movies/RaddStream and play anywhere; in-app keeps play here.",
                             icon = {
                                 Icon(
                                     Icons.Default.Download,
@@ -171,16 +173,6 @@ fun DownloadsScreen(
             }
         }
     }
-}
-
-@Composable
-private fun SectionTitle(text: String) {
-    Text(
-        text = text,
-        style = MaterialTheme.typography.titleMedium,
-        fontWeight = FontWeight.SemiBold,
-        color = MaterialTheme.colorScheme.onBackground,
-    )
 }
 
 @Composable
@@ -241,11 +233,6 @@ private fun StorageCard(storage: StorageInfo?) {
             )
         }
     }
-}
-
-@Composable
-private fun PlayableOnlyNotice() {
-    NoticeCard(Brand.copy("offline_notice"))
 }
 
 @Composable

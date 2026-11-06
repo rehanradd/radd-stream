@@ -88,6 +88,13 @@ data class AdoptRequest(
     val resumable: Boolean,
     /** Print label so the engine's library UI can show what this file is. */
     val printLabel: String,
+    /**
+     * The work's title for the Downloads row. "" means unknown — a preview
+     * adopts without one on purpose (it writes no row), and a row created
+     * before titles were plumbed keeps its blank until the viewer re-keeps
+     * it; the list falls back to the print label, never to "Saved file".
+     */
+    val title: String = "",
     /** True when this URL was already downloaded through the shared cache data source. */
     val sharesCacheStorage: Boolean,
 )

@@ -69,6 +69,8 @@ data class UserPreferences(
     val dataSaver: Boolean = true,
     /** Downloads start on Wi-Fi only. On by default. */
     val wifiOnlyDownloads: Boolean = true,
+    /** A finished movie's download deletes itself. On by default. */
+    val autoDeleteWatched: Boolean = true,
     val keepTtl: KeepTtl = KeepTtl.H3,
     val subtitleLang: String = SUBTITLE_DEFAULT,
     val dynamicColor: Boolean = false,
@@ -367,6 +369,11 @@ class SettingsViewModel @Inject constructor(
             }
         }
         viewModelScope.launch {
+            settingsRepository.autoDeleteWatched.collect { enabled ->
+                _uiState.update { it.copy(prefs = it.prefs.copy(autoDeleteWatched = enabled)) }
+            }
+        }
+        viewModelScope.launch {
             settingsRepository.keepTtlHours.collect { hours ->
                 _uiState.update { it.copy(prefs = it.prefs.copy(keepTtl = KeepTtl.fromHours(hours))) }
             }
@@ -499,6 +506,11 @@ class SettingsViewModel @Inject constructor(
     fun setWifiOnlyDownloads(value: Boolean) {
         updatePrefs { it.copy(wifiOnlyDownloads = value) }
         viewModelScope.launch { settingsRepository.saveWifiOnlyDownloads(value) }
+    }
+
+    fun setAutoDeleteWatched(value: Boolean) {
+        updatePrefs { it.copy(autoDeleteWatched = value) }
+        viewModelScope.launch { settingsRepository.saveAutoDeleteWatched(value) }
     }
 
     fun setKeepTtl(value: KeepTtl) {
