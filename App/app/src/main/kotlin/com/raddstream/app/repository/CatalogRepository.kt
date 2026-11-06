@@ -75,9 +75,9 @@ class CatalogRepository @Inject constructor(
      * that used to work must never turn into an error for a call that is only an
      * upgrade. A ceiling on the wait is the caller's job, not this one's.
      */
-    suspend fun playV2(releaseId: Int): V2PlayResult? {
+    suspend fun playV2(releaseId: Int, prefer: String? = null): V2PlayResult? {
         val response = try {
-            apiProvider.current().play(WirePlayRequest(releaseId = releaseId, prefer = "quality"))
+            apiProvider.current().play(WirePlayRequest(releaseId = releaseId, prefer = prefer ?: "quality"))
         } catch (_: HttpException) {
             return null
         } catch (_: IOException) {

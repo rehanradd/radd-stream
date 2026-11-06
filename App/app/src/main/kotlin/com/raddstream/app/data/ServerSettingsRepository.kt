@@ -621,6 +621,34 @@ class ServerSettingsRepository @Inject constructor(
         dataStore.edit { preferences -> preferences[MOBILE_DATA_KEY] = enabled }
     }
 
+    /**
+     * Data Saver: on mobile data, titles start at 480p and the server is
+     * asked for its data-saving copy. On by default — mobile data is the
+     * expensive network for most viewers here, and the switch is one tap
+     * away in Settings for anyone who wants full quality on the go.
+     */
+    val dataSaver: Flow<Boolean> = dataStore.data.map { preferences ->
+        preferences[DATA_SAVER_KEY] ?: true
+    }
+
+    suspend fun saveDataSaver(enabled: Boolean) {
+        dataStore.edit { preferences -> preferences[DATA_SAVER_KEY] = enabled }
+    }
+
+    /**
+     * Downloads only on Wi-Fi. On by default — a kept title is hundreds of
+     * megabytes, and starting one on mobile data by accident is the expensive
+     * mistake this exists to prevent. The viewer can switch it off in
+     * Settings; the download then starts on whatever network is up.
+     */
+    val wifiOnlyDownloads: Flow<Boolean> = dataStore.data.map { preferences ->
+        preferences[WIFI_ONLY_DOWNLOADS_KEY] ?: true
+    }
+
+    suspend fun saveWifiOnlyDownloads(enabled: Boolean) {
+        dataStore.edit { preferences -> preferences[WIFI_ONLY_DOWNLOADS_KEY] = enabled }
+    }
+
     /** How long an offline keep survives before the sweeper deletes it: 3 or 6 hours. */
     val keepTtlHours: Flow<Int> = dataStore.data.map { preferences ->
         preferences[KEEP_TTL_KEY]?.takeIf { it == KEEP_TTL_HOURS_3 || it == KEEP_TTL_HOURS_6 }
@@ -824,6 +852,8 @@ class ServerSettingsRepository @Inject constructor(
         private val SEARCH_RECENTS_KEY = stringPreferencesKey("search_recents")
         private val IMAGE_QUALITY_KEY = stringPreferencesKey("image_quality")
         private val MOBILE_DATA_KEY = booleanPreferencesKey("mobile_data_allowed")
+        private val DATA_SAVER_KEY = booleanPreferencesKey("data_saver")
+        private val WIFI_ONLY_DOWNLOADS_KEY = booleanPreferencesKey("wifi_only_downloads")
         private val KEEP_TTL_KEY = intPreferencesKey("keep_ttl_hours")
         private val PREFERRED_SUBTITLE_LANGUAGE_KEY = stringPreferencesKey("preferred_subtitle_language")
         private val SUBTITLE_SIZE_KEY = intPreferencesKey("subtitle_size_percent")

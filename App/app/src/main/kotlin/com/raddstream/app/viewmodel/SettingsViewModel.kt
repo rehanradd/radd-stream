@@ -65,6 +65,10 @@ enum class KeepTtl(val label: String, val hours: Int) {
 data class UserPreferences(
     val imageQuality: ImageQuality = ImageQuality.AUTO,
     val downloadOnMobileData: Boolean = false,
+    /** Data Saver: on mobile data, titles start at 480p. On by default. */
+    val dataSaver: Boolean = true,
+    /** Downloads start on Wi-Fi only. On by default. */
+    val wifiOnlyDownloads: Boolean = true,
     val keepTtl: KeepTtl = KeepTtl.H3,
     val subtitleLang: String = SUBTITLE_DEFAULT,
     val dynamicColor: Boolean = false,
@@ -353,6 +357,16 @@ class SettingsViewModel @Inject constructor(
             }
         }
         viewModelScope.launch {
+            settingsRepository.dataSaver.collect { enabled ->
+                _uiState.update { it.copy(prefs = it.prefs.copy(dataSaver = enabled)) }
+            }
+        }
+        viewModelScope.launch {
+            settingsRepository.wifiOnlyDownloads.collect { enabled ->
+                _uiState.update { it.copy(prefs = it.prefs.copy(wifiOnlyDownloads = enabled)) }
+            }
+        }
+        viewModelScope.launch {
             settingsRepository.keepTtlHours.collect { hours ->
                 _uiState.update { it.copy(prefs = it.prefs.copy(keepTtl = KeepTtl.fromHours(hours))) }
             }
@@ -475,6 +489,16 @@ class SettingsViewModel @Inject constructor(
     fun setDownloadOnMobileData(value: Boolean) {
         updatePrefs { it.copy(downloadOnMobileData = value) }
         viewModelScope.launch { settingsRepository.saveMobileDataAllowed(value) }
+    }
+
+    fun setDataSaver(value: Boolean) {
+        updatePrefs { it.copy(dataSaver = value) }
+        viewModelScope.launch { settingsRepository.saveDataSaver(value) }
+    }
+
+    fun setWifiOnlyDownloads(value: Boolean) {
+        updatePrefs { it.copy(wifiOnlyDownloads = value) }
+        viewModelScope.launch { settingsRepository.saveWifiOnlyDownloads(value) }
     }
 
     fun setKeepTtl(value: KeepTtl) {

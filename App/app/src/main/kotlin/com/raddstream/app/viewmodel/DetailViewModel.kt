@@ -6,7 +6,9 @@ import androidx.lifecycle.viewModelScope
 import com.raddstream.app.data.ServerSettingsRepository
 import com.raddstream.app.data.UserRegion
 import com.raddstream.app.data.cache.CacheCoordinator
+import com.raddstream.app.data.cache.ConnectivityProbe
 import com.raddstream.app.data.cache.KeepIdentity
+import com.raddstream.app.data.cache.NetworkClass
 import com.raddstream.app.data.downloads.DeviceDownloadResult
 import com.raddstream.app.data.downloads.DeviceDownloadsRepository
 import com.raddstream.app.data.local.WatchHistoryDao
@@ -21,6 +23,7 @@ import com.raddstream.app.player.AdoptRequest
 import com.raddstream.app.player.CacheAffordance
 import com.raddstream.app.player.CacheEngineHolder
 import com.raddstream.app.player.CacheSessionKey
+import com.raddstream.app.player.DataSaver
 import com.raddstream.app.player.KeepResult
 import com.raddstream.app.player.LadderForScope
 import com.raddstream.app.player.LadderRung
@@ -123,6 +126,7 @@ class DetailViewModel @Inject constructor(
     private val syncAccountRepository: SyncAccountRepository,
     private val settingsRepository: ServerSettingsRepository,
     private val watchHistoryDao: WatchHistoryDao,
+    private val connectivityProbe: ConnectivityProbe,
 ) : ViewModel() {
 
     private val postId: Int = (savedStateHandle[Screen.Detail.ARG_POST_ID] as? String)?.toIntOrNull()
@@ -176,6 +180,16 @@ class DetailViewModel @Inject constructor(
             }
         }
         viewModelScope.launch {
+            settingsRepository.dataSaver.collect { enabled ->
+                dataSaver = enabled
+            }
+        }
+        viewModelScope.launch {
+            settingsRepository.wifiOnlyDownloads.collect { enabled ->
+                wifiOnlyDownloads = enabled
+            }
+        }
+        viewModelScope.launch {
             settingsRepository.userRegion.collect { region ->
                 userRegion = region
                 publishViewerContent()
@@ -198,6 +212,12 @@ class DetailViewModel @Inject constructor(
      */
     private var qualityGateEnabled: Boolean = false
     private var freeQualityCap: String = "720p"
+    /** Data Saver and Wi-Fi-only downloads — both on by default, both the viewer's own choice. */
+    private var dataSaver: Boolean = true
+    private var wifiOnlyDownloads: Boolean = true
+
+    /** True while the network is Wi-Fi; anything else is mobile data for these two switches. */
+    private val onWifi: Boolean get() = connectivityProbe.current() == NetworkClass.WIFI
 
     /**
      * The viewer's regional-dub preference; [UserRegion.DEFAULT] until DataStore answers,
@@ -712,7 +732,12 @@ class DetailViewModel @Inject constructor(
         // so a healthy call answers in milliseconds.
         viewModelScope.launch {
             val v2 = runCatching {
-                withTimeout(2_000) { catalogRepository.playV2(print.releaseId) }
+                withTimeout(2_000) {
+                    catalogRepository.playV2(
+                        print.releaseId,
+                        prefer = DataSaver.playPrefer(dataSaver, onWifi),
+                    )
+                }
             }.getOrNull()
             val playedV2 = v2 != null && v2.bundle.renditions.isNotEmpty() &&
                 playV2Bundle(v2, print, external)
@@ -839,6 +864,16 @@ class DetailViewModel @Inject constructor(
     fun keepPrint(print: RankedPrint) {
         if (!VipQualityGate.allowsResolution(print.resolution, premiumAccess)) {
             _uiState.update { it.copy(actionMessage = VipQualityGate.lockedMessage(freeQualityCap)) }
+            return
+        }
+        // Wi-Fi-only is a gate, not a suggestion: starting a hundreds-of-megabytes
+        // download on mobile data by accident is the expensive mistake it exists
+        // to prevent. The message says where the switch lives, so the viewer is
+        // never left guessing why the tap did nothing.
+        if (DataSaver.wifiOnlyBlocks(wifiOnlyDownloads, onWifi)) {
+            _uiState.update {
+                it.copy(actionMessage = "Wi-Fi only is on — connect to Wi-Fi to download this title. You can change it in Settings.")
+            }
             return
         }
         val link = print.links.firstOrNull { !it.streamId.isBlank() && !it.isPageLink }

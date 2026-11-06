@@ -34,6 +34,7 @@ import com.raddstream.app.player.CacheEngineHolder
 import com.raddstream.app.player.CacheSnapshot
 import com.raddstream.app.player.CacheState
 import com.raddstream.app.player.CalibrationState
+import com.raddstream.app.player.DataSaver
 import com.raddstream.app.player.DeferredOffsetReporter
 import com.raddstream.app.player.EpisodeOffsets
 import com.raddstream.app.player.EpisodeProgression
@@ -79,6 +80,8 @@ import com.raddstream.app.player.subtitle.SubtitleFormat
 import com.raddstream.app.player.subtitle.SubtitleParser
 import com.raddstream.app.player.subtitles.SubtitleOffset
 import com.raddstream.app.data.ServerSettingsRepository
+import com.raddstream.app.data.cache.ConnectivityProbe
+import com.raddstream.app.data.cache.NetworkClass
 import com.raddstream.app.data.local.WatchHistoryDao
 import com.raddstream.app.network.ApiProvider
 import com.raddstream.app.network.streamRedirectUrl
@@ -121,6 +124,7 @@ class PlayerViewModel @Inject constructor(
     private val syncAccountRepository: SyncAccountRepository,
     private val watchHistoryDao: WatchHistoryDao,
     private val adCadence: AdCadenceGovernor,
+    private val connectivityProbe: ConnectivityProbe,
 ) : ViewModel() {
 
     private val store: PlayerSessionStore = PlayerSessionStore.Instance
@@ -231,6 +235,8 @@ class PlayerViewModel @Inject constructor(
      */
     private var qualityGateEnabled: Boolean = false
     private var freeQualityCap: String = "720p"
+    /** Data Saver — on by default, so mobile-data titles start at 480p. */
+    private var dataSaver: Boolean = true
 
     /** A confirmed member, or everyone while the operator has not turned gating on. */
     private val premiumAccess: Boolean get() = VipQualityGate.premiumAccess(qualityGateEnabled, syncEntitled)
@@ -299,6 +305,12 @@ class PlayerViewModel @Inject constructor(
         viewModelScope.launch {
             settingsRepository.freeQualityCap.collect { cap ->
                 freeQualityCap = cap
+                armQualityChoices()
+            }
+        }
+        viewModelScope.launch {
+            settingsRepository.dataSaver.collect { enabled ->
+                dataSaver = enabled
                 armQualityChoices()
             }
         }
@@ -772,15 +784,26 @@ class PlayerViewModel @Inject constructor(
             defaultBand = defaultQualityBand,
             rungBands = rungs.map { it.band },
         )
+        // Data Saver caps the start on mobile data — 480p when the ladder has it —
+        // and the auto pointer with it, so Auto cannot quietly start above the cap.
+        // The rungs themselves are untouched: the viewer can still switch up.
+        val onWifi = connectivityProbe.current() == NetworkClass.WIFI
+        val cappedStartBand = DataSaver.capBand(startBand, rungs.map { it.band }, dataSaver, onWifi)
+        val cappedAutoBand = staged.autoBand
+            ?.takeIf { band -> rungs.any { it.band == band } }
+            ?.let { DataSaver.capBand(it, rungs.map { it.band }, dataSaver, onWifi) }
         val plan = staged.copy(
             rungs = rungs,
-            startBand = startBand,
+            startBand = cappedStartBand,
             auto = auto,
-            autoBand = staged.autoBand?.takeIf { band -> rungs.any { it.band == band } },
+            autoBand = cappedAutoBand,
         )
         ladderPlan = plan
         if (plan.auto) autoRungHandle = staged.startBand?.let { band ->
-            plan.rungs.firstOrNull { it.band == band }?.streamId
+            // The same cap as the start band above: Auto's first rung is the
+            // capped one on mobile data, not the staged one above it.
+            val capped = DataSaver.capBand(band, rungs.map { it.band }, dataSaver, onWifi)
+            plan.rungs.firstOrNull { it.band == capped }?.streamId
         } ?: handle
         _ui.update {
             it.copy(

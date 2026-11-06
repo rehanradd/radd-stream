@@ -232,6 +232,17 @@ private fun EntitlementCard(state: VipUiState) {
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+            // There is no cancel button because there is nothing to cancel:
+            // VIP is a manual payment the operator approves, and it never
+            // charges again on its own. When it ends, the viewer pays again
+            // to continue — or does nothing, and goes back to free.
+            if (earned.vip) {
+                Text(
+                    "VIP does not renew itself. When it ends, pay again to continue — nothing is charged on its own.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
         }
     }
 }
@@ -518,6 +529,11 @@ private fun PlanCard(
             )
             Text(
                 plan.period,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Text(
+                "This is the full amount you send — no extra charge is added here.",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )

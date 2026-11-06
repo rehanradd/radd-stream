@@ -68,7 +68,6 @@ import com.raddstream.app.player.AudioBoostUi
 import com.raddstream.app.share.LanShareStatus
 import com.raddstream.app.viewmodel.AccountCardCopy
 import com.raddstream.app.viewmodel.AccountUiState
-import com.raddstream.app.viewmodel.CatalogScale
 import com.raddstream.app.viewmodel.ContactUiState
 import com.raddstream.app.viewmodel.ImageQuality
 import com.raddstream.app.viewmodel.KeepTtl
@@ -149,32 +148,9 @@ fun SettingsScreen(
                     }
                 }
 
-                val stats = state.stats
-                if (stats != null) {
-                    Spacer(Modifier.height(8.dp))
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceAround,
-                    ) {
-                        StatBox(
-                            label = CatalogScale.WORKS_LABEL,
-                            value = stats.posts.toString(),
-                        )
-                        StatBox(
-                            label = CatalogScale.RELEASES_LABEL,
-                            value = stats.releases.toString(),
-                        )
-                        StatBox(
-                            label = CatalogScale.LINKS_LABEL,
-                            value = stats.sources.toString(),
-                        )
-                    }
-                    Text(
-                        CatalogScale.SCOPE_NOTE,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
+                // No counts here: works/releases/links are the operator's numbers,
+                // not something a viewer needs to see on their own Settings screen.
+                // The connection test above still fetches them for its own message.
             }
 
             // ── Downloads entry ────────────────────────────────────────
@@ -185,6 +161,18 @@ fun SettingsScreen(
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
+                    Spacer(Modifier.height(10.dp))
+                    SwitchRow(
+                        checked = state.prefs.wifiOnlyDownloads,
+                        onCheckedChange = viewModel::setWifiOnlyDownloads,
+                        label = "Download only on Wi-Fi",
+                    )
+                    Text(
+                        "A title you keep downloads only when this phone is on Wi-Fi. Turn it off to download on mobile data too.",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Spacer(Modifier.height(10.dp))
                     OutlinedButton(onClick = onOpenDownloads, modifier = Modifier.fillMaxWidth()) {
                         Text("Open Downloads")
                     }
@@ -491,6 +479,40 @@ fun SettingsScreen(
             }
 
             // ── Playback & Display preferences ─────────────────────────
+            // ── Languages ──────────────────────────────────────────────
+            // The ONE place that shows the languages in force. The Region
+            // card picks them, the player sheet changes them mid-title, and
+            // these chips change them here — all three write the same keys,
+            // and this card shows the effective values, so a viewer never has
+            // to guess which one won.
+            SettingsCard(title = "Languages") {
+                Text(
+                    "Audio: ${state.prefs.audioLanguage}. Subtitles: ${state.prefs.subtitleLang}.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+
+                Spacer(Modifier.height(10.dp))
+                PreferenceRowTitle("Preferred audio language")
+                val audioOptions = UserPreferences.AUDIO_LANGUAGE_OPTIONS
+                ChipRow(audioOptions, audioOptions.indexOf(state.prefs.audioLanguage).coerceAtLeast(0)) { idx ->
+                    viewModel.setAudioLanguage(audioOptions[idx])
+                }
+                Text(
+                    "Half this catalog is dual audio. The player picks the track that says so; " +
+                        "when nothing matches, its own choice is left alone rather than guessing. " +
+                        "Saved on this device.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+
+                Spacer(Modifier.height(10.dp))
+                PreferenceRowTitle("Default subtitle language")
+                ChipRow(subtitleOptions, subtitleOptions.indexOf(state.prefs.subtitleLang).coerceAtLeast(0)) { idx ->
+                    viewModel.setSubtitleLang(subtitleOptions[idx])
+                }
+            }
+
             SettingsCard(title = "Playback & Display") {
                 PreferenceRowTitle("Watching region")
                 val region = RegionChoices.byId(state.userRegion)
@@ -521,11 +543,24 @@ fun SettingsScreen(
                     onCheckedChange = viewModel::setDownloadOnMobileData,
                     label = "Load poster images over mobile data",
                 )
-                // A keep you asked for downloads on any network, always — that promise is not
-                // what this switch is for, so it no longer claims to be.
+                // A keep is gated by the Wi-Fi-only switch in the Offline card above,
+                // not by this one — this switch only ever governed the thumbnails.
                 Text(
-                    "A title you kept offline downloads whatever network you are on; this only " +
+                    "A title you keep follows the Wi-Fi-only switch in the Offline card; this only " +
                         "governs the thumbnails on the screens you browse.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+
+                Spacer(Modifier.height(10.dp))
+                PreferenceRowTitle("Data Saver")
+                SwitchRow(
+                    checked = state.prefs.dataSaver,
+                    onCheckedChange = viewModel::setDataSaver,
+                    label = "Save mobile data while watching",
+                )
+                Text(
+                    "On mobile data, titles start at 480p and the server is asked for its data-saving copy. Wi-Fi is untouched, and you can still switch a title up in the player.",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -535,26 +570,6 @@ fun SettingsScreen(
                 ChipRow(KeepTtl.entries.map { it.label }, KeepTtl.entries.indexOf(state.prefs.keepTtl)) { idx ->
                     viewModel.setKeepTtl(KeepTtl.entries.toList()[idx])
                 }
-
-                Spacer(Modifier.height(10.dp))
-                PreferenceRowTitle("Default subtitle language")
-                ChipRow(subtitleOptions, subtitleOptions.indexOf(state.prefs.subtitleLang).coerceAtLeast(0)) { idx ->
-                    viewModel.setSubtitleLang(subtitleOptions[idx])
-                }
-
-                Spacer(Modifier.height(10.dp))
-                PreferenceRowTitle("Preferred audio language")
-                val audioOptions = UserPreferences.AUDIO_LANGUAGE_OPTIONS
-                ChipRow(audioOptions, audioOptions.indexOf(state.prefs.audioLanguage).coerceAtLeast(0)) { idx ->
-                    viewModel.setAudioLanguage(audioOptions[idx])
-                }
-                Text(
-                    "Half this catalog is dual audio. The player picks the track that says so; " +
-                        "when nothing matches, its own choice is left alone rather than guessing. " +
-                        "Saved on this device.",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
 
                 Spacer(Modifier.height(10.dp))
                 PreferenceRowTitle("Audio level")
@@ -598,8 +613,7 @@ fun SettingsScreen(
                 }
                 Text(
                     "Saved on this device, and applied the next time each one matters: image size " +
-                        "from the next poster, the keep duration from the next download, audio and " +
-                        "subtitle language from the next playback.",
+                        "from the next poster, the keep duration from the next download.",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -822,13 +836,6 @@ private fun ChipRow(options: List<String>, selectedIndex: Int, onSelect: (Int) -
 }
 
 @Composable
-private fun StatBox(label: String, value: String) {
-    Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        Text(value, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
-        Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-    }
-}
-
 /**
  * Renders the socket's real state as one short line. Reports what is actually bound, not what was
  * asked: a share that could not bind says so plainly, and a live share names the concrete address and
