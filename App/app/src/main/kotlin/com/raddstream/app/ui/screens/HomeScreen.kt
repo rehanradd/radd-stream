@@ -198,6 +198,7 @@ fun HomeScreen(
 
         state.updateNotice?.let { update ->
             AppUpdateDialog(
+                required = update.required,
                 // Only close the dialog once the download actually opened, so a phone
                 // with no browser keeps the one-tap path instead of losing it silently.
                 onUpdateNow = { if (openDownload(context, update.url)) viewModel.dismissUpdate() },
@@ -271,21 +272,37 @@ private fun BroadcastBanner(broadcast: PanelBroadcast, onDismiss: () -> Unit) {
 }
 
 @Composable
-private fun AppUpdateDialog(onUpdateNow: () -> Unit, onDismiss: () -> Unit) {
+/**
+ * The update dialog. A required update — this build is below the operator's
+ * minimum — offers no "Later" and cannot be dismissed: the viewer cannot
+ * keep using a build the operator has withdrawn.
+ */
+private fun AppUpdateDialog(
+    required: Boolean,
+    onUpdateNow: () -> Unit,
+    onDismiss: () -> Unit,
+) {
     AlertDialog(
-        onDismissRequest = onDismiss,
+        onDismissRequest = if (required) ({}) else onDismiss,
         icon = { RaddStreamMark(diameter = 40.dp) },
         title = {
             Text(
-                text = Brand.copy("update_title", "A new build is available"),
+                text = Brand.copy(
+                    if (required) "update_required_title" else "update_title",
+                    if (required) "Update required" else "A new build is available",
+                ),
                 fontWeight = FontWeight.Bold,
             )
         },
         text = {
             Text(
                 Brand.copy(
-                    "update_message",
-                    "${Brand.name} has published a newer APK. Download it to keep the catalog and player current.",
+                    if (required) "update_required_message" else "update_message",
+                    if (required) {
+                        "${Brand.name} needs an update to keep working. Download the new build to continue."
+                    } else {
+                        "${Brand.name} has published a newer APK. Download it to keep the catalog and player current."
+                    },
                     "name" to Brand.name,
                 ),
             )
@@ -295,8 +312,12 @@ private fun AppUpdateDialog(onUpdateNow: () -> Unit, onDismiss: () -> Unit) {
                 Text(Brand.copy("update_now", "Update Now"), fontWeight = FontWeight.SemiBold)
             }
         },
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text("Later") }
+        dismissButton = if (required) {
+            null
+        } else {
+            {
+                TextButton(onClick = onDismiss) { Text("Later") }
+            }
         },
         containerColor = MaterialTheme.colorScheme.surface,
         shape = RoundedCornerShape(28.dp),

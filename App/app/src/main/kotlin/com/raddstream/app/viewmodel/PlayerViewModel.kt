@@ -230,6 +230,7 @@ class PlayerViewModel @Inject constructor(
      * handed at every site below.
      */
     private var qualityGateEnabled: Boolean = false
+    private var freeQualityCap: String = "720p"
 
     /** A confirmed member, or everyone while the operator has not turned gating on. */
     private val premiumAccess: Boolean get() = VipQualityGate.premiumAccess(qualityGateEnabled, syncEntitled)
@@ -292,6 +293,12 @@ class PlayerViewModel @Inject constructor(
         viewModelScope.launch {
             settingsRepository.qualityGateEnabled.collect { enabled ->
                 qualityGateEnabled = enabled
+                armQualityChoices()
+            }
+        }
+        viewModelScope.launch {
+            settingsRepository.freeQualityCap.collect { cap ->
+                freeQualityCap = cap
                 armQualityChoices()
             }
         }
@@ -755,7 +762,7 @@ class PlayerViewModel @Inject constructor(
         // The detail screen already gates what it stages, but a deep link or a membership
         // that lapsed mid-session could still hand us a premium rung. The player applies the
         // same rule at the point the switch is built, so no premium choice is ever offered.
-        val rungs = staged.rungs.filter { VipQualityGate.allowsBand(it.band, premiumAccess) }
+        val rungs = staged.rungs.filter { VipQualityGate.allowsBand(it.band, premiumAccess, freeQualityCap) }
         if (rungs.isEmpty()) return
         // The standing default band (plan §5 step 10): an explicit tap outranks it, it
         // outranks Auto's pick, and a band missing from this ladder is ignored.
@@ -803,7 +810,7 @@ class PlayerViewModel @Inject constructor(
             band
         }
         val rung = plan.rungs.firstOrNull { it.band == targetBand } ?: return
-        if (!VipQualityGate.allowsBand(rung.band, premiumAccess)) return
+        if (!VipQualityGate.allowsBand(rung.band, premiumAccess, freeQualityCap)) return
         val active = _ui.value.activeRendition
         val auto = wantedAuto
         store.autoQuality.configure(plan.rungs, rung.band, auto)
@@ -1355,6 +1362,7 @@ class PlayerViewModel @Inject constructor(
                 episode,
             ),
             premiumAccess,
+            freeQualityCap,
         )
         val option = ladder.resolvedFor(LadderForScope.AUTO) ?: return null
         val handle = option.streamId.takeIf { it.isNotBlank() } ?: return null

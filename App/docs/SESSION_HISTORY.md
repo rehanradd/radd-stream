@@ -1644,3 +1644,23 @@ or printed. Gating is qoder1's call after fresh green CI.
 **Disclaimer.** The panel holds it as two tuning keys (`disclaimer_text` ≤4000, `disclaimer_version` 0..9999); the feed carries it on remote-config; the watcher mirrors it; the app shows it once per version on first run (a dialog that cannot be swiped away without "I understand") and again in Settings for re-reading. Nothing is invented: an empty text means nothing published, and nothing shows. The operator has not written the text yet — that is his to write, and the draft policy doc is his to paste from.
 
 **Not done:** push (this commit, then CI judges); the panel workspace files go to the VM panel + restart through the gate with the tabs edits. Next: panel keys the app ignores.
+
+---
+
+### Session 61 — Panel keys the app ignored + version health + settings_unavailable (Muse, 2026-11-06)
+
+**Agent:** Muse (BoNzoO), coded directly. Same branch as Sessions 40–60.
+
+**What it is:** four audit findings closed in one commit — the P0 first.
+
+**`settings_unavailable` (P0).** The server has sent this marker since the v1 panel was written: when its settings row cannot be read, it answers shipped defaults and marks the body degraded. The app never decoded the marker, so a degraded 200 would have overwritten the operator's real switches, prices and rails with defaults. The app now decodes it and, at all three consumers — the config watcher, Home's check, and the VIP screen's price load — keeps the last good config and acts on nothing in the body.
+
+**Section caps.** `home_sections_max` / `section_cap` are read by the server feed (clamped to the panel's bounds) and applied there — the feed itself caps the sections and the works per section. The panel now labels them honestly as server-applied.
+
+**Free quality cap.** The operator's cap ("480p" or "720p") is served on remote-config, mirrored by the watcher, and the quality gate is cap-aware: at 480p, 720p rungs, prints and labels leave the free ladder and layout, and the locked message says so. Detail and player collect the cap the same way they collect the gate switch.
+
+**Version health.** Two halves: the app's HTTP client now sends its own User-Agent (with the version name) on every request — before this, only the discovery probes sent it. And the app decodes the two version codes the server already publishes: the update notice compares the published APK code against this build, and a build below the operator's minimum gets a required update dialog — no "Later", no dismiss. The minimum comes from the latest *published* panel snapshot; the draft does not count.
+
+**kill_switch.** Investigated, no code: the key exists nowhere — not in the panel, not in the server, not in the app. The kill switch is `maintenance_mode`, which the app already honours. Recorded so the audit's "ZERO hits" line is answered, not left open.
+
+**Not done:** push (this commit, then CI judges — the region/disclaimer runs on d541dd4 are both green, so nothing is in flight). The panel label file rides the gate with the tabs / Live page / broadcast / disclaimer edits. Next: research-rule screens.

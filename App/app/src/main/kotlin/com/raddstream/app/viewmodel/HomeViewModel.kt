@@ -84,20 +84,44 @@ data class HomeUiState(
 /**
  * A build the operator published through remote config.
  *
- * The published body carries no version code, so this cannot compare versions: a
- * non-empty, http(s) URL is the whole signal, and the copy says "a new build is
- * available" rather than pretending to know whether it is newer than this APK.
+ * The published body carries the APK's version code when the operator set
+ * one, so this can compare versions instead of guessing: a published code
+ * at or below this build means this build already has it, and no notice
+ * shows. A body with no code (0) falls back to the old rule — a published,
+ * http(s) URL is the whole signal. `required` is true only when the
+ * operator set a minimum this build falls below: that update is not
+ * optional, and the dialog offers no "Later".
+ *
+ * @param required true when this build is below the operator's minimum version.
  */
 data class AppUpdate(
     val url: String,
     val publishedAt: Long,
+    val required: Boolean = false,
 ) {
     companion object {
         /** Null unless the operator actually published a usable download link. */
-        fun from(config: VipRemoteConfig?): AppUpdate? {
+        fun from(config: VipRemoteConfig?, currentVersionCode: Int = 0): AppUpdate? {
             val url = config?.apkUpdateUrl?.trim().orEmpty()
             if (!WireText.isHttpUrl(url)) return null
-            return AppUpdate(url = url, publishedAt = config?.updatedAt ?: 0L)
+            // A published code is the operator's own verdict on whether this
+            // build is behind: at or below it, this build already has the
+            // update. A code of 0 means "no code published", and the link
+            // alone is the signal, as before.
+            val publishedCode = config?.apkUpdateVersionCode ?: 0
+            if (publishedCode > 0 && currentVersionCode > 0 &&
+                publishedCode <= currentVersionCode
+            ) {
+                return null
+            }
+            val minCode = config?.minVersionCode ?: 0
+            val required = minCode > 0 && currentVersionCode > 0 &&
+                currentVersionCode < minCode
+            return AppUpdate(
+                url = url,
+                publishedAt = config?.updatedAt ?: 0L,
+                required = required,
+            )
         }
     }
 }
@@ -268,7 +292,15 @@ class HomeViewModel @Inject constructor(
             } catch (_: Exception) {
                 return@launch
             }
-            val notice = AppUpdate.from(config)?.takeUnless { it.url == dismissedUpdateUrl }
+            // A degraded body is a shape guarantee, not the operator's
+            // decision: the settings row could not be read, so its sections,
+            // broadcasts, hides and update link are shipped defaults. Merging
+            // any of it would wipe the operator's real rails with defaults —
+            // the fail-open the server's own docstring warns about. Keep the
+            // last good state instead, exactly as the watcher does.
+            if (config.settingsUnavailable) return@launch
+            val notice = AppUpdate.from(config, Brand.versionCode)
+                ?.takeUnless { it.url == dismissedUpdateUrl }
             // The audience for a targeted broadcast is decided here, from
             // what this phone knows: the viewer's region card, and the tier
             // the account store has actually loaded. A tier that has not

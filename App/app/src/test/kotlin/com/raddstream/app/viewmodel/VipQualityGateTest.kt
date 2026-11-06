@@ -65,7 +65,49 @@ class VipQualityGateTest {
     }
 
     @Test
-    fun `a free viewer gets the free rungs and a fresh auto pointer`() {
+    fun `a 480p cap makes 720p premium, a 720p cap leaves it free`() {
+        assertFalse(VipQualityGate.isPremiumBand("720p", "720p"))
+        assertTrue(VipQualityGate.isPremiumBand("720p", "480p"))
+        assertTrue(VipQualityGate.isPremiumBand(" 720p ", "480p"))
+        assertFalse(VipQualityGate.isPremiumBand("480p", "480p"))
+        assertTrue(VipQualityGate.isPremiumBand("1080p", "480p"))
+
+        assertFalse(VipQualityGate.isPremiumResolution(Resolution.R720, "720p"))
+        assertTrue(VipQualityGate.isPremiumResolution(Resolution.R720, "480p"))
+        assertFalse(VipQualityGate.isPremiumResolution(Resolution.R480, "480p"))
+
+        assertFalse(VipQualityGate.isPremiumLabel("HD 720 print", "720p"))
+        assertTrue(VipQualityGate.isPremiumLabel("HD 720 print", "480p"))
+
+        assertEquals(
+            "720p, 1080p and 4K sources are part of VIP. Upgrade to unlock them.",
+            VipQualityGate.lockedMessage("480p"),
+        )
+        assertEquals(
+            VipQualityGate.LOCKED_MESSAGE,
+            VipQualityGate.lockedMessage("720p"),
+        )
+        // A cap the server never sends reads as the shipped one.
+        assertEquals(
+            VipQualityGate.LOCKED_MESSAGE,
+            VipQualityGate.lockedMessage("4K"),
+        )
+    }
+
+    @Test
+    fun `a free viewer under a 480p cap keeps only the 480p rung`() {
+        val ladder = LadderForScope(
+            options = listOf(option("1080p"), option("720p"), option("480p")),
+            autoBand = "720p",
+            downloadOnlyBands = setOf("720p"),
+        )
+
+        val gated = VipQualityGate.gate(ladder, isVip = false, freeQualityCap = "480p")
+
+        assertEquals(listOf("480p"), gated.options.map { it.band })
+        assertEquals("480p", gated.autoBand)
+        assertTrue(gated.downloadOnlyBands.isEmpty())
+    }
         val ladder = LadderForScope(
             options = listOf(option("2160p"), option("1080p"), option("720p")),
             autoBand = "1080p",

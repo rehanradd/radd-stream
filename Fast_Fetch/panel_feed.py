@@ -29,6 +29,7 @@ off, not broken: every function answers empty and the caller carries on.
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import sqlite3
@@ -292,6 +293,106 @@ TABS_DEFAULT = ["home", "search", "my_list", "settings"]
 TAB_IDS = frozenset(TABS_DEFAULT)
 
 
+def _tuning_int(conn, name, default, lo, hi):
+    """One INTEGER tuning value, clamped to the panel's own bounds.
+
+    A missing table, row or column answers the default; a non-integer or
+    out-of-range value answers the nearest bound, never the operator's typo.
+    """
+    try:
+        if not _has_table(conn, "tuning_settings"):
+            return default
+        row = conn.execute(
+            "SELECT %s FROM tuning_settings WHERE id = 1" % name).fetchone()
+    except sqlite3.Error:
+        return default
+    if row is None:
+        return default
+    try:
+        value = int(_theme_col(row, name) or 0)
+    except (TypeError, ValueError):
+        return default
+    return max(lo, min(hi, value))
+
+
+def read_section_caps(panel_path=None):
+    """How many home sections, and how many works one section carries.
+
+    The operator's `home_sections_max` / `section_cap` tuning keys, clamped
+    to the panel's own bounds (1..12 sections, 5..50 works). A panel that
+    predates the keys answers the shipped caps — the feed never grows
+    unbounded because a row is missing.
+    """
+    conn = _open_panel(panel_path)
+    if conn is None:
+        return {"sections_max": SECTION_MAX, "section_cap": SECTION_ITEM_CAP}
+    try:
+        return {
+            "sections_max": _tuning_int(conn, "home_sections_max", SECTION_MAX, 1, 12),
+            "section_cap": _tuning_int(conn, "section_cap", SECTION_ITEM_CAP, 5, 50),
+        }
+    finally:
+        conn.close()
+
+
+def read_free_quality_cap(panel_path=None):
+    """The best picture a free viewer may play: "480p" or "720p".
+
+    The operator's `free_quality_cap` tuning key. Anything else — a missing
+    key, a typo, an older panel — answers the shipped "720p", never a
+    stricter cap the operator did not ask for.
+    """
+    conn = _open_panel(panel_path)
+    if conn is None:
+        return "720p"
+    try:
+        if not _has_table(conn, "tuning_settings"):
+            return "720p"
+        try:
+            row = conn.execute(
+                "SELECT free_quality_cap FROM tuning_settings WHERE id = 1").fetchone()
+        except sqlite3.Error:
+            return "720p"
+        if row is None:
+            return "720p"
+        cap = _theme_col(row, "free_quality_cap")
+        return cap if isinstance(cap, str) and cap in ("480p", "720p") else "720p"
+    finally:
+        conn.close()
+
+
+def read_min_version(panel_path=None):
+    """The lowest app version code the operator still supports, or 0.
+
+    Read from the latest PUBLISHED config snapshot — the draft does not
+    count, because an unpublished minimum is not a minimum yet. A panel
+    with no publish history, a missing table, or an unreadable snapshot
+    answers 0, which the app reads as "no minimum".
+    """
+    conn = _open_panel(panel_path)
+    if conn is None:
+        return 0
+    try:
+        if not _has_table(conn, "app_remote_config_history"):
+            return 0
+        try:
+            row = conn.execute(
+                "SELECT snapshot_json FROM app_remote_config_history "
+                "ORDER BY config_version DESC LIMIT 1").fetchone()
+        except sqlite3.Error:
+            return 0
+        if row is None:
+            return 0
+        try:
+            snap = json.loads(row["snapshot_json"])
+            version = int(snap.get("config", {}).get("min_version_code") or 0)
+        except (TypeError, ValueError, AttributeError):
+            return 0
+        return version if version >= 0 else 0
+    finally:
+        conn.close()
+
+
 def read_tabs(panel_path=None):
     """Operator tab list for the app, or the default four. Never raises.
 
@@ -454,6 +555,7 @@ def load_panel_feed(catalog_conn, panel_path=None, now=None):
     if panel is None:
         return empty
     try:
+        caps = read_section_caps(panel_path)
         global_hidden, section_hidden = _active_hides(panel, now)
         hidden = set(sorted(global_hidden)[:HIDDEN_IDS_CAP])
         if not _has_table(panel, "home_sections"):
@@ -463,7 +565,7 @@ def load_panel_feed(catalog_conn, panel_path=None, now=None):
             sections = panel.execute(
                 "SELECT * FROM home_sections WHERE is_enabled = 1 "
                 "ORDER BY position ASC, id ASC LIMIT ?",
-                (SECTION_MAX,)).fetchall()
+                (caps["sections_max"],)).fetchall()
         except sqlite3.Error:
             return {"sections": [], "broadcasts": active_broadcasts(panel_path, now),
                     "hidden_work_ids": sorted(hidden)}
@@ -499,7 +601,7 @@ def load_panel_feed(catalog_conn, panel_path=None, now=None):
             }
             rows = _resolve_rows(
                 catalog_conn, rule, category_key, curated_ids,
-                SECTION_ITEM_CAP, hidden | section_hide)
+                caps["section_cap"], hidden | section_hide)
             out_sections.append({"key": key, "title": title, "rows": rows})
         return {"sections": out_sections,
                 "broadcasts": active_broadcasts(panel_path, now),

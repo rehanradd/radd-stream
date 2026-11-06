@@ -56,6 +56,12 @@ class RemoteConfigWatcher @Inject constructor(
             return
         }
         if (!config.success) return
+        // A degraded body is a shape guarantee, not the operator's decision:
+        // the settings row could not be read, so every switch, price and cap
+        // in it is a shipped default. Saving any of it would overwrite the
+        // operator's real values with defaults — the fail-open the server's
+        // own docstring warns about. Keep the last good config instead.
+        if (config.settingsUnavailable) return
         // `flags.chromecast` is deliberately not mirrored: this build has no cast UI at all, so
         // there is no feature for that switch to take away. Storing it would be a dead key.
         val flags = config.featureFlags
@@ -81,6 +87,10 @@ class RemoteConfigWatcher @Inject constructor(
         // operator retracting it) stores empty — and empty means "nothing
         // published", so the dialog never opens on it.
         settings.saveDisclaimer(config.disclaimer)
+        // The free quality cap rides the same body, under the same rule: a
+        // failed poll leaves the last good cap in place, and a body that
+        // carries no cap (an older deployment) stores the shipped "720p".
+        settings.saveFreeQualityCap(config.freeQualityCap)
         // The caps travel with the switch, and only a body that carries them overrides what this
         // build already enforces — a partial body leaves the shipped 25/12/4 windows in force
         // rather than resetting them to something the operator never asked for.

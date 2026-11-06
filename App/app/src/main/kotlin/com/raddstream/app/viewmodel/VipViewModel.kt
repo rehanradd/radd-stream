@@ -296,6 +296,16 @@ class VipViewModel @Inject constructor(
                     }
                     return@launch
                 }
+                // A degraded body is a shape guarantee, not the operator's
+                // decision: its prices and payment handles are shipped
+                // defaults. Showing them would quote a price the operator did
+                // not set — keep the quoted defaults and say so instead.
+                if (config.settingsUnavailable) {
+                    _uiState.update {
+                        it.copy(isLoading = false, loadError = "Payment details are unavailable right now.")
+                    }
+                    return@launch
+                }
                 _uiState.update { current -> current.withConfig(config) }
                 resubmitStoredDraft()
             } catch (ex: Exception) {

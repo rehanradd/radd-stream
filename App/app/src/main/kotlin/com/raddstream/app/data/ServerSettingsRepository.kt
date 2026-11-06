@@ -546,6 +546,25 @@ class ServerSettingsRepository @Inject constructor(
     }
 
     /**
+     * The best picture a free viewer may play, as the operator set it:
+     * "480p" or "720p". Anything else the server sent — a typo, an older
+     * deployment — reads as the shipped "720p", never a stricter cap the
+     * operator did not ask for.
+     */
+    val freeQualityCap: Flow<String> = dataStore.data.map { preferences ->
+        (preferences[FREE_QUALITY_CAP_KEY] ?: "720p")
+            .takeIf { it == "480p" || it == "720p" } ?: "720p"
+    }
+
+    /** Record one received free quality cap, from the same successful poll as [saveTabs]. */
+    suspend fun saveFreeQualityCap(cap: String) {
+        dataStore.edit { preferences ->
+            preferences[FREE_QUALITY_CAP_KEY] =
+                cap.takeIf { it == "480p" || it == "720p" } ?: "720p"
+        }
+    }
+
+    /**
      * The last entitlement the ledger confirmed, mirrored here so a restart does not have to
      * wait for a round trip before it knows what this account may play. It is a CACHE of the
      * server's answer, never a second authority: a signed-out device clears it, and every
@@ -782,6 +801,7 @@ class ServerSettingsRepository @Inject constructor(
         private val DISCLAIMER_TEXT_KEY = stringPreferencesKey("disclaimer_text")
         private val DISCLAIMER_VERSION_KEY = intPreferencesKey("disclaimer_version")
         private val DISCLAIMER_SEEN_VERSION_KEY = intPreferencesKey("disclaimer_seen_version")
+        private val FREE_QUALITY_CAP_KEY = stringPreferencesKey("free_quality_cap")
         private val THEME_ACCENT_KEY = stringPreferencesKey("theme_accent")
         private val THEME_DYNAMIC_COLOR_KEY = booleanPreferencesKey("theme_dynamic_color")
         private val THEME_HERO_AUTOPLAY_KEY = booleanPreferencesKey("theme_hero_autoplay")

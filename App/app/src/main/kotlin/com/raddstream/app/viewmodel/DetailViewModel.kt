@@ -158,6 +158,12 @@ class DetailViewModel @Inject constructor(
             }
         }
         viewModelScope.launch {
+            settingsRepository.freeQualityCap.collect { cap ->
+                freeQualityCap = cap
+                publishViewerContent()
+            }
+        }
+        viewModelScope.launch {
             settingsRepository.userRegion.collect { region ->
                 userRegion = region
                 publishViewerContent()
@@ -179,6 +185,7 @@ class DetailViewModel @Inject constructor(
      * something; [premiumAccess] is what every gate call below actually passes.
      */
     private var qualityGateEnabled: Boolean = false
+    private var freeQualityCap: String = "720p"
 
     /**
      * The viewer's regional-dub preference; [UserRegion.DEFAULT] until DataStore answers,
@@ -229,13 +236,13 @@ class DetailViewModel @Inject constructor(
             state.ladderEpisode,
         )
         val premiumLocked = qualityGateEnabled && !serverVip && (
-            VipQualityGate.hasPremiumPrints(full) ||
-                scope.options.any { VipQualityGate.isPremiumBand(it.band) || VipQualityGate.isPremiumLabel(it.title) }
+            VipQualityGate.hasPremiumPrints(full, freeQualityCap) ||
+                scope.options.any { VipQualityGate.isPremiumBand(it.band, freeQualityCap) || VipQualityGate.isPremiumLabel(it.title, freeQualityCap) }
             )
         _uiState.update {
             it.copy(
-                layout = VipQualityGate.gate(full, premiumAccess),
-                ladder = VipQualityGate.gate(scope, premiumAccess),
+                layout = VipQualityGate.gate(full, premiumAccess, freeQualityCap),
+                ladder = VipQualityGate.gate(scope, premiumAccess, freeQualityCap),
                 vip = serverVip,
                 premiumSourcesLocked = premiumLocked,
                 adFree = RewardedVipPass.isAdFree(serverVip, rewardedExpiresAt),
@@ -340,6 +347,7 @@ class DetailViewModel @Inject constructor(
                 episode,
             ),
             premiumAccess,
+            freeQualityCap,
         )
 
     /**
@@ -359,6 +367,7 @@ class DetailViewModel @Inject constructor(
                         episode,
                     ),
                     premiumAccess,
+                    freeQualityCap,
                 ),
                 ladderSeason = season,
                 ladderEpisode = episode,
@@ -370,7 +379,7 @@ class DetailViewModel @Inject constructor(
     /** A rung this app cannot present is downloaded, and the row says so — no hidden failure. */
     fun keepRung(option: QualityOption) {
         if (isLocked(option)) {
-            _uiState.update { it.copy(actionMessage = VipQualityGate.LOCKED_MESSAGE) }
+            _uiState.update { it.copy(actionMessage = VipQualityGate.lockedMessage(freeQualityCap)) }
             return
         }
         if (option.isProviderPage) {
@@ -386,8 +395,8 @@ class DetailViewModel @Inject constructor(
 
     /** A premium rung the current viewer may not take, decided from the same gate the UI uses. */
     private fun isLocked(option: QualityOption): Boolean =
-        !VipQualityGate.allowsBand(option.band, premiumAccess) ||
-            (!premiumAccess && VipQualityGate.isPremiumLabel(option.title))
+        !VipQualityGate.allowsBand(option.band, premiumAccess, freeQualityCap) ||
+            (!premiumAccess && VipQualityGate.isPremiumLabel(option.title, freeQualityCap))
 
     /**
      * Keep one rung for offline playback, by OUR opaque handle.
@@ -523,7 +532,7 @@ class DetailViewModel @Inject constructor(
      */
     fun playLadder(option: QualityOption, external: Boolean = false) {
         if (isLocked(option)) {
-            _uiState.update { it.copy(actionMessage = VipQualityGate.LOCKED_MESSAGE) }
+            _uiState.update { it.copy(actionMessage = VipQualityGate.lockedMessage(freeQualityCap)) }
             return
         }
         val title = _uiState.value.post?.let { it.cleanTitle ?: it.title } ?: "Stream"
@@ -622,7 +631,7 @@ class DetailViewModel @Inject constructor(
     /** Play the best link this print offers. The server already ranked them. */
     fun playPrint(print: RankedPrint, external: Boolean = false) {
         if (!VipQualityGate.allowsResolution(print.resolution, premiumAccess)) {
-            _uiState.update { it.copy(actionMessage = VipQualityGate.LOCKED_MESSAGE) }
+            _uiState.update { it.copy(actionMessage = VipQualityGate.lockedMessage(freeQualityCap)) }
             return
         }
         val link = print.links.firstOrNull { it.playableHere } ?:
@@ -766,7 +775,7 @@ class DetailViewModel @Inject constructor(
 
     fun keepPrint(print: RankedPrint) {
         if (!VipQualityGate.allowsResolution(print.resolution, premiumAccess)) {
-            _uiState.update { it.copy(actionMessage = VipQualityGate.LOCKED_MESSAGE) }
+            _uiState.update { it.copy(actionMessage = VipQualityGate.lockedMessage(freeQualityCap)) }
             return
         }
         val link = print.links.firstOrNull { !it.streamId.isBlank() && !it.isPageLink }

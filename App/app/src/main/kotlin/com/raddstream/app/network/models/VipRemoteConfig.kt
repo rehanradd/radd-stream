@@ -24,6 +24,35 @@ data class VipRemoteConfig(
     val currency: String = "PKR",
     @SerializedName("updated_at")
     val updatedAt: Long = 0L,
+    /**
+     * True when the server could not read its own settings row and answered
+     * with shipped defaults instead: the shape is guaranteed, the values are
+     * not the operator's decision. The app must keep its last cached config
+     * and act on nothing in this body — treating unknown as `false` is how a
+     * remote control fails open (see `admin_panel.remote_config`).
+     */
+    @SerializedName("settings_unavailable")
+    val settingsUnavailable: Boolean = false,
+    /**
+     * The best picture a free viewer may play, as the operator set it in the
+     * panel ("480p" or "720p"; "720p" when unset). The quality gate reads it;
+     * any other value decodes but is treated as "720p" by the gate.
+     */
+    @SerializedName("free_quality_cap")
+    val freeQualityCap: String = "720p",
+    /**
+     * The version code of the APK the operator published, or 0 when they
+     * published no code. The update notice compares it against this build;
+     * a body with no code falls back to "a link means an update".
+     */
+    @SerializedName("apk_update_version_code")
+    val apkUpdateVersionCode: Int = 0,
+    /**
+     * The lowest app version code the operator still supports, or 0 for "no
+     * minimum". A build below it is told the update is required, not optional.
+     */
+    @SerializedName("min_version_code")
+    val minVersionCode: Int = 0,
     /** Operator switch: the phone shows a maintenance notice instead of the catalog. */
     @SerializedName("maintenance_mode")
     val maintenanceMode: Boolean = false,

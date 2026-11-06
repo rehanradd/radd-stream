@@ -88,7 +88,12 @@ def _build_panel(path):
         "theme_mode TEXT, theme_accent TEXT, theme_dynamic_color INTEGER, "
         "theme_hero_autoplay INTEGER, theme_hero_interval_s INTEGER, "
         "hero_max INTEGER, tabs TEXT, disclaimer_text TEXT, "
-        "disclaimer_version INTEGER)")
+        "disclaimer_version INTEGER, home_sections_max INTEGER, "
+        "section_cap INTEGER, free_quality_cap TEXT)")
+    conn.execute(
+        "CREATE TABLE app_remote_config_history (id INTEGER PRIMARY KEY, "
+        "config_version INTEGER NOT NULL, snapshot_json TEXT NOT NULL, "
+        "published_by INTEGER, published_at INTEGER)")
     now = 1_791_000_000
     conn.executemany(
         "INSERT INTO home_sections VALUES (?,?,?,?,?,?,?,?,?)", [
@@ -125,9 +130,13 @@ def _build_panel(path):
             (9, "No such target", "Nobody", "info", "everyone", None, now - 10, now + 3600, "published"),
         ])
     conn.execute(
-        "INSERT INTO tuning_settings VALUES (?,?,?,?,?,?,?,?,?,?)",
+        "INSERT INTO tuning_settings VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (1, "light", "#2BC79A", 1, 0, 8, 4, "my_list,home,home,search",
-         "Links come from public sites. We host nothing.", 3))
+         "Links come from public sites. We host nothing.", 3, 12, 20, "720p"))
+    conn.execute(
+        "INSERT INTO app_remote_config_history VALUES (?,?,?,?,?)",
+        (1, 5, '{"config": {"min_version_code": 42, "config_version": 5}}',
+         1, now))
     conn.commit()
     conn.close()
     return now
@@ -243,6 +252,60 @@ class PanelFeedTests(unittest.TestCase):
         self.assertEqual(
             panel_feed.read_disclaimer(panel_path=self.panel_path),
             {"text": "", "version": 0})
+
+    def test_section_caps_read_operator_values(self):
+        self.assertEqual(
+            panel_feed.read_section_caps(panel_path=self.panel_path),
+            {"sections_max": 12, "section_cap": 20})
+
+    def test_section_caps_clamp_and_apply(self):
+        conn = sqlite3.connect(self.panel_path)
+        conn.execute(
+            "UPDATE tuning_settings SET home_sections_max=99, section_cap=1 WHERE id=1")
+        conn.commit()
+        conn.close()
+        # 99 clamps to the panel's bound of 12; 1 clamps up to 5.
+        self.assertEqual(
+            panel_feed.read_section_caps(panel_path=self.panel_path),
+            {"sections_max": 12, "section_cap": 5})
+        conn = sqlite3.connect(self.panel_path)
+        conn.execute(
+            "UPDATE tuning_settings SET home_sections_max=1, section_cap=5 WHERE id=1")
+        conn.commit()
+        conn.close()
+        feed = self.feed()
+        self.assertEqual(len(feed["sections"]), 1)
+        self.assertLessEqual(len(feed["sections"][0]["rows"]), 5)
+
+    def test_free_quality_cap_reads_operator_value(self):
+        self.assertEqual(
+            panel_feed.read_free_quality_cap(panel_path=self.panel_path), "720p")
+        conn = sqlite3.connect(self.panel_path)
+        conn.execute(
+            "UPDATE tuning_settings SET free_quality_cap='480p' WHERE id=1")
+        conn.commit()
+        self.assertEqual(
+            panel_feed.read_free_quality_cap(panel_path=self.panel_path), "480p")
+        conn.execute(
+            "UPDATE tuning_settings SET free_quality_cap='4K' WHERE id=1")
+        conn.commit()
+        conn.close()
+        # A value the panel itself would refuse is never the app's cap.
+        self.assertEqual(
+            panel_feed.read_free_quality_cap(panel_path=self.panel_path), "720p")
+
+    def test_min_version_reads_published_snapshot(self):
+        self.assertEqual(
+            panel_feed.read_min_version(panel_path=self.panel_path), 42)
+        conn = sqlite3.connect(self.panel_path)
+        conn.execute("DELETE FROM app_remote_config_history")
+        conn.commit()
+        conn.close()
+        self.assertEqual(
+            panel_feed.read_min_version(panel_path=self.panel_path), 0)
+        empty_path = os.path.join(self.tmp.name, "empty.db")
+        sqlite3.connect(empty_path).close()
+        self.assertEqual(panel_feed.read_min_version(panel_path=empty_path), 0)
 
     def test_missing_panel_db_returns_empty_without_raising(self):
         feed = panel_feed.load_panel_feed(

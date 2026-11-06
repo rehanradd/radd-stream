@@ -389,7 +389,10 @@ class VipRemoteConfigTest {
               ],
               "hidden_work_ids": [2],
               "tabs": ["settings", "home"],
-              "disclaimer": {"text": "Links come from public sites. We host nothing.", "version": 3}
+              "disclaimer": {"text": "Links come from public sites. We host nothing.", "version": 3},
+              "free_quality_cap": "480p",
+              "apk_update_version_code": 214,
+              "min_version_code": 210
             }
             """.trimIndent(),
             VipRemoteConfig::class.java,
@@ -419,6 +422,9 @@ class VipRemoteConfigTest {
 
         assertEquals("Links come from public sites. We host nothing.", config.disclaimer.text)
         assertEquals(3, config.disclaimer.version)
+        assertEquals("480p", config.freeQualityCap)
+        assertEquals(214, config.apkUpdateVersionCode)
+        assertEquals(210, config.minVersionCode)
     }
 
     @Test
@@ -431,6 +437,20 @@ class VipRemoteConfigTest {
         assertEquals(PanelTheme(), config.theme)
         assertEquals("", config.disclaimer.text)
         assertEquals(0, config.disclaimer.version)
+        assertEquals("720p", config.freeQualityCap)
+        assertEquals(0, config.apkUpdateVersionCode)
+        assertEquals(0, config.minVersionCode)
+        assertEquals(false, config.settingsUnavailable)
+    }
+
+    @Test
+    fun `a degraded body still decodes, with the marker set`() {
+        val config = gson.fromJson(
+            """{"success": true, "settings_unavailable": true}""",
+            VipRemoteConfig::class.java,
+        )
+
+        assertEquals(true, config.settingsUnavailable)
     }
 
     @Test
