@@ -21,6 +21,7 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material3.Button
@@ -535,6 +536,72 @@ fun SettingsScreen(
                     "Saved on this device, and applied the next time each one matters: image size " +
                         "from the next poster, the keep duration from the next download, audio and " +
                         "subtitle language from the next playback.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+
+            // ── Player defaults ──────────────────────────────────────
+            // The switches the player itself obeys (plan §5 step 10, P36): autoplay-next
+            // gates the auto-advance, autoplay-previews gates the Home hero, default
+            // quality is the rung a new title starts on when Play was Auto, and subtitle
+            // size is the same number the player sheet's slider writes.
+            SettingsCard(title = "Player", icon = Icons.Default.PlayArrow) {
+                SwitchRow(
+                    checked = state.prefs.autoplayNext,
+                    onCheckedChange = viewModel::setAutoplayNext,
+                    label = "Play the next episode automatically",
+                )
+                Text(
+                    "When this is off, an episode ends on the Next Episode button instead of moving on by itself.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                SwitchRow(
+                    checked = state.prefs.autoplayPreviews,
+                    onCheckedChange = viewModel::setAutoplayPreviews,
+                    label = "Auto-play previews on Home",
+                )
+                Text(
+                    "When this is off, the Home hero stays on the first poster until you swipe it.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+
+                Spacer(Modifier.height(10.dp))
+                PreferenceRowTitle("Default quality")
+                val qualityBands = listOf("auto", "480p", "720p", "1080p", "2160p")
+                val qualityLabels = listOf("Auto", "480p", "720p", "1080p", "4K")
+                ChipRow(qualityLabels, qualityBands.indexOf(state.prefs.defaultQuality).coerceAtLeast(0)) { idx ->
+                    viewModel.setDefaultQuality(qualityBands[idx])
+                }
+                Text(
+                    "The quality a new title starts on. Auto lets the player pick; a fixed choice starts there and stays.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+
+                Spacer(Modifier.height(10.dp))
+                PreferenceRowTitle("Subtitle size")
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    Text(
+                        "${state.prefs.subtitleSizePercent}%",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                    Slider(
+                        value = state.prefs.subtitleSizePercent.toFloat(),
+                        onValueChange = { viewModel.setSubtitleSize(it.toInt()) },
+                        valueRange = 50f..200f,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+                Text(
+                    "The same size the player sheet offers while watching; it applies from the next playback.",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )

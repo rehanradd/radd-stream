@@ -70,6 +70,8 @@ fun RaddStreamNavGraph(
     features: RemoteFeatures = RemoteFeatures(),
     /** The operator's theme, for the hero knobs Home reads from it. */
     theme: PanelTheme = PanelTheme(),
+    /** The viewer's own autoplay-previews switch (plan §5 step 10): either it or the operator's hero flag being off stops the carousel. */
+    autoplayPreviews: Boolean = true,
     openRequest: LocalVideoOpen? = null,
     onOpenConsumed: () -> Unit = {},
 ) {
@@ -171,7 +173,7 @@ fun RaddStreamNavGraph(
                     onBrowseType = { type -> navController.navigate(Screen.Browse.createRoute(type)) },
                     onSetupServerClick = { navController.navigate(Screen.Setup.route) },
                     heroMax = theme.heroMax,
-                    heroAutoplay = theme.heroAutoplay,
+                    heroAutoplay = theme.heroAutoplay && autoplayPreviews,
                     heroIntervalMs = theme.heroIntervalS * 1_000L,
                 )
             }

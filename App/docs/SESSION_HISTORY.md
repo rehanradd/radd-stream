@@ -1474,3 +1474,20 @@ or printed. Gating is qoder1's call after fresh green CI.
 - **Wiring:** `QualitySheet` rung rows now show the cost as their detail, with "Playing" joining it (after " · ") only on the rung playing now; the Auto row is untouched (Auto adapts, so it has no fixed cost). No strings changed, so the string guards are unaffected; no composable touched, so the annotation audit from Session 49's fix still stands.
 
 **Not done:** no local Gradle run — CI judges. Device check (costs read on real rungs, including an unknown-band rung showing no cost) is owner-only, part of step 20. Next: player step 10 (player defaults in Settings).
+
+---
+
+### Session 51 — Player rebuild step 10: player defaults in Settings (Muse, 2026-11-06)
+
+**Agent:** Muse (BoNzoO), coded directly on the user's order. No qoder lane. Same branch as Sessions 40–50.
+
+**Built:** the four player defaults (plan §5 #10, P36) — the switches the player itself obeys.
+
+- **Autoplay-next:** NEW `player_autoplay_next` in `ServerSettingsRepository` (default ON, plan D4), collected by `PlayerViewModel`, and the auto-advance in `handleCrossEpisodeAction` now asks the pure `shouldAutoAdvance` gate first. With the switch off, the episode ends on the Next Episode button instead of advancing: NEW `endedHasNextEpisode` on `PlayerUiState`, set when the gated action arrives, cleared when playback leaves the ended state, when a new bundle opens, or when the button is tapped. The ended overlay is now `EndedButtons` (Play Again + Next Episode, same card style); `PlayAgainButton` is deleted, not left dead. No countdown ambush, no "Are you still watching?".
+- **Default quality:** NEW `player_default_quality` (default "auto"), a ChipRow in Settings (Auto/480p/720p/1080p/4K), applied in `armQualityChoices` through the pure `resolveStartBand`: an explicit tap on the detail screen outranks it, it outranks Auto's pick, a band missing from this ladder is ignored, and applying it turns Auto off for that title (a fixed band is a decision, and the director never moves a decision). Verified while building: the staged start band is effectively always set (detail screen, quality switch, binge prefetch all stage one), so the default can only honestly apply where Auto was staged — which is exactly what the precedence says.
+- **Autoplay-previews:** NEW `player_autoplay_previews` (default ON, matching the hero's own default). The plan never defined "previews" — the only autoplay in the app is the Home hero carousel — so the switch gates it: `MainActivity` collects it, `NavGraph` passes it, Home runs `theme.heroAutoplay && autoplayPreviews`. Either the operator's flag or the viewer's switch being off stops the carousel.
+- **Subtitle size:** no new key — it already lived in the player sheet (`subtitle_size_percent`, 50..200 %). Settings now surfaces it with a slider that writes the same store through `saveSubtitleStyle`, so the sheet and Settings can never disagree.
+- **Tests:** NEW `PlayerDefaultsTest` (9 cases): the gate (on advances, off ends on the button, in-file seeks and movie endings never advance) and the start-band precedence (default applies on Auto, explicit tap wins, missing band ignored, fallbacks).
+- **Checks before committing:** no `PlayAgainButton` references left; zero raw `Color(0x…)` in the diff; full-file annotation audit clean; no new strings (Settings uses hardcoded copy like the rest of that screen; the player reuses `player_next_episode`/`player_play_again`).
+
+**Not done:** no local Gradle run — CI judges. Device check (switch off → episode ends on the button; switch on → advances; default 720p → title starts 720p; previews off → hero stays) is owner-only, part of step 20. Next: player step 11 (chapter ticks on the scrubber).

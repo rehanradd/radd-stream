@@ -125,6 +125,14 @@ class MainActivity : ComponentActivity() {
             }
             val operatorTheme by themePreference.collectAsState(initial = PanelTheme())
 
+            // The viewer's own autoplay-previews switch (plan §5 step 10): it gates the
+            // Home hero alongside the operator's theme flag — either one off stops the
+            // carousel. Seeded on, matching the hero's own default.
+            val autoplayPreviewsPreference: Flow<Boolean> = remember(serverSettingsRepository) {
+                serverSettingsRepository.autoplayPreviews.catch { emit(true) }
+            }
+            val autoplayPreviews by autoplayPreviewsPreference.collectAsState(initial = true)
+
             RaddStreamTheme(
                 darkTheme = resolveThemeDark(operatorTheme.mode, isSystemInDarkTheme()),
                 dynamicColor = effectiveDynamicColor(dynamicColorRequested, operatorTheme.dynamicColor),
@@ -179,6 +187,7 @@ class MainActivity : ComponentActivity() {
                             startDestination = destination,
                             features = operatorFeatures,
                             theme = operatorTheme,
+                            autoplayPreviews = autoplayPreviews,
                             openRequest = pendingLocalOpen,
                             onOpenConsumed = { pendingLocalOpen = null },
                         )

@@ -69,6 +69,14 @@ data class UserPreferences(
     val audioBoost: Float = AudioBoost.BASELINE,
     /** Preferred audio language, or [AUDIO_LANGUAGE_DEFAULT] = leave it to the player. */
     val audioLanguage: String = AUDIO_LANGUAGE_DEFAULT,
+    /** Play the next episode on its own when this one ends (plan §5 step 10, D4: on). */
+    val autoplayNext: Boolean = true,
+    /** Let the Home hero move on its own (plan §5 step 10); off stops the carousel. */
+    val autoplayPreviews: Boolean = true,
+    /** The rung a new title starts on when Play was Auto; "auto" = no default. */
+    val defaultQuality: String = "auto",
+    /** Subtitle text size, 50..200 % — the same number the player sheet's slider writes. */
+    val subtitleSizePercent: Int = 100,
 ) {
     /**
      * The widest poster this install asks the image loader for, in pixels. This is the ONE
@@ -267,7 +275,7 @@ class SettingsViewModel @Inject constructor(
     /**
      * Every row in the Playback & Display card, collected rather than sampled so a value
      * written anywhere shows up here immediately, and so a tap survives process death.
-     * These eight flows are the whole preference layer: the player, the theme, the image
+     * These twelve flows are the whole preference layer: the player, the theme, the image
      * loader, the offline sweeper and the release selector each read the same stored values,
      * which is what makes a chip here a setting rather than a decoration.
      */
@@ -309,6 +317,28 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch {
             settingsRepository.dynamicColorEnabled.collect { enabled ->
                 _uiState.update { it.copy(prefs = it.prefs.copy(dynamicColor = enabled)) }
+            }
+        }
+        // Player defaults (plan §5 step 10): the autoplay switches, the standing
+        // default quality, and the subtitle size the player sheet's slider also writes.
+        viewModelScope.launch {
+            settingsRepository.autoplayNext.collect { enabled ->
+                _uiState.update { it.copy(prefs = it.prefs.copy(autoplayNext = enabled)) }
+            }
+        }
+        viewModelScope.launch {
+            settingsRepository.autoplayPreviews.collect { enabled ->
+                _uiState.update { it.copy(prefs = it.prefs.copy(autoplayPreviews = enabled)) }
+            }
+        }
+        viewModelScope.launch {
+            settingsRepository.defaultQuality.collect { band ->
+                _uiState.update { it.copy(prefs = it.prefs.copy(defaultQuality = band)) }
+            }
+        }
+        viewModelScope.launch {
+            settingsRepository.subtitleStyle.collect { style ->
+                _uiState.update { it.copy(prefs = it.prefs.copy(subtitleSizePercent = style.sizePercent)) }
             }
         }
         // Collected, not sampled: the region screen this row opens writes the same key, so the
@@ -421,6 +451,37 @@ class SettingsViewModel @Inject constructor(
         updatePrefs { it.copy(audioLanguage = value) }
         val store = if (value == UserPreferences.AUDIO_LANGUAGE_DEFAULT) null else value
         viewModelScope.launch { settingsRepository.savePreferredAudioLanguage(store) }
+    }
+
+    /**
+     * Player defaults (plan §5 step 10, P36). Each one writes straight through to the
+     * same store its consumer reads — the player for autoplay-next and default quality,
+     * the Home hero for autoplay-previews, the subtitle renderer for size — so a switch
+     * here is a setting, not a decoration.
+     */
+    fun setAutoplayNext(enabled: Boolean) {
+        updatePrefs { it.copy(autoplayNext = enabled) }
+        viewModelScope.launch { settingsRepository.saveAutoplayNext(enabled) }
+    }
+
+    fun setAutoplayPreviews(enabled: Boolean) {
+        updatePrefs { it.copy(autoplayPreviews = enabled) }
+        viewModelScope.launch { settingsRepository.saveAutoplayPreviews(enabled) }
+    }
+
+    fun setDefaultQuality(band: String) {
+        updatePrefs { it.copy(defaultQuality = band) }
+        viewModelScope.launch { settingsRepository.saveDefaultQuality(band) }
+    }
+
+    /** The subtitle size, 50..200 % — the same number the player sheet's slider writes. */
+    fun setSubtitleSize(percent: Int) {
+        val safe = percent.coerceIn(50, 200)
+        updatePrefs { it.copy(subtitleSizePercent = safe) }
+        viewModelScope.launch {
+            val current = settingsRepository.subtitleStyle.first()
+            settingsRepository.saveSubtitleStyle(current.copy(sizePercent = safe))
+        }
     }
 
     /**

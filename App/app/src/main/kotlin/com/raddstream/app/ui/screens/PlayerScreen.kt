@@ -547,7 +547,11 @@ private fun PlayerScreenContent(
         }
 
         if (state.isEnded && controlsVisible && !state.locked && !state.pureCinema) {
-            PlayAgainButton(onPlayAgain = { vm.playFrom(0) })
+            EndedButtons(
+                showNextEpisode = state.endedHasNextEpisode,
+                onPlayAgain = { vm.playFrom(0) },
+                onNextEpisode = { vm.requestNextEpisode() },
+            )
         }
 
         // 7 — dialogs & sheets (VM-flag driven so every entry point is centralized)
@@ -1576,20 +1580,41 @@ private fun UnlockFab(onUnlock: () -> Unit) {
 }
 
 @Composable
-private fun PlayAgainButton(onPlayAgain: () -> Unit) {
+private fun EndedButtons(showNextEpisode: Boolean, onPlayAgain: () -> Unit, onNextEpisode: () -> Unit) {
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        Surface(
-            color = RaddHudCard,
-            shape = MaterialTheme.shapes.medium,
-            modifier = Modifier.clickableNoRipple(onPlayAgain),
-        ) {
-            Row(
-                Modifier.padding(horizontal = 20.dp, vertical = 12.dp),
-                verticalAlignment = Alignment.CenterVertically,
+        Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Surface(
+                color = RaddHudCard,
+                shape = MaterialTheme.shapes.medium,
+                modifier = Modifier.clickableNoRipple(onPlayAgain),
             ) {
-                Icon(Icons.Default.Replay10, null, tint = Color.White)
-                Spacer(Modifier.width(8.dp))
-                Text(stringResource(R.string.player_play_again), color = Color.White, fontSize = brandSp(14))
+                Row(
+                    Modifier.padding(horizontal = 20.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(Icons.Default.Replay10, null, tint = Color.White)
+                    Spacer(Modifier.width(8.dp))
+                    Text(stringResource(R.string.player_play_again), color = Color.White, fontSize = brandSp(14))
+                }
+            }
+            // Only when autoplay-next is off and a numbered successor exists: the
+            // episode ends on this button instead of advancing on its own (plan §5
+            // step 10). Same card, same tap — a choice, not an ambush.
+            if (showNextEpisode) {
+                Surface(
+                    color = RaddHudCard,
+                    shape = MaterialTheme.shapes.medium,
+                    modifier = Modifier.clickableNoRipple(onNextEpisode),
+                ) {
+                    Row(
+                        Modifier.padding(horizontal = 20.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(Icons.Default.SkipNext, null, tint = Color.White)
+                        Spacer(Modifier.width(8.dp))
+                        Text(stringResource(R.string.player_next_episode), color = Color.White, fontSize = brandSp(14))
+                    }
+                }
             }
         }
     }

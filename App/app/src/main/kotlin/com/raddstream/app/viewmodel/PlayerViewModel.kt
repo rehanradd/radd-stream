@@ -65,6 +65,8 @@ import com.raddstream.app.player.SubtitleUiSettings
 import com.raddstream.app.player.TrackUiOption
 import com.raddstream.app.player.ViewMode
 import com.raddstream.app.player.majorVersionOf
+import com.raddstream.app.player.resolveStartBand
+import com.raddstream.app.player.shouldAutoAdvance
 import com.raddstream.app.player.shouldShowCoach
 import com.raddstream.app.player.subtitle.SubtitleCue
 import com.raddstream.app.player.subtitle.SubtitleFile
@@ -137,6 +139,15 @@ class PlayerViewModel @Inject constructor(
      * whether this player offers a keep at all — see [refreshKeepState] and [keepCurrent].
      */
     private var downloadsAllowed: Boolean = true
+
+    /**
+     * The viewer's own player defaults (plan §5 step 10, P36): autoplay-next, on until
+     * the viewer turns it off (plan D4), and the standing default quality band ("auto"
+     * = no default). Collected, not sampled, so a change in Settings reaches a player
+     * that is already running before the next episode ends.
+     */
+    private var autoplayNext: Boolean = true
+    private var defaultQualityBand: String = LadderForScope.AUTO
 
     private val sleepTimer = SleepTimer()
 
@@ -354,6 +365,16 @@ class PlayerViewModel @Inject constructor(
                 _showCoach.value = shouldShowCoach(seen, Brand.versionName)
             }
         }
+        // The viewer's own player defaults (plan §5 step 10): the autoplay-next switch
+        // gates the auto-advance, and the default band is the rung a new title starts
+        // on when Play was Auto. Collected, not sampled, so a change in Settings reaches
+        // a player that is already running.
+        viewModelScope.launch {
+            settingsRepository.autoplayNext.collect { enabled -> autoplayNext = enabled }
+        }
+        viewModelScope.launch {
+            settingsRepository.defaultQuality.collect { band -> defaultQualityBand = band }
+        }
     }
 
     /**
@@ -400,6 +421,10 @@ class PlayerViewModel @Inject constructor(
                 it.copy(
                     isBuffering = playbackState == Player.STATE_BUFFERING,
                     isEnded = playbackState == Player.STATE_ENDED,
+                    // The ended successor offer dies the moment playback leaves the ended
+                    // state — a replay or a new title must not inherit the last episode's
+                    // Next Episode button.
+                    endedHasNextEpisode = if (playbackState == Player.STATE_ENDED) it.endedHasNextEpisode else false,
                 )
             }
             if (playbackState == Player.STATE_ENDED) {
@@ -439,7 +464,7 @@ class PlayerViewModel @Inject constructor(
     private fun observeStore() {
         viewModelScope.launch {
             store.bundle.collect { b ->
-                _ui.update { it.copy(bundle = b, activeRendition = store.activeRendition()) }
+                _ui.update { it.copy(bundle = b, activeRendition = store.activeRendition(), endedHasNextEpisode = false) }
                 armQualityChoices()
                 // A rung Auto moved to is the SAME episode in a different address, so the
                 // binge policy must not be re-armed by it; only a new file or a new episode
@@ -684,11 +709,18 @@ class PlayerViewModel @Inject constructor(
         // same rule at the point the switch is built, so no premium choice is ever offered.
         val rungs = staged.rungs.filter { VipQualityGate.allowsBand(it.band, premiumAccess) }
         if (rungs.isEmpty()) return
-        val startBand = staged.startBand?.takeIf { band -> rungs.any { it.band == band } }
-            ?: rungs.first().band
+        // The standing default band (plan §5 step 10): an explicit tap outranks it, it
+        // outranks Auto's pick, and a band missing from this ladder is ignored.
+        val (startBand, auto) = resolveStartBand(
+            stagedStartBand = staged.startBand,
+            stagedAuto = staged.auto,
+            defaultBand = defaultQualityBand,
+            rungBands = rungs.map { it.band },
+        )
         val plan = staged.copy(
             rungs = rungs,
             startBand = startBand,
+            auto = auto,
             autoBand = staged.autoBand?.takeIf { band -> rungs.any { it.band == band } },
         )
         ladderPlan = plan
@@ -1060,6 +1092,7 @@ class PlayerViewModel @Inject constructor(
 
     /** Manual "next episode" button — same event path as auto-advance at media end. */
     fun requestNextEpisode() {
+        _ui.update { it.copy(endedHasNextEpisode = false) }
         val bundle = store.bundle.value
         val target = bundle?.target
         if (target == null || (target.episode <= 0 && target.season <= 0)) {
@@ -1758,6 +1791,14 @@ class PlayerViewModel @Inject constructor(
         store.clearNextEpisode()
         when (action) {
             is NextEpisodeAction.NextBundleRequest -> viewModelScope.launch {
+                // The autoplay-next switch (plan §5 step 10, P36) is the promise: with it
+                // off, the episode ends on the Next Episode button instead of advancing.
+                // The action is already consumed above, so the button re-derives the next
+                // episode through requestNextEpisode — nothing here fires twice.
+                if (!shouldAutoAdvance(autoplayNext, action)) {
+                    _ui.update { it.copy(endedHasNextEpisode = true) }
+                    return@launch
+                }
                 // The one placement raised without being asked: the file ended and a successor
                 // exists, which is the only moment the policy allows a break and the viewer was
                 // already about to be handed to the next episode. A refusal — cadence off, not due,

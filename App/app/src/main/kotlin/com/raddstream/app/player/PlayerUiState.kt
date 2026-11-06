@@ -191,6 +191,8 @@ data class PlayerUiState(
     val isPlaying: Boolean = false,
     val isBuffering: Boolean = false,
     val isEnded: Boolean = false,
+    /** The ended episode has a numbered successor and autoplay-next is off: the ended overlay offers the Next Episode button instead of advancing. */
+    val endedHasNextEpisode: Boolean = false,
     val positionMs: Long = 0,
     val bufferedMs: Long = 0,
     val durationMs: Long = 0,

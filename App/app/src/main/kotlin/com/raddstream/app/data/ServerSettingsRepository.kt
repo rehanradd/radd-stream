@@ -245,6 +245,45 @@ class ServerSettingsRepository @Inject constructor(
         }
     }
 
+    /**
+     * Player defaults (plan §5 step 10, P36): the viewer's own switches, not the
+     * operator's. Autoplay-next defaults ON (plan D4, Netflix's default) — the switch
+     * in Settings is the promise, and the player reads this flow before advancing.
+     * Autoplay-previews defaults ON, matching the hero carousel's own default; it gates
+     * the Home hero, never a video. Default quality defaults to "auto" — the same word
+     * the ladder uses ([com.raddstream.app.player.LadderForScope.AUTO]) — and a fixed
+     * band only applies when the viewer picked a rung themselves, never by guessing.
+     */
+    val autoplayNext: Flow<Boolean> = dataStore.data.map { preferences ->
+        preferences[AUTOPLAY_NEXT_KEY] ?: true
+    }
+
+    suspend fun saveAutoplayNext(enabled: Boolean) {
+        dataStore.edit { preferences ->
+            preferences[AUTOPLAY_NEXT_KEY] = enabled
+        }
+    }
+
+    val autoplayPreviews: Flow<Boolean> = dataStore.data.map { preferences ->
+        preferences[AUTOPLAY_PREVIEWS_KEY] ?: true
+    }
+
+    suspend fun saveAutoplayPreviews(enabled: Boolean) {
+        dataStore.edit { preferences ->
+            preferences[AUTOPLAY_PREVIEWS_KEY] = enabled
+        }
+    }
+
+    val defaultQuality: Flow<String> = dataStore.data.map { preferences ->
+        preferences[DEFAULT_QUALITY_KEY]?.takeIf { it.isNotBlank() } ?: "auto"
+    }
+
+    suspend fun saveDefaultQuality(band: String) {
+        dataStore.edit { preferences ->
+            preferences[DEFAULT_QUALITY_KEY] = band
+        }
+    }
+
     /** Drop the trial state with the credential: a signed-out device has no clock to show. */
     suspend fun clearDeviceTrial() {
         dataStore.edit { preferences ->
@@ -649,6 +688,9 @@ class ServerSettingsRepository @Inject constructor(
         private val TRIAL_RECORDED_AT_MS_KEY = longPreferencesKey("trial_recorded_at_ms")
         private val TRIAL_KEY_UNSEEN_KEY = booleanPreferencesKey("trial_key_unseen")
         private val COACH_SEEN_VERSION_KEY = stringPreferencesKey("player_coach_seen_version")
+        private val AUTOPLAY_NEXT_KEY = booleanPreferencesKey("player_autoplay_next")
+        private val AUTOPLAY_PREVIEWS_KEY = booleanPreferencesKey("player_autoplay_previews")
+        private val DEFAULT_QUALITY_KEY = stringPreferencesKey("player_default_quality")
         private val ACCOUNT_LABEL_KEY = stringPreferencesKey("account_label")
         private val SEARCH_RECENTS_KEY = stringPreferencesKey("search_recents")
         private val IMAGE_QUALITY_KEY = stringPreferencesKey("image_quality")
