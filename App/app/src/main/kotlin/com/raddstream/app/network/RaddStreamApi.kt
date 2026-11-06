@@ -81,6 +81,7 @@ interface RaddStreamApi {
         @Query("quality") quality: String? = null,
         @Query("sort") sort: String? = null,
         @Query("free_only") freeOnly: Boolean? = null,
+        @Query("work_ref") workRef: String? = null,
         @Query("page") page: Int = 1,
         @Query("limit") limit: Int = 20,
     ): PostsResponse

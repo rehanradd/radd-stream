@@ -3,8 +3,10 @@ package com.raddstream.app.sync
 import com.google.gson.Gson
 import com.raddstream.app.data.ServerSettingsRepository
 import com.raddstream.app.data.local.FavoriteDao
+import com.raddstream.app.data.local.FavoritePost
 import com.raddstream.app.data.local.SyncedProgressDao
 import com.raddstream.app.data.local.SyncedProgressEntity
+import com.raddstream.app.data.local.UnavailableWorkDao
 import com.raddstream.app.di.CacheScope
 import com.raddstream.app.network.ApiProvider
 import com.raddstream.app.network.RaddStreamApi
@@ -77,6 +79,7 @@ class SyncAccountRepository @Inject constructor(
     private val apiProvider: ApiProvider,
     private val settingsRepository: ServerSettingsRepository,
     private val favoriteDao: FavoriteDao,
+    private val unavailableDao: UnavailableWorkDao,
     private val syncedProgressDao: SyncedProgressDao,
     @CacheScope private val scope: CoroutineScope,
 ) {
@@ -486,11 +489,33 @@ class SyncAccountRepository @Inject constructor(
                 if (mergeProgress(ref, entry)) pulled++
             }
 
+            // The pull side of the list: a server favorite this device never
+            // saw is resolved to its post and saved here, so the second
+            // device's list becomes this device's list. A handle that
+            // resolves to nothing (a work the catalog dropped, a flagged
+            // work the resolver refuses) is skipped, not retried — the next
+            // pass counts it again, and the card says how many are still
+            // unknown. Bounded like the push pass, and never a report back
+            // to the server: the row is already there.
+            var favoritesPulled = 0
+            for (ref in plan.unknownRefs.take(MAX_WRITES_PER_PASS)) {
+                val post = runCatching {
+                    api.getPosts(workRef = ref, page = 1, limit = 1).results.firstOrNull()
+                }.getOrNull() ?: continue
+                favoriteDao.insert(FavoritePost.fromPost(post))
+                // The server listed this post in this very response, so a
+                // refusal recorded against it earlier no longer stands.
+                unavailableDao.clear(post.id)
+                favoriteDao.recordAnswer(post.id, null, System.currentTimeMillis())
+                favoritesPulled++
+            }
+
             SyncReport(
                 favoritesPushed = pushed,
                 progressRowsPulled = pulled,
-                favoritesUnknownHere = plan.unknownHere,
+                favoritesUnknownHere = plan.unknownHere - favoritesPulled,
                 favoritesUnnamable = plan.unnammable,
+                favoritesPulled = favoritesPulled,
                 completed = true,
             )
         } catch (error: Exception) {

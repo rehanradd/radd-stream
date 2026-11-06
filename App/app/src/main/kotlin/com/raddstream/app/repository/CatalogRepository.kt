@@ -40,6 +40,7 @@ class CatalogRepository @Inject constructor(
         quality: String? = null,
         sort: String? = null,
         freeOnly: Boolean? = null,
+        workRef: String? = null,
         page: Int = 1,
         limit: Int = 20,
     ): PostsResponse = apiProvider.current().getPosts(
@@ -50,6 +51,7 @@ class CatalogRepository @Inject constructor(
         quality = quality,
         sort = sort,
         freeOnly = freeOnly,
+        workRef = workRef,
         page = page,
         limit = limit,
     )

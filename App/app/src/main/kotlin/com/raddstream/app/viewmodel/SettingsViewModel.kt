@@ -1185,6 +1185,9 @@ private fun syncSentence(report: SyncReport, paused: Boolean, signedIn: Boolean 
         append(if (signedIn) "Signed in and synced. " else "Synced. ")
         append("${report.favoritesPushed} ${if (report.favoritesPushed == 1) "save" else "s"} sent up, ")
         append("${report.progressRowsPulled} resume ${if (report.progressRowsPulled == 1) "point" else "points"} pulled down.")
+        if (report.favoritesPulled > 0) {
+            append(" ${report.favoritesPulled} saved ${if (report.favoritesPulled == 1) "title" else "titles"} from your other device ${if (report.favoritesPulled == 1) "is" else "are"} now on this device too.")
+        }
         if (report.favoritesUnknownHere > 0) {
             append(" ${report.favoritesUnknownHere} saved ${if (report.favoritesUnknownHere == 1) "title is" else "titles are"} on the server but not on this device — open them once and they will be yours here too.")
         }

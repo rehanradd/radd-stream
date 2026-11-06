@@ -461,6 +461,8 @@ jobs:
       # VIP gate. Offline — temp SQLite files.
       - name: 🧪 test_search_fuzzy.py
         run: python3 -S Fast_Fetch/test_search_fuzzy.py
+      - name: 🧪 test_work_ref.py
+        run: python3 -S Fast_Fetch/test_work_ref.py
 
       # The public contact intake (`POST /api/v1/contact`): the panel's
       # categories, validation, masking and limits, writing the panel's

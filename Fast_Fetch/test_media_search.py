@@ -71,7 +71,7 @@ class Fixture(unittest.TestCase):
         self.addCleanup(self.conn.close)
 
     def ingest(self, *, title, site="somecdn.site", is_18_plus=0,
-               release_title=None, languages='["Hindi"]'):
+               release_title=None, languages='["Hindi"]', year=2024):
         label = release_title if release_title is not None else f"{title} 120min 1080p"
         # The projector takes the rung from the release row's `quality` and only
         # falls back to the label, so a fixture that disagrees with itself would
@@ -81,9 +81,9 @@ class Fixture(unittest.TestCase):
         data = {
             "url": f"https://{site}/movie/{slug}/",
             "slug": slug,
-            "title": f"{title} ({2024})",
+            "title": f"{title} ({year})",
             "clean_title": title,
-            "year": 2024,
+            "year": year,
             "content_type": "movie",
             "poster_url": "https://cdn/poster.jpg",
             "genres": '["Action"]',
@@ -93,7 +93,7 @@ class Fixture(unittest.TestCase):
             "industry": "Bollywood",
             "country": "India",
             "language": "Hindi",
-            "canonical_key": fast_fetch.generate_canonical_key(title, 2024),
+            "canonical_key": fast_fetch.generate_canonical_key(title, year),
             "releases": [{"release_title": label, "quality": rung,
                           "codec": "x264", "size": "1.5GB", "languages": languages,
                           "season": "", "episode": "", "intermediate_url": "",
@@ -229,6 +229,44 @@ class Scoring(Fixture):
         self.assertEqual(item["matched_on"], ["audio_language"])
         miss = self.only(self.search(title="Tongue", audio_language="punjabi"))
         self.assertEqual(miss["mismatched_on"], ["audio_language"])
+
+    def test_newest_puts_the_latest_year_first(self):
+        self.ingest(title="Sortable Old", year=2019)
+        self.ingest(title="Sortable New", year=2024)
+        result = self.search(title="Sortable", sort="newest")
+        self.assertEqual([r["clean_title"] for r in result["results"]],
+                         ["Sortable New", "Sortable Old"])
+        self.assertEqual(result["query"]["sort"], "newest")
+
+    def test_most_copies_puts_the_mirrored_work_first(self):
+        self.ingest(title="Sortable One", release_title="Sortable One 120min 1080p")
+        self.ingest(title="Sortable Two", release_title="Sortable Two 120min 1080p")
+        two = int(self.conn.execute(
+            "SELECT id FROM posts WHERE clean_title = 'Sortable Two'").fetchone()["id"])
+        two_release = int(self.conn.execute(
+            "SELECT id FROM releases WHERE post_id = ?", (two,)).fetchone()["id"])
+        for n in range(3):
+            self.conn.execute(
+                "INSERT INTO download_sources (release_id, source_url, service, status)"
+                " VALUES (?, ?, 'hubcloud_10g', 'active')",
+                (two_release, f"https://mirror{n}.example/{n}.mp4"))
+        self.conn.commit()
+        result = self.search(title="Sortable", sort="most_copies")
+        self.assertEqual([r["clean_title"] for r in result["results"]],
+                         ["Sortable Two", "Sortable One"])
+
+    def test_title_orders_alphabetically(self):
+        self.ingest(title="Sortable Zulu")
+        self.ingest(title="Sortable Alpha")
+        result = self.search(title="Sortable", sort="title")
+        self.assertEqual([r["clean_title"] for r in result["results"]],
+                         ["Sortable Alpha", "Sortable Zulu"])
+
+    def test_an_unknown_sort_falls_back_to_best_instead_of_refusing(self):
+        self.ingest(title="Sortable One")
+        result = self.search(title="Sortable", sort="by-magic")
+        self.assertTrue(result["success"])
+        self.assertEqual(result["query"]["sort"], "best")
 
 
 class EdgeContract(Fixture):

@@ -273,6 +273,12 @@ fun RaddStreamNavGraph(
                     navArgument(Screen.Player.ARG_STREAM_ID) { type = NavType.StringType },
                     navArgument(Screen.Player.ARG_TITLE) { type = NavType.StringType },
                 ),
+                deepLinks = listOf(
+                    // radd://stream/<handle>/<title> — a shared link opens the
+                    // player for one handle, with the same args the in-app
+                    // route carries, so the decode below is identical.
+                    androidx.navigation.navDeepLink { uriPattern = Brand.deepLinkUri("stream/{streamId}/{title}") },
+                ),
             ) { backStackEntry ->
                 val encodedHandle = backStackEntry.arguments?.getString(Screen.Player.ARG_STREAM_ID) ?: ""
                 val encodedTitle = backStackEntry.arguments?.getString(Screen.Player.ARG_TITLE) ?: ""

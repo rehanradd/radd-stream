@@ -2947,17 +2947,91 @@ def _fuzzy_post_ids(conn, query):
     return matched
 
 
+def _resolve_work_ref(conn, work_ref: str):
+    """The post id a minted work handle names, or None.
+
+    The handle is unminted with this server's own signing secret, so a forged
+    or foreign handle is not a row — it is nothing, and the caller answers an
+    empty page, never an error. The raw key is one of the three shapes
+    `catalog_v2.work_key_for` mints: `imdb:tt…` and `tmdb:…` match the id
+    columns; `family:normalized title:year` matches the title the same way
+    the key was derived from it (the UDF is registered on this connection
+    only, and only for this lookup — a full scan is the price of a key that
+    was never a column). The family is checked in Python, because the ledger
+    stores the content type, not the family. The adult clause applies at
+    every step: a flagged work is indistinguishable from a missing one.
+    """
+    key = redact.parse_text(work_ref, signing_secret())
+    if not key:
+        return None
+    if key.startswith("imdb:"):
+        row = conn.execute(
+            f"SELECT id FROM posts p WHERE {redact.adult_clause('p')} AND p.imdb_id = ?"
+            " ORDER BY id DESC LIMIT 1", (key[5:],)).fetchone()
+        return int(row["id"]) if row else None
+    if key.startswith("tmdb:"):
+        row = conn.execute(
+            f"SELECT id FROM posts p WHERE {redact.adult_clause('p')} AND p.tmdb_id = ?"
+            " ORDER BY id DESC LIMIT 1", (key[5:],)).fetchone()
+        return int(row["id"]) if row else None
+    parts = key.split(":")
+    if len(parts) != 3:
+        return None
+    family, title, year = parts
+    if family not in ("movie", "series") or not title:
+        return None
+    conn.create_function(
+        "radd_norm_title", 1, catalog_v2.normalize_title, deterministic=True)
+    sql = ("SELECT id, clean_title, title, year, content_type, is_animated"
+           " FROM posts p"
+           f" WHERE {redact.adult_clause('p')}"
+           " AND radd_norm_title(COALESCE(p.clean_title, p.title)) = ?")
+    params = [title]
+    if year != "ny":
+        try:
+            params.append(int(year))
+        except ValueError:
+            return None
+        sql += " AND p.year = ?"
+    sql += " ORDER BY id DESC"
+    for row in conn.execute(sql, params).fetchall():
+        work_type = catalog_v2.work_type_for(
+            row["content_type"] or "movie", int(row["is_animated"] or 0),
+            row["clean_title"] or row["title"] or "")
+        if catalog_v2.work_family(work_type) == family:
+            return int(row["id"])
+    return None
+
+
 def api_v1_get_posts(query: str = "", content_type: str = "", page: int = 1,
                      limit: int = 20, full: bool = False,
                      base_url: str = "", industry: str = "", genre: str = "",
-                     quality: str = "", sort: str = "", free_only: bool = False) -> dict:
+                     quality: str = "", sort: str = "", free_only: bool = False,
+                     work_ref: str = "") -> dict:
     _ensure_schema()
     offset = max(0, (page - 1) * limit)
     with get_db() as conn:
         # Adult-flagged posts are stored in the DB but never exposed via the API
         where_clauses = [redact.adult_clause("p")]
         params = []
-        if query:
+        if work_ref:
+            # A minted handle names one work: the title search is not consulted
+            # at all, and a handle that resolves to nothing answers an empty
+            # page (total 0), never an error. Every other filter, the adult
+            # clause and the hides below still apply on top of the one id.
+            post_id = _resolve_work_ref(conn, work_ref)
+            if post_id is None:
+                return {
+                    "page": page,
+                    "limit": limit,
+                    "total": 0,
+                    "total_pages": 1,
+                    "results": [],
+                    "fuzzy": False,
+                }
+            where_clauses.append("p.id = ?")
+            params.append(post_id)
+        elif query:
             where_clauses.append("(p.clean_title LIKE ? OR p.title LIKE ? OR p.slug LIKE ?)")
             q_param = f"%{query}%"
             params.extend([q_param, q_param, q_param])
@@ -3077,7 +3151,7 @@ def api_v1_get_posts(query: str = "", content_type: str = "", page: int = 1,
         total = conn.execute(f"SELECT COUNT(*) FROM posts p WHERE {where_sql}", params).fetchone()[0]
 
         fuzzy = False
-        if query and total == 0:
+        if query and not work_ref and total == 0:
             # Exact search found nothing: one edit away is the only honest
             # second chance. The candidate ids only ever replace the LIKE
             # clause (always index 1, always the first three params) — every
@@ -3138,7 +3212,8 @@ def api_v1_get_posts(query: str = "", content_type: str = "", page: int = 1,
 
 def api_v1_search_by_media(query: str = "", duration_s=None, resolution: str = "",
                            audio_language: str = "", limit: int = 10,
-                           full: bool = False, base_url: str = "") -> dict:
+                           full: bool = False, base_url: str = "",
+                           sort: str = "best") -> dict:
     """/api/v1/search/by-media — what the file in the viewer's hand probably is.
 
     Thin on purpose: the matching and the three-way honesty report live in
@@ -3158,7 +3233,8 @@ def api_v1_search_by_media(query: str = "", duration_s=None, resolution: str = "
     with get_db() as conn:
         result = media_search.search_by_media(
             conn, title=query, duration_s=duration_s, resolution=resolution,
-            audio_language=audio_language, limit=limit, full=full, enrich=enrich)
+            audio_language=audio_language, limit=limit, full=full, enrich=enrich,
+            sort=sort)
         if not full and result.get("results"):
             subs = _subtitled_posts(conn, [int(r["id"]) for r in result["results"]])
             for item in result["results"]:
@@ -4100,6 +4176,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 quality=query_params.get("quality", [""])[0],
                 sort=query_params.get("sort", [""])[0],
                 free_only=query_params.get("free_only", [""])[0] == "1",
+                work_ref=query_params.get("work_ref", [""])[0],
             )
             self.send_json(data)
 
@@ -4117,6 +4194,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 resolution=number("resolution"),
                 audio_language=query_params.get("language", [""])[0],
                 limit=limit, full=full, base_url=base_url,
+                sort=query_params.get("sort", ["best"])[0],
             )
             self.send_json(data, status=200 if data.get("success") else 400)
 

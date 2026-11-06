@@ -1,15 +1,22 @@
 package com.raddstream.app
 
 import android.app.Application
+import androidx.hilt.work.HiltWorkerFactory
+import androidx.work.Configuration
+import androidx.work.ExistingPeriodicWorkPolicy
+import androidx.work.PeriodicWorkRequestBuilder
+import androidx.work.WorkManager
 import com.raddstream.app.brand.Brand
 import com.raddstream.app.data.DeviceIdentity
 import com.raddstream.app.data.RemoteConfigWatcher
 import com.raddstream.app.data.cache.CacheEngineRunner
+import com.raddstream.app.data.cache.CacheSweepWorker
 import com.raddstream.app.data.cache.KeepTtlHolder
 import com.raddstream.app.images.ImageSizingHolder
 import com.raddstream.app.share.LanShareRunner
 import com.raddstream.app.sync.SyncAccountRepository
 import dagger.hilt.android.HiltAndroidApp
+import java.util.concurrent.TimeUnit
 import javax.inject.Inject
 
 /**
@@ -17,7 +24,7 @@ import javax.inject.Inject
  * Referenced in AndroidManifest.xml as android:name=".RaddStreamApplication"
  */
 @HiltAndroidApp
-class RaddStreamApplication : Application() {
+class RaddStreamApplication : Application(), Configuration.Provider {
 
     @Inject
     lateinit var cacheEngineRunner: CacheEngineRunner
@@ -36,6 +43,15 @@ class RaddStreamApplication : Application() {
 
     @Inject
     lateinit var remoteConfigWatcher: RemoteConfigWatcher
+
+    @Inject
+    lateinit var workerFactory: HiltWorkerFactory
+
+    // The manifest removes WorkManager's default initializer, so this is the
+    // only factory that can build a worker — and the only one that can build
+    // a @HiltWorker at all.
+    override val workManagerConfiguration: Configuration
+        get() = Configuration.Builder().setWorkerFactory(workerFactory).build()
 
     override fun onCreate() {
         super.onCreate()
@@ -76,5 +92,15 @@ class RaddStreamApplication : Application() {
         // only reader of `/remote-config` that runs before any UI, and it is what makes
         // maintenance mode cover the whole app instead of only a screen someone opened.
         remoteConfigWatcher.start()
+        // The closed-app sweep: the same TTL auto-delete + low-storage eviction
+        // the in-process runner runs every 5 minutes, once a day while the app
+        // is closed. KEEP means a reinstall of this line never duplicates the
+        // work; a failure never retries, the next day or the next launch
+        // covers it.
+        WorkManager.getInstance(this).enqueueUniquePeriodicWork(
+            CacheSweepWorker.UNIQUE_NAME,
+            ExistingPeriodicWorkPolicy.KEEP,
+            PeriodicWorkRequestBuilder<CacheSweepWorker>(1, TimeUnit.DAYS).build(),
+        )
     }
 }

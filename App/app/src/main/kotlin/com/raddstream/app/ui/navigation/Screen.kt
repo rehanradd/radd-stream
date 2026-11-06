@@ -9,12 +9,13 @@ import java.nio.charset.StandardCharsets
  * `?` and `%`, and a route segment splits on those characters — so every destination carrying
  * one encodes on the way in and decodes on the way out, identically. Three destinations needed
  * this and each had its own copy of the same four lines; one owner means a route can never be
- * built one way and parsed another.
+ * built one way and parsed another. The decoder is `internal` (not private) so [DeepLinks]
+ * parses with the same codec instead of a second copy.
  */
-private fun encodeRouteArg(raw: String): String =
+internal fun encodeRouteArg(raw: String): String =
     URLEncoder.encode(raw, StandardCharsets.UTF_8.name())
 
-private fun decodeRouteArg(encoded: String): String =
+internal fun decodeRouteArg(encoded: String): String =
     try {
         URLDecoder.decode(encoded, StandardCharsets.UTF_8.name())
     } catch (_: Exception) {

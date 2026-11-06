@@ -96,6 +96,7 @@ import com.raddstream.app.ui.components.SectionHeader
 import com.raddstream.app.ui.components.SubtitleBadge
 import com.raddstream.app.player.LadderForScope
 import com.raddstream.app.player.QualityOption
+import com.raddstream.app.ui.navigation.DeepLinks
 import com.raddstream.app.viewmodel.DetailNavigationEvent
 import com.raddstream.app.viewmodel.DetailViewModel
 import com.raddstream.app.viewmodel.EpisodeGroup
@@ -1162,7 +1163,11 @@ private fun PrintCard(
 // ── Platform helpers (share keeps the app's own copy honest) ────────────────
 private fun shareTitle(context: Context, post: PostDetail) {
     val title = post.cleanTitle?.takeIf { it.isNotBlank() } ?: post.title
-    val text = Brand.copy("share_template", "", "title" to title)
+    // The template is the operator's words; the link is the app's own deep
+    // link to the title's page — a share that only says "check this out"
+    // leaves the receiver with nowhere to go.
+    val text = Brand.copy("share_template", "", "title" to title) +
+        "\n" + DeepLinks.detailUri(post.id)
     val intent = Intent(Intent.ACTION_SEND).apply {
         type = "text/plain"
         putExtra(Intent.EXTRA_SUBJECT, title)
