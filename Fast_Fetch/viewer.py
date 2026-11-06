@@ -34,6 +34,7 @@ import admin_panel
 import media_search
 import panel_feed
 import contact_intake
+import search_fuzzy
 import usage_stats
 
 if sys.platform.startswith("win"):
@@ -2916,10 +2917,40 @@ def _subtitled_posts(conn, post_ids) -> dict:
 POSTS_MAX_OFFSET = 10_000
 
 
+def _fuzzy_post_ids(conn, query):
+    """Post ids whose title is one edit away from the query, token by token.
+
+    The candidate pass is one scan: every 3-gram of every query token, OR'd
+    into a single LIKE query, capped. The true check is in Python, so a
+    shared gram never smuggles in a title that is two edits away. The adult
+    clause applies here too; the operator's hides apply in the caller, where
+    the ids only ever replace the LIKE clause.
+    """
+    tokens = search_fuzzy.fuzzy_tokens(query)
+    if not tokens:
+        return []
+    grams = sorted({gram for token in tokens for gram in search_fuzzy.candidate_grams(token)})
+    if not grams:
+        return []
+    like_sql = " OR ".join("lower(p.clean_title) LIKE ?" for _ in grams)
+    rows = conn.execute(
+        f"SELECT p.id, p.clean_title FROM posts p WHERE {redact.adult_clause('p')}"
+        f" AND ({like_sql}) ORDER BY p.id DESC LIMIT {search_fuzzy.CANDIDATE_LIMIT}",
+        [f"%{gram}%" for gram in grams]).fetchall()
+    matched = []
+    for row in rows:
+        title_tokens = search_fuzzy.tokenize(row["clean_title"] or "")
+        if search_fuzzy.fuzzy_match(tokens, title_tokens):
+            matched.append(row["id"])
+        if len(matched) >= 20:
+            break
+    return matched
+
+
 def api_v1_get_posts(query: str = "", content_type: str = "", page: int = 1,
                      limit: int = 20, full: bool = False,
                      base_url: str = "", industry: str = "", genre: str = "",
-                     quality: str = "", sort: str = "") -> dict:
+                     quality: str = "", sort: str = "", free_only: bool = False) -> dict:
     _ensure_schema()
     offset = max(0, (page - 1) * limit)
     with get_db() as conn:
@@ -2998,6 +3029,24 @@ def api_v1_get_posts(query: str = "", content_type: str = "", page: int = 1,
                 "EXISTS (SELECT 1 FROM releases rq"
                 f" WHERE rq.post_id = p.id AND rq.quality IS NOT NULL AND {quality_sql})")
 
+        if free_only:
+            # "Included in my plan" for a free viewer: the work has at least
+            # one print the free gate lets through. Mirrors the client's
+            # VipQualityGate — 1080p/2160p/4K/UHD/Full-HD are premium, and
+            # under a 480p operator cap 720p joins them. A print with no
+            # quality label counts as free, the same as the client treats an
+            # unknown band.
+            premium_markers = ["%1080%", "%2160%", "%4K%", "%UHD%",
+                               "%FULL HD%", "%FULLHD%", "%FHD%"]
+            if panel_feed.read_free_quality_cap() == "480p":
+                premium_markers.append("%720%")
+            premium_sql = " OR ".join(
+                "upper(rq.quality) LIKE ?" for _ in premium_markers)
+            where_clauses.append(
+                "EXISTS (SELECT 1 FROM releases rq WHERE rq.post_id = p.id AND"
+                f" (rq.quality IS NULL OR TRIM(rq.quality) = '' OR NOT ({premium_sql})))")
+            params.extend(premium_markers)
+
         # No play-count column exists, so "trending" cannot be invented from views.
         # Rank instead by the only popularity-adjacent figure the ledger carries:
         # how many prints and mirrors the catalog has for the work.
@@ -3026,6 +3075,24 @@ def api_v1_get_posts(query: str = "", content_type: str = "", page: int = 1,
             params.extend(ids)
             where_sql = " AND ".join(where_clauses)
         total = conn.execute(f"SELECT COUNT(*) FROM posts p WHERE {where_sql}", params).fetchone()[0]
+
+        fuzzy = False
+        if query and total == 0:
+            # Exact search found nothing: one edit away is the only honest
+            # second chance. The candidate ids only ever replace the LIKE
+            # clause (always index 1, always the first three params) — every
+            # other filter, the adult clause and the hides stay exactly as
+            # they were.
+            fuzzy_ids = _fuzzy_post_ids(conn, query)
+            if fuzzy_ids:
+                where_clauses[1] = (
+                    "p.id IN (%s)" % ", ".join("?" for _ in fuzzy_ids))
+                params = fuzzy_ids + params[3:]
+                where_sql = " AND ".join(where_clauses)
+                total = conn.execute(
+                    f"SELECT COUNT(*) FROM posts p WHERE {where_sql}",
+                    params).fetchone()[0]
+                fuzzy = True
 
         # `p.source_site`, `p.url` and `p.slug` used to be selected here: the site
         # it came from and the page we took it off. Both are our bookkeeping, so
@@ -3065,6 +3132,7 @@ def api_v1_get_posts(query: str = "", content_type: str = "", page: int = 1,
             "total": total,
             "total_pages": total_pages,
             "results": results,
+            "fuzzy": fuzzy,
         }
 
 
@@ -4031,6 +4099,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 genre=query_params.get("genre", [""])[0],
                 quality=query_params.get("quality", [""])[0],
                 sort=query_params.get("sort", [""])[0],
+                free_only=query_params.get("free_only", [""])[0] == "1",
             )
             self.send_json(data)
 

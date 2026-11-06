@@ -8,6 +8,7 @@ import com.raddstream.app.network.models.PostDetail
 import com.raddstream.app.network.models.PostsResponse
 import com.raddstream.app.network.models.StatsResponse
 import com.raddstream.app.network.models.StreamResponse
+import com.raddstream.app.network.models.SuggestItem
 import com.raddstream.app.network.models.VipRemoteConfig
 import com.raddstream.app.network.models.WirePlayRequest
 import com.raddstream.app.player.Coverage
@@ -38,6 +39,7 @@ class CatalogRepository @Inject constructor(
         genre: String? = null,
         quality: String? = null,
         sort: String? = null,
+        freeOnly: Boolean? = null,
         page: Int = 1,
         limit: Int = 20,
     ): PostsResponse = apiProvider.current().getPosts(
@@ -47,9 +49,23 @@ class CatalogRepository @Inject constructor(
         genre = genre,
         quality = quality,
         sort = sort,
+        freeOnly = freeOnly,
         page = page,
         limit = limit,
     )
+
+    /**
+     * GET /api/v2/suggest while typing. Never throws: a blocked route (the
+     * nginx allow-list does not cover /api/v2/suggest yet), an old server
+     * or a dead socket all answer the same way — no chips — because a
+     * type-ahead that fails must never fail the search it was helping.
+     */
+    suspend fun suggest(query: String): List<SuggestItem> {
+        if (query.trim().length < 2) return emptyList()
+        return runCatching {
+            apiProvider.current().suggest(query.trim(), limit = 5).items
+        }.getOrNull() ?: emptyList()
+    }
 
     suspend fun getPostDetail(postId: Int): PostDetail? {
         val response = apiProvider.current().getPostDetail(postId)

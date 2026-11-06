@@ -3,7 +3,9 @@ package com.raddstream.app.viewmodel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.raddstream.app.data.local.FavoritePost
+import com.raddstream.app.data.local.WatchHistoryDao
 import com.raddstream.app.network.models.Post
+import com.raddstream.app.repository.CatalogRepository
 import com.raddstream.app.repository.FavoritesRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
@@ -15,38 +17,74 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
-enum class ListSort(val label: String) { RECENT("Recently added"), TITLE("Title A–Z") }
+enum class ListSort(val label: String) {
+    RECENT("Recently added"),
+    TITLE("Title A–Z"),
+    UNWATCHED("Unwatched first"),
+}
 
 data class MyListUiState(
     val favorites: List<Post> = emptyList(),
     val sort: ListSort = ListSort.RECENT,
     val isLoading: Boolean = false,
-    /** The row whose removal the viewer has asked for and not yet confirmed, by id. */
-    val armedRemovalId: Int? = null,
     /**
      * Rows this device still stores and this build may not draw. Counted, never listed: the
      * viewer's list did not shrink, the server's answer about it changed.
      */
     val hiddenCount: Int = 0,
+    /** The three most-covered titles in the catalog, for the empty state. Empty when unloaded. */
+    val popular: List<Post> = emptyList(),
+    /** The title just removed, so the screen can offer Undo. Null when nothing is waiting. */
+    val removedTitle: String? = null,
 ) {
     /** [AdultPolicy.hiddenNotice] — a number, because a notice naming a hidden title is a list of one. */
     val hiddenNotice: String? get() = AdultPolicy.hiddenNotice(hiddenCount)
 }
 
+/**
+ * The My List order, as one pure function: recently-added and title are the
+ * old orders; unwatched-first puts titles with no finished watch row ahead
+ * of finished ones, then recently-added inside each half. "Finished" is the
+ * rail's own end-guard, via [watchedTitles] — a half-watched title still
+ * counts as unwatched, and a series counts as watched when any episode of
+ * it is finished.
+ */
+fun sortMyList(
+    posts: List<FavoritePost>,
+    sort: ListSort,
+    watchedTitles: Set<String>,
+): List<FavoritePost> {
+    fun isWatched(post: FavoritePost) = (post.cleanTitle ?: post.title) in watchedTitles
+    return when (sort) {
+        ListSort.RECENT -> posts.sortedByDescending { it.addedAt }
+        ListSort.TITLE -> posts.sortedBy { (it.cleanTitle ?: it.title).lowercase() }
+        ListSort.UNWATCHED -> posts.sortedWith(
+            compareBy<FavoritePost> { isWatched(it) }.thenByDescending { it.addedAt },
+        )
+    }
+}
+
 @HiltViewModel
 class MyListViewModel @Inject constructor(
     private val favoritesRepository: FavoritesRepository,
+    private val watchHistoryDao: WatchHistoryDao,
+    private val catalogRepository: CatalogRepository,
 ) : ViewModel() {
 
     private val sortFlow = MutableStateFlow(ListSort.RECENT)
-    private val armedRemoval = MutableStateFlow<Int?>(null)
+    private val popularFlow = MutableStateFlow<List<Post>>(emptyList())
+    private val removedTitleFlow = MutableStateFlow<String?>(null)
+    private var lastRemoved: Post? = null
+    private var popularLoaded = false
 
     val uiState: StateFlow<MyListUiState> = combine(
         favoritesRepository.getAllFavorites(),
         favoritesRepository.observeRefusedIds(),
         sortFlow,
-        armedRemoval,
-    ) { list, refused, sort, armed ->
+        watchHistoryDao.observeDurations(),
+        popularFlow,
+        removedTitleFlow,
+    ) { list, refused, sort, history, popular, removedTitle ->
         // The stored rows are filtered here, before anything sorts or maps them, so no later step
         // can be handed the unfiltered list by accident. `is18Plus` is the strict half and is null
         // for every row on today's wire; the refusal ledger is the half that fires against a public
@@ -56,16 +94,14 @@ class MyListViewModel @Inject constructor(
             flagOf = FavoritePost::is18Plus,
             refusedOf = { it.id in refused },
         )
-        val sorted: List<FavoritePost> = when (sort) {
-            ListSort.RECENT -> visible.sortedByDescending { it.addedAt }
-            ListSort.TITLE -> visible.sortedBy { (it.cleanTitle ?: it.title).lowercase() }
-        }
+        val sorted = sortMyList(visible, sort, watchedTitles(history))
         MyListUiState(
             favorites = sorted.map(FavoritePost::toPost),
             sort = sort,
             isLoading = false,
-            armedRemovalId = armed,
             hiddenCount = list.size - visible.size,
+            popular = popular,
+            removedTitle = removedTitle,
         )
     }.stateIn(
         scope = viewModelScope,
@@ -94,26 +130,48 @@ class MyListViewModel @Inject constructor(
                 // The ledger keeps what it held. Nothing here may hide or un-hide a row.
             }
         }
+        viewModelScope.launch {
+            // The empty state needs something to point at, and the only honest
+            // "popular" this app can name is the server's own trending order —
+            // most prints and mirrors first. Loaded once, only when the visible
+            // list is empty, and never allowed to fail the screen: no server,
+            // no titles, the text-only empty state stands.
+            uiState.collect { state ->
+                if (!state.isLoading && state.favorites.isEmpty() && !popularLoaded) {
+                    popularLoaded = true
+                    popularFlow.value = runCatching {
+                        catalogRepository.getPosts(sort = "trending", page = 1, limit = 3).results
+                    }.getOrNull() ?: emptyList()
+                }
+            }
+        }
     }
 
     fun setSort(sort: ListSort) {
         sortFlow.value = sort
     }
 
-    /** A held tile is a wish. It becomes a deletion only when [confirmRemoval] says so. */
-    fun requestRemoval(postId: Int) =
-        takeStep(MyListRemoval.step(armedRemoval.value, RemovalTrigger.LONG_PRESS, postId))
+    /**
+     * One tap removes the row at once — no held tile, no confirm dialog.
+     * The row is only ever one Undo away: the removed post is kept in memory
+     * and [undoRemoval] puts it back, and the snackbar is the way back.
+     */
+    fun remove(postId: Int) {
+        val post = uiState.value.favorites.firstOrNull { it.id == postId } ?: return
+        lastRemoved = post
+        removedTitleFlow.value = post.displayTitle
+        viewModelScope.launch { favoritesRepository.removeFavorite(postId) }
+    }
 
-    fun confirmRemoval() =
-        takeStep(MyListRemoval.step(armedRemoval.value, RemovalTrigger.CONFIRM, null))
+    fun undoRemoval() {
+        val post = lastRemoved ?: return
+        lastRemoved = null
+        removedTitleFlow.value = null
+        viewModelScope.launch { favoritesRepository.addFavorite(post) }
+    }
 
-    fun cancelRemoval() =
-        takeStep(MyListRemoval.step(armedRemoval.value, RemovalTrigger.CANCEL, null))
-
-    private fun takeStep(step: RemovalStep) {
-        armedRemoval.value = step.armed
-        step.removeNow?.let { id ->
-            viewModelScope.launch { favoritesRepository.removeFavorite(id) }
-        }
+    fun clearRemovedNotice() {
+        lastRemoved = null
+        removedTitleFlow.value = null
     }
 }

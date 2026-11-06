@@ -45,6 +45,12 @@ data class PostsResponse(
     @SerializedName("total_pages")
     val totalPages: Int = 1,
     val results: List<Post> = emptyList(),
+    /**
+     * True when the server's exact search found nothing and this page is the
+     * one-edit-away fallback instead. The screen says so out loud, so a
+     * viewer who typed "Avngers" knows why "Avengers" is what came back.
+     */
+    val fuzzy: Boolean = false,
 )
 
 /** One catalog row of GET /api/v1/posts (the served `post_brief` view: identity + title fields + counts). */

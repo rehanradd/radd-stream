@@ -153,6 +153,33 @@ fun SearchScreen(
             Spacer(Modifier.height(8.dp))
             FilterRail(state = state, viewModel = viewModel)
 
+            // Type-ahead titles for what is being typed. A tap searches for
+            // that title — it never opens a page, because a suggestion names
+            // a work, not a post.
+            if (state.suggestions.isNotEmpty()) {
+                LazyRow(
+                    modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    contentPadding = PaddingValues(vertical = 4.dp),
+                ) {
+                    items(state.suggestions, key = { it.id }) { suggestion ->
+                        FilterChip(
+                            selected = false,
+                            onClick = { viewModel.runSuggestion(suggestion.title) },
+                            label = {
+                                Text(
+                                    if (suggestion.year != null) {
+                                        "${suggestion.title} (${suggestion.year})"
+                                    } else {
+                                        suggestion.title
+                                    },
+                                )
+                            },
+                        )
+                    }
+                }
+            }
+
             SearchBody(
                 state = state,
                 viewModel = viewModel,
@@ -214,6 +241,18 @@ private fun FilterRail(state: SearchUiState, viewModel: SearchViewModel) {
                     quality.label,
                     state.filters.quality == quality,
                 ) { viewModel.selectQuality(quality) },
+            )
+        }
+        // A VIP viewer has everything included, so the chip would narrow
+        // their catalog for nothing. Free viewers get the one filter that
+        // answers "can I watch this without paying".
+        if (!state.isVip) {
+            add(FilterRailEntry.Caption("Plan"))
+            add(
+                FilterRailEntry.Choice(
+                    "Included in my plan",
+                    state.filters.includedOnly,
+                ) { viewModel.setIncludedOnly(!state.filters.includedOnly) },
             )
         }
         add(FilterRailEntry.Caption("Sort"))
@@ -311,6 +350,18 @@ private fun SearchBody(
                 }
             }
 
+            // The server found nothing exact and answered one edit away
+            // instead. Say so, so the viewer knows why "Avengers" is what
+            // came back for "Avngers".
+            if (state.isFuzzy) {
+                Text(
+                    text = "Showing close matches — check the spelling.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+                )
+            }
+
             state.groups.forEach { group ->
                 SectionHeader(title = group.label, subtitle = "${group.items.size}", modifier = Modifier.padding(horizontal = 0.dp))
                 MediaRail(items = group.items, key = { it.id }) { post ->
@@ -373,6 +424,16 @@ private fun FilterSheetContent(
             isSelected = { state.filters.quality == it },
             onSelect = viewModel::selectQuality,
         )
+        if (!state.isVip) {
+            Text("Plan", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurface)
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FilterChip(
+                    selected = state.filters.includedOnly,
+                    onClick = { viewModel.setIncludedOnly(!state.filters.includedOnly) },
+                    label = { Text("Included in my plan") },
+                )
+            }
+        }
 
         Text("Sort results", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurface)
         Text(

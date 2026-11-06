@@ -6,8 +6,10 @@ import com.raddstream.app.data.ServerSettingsRepository
 import com.raddstream.app.data.normalizeSearchRecents
 import com.raddstream.app.network.friendlyNetworkError
 import com.raddstream.app.network.models.Post
+import com.raddstream.app.network.models.SuggestItem
 import com.raddstream.app.network.models.WorkType
 import com.raddstream.app.repository.CatalogRepository
+import com.raddstream.app.sync.SyncAccountRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
 import kotlinx.coroutines.CancellationException
@@ -85,11 +87,18 @@ data class SearchFilters(
     val quality: QualityFilter = QualityFilter.ALL,
     val yearFrom: Int? = null,
     val yearTo: Int? = null,
+    /**
+     * "Included in my plan": only works with at least one free print. A
+     * server filter, so it narrows the whole catalog — and a VIP viewer
+     * never sees the chip at all, because for them everything is included.
+     */
+    val includedOnly: Boolean = false,
 ) {
     val anyServerFilterActive: Boolean
         get() = industry != IndustryFilter.ALL ||
             genre != GenreFilter.ALL ||
-            quality != QualityFilter.ALL
+            quality != QualityFilter.ALL ||
+            includedOnly
 
     val anyClientFilterActive: Boolean
         get() = yearFrom != null || yearTo != null
@@ -126,6 +135,12 @@ data class SearchUiState(
     val page: Int = 1,
     val hasMore: Boolean = false,
     val hasSearched: Boolean = false,
+    /** A VIP viewer has everything included, so the chip never shows for them. */
+    val isVip: Boolean = false,
+    /** Type-ahead titles for the current query; empty when the route is blocked or the server is old. */
+    val suggestions: List<SuggestItem> = emptyList(),
+    /** True when this page is the server's one-edit-away fallback, not an exact match. */
+    val isFuzzy: Boolean = false,
 ) {
     /** A blank query is still a search when a server facet is selected. */
     val hasSearchIntent: Boolean
@@ -140,6 +155,7 @@ data class SearchUiState(
 class SearchViewModel @Inject constructor(
     private val catalogRepository: CatalogRepository,
     private val settingsRepository: ServerSettingsRepository,
+    private val syncAccountRepository: SyncAccountRepository,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(SearchUiState())
@@ -147,6 +163,7 @@ class SearchViewModel @Inject constructor(
 
     private var searchJob: Job? = null
     private var moreJob: Job? = null
+    private var suggestJob: Job? = null
     private var rawResults: List<Post> = emptyList()
 
     init {
@@ -158,22 +175,40 @@ class SearchViewModel @Inject constructor(
                 _uiState.update { it.copy(recents = stored) }
             }
         }
+        viewModelScope.launch {
+            // Null entitlement is "not loaded yet", not "free": the chip
+            // shows until the account answers, because hiding it for a
+            // free viewer would cost them the filter, while a VIP viewer
+            // sees it vanish the moment their tier loads.
+            syncAccountRepository.entitlement.collect { entitlement ->
+                _uiState.update { it.copy(isVip = entitlement?.vip == true) }
+            }
+        }
     }
 
     fun onQueryChanged(query: String) {
         _uiState.update { it.copy(query = query, error = null) }
         scheduleSearch(reset = true)
+        scheduleSuggest()
     }
 
     /** Records the current query and forces an immediate search (IME "Search" key). */
     fun submitCurrentQuery() {
+        _uiState.update { it.copy(suggestions = emptyList()) }
         recordRecent(_uiState.value.query)
         scheduleSearch(reset = true, immediate = true)
     }
 
     fun runRecent(query: String) {
-        _uiState.update { it.copy(query = query) }
+        _uiState.update { it.copy(query = query, suggestions = emptyList()) }
         recordRecent(query)
+        scheduleSearch(reset = true, immediate = true)
+    }
+
+    /** A suggestion is a title to search for, not a page to open: the id it carries is a work id. */
+    fun runSuggestion(title: String) {
+        _uiState.update { it.copy(query = title, suggestions = emptyList()) }
+        recordRecent(title)
         scheduleSearch(reset = true, immediate = true)
     }
 
@@ -198,6 +233,12 @@ class SearchViewModel @Inject constructor(
     fun selectQuality(quality: QualityFilter) {
         if (_uiState.value.filters.quality == quality) return
         _uiState.update { it.copy(filters = it.filters.copy(quality = quality)) }
+        scheduleSearch(reset = true)
+    }
+
+    fun setIncludedOnly(includedOnly: Boolean) {
+        if (_uiState.value.filters.includedOnly == includedOnly) return
+        _uiState.update { it.copy(filters = it.filters.copy(includedOnly = includedOnly)) }
         scheduleSearch(reset = true)
     }
 
@@ -239,6 +280,7 @@ class SearchViewModel @Inject constructor(
                     genre = state.filters.genre.wireValue,
                     quality = state.filters.quality.wireValue,
                     sort = state.sort.wireValue,
+                    freeOnly = state.filters.includedOnly.takeIf { it },
                     page = next,
                     limit = PAGE_SIZE,
                 )
@@ -248,6 +290,7 @@ class SearchViewModel @Inject constructor(
                         page = next,
                         serverTotal = resp.total,
                         hasMore = resp.results.size >= PAGE_SIZE && next < resp.totalPages,
+                        isFuzzy = resp.fuzzy,
                     )
                 }
                 recompute()
@@ -272,6 +315,7 @@ class SearchViewModel @Inject constructor(
                 it.copy(
                     isLoading = false, error = null, groups = emptyList(), resultCount = 0,
                     serverTotal = 0, hasSearched = false, hasMore = false, page = 1,
+                    isFuzzy = false,
                 )
             }
             return
@@ -288,6 +332,7 @@ class SearchViewModel @Inject constructor(
                     genre = filters.genre.wireValue,
                     quality = filters.quality.wireValue,
                     sort = state.sort.wireValue,
+                    freeOnly = filters.includedOnly.takeIf { it },
                     page = 1,
                     limit = PAGE_SIZE,
                 )
@@ -300,6 +345,7 @@ class SearchViewModel @Inject constructor(
                         serverTotal = resp.total,
                         hasMore = resp.results.size >= PAGE_SIZE && resp.totalPages > 1,
                         error = null,
+                        isFuzzy = resp.fuzzy,
                     )
                 }
                 recompute()
@@ -317,6 +363,26 @@ class SearchViewModel @Inject constructor(
                     )
                 }
             }
+        }
+    }
+
+    /**
+     * Type-ahead on the same debounce as the search, on its own job so a
+     * slow suggest never delays the results. Two characters minimum — the
+     * server answers nothing shorter — and a blank query clears the chips.
+     * A blocked route or an old server just leaves the list empty.
+     */
+    private fun scheduleSuggest() {
+        suggestJob?.cancel()
+        val query = _uiState.value.query.trim()
+        if (query.length < 2) {
+            _uiState.update { it.copy(suggestions = emptyList()) }
+            return
+        }
+        suggestJob = viewModelScope.launch {
+            delay(DEBOUNCE_MS)
+            val items = catalogRepository.suggest(query)
+            _uiState.update { it.copy(suggestions = items) }
         }
     }
 

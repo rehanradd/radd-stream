@@ -108,6 +108,15 @@ interface WatchHistoryDao {
     @Query("SELECT * FROM watch_history WHERE seasonNumber = 0 AND episodeNumber = 0 AND durationMs > 0")
     suspend fun findMovieRows(): List<WatchHistoryEntity>
 
+    /**
+     * Every row with a known duration, as a flow: the My List sort re-reads
+     * it, so a title finished on another screen moves down the list while
+     * this screen is still open. The finished-ness itself is judged in
+     * Kotlin ([watchedTitles]) against the rail's end-guard.
+     */
+    @Query("SELECT * FROM watch_history WHERE durationMs > 0")
+    fun observeDurations(): Flow<List<WatchHistoryEntity>>
+
     @Query("DELETE FROM watch_history")
     suspend fun clear()
 }

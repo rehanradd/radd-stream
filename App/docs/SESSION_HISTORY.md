@@ -1716,3 +1716,23 @@ or printed. Gating is qoder1's call after fresh green CI.
 **Watched auto-delete.** A finished movie's download deletes itself to free space, with a notice naming it. On by default, with an off-switch in Settings (Offline card). Only a fully downloaded keep is touched, and only a movie — the check reads movie watch-history rows against the rail's own 10-second end-guard, so a half-watched film stays and one watched episode can never delete a season keep.
 
 **Tests:** new `DownloadsRulesTest` (4 cases: watched-title set, end-guard boundary, keep-confirm size labels, one-list order). **Not done:** push (this commit, then CI judges — the 7851b89 run is finished: Android red on the one test typo fixed above, so nothing is in flight). Next: Search/My List research rules. Device checks owner-only.
+
+**Addendum — CI failure on 9e0e7fb (Android run 42153914025).** The run failed at `compileDebugKotlin` — one error, `DetailViewModel.kt:105:5`: Session 64's new top-level `PendingKeep` is public and exposes its `internal` parameter type `KeepTarget`. Fixed by making `PendingKeep` `internal` (it is only ever read by the Detail screen, in the same module). The fix ships in the next commit, with the Session 65 work below.
+
+---
+
+### Session 65 — Search + My List research rules (Muse, 2026-11-06)
+
+**Agent:** Muse (BoNzoO), coded directly. Same branch as Sessions 40–64.
+
+**What it is:** the UX plan's Search and My List rules. Server + app.
+
+**My List.** Remove is one tap now, not a held tile plus a confirm dialog: a small × on the poster's corner removes the row at once, and the snackbar offers Undo for as long as it is on screen. The old arm-and-confirm state machine (`MyListRemoval`) is deleted, with its test. Sort gains "Unwatched first": titles with no finished watch row come first, then recently-added inside each half — finished means the rail's own 10-second end-guard, so a half-watched title still counts as unwatched. The empty state shows three "Popular right now" titles — the server's own trending order (most prints and mirrors first), loaded once and only when the list is empty; no server means no titles, the text-only empty state stands.
+
+**Search — typo tolerance (server).** Exact search still answers first and always. Only when it finds nothing does the server take a second chance: a 3-gram candidate pass over titles (one scan, 200 rows), then a true edit-distance check in Python — every query token must land within one edit of some title token. "Avngers" finds "Avengers Endgame"; two edits away stays silent. The adult clause applies to the candidate pass too, and the operator's hides still apply in the final query. The response carries `"fuzzy": true` when the fallback ran, and the app says so out loud ("Showing close matches — check the spelling."). New module `Fast_Fetch/search_fuzzy.py`, new suite `Fast_Fetch/test_search_fuzzy.py` (8 tests, registered in backend-ci.yml).
+
+**Search — "Included in my plan" (server + app).** A new `free_only=1` filter on `/api/v1/posts`: a work counts when it has at least one print the free gate lets through — 1080p/2160p/4K/UHD/Full-HD are premium, 720p joins them under a 480p operator cap, and a print with no quality label counts as free, the same as the client treats an unknown band. The chip sits in the filter rail and the filter sheet, and only a free viewer sees it: for a VIP viewer everything is included, so the chip would only narrow their catalog for nothing.
+
+**Search — suggestions while typing (app).** The existing `/api/v2/suggest` endpoint is wired in: two characters minimum, same debounce as the search, at most five title chips under the field. A tap searches for that title — it never opens a page, because a suggestion names a work, not a post. A blocked route or an old server just leaves the list empty; the search never fails for it. **Gate item:** `/api/v2/suggest` needs the nginx allow-list before it answers in production, like `/api/v2/play` and `POST /api/v1/contact` before it.
+
+**Tests:** server — new `test_search_fuzzy.py` (8 tests: edit distance, tokenize, match rules, typo finds the title, exact stays exact, adult never served, free-only keeps only works with a free print) + `test_panel_feed.py` 29 OK + `test_database.py` 135 OK locally. App — new `MyListSortTest` (2 cases) + new `SuggestWireTest` (3 cases: suggest decode, empty body, fuzzy posts page). **Not done:** push (this commit, then CI judges — the 9e0e7fb run is finished: Android red on the `PendingKeep` visibility fault fixed above, so nothing is in flight). Next: backend gaps, design polish, final double-verification. Device checks owner-only.

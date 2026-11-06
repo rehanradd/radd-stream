@@ -24,6 +24,7 @@ import com.raddstream.app.network.models.RemovedResponse
 import com.raddstream.app.network.models.RevokedResponse
 import com.raddstream.app.network.models.StatsResponse
 import com.raddstream.app.network.models.StreamResponse
+import com.raddstream.app.network.models.SuggestResponse
 import com.raddstream.app.network.models.VipRemoteConfig
 import com.raddstream.app.network.models.WirePlayRequest
 import com.raddstream.app.network.models.WirePlayResponse
@@ -79,9 +80,22 @@ interface RaddStreamApi {
         @Query("genre") genre: String? = null,
         @Query("quality") quality: String? = null,
         @Query("sort") sort: String? = null,
+        @Query("free_only") freeOnly: Boolean? = null,
         @Query("page") page: Int = 1,
         @Query("limit") limit: Int = 20,
     ): PostsResponse
+
+    /**
+     * GET /api/v2/suggest — cheap type-ahead over the works ledger (title
+     * prefixes only). An enhancement, never a gate: the route needs the
+     * nginx allow-list (a gate item, like /api/v2/play), so a 403 here
+     * means no chips, never a failed search.
+     */
+    @GET("api/v2/suggest")
+    suspend fun suggest(
+        @Query("q") query: String,
+        @Query("limit") limit: Int = 5,
+    ): SuggestResponse
 
     /** GET /api/v1/posts/{id} — post details with all releases and sources. */
     @GET("api/v1/posts/{id}")
