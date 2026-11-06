@@ -51,6 +51,7 @@ import com.raddstream.app.ui.screens.DeadLinkScreen
 import com.raddstream.app.ui.screens.DetailScreen
 import com.raddstream.app.ui.screens.DownloadsScreen
 import com.raddstream.app.ui.screens.EmbedWebViewScreen
+import com.raddstream.app.ui.screens.HelpScreen
 import com.raddstream.app.ui.screens.HomeScreen
 import com.raddstream.app.ui.screens.LiveTvScreen
 import com.raddstream.app.ui.screens.LocalFilesScreen
@@ -465,7 +466,12 @@ fun RaddStreamNavGraph(
                     onOpenDashboard = { navController.navigate(Screen.Dashboard.route) },
                     onOpenProfile = { navController.navigate(Screen.Profile.route) },
                     onOpenCoins = { navController.navigate(Screen.Coins.route) },
+                    onOpenHelp = { navController.navigate(Screen.Help.route) },
                 )
+            }
+
+            composable(Screen.Help.route) {
+                HelpScreen(onBackClick = { navController.popBackStack() })
             }
 
             composable(Screen.VipUpgrade.route) {
