@@ -283,6 +283,12 @@ fun DetailScreen(
             pending = pending,
             onConfirm = viewModel::confirmKeep,
             onDismiss = viewModel::dismissKeep,
+            // Session 73 (Phase 5): a free viewer asking for a file gets the
+            // external-browser route as well — the browser follows the server's
+            // redirect to ShrinkMe (when enabled) or the file. VIP viewers never
+            // see it; their downloads are already direct.
+            showWebLink = !state.vip,
+            onWebLink = { openWebPage(context, viewModel.webDownloadUrlFor(pending.handle)) },
         )
     }
 }
@@ -298,6 +304,8 @@ private fun KeepConfirmDialog(
     pending: PendingKeep,
     onConfirm: () -> Unit,
     onDismiss: () -> Unit,
+    showWebLink: Boolean = false,
+    onWebLink: () -> Unit = {},
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -315,6 +323,9 @@ private fun KeepConfirmDialog(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+                if (showWebLink) {
+                    TextButton(onClick = onWebLink) { Text("Get Free Web Link") }
+                }
             }
         },
         confirmButton = {
@@ -1214,5 +1225,20 @@ private fun openInExternalPlayer(context: Context, url: String) {
         } catch (_: Exception) {
             Toast.makeText(context, "No player or browser installed", Toast.LENGTH_SHORT).show()
         }
+    }
+}
+
+/**
+ * Session 73 (Phase 5): open a plain web link in the external browser — the
+ * Web Download link for a free viewer. Unlike [openInExternalPlayer] this sets
+ * no MIME type, so the system picks the browser, not a video player.
+ */
+private fun openWebPage(context: Context, url: String) {
+    try {
+        context.startActivity(
+            Intent(Intent.ACTION_VIEW, Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+        )
+    } catch (_: Exception) {
+        Toast.makeText(context, "No browser installed", Toast.LENGTH_SHORT).show()
     }
 }

@@ -216,14 +216,14 @@ class DownloadEndpointTests(unittest.TestCase):
         self.assertEqual(headers["Location"], DIRECT_URL)
 
     # ---- free-tier shorteners --------------------------------------------- #
-    def test_a_free_download_uses_the_configured_shortener_and_caches_it(self):
+    def test_a_free_web_download_uses_the_configured_shortener_and_caches_it(self):
         self.configure_shorteners(shrinkme="shrinkme-token")
         token = self.token(self.source_id)
         with mock.patch.object(
                 viewer, "call_shortener",
                 return_value="https://short.test/once") as call:
             status, headers, _body = self.fetch(
-                self.public_url, f"/api/v1/download?id={token}", follow=False)
+                self.public_url, f"/api/v1/download?id={token}&via=web", follow=False)
         self.assertEqual(status, 302)
         self.assertEqual(headers["Location"], "https://short.test/once")
         # A shortened target is a landing page, not the file.
@@ -243,9 +243,25 @@ class DownloadEndpointTests(unittest.TestCase):
                 viewer, "call_shortener",
                 side_effect=AssertionError("cache was not used")):
             status, headers, _body = self.fetch(
-                self.public_url, f"/api/v1/download?id={token}", follow=False)
+                self.public_url, f"/api/v1/download?id={token}&via=web", follow=False)
         self.assertEqual(status, 302)
         self.assertEqual(headers["Location"], "https://short.test/once")
+
+    def test_a_free_download_without_the_web_marker_stays_direct(self):
+        """Web-only shortening (owner decision 2026-11-06): the app's own
+        native downloads never carry `via=web`, so they stay direct however
+        the operator configures the panel — the shortener is never even asked.
+        """
+        self.configure_shorteners(shrinkme="shrinkme-token")
+        token = self.token(self.source_id)
+        with mock.patch.object(
+                viewer, "call_shortener",
+                side_effect=AssertionError("in-app download must not shorten")):
+            status, headers, _body = self.fetch(
+                self.public_url, f"/api/v1/download?id={token}", follow=False)
+        self.assertEqual(status, 302)
+        self.assertEqual(headers["Location"], DIRECT_URL)
+        self.assertIn("attachment", headers["Content-Disposition"])
 
     def test_an_unconfigured_or_failing_shortener_falls_back_to_direct(self):
         token = self.token(self.source_id)
@@ -263,14 +279,11 @@ class DownloadEndpointTests(unittest.TestCase):
         self.assertEqual(headers["Location"], DIRECT_URL)
         self.assertIn("attachment", headers["Content-Disposition"])
 
-    def test_a_saved_token_alone_does_not_reenable_the_retired_detour(self):
-        """The owner's directive is structural now, not an accident of empty columns.
-
-        "LINK SHORTENERS ARE PERMANENTLY DROPPED & RETIRED … All media downloads and
-        streams are 100% direct." Until `feature_link_shorteners` existed the shipped
-        behavior satisfied that only because nobody had typed a token: one save in
-        /admin would have detoured every free download, silently, with no flag to
-        notice and nothing to flip back.
+    def test_a_saved_token_alone_does_not_enable_shortening(self):
+        """The flag is the switch, not the token. Shortening is web-only
+        (owner decision 2026-11-06): a saved token with the flag off hands the
+        route no targets, so every download stays direct until the operator
+        enables it — and even then only `?via=web` requests are shortened.
         """
         self.configure_shorteners(shrinkme="shrinkme-token", enabled=False)
         self.assertEqual(admin_panel.shortener_targets(self.conn), [],
@@ -329,7 +342,7 @@ class DownloadEndpointTests(unittest.TestCase):
         with mock.patch.object(viewer, "call_shortener",
                                return_value="https://short.test/free") as call:
             status, headers, _body = self.fetch(
-                self.public_url, f"/api/v1/download?id={token}", follow=False,
+                self.public_url, f"/api/v1/download?id={token}&via=web", follow=False,
                 headers={"Authorization": f"Bearer {key}"})
         self.assertEqual(status, 302)
         self.assertEqual(headers["Location"], "https://short.test/free")
@@ -358,7 +371,7 @@ class DownloadEndpointTests(unittest.TestCase):
                                    return_value="https://short.test/free") as call:
                 status, headers, _body = self.fetch(
                     self.public_url,
-                    f"/api/v1/download?id={token}&vip={forged}", follow=False)
+                    f"/api/v1/download?id={token}&vip={forged}&via=web", follow=False)
             self.assertEqual(status, 302, forged)
             self.assertEqual(headers["Location"], "https://short.test/free", forged)
             call.assert_called_once()

@@ -29,6 +29,7 @@ import com.raddstream.app.player.LadderRung
 import com.raddstream.app.player.PlayerSessionStore
 import com.raddstream.app.player.QualityLadder
 import com.raddstream.app.player.QualityOption
+import com.raddstream.app.player.webDownloadUrl
 import com.raddstream.app.repository.CatalogRepository
 import com.raddstream.app.repository.FavoritesRepository
 import com.raddstream.app.repository.V2PlayResult
@@ -171,7 +172,28 @@ class DetailViewModel @Inject constructor(
         loadDetail()
         observeFavorite()
         observeEntitlement()
+        observeServerBase()
     }
+
+    /**
+     * Session 73 (Phase 5): keep the server origin for the [Get Free Web Link]
+     * action — the link opens `<origin>/api/v1/download?id=<handle>&via=web`
+     * in the external browser, never inside the app.
+     */
+    private fun observeServerBase() {
+        viewModelScope.launch {
+            settingsRepository.serverUrl.collect { base ->
+                serverBaseUrl = base ?: ""
+            }
+        }
+    }
+
+    /**
+     * Session 73 (Phase 5): the external-browser download URL for a pending keep's
+     * handle. Pure builder in [webDownloadUrl]; the browser, not the app, is
+     * what follows the server's redirect — the app never shortens anything itself.
+     */
+    fun webDownloadUrlFor(handle: String): String = webDownloadUrl(serverBaseUrl, handle)
 
     /**
      * Whether this viewer is owed a page without the house card. Both inputs are pushed, so a
@@ -232,6 +254,8 @@ class DetailViewModel @Inject constructor(
 
     private var serverVip: Boolean = false
     private var rewardedExpiresAt: Long = 0L
+    /** Session 73 (Phase 5): the server origin this install talks to, kept for the Web Download link. Empty until DataStore answers. */
+    private var serverBaseUrl: String = ""
 
     /**
      * The operator's switch, not this screen's opinion. Off is the shipped default, so the

@@ -4340,19 +4340,26 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     target = res["url"]
                     shortened = False
                     if not full and not request_is_vip(self.headers, query_params):
-                        # Free tier: a configured shortener earns the operator
-                        # revenue before the bytes. The cache makes a repeat
-                        # download free; a shortener outage falls back to the
-                        # direct URL rather than failing the download.
-                        try:
-                            with get_db() as conn:
-                                shortened_target = shorten_download_url(
-                                    target, conn)
-                        except Exception:      # noqa: BLE001
-                            shortened_target = None
-                        if shortened_target:
-                            target = shortened_target
-                            shortened = True
+                        # Free tier, WEB PAGE ONLY (owner decision 2026-11-06):
+                        # a shortener earns the operator revenue before the
+                        # bytes, but only when the request came through the web
+                        # download page (`?via=web`). The app's own native
+                        # downloads never carry that marker, so they stay
+                        # direct however the operator configures the panel.
+                        # The cache makes a repeat download free; a shortener
+                        # outage falls back to the direct URL rather than
+                        # failing the download.
+                        via_web = query_params.get("via", [""])[0] == "web"
+                        if via_web:
+                            try:
+                                with get_db() as conn:
+                                    shortened_target = shorten_download_url(
+                                        target, conn)
+                            except Exception:      # noqa: BLE001
+                                shortened_target = None
+                            if shortened_target:
+                                target = shortened_target
+                                shortened = True
                     self.send_response(302)
                     self.send_header("Location", target)
                     self.send_header("Cache-Control", "no-store")

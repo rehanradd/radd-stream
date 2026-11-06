@@ -2330,11 +2330,14 @@ SHORTENER_TOKEN_FIELDS = (
 def shortener_targets(conn):
     """Configured `(network, token)` pairs, rotation order, server side only.
 
-    Empty when the flag `feature_link_shorteners` is off (the shipped default, and the
-    owner's standing directive), when the operator has saved no token, or when the settings
-    row is unavailable — which is the same answer to the caller as "shorteners are
-    off": the download route falls back to the direct URL. Read-only and
-    idempotent, like :func:`remote_config`."""
+    Empty when the flag `feature_link_shorteners` is off (the shipped default,
+    and the operator has not enabled it), when the operator has saved no token,
+    or when the settings row is unavailable — which is the same answer to the
+    caller as "shorteners are off": the download route falls back to the
+    direct URL. When the operator enables it (owner decision 2026-11-06),
+    shortening applies ONLY to web-page requests (`?via=web`); the app's
+    native downloads stay direct. Read-only and idempotent, like
+    :func:`remote_config`."""
     try:
         _ensure_monetization(conn)
         values = _read_monetization(conn)
@@ -2343,9 +2346,9 @@ def shortener_targets(conn):
     if values is None:
         return []
     if not _as_flag(values.get("feature_link_shorteners", 0)):
-        # Retired by the owner's directive; a saved token is not consent to detour a
-        # free user's download. The download route reads this list, so refusing here
-        # is the one place the policy can be enforced for every caller.
+        # Off by default. A saved token is not consent to detour a free user's
+        # download: the download route reads this list, so refusing here is the
+        # one place the policy can be enforced for every caller.
         return []
     targets = []
     for network, key in SHORTENER_TOKEN_FIELDS:
