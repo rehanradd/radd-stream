@@ -1346,6 +1346,78 @@ def request_movie(conn_or_path, account_id, *, title, notes="", now=None,
             "already_applied": spend["already_applied"], "id": request_id}
 
 
+#: The statuses the operator may move a request to. The schema comment on
+#: `movie_requests` names this workflow; 'open' is the start and only a human
+#: on the panel moves it. A crawl trigger does NOT change the status — the run
+#: is recorded in the fleet audit journal, and the request stays open until
+#: the operator has seen the title.
+REQUEST_TERMINAL_STATUSES = ("indexed", "declined")
+_REQUEST_STATUSES = ("open",) + REQUEST_TERMINAL_STATUSES
+
+
+def list_movie_requests(conn_or_path, *, status=None, limit=100,
+                        oldest_first=False) -> list:
+    """The operator's queue, newest first, every row a plain dict.
+
+    `status` filters to one workflow state; an unknown one is a caller bug and
+    fails loudly instead of silently returning the wrong queue. `oldest_first`
+    is the queue order — the operator works the oldest request first — while
+    the recent list stays newest first.
+    """
+    if status is not None and status not in _REQUEST_STATUSES:
+        raise ValueError(f"unknown request status: {status!r}")
+    direction = "ASC" if oldest_first else "DESC"
+    with _borrow(conn_or_path) as conn:
+        if status is None:
+            rows = conn.execute(
+                "SELECT id, account_id, title, notes, status, created_at"
+                " FROM movie_requests ORDER BY created_at"
+                f" {direction}, id {direction} LIMIT ?",
+                (int(limit),)).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT id, account_id, title, notes, status, created_at"
+                " FROM movie_requests WHERE status = ?"
+                f" ORDER BY created_at {direction}, id {direction} LIMIT ?",
+                (str(status), int(limit))).fetchall()
+    return [{
+        "id": int(row["id"]),
+        "account_id": int(row["account_id"]),
+        "title": str(row["title"]),
+        "notes": str(row["notes"] or ""),
+        "status": str(row["status"]),
+        "created_at": float(row["created_at"]),
+    } for row in rows]
+
+
+def set_request_status(conn_or_path, request_id, status) -> dict | None:
+    """Move one open request to 'indexed' or 'declined'.
+
+    Returns ``{"id", "status", "changed"}``; ``None`` when the row does not
+    exist. A re-mark writes nothing and reports the status the row already
+    holds, the same shape as a replayed spend — the operator's double-click
+    closes nobody twice.
+    """
+    if status not in REQUEST_TERMINAL_STATUSES:
+        raise ValueError(f"unknown request status: {status!r}")
+    with _borrow(conn_or_path) as conn:
+        row = conn.execute(
+            "SELECT status FROM movie_requests WHERE id = ?",
+            (int(request_id),)).fetchone()
+        if row is None:
+            return None
+        current = str(row["status"])
+        if current != "open":
+            return {"id": int(request_id), "status": current,
+                    "changed": False}
+        conn.execute(
+            "UPDATE movie_requests SET status = ? WHERE id = ?",
+            (str(status), int(request_id)))
+        _commit(conn)
+        return {"id": int(request_id), "status": str(status),
+                "changed": True}
+
+
 def owned_themes(conn_or_path, account_id) -> list:
     """The theme ids this account owns, oldest purchase first. `jade` is the
     shipped look and is owned by everyone, so it is always in the answer

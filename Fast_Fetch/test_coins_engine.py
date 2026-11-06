@@ -1014,6 +1014,60 @@ class RequestMovie(Wallet):
                          engagement.resolve_request_movie_coins())
 
 
+class RequestQueue(Wallet):
+    """The operator's queue over `movie_requests`: list + close."""
+
+    def file_two(self):
+        self.grant(700)
+        first = engagement.request_movie(
+            self.state, self.account_id, title="Dune: Part Three", now=1000.0)
+        second = engagement.request_movie(
+            self.state, self.account_id, title="The Matrix", now=2000.0)
+        return first["id"], second["id"]
+
+    def test_the_open_queue_is_oldest_first_and_the_recent_list_is_newest(self):
+        first, second = self.file_two()
+        open_rows = engagement.list_movie_requests(
+            self.state, status="open", oldest_first=True)
+        self.assertEqual([row["id"] for row in open_rows], [first, second])
+        recent = engagement.list_movie_requests(self.state, status=None)
+        self.assertEqual([row["id"] for row in recent], [second, first])
+
+    def test_a_status_filter_lists_only_that_state(self):
+        first, second = self.file_two()
+        engagement.set_request_status(self.state, first, "indexed")
+        self.assertEqual(
+            [row["id"] for row in engagement.list_movie_requests(
+                self.state, status="indexed")], [first])
+        self.assertEqual(
+            [row["id"] for row in engagement.list_movie_requests(
+                self.state, status="open")], [second])
+
+    def test_an_unknown_status_is_a_caller_bug(self):
+        with self.assertRaises(ValueError):
+            engagement.list_movie_requests(self.state, status="crawling")
+
+    def test_closing_an_open_request_reports_changed(self):
+        first, _second = self.file_two()
+        result = engagement.set_request_status(self.state, first, "declined")
+        self.assertEqual(result, {"id": first, "status": "declined",
+                                  "changed": True})
+
+    def test_a_second_close_writes_nothing_and_reports_what_it_already_is(self):
+        first, _second = self.file_two()
+        engagement.set_request_status(self.state, first, "indexed")
+        result = engagement.set_request_status(self.state, first, "declined")
+        self.assertEqual(result, {"id": first, "status": "indexed",
+                                  "changed": False})
+
+    def test_a_missing_row_is_none_and_a_bad_status_raises(self):
+        self.assertIsNone(
+            engagement.set_request_status(self.state, 9999, "indexed"))
+        first, _second = self.file_two()
+        with self.assertRaises(ValueError):
+            engagement.set_request_status(self.state, first, "crawling")
+
+
 class Themes(Wallet):
     """`POST /coins/redeem-theme` — 250 coins buys one player theme, forever.
 

@@ -22,6 +22,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).parent.resolve()))
 
 import admin_panel          # noqa: E402
+import accounts             # noqa: E402
 import api_v2               # noqa: E402
 import catalog_v2           # noqa: E402
 import engagement           # noqa: E402
@@ -1173,10 +1174,276 @@ class Fleet(Fixture):
         for site in admin_panel.FLEET_SITES:
             self.assertNotIn(site, blob)
 
-    def test_only_the_two_settings_actions_consume_a_body(self):
+    def test_the_body_actions_consume_a_body(self):
         self.assertTrue(admin_panel.takes_body(admin_panel.RUN_SCRAPER_PATH))
         self.assertTrue(admin_panel.takes_body(admin_panel.SAVE_MONETIZATION_PATH))
+        self.assertTrue(admin_panel.takes_body(admin_panel.TRIGGER_REQUEST_CRAWL_PATH))
+        self.assertTrue(admin_panel.takes_body(admin_panel.REQUEST_INDEXED_PATH))
+        self.assertTrue(admin_panel.takes_body(admin_panel.REQUEST_DECLINED_PATH))
         self.assertFalse(admin_panel.takes_body("/admin/api/links/1/evidence"))
+
+
+class Requests(Fixture):
+    """The movie-request queue: list, trigger one bounded sync, close the row.
+
+    The trigger is the honest half of the page: it queues one run for one site
+    the operator picks, through the same `_queue_crawler_run` the fleet page
+    uses — it never claims to search all 18 scrapers for the title.
+    """
+
+    def setUp(self):
+        super().setUp()
+        env = mock.patch.dict("os.environ", {"RADD_ADMIN_TOKEN": TOKEN})
+        env.start()
+        self.addCleanup(env.stop)
+        self.state = Path(self.tmp.name) / "user_state.db"
+        self.state_conn = accounts.connect(self.state)
+        self.addCleanup(self.state_conn.close)
+        engagement.connect(self.state).close()
+        self.key = accounts.new_sync_key()
+        self.account_id = accounts.create_account(
+            self.state_conn, key=self.key)["account_id"]
+        engagement.grant_coins(self.state_conn, self.account_id, amount=1000,
+                               reason="admin_grant",
+                               idempotency_key="fund-requests")
+        self.request_id = engagement.request_movie(
+            self.state_conn, self.account_id, title="Dune: Part Three",
+            notes="please")["id"]
+        for patcher in (mock.patch.object(admin_panel, "_running_sites",
+                                          lambda: set()),):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def get(self, path, peer="127.0.0.1", header=f"Bearer {TOKEN}"):
+        return admin_panel.route_get(path, {}, db_path=self.db_path,
+                                     peer_address=peer, token_header=header,
+                                     state_db_path=self.state)
+
+    def payload(self, path):
+        status, _type, raw = self.get(path)
+        self.assertEqual(status, 200, raw[:200])
+        return json.loads(raw.decode("utf-8"))
+
+    def post(self, path, body, peer="127.0.0.1", header=f"Bearer {TOKEN}"):
+        return admin_panel.route_post(path, {}, db_path=self.db_path,
+                                      peer_address=peer, token_header=header,
+                                      body=body, state_db_path=self.state)
+
+    def csrf(self, action, request_id):
+        return admin_panel._csrf_token(action, request_id)
+
+    def crawler_for(self, site):
+        return next(handle for handle, name
+                    in admin_panel._CRAWLER_SITES.items() if name == site)
+
+    def status_of(self, request_id):
+        row = self.state_conn.execute(
+            "SELECT status FROM movie_requests WHERE id = ?",
+            (request_id,)).fetchone()
+        return str(row["status"])
+
+    def audit(self):
+        with admin_panel._session(self.db_path) as conn:
+            exists = conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+                " AND name = 'admin_fleet_audit'").fetchone()
+            if exists is None:
+                return []
+            return conn.execute(
+                "SELECT crawler_id, action, status FROM admin_fleet_audit"
+                " ORDER BY id").fetchall()
+
+    def trigger_body(self, request_id=None, site="multimovies", **extra):
+        body = {"request_id": str(request_id or self.request_id),
+                "crawler": self.crawler_for(site),
+                "mode": "sync", "limit": 25,
+                "csrf": self.csrf("trigger-request-crawl",
+                                  request_id or self.request_id)}
+        body.update(extra)
+        return body
+
+    def mark_body(self, segment, request_id=None, **extra):
+        target = request_id or self.request_id
+        body = {"request_id": str(target),
+                "csrf": self.csrf(segment, target)}
+        body.update(extra)
+        return body
+
+    # ── the screen ───────────────────────────────────────────────────────
+    def test_the_json_screen_lists_the_open_request_with_its_balance(self):
+        data = self.payload("/admin/api/requests")
+        self.assertTrue(data["available"])
+        self.assertEqual(data["open_count"], 1)
+        row = data["open"][0]
+        self.assertEqual(row["title"], "Dune: Part Three")
+        self.assertEqual(row["status"], "open")
+        self.assertEqual(row["balance"], 700)
+        self.assertTrue(str(row["hint"]).startswith("acct-"))
+        self.assertEqual(data["recent"][0]["id"], self.request_id)
+        blob = json.dumps(data).lower()
+        for site in admin_panel.FLEET_SITES:
+            self.assertNotIn(site, blob)
+        self.assertEqual([row["crawler_id"] for row in data["crawlers"]],
+                         [f"crawler-{i:02d}" for i in range(1, 19)])
+
+    def test_the_html_page_lists_the_request_and_offers_all_three_actions(self):
+        status, content_type, raw = self.get("/admin/requests")
+        self.assertEqual(status, 200, raw[:200])
+        self.assertEqual(content_type, admin_panel.CONTENT_HTML)
+        text = raw.decode("utf-8")
+        self.assertIn("Dune: Part Three", text)
+        self.assertIn("Trigger crawler", text)
+        self.assertIn("Indexed", text)
+        self.assertIn("Decline", text)
+        self.assertIn("does not search", text)
+        self.assertIn("multimovies", text)
+
+    def test_the_page_is_not_mounted_on_the_public_port(self):
+        import viewer
+        self.assertTrue(admin_panel.ADMIN_PREFIX
+                        in viewer.OPERATOR_ONLY_PREFIXES)
+
+    # ── the trigger ──────────────────────────────────────────────────────
+    def test_a_trigger_queues_one_bounded_sync_for_the_picked_site(self):
+        calls = []
+
+        def fake_spawn(site, mode, limit, crawler_id, audit_id, db_path):
+            calls.append((site, mode, limit, crawler_id, audit_id))
+            return 4321
+
+        with mock.patch.object(admin_panel, "_spawn_fleet_run", fake_spawn):
+            status, _type, raw = self.post(
+                admin_panel.TRIGGER_REQUEST_CRAWL_PATH, self.trigger_body())
+        self.assertEqual(status, 200, raw[:200])
+        body = json.loads(raw.decode())
+        self.assertTrue(body["ok"])
+        # The receipt carries the handle only, like the fleet receipt: a site
+        # name in a JSON body would fail the whole answer closed.
+        self.assertEqual(body["crawler_id"], self.crawler_for("multimovies"))
+        self.assertNotIn("site", body)
+        self.assertIsInstance(body["audit_id"], int)
+        self.assertEqual(calls, [("multimovies", "sync", 25,
+                                  self.crawler_for("multimovies"),
+                                  body["audit_id"])])
+        self.assertEqual(
+            [(row["crawler_id"], row["action"], row["status"])
+             for row in self.audit()],
+            [(self.crawler_for("multimovies"), "sync", "running")])
+        # The trigger never closes the request by itself.
+        self.assertEqual(self.status_of(self.request_id), "open")
+
+    def test_a_trigger_for_a_busy_site_is_refused_before_any_spawn(self):
+        called = []
+        with mock.patch.object(admin_panel, "_running_sites",
+                               lambda: {"multimovies"}):
+            with mock.patch.object(admin_panel, "_spawn_fleet_run",
+                                   lambda *a, **k: called.append(a) or 1):
+                status, _type, raw = self.post(
+                    admin_panel.TRIGGER_REQUEST_CRAWL_PATH, self.trigger_body())
+        self.assertEqual(status, 400, raw[:200])
+        self.assertIn("in progress", json.loads(raw)["detail"])
+        self.assertEqual(called, [])
+        self.assertEqual(self.audit(), [])
+
+    def test_a_trigger_with_a_bad_handle_token_or_extra_key_is_refused(self):
+        with mock.patch.object(admin_panel, "_spawn_fleet_run",
+                               lambda *a, **k: 1):
+            for body, code in (
+                    (self.trigger_body(crawler="crawler-99"), "invalid_params"),
+                    (self.trigger_body(crawler="multimovies"), "invalid_params"),
+                    (self.trigger_body(csrf="nope"), "forbidden"),
+                    (self.trigger_body(extra="x"), "invalid_params")):
+                status, _type, raw = self.post(
+                    admin_panel.TRIGGER_REQUEST_CRAWL_PATH, body)
+                self.assertEqual(status, 400 if code == "invalid_params" else 403,
+                                 (body, raw[:200]))
+                self.assertEqual(json.loads(raw)["code"], code)
+            missing = self.trigger_body(request_id=9999)
+            status, _type, raw = self.post(
+                admin_panel.TRIGGER_REQUEST_CRAWL_PATH, missing)
+            self.assertEqual(status, 404, raw[:200])
+        self.assertEqual(self.audit(), [])
+
+    def test_a_trigger_for_a_closed_request_is_refused(self):
+        self.post(admin_panel.REQUEST_INDEXED_PATH,
+                  self.mark_body("mark-request-indexed"))
+        self.assertEqual(self.status_of(self.request_id), "indexed")
+        with mock.patch.object(admin_panel, "_spawn_fleet_run",
+                               lambda *a, **k: 1):
+            status, _type, raw = self.post(
+                admin_panel.TRIGGER_REQUEST_CRAWL_PATH, self.trigger_body())
+        self.assertEqual(status, 400, raw[:200])
+        self.assertIn("already closed", json.loads(raw)["detail"])
+        self.assertEqual(self.audit(), [])
+
+    def test_the_trigger_form_post_answers_with_the_refreshed_page(self):
+        body = self.trigger_body()
+        body["_form"] = "1"
+        with mock.patch.object(admin_panel, "_spawn_fleet_run",
+                               lambda *a, **k: 4321):
+            status, content_type, raw = self.post(
+                admin_panel.TRIGGER_REQUEST_CRAWL_PATH, body)
+        self.assertEqual(status, 200, raw[:200])
+        self.assertEqual(content_type, admin_panel.CONTENT_HTML)
+        self.assertIn("crawl queued for multimovies", raw.decode("utf-8"))
+
+    # ── the closes ───────────────────────────────────────────────────────
+    def test_marking_indexed_closes_the_row_and_a_second_mark_changes_nothing(self):
+        status, _type, raw = self.post(
+            admin_panel.REQUEST_INDEXED_PATH,
+            self.mark_body("mark-request-indexed"))
+        self.assertEqual(status, 200, raw[:200])
+        review = json.loads(raw.decode())["review"]
+        self.assertEqual(review, {"id": self.request_id, "status": "indexed",
+                                  "changed": True})
+        self.assertEqual(self.status_of(self.request_id), "indexed")
+        status, _type, raw = self.post(
+            admin_panel.REQUEST_DECLINED_PATH,
+            self.mark_body("mark-request-declined"))
+        self.assertEqual(status, 200, raw[:200])
+        review = json.loads(raw.decode())["review"]
+        self.assertEqual(review, {"id": self.request_id, "status": "indexed",
+                                  "changed": False})
+        self.assertEqual(self.status_of(self.request_id), "indexed")
+
+    def test_marking_declined_closes_the_row(self):
+        status, _type, raw = self.post(
+            admin_panel.REQUEST_DECLINED_PATH,
+            self.mark_body("mark-request-declined"))
+        self.assertEqual(status, 200, raw[:200])
+        self.assertEqual(json.loads(raw.decode())["review"]["status"], "declined")
+        self.assertEqual(self.status_of(self.request_id), "declined")
+
+    def test_a_wrong_token_cannot_probe_for_a_row(self):
+        missing = _without_request_id(self.post(
+            admin_panel.REQUEST_INDEXED_PATH,
+            self.mark_body("mark-request-indexed", request_id=9999,
+                           csrf="nope")))
+        real = _without_request_id(self.post(
+            admin_panel.REQUEST_INDEXED_PATH,
+            self.mark_body("mark-request-indexed", csrf="nope")))
+        self.assertEqual(missing, real)
+        self.assertEqual(missing[0], 403)
+
+    def test_the_review_form_post_answers_with_the_refreshed_page(self):
+        body = self.mark_body("mark-request-indexed")
+        body["_form"] = "1"
+        status, content_type, raw = self.post(
+            admin_panel.REQUEST_INDEXED_PATH, body)
+        self.assertEqual(status, 200, raw[:200])
+        self.assertEqual(content_type, admin_panel.CONTENT_HTML)
+        self.assertIn("marked indexed", raw.decode("utf-8"))
+
+    # ── the gate ─────────────────────────────────────────────────────────
+    def test_a_remote_peer_never_sees_the_queue_or_closes_a_row(self):
+        refused = self.get("/admin/requests", peer="203.0.113.9")
+        self.assertEqual(refused[0], 403)
+        self.assertNotIn("Dune", refused[2].decode())
+        refused = self.post(admin_panel.REQUEST_INDEXED_PATH,
+                            self.mark_body("mark-request-indexed"),
+                            peer="10.0.0.5")
+        self.assertEqual(refused[0], 403)
+        self.assertEqual(self.status_of(self.request_id), "open")
 
 
 def _without_request_id(triple):
