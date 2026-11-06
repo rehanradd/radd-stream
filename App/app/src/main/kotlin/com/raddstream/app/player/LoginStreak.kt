@@ -30,7 +30,7 @@ fun localEpochDay(nowMs: Long, offsetMs: Long): Long =
 
 /** The local calendar day right now, on this device. */
 fun loginStreakDay(nowMs: Long): Long =
-    localEpochDay(nowMs, TimeZone.getDefault().getOffset(nowMs))
+    localEpochDay(nowMs, TimeZone.getDefault().getOffset(nowMs).toLong())
 
 /**
  * The streak after an open on [todayDay].
