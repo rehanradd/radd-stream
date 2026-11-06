@@ -68,9 +68,10 @@ class ServerSettingsRepository @Inject constructor(
 
     /**
      * Preferred audio language as the user spelled it (BCP-47 tag or an English name);
-     * null means "the player's own choice", which is the honest default — this catalog is
-     * dual audio and guessing a language for someone who never picked one is how a Hindi
-     * viewer ends up with an English dub.
+     * null means "never set" — the region's default applies (see
+     * [com.raddstream.app.player.LanguageDefaults]), so a Hindi viewer is never left to
+     * the player's device-locale guess. The literal "Player default" is the explicit
+     * "leave it to the player" pick, stored as a word so it is never mistaken for never-set.
      */
     val preferredAudioLanguage: Flow<String?> = dataStore.data.map { preferences ->
         preferences[PREFERRED_AUDIO_LANGUAGE_KEY]
@@ -548,13 +549,19 @@ class ServerSettingsRepository @Inject constructor(
         dataStore.edit { preferences -> preferences[KEEP_TTL_KEY] = safe }
     }
 
-    /** Preferred subtitle language as the user named it; null means "leave it off". */
+    /**
+     * Preferred subtitle language as the user named it; null means "never set" (the region's
+     * default applies — see [com.raddstream.app.player.LanguageDefaults]), and the literal
+     * [SUBTITLE_OFF] means off. Off used to be stored as a removal, which made it
+     * indistinguishable from never-set; an explicit Off stored as nothing would come back as
+     * the region's English on the next playback.
+     */
     val preferredSubtitleLanguage: Flow<String?> = dataStore.data.map { preferences ->
         preferences[PREFERRED_SUBTITLE_LANGUAGE_KEY]
     }
 
     suspend fun savePreferredSubtitleLanguage(language: String?) {
-        val clean = language?.trim()?.takeIf { it.isNotEmpty() && it != SUBTITLE_OFF }
+        val clean = language?.trim()?.takeIf { it.isNotEmpty() }
         dataStore.edit { preferences ->
             if (clean == null) preferences.remove(PREFERRED_SUBTITLE_LANGUAGE_KEY)
             else preferences[PREFERRED_SUBTITLE_LANGUAGE_KEY] = clean

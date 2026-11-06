@@ -208,11 +208,22 @@ data class PlayerUiState(
      * promise — see [AudioBoostUi.honestSummary].
      */
     val audioBoostLevel: Float = AudioBoost.BASELINE,
-    /** The user's preferred audio language, as they spelled it; null = the player's own pick. */
+    /**
+     * The audio language in force, as the viewer spelled it — the stored pick, or the
+     * region's default when never set (Desi: Hindi). Null only when the region has no
+     * stance (East Asian): then the player's own pick stands.
+     */
     val preferredAudioLanguage: String? = null,
     /**
-     * The user's preferred subtitle language, as they spelled it. Null is not "no opinion":
-     * the Settings row stores the absence of a value for "Off", so null means no subtitles.
+     * The second audio language for the region, tried only after [preferredAudioLanguage]
+     * misses (Desi: Urdu — one spoken language in these films, two track tags). Null
+     * everywhere else.
+     */
+    val preferredAudioFallback: String? = null,
+    /**
+     * The subtitle language in force, as the viewer spelled it — the stored pick, or the
+     * region's default when never set (Desi and East Asian: English). The literal "Off"
+     * means no subtitles; null only when the region has no subtitle stance (International).
      */
     val preferredSubtitleLanguage: String? = null,
     /** The rung Auto is playing now; null when Auto is not armed (manual band or no ladder). */

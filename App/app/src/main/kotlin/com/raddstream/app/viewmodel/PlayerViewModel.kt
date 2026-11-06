@@ -42,6 +42,7 @@ import com.raddstream.app.player.KeepResult
 import com.raddstream.app.player.KeepUiState
 import com.raddstream.app.player.LadderForScope
 import com.raddstream.app.player.LadderRung
+import com.raddstream.app.player.LanguageDefaults
 import com.raddstream.app.player.NextEpisodeAction
 import com.raddstream.app.player.PlaybackBundle
 import com.raddstream.app.player.PlaybackInfo
@@ -96,6 +97,7 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -319,14 +321,25 @@ class PlayerViewModel @Inject constructor(
             }
         }
         viewModelScope.launch {
-            settingsRepository.preferredAudioLanguage.collect { language ->
-                _ui.update { it.copy(preferredAudioLanguage = language) }
+            combine(
+                settingsRepository.userRegion,
+                settingsRepository.preferredAudioLanguage,
+                settingsRepository.preferredSubtitleLanguage,
+            ) { region, audio, subtitle ->
+                Triple(
+                    LanguageDefaults.effectiveAudioLanguage(audio, region),
+                    LanguageDefaults.effectiveAudioFallback(region),
+                    LanguageDefaults.effectiveSubtitleLanguage(subtitle, region),
+                )
+            }.collect { (audio, fallback, subtitle) ->
+                _ui.update {
+                    it.copy(
+                        preferredAudioLanguage = audio,
+                        preferredAudioFallback = fallback,
+                        preferredSubtitleLanguage = subtitle,
+                    )
+                }
                 applyPreferredAudioTrack()
-            }
-        }
-        viewModelScope.launch {
-            settingsRepository.preferredSubtitleLanguage.collect { language ->
-                _ui.update { it.copy(preferredSubtitleLanguage = language) }
                 applyPreferredSubtitleTrack()
             }
         }
@@ -1619,13 +1632,18 @@ class PlayerViewModel @Inject constructor(
      * selection would make things worse — the stream has nothing in that language, and the
      * language is already playing — so a null answer is honoured as "change nothing" rather
      * than second-guessed here. Media3's own locale heuristic is left in charge exactly when
-     * the user never expressed a preference.
+     * neither the viewer nor their region expressed a preference (East Asian audio); a
+     * viewer who never chose still gets their region's default, Hindi for Desi.
      */
     private fun applyPreferredAudioTrack() {
         val state = _ui.value
         val preferred = state.preferredAudioLanguage?.takeIf { it.isNotBlank() } ?: return
         if (controller == null) return
-        val picked = AudioTrackPolicy.pickPreferred(state.audioTrackRows(), preferred) ?: return
+        val picked = AudioTrackPolicy.pickPreferred(
+            state.audioTrackRows(),
+            preferred,
+            state.preferredAudioFallback,
+        ) ?: return
         if (picked == state.selectedAudioId) return
         val option = state.audioTracks.firstOrNull { it.id == picked } ?: return
         selectAudioTrack(option)
@@ -1714,12 +1732,18 @@ class PlayerViewModel @Inject constructor(
         }
         // Remember the pick: the next episode (and the next visit) auto-applies this
         // language, not the old Settings choice. The sync delay is deliberately never
-        // saved — it belongs to this viewing.
+        // saved — it belongs to this viewing. Turning subtitles off is a pick too: it
+        // saves the literal "Off", because saving nothing would let the region default
+        // (English) come back on the next episode and undo the viewer in front of us.
         val language = persistedLanguageFor(option)
         if (language != null) {
             viewModelScope.launch {
                 if (trackType == C.TRACK_TYPE_AUDIO) settingsRepository.savePreferredAudioLanguage(language)
                 else settingsRepository.savePreferredSubtitleLanguage(language)
+            }
+        } else if (trackType == C.TRACK_TYPE_TEXT) {
+            viewModelScope.launch {
+                settingsRepository.savePreferredSubtitleLanguage(ServerSettingsRepository.SUBTITLE_OFF)
             }
         }
     }

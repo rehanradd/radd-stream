@@ -1576,3 +1576,25 @@ or printed. Gating is qoder1's call after fresh green CI.
 - **Checks before committing:** every `@Composable` in the file lands on exactly one function (audit: 15 annotations, StreakCard and PricingSection each keep their own); no prose ratchet touches this screen (the copy test scans `PlayerScreen.kt` only) and the screen already hardcodes its copy like the rest of the VIP screen.
 
 **Not done:** NOT pushed — CI run 42142493644 (steps 10/11/13/14) is still in progress and a push would cancel it; this commit waits for its verdict, then pushes with any fix it needs. Device check (open the app on consecutive days, the card counts up) is owner-only, part of step 20. Next: tabs control or the contact form.
+
+---
+
+### Session 57 — Language defaults: Hindi/Urdu audio + English subtitles for Desi, app English everywhere (Muse, 2026-11-06)
+
+**Agent:** Muse (BoNzoO), coded directly on the user's order. No qoder lane. Same branch as Sessions 40–56.
+
+**User order (06:18 PKT):** Pakistan and India mostly watch Bollywood and Hollywood in Hindi dub, so the app's default language for the Pakistan/India region is Hindi/Urdu, subtitles by default English, and the app language is English for all regions — with every option still customizable. He also made clear what the app is: Pakistan makes few movies, so Pakistanis watch piracy movies from online sites, and the app does the same — it aggregates publicly available links and hosts nothing (the disclaimer already says this; the order is recorded in memory as the standing product fact).
+
+**What was already true (verified before writing code):** the Region screen's Desi card (the default, preselected) already saves audio "Hindi" + subtitles "English"; International saves English audio; the player matcher already knows both `hin` and `urd` and `pickPreferred` already takes a fallback the player never passed. The app UI is English by construction — one `res/values`, no locale code anywhere, no language switch — so "app English everywhere" needed no code.
+
+**The gap (verified):** the Region screen only writes its defaults when the viewer taps Continue on it. A viewer who never reaches it kept null preferences, and null meant "the player's own pick": audio by device locale (English on an English phone — the exact bug `AudioTrackMatcher` was written to fix) and subtitles OFF. So the rule held only for first-run users who answered Region.
+
+**Built:**
+- **Pure policy:** NEW `player/LanguageDefaults.kt` — `effectiveAudioLanguage` / `effectiveSubtitleLanguage` (stored pick wins; only a stored null falls back to the region card: Desi Hindi/English, International English/null, East Asian null/English; unknown region resolves to Desi) + `effectiveAudioFallback` (Desi "Urdu" — one spoken language in these films, two track tags; tried only after Hindi misses). NEW `LanguageDefaultsTest` (6 cases).
+- **Wiring:** `PlayerViewModel.observeSettings` now combines region + both stored prefs into the effective values (plus the fallback in `PlayerUiState.preferredAudioFallback`, passed to `pickPreferred`); `SettingsViewModel` does the same combine for the chips, so Settings shows the language in force, not a stale "Player default"/"Off".
+- **Explicit choices now survive the fallback:** "Off" and "Player default" are stored as literals, not removals — `savePreferredSubtitleLanguage` no longer strips "Off", both Settings setters store the word itself, and turning subtitles off in the player sheet now saves "Off" (it used to save nothing, so the next episode brought the default back).
+- **Customization gap closed:** "Urdu" added to the Settings subtitle chips (audio already offered it; the region test pins card words to chip words, and widening the chip list cannot break it).
+
+**Checks before committing:** no test asserts the old stores-nothing behaviour (grep clean); the region test only checks card words are in the chip list; `combine` transform + Triple/Pair destructuring match the flow arities; every KDoc that said "null means off / player's own pick" updated to the new contract.
+
+**Not done:** pushed with step 19 after CI run 42142493644 went green — a new run judges both. Device check (fresh install, no Region answer: Hindi audio + English subs on first play; turn subs off in the player, next episode stays off) is owner-only, part of step 20. Next: tabs control or the contact form.

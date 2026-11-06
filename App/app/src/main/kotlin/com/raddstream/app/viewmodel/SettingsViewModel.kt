@@ -10,6 +10,7 @@ import com.raddstream.app.network.friendlyNetworkError
 import com.raddstream.app.network.models.StatsResponse
 import com.raddstream.app.player.AudioBoost
 import com.raddstream.app.player.AudioBoostUi
+import com.raddstream.app.player.LanguageDefaults
 import com.raddstream.app.repository.CatalogRepository
 import com.raddstream.app.share.LanShareRunner
 import com.raddstream.app.share.LanShareStatus
@@ -27,6 +28,7 @@ import javax.inject.Inject
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -67,7 +69,7 @@ data class UserPreferences(
     val dynamicColor: Boolean = false,
     /** The audio level in [AudioBoost]'s unit, already reduced to what this build can apply. */
     val audioBoost: Float = AudioBoost.BASELINE,
-    /** Preferred audio language, or [AUDIO_LANGUAGE_DEFAULT] = leave it to the player. */
+    /** The audio language in force — the stored pick, or the region's default when never set. */
     val audioLanguage: String = AUDIO_LANGUAGE_DEFAULT,
     /** Play the next episode on its own when this one ends (plan §5 step 10, D4: on). */
     val autoplayNext: Boolean = true,
@@ -92,7 +94,7 @@ data class UserPreferences(
         }
 
     companion object {
-        /** The chip label for "no preference", which is stored as the absence of one. */
+        /** The chip label for the explicit "leave it to the player" pick, stored as the word itself. */
         const val AUDIO_LANGUAGE_DEFAULT = "Player default"
         val AUDIO_LANGUAGE_OPTIONS = listOf(
             AUDIO_LANGUAGE_DEFAULT, "English", "Hindi", "Urdu", "Tamil", "Telugu", "Malayalam", "Japanese",
@@ -286,9 +288,25 @@ class SettingsViewModel @Inject constructor(
             }
         }
         viewModelScope.launch {
-            settingsRepository.preferredAudioLanguage.collect { language ->
+            // The chips show the language in force, not the stored word: a viewer who never
+            // chose still sees their region's default (Desi: Hindi audio, English subtitles),
+            // because that is what the player will actually play. One combine, not three
+            // collectors, so a region change and a language change can never show a half-old
+            // pair — the audio row and the subtitle row always answer the same region.
+            combine(
+                settingsRepository.userRegion,
+                settingsRepository.preferredAudioLanguage,
+                settingsRepository.preferredSubtitleLanguage,
+            ) { region, audio, subtitle ->
+                Pair(
+                    LanguageDefaults.effectiveAudioLanguage(audio, region)
+                        ?: UserPreferences.AUDIO_LANGUAGE_DEFAULT,
+                    LanguageDefaults.effectiveSubtitleLanguage(subtitle, region)
+                        ?: UserPreferences.SUBTITLE_DEFAULT,
+                )
+            }.collect { (audio, subtitle) ->
                 _uiState.update {
-                    it.copy(prefs = it.prefs.copy(audioLanguage = language ?: UserPreferences.AUDIO_LANGUAGE_DEFAULT))
+                    it.copy(prefs = it.prefs.copy(audioLanguage = audio, subtitleLang = subtitle))
                 }
             }
         }
@@ -305,13 +323,6 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch {
             settingsRepository.keepTtlHours.collect { hours ->
                 _uiState.update { it.copy(prefs = it.prefs.copy(keepTtl = KeepTtl.fromHours(hours))) }
-            }
-        }
-        viewModelScope.launch {
-            settingsRepository.preferredSubtitleLanguage.collect { language ->
-                _uiState.update {
-                    it.copy(prefs = it.prefs.copy(subtitleLang = language ?: UserPreferences.SUBTITLE_DEFAULT))
-                }
             }
         }
         viewModelScope.launch {
@@ -421,11 +432,10 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch { settingsRepository.saveKeepTtlHours(value.hours) }
     }
 
-    /** [UserPreferences.SUBTITLE_DEFAULT] stores nothing, exactly like the audio row. */
+    /** [UserPreferences.SUBTITLE_DEFAULT] is stored as the word itself, like the audio row. */
     fun setSubtitleLang(value: String) {
         updatePrefs { it.copy(subtitleLang = value) }
-        val store = if (value == UserPreferences.SUBTITLE_DEFAULT) null else value
-        viewModelScope.launch { settingsRepository.savePreferredSubtitleLanguage(store) }
+        viewModelScope.launch { settingsRepository.savePreferredSubtitleLanguage(value) }
     }
 
     fun setDynamicColor(value: Boolean) {
@@ -446,11 +456,15 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch { settingsRepository.saveAudioBoostLevel(safe) }
     }
 
-    /** The persisted audio language. [UserPreferences.AUDIO_LANGUAGE_DEFAULT] stores nothing. */
+    /**
+     * The persisted audio language, stored as the word itself — including
+     * [UserPreferences.AUDIO_LANGUAGE_DEFAULT], so an explicit "leave it to the player" is
+     * never mistaken for a viewer who never chose (only a stored null falls back to the
+     * region's default).
+     */
     fun setAudioLanguage(value: String) {
         updatePrefs { it.copy(audioLanguage = value) }
-        val store = if (value == UserPreferences.AUDIO_LANGUAGE_DEFAULT) null else value
-        viewModelScope.launch { settingsRepository.savePreferredAudioLanguage(store) }
+        viewModelScope.launch { settingsRepository.savePreferredAudioLanguage(value) }
     }
 
     /**

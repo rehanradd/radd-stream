@@ -73,7 +73,7 @@ import com.raddstream.app.viewmodel.UserPreferences
 
 /** The subtitle chips, in the order the row shows them. Readable by the region test, which
  * pins that a card can only ever seed a word this row can actually display. */
-internal val subtitleOptions = listOf("Off", "English", "Hindi", "Tamil", "Telugu")
+internal val subtitleOptions = listOf("Off", "English", "Hindi", "Urdu", "Tamil", "Telugu")
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
