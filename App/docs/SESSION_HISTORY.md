@@ -1491,3 +1491,18 @@ or printed. Gating is qoder1's call after fresh green CI.
 - **Checks before committing:** no `PlayAgainButton` references left; zero raw `Color(0x…)` in the diff; full-file annotation audit clean; no new strings (Settings uses hardcoded copy like the rest of that screen; the player reuses `player_next_episode`/`player_play_again`).
 
 **Not done:** no local Gradle run — CI judges. Device check (switch off → episode ends on the button; switch on → advances; default 720p → title starts 720p; previews off → hero stays) is owner-only, part of step 20. Next: player step 11 (chapter ticks on the scrubber).
+
+---
+
+### Session 52 — Player rebuild step 11: chapter ticks + chapter list (Muse, 2026-11-06)
+
+**Agent:** Muse (BoNzoO), coded directly on the user's order. No qoder lane. Same branch as Sessions 40–51.
+
+**Built:** chapters (plan §5 #11, P14) — from the pack episode boundaries the server already sends.
+
+- **Pure mapping:** NEW `chapterTicks(episodes, durationMs)` in `player/ChapterTicks.kt` — `Coverage.episodes` (offset seconds + optional chapter title) → `ChapterTick(offsetMs, title, fraction)`. A tick needs a known offset strictly inside the file: the first episode starts at 0 (no tick at the very start), an offset at or past the end is not a chapter, a missing offset is not one either; duplicates collapse, the list comes back in play order. Untitled chapters read "Episode N". NEW `ChapterTicksTest` (4 cases: fractions in play order, no duration → no ticks, out-of-file offsets excluded, duplicates collapse + order).
+- **Scrubber:** `Scrubber` takes the active rendition's `episodes` and draws one short white mark per tick, straddling the track (2 dp wide, 9 dp tall). Tapping a tick seeks — the track's own tap-to-seek already does that, so a tick needs no gesture of its own. A single-episode file has no episodes list, so it has no ticks — honest, not a gap to fill by guessing. No ViewModel or UI-state change was needed: the data already rides in `state.activeRendition.coverage.episodes`.
+- **Print sheet:** a "Chapters" section (NEW string `player_chapters_title`, defined + used) listing each chapter as a row — title + mm:ss — that hides the sheet and seeks on tap. Both surfaces use the same pure function, so they can never disagree about where a chapter starts.
+- **Checks before committing:** string-guard replica clean (136 defined / 136 used, no orphans, no missing, no duplicate values); full-file annotation audit clean; no raw `Color(0x…)` in the diff.
+
+**Not done:** no local Gradle run — CI judges. Device check (ticks visible on a packed title, tapping one seeks, chapter rows seek) is owner-only, part of step 20. Next: player step 13 (POST /api/v2/play — needs the nginx allow-list through the gate).

@@ -143,6 +143,8 @@ import com.raddstream.app.player.AudioBoost
 import com.raddstream.app.player.AudioBoostUi
 import com.raddstream.app.player.AudioTrackPolicy
 import com.raddstream.app.player.CacheAffordance
+import com.raddstream.app.player.EpisodeCoverage
+import com.raddstream.app.player.chapterTicks
 import com.raddstream.app.player.CalibrationState
 import com.raddstream.app.player.DominantAxis
 import com.raddstream.app.player.DragCommand
@@ -1300,6 +1302,7 @@ private fun BottomControls(
                 enabled = state.seekEnabled,
                 onSeek = { vm.seekTo(it) },
                 onActivity = onActivity,
+                episodes = state.activeRendition?.coverage?.episodes.orEmpty(),
             )
             Row(
                 Modifier
@@ -1495,7 +1498,11 @@ private fun Scrubber(
     enabled: Boolean,
     onSeek: (Long) -> Unit,
     onActivity: () -> Unit,
+    episodes: List<EpisodeCoverage> = emptyList(),
 ) {
+    // Chapter ticks (plan §5 step 11): the pack's episode boundaries, from the same
+    // pure function the print sheet's chapter list uses, so the two can never disagree.
+    val ticks = remember(episodes, durationMs) { chapterTicks(episodes, durationMs) }
     BoxWithConstraints(
         Modifier
             .fillMaxWidth()
@@ -1528,6 +1535,19 @@ private fun Scrubber(
                 .height(3.dp)
                 .background(RaddCurrent500),
         )
+        // One short white mark per chapter, straddling the track. Tapping one seeks —
+        // the track's own tap-to-seek already does that, so a tick needs no gesture
+        // of its own. The thumb passes over them; that is the point of a mark.
+        ticks.forEach { tick ->
+            Box(
+                Modifier
+                    .align(Alignment.CenterStart)
+                    .offset(x = (maxWidth * tick.fraction) - 1.dp)
+                    .width(2.dp)
+                    .height(9.dp)
+                    .background(Color.White.copy(alpha = 0.85f)),
+            )
+        }
         Box(
             Modifier
                 .align(Alignment.CenterStart)
@@ -2680,6 +2700,23 @@ private fun PrintLogSheet(state: PlayerUiState, vm: PlayerViewModel) {
                     fontSize = brandSp(13),
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 3.dp),
                 )
+            }
+            // Chapters (plan §5 step 11): the pack's episode boundaries as rows that
+            // seek on tap. Absent for a single-episode file — no boundaries, no list.
+            // The ticks come from the same pure function the scrubber draws, so the
+            // two can never disagree about where a chapter starts.
+            val chapters = remember(state.activeRendition?.coverage?.episodes, state.durationMs) {
+                chapterTicks(state.activeRendition?.coverage?.episodes.orEmpty(), state.durationMs)
+            }
+            if (chapters.isNotEmpty()) {
+                Spacer(Modifier.height(10.dp))
+                SheetTitle(stringResource(R.string.player_chapters_title))
+                chapters.forEach { tick ->
+                    SheetRow(label = "${tick.title}  ·  ${tick.offsetMs.formatTime()}") {
+                        vm.hidePrintSheet()
+                        vm.seekTo(tick.offsetMs)
+                    }
+                }
             }
             if (state.failoverLog.isNotEmpty()) {
                 Spacer(Modifier.height(10.dp))
