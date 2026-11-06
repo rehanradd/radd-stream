@@ -238,6 +238,33 @@ class PlayerSessionStore(
     fun peekFailover(streamId: String): List<String> = stagedFailovers[streamId].orEmpty()
 
     /**
+     * The print's coverage — the episode boundaries and chapter titles — staged by the
+     * detail screen next to the runner-ups of the launched rung and read by the player
+     * when it opens the handle.
+     *
+     * Same discipline as [stageFailover]: in memory only, nothing survives a process
+     * death. Only the v2 bundle carries this data (the v1 detail never serves the
+     * offsets), so a playback launched the old way simply has no coverage, exactly as
+     * before — the scrubber draws no ticks and the packed-file logic falls back to
+     * the learned offsets it already keeps.
+     */
+    private val stagedCoverages = LinkedHashMap<String, Coverage>()
+
+    fun stageCoverage(streamId: String, coverage: Coverage) {
+        if (streamId.isBlank()) return
+        stagedCoverages.remove(streamId)
+        if (coverage.episodes.isNotEmpty() || coverage.offsetSeconds != null) {
+            stagedCoverages[streamId] = coverage
+        }
+        while (stagedCoverages.size > MAX_STAGED_FAILOVERS) {
+            stagedCoverages.remove(stagedCoverages.keys.first())
+        }
+    }
+
+    /** Read without consuming: re-opening the same rung still gets its chapters. */
+    fun peekCoverage(streamId: String): Coverage? = stagedCoverages[streamId]
+
+    /**
      * The rung list Auto may move along, staged by the detail screen next to the runner-ups
      * of the launched rung and read by the service when it arms [autoQuality].
      *

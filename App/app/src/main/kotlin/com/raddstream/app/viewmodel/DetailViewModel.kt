@@ -13,6 +13,7 @@ import com.raddstream.app.data.local.WatchHistoryDao
 import com.raddstream.app.data.local.WatchHistoryEntity
 import com.raddstream.app.network.ApiProvider
 import com.raddstream.app.network.friendlyNetworkError
+import com.raddstream.app.network.models.LinkState
 import com.raddstream.app.network.models.PostDetail
 import com.raddstream.app.network.models.StreamResponse
 import com.raddstream.app.network.streamRedirectUrl
@@ -28,6 +29,7 @@ import com.raddstream.app.player.QualityLadder
 import com.raddstream.app.player.QualityOption
 import com.raddstream.app.repository.CatalogRepository
 import com.raddstream.app.repository.FavoritesRepository
+import com.raddstream.app.repository.V2PlayResult
 import com.raddstream.app.sync.SyncAccountRepository
 import com.raddstream.app.ui.navigation.Screen
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -39,6 +41,7 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeout
 
 data class DetailUiState(
     val post: PostDetail? = null,
@@ -629,7 +632,61 @@ class DetailViewModel @Inject constructor(
             _uiState.update { it.copy(actionMessage = "Nothing playable on this print yet.") }
             return
         }
+        // The server's own bundle first (plan §5 step 13): its winner is ranked from
+        // the server's probes, and only it carries the print's coverage. Any failure
+        // — a 403 while nginx still blocks the route, a timeout, a dead socket — falls
+        // back to the client-side link above, so Play never gets slower or stricter
+        // than it was. Two seconds is the ceiling: the server is on the same host,
+        // so a healthy call answers in milliseconds.
+        viewModelScope.launch {
+            val v2 = runCatching {
+                withTimeout(2_000) { catalogRepository.playV2(print.releaseId) }
+            }.getOrNull()
+            val playedV2 = v2 != null && v2.bundle.renditions.isNotEmpty() &&
+                playV2Bundle(v2, print, external)
+            if (!playedV2) {
+                playLink(link, external, print.season, print.episodeFrom)
+            }
+        }
+    }
+
+    /**
+     * Play the server's own bundle for this print (plan §5 step 13). The winner is
+     * the server's best copy — ranked from its probes, not our formula — so it is
+     * the handle that plays. Its runner-ups stage as the silent failover and its
+     * coverage stages as the print's chapters, both under the winner's handle, so
+     * the player reads them back without the route carrying anything new.
+     * Returns false when the bundle cannot be played after all, so the caller falls
+     * back to the client-side link instead of leaving the viewer with nothing.
+     */
+    private fun playV2Bundle(result: V2PlayResult, print: RankedPrint, external: Boolean): Boolean {
+        val winner = result.bundle.renditions.firstOrNull() ?: return false
+        val streamId = winner.streamId?.takeIf { it.isNotBlank() } ?: return false
+        val playUrl = winner.playUrl?.takeIf { it.isNotBlank() } ?: return false
+        PlayerSessionStore.Instance.stageFailover(
+            streamId,
+            result.bundle.renditions.drop(1).mapNotNull { it.streamId },
+        )
+        PlayerSessionStore.Instance.stageCoverage(streamId, result.coverage)
+        val link = RankedLink(
+            streamId = streamId,
+            linkId = winner.linkId?.toInt(),
+            // A stream candidate is, by the server's own verdict, playable and not
+            // dead — the dead ones never reach this list. Anything else would be
+            // the client re-judging the server's ranking.
+            health = LinkState.ACTIVE,
+            ephemeral = winner.ephemeral,
+            resumable = winner.resumable,
+            playUrl = playUrl,
+            label = winner.label,
+            // kind is not served on a rendition: the playability alone decides
+            // whether this is a page, and a stream candidate never is one.
+            kind = null,
+            playability = winner.playability,
+            score = winner.linkScore,
+        )
         playLink(link, external, print.season, print.episodeFrom)
+        return true
     }
 
     /**

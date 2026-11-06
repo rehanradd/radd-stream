@@ -23,6 +23,8 @@ import com.raddstream.app.network.models.RevokedResponse
 import com.raddstream.app.network.models.StatsResponse
 import com.raddstream.app.network.models.StreamResponse
 import com.raddstream.app.network.models.VipRemoteConfig
+import com.raddstream.app.network.models.WirePlayRequest
+import com.raddstream.app.network.models.WirePlayResponse
 import retrofit2.http.Body
 import retrofit2.http.GET
 import retrofit2.http.Header
@@ -281,4 +283,25 @@ interface RaddStreamApi {
     suspend fun getEntitlement(
         @Header("Authorization") authorization: String?,
     ): EntitlementResponse
+
+    /**
+     * POST /api/v2/play — one PlayBundle for a print, ranked by the server (plan §5 step 13).
+     *
+     * This is the call the client-side bundle builder was waiting for: the server orders
+     * the candidates from its own probes, hands back one tier per print plus the ranked
+     * lists, and — the part no v1 route serves — the print's coverage with the episode
+     * offsets and chapter titles. The response shape is the server's actual one
+     * (`catalog_api.play_bundle`): tiers/candidates/coverage, no `renditions`.
+     *
+     * Unauthenticated like the v1 detail: the public answer is the same for every viewer.
+     * A 403 here means nginx has not allowed the route yet (the gate owns that); a
+     * non-playable print answers 200 with an empty ladder and `download_options` instead
+     * of an error, and a target the server cannot see answers 404. The caller treats
+     * ANY failure as "fall back to the client-side ladder" — never as a reason to show
+     * the viewer an error for a Play tap that used to work.
+     */
+    @POST("api/v2/play")
+    suspend fun play(
+        @Body body: WirePlayRequest,
+    ): WirePlayResponse
 }

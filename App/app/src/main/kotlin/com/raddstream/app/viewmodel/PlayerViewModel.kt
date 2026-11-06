@@ -597,6 +597,7 @@ class PlayerViewModel @Inject constructor(
                                                        title = title,
                                                        backupHandles = store.peekFailover(streamId))
                 .withStagedTarget(streamId)
+                .withStagedCoverage(streamId)
             seedResumeFromStoredPositions(streamId, startOverrideMs)
             beginBundle(bundle, title, resumeKey = streamId, overrideMs = startOverrideMs)
         }
@@ -622,6 +623,18 @@ class PlayerViewModel @Inject constructor(
                 episode = scope.episode,
             ),
         )
+    }
+
+    /**
+     * The coverage the detail screen staged for this handle (plan §5 step 13): the
+     * print's episode boundaries and chapter titles, from the v2 bundle. A handle
+     * launched the old way has none staged, so the rendition keeps the default empty
+     * coverage — the scrubber draws no ticks, exactly as before.
+     */
+    private fun PlaybackBundle.withStagedCoverage(streamId: String): PlaybackBundle {
+        val coverage = store.peekCoverage(streamId) ?: return this
+        val first = renditions.firstOrNull() ?: return this
+        return copy(renditions = listOf(first.copy(coverage = coverage)) + renditions.drop(1))
     }
 
     /**
