@@ -33,6 +33,7 @@ import payments
 import admin_panel
 import media_search
 import panel_feed
+import contact_intake
 import usage_stats
 
 if sys.platform.startswith("win"):
@@ -4320,6 +4321,36 @@ class DashboardHandler(BaseHTTPRequestHandler):
             return
         self.send_error(501, "Unsupported method ('HEAD')")
 
+    def _contact_intake(self):
+        """`POST /api/v1/contact` — the public contact form, no login.
+
+        One JSON body: `category` (one of the panel's five), `subject`,
+        `body`, and an optional `account_hint` (an email the viewer leaves
+        so the operator can reply). The message is stored in the panel's
+        `contact_messages` table by `contact_intake`, under the panel's own
+        validation and masking, so it lands in the same inbox the operator
+        already triages. Answers the v1 shape: `{"success": true}` on store,
+        `invalid_params` (400) for a bad category or an empty body,
+        `unavailable` (503) when the panel inbox is not wired or locked —
+        an honest retry-later, never a swallowed message.
+        """
+        payload, code = api_v2.read_body(self)
+        if payload is None:
+            self.send_json({"success": False, "error": code or "invalid_params"},
+                           status=400)
+            return
+        ok, result = contact_intake.submit_contact(
+            category=payload.get("category"),
+            subject=payload.get("subject", ""),
+            body=payload.get("body", ""),
+            account_hint=payload.get("account_hint"),
+        )
+        if not ok:
+            status = 503 if result == "unavailable" else 400
+            self.send_json({"success": False, "error": result}, status=status)
+            return
+        self.send_json({"success": True})
+
     def do_POST(self):
         """The v2 write surface (§12): `/play`, link reports, learned offsets,
         the account writes that put a favorite or a resume point on the server, and
@@ -4399,6 +4430,13 @@ class DashboardHandler(BaseHTTPRequestHandler):
             if answered is not None:
                 self.send_triple(answered)
                 return
+        if path == "/api/v1/contact":
+            # The public contact form: one JSON body, no login, no sync key —
+            # the message lands in the panel's inbox under the panel's own
+            # rules (`contact_intake`). Answered ahead of the v2 dispatcher
+            # because this is a v1 route and `api_v2` would 404 it.
+            self._contact_intake()
+            return
         if api_v2.is_v2(path):
             _ensure_schema()
             if api_v2.route_post(self, path, query_params, db_path=DB_PATH,

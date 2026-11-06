@@ -1616,3 +1616,17 @@ or printed. Gating is qoder1's call after fresh green CI.
 ## Addendum — Android CI failure on f5ebf4f, fixed
 - Android CI run 42143779496 FAILED at `compileDebugKotlin` — 3 errors, all in step 19, none in the language defaults: (1) `LoginStreak.kt:33` — `TimeZone.getOffset()` returns Int, `localEpochDay` takes Long; fixed with `.toLong()`. (2–3) `VipUpgradeScreen.kt:632–633` — `Icons.Default.ContentCopy` unresolved: the step-19 import edit had REPLACED the `ContentCopy` import line with the `DateRange` import instead of adding alongside it; the import is restored (alphabetical, between Check and DateRange). Lesson, same family as the step-7/8 annotation mistakes: an edit whose old_text spans a line you meant to keep can silently delete it — after any import edit, grep the file for the names the old block carried.
 - The fix commit also carries the tabs-control commit (Session 58) on top of it; the next run judges both.
+
+---
+
+### Session 59 — Contact form: the app writes to the panel's inbox (Muse, 2026-11-06)
+
+**Agent:** Muse (BoNzoO), coded directly. Same branch as Sessions 40–58. Built while CI runs 42144779319 + 42144779434 (step 19 fix + language defaults + tabs) were still in progress — committed locally only, push waits for those runs.
+
+**What it is:** Settings gains a "Contact us" card. The viewer picks a category (Bug, Payment, Content, Takedown, Other), writes a message, optionally leaves an email, and sends. The message lands in the panel's `contact_messages` table, where the operator already triages it — no new inbox, no login, no account needed.
+
+**Server (this branch):** NEW `contact_intake.py` — `POST /api/v1/contact` under the panel's own rules (five categories, body required and cut at 2000, subject cut at 200, the email stored masked, markup stripped, URLs replaced). A missing or locked panel DB answers 503, never a swallowed message. `viewer.py` answers it ahead of the v2 dispatcher in the v1 shape. 8 new tests, 8 OK locally, registered in backend-ci.yml. One near-miss while wiring: a first edit landed the new branch inside `_bucket_for` instead of `do_POST` (the anchor matched four places) — caught by reading the file, reverted, and re-anchored on the fall-through. Lesson, same family as the step-7 annotation mistake: an anchor that matches more than once edits the first match, not the one meant — check the line number after every multi-match edit.
+
+**App (this branch):** `ContactWire`, `RaddStreamApi` POST, `CatalogRepository.submitContact` (false on any failure), `SettingsViewModel` `ContactUiState` + submit (success closes and clears, failure keeps the text), `ContactDialog` with wrapping category chips. The copy guard was checked by hand: the dialog's literals carry no banned word and sit inside the OnboardHonesty scan scope.
+
+**Not done:** push (waits for the two runs); nginx allow-list for `/api/v1/contact` is a gate item, like `/api/v2/play` before it. Next: Live control page.

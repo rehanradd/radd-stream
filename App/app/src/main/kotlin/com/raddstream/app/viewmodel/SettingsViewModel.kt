@@ -120,6 +120,8 @@ data class SettingsUiState(
     val lanShareStatus: LanShareStatus = LanShareStatus.Off,
     /** The OPTIONAL sync account. Signed out, this card is one line and one button. */
     val account: AccountUiState = AccountUiState(),
+    /** The contact form's whole state. The message lives only until it is sent. */
+    val contact: ContactUiState = ContactUiState(),
     /**
      * The regional-dub choice the onboarding screen wrote, normalized. Seeded with
      * [UserRegion.DEFAULT] because the store always answers a value — the card label below
@@ -177,6 +179,28 @@ data class AccountUiState(
 
     /** True when a trial was granted here and has run out. */
     val trialExpired: Boolean get() = trialSecondsLeft != null && trialSecondsLeft <= 0.0
+}
+
+/**
+ * The contact form's whole state. The category ids are the panel's own five
+ * (`contact_messages.category`); the labels are what the chips show. The
+ * email is optional — it is only how the operator replies — and the server
+ * stores it masked, so this screen never shows a full address back.
+ */
+data class ContactUiState(
+    val showForm: Boolean = false,
+    val category: String = "other",
+    val subject: String = "",
+    val body: String = "",
+    val email: String = "",
+    val isSending: Boolean = false,
+    val message: String? = null,
+    val messageIsError: Boolean = false,
+) {
+    companion object {
+        val CATEGORY_IDS: List<String> = listOf("bug", "payment", "content", "takedown", "other")
+        val CATEGORY_LABELS: List<String> = listOf("Bug", "Payment", "Content", "Takedown", "Other")
+    }
 }
 
 @HiltViewModel
@@ -781,6 +805,95 @@ class SettingsViewModel @Inject constructor(
                             isLinking = false,
                             linkMessage = AccountCardCopy.linkRefusalSentence(outcome.reason),
                             linkMessageIsError = true,
+                        ),
+                    )
+                }
+            }
+        }
+    }
+
+    // ── Contact us ───────────────────────────────────────────────────────
+
+    fun openContactForm() {
+        _uiState.update {
+            it.copy(contact = it.contact.copy(showForm = true, message = null, messageIsError = false))
+        }
+    }
+
+    fun closeContactForm() {
+        _uiState.update { it.copy(contact = it.contact.copy(showForm = false)) }
+    }
+
+    fun onContactCategoryChanged(value: String) {
+        _uiState.update { it.copy(contact = it.contact.copy(category = value)) }
+    }
+
+    fun onContactSubjectChanged(value: String) {
+        _uiState.update { it.copy(contact = it.contact.copy(subject = value)) }
+    }
+
+    fun onContactBodyChanged(value: String) {
+        _uiState.update { it.copy(contact = it.contact.copy(body = value)) }
+    }
+
+    fun onContactEmailChanged(value: String) {
+        _uiState.update { it.copy(contact = it.contact.copy(email = value)) }
+    }
+
+    /**
+     * Send the form to the operator's inbox. The body is the only required
+     * field — a message with nothing in it is not a message. On success the
+     * form closes and its fields clear, and the card keeps the one-line
+     * answer; on failure the text stays exactly as typed, so a dropped
+     * connection costs a retry, not a rewrite.
+     */
+    fun submitContact() {
+        val contact = _uiState.value.contact
+        if (contact.isSending) return
+        if (contact.body.isBlank()) {
+            _uiState.update {
+                it.copy(contact = it.contact.copy(message = "Write your message first.", messageIsError = true))
+            }
+            return
+        }
+        // The card's own precondition, said in the dialog rather than in the
+        // card's message slot: a message is a row on a server, and with no
+        // address there is no server to write to.
+        if (_uiState.value.serverUrl.isBlank()) {
+            _uiState.update {
+                it.copy(
+                    contact = it.contact.copy(
+                        message = refusalSentence(Refusal.NO_SERVER),
+                        messageIsError = true,
+                    ),
+                )
+            }
+            return
+        }
+        _uiState.update {
+            it.copy(contact = it.contact.copy(isSending = true, message = null, messageIsError = false))
+        }
+        viewModelScope.launch {
+            val sent = catalogRepository.submitContact(
+                category = contact.category,
+                subject = contact.subject.trim(),
+                body = contact.body.trim(),
+                accountHint = contact.email.trim().takeIf { it.isNotEmpty() },
+            )
+            _uiState.update {
+                if (sent) {
+                    it.copy(
+                        contact = ContactUiState(
+                            message = "Sent. If you left an email, we can reply to it.",
+                            messageIsError = false,
+                        ),
+                    )
+                } else {
+                    it.copy(
+                        contact = it.contact.copy(
+                            isSending = false,
+                            message = "Could not send. Check your connection and try again.",
+                            messageIsError = true,
                         ),
                     )
                 }

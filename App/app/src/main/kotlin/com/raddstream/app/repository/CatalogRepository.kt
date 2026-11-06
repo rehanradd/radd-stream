@@ -2,6 +2,7 @@ package com.raddstream.app.repository
 
 import com.raddstream.app.data.ServerSettingsRepository
 import com.raddstream.app.network.ApiProvider
+import com.raddstream.app.network.models.ContactRequest
 import com.raddstream.app.network.models.PlayBundle
 import com.raddstream.app.network.models.PostDetail
 import com.raddstream.app.network.models.PostsResponse
@@ -90,6 +91,30 @@ class CatalogRepository @Inject constructor(
         }
         val coverage = response.coverage?.toPlayerCoverage() ?: Coverage()
         return V2PlayResult(bundle = response.toDomain(baseUrl), coverage = coverage)
+    }
+
+    /**
+     * POST /api/v1/contact: one message for the operator's inbox. True only
+     * when the server stored it — a 400 (bad category, empty body), a 403
+     * while nginx still blocks the route, a 503 when the inbox is not wired,
+     * or a dead socket all answer false, because the form keeps the text and
+     * says "try again" instead of pretending the message went through.
+     */
+    suspend fun submitContact(
+        category: String,
+        subject: String,
+        body: String,
+        accountHint: String?,
+    ): Boolean {
+        return try {
+            apiProvider.current().submitContact(
+                ContactRequest(category, subject, body, accountHint),
+            ).success
+        } catch (_: HttpException) {
+            false
+        } catch (_: IOException) {
+            false
+        }
     }
 
     /**

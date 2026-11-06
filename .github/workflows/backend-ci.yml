@@ -455,6 +455,12 @@ jobs:
       - name: 🧪 test_panel_feed.py
         run: python3 -S Fast_Fetch/test_panel_feed.py
 
+      # The public contact intake (`POST /api/v1/contact`): the panel's
+      # categories, validation, masking and limits, writing the panel's
+      # `contact_messages` table. Offline — temp SQLite files.
+      - name: 🧪 test_contact_intake.py
+        run: python3 -S Fast_Fetch/test_contact_intake.py
+
       # The agreement gate on the key-level fold (order #60, 2026-11-05). `--apply` hides a
       # work only when every row it would flip corroborates the flagged sibling by title, with
       # no derivable year contradicting it: a literal `MAX(is_18_plus)` per `canonical_key`

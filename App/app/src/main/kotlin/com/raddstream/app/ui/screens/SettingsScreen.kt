@@ -4,6 +4,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -19,6 +21,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Email
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PlayArrow
@@ -66,6 +69,7 @@ import com.raddstream.app.share.LanShareStatus
 import com.raddstream.app.viewmodel.AccountCardCopy
 import com.raddstream.app.viewmodel.AccountUiState
 import com.raddstream.app.viewmodel.CatalogScale
+import com.raddstream.app.viewmodel.ContactUiState
 import com.raddstream.app.viewmodel.ImageQuality
 import com.raddstream.app.viewmodel.KeepTtl
 import com.raddstream.app.viewmodel.SettingsViewModel
@@ -424,6 +428,35 @@ fun SettingsScreen(
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+            }
+
+            // ── Contact us ───────────────────────────────────────────────────
+            SettingsCard(title = "Contact us", icon = Icons.Default.Email) {
+                Text(
+                    "Report a problem, ask about a payment, or ask for a title to be taken down. No account needed.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                OutlinedButton(
+                    onClick = viewModel::openContactForm,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text("Write to us")
+                }
+                state.contact.message?.let { msg ->
+                    Text(
+                        msg,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (state.contact.messageIsError) {
+                            MaterialTheme.colorScheme.error
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        },
+                    )
+                }
+                if (state.contact.showForm) {
+                    ContactDialog(contact = state.contact, viewModel = viewModel)
+                }
             }
 
             // ── Playback & Display preferences ─────────────────────────
@@ -866,6 +899,92 @@ internal fun ProfileLinkDialog(account: AccountUiState, viewModel: SettingsViewM
         },
         dismissButton = {
             TextButton(onClick = viewModel::closeLinkForm, enabled = !account.isLinking) {
+                Text("Cancel")
+            }
+        },
+    )
+}
+
+/**
+ * The contact form. Five categories, one message, one optional email.
+ *
+ * The chips wrap (FlowRow) because five of them do not fit one row on a
+ * narrow phone, and the plain Row the language chips use would clip the
+ * last one. The email is optional and the line under it says what the
+ * server does with it — stores it shortened — because a form that quietly
+ * collects an address is a form that harvests one.
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+internal fun ContactDialog(contact: ContactUiState, viewModel: SettingsViewModel) {
+    AlertDialog(
+        onDismissRequest = viewModel::closeContactForm,
+        title = { Text("Write to us") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    ContactUiState.CATEGORY_LABELS.forEachIndexed { idx, label ->
+                        FilterChip(
+                            selected = ContactUiState.CATEGORY_IDS[idx] == contact.category,
+                            onClick = { viewModel.onContactCategoryChanged(ContactUiState.CATEGORY_IDS[idx]) },
+                            label = { Text(label) },
+                        )
+                    }
+                }
+                OutlinedTextField(
+                    value = contact.subject,
+                    onValueChange = viewModel::onContactSubjectChanged,
+                    label = { Text("Subject (optional)") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                OutlinedTextField(
+                    value = contact.body,
+                    onValueChange = viewModel::onContactBodyChanged,
+                    label = { Text("Your message") },
+                    minLines = 4,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                OutlinedTextField(
+                    value = contact.email,
+                    onValueChange = viewModel::onContactEmailChanged,
+                    label = { Text("Your email (optional)") },
+                    placeholder = { Text("So we can reply") },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Text(
+                    "Your email is stored shortened, so only part of it is ever visible to us.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                contact.message?.let { message ->
+                    Text(
+                        message,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (contact.messageIsError) {
+                            MaterialTheme.colorScheme.error
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        },
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = viewModel::submitContact,
+                enabled = !contact.isSending && contact.body.isNotBlank(),
+            ) {
+                BusyLabel(contact.isSending, "Send")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = viewModel::closeContactForm, enabled = !contact.isSending) {
                 Text("Cancel")
             }
         },

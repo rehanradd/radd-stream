@@ -3,6 +3,8 @@ package com.raddstream.app.network
 import com.raddstream.app.network.models.AccountCreateRequest
 import com.raddstream.app.network.models.AccountCreateResponse
 import com.raddstream.app.network.models.AccountInfoResponse
+import com.raddstream.app.network.models.ContactRequest
+import com.raddstream.app.network.models.ContactResponse
 import com.raddstream.app.network.models.DeviceTrialRequest
 import com.raddstream.app.network.models.DeviceTrialResponse
 import com.raddstream.app.network.models.EntitlementResponse
@@ -115,6 +117,19 @@ interface RaddStreamApi {
      */
     @GET("api/v1/app/remote-config")
     suspend fun getRemoteConfig(): VipRemoteConfig
+
+    /**
+     * POST /api/v1/contact — the public contact form, no login, no sync key.
+     *
+     * The message lands in the panel's inbox under the panel's own rules
+     * (category, subject and body limits, the contact hint stored masked).
+     * The server answers `{"success": true}` on store, 400 for a bad
+     * category or an empty body, 503 when the inbox is not wired.
+     */
+    @POST("api/v1/contact")
+    suspend fun submitContact(
+        @Body request: ContactRequest,
+    ): ContactResponse
 
     // ── OPTIONAL sync account (api/v2/account) ───────────────────────────────────
     //
