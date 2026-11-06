@@ -40,7 +40,7 @@ import dagger.hilt.components.SingletonComponent
  * [onBitmap] is the artwork-accent hook: a caller that wants the poster's own colour (the detail
  * header's border) gets the decoded bitmap on success, and nothing when the load is gated or fails.
  * It is optional and defaults to off, so the grid cells that never need a bitmap pay nothing.
- */
+ *
  * It reads [ImageSizingHolder], an Application-owned singleton, through a Hilt [EntryPoint] off the
  * ambient [LocalContext], because a poster lives deep inside a recycled grid cell where no screen
  * composes a ViewModel. Handing Coil an explicit [ImageRequest] size is the whole point: left to
