@@ -48,6 +48,17 @@ class ServerSettingsRepository @Inject constructor(
             ?: Brand.defaultServerUrl.takeIf { it.isNotBlank() }
     }
 
+    /**
+     * Whether this install ever chose a server: a saved key, as opposed to the address
+     * the brand file ships. The [serverUrl] flow returns the shipped default when
+     * nothing is saved, so a caller that needs to know "fresh install, never
+     * connected" cannot read it off that flow — it asks here. A fresh install's
+     * silent connect (see StartupRouting) runs exactly once, on this answer.
+     */
+    val hasSavedServerUrl: Flow<Boolean> = dataStore.data.map { preferences ->
+        preferences[SERVER_URL_KEY] != null
+    }
+
     suspend fun saveServerUrl(url: String) {
         dataStore.edit { preferences -> preferences[SERVER_URL_KEY] = url }
     }

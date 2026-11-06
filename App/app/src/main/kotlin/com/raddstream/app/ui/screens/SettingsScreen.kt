@@ -189,7 +189,7 @@ fun SettingsScreen(
                     )
                     Spacer(Modifier.height(10.dp))
                     OutlinedButton(onClick = onOpenDownloads, modifier = Modifier.fillMaxWidth()) {
-                        Text("Open Downloads")
+                        Text("Open Media Vault")
                     }
                 }
             }
@@ -736,7 +736,7 @@ fun SettingsScreen(
                 // The poster-image cache as a bar: what it holds now against the
                 // loader's own cap. Nothing here is a guess at the device's free
                 // space, and the kept videos are not in this number at all — they
-                // are listed and removed on the Downloads screen.
+                // are listed and removed on the Media Vault screen.
                 val cacheBytes = state.posterCacheBytes
                 val cacheMax = state.posterCacheMaxBytes
                 if (cacheBytes != null && cacheMax != null) {
@@ -757,7 +757,7 @@ fun SettingsScreen(
                 Text(
                     "This clears only the poster images the app has fetched; they come back as you " +
                         "browse. Videos you kept for offline are not touched here — they are removed " +
-                        "individually on the Downloads screen.",
+                        "individually on the Media Vault screen.",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )

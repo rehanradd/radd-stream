@@ -26,9 +26,12 @@ import com.raddstream.app.data.RemoteFeatures
 import com.raddstream.app.data.ServerSettingsRepository
 import com.raddstream.app.network.models.PanelDisclaimer
 import com.raddstream.app.network.models.PanelTheme
+import com.raddstream.app.repository.CatalogRepository
 import com.raddstream.app.ui.navigation.LocalVideoOpen
 import com.raddstream.app.ui.navigation.Screen
 import com.raddstream.app.ui.navigation.RaddStreamNavGraph
+import com.raddstream.app.ui.navigation.StartDestination
+import com.raddstream.app.ui.navigation.resolveStartDestination
 import com.raddstream.app.ui.screens.DisclaimerDialog
 import com.raddstream.app.ui.screens.MaintenanceScreen
 import com.raddstream.app.ui.theme.RaddStreamTheme
@@ -36,10 +39,12 @@ import com.raddstream.app.ui.theme.parseAccentHex
 import com.raddstream.app.ui.theme.resolveThemeDark
 import dagger.hilt.android.AndroidEntryPoint
 import javax.inject.Inject
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * Single-activity host.
@@ -59,6 +64,9 @@ import kotlinx.coroutines.launch
 class MainActivity : ComponentActivity() {
     @Inject
     lateinit var serverSettingsRepository: ServerSettingsRepository
+
+    @Inject
+    lateinit var catalogRepository: CatalogRepository
 
     /**
      * A file another app asked us to play, waiting for the graph that can route it. It is
@@ -178,13 +186,33 @@ class MainActivity : ComponentActivity() {
                     } catch (_: Exception) {
                         null
                     }
-                    startDestination = when {
-                        savedUrl.isNullOrBlank() -> Screen.Setup.route
+                    val hasSavedServer = try {
+                        serverSettingsRepository.hasSavedServerUrl.first()
+                    } catch (_: Exception) {
+                        false
+                    }
+                    // A fresh install never sees the Setup form when the shipped server
+                    // answers: the default is probed once, in the background, and saved
+                    // only when it answers. A dead default — or an unbranded build with
+                    // no default at all — still opens Setup, prefilled as before.
+                    val defaultReachable: Boolean? = if (savedUrl.isNullOrBlank() || hasSavedServer) {
+                        null
+                    } else {
+                        trySilentDefaultConnect(catalogRepository, savedUrl)
+                    }
+                    val destination = resolveStartDestination(
+                        savedUrl = savedUrl,
+                        hasSavedServerUrl = hasSavedServer,
+                        defaultServerReachable = defaultReachable,
                         // First install after the server is connected gets one chance to say what
                         // they watch; a store that cannot answer is treated as "already asked",
                         // because onboarding is a convenience and must never become the door.
-                        regionChoiceUnanswered(serverSettingsRepository) -> Screen.Region.route
-                        else -> Screen.Home.route
+                        regionUnanswered = regionChoiceUnanswered(serverSettingsRepository),
+                    )
+                    startDestination = when (destination) {
+                        StartDestination.Setup -> Screen.Setup.route
+                        StartDestination.Region -> Screen.Region.route
+                        StartDestination.Home -> Screen.Home.route
                     }
                 }
 
@@ -308,6 +336,31 @@ class MainActivity : ComponentActivity() {
  */
 private fun effectiveDynamicColor(storedEnabled: Boolean, panelAllowed: Boolean): Boolean =
     storedEnabled && Brand.dynamicColorAllowed && panelAllowed
+
+/**
+ * One bounded probe of the shipped server, for a fresh install only.
+ *
+ * `testAndSaveServer` saves the address when it answers, so a fresh install that
+ * reaches Home through here has a saved server from then on — the probe runs
+ * once, never on every cold start. The 15s bound is the whole point: a dead
+ * default must not hold the first frame hostage; the OkHttp timeouts underneath
+ * are 10s connect / 15s read, so this is the tighter ceiling. A timeout reads
+ * as "did not answer" and the caller opens Setup.
+ */
+private const val SILENT_CONNECT_TIMEOUT_MS = 15_000L
+
+private suspend fun trySilentDefaultConnect(
+    catalogRepository: CatalogRepository,
+    url: String,
+): Boolean = try {
+    withTimeoutOrNull(SILENT_CONNECT_TIMEOUT_MS) {
+        catalogRepository.testAndSaveServer(url)
+    } != null
+} catch (cancelled: CancellationException) {
+    throw cancelled
+} catch (_: Exception) {
+    false
+}
 
 /**
  * Whether this install has never been through the region screen.

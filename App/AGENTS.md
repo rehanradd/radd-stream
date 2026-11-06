@@ -183,6 +183,9 @@ never persist the token in the repository.
 10. **Session logs go in `App/docs/SESSION_HISTORY.md`, never in this file** — this file is
     instructions-only and is auto-loaded into every agent's context. (An older line here said
     to update this AGENTS.md with the session log; that line is retired by the root rule.)
+11. **`vectorResource` is qualified, never top-level** — in this Compose version (BOM 2024.06.00)
+    there is no top-level `androidx.compose.ui.res.vectorResource`; always call
+    `ImageVector.vectorResource(id)` with `import androidx.compose.ui.graphics.vector.ImageVector`.
 
 ---
 

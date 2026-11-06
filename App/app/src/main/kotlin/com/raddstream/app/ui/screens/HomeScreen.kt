@@ -117,6 +117,14 @@ fun HomeScreen(
                 LinearProgressIndicator(Modifier.fillMaxWidth())
             }
 
+            // Search first: the hero bar is the front door to the catalog — one tap opens
+            // Search, instead of hunting for the small icon in the top bar. It hides with
+            // the operator's search flag, exactly like the icon does.
+            if (searchEnabled) {
+                HeroSearchBar(onClick = onSearchClick)
+                Spacer(Modifier.height(12.dp))
+            }
+
             // The operator's channel to every phone: a broadcast shows above the
             // catalog, even when the catalog itself failed to load — that is
             // exactly when the operator has something to say.
@@ -413,6 +421,33 @@ private fun JumpOffRow(onBrowseType: (String?) -> Unit) {
                     )
                 }
             }
+        }
+    }
+}
+
+/**
+ * The search-first front door: a full-width bar that opens Search on one tap.
+ * It is a door, not a field — typing happens on the Search screen, so this never
+ * holds text state and never needs a keyboard.
+ */
+@Composable
+private fun HeroSearchBar(onClick: () -> Unit) {
+    Surface(
+        onClick = onClick,
+        shape = RoundedCornerShape(28.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant,
+        contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Icon(Icons.Default.Search, contentDescription = null)
+            Text(
+                text = "Search movies and shows",
+                style = MaterialTheme.typography.bodyLarge,
+            )
         }
     }
 }
