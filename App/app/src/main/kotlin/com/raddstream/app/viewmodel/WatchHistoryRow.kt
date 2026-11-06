@@ -45,7 +45,11 @@ object WatchHistoryRow {
         posterUrl = row.posterUrl,
         scopeLabel = ContinueWatchingTile.scopeLabel(row.seasonNumber, row.episodeNumber),
         progressFraction = ContinueWatchingTile.progressFraction(row.positionMs, row.durationMs),
-        progressLabel = ContinueWatchingTile.progressLabel(row.positionMs, row.durationMs),
+        // A finished title has no time left to report: the rail's label would say
+        // "Less than a minute left" for a row stopped inside the end-guard, and the
+        // screen would show that next to "Finished". Null here keeps one truth.
+        progressLabel = if (isFinished(row.positionMs, row.durationMs)) null
+        else ContinueWatchingTile.progressLabel(row.positionMs, row.durationMs),
         finished = isFinished(row.positionMs, row.durationMs),
         dateLabel = dateLabel(row.updatedAt),
     )
