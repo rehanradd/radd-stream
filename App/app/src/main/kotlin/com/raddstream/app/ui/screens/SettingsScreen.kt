@@ -22,6 +22,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Email
+import androidx.compose.material.icons.filled.Help
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PlayArrow
@@ -93,6 +94,7 @@ fun SettingsScreen(
     onOpenDownloads: () -> Unit = {},
     onOpenVipUpgrade: () -> Unit = {},
     onOpenRegionChoice: () -> Unit = {},
+    onOpenHelp: () -> Unit = {},
     viewModel: SettingsViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsState()
@@ -462,6 +464,23 @@ fun SettingsScreen(
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+            }
+
+            // ── Help ───────────────────────────────────────────────────────
+            // Read help first, write to us second: most questions are answered on
+            // the Help screen, and the Contact form is for a person's own problem.
+            SettingsCard(title = "Help", icon = Icons.Default.Help) {
+                Text(
+                    "How to watch, download, and use VIP and coins.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                OutlinedButton(
+                    onClick = onOpenHelp,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text("Read help")
+                }
             }
 
             // ── Contact us ───────────────────────────────────────────────────

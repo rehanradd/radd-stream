@@ -31,6 +31,7 @@ import com.raddstream.app.ui.screens.BrowseScreen
 import com.raddstream.app.ui.screens.DetailScreen
 import com.raddstream.app.ui.screens.DownloadsScreen
 import com.raddstream.app.ui.screens.EmbedWebViewScreen
+import com.raddstream.app.ui.screens.HelpScreen
 import com.raddstream.app.ui.screens.HomeScreen
 import com.raddstream.app.ui.screens.LocalFilesScreen
 import com.raddstream.app.ui.screens.MyListScreen
@@ -236,7 +237,12 @@ fun RaddStreamNavGraph(
                     onOpenDownloads = { navController.navigate(Screen.Downloads.route) },
                     onOpenVipUpgrade = { navController.navigate(Screen.VipUpgrade.route) },
                     onOpenRegionChoice = { navController.navigate(Screen.Region.route) },
+                    onOpenHelp = { navController.navigate(Screen.Help.route) },
                 )
+            }
+
+            composable(Screen.Help.route) {
+                HelpScreen(onBackClick = { navController.popBackStack() })
             }
 
             composable(Screen.VipUpgrade.route) {
