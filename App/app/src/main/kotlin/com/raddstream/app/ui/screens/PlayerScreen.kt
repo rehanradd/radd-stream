@@ -16,9 +16,14 @@ import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -55,9 +60,7 @@ import androidx.compose.material.icons.filled.BrightnessHigh
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.FastForward
-import androidx.compose.material.icons.filled.HighQuality
 import androidx.compose.material.icons.filled.Forward10
-import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.FullscreenExit
 import androidx.compose.material.icons.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.filled.KeyboardArrowRight
@@ -67,20 +70,16 @@ import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.MusicNote
-import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PictureInPicture
-import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Replay10
 import androidx.compose.material.icons.filled.RotateRight
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.Speed
-import androidx.compose.material.icons.filled.Subtitles
 import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.filled.VolumeMute
 import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -110,9 +109,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -160,10 +164,10 @@ import com.raddstream.app.player.subtitles.SubtitleOffset
 import com.raddstream.app.player.subtitles.SubtitleOffsetSheet
 import com.raddstream.app.player.dragHalfZone
 import com.raddstream.app.player.dominantAxis
-import com.raddstream.app.ui.theme.AccentOrange
-import com.raddstream.app.ui.theme.AccentOrangeToast
 import com.raddstream.app.ui.theme.RaddCaptionPlate
 import com.raddstream.app.ui.theme.RaddCaptionPlateArgb
+import com.raddstream.app.ui.theme.RaddCoral400
+import com.raddstream.app.ui.theme.RaddCurrent500
 import com.raddstream.app.ui.theme.RaddHudBar
 import com.raddstream.app.ui.theme.RaddHudCard
 import com.raddstream.app.ui.theme.RaddHudChip
@@ -179,6 +183,7 @@ import com.raddstream.app.ui.theme.RaddPlayerDialog
 import com.raddstream.app.ui.theme.RaddPlayerSheet
 import com.raddstream.app.ui.theme.RaddPlayerSnackbarPlate
 import com.raddstream.app.ui.theme.RaddPlayerStage
+import com.raddstream.app.ui.theme.RaddTideIndigo
 import com.raddstream.app.ui.theme.brandSp
 import com.raddstream.app.ui.theme.paint
 import com.raddstream.app.viewmodel.PlayerEvent
@@ -503,13 +508,7 @@ private fun PlayerScreenContent(
         if (state.isBuffering && !state.isPlaying && state.giveUp == null &&
             state.startPhase == StartPhase.NONE
         ) {
-            CircularProgressIndicator(
-                modifier = Modifier
-                    .align(Alignment.Center)
-                    .size(46.dp),
-                color = AccentOrange,
-                strokeWidth = 3.dp,
-            )
+            LoadingWave(modifier = Modifier.align(Alignment.Center))
         }
 
         // The window before the first frame is the one a viewer cannot tell apart from a
@@ -706,7 +705,7 @@ private fun styleNativeSubtitles(view: PlayerView, state: PlayerUiState) {
 private fun AudioOnlySurface(title: String, isPlaying: Boolean) {
     Box(Modifier.fillMaxSize().background(RaddPlayerStage), contentAlignment = Alignment.Center) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Icon(Icons.Default.MusicNote, null, tint = AccentOrange, modifier = Modifier.size(72.dp))
+            Icon(Icons.Default.MusicNote, null, tint = RaddCurrent500, modifier = Modifier.size(72.dp))
             Spacer(Modifier.height(12.dp))
             Text(
                 title,
@@ -1040,7 +1039,7 @@ private fun ScrubToast(target: Long, durationMs: Long) {
 private fun BoostBadge() {
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
         Surface(
-            color = AccentOrangeToast,
+            color = RaddCurrent500,
             shape = MaterialTheme.shapes.small,
             modifier = Modifier.padding(top = 92.dp),
         ) {
@@ -1102,7 +1101,7 @@ private fun TopBar(vm: PlayerViewModel, state: PlayerUiState, onBack: () -> Unit
             Icon(
                 Icons.Default.Bedtime,
                 stringResource(R.string.player_sleep_remaining, state.sleep.remainingMs.formatTime()),
-                tint = AccentOrange,
+                tint = RaddCurrent500,
                 modifier = Modifier
                     .size(16.dp)
                     .padding(end = 6.dp),
@@ -1111,7 +1110,7 @@ private fun TopBar(vm: PlayerViewModel, state: PlayerUiState, onBack: () -> Unit
         if (state.speed != 1f && !state.boosting) {
             Text(
                 stringResource(R.string.player_speed_short, state.speed),
-                color = AccentOrange,
+                color = RaddCurrent500,
                 fontSize = brandSp(13),
                 fontWeight = FontWeight.Bold,
                 modifier = Modifier.padding(end = 6.dp),
@@ -1131,8 +1130,8 @@ private fun CenterControls(state: PlayerUiState, vm: PlayerViewModel) {
             Surface(color = RaddHudChip, shape = CircleShape) {
                 IconButton(onClick = { vm.togglePlayPause() }, modifier = Modifier.size(72.dp)) {
                     Icon(
-                        if (state.isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                        if (state.isPlaying) stringResource(R.string.player_pause) else stringResource(R.string.player_play),
+                        painter = if (state.isPlaying) painterResource(R.drawable.ic_player_pause) else painterResource(R.drawable.ic_player_play),
+                        contentDescription = if (state.isPlaying) stringResource(R.string.player_pause) else stringResource(R.string.player_play),
                         tint = Color.White,
                         modifier = Modifier.size(44.dp),
                     )
@@ -1184,7 +1183,7 @@ private fun EdgeHud(
                 Modifier
                     .fillMaxWidth(played)
                     .height(2.dp)
-                    .background(AccentOrange),
+                    .background(RaddCurrent500),
             )
         }
 
@@ -1228,8 +1227,8 @@ private fun EdgeHud(
                 onClick = { if (state.isEnded) vm.playFrom(0) else vm.togglePlayPause() },
             ) {
                 Icon(
-                    if (state.isPlaying && !state.isBuffering) Icons.Default.Pause else Icons.Default.PlayArrow,
-                    null,
+                    painter = if (state.isPlaying && !state.isBuffering) painterResource(R.drawable.ic_player_pause) else painterResource(R.drawable.ic_player_play),
+                    contentDescription = null,
                     tint = Color.White,
                     modifier = Modifier.size(20.dp),
                 )
@@ -1263,7 +1262,7 @@ private fun EdgeHud(
                 Icon(
                     Icons.Default.LocalMovies,
                     null,
-                    tint = AccentOrange,
+                    tint = RaddCurrent500,
                     modifier = Modifier.size(20.dp),
                 )
             }
@@ -1328,8 +1327,8 @@ private fun BottomControls(
                     if (state.isPlaying) stringResource(R.string.player_pause) else stringResource(R.string.player_play),
                 ) {
                     Icon(
-                        if (state.isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                        null,
+                        painter = if (state.isPlaying) painterResource(R.drawable.ic_player_pause) else painterResource(R.drawable.ic_player_play),
+                        contentDescription = null,
                         tint = Color.White,
                     )
                 }
@@ -1339,21 +1338,31 @@ private fun BottomControls(
                     else stringResource(R.string.player_volume_muted),
                     onLongClick = { showVolumeDialog = true },
                 ) {
-                    Icon(
-                        if (state.userVolume > 0f) Icons.Default.VolumeUp else Icons.Default.VolumeMute,
-                        null,
-                        tint = Color.White,
-                    )
+                    if (state.userVolume > 0f) {
+                        Icon(
+                            painter = painterResource(R.drawable.ic_player_volume),
+                            contentDescription = null,
+                            tint = Color.White,
+                        )
+                    } else {
+                        // No brand icon for muted: the speaker with waves would lie
+                        // about the state, so the Material mute mark stays.
+                        Icon(
+                            Icons.Default.VolumeMute,
+                            null,
+                            tint = Color.White,
+                        )
+                    }
                 }
                 PlayerControlButton({ vm.showSubtitleSheet() }, stringResource(R.string.player_subtitles_label, subtitleWord)) {
-                    Icon(Icons.Default.Subtitles, null, tint = if (subtitleActive(state)) AccentOrange else Color.White)
+                    Icon(painterResource(R.drawable.ic_player_subtitles), null, tint = if (subtitleActive(state)) RaddCurrent500 else Color.White)
                 }
                 if (state.canSwitchQuality) {
                     PlayerControlButton({ vm.showQualitySheet() }, stringResource(R.string.player_quality_label, state.qualityLabel)) {
                         Icon(
-                            Icons.Default.HighQuality,
+                            painterResource(R.drawable.ic_player_quality),
                             null,
-                            tint = if (state.qualityAuto) Color.White else AccentOrange,
+                            tint = if (state.qualityAuto) Color.White else RaddCurrent500,
                         )
                     }
                 }
@@ -1362,11 +1371,13 @@ private fun BottomControls(
                     if (state.fullscreen) stringResource(R.string.player_exit_fullscreen)
                     else stringResource(R.string.player_fullscreen),
                 ) {
-                    Icon(
-                        if (state.fullscreen) Icons.Default.FullscreenExit else Icons.Default.Fullscreen,
-                        null,
-                        tint = Color.White,
-                    )
+                    if (state.fullscreen) {
+                        // No brand icon for exit: the expand-corners mark would lie
+                        // about the state, so the Material exit mark stays.
+                        Icon(Icons.Default.FullscreenExit, null, tint = Color.White)
+                    } else {
+                        Icon(painterResource(R.drawable.ic_player_fullscreen), null, tint = Color.White)
+                    }
                 }
                 PlayerControlButton({ vm.showMoreSheet() }, stringResource(R.string.player_more)) {
                     Icon(Icons.Default.MoreVert, null, tint = Color.White)
@@ -1509,14 +1520,14 @@ private fun Scrubber(
                 .align(Alignment.CenterStart)
                 .fillMaxWidth(posFraction)
                 .height(3.dp)
-                .background(AccentOrange),
+                .background(RaddCurrent500),
         )
         Box(
             Modifier
                 .align(Alignment.CenterStart)
                 .offset(x = maxWidth * posFraction.coerceIn(0f, 0.98f))
                 .size(13.dp)
-                .background(AccentOrange, shape = CircleShape),
+                .background(RaddCurrent500, shape = CircleShape),
         )
         if (enabled && durationMs > 0) {
             Box(
@@ -1589,7 +1600,7 @@ private fun ConnectionErrorCard(message: String, onRetry: () -> Unit) {
             Modifier.padding(24.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            Icon(Icons.Default.Warning, null, tint = AccentOrange, modifier = Modifier.size(40.dp))
+            Icon(Icons.Default.Warning, null, tint = RaddCoral400, modifier = Modifier.size(40.dp))
             Spacer(Modifier.height(10.dp))
             Text(message, color = Color.White, fontSize = brandSp(13), textAlign = TextAlign.Center)
             Spacer(Modifier.height(12.dp))
@@ -1652,6 +1663,61 @@ private fun PlayerCoachOverlay(onDismiss: () -> Unit) {
     }
 }
 
+/**
+ * The brand loading current (plan §5 step 8, §4.7): the three wave lines from
+ * `loading-wave.svg` (jade / coral / indigo), whose dashes flow along the wave and
+ * chase each other — the same 34/20 dash and 1.5 s cycle as the asset's CSS, the
+ * coral line half a second behind and the indigo line a second behind. Drawn in
+ * Compose, not played from the asset's GIF, so it needs no new dependency and no
+ * bitmap: the paths are the asset's own Q/T curves, rebuilt from its coordinates.
+ * Replaces the generic spinner wherever the player waits.
+ */
+@Composable
+private fun LoadingWave(modifier: Modifier = Modifier) {
+    val phase by rememberInfiniteTransition().animateFloat(
+        initialValue = 0f,
+        targetValue = -54f,
+        animationSpec = infiniteRepeatable(animation = tween(1500, easing = LinearEasing)),
+    )
+    Canvas(modifier.size(96.dp)) {
+        val waveScale = size.minDimension / 200f
+        withTransform({ scale(waveScale, waveScale) }) {
+            drawPath(
+                loadingWavePath(76f),
+                color = RaddCurrent500,
+                style = Stroke(width = 6f, cap = StrokeCap.Round, pathEffect = PathEffect.dashPathEffect(floatArrayOf(34f, 20f), phase)),
+            )
+            drawPath(
+                loadingWavePath(100f),
+                color = RaddCoral400,
+                style = Stroke(width = 6f, cap = StrokeCap.Round, pathEffect = PathEffect.dashPathEffect(floatArrayOf(34f, 20f), phase - 18f)),
+            )
+            drawPath(
+                loadingWavePath(124f),
+                color = RaddTideIndigo,
+                style = Stroke(width = 6f, cap = StrokeCap.Round, pathEffect = PathEffect.dashPathEffect(floatArrayOf(34f, 20f), phase - 36f)),
+            )
+        }
+    }
+}
+
+/**
+ * One wave line from `loading-wave.svg`: M14, then a Q curve and six T curves
+ * across to x=186, the control points alternating 13 above and 13 below the line —
+ * each T reflects the previous control point across its endpoint, which is what the
+ * SVG's T command does. Pure geometry, no player state.
+ */
+private fun loadingWavePath(y: Float): Path = Path().apply {
+    moveTo(14f, y)
+    var controlX = 26.5f
+    var controlY = y - 13f
+    floatArrayOf(39f, 64f, 89f, 114f, 139f, 164f, 186f).forEach { x ->
+        quadraticBezierTo(controlX, controlY, x, y)
+        controlX = 2 * x - controlX
+        controlY = 2 * y - controlY
+    }
+}
+
 private fun StartNoticeCard(
     phase: StartPhase,
     title: String?,
@@ -1663,17 +1729,23 @@ private fun StartNoticeCard(
     val label = phase.label
     val spoken = if (title.isNullOrBlank()) label else stringResource(R.string.player_notice_spaced, label, title)
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        // The logo-mark (§4.7): 32 dp, top-left, only while nothing is playing.
+        Icon(
+            painter = painterResource(R.drawable.ic_logo_mark),
+            contentDescription = null,
+            tint = Color.Unspecified,
+            modifier = Modifier
+                .align(Alignment.TopStart)
+                .padding(16.dp)
+                .size(32.dp),
+        )
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
             modifier = Modifier
                 .padding(horizontal = 32.dp)
                 .semantics(mergeDescendants = true) { contentDescription = spoken },
         ) {
-            CircularProgressIndicator(
-                modifier = Modifier.size(46.dp),
-                color = AccentOrange,
-                strokeWidth = 3.dp,
-            )
+            LoadingWave()
             Spacer(Modifier.height(14.dp))
             Text(
                 label,
@@ -1719,12 +1791,12 @@ private fun StartNoticeCard(
                 Row(horizontalArrangement = Arrangement.Center) {
                     onRetry?.let {
                         TextButton(onClick = it) {
-                            Text(stringResource(R.string.player_retry), color = AccentOrange)
+                            Text(stringResource(R.string.player_retry), color = RaddCurrent500)
                         }
                     }
                     onTryAnother?.let {
                         TextButton(onClick = it) {
-                            Text(stringResource(R.string.player_start_try_another), color = AccentOrange)
+                            Text(stringResource(R.string.player_start_try_another), color = RaddCurrent500)
                         }
                     }
                 }
@@ -1745,6 +1817,16 @@ private fun GiveUpCard(
     AlertDialog(
         onDismissRequest = onDismiss,
         containerColor = RaddPlayerDialog,
+        icon = {
+            // The logo-mark (§4.7): 32 dp, only while nothing is playing — which
+            // is exactly when this card exists. Its own colours, never tinted.
+            Icon(
+                painter = painterResource(R.drawable.ic_logo_mark),
+                contentDescription = null,
+                tint = Color.Unspecified,
+                modifier = Modifier.size(32.dp),
+            )
+        },
         title = {
             Text(
                 when (why) {
@@ -1776,11 +1858,11 @@ private fun GiveUpCard(
         },
         confirmButton = {
             Row {
-                TextButton(onClick = onRetry) { Text(stringResource(R.string.player_retry), color = AccentOrange) }
+                TextButton(onClick = onRetry) { Text(stringResource(R.string.player_retry), color = RaddCurrent500) }
                 onTryAnother?.let {
-                    TextButton(onClick = it) { Text(stringResource(R.string.player_start_try_another), color = AccentOrange) }
+                    TextButton(onClick = it) { Text(stringResource(R.string.player_start_try_another), color = RaddCurrent500) }
                 }
-                TextButton(onClick = onExternal) { Text(stringResource(R.string.player_open_external), color = AccentOrange) }
+                TextButton(onClick = onExternal) { Text(stringResource(R.string.player_open_external), color = RaddCurrent500) }
             }
         },
         dismissButton = {
@@ -1907,7 +1989,7 @@ private fun ResumeDialog(state: PlayerUiState, vm: PlayerViewModel) {
             )
         },
         confirmButton = {
-            TextButton(onClick = { vm.resolveResume(true) }) { Text(stringResource(R.string.player_resume), color = AccentOrange) }
+            TextButton(onClick = { vm.resolveResume(true) }) { Text(stringResource(R.string.player_resume), color = RaddCurrent500) }
         },
         dismissButton = {
             TextButton(onClick = { vm.resolveResume(false) }) { Text(stringResource(R.string.player_start_over), color = Color.White.copy(alpha = 0.7f)) }
@@ -1938,7 +2020,7 @@ private fun SponsorBreakDialog(slot: AdSlot, onDismiss: () -> Unit) {
             )
         },
         confirmButton = {
-            TextButton(onClick = onDismiss) { Text(stringResource(R.string.player_continue), color = AccentOrange) }
+            TextButton(onClick = onDismiss) { Text(stringResource(R.string.player_continue), color = RaddCurrent500) }
         },
     )
 }
@@ -1973,7 +2055,7 @@ private fun CalibrationDialog(
         confirmButton = {
             TextButton(
                 onClick = { text.toIntOrNull()?.let { onConfirm(it) } ?: onDismiss() },
-            ) { Text(stringResource(R.string.player_mark_position), color = AccentOrange) }
+            ) { Text(stringResource(R.string.player_mark_position), color = RaddCurrent500) }
         },
         dismissButton = {
             TextButton(onClick = onDismiss) { Text(stringResource(R.string.player_cancel), color = Color.White.copy(alpha = 0.7f)) }
@@ -2000,7 +2082,7 @@ private fun PlayFromDialog(
             )
         },
         confirmButton = {
-            TextButton(onClick = { onSubmit(parseTimeToMs(text)) }) { Text(stringResource(R.string.player_go), color = AccentOrange) }
+            TextButton(onClick = { onSubmit(parseTimeToMs(text)) }) { Text(stringResource(R.string.player_go), color = RaddCurrent500) }
         },
         dismissButton = {
             TextButton(onClick = onDismiss) { Text(stringResource(R.string.player_cancel), color = Color.White.copy(alpha = 0.7f)) }
@@ -2041,7 +2123,7 @@ private fun SpeedSheet(state: PlayerUiState, vm: PlayerViewModel) {
                 GestureMapper.SPEED_PRESETS.forEach { preset ->
                     val selected = state.speed == preset
                     Surface(
-                        color = if (selected) AccentOrange else RaddHudPillIdle,
+                        color = if (selected) RaddCurrent500 else RaddHudPillIdle,
                         shape = MaterialTheme.shapes.small,
                         modifier = Modifier
                             .padding(end = 6.dp)
@@ -2120,7 +2202,7 @@ private fun QualityRow(title: String, detail: String?, selected: Boolean, onClic
     ) {
         Text(
             title,
-            color = if (selected) AccentOrange else Color.White,
+            color = if (selected) RaddCurrent500 else Color.White,
             fontSize = brandSp(14),
             fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
         )
@@ -2129,7 +2211,7 @@ private fun QualityRow(title: String, detail: String?, selected: Boolean, onClic
             Text(detail, color = Color.White.copy(alpha = 0.5f), fontSize = brandSp(12))
         }
         Spacer(Modifier.weight(1f))
-        if (selected) Icon(Icons.Default.Check, null, tint = AccentOrange, modifier = Modifier.size(18.dp))
+        if (selected) Icon(Icons.Default.Check, null, tint = RaddCurrent500, modifier = Modifier.size(18.dp))
     }
 }
 
@@ -2146,7 +2228,7 @@ private fun SleepSheet(state: PlayerUiState, vm: PlayerViewModel) {
             if (state.sleep.mode == SleepMode.COUNTDOWN) {
                 Text(
                     stringResource(R.string.player_sleep_fading, state.sleep.remainingMs.formatTime()),
-                    color = AccentOrange,
+                    color = RaddCurrent500,
                     fontSize = brandSp(13),
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
                 )
@@ -2365,7 +2447,7 @@ private fun TracksSheet(state: PlayerUiState, vm: PlayerViewModel) {
             ) {
                 Text(
                     AudioBoost.labelFor(state.audioBoostLevel),
-                    color = AccentOrange,
+                    color = RaddCurrent500,
                     fontSize = brandSp(13),
                     fontWeight = FontWeight.SemiBold,
                 )
@@ -2562,7 +2644,7 @@ private fun PrintLogSheet(state: PlayerUiState, vm: PlayerViewModel) {
                         if (r.playback.isHls()) append("  ·  ").append(hlsTag)
                         if (active) append("   ← ").append(playingTag)
                     },
-                    color = if (active) AccentOrange else Color.White.copy(alpha = 0.8f),
+                    color = if (active) RaddCurrent500 else Color.White.copy(alpha = 0.8f),
                     fontSize = brandSp(13),
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 3.dp),
                 )
@@ -2626,7 +2708,7 @@ private fun SheetRow(label: String, selected: Boolean = false, enabled: Boolean 
             Text(
                 label,
                 color = when {
-                    selected -> AccentOrange
+                    selected -> RaddCurrent500
                     !enabled -> Color.White.copy(alpha = 0.4f)
                     else -> Color.White
                 },
@@ -2634,7 +2716,7 @@ private fun SheetRow(label: String, selected: Boolean = false, enabled: Boolean 
             )
         },
         leadingContent = if (selected) {
-            { Icon(Icons.Default.Check, null, tint = AccentOrange) }
+            { Icon(Icons.Default.Check, null, tint = RaddCurrent500) }
         } else {
             null
         },
