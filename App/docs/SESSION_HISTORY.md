@@ -1916,3 +1916,5 @@ preselected, tap → jade check, Continue saves).
   fix is the other direction: `PendingKeep` and `KeepTarget` are public now, because both
   are part of the public UiState shape (and the screen's confirm dialog). Both fixes ship
   in the next commit.
+
+**Addendum 2 — CI verdict on be96699 (Android run 42159907231; no Backend run — App-only paths).** Android **FAILURE** at `compileDebugKotlin`, ONE error left: `RegionSelectionScreen.kt:222:35` — `vectorResource(...)` has no applicable candidate. The top-level `androidx.compose.ui.res.vectorResource` does not exist in this Compose version (BOM 2024.06.00); the compiler only knows the two `ImageVector.Companion.vectorResource` overloads. NavGraph already uses the working form, so the screen now calls `ImageVector.vectorResource(...)` too (with the `ImageVector` import restored). Fix ships in the next commit.

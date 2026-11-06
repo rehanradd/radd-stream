@@ -40,6 +40,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.vectorResource
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
@@ -219,7 +220,9 @@ private fun RegionChoiceCard(
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(
-                    imageVector = vectorResource(regionIconRes(choice)),
+                    // The qualified form, as in NavGraph: the top-level vectorResource does
+                    // not exist in this Compose version (BOM 2024.06.00), only the Companion's.
+                    imageVector = ImageVector.vectorResource(regionIconRes(choice)),
                     contentDescription = null,
                     tint = iconTint,
                     modifier = Modifier.size(26.dp),
