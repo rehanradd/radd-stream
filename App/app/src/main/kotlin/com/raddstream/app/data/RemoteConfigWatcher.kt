@@ -71,6 +71,10 @@ class RemoteConfigWatcher @Inject constructor(
         // The theme rides the same successful body: a failed poll leaves the
         // last good theme in place, exactly like the switches above.
         settings.saveTheme(config.theme)
+        // The tabs ride the same body, under the same rule: a failed poll
+        // leaves the last good order in place, and a body that carries no
+        // tabs (an older deployment) leaves the bar on its own four.
+        settings.saveTabs(config.tabs)
         // The caps travel with the switch, and only a body that carries them overrides what this
         // build already enforces — a partial body leaves the shipped 25/12/4 windows in force
         // rather than resetting them to something the operator never asked for.

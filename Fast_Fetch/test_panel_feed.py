@@ -87,7 +87,7 @@ def _build_panel(path):
         "CREATE TABLE tuning_settings (id INTEGER PRIMARY KEY, "
         "theme_mode TEXT, theme_accent TEXT, theme_dynamic_color INTEGER, "
         "theme_hero_autoplay INTEGER, theme_hero_interval_s INTEGER, "
-        "hero_max INTEGER)")
+        "hero_max INTEGER, tabs TEXT)")
     now = 1_791_000_000
     conn.executemany(
         "INSERT INTO home_sections VALUES (?,?,?,?,?,?,?,?,?)", [
@@ -120,8 +120,8 @@ def _build_panel(path):
             (5, "Future", "Soon", "info", "all", now + 3600, now + 7200, "published"),
         ])
     conn.execute(
-        "INSERT INTO tuning_settings VALUES (?,?,?,?,?,?,?)",
-        (1, "light", "#2BC79A", 1, 0, 8, 4))
+        "INSERT INTO tuning_settings VALUES (?,?,?,?,?,?,?,?)",
+        (1, "light", "#2BC79A", 1, 0, 8, 4, "my_list,home,home,search"))
     conn.commit()
     conn.close()
     return now
@@ -250,6 +250,39 @@ class PanelFeedTests(unittest.TestCase):
         self.assertEqual(
             panel_feed.read_theme(panel_path=os.path.join(self.tmp.name, "nope.db")),
             panel_feed.THEME_DEFAULTS)
+
+    def test_tabs_reads_operator_order_deduped(self):
+        # The fixture order is my_list, home, home, search: the duplicate
+        # collapses, the order stands, and settings is absent because the
+        # operator did not list it — the list is authoritative.
+        self.assertEqual(
+            panel_feed.read_tabs(panel_path=self.panel_path),
+            ["my_list", "home", "search"])
+
+    def test_tabs_defaults_when_nothing_set(self):
+        empty_path = os.path.join(self.tmp.name, "empty.db")
+        sqlite3.connect(empty_path).close()
+        self.assertEqual(
+            panel_feed.read_tabs(panel_path=empty_path),
+            panel_feed.TABS_DEFAULT)
+        self.assertEqual(
+            panel_feed.read_tabs(panel_path=os.path.join(self.tmp.name, "nope.db")),
+            panel_feed.TABS_DEFAULT)
+
+    def test_tabs_unknown_ids_dropped_and_empty_falls_back(self):
+        conn = sqlite3.connect(self.panel_path)
+        conn.execute(
+            "UPDATE tuning_settings SET tabs='home,nope,search' WHERE id=1")
+        conn.commit()
+        self.assertEqual(
+            panel_feed.read_tabs(panel_path=self.panel_path),
+            ["home", "search"])
+        conn.execute("UPDATE tuning_settings SET tabs='' WHERE id=1")
+        conn.commit()
+        conn.close()
+        self.assertEqual(
+            panel_feed.read_tabs(panel_path=self.panel_path),
+            panel_feed.TABS_DEFAULT)
 
     def test_theme_invalid_values_fall_back_to_defaults(self):
         conn = sqlite3.connect(self.panel_path)

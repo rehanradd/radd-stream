@@ -269,6 +269,47 @@ def read_theme(panel_path=None):
         conn.close()
 
 
+#: The tabs the bottom bar shows, in the operator's order, as set in
+#: `tuning_settings.tabs` (a comma list). The app's own four are the default;
+#: Home is pinned first by the APP, not here — the server only validates.
+TABS_DEFAULT = ["home", "search", "my_list", "settings"]
+TAB_IDS = frozenset(TABS_DEFAULT)
+
+
+def read_tabs(panel_path=None):
+    """Operator tab list for the app, or the default four. Never raises.
+
+    Reads the ``tabs`` TEXT column from ``tuning_settings`` (id = 1), read-only.
+    A missing database, table, row or column answers the defaults; unknown ids
+    are dropped, duplicates collapse, and an empty or unreadable value answers
+    the defaults — the app keeps its own rails either way.
+    """
+    conn = _open_panel(panel_path)
+    if conn is None:
+        return list(TABS_DEFAULT)
+    try:
+        if not _has_table(conn, "tuning_settings"):
+            return list(TABS_DEFAULT)
+        try:
+            row = conn.execute(
+                "SELECT tabs FROM tuning_settings WHERE id = 1").fetchone()
+        except sqlite3.Error:
+            return list(TABS_DEFAULT)
+        if row is None:
+            return list(TABS_DEFAULT)
+        raw = _theme_col(row, "tabs")
+        if not isinstance(raw, str) or not raw.strip():
+            return list(TABS_DEFAULT)
+        seen = []
+        for part in raw.split(","):
+            tab = part.strip().lower()
+            if tab in TAB_IDS and tab not in seen:
+                seen.append(tab)
+        return seen or list(TABS_DEFAULT)
+    finally:
+        conn.close()
+
+
 def _resolve_rows(catalog_conn, rule, category_key, curated_ids, limit, hidden):
     """Post rows for one section rule, adult-filtered and hide-filtered.
 

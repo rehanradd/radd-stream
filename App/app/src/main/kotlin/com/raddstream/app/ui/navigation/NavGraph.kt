@@ -68,6 +68,8 @@ fun RaddStreamNavGraph(
     navController: NavHostController = rememberNavController(),
     startDestination: String,
     features: RemoteFeatures = RemoteFeatures(),
+    /** The operator's tab order from the panel (`tabs` tuning key), as the activity last received it; empty means "never received", and the bar falls back to its own four. */
+    tabs: List<String> = emptyList(),
     /** The operator's theme, for the hero knobs Home reads from it. */
     theme: PanelTheme = PanelTheme(),
     /** The viewer's own autoplay-previews switch (plan §5 step 10): either it or the operator's hero flag being off stops the carousel. */
@@ -88,11 +90,18 @@ fun RaddStreamNavGraph(
         onOpenConsumed()
     }
 
-    val bottomNavItems = buildList {
-        add(BottomNavItem("Home", Screen.Home.route, Icons.Default.Home))
-        if (features.search) add(BottomNavItem("Search", Screen.Search.route, Icons.Default.Search))
-        add(BottomNavItem("My List", Screen.MyList.route, Icons.Default.Favorite))
-        add(BottomNavItem("Settings", Screen.Settings.route, Icons.Default.Settings))
+    // The operator's tab order, resolved against what this build can show: Home is always
+    // first, Search only when its feature flag is on, and an empty or all-unknown list falls
+    // back to the four tabs this build has always shipped. The routes stay registered even
+    // for a tab the operator hid — a back stack that already holds that screen must not name
+    // a destination the graph cannot resolve.
+    val bottomNavItems = PanelTabs.resolve(tabs, features.search).map { id ->
+        when (id) {
+            "search" -> BottomNavItem("Search", Screen.Search.route, Icons.Default.Search)
+            "my_list" -> BottomNavItem("My List", Screen.MyList.route, Icons.Default.Favorite)
+            "settings" -> BottomNavItem("Settings", Screen.Settings.route, Icons.Default.Settings)
+            else -> BottomNavItem("Home", Screen.Home.route, Icons.Default.Home)
+        }
     }
 
     val showBottomBar = currentRoute in bottomNavItems.map { it.route }

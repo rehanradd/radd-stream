@@ -482,6 +482,28 @@ class ServerSettingsRepository @Inject constructor(
     }
 
     /**
+     * The operator's tab list, mirrored the same way as the theme above: the
+     * last body we actually received is what the bar shows, so a dead server
+     * on launch leaves the previous order in force. Empty means "never
+     * received" — the bar falls back to its own four (see
+     * [com.raddstream.app.ui.navigation.PanelTabs]).
+     */
+    val panelTabs: Flow<List<String>> = dataStore.data.map { preferences ->
+        preferences[PANEL_TABS_KEY]
+            ?.split(",")
+            ?.map { it.trim() }
+            ?.filter { it.isNotEmpty() }
+            ?: emptyList()
+    }
+
+    /** Record one received tab list, from the same successful poll as [saveTheme]. */
+    suspend fun saveTabs(tabs: List<String>) {
+        dataStore.edit { preferences ->
+            preferences[PANEL_TABS_KEY] = tabs.joinToString(",")
+        }
+    }
+
+    /**
      * The last entitlement the ledger confirmed, mirrored here so a restart does not have to
      * wait for a round trip before it knows what this account may play. It is a CACHE of the
      * server's answer, never a second authority: a signed-out device clears it, and every
@@ -714,6 +736,7 @@ class ServerSettingsRepository @Inject constructor(
         private val FEATURE_QUALITY_GATE_KEY = booleanPreferencesKey("feature_quality_gate")
         private val FEATURE_ADS_KEY = booleanPreferencesKey("feature_ads")
         private val THEME_MODE_KEY = stringPreferencesKey("theme_mode")
+        private val PANEL_TABS_KEY = stringPreferencesKey("panel_tabs")
         private val THEME_ACCENT_KEY = stringPreferencesKey("theme_accent")
         private val THEME_DYNAMIC_COLOR_KEY = booleanPreferencesKey("theme_dynamic_color")
         private val THEME_HERO_AUTOPLAY_KEY = booleanPreferencesKey("theme_hero_autoplay")

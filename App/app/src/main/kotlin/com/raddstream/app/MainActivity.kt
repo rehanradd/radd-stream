@@ -123,6 +123,14 @@ class MainActivity : ComponentActivity() {
             }
             val operatorFeatures by featuresPreference.collectAsState(initial = RemoteFeatures())
 
+            // The operator's tab order, mirrored into DataStore by RemoteConfigWatcher.
+            // Seeded with an empty list so a cold start shows the bar's own four; a
+            // store that cannot answer takes no tab away from anybody.
+            val tabsPreference: Flow<List<String>> = remember(serverSettingsRepository) {
+                serverSettingsRepository.panelTabs.catch { emit(emptyList()) }
+            }
+            val operatorTabs by tabsPreference.collectAsState(initial = emptyList())
+
             // The operator's theme, mirrored into DataStore by RemoteConfigWatcher.
             // Seeded with the app's own defaults (dark, brand accent, hero on) so a
             // cold start paints the app it always painted; a store that cannot
@@ -193,6 +201,7 @@ class MainActivity : ComponentActivity() {
                         else -> RaddStreamNavGraph(
                             startDestination = destination,
                             features = operatorFeatures,
+                            tabs = operatorTabs,
                             theme = operatorTheme,
                             autoplayPreviews = autoplayPreviews,
                             openRequest = pendingLocalOpen,

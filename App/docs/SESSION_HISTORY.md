@@ -1598,3 +1598,17 @@ or printed. Gating is qoder1's call after fresh green CI.
 **Checks before committing:** no test asserts the old stores-nothing behaviour (grep clean); the region test only checks card words are in the chip list; `combine` transform + Triple/Pair destructuring match the flow arities; every KDoc that said "null means off / player's own pick" updated to the new contract.
 
 **Not done:** pushed with step 19 after CI run 42142493644 went green — a new run judges both. Device check (fresh install, no Region answer: Hindi audio + English subs on first play; turn subs off in the player, next episode stays off) is owner-only, part of step 20. Next: tabs control or the contact form.
+
+---
+
+### Session 58 — Tabs control: the panel orders the bottom bar (Muse, 2026-11-06)
+
+**Agent:** Muse (BoNzoO), coded directly. Same branch as Sessions 40–57. Built while CI run 42143779496 (step 19 + language defaults) was still in progress — committed locally only, push waits for that run.
+
+**What it is:** the operator sets the bottom-bar tabs in the panel, and the app shows them in that order. The panel source is a new `tabs` tuning key (comma list, default `home,search,my_list,settings`), stored as a TEXT column the panel's `_seed` auto-adds on its next restart — the same way the theme keys landed. The panel validates it (only the four ids, at least one named) and labels it "remote-config (app reads it)". No tuning UI template exists; tuning is API-driven.
+
+**Server (this branch):** `panel_feed.read_tabs()` (same tolerant pattern as `read_theme`: missing DB/table/row/column → default four; unknown ids drop, duplicates collapse, empty → defaults) + `viewer.py` merges `tabs` into the remote-config body next to `theme` — no new route. 3 new `test_panel_feed.py` cases; 21 OK locally.
+
+**App (this branch):** `VipRemoteConfig.tabs`; NEW pure `ui/navigation/PanelTabs.resolve` + 7 tests — the operator's list is authoritative (a tab it did not list does not show), Home is always pinned first, Search drops out when its feature flag is off, empty/all-unknown falls back to the shipped four. DataStore mirror (`panel_tabs` key) via `saveTabs`/`panelTabs`; `RemoteConfigWatcher` saves it on the same successful poll as the theme; `MainActivity` collects it; `NavGraph` builds the bar from the resolved list. Routes stay registered for a hidden tab so a back stack holding it still resolves. Decode test extended.
+
+**Not done:** push (waits for run 42143779496); panel workspace changes are NOT in this repo — they go to the VM panel workspace + panel restart through the gate before tabs work end-to-end (live panel DB has no `tabs` column yet; defaults cover it). Next: contact form.

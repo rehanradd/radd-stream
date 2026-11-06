@@ -72,6 +72,15 @@ data class VipRemoteConfig(
      * which is the app this build has always shipped.
      */
     val theme: PanelTheme = PanelTheme(),
+    /**
+     * The operator's bottom-bar tabs, in order, as set in the panel's `tabs`
+     * tuning key. Empty from an older deployment — the app then keeps its own
+     * four, exactly like the sections above. The list is authoritative when
+     * present (a tab the operator did not list does not show), except Home,
+     * which [com.raddstream.app.ui.navigation.PanelTabs.resolve] pins first:
+     * the app cannot function without a way back to it.
+     */
+    val tabs: List<String> = emptyList(),
 )
 
 /**

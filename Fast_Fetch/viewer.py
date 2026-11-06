@@ -4240,11 +4240,12 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 payload = admin_panel.remote_config(conn)
                 # The panel feed rides the same body the app already polls:
                 # sections the operator built, broadcasts it published, works
-                # it hid, and the theme knobs it set. No new route, so the
-                # public allow-list does not change. Unwired means three
-                # empty lists plus the default theme, and the app keeps its
-                # own rails; the keys are always present so the client
-                # contract never depends on the panel being up.
+                # it hid, the theme knobs it set, and the tabs it ordered. No
+                # new route, so the public allow-list does not change. Unwired
+                # means three empty lists plus the default theme and the
+                # default tabs, and the app keeps its own rails; the keys are
+                # always present so the client contract never depends on the
+                # panel being up.
                 feed = panel_feed.load_panel_feed(conn)
                 all_ids = [int(r["id"]) for s in feed["sections"]
                            for r in s["rows"]]
@@ -4266,6 +4267,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 payload["broadcasts"] = feed["broadcasts"]
                 payload["hidden_work_ids"] = feed["hidden_work_ids"]
                 payload["theme"] = panel_feed.read_theme()
+                payload["tabs"] = panel_feed.read_tabs()
             self.send_json(redact.scrub(payload),
                            extra_headers=[("Cache-Control", "public, max-age=60")])
 

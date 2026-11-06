@@ -386,7 +386,8 @@ class VipRemoteConfigTest {
                 {"id": 1, "title": "Hello", "body": "Welcome", "severity": "info"},
                 {"id": 2, "title": "Careful", "body": "", "severity": "warning"}
               ],
-              "hidden_work_ids": [2]
+              "hidden_work_ids": [2],
+              "tabs": ["settings", "home"]
             }
             """.trimIndent(),
             VipRemoteConfig::class.java,
@@ -407,6 +408,8 @@ class VipRemoteConfigTest {
         assertEquals("warning", config.broadcasts[1].severity)
 
         assertEquals(listOf(2), config.hiddenWorkIds)
+
+        assertEquals(listOf("settings", "home"), config.tabs)
     }
 
     @Test
