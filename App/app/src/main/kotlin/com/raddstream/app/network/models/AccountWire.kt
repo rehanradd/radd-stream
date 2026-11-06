@@ -194,6 +194,13 @@ data class ProgressWriteResponse(
     val progress: ProgressEntry? = null,
     /** False when the server kept what it already had: our stamp was not newer. */
     val applied: Boolean? = null,
+    /**
+     * Coins this write earned by finishing the title (15 by default), zero
+     * otherwise: the server pays once per title, and the player shows the
+     * toast only when this number is positive. Zero on a server that predates
+     * the grant — an older server simply never pays.
+     */
+    @SerializedName("coins_earned") val coinsEarned: Int = 0,
 )
 
 /** Body of both progress writes. Position and duration are seconds, not milliseconds. */
@@ -326,6 +333,14 @@ data class CoinCapsResponse(
      * link rather than inventing a price.
      */
     val download: DownloadCreditPrice = DownloadCreditPrice(),
+    /**
+     * The movie-request price the server publishes (coins for one title).
+     * Zero when the server predates the request: the phone offers no request
+     * form rather than inventing a price.
+     */
+    val request: DownloadCreditPrice = DownloadCreditPrice(),
+    /** The player themes the server publishes (theme -> coin price), empty until read. */
+    val themes: Map<String, DownloadCreditPrice> = emptyMap(),
 )
 
 /** The price of one direct download, as the `coins/caps` route publishes it. */
@@ -386,6 +401,82 @@ data class CoinDownloadCredit(
 
 data class CoinDownloadCreditResponse(
     val credit: CoinDownloadCredit? = null,
+)
+
+/**
+ * POST /api/v2/account/coins/share — report one share of a movie. The body
+ * carries the work handle and nothing else: the server verifies the handle
+ * is one of ours and pays once a day, so a second share the same day answers
+ * `granted: false` and pays nothing. The app shows "+N coins" only when the
+ * server says it granted.
+ */
+data class CoinShareRequest(
+    @SerializedName("work_ref") val workRef: String,
+)
+
+/** What one share claim answers: whether it paid, what it paid, and the wallet it left behind. */
+data class CoinShare(
+    val granted: Boolean = false,
+    val coins: Int = 0,
+    val balance: Int = 0,
+)
+
+data class CoinShareResponse(
+    val share: CoinShare? = null,
+)
+
+/**
+ * POST /api/v2/account/coins/request-movie — spend coins on one requested
+ * movie. The body carries the title (the viewer's own words) and an optional
+ * note: the price is the server's own knob and the spend and the queue entry
+ * are one purchase, so a replay answers `already_applied` with the request it
+ * already filed.
+ */
+data class CoinRequestMovieRequest(
+    val title: String,
+    val notes: String = "",
+)
+
+/** What one movie request answers: the queued request, what it cost, and the wallet it left behind. */
+data class CoinMovieRequest(
+    val id: Int? = null,
+    val title: String = "",
+    val cost: Int = 0,
+    val balance: Int = 0,
+    @SerializedName("already_applied") val alreadyApplied: Boolean = false,
+)
+
+data class CoinRequestMovieResponse(
+    val request: CoinMovieRequest? = null,
+)
+
+/**
+ * POST /api/v2/account/coins/redeem-theme — spend coins on one player theme.
+ * The body carries the theme id and nothing else: the price is one price for
+ * every theme, and a theme already owned answers `already_applied` with the
+ * ownership it already holds — no spend runs at all.
+ */
+data class CoinRedeemThemeRequest(
+    val theme: String,
+)
+
+/** What one theme purchase answers: the theme, what it cost, the wallet it left behind, and everything owned now. */
+data class CoinTheme(
+    val theme: String = "",
+    val cost: Int = 0,
+    val balance: Int = 0,
+    @SerializedName("already_applied") val alreadyApplied: Boolean = false,
+    val owned: List<String> = emptyList(),
+)
+
+data class CoinRedeemThemeResponse(
+    val theme: CoinTheme? = null,
+)
+
+/** GET /api/v2/account/coins/themes — what this account owns, and what a theme costs. */
+data class CoinThemesResponse(
+    val themes: List<String> = emptyList(),
+    val prices: Map<String, DownloadCreditPrice> = emptyMap(),
 )
 
 /**

@@ -133,6 +133,20 @@ _REDEEM_KEYS = frozenset({"plan"})
 #: here — a credit buys one direct download of one movie, so the download id
 #: is the purchase, not a detail smuggled past the price.
 _DOWNLOAD_KEYS = frozenset({"handle"})
+#: The only key a share claim may carry: the minted handle of the shared work.
+#: The server cannot observe a share, so the handle is the whole proof the
+#: work exists and is ours.
+_SHARE_KEYS = frozenset({"work_ref"})
+#: The keys a movie request may carry: the title (required) and the viewer's
+#: own note (optional). Nothing else — a request is a title, not a form.
+_REQUEST_MOVIE_KEYS = frozenset({"title", "notes"})
+#: The only key a theme purchase may carry: the theme id. The price is one
+#: price for every theme, so the name is the purchase.
+_REDEEM_THEME_KEYS = frozenset({"theme"})
+#: A title a viewer types is their own words, and a request that is a page of
+#: text is not a request: 200 characters for the title, 500 for the note.
+_REQUEST_TITLE_MAX = 200
+_REQUEST_NOTES_MAX = 500
 
 #: The one earnable `reason`, and what it does. Not a price: `daily_login` is the app's
 #: name for claiming today in the streak ladder, so the size of the grant is
@@ -541,6 +555,24 @@ def _download_view(credit: dict) -> dict:
             "expires_at": float(credit["expires_at"])}
 
 
+def _share_view(share: dict) -> dict:
+    return {"granted": bool(share["granted"]), "coins": int(share["coins"]),
+            "balance": int(share["balance"])}
+
+
+def _request_view(request: dict) -> dict:
+    return {"id": request["id"], "title": str(request["title"]),
+            "cost": int(request["cost"]), "balance": int(request["balance"]),
+            "already_applied": bool(request["already_applied"])}
+
+
+def _theme_view(theme: dict) -> dict:
+    return {"theme": str(theme["theme"]), "cost": int(theme["cost"]),
+            "balance": int(theme["balance"]),
+            "already_applied": bool(theme["already_applied"]),
+            "owned": [str(name) for name in theme["owned"]]}
+
+
 def route_get(path, query, *, db_path, catalog_path, secret, headers) -> tuple | None:
     """GET on the account surface. `None` means "not mine", fall through."""
     if not is_account(path):
@@ -679,7 +711,22 @@ def route_get(path, query, *, db_path, catalog_path, secret, headers) -> tuple |
                 "passes": engagement.passes_projection(
                     engagement.resolve_ladder(values)),
                 "download": {"coins": engagement.resolve_download_credit(values)},
+                "request": {"coins": engagement.resolve_request_movie_coins(values)},
+                "themes": engagement.themes_projection(values),
                 "streak": engagement.resolve_streak_grants(values)})
+        if tail == ["coins", "themes"]:
+            # What this account owns, and what a theme costs: the picker reads
+            # both from one place, so a theme it shows as locked is one the
+            # redeem route will actually sell, at the price the picker shows.
+            if not key:
+                return _problem("unauthorised", 401,
+                                "a bearer <redacted> key is required", path)
+            account = accounts.authenticate(db_path, key, tracker=LIMITER)
+            values = _settings(catalog)
+            with closing(engagement.connect(db_path)) as wallet:
+                owned = engagement.owned_themes(wallet, account["account_id"])
+            return _respond({"themes": owned,
+                             "prices": engagement.themes_projection(values)})
         return _problem("not_found", 404, "no such account route", path)
     except Exception as error:                      # noqa: BLE001 — the edge answers, it never re-raises
         return _refused(error, path)
@@ -789,7 +836,25 @@ def route_post(path, body, *, db_path, catalog_path, secret, headers) -> tuple |
                                         catalog=catalog,
                                         tracker=LIMITER)
             _note_client_usage(db_path, payload, key, headers)
-            return _respond({"progress": accounts.to_public(row, mint)}, status=201)
+            # A finished title pays once, ever: 90% watched counts as finished
+            # because the player may never report exactly 100%. The grant is a
+            # server-side decision on numbers the server already holds — the
+            # phone never claims a finish, it only reports a position.
+            coins_earned = 0
+            position = float(row.get("position_seconds") or 0.0)
+            duration = float(row.get("duration_seconds") or 0.0)
+            if duration > 0 and position >= engagement.FINISH_WATCH_FRACTION * duration:
+                account = accounts.authenticate(db_path, key, tracker=LIMITER)
+                values = _settings(catalog)
+                with closing(engagement.connect(db_path)) as wallet:
+                    grant = engagement.grant_finish_watch(
+                        wallet, account["account_id"], work=work,
+                        season=int(row.get("season_number") or 0),
+                        episode=int(row.get("episode_number") or 0),
+                        values=values)
+                coins_earned = grant["coins"] if grant["granted"] else 0
+            return _respond({"progress": accounts.to_public(row, mint),
+                             "coins_earned": coins_earned}, status=201)
         if tail == ["progress", "remove"]:
             work, refusal = _target(payload, mint, path)
             if refusal:
@@ -914,6 +979,95 @@ def route_post(path, body, *, db_path, catalog_path, secret, headers) -> tuple |
                     return _problem("licence_required", 402,
                                     "this wallet cannot cover that download", path)
             return _respond({"credit": _download_view(credit)})
+        if tail == ["coins", "share"]:
+            # One share of a movie pays 25 coins, once a day. The server cannot
+            # observe a share — the app's chooser returning proves nothing —
+            # so this is a bounded client claim, the same shape as the
+            # daily-login claim: the app reports it, the server verifies the
+            # work handle is one of ours (a forged handle is a 400 before any
+            # coin moves) and the day bucket is the enforcement. The reply
+            # carries the grant, so the app shows "+25" only when the server
+            # says it paid.
+            extra = sorted(str(name) for name in payload if name not in _SHARE_KEYS)
+            if extra:
+                return _problem("invalid_params", 400,
+                                "a share claim accepts work_ref only", path)
+            work, refusal = _target(payload, mint, path)
+            if refusal:
+                return refusal
+            # The adult law covers the share too: a flagged work is
+            # indistinguishable from one that never existed, so the refusal is
+            # the same 400 `_target` gives a forged handle — same code, same
+            # words, nothing echoed back. A minted handle for a work the
+            # catalog never held is refused the same way.
+            if not accounts.work_is_visible(catalog, work):
+                return _problem("invalid_params", 400,
+                                "work_ref is not a handle this service minted", path)
+            account = accounts.authenticate(db_path, key, tracker=LIMITER)
+            values = _settings(catalog)
+            with closing(engagement.connect(db_path)) as wallet:
+                share = engagement.grant_share(
+                    wallet, account["account_id"], work=work, values=values)
+            return _respond({"share": _share_view(share)})
+        if tail == ["coins", "request-movie"]:
+            # One requested movie costs 300 coins and queues the title for the
+            # operator. The title is the viewer's own words, capped at the
+            # route — a request that is a page of text is not a request — and
+            # the spend and the queue entry are one purchase: a retry with the
+            # same second spends nothing and queues nothing twice.
+            extra = sorted(str(name) for name in payload if name not in _REQUEST_MOVIE_KEYS)
+            if extra:
+                return _problem("invalid_params", 400,
+                                "a movie request accepts title and notes only", path)
+            title = str(payload.get("title") or "").strip()
+            notes = str(payload.get("notes") or "").strip()
+            if not title or len(title) > _REQUEST_TITLE_MAX or len(notes) > _REQUEST_NOTES_MAX:
+                return _problem("invalid_params", 400,
+                                "a movie request needs a short title", path)
+            account = accounts.authenticate(db_path, key, tracker=LIMITER)
+            values = _settings(catalog)
+            with closing(engagement.connect(db_path)) as wallet:
+                try:
+                    request = engagement.request_movie(
+                        wallet, account["account_id"], title=title, notes=notes,
+                        values=values)
+                except engagement.InsufficientCoins:
+                    # Same 402 as the pass route: the refusal names no number,
+                    # and the caller reads its own balance from `GET /coins`.
+                    return _problem("licence_required", 402,
+                                    "this wallet cannot cover that request", path)
+            return _respond({"request": _request_view(request)})
+        if tail == ["coins", "redeem-theme"]:
+            # One player theme costs 250 coins and is owned forever. The theme
+            # must be one this server sells — an unknown name is a 400 before
+            # any coin moves — and a theme already owned costs nothing: the
+            # route answers `already_applied` with the ownership it already
+            # holds, and no spend runs at all.
+            extra = sorted(str(name) for name in payload if name not in _REDEEM_THEME_KEYS)
+            if extra:
+                return _problem("invalid_params", 400,
+                                "a theme purchase accepts theme only", path)
+            theme = str(payload.get("theme") or "")
+            if theme not in engagement.PURCHASABLE_THEMES:
+                return _problem("invalid_params", 400, "no such theme", path)
+            account = accounts.authenticate(db_path, key, tracker=LIMITER)
+            values = _settings(catalog)
+            with closing(engagement.connect(db_path)) as wallet:
+                owned = engagement.owned_themes(wallet, account["account_id"])
+                if theme in owned:
+                    return _respond({"theme": _theme_view({
+                        "theme": theme, "cost": engagement.resolve_theme_coins(values),
+                        "balance": engagement.coin_balance(wallet, account["account_id"]),
+                        "already_applied": True, "owned": owned})})
+                try:
+                    bought = engagement.redeem_theme(
+                        wallet, account["account_id"], theme=theme, values=values)
+                except engagement.InsufficientCoins:
+                    # Same 402 as the pass route: the refusal names no number,
+                    # and the caller reads its own balance from `GET /coins`.
+                    return _problem("licence_required", 402,
+                                    "this wallet cannot cover that theme", path)
+            return _respond({"theme": _theme_view(bought)})
         return _problem("not_found", 404, "no such account route", path)
     except Exception as error:                      # noqa: BLE001 — the edge answers, it never re-raises
         return _refused(error, path)
@@ -1050,7 +1204,7 @@ def _selfcheck() -> int:
         seen = route_get(f"{PREFIX}/coins/history", {}, db_path=db,
                          catalog_path=catalog, secret=secret, headers=auth)
         assert seen[0] == 200 and json.loads(seen[2])["count"] >= 2, seen
-        stranger = accounts.register(db, device="selfcheck-stranger")["sync_key"]
+        stranger = accounts.create_account(db)["sync_key"]
         theirs = route_get(f"{PREFIX}/coins/history", {}, db_path=db,
                            catalog_path=catalog, secret=secret,
                            headers={"Authorization": f"Bearer {stranger}"})

@@ -226,7 +226,7 @@ fun DetailScreen(
                     IconButton(
                         onClick = {
                             val post = state.post
-                            if (post != null) shareTitle(context, post)
+                            if (post != null) shareTitle(context, post) { viewModel.reportShare(post.workRef) }
                         },
                     ) {
                         Icon(Icons.Default.Share, contentDescription = "Share this title")
@@ -1229,7 +1229,7 @@ private fun PrintCard(
 }
 
 // ── Platform helpers (share keeps the app's own copy honest) ────────────────
-private fun shareTitle(context: Context, post: PostDetail) {
+private fun shareTitle(context: Context, post: PostDetail, onShared: () -> Unit) {
     val title = post.cleanTitle?.takeIf { it.isNotBlank() } ?: post.title
     // The template is the operator's words; the link is the app's own deep
     // link to the title's page — a share that only says "check this out"
@@ -1243,6 +1243,10 @@ private fun shareTitle(context: Context, post: PostDetail) {
     }
     try {
         context.startActivity(Intent.createChooser(intent, "Share via").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        // The chooser firing is the share, as far as this phone can know: the
+        // server pays once a day on the report, and a failed report is silent
+        // because the share already left the phone.
+        onShared()
     } catch (_: Exception) {
         Toast.makeText(context, "No share target available", Toast.LENGTH_SHORT).show()
     }

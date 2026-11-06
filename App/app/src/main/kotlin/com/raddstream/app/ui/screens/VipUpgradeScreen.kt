@@ -22,7 +22,8 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material.icons.filled.Info
-import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Movie
+import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.Button
@@ -46,6 +47,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -61,8 +63,10 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.raddstream.app.data.VipPendingSubmission
+import com.raddstream.app.network.models.DownloadCreditPrice
 import com.raddstream.app.network.models.PassTier
 import com.raddstream.app.network.models.VipRemoteStreak
+import com.raddstream.app.ui.theme.PlayerChromeTheme
 import com.raddstream.app.ui.theme.RaddCurrent500
 import com.raddstream.app.ui.theme.RaddInk950
 import com.raddstream.app.ui.theme.RaddSignalGold
@@ -147,6 +151,25 @@ fun VipUpgradeScreen(
                     isRedeeming = state.isRedeeming,
                     redeemMessage = state.redeemMessage,
                     onRedeem = viewModel::redeemPass,
+                )
+            }
+            if (state.signedIn) {
+                RequestMovieCard(
+                    price = state.requestPrice,
+                    balance = state.coinBalance,
+                    isRequesting = state.isRequesting,
+                    message = state.requestMessage,
+                    onRequest = viewModel::requestMovie,
+                )
+                ThemeCard(
+                    catalog = state.themeCatalog,
+                    owned = state.ownedThemes,
+                    selected = state.selectedTheme,
+                    balance = state.coinBalance,
+                    isBuying = state.isBuyingTheme,
+                    message = state.themeMessage,
+                    onBuy = viewModel::buyTheme,
+                    onSelect = viewModel::selectTheme,
                 )
             }
 
@@ -613,6 +636,165 @@ private fun StreakCard(
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+        }
+    }
+}
+
+/** A theme id in the viewer's words: the names are the server's. */
+private fun themeLabel(theme: String): String = when (theme) {
+    PlayerChromeTheme.MIDNIGHT -> "Midnight"
+    PlayerChromeTheme.EMBER -> "Ember"
+    else -> "Jade"
+}
+
+@Composable
+private fun RequestMovieCard(
+    price: Int,
+    balance: Int,
+    isRequesting: Boolean,
+    message: String?,
+    onRequest: (String) -> Unit,
+) {
+    var title by remember { mutableStateOf("") }
+    // No form until the server publishes a price: a request with no price is a
+    // promise this screen cannot keep.
+    if (price <= 0) return
+    Surface(
+        color = RaddCurrent500.copy(alpha = 0.10f),
+        shape = RoundedCornerShape(20.dp),
+        border = BorderStroke(1.dp, RaddCurrent500.copy(alpha = 0.35f)),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(
+            modifier = Modifier.padding(18.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Default.Movie, contentDescription = null, tint = RaddCurrent500)
+                Spacer(Modifier.width(10.dp))
+                Text(
+                    "Request a movie",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onBackground,
+                )
+            }
+            Text(
+                "Missing a title? Spend $price coins and the team will look for it.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            OutlinedTextField(
+                value = title,
+                onValueChange = { if (it.length <= 200) title = it },
+                label = { Text("Movie name") },
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Button(
+                onClick = { onRequest(title) },
+                enabled = title.isNotBlank() && !isRequesting && balance >= price,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text(if (isRequesting) "Requesting…" else "Request — $price coins")
+            }
+            if (message != null) {
+                Text(
+                    message,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ThemeCard(
+    catalog: Map<String, DownloadCreditPrice>,
+    owned: List<String>,
+    selected: String,
+    balance: Int,
+    isBuying: Boolean,
+    message: String?,
+    onBuy: (String) -> Unit,
+    onSelect: (String) -> Unit,
+) {
+    // Jade is the shipped look and is always owned; the catalog holds only the
+    // themes coins can buy. No card until the server publishes a price.
+    if (catalog.isEmpty()) return
+    Surface(
+        color = RaddCurrent500.copy(alpha = 0.10f),
+        shape = RoundedCornerShape(20.dp),
+        border = BorderStroke(1.dp, RaddCurrent500.copy(alpha = 0.35f)),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(
+            modifier = Modifier.padding(18.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Default.Palette, contentDescription = null, tint = RaddCurrent500)
+                Spacer(Modifier.width(10.dp))
+                Text(
+                    "Player themes",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onBackground,
+                )
+            }
+            Text(
+                "A skin for the player's chrome — the background, the plates, the rail. Never the accent that marks a selected control.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            for (theme in PlayerChromeTheme.IDS) {
+                val isOwned = theme == PlayerChromeTheme.JADE || theme in owned
+                val isSelected = theme == selected
+                val cost = catalog[theme]?.coins ?: 0
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            themeLabel(theme) + if (isSelected) " — wearing" else "",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onBackground,
+                        )
+                        Text(
+                            when {
+                                theme == PlayerChromeTheme.JADE -> "The shipped look — free"
+                                isOwned -> "Owned"
+                                else -> "$cost coins"
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Button(
+                        onClick = { if (isOwned) onSelect(theme) else onBuy(theme) },
+                        enabled = !isBuying && (isOwned || balance >= cost),
+                    ) {
+                        Text(
+                            when {
+                                isSelected -> "Wearing"
+                                isOwned -> "Wear"
+                                else -> "Buy — $cost"
+                            },
+                        )
+                    }
+                }
+            }
+            if (message != null) {
+                Text(
+                    message,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
         }
     }
 }

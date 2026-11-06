@@ -20,6 +20,7 @@ import com.raddstream.app.player.SubtitleColor
 import com.raddstream.app.player.SubtitleUiSettings
 import com.raddstream.app.player.loginStreakDay
 import com.raddstream.app.player.nextLoginStreak
+import com.raddstream.app.ui.theme.PlayerChromeTheme
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -138,6 +139,25 @@ class ServerSettingsRepository @Inject constructor(
             else preferences[PREFERRED_SUBTITLE_LANGUAGE_KEY] = cleanSubtitle
             preferences[REGION_RECORDED_KEY] = true
         }
+    }
+
+    /**
+     * The player chrome theme this device wears: `jade` (the shipped look),
+     * `midnight` or `ember`. A theme is a skin for the player's chrome only —
+     * the background, the HUD plates, the rail and the played fill — never the
+     * meaning-carrying accent. An unreadable stored value is `jade`: a theme
+     * that does not exist is the default, never a crash. The picker lives on
+     * the VIP screen, where the theme is bought; this is only the stored pick.
+     */
+    val playerTheme: Flow<String> = dataStore.data.map { preferences ->
+        val stored = preferences[PLAYER_THEME_KEY]?.trim().orEmpty()
+        if (stored in PlayerChromeTheme.IDS) stored else PlayerChromeTheme.JADE
+    }
+
+    /** Wear a player chrome theme. An unknown id is ignored, never stored. */
+    suspend fun savePlayerTheme(theme: String) {
+        if (theme !in PlayerChromeTheme.IDS) return
+        dataStore.edit { preferences -> preferences[PLAYER_THEME_KEY] = theme }
     }
 
     /**
@@ -850,6 +870,7 @@ class ServerSettingsRepository @Inject constructor(
         private val FEATURE_QUALITY_GATE_KEY = booleanPreferencesKey("feature_quality_gate")
         private val FEATURE_ADS_KEY = booleanPreferencesKey("feature_ads")
         private val THEME_MODE_KEY = stringPreferencesKey("theme_mode")
+        private val PLAYER_THEME_KEY = stringPreferencesKey("player_theme")
         private val PANEL_TABS_KEY = stringPreferencesKey("panel_tabs")
         private val DISCLAIMER_TEXT_KEY = stringPreferencesKey("disclaimer_text")
         private val DISCLAIMER_VERSION_KEY = intPreferencesKey("disclaimer_version")

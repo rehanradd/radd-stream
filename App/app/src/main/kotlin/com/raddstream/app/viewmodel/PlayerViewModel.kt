@@ -417,6 +417,13 @@ class PlayerViewModel @Inject constructor(
         viewModelScope.launch {
             settingsRepository.defaultQuality.collect { band -> defaultQualityBand = band }
         }
+        // The player chrome theme this device wears: collected, not sampled, so
+        // a change on the VIP screen reaches a player that is already running.
+        viewModelScope.launch {
+            settingsRepository.playerTheme.collect { theme ->
+                _ui.update { it.copy(playerTheme = theme) }
+            }
+        }
     }
 
     /**
@@ -1035,7 +1042,7 @@ class PlayerViewModel @Inject constructor(
         if (!syncSignedIn) return
         if (!forced && !syncAccountRepository.progressReportDue()) return
         viewModelScope.launch {
-            syncAccountRepository.reportProgress(
+            val coinsEarned = syncAccountRepository.reportProgress(
                 workRef = scope.workRef,
                 season = scope.season,
                 episode = scope.episode,
@@ -1043,6 +1050,12 @@ class PlayerViewModel @Inject constructor(
                 durationMs = durationMs,
                 forced = forced,
             )
+            // The server pays once per finished title; the toast is the only
+            // sign the viewer gets, and it shows only when the server says it
+            // paid — never on a position the server did not reward.
+            if (coinsEarned > 0) {
+                _events.emit(PlayerEvent.Message("+$coinsEarned coins for finishing this title"))
+            }
         }
     }
 

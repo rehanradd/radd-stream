@@ -6,7 +6,9 @@ import com.raddstream.app.data.ServerSettingsRepository
 import com.raddstream.app.data.VipPendingSubmission
 import com.raddstream.app.network.friendlyNetworkError
 import com.raddstream.app.network.models.AccountEntitlement
+import com.raddstream.app.network.models.DownloadCreditPrice
 import com.raddstream.app.network.models.PassTier
+import com.raddstream.app.ui.theme.PlayerChromeTheme
 import com.raddstream.app.network.models.VipRemoteConfig
 import com.raddstream.app.network.models.VipRemoteStreak
 import com.raddstream.app.repository.CatalogRepository
@@ -161,6 +163,14 @@ data class VipUiState(
     val streakLadder: Map<Int, Int> = emptyMap(),
     /** The pass catalog the server publishes (plan -> coin price), empty until read. */
     val passCatalog: Map<String, PassTier> = emptyMap(),
+    /** The player themes the server publishes (theme -> coin price), empty until read. */
+    val themeCatalog: Map<String, DownloadCreditPrice> = emptyMap(),
+    /** The movie-request price the server publishes (coins for one title), 0 until read. */
+    val requestPrice: Int = 0,
+    /** The player themes this account owns, always including `jade` (the shipped look). */
+    val ownedThemes: List<String> = emptyList(),
+    /** The player chrome theme this device wears — the pick, not the purchase. */
+    val selectedTheme: String = PlayerChromeTheme.JADE,
     /** The last claim's answer in the viewer's own words, or null before any claim. */
     val claimMessage: String? = null,
     /** A claim is in flight, so the button cannot be pressed into a second claim. */
@@ -171,6 +181,14 @@ data class VipUiState(
     val redeemMessage: String? = null,
     /** A redeem is in flight, so the button cannot be pressed into a second redeem. */
     val isRedeeming: Boolean = false,
+    /** The last movie-request answer in the viewer's own words, or null before any request. */
+    val requestMessage: String? = null,
+    /** A request is in flight, so the button cannot be pressed into a second request. */
+    val isRequesting: Boolean = false,
+    /** The last theme purchase's answer in the viewer's own words, or null before any purchase. */
+    val themeMessage: String? = null,
+    /** A theme purchase is in flight, so the button cannot be pressed into a second purchase. */
+    val isBuyingTheme: Boolean = false,
     /** Whether this device holds a sync key — the only thing the ledger can attach a claim to. */
     val signedIn: Boolean = false,
     /** The server's own answer, or null while it has never been read on this device. */
@@ -229,8 +247,18 @@ class VipViewModel @Inject constructor(
         observeRewardedVip()
         observeStreak()
         observeAccount()
+        observeTheme()
         loadConfig()
         loadWallet()
+    }
+
+    /** The chrome theme this device wears, collected so a pick on this screen reaches the player. */
+    private fun observeTheme() {
+        viewModelScope.launch {
+            settingsRepository.playerTheme.collect { theme ->
+                _uiState.update { it.copy(selectedTheme = theme) }
+            }
+        }
     }
 
     /** The wallet, the ladder and the pass catalog, read once the account is known. */
@@ -238,11 +266,17 @@ class VipViewModel @Inject constructor(
         viewModelScope.launch {
             val ladder = syncAccountRepository.loadStreakLadder()
             val catalog = syncAccountRepository.loadPassCatalog()
+            val themes = syncAccountRepository.loadThemeCatalog()
+            val requestPrice = syncAccountRepository.loadRequestPrice()
+            val owned = syncAccountRepository.loadCoinThemes()
             val balance = syncAccountRepository.loadCoinBalance()
             _uiState.update {
                 it.copy(
                     streakLadder = ladder.ifEmpty { it.streakLadder },
                     passCatalog = catalog.ifEmpty { it.passCatalog },
+                    themeCatalog = themes.ifEmpty { it.themeCatalog },
+                    requestPrice = if (requestPrice > 0) requestPrice else it.requestPrice,
+                    ownedThemes = owned?.themes?.ifEmpty { it.ownedThemes } ?: it.ownedThemes,
                     coinBalance = balance ?: it.coinBalance,
                 )
             }
@@ -331,6 +365,122 @@ class VipViewModel @Inject constructor(
                 _uiState.update { it.copy(isRedeeming = false) }
             }
         }
+    }
+
+    /**
+     * Spend coins on one requested movie. The server decides the price and the
+     * debit and queues the title for the operator; a replay answers
+     * `already_applied` with the request it already filed, so a double tap
+     * files one request, not two.
+     */
+    fun requestMovie(title: String) {
+        val state = _uiState.value
+        if (!state.signedIn || state.isRequesting) return
+        val cost = state.requestPrice
+        if (cost <= 0) return
+        viewModelScope.launch {
+            val clean = title.trim()
+            if (clean.isEmpty()) {
+                _uiState.update { it.copy(requestMessage = "Type the movie's name first.") }
+                return@launch
+            }
+            if (state.coinBalance < cost) {
+                _uiState.update { it.copy(requestMessage = "Not enough coins yet — keep checking in.") }
+                return@launch
+            }
+            _uiState.update { it.copy(isRequesting = true, requestMessage = null) }
+            try {
+                val requested = syncAccountRepository.requestMovie(clean)
+                if (requested == null) {
+                    _uiState.update {
+                        it.copy(requestMessage = "Could not reach the server — try again later.")
+                    }
+                    return@launch
+                }
+                val balance = syncAccountRepository.loadCoinBalance()
+                _uiState.update {
+                    it.copy(
+                        coinBalance = balance ?: it.coinBalance,
+                        requestMessage = if (requested.alreadyApplied) {
+                            "That request is already in — no coins spent twice."
+                        } else {
+                            "Requested — ${requested.cost} coins. The team will look for it."
+                        },
+                    )
+                }
+            } finally {
+                _uiState.update { it.copy(isRequesting = false) }
+            }
+        }
+    }
+
+    /**
+     * Buy one player theme and wear it at once. A theme already owned costs
+     * nothing — the route answers `already_applied` and no spend runs — and
+     * wearing it is a local pick the player reads from the stored setting.
+     */
+    fun buyTheme(theme: String) {
+        val state = _uiState.value
+        if (!state.signedIn || state.isBuyingTheme) return
+        if (theme !in PlayerChromeTheme.IDS || theme == PlayerChromeTheme.JADE) return
+        val cost = state.themeCatalog[theme]?.coins ?: return
+        viewModelScope.launch {
+            if (theme in state.ownedThemes) {
+                settingsRepository.savePlayerTheme(theme)
+                _uiState.update {
+                    it.copy(selectedTheme = theme, themeMessage = "Wearing ${themeLabel(theme)}.")
+                }
+                return@launch
+            }
+            if (state.coinBalance < cost) {
+                _uiState.update { it.copy(themeMessage = "Not enough coins yet — keep checking in.") }
+                return@launch
+            }
+            _uiState.update { it.copy(isBuyingTheme = true, themeMessage = null) }
+            try {
+                val bought = syncAccountRepository.redeemTheme(theme)
+                if (bought == null) {
+                    _uiState.update {
+                        it.copy(themeMessage = "Could not reach the server — try again later.")
+                    }
+                    return@launch
+                }
+                val balance = syncAccountRepository.loadCoinBalance()
+                settingsRepository.savePlayerTheme(theme)
+                _uiState.update {
+                    it.copy(
+                        coinBalance = balance ?: it.coinBalance,
+                        ownedThemes = bought.owned.ifEmpty { it.ownedThemes },
+                        selectedTheme = theme,
+                        themeMessage = if (bought.alreadyApplied) {
+                            "You already own ${themeLabel(theme)}."
+                        } else {
+                            "${themeLabel(theme)} is yours — ${bought.cost} coins."
+                        },
+                    )
+                }
+            } finally {
+                _uiState.update { it.copy(isBuyingTheme = false) }
+            }
+        }
+    }
+
+    /** Wear a theme this account already owns, without buying anything. */
+    fun selectTheme(theme: String) {
+        val state = _uiState.value
+        if (!state.signedIn || theme !in PlayerChromeTheme.IDS) return
+        if (theme !in state.ownedThemes && theme != PlayerChromeTheme.JADE) return
+        viewModelScope.launch {
+            settingsRepository.savePlayerTheme(theme)
+            _uiState.update { it.copy(selectedTheme = theme, themeMessage = null) }
+        }
+    }
+
+    /** A theme id in the viewer's words: the names are the server's. */
+    private fun themeLabel(theme: String): String = when (theme) {
+        PlayerChromeTheme.MIDNIGHT -> "Midnight"
+        PlayerChromeTheme.EMBER -> "Ember"
+        else -> "Jade"
     }
 
     /** What a pass tier buys, in the viewer's words: the plan names are the server's. */

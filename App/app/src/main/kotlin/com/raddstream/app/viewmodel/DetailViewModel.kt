@@ -652,6 +652,26 @@ class DetailViewModel @Inject constructor(
         return webDownloadUrlWithCredit(serverBaseUrl, handle, token)
     }
 
+    /**
+     * Report one share of this title, after the chooser already fired. The
+     * server pays once a day, so the message shows only when the server says
+     * it granted — a second share the same day is silent, not a nag. A failed
+     * report is silent too: the share already left the phone, and a coin
+     * report must never undo it.
+     */
+    fun reportShare(workRef: String?) {
+        val ref = workRef?.takeIf { it.isNotBlank() } ?: return
+        viewModelScope.launch {
+            val share = syncAccountRepository.reportShare(ref)
+            if (share != null && share.granted && share.coins > 0) {
+                _uiState.update {
+                    it.copy(actionMessage = "+${share.coins} coins for sharing",
+                            coinBalance = share.balance)
+                }
+            }
+        }
+    }
+
     /** The viewer confirmed the size and the quality: start whichever system owns the copy. */
     fun confirmKeep() {
         val pending = _uiState.value.pendingKeep ?: return

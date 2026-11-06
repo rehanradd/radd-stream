@@ -172,12 +172,9 @@ import com.raddstream.app.ui.theme.RaddCaptionPlate
 import com.raddstream.app.ui.theme.RaddCaptionPlateArgb
 import com.raddstream.app.ui.theme.RaddCoral400
 import com.raddstream.app.ui.theme.RaddCurrent500
-import com.raddstream.app.ui.theme.RaddHudBar
-import com.raddstream.app.ui.theme.RaddHudCard
-import com.raddstream.app.ui.theme.RaddHudChip
+import com.raddstream.app.ui.theme.PlayerChromeTheme
 import com.raddstream.app.ui.theme.RaddHudPillIdle
 import com.raddstream.app.ui.theme.RaddHudToast
-import com.raddstream.app.ui.theme.RaddHudTrack
 import com.raddstream.app.ui.theme.RaddKeepBlocked
 import com.raddstream.app.ui.theme.RaddKeepKeeping
 import com.raddstream.app.ui.theme.RaddKeepStored
@@ -266,6 +263,10 @@ private fun PlayerScreenContent(
 ) {
     val context = LocalContext.current
     val activity = remember(context) { context.findActivity() }
+    // The chrome theme this device wears: resolved once here and handed to the
+    // transient overlays that take no state of their own; the stateful chrome
+    // pieces resolve it from `state.playerTheme` themselves.
+    val chrome = PlayerChromeTheme.forId(state.playerTheme)
 
     var controlsVisible by remember { mutableStateOf(true) }
     var interactTick by remember { mutableStateOf(0L) }
@@ -382,7 +383,7 @@ private fun PlayerScreenContent(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color.Black),
+            .background(chrome.background),
     ) {
         // 1 — video surface or audio-only placeholder
         if (state.audioOnly) {
@@ -429,7 +430,7 @@ private fun PlayerScreenContent(
 
         // 4 — transient feedback layers
         DoubleTapRipple(state)
-        hud?.let { HudToast(it) }
+        hud?.let { HudToast(it, chrome) }
         scrubPreviewMs?.let { ScrubToast(target = it, durationMs = state.durationMs) }
         if (state.boosting) BoostBadge()
 
@@ -450,7 +451,7 @@ private fun PlayerScreenContent(
             }
         }
         if (state.locked) {
-            UnlockFab(onUnlock = { vm.setLocked(false) })
+            UnlockFab(chrome, onUnlock = { vm.setLocked(false) })
         }
 
         // 6 — narration cards
@@ -550,6 +551,7 @@ private fun PlayerScreenContent(
 
         if (state.isEnded && controlsVisible && !state.locked && !state.pureCinema) {
             EndedButtons(
+                chrome,
                 showNextEpisode = state.endedHasNextEpisode,
                 onPlayAgain = { vm.playFrom(0) },
                 onNextEpisode = { vm.requestNextEpisode() },
@@ -933,6 +935,7 @@ private fun DoubleTapRipple(state: PlayerUiState) {
     val ripple = state.ripple ?: held ?: return
     state.ripple?.let { held = it }
     val forward = ripple.deltaMs >= 0
+    val chrome = PlayerChromeTheme.forId(state.playerTheme)
     val label = (if (forward) "+" else "−") + (kotlin.math.abs(ripple.deltaMs) / 1000L) + "s"
     val alignment = when (ripple.zone) {
         ScreenZone.LEFT -> Alignment.CenterStart
@@ -950,7 +953,7 @@ private fun DoubleTapRipple(state: PlayerUiState) {
             exit = fadeOut(tween(220)),
         ) {
             Surface(
-                color = RaddHudCard,
+                color = chrome.card,
                 shape = MaterialTheme.shapes.medium,
                 modifier = Modifier.padding(horizontal = 34.dp),
             ) {
@@ -979,7 +982,7 @@ private sealed class Hud {
 }
 
 @Composable
-private fun HudToast(hud: Hud) {
+private fun HudToast(hud: Hud, chrome: PlayerChromeTheme) {
     val icon = when (hud) {
         is Hud.Brightness -> Icons.Default.BrightnessHigh
         is Hud.Volume -> if (hud.value <= 0.01f) Icons.Default.VolumeMute else Icons.Default.VolumeUp
@@ -996,7 +999,7 @@ private fun HudToast(hud: Hud) {
         is Hud.Boost -> -1f
     }
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        Surface(color = RaddHudCard, shape = MaterialTheme.shapes.medium) {
+        Surface(color = chrome.card, shape = MaterialTheme.shapes.medium) {
             Column(
                 Modifier.padding(horizontal = 22.dp, vertical = 14.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
@@ -1065,10 +1068,11 @@ private fun BoostBadge() {
 @Composable
 private fun TopBar(vm: PlayerViewModel, state: PlayerUiState, onBack: () -> Unit) {
     val print = state.activeRendition
+    val chrome = PlayerChromeTheme.forId(state.playerTheme)
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .background(RaddHudBar)
+            .background(chrome.bar)
             .padding(start = 4.dp, end = 4.dp, top = 6.dp, bottom = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -1133,9 +1137,10 @@ private fun TopBar(vm: PlayerViewModel, state: PlayerUiState, onBack: () -> Unit
 
 @Composable
 private fun CenterControls(state: PlayerUiState, vm: PlayerViewModel) {
+    val chrome = PlayerChromeTheme.forId(state.playerTheme)
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         if (!state.isBuffering) {
-            Surface(color = RaddHudChip, shape = CircleShape) {
+            Surface(color = chrome.chip, shape = CircleShape) {
                 IconButton(onClick = { vm.togglePlayPause() }, modifier = Modifier.size(72.dp)) {
                     Icon(
                         painter = if (state.isPlaying) painterResource(R.drawable.ic_player_pause) else painterResource(R.drawable.ic_player_play),
@@ -1178,6 +1183,7 @@ private fun EdgeHud(
     } else {
         0f
     }
+    val chrome = PlayerChromeTheme.forId(state.playerTheme)
     Box(Modifier.fillMaxSize()) {
         // Progress, painted on the edge of the frame rather than across the image.
         Box(
@@ -1185,13 +1191,13 @@ private fun EdgeHud(
                 .fillMaxWidth()
                 .align(Alignment.TopStart)
                 .height(2.dp)
-                .background(RaddHudTrack),
+                .background(chrome.track),
         ) {
             Box(
                 Modifier
                     .fillMaxWidth(played)
                     .height(2.dp)
-                    .background(RaddCurrent500),
+                    .background(chrome.played),
             )
         }
 
@@ -1200,7 +1206,7 @@ private fun EdgeHud(
             modifier = Modifier
                 .align(Alignment.TopStart)
                 .padding(start = 6.dp, top = 6.dp)
-                .background(RaddHudChip, CircleShape)
+                .background(chrome.chip, CircleShape)
                 .padding(horizontal = 6.dp, vertical = 2.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -1226,7 +1232,7 @@ private fun EdgeHud(
             modifier = Modifier
                 .align(Alignment.BottomStart)
                 .padding(start = 6.dp, bottom = 10.dp)
-                .background(RaddHudChip, CircleShape)
+                .background(chrome.chip, CircleShape)
                 .padding(horizontal = 6.dp, vertical = 2.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -1262,7 +1268,7 @@ private fun EdgeHud(
             modifier = Modifier
                 .align(Alignment.BottomEnd)
                 .padding(end = 6.dp, bottom = 10.dp)
-                .background(RaddHudChip, CircleShape)
+                .background(chrome.chip, CircleShape)
                 .padding(horizontal = 4.dp, vertical = 2.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -1289,13 +1295,15 @@ private fun BottomControls(
     onActivity: () -> Unit,
 ) {
     var showVolumeDialog by remember { mutableStateOf(false) }
+    val chrome = PlayerChromeTheme.forId(state.playerTheme)
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.BottomCenter) {
         Column(
             Modifier
                 .fillMaxWidth()
-                .background(RaddHudBar),
+                .background(chrome.bar),
         ) {
             Scrubber(
+                chrome = chrome,
                 positionMs = state.positionMs,
                 bufferedMs = state.bufferedMs,
                 durationMs = state.durationMs,
@@ -1489,9 +1497,10 @@ private fun PlayerControlButton(
     }
 }
 
-/** Thin MX scrubber: grey track, brighter buffered segment, orange played segment + thumb. */
+/** Thin MX scrubber: grey track, brighter buffered segment, theme played segment + thumb. */
 @Composable
 private fun Scrubber(
+    chrome: PlayerChromeTheme,
     positionMs: Long,
     bufferedMs: Long,
     durationMs: Long,
@@ -1533,7 +1542,7 @@ private fun Scrubber(
                 .align(Alignment.CenterStart)
                 .fillMaxWidth(posFraction)
                 .height(3.dp)
-                .background(RaddCurrent500),
+                .background(chrome.played),
         )
         // One short white mark per chapter, straddling the track. Tapping one seeks —
         // the track's own tap-to-seek already does that, so a tick needs no gesture
@@ -1553,7 +1562,7 @@ private fun Scrubber(
                 .align(Alignment.CenterStart)
                 .offset(x = maxWidth * posFraction.coerceIn(0f, 0.98f))
                 .size(13.dp)
-                .background(RaddCurrent500, shape = CircleShape),
+                .background(chrome.played, shape = CircleShape),
         )
         if (enabled && durationMs > 0) {
             Box(
@@ -1585,10 +1594,10 @@ private fun Scrubber(
 }
 
 @Composable
-private fun UnlockFab(onUnlock: () -> Unit) {
+private fun UnlockFab(chrome: PlayerChromeTheme, onUnlock: () -> Unit) {
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.CenterEnd) {
         Surface(
-            color = RaddHudBar,
+            color = chrome.bar,
             shape = MaterialTheme.shapes.small,
             modifier = Modifier.padding(16.dp),
         ) {
@@ -1600,11 +1609,11 @@ private fun UnlockFab(onUnlock: () -> Unit) {
 }
 
 @Composable
-private fun EndedButtons(showNextEpisode: Boolean, onPlayAgain: () -> Unit, onNextEpisode: () -> Unit) {
+private fun EndedButtons(chrome: PlayerChromeTheme, showNextEpisode: Boolean, onPlayAgain: () -> Unit, onNextEpisode: () -> Unit) {
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Surface(
-                color = RaddHudCard,
+                color = chrome.card,
                 shape = MaterialTheme.shapes.medium,
                 modifier = Modifier.clickableNoRipple(onPlayAgain),
             ) {
@@ -1622,7 +1631,7 @@ private fun EndedButtons(showNextEpisode: Boolean, onPlayAgain: () -> Unit, onNe
             // step 10). Same card, same tap — a choice, not an ambush.
             if (showNextEpisode) {
                 Surface(
-                    color = RaddHudCard,
+                    color = chrome.card,
                     shape = MaterialTheme.shapes.medium,
                     modifier = Modifier.clickableNoRipple(onNextEpisode),
                 ) {
@@ -1983,12 +1992,13 @@ private fun SubtitleColourSwatch(colour: SubtitleColor, selected: Boolean, onSel
 private fun KeepChip(state: PlayerUiState, vm: PlayerViewModel) {
     val keep = state.keep
     if (keep is KeepUiState.Unavailable) return
+    val chrome = PlayerChromeTheme.forId(state.playerTheme)
     Surface(
         color = when (keep) {
             is KeepUiState.Stored -> RaddKeepStored
             is KeepUiState.Blocked -> RaddKeepBlocked
             is KeepUiState.Keeping -> RaddKeepKeeping
-            else -> RaddHudBar
+            else -> chrome.bar
         },
         shape = MaterialTheme.shapes.small,
         modifier = Modifier

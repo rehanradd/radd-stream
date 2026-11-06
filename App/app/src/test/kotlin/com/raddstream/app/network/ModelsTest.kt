@@ -10,6 +10,13 @@ import com.raddstream.app.network.models.CoinEarnRequest
 import com.raddstream.app.network.models.CoinEarnResponse
 import com.raddstream.app.network.models.CoinRedeemRequest
 import com.raddstream.app.network.models.CoinRedeemResponse
+import com.raddstream.app.network.models.CoinRedeemThemeRequest
+import com.raddstream.app.network.models.CoinRedeemThemeResponse
+import com.raddstream.app.network.models.CoinRequestMovieRequest
+import com.raddstream.app.network.models.CoinRequestMovieResponse
+import com.raddstream.app.network.models.CoinShareRequest
+import com.raddstream.app.network.models.CoinShareResponse
+import com.raddstream.app.network.models.CoinThemesResponse
 import com.raddstream.app.network.models.Container
 import com.raddstream.app.network.models.CoverageType
 import com.raddstream.app.network.models.EntitlementResponse
@@ -27,6 +34,7 @@ import com.raddstream.app.network.models.Post
 import com.raddstream.app.network.models.PostDetail
 import com.raddstream.app.network.models.PostDetailResponse
 import com.raddstream.app.network.models.PostsResponse
+import com.raddstream.app.network.models.ProgressWriteResponse
 import com.raddstream.app.network.models.PrintFlag
 import com.raddstream.app.network.models.ProblemCode
 import com.raddstream.app.network.models.Resolution
@@ -583,5 +591,127 @@ class ModelsTest {
         assertEquals(270, credit?.balance)
         assertEquals(false, credit?.alreadyApplied)
         assertEquals(1790000000.0, credit?.expiresAt)
+    }
+
+    @Test
+    fun `coin share request carries work_ref only`() {
+        val json = gson.toJson(CoinShareRequest("handle-abc"))
+
+        assertEquals("""{"work_ref":"handle-abc"}""", json)
+    }
+
+    @Test
+    fun `coin share response decodes the server's grant`() {
+        val response = gson.fromJson(
+            """{"share":{"granted":true,"coins":25,"balance":25}}""",
+            CoinShareResponse::class.java,
+        )
+
+        val share = response.share
+        assertNotNull(share)
+        assertEquals(true, share?.granted)
+        assertEquals(25, share?.coins)
+        assertEquals(25, share?.balance)
+    }
+
+    @Test
+    fun `coin share response decodes a second share the same day as no grant`() {
+        val response = gson.fromJson(
+            """{"share":{"granted":false,"coins":25,"balance":25}}""",
+            CoinShareResponse::class.java,
+        )
+
+        assertEquals(false, response.share?.granted)
+        assertEquals(25, response.share?.balance)
+    }
+
+    @Test
+    fun `coin request-movie request carries title and notes`() {
+        val json = gson.toJson(CoinRequestMovieRequest("Dune: Part Three", "please"))
+
+        assertEquals("""{"title":"Dune: Part Three","notes":"please"}""", json)
+    }
+
+    @Test
+    fun `coin request-movie response decodes the queued request`() {
+        val response = gson.fromJson(
+            """{"request":{"id":7,"title":"Dune: Part Three","cost":300,"balance":0,"already_applied":false}}""",
+            CoinRequestMovieResponse::class.java,
+        )
+
+        val request = response.request
+        assertNotNull(request)
+        assertEquals(7, request?.id)
+        assertEquals("Dune: Part Three", request?.title)
+        assertEquals(300, request?.cost)
+        assertEquals(0, request?.balance)
+        assertEquals(false, request?.alreadyApplied)
+    }
+
+    @Test
+    fun `coin redeem-theme request carries theme only`() {
+        val json = gson.toJson(CoinRedeemThemeRequest("midnight"))
+
+        assertEquals("""{"theme":"midnight"}""", json)
+    }
+
+    @Test
+    fun `coin redeem-theme response decodes the theme and the ownership`() {
+        val response = gson.fromJson(
+            """{"theme":{"theme":"midnight","cost":250,"balance":0,"already_applied":false,"owned":["jade","midnight"]}}""",
+            CoinRedeemThemeResponse::class.java,
+        )
+
+        val theme = response.theme
+        assertNotNull(theme)
+        assertEquals("midnight", theme?.theme)
+        assertEquals(250, theme?.cost)
+        assertEquals(0, theme?.balance)
+        assertEquals(false, theme?.alreadyApplied)
+        assertEquals(listOf("jade", "midnight"), theme?.owned)
+    }
+
+    @Test
+    fun `coin themes response decodes owned themes and prices`() {
+        val response = gson.fromJson(
+            """{"themes":["jade"],"prices":{"midnight":{"coins":250},"ember":{"coins":250}}}""",
+            CoinThemesResponse::class.java,
+        )
+
+        assertEquals(listOf("jade"), response.themes)
+        assertEquals(250, response.prices["midnight"]?.coins)
+        assertEquals(250, response.prices["ember"]?.coins)
+    }
+
+    @Test
+    fun `coin caps response decodes the request price and the theme prices`() {
+        val response = gson.fromJson(
+            """{"streak":{"coins":{"1":10},"pass_seconds":86400},"passes":{},"download":{"coins":100},"request":{"coins":300},"themes":{"midnight":{"coins":250},"ember":{"coins":250}}}""",
+            CoinCapsResponse::class.java,
+        )
+
+        assertEquals(300, response.request.coins)
+        assertEquals(250, response.themes["midnight"]?.coins)
+        assertEquals(250, response.themes["ember"]?.coins)
+    }
+
+    @Test
+    fun `progress write response decodes coins earned by a finish`() {
+        val response = gson.fromJson(
+            """{"progress":{"work_ref":"handle-abc","position_seconds":950.0,"duration_seconds":1000.0},"coins_earned":15}""",
+            ProgressWriteResponse::class.java,
+        )
+
+        assertEquals(15, response.coinsEarned)
+    }
+
+    @Test
+    fun `progress write response without coins earned pays nothing`() {
+        val response = gson.fromJson(
+            """{"progress":{"work_ref":"handle-abc","position_seconds":500.0,"duration_seconds":1000.0}}""",
+            ProgressWriteResponse::class.java,
+        )
+
+        assertEquals(0, response.coinsEarned)
     }
 }

@@ -11,6 +11,13 @@ import com.raddstream.app.network.models.CoinEarnRequest
 import com.raddstream.app.network.models.CoinEarnResponse
 import com.raddstream.app.network.models.CoinRedeemRequest
 import com.raddstream.app.network.models.CoinRedeemResponse
+import com.raddstream.app.network.models.CoinRedeemThemeRequest
+import com.raddstream.app.network.models.CoinRedeemThemeResponse
+import com.raddstream.app.network.models.CoinRequestMovieRequest
+import com.raddstream.app.network.models.CoinRequestMovieResponse
+import com.raddstream.app.network.models.CoinShareRequest
+import com.raddstream.app.network.models.CoinShareResponse
+import com.raddstream.app.network.models.CoinThemesResponse
 import com.raddstream.app.network.models.ContactRequest
 import com.raddstream.app.network.models.ContactResponse
 import com.raddstream.app.network.models.DeviceTrialRequest
@@ -378,6 +385,47 @@ interface RaddStreamApi {
         @Header("Authorization") authorization: String?,
         @Body body: CoinDownloadCreditRequest,
     ): CoinDownloadCreditResponse
+
+    /**
+     * POST /api/v2/account/coins/share — report one share of a movie. The body
+     * carries the work handle and nothing else: the server pays once a day, so
+     * a second share the same day answers `granted: false` and pays nothing.
+     */
+    @POST("api/v2/account/coins/share")
+    suspend fun reportShare(
+        @Header("Authorization") authorization: String?,
+        @Body body: CoinShareRequest,
+    ): CoinShareResponse
+
+    /**
+     * POST /api/v2/account/coins/request-movie — spend coins on one requested
+     * movie. The body carries the title and an optional note: the price is the
+     * server's own knob, and a replay answers `already_applied` with the
+     * request it already filed.
+     */
+    @POST("api/v2/account/coins/request-movie")
+    suspend fun requestMovie(
+        @Header("Authorization") authorization: String?,
+        @Body body: CoinRequestMovieRequest,
+    ): CoinRequestMovieResponse
+
+    /** GET /api/v2/account/coins/themes — what this account owns, and what a theme costs. */
+    @GET("api/v2/account/coins/themes")
+    suspend fun getCoinThemes(
+        @Header("Authorization") authorization: String?,
+    ): CoinThemesResponse
+
+    /**
+     * POST /api/v2/account/coins/redeem-theme — spend coins on one player
+     * theme. The body carries the theme id and nothing else: the price is one
+     * price for every theme, and a theme already owned answers
+     * `already_applied` with the ownership it already holds.
+     */
+    @POST("api/v2/account/coins/redeem-theme")
+    suspend fun redeemTheme(
+        @Header("Authorization") authorization: String?,
+        @Body body: CoinRedeemThemeRequest,
+    ): CoinRedeemThemeResponse
 
     /**
      * POST /api/v2/play — one PlayBundle for a print, ranked by the server (plan §5 step 13).

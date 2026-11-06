@@ -806,6 +806,294 @@ class RedeemDownload(Wallet):
             self.assertEqual(second["balance"], 0)
 
 
+# ── the Build 5 extras ───────────────────────────────────────────────────────
+
+
+class Share(Wallet):
+    """`POST /coins/share` — one share of a movie pays 25 coins, once a day.
+
+    The server cannot observe a share, so the grant is a bounded client claim,
+    the same shape as the daily-login claim: the app reports it, the server
+    verifies the work handle is one of ours and the day bucket is the
+    enforcement. A second share the same day pays nothing, whatever title it
+    names — the cap is one paid share a day, not one per title, because a
+    per-title cap would let one phone farm 250 coins by sharing ten movies.
+    """
+
+    def share(self, work_ref=None, **extra):
+        return self.post(f"{COINS}/share",
+                         {"work_ref": (redact.mint_text(VISIBLE, SECRET)
+                                        if work_ref is None else work_ref),
+                          **extra})
+
+    def test_a_share_pays_once_a_day_and_a_second_share_pays_nothing(self):
+        answered = self.share()
+        self.assertEqual(answered[0], 200, answered)
+        share = self.body(answered)["share"]
+        self.assertTrue(share["granted"])
+        self.assertEqual(share["coins"], engagement.resolve_share_coins())
+        self.assertEqual(share["balance"], share["coins"])
+        again = self.body(self.share())["share"]
+        self.assertFalse(again["granted"])
+        self.assertEqual(again["coins"], share["coins"])
+        self.assertEqual(again["balance"], share["balance"])
+        grants = [row for row in self.rows() if row["reason"] == "share"]
+        self.assertEqual(len(grants), 1, grants)
+        self.assertEqual(grants[0]["delta"], share["coins"])
+        self.assertEqual(grants[0]["ref"], VISIBLE)
+
+    def test_a_forged_or_flagged_work_ref_is_a_400_and_earns_nothing(self):
+        before = self.wallet_state()
+        for ref in ("not-a-handle", "",
+                    redact.mint_text(VISIBLE, "some-other-install-secret"),
+                    redact.mint_text(ADULT, SECRET),
+                    redact.mint_text("movie:in:999999:nobody", SECRET)):
+            answered = self.share(work_ref=ref)
+            self.assertEqual(answered[0], 400, (ref, answered))
+            self.assertEqual(self.code(answered), "invalid_params")
+        self.assertEqual(self.wallet_state(), before)
+        self.assertEqual(self.rows(), [])
+
+    def test_an_extra_key_is_a_400_and_earns_nothing(self):
+        before = self.wallet_state()
+        answered = self.share(coins=999)
+        self.assertEqual(answered[0], 400, answered)
+        self.assertEqual(self.wallet_state(), before)
+
+    def test_no_key_is_a_401_and_earns_nothing(self):
+        answered = self.post(f"{COINS}/share",
+                             {"work_ref": redact.mint_text(VISIBLE, SECRET)},
+                             key=None)
+        self.assertEqual(answered[0], 401, answered)
+        self.assertEqual(self.rows(), [])
+
+    def test_the_grant_follows_the_operator_knob(self):
+        self.settings(coin_share=40)
+        self.assertEqual(self.body(self.share())["share"]["coins"], 40)
+        self.assertEqual(self.rows()[-1]["delta"], 40)
+
+    def test_a_zero_or_unparseable_knob_pays_the_shipped_grant(self):
+        for value in (0, "abc"):
+            self.settings(coin_share=value)
+            self.assertEqual(engagement.resolve_share_coins(
+                {"coin_share": value}), engagement.SHARE_COINS)
+
+
+class FinishWatch(Wallet):
+    """The finish grant, riding the progress route — 15 coins, once per title.
+
+    The phone never claims a finish, it only reports a position, and the
+    server decides: 90% watched counts as finished because the player may
+    never report exactly 100%. The grant is once per title ever (per episode
+    for a series), so a rewatch pays nothing.
+    """
+
+    def watch(self, position, duration, season=0, episode=0):
+        return self.post(f"{P}/progress", {
+            "work_ref": redact.mint_text(VISIBLE, SECRET),
+            "season_number": season, "episode_number": episode,
+            "position_seconds": position, "duration_seconds": duration,
+            "client_updated_at": time.time()})
+
+    def test_a_finish_pays_once_and_a_rewatch_pays_nothing(self):
+        first = self.body(self.watch(950, 1000))
+        self.assertEqual(first["coins_earned"], engagement.FINISH_WATCH_COINS)
+        self.assertEqual(self.body(self.watch(960, 1000))["coins_earned"], 0)
+        grants = [row for row in self.rows() if row["reason"] == "finish_watch"]
+        self.assertEqual(len(grants), 1, grants)
+        self.assertEqual(grants[0]["delta"], engagement.FINISH_WATCH_COINS)
+        self.assertEqual(grants[0]["ref"], VISIBLE)
+
+    def test_a_half_watched_title_pays_nothing(self):
+        self.assertEqual(self.body(self.watch(500, 1000))["coins_earned"], 0)
+        self.assertEqual([row for row in self.rows()
+                          if row["reason"] == "finish_watch"], [])
+
+    def test_the_90_percent_line_is_the_line(self):
+        self.assertEqual(self.body(self.watch(899, 1000))["coins_earned"], 0)
+        self.assertEqual(self.body(self.watch(901, 1000))["coins_earned"],
+                         engagement.FINISH_WATCH_COINS)
+
+    def test_each_episode_pays_once(self):
+        self.assertEqual(self.body(self.watch(950, 1000, season=1, episode=1))
+                         ["coins_earned"], engagement.FINISH_WATCH_COINS)
+        self.assertEqual(self.body(self.watch(950, 1000, season=1, episode=1))
+                         ["coins_earned"], 0)
+        self.assertEqual(self.body(self.watch(950, 1000, season=1, episode=2))
+                         ["coins_earned"], engagement.FINISH_WATCH_COINS)
+        grants = [row for row in self.rows() if row["reason"] == "finish_watch"]
+        self.assertEqual(len(grants), 2, grants)
+
+    def test_the_grant_follows_the_operator_knob(self):
+        self.settings(coin_finish_watch=30)
+        self.assertEqual(self.body(self.watch(950, 1000))["coins_earned"], 30)
+
+
+class RequestMovie(Wallet):
+    """`POST /coins/request-movie` — 300 coins queues one title for the operator.
+
+    The spend and the queue entry are two writes of one purchase: a refusal
+    queues nothing, and a retry in the same second files nothing twice.
+    """
+
+    def ask(self, title="Dune: Part Three", **extra):
+        return self.post(f"{COINS}/request-movie", {"title": title, **extra})
+
+    def queue(self):
+        with closing(sqlite3.connect(str(self.state))) as conn:
+            return [dict(zip(("id", "title", "status"), row)) for row in
+                    conn.execute("SELECT id, title, status FROM movie_requests"
+                                 " ORDER BY id")]
+
+    def test_a_request_costs_the_price_and_queues_the_title(self):
+        cost = engagement.resolve_request_movie_coins()
+        self.grant(cost)
+        answered = self.ask()
+        self.assertEqual(answered[0], 200, answered)
+        request = self.body(answered)["request"]
+        self.assertEqual(request["cost"], cost)
+        self.assertEqual(request["balance"], 0)
+        self.assertFalse(request["already_applied"])
+        self.assertIsInstance(request["id"], int)
+        queued = self.queue()
+        self.assertEqual(len(queued), 1, queued)
+        self.assertEqual(queued[0]["id"], request["id"])
+        self.assertEqual(queued[0]["title"], "Dune: Part Three")
+        self.assertEqual(queued[0]["status"], "open")
+        spends = [row for row in self.rows() if row["reason"] == "redeem_request"]
+        self.assertEqual(len(spends), 1, spends)
+        self.assertEqual(spends[0]["delta"], -cost)
+
+    def test_a_short_wallet_is_refused_and_nothing_is_queued(self):
+        before = self.wallet_state()
+        answered = self.ask()
+        self.assertEqual(answered[0], 402, answered)
+        self.assertEqual(self.code(answered), "licence_required")
+        self.assertEqual(self.wallet_state(), before)
+        self.assertEqual(self.queue(), [])
+
+    def test_a_blank_or_huge_title_is_a_400_and_queues_nothing(self):
+        before = self.wallet_state()
+        for title in ("", "   ", "x" * 201):
+            answered = self.ask(title=title)
+            self.assertEqual(answered[0], 400, (title[:20], answered))
+            self.assertEqual(self.code(answered), "invalid_params")
+        answered = self.ask(notes="x" * 501)
+        self.assertEqual(answered[0], 400, answered)
+        self.assertEqual(self.wallet_state(), before)
+        self.assertEqual(self.queue(), [])
+
+    def test_an_extra_key_is_a_400_and_queues_nothing(self):
+        answered = self.ask(coins=300)
+        self.assertEqual(answered[0], 400, answered)
+        self.assertEqual(self.queue(), [])
+
+    def test_a_replay_in_the_same_second_files_one_request(self):
+        self.grant(engagement.resolve_request_movie_coins() * 2)
+        first = self.body(self.ask())["request"]
+        second = self.body(self.ask())["request"]
+        if second["already_applied"]:
+            self.assertEqual(second["id"], first["id"])
+            self.assertEqual(len(self.queue()), 1)
+            self.assertEqual(len([row for row in self.rows()
+                                  if row["reason"] == "redeem_request"]), 1)
+        else:
+            self.assertEqual(len(self.queue()), 2)
+            self.assertEqual(second["balance"], 0)
+
+    def test_the_price_follows_the_operator_knob(self):
+        self.settings(coin_redeem_request=50)
+        self.grant(50)
+        request = self.body(self.ask())["request"]
+        self.assertEqual(request["cost"], 50)
+        self.assertEqual(self.rows()[-1]["delta"], -50)
+
+    def test_caps_publishes_the_request_price_by_default(self):
+        caps = self.body(self.get(f"{COINS}/caps"))
+        self.assertEqual(caps["request"]["coins"],
+                         engagement.resolve_request_movie_coins())
+
+
+class Themes(Wallet):
+    """`POST /coins/redeem-theme` — 250 coins buys one player theme, forever.
+
+    `jade` is the shipped look: free, always owned, never sold, so buying it
+    is a 400. A theme already owned costs nothing — the route answers
+    `already_applied` and no spend runs at all. The picker reads owned themes
+    and prices from one GET, so a theme it shows as locked is one the redeem
+    route will actually sell, at the price the picker shows.
+    """
+
+    def buy(self, theme="midnight", **extra):
+        return self.post(f"{COINS}/redeem-theme", {"theme": theme, **extra})
+
+    def owned(self):
+        with closing(sqlite3.connect(str(self.state))) as conn:
+            return [row[0] for row in conn.execute(
+                "SELECT theme_id FROM purchased_themes WHERE account_id = ?"
+                " ORDER BY purchased_at", (self.account_id,))]
+
+    def test_themes_are_listed_with_their_price_and_jade_is_free(self):
+        listed = self.body(self.get(f"{COINS}/themes"))
+        self.assertEqual(listed["themes"], ["jade"])
+        self.assertEqual(listed["prices"],
+                         {name: {"coins": engagement.THEME_COINS}
+                          for name in engagement.PURCHASABLE_THEMES})
+        caps = self.body(self.get(f"{COINS}/caps"))
+        self.assertEqual(caps["themes"], listed["prices"])
+
+    def test_a_theme_costs_the_price_and_is_owned_forever(self):
+        cost = engagement.resolve_theme_coins()
+        self.grant(cost)
+        answered = self.buy()
+        self.assertEqual(answered[0], 200, answered)
+        theme = self.body(answered)["theme"]
+        self.assertEqual(theme["cost"], cost)
+        self.assertEqual(theme["balance"], 0)
+        self.assertFalse(theme["already_applied"])
+        self.assertEqual(theme["owned"], ["jade", "midnight"])
+        self.assertEqual(self.owned(), ["midnight"])
+        spends = [row for row in self.rows() if row["reason"] == "redeem_theme"]
+        self.assertEqual(len(spends), 1, spends)
+        self.assertEqual(spends[0]["delta"], -cost)
+
+    def test_a_theme_already_owned_costs_nothing(self):
+        self.grant(engagement.resolve_theme_coins() * 2)
+        first = self.body(self.buy())["theme"]
+        second = self.body(self.buy())["theme"]
+        self.assertTrue(second["already_applied"])
+        self.assertEqual(second["balance"], first["balance"])
+        self.assertEqual(second["owned"], ["jade", "midnight"])
+        self.assertEqual(len([row for row in self.rows()
+                              if row["reason"] == "redeem_theme"]), 1)
+
+    def test_an_unknown_or_free_theme_is_a_400_and_spends_nothing(self):
+        before = self.wallet_state()
+        for theme in ("neon", "jade", "", "MIDNIGHT"):
+            answered = self.buy(theme=theme)
+            self.assertEqual(answered[0], 400, (theme, answered))
+            self.assertEqual(self.code(answered), "invalid_params")
+        self.assertEqual(self.wallet_state(), before)
+        self.assertEqual(self.owned(), [])
+
+    def test_a_short_wallet_is_refused_and_owns_nothing(self):
+        before = self.wallet_state()
+        answered = self.buy()
+        self.assertEqual(answered[0], 402, answered)
+        self.assertEqual(self.code(answered), "licence_required")
+        self.assertEqual(self.wallet_state(), before)
+        self.assertEqual(self.owned(), [])
+
+    def test_the_price_follows_the_operator_knob(self):
+        self.settings(coin_redeem_theme=100)
+        caps = self.body(self.get(f"{COINS}/caps"))
+        self.assertEqual(caps["themes"]["midnight"]["coins"], 100, caps)
+        self.grant(100)
+        theme = self.body(self.buy())["theme"]
+        self.assertEqual(theme["cost"], 100)
+        self.assertEqual(self.rows()[-1]["delta"], -100)
+
+
 # ── concurrency ───────────────────────────────────────────────────────────────
 
 

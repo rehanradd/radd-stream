@@ -109,12 +109,14 @@ SERVER_SOURCES = frozenset({"server", "admin"})
 #: Reason vocabulary. `ref` names one of these; it is never a title or a URL.
 LEDGER_REASONS = frozenset({
     "rewarded_ad", "streak_day", "redeem_pass", "redeem_download",
+    "redeem_theme", "redeem_request", "share", "finish_watch",
     "admin_grant", "refund",
 })
 #: Debits. Redemption of a pass, and a `refund` that claws back a wrong credit
 #: (a compensating row — the append-only way to undo a mistake; a refund that
 #: *returns* coins after a failed spend is instead a positive `grant_coins`).
-SPEND_REASONS = frozenset({"redeem_pass", "redeem_download", "refund"})
+SPEND_REASONS = frozenset({"redeem_pass", "redeem_download", "redeem_theme",
+                            "redeem_request", "refund"})
 
 #: Coins credited per *server-verified* rewarded completion (q3 owns the admin
 #: knob; this is the default it overrides). `coin_value_pkr` stays q3's.
@@ -154,6 +156,28 @@ DOWNLOAD_CREDIT_COINS = 100
 #: so the window only covers a browser that opens late, not a coin saved
 #: for a later film.
 DOWNLOAD_CREDIT_SECONDS = 86_400.0
+
+#: One share of a movie pays 25 coins, once a day (daily check-in Build 5).
+#: One finished title pays 15, once per title ever. One requested movie costs
+#: 300; one player theme costs 250. Each has its operator knob
+#: (`coin_share`, `coin_finish_watch`, `coin_redeem_request`,
+#: `coin_redeem_theme`), resolved by the functions below — a stored 0 or an
+#: unparseable paste means the shipped number, never free.
+SHARE_COINS = 25
+FINISH_WATCH_COINS = 15
+#: A title counts as finished at 90% watched: the player may never report
+#: exactly 100%, and a viewer who watched nine tenths of a film finished it.
+FINISH_WATCH_FRACTION = 0.9
+REQUEST_MOVIE_COINS = 300
+THEME_COINS = 250
+
+#: The player themes coins can buy. `jade` is the shipped look — free, always
+#: owned, never sold — so it is not in this table: a theme here is a chrome
+#: skin for the player's non-meaning surfaces (plates, rails, icon tints),
+#: never a recolour of the meaning-carrying accent, which DESIGN_SYSTEM §9
+#: forbids replacing. One price for every theme, resolved by
+#: `resolve_theme_coins`.
+PURCHASABLE_THEMES = ("midnight", "ember")
 MONTHLY_SECONDS = 30 * DAY_SECONDS
 #: The ladder is data end to end: each tier carries its price, the rule that says
 #: when its pass stops working, and the names of the two `app_remote_config` knobs
@@ -361,6 +385,29 @@ CREATE TABLE IF NOT EXISTS coin_download_credits (
     expires_at REAL NOT NULL,
     used_at REAL,
     created_at REAL NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS movie_requests (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    -- One requested movie, bought with coins: the spend and the queue entry are
+    -- two writes of one purchase, so a request that never reached the queue
+    -- cost nothing. `title` is the viewer's own words, capped at the route;
+    -- `status` is the operator's workflow ('open' | 'indexed' | 'declined').
+    account_id INTEGER NOT NULL REFERENCES user_accounts(id) ON DELETE CASCADE,
+    title TEXT NOT NULL,
+    notes TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'open',
+    created_at REAL NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS purchased_themes (
+    account_id INTEGER NOT NULL REFERENCES user_accounts(id) ON DELETE CASCADE,
+    -- One owned player theme: the row IS the ownership, so the app reads what
+    -- this account owns from here and never from a claim. The pair is the key
+    -- because a theme is bought once and kept — there is nothing to buy twice.
+    theme_id TEXT NOT NULL,
+    purchased_at REAL NOT NULL,
+    PRIMARY KEY (account_id, theme_id)
 );
 """
 
@@ -627,6 +674,50 @@ def resolve_download_credit(values=None) -> int:
     except (TypeError, ValueError):
         coins = 0
     return coins if coins > 0 else int(DOWNLOAD_CREDIT_COINS)
+
+
+def _resolve_coin_knob(values, key: str, shipped: int) -> int:
+    """One whole-number coin knob, by the rule every such knob follows: a
+    stored 0 or an unparseable paste is "use the shipped number", never "free"
+    and never unlimited."""
+    if not values:
+        return int(shipped)
+    try:
+        coins = int(values.get(key) or 0)
+    except (TypeError, ValueError):
+        coins = 0
+    return coins if coins > 0 else int(shipped)
+
+
+def resolve_share_coins(values=None) -> int:
+    """The share grant as the operator priced it (the app learns the number
+    from the share route's own answer, not from a pre-read)."""
+    return _resolve_coin_knob(values, "coin_share", SHARE_COINS)
+
+
+def resolve_finish_watch_coins(values=None) -> int:
+    """The finish-watch grant as the operator priced it (the app learns the
+    number from the progress route's own answer, not from a pre-read)."""
+    return _resolve_coin_knob(values, "coin_finish_watch", FINISH_WATCH_COINS)
+
+
+def resolve_request_movie_coins(values=None) -> int:
+    """The movie-request price as the operator priced it."""
+    return _resolve_coin_knob(values, "coin_redeem_request", REQUEST_MOVIE_COINS)
+
+
+def resolve_theme_coins(values=None) -> int:
+    """The player-theme price as the operator priced it (one price, every theme)."""
+    return _resolve_coin_knob(values, "coin_redeem_theme", THEME_COINS)
+
+
+def themes_projection(values=None) -> dict:
+    """The `themes` block a phone reads: every purchasable theme and the one
+    price they all share, built from the same resolver the redeem route
+    charges through — so the price a picker shows and the price the wallet is
+    debited are one read."""
+    price = resolve_theme_coins(values)
+    return {theme: {"coins": price} for theme in PURCHASABLE_THEMES}
 
 
 def passes_projection(ladder) -> dict:
@@ -1166,6 +1257,136 @@ def consume_download_credit(conn_or_path, token, *, handle, credit_secret,
             return changed.rowcount == 1
     except Exception:  # noqa: BLE001 — a credit the store cannot read spends nothing
         return False
+
+
+# ── the Build 5 grants and spends ─────────────────────────────────────────────
+
+
+def grant_share(conn_or_path, account_id, *, work, now=None, values=None) -> dict:
+    """Pay one share of a movie: 25 coins, once a day per account.
+
+    The server cannot observe a share — the app's chooser returning does not
+    prove the share left the phone — so this is a bounded client claim, the
+    same shape as the daily-login claim: the app reports it, the server
+    verifies the work handle is ours (the route does that before calling
+    here) and the day bucket is the enforcement. The idempotency key is the
+    account + the Karachi day bucket, so a second share the same day pays
+    nothing, whatever title it names.
+    """
+    moment = time.time() if now is None else float(now)
+    bucket = _day_bucket(moment, STREAK_TZ_DEFAULT, DAY_BOUNDARY_HOUR_DEFAULT)
+    amount = resolve_share_coins(values)
+    granted = grant_coins(conn_or_path, account_id, amount=amount, reason="share",
+                          source="server", ref=str(work),
+                          idempotency_key=f"share:{account_id}:{bucket}", now=moment)
+    # `grant_coins` reports a replay as `idempotent` (the write landed zero
+    # rows) — that is the already-paid answer, not a second grant.
+    return {"granted": not granted["idempotent"], "coins": amount,
+            "balance": granted["balance"]}
+
+
+def grant_finish_watch(conn_or_path, account_id, *, work, season=0, episode=0,
+                       now=None, values=None) -> dict:
+    """Pay one finished title: 15 coins, once per title ever.
+
+    The idempotency key is the account + the work + the season/episode, so a
+    rewatch pays nothing and a series pays per episode, not per season. The
+    caller decides what "finished" means — the progress route checks the
+    90% threshold before calling here — so this function only pays, never
+    measures.
+    """
+    moment = time.time() if now is None else float(now)
+    amount = resolve_finish_watch_coins(values)
+    granted = grant_coins(conn_or_path, account_id, amount=amount,
+                          reason="finish_watch", source="server", ref=str(work),
+                          idempotency_key=(
+                              f"finish-watch:{account_id}:{work}:"
+                              f"{int(season or 0)}:{int(episode or 0)}"),
+                          now=moment)
+    # `grant_coins` reports a replay as `idempotent` — a rewatch pays nothing.
+    return {"granted": not granted["idempotent"], "coins": amount,
+            "balance": granted["balance"]}
+
+
+def request_movie(conn_or_path, account_id, *, title, notes="", now=None,
+                  values=None, idempotency_key=None) -> dict:
+    """Spend coins on one requested movie and queue it for the operator.
+
+    The spend and the queue entry are two writes of one purchase: a retry with
+    the same idempotency key spends nothing and queues nothing twice. The
+    title is the viewer's own words, capped by the route; the status starts
+    'open' and only a human on the panel moves it.
+    """
+    moment = time.time() if now is None else float(now)
+    cost = resolve_request_movie_coins(values)
+    key = (f"request-movie:{account_id}:{int(moment)}"
+           if idempotency_key is None else str(idempotency_key))
+    spend = spend_coins(conn_or_path, account_id, amount=cost,
+                        reason="redeem_request", ref=str(title),
+                        idempotency_key=key, now=moment)
+    request_id = None
+    if spend["already_applied"]:
+        # A replay reports the request it filed, not a fresh id.
+        with _borrow(conn_or_path) as conn:
+            row = conn.execute(
+                "SELECT id FROM movie_requests WHERE account_id = ? AND title = ?"
+                " ORDER BY created_at DESC LIMIT 1",
+                (int(account_id), str(title))).fetchone()
+            request_id = int(row["id"]) if row is not None else None
+    else:
+        with _borrow(conn_or_path) as conn:
+            row = conn.execute(
+                "INSERT INTO movie_requests"
+                "(account_id, title, notes, status, created_at)"
+                " VALUES(?,?,?,'open',?)",
+                (int(account_id), str(title), str(notes or ""), moment))
+            _commit(conn)
+            request_id = int(row.lastrowid)
+    return {"title": str(title), "cost": cost, "balance": spend["balance"],
+            "already_applied": spend["already_applied"], "id": request_id}
+
+
+def owned_themes(conn_or_path, account_id) -> list:
+    """The theme ids this account owns, oldest purchase first. `jade` is the
+    shipped look and is owned by everyone, so it is always in the answer
+    whether or not a row says so — the table only ever holds purchases."""
+    with _borrow(conn_or_path) as conn:
+        rows = conn.execute(
+            "SELECT theme_id FROM purchased_themes WHERE account_id = ?"
+            " ORDER BY purchased_at",
+            (int(account_id),)).fetchall()
+    return ["jade"] + [str(row["theme_id"]) for row in rows
+                       if str(row["theme_id"]) != "jade"]
+
+
+def redeem_theme(conn_or_path, account_id, *, theme, now=None, values=None,
+                 idempotency_key=None) -> dict:
+    """Spend coins on one player theme and record the ownership.
+
+    The theme must be one of `PURCHASABLE_THEMES` — the route checks that
+    before calling here, so a name this server never sold cannot be bought.
+    The purchase is the (account, theme) pair: a retry with the same
+    idempotency key spends nothing and records nothing twice, and a theme
+    already owned costs nothing at all — the route answers `already_applied`
+    with the ownership it already holds.
+    """
+    moment = time.time() if now is None else float(now)
+    cost = resolve_theme_coins(values)
+    key = (f"redeem-theme:{account_id}:{theme}:{int(moment)}"
+           if idempotency_key is None else str(idempotency_key))
+    spend = spend_coins(conn_or_path, account_id, amount=cost,
+                        reason="redeem_theme", ref=str(theme),
+                        idempotency_key=key, now=moment)
+    if not spend["already_applied"]:
+        with _borrow(conn_or_path) as conn:
+            conn.execute(
+                "INSERT OR IGNORE INTO purchased_themes"
+                "(account_id, theme_id, purchased_at) VALUES(?,?,?)",
+                (int(account_id), str(theme), moment))
+            _commit(conn)
+    return {"theme": str(theme), "cost": cost, "balance": spend["balance"],
+            "already_applied": spend["already_applied"],
+            "owned": owned_themes(conn_or_path, account_id)}
 
 
 # ── ad cadence, server-side (Pillar 1) ────────────────────────────────────────
