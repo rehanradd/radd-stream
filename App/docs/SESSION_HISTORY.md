@@ -1456,3 +1456,17 @@ or printed. Gating is qoder1's call after fresh green CI.
 - **Checks before committing:** no references left to the removed icon imports or AccentOrange; zero raw `Color(0x…)` in the diff (BrandDriftTest safe); no duplicated `@Composable`; all 7 vectors parse; no strings changed, so the string guards are unaffected.
 
 **Not done:** no local Gradle run — CI judges. Device check (icons read at 48 dp, wave animates, jade reads over frames, logo-mark placements) is owner-only, part of step 20. Next: player step 9 (MB/hour labels in the quality sheet).
+
+---
+
+### Session 50 — Player rebuild step 9: quality sheet MB/hour labels (Muse, 2026-11-06)
+
+**Agent:** Muse (BoNzoO), coded directly on the user's order. No qoder lane. Same branch as Sessions 40–49.
+
+**Built:** each quality rung now shows its data cost before the tap (plan §5 #9, §1.7 guide) — the thing a viewer on mobile data needs and nobody else shows.
+
+- **Pure mapping:** NEW top-level `qualityCostPerHour(band)` in `player/QualityLadder.kt` — band → plain-words cost, never from `sizeBytes` (a download's size is not an hour of watching): 2160p "≈ 7–11 GB/hour", 1080p "≈ 3 GB/hour", 720p "≈ 1.5 GB/hour", 480p "≈ 700 MB/hour", sd "≈ 300 MB/hour"; unknown/unbanded → null (no cost rather than a guess). Case- and space-tolerant. NEW `QualityCostLabelTest` (3 cases: every known band, unknown → null, case/space tolerance).
+- **Reconciliation, written in the code:** the plan's own example ("High ≈ 1.5 GB/hour") is the 720p rung — the free cap — not 1080p, which the same §1.7 guide prices at ~3 GB/hour. The mapping follows the guide's numbers per resolution, so both of the plan's sentences stay true.
+- **Wiring:** `QualitySheet` rung rows now show the cost as their detail, with "Playing" joining it (after " · ") only on the rung playing now; the Auto row is untouched (Auto adapts, so it has no fixed cost). No strings changed, so the string guards are unaffected; no composable touched, so the annotation audit from Session 49's fix still stands.
+
+**Not done:** no local Gradle run — CI judges. Device check (costs read on real rungs, including an unknown-band rung showing no cost) is owner-only, part of step 20. Next: player step 10 (player defaults in Settings).

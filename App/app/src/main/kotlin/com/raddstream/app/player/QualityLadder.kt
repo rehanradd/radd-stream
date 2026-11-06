@@ -80,6 +80,26 @@ data class QualityOption(
     }
 }
 
+/**
+ * Data cost per hour of watching, from the plan §1.7 guide (approximate,
+ * codec-dependent — a HEVC 1080p costs less than an AVC one, so these are the
+ * guide's own numbers, never a measurement of this print). A separate pure
+ * band → cost mapping on purpose: it is NOT derived from `sizeBytes`, because a
+ * file's size says how big its download is, not how fast an hour of it plays.
+ *
+ * The plan's own example ("High ≈ 1.5 GB/hour") is the 720p rung — the free cap —
+ * not 1080p, which the same §1.7 guide prices at ~3 GB/hour. Unknown or unbanded
+ * rungs show no cost rather than a guessed one.
+ */
+fun qualityCostPerHour(band: String): String? = when (band.trim().lowercase()) {
+    "2160p" -> "≈ 7–11 GB/hour"
+    "1080p" -> "≈ 3 GB/hour"
+    "720p" -> "≈ 1.5 GB/hour"
+    "480p" -> "≈ 700 MB/hour"
+    "sd" -> "≈ 300 MB/hour"
+    else -> null
+}
+
 /** Everything the detail screen needs from one scope's ladder. */
 data class LadderForScope(
     val options: List<QualityOption>,

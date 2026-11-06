@@ -164,6 +164,7 @@ import com.raddstream.app.player.subtitles.SubtitleOffset
 import com.raddstream.app.player.subtitles.SubtitleOffsetSheet
 import com.raddstream.app.player.dragHalfZone
 import com.raddstream.app.player.dominantAxis
+import com.raddstream.app.player.qualityCostPerHour
 import com.raddstream.app.ui.theme.RaddCaptionPlate
 import com.raddstream.app.ui.theme.RaddCaptionPlateArgb
 import com.raddstream.app.ui.theme.RaddCoral400
@@ -2175,7 +2176,12 @@ private fun QualitySheet(state: PlayerUiState, vm: PlayerViewModel) {
                 val selected = !state.qualityAuto && rung.band == state.qualityBand
                 QualityRow(
                     title = rung.label?.takeIf { it.isNotBlank() } ?: rung.band.uppercase(),
-                    detail = if (selected) stringResource(R.string.player_playing) else null,
+                    // The cost shows before the tap (plan §5 step 9) — the "Playing"
+                    // word only joins it when this rung is the one playing now.
+                    detail = listOfNotNull(
+                        qualityCostPerHour(rung.band),
+                        if (selected) stringResource(R.string.player_playing) else null,
+                    ).joinToString(" · ").takeIf { it.isNotEmpty() },
                     selected = selected,
                     onClick = { vm.selectQualityBand(rung.band) },
                 )
