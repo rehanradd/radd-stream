@@ -1611,7 +1611,6 @@ private fun ConnectionErrorCard(message: String, onRetry: () -> Unit) {
 
 // ── Give-up card (§5 handoff reasons) ──────────────────────────────────────────
 
-@Composable
 /**
  * First-run gesture coach (plan §5 step 7): the three hints the player teaches nowhere
  * else, on a dimmed scrim so they read over any frame. Any tap dismisses — the tap is
@@ -1718,6 +1717,7 @@ private fun loadingWavePath(y: Float): Path = Path().apply {
     }
 }
 
+@Composable
 private fun StartNoticeCard(
     phase: StartPhase,
     title: String?,

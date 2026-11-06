@@ -1440,6 +1440,8 @@ or printed. Gating is qoder1's call after fresh green CI.
 
 **Not done:** no local Gradle run — CI judges. Device check (overlay really shows once on first open, never again, 4 s, tap dismisses) is owner-only, part of step 20. Next: player step 8 (brand icons + jade accent; SVG → vector conversion first).
 
+**Addendum (step-7 CI fix, same night):** CI run 42136285358 FAILED at `compileDebugKotlin` — my overlay insert had stolen `StartNoticeCard`'s `@Composable`: it ended up above the new overlay's KDoc, so the overlay carried two annotations ("not repeatable") and `StartNoticeCard` none (three "must be marked" errors). Root cause: my insert anchor skipped the annotation line, and my duplicate check only looked for two adjacent `@Composable` lines — a KDoc between them hid the pair. Fixed in the fix commit on top of step 8: stray annotation removed, `@Composable` restored above `StartNoticeCard`, and a full-file annotation audit now shows every composable with exactly one. Lesson for every later insert: the anchor must include the `@Composable` line above the function being inserted before.
+
 ---
 
 ### Session 49 — Player rebuild step 8: brand icons + jade accent + loading-wave (Muse, 2026-11-06)
