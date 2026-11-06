@@ -114,6 +114,7 @@ fun SettingsScreen(
     onOpenProfile: () -> Unit = {},
     onOpenCoins: () -> Unit = {},
     onOpenHelp: () -> Unit = {},
+    onOpenLanguages: () -> Unit = {},
     onOpenWatchHistory: () -> Unit = {},
     viewModel: SettingsViewModel = hiltViewModel(),
 ) {
@@ -700,6 +701,20 @@ fun SettingsScreen(
                 ChipRow(subtitleOptions, subtitleOptions.indexOf(state.prefs.subtitleLang).coerceAtLeast(0)) { idx ->
                     viewModel.setSubtitleLang(subtitleOptions[idx])
                 }
+
+                Spacer(Modifier.height(10.dp))
+                OutlinedButton(
+                    onClick = onOpenLanguages,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text("Open Languages screen")
+                }
+                Text(
+                    "Audio, subtitles and subtitle size in one place — the same choices " +
+                        "the Region card, these chips and the player sheet write.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
 
             SettingsCard(title = "Playback & Display") {
