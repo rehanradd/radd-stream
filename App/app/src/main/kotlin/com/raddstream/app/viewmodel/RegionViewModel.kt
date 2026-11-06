@@ -80,4 +80,15 @@ class RegionViewModel @Inject constructor(
             if (stored.isSuccess) onSaved()
         }
     }
+
+    /**
+     * Skip the question: keep the shipped default and record the answer through the same
+     * save path as tapping a card, so the screen never reappears. Skipping is not "no
+     * choice" — it is the default choice, written like any other. A card tapped before
+     * Skip is undone by it; that is what the button promises.
+     */
+    fun skipAndContinue(onSaved: () -> Unit) {
+        _ui.update { it.copy(selectedId = UserRegion.DEFAULT, saveFailed = false) }
+        saveAndContinue(onSaved)
+    }
 }
