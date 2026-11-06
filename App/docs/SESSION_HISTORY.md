@@ -1457,6 +1457,8 @@ or printed. Gating is qoder1's call after fresh green CI.
 
 **Not done:** no local Gradle run — CI judges. Device check (icons read at 48 dp, wave animates, jade reads over frames, logo-mark placements) is owner-only, part of step 20. Next: player step 9 (MB/hour labels in the quality sheet).
 
+**Addendum (step-8 CI fix, same night):** CI run 42137443535 FAILED at `processDebugResources` — all 6 vectors: `attr/colorControlNormal not found`. I had copied the `android:tint="?attr/colorControlNormal"` line from the tab vectors, but those vectors were never in the app (they live only in `files/brand-assets/android-vectors/`), and this app has no AppCompat theme attr by that name. Fixed in the fix commit on top of step 9: the tint line removed from all 6 vectors (the Compose `Icon(tint=…)` at each call site is the only tint they need — the black strokes take the tint). Lesson: never copy the tint attr into an app vector; verify an asset is actually in `res/drawable` before copying its house style.
+
 ---
 
 ### Session 50 — Player rebuild step 9: quality sheet MB/hour labels (Muse, 2026-11-06)
