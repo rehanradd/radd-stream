@@ -17,6 +17,7 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
 import com.raddstream.app.brand.Brand
+import com.raddstream.app.player.AbRepeat
 import com.raddstream.app.player.AdCadenceGovernor
 import com.raddstream.app.player.AdDecision
 import com.raddstream.app.player.AdSlot
@@ -64,6 +65,9 @@ import com.raddstream.app.player.SubtitleTrackPolicy
 import com.raddstream.app.player.SubtitleUiSettings
 import com.raddstream.app.player.TrackUiOption
 import com.raddstream.app.player.ViewMode
+import com.raddstream.app.player.abRepeatWithA
+import com.raddstream.app.player.abRepeatWithB
+import com.raddstream.app.player.loopTargetMs
 import com.raddstream.app.player.majorVersionOf
 import com.raddstream.app.player.resolveStartBand
 import com.raddstream.app.player.shouldAutoAdvance
@@ -513,6 +517,12 @@ class PlayerViewModel @Inject constructor(
 
     private var watchedBingeKey: String? = null
 
+    /** The last A-B loop-back, on the monotonic clock: the re-arm guard in the policy. */
+    private var lastAbLoopAtMs: Long? = null
+
+    /** Which file the staged A-B segment belongs to (target + title); a new file clears it. */
+    private var abRepeatScopeKey: String? = null
+
     private fun startTicker() {
         tickerJob?.cancel()
         var lastSleepTick = System.currentTimeMillis()
@@ -528,6 +538,18 @@ class PlayerViewModel @Inject constructor(
                             bufferedMs = bufferedOf(c),
                             durationMs = if (c.duration > 0) c.duration else it.durationMs,
                         )
+                    }
+                    // A-B repeat (§5 P14): the ticker already visits every 200 ms, so
+                    // it is the clock — when the playhead reaches B, seek back to A.
+                    // The re-arm window inside the policy keeps a seek still in flight
+                    // from being re-issued on every visit.
+                    val loopTo = loopTargetMs(
+                        _ui.value.positionMs, _ui.value.abRepeat, lastAbLoopAtMs,
+                        SystemClock.elapsedRealtime(),
+                    )
+                    if (loopTo != null) {
+                        lastAbLoopAtMs = SystemClock.elapsedRealtime()
+                        seekTo(loopTo)
                     }
                     // The start deadline (§5 P5): the ticker already visits every 200 ms, so
                     // it is the clock — no second thread. A first frame disarms the attempt
@@ -806,6 +828,17 @@ class PlayerViewModel @Inject constructor(
         resumeKey: String,
         overrideMs: Long? = null,
     ) {
+        // A new file starts with no segment: the old A-B points are positions in a
+        // different file. A quality switch keeps the same work, season, episode and
+        // title, so the segment survives it — the range is in the file, not the
+        // address. The scope key is the target plus the title, because a deep link
+        // carries the empty target and only its title tells it apart.
+        val scopeKey = "${bundle.target.kind}:${bundle.target.id}:${bundle.target.season}:${bundle.target.episode}:$title"
+        if (abRepeatScopeKey != scopeKey) {
+            _ui.update { it.copy(abRepeat = AbRepeat()) }
+            lastAbLoopAtMs = null
+            abRepeatScopeKey = scopeKey
+        }
         store.installBundle(bundle)
         activeResumeKey = resumeKey
         val resume = resumeByTarget[resumeKey] ?: 0L
@@ -972,6 +1005,21 @@ class PlayerViewModel @Inject constructor(
         val fps = _ui.value.frameRate?.takeIf { it > 0f } ?: 24f
         val delta = (1000f / fps) * direction.sign
         seekTo(_ui.value.positionMs + delta.toLong())
+    }
+
+    /** A-B repeat (§5 P14): set point A at the current playhead. */
+    fun setAbPointA() {
+        _ui.update { it.copy(abRepeat = abRepeatWithA(it.abRepeat, it.positionMs)) }
+    }
+
+    /** A-B repeat (§5 P14): set point B at the current playhead. */
+    fun setAbPointB() {
+        _ui.update { it.copy(abRepeat = abRepeatWithB(it.abRepeat, it.positionMs)) }
+    }
+
+    /** A-B repeat (§5 P14): clear the segment; playback continues normally. */
+    fun clearAbRepeat() {
+        _ui.update { it.copy(abRepeat = AbRepeat()) }
     }
 
     fun setSpeed(speed: Float) {

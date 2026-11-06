@@ -42,6 +42,10 @@
     <string name="player_forward_10">Forward 10 seconds</string>
     <string name="player_frame_back">Step back one frame</string>
     <string name="player_frame_forward">Step forward one frame</string>
+    <string name="player_ab_set_a">Set point A</string>
+    <string name="player_ab_set_b">Set point B</string>
+    <string name="player_ab_point">Point %1$s · %2$s</string>
+    <string name="player_ab_clear">Clear A-B repeat</string>
     <string name="player_next_episode">Next episode</string>
     <string name="player_sleep_timer">Sleep timer</string>
     <string name="player_aspect_label">Aspect: %1$s</string>

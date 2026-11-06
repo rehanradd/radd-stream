@@ -2560,6 +2560,28 @@ private fun MoreSheet(state: PlayerUiState, vm: PlayerViewModel, onEnterPip: () 
                 vm.hideMoreSheet()
                 vm.stepFrame(1)
             }
+            // A-B repeat (§5 P14): set the two points of the loop. The sheet stays
+            // open for both taps — setting A then B is one visit, not two — and the
+            // row labels show the points once they are set, so the segment is visible.
+            SheetRow(
+                label = state.abRepeat.aMs?.let {
+                    stringResource(R.string.player_ab_point, "A", it.formatTime())
+                } ?: stringResource(R.string.player_ab_set_a),
+            ) {
+                vm.setAbPointA()
+            }
+            SheetRow(
+                label = state.abRepeat.bMs?.let {
+                    stringResource(R.string.player_ab_point, "B", it.formatTime())
+                } ?: stringResource(R.string.player_ab_set_b),
+            ) {
+                vm.setAbPointB()
+            }
+            if (state.abRepeat.hasA || state.abRepeat.hasB) {
+                SheetRow(label = stringResource(R.string.player_ab_clear)) {
+                    vm.clearAbRepeat()
+                }
+            }
             SheetRow(label = stringResource(R.string.player_rewind_10)) {
                 vm.hideMoreSheet()
                 vm.seekBy(-10_000)

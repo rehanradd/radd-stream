@@ -1526,3 +1526,18 @@ or printed. Gating is qoder1's call after fresh green CI.
 - **Checks before committing:** no new strings (guard untouched); no composable touched (annotation audit not needed); diff reviewed file by file; one real bug caught in review — `playV2Bundle`'s early returns used to leave the viewer with nothing; it now returns a Boolean and the caller falls back.
 
 **Not done:** no local Gradle run — CI judges. **The live v2 path is UNVERIFIED until nginx allows /api/v2/play** (the route 403s at the edge today — the gate owns that allow-list change); until then every Play tap takes the v1 fallback, which is the safe behaviour, not a failure. Rung taps (playLadder) stay on the v1 ladder — `QualityOption` carries no release id, so the v2 call has nothing to ask for there; that is a later step. Device check (Play opens, ticks show on a packed title) is owner-only, part of step 20. Next: player step 14 (A-B repeat).
+
+---
+
+### Session 54 — Player rebuild step 14: A-B repeat (Muse, 2026-11-06)
+
+**Agent:** Muse (BoNzoO), coded directly on the user's order. No qoder lane. Same branch as Sessions 40–53.
+
+**Built:** A-B repeat (plan §5 #14, P13) — loop one segment of the file, A to B.
+
+- **Pure policy:** NEW `player/AbRepeat.kt` — `AbRepeat(aMs, bMs)` with `isActive` (both set, A < B); `abRepeatWithA` (an A at or past the current B starts a new segment and clears B); `abRepeatWithB` (a B at or before A is ignored, the old A stands); `loopTargetMs` (the playhead loops to A at B and not before, with a 1-second re-arm window so a seek still in flight is not re-issued on every tick). Media3's REPEAT_MODE_ONE loops the whole item, so the loop is ticker-driven, not a mode. NEW `AbRepeatTest` (5 cases).
+- **Wiring:** `PlayerUiState.abRepeat` (default empty); the ViewModel's 200 ms ticker asks `loopTargetMs` on every visit and seeks to A when it answers; `setAbPointA`/`setAbPointB`/`clearAbRepeat` next to `stepFrame` (the frame-step machinery this sits on). A new file clears the segment — the scope key is the bundle target plus the title, so a quality switch keeps the segment (same file, new address) while a new episode or a deep link clears it.
+- **UI:** three rows in the More sheet's Playback group, after Frame forward — Set point A / Set point B / Clear (shown only once a point exists). The sheet stays open for both taps, so setting A then B is one visit, not two; the row labels show the points once set ("Point A · 01:23"), so the segment is visible. NEW strings `player_ab_set_a/set_b/point/clear` (4), all defined + used.
+- **Checks before committing:** prose ratchet replica [] (the "A"/"B" args are single letters, no whitespace); quoting replica []; string guard replica clean (141 defined / 141 used, no orphans, no duplicate values); no composable added or moved (annotation audit not needed).
+
+**Not done:** no local Gradle run — CI judges. Device check (set A and B, the segment loops, Clear stops it, a quality switch keeps it) is owner-only, part of step 20. Next: player step 15 (AudioBoost verify-only) or step 19 (VIP streak display).
