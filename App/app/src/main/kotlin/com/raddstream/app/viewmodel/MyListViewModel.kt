@@ -77,14 +77,24 @@ class MyListViewModel @Inject constructor(
     private var lastRemoved: Post? = null
     private var popularLoaded = false
 
+    // Six flows, combined as two triples: the typed `combine` overloads this
+    // codebase already uses stop at three, and a six-flow call falls back to
+    // the vararg form whose array the lambda cannot destructure — CI proved
+    // it (run 42155195902). The nesting changes nothing about the values:
+    // each inner triple re-emits on its own flows, and the outer pair emits
+    // on either half.
     val uiState: StateFlow<MyListUiState> = combine(
-        favoritesRepository.getAllFavorites(),
-        favoritesRepository.observeRefusedIds(),
-        sortFlow,
-        watchHistoryDao.observeDurations(),
-        popularFlow,
-        removedTitleFlow,
-    ) { list, refused, sort, history, popular, removedTitle ->
+        combine(
+            favoritesRepository.getAllFavorites(),
+            favoritesRepository.observeRefusedIds(),
+            sortFlow,
+        ) { list, refused, sort -> Triple(list, refused, sort) },
+        combine(
+            watchHistoryDao.observeDurations(),
+            popularFlow,
+            removedTitleFlow,
+        ) { history, popular, removedTitle -> Triple(history, popular, removedTitle) },
+    ) { (list, refused, sort), (history, popular, removedTitle) ->
         // The stored rows are filtered here, before anything sorts or maps them, so no later step
         // can be handed the unfiltered list by accident. `is18Plus` is the strict half and is null
         // for every row on today's wire; the refusal ledger is the half that fires against a public
