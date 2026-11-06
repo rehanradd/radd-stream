@@ -32,6 +32,7 @@ import com.raddstream.app.ui.screens.DetailScreen
 import com.raddstream.app.ui.screens.DownloadsScreen
 import com.raddstream.app.ui.screens.EmbedWebViewScreen
 import com.raddstream.app.ui.screens.HomeScreen
+import com.raddstream.app.ui.screens.LocalFilesScreen
 import com.raddstream.app.ui.screens.MyListScreen
 import com.raddstream.app.ui.screens.PlayerScreen
 import com.raddstream.app.ui.screens.RegionSelectionScreen
@@ -250,6 +251,16 @@ fun RaddStreamNavGraph(
                             navController.navigate(Screen.Player.createRoute(it, item.title))
                         }
                     },
+                    onPlayLocal = { uri, title ->
+                        navController.navigate(Screen.PlayerLocal.createRoute(uri, title))
+                    },
+                    onOpenLocalFiles = { navController.navigate(Screen.LocalFiles.route) },
+                )
+            }
+
+            composable(Screen.LocalFiles.route) {
+                LocalFilesScreen(
+                    onBackClick = { navController.popBackStack() },
                     onPlayLocal = { uri, title ->
                         navController.navigate(Screen.PlayerLocal.createRoute(uri, title))
                     },

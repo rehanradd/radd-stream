@@ -94,4 +94,7 @@ sealed class Screen(val route: String) {
 
         fun decode(encoded: String): String = decodeRouteArg(encoded)
     }
+
+    /** The phone's own videos (Movies/ and Download/), listed from MediaStore. */
+    object LocalFiles : Screen("local_files")
 }

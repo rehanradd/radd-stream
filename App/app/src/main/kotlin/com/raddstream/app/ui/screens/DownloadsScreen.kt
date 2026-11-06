@@ -17,7 +17,9 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
@@ -60,6 +62,7 @@ fun DownloadsScreen(
     onBackClick: () -> Unit,
     onPlay: (KeptItem) -> Unit = {},
     onPlayLocal: (uri: String, title: String) -> Unit = { _, _ -> },
+    onOpenLocalFiles: () -> Unit = {},
     viewModel: DownloadsViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsState()
@@ -91,6 +94,7 @@ fun DownloadsScreen(
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
             item { StorageCard(state.storage) }
+            item { LocalFilesEntry(onOpenLocalFiles) }
             state.statusMessage?.let { msg ->
                 item {
                     Text(
@@ -172,6 +176,46 @@ fun DownloadsScreen(
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun LocalFilesEntry(onOpenLocalFiles: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(MaterialTheme.colorScheme.surface)
+            .clickable { onOpenLocalFiles() }
+            .padding(16.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            Icons.Default.Folder,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.size(28.dp),
+        )
+        Column(
+            modifier = Modifier.weight(1f).padding(start = 12.dp),
+        ) {
+            Text(
+                "Videos on this phone",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+            Text(
+                "Browse Movies and Downloads",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Icon(
+            Icons.Default.ChevronRight,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
 }
 

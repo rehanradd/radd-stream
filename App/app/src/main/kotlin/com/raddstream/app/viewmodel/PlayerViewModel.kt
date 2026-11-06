@@ -82,6 +82,8 @@ import com.raddstream.app.player.subtitle.SubtitleFile
 import com.raddstream.app.player.subtitle.SubtitleFormat
 import com.raddstream.app.player.subtitle.SubtitleParser
 import com.raddstream.app.player.subtitles.SubtitleOffset
+import com.raddstream.app.data.LocalResumeRepository
+import com.raddstream.app.data.isLocalResumeUri
 import com.raddstream.app.data.ServerSettingsRepository
 import com.raddstream.app.data.cache.ConnectivityProbe
 import com.raddstream.app.data.cache.NetworkClass
@@ -126,6 +128,7 @@ class PlayerViewModel @Inject constructor(
     private val catalogRepository: CatalogRepository,
     private val syncAccountRepository: SyncAccountRepository,
     private val watchHistoryDao: WatchHistoryDao,
+    private val localResumeRepository: LocalResumeRepository,
     private val adCadence: AdCadenceGovernor,
     private val connectivityProbe: ConnectivityProbe,
 ) : ViewModel() {
@@ -788,7 +791,19 @@ class PlayerViewModel @Inject constructor(
     private suspend fun seedResumeFromStoredPositions(resumeKey: String, explicitStartMs: Long?) {
         if (explicitStartMs != null) return
         if (resumeByTarget[resumeKey] != null) return
-        val scope = store.peekWorkRef(resumeKey) ?: return
+        val scope = store.peekWorkRef(resumeKey)
+        if (scope == null) {
+            // A local file has no work ref for Room or the sync account to hang a
+            // position on — its resume lives in the local store instead, and only
+            // a device address may read it (a staged direct-URL key never does).
+            if (!isLocalResumeUri(resumeKey)) return
+            val localMs = localResumeRepository.positionFor(resumeKey) ?: return
+            val seed = ResumeSeed.seedFor(explicitStartMs, resumeByTarget[resumeKey], null, localMs)
+                ?: return
+            // Re-checked: a position measured while this lookup was running outranks it.
+            if (resumeByTarget[resumeKey] == null) resumeByTarget[resumeKey] = seed
+            return
+        }
         val syncedMs = if (syncSignedIn) {
             syncAccountRepository.resumePositionMs(scope.workRef, scope.season, scope.episode)
         } else {
@@ -989,6 +1004,12 @@ class PlayerViewModel @Inject constructor(
         val key = activeResumeKey ?: bundle.target.workKey ?: c.currentMediaItem?.mediaId ?: return
         val pos = c.currentPosition
         if (pos > 5_000 && pos < c.duration) resumeByTarget[key] = pos else resumeByTarget.remove(key)
+        // A local file's position must survive the process: the in-memory map dies
+        // with it, so a device address is also written to the local resume store
+        // under the same guards (a finished or barely-started file clears it).
+        if (isLocalResumeUri(key)) {
+            viewModelScope.launch { localResumeRepository.savePosition(key, pos, c.duration) }
+        }
         reportResume(c, pos, forced)
     }
 

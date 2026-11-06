@@ -26,6 +26,14 @@
         android:name="android.permission.WRITE_EXTERNAL_STORAGE"
         android:maxSdkVersion="28" />
 
+    <!-- Read the phone's own videos for the Media Vault's local-files list: API 33+
+         grants video-only access (READ_MEDIA_VIDEO); older releases use the storage
+         permission, capped at 32 because 33+ replaces it. -->
+    <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
+    <uses-permission
+        android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="32" />
+
     <!--
       Brand: android:label and the deep-link scheme below are generated from
       /brand.properties (resValue "brand_app_name" + manifestPlaceholder
