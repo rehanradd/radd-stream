@@ -1859,3 +1859,45 @@ vectors parse as XML with no `?attr` left. **Not done:** push (this commit,
 then CI judges — the 7aa9e46 runs are finished: Backend green, Android red on
 the hilt-work version fixed above, so nothing is in flight). Next: player
 steps 12/16–18/20, final double-verification. Device checks owner-only.
+
+**Addendum — CI verdict on 641b6e7 (Android run 42158361416; no Backend run — App-only paths).** Android **FAILURE** at `:app:kaptGenerateStubsDebugKotlin` — every error was in `CatalogImage.kt:44`: the Session 67 KDoc edit closed the file's KDoc comment (`*/`) right after the new `onBitmap` paragraph, orphaning the rest of the original KDoc as bare text outside any comment. Fixed by deleting that stray close (the paragraphs are one KDoc again); the log named no other file. The fix ships in the next commit, with the Session 68 work below.
+
+---
+
+### Session 68 — Region screen redesign: one question, three short cards (Muse, 2026-11-06)
+
+**Agent:** Muse (BoNzoO), coded directly. Same branch as Sessions 40–67. Owner order 08:44 PKT: "make select region card simple and easy to understand, short text, not much info that confuse user … beautiful and modern and stylish, use our own SVG or animation … design every card and box carefully beautifully."
+
+**What changed.** The old screen was a brochure: a long explainer paragraph, then per card a
+title, a summary, 3–4 bullet contents, a preference line and a caveat. The new screen asks
+one question and offers three short answers:
+- A centred header: the source-ripple brand mark (56dp), "What do you love to watch?", and
+  one line — "Pick one. You can change it later in Settings."
+- Three cards, each a brand icon in a 48dp tile, a name, one short tagline, and the
+  audio/subtitle promise as a pill: **Desi** — "Bollywood & Hindi dubs" — "Hindi audio ·
+  English subtitles" (with a small "Recommended" pill, it is the shipped default);
+  **East Asian** — "K-Drama, C-Drama & Anime" — "Original audio · English subtitles";
+  **International** — "Hollywood & world cinema" — "English audio".
+- The selected card wears the brand jade — border, icon tile and pill shift together through
+  `animateColorAsState`, and a jade check badge scales in. Cards enter staggered (90ms apart,
+  fade + rise). The whole card is the tap target, radio-button role kept, and the Continue
+  button and the announced save-failure line are unchanged apart from a shorter sentence.
+- Three new brand vectors in the house style (24×24, 2px stroke, round caps, no tint attr):
+  a clapperboard (`ic_region_desi`), a paper lantern (`ic_region_east_asian`), a globe
+  (`ic_region_international`); all three parse as XML with no `?attr` left.
+- The data got shorter with the screen: `RegionChoice` is now title + tagline + the two
+  language keys; the bullet `contents` and the `caveat` are gone, and `preferencePill()`
+  is the card's one-line promise. The honesty boundary did not move — the `RegionChoices`
+  KDoc still records that no card may offer Pakistani drama serials (no importer scrapes
+  Hum, ARY or Geo), and the test still pins it on the taglines. `preferenceLine()` is
+  untouched: Settings still shows the same sentence it always did.
+- Tests: `RegionChoicesTest` — the last test now pins the taglines (no drama promise, at
+  most 32 characters, every card named) and a new test pins the three pills. The language
+  and preference-line tests are unchanged.
+
+**Checks:** @Composable count unchanged on the screen (2 = 2, no annotation stolen);
+`regionIconRes` is a plain function returning the drawable id, not a composable. No
+strings.xml / PlayerScreen.kt changes. **Not done:** push (this commit, then CI judges —
+nothing is in flight). Next: player steps 12/16–18/20, final double-verification. Device
+checks owner-only (see the owner-only list: the region cards on a real phone, Desi
+preselected, tap → jade check, Continue saves).

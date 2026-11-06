@@ -12,8 +12,8 @@ import org.junit.Test
  * region vocabulary ([UserRegion]) and the words the Settings chips can actually display.
  *
  * A card is a promise about the catalog, so the second group of tests is the honest one — the
- * screen may only offer what `classify_media()` can produce, and what it cannot offer has to be
- * said out loud instead of quietly omitted.
+ * screen may only offer what `classify_media()` can produce, and a card is one short line,
+ * not a brochure: the tagline must stay short enough to read at a glance.
  */
 class RegionChoicesTest {
 
@@ -86,20 +86,35 @@ class RegionChoicesTest {
     }
 
     @Test
+    fun `the card pill states the same promise as the settings line, in one short line`() {
+        assertEquals(
+            "Hindi audio · English subtitles",
+            RegionChoices.byId(UserRegion.DESI_DUBS).preferencePill(),
+        )
+        assertEquals(
+            "Original audio · English subtitles",
+            RegionChoices.byId(UserRegion.EAST_ASIAN).preferencePill(),
+        )
+        assertEquals(
+            "English audio",
+            RegionChoices.byId(UserRegion.INTERNATIONAL).preferencePill(),
+        )
+    }
+
+    @Test
     fun `no card sells content this catalog cannot serve`() {
         // classify_media() has no Pakistani-drama industry and no importer scrapes Hum, ARY or
-        // Geo, so an offer of those serials would be a promise the server cannot keep.
+        // Geo, so an offer of those serials would be a promise the server cannot keep. The
+        // tagline is one short line — a card that needs a paragraph to explain itself is not
+        // a simple card.
         RegionChoices.ALL.forEach { choice ->
-            choice.contents.forEach { line ->
-                val lowered = line.lowercase()
-                assertTrue(
-                    "card ${choice.id} promises $line",
-                    listOf("hum tv", "ary", "geo tv", "pakistani drama").none { lowered.contains(it) },
-                )
-            }
-            assertTrue(choice.contents.isNotEmpty())
+            val lowered = choice.tagline.lowercase()
+            assertTrue(
+                "card ${choice.id} promises ${choice.tagline}",
+                listOf("hum tv", "ary", "geo tv", "pakistani drama").none { lowered.contains(it) },
+            )
+            assertTrue("card ${choice.id} tagline is a paragraph, not a line", choice.tagline.length <= 32)
+            assertTrue("card ${choice.id} has no name", choice.title.isNotBlank())
         }
-        val caveat = RegionChoices.byId(UserRegion.DESI_DUBS).caveat
-        assertTrue("the missing Pakistani dramas must be said, not omitted", caveat != null && caveat.contains("Pakistani"))
     }
 }
