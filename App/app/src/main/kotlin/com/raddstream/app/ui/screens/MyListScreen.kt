@@ -13,9 +13,11 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.FavoriteBorder
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarDuration
@@ -46,6 +48,7 @@ import com.raddstream.app.viewmodel.MyListViewModel
 @Composable
 fun MyListScreen(
     onPostClick: (Post) -> Unit,
+    onOpenWatchHistory: () -> Unit = {},
     viewModel: MyListViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsState()
@@ -76,6 +79,15 @@ fun MyListScreen(
                 // CL-7, same as Settings: the title says "My List" and so does
                 // its nav tab — the title is paint, not a second announcement.
                 title = { Text("My List", modifier = Modifier.clearAndSetSemantics { }) },
+                actions = {
+                    // The history lives next to the list it belongs to: the same
+                    // device, the same titles, one tap away in every list state.
+                    IconButton(onClick = onOpenWatchHistory) {
+                        Icon(Icons.Default.History, contentDescription = "Watch history")
+                    }
+                },
+                },
+>>>>>>> 40370e2 (Session 81 (D1.3): Watch History screen)
             )
         },
     ) { contentPadding ->

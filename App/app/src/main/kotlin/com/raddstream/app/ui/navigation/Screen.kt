@@ -43,6 +43,7 @@ sealed class Screen(val route: String) {
     object MyList : Screen("my_list")
     object Settings : Screen("settings")
     object Help : Screen("help")
+    object WatchHistory : Screen("watch_history")
     object Downloads : Screen("downloads")
     object VipUpgrade : Screen("vip_upgrade")
     /** Session 123: the account screens — the dashboard, the standalone check-in, the coins, and the profile. */
