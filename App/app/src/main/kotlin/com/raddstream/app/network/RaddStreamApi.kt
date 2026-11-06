@@ -7,6 +7,8 @@ import com.raddstream.app.network.models.CoinBalanceResponse
 import com.raddstream.app.network.models.CoinCapsResponse
 import com.raddstream.app.network.models.CoinEarnRequest
 import com.raddstream.app.network.models.CoinEarnResponse
+import com.raddstream.app.network.models.CoinRedeemRequest
+import com.raddstream.app.network.models.CoinRedeemResponse
 import com.raddstream.app.network.models.ContactRequest
 import com.raddstream.app.network.models.ContactResponse
 import com.raddstream.app.network.models.DeviceTrialRequest
@@ -349,6 +351,18 @@ interface RaddStreamApi {
         @Header("Authorization") authorization: String?,
         @Body body: CoinEarnRequest,
     ): CoinEarnResponse
+
+    /**
+     * POST /api/v2/account/coins/redeem — spend coins on a VIP pass. The body carries
+     * the plan name and nothing else: the price is the ladder's own, the debit is one
+     * guarded server UPDATE, and the pass is recorded against the account, so the
+     * entitlement it buys is visible the next time the app reads it.
+     */
+    @POST("api/v2/account/coins/redeem")
+    suspend fun redeemPass(
+        @Header("Authorization") authorization: String?,
+        @Body body: CoinRedeemRequest,
+    ): CoinRedeemResponse
 
     /**
      * POST /api/v2/play — one PlayBundle for a print, ranked by the server (plan §5 step 13).

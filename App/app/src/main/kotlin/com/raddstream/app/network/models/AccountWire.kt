@@ -318,6 +318,37 @@ data class StreakLadder(
 
 data class CoinCapsResponse(
     val streak: StreakLadder = StreakLadder(),
+    /** The pass tiers the server publishes (plan -> coin price), empty until read. */
+    val passes: Map<String, PassTier> = emptyMap(),
+)
+
+/** One pass tier the `coins/caps` route publishes: its coin price and its rupee price. */
+data class PassTier(
+    val coins: Int = 0,
+    val pkr: Int = 0,
+)
+
+/**
+ * POST /api/v2/account/coins/redeem — spend coins on a pass. The body carries the
+ * plan name and nothing else: the price is the ladder's own and the debit is one
+ * guarded server UPDATE, so a replay answers `already_applied` and spends nothing twice.
+ */
+data class CoinRedeemRequest(
+    val plan: String,
+)
+
+/** What one redeem answers: the pass, what it cost, and the wallet it left behind. */
+data class CoinRedeemed(
+    val reward: String = "",
+    val cost: Int = 0,
+    val balance: Int = 0,
+    @SerializedName("already_applied") val alreadyApplied: Boolean = false,
+    @SerializedName("expires_at") val expiresAt: Double = 0.0,
+    val pass: String? = null,
+)
+
+data class CoinRedeemResponse(
+    val redeemed: CoinRedeemed? = null,
 )
 
 /**

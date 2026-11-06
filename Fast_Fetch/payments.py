@@ -979,8 +979,12 @@ def entitlement(conn_or_path, key, *, now: float | None = None,
     with accounts._borrow(conn_or_path) as conn:
         account = accounts._authenticate(conn, key, now=moment, tracker=tracker)
         pending = has_pending(conn, account["account_id"])
-    return {"vip": bool(account["vip_until"] > moment),
-            "vip_until": float(account["vip_until"] or 0), "pending": bool(pending)}
+        # A coin pass is VIP too: the later of paid membership and any unexpired
+        # recorded pass is what this account is entitled to.
+        until = max(float(account["vip_until"] or 0),
+                    accounts.coin_pass_until(conn, account["account_id"], moment))
+    return {"vip": bool(until > moment),
+            "vip_until": float(until or 0), "pending": bool(pending)}
 
 
 def list_payments(conn_or_path, *, status: str | None = STATUS_PENDING,

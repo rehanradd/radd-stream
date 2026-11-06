@@ -1703,7 +1703,7 @@ MONETIZATION_FIELDS = (
     ("ad_app_open_min_gap_minutes", "Ad gap: app open (minutes; 0 = default 240)", _INT, 240),
     ("coin_per_rewarded_ad", "Coins per rewarded ad view", _INT, 5),
     ("rewarded_daily_cap", "Rewarded ads counted per local day", _INT, 10),
-    ("coin_redeem_day", "Coins: one-day pass", _INT, 30),
+    ("coin_redeem_day", "Coins: one-day pass", _INT, 500),
     ("coin_redeem_weekend", "Coins: weekend pass", _INT, 70),
     ("coin_redeem_monthly", "Coins: 30-day VIP pass", _INT, 200),
     ("streak_day1_coins", "Streak: day-1 bonus coins", _INT, 10),

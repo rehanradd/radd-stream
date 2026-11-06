@@ -61,6 +61,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.raddstream.app.data.VipPendingSubmission
+import com.raddstream.app.network.models.PassTier
 import com.raddstream.app.network.models.VipRemoteStreak
 import com.raddstream.app.ui.theme.RaddCurrent500
 import com.raddstream.app.ui.theme.RaddInk950
@@ -137,11 +138,15 @@ fun VipUpgradeScreen(
                     count = state.streakCount,
                     balance = state.coinBalance,
                     ladder = state.streakLadder,
+                    catalog = state.passCatalog,
                     signedIn = state.signedIn,
                     claimedToday = state.claimedToday,
                     isClaiming = state.isClaiming,
                     claimMessage = state.claimMessage,
                     onClaim = viewModel::claimDailyLogin,
+                    isRedeeming = state.isRedeeming,
+                    redeemMessage = state.redeemMessage,
+                    onRedeem = viewModel::redeemPass,
                 )
             }
 
@@ -428,11 +433,15 @@ private fun StreakCard(
     count: Int,
     balance: Int,
     ladder: Map<Int, Int>,
+    catalog: Map<String, PassTier>,
     signedIn: Boolean,
     claimedToday: Boolean,
     isClaiming: Boolean,
     claimMessage: String?,
     onClaim: () -> Unit,
+    isRedeeming: Boolean,
+    redeemMessage: String?,
+    onRedeem: (String) -> Unit,
 ) {
     val complete = count >= streak.days
     val today = (count + 1).coerceIn(1, streak.days)
@@ -544,6 +553,53 @@ private fun StreakCard(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+            }
+            if (catalog.isNotEmpty()) {
+                Text(
+                    "Spend coins",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onBackground,
+                )
+                for (plan in listOf("day", "weekend", "monthly_vip")) {
+                    val tier = catalog[plan] ?: continue
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                when (plan) {
+                                    "day" -> "24-hour VIP pass"
+                                    "weekend" -> "Weekend VIP pass"
+                                    "monthly_vip" -> "30-day VIP pass"
+                                    else -> "VIP pass"
+                                },
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.onBackground,
+                            )
+                            Text(
+                                "${tier.coins} coins",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        Button(
+                            onClick = { onRedeem(plan) },
+                            enabled = signedIn && !isRedeeming && balance >= tier.coins,
+                        ) {
+                            Text("Redeem")
+                        }
+                    }
+                }
+                if (redeemMessage != null) {
+                    Text(
+                        redeemMessage,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
             if (streak.rewardCoins > 0) {
                 Text(

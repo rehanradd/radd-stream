@@ -258,6 +258,41 @@ class EngagementFixture(unittest.TestCase):
         self.assertIsNone(redact.parse_vip_pass(result["pass"], SECRET,
                                                  now=result["pass_expires_at"] + 1))
 
+    def test_a_redeemed_day_pass_is_recorded_and_a_retry_records_nothing_twice(self):
+        engagement.grant_coins(self.conn, self.account_id, amount=500,
+                               reason="admin_grant", source="admin")
+        key = "test-redeem-once"
+        first = engagement.redeem_pass(
+            self.conn, self.account_id, plan="day", pass_secret=SECRET,
+            idempotency_key=key)
+        self.assertEqual(first["cost"], 500)
+        self.assertFalse(first["already_applied"])
+        second = engagement.redeem_pass(
+            self.conn, self.account_id, plan="day", pass_secret=SECRET,
+            idempotency_key=key)
+        self.assertTrue(second["already_applied"])
+        rows = self.conn.execute(
+            "SELECT plan, expires_at FROM coin_passes WHERE account_id = ?",
+            (self.account_id,)).fetchall()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["plan"], "day")
+        self.assertAlmostEqual(rows[0]["expires_at"], first["expires_at"], delta=1)
+
+    def test_the_day_seven_pass_is_recorded_like_a_redeemed_one(self):
+        base = epoch_at("2026-01-05T12:00:00")
+        result = None
+        for i in range(engagement.STREAK_PASS_DAY):
+            result = engagement.record_engagement_day(
+                self.conn, self.account_id, now=base + i * 86400, pass_secret=SECRET)
+        self.assertIsNotNone(result["pass"])
+        rows = self.conn.execute(
+            "SELECT plan, expires_at FROM coin_passes WHERE account_id = ?",
+            (self.account_id,)).fetchall()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["plan"], "streak_day7")
+        self.assertAlmostEqual(rows[0]["expires_at"], result["pass_expires_at"],
+                               delta=1)
+
     # ── 9. ad cadence is enforced server-side, and 0 never means unlimited ───
 
     def test_a_second_preroll_inside_the_window_is_denied(self):
@@ -317,13 +352,13 @@ class EngagementFixture(unittest.TestCase):
             self.assertIn(plan, view["wallet"]["redeem_coin_costs"])
 
     def test_redeeming_a_pass_spends_coins_and_mints_a_verifiable_capability(self):
-        engagement.grant_coins(self.conn, self.account_id, amount=100,
+        cost = engagement.PASS_LADDER["day"]["coins"]
+        engagement.grant_coins(self.conn, self.account_id, amount=cost,
                                reason="admin_grant", source="admin")
         now = epoch_at("2026-01-05T12:00:00")
         redeem = engagement.redeem_pass(self.conn, self.account_id, plan="day",
                                         pass_secret=SECRET, now=now)
-        self.assertEqual(redeem["balance"],
-                         100 - engagement.PASS_LADDER["day"]["coins"])
+        self.assertEqual(redeem["balance"], 0)
         self.assertEqual(redact.parse_vip_pass(redeem["pass"], SECRET, now=now + 1),
                          redeem["expires_at"])
         # a wrong secret forges nothing

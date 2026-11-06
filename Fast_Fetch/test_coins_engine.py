@@ -620,6 +620,18 @@ class Redeem(Wallet):
         self.assertEqual(spends[0]["delta"], -cost)
         self.assertEqual(spends[0]["ref"], "day")
 
+    def test_a_redeemed_day_pass_makes_entitlement_vip_for_a_day(self):
+        """The pass the server minted is a VIP entitlement, not just a token the
+        caller must remember to present: the app gates VIP on `entitlement`, so a
+        redeemed pass that did not flip it would be unusable from the app."""
+        cost = engagement.resolve_ladder()["day"]["coins"]
+        self.grant(cost)
+        receipt = self.body(self.redeem("day"))["redeemed"]
+        self.assertEqual(receipt["cost"], cost)
+        earned = self.body(self.get(f"{P}/entitlement"))["entitlement"]
+        self.assertTrue(earned["vip"])
+        self.assertAlmostEqual(earned["vip_until"], receipt["expires_at"], delta=2)
+
     def test_the_price_charged_is_the_price_the_saved_row_publishes(self):
         """`resolve_ladder` is the only function that turns a settings row into a
         ladder, and this route hands the resolved table to `redeem_pass` rather than

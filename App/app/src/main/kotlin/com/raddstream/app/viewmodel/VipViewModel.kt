@@ -6,6 +6,7 @@ import com.raddstream.app.data.ServerSettingsRepository
 import com.raddstream.app.data.VipPendingSubmission
 import com.raddstream.app.network.friendlyNetworkError
 import com.raddstream.app.network.models.AccountEntitlement
+import com.raddstream.app.network.models.PassTier
 import com.raddstream.app.network.models.VipRemoteConfig
 import com.raddstream.app.network.models.VipRemoteStreak
 import com.raddstream.app.repository.CatalogRepository
@@ -158,12 +159,18 @@ data class VipUiState(
     val coinBalance: Int = 0,
     /** The streak ladder the server will pay (day -> coins), empty until read. */
     val streakLadder: Map<Int, Int> = emptyMap(),
+    /** The pass catalog the server publishes (plan -> coin price), empty until read. */
+    val passCatalog: Map<String, PassTier> = emptyMap(),
     /** The last claim's answer in the viewer's own words, or null before any claim. */
     val claimMessage: String? = null,
     /** A claim is in flight, so the button cannot be pressed into a second claim. */
     val isClaiming: Boolean = false,
     /** Today is already claimed (paid or already-claimed answer), so the button rests. */
     val claimedToday: Boolean = false,
+    /** The last redeem's answer in the viewer's own words, or null before any redeem. */
+    val redeemMessage: String? = null,
+    /** A redeem is in flight, so the button cannot be pressed into a second redeem. */
+    val isRedeeming: Boolean = false,
     /** Whether this device holds a sync key — the only thing the ledger can attach a claim to. */
     val signedIn: Boolean = false,
     /** The server's own answer, or null while it has never been read on this device. */
@@ -226,14 +233,16 @@ class VipViewModel @Inject constructor(
         loadWallet()
     }
 
-    /** The wallet and the ladder, read once the account is known. A failure keeps zeros. */
+    /** The wallet, the ladder and the pass catalog, read once the account is known. */
     private fun loadWallet() {
         viewModelScope.launch {
             val ladder = syncAccountRepository.loadStreakLadder()
+            val catalog = syncAccountRepository.loadPassCatalog()
             val balance = syncAccountRepository.loadCoinBalance()
             _uiState.update {
                 it.copy(
                     streakLadder = ladder.ifEmpty { it.streakLadder },
+                    passCatalog = catalog.ifEmpty { it.passCatalog },
                     coinBalance = balance ?: it.coinBalance,
                 )
             }
@@ -279,6 +288,57 @@ class VipViewModel @Inject constructor(
                 _uiState.update { it.copy(isClaiming = false) }
             }
         }
+    }
+
+    /**
+     * Spend coins on a VIP pass. The server decides the price and the debit; the
+     * button is already guarded by the wallet the screen shows, so a refusal here
+     * is a race, not a price the viewer was shown. A successful redeem refreshes
+     * the entitlement, so the screen shows VIP at once instead of on the next launch.
+     */
+    fun redeemPass(plan: String) {
+        val state = _uiState.value
+        if (!state.signedIn || state.isRedeeming) return
+        val cost = state.passCatalog[plan]?.coins ?: return
+        viewModelScope.launch {
+            if (state.coinBalance < cost) {
+                _uiState.update {
+                    it.copy(redeemMessage = "Not enough coins yet — keep checking in.")
+                }
+                return@launch
+            }
+            _uiState.update { it.copy(isRedeeming = true, redeemMessage = null) }
+            try {
+                val redeemed = syncAccountRepository.redeemPass(plan)
+                if (redeemed == null) {
+                    _uiState.update {
+                        it.copy(redeemMessage = "Could not reach the server — try again later.")
+                    }
+                    return@launch
+                }
+                val balance = syncAccountRepository.loadCoinBalance()
+                syncAccountRepository.refreshEntitlement(force = true)
+                _uiState.update {
+                    it.copy(
+                        coinBalance = balance ?: it.coinBalance,
+                        redeemMessage = when {
+                            redeemed.alreadyApplied -> "You already have this pass."
+                            else -> "VIP pass active for ${passDurationLabel(plan)} — ${redeemed.cost} coins."
+                        },
+                    )
+                }
+            } finally {
+                _uiState.update { it.copy(isRedeeming = false) }
+            }
+        }
+    }
+
+    /** What a pass tier buys, in the viewer's words: the plan names are the server's. */
+    private fun passDurationLabel(plan: String): String = when (plan) {
+        "day" -> "24 hours"
+        "weekend" -> "the weekend"
+        "monthly_vip" -> "30 days"
+        else -> "its full length"
     }
 
     /**

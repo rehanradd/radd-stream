@@ -138,7 +138,12 @@ STREAK_PASS_SECONDS = DAY_SECONDS
 #: The pass ladder (Pillar 3), owned here, NOT in `payments.py`. Monthly VIP is
 #: ₨250 per `docs/MONETIZATION_AND_FLEET_PLAN.md:46`, ruled authoritative by Q4;
 #: `payments.PLAN_DEFAULTS` keeps its own (200) value untouched and Q4 reconciles.
-REDEEM_COIN_COSTS = {"day": 30, "weekend": 70, "monthly_vip": 200}
+#: The 24-hour VIP pass costs 500 coins by the owner's daily check-in plan
+#: (2026-11-07): ten days of check-ins for one day of VIP, so a pass is earned,
+#: not given away after two mornings. The weekend and monthly tiers keep their
+#: shipped prices; the operator re-prices any tier with its knob
+#: (`coin_redeem_day`, `coin_redeem_weekend`, `coin_redeem_monthly`).
+REDEEM_COIN_COSTS = {"day": 500, "weekend": 70, "monthly_vip": 200}
 MONTHLY_SECONDS = 30 * DAY_SECONDS
 #: The ladder is data end to end: each tier carries its price, the rule that says
 #: when its pass stops working, and the names of the two `app_remote_config` knobs
@@ -320,6 +325,19 @@ CREATE TABLE IF NOT EXISTS ad_cadence_state (
     native_poster_cursor INTEGER NOT NULL DEFAULT 0,
     updated_at REAL NOT NULL DEFAULT 0
 );
+
+CREATE TABLE IF NOT EXISTS coin_passes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    -- A redeemed or streak-minted VIP pass, recorded so `entitlement` and the
+    -- download/stream VIP checks can see it: the signed token alone carries no
+    -- account, so without this row a pass the server itself minted would not
+    -- make its owner VIP anywhere the app looks. Expired rows are dead, not
+    -- deleted — the ledger keeps its history and the read is MAX(expires_at).
+    account_id INTEGER NOT NULL REFERENCES user_accounts(id) ON DELETE CASCADE,
+    plan TEXT NOT NULL,                  -- 'day' | 'weekend' | 'monthly_vip' | 'streak_day7'
+    expires_at REAL NOT NULL,
+    created_at REAL NOT NULL
+);
 """
 
 #: A later release declares new columns here and `_migrate_columns` installs them
@@ -346,6 +364,8 @@ CREATE INDEX IF NOT EXISTS idx_coin_ledger_account
 CREATE INDEX IF NOT EXISTS idx_coin_ledger_rewarded
     ON coin_ledger(account_id, reason, created_at);
 CREATE INDEX IF NOT EXISTS idx_streak_state_updated ON streak_state(updated_at);
+CREATE INDEX IF NOT EXISTS idx_coin_passes_account
+    ON coin_passes(account_id, expires_at);
 """
 
 
@@ -941,6 +961,10 @@ def record_engagement_day(conn_or_path, account_id, *, now=None, tz=None,
             # actually says, not a float that a round trip would not reproduce.
             pass_expires = float(int(moment + table["pass_seconds"]))
             pass_token = redact.mint_vip_pass(pass_expires, pass_secret)
+            # A streak-minted pass is a VIP pass too: record it, so the 24 hours
+            # it buys are visible to `entitlement` exactly like a redeemed one.
+            # Same connection and commit as the grant, so the two cannot diverge.
+            _record_coin_pass(conn, account_id, "streak_day7", pass_expires, moment)
         _commit(conn)
     return {"account_id": int(account_id), "status": status,
             "current_streak": new_current, "best_streak": new_best,
@@ -959,6 +983,17 @@ def pass_ladder(values=None) -> dict:
     This is :func:`resolve_ladder` under its older name, not a second table: a
     ladder with two accessors is a ladder with two answers."""
     return resolve_ladder(values)
+
+
+def _record_coin_pass(conn: sqlite3.Connection, account_id, plan, expires_at,
+                      created_at) -> None:
+    """Record a minted VIP pass against its account, so `entitlement` and the
+    VIP checks can see it. The caller owns the transaction: this only executes
+    the INSERT, it never commits."""
+    conn.execute(
+        "INSERT INTO coin_passes(account_id, plan, expires_at, created_at)"
+        " VALUES(?,?,?,?)",
+        (int(account_id), str(plan), float(expires_at), float(created_at)))
 
 
 def redeem_pass(conn_or_path, account_id, *, plan, pass_secret, now=None,
@@ -996,6 +1031,14 @@ def redeem_pass(conn_or_path, account_id, *, plan, pass_secret, now=None,
                         ref=plan, idempotency_key=idempotency_key, now=moment)
     expires = float(int(expires))   # the signed token's resolution is whole seconds
     token = redact.mint_vip_pass(expires, pass_secret)
+    if not spend["already_applied"]:
+        # The spend and the record are two writes, not one transaction: a retry
+        # with the same idempotency key must not record the same pass twice, and
+        # a record that failed after the spend still leaves the caller holding
+        # the token (the download bypass works from the token alone).
+        with _borrow(conn_or_path) as conn:
+            _record_coin_pass(conn, account_id, plan, expires, moment)
+            _commit(conn)
     return {"plan": plan, "cost": cost, "balance": spend["balance"],
             "already_applied": spend["already_applied"], "pass": token,
             "expires_at": expires, "expiry_rule": str(spec.get("expiry_rule") or "")}

@@ -17,9 +17,12 @@ import com.raddstream.app.network.models.AccountEntitlement
 import com.raddstream.app.network.models.AccountProblem
 import com.raddstream.app.network.models.CoinEarnRequest
 import com.raddstream.app.network.models.CoinEarned
+import com.raddstream.app.network.models.CoinRedeemRequest
+import com.raddstream.app.network.models.CoinRedeemed
 import com.raddstream.app.network.models.DeviceTrialRequest
 import com.raddstream.app.network.models.FavoriteEntry
 import com.raddstream.app.network.models.FavoriteRequest
+import com.raddstream.app.network.models.PassTier
 import com.raddstream.app.network.models.PaymentReceipt
 import com.raddstream.app.network.models.PaymentRequest
 import com.raddstream.app.network.models.ProfileLinkRequest
@@ -701,6 +704,50 @@ class SyncAccountRepository @Inject constructor(
         val key = currentKey() ?: return null
         return try {
             apiProvider.current().earnDailyLogin(bearerHeader(key), CoinEarnRequest()).earned
+        } catch (error: Exception) {
+            when (verdictOf(error, hadWorkRef = false)) {
+                ServerVerdict.SIGN_OUT -> {
+                    signOutLocally()
+                    null
+                }
+                ServerVerdict.PAUSE_SESSION -> {
+                    pausedByThrottle = true
+                    null
+                }
+                else -> null
+            }
+        }
+    }
+
+    /** The pass catalog (plan -> coin price) the server publishes, or empty when unread. */
+    suspend fun loadPassCatalog(): Map<String, PassTier> {
+        val key = currentKey() ?: return emptyMap()
+        return try {
+            apiProvider.current().getCoinCaps(bearerHeader(key)).passes
+        } catch (error: Exception) {
+            when (verdictOf(error, hadWorkRef = false)) {
+                ServerVerdict.SIGN_OUT -> {
+                    signOutLocally()
+                    emptyMap()
+                }
+                ServerVerdict.PAUSE_SESSION -> {
+                    pausedByThrottle = true
+                    emptyMap()
+                }
+                else -> emptyMap()
+            }
+        }
+    }
+
+    /**
+     * Spend coins on a VIP pass. The server decides the price and the debit; a replay
+     * answers `already_applied` with the same pass. Null when there is no key or the
+     * server cannot be reached.
+     */
+    suspend fun redeemPass(plan: String): CoinRedeemed? {
+        val key = currentKey() ?: return null
+        return try {
+            apiProvider.current().redeemPass(bearerHeader(key), CoinRedeemRequest(plan)).redeemed
         } catch (error: Exception) {
             when (verdictOf(error, hadWorkRef = false)) {
                 ServerVerdict.SIGN_OUT -> {

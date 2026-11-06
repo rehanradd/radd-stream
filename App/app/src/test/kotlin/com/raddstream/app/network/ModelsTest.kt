@@ -6,6 +6,8 @@ import com.raddstream.app.network.models.CoinBalanceResponse
 import com.raddstream.app.network.models.CoinCapsResponse
 import com.raddstream.app.network.models.CoinEarnRequest
 import com.raddstream.app.network.models.CoinEarnResponse
+import com.raddstream.app.network.models.CoinRedeemRequest
+import com.raddstream.app.network.models.CoinRedeemResponse
 import com.raddstream.app.network.models.Container
 import com.raddstream.app.network.models.CoverageType
 import com.raddstream.app.network.models.EntitlementResponse
@@ -501,20 +503,39 @@ class ModelsTest {
     }
 
     @Test
-    fun `coin caps response decodes the streak ladder by day`() {
+    fun `coin caps response decodes the pass tiers by plan`() {
         val response = gson.fromJson(
-            """{"streak":{"coins":{"1":10,"2":20,"7":150},"pass_seconds":86400}}""",
+            """{"streak":{"coins":{"1":10},"pass_seconds":86400},"passes":{"day":{"coins":500,"pkr":20},"weekend":{"coins":70,"pkr":50},"monthly_vip":{"coins":200,"pkr":250}}}""",
             CoinCapsResponse::class.java,
         )
 
-        assertEquals(20, response.streak.byDay[2])
-        assertEquals(150, response.streak.byDay[7])
-        assertEquals(86400L, response.streak.passSeconds)
-        // A key that is not a ladder day is dropped, never shown as a prize.
-        val wide = gson.fromJson(
-            """{"streak":{"coins":{"1":10,"9":999},"pass_seconds":0}}""",
-            CoinCapsResponse::class.java,
+        assertEquals(500, response.passes["day"]?.coins)
+        assertEquals(20, response.passes["day"]?.pkr)
+        assertEquals(70, response.passes["weekend"]?.coins)
+        assertEquals(200, response.passes["monthly_vip"]?.coins)
+    }
+
+    @Test
+    fun `coin redeem request carries plan only`() {
+        val json = gson.toJson(CoinRedeemRequest("day"))
+
+        assertEquals("""{"plan":"day"}""", json)
+    }
+
+    @Test
+    fun `coin redeem response decodes the server's receipt`() {
+        val response = gson.fromJson(
+            """{"redeemed":{"reward":"day","cost":500,"balance":0,"already_applied":false,"expires_at":1790000000.0,"pass":"token"}}""",
+            CoinRedeemResponse::class.java,
         )
-        assertNull(wide.streak.byDay[9])
+
+        val redeemed = response.redeemed
+        assertNotNull(redeemed)
+        assertEquals("day", redeemed?.reward)
+        assertEquals(500, redeemed?.cost)
+        assertEquals(0, redeemed?.balance)
+        assertEquals(false, redeemed?.alreadyApplied)
+        assertEquals(1790000000.0, redeemed?.expiresAt)
+        assertEquals("token", redeemed?.pass)
     }
 }

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """The pass ladder is data, it is priced once, and a refusal writes nothing.
 
-`Fast_Fetch/engagement.py` sells three passes — a day for ₨20 / 30 coins, a weekend
+`Fast_Fetch/engagement.py` sells three passes — a day for ₨20 / 500 coins, a weekend
 for ₨50 / 70, a 30-day VIP for ₨250 / 200 — and until this suite, the shape of that
 ladder lived in two places that had to be kept in step by a human:
 
@@ -188,7 +188,7 @@ class TierDataTests(LadderFixture):
 
     def test_the_shipped_ladder_is_not_rewritten_by_resolving_a_price(self):
         engagement.resolve_ladder(defaults_row(coin_redeem_day=5, pass_day_pkr=9))
-        self.assertEqual(engagement.PASS_LADDER["day"]["coins"], 30)
+        self.assertEqual(engagement.PASS_LADDER["day"]["coins"], 500)
         self.assertEqual(engagement.PASS_LADDER["day"]["pkr"], 20)
 
 
@@ -366,18 +366,18 @@ class PublishedPriceIsChargedPriceTests(LadderFixture):
     def test_a_zero_coin_paste_is_the_shipped_cost_and_never_a_free_pass(self):
         row = defaults_row(coin_redeem_day=0)
         self.assertEqual(admin_panel._engagement_public(row)["passes"]["day"]["coins"],
-                         30)
-        self.assertEqual(self.charged("day", values=row)["cost"], 30)
+                         500)
+        self.assertEqual(self.charged("day", values=row)["cost"], 500)
 
     def test_an_unusable_paste_answers_the_shipped_price_not_a_negative_one(self):
         """`_validated` refuses these at the form, so this is the belt for a row
-        edited outside it: the spender must never charge -30 coins, which would be
+        edited outside it: the spender must never charge -500 coins, which would be
         a grant disguised as a purchase."""
         for bad in ("twelve", "", None, -50, "0"):
             row = defaults_row(coin_redeem_day=bad)
             cost = engagement.resolve_ladder(row)["day"]["coins"]
-            self.assertEqual(cost, 30, repr(bad))
-            self.assertEqual(self.charged("day", values=row)["cost"], 30, repr(bad))
+            self.assertEqual(cost, 500, repr(bad))
+            self.assertEqual(self.charged("day", values=row)["cost"], 500, repr(bad))
 
     def test_a_zero_pkr_price_is_a_deliberate_free_tier_not_a_sentinel(self):
         """The asymmetry, on purpose: 0 coins means "use the default" because a
@@ -387,7 +387,7 @@ class PublishedPriceIsChargedPriceTests(LadderFixture):
         row = defaults_row(pass_day_pkr=0)
         self.assertEqual(admin_panel._engagement_public(row)["passes"]["day"]["pkr"], 0)
         self.assertEqual(engagement.resolve_ladder(row)["day"]["pkr"], 0)
-        self.assertEqual(engagement.resolve_ladder(row)["day"]["coins"], 30)
+        self.assertEqual(engagement.resolve_ladder(row)["day"]["coins"], 500)
 
     def test_no_price_or_coin_count_leaves_the_module_as_a_float(self):
         ladder = engagement.resolve_ladder(defaults_row())
