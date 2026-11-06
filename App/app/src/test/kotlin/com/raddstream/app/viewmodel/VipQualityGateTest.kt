@@ -108,6 +108,9 @@ class VipQualityGateTest {
         assertEquals("480p", gated.autoBand)
         assertTrue(gated.downloadOnlyBands.isEmpty())
     }
+
+    @Test
+    fun `a free viewer gets the free rungs and a fresh auto pointer`() {
         val ladder = LadderForScope(
             options = listOf(option("2160p"), option("1080p"), option("720p")),
             autoBand = "1080p",
