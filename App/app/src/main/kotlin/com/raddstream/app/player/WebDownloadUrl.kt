@@ -29,3 +29,14 @@ fun webDownloadUrl(serverBaseUrl: String, streamId: String): String {
     val handle = URLEncoder.encode(streamId.trim(), StandardCharsets.UTF_8.name())
     return "$origin/api/v1/download?id=$handle&via=web"
 }
+
+/**
+ * Session 76 (Build 4): the same web download URL with a bought direct-download
+ * credit attached. The server spends the credit on this one download and 302s
+ * straight to the file, skipping the shortener — the token is the credit's
+ * signed id, so the browser needs no account and the credit buys no other movie.
+ */
+fun webDownloadUrlWithCredit(serverBaseUrl: String, streamId: String, creditToken: String): String {
+    val token = URLEncoder.encode(creditToken.trim(), StandardCharsets.UTF_8.name())
+    return "${webDownloadUrl(serverBaseUrl, streamId)}&credit=$token"
+}

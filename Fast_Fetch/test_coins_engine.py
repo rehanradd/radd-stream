@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Offline tests for the coins HTTP surface — `GET /coins`, `GET /coins/caps`,
-`GET /coins/history`, `POST /coins/earn`, `POST /coins/redeem` on `accounts_api.py`.
+`GET /coins/history`, `POST /coins/earn`, `POST /coins/redeem`,
+`POST /coins/redeem-download` on `accounts_api.py`.
 
 `engagement.py` owned the wallet long before this surface existed: the append-only
 `coin_ledger` with its `RAISE(ABORT)` triggers, the derived `SUM(delta)` balance, the
@@ -719,6 +720,90 @@ class Redeem(Wallet):
         receipt = self.body(self.redeem("day"))["redeemed"]
         self.assertIsNotNone(redact.parse_vip_pass(receipt["pass"], SECRET))
         self.assertIsNone(redact.parse_vip_pass(receipt["pass"], "wrong-secret"))
+
+
+# ── the redeem-download route ──────────────────────────────────────────────────
+
+
+class RedeemDownload(Wallet):
+    HANDLE = redact.mint_token(1234, SECRET)
+
+    def buy(self, handle=None, **extra):
+        return self.post(f"{COINS}/redeem-download",
+                         {"handle": self.HANDLE if handle is None else handle,
+                          **extra})
+
+    def test_a_short_wallet_is_refused_and_the_ledger_does_not_move(self):
+        before = self.wallet_state()
+        answered = self.buy()
+        self.assertEqual(answered[0], 402, answered)
+        self.assertEqual(self.code(answered), "licence_required")
+        self.assertEqual(self.wallet_state(), before)
+        self.assertEqual(self.rows(), [])
+
+    def test_a_download_credit_costs_the_published_price_and_names_its_movie(self):
+        cost = engagement.resolve_download_credit()
+        self.grant(cost)
+        answered = self.buy()
+        self.assertEqual(answered[0], 200, answered)
+        credit = self.body(answered)["credit"]
+        self.assertEqual(credit["cost"], cost)
+        self.assertEqual(credit["handle"], self.HANDLE)
+        self.assertEqual(credit["balance"], 0)
+        self.assertFalse(credit["already_applied"])
+        self.assertGreater(credit["expires_at"], time.time())
+        # the token is the row's signed id, the one `consume_download_credit`
+        # spends — asserted against the verifier, not a shape this file invented
+        with closing(sqlite3.connect(str(self.state))) as conn:
+            row = conn.execute(
+                "SELECT id FROM coin_download_credits WHERE account_id = ?",
+                (self.account_id,)).fetchone()
+        self.assertIsNotNone(row)
+        self.assertEqual(redact.parse_download_credit(credit["token"], SECRET),
+                         row[0])
+        spends = [row for row in self.rows() if row["reason"] == "redeem_download"]
+        self.assertEqual(len(spends), 1, spends)
+        self.assertEqual(spends[0]["delta"], -cost)
+        self.assertEqual(spends[0]["ref"], self.HANDLE)
+
+    def test_the_price_charged_is_the_price_the_caps_route_publishes(self):
+        self.settings(coin_redeem_download=7)
+        caps = self.body(self.get(f"{COINS}/caps"))
+        self.assertEqual(caps["download"]["coins"], 7, caps)
+        self.grant(7)
+        credit = self.body(self.buy())["credit"]
+        self.assertEqual(credit["cost"], 7)
+        self.assertEqual(self.rows()[-1]["delta"], -7)
+
+    def test_caps_publishes_the_download_price_by_default(self):
+        caps = self.body(self.get(f"{COINS}/caps"))
+        self.assertEqual(caps["download"]["coins"],
+                         engagement.resolve_download_credit())
+
+    def test_a_handle_that_is_not_ours_is_a_400_and_spends_nothing(self):
+        before = self.wallet_state()
+        for handle in ("not-a-handle", "1234", ""):
+            answered = self.buy(handle=handle)
+            self.assertEqual(answered[0], 400, (handle, answered))
+            self.assertEqual(self.code(answered), "invalid_params")
+        self.assertEqual(self.wallet_state(), before)
+        answered = self.post(f"{COINS}/redeem-download",
+                             {"handle": self.HANDLE, "plan": "day"})
+        self.assertEqual(answered[0], 400, answered)
+        self.assertEqual(self.wallet_state(), before)
+
+    def test_a_second_purchase_in_the_same_second_is_a_replay_not_a_second_spend(self):
+        self.grant(engagement.resolve_download_credit() * 2)
+        first = self.body(self.buy())["credit"]
+        second = self.body(self.buy())["credit"]
+        spends = [row for row in self.rows() if row["reason"] == "redeem_download"]
+        if second["already_applied"]:
+            self.assertEqual(len(spends), 1, spends)
+            self.assertEqual(second["token"], first["token"])
+            self.assertEqual(second["balance"], first["balance"])
+        else:
+            self.assertEqual(len(spends), 2, spends)
+            self.assertEqual(second["balance"], 0)
 
 
 # ── concurrency ───────────────────────────────────────────────────────────────

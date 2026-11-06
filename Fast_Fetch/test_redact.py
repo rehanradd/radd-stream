@@ -379,6 +379,21 @@ class HandleTests(unittest.TestCase):
         self.assertEqual(redact.parse_text(token, self.SECRET), value)
         self.assertIsNone(redact.parse_text(token[:-1] + "A", self.SECRET))
 
+    def test_download_credit_token_round_trip_and_no_pass_confusion(self):
+        """A credit token is a different capability from a VIP pass: it signs a
+        row id, not an expiry, under its own version and tag domain — so a pass
+        must never parse as a credit and a credit must never parse as a pass,
+        even though both are signed the same way."""
+        token = redact.mint_download_credit(42, self.SECRET)
+        self.assertEqual(redact.parse_download_credit(token, self.SECRET), 42)
+        self.assertIsNone(redact.parse_download_credit(token[:-2] + "xx", self.SECRET))
+        self.assertIsNone(redact.parse_download_credit(token, "another-secret"))
+        self.assertIsNone(redact.parse_download_credit("not-a-token", self.SECRET))
+        self.assertIsNone(redact.parse_download_credit("", self.SECRET))
+        vip = redact.mint_vip_pass(time.time() + 300, self.SECRET)
+        self.assertIsNone(redact.parse_download_credit(vip, self.SECRET))
+        self.assertIsNone(redact.parse_vip_pass(token, self.SECRET))
+
     def test_stream_secret_is_stable_and_persisted_outside_the_checkout(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "catalog.db"

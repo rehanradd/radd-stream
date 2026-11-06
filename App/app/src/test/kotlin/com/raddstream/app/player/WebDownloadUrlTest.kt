@@ -36,4 +36,20 @@ class WebDownloadUrlTest {
             webDownloadUrl("https://raddstream.duckdns.org", "tok-1"),
         )
     }
+
+    @Test
+    fun creditTokenAppendsAfterWebMarker() {
+        assertEquals(
+            "http://92.4.95.252/api/v1/download?id=abc123&via=web&credit=cred-1",
+            webDownloadUrlWithCredit("http://92.4.95.252", "abc123", "cred-1"),
+        )
+    }
+
+    @Test
+    fun creditTokenIsUrlEncoded() {
+        assertEquals(
+            "https://example.test/api/v1/download?id=abc123&via=web&credit=a%2Bb%3Dc",
+            webDownloadUrlWithCredit("https://example.test", "abc123", "a+b=c"),
+        )
+    }
 }

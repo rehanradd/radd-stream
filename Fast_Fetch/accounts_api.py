@@ -129,6 +129,10 @@ _EARN_KEYS = frozenset({"reason"})
 #: The only key a redemption may carry. `media_id`/`work_ref` are refused with the rest:
 #: what is sold here is a time-boxed pass over the catalog, never one title.
 _REDEEM_KEYS = frozenset({"plan"})
+#: The only key a download-credit purchase may carry. The handle IS the title
+#: here — a credit buys one direct download of one movie, so the download id
+#: is the purchase, not a detail smuggled past the price.
+_DOWNLOAD_KEYS = frozenset({"handle"})
 
 #: The one earnable `reason`, and what it does. Not a price: `daily_login` is the app's
 #: name for claiming today in the streak ladder, so the size of the grant is
@@ -530,6 +534,13 @@ def _redeem_view(redeemed: dict) -> dict:
             "pass": redeemed["pass"]}
 
 
+def _download_view(credit: dict) -> dict:
+    return {"token": credit["token"], "handle": str(credit["handle"]),
+            "cost": int(credit["cost"]), "balance": int(credit["balance"]),
+            "already_applied": bool(credit["already_applied"]),
+            "expires_at": float(credit["expires_at"])}
+
+
 def route_get(path, query, *, db_path, catalog_path, secret, headers) -> tuple | None:
     """GET on the account surface. `None` means "not mine", fall through."""
     if not is_account(path):
@@ -667,6 +678,7 @@ def route_get(path, query, *, db_path, catalog_path, secret, headers) -> tuple |
                 "caps": dict(engagement.remote_view()["wallet"]),
                 "passes": engagement.passes_projection(
                     engagement.resolve_ladder(values)),
+                "download": {"coins": engagement.resolve_download_credit(values)},
                 "streak": engagement.resolve_streak_grants(values)})
         return _problem("not_found", 404, "no such account route", path)
     except Exception as error:                      # noqa: BLE001 — the edge answers, it never re-raises
@@ -875,6 +887,33 @@ def route_post(path, body, *, db_path, catalog_path, secret, headers) -> tuple |
                     return _problem("licence_required", 402,
                                     "this wallet cannot cover that reward", path)
             return _respond({"redeemed": _redeem_view(redeemed)})
+        if tail == ["coins", "redeem-download"]:
+            # Coins into one direct download of one movie. The handle IS the
+            # purchase: a credit bought for one download id spends on no other,
+            # so the route checks the handle is one of our own signed tokens
+            # before any coin moves — a credit for a handle that never resolves
+            # would be 100 coins for nothing. The price is resolved from the
+            # operator's row, the same read the caps route publishes.
+            extra = sorted(str(name) for name in payload if name not in _DOWNLOAD_KEYS)
+            if extra:
+                return _problem("invalid_params", 400,
+                                "a download purchase accepts handle only", path)
+            handle = str(payload.get("handle") or "")
+            if not redact.parse_token(handle, secret, signed_only=True):
+                return _problem("invalid_params", 400, "no such download", path)
+            account = accounts.authenticate(db_path, key, tracker=LIMITER)
+            values = _settings(catalog)
+            with closing(engagement.connect(db_path)) as wallet:
+                try:
+                    credit = engagement.redeem_download_credit(
+                        wallet, account["account_id"], handle=handle,
+                        credit_secret=secret, values=values)
+                except engagement.InsufficientCoins:
+                    # Same 402 as the pass route: the refusal names no number,
+                    # and the caller reads its own balance from `GET /coins`.
+                    return _problem("licence_required", 402,
+                                    "this wallet cannot cover that download", path)
+            return _respond({"credit": _download_view(credit)})
         return _problem("not_found", 404, "no such account route", path)
     except Exception as error:                      # noqa: BLE001 — the edge answers, it never re-raises
         return _refused(error, path)

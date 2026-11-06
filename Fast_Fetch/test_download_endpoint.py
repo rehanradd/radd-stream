@@ -11,6 +11,7 @@ loopback against a temporary catalog.
 """
 import json
 import sqlite3
+from contextlib import closing
 import sys
 import tempfile
 import threading
@@ -25,6 +26,7 @@ sys.path.insert(0, str(Path(__file__).parent.resolve()))
 
 import accounts        # noqa: E402
 import admin_panel     # noqa: E402
+import engagement      # noqa: E402
 import fast_fetch      # noqa: E402
 import redact          # noqa: E402
 import viewer          # noqa: E402
@@ -262,6 +264,92 @@ class DownloadEndpointTests(unittest.TestCase):
         self.assertEqual(status, 302)
         self.assertEqual(headers["Location"], DIRECT_URL)
         self.assertIn("attachment", headers["Content-Disposition"])
+
+    def test_a_bought_credit_skips_the_shortener_once_and_only_once(self):
+        """Daily check-in Build 4: a free viewer who spent 100 coins on a
+        direct download gets the file, not the ShrinkMe page — and the same
+        token a second time is spent, so the second download is shortened
+        like any other free web download."""
+        self.configure_shorteners(shrinkme="shrinkme-token")
+        token = self.token(self.source_id)
+        secret = viewer.signing_secret()
+        with closing(engagement.connect(self.state_path)) as wallet:
+            accounts.ensure_schema(wallet)
+            account_id = accounts.create_account(wallet, key="c" * 20)["account_id"]
+            engagement.grant_coins(wallet, account_id, amount=100,
+                                   reason="admin_grant", source="admin")
+            credit = engagement.redeem_download_credit(
+                wallet, account_id, handle=token, credit_secret=secret)
+        with mock.patch.object(
+                viewer, "call_shortener",
+                side_effect=AssertionError("a bought credit must not shorten")) as call:
+            status, headers, _body = self.fetch(
+                self.public_url,
+                f"/api/v1/download?id={token}&via=web&credit={credit['token']}",
+                follow=False)
+        self.assertEqual(status, 302)
+        self.assertEqual(headers["Location"], DIRECT_URL)
+        self.assertIn("attachment", headers["Content-Disposition"])
+        call.assert_not_called()
+        with sqlite3.connect(str(self.state_path)) as conn:
+            used = conn.execute(
+                "SELECT used_at FROM coin_download_credits WHERE id = ?",
+                (redact.parse_download_credit(credit["token"], secret),)
+                ).fetchone()
+        self.assertIsNotNone(used[0], "the first download must spend the credit")
+        # Second use of the same token: the credit is spent, so this is an
+        # ordinary free web download and the shortener runs.
+        with mock.patch.object(
+                viewer, "call_shortener",
+                return_value="https://short.test/once") as call:
+            status, headers, _body = self.fetch(
+                self.public_url,
+                f"/api/v1/download?id={token}&via=web&credit={credit['token']}",
+                follow=False)
+        self.assertEqual(status, 302)
+        self.assertEqual(headers["Location"], "https://short.test/once")
+        call.assert_called_once()
+
+    def test_a_credit_for_another_movie_or_a_bad_token_still_shortens(self):
+        """A credit buys one movie: presenting it for a different download, or
+        a token that was never minted, falls back to the ordinary shortening —
+        a bad token costs a direct link, never the download itself."""
+        self.configure_shorteners(shrinkme="shrinkme-token")
+        token = self.token(self.source_id)
+        other_id = _ingest(self.conn, "Second Film", is_18_plus=0,
+                           direct_url="https://media.example.test/second.mp4")
+        other = self.token(other_id)
+        secret = viewer.signing_secret()
+        with closing(engagement.connect(self.state_path)) as wallet:
+            accounts.ensure_schema(wallet)
+            account_id = accounts.create_account(wallet, key="d" * 20)["account_id"]
+            engagement.grant_coins(wallet, account_id, amount=100,
+                                   reason="admin_grant", source="admin")
+            credit = engagement.redeem_download_credit(
+                wallet, account_id, handle=token, credit_secret=secret)
+        with mock.patch.object(
+                viewer, "call_shortener",
+                return_value="https://short.test/once") as call:
+            status, headers, _body = self.fetch(
+                self.public_url,
+                f"/api/v1/download?id={token}&via=web&credit=not-a-token",
+                follow=False)
+            self.assertEqual(status, 302)
+            self.assertEqual(headers["Location"], "https://short.test/once")
+            status, headers, _body = self.fetch(
+                self.public_url,
+                f"/api/v1/download?id={other}&via=web&credit={credit['token']}",
+                follow=False)
+            self.assertEqual(status, 302)
+            self.assertEqual(headers["Location"], "https://short.test/once")
+        self.assertEqual(call.call_count, 2)
+        # and the credit itself is still unspent, for its own movie
+        with sqlite3.connect(str(self.state_path)) as conn:
+            used = conn.execute(
+                "SELECT used_at FROM coin_download_credits WHERE id = ?",
+                (redact.parse_download_credit(credit["token"], secret),)
+                ).fetchone()
+        self.assertIsNone(used[0])
 
     def test_an_unconfigured_or_failing_shortener_falls_back_to_direct(self):
         token = self.token(self.source_id)

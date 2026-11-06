@@ -320,6 +320,17 @@ data class CoinCapsResponse(
     val streak: StreakLadder = StreakLadder(),
     /** The pass tiers the server publishes (plan -> coin price), empty until read. */
     val passes: Map<String, PassTier> = emptyMap(),
+    /**
+     * The direct-download price the server publishes (coins for one movie).
+     * Zero when the server predates the credit: the phone offers no direct
+     * link rather than inventing a price.
+     */
+    val download: DownloadCreditPrice = DownloadCreditPrice(),
+)
+
+/** The price of one direct download, as the `coins/caps` route publishes it. */
+data class DownloadCreditPrice(
+    val coins: Int = 0,
 )
 
 /** One pass tier the `coins/caps` route publishes: its coin price and its rupee price. */
@@ -349,6 +360,32 @@ data class CoinRedeemed(
 
 data class CoinRedeemResponse(
     val redeemed: CoinRedeemed? = null,
+)
+
+/**
+ * POST /api/v2/account/coins/redeem-download — spend coins on one direct
+ * download of one movie. The body carries the download handle and nothing
+ * else: the price is the server's own knob and the debit is one guarded
+ * server UPDATE, so a replay answers `already_applied` and spends nothing
+ * twice. The answer's token is the credit's signed id — the browser that
+ * presents it needs no account.
+ */
+data class CoinDownloadCreditRequest(
+    val handle: String,
+)
+
+/** What one download purchase answers: the token, what it cost, and the wallet it left behind. */
+data class CoinDownloadCredit(
+    val token: String? = null,
+    val handle: String = "",
+    val cost: Int = 0,
+    val balance: Int = 0,
+    @SerializedName("already_applied") val alreadyApplied: Boolean = false,
+    @SerializedName("expires_at") val expiresAt: Double = 0.0,
+)
+
+data class CoinDownloadCreditResponse(
+    val credit: CoinDownloadCredit? = null,
 )
 
 /**

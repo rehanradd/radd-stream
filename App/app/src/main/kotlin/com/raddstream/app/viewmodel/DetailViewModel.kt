@@ -30,6 +30,7 @@ import com.raddstream.app.player.PlayerSessionStore
 import com.raddstream.app.player.QualityLadder
 import com.raddstream.app.player.QualityOption
 import com.raddstream.app.player.webDownloadUrl
+import com.raddstream.app.player.webDownloadUrlWithCredit
 import com.raddstream.app.repository.CatalogRepository
 import com.raddstream.app.repository.FavoritesRepository
 import com.raddstream.app.repository.V2PlayResult
@@ -89,6 +90,16 @@ data class DetailUiState(
      * only starts on Confirm.
      */
     val pendingKeep: PendingKeep? = null,
+    /**
+     * Session 76 (Build 4): the direct-download price (coins for one movie)
+     * and the viewer's balance, read when the keep dialog opens so a free
+     * viewer can see what a direct link costs and whether they can afford it.
+     * Zero price means the server predates the credit — no direct link is offered.
+     */
+    val downloadCreditPrice: Int = 0,
+    val coinBalance: Int = 0,
+    /** The answer to a [directDownloadUrlFor] ask that could not open a link. */
+    val directLinkMessage: String? = null,
 )
 
 /**
@@ -595,15 +606,56 @@ class DetailViewModel @Inject constructor(
                         resumable = meta?.resumable ?: false,
                         target = target,
                     ),
+                    directLinkMessage = null,
                 )
             }
+            // Session 76 (Build 4): a free viewer asking for a file can also
+            // buy a direct link with coins — read the price and the balance
+            // while the dialog is open, so the button can say what it costs
+            // and whether the wallet covers it. VIP viewers never see it;
+            // their downloads are already direct.
+            if (!_uiState.value.vip) {
+                val price = syncAccountRepository.loadDownloadCreditPrice()
+                val balance = syncAccountRepository.loadCoinBalance()
+                _uiState.update {
+                    it.copy(
+                        downloadCreditPrice = price,
+                        coinBalance = balance ?: it.coinBalance,
+                    )
+                }
+            }
         }
+    }
+
+    /**
+     * Session 76 (Build 4): buy one direct download of [handle] with coins and
+     * hand back the browser URL that spends the credit. Null when the server
+     * cannot be reached or the credit is already spent — the reason is in
+     * [DetailUiState.directLinkMessage], never invented here.
+     */
+    suspend fun directDownloadUrlFor(handle: String): String? {
+        val credit = syncAccountRepository.redeemDownloadCredit(handle)
+        if (credit == null) {
+            _uiState.update {
+                it.copy(directLinkMessage = "Could not reach the server — try again.")
+            }
+            return null
+        }
+        val token = credit.token
+        if (token.isNullOrBlank()) {
+            _uiState.update {
+                it.copy(directLinkMessage = "That direct link was already used.")
+            }
+            return null
+        }
+        _uiState.update { it.copy(coinBalance = credit.balance, directLinkMessage = null) }
+        return webDownloadUrlWithCredit(serverBaseUrl, handle, token)
     }
 
     /** The viewer confirmed the size and the quality: start whichever system owns the copy. */
     fun confirmKeep() {
         val pending = _uiState.value.pendingKeep ?: return
-        _uiState.update { it.copy(pendingKeep = null) }
+        _uiState.update { it.copy(pendingKeep = null, directLinkMessage = null) }
         viewModelScope.launch {
             if (pending.target == KeepTarget.EngineHls) {
                 keepViaEngine(pending.handle, pending.printLabel, pending.title, pending.sizeBytes, pending.resumable)
@@ -627,7 +679,7 @@ class DetailViewModel @Inject constructor(
     /** The viewer declined the download: nothing started, nothing to clean up except the ask. */
     fun dismissKeep() {
         lastDownload = null
-        _uiState.update { it.copy(pendingKeep = null) }
+        _uiState.update { it.copy(pendingKeep = null, directLinkMessage = null) }
     }
 
     /**

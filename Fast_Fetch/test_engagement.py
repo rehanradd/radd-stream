@@ -383,6 +383,97 @@ class EngagementFixture(unittest.TestCase):
         self.assertEqual(expires_local.weekday(), 0)     # Monday 00:00 local
         self.assertEqual((expires_local.hour, expires_local.minute), (0, 0))
 
+    # ── 11. the direct-download credit (daily check-in Build 4) ─────────────
+
+    def test_the_download_price_resolves_from_its_knob_and_zero_means_default(self):
+        self.assertEqual(engagement.resolve_download_credit(), 100)
+        self.assertEqual(engagement.resolve_download_credit(
+            {"coin_redeem_download": 7}), 7)
+        self.assertEqual(engagement.resolve_download_credit(
+            {"coin_redeem_download": 0}), 100)
+        self.assertEqual(engagement.resolve_download_credit(
+            {"coin_redeem_download": "twelve"}), 100)
+
+    def test_a_download_credit_is_recorded_and_spends_exactly_once(self):
+        engagement.grant_coins(self.conn, self.account_id, amount=100,
+                               reason="admin_grant", source="admin")
+        handle = redact.mint_token(1234, SECRET)
+        now = epoch_at("2026-01-05T12:00:00")
+        bought = engagement.redeem_download_credit(
+            self.conn, self.account_id, handle=handle, credit_secret=SECRET, now=now)
+        self.assertEqual(bought["cost"], 100)
+        self.assertEqual(bought["balance"], 0)
+        self.assertFalse(bought["already_applied"])
+        self.assertAlmostEqual(bought["expires_at"], now + 86_400, delta=1)
+        rows = self.conn.execute(
+            "SELECT id, handle, expires_at, used_at FROM coin_download_credits"
+            " WHERE account_id = ?", (self.account_id,)).fetchall()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["handle"], handle)
+        self.assertIsNone(rows[0]["used_at"])
+        credit_id = redact.parse_download_credit(bought["token"], SECRET)
+        self.assertEqual(credit_id, rows[0]["id"])
+        # the spend is on the ledger, so the deduction is auditable
+        spends = [r for r in engagement.ledger(self.conn, self.account_id)
+                  if r["reason"] == "redeem_download"]
+        self.assertEqual(len(spends), 1)
+        self.assertEqual(spends[0]["delta"], -100)
+        self.assertEqual(spends[0]["ref"], handle)
+        # one consume, then the same token is spent: a second browser gets no file
+        self.assertTrue(engagement.consume_download_credit(
+            self.conn, bought["token"], handle=handle, credit_secret=SECRET,
+            now=now + 60))
+        self.assertFalse(engagement.consume_download_credit(
+            self.conn, bought["token"], handle=handle, credit_secret=SECRET,
+            now=now + 120))
+        self.assertFalse(engagement.consume_download_credit(
+            self.conn, bought["token"], handle="other-handle", credit_secret=SECRET,
+            now=now + 120))
+
+    def test_a_credit_for_another_movie_or_a_lapsed_one_spends_nothing(self):
+        engagement.grant_coins(self.conn, self.account_id, amount=100,
+                               reason="admin_grant", source="admin")
+        handle = redact.mint_token(1234, SECRET)
+        now = epoch_at("2026-01-05T12:00:00")
+        bought = engagement.redeem_download_credit(
+            self.conn, self.account_id, handle=handle, credit_secret=SECRET, now=now)
+        self.assertFalse(engagement.consume_download_credit(
+            self.conn, bought["token"], handle=redact.mint_token(9999, SECRET),
+            credit_secret=SECRET, now=now + 60))
+        self.assertFalse(engagement.consume_download_credit(
+            self.conn, bought["token"], handle=handle, credit_secret=SECRET,
+            now=now + 86_401))
+        # and the credit itself is still there, unspent, for its own movie
+        row = self.conn.execute(
+            "SELECT used_at FROM coin_download_credits WHERE id = ?",
+            (redact.parse_download_credit(bought["token"], SECRET),)).fetchone()
+        self.assertIsNone(row["used_at"])
+
+    def test_a_redeem_retry_mints_nothing_twice_and_re_derives_the_token(self):
+        engagement.grant_coins(self.conn, self.account_id, amount=100,
+                               reason="admin_grant", source="admin")
+        handle = redact.mint_token(1234, SECRET)
+        key = "test-download-once"
+        first = engagement.redeem_download_credit(
+            self.conn, self.account_id, handle=handle, credit_secret=SECRET,
+            idempotency_key=key)
+        second = engagement.redeem_download_credit(
+            self.conn, self.account_id, handle=handle, credit_secret=SECRET,
+            idempotency_key=key)
+        self.assertTrue(second["already_applied"])
+        self.assertEqual(second["token"], first["token"])
+        self.assertEqual(second["expires_at"], first["expires_at"])
+        rows = self.conn.execute(
+            "SELECT id FROM coin_download_credits WHERE account_id = ?",
+            (self.account_id,)).fetchall()
+        self.assertEqual(len(rows), 1)
+
+    def test_a_download_credit_without_enough_coins_mints_nothing(self):
+        with self.assertRaises(engagement.InsufficientCoins):
+            engagement.redeem_download_credit(
+                self.conn, self.account_id, handle=redact.mint_token(1234, SECRET),
+                credit_secret=SECRET)
+
     # ── schema lifecycle (mirrors the accounts.py idempotency contract) ──────
 
     def test_ensure_schema_is_idempotent_and_additive(self):

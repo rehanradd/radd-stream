@@ -4,6 +4,8 @@ import com.raddstream.app.data.local.FavoritePost
 import com.raddstream.app.network.models.Codec
 import com.raddstream.app.network.models.CoinBalanceResponse
 import com.raddstream.app.network.models.CoinCapsResponse
+import com.raddstream.app.network.models.CoinDownloadCreditRequest
+import com.raddstream.app.network.models.CoinDownloadCreditResponse
 import com.raddstream.app.network.models.CoinEarnRequest
 import com.raddstream.app.network.models.CoinEarnResponse
 import com.raddstream.app.network.models.CoinRedeemRequest
@@ -537,5 +539,49 @@ class ModelsTest {
         assertEquals(false, redeemed?.alreadyApplied)
         assertEquals(1790000000.0, redeemed?.expiresAt)
         assertEquals("token", redeemed?.pass)
+    }
+
+    @Test
+    fun `coin caps response decodes the direct download price`() {
+        val response = gson.fromJson(
+            """{"streak":{"coins":{"1":10},"pass_seconds":86400},"passes":{},"download":{"coins":100}}""",
+            CoinCapsResponse::class.java,
+        )
+
+        assertEquals(100, response.download.coins)
+    }
+
+    @Test
+    fun `coin caps response without a download block offers no direct link`() {
+        val response = gson.fromJson(
+            """{"streak":{"coins":{"1":10},"pass_seconds":86400},"passes":{}}""",
+            CoinCapsResponse::class.java,
+        )
+
+        assertEquals(0, response.download.coins)
+    }
+
+    @Test
+    fun `coin download credit request carries handle only`() {
+        val json = gson.toJson(CoinDownloadCreditRequest("abc123"))
+
+        assertEquals("""{"handle":"abc123"}""", json)
+    }
+
+    @Test
+    fun `coin download credit response decodes the server's receipt`() {
+        val response = gson.fromJson(
+            """{"credit":{"token":"cred-token","handle":"abc123","cost":100,"balance":270,"already_applied":false,"expires_at":1790000000.0}}""",
+            CoinDownloadCreditResponse::class.java,
+        )
+
+        val credit = response.credit
+        assertNotNull(credit)
+        assertEquals("cred-token", credit?.token)
+        assertEquals("abc123", credit?.handle)
+        assertEquals(100, credit?.cost)
+        assertEquals(270, credit?.balance)
+        assertEquals(false, credit?.alreadyApplied)
+        assertEquals(1790000000.0, credit?.expiresAt)
     }
 }

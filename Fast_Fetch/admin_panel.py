@@ -1706,6 +1706,7 @@ MONETIZATION_FIELDS = (
     ("coin_redeem_day", "Coins: one-day pass", _INT, 500),
     ("coin_redeem_weekend", "Coins: weekend pass", _INT, 70),
     ("coin_redeem_monthly", "Coins: 30-day VIP pass", _INT, 200),
+    ("coin_redeem_download", "Coins: direct download pass", _INT, 100),
     ("streak_day1_coins", "Streak: day-1 bonus coins", _INT, 10),
     ("streak_day3_coins", "Streak: day-3 bonus coins", _INT, 30),
     ("streak_day7_pass_hours", "Streak: day-7 free pass (hours)", _INT, 24),

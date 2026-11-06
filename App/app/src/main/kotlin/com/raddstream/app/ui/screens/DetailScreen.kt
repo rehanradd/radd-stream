@@ -65,6 +65,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -78,6 +79,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.hilt.navigation.compose.hiltViewModel
+import kotlinx.coroutines.launch
 import com.raddstream.app.brand.Brand
 import com.raddstream.app.network.models.PostDetail
 import com.raddstream.app.ui.components.AudioBadge
@@ -124,6 +126,7 @@ fun DetailScreen(
     val state by viewModel.uiState.collectAsState()
     val snackbarHostState = remember { SnackbarHostState() }
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     var pendingDownload by remember { mutableStateOf<(() -> Unit)?>(null) }
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission(),
@@ -289,6 +292,19 @@ fun DetailScreen(
             // see it; their downloads are already direct.
             showWebLink = !state.vip,
             onWebLink = { openWebPage(context, viewModel.webDownloadUrlFor(pending.handle)) },
+            // Session 76 (Build 4): the same free viewer can spend coins on a
+            // direct link instead — the button is there only when the server
+            // published a price, and only enabled when the wallet covers it.
+            showDirectLink = !state.vip && state.downloadCreditPrice > 0,
+            directLinkPrice = state.downloadCreditPrice,
+            directLinkEnabled = state.coinBalance >= state.downloadCreditPrice,
+            directLinkMessage = state.directLinkMessage,
+            onDirectLink = {
+                scope.launch {
+                    val url = viewModel.directDownloadUrlFor(pending.handle)
+                    if (url != null) openWebPage(context, url)
+                }
+            },
         )
     }
 }
@@ -306,6 +322,11 @@ private fun KeepConfirmDialog(
     onDismiss: () -> Unit,
     showWebLink: Boolean = false,
     onWebLink: () -> Unit = {},
+    showDirectLink: Boolean = false,
+    directLinkPrice: Int = 0,
+    directLinkEnabled: Boolean = false,
+    directLinkMessage: String? = null,
+    onDirectLink: () -> Unit = {},
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -325,6 +346,21 @@ private fun KeepConfirmDialog(
                 )
                 if (showWebLink) {
                     TextButton(onClick = onWebLink) { Text("Get Free Web Link") }
+                }
+                if (showDirectLink) {
+                    // Session 76 (Build 4): a direct link for one movie, bought
+                    // with coins — the button is disabled while the wallet is
+                    // short, so a tap can never spend what is not there.
+                    TextButton(onClick = onDirectLink, enabled = directLinkEnabled) {
+                        Text("Direct Link — $directLinkPrice coins")
+                    }
+                    if (directLinkMessage != null) {
+                        Text(
+                            directLinkMessage,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                 }
             }
         },

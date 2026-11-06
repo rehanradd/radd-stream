@@ -17,6 +17,8 @@ import com.raddstream.app.network.models.AccountEntitlement
 import com.raddstream.app.network.models.AccountProblem
 import com.raddstream.app.network.models.CoinEarnRequest
 import com.raddstream.app.network.models.CoinEarned
+import com.raddstream.app.network.models.CoinDownloadCredit
+import com.raddstream.app.network.models.CoinDownloadCreditRequest
 import com.raddstream.app.network.models.CoinRedeemRequest
 import com.raddstream.app.network.models.CoinRedeemed
 import com.raddstream.app.network.models.DeviceTrialRequest
@@ -748,6 +750,51 @@ class SyncAccountRepository @Inject constructor(
         val key = currentKey() ?: return null
         return try {
             apiProvider.current().redeemPass(bearerHeader(key), CoinRedeemRequest(plan)).redeemed
+        } catch (error: Exception) {
+            when (verdictOf(error, hadWorkRef = false)) {
+                ServerVerdict.SIGN_OUT -> {
+                    signOutLocally()
+                    null
+                }
+                ServerVerdict.PAUSE_SESSION -> {
+                    pausedByThrottle = true
+                    null
+                }
+                else -> null
+            }
+        }
+    }
+
+    /** The direct-download price (coins for one movie) the server publishes, or 0 when unread. */
+    suspend fun loadDownloadCreditPrice(): Int {
+        val key = currentKey() ?: return 0
+        return try {
+            apiProvider.current().getCoinCaps(bearerHeader(key)).download.coins
+        } catch (error: Exception) {
+            when (verdictOf(error, hadWorkRef = false)) {
+                ServerVerdict.SIGN_OUT -> {
+                    signOutLocally()
+                    0
+                }
+                ServerVerdict.PAUSE_SESSION -> {
+                    pausedByThrottle = true
+                    0
+                }
+                else -> 0
+            }
+        }
+    }
+
+    /**
+     * Spend coins on one direct download of one movie. The server decides the price
+     * and the debit and answers the credit token the browser spends. Null when there
+     * is no key or the server cannot be reached.
+     */
+    suspend fun redeemDownloadCredit(handle: String): CoinDownloadCredit? {
+        val key = currentKey() ?: return null
+        return try {
+            apiProvider.current().redeemDownloadCredit(
+                bearerHeader(key), CoinDownloadCreditRequest(handle)).credit
         } catch (error: Exception) {
             when (verdictOf(error, hadWorkRef = false)) {
                 ServerVerdict.SIGN_OUT -> {

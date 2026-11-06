@@ -5,6 +5,8 @@ import com.raddstream.app.network.models.AccountCreateResponse
 import com.raddstream.app.network.models.AccountInfoResponse
 import com.raddstream.app.network.models.CoinBalanceResponse
 import com.raddstream.app.network.models.CoinCapsResponse
+import com.raddstream.app.network.models.CoinDownloadCreditRequest
+import com.raddstream.app.network.models.CoinDownloadCreditResponse
 import com.raddstream.app.network.models.CoinEarnRequest
 import com.raddstream.app.network.models.CoinEarnResponse
 import com.raddstream.app.network.models.CoinRedeemRequest
@@ -363,6 +365,19 @@ interface RaddStreamApi {
         @Header("Authorization") authorization: String?,
         @Body body: CoinRedeemRequest,
     ): CoinRedeemResponse
+
+    /**
+     * POST /api/v2/account/coins/redeem-download — spend coins on one direct
+     * download of one movie. The body carries the download handle and nothing
+     * else: the price is the server's own knob, the debit is one guarded
+     * server UPDATE, and the answer's token is the credit the browser spends
+     * on `GET /api/v1/download?credit=…`.
+     */
+    @POST("api/v2/account/coins/redeem-download")
+    suspend fun redeemDownloadCredit(
+        @Header("Authorization") authorization: String?,
+        @Body body: CoinDownloadCreditRequest,
+    ): CoinDownloadCreditResponse
 
     /**
      * POST /api/v2/play — one PlayBundle for a print, ranked by the server (plan §5 step 13).

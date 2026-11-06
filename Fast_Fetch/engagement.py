@@ -108,12 +108,13 @@ SERVER_SOURCES = frozenset({"server", "admin"})
 
 #: Reason vocabulary. `ref` names one of these; it is never a title or a URL.
 LEDGER_REASONS = frozenset({
-    "rewarded_ad", "streak_day", "redeem_pass", "admin_grant", "refund",
+    "rewarded_ad", "streak_day", "redeem_pass", "redeem_download",
+    "admin_grant", "refund",
 })
 #: Debits. Redemption of a pass, and a `refund` that claws back a wrong credit
 #: (a compensating row — the append-only way to undo a mistake; a refund that
 #: *returns* coins after a failed spend is instead a positive `grant_coins`).
-SPEND_REASONS = frozenset({"redeem_pass", "refund"})
+SPEND_REASONS = frozenset({"redeem_pass", "redeem_download", "refund"})
 
 #: Coins credited per *server-verified* rewarded completion (q3 owns the admin
 #: knob; this is the default it overrides). `coin_value_pkr` stays q3's.
@@ -144,6 +145,15 @@ STREAK_PASS_SECONDS = DAY_SECONDS
 #: shipped prices; the operator re-prices any tier with its knob
 #: (`coin_redeem_day`, `coin_redeem_weekend`, `coin_redeem_monthly`).
 REDEEM_COIN_COSTS = {"day": 500, "weekend": 70, "monthly_vip": 200}
+
+#: One direct download — a free viewer skipping the web shortener for one
+#: movie — costs 100 coins by the same plan. The operator re-prices it with
+#: the `coin_redeem_download` knob, resolved by `resolve_download_credit`.
+DOWNLOAD_CREDIT_COINS = 100
+#: A bought credit stays good for a day: the viewer buys it and taps the link,
+#: so the window only covers a browser that opens late, not a coin saved
+#: for a later film.
+DOWNLOAD_CREDIT_SECONDS = 86_400.0
 MONTHLY_SECONDS = 30 * DAY_SECONDS
 #: The ladder is data end to end: each tier carries its price, the rule that says
 #: when its pass stops working, and the names of the two `app_remote_config` knobs
@@ -336,6 +346,20 @@ CREATE TABLE IF NOT EXISTS coin_passes (
     account_id INTEGER NOT NULL REFERENCES user_accounts(id) ON DELETE CASCADE,
     plan TEXT NOT NULL,                  -- 'day' | 'weekend' | 'monthly_vip' | 'streak_day7'
     expires_at REAL NOT NULL,
+    created_at REAL NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS coin_download_credits (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    -- One direct download, bought with coins: the row is the credit, the token
+    -- is only its signed id. `handle` is the opaque download id it was bought
+    -- for — a credit for one movie buys no other — and `used_at` is the
+    -- single-use guard: the consume is one guarded UPDATE, so two browsers
+    -- racing the same token get one file and one refusal.
+    account_id INTEGER NOT NULL REFERENCES user_accounts(id) ON DELETE CASCADE,
+    handle TEXT NOT NULL,
+    expires_at REAL NOT NULL,
+    used_at REAL,
     created_at REAL NOT NULL
 );
 """
@@ -585,6 +609,24 @@ def resolve_ladder(values=None) -> dict:
                 spec["pkr"] = int(shipped["pkr"])
         ladder[name] = spec
     return ladder
+
+
+def resolve_download_credit(values=None) -> int:
+    """The direct-download price as the operator priced it, in one place.
+
+    The same whole-number knob rule as the ladder: a stored 0 or an
+    unparseable paste is "use the shipped number", never "free". This is the
+    only function that turns a settings row into the price — the caps route
+    publishes it and `redeem_download_credit` charges it — so the price a
+    phone is shown and the price the wallet is debited are one read.
+    """
+    if not values:
+        return int(DOWNLOAD_CREDIT_COINS)
+    try:
+        coins = int(values.get("coin_redeem_download") or 0)
+    except (TypeError, ValueError):
+        coins = 0
+    return coins if coins > 0 else int(DOWNLOAD_CREDIT_COINS)
 
 
 def passes_projection(ladder) -> dict:
@@ -1042,6 +1084,88 @@ def redeem_pass(conn_or_path, account_id, *, plan, pass_secret, now=None,
     return {"plan": plan, "cost": cost, "balance": spend["balance"],
             "already_applied": spend["already_applied"], "pass": token,
             "expires_at": expires, "expiry_rule": str(spec.get("expiry_rule") or "")}
+
+
+# ── the direct-download credit (daily check-in Build 4) ──────────────────────
+
+
+def redeem_download_credit(conn_or_path, account_id, *, handle, credit_secret,
+                           now=None, values=None, idempotency_key=None) -> dict:
+    """Spend coins on one direct download of one movie.
+
+    The credit is a row, not a pass: the token is only the row's signed id, so
+    the browser that presents it needs no account and the server still knows
+    exactly which download it was bought for. The spend and the row are two
+    writes — a retry with the same idempotency key spends nothing and mints
+    nothing twice, and a row that failed after the spend still leaves the
+    caller holding the token (the download bypass works from the token alone).
+    """
+    moment = time.time() if now is None else float(now)
+    cost = resolve_download_credit(values)
+    key = (f"redeem-download:{account_id}:{handle}:{int(moment)}"
+           if idempotency_key is None else str(idempotency_key))
+    spend = spend_coins(conn_or_path, account_id, amount=cost,
+                        reason="redeem_download", ref=str(handle),
+                        idempotency_key=key, now=moment)
+    expires = float(int(moment + DOWNLOAD_CREDIT_SECONDS))
+    token = None
+    if not spend["already_applied"]:
+        with _borrow(conn_or_path) as conn:
+            row = conn.execute(
+                "INSERT INTO coin_download_credits"
+                "(account_id, handle, expires_at, created_at)"
+                " VALUES(?,?,?,?)",
+                (int(account_id), str(handle), expires, moment))
+            _commit(conn)
+            token = redact.mint_download_credit(int(row.lastrowid), credit_secret)
+    else:
+        # A replay buys nothing twice, and mints nothing twice either: the
+        # caller already holds the token from the first answer, so this only
+        # re-derives it — and reports the row's own expiry, not a fresh day.
+        with _borrow(conn_or_path) as conn:
+            found = conn.execute(
+                "SELECT id, expires_at FROM coin_download_credits"
+                " WHERE account_id = ? AND handle = ? AND used_at IS NULL"
+                " AND expires_at > ? ORDER BY id DESC LIMIT 1",
+                (int(account_id), str(handle), moment)).fetchone()
+        if found is not None:
+            token = redact.mint_download_credit(int(found["id"]), credit_secret)
+            expires = float(found["expires_at"])
+        else:
+            # The replay's own credit is already spent: there is no live token
+            # to re-derive, and the expiry is the row's, not a fresh day.
+            expires = 0.0
+    return {"handle": str(handle), "cost": cost, "balance": spend["balance"],
+            "already_applied": spend["already_applied"], "token": token,
+            "expires_at": expires}
+
+
+def consume_download_credit(conn_or_path, token, *, handle, credit_secret,
+                            now=None) -> bool:
+    """Spend one download credit on this download, or refuse it.
+
+    True only when the token is ours, names a credit bought for this exact
+    download id, is unexpired, and has never been used — the consume is one
+    guarded UPDATE, so two browsers racing the same token get one file and
+    one refusal. Anything else is False, never an exception: the download
+    route falls back to its ordinary shortening, so a bad token costs the
+    caller a direct link, never the download itself.
+    """
+    moment = time.time() if now is None else float(now)
+    credit_id = redact.parse_download_credit(token, credit_secret)
+    if credit_id is None:
+        return False
+    try:
+        with _borrow(conn_or_path) as conn:
+            changed = conn.execute(
+                "UPDATE coin_download_credits SET used_at = ?"
+                " WHERE id = ? AND handle = ? AND used_at IS NULL"
+                " AND expires_at > ?",
+                (moment, int(credit_id), str(handle), moment))
+            _commit(conn)
+            return changed.rowcount == 1
+    except Exception:  # noqa: BLE001 — a credit the store cannot read spends nothing
+        return False
 
 
 # ── ad cadence, server-side (Pillar 1) ────────────────────────────────────────

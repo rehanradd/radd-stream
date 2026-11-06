@@ -28,6 +28,7 @@ import redact
 import tiers
 import api_v2
 import catalog_v2
+import engagement
 import accounts_api
 import payments
 import admin_panel
@@ -4340,6 +4341,22 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     target = res["url"]
                     shortened = False
                     if not full and not request_is_vip(self.headers, query_params):
+                        # A bought direct-download credit skips the shortener
+                        # for this one download (daily check-in Build 4): the
+                        # token is spent here, whether or not the web marker
+                        # is set, because a credit is a direct file, not a web
+                        # page. Anything wrong with the token just falls back
+                        # to the ordinary shortening — a bad token costs a
+                        # direct link, never the download itself.
+                        credit_token = query_params.get("credit", [""])[0]
+                        credit_used = False
+                        if credit_token:
+                            try:
+                                credit_used = engagement.consume_download_credit(
+                                    engagement.default_db_path(), credit_token,
+                                    handle=source_ref, credit_secret=signing_secret())
+                            except Exception:      # noqa: BLE001
+                                credit_used = False
                         # Free tier, WEB PAGE ONLY (owner decision 2026-11-06):
                         # a shortener earns the operator revenue before the
                         # bytes, but only when the request came through the web
@@ -4350,7 +4367,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                         # outage falls back to the direct URL rather than
                         # failing the download.
                         via_web = query_params.get("via", [""])[0] == "web"
-                        if via_web:
+                        if via_web and not credit_used:
                             try:
                                 with get_db() as conn:
                                     shortened_target = shorten_download_url(
