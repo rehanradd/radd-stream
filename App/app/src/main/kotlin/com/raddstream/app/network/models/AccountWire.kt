@@ -25,6 +25,10 @@ import com.google.gson.annotations.SerializedName
  *   POST api/v2/account/progress/remove     -> {removed}
  *   POST api/v2/account/payment             -> payment{payment_id, status, plan, amount_pkr, method, submitted_at}
  *   GET  api/v2/account/entitlement         -> entitlement{vip, vip_until, pending}
+ *   GET  api/v2/account/coins               -> {balance, rewarded_grants_today, caps}
+ *   GET  api/v2/account/coins/caps          -> {caps, passes, streak{coins, pass_seconds}}
+ *   POST api/v2/account/coins/earn          -> earned{status, current_streak, best_streak,
+ *                                                      day, coins_granted, pass?, pass_expires_at?}
  *
  * THREE THINGS THESE MODELS ENFORCE, because the server cannot enforce them for us:
  *
@@ -257,6 +261,62 @@ data class AccountEntitlement(
 
 data class EntitlementResponse(
     val entitlement: AccountEntitlement? = null,
+)
+
+/**
+ * The coin wallet the daily check-in pays into (`accounts_api.py` `coins/*`).
+ *
+ * The server is the only minter: a claim carries `reason` and nothing else, the
+ * grant size is the ladder's own, and the day is claimed by one guarded server
+ * UPDATE — so a replay answers `same_day_noop` and pays nothing twice. The app
+ * never invents a balance, a grant, or a pass; it only reads what these answers say.
+ */
+data class CoinEarnRequest(
+    val reason: String = DAILY_LOGIN,
+) {
+    companion object {
+        /** The only reason the earn route accepts. */
+        const val DAILY_LOGIN = "daily_login"
+    }
+}
+
+/** What one daily-login claim answers: the new streak, what it paid, and any pass. */
+data class CoinEarned(
+    val status: String = "",
+    @SerializedName("current_streak") val currentStreak: Int = 0,
+    @SerializedName("best_streak") val bestStreak: Int = 0,
+    val day: String = "",
+    @SerializedName("coins_granted") val coinsGranted: Int = 0,
+    val pass: String? = null,
+    @SerializedName("pass_expires_at") val passExpiresAt: Double = 0.0,
+)
+
+data class CoinEarnResponse(
+    val earned: CoinEarned? = null,
+)
+
+/** This account's own coin balance, the same `SUM(delta)` the spender checks. */
+data class CoinBalanceResponse(
+    val balance: Int = 0,
+    @SerializedName("rewarded_grants_today") val rewardedGrantsToday: Int = 0,
+)
+
+/**
+ * The streak ladder the server will actually pay, as the `coins/caps` route
+ * publishes it. Keys are day numbers as strings; [byDay] keeps only real days.
+ */
+data class StreakLadder(
+    val coins: Map<String, Int> = emptyMap(),
+    @SerializedName("pass_seconds") val passSeconds: Long = 0L,
+) {
+    val byDay: Map<Int, Int>
+        get() = coins.mapNotNull { (key, value) ->
+            key.toIntOrNull()?.takeIf { it in 1..7 }?.let { it to value }
+        }.toMap()
+}
+
+data class CoinCapsResponse(
+    val streak: StreakLadder = StreakLadder(),
 )
 
 /**

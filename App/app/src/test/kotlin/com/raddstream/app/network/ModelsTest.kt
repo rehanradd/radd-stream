@@ -2,6 +2,10 @@ package com.raddstream.app.network
 
 import com.raddstream.app.data.local.FavoritePost
 import com.raddstream.app.network.models.Codec
+import com.raddstream.app.network.models.CoinBalanceResponse
+import com.raddstream.app.network.models.CoinCapsResponse
+import com.raddstream.app.network.models.CoinEarnRequest
+import com.raddstream.app.network.models.CoinEarnResponse
 import com.raddstream.app.network.models.Container
 import com.raddstream.app.network.models.CoverageType
 import com.raddstream.app.network.models.EntitlementResponse
@@ -460,5 +464,57 @@ class ModelsTest {
             Post::class.java,
         )
         assertEquals(listOf("Action", "Drama"), csv.genreList)
+    }
+
+    @Test
+    fun `coin earn request carries reason only`() {
+        val json = gson.toJson(CoinEarnRequest())
+
+        assertEquals("""{"reason":"daily_login"}""", json)
+    }
+
+    @Test
+    fun `coin earn response decodes the server's claim answer`() {
+        val response = gson.fromJson(
+            """{"earned":{"status":"advanced","current_streak":2,"best_streak":5,"day":"2026-11-07","coins_granted":20}}""",
+            CoinEarnResponse::class.java,
+        )
+
+        val earned = response.earned
+        assertNotNull(earned)
+        assertEquals("advanced", earned?.status)
+        assertEquals(2, earned?.currentStreak)
+        assertEquals(5, earned?.bestStreak)
+        assertEquals(20, earned?.coinsGranted)
+        assertNull(earned?.pass)
+    }
+
+    @Test
+    fun `coin balance response decodes the ledger's own number`() {
+        val response = gson.fromJson(
+            """{"balance":370,"rewarded_grants_today":0}""",
+            CoinBalanceResponse::class.java,
+        )
+
+        assertEquals(370, response.balance)
+        assertEquals(0, response.rewardedGrantsToday)
+    }
+
+    @Test
+    fun `coin caps response decodes the streak ladder by day`() {
+        val response = gson.fromJson(
+            """{"streak":{"coins":{"1":10,"2":20,"7":150},"pass_seconds":86400}}""",
+            CoinCapsResponse::class.java,
+        )
+
+        assertEquals(20, response.streak.byDay[2])
+        assertEquals(150, response.streak.byDay[7])
+        assertEquals(86400L, response.streak.passSeconds)
+        // A key that is not a ladder day is dropped, never shown as a prize.
+        val wide = gson.fromJson(
+            """{"streak":{"coins":{"1":10,"9":999},"pass_seconds":0}}""",
+            CoinCapsResponse::class.java,
+        )
+        assertNull(wide.streak.byDay[9])
     }
 }

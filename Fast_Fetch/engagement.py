@@ -125,9 +125,12 @@ REWARDED_DAILY_CAP = 10
 #: rollover — activity before it counts toward the previous day.
 STREAK_TZ_DEFAULT = "Asia/Karachi"
 DAY_BOUNDARY_HOUR_DEFAULT = 4
-#: Coin grants at these streak milestones (plan Pillar 2, lines 33–35).
-STREAK_GRANTS_COINS = {1: 10, 3: 30}
-#: The Day-7 milestone mints a 24-hour ad-free pass rather than coins.
+#: Coin grants at these streak milestones (plan Pillar 2, lines 33–35), now the
+#: 7-day daily check-in ladder the owner approved 2026-11-07: 10/20/30/40/50/70
+#: and a 150-coin jackpot on day 7. A streak past day 7 keeps counting but grants
+#: nothing further until it resets — the ladder is seven days, not a cycle.
+STREAK_GRANTS_COINS = {1: 10, 2: 20, 3: 30, 4: 40, 5: 50, 6: 70, 7: 150}
+#: The Day-7 milestone mints a 24-hour ad-free pass as well as the 150 coins.
 STREAK_PASS_DAY = 7
 DAY_SECONDS = 24 * 3600
 STREAK_PASS_SECONDS = DAY_SECONDS
@@ -816,7 +819,10 @@ def _bounded_count(value, shipped, ceiling) -> int:
 
 #: Which `app_remote_config` knob sizes which streak milestone. The milestones are
 #: code: a knob can make day 1's reward bigger or smaller, it cannot invent a day.
-STREAK_GRANT_SETTINGS = {1: "streak_day1_coins", 3: "streak_day3_coins"}
+STREAK_GRANT_SETTINGS = {1: "streak_day1_coins", 2: "streak_day2_coins",
+                          3: "streak_day3_coins", 4: "streak_day4_coins",
+                          5: "streak_day5_coins", 6: "streak_day6_coins",
+                          7: "streak_day7_coins"}
 STREAK_PASS_HOURS_SETTING = "streak_day7_pass_hours"
 #: A bad save is clamped, not trusted. 10,000 coins is 300 one-day passes, so it is
 #: far past any plausible bonus and still below a paste error's damage.

@@ -154,6 +154,16 @@ data class VipUiState(
     val streak: VipRemoteStreak = VipRemoteStreak(),
     /** Consecutive days this device opened the app, counted locally (MainActivity records it). */
     val streakCount: Int = 0,
+    /** This account's coin balance, read from the ledger — never invented here. */
+    val coinBalance: Int = 0,
+    /** The streak ladder the server will pay (day -> coins), empty until read. */
+    val streakLadder: Map<Int, Int> = emptyMap(),
+    /** The last claim's answer in the viewer's own words, or null before any claim. */
+    val claimMessage: String? = null,
+    /** A claim is in flight, so the button cannot be pressed into a second claim. */
+    val isClaiming: Boolean = false,
+    /** Today is already claimed (paid or already-claimed answer), so the button rests. */
+    val claimedToday: Boolean = false,
     /** Whether this device holds a sync key — the only thing the ledger can attach a claim to. */
     val signedIn: Boolean = false,
     /** The server's own answer, or null while it has never been read on this device. */
@@ -213,6 +223,62 @@ class VipViewModel @Inject constructor(
         observeStreak()
         observeAccount()
         loadConfig()
+        loadWallet()
+    }
+
+    /** The wallet and the ladder, read once the account is known. A failure keeps zeros. */
+    private fun loadWallet() {
+        viewModelScope.launch {
+            val ladder = syncAccountRepository.loadStreakLadder()
+            val balance = syncAccountRepository.loadCoinBalance()
+            _uiState.update {
+                it.copy(
+                    streakLadder = ladder.ifEmpty { it.streakLadder },
+                    coinBalance = balance ?: it.coinBalance,
+                )
+            }
+        }
+    }
+
+    /**
+     * Claim today's check-in. The server decides the grant: a fresh day pays the
+     * ladder's coins for the new streak day, a second claim the same day pays nothing,
+     * and an unreachable server is reported as exactly that — never as "already claimed".
+     */
+    fun claimDailyLogin() {
+        val state = _uiState.value
+        if (!state.signedIn || state.isClaiming || state.claimedToday) return
+        viewModelScope.launch {
+            _uiState.update { it.copy(isClaiming = true, claimMessage = null) }
+            try {
+                val earned = syncAccountRepository.claimDailyLogin()
+                if (earned == null) {
+                    _uiState.update {
+                        it.copy(claimMessage = "Could not reach the server — try again later.")
+                    }
+                    return@launch
+                }
+                val balance = syncAccountRepository.loadCoinBalance()
+                _uiState.update {
+                    it.copy(
+                        claimedToday = true,
+                        coinBalance = balance ?: it.coinBalance,
+                        claimMessage = when {
+                            earned.status == "same_day_noop" -> "Already claimed today."
+                            earned.currentStreak > 7 ->
+                                "Streak day ${earned.currentStreak} — the 7-day ladder is complete."
+                            earned.pass != null ->
+                                "+${earned.coinsGranted} coins — Day ${earned.currentStreak} of 7, and a 24-hour pass."
+                            earned.coinsGranted > 0 ->
+                                "+${earned.coinsGranted} coins — Day ${earned.currentStreak} of 7."
+                            else -> "Day ${earned.currentStreak} of 7."
+                        },
+                    )
+                }
+            } finally {
+                _uiState.update { it.copy(isClaiming = false) }
+            }
+        }
     }
 
     /**
@@ -253,6 +319,7 @@ class VipViewModel @Inject constructor(
         viewModelScope.launch {
             syncAccountRepository.signedIn.collect { signed ->
                 _uiState.update { it.copy(signedIn = signed) }
+                if (signed) loadWallet()
             }
         }
         viewModelScope.launch {

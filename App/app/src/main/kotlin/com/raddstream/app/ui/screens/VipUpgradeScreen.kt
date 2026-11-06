@@ -57,6 +57,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.raddstream.app.data.VipPendingSubmission
@@ -131,7 +132,17 @@ fun VipUpgradeScreen(
                 onWatchAd = { viewModel.grantRewardedVip() },
             )
             if (state.streak.isConfigured) {
-                StreakCard(streak = state.streak, count = state.streakCount)
+                StreakCard(
+                    streak = state.streak,
+                    count = state.streakCount,
+                    balance = state.coinBalance,
+                    ladder = state.streakLadder,
+                    signedIn = state.signedIn,
+                    claimedToday = state.claimedToday,
+                    isClaiming = state.isClaiming,
+                    claimMessage = state.claimMessage,
+                    onClaim = viewModel::claimDailyLogin,
+                )
             }
 
             when {
@@ -403,15 +414,28 @@ private fun RewardedVipSection(expiresAt: Long, onWatchAd: () -> Unit) {
 }
 
 /**
- * The login streak (plan §5 step 19): consecutive days this device opened the app, against the
- * operator's own plan (target days, reward coins). The count is local — MainActivity records one
- * open per day — and the reward is the operator's: this card shows the promise, it never claims
- * the coins were paid, because no screen in this build can see the wallet. Hidden entirely when
- * the operator never configured a streak, so an absent plan is never shown as a zero.
+ * The login streak (plan §5 step 19) and the daily check-in that pays it: consecutive days
+ * this device opened the app, against the operator's own plan (target days, reward coins).
+ * The count is local — MainActivity records one open per day — and the coins are the
+ * server's: the seven pills show the ladder the server will pay, the Claim button asks
+ * the server for today's grant, and the balance is the ledger's own answer. A claim the
+ * server already paid answers "already claimed" and pays nothing twice. Hidden entirely
+ * when the operator never configured a streak, so an absent plan is never shown as a zero.
  */
 @Composable
-private fun StreakCard(streak: VipRemoteStreak, count: Int) {
+private fun StreakCard(
+    streak: VipRemoteStreak,
+    count: Int,
+    balance: Int,
+    ladder: Map<Int, Int>,
+    signedIn: Boolean,
+    claimedToday: Boolean,
+    isClaiming: Boolean,
+    claimMessage: String?,
+    onClaim: () -> Unit,
+) {
     val complete = count >= streak.days
+    val today = (count + 1).coerceIn(1, streak.days)
     Surface(
         color = RaddCurrent500.copy(alpha = 0.10f),
         shape = RoundedCornerShape(20.dp),
@@ -444,6 +468,83 @@ private fun StreakCard(streak: VipRemoteStreak, count: Int) {
                 modifier = Modifier.fillMaxWidth(),
                 color = RaddCurrent500,
             )
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                for (day in 1..streak.days) {
+                    val done = day <= count
+                    val isToday = day == today && !complete
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        modifier = Modifier
+                            .weight(1f)
+                            .padding(vertical = 4.dp),
+                    ) {
+                        Surface(
+                            color = when {
+                                done -> RaddCurrent500.copy(alpha = 0.25f)
+                                isToday -> RaddCurrent500.copy(alpha = 0.10f)
+                                else -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                            },
+                            shape = RoundedCornerShape(10.dp),
+                            border = if (isToday) {
+                                BorderStroke(1.dp, RaddCurrent500)
+                            } else {
+                                null
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Column(
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                modifier = Modifier.padding(vertical = 8.dp, horizontal = 2.dp),
+                            ) {
+                                Text(
+                                    "Day $day",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = if (isToday) FontWeight.Bold else FontWeight.Normal,
+                                    color = MaterialTheme.colorScheme.onBackground,
+                                    textAlign = TextAlign.Center,
+                                )
+                                Text(
+                                    ladder[day]?.let { "$it coins" } ?: "",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    textAlign = TextAlign.Center,
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+            if (signedIn) {
+                Text(
+                    "Wallet: $balance coins.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Button(
+                onClick = onClaim,
+                enabled = signedIn && !claimedToday && !isClaiming,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text(if (claimedToday) "Claimed today" else "Claim Today's Coins")
+            }
+            if (!signedIn) {
+                Text(
+                    "Sign in to claim your coins.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            if (claimMessage != null) {
+                Text(
+                    claimMessage,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
             if (streak.rewardCoins > 0) {
                 Text(
                     "Reward: ${streak.rewardCoins} coins when you reach ${streak.days} days.",
@@ -452,7 +553,7 @@ private fun StreakCard(streak: VipRemoteStreak, count: Int) {
                 )
             }
             Text(
-                "Counted on this device. The coins go to your wallet when the operator pays them.",
+                "Counted on this device. The coins go to your wallet when the server pays them.",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )

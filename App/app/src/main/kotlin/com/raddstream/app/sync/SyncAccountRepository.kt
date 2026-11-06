@@ -15,6 +15,8 @@ import com.raddstream.app.network.buildRaddGson
 import com.raddstream.app.network.models.AccountCreateRequest
 import com.raddstream.app.network.models.AccountEntitlement
 import com.raddstream.app.network.models.AccountProblem
+import com.raddstream.app.network.models.CoinEarnRequest
+import com.raddstream.app.network.models.CoinEarned
 import com.raddstream.app.network.models.DeviceTrialRequest
 import com.raddstream.app.network.models.FavoriteEntry
 import com.raddstream.app.network.models.FavoriteRequest
@@ -643,6 +645,73 @@ class SyncAccountRepository @Inject constructor(
                     _entitlement.value
                 }
                 else -> _entitlement.value
+            }
+        }
+    }
+
+    /**
+     * This account's coin balance, or null when there is no key or the server cannot
+     * be reached. The ledger is the only authority; this is a read, never a claim.
+     */
+    suspend fun loadCoinBalance(): Int? {
+        val key = currentKey() ?: return null
+        return try {
+            apiProvider.current().getCoinBalance(bearerHeader(key)).balance
+        } catch (error: Exception) {
+            when (verdictOf(error, hadWorkRef = false)) {
+                ServerVerdict.SIGN_OUT -> {
+                    signOutLocally()
+                    null
+                }
+                ServerVerdict.PAUSE_SESSION -> {
+                    pausedByThrottle = true
+                    null
+                }
+                else -> null
+            }
+        }
+    }
+
+    /** The streak ladder (day -> coins) the server will pay, or empty when unread. */
+    suspend fun loadStreakLadder(): Map<Int, Int> {
+        val key = currentKey() ?: return emptyMap()
+        return try {
+            apiProvider.current().getCoinCaps(bearerHeader(key)).streak.byDay
+        } catch (error: Exception) {
+            when (verdictOf(error, hadWorkRef = false)) {
+                ServerVerdict.SIGN_OUT -> {
+                    signOutLocally()
+                    emptyMap()
+                }
+                ServerVerdict.PAUSE_SESSION -> {
+                    pausedByThrottle = true
+                    emptyMap()
+                }
+                else -> emptyMap()
+            }
+        }
+    }
+
+    /**
+     * Claim today's check-in. The server decides the grant; a second claim the same
+     * day answers `same_day_noop` with zero coins. Null when there is no key or the
+     * server cannot be reached — the caller must not present that as "already claimed".
+     */
+    suspend fun claimDailyLogin(): CoinEarned? {
+        val key = currentKey() ?: return null
+        return try {
+            apiProvider.current().earnDailyLogin(bearerHeader(key), CoinEarnRequest()).earned
+        } catch (error: Exception) {
+            when (verdictOf(error, hadWorkRef = false)) {
+                ServerVerdict.SIGN_OUT -> {
+                    signOutLocally()
+                    null
+                }
+                ServerVerdict.PAUSE_SESSION -> {
+                    pausedByThrottle = true
+                    null
+                }
+                else -> null
             }
         }
     }

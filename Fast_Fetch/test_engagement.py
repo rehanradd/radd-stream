@@ -207,11 +207,42 @@ class EngagementFixture(unittest.TestCase):
         for i in range(3):
             engagement.record_engagement_day(
                 self.conn, self.account_id, now=base + i * 86400)
-        # Day 1 (10) + Day 3 (30) = 40 coins, and each fired once
-        self.assertEqual(engagement.coin_balance(self.conn, self.account_id), 40)
+        # Day 1 (10) + Day 2 (20) + Day 3 (30) = 60 coins, and each fired once
+        self.assertEqual(engagement.coin_balance(self.conn, self.account_id), 60)
         streak_grants = [r for r in engagement.ledger(self.conn, self.account_id)
                          if r["reason"] == "streak_day"]
-        self.assertEqual(len(streak_grants), 2)
+        self.assertEqual(len(streak_grants), 3)
+
+    def test_seven_day_ladder_pays_each_day_and_stops_after_day_seven(self):
+        base = epoch_at("2026-01-05T12:00:00")
+        last = None
+        for i in range(7):
+            last = engagement.record_engagement_day(
+                self.conn, self.account_id, now=base + i * 86400)
+        # 10 + 20 + 30 + 40 + 50 + 70 + 150 = 370, one grant per day
+        self.assertEqual(last["current_streak"], 7)
+        self.assertEqual(last["granted_coins"], 150)
+        self.assertEqual(engagement.coin_balance(self.conn, self.account_id), 370)
+        streak_grants = [r for r in engagement.ledger(self.conn, self.account_id)
+                         if r["reason"] == "streak_day"]
+        self.assertEqual(len(streak_grants), 7)
+        # Day 8 keeps the streak alive but the ladder is seven days, not a cycle
+        eighth = engagement.record_engagement_day(
+            self.conn, self.account_id, now=base + 7 * 86400)
+        self.assertEqual((eighth["status"], eighth["current_streak"]), ("advanced", 8))
+        self.assertEqual(eighth["granted_coins"], 0)
+        self.assertEqual(engagement.coin_balance(self.conn, self.account_id), 370)
+
+    def test_streak_ladder_resolves_operator_knobs(self):
+        resolved = engagement.resolve_streak_grants({"streak_day4_coins": 44})
+        self.assertEqual(resolved["coins"][4], 44)
+        # Unmentioned days keep the shipped ladder, and a blank row keeps all of it
+        self.assertEqual(resolved["coins"][2], 20)
+        self.assertEqual(resolved["coins"][7], 150)
+        self.assertEqual(engagement.resolve_streak_grants({})["coins"],
+                         engagement.STREAK_GRANTS_COINS)
+        self.assertEqual(engagement.resolve_streak_grants(None)["coins"],
+                         engagement.STREAK_GRANTS_COINS)
 
     def test_the_day_seven_milestone_mints_a_signed_pass(self):
         base = epoch_at("2026-01-05T12:00:00")

@@ -3,6 +3,10 @@ package com.raddstream.app.network
 import com.raddstream.app.network.models.AccountCreateRequest
 import com.raddstream.app.network.models.AccountCreateResponse
 import com.raddstream.app.network.models.AccountInfoResponse
+import com.raddstream.app.network.models.CoinBalanceResponse
+import com.raddstream.app.network.models.CoinCapsResponse
+import com.raddstream.app.network.models.CoinEarnRequest
+import com.raddstream.app.network.models.CoinEarnResponse
 import com.raddstream.app.network.models.ContactRequest
 import com.raddstream.app.network.models.ContactResponse
 import com.raddstream.app.network.models.DeviceTrialRequest
@@ -313,6 +317,38 @@ interface RaddStreamApi {
     suspend fun getEntitlement(
         @Header("Authorization") authorization: String?,
     ): EntitlementResponse
+
+    /**
+     * GET /api/v2/account/coins — this account's own coin balance. The number is the
+     * same `SUM(delta)` the spender checks before it debits, so a reply and a refusal
+     * cannot disagree about what this account holds.
+     */
+    @GET("api/v2/account/coins")
+    suspend fun getCoinBalance(
+        @Header("Authorization") authorization: String?,
+    ): CoinBalanceResponse
+
+    /**
+     * GET /api/v2/account/coins/caps — the ceilings the ledger holds, the pass prices
+     * and the streak ladder this server will actually pay. The ladder here is the one
+     * the earn route enforces, so the phone cannot show a prize the ledger will not pay.
+     */
+    @GET("api/v2/account/coins/caps")
+    suspend fun getCoinCaps(
+        @Header("Authorization") authorization: String?,
+    ): CoinCapsResponse
+
+    /**
+     * POST /api/v2/account/coins/earn — claim today's check-in. The body carries
+     * `reason` and nothing else: the grant size is the ladder's own and the day is
+     * claimed by one guarded server UPDATE, so a second claim the same day answers
+     * `same_day_noop` and pays nothing twice.
+     */
+    @POST("api/v2/account/coins/earn")
+    suspend fun earnDailyLogin(
+        @Header("Authorization") authorization: String?,
+        @Body body: CoinEarnRequest,
+    ): CoinEarnResponse
 
     /**
      * POST /api/v2/play — one PlayBundle for a print, ranked by the server (plan §5 step 13).
