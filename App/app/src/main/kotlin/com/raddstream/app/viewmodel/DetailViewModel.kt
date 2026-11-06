@@ -504,6 +504,20 @@ class DetailViewModel @Inject constructor(
         )
     }
 
+    /**
+     * The tier a rung requires: VIP when the operator's gate reserves its band,
+     * Standard otherwise. A property of the stream and the operator's policy,
+     * never of the viewer — a VIP viewer reads "VIP" on the 1080p row they can
+     * play, and a free viewer never sees that row at all (the gate removed it
+     * and VipSourcesCard says where it went). With the gate off, every rung is
+     * Standard because nothing requires VIP.
+     */
+    fun tierLabelFor(option: QualityOption): String =
+        if (qualityGateEnabled &&
+            (VipQualityGate.isPremiumBand(option.band, freeQualityCap) ||
+                VipQualityGate.isPremiumLabel(option.title, freeQualityCap))
+        ) "VIP" else "Standard"
+
     /** A premium rung the current viewer may not take, decided from the same gate the UI uses. */
     private fun isLocked(option: QualityOption): Boolean =
         !VipQualityGate.allowsBand(option.band, premiumAccess, freeQualityCap) ||

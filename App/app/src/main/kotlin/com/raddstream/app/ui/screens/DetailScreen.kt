@@ -263,6 +263,7 @@ fun DetailScreen(
                     selectedBand = state.selectedBand,
                     onPlay = viewModel::playLadder,
                     onKeep = { option -> downloadWithStoragePermission { viewModel.keepRung(option) } },
+                    tierLabel = viewModel::tierLabelFor,
                 ),
                 ladderScope = rungScopeLabel(state.ladderSeason, state.ladderEpisode),
                 adFree = state.adFree,
@@ -334,6 +335,8 @@ private data class RungActions(
     val selectedBand: String?,
     val onPlay: (QualityOption) -> Unit,
     val onKeep: (QualityOption) -> Unit,
+    /** The tier each rung requires ("VIP" / "Standard"), from the ViewModel. */
+    val tierLabel: (QualityOption) -> String,
 )
 
 /** Which scope a ladder belongs to, in the viewer's words. Null means the whole work. */
@@ -443,6 +446,7 @@ private fun DetailContent(
                     selectedBand = rungs.selectedBand,
                     onPlayRung = rungs.onPlay,
                     onKeepRung = rungs.onKeep,
+                    tierLabel = rungs.tierLabel,
                 )
             }
         }
@@ -1095,6 +1099,7 @@ private fun EpisodeRow(
                 onPlayRung = rungs.onPlay,
                 onKeepRung = rungs.onKeep,
                 scopeTitle = scopeLabel,
+                tierLabel = rungs.tierLabel,
             )
         }
     }

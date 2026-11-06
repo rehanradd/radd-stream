@@ -185,6 +185,19 @@ class ProjectionTests(FixtureMixin):
         self.assertNotIn("brand_new_column", redact.project(
             {**row, "brand_new_column": "hubcloud"}, "link"))
 
+    def test_ladder_link_keeps_the_measured_mime_type(self):
+        # Session 71: the detail screen's honest source row reads Instant
+        # Stream vs Direct File off the winner copy's probe-measured mime.
+        view = redact.project(
+            {"stream_id": "lh-1",
+             "play_url": "http://our.box/api/v1/stream?id=lh-1",
+             "kind": "direct", "playable": True, "status": "active",
+             "mime_type": "application/vnd.apple.mpegurl",
+             "source_site": "vegamovies"},
+            "ladder_link")
+        self.assertEqual(view["mime_type"], "application/vnd.apple.mpegurl")
+        self.assertNotIn("source_site", view)
+
     def test_project_refuses_to_publish_a_view_that_names_provenance(self):
         """An allowlist typo must fail loudly, not leak quietly."""
         original = redact.VIEWS["link"]

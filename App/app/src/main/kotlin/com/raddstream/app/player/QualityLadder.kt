@@ -1,6 +1,7 @@
 package com.raddstream.app.player
 
 import com.raddstream.app.network.models.LadderTier
+import com.raddstream.app.network.models.LinkClassification
 import com.raddstream.app.network.models.OptionGroup
 import com.raddstream.app.network.models.ProviderPageLinks
 
@@ -35,6 +36,12 @@ data class QualityOption(
     val playsHere: Boolean,
     val resumable: Boolean,
     val copies: Int,
+    /** The winning print's stored audio languages. Empty when the print's
+     * languages column is empty — the row shows no audio line then. */
+    val audioLanguages: List<String> = emptyList(),
+    /** What the winner copy measurably is: a manifest stream or a direct file.
+     * Null when the copy was never probed — the row claims neither. */
+    val streamCategory: StreamCategory? = null,
     /**
      * The rung's winner is a page, not a file: it can be opened, never streamed here and never
      * kept. No default on purpose — every construction of a rung has to answer for it, so a page
@@ -79,6 +86,58 @@ data class QualityOption(
         }
     }
 }
+
+/**
+ * What a rung's winner copy measurably is — a manifest stream or a direct file —
+ * named by the container the probe actually measured. Null is a real answer: the
+ * copy was never probed, so the row claims neither shape rather than a guessed one.
+ */
+data class StreamCategory(val kind: Kind, val container: String) {
+    enum class Kind { INSTANT_STREAM, DIRECT_FILE }
+
+    /** "Instant Stream · M3U8" / "Direct File · MP4" — the row's own words. */
+    val label: String
+        get() = when (kind) {
+            Kind.INSTANT_STREAM -> "Instant Stream · $container"
+            Kind.DIRECT_FILE -> "Direct File · $container"
+        }
+}
+
+/**
+ * The stream category of one winner copy, from the probe-measured MIME the
+ * server publishes on the ladder link — never from a host name or a guessed
+ * speed. A manifest MIME outranks everything (the same rule
+ * [ManifestProtocolTest] pins for playback); a video file MIME names its
+ * container; anything else — an HTML page, an audio file, no measurement at
+ * all — yields null, and the row shows no category.
+ */
+fun streamCategoryFor(mimeType: String?, playUrl: String?): StreamCategory? {
+    if (LinkClassification.isHls(mimeType, playUrl)) {
+        return StreamCategory(StreamCategory.Kind.INSTANT_STREAM, "M3U8")
+    }
+    if (LinkClassification.isDash(mimeType, playUrl)) {
+        return StreamCategory(StreamCategory.Kind.INSTANT_STREAM, "DASH")
+    }
+    val mime = mimeType?.trim()?.lowercase().orEmpty()
+    val container = FILE_MIME_CONTAINERS.entries.firstOrNull { (marker, _) -> marker in mime }?.value
+        ?: return null
+    return StreamCategory(StreamCategory.Kind.DIRECT_FILE, container)
+}
+
+/** Probe-measured video file MIME → the container the row may name. */
+private val FILE_MIME_CONTAINERS = mapOf(
+    "video/mp4" to "MP4",
+    "video/x-matroska" to "MKV",
+    "video/matroska" to "MKV",
+    "video/webm" to "WebM",
+    "video/quicktime" to "MOV",
+    "video/x-msvideo" to "AVI",
+    "video/mpeg" to "MPG",
+    "video/mp2t" to "TS",
+    "video/x-m4v" to "M4V",
+    "video/3gpp" to "3GP",
+    "video/ogg" to "OGV",
+)
 
 /**
  * Data cost per hour of watching, from the plan §1.7 guide (approximate,
@@ -205,6 +264,8 @@ object QualityLadder {
             playsHere = playable && winner.playable && !winner.isDead,
             resumable = winner.isResumableLink,
             copies = copies,
+            audioLanguages = audioLanguages,
+            streamCategory = streamCategoryFor(winner.mimeType, winner.bestUrl),
             // The ladder's copy of a link carries `kind` and no `playability` (that is the
             // `ladder_link` projection, not the full one), so the rung's page verdict comes from
             // the served kind word alone — the same rule the detail rows use. WORDS only, never

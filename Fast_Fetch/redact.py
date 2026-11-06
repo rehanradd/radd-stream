@@ -253,10 +253,13 @@ VIEWS: dict[str, frozenset[str]] = {
                                      "band", "quality_label"}),
     "link": frozenset(_LINK),
     # The quality ladder's copy of a link: what a player or a download card needs
-    # to start it, and none of the link's diagnostic furniture.
+    # to start it, and none of the link's diagnostic furniture. `mime_type` is the
+    # probe-measured Content-Type of the winner copy (Session 71: the detail
+    # screen's honest source row reads Instant Stream vs Direct File off it);
+    # it names a format, never a hoster, so it is safe to publish.
     "ladder_link": frozenset({
         "stream_id", "play_url", "kind", "playable", "status", "expires_at",
-        "is_resumable", "is_temporary", "file_size_bytes", "label",
+        "is_resumable", "is_temporary", "file_size_bytes", "label", "mime_type",
     }),
     # GET /api/v1/stats — scale, no per-site breakdown.
     #
