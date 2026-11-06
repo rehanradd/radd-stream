@@ -265,6 +265,9 @@ private fun PlayerScreenContent(
     var snackbar by remember { mutableStateOf<String?>(null) }
     var scrubPreviewMs by remember { mutableStateOf<Long?>(null) }
 
+    val showCoach by vm.showCoach.collectAsState()
+    var coachDismissed by remember { mutableStateOf(false) }
+
     val launchPip = rememberPipLauncher()
     PlayerEventWatcher(vm, context, onPlayNextEpisode) { snackbar = it }
 
@@ -323,6 +326,19 @@ private fun PlayerScreenContent(
         if (controlsVisible && state.isPlaying && !state.dialogBlocking) {
             delay(3000)
             if (state.isPlaying) controlsVisible = false
+        }
+    }
+
+    // First-run gesture coach (plan §5 step 7): owed once per major version, shown
+    // only once the picture is actually moving — never over a loading notice, an error,
+    // a dialog, a sheet, or a locked player. Four seconds, then never again this version.
+    val coachVisible = showCoach && !coachDismissed && !state.dialogBlocking &&
+        !state.moreSheetVisible && !state.locked && state.connectionError == null && state.isPlaying
+    LaunchedEffect(coachVisible) {
+        if (coachVisible) {
+            delay(4000)
+            coachDismissed = true
+            vm.markCoachSeen()
         }
     }
 
@@ -583,6 +599,18 @@ private fun PlayerScreenContent(
                     Text(msg, color = Color.White, fontSize = brandSp(13), modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp))
                 }
             }
+        }
+
+        // 9 — first-run gesture coach (plan §5 step 7): once per major version, 4 s,
+        // any tap dismisses. Sits above the chrome and the narration cards; sheets and
+        // dialogs are gated out by the visibility rule above, so it never covers one.
+        if (coachVisible) {
+            PlayerCoachOverlay(
+                onDismiss = {
+                    coachDismissed = true
+                    vm.markCoachSeen()
+                },
+            )
         }
     }
 }
@@ -1573,6 +1601,57 @@ private fun ConnectionErrorCard(message: String, onRetry: () -> Unit) {
 // ── Give-up card (§5 handoff reasons) ──────────────────────────────────────────
 
 @Composable
+/**
+ * First-run gesture coach (plan §5 step 7): the three hints the player teaches nowhere
+ * else, on a dimmed scrim so they read over any frame. Any tap dismisses — the tap is
+ * the lesson ending, not a control press — and the 4 s timer in [PlayerScreenContent]
+ * dismisses it the same way. No icons: the words are the whole hint, and a fourth
+ * visual language would be decoration on a teaching moment.
+ */
+@Composable
+private fun PlayerCoachOverlay(onDismiss: () -> Unit) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(alpha = 0.55f))
+            .clickableNoRipple(onDismiss),
+        contentAlignment = Alignment.Center,
+    ) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            modifier = Modifier.padding(horizontal = 32.dp),
+        ) {
+            Text(
+                stringResource(R.string.player_coach_title),
+                color = Color.White,
+                style = MaterialTheme.typography.titleMedium,
+                textAlign = TextAlign.Center,
+            )
+            Spacer(Modifier.height(12.dp))
+            Text(
+                stringResource(R.string.player_coach_double_tap),
+                color = Color.White.copy(alpha = 0.85f),
+                style = MaterialTheme.typography.bodyMedium,
+                textAlign = TextAlign.Center,
+            )
+            Spacer(Modifier.height(6.dp))
+            Text(
+                stringResource(R.string.player_coach_swipe),
+                color = Color.White.copy(alpha = 0.85f),
+                style = MaterialTheme.typography.bodyMedium,
+                textAlign = TextAlign.Center,
+            )
+            Spacer(Modifier.height(6.dp))
+            Text(
+                stringResource(R.string.player_coach_long_press),
+                color = Color.White.copy(alpha = 0.85f),
+                style = MaterialTheme.typography.bodyMedium,
+                textAlign = TextAlign.Center,
+            )
+        }
+    }
+}
+
 private fun StartNoticeCard(
     phase: StartPhase,
     title: String?,

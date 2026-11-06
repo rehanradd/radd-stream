@@ -227,6 +227,24 @@ class ServerSettingsRepository @Inject constructor(
         }
     }
 
+    /**
+     * The app major version the first-run gesture coach was last shown for, or null
+     * when it has never been shown. The coach shows once per major version (plan §5
+     * step 7): first open ever, and once again after a major version change — a
+     * minor update must not re-teach gestures the viewer already knows. The stored
+     * value is a major version ("1"), never the full version name, so 1.0.4 → 1.1.0
+     * does not re-show. Written when the coach is dismissed or its 4 s timer ends.
+     */
+    val coachSeenVersion: Flow<String?> = dataStore.data.map { preferences ->
+        preferences[COACH_SEEN_VERSION_KEY]
+    }
+
+    suspend fun saveCoachSeenVersion(majorVersion: String) {
+        dataStore.edit { preferences ->
+            preferences[COACH_SEEN_VERSION_KEY] = majorVersion
+        }
+    }
+
     /** Drop the trial state with the credential: a signed-out device has no clock to show. */
     suspend fun clearDeviceTrial() {
         dataStore.edit { preferences ->
@@ -630,6 +648,7 @@ class ServerSettingsRepository @Inject constructor(
         private val TRIAL_SECONDS_REMAINING_KEY = doublePreferencesKey("trial_seconds_remaining")
         private val TRIAL_RECORDED_AT_MS_KEY = longPreferencesKey("trial_recorded_at_ms")
         private val TRIAL_KEY_UNSEEN_KEY = booleanPreferencesKey("trial_key_unseen")
+        private val COACH_SEEN_VERSION_KEY = stringPreferencesKey("player_coach_seen_version")
         private val ACCOUNT_LABEL_KEY = stringPreferencesKey("account_label")
         private val SEARCH_RECENTS_KEY = stringPreferencesKey("search_recents")
         private val IMAGE_QUALITY_KEY = stringPreferencesKey("image_quality")

@@ -1424,3 +1424,18 @@ or printed. Gating is qoder1's call after fresh green CI.
 **Built:** one constant, as the plan specified (plan §5 #6, research rule: chrome-free default, ~3 s auto-hide). `PlayerScreen.kt:321-324`: the auto-hide `LaunchedEffect(controlsVisible, state.isPlaying, interactTick, state.dialogBlocking)` now waits `delay(3000)` instead of `delay(3800)`, and its comment reads 3.0 s. Nothing else changes: the guard (`controlsVisible && state.isPlaying && !state.dialogBlocking`), the re-check after the delay, and the 900 ms double-tap ripple lifetime are untouched. No strings changed, so the DeadCodeGuardTest / PlayerChromeCopyTest string guards are unaffected; no test pins the old 3800 value (verified by grep — zero hits in `App/app/src/test/`).
 
 **Not done:** no local Gradle run — CI judges. Device check (controls really hide at 3 s on a phone) is owner-only, part of step 20. Next: player step 7 (coach marks — none exist yet; new DataStore key + one-time overlay).
+
+---
+
+### Session 48 — Player rebuild step 7: first-run gesture coach marks (Muse, 2026-11-06)
+
+**Agent:** Muse (BoNzoO), coded directly on the user's order. No qoder lane. Same branch as Sessions 40–47.
+
+**Built:** the player finally teaches its gestures (plan §5 #7, research rule P37). One-time overlay, three hints, 4 seconds, dismiss on any tap — and never again until a major version change.
+
+- **Flag (version-stamped, not boolean):** `ServerSettingsRepository` gains `coachSeenVersion: Flow<String?>` + `saveCoachSeenVersion(major)` backed by `player_coach_seen_version` (one string key). A plain boolean could not do the plan's "once after a major version change" half; storing the major ("1") means 1.0.4 → 1.1.0 does not re-teach.
+- **Pure policy:** NEW `player/CoachPolicy.kt` — top-level `majorVersionOf` + `shouldShowCoach(seen, current)`, same shape as `StartDeadline`. NEW `CoachPolicyTest` (4 cases: never shown → show; same major → hide, including a stored full version compared by its major; new major → show; major parsing incl. blank/whitespace).
+- **Wiring:** `PlayerViewModel` exposes `showCoach: StateFlow<Boolean>` (false until DataStore answers — never show on a guess) collected in `observeSettings()`, plus `markCoachSeen()` which saves the current major. The screen reads only that boolean, never the raw stored version.
+- **Overlay:** NEW `PlayerCoachOverlay` composable in `PlayerScreen.kt` — dimmed scrim + centered title ("Quick gestures") and the three hints, all verified true in code before teaching them: double-tap sides ±10 s (`PlayerGestures`, double-tap ripple), swipe left brightness / right volume (vertical-drag lanes), long-press 2× (`GestureSettings.boostSpeed = 2.0f`, hold-to-boost, release restores). Any tap dismisses (the tap ends the lesson, it does not also press the control beneath); a 4 s timer dismisses the same way. Shown only once the picture is actually moving (`isPlaying`) and never over a loading notice, an error, a dialog, a sheet (including More), or a locked player. New strings in strings.xml (4: title + three hints) — verified before committing with a local replica of both guards: defined-not-used [], used-not-defined [], duplicate values {}, all four new strings painted.
+
+**Not done:** no local Gradle run — CI judges. Device check (overlay really shows once on first open, never again, 4 s, tap dismisses) is owner-only, part of step 20. Next: player step 8 (brand icons + jade accent; SVG → vector conversion first).

@@ -64,6 +64,8 @@ import com.raddstream.app.player.SubtitleTrackPolicy
 import com.raddstream.app.player.SubtitleUiSettings
 import com.raddstream.app.player.TrackUiOption
 import com.raddstream.app.player.ViewMode
+import com.raddstream.app.player.majorVersionOf
+import com.raddstream.app.player.shouldShowCoach
 import com.raddstream.app.player.subtitle.SubtitleCue
 import com.raddstream.app.player.subtitle.SubtitleFile
 import com.raddstream.app.player.subtitle.SubtitleFormat
@@ -221,6 +223,15 @@ class PlayerViewModel @Inject constructor(
     private val _ui = MutableStateFlow(PlayerUiState())
     val uiState: StateFlow<PlayerUiState> = _ui.asStateFlow()
 
+    /**
+     * Whether the first-run gesture coach (plan §5 step 7) is owed right now. False
+     * until the stored version is read — never show on a guess — and false again once
+     * it is marked seen for this major version. The screen reads this, never the raw
+     * stored version, so a half-loaded DataStore can never flash the overlay.
+     */
+    private val _showCoach = MutableStateFlow(false)
+    val showCoach: StateFlow<Boolean> = _showCoach.asStateFlow()
+
     private val _events = MutableSharedFlow<PlayerEvent>(extraBufferCapacity = 8)
     val events: SharedFlow<PlayerEvent> = _events.asSharedFlow()
 
@@ -334,6 +345,25 @@ class PlayerViewModel @Inject constructor(
                 downloadsAllowed = allowed
                 refreshKeepState()
             }
+        }
+        // The first-run gesture coach (plan §5 step 7): owed when never shown, or last
+        // shown for a different major version than the one running now. Collected, not
+        // sampled, so marking it seen hides it at once without a relaunch.
+        viewModelScope.launch {
+            settingsRepository.coachSeenVersion.collect { seen ->
+                _showCoach.value = shouldShowCoach(seen, Brand.versionName)
+            }
+        }
+    }
+
+    /**
+     * The first-run gesture coach has been shown for this major version: record it so it
+     * never shows again until a major version change. Called when the viewer taps it away
+     * or its 4 s timer ends — either way the lesson was delivered, not skipped.
+     */
+    fun markCoachSeen() {
+        viewModelScope.launch {
+            settingsRepository.saveCoachSeenVersion(majorVersionOf(Brand.versionName))
         }
     }
 

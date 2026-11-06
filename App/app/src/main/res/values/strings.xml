@@ -89,6 +89,10 @@
     <string name="player_go">Go</string>
     <string name="player_speed_title">Playback speed (pitch preserved)</string>
     <string name="player_boost_note">Long-press the video any time for a 2× boost — releasing restores this speed.</string>
+    <string name="player_coach_title">Quick gestures</string>
+    <string name="player_coach_double_tap">Double-tap the sides to skip 10 seconds</string>
+    <string name="player_coach_swipe">Swipe the left edge for brightness, the right edge for volume</string>
+    <string name="player_coach_long_press">Long-press to play at 2× speed</string>
     <string name="player_quality_title">Quality</string>
     <string name="player_quality_auto">Auto (recommended)</string>
     <string name="player_quality_auto_detail">Chosen from what your connection is actually moving</string>
