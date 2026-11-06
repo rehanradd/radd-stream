@@ -127,6 +127,30 @@ data class SettingsUiState(
     val lanShareStatus: LanShareStatus = LanShareStatus.Off,
     /** The OPTIONAL sync account. Signed out, this card is one line and one button. */
     val account: AccountUiState = AccountUiState(),
+    /**
+     * The membership summary the VIP card paints — collected from the sync
+     * account's entitlement, never invented: null entitlement means "not
+     * loaded yet", so the card shows the free line until the server answers.
+     * vipUntilMillis is 0 when there is no VIP grant to date.
+     */
+    val planIsVip: Boolean = false,
+    val planVipUntilMillis: Long = 0L,
+    val planPaymentPending: Boolean = false,
+    /**
+     * The operator's published prices, in PKR, from the remote config — 0
+     * means "not published", and the card hides the price line rather than
+     * printing a zero. Fetched once when Settings opens; a failed fetch
+     * leaves the last known values (0 on a fresh install).
+     */
+    val planMonthlyPkr: Int = 0,
+    val planYearlyPkr: Int = 0,
+    /**
+     * The poster-image disk cache, measured from Coil's own disk cache —
+     * null until the first measurement lands. max is the loader's own cap,
+     * so the bar is size-of-cap, never a guess at the device's free space.
+     */
+    val posterCacheBytes: Long? = null,
+    val posterCacheMaxBytes: Long? = null,
     /** The contact form's whole state. The message lives only until it is sent. */
     val contact: ContactUiState = ContactUiState(),
     /**
@@ -235,6 +259,8 @@ class SettingsViewModel @Inject constructor(
         observeLanShare()
         observeAccount()
         observeTrial()
+        observePlan()
+        measurePosterCache()
     }
 
     /**
@@ -294,6 +320,48 @@ class SettingsViewModel @Inject constructor(
                 }
                 _uiState.update { it.copy(account = it.account.copy(trialSecondsLeft = seconds)) }
             }
+        }
+    }
+
+    /**
+     * The membership summary for the VIP card: the entitlement the sync
+     * account already collects (a VIP grant is server truth, never a local
+     * guess) plus the operator's published prices from the remote config.
+     * Both are best-effort — a null entitlement means "not loaded yet" and
+     * a failed price fetch leaves 0, which the card reads as "not published".
+     */
+    private fun observePlan() {
+        viewModelScope.launch {
+            syncAccountRepository.entitlement.collect { entitlement ->
+                _uiState.update {
+                    it.copy(
+                        planIsVip = entitlement?.vip == true,
+                        planVipUntilMillis = ((entitlement?.vipUntil ?: 0.0) * 1000).toLong(),
+                        planPaymentPending = entitlement?.pending == true,
+                    )
+                }
+            }
+        }
+        viewModelScope.launch {
+            runCatching { catalogRepository.getRemoteConfig() }.onSuccess { config ->
+                _uiState.update {
+                    it.copy(
+                        planMonthlyPkr = config.vip.monthlyPkr.takeIf { price -> price > 0 } ?: 0,
+                        planYearlyPkr = config.vip.yearlyPkr.takeIf { price -> price > 0 } ?: 0,
+                    )
+                }
+            }
+        }
+    }
+
+    /** Reads Coil's own disk cache size and cap, on IO because both are file I/O. */
+    private fun measurePosterCache() {
+        viewModelScope.launch {
+            val (bytes, max) = withContext(Dispatchers.IO) {
+                val disk = Coil.imageLoader(context).diskCache
+                (disk?.size to disk?.maxSize)
+            }
+            _uiState.update { it.copy(posterCacheBytes = bytes, posterCacheMaxBytes = max) }
         }
     }
 
@@ -610,10 +678,13 @@ class SettingsViewModel @Inject constructor(
                     },
                 )
             }
+            // The bar must show the empty cache, not the size it measured before the clear.
+            measurePosterCache()
         }
     }
 
-    private fun formatCacheSize(bytes: Long): String = when {
+    /** Shared with the screen: the same MB/KB/B rule paints the cache bar and the cleared notice. */
+    internal fun formatCacheSize(bytes: Long): String = when {
         bytes >= 1024 * 1024 -> "${bytes / (1024 * 1024)} MB"
         bytes >= 1024 -> "${bytes / 1024} KB"
         else -> "$bytes B"

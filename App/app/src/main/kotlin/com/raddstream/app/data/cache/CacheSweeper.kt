@@ -2,9 +2,10 @@ package com.raddstream.app.data.cache
 
 /**
  * Persistence surface the TTL / low-storage sweep needs, abstracted so the orchestration is
- * pure and unit-testable and this file has NO Android or Room or WorkManager dependency
- * (WorkManager is not yet a Gradle dependency; the worker wrapper + enqueue code are delivered
- * in `docs/HANDOFF_appcache.md`).
+ * pure and unit-testable and this file has NO Android or Room or WorkManager dependency.
+ * The worker wrapper is `CacheSweepWorker` (same package, Session 66) and the daily
+ * enqueue lives in the Application; the sketch in `docs/HANDOFF_appcache.md` §6 is
+ * the record of what was planned, not the code.
  */
 interface CacheSweepStore {
     suspend fun liveFiles(): List<CacheFileEntity>

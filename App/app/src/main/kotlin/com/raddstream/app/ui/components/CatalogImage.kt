@@ -1,6 +1,7 @@
 package com.raddstream.app.ui.components
 
 import android.content.Context
+import android.graphics.Bitmap
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -19,6 +20,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.core.graphics.drawable.toBitmap
 import coil.compose.SubcomposeAsyncImage
 import coil.request.ImageRequest
 import com.raddstream.app.images.ImageSizingHolder
@@ -35,6 +37,10 @@ import dagger.hilt.components.SingletonComponent
  * "Image quality" row and the mobile-data switch cannot be honoured on one screen and quietly ignored
  * on another — the drift this whole file exists to prevent.
  *
+ * [onBitmap] is the artwork-accent hook: a caller that wants the poster's own colour (the detail
+ * header's border) gets the decoded bitmap on success, and nothing when the load is gated or fails.
+ * It is optional and defaults to off, so the grid cells that never need a bitmap pay nothing.
+ */
  * It reads [ImageSizingHolder], an Application-owned singleton, through a Hilt [EntryPoint] off the
  * ambient [LocalContext], because a poster lives deep inside a recycled grid cell where no screen
  * composes a ViewModel. Handing Coil an explicit [ImageRequest] size is the whole point: left to
@@ -64,6 +70,7 @@ fun CatalogImage(
     modifier: Modifier = Modifier,
     contentScale: ContentScale = ContentScale.Crop,
     fallbackLabel: String? = null,
+    onBitmap: ((Bitmap?) -> Unit)? = null,
 ) {
     val context = LocalContext.current
     val holder = remember(context) { imageSizingHolder(context) }
@@ -96,6 +103,10 @@ fun CatalogImage(
         // reaches this slot, so the surface behind the card stays the truth in that case.
         loading = { ShimmerBox(Modifier.fillMaxSize()) },
         error = { ImageFallbackCard(label = fallbackLabel) },
+        // The artwork-accent hook: only a caller that passed onBitmap pays the
+        // decode-to-bitmap, and only on a real success — a gated or failed load
+        // reports nothing, so the caller keeps its fallback colour.
+        onSuccess = { state -> onBitmap?.invoke(state.result.drawable.toBitmap()) },
     )
 }
 

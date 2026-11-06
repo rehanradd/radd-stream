@@ -41,9 +41,11 @@ import kotlinx.coroutines.launch
  *
  * HONESTY RULE (owner brief + AGENTS.md policy): a rail is only *rendered* when it
  * has a real backing source. `HomeViewModel` therefore only builds rails the v1 API
- * can actually serve. Rails the brief asks for but that have **no server support yet**
- * (continue-watching, trending, "because you watched", genre/language jump-off) are
- * declared in [RESERVE_NOTE] and intentionally omitted — the endpoint is requested in
+ * can actually serve. Continue Watching renders from the device's own watch
+ * history (no server needed), and the panel's sections render from the feed.
+ * Rails the brief asks for but that have **no server support yet** (trending as a
+ * feed, "because you watched", genre/language jump-off) are declared in
+ * [RESERVE_NOTE] and intentionally omitted — the endpoint is requested in
  * docs/HANDOFF_appui.md rather than filled with fabricated or client-invented data.
  */
 /**
@@ -152,7 +154,11 @@ data class AppUpdate(
 
 private const val RESERVE_NOTE = """
     Reserved rails awaiting server support (see docs/HANDOFF_appui.md):
-      - trending          : needs GET /api/v1/trending or a play-count field — requested.
+      - trending          : a trending ORDER already exists as sort=trending on
+                            /api/v1/posts (most prints and mirrors — no play
+                            counts exist, so it is not popularity); what is
+                            still missing is a dedicated GET /api/v1/trending
+                            feed endpoint.
       - because_you_watch : needs GET /api/v1/related?work_id= (API_V2.md collections) — requested.
       - genre / language jump-off : needs GET /api/v1/facets (browse facets) — requested.
     None of these render until the backend returns real rows; they are NOT faked.

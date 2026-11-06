@@ -26,9 +26,13 @@ import kotlinx.coroutines.launch
  *  - **Server-driven:** free-text `q` (debounced), `type`, and the industry /
  *    genre / quality / sort facets. The backend composes them into SQL before
  *    paging, so a chip narrows the whole catalog rather than only the rows this
- *    device has already loaded.
+ *    device has already loaded. The sort is sent with every page fetch — it
+ *    orders the page the server returns.
  *  - **Client-driven over the accumulated page(s):** the year range and the
- *    final per-group ordering. Grouping by content type is presentation only.
+ *    final per-group ordering. Grouping by content type is presentation only,
+ *    and the order you SEE inside each group is this file's re-sort, not the
+ *    server's page order: the server sort decides which rows arrive, the
+ *    client sort decides how they line up on screen.
  *
  * Quality facets are an existence test over `releases.quality` on the server
  * (`4K` also matches 2160p/UHD). That is why the chip works even though the v1

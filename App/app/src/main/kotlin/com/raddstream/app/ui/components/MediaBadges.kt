@@ -30,13 +30,20 @@ import com.raddstream.app.network.models.HdrFormat
 import com.raddstream.app.network.models.LinkState
 import com.raddstream.app.network.models.Resolution
 import com.raddstream.app.network.models.SourceTag
+import com.raddstream.app.ui.theme.RaddCamPill
+import com.raddstream.app.ui.theme.RaddHdrPill
+import com.raddstream.app.ui.theme.RaddHealthDead
+import com.raddstream.app.ui.theme.RaddHealthExpired
+import com.raddstream.app.ui.theme.RaddHealthOk
+import com.raddstream.app.ui.theme.RaddSignalGold
 import com.raddstream.app.viewmodel.RankedPrint
 
 /**
- * Small reusable status/badge primitives. Colors come ONLY from
- * `MaterialTheme.colorScheme` (no raw hex). Anything that wants a dedicated
- * semantic colour is requested as a theme token in docs/HANDOFF_appui.md; until
- * that token exists it maps to the nearest M3 role so nothing is hardcoded.
+ * Small reusable status/badge primitives. Colors come from
+ * `MaterialTheme.colorScheme` or from the semantic tokens in
+ * `ui/theme/Color.kt` (link health, HDR, CAM) — never raw hex at a call
+ * site. The tokens exist precisely so a badge does not borrow a generic
+ * role (a CAM badge is not an error, an HDR badge is not a tertiary).
  */
 
 @Composable
@@ -73,19 +80,20 @@ fun Pill(
 
 /**
  * The print-quality badge — the "quality axis" of a release (4K · DV · BluRay).
- * Deliberately loud for HDR/4K, muted for unknown, and *error*-coloured for CAM so
- * the discouraged bootleg is unmistakable (owner brief + API_V2.md §3 ordering).
+ * Deliberately loud for HDR/4K, muted for unknown, and CAM-token coloured for
+ * CAM so the discouraged bootleg is unmistakable (owner brief + API_V2.md §3
+ * ordering) — a cam recording is a low-quality source, not an error.
  */
 @Composable
 fun PrintQualityBadge(print: RankedPrint, modifier: Modifier = Modifier) {
     val bg = when {
-        print.isCam -> MaterialTheme.colorScheme.errorContainer
+        print.isCam -> RaddCamPill
         print.resolution == Resolution.R2160 -> MaterialTheme.colorScheme.primaryContainer
         print.isOfficialPrint -> MaterialTheme.colorScheme.tertiaryContainer
         else -> MaterialTheme.colorScheme.surfaceVariant
     }
     val fg = when {
-        print.isCam -> MaterialTheme.colorScheme.onErrorContainer
+        print.isCam -> RaddHealthDead
         print.resolution == Resolution.R2160 -> MaterialTheme.colorScheme.onPrimaryContainer
         print.isOfficialPrint -> MaterialTheme.colorScheme.onTertiaryContainer
         else -> MaterialTheme.colorScheme.onSurfaceVariant
@@ -111,8 +119,10 @@ fun HdrBadge(print: RankedPrint, modifier: Modifier = Modifier) {
     Pill(
         text = text,
         modifier = modifier,
-        backgroundColor = MaterialTheme.colorScheme.tertiaryContainer,
-        contentColor = MaterialTheme.colorScheme.onTertiaryContainer,
+        // The HDR pill is its own token, not a borrowed tertiary: the gold
+        // text is verified 9.8:1 on this exact pill (see Color.kt §8).
+        backgroundColor = RaddHdrPill,
+        contentColor = RaddSignalGold,
         contentDescription = "High dynamic range $text",
     )
 }
@@ -234,8 +244,10 @@ fun CamBadge(modifier: Modifier = Modifier) {
     Row(
         modifier = modifier
             .clip(RoundedCornerShape(6.dp))
-            .background(MaterialTheme.colorScheme.errorContainer)
-            .border(1.dp, MaterialTheme.colorScheme.error, RoundedCornerShape(6.dp))
+            // CAM is its own token, not an error: a cam recording is a
+            // low-quality source, not something that went wrong.
+            .background(RaddCamPill)
+            .border(1.dp, RaddHealthDead, RoundedCornerShape(6.dp))
             .padding(horizontal = 8.dp, vertical = 3.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(4.dp),
@@ -243,14 +255,14 @@ fun CamBadge(modifier: Modifier = Modifier) {
         Icon(
             Icons.Default.Visibility,
             contentDescription = null,
-            tint = MaterialTheme.colorScheme.onErrorContainer,
+            tint = RaddHealthDead,
             modifier = Modifier.size(13.dp),
         )
         Text(
             "Cam recording",
             style = MaterialTheme.typography.labelSmall,
             fontWeight = FontWeight.Bold,
-            color = MaterialTheme.colorScheme.onErrorContainer,
+            color = RaddHealthDead,
         )
     }
 }
@@ -268,9 +280,12 @@ fun LinkHealthChip(
     resumable: Boolean,
     modifier: Modifier = Modifier,
 ) {
+    // The dot wears the link-health tokens, not the generic primary/error:
+    // health is this app's superpower and the chip is where the viewer reads it.
     val dotColor = when (health) {
-        LinkState.ACTIVE -> MaterialTheme.colorScheme.primary
-        LinkState.DEAD, LinkState.EXPIRED -> MaterialTheme.colorScheme.error
+        LinkState.ACTIVE -> RaddHealthOk
+        LinkState.DEAD -> RaddHealthDead
+        LinkState.EXPIRED -> RaddHealthExpired
         LinkState.UNCHECKED, LinkState.UNKNOWN -> MaterialTheme.colorScheme.outline
     }
     val healthText = when (health) {

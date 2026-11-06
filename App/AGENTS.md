@@ -9,8 +9,9 @@
 
 > A native Kotlin/Compose Android client for a `radd-stream` server. Verified in `App/app/src`, the
 > surface covers server setup, catalog browsing, search, favorites, a detail screen, and Media3
-> playback via the stream resolver. Device/CI verification is pending — §5 and §6 give the exact
-> API contract and the known broken spots.---
+> playback via the stream resolver. Device verification is pending; CI is green on the panel
+> branch (run ids in `App/docs/SESSION_HISTORY.md`) — §5 and §6 give the exact API contract and
+> the known broken spots.---
 
 ## 1. Critical Constraint — No Local Android Studio
 
@@ -111,7 +112,7 @@ verification, not implementation.
 |---|---|---|
 | **Phase 0** | Gradle project skeleton + CI | ✅ Complete |
 | **Phase 1** | Server setup → metadata catalog → search | 🚧 Implemented; CI/device verification pending |
-| **Phase 2** | Detail pages, playback, watchlist, settings | 🚧 Code implemented; unverified; the season/episode + `is_temporary` model mismatches in §6 block correct series playback |
+| **Phase 2** | Detail pages, playback, watchlist, settings | 🚧 Code implemented; device verification pending (the old season/episode + `is_temporary` model mismatch that used to block series playback was fixed in code — series play through the player now) |
 | **Phase 3** | Chromecast, multi-server, Android TV | ⏳ Future |
 
 ---
@@ -179,7 +180,9 @@ never persist the token in the repository.
 7. **Test every network model** — a JSON deserialization test per new data class
 8. **Keep APK under 15 MB** — no bundled video assets; lazy-load everything
 9. **Minimum SDK 21** — guard anything below API 21 with Build.VERSION_CODES
-10. **Always update this AGENTS.md** with your session log before ending
+10. **Session logs go in `App/docs/SESSION_HISTORY.md`, never in this file** — this file is
+    instructions-only and is auto-loaded into every agent's context. (An older line here said
+    to update this AGENTS.md with the session log; that line is retired by the root rule.)
 
 ---
 

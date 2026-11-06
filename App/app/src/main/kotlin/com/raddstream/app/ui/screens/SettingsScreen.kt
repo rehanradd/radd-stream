@@ -34,6 +34,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -73,6 +74,9 @@ import com.raddstream.app.viewmodel.ImageQuality
 import com.raddstream.app.viewmodel.KeepTtl
 import com.raddstream.app.viewmodel.SettingsViewModel
 import com.raddstream.app.viewmodel.UserPreferences
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 /** The subtitle chips, in the order the row shows them. Readable by the region test, which
  * pins that a card can only ever seed a word this row can actually display. */
@@ -192,6 +196,37 @@ fun SettingsScreen(
 
             // ── VIP membership ─────────────────────────────────────────
             SettingsCard(title = "VIP Membership", icon = Icons.Default.Star) {
+                // The plan summary: what this install actually has (VIP with its
+                // date, a payment waiting, or free) plus the operator's
+                // published prices when the server sent any. The trial days
+                // live on the Account card, not here — one screen, one fact.
+                Text(
+                    when {
+                        state.planIsVip && state.planVipUntilMillis > 0L ->
+                            "VIP — confirmed through ${planDateLabel(state.planVipUntilMillis)}."
+                        state.planIsVip -> "VIP — active."
+                        state.planPaymentPending ->
+                            "Payment submitted — waiting for confirmation."
+                        else -> "Free plan — playback stays at 720p."
+                    },
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.Medium,
+                )
+                if (state.planMonthlyPkr > 0 || state.planYearlyPkr > 0) {
+                    Text(
+                        buildString {
+                            if (state.planMonthlyPkr > 0) {
+                                append("Rs ${"%,d".format(state.planMonthlyPkr)} a month")
+                            }
+                            if (state.planYearlyPkr > 0) {
+                                if (isNotEmpty()) append(" · ")
+                                append("Rs ${"%,d".format(state.planYearlyPkr)} a year")
+                            }
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
                 Text(
                     "Support the catalog with a monthly or yearly membership. Pay through " +
                         "JazzCash, EasyPaisa or Raast, then submit the transaction ID from " +
@@ -200,7 +235,7 @@ fun SettingsScreen(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 Button(onClick = onOpenVipUpgrade, modifier = Modifier.fillMaxWidth()) {
-                    Text("Upgrade to VIP")
+                    Text(if (state.planIsVip) "View membership" else "Upgrade to VIP")
                 }
             }
 
@@ -698,6 +733,24 @@ fun SettingsScreen(
 
             // ── Cache ──────────────────────────────────────────────────
             SettingsCard(title = "Storage & cache") {
+                // The poster-image cache as a bar: what it holds now against the
+                // loader's own cap. Nothing here is a guess at the device's free
+                // space, and the kept videos are not in this number at all — they
+                // are listed and removed on the Downloads screen.
+                val cacheBytes = state.posterCacheBytes
+                val cacheMax = state.posterCacheMaxBytes
+                if (cacheBytes != null && cacheMax != null) {
+                    Text(
+                        "Poster images: ${viewModel.formatCacheSize(cacheBytes)} of " +
+                            viewModel.formatCacheSize(cacheMax),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    LinearProgressIndicator(
+                        progress = { cacheBytes.toFloat() / cacheMax.toFloat().coerceAtLeast(1f) },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
                 Button(onClick = viewModel::clearImageCache, modifier = Modifier.fillMaxWidth()) {
                     Text("Clear poster images")
                 }
@@ -860,6 +913,10 @@ private fun lanShareStatusLine(status: LanShareStatus): String = when (status) {
         "Listening on $where · ${status.servableCount} kept ${if (status.servableCount == 1) "file" else "files"}"
     }
 }
+
+/** The VIP card's date — the same "d MMM yyyy" the VIP screen paints, so the two never disagree. */
+private fun planDateLabel(epochMs: Long): String =
+    SimpleDateFormat("d MMM yyyy", Locale.getDefault()).format(Date(epochMs))
 
 /**
  * The phone + PIN form. Three fields, four sentences, one button.

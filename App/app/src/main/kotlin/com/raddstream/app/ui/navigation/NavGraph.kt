@@ -1,11 +1,6 @@
 package com.raddstream.app.ui.navigation
 
 import androidx.compose.foundation.layout.padding
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Favorite
-import androidx.compose.material.icons.filled.Home
-import androidx.compose.material.icons.filled.Search
-import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
@@ -18,6 +13,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.res.vectorResource
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavHostController
 import androidx.navigation.NavType
@@ -26,6 +22,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
+import com.raddstream.app.R
 import com.raddstream.app.brand.Brand
 import com.raddstream.app.data.RemoteFeatures
 import com.raddstream.app.network.models.PanelTheme
@@ -95,12 +92,18 @@ fun RaddStreamNavGraph(
     // back to the four tabs this build has always shipped. The routes stay registered even
     // for a tab the operator hid — a back stack that already holds that screen must not name
     // a destination the graph cannot resolve.
+    // The four tabs wear the brand's own icons (res/drawable/ic_tab_*.xml,
+    // the stroke set from the brand pack — the `?attr/colorControlNormal`
+    // tint the pack files carried was stripped on copy-in, because this app
+    // has no such attr; the NavigationBarItem tint is the only tint). The
+    // vectors are stroke-black; Icon's tint recolours them to the bar's
+    // selected/unselected colours, exactly as the Material icons did.
     val bottomNavItems = PanelTabs.resolve(tabs, features.search).map { id ->
         when (id) {
-            "search" -> BottomNavItem("Search", Screen.Search.route, Icons.Default.Search)
-            "my_list" -> BottomNavItem("My List", Screen.MyList.route, Icons.Default.Favorite)
-            "settings" -> BottomNavItem("Settings", Screen.Settings.route, Icons.Default.Settings)
-            else -> BottomNavItem("Home", Screen.Home.route, Icons.Default.Home)
+            "search" -> BottomNavItem("Search", Screen.Search.route, ImageVector.vectorResource(R.drawable.ic_tab_search))
+            "my_list" -> BottomNavItem("My List", Screen.MyList.route, ImageVector.vectorResource(R.drawable.ic_tab_my_list))
+            "settings" -> BottomNavItem("Settings", Screen.Settings.route, ImageVector.vectorResource(R.drawable.ic_tab_settings))
+            else -> BottomNavItem("Home", Screen.Home.route, ImageVector.vectorResource(R.drawable.ic_tab_home))
         }
     }
 

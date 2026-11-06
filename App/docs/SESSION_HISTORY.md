@@ -1758,3 +1758,104 @@ or printed. Gating is qoder1's call after fresh green CI.
 **The v1 aliases NOT built (deliberate).** `/api/v1/trending` and `/api/v1/suggest` as v1 routes: the app already reaches both capabilities — trending through `sort=trending` on the posts list (My List's popular row uses it) and suggestions through the wired `/api/v2/suggest`. A v1 alias would be a route no caller calls, and this project does not build uncalled routes. If a v1-only client ever appears, the alias is a one-line route each.
 
 **Tests:** server — test_media_search 44 OK, test_work_ref 5 OK, test_search_fuzzy OK, test_panel_feed OK, test_redact OK, test_database OK (skipped=1) locally. App — new DeepLinksTest (6) + SyncContractTest additions (2); no test constructs the touched ViewModels/repositories directly. **Not done:** push (this commit, then CI judges — the c65cf05 runs are finished: Backend green, Android red on the six-flow combine fixed above, so nothing is in flight). Next: design polish + 12 doc contradictions, final double-verification. Device checks owner-only.
+
+**Addendum — CI verdict on 7aa9e46 (Android run 42156765811, Backend run 42156765709).** Backend **SUCCESS**. Android **FAILURE** at `:app:checkDebugAarMetadata` — `Could not find androidx.hilt:hilt-work:2.51.1`: the Session 66 catalog entry pinned `hilt-work` to the Hilt version (`version.ref = "hilt"`), but `androidx.hilt:hilt-work` has its own numbering — 1.2.0 is the current one. Fixed by giving `hilt-work` its own version ref (`1.2.0`). The fix ships in the next commit, with the Session 67 work below.
+
+---
+
+### Session 67 — Design polish: bundled fonts, launcher PNGs, tab icons, semantic tokens, artwork accent, Settings plan + storage, 12 doc contradictions (Muse, 2026-11-06)
+
+**Agent:** Muse (BoNzoO), coded directly. Same branch as Sessions 40–66.
+
+**Bundled fonts.** Outfit (display) + Inter (text), both SIL OFL 1.1, downloaded from
+`google/fonts` and verified as real variable TTFs by name table (Inter 876 KB,
+Outfit 111 KB) into `res/font/outfit_variable.ttf` / `inter_variable.ttf`.
+`Type.kt` now points `RaddDisplayFamily` / `RaddTextFamily` at the bundled files
+(the exact switch `docs/HANDOFF_apptime.md` prescribed); the dead
+`brandFontFamily` platform-family mapper is deleted and the header comment now
+says the fonts are bundled. No gradle change (fonts are resources). Follow-on
+(not done): the weight axis via `FontVariationSettings`, so Bold/SemiBold
+weights drive the variable font's wght axis instead of the default instance —
+device check owner-only.
+
+**Launcher PNGs were blank.** Every one of the ten legacy `mipmap-*/ic_launcher*.png`
+files was a single solid colour `(10,10,15)` — no mark at all. Regenerated from
+the current adaptive icon with `~/workspace/render-launcher-pngs.py` (kept in the
+workspace, not the repo): the background's exact 3-stop gradient
+(`#06090B` → `#081412` → `#0B2621`) plus the Source Ripple foreground's exact
+geometry (outer arc r=32 stroke 8 at 62% jade, inner arc r=18 stroke 10 full
+jade, both spanning −70°…+70° through east; core dot r=8; rider dot r=5.4),
+rendered 4× and downscaled, at 48/72/96/144/192, square + circular-masked
+round. Verified two ways: pixel stats (771 colours, 3,561 jade pixels at
+xxxhdpi, was 1 colour / 0 jade) and a visual read of the rendered icon.
+
+**Tab icons.** The four brand tab vectors moved from `files/brand-assets/android-vectors/`
+into `res/drawable/ic_tab_*.xml` with the `android:tint="?attr/colorControlNormal"`
+line stripped on copy-in (this app has no such attr — the step-8 lesson; the
+vectors parse as XML and carry no `?attr` now). The bottom bar uses them via
+`ImageVector.vectorResource` instead of the Material defaults; the
+`NavigationBarItem` tint is the only tint, so selected/unselected colours work
+exactly as before. The removed `Icons.Default.*` imports are gone with no
+remaining `Icons.` reference in `NavGraph.kt`.
+
+**Semantic tokens, actually used.** `RaddHdrPill` / `RaddCamPill` / `RaddHealthOk` /
+`RaddHealthExpired` / `RaddHealthDead` were defined in `Color.kt` and used nowhere.
+Now: `HdrBadge` wears `RaddHdrPill` + `RaddSignalGold` (verified 9.8:1 on that
+pill); `CamBadge` and the CAM branch of `PrintQualityBadge` wear `RaddCamPill` +
+`RaddHealthDead` — a cam recording is a low-quality source, not an error, so it
+stops borrowing the error role; the `LinkHealthChip` dot wears the health
+tokens (Ok/Dead/Expired, outline for unchecked). The `MediaBadges.kt` header
+KDoc now says the tokens are the sanctioned source. Still defined but unwired:
+`RaddBluRayPill` / `RaddWebDlPill` — no distribution badge exists to wear them;
+not invented here. Audit corrections folded in: `RaddStreamMark` IS used
+(`CatalogImage` fallback, Home), and the SetupScreen accent button ALREADY has
+a `contentColor` — both audit lines were stale, no code needed.
+
+**Artwork accent, wired at last.** `rememberArtworkAccent` existed with no caller.
+`CatalogImage` gained an optional `onBitmap` hook (fires only on a real success,
+via `SubcomposeAsyncImage.onSuccess` + `toBitmap()`; gated/failed loads report
+nothing). The detail header captures the poster bitmap and frames the poster
+with a 1dp border in its own accent (60% alpha); no bitmap yet means no border,
+so the brand jade never pretends to be a sample.
+
+**Settings polish.** The VIP card is now a plan summary: VIP with its date
+("confirmed through <date>", same format as the VIP screen), payment pending,
+or Free — plus the operator's published prices from the remote config
+("Rs 200 a month · Rs 1,500 a year", hidden entirely when unpublished, never a
+zero). New state in `SettingsViewModel` (entitlement collector + one price
+fetch + `formatCacheSize` shared with the screen). The Storage card gained the
+visual: "Poster images: X of Y" + a progress bar against Coil's own disk-cache
+cap, measured from the loader (null until measured); the Clear button
+re-measures after clearing so the bar shows the empty cache. The trial days
+stay on the Account card — one screen, one fact.
+
+**12 doc contradictions — closed.** HANDOFF_appci (0 workflows) and BUILD_PLAN
+(signing blocker) got dated retirement notes — both are history now (CI green,
+`v1.0.4` published). App/AGENTS.md: "Device/CI verification is pending" →
+device pending, CI green; the Phase 2 row's "season/episode mismatch blocks
+series playback" retired (fixed in code, series play now); the stale §13.10
+"update this AGENTS.md with your session log" line retired by the root rule.
+RESERVE_NOTE: trending is an order that already exists (`sort=trending`, most
+prints/mirrors, no play counts) — only the dedicated feed endpoint is missing;
+the KDoc's "continue-watching has no server support" line dropped (it renders
+from local history). PLAN.md's "`anime` returns zero rows" corrected (5847
+rows). SearchViewModel's KDoc now says the visible per-group order is the
+client's re-sort, the server sort orders the page fetch. HANDOFF_appcache §6
+and CacheSweeper's KDoc: WorkManager is delivered (Session 66), not "not yet
+a dependency". The admin-control ideas doc: hero_max, section caps and tabs
+annotated as wired (Sessions 41/58/61). PLAYER_AND_CACHE_DIRECTIVE §4: the
+streak shipped on the VIP screen (step 19), not Settings/Profile; the pre-roll
+ad delegate is still unbuilt (ads parked). Already resolved, no edit needed:
+PARITY's heal note already carries its retirement (missing-post 404 fixed in
+2c89cc2); the admin-v2 README makes no tuning-persists claim and `_seed` is
+already NULL-only seeding.
+
+**Tests:** no new suites (no new pure logic — the VM additions are collectors
+over existing repositories; no test constructs `SettingsViewModel` directly).
+Pre-push checks: @Composable counts unchanged on every touched file (the two
+script flags were artifacts: a same-line `*/@Composable` and a lowercase
+composable the regex missed); no strings.xml / PlayerScreen.kt changes; tab
+vectors parse as XML with no `?attr` left. **Not done:** push (this commit,
+then CI judges — the 7aa9e46 runs are finished: Backend green, Android red on
+the hilt-work version fixed above, so nothing is in flight). Next: player
+steps 12/16–18/20, final double-verification. Device checks owner-only.

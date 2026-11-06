@@ -10,6 +10,7 @@ import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -97,6 +98,7 @@ import com.raddstream.app.ui.components.SubtitleBadge
 import com.raddstream.app.player.LadderForScope
 import com.raddstream.app.player.QualityOption
 import com.raddstream.app.ui.navigation.DeepLinks
+import com.raddstream.app.ui.theme.rememberArtworkAccent
 import com.raddstream.app.viewmodel.DetailNavigationEvent
 import com.raddstream.app.viewmodel.DetailViewModel
 import com.raddstream.app.viewmodel.EpisodeGroup
@@ -530,12 +532,25 @@ private fun PosterHeader(
     includedLine: String? = null,
 ) {
     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+        // The poster's own colour, sampled once it loads: a 1dp border in the
+        // artwork accent frames the poster in its own palette. No bitmap yet
+        // (still loading, gated, or failed) means no border at all — the
+        // brand jade is the fallback inside rememberArtworkAccent, and a
+        // jade frame around a not-yet-loaded poster would be a decoration
+        // pretending to be a sample.
+        var posterBitmap by remember(post.id) { mutableStateOf<android.graphics.Bitmap?>(null) }
+        val posterAccent = rememberArtworkAccent(posterBitmap)
         Box(
             modifier = Modifier
                 .width(120.dp)
                 .aspectRatio(0.68f)
                 .clip(RoundedCornerShape(12.dp))
-                .background(MaterialTheme.colorScheme.surfaceVariant),
+                .background(MaterialTheme.colorScheme.surfaceVariant)
+                .border(
+                    width = 1.dp,
+                    color = if (posterBitmap != null) posterAccent.copy(alpha = 0.6f) else Color.Transparent,
+                    shape = RoundedCornerShape(12.dp),
+                ),
             contentAlignment = Alignment.Center,
         ) {
             if (!post.posterUrl.isNullOrBlank()) {
@@ -544,6 +559,7 @@ private fun PosterHeader(
                     contentDescription = "${post.cleanTitle ?: post.title} poster",
                     modifier = Modifier.fillMaxSize(),
                     fallbackLabel = (post.cleanTitle ?: post.title).take(2).uppercase(),
+                    onBitmap = { posterBitmap = it },
                 )
             } else {
                 ImageFallbackCard(
