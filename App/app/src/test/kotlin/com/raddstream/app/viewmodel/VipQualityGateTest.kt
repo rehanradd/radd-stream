@@ -105,7 +105,11 @@ class VipQualityGateTest {
         val gated = VipQualityGate.gate(ladder, isVip = false, freeQualityCap = "480p")
 
         assertEquals(listOf("480p"), gated.options.map { it.band })
-        assertEquals("480p", gated.autoBand)
+        assertNull(
+            "the auto pointer dies with its rung, exactly as under the shipped cap — " +
+                "it never falls back to a kept rung",
+            gated.autoBand,
+        )
         assertTrue(gated.downloadOnlyBands.isEmpty())
     }
 

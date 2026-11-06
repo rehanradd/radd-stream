@@ -1014,11 +1014,15 @@ fun resumePointFor(rows: List<WatchHistoryEntity>): ResumePoint? {
 /** One entry per watched scope, keyed by (season, episode). */
 fun episodeProgressFor(rows: List<WatchHistoryEntity>): Map<Pair<Int, Int>, EpisodeProgress> =
     rows.associate { row ->
+        val watched = row.durationMs > 0L &&
+            row.positionMs >= row.durationMs - WatchHistoryEntity.END_GUARD_MS
         (row.seasonNumber to row.episodeNumber) to EpisodeProgress(
             fraction = ContinueWatchingTile.progressFraction(row.positionMs, row.durationMs),
-            watched = row.durationMs > 0L &&
-                row.positionMs >= row.durationMs - WatchHistoryEntity.END_GUARD_MS,
-            remainingLabel = ContinueWatchingTile.progressLabel(row.positionMs, row.durationMs),
+            watched = watched,
+            // A watched episode has nothing left to promise: "Less than a minute left"
+            // under a full bar is a lie about a finished episode.
+            remainingLabel = if (watched) null
+                else ContinueWatchingTile.progressLabel(row.positionMs, row.durationMs),
         )
     }
 
