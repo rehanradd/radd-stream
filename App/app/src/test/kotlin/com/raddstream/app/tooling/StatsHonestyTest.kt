@@ -124,18 +124,20 @@ class StatsHonestyTest {
         }
     }
 
+    /**
+     * Session 63 removed the stored totals from Settings outright, so the Settings half of this
+     * test is now a negative: the screen must not paint a stored count at all, and the two
+     * connection notices are the surfaces that still speak through the single owner.
+     */
     @Test
-    fun `the three surfaces all ask the single owner and the numbers are still on screen`() {
+    fun `the connection notices still ask the single owner and Settings shows no stored totals`() {
         // Positive controls: the refusal above would also pass on a file that renders nothing.
-        assertTrue(
-            "Settings draws its totals through the owner",
-            settingsScreen.readText().contains("CatalogScale.WORKS_LABEL"),
+        assertFalse(
+            "Session 63 removed the raw counts from Settings — they must not creep back",
+            settingsScreen.readText().contains("stats.posts"),
         )
-        assertTrue(
-            "and the server counts are still painted, not quietly removed",
-            settingsScreen.readText().contains("stats.posts.toString()"),
-        )
-        assertTrue(settingsScreen.readText().contains("CatalogScale.SCOPE_NOTE"))
+        assertFalse(settingsScreen.readText().contains("CatalogScale.WORKS_LABEL"))
+        assertFalse(settingsScreen.readText().contains("CatalogScale.SCOPE_NOTE"))
         assertTrue(
             "setup speaks through the owner",
             setupViewModel.readText().contains("CatalogScale.connectionNotice(stats.posts)"),

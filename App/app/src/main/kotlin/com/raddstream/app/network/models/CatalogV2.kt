@@ -279,6 +279,8 @@ data class Rendition(
     val scoreScale: ScoreScale = ScoreScale.UNKNOWN,
     val ephemeral: Boolean = false,
     val offsetSeconds: Int = 0,
+    /** The server's own verdict: this copy resumes after an interruption. */
+    val resumable: Boolean = false,
     val headers: Map<String, String> = emptyMap(),
 )
 

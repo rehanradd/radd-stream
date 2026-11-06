@@ -1160,5 +1160,43 @@ class PublicShapeTests(StateTestCase):
         return int(self.conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
 
 
+class CoinPassUntilTests(StateTestCase):
+    """`coin_pass_until` is the one read both VIP answers share: the latest
+    unexpired recorded pass, or 0.0 when there is none — including a database
+    that predates the table entirely."""
+
+    def setUp(self):
+        super().setUp()
+        self.account_id = self.new_account()["account_id"]
+        self.conn.execute(
+            "CREATE TABLE IF NOT EXISTS coin_passes ("
+            " id INTEGER PRIMARY KEY AUTOINCREMENT, account_id INTEGER NOT NULL,"
+            " plan TEXT NOT NULL, expires_at REAL NOT NULL,"
+            " created_at REAL NOT NULL)")
+        self.conn.commit()
+
+    def _seed(self, plan, expires_at):
+        self.conn.execute(
+            "INSERT INTO coin_passes(account_id, plan, expires_at, created_at)"
+            " VALUES(?,?,?,?)", (self.account_id, plan, expires_at, 1000.0))
+        self.conn.commit()
+
+    def test_a_future_pass_returns_its_expiry_and_an_expired_one_returns_zero(self):
+        self._seed("day", 5000.0)
+        self._seed("weekend", 3000.0)  # expired at the check below
+        self.assertEqual(accounts.coin_pass_until(self.conn, self.account_id, 4000.0),
+                         5000.0)
+
+    def test_no_pass_row_returns_zero(self):
+        self.assertEqual(accounts.coin_pass_until(self.conn, self.account_id, 1000.0),
+                         0.0)
+
+    def test_a_database_without_the_table_answers_zero_not_an_error(self):
+        self.conn.execute("DROP TABLE coin_passes")
+        self.conn.commit()
+        self.assertEqual(accounts.coin_pass_until(self.conn, self.account_id, 1000.0),
+                         0.0)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

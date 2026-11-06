@@ -1,6 +1,7 @@
 package com.raddstream.app.network
 
 import com.google.gson.Gson
+import com.raddstream.app.brand.Brand
 import com.raddstream.app.data.ServerSettingsRepository
 import java.net.URI
 import java.net.URLEncoder
@@ -50,6 +51,17 @@ class ApiProvider @Inject constructor(
             val client = OkHttpClient.Builder()
                 .connectTimeout(10, TimeUnit.SECONDS)
                 .readTimeout(15, TimeUnit.SECONDS)
+                // Every request carries the app's own User-Agent, including its
+                // version name: the config fetch is how the server learns
+                // which build is asking, and the discovery probes already
+                // send this same string. No header, no version on the wire.
+                .addInterceptor { chain ->
+                    chain.proceed(
+                        chain.request().newBuilder()
+                            .header("User-Agent", Brand.userAgent)
+                            .build(),
+                    )
+                }
                 .build()
             // MUST be buildRaddGson(), not GsonBuilder().create(): the v1 wire sends
             // `is_temporary` as 1/0 on /api/v1/posts/{id} and as true/false on

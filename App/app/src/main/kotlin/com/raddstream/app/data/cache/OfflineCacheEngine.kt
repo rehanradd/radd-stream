@@ -74,7 +74,7 @@ class OfflineCacheEngine @Inject constructor(
         val sourceKey = KeepIdentity.sourceKeyFor(handle)
         val outcome = repository.keep(
             handle = handle,
-            title = "",
+            title = request.title,
             sizeBytes = request.expectedTotalBytes,
             resumable = request.resumable,
             printLabel = request.printLabel,

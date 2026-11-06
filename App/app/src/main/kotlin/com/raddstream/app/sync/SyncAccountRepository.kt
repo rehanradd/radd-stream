@@ -3,8 +3,10 @@ package com.raddstream.app.sync
 import com.google.gson.Gson
 import com.raddstream.app.data.ServerSettingsRepository
 import com.raddstream.app.data.local.FavoriteDao
+import com.raddstream.app.data.local.FavoritePost
 import com.raddstream.app.data.local.SyncedProgressDao
 import com.raddstream.app.data.local.SyncedProgressEntity
+import com.raddstream.app.data.local.UnavailableWorkDao
 import com.raddstream.app.di.CacheScope
 import com.raddstream.app.network.ApiProvider
 import com.raddstream.app.network.RaddStreamApi
@@ -13,9 +15,24 @@ import com.raddstream.app.network.buildRaddGson
 import com.raddstream.app.network.models.AccountCreateRequest
 import com.raddstream.app.network.models.AccountEntitlement
 import com.raddstream.app.network.models.AccountProblem
+import com.raddstream.app.network.models.CoinEarnRequest
+import com.raddstream.app.network.models.CoinEarned
+import com.raddstream.app.network.models.CoinDownloadCredit
+import com.raddstream.app.network.models.CoinDownloadCreditRequest
+import com.raddstream.app.network.models.CoinMovieRequest
+import com.raddstream.app.network.models.CoinRedeemRequest
+import com.raddstream.app.network.models.CoinRedeemThemeRequest
+import com.raddstream.app.network.models.CoinRedeemed
+import com.raddstream.app.network.models.CoinRequestMovieRequest
+import com.raddstream.app.network.models.CoinShare
+import com.raddstream.app.network.models.CoinShareRequest
+import com.raddstream.app.network.models.CoinTheme
+import com.raddstream.app.network.models.CoinThemesResponse
 import com.raddstream.app.network.models.DeviceTrialRequest
+import com.raddstream.app.network.models.DownloadCreditPrice
 import com.raddstream.app.network.models.FavoriteEntry
 import com.raddstream.app.network.models.FavoriteRequest
+import com.raddstream.app.network.models.PassTier
 import com.raddstream.app.network.models.PaymentReceipt
 import com.raddstream.app.network.models.PaymentRequest
 import com.raddstream.app.network.models.ProfileLinkRequest
@@ -77,6 +94,7 @@ class SyncAccountRepository @Inject constructor(
     private val apiProvider: ApiProvider,
     private val settingsRepository: ServerSettingsRepository,
     private val favoriteDao: FavoriteDao,
+    private val unavailableDao: UnavailableWorkDao,
     private val syncedProgressDao: SyncedProgressDao,
     @CacheScope private val scope: CoroutineScope,
 ) {
@@ -403,6 +421,10 @@ class SyncAccountRepository @Inject constructor(
      * position is the one thing worth a request and the next tick may never come. The player
      * that owns the tick loop is the reason this throttle exists; nothing here is called per
      * frame.
+     *
+     * Returns the coins this write earned by finishing the title (15 by default), zero
+     * otherwise: the server pays once per title when the reported position reaches 90% of
+     * the duration, and the player shows its toast only on a positive number.
      */
     suspend fun reportProgress(
         workRef: String?,
@@ -411,15 +433,16 @@ class SyncAccountRepository @Inject constructor(
         positionMs: Long,
         durationMs: Long,
         forced: Boolean = false,
-    ): SyncAck {
-        val ref = workRef?.takeIf { it.isNotBlank() } ?: return SyncAck.NOT_NAMABLE
-        if (pausedByThrottle) return SyncAck.SKIPPED
-        if (forced) progressThrottle.forceNow() else if (!progressThrottle.take()) return SyncAck.SKIPPED
+    ): Int {
+        val ref = workRef?.takeIf { it.isNotBlank() } ?: return 0
+        if (pausedByThrottle) return 0
+        if (forced) progressThrottle.forceNow() else if (!progressThrottle.take()) return 0
         val positionSeconds = positionMs.coerceAtLeast(0L) / 1000.0
         val durationSeconds = durationMs.coerceAtLeast(0L) / 1000.0
         val stamp = System.currentTimeMillis() / 1000.0
+        var coinsEarned = 0
         val ack = attempt(hadWorkRef = true) { api, auth ->
-            api.putProgress(
+            val response = api.putProgress(
                 auth,
                 ProgressRequest(
                     workRef = ref,
@@ -430,6 +453,8 @@ class SyncAccountRepository @Inject constructor(
                     clientUpdatedAt = stamp,
                 ),
             )
+            coinsEarned = response.coinsEarned
+            response
         }
         // Fold our own report into the mirror at once, so this device resumes from where
         // this device stopped without waiting for a pull to agree with it.
@@ -445,7 +470,7 @@ class SyncAccountRepository @Inject constructor(
                 ),
             )
         }
-        return ack
+        return coinsEarned
     }
 
     /** "Sync now": read both lists, write what the library is missing, fold in what it has. */
@@ -486,11 +511,33 @@ class SyncAccountRepository @Inject constructor(
                 if (mergeProgress(ref, entry)) pulled++
             }
 
+            // The pull side of the list: a server favorite this device never
+            // saw is resolved to its post and saved here, so the second
+            // device's list becomes this device's list. A handle that
+            // resolves to nothing (a work the catalog dropped, a flagged
+            // work the resolver refuses) is skipped, not retried — the next
+            // pass counts it again, and the card says how many are still
+            // unknown. Bounded like the push pass, and never a report back
+            // to the server: the row is already there.
+            var favoritesPulled = 0
+            for (ref in plan.unknownRefs.take(MAX_WRITES_PER_PASS)) {
+                val post = runCatching {
+                    api.getPosts(workRef = ref, page = 1, limit = 1).results.firstOrNull()
+                }.getOrNull() ?: continue
+                favoriteDao.insert(FavoritePost.fromPost(post))
+                // The server listed this post in this very response, so a
+                // refusal recorded against it earlier no longer stands.
+                unavailableDao.clear(post.id)
+                favoriteDao.recordAnswer(post.id, null, System.currentTimeMillis())
+                favoritesPulled++
+            }
+
             SyncReport(
                 favoritesPushed = pushed,
                 progressRowsPulled = pulled,
-                favoritesUnknownHere = plan.unknownHere,
+                favoritesUnknownHere = plan.unknownHere - favoritesPulled,
                 favoritesUnnamable = plan.unnammable,
+                favoritesPulled = favoritesPulled,
                 completed = true,
             )
         } catch (error: Exception) {
@@ -618,6 +665,299 @@ class SyncAccountRepository @Inject constructor(
                     _entitlement.value
                 }
                 else -> _entitlement.value
+            }
+        }
+    }
+
+    /**
+     * This account's coin balance, or null when there is no key or the server cannot
+     * be reached. The ledger is the only authority; this is a read, never a claim.
+     */
+    suspend fun loadCoinBalance(): Int? {
+        val key = currentKey() ?: return null
+        return try {
+            apiProvider.current().getCoinBalance(bearerHeader(key)).balance
+        } catch (error: Exception) {
+            when (verdictOf(error, hadWorkRef = false)) {
+                ServerVerdict.SIGN_OUT -> {
+                    signOutLocally()
+                    null
+                }
+                ServerVerdict.PAUSE_SESSION -> {
+                    pausedByThrottle = true
+                    null
+                }
+                else -> null
+            }
+        }
+    }
+
+    /** The streak ladder (day -> coins) the server will pay, or empty when unread. */
+    suspend fun loadStreakLadder(): Map<Int, Int> {
+        val key = currentKey() ?: return emptyMap()
+        return try {
+            apiProvider.current().getCoinCaps(bearerHeader(key)).streak.byDay
+        } catch (error: Exception) {
+            when (verdictOf(error, hadWorkRef = false)) {
+                ServerVerdict.SIGN_OUT -> {
+                    signOutLocally()
+                    emptyMap()
+                }
+                ServerVerdict.PAUSE_SESSION -> {
+                    pausedByThrottle = true
+                    emptyMap()
+                }
+                else -> emptyMap()
+            }
+        }
+    }
+
+    /**
+     * Claim today's check-in. The server decides the grant; a second claim the same
+     * day answers `same_day_noop` with zero coins. Null when there is no key or the
+     * server cannot be reached — the caller must not present that as "already claimed".
+     */
+    suspend fun claimDailyLogin(): CoinEarned? {
+        val key = currentKey() ?: return null
+        return try {
+            apiProvider.current().earnDailyLogin(bearerHeader(key), CoinEarnRequest()).earned
+        } catch (error: Exception) {
+            when (verdictOf(error, hadWorkRef = false)) {
+                ServerVerdict.SIGN_OUT -> {
+                    signOutLocally()
+                    null
+                }
+                ServerVerdict.PAUSE_SESSION -> {
+                    pausedByThrottle = true
+                    null
+                }
+                else -> null
+            }
+        }
+    }
+
+    /** The pass catalog (plan -> coin price) the server publishes, or empty when unread. */
+    suspend fun loadPassCatalog(): Map<String, PassTier> {
+        val key = currentKey() ?: return emptyMap()
+        return try {
+            apiProvider.current().getCoinCaps(bearerHeader(key)).passes
+        } catch (error: Exception) {
+            when (verdictOf(error, hadWorkRef = false)) {
+                ServerVerdict.SIGN_OUT -> {
+                    signOutLocally()
+                    emptyMap()
+                }
+                ServerVerdict.PAUSE_SESSION -> {
+                    pausedByThrottle = true
+                    emptyMap()
+                }
+                else -> emptyMap()
+            }
+        }
+    }
+
+    /** The player themes the server publishes (theme -> coin price), empty until read. */
+    suspend fun loadThemeCatalog(): Map<String, DownloadCreditPrice> {
+        val key = currentKey() ?: return emptyMap()
+        return try {
+            apiProvider.current().getCoinCaps(bearerHeader(key)).themes
+        } catch (error: Exception) {
+            when (verdictOf(error, hadWorkRef = false)) {
+                ServerVerdict.SIGN_OUT -> {
+                    signOutLocally()
+                    emptyMap()
+                }
+                ServerVerdict.PAUSE_SESSION -> {
+                    pausedByThrottle = true
+                    emptyMap()
+                }
+                else -> emptyMap()
+            }
+        }
+    }
+
+    /** The movie-request price (coins for one title) the server publishes, or 0 when unread. */
+    suspend fun loadRequestPrice(): Int {
+        val key = currentKey() ?: return 0
+        return try {
+            apiProvider.current().getCoinCaps(bearerHeader(key)).request.coins
+        } catch (error: Exception) {
+            when (verdictOf(error, hadWorkRef = false)) {
+                ServerVerdict.SIGN_OUT -> {
+                    signOutLocally()
+                    0
+                }
+                ServerVerdict.PAUSE_SESSION -> {
+                    pausedByThrottle = true
+                    0
+                }
+                else -> 0
+            }
+        }
+    }
+
+    /**
+     * Spend coins on a VIP pass. The server decides the price and the debit; a replay
+     * answers `already_applied` with the same pass. Null when there is no key or the
+     * server cannot be reached.
+     */
+    suspend fun redeemPass(plan: String): CoinRedeemed? {
+        val key = currentKey() ?: return null
+        return try {
+            apiProvider.current().redeemPass(bearerHeader(key), CoinRedeemRequest(plan)).redeemed
+        } catch (error: Exception) {
+            when (verdictOf(error, hadWorkRef = false)) {
+                ServerVerdict.SIGN_OUT -> {
+                    signOutLocally()
+                    null
+                }
+                ServerVerdict.PAUSE_SESSION -> {
+                    pausedByThrottle = true
+                    null
+                }
+                else -> null
+            }
+        }
+    }
+
+    /** The direct-download price (coins for one movie) the server publishes, or 0 when unread. */
+    suspend fun loadDownloadCreditPrice(): Int {
+        val key = currentKey() ?: return 0
+        return try {
+            apiProvider.current().getCoinCaps(bearerHeader(key)).download.coins
+        } catch (error: Exception) {
+            when (verdictOf(error, hadWorkRef = false)) {
+                ServerVerdict.SIGN_OUT -> {
+                    signOutLocally()
+                    0
+                }
+                ServerVerdict.PAUSE_SESSION -> {
+                    pausedByThrottle = true
+                    0
+                }
+                else -> 0
+            }
+        }
+    }
+
+    /**
+     * Spend coins on one direct download of one movie. The server decides the price
+     * and the debit and answers the credit token the browser spends. Null when there
+     * is no key or the server cannot be reached.
+     */
+    suspend fun redeemDownloadCredit(handle: String): CoinDownloadCredit? {
+        val key = currentKey() ?: return null
+        return try {
+            apiProvider.current().redeemDownloadCredit(
+                bearerHeader(key), CoinDownloadCreditRequest(handle)).credit
+        } catch (error: Exception) {
+            when (verdictOf(error, hadWorkRef = false)) {
+                ServerVerdict.SIGN_OUT -> {
+                    signOutLocally()
+                    null
+                }
+                ServerVerdict.PAUSE_SESSION -> {
+                    pausedByThrottle = true
+                    null
+                }
+                else -> null
+            }
+        }
+    }
+
+    /**
+     * Report one share of a movie. The server pays once a day, so the answer
+     * carries whether it granted: the caller shows "+N coins" only when it
+     * did. Null when there is no key or the server cannot be reached — a
+     * failed report never blocks the share itself, which already left the phone.
+     */
+    suspend fun reportShare(workRef: String): CoinShare? {
+        val key = currentKey() ?: return null
+        return try {
+            apiProvider.current().reportShare(
+                bearerHeader(key), CoinShareRequest(workRef)).share
+        } catch (error: Exception) {
+            when (verdictOf(error, hadWorkRef = true)) {
+                ServerVerdict.SIGN_OUT -> {
+                    signOutLocally()
+                    null
+                }
+                ServerVerdict.PAUSE_SESSION -> {
+                    pausedByThrottle = true
+                    null
+                }
+                else -> null
+            }
+        }
+    }
+
+    /**
+     * Spend coins on one requested movie. The server decides the price and
+     * the debit and answers the queued request. Null when there is no key or
+     * the server cannot be reached; a short wallet answers null too, and the
+     * caller reads the balance it already holds to say why.
+     */
+    suspend fun requestMovie(title: String, notes: String = ""): CoinMovieRequest? {
+        val key = currentKey() ?: return null
+        return try {
+            apiProvider.current().requestMovie(
+                bearerHeader(key), CoinRequestMovieRequest(title, notes)).request
+        } catch (error: Exception) {
+            when (verdictOf(error, hadWorkRef = false)) {
+                ServerVerdict.SIGN_OUT -> {
+                    signOutLocally()
+                    null
+                }
+                ServerVerdict.PAUSE_SESSION -> {
+                    pausedByThrottle = true
+                    null
+                }
+                else -> null
+            }
+        }
+    }
+
+    /** What this account owns of the player themes, and what a theme costs. Null when unread. */
+    suspend fun loadCoinThemes(): CoinThemesResponse? {
+        val key = currentKey() ?: return null
+        return try {
+            apiProvider.current().getCoinThemes(bearerHeader(key))
+        } catch (error: Exception) {
+            when (verdictOf(error, hadWorkRef = false)) {
+                ServerVerdict.SIGN_OUT -> {
+                    signOutLocally()
+                    null
+                }
+                ServerVerdict.PAUSE_SESSION -> {
+                    pausedByThrottle = true
+                    null
+                }
+                else -> null
+            }
+        }
+    }
+
+    /**
+     * Spend coins on one player theme. The server decides the price and the
+     * debit and answers the theme with everything owned now. Null when there
+     * is no key or the server cannot be reached.
+     */
+    suspend fun redeemTheme(theme: String): CoinTheme? {
+        val key = currentKey() ?: return null
+        return try {
+            apiProvider.current().redeemTheme(
+                bearerHeader(key), CoinRedeemThemeRequest(theme)).theme
+        } catch (error: Exception) {
+            when (verdictOf(error, hadWorkRef = false)) {
+                ServerVerdict.SIGN_OUT -> {
+                    signOutLocally()
+                    null
+                }
+                ServerVerdict.PAUSE_SESSION -> {
+                    pausedByThrottle = true
+                    null
+                }
+                else -> null
             }
         }
     }

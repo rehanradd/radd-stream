@@ -197,14 +197,30 @@ fun RaddStreamTheme(
     // the app to light-first or allow Material You without touching any screen.
     darkTheme: Boolean = Brand.schemeDefaultDark,
     dynamicColor: Boolean = Brand.schemeDynamicColorDefault,
+    // The operator's accent from the admin panel (null = brand default). It
+    // repaints the `primary` roles only: the semantic Radd* tokens (jade =
+    // playable, the link-health scale) stay constant, so an accent can never
+    // silently re-meaning a colour the app uses as a signal.
+    accent: Color? = null,
     content: @Composable () -> Unit,
 ) {
     val context = LocalContext.current
-    val colorScheme = when {
+    val baseScheme = when {
         dynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S ->
             if (darkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
         darkTheme -> RaddDarkScheme
         else -> RaddLightScheme
+    }
+    val colorScheme = if (accent == null) {
+        baseScheme
+    } else {
+        baseScheme.copy(
+            primary = accent,
+            primaryContainer = mixColors(accent, baseScheme.primaryContainer),
+            // A light accent needs dark ink on it, a dark accent white: the
+            // same luminance rule the brand's own on-primary pair follows.
+            onPrimary = accentOnPrimary(accent),
+        )
     }
     MaterialTheme(
         colorScheme = colorScheme,
@@ -213,3 +229,11 @@ fun RaddStreamTheme(
         content = content,
     )
 }
+
+/** Halfway between two colours, channel by channel — the accent's container. */
+private fun mixColors(first: Color, second: Color): Color = Color(
+    red = (first.red + second.red) / 2f,
+    green = (first.green + second.green) / 2f,
+    blue = (first.blue + second.blue) / 2f,
+    alpha = (first.alpha + second.alpha) / 2f,
+)

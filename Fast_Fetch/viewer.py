@@ -28,10 +28,14 @@ import redact
 import tiers
 import api_v2
 import catalog_v2
+import engagement
 import accounts_api
 import payments
 import admin_panel
 import media_search
+import panel_feed
+import contact_intake
+import search_fuzzy
 import usage_stats
 
 if sys.platform.startswith("win"):
@@ -2914,17 +2918,121 @@ def _subtitled_posts(conn, post_ids) -> dict:
 POSTS_MAX_OFFSET = 10_000
 
 
+def _fuzzy_post_ids(conn, query):
+    """Post ids whose title is one edit away from the query, token by token.
+
+    The candidate pass is one scan: every 3-gram of every query token, OR'd
+    into a single LIKE query, capped. The true check is in Python, so a
+    shared gram never smuggles in a title that is two edits away. The adult
+    clause applies here too; the operator's hides apply in the caller, where
+    the ids only ever replace the LIKE clause.
+    """
+    tokens = search_fuzzy.fuzzy_tokens(query)
+    if not tokens:
+        return []
+    grams = sorted({gram for token in tokens for gram in search_fuzzy.candidate_grams(token)})
+    if not grams:
+        return []
+    like_sql = " OR ".join("lower(p.clean_title) LIKE ?" for _ in grams)
+    rows = conn.execute(
+        f"SELECT p.id, p.clean_title FROM posts p WHERE {redact.adult_clause('p')}"
+        f" AND ({like_sql}) ORDER BY p.id DESC LIMIT {search_fuzzy.CANDIDATE_LIMIT}",
+        [f"%{gram}%" for gram in grams]).fetchall()
+    matched = []
+    for row in rows:
+        title_tokens = search_fuzzy.tokenize(row["clean_title"] or "")
+        if search_fuzzy.fuzzy_match(tokens, title_tokens):
+            matched.append(row["id"])
+        if len(matched) >= 20:
+            break
+    return matched
+
+
+def _resolve_work_ref(conn, work_ref: str):
+    """The post id a minted work handle names, or None.
+
+    The handle is unminted with this server's own signing secret, so a forged
+    or foreign handle is not a row — it is nothing, and the caller answers an
+    empty page, never an error. The raw key is one of the three shapes
+    `catalog_v2.work_key_for` mints: `imdb:tt…` and `tmdb:…` match the id
+    columns; `family:normalized title:year` matches the title the same way
+    the key was derived from it (the UDF is registered on this connection
+    only, and only for this lookup — a full scan is the price of a key that
+    was never a column). The family is checked in Python, because the ledger
+    stores the content type, not the family. The adult clause applies at
+    every step: a flagged work is indistinguishable from a missing one.
+    """
+    key = redact.parse_text(work_ref, signing_secret())
+    if not key:
+        return None
+    if key.startswith("imdb:"):
+        row = conn.execute(
+            f"SELECT id FROM posts p WHERE {redact.adult_clause('p')} AND p.imdb_id = ?"
+            " ORDER BY id DESC LIMIT 1", (key[5:],)).fetchone()
+        return int(row["id"]) if row else None
+    if key.startswith("tmdb:"):
+        row = conn.execute(
+            f"SELECT id FROM posts p WHERE {redact.adult_clause('p')} AND p.tmdb_id = ?"
+            " ORDER BY id DESC LIMIT 1", (key[5:],)).fetchone()
+        return int(row["id"]) if row else None
+    parts = key.split(":")
+    if len(parts) != 3:
+        return None
+    family, title, year = parts
+    if family not in ("movie", "series") or not title:
+        return None
+    conn.create_function(
+        "radd_norm_title", 1, catalog_v2.normalize_title, deterministic=True)
+    sql = ("SELECT id, clean_title, title, year, content_type, is_animated"
+           " FROM posts p"
+           f" WHERE {redact.adult_clause('p')}"
+           " AND radd_norm_title(COALESCE(p.clean_title, p.title)) = ?")
+    params = [title]
+    if year != "ny":
+        try:
+            params.append(int(year))
+        except ValueError:
+            return None
+        sql += " AND p.year = ?"
+    sql += " ORDER BY id DESC"
+    for row in conn.execute(sql, params).fetchall():
+        work_type = catalog_v2.work_type_for(
+            row["content_type"] or "movie", int(row["is_animated"] or 0),
+            row["clean_title"] or row["title"] or "")
+        if catalog_v2.work_family(work_type) == family:
+            return int(row["id"])
+    return None
+
+
 def api_v1_get_posts(query: str = "", content_type: str = "", page: int = 1,
                      limit: int = 20, full: bool = False,
                      base_url: str = "", industry: str = "", genre: str = "",
-                     quality: str = "", sort: str = "") -> dict:
+                     quality: str = "", sort: str = "", free_only: bool = False,
+                     work_ref: str = "") -> dict:
     _ensure_schema()
     offset = max(0, (page - 1) * limit)
     with get_db() as conn:
         # Adult-flagged posts are stored in the DB but never exposed via the API
         where_clauses = [redact.adult_clause("p")]
         params = []
-        if query:
+        if work_ref:
+            # A minted handle names one work: the title search is not consulted
+            # at all, and a handle that resolves to nothing answers an empty
+            # page (total 0), never an error. Every other filter, the adult
+            # clause and the hides below still apply on top of the one id.
+            post_id = _resolve_work_ref(conn, work_ref)
+            if post_id is None:
+                return {
+                    "page": page,
+                    "limit": limit,
+                    "total": 0,
+                    "total_pages": 1,
+                    "results": [],
+                    "fuzzy": False,
+                }
+            where_clauses.append("p.id = ?")
+            params.append(post_id)
+        elif query:
             where_clauses.append("(p.clean_title LIKE ? OR p.title LIKE ? OR p.slug LIKE ?)")
             q_param = f"%{query}%"
             params.extend([q_param, q_param, q_param])
@@ -2996,6 +3104,24 @@ def api_v1_get_posts(query: str = "", content_type: str = "", page: int = 1,
                 "EXISTS (SELECT 1 FROM releases rq"
                 f" WHERE rq.post_id = p.id AND rq.quality IS NOT NULL AND {quality_sql})")
 
+        if free_only:
+            # "Included in my plan" for a free viewer: the work has at least
+            # one print the free gate lets through. Mirrors the client's
+            # VipQualityGate — 1080p/2160p/4K/UHD/Full-HD are premium, and
+            # under a 480p operator cap 720p joins them. A print with no
+            # quality label counts as free, the same as the client treats an
+            # unknown band.
+            premium_markers = ["%1080%", "%2160%", "%4K%", "%UHD%",
+                               "%FULL HD%", "%FULLHD%", "%FHD%"]
+            if panel_feed.read_free_quality_cap() == "480p":
+                premium_markers.append("%720%")
+            premium_sql = " OR ".join(
+                "upper(rq.quality) LIKE ?" for _ in premium_markers)
+            where_clauses.append(
+                "EXISTS (SELECT 1 FROM releases rq WHERE rq.post_id = p.id AND"
+                f" (rq.quality IS NULL OR TRIM(rq.quality) = '' OR NOT ({premium_sql})))")
+            params.extend(premium_markers)
+
         # No play-count column exists, so "trending" cannot be invented from views.
         # Rank instead by the only popularity-adjacent figure the ledger carries:
         # how many prints and mirrors the catalog has for the work.
@@ -3012,7 +3138,36 @@ def api_v1_get_posts(query: str = "", content_type: str = "", page: int = 1,
             order_sql = "p.id DESC"
 
         where_sql = " AND ".join(where_clauses)
+        # A work the operator hid in the panel stays hidden on every list,
+        # including to an old app that never learned about the panel feed: the
+        # hide is enforced here, at serve time, not only in the section
+        # resolver. Unwired (no panel database) means no hides, never an error.
+        hidden = panel_feed.hidden_work_ids()
+        if hidden:
+            ids = sorted(hidden)[:panel_feed.HIDDEN_IDS_CAP]
+            where_clauses.append(
+                "p.id NOT IN (%s)" % ",".join("?" for _ in ids))
+            params.extend(ids)
+            where_sql = " AND ".join(where_clauses)
         total = conn.execute(f"SELECT COUNT(*) FROM posts p WHERE {where_sql}", params).fetchone()[0]
+
+        fuzzy = False
+        if query and not work_ref and total == 0:
+            # Exact search found nothing: one edit away is the only honest
+            # second chance. The candidate ids only ever replace the LIKE
+            # clause (always index 1, always the first three params) — every
+            # other filter, the adult clause and the hides stay exactly as
+            # they were.
+            fuzzy_ids = _fuzzy_post_ids(conn, query)
+            if fuzzy_ids:
+                where_clauses[1] = (
+                    "p.id IN (%s)" % ", ".join("?" for _ in fuzzy_ids))
+                params = fuzzy_ids + params[3:]
+                where_sql = " AND ".join(where_clauses)
+                total = conn.execute(
+                    f"SELECT COUNT(*) FROM posts p WHERE {where_sql}",
+                    params).fetchone()[0]
+                fuzzy = True
 
         # `p.source_site`, `p.url` and `p.slug` used to be selected here: the site
         # it came from and the page we took it off. Both are our bookkeeping, so
@@ -3052,12 +3207,14 @@ def api_v1_get_posts(query: str = "", content_type: str = "", page: int = 1,
             "total": total,
             "total_pages": total_pages,
             "results": results,
+            "fuzzy": fuzzy,
         }
 
 
 def api_v1_search_by_media(query: str = "", duration_s=None, resolution: str = "",
                            audio_language: str = "", limit: int = 10,
-                           full: bool = False, base_url: str = "") -> dict:
+                           full: bool = False, base_url: str = "",
+                           sort: str = "best") -> dict:
     """/api/v1/search/by-media — what the file in the viewer's hand probably is.
 
     Thin on purpose: the matching and the three-way honesty report live in
@@ -3077,7 +3234,8 @@ def api_v1_search_by_media(query: str = "", duration_s=None, resolution: str = "
     with get_db() as conn:
         result = media_search.search_by_media(
             conn, title=query, duration_s=duration_s, resolution=resolution,
-            audio_language=audio_language, limit=limit, full=full, enrich=enrich)
+            audio_language=audio_language, limit=limit, full=full, enrich=enrich,
+            sort=sort)
         if not full and result.get("results"):
             subs = _subtitled_posts(conn, [int(r["id"]) for r in result["results"]])
             for item in result["results"]:
@@ -3102,6 +3260,23 @@ def api_v1_get_post_detail(post_id: int, full: bool = False,
             p_dict = redact.project(post, "post_detail")
             p_dict.update(_art_pair(post, base_url))
             p_dict["work_ref"] = _work_ref(post)
+
+        # Runtime comes from the v2 work row, keyed exactly the way
+        # `_work_ref` derives it — a post with no matching work simply has
+        # no runtime, and the app shows nothing rather than a guessed one.
+        try:
+            title = post["clean_title"] or post["title"] or ""
+            work_type = catalog_v2.work_type_for(
+                post["content_type"] or "movie", int(post["is_animated"] or 0), title)
+            key = catalog_v2.work_key_for(
+                title, post["year"], work_type, post["imdb_id"] or "", post["tmdb_id"])
+            work = conn.execute(
+                "SELECT runtime_minutes FROM cat_works WHERE work_key = ?",
+                (key,)).fetchone()
+            if work is not None and work["runtime_minutes"]:
+                p_dict["runtime_minutes"] = int(work["runtime_minutes"])
+        except sqlite3.Error:
+            pass
 
         releases = conn.execute("SELECT * FROM releases WHERE post_id = ? ORDER BY id ASC", (post_id,)).fetchall()
         rel_list = []
@@ -3971,6 +4146,14 @@ class DashboardHandler(BaseHTTPRequestHandler):
             try:
                 import fast_fetch
                 res = fast_fetch.heal_post_links(post_id, verbose=False)
+                if "error" in res:
+                    # A missing post is the caller's error, not a success:
+                    # `heal_post_links` answers `{"healed": 0, "error": ...}`
+                    # for it, and wrapping that in `success: True` was a 200
+                    # that contradicted itself.
+                    self.send_json({"success": False, "error": res["error"]},
+                                   status=404)
+                    return
                 resp_payload = {"success": True, **res}
             except Exception as ex:
                 resp_payload = {"success": False, "error": str(ex)}
@@ -3993,6 +4176,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 genre=query_params.get("genre", [""])[0],
                 quality=query_params.get("quality", [""])[0],
                 sort=query_params.get("sort", [""])[0],
+                free_only=query_params.get("free_only", [""])[0] == "1",
+                work_ref=query_params.get("work_ref", [""])[0],
             )
             self.send_json(data)
 
@@ -4010,6 +4195,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 resolution=number("resolution"),
                 audio_language=query_params.get("language", [""])[0],
                 limit=limit, full=full, base_url=base_url,
+                sort=query_params.get("sort", ["best"])[0],
             )
             self.send_json(data, status=200 if data.get("success") else 400)
 
@@ -4155,19 +4341,42 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     target = res["url"]
                     shortened = False
                     if not full and not request_is_vip(self.headers, query_params):
-                        # Free tier: a configured shortener earns the operator
-                        # revenue before the bytes. The cache makes a repeat
-                        # download free; a shortener outage falls back to the
-                        # direct URL rather than failing the download.
-                        try:
-                            with get_db() as conn:
-                                shortened_target = shorten_download_url(
-                                    target, conn)
-                        except Exception:      # noqa: BLE001
-                            shortened_target = None
-                        if shortened_target:
-                            target = shortened_target
-                            shortened = True
+                        # A bought direct-download credit skips the shortener
+                        # for this one download (daily check-in Build 4): the
+                        # token is spent here, whether or not the web marker
+                        # is set, because a credit is a direct file, not a web
+                        # page. Anything wrong with the token just falls back
+                        # to the ordinary shortening — a bad token costs a
+                        # direct link, never the download itself.
+                        credit_token = query_params.get("credit", [""])[0]
+                        credit_used = False
+                        if credit_token:
+                            try:
+                                credit_used = engagement.consume_download_credit(
+                                    engagement.default_db_path(), credit_token,
+                                    handle=source_ref, credit_secret=signing_secret())
+                            except Exception:      # noqa: BLE001
+                                credit_used = False
+                        # Free tier, WEB PAGE ONLY (owner decision 2026-11-06):
+                        # a shortener earns the operator revenue before the
+                        # bytes, but only when the request came through the web
+                        # download page (`?via=web`). The app's own native
+                        # downloads never carry that marker, so they stay
+                        # direct however the operator configures the panel.
+                        # The cache makes a repeat download free; a shortener
+                        # outage falls back to the direct URL rather than
+                        # failing the download.
+                        via_web = query_params.get("via", [""])[0] == "web"
+                        if via_web and not credit_used:
+                            try:
+                                with get_db() as conn:
+                                    shortened_target = shorten_download_url(
+                                        target, conn)
+                            except Exception:      # noqa: BLE001
+                                shortened_target = None
+                            if shortened_target:
+                                target = shortened_target
+                                shortened = True
                     self.send_response(302)
                     self.send_header("Location", target)
                     self.send_header("Cache-Control", "no-store")
@@ -4218,6 +4427,39 @@ class DashboardHandler(BaseHTTPRequestHandler):
             _ensure_schema()
             with get_db() as conn:
                 payload = admin_panel.remote_config(conn)
+                # The panel feed rides the same body the app already polls:
+                # sections the operator built, broadcasts it published, works
+                # it hid, the theme knobs it set, and the tabs it ordered. No
+                # new route, so the public allow-list does not change. Unwired
+                # means three empty lists plus the default theme and the
+                # default tabs, and the app keeps its own rails; the keys are
+                # always present so the client contract never depends on the
+                # panel being up.
+                feed = panel_feed.load_panel_feed(conn)
+                all_ids = [int(r["id"]) for s in feed["sections"]
+                           for r in s["rows"]]
+                subtitled = _subtitled_posts(conn, all_ids)
+
+                def _project_panel_post(row):
+                    item = redact.project(row, "post_brief")
+                    item.update(_art_pair(row, base_url))
+                    item["work_ref"] = _work_ref(row)
+                    item["subtitled"] = bool(
+                        subtitled.get(int(row["id"]), False))
+                    return item
+
+                payload["sections"] = [
+                    {"key": s["key"], "title": s["title"],
+                     "items": [_project_panel_post(r) for r in s["rows"]]}
+                    for s in feed["sections"]
+                ]
+                payload["broadcasts"] = feed["broadcasts"]
+                payload["hidden_work_ids"] = feed["hidden_work_ids"]
+                payload["theme"] = panel_feed.read_theme()
+                payload["tabs"] = panel_feed.read_tabs()
+                payload["disclaimer"] = panel_feed.read_disclaimer()
+                payload["free_quality_cap"] = panel_feed.read_free_quality_cap()
+                payload["min_version_code"] = panel_feed.read_min_version()
             self.send_json(redact.scrub(payload),
                            extra_headers=[("Cache-Control", "public, max-age=60")])
 
@@ -4269,6 +4511,36 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self._serve_art(query_params, full=full)
             return
         self.send_error(501, "Unsupported method ('HEAD')")
+
+    def _contact_intake(self):
+        """`POST /api/v1/contact` — the public contact form, no login.
+
+        One JSON body: `category` (one of the panel's five), `subject`,
+        `body`, and an optional `account_hint` (an email the viewer leaves
+        so the operator can reply). The message is stored in the panel's
+        `contact_messages` table by `contact_intake`, under the panel's own
+        validation and masking, so it lands in the same inbox the operator
+        already triages. Answers the v1 shape: `{"success": true}` on store,
+        `invalid_params` (400) for a bad category or an empty body,
+        `unavailable` (503) when the panel inbox is not wired or locked —
+        an honest retry-later, never a swallowed message.
+        """
+        payload, code = api_v2.read_body(self)
+        if payload is None:
+            self.send_json({"success": False, "error": code or "invalid_params"},
+                           status=400)
+            return
+        ok, result = contact_intake.submit_contact(
+            category=payload.get("category"),
+            subject=payload.get("subject", ""),
+            body=payload.get("body", ""),
+            account_hint=payload.get("account_hint"),
+        )
+        if not ok:
+            status = 503 if result == "unavailable" else 400
+            self.send_json({"success": False, "error": result}, status=status)
+            return
+        self.send_json({"success": True})
 
     def do_POST(self):
         """The v2 write surface (§12): `/play`, link reports, learned offsets,
@@ -4349,6 +4621,13 @@ class DashboardHandler(BaseHTTPRequestHandler):
             if answered is not None:
                 self.send_triple(answered)
                 return
+        if path == "/api/v1/contact":
+            # The public contact form: one JSON body, no login, no sync key —
+            # the message lands in the panel's inbox under the panel's own
+            # rules (`contact_intake`). Answered ahead of the v2 dispatcher
+            # because this is a v1 route and `api_v2` would 404 it.
+            self._contact_intake()
+            return
         if api_v2.is_v2(path):
             _ensure_schema()
             if api_v2.route_post(self, path, query_params, db_path=DB_PATH,

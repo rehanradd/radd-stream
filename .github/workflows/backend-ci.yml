@@ -465,6 +465,27 @@ jobs:
       - name: 🧪 test_hubcdn_unwrap.py
         run: python3 -S Fast_Fetch/test_hubcdn_unwrap.py
 
+      # The admin panel feed for the app (sections / broadcasts / hides): the
+      # resolver, the adult fail-closed rule, the hide expiry/restore rules,
+      # and the posts-route hide enforcement. Offline — temp SQLite files.
+      - name: 🧪 test_panel_feed.py
+        run: python3 -S Fast_Fetch/test_panel_feed.py
+
+      # Typo-tolerant search and the free-only filter on /api/v1/posts: the
+      # edit-distance-1 fallback (3-gram candidates, Python check) runs only
+      # when exact search finds nothing, and free_only mirrors the client's
+      # VIP gate. Offline — temp SQLite files.
+      - name: 🧪 test_search_fuzzy.py
+        run: python3 -S Fast_Fetch/test_search_fuzzy.py
+      - name: 🧪 test_work_ref.py
+        run: python3 -S Fast_Fetch/test_work_ref.py
+
+      # The public contact intake (`POST /api/v1/contact`): the panel's
+      # categories, validation, masking and limits, writing the panel's
+      # `contact_messages` table. Offline — temp SQLite files.
+      - name: 🧪 test_contact_intake.py
+        run: python3 -S Fast_Fetch/test_contact_intake.py
+
       # The agreement gate on the key-level fold (order #60, 2026-11-05). `--apply` hides a
       # work only when every row it would flip corroborates the flagged sibling by title, with
       # no derivable year contradicting it: a literal `MAX(is_18_plus)` per `canonical_key`

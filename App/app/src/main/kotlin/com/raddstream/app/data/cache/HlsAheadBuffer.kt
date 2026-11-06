@@ -47,8 +47,9 @@ class HlsAheadBuffer(
         aheadSegments: Int,
     ): Result = withContext(Dispatchers.IO) {
         if (!workDir.exists()) workDir.mkdirs()
-        val mediaText = loadMediaPlaylist(manifestUrl)
+        val media = loadMediaPlaylist(manifestUrl)
             ?: return@withContext Result(emptyList(), emptySet(), null, sourceDead = true, error = "manifest_unreachable")
+        val mediaText = media.text
 
         val segments = HlsPlaylist.parseSegments(mediaText)
         if (segments.isEmpty()) {
@@ -57,7 +58,13 @@ class HlsAheadBuffer(
 
         val covered = HashSet<Int>()
         var lastError: String? = null
-        val upper = minOf(segments.size - 1, startSegmentIndex + aheadSegments)
+        // Overflow-safe: a full-download pass asks for Int.MAX_VALUE ahead, so the
+        // addition must not wrap. The window is the rest of the playlist either way.
+        val upper = minOf(
+            segments.size - 1,
+            (startSegmentIndex.toLong() + aheadSegments)
+                .coerceAtMost((segments.size - 1).toLong()).toInt(),
+        )
         for (i in startSegmentIndex..upper) {
             coroutineContext.ensureActive()
             val seg = segments[i]
@@ -66,7 +73,10 @@ class HlsAheadBuffer(
                 covered.add(seg.index) // already have it — never re-fetch
                 continue
             }
-            val url = resolveUrl(manifestUrl, seg.uri)
+            // Segments resolve against the playlist they came from, not the address we
+            // asked for: our redirector 302s, and a relative segment ref belongs to the
+            // final playlist URL, never to /api/v1/stream.
+            val url = resolveUrl(media.finalUrl, seg.uri)
             when (val outcome = downloadSegment(url, localFile)) {
                 SegmentOutcome.Saved -> covered.add(seg.index)
                 SegmentOutcome.Dead -> {
@@ -135,10 +145,10 @@ class HlsAheadBuffer(
     }
 
     /** Fetch a media playlist; if the URL is a master, descend to the highest-bandwidth variant. */
-    private suspend fun loadMediaPlaylist(url: String): String? {
+    private suspend fun loadMediaPlaylist(url: String): FetchedPlaylist? {
         val first = fetchText(url) ?: return null
-        if (!HlsPlaylist.isMaster(first)) return first
-        val variant = pickVariantUrl(first, url) ?: return first
+        if (!HlsPlaylist.isMaster(first.text)) return first
+        val variant = pickVariantUrl(first.text, first.finalUrl) ?: return first
         return fetchText(variant) ?: first
     }
 
@@ -154,12 +164,19 @@ class HlsAheadBuffer(
         return last?.let { resolveUrl(masterUrl, it) }
     }
 
-    private suspend fun fetchText(url: String): String? {
+    private suspend fun fetchText(url: String): FetchedPlaylist? {
         val request = Request.Builder().url(url).build()
         var response: okhttp3.Response? = null
         return try {
             response = client.newCall(request).execute()
-            if (response.isSuccessful) response.body?.string() else null
+            if (response.isSuccessful) {
+                val body = response.body?.string() ?: return null
+                // The URL the bytes actually came from: after our redirector's 302 this
+                // is the playlist host, and relative segment refs resolve against it.
+                FetchedPlaylist(body, response.request.url.toString())
+            } else {
+                null
+            }
         } catch (_: IOException) {
             null
         } finally {
@@ -169,6 +186,9 @@ class HlsAheadBuffer(
             }
         }
     }
+
+    /** A fetched playlist plus the URL it actually came from (after redirects). */
+    private data class FetchedPlaylist(val text: String, val finalUrl: String)
 
     /** Keep the leading tag block of the original media playlist (EXTM3U + session tags). */
     private fun headerOf(text: String): String =

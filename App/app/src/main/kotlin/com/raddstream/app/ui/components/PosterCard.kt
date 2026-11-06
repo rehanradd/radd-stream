@@ -12,9 +12,15 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -58,6 +64,12 @@ fun PosterCard(
     progressFraction: Float? = null,
     /** The same fact in words — "S2:E5 · 23 min left". */
     progressLabel: String? = null,
+    /**
+     * One-tap remove, shown as a small × on the poster's corner. Only My List
+     * passes it: everywhere else the tile is a doorway, not a list to edit,
+     * and a remove badge there would be a trap for a slipping thumb.
+     */
+    onRemove: (() -> Unit)? = null,
 ) {
     val title = post.cleanTitle?.takeIf { it.isNotBlank() } ?: post.title
     val typeLabel = post.typeLabel
@@ -114,6 +126,30 @@ fun PosterCard(
                         // branded fallback says what failed, and keeps the title readable.
                         fallbackLabel = title.take(2).uppercase(),
                     )
+                }
+
+                // One tap, not a held tile and not a confirm: the × removes
+                // the row at once, and the screen offers Undo in the snackbar.
+                // The button eats its own tap, so it never also opens the title.
+                if (onRemove != null) {
+                    IconButton(
+                        onClick = onRemove,
+                        modifier = Modifier
+                            .align(Alignment.TopEnd)
+                            .padding(6.dp)
+                            .size(28.dp)
+                            .background(
+                                MaterialTheme.colorScheme.surface.copy(alpha = 0.85f),
+                                CircleShape,
+                            ),
+                    ) {
+                        Icon(
+                            Icons.Default.Close,
+                            contentDescription = "Remove $title from My List",
+                            tint = MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.size(16.dp),
+                        )
+                    }
                 }
 
                 // Bottom scrim: a poster's lower edge is whatever the artwork happens to be, and

@@ -7,9 +7,11 @@ import coil.Coil
 import com.raddstream.app.data.ServerSettingsRepository
 import com.raddstream.app.data.UserRegion
 import com.raddstream.app.network.friendlyNetworkError
+import com.raddstream.app.network.models.PanelDisclaimer
 import com.raddstream.app.network.models.StatsResponse
 import com.raddstream.app.player.AudioBoost
 import com.raddstream.app.player.AudioBoostUi
+import com.raddstream.app.player.LanguageDefaults
 import com.raddstream.app.repository.CatalogRepository
 import com.raddstream.app.share.LanShareRunner
 import com.raddstream.app.share.LanShareStatus
@@ -27,6 +29,7 @@ import javax.inject.Inject
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -62,13 +65,27 @@ enum class KeepTtl(val label: String, val hours: Int) {
 data class UserPreferences(
     val imageQuality: ImageQuality = ImageQuality.AUTO,
     val downloadOnMobileData: Boolean = false,
+    /** Data Saver: on mobile data, titles start at 480p. On by default. */
+    val dataSaver: Boolean = true,
+    /** Downloads start on Wi-Fi only. On by default. */
+    val wifiOnlyDownloads: Boolean = true,
+    /** A finished movie's download deletes itself. On by default. */
+    val autoDeleteWatched: Boolean = true,
     val keepTtl: KeepTtl = KeepTtl.H3,
     val subtitleLang: String = SUBTITLE_DEFAULT,
     val dynamicColor: Boolean = false,
     /** The audio level in [AudioBoost]'s unit, already reduced to what this build can apply. */
     val audioBoost: Float = AudioBoost.BASELINE,
-    /** Preferred audio language, or [AUDIO_LANGUAGE_DEFAULT] = leave it to the player. */
+    /** The audio language in force — the stored pick, or the region's default when never set. */
     val audioLanguage: String = AUDIO_LANGUAGE_DEFAULT,
+    /** Play the next episode on its own when this one ends (plan §5 step 10, D4: on). */
+    val autoplayNext: Boolean = true,
+    /** Let the Home hero move on its own (plan §5 step 10); off stops the carousel. */
+    val autoplayPreviews: Boolean = true,
+    /** The rung a new title starts on when Play was Auto; "auto" = no default. */
+    val defaultQuality: String = "auto",
+    /** Subtitle text size, 50..200 % — the same number the player sheet's slider writes. */
+    val subtitleSizePercent: Int = 100,
 ) {
     /**
      * The widest poster this install asks the image loader for, in pixels. This is the ONE
@@ -84,7 +101,7 @@ data class UserPreferences(
         }
 
     companion object {
-        /** The chip label for "no preference", which is stored as the absence of one. */
+        /** The chip label for the explicit "leave it to the player" pick, stored as the word itself. */
         const val AUDIO_LANGUAGE_DEFAULT = "Player default"
         val AUDIO_LANGUAGE_OPTIONS = listOf(
             AUDIO_LANGUAGE_DEFAULT, "English", "Hindi", "Urdu", "Tamil", "Telugu", "Malayalam", "Japanese",
@@ -111,11 +128,44 @@ data class SettingsUiState(
     /** The OPTIONAL sync account. Signed out, this card is one line and one button. */
     val account: AccountUiState = AccountUiState(),
     /**
+     * The membership summary the VIP card paints — collected from the sync
+     * account's entitlement, never invented: null entitlement means "not
+     * loaded yet", so the card shows the free line until the server answers.
+     * vipUntilMillis is 0 when there is no VIP grant to date.
+     */
+    val planIsVip: Boolean = false,
+    val planVipUntilMillis: Long = 0L,
+    val planPaymentPending: Boolean = false,
+    /**
+     * The operator's published prices, in PKR, from the remote config — 0
+     * means "not published", and the card hides the price line rather than
+     * printing a zero. Fetched once when Settings opens; a failed fetch
+     * leaves the last known values (0 on a fresh install).
+     */
+    val planMonthlyPkr: Int = 0,
+    val planYearlyPkr: Int = 0,
+    /**
+     * The poster-image disk cache, measured from Coil's own disk cache —
+     * null until the first measurement lands. max is the loader's own cap,
+     * so the bar is size-of-cap, never a guess at the device's free space.
+     */
+    val posterCacheBytes: Long? = null,
+    val posterCacheMaxBytes: Long? = null,
+    /** The contact form's whole state. The message lives only until it is sent. */
+    val contact: ContactUiState = ContactUiState(),
+    /**
      * The regional-dub choice the onboarding screen wrote, normalized. Seeded with
      * [UserRegion.DEFAULT] because the store always answers a value — the card label below
      * shows which one, and tapping it opens the same screen the first install showed.
      */
     val userRegion: String = UserRegion.DEFAULT,
+    /**
+     * The operator's disclaimer, as last received. Empty text means "nothing
+     * published" — the card says so instead of showing an empty dialog.
+     */
+    val disclaimer: PanelDisclaimer = PanelDisclaimer(),
+    /** The disclaimer dialog the Settings card opens, if any. */
+    val showDisclaimer: Boolean = false,
 )
 
 /**
@@ -169,6 +219,28 @@ data class AccountUiState(
     val trialExpired: Boolean get() = trialSecondsLeft != null && trialSecondsLeft <= 0.0
 }
 
+/**
+ * The contact form's whole state. The category ids are the panel's own five
+ * (`contact_messages.category`); the labels are what the chips show. The
+ * email is optional — it is only how the operator replies — and the server
+ * stores it masked, so this screen never shows a full address back.
+ */
+data class ContactUiState(
+    val showForm: Boolean = false,
+    val category: String = "other",
+    val subject: String = "",
+    val body: String = "",
+    val email: String = "",
+    val isSending: Boolean = false,
+    val message: String? = null,
+    val messageIsError: Boolean = false,
+) {
+    companion object {
+        val CATEGORY_IDS: List<String> = listOf("bug", "payment", "content", "takedown", "other")
+        val CATEGORY_LABELS: List<String> = listOf("Bug", "Payment", "Content", "Takedown", "Other")
+    }
+}
+
 @HiltViewModel
 class SettingsViewModel @Inject constructor(
     @ApplicationContext private val context: Context,
@@ -187,6 +259,8 @@ class SettingsViewModel @Inject constructor(
         observeLanShare()
         observeAccount()
         observeTrial()
+        observePlan()
+        measurePosterCache()
     }
 
     /**
@@ -249,6 +323,48 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
+    /**
+     * The membership summary for the VIP card: the entitlement the sync
+     * account already collects (a VIP grant is server truth, never a local
+     * guess) plus the operator's published prices from the remote config.
+     * Both are best-effort — a null entitlement means "not loaded yet" and
+     * a failed price fetch leaves 0, which the card reads as "not published".
+     */
+    private fun observePlan() {
+        viewModelScope.launch {
+            syncAccountRepository.entitlement.collect { entitlement ->
+                _uiState.update {
+                    it.copy(
+                        planIsVip = entitlement?.vip == true,
+                        planVipUntilMillis = ((entitlement?.vipUntil ?: 0.0) * 1000).toLong(),
+                        planPaymentPending = entitlement?.pending == true,
+                    )
+                }
+            }
+        }
+        viewModelScope.launch {
+            runCatching { catalogRepository.getRemoteConfig() }.onSuccess { config ->
+                _uiState.update {
+                    it.copy(
+                        planMonthlyPkr = config.vip.monthlyPkr.takeIf { price -> price > 0 } ?: 0,
+                        planYearlyPkr = config.vip.yearlyPkr.takeIf { price -> price > 0 } ?: 0,
+                    )
+                }
+            }
+        }
+    }
+
+    /** Reads Coil's own disk cache size and cap, on IO because both are file I/O. */
+    private fun measurePosterCache() {
+        viewModelScope.launch {
+            val (bytes, max) = withContext(Dispatchers.IO) {
+                val disk = Coil.imageLoader(context).diskCache
+                (disk?.size to disk?.maxSize)
+            }
+            _uiState.update { it.copy(posterCacheBytes = bytes, posterCacheMaxBytes = max) }
+        }
+    }
+
     private fun loadServerUrlAndStats() {
         viewModelScope.launch {
             val url = settingsRepository.serverUrl.first() ?: ""
@@ -267,7 +383,7 @@ class SettingsViewModel @Inject constructor(
     /**
      * Every row in the Playback & Display card, collected rather than sampled so a value
      * written anywhere shows up here immediately, and so a tap survives process death.
-     * These eight flows are the whole preference layer: the player, the theme, the image
+     * These twelve flows are the whole preference layer: the player, the theme, the image
      * loader, the offline sweeper and the release selector each read the same stored values,
      * which is what makes a chip here a setting rather than a decoration.
      */
@@ -278,9 +394,25 @@ class SettingsViewModel @Inject constructor(
             }
         }
         viewModelScope.launch {
-            settingsRepository.preferredAudioLanguage.collect { language ->
+            // The chips show the language in force, not the stored word: a viewer who never
+            // chose still sees their region's default (Desi: Hindi audio, English subtitles),
+            // because that is what the player will actually play. One combine, not three
+            // collectors, so a region change and a language change can never show a half-old
+            // pair — the audio row and the subtitle row always answer the same region.
+            combine(
+                settingsRepository.userRegion,
+                settingsRepository.preferredAudioLanguage,
+                settingsRepository.preferredSubtitleLanguage,
+            ) { region, audio, subtitle ->
+                Pair(
+                    LanguageDefaults.effectiveAudioLanguage(audio, region)
+                        ?: UserPreferences.AUDIO_LANGUAGE_DEFAULT,
+                    LanguageDefaults.effectiveSubtitleLanguage(subtitle, region)
+                        ?: UserPreferences.SUBTITLE_DEFAULT,
+                )
+            }.collect { (audio, subtitle) ->
                 _uiState.update {
-                    it.copy(prefs = it.prefs.copy(audioLanguage = language ?: UserPreferences.AUDIO_LANGUAGE_DEFAULT))
+                    it.copy(prefs = it.prefs.copy(audioLanguage = audio, subtitleLang = subtitle))
                 }
             }
         }
@@ -295,20 +427,50 @@ class SettingsViewModel @Inject constructor(
             }
         }
         viewModelScope.launch {
+            settingsRepository.dataSaver.collect { enabled ->
+                _uiState.update { it.copy(prefs = it.prefs.copy(dataSaver = enabled)) }
+            }
+        }
+        viewModelScope.launch {
+            settingsRepository.wifiOnlyDownloads.collect { enabled ->
+                _uiState.update { it.copy(prefs = it.prefs.copy(wifiOnlyDownloads = enabled)) }
+            }
+        }
+        viewModelScope.launch {
+            settingsRepository.autoDeleteWatched.collect { enabled ->
+                _uiState.update { it.copy(prefs = it.prefs.copy(autoDeleteWatched = enabled)) }
+            }
+        }
+        viewModelScope.launch {
             settingsRepository.keepTtlHours.collect { hours ->
                 _uiState.update { it.copy(prefs = it.prefs.copy(keepTtl = KeepTtl.fromHours(hours))) }
             }
         }
         viewModelScope.launch {
-            settingsRepository.preferredSubtitleLanguage.collect { language ->
-                _uiState.update {
-                    it.copy(prefs = it.prefs.copy(subtitleLang = language ?: UserPreferences.SUBTITLE_DEFAULT))
-                }
+            settingsRepository.dynamicColorEnabled.collect { enabled ->
+                _uiState.update { it.copy(prefs = it.prefs.copy(dynamicColor = enabled)) }
+            }
+        }
+        // Player defaults (plan §5 step 10): the autoplay switches, the standing
+        // default quality, and the subtitle size the player sheet's slider also writes.
+        viewModelScope.launch {
+            settingsRepository.autoplayNext.collect { enabled ->
+                _uiState.update { it.copy(prefs = it.prefs.copy(autoplayNext = enabled)) }
             }
         }
         viewModelScope.launch {
-            settingsRepository.dynamicColorEnabled.collect { enabled ->
-                _uiState.update { it.copy(prefs = it.prefs.copy(dynamicColor = enabled)) }
+            settingsRepository.autoplayPreviews.collect { enabled ->
+                _uiState.update { it.copy(prefs = it.prefs.copy(autoplayPreviews = enabled)) }
+            }
+        }
+        viewModelScope.launch {
+            settingsRepository.defaultQuality.collect { band ->
+                _uiState.update { it.copy(prefs = it.prefs.copy(defaultQuality = band)) }
+            }
+        }
+        viewModelScope.launch {
+            settingsRepository.subtitleStyle.collect { style ->
+                _uiState.update { it.copy(prefs = it.prefs.copy(subtitleSizePercent = style.sizePercent)) }
             }
         }
         // Collected, not sampled: the region screen this row opens writes the same key, so the
@@ -318,6 +480,24 @@ class SettingsViewModel @Inject constructor(
                 _uiState.update { it.copy(userRegion = region) }
             }
         }
+        // The disclaimer card shows what the last poll brought in, the same
+        // way the region row does: a new version the operator publishes
+        // appears here without the viewer having to reopen the app.
+        viewModelScope.launch {
+            settingsRepository.disclaimer.collect { disclaimer ->
+                _uiState.update { it.copy(disclaimer = disclaimer) }
+            }
+        }
+    }
+
+    /** Open the disclaimer text this install has on file. */
+    fun openDisclaimer() {
+        _uiState.update { it.copy(showDisclaimer = true) }
+    }
+
+    /** Close the disclaimer dialog. Reading it here does not accept it: acceptance happens only on the first-run dialog, once per version. */
+    fun closeDisclaimer() {
+        _uiState.update { it.copy(showDisclaimer = false) }
     }
 
     /**
@@ -386,16 +566,30 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch { settingsRepository.saveMobileDataAllowed(value) }
     }
 
+    fun setDataSaver(value: Boolean) {
+        updatePrefs { it.copy(dataSaver = value) }
+        viewModelScope.launch { settingsRepository.saveDataSaver(value) }
+    }
+
+    fun setWifiOnlyDownloads(value: Boolean) {
+        updatePrefs { it.copy(wifiOnlyDownloads = value) }
+        viewModelScope.launch { settingsRepository.saveWifiOnlyDownloads(value) }
+    }
+
+    fun setAutoDeleteWatched(value: Boolean) {
+        updatePrefs { it.copy(autoDeleteWatched = value) }
+        viewModelScope.launch { settingsRepository.saveAutoDeleteWatched(value) }
+    }
+
     fun setKeepTtl(value: KeepTtl) {
         updatePrefs { it.copy(keepTtl = value) }
         viewModelScope.launch { settingsRepository.saveKeepTtlHours(value.hours) }
     }
 
-    /** [UserPreferences.SUBTITLE_DEFAULT] stores nothing, exactly like the audio row. */
+    /** [UserPreferences.SUBTITLE_DEFAULT] is stored as the word itself, like the audio row. */
     fun setSubtitleLang(value: String) {
         updatePrefs { it.copy(subtitleLang = value) }
-        val store = if (value == UserPreferences.SUBTITLE_DEFAULT) null else value
-        viewModelScope.launch { settingsRepository.savePreferredSubtitleLanguage(store) }
+        viewModelScope.launch { settingsRepository.savePreferredSubtitleLanguage(value) }
     }
 
     fun setDynamicColor(value: Boolean) {
@@ -416,11 +610,46 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch { settingsRepository.saveAudioBoostLevel(safe) }
     }
 
-    /** The persisted audio language. [UserPreferences.AUDIO_LANGUAGE_DEFAULT] stores nothing. */
+    /**
+     * The persisted audio language, stored as the word itself — including
+     * [UserPreferences.AUDIO_LANGUAGE_DEFAULT], so an explicit "leave it to the player" is
+     * never mistaken for a viewer who never chose (only a stored null falls back to the
+     * region's default).
+     */
     fun setAudioLanguage(value: String) {
         updatePrefs { it.copy(audioLanguage = value) }
-        val store = if (value == UserPreferences.AUDIO_LANGUAGE_DEFAULT) null else value
-        viewModelScope.launch { settingsRepository.savePreferredAudioLanguage(store) }
+        viewModelScope.launch { settingsRepository.savePreferredAudioLanguage(value) }
+    }
+
+    /**
+     * Player defaults (plan §5 step 10, P36). Each one writes straight through to the
+     * same store its consumer reads — the player for autoplay-next and default quality,
+     * the Home hero for autoplay-previews, the subtitle renderer for size — so a switch
+     * here is a setting, not a decoration.
+     */
+    fun setAutoplayNext(enabled: Boolean) {
+        updatePrefs { it.copy(autoplayNext = enabled) }
+        viewModelScope.launch { settingsRepository.saveAutoplayNext(enabled) }
+    }
+
+    fun setAutoplayPreviews(enabled: Boolean) {
+        updatePrefs { it.copy(autoplayPreviews = enabled) }
+        viewModelScope.launch { settingsRepository.saveAutoplayPreviews(enabled) }
+    }
+
+    fun setDefaultQuality(band: String) {
+        updatePrefs { it.copy(defaultQuality = band) }
+        viewModelScope.launch { settingsRepository.saveDefaultQuality(band) }
+    }
+
+    /** The subtitle size, 50..200 % — the same number the player sheet's slider writes. */
+    fun setSubtitleSize(percent: Int) {
+        val safe = percent.coerceIn(50, 200)
+        updatePrefs { it.copy(subtitleSizePercent = safe) }
+        viewModelScope.launch {
+            val current = settingsRepository.subtitleStyle.first()
+            settingsRepository.saveSubtitleStyle(current.copy(sizePercent = safe))
+        }
     }
 
     /**
@@ -449,10 +678,13 @@ class SettingsViewModel @Inject constructor(
                     },
                 )
             }
+            // The bar must show the empty cache, not the size it measured before the clear.
+            measurePosterCache()
         }
     }
 
-    private fun formatCacheSize(bytes: Long): String = when {
+    /** Shared with the screen: the same MB/KB/B rule paints the cache bar and the cleared notice. */
+    internal fun formatCacheSize(bytes: Long): String = when {
         bytes >= 1024 * 1024 -> "${bytes / (1024 * 1024)} MB"
         bytes >= 1024 -> "${bytes / 1024} KB"
         else -> "$bytes B"
@@ -713,6 +945,95 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
+    // ── Contact us ───────────────────────────────────────────────────────
+
+    fun openContactForm() {
+        _uiState.update {
+            it.copy(contact = it.contact.copy(showForm = true, message = null, messageIsError = false))
+        }
+    }
+
+    fun closeContactForm() {
+        _uiState.update { it.copy(contact = it.contact.copy(showForm = false)) }
+    }
+
+    fun onContactCategoryChanged(value: String) {
+        _uiState.update { it.copy(contact = it.contact.copy(category = value)) }
+    }
+
+    fun onContactSubjectChanged(value: String) {
+        _uiState.update { it.copy(contact = it.contact.copy(subject = value)) }
+    }
+
+    fun onContactBodyChanged(value: String) {
+        _uiState.update { it.copy(contact = it.contact.copy(body = value)) }
+    }
+
+    fun onContactEmailChanged(value: String) {
+        _uiState.update { it.copy(contact = it.contact.copy(email = value)) }
+    }
+
+    /**
+     * Send the form to the operator's inbox. The body is the only required
+     * field — a message with nothing in it is not a message. On success the
+     * form closes and its fields clear, and the card keeps the one-line
+     * answer; on failure the text stays exactly as typed, so a dropped
+     * connection costs a retry, not a rewrite.
+     */
+    fun submitContact() {
+        val contact = _uiState.value.contact
+        if (contact.isSending) return
+        if (contact.body.isBlank()) {
+            _uiState.update {
+                it.copy(contact = it.contact.copy(message = "Write your message first.", messageIsError = true))
+            }
+            return
+        }
+        // The card's own precondition, said in the dialog rather than in the
+        // card's message slot: a message is a row on a server, and with no
+        // address there is no server to write to.
+        if (_uiState.value.serverUrl.isBlank()) {
+            _uiState.update {
+                it.copy(
+                    contact = it.contact.copy(
+                        message = refusalSentence(Refusal.NO_SERVER),
+                        messageIsError = true,
+                    ),
+                )
+            }
+            return
+        }
+        _uiState.update {
+            it.copy(contact = it.contact.copy(isSending = true, message = null, messageIsError = false))
+        }
+        viewModelScope.launch {
+            val sent = catalogRepository.submitContact(
+                category = contact.category,
+                subject = contact.subject.trim(),
+                body = contact.body.trim(),
+                accountHint = contact.email.trim().takeIf { it.isNotEmpty() },
+            )
+            _uiState.update {
+                if (sent) {
+                    it.copy(
+                        contact = ContactUiState(
+                            message = "Sent. If you left an email, we can reply to it.",
+                            messageIsError = false,
+                        ),
+                    )
+                } else {
+                    it.copy(
+                        contact = it.contact.copy(
+                            isSending = false,
+                            message = "Could not send. Check your connection and try again.",
+                            messageIsError = true,
+                        ),
+                    )
+                }
+            }
+        }
+    }
+
     /**
      * "Sync now": both lists read, the library's missing favorites written, the pulled resume
      * points folded into the local mirror. The counts are the only thing reported, because the
@@ -935,6 +1256,9 @@ private fun syncSentence(report: SyncReport, paused: Boolean, signedIn: Boolean 
         append(if (signedIn) "Signed in and synced. " else "Synced. ")
         append("${report.favoritesPushed} ${if (report.favoritesPushed == 1) "save" else "s"} sent up, ")
         append("${report.progressRowsPulled} resume ${if (report.progressRowsPulled == 1) "point" else "points"} pulled down.")
+        if (report.favoritesPulled > 0) {
+            append(" ${report.favoritesPulled} saved ${if (report.favoritesPulled == 1) "title" else "titles"} from your other device ${if (report.favoritesPulled == 1) "is" else "are"} now on this device too.")
+        }
         if (report.favoritesUnknownHere > 0) {
             append(" ${report.favoritesUnknownHere} saved ${if (report.favoritesUnknownHere == 1) "title is" else "titles are"} on the server but not on this device — open them once and they will be yours here too.")
         }

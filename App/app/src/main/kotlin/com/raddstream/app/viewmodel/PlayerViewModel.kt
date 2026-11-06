@@ -3,6 +3,7 @@ package com.raddstream.app.viewmodel
 import android.content.ComponentName
 import android.content.Context
 import android.net.Uri
+import android.os.SystemClock
 import androidx.annotation.OptIn
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.ViewModel
@@ -16,6 +17,7 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
 import com.raddstream.app.brand.Brand
+import com.raddstream.app.player.AbRepeat
 import com.raddstream.app.player.AdCadenceGovernor
 import com.raddstream.app.player.AdDecision
 import com.raddstream.app.player.AdSlot
@@ -32,7 +34,11 @@ import com.raddstream.app.player.CacheEngineHolder
 import com.raddstream.app.player.CacheSnapshot
 import com.raddstream.app.player.CacheState
 import com.raddstream.app.player.CalibrationState
+import com.raddstream.app.player.DataSaver
 import com.raddstream.app.player.DeferredOffsetReporter
+import com.raddstream.app.player.directVideoIsHls
+import com.raddstream.app.player.directVideoMime
+import com.raddstream.app.player.directVideoTitle
 import com.raddstream.app.player.EpisodeOffsets
 import com.raddstream.app.player.EpisodeProgression
 import com.raddstream.app.player.ExternalSubtitle
@@ -40,6 +46,7 @@ import com.raddstream.app.player.KeepResult
 import com.raddstream.app.player.KeepUiState
 import com.raddstream.app.player.LadderForScope
 import com.raddstream.app.player.LadderRung
+import com.raddstream.app.player.LanguageDefaults
 import com.raddstream.app.player.NextEpisodeAction
 import com.raddstream.app.player.PlaybackBundle
 import com.raddstream.app.player.PlaybackInfo
@@ -56,17 +63,30 @@ import com.raddstream.app.player.ScreenZone
 import com.raddstream.app.player.SleepMode
 import com.raddstream.app.player.SleepTick
 import com.raddstream.app.player.SleepTimer
+import com.raddstream.app.player.StartDeadline
+import com.raddstream.app.player.StartPhase
 import com.raddstream.app.player.SubtitleTrackDecision
 import com.raddstream.app.player.SubtitleTrackPolicy
 import com.raddstream.app.player.SubtitleUiSettings
 import com.raddstream.app.player.TrackUiOption
 import com.raddstream.app.player.ViewMode
+import com.raddstream.app.player.abRepeatWithA
+import com.raddstream.app.player.abRepeatWithB
+import com.raddstream.app.player.loopTargetMs
+import com.raddstream.app.player.majorVersionOf
+import com.raddstream.app.player.resolveStartBand
+import com.raddstream.app.player.shouldAutoAdvance
+import com.raddstream.app.player.shouldShowCoach
 import com.raddstream.app.player.subtitle.SubtitleCue
 import com.raddstream.app.player.subtitle.SubtitleFile
 import com.raddstream.app.player.subtitle.SubtitleFormat
 import com.raddstream.app.player.subtitle.SubtitleParser
 import com.raddstream.app.player.subtitles.SubtitleOffset
+import com.raddstream.app.data.LocalResumeRepository
+import com.raddstream.app.data.isLocalResumeUri
 import com.raddstream.app.data.ServerSettingsRepository
+import com.raddstream.app.data.cache.ConnectivityProbe
+import com.raddstream.app.data.cache.NetworkClass
 import com.raddstream.app.data.local.WatchHistoryDao
 import com.raddstream.app.network.ApiProvider
 import com.raddstream.app.network.streamRedirectUrl
@@ -85,6 +105,7 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -107,13 +128,23 @@ class PlayerViewModel @Inject constructor(
     private val catalogRepository: CatalogRepository,
     private val syncAccountRepository: SyncAccountRepository,
     private val watchHistoryDao: WatchHistoryDao,
+    private val localResumeRepository: LocalResumeRepository,
     private val adCadence: AdCadenceGovernor,
+    private val connectivityProbe: ConnectivityProbe,
 ) : ViewModel() {
 
     private val store: PlayerSessionStore = PlayerSessionStore.Instance
 
     private var controller: MediaController? = null
     private var tickerJob: Job? = null
+
+    /**
+     * Monotonic instant the current load was requested (`elapsedRealtime`, so a sleeping
+     * phone does not gift the deadline free seconds). Stamped in [loadNow] — the one funnel
+     * every play path goes through — and in [retryCurrentCandidates], the one path that
+     * bypasses it. Null once a first frame has rendered, so no stale attempt can fire.
+     */
+    private var startAttemptAtMs: Long? = null
     private var keepJob: Job? = null
     private var settingsJob: Job? = null
     private var bingeResolveJob: Job? = null
@@ -124,6 +155,15 @@ class PlayerViewModel @Inject constructor(
      * whether this player offers a keep at all — see [refreshKeepState] and [keepCurrent].
      */
     private var downloadsAllowed: Boolean = true
+
+    /**
+     * The viewer's own player defaults (plan §5 step 10, P36): autoplay-next, on until
+     * the viewer turns it off (plan D4), and the standing default quality band ("auto"
+     * = no default). Collected, not sampled, so a change in Settings reaches a player
+     * that is already running before the next episode ends.
+     */
+    private var autoplayNext: Boolean = true
+    private var defaultQualityBand: String = LadderForScope.AUTO
 
     private val sleepTimer = SleepTimer()
 
@@ -200,6 +240,9 @@ class PlayerViewModel @Inject constructor(
      * handed at every site below.
      */
     private var qualityGateEnabled: Boolean = false
+    private var freeQualityCap: String = "720p"
+    /** Data Saver — on by default, so mobile-data titles start at 480p. */
+    private var dataSaver: Boolean = true
 
     /** A confirmed member, or everyone while the operator has not turned gating on. */
     private val premiumAccess: Boolean get() = VipQualityGate.premiumAccess(qualityGateEnabled, syncEntitled)
@@ -209,6 +252,15 @@ class PlayerViewModel @Inject constructor(
 
     private val _ui = MutableStateFlow(PlayerUiState())
     val uiState: StateFlow<PlayerUiState> = _ui.asStateFlow()
+
+    /**
+     * Whether the first-run gesture coach (plan §5 step 7) is owed right now. False
+     * until the stored version is read — never show on a guess — and false again once
+     * it is marked seen for this major version. The screen reads this, never the raw
+     * stored version, so a half-loaded DataStore can never flash the overlay.
+     */
+    private val _showCoach = MutableStateFlow(false)
+    val showCoach: StateFlow<Boolean> = _showCoach.asStateFlow()
 
     private val _events = MutableSharedFlow<PlayerEvent>(extraBufferCapacity = 8)
     val events: SharedFlow<PlayerEvent> = _events.asSharedFlow()
@@ -256,6 +308,18 @@ class PlayerViewModel @Inject constructor(
                 armQualityChoices()
             }
         }
+        viewModelScope.launch {
+            settingsRepository.freeQualityCap.collect { cap ->
+                freeQualityCap = cap
+                armQualityChoices()
+            }
+        }
+        viewModelScope.launch {
+            settingsRepository.dataSaver.collect { enabled ->
+                dataSaver = enabled
+                armQualityChoices()
+            }
+        }
     }
 
     /**
@@ -282,14 +346,25 @@ class PlayerViewModel @Inject constructor(
             }
         }
         viewModelScope.launch {
-            settingsRepository.preferredAudioLanguage.collect { language ->
-                _ui.update { it.copy(preferredAudioLanguage = language) }
+            combine(
+                settingsRepository.userRegion,
+                settingsRepository.preferredAudioLanguage,
+                settingsRepository.preferredSubtitleLanguage,
+            ) { region, audio, subtitle ->
+                Triple(
+                    LanguageDefaults.effectiveAudioLanguage(audio, region),
+                    LanguageDefaults.effectiveAudioFallback(region),
+                    LanguageDefaults.effectiveSubtitleLanguage(subtitle, region),
+                )
+            }.collect { (audio, fallback, subtitle) ->
+                _ui.update {
+                    it.copy(
+                        preferredAudioLanguage = audio,
+                        preferredAudioFallback = fallback,
+                        preferredSubtitleLanguage = subtitle,
+                    )
+                }
                 applyPreferredAudioTrack()
-            }
-        }
-        viewModelScope.launch {
-            settingsRepository.preferredSubtitleLanguage.collect { language ->
-                _ui.update { it.copy(preferredSubtitleLanguage = language) }
                 applyPreferredSubtitleTrack()
             }
         }
@@ -323,6 +398,42 @@ class PlayerViewModel @Inject constructor(
                 downloadsAllowed = allowed
                 refreshKeepState()
             }
+        }
+        // The first-run gesture coach (plan §5 step 7): owed when never shown, or last
+        // shown for a different major version than the one running now. Collected, not
+        // sampled, so marking it seen hides it at once without a relaunch.
+        viewModelScope.launch {
+            settingsRepository.coachSeenVersion.collect { seen ->
+                _showCoach.value = shouldShowCoach(seen, Brand.versionName)
+            }
+        }
+        // The viewer's own player defaults (plan §5 step 10): the autoplay-next switch
+        // gates the auto-advance, and the default band is the rung a new title starts
+        // on when Play was Auto. Collected, not sampled, so a change in Settings reaches
+        // a player that is already running.
+        viewModelScope.launch {
+            settingsRepository.autoplayNext.collect { enabled -> autoplayNext = enabled }
+        }
+        viewModelScope.launch {
+            settingsRepository.defaultQuality.collect { band -> defaultQualityBand = band }
+        }
+        // The player chrome theme this device wears: collected, not sampled, so
+        // a change on the VIP screen reaches a player that is already running.
+        viewModelScope.launch {
+            settingsRepository.playerTheme.collect { theme ->
+                _ui.update { it.copy(playerTheme = theme) }
+            }
+        }
+    }
+
+    /**
+     * The first-run gesture coach has been shown for this major version: record it so it
+     * never shows again until a major version change. Called when the viewer taps it away
+     * or its 4 s timer ends — either way the lesson was delivered, not skipped.
+     */
+    fun markCoachSeen() {
+        viewModelScope.launch {
+            settingsRepository.saveCoachSeenVersion(majorVersionOf(Brand.versionName))
         }
     }
 
@@ -359,6 +470,10 @@ class PlayerViewModel @Inject constructor(
                 it.copy(
                     isBuffering = playbackState == Player.STATE_BUFFERING,
                     isEnded = playbackState == Player.STATE_ENDED,
+                    // The ended successor offer dies the moment playback leaves the ended
+                    // state — a replay or a new title must not inherit the last episode's
+                    // Next Episode button.
+                    endedHasNextEpisode = if (playbackState == Player.STATE_ENDED) it.endedHasNextEpisode else false,
                 )
             }
             if (playbackState == Player.STATE_ENDED) {
@@ -398,7 +513,7 @@ class PlayerViewModel @Inject constructor(
     private fun observeStore() {
         viewModelScope.launch {
             store.bundle.collect { b ->
-                _ui.update { it.copy(bundle = b, activeRendition = store.activeRendition()) }
+                _ui.update { it.copy(bundle = b, activeRendition = store.activeRendition(), endedHasNextEpisode = false) }
                 armQualityChoices()
                 // A rung Auto moved to is the SAME episode in a different address, so the
                 // binge policy must not be re-armed by it; only a new file or a new episode
@@ -447,6 +562,12 @@ class PlayerViewModel @Inject constructor(
 
     private var watchedBingeKey: String? = null
 
+    /** The last A-B loop-back, on the monotonic clock: the re-arm guard in the policy. */
+    private var lastAbLoopAtMs: Long? = null
+
+    /** Which file the staged A-B segment belongs to (target + title); a new file clears it. */
+    private var abRepeatScopeKey: String? = null
+
     private fun startTicker() {
         tickerJob?.cancel()
         var lastSleepTick = System.currentTimeMillis()
@@ -455,12 +576,52 @@ class PlayerViewModel @Inject constructor(
                 val c = controller
                 if (c != null && c.isConnected) {
                     val now = System.currentTimeMillis()
+                    val wasStarting = _ui.value.startPhase != StartPhase.NONE
                     _ui.update {
                         it.copy(
                             positionMs = c.currentPosition,
                             bufferedMs = bufferedOf(c),
                             durationMs = if (c.duration > 0) c.duration else it.durationMs,
                         )
+                    }
+                    // A-B repeat (§5 P14): the ticker already visits every 200 ms, so
+                    // it is the clock — when the playhead reaches B, seek back to A.
+                    // The re-arm window inside the policy keeps a seek still in flight
+                    // from being re-issued on every visit.
+                    val loopTo = loopTargetMs(
+                        _ui.value.positionMs, _ui.value.abRepeat, lastAbLoopAtMs,
+                        SystemClock.elapsedRealtime(),
+                    )
+                    if (loopTo != null) {
+                        lastAbLoopAtMs = SystemClock.elapsedRealtime()
+                        seekTo(loopTo)
+                    }
+                    // The start deadline (§5 P5): the ticker already visits every 200 ms, so
+                    // it is the clock — no second thread. A first frame disarms the attempt
+                    // and records how long the start took, but only when the player really
+                    // was starting: a quality switch mid-scene must not overwrite the
+                    // route-open measurement with a near-zero one.
+                    val attemptAt = startAttemptAtMs
+                    if (attemptAt != null) {
+                        val elapsed = SystemClock.elapsedRealtime() - attemptAt
+                        val firstFrame = c.isPlaying || c.duration > 0
+                        if (firstFrame) {
+                            startAttemptAtMs = null
+                            _ui.update {
+                                it.copy(
+                                    startElapsedMs = 0,
+                                    lastFirstFrameMs = if (wasStarting) elapsed else it.lastFirstFrameMs,
+                                    deadlineGiveUp = false,
+                                )
+                            }
+                        } else {
+                            _ui.update {
+                                it.copy(
+                                    startElapsedMs = elapsed,
+                                    deadlineGiveUp = elapsed >= StartDeadline.GIVE_UP_AFTER_MS,
+                                )
+                            }
+                        }
                     }
                     // Sleep timer advance + fade (player volume = user volume × fade factor)
                     if (_ui.value.sleep.mode == SleepMode.COUNTDOWN) {
@@ -496,6 +657,18 @@ class PlayerViewModel @Inject constructor(
     fun startStreamHandle(streamId: String, title: String, startOverrideMs: Long? = null) {
         if (_ui.value.bundle?.renditions?.firstOrNull()?.playback?.streamId == streamId) return
         viewModelScope.launch {
+            // A pasted direct link, staged under its opaque key by the search
+            // screen: no redirector, no server round-trip, no resume history —
+            // the address itself is the whole ladder, one rung.
+            store.peekDirectUrl(streamId)?.let { directUrl ->
+                beginBundle(
+                    directPlaybackBundle(streamId, directUrl),
+                    title,
+                    resumeKey = streamId,
+                    overrideMs = startOverrideMs,
+                )
+                return@launch
+            }
             val playUrl = streamRedirectUrl(apiProvider.currentBaseUrl(), streamId)
             // Runner-ups of this rung, staged by the detail screen: handles only, so a
             // 403 mid-play costs one silent hop instead of a dialog and a quality drop.
@@ -503,6 +676,7 @@ class PlayerViewModel @Inject constructor(
                                                        title = title,
                                                        backupHandles = store.peekFailover(streamId))
                 .withStagedTarget(streamId)
+                .withStagedCoverage(streamId)
             seedResumeFromStoredPositions(streamId, startOverrideMs)
             beginBundle(bundle, title, resumeKey = streamId, overrideMs = startOverrideMs)
         }
@@ -528,6 +702,18 @@ class PlayerViewModel @Inject constructor(
                 episode = scope.episode,
             ),
         )
+    }
+
+    /**
+     * The coverage the detail screen staged for this handle (plan §5 step 13): the
+     * print's episode boundaries and chapter titles, from the v2 bundle. A handle
+     * launched the old way has none staged, so the rendition keeps the default empty
+     * coverage — the scrubber draws no ticks, exactly as before.
+     */
+    private fun PlaybackBundle.withStagedCoverage(streamId: String): PlaybackBundle {
+        val coverage = store.peekCoverage(streamId) ?: return this
+        val first = renditions.firstOrNull() ?: return this
+        return copy(renditions = listOf(first.copy(coverage = coverage)) + renditions.drop(1))
     }
 
     /**
@@ -567,6 +753,39 @@ class PlayerViewModel @Inject constructor(
     }
 
     /**
+     * One rung, no server: a pasted .mp4/.m3u8 address staged under its opaque
+     * key. The shape mirrors [startLocalUri] — the player already knows how to
+     * play a bundle whose only rendition is a direct file — with two honest
+     * differences: `resumable` is false, because the address is unprobed and
+     * the player must not claim a Range resume it never measured; and the
+     * protocol and mime come from the address itself, so Media3 picks the
+     * right reader for a playlist versus a single file.
+     */
+    private fun directPlaybackBundle(key: String, url: String): PlaybackBundle {
+        val isHls = directVideoIsHls(url)
+        return PlaybackBundle(
+            session = SessionInfo(id = key),
+            target = PlayTarget(kind = "direct", id = 0),
+            renditions = listOf(
+                PlaybackRendition(
+                    rank = 1,
+                    print = PrintInfo(label = "Direct link"),
+                    playback = PlaybackInfo(
+                        playUrl = url,
+                        streamId = key,
+                        label = directVideoTitle(url),
+                        protocol = if (isHls) "hls" else "progressive",
+                        mimeType = directVideoMime(url),
+                        resumable = false,
+                        kind = "direct",
+                        playabilityWire = "stream",
+                    ),
+                ),
+            ),
+        )
+    }
+
+    /**
      * The stored position for the scope this handle is about to play, in the one place this
      * player already looks. [ResumeSeed] owns the precedence; what lives here is the two reads
      * and the write into [resumeByTarget] — the same map a position on THIS device writes.
@@ -579,7 +798,19 @@ class PlayerViewModel @Inject constructor(
     private suspend fun seedResumeFromStoredPositions(resumeKey: String, explicitStartMs: Long?) {
         if (explicitStartMs != null) return
         if (resumeByTarget[resumeKey] != null) return
-        val scope = store.peekWorkRef(resumeKey) ?: return
+        val scope = store.peekWorkRef(resumeKey)
+        if (scope == null) {
+            // A local file has no work ref for Room or the sync account to hang a
+            // position on — its resume lives in the local store instead, and only
+            // a device address may read it (a staged direct-URL key never does).
+            if (!isLocalResumeUri(resumeKey)) return
+            val localMs = localResumeRepository.positionFor(resumeKey) ?: return
+            val seed = ResumeSeed.seedFor(explicitStartMs, resumeByTarget[resumeKey], null, localMs)
+                ?: return
+            // Re-checked: a position measured while this lookup was running outranks it.
+            if (resumeByTarget[resumeKey] == null) resumeByTarget[resumeKey] = seed
+            return
+        }
         val syncedMs = if (syncSignedIn) {
             syncAccountRepository.resumePositionMs(scope.workRef, scope.season, scope.episode)
         } else {
@@ -613,18 +844,36 @@ class PlayerViewModel @Inject constructor(
         // The detail screen already gates what it stages, but a deep link or a membership
         // that lapsed mid-session could still hand us a premium rung. The player applies the
         // same rule at the point the switch is built, so no premium choice is ever offered.
-        val rungs = staged.rungs.filter { VipQualityGate.allowsBand(it.band, premiumAccess) }
+        val rungs = staged.rungs.filter { VipQualityGate.allowsBand(it.band, premiumAccess, freeQualityCap) }
         if (rungs.isEmpty()) return
-        val startBand = staged.startBand?.takeIf { band -> rungs.any { it.band == band } }
-            ?: rungs.first().band
+        // The standing default band (plan §5 step 10): an explicit tap outranks it, it
+        // outranks Auto's pick, and a band missing from this ladder is ignored.
+        val (startBand, auto) = resolveStartBand(
+            stagedStartBand = staged.startBand,
+            stagedAuto = staged.auto,
+            defaultBand = defaultQualityBand,
+            rungBands = rungs.map { it.band },
+        )
+        // Data Saver caps the start on mobile data — 480p when the ladder has it —
+        // and the auto pointer with it, so Auto cannot quietly start above the cap.
+        // The rungs themselves are untouched: the viewer can still switch up.
+        val onWifi = connectivityProbe.current() == NetworkClass.WIFI
+        val cappedStartBand = DataSaver.capBand(startBand, rungs.map { it.band }, dataSaver, onWifi)
+        val cappedAutoBand = staged.autoBand
+            ?.takeIf { band -> rungs.any { it.band == band } }
+            ?.let { DataSaver.capBand(it, rungs.map { it.band }, dataSaver, onWifi) }
         val plan = staged.copy(
             rungs = rungs,
-            startBand = startBand,
-            autoBand = staged.autoBand?.takeIf { band -> rungs.any { it.band == band } },
+            startBand = cappedStartBand,
+            auto = auto,
+            autoBand = cappedAutoBand,
         )
         ladderPlan = plan
         if (plan.auto) autoRungHandle = staged.startBand?.let { band ->
-            plan.rungs.firstOrNull { it.band == band }?.streamId
+            // The same cap as the start band above: Auto's first rung is the
+            // capped one on mobile data, not the staged one above it.
+            val capped = DataSaver.capBand(band, rungs.map { it.band }, dataSaver, onWifi)
+            plan.rungs.firstOrNull { it.band == capped }?.streamId
         } ?: handle
         _ui.update {
             it.copy(
@@ -654,7 +903,7 @@ class PlayerViewModel @Inject constructor(
             band
         }
         val rung = plan.rungs.firstOrNull { it.band == targetBand } ?: return
-        if (!VipQualityGate.allowsBand(rung.band, premiumAccess)) return
+        if (!VipQualityGate.allowsBand(rung.band, premiumAccess, freeQualityCap)) return
         val active = _ui.value.activeRendition
         val auto = wantedAuto
         store.autoQuality.configure(plan.rungs, rung.band, auto)
@@ -692,6 +941,17 @@ class PlayerViewModel @Inject constructor(
         resumeKey: String,
         overrideMs: Long? = null,
     ) {
+        // A new file starts with no segment: the old A-B points are positions in a
+        // different file. A quality switch keeps the same work, season, episode and
+        // title, so the segment survives it — the range is in the file, not the
+        // address. The scope key is the target plus the title, because a deep link
+        // carries the empty target and only its title tells it apart.
+        val scopeKey = "${bundle.target.kind}:${bundle.target.id}:${bundle.target.season}:${bundle.target.episode}:$title"
+        if (abRepeatScopeKey != scopeKey) {
+            _ui.update { it.copy(abRepeat = AbRepeat()) }
+            lastAbLoopAtMs = null
+            abRepeatScopeKey = scopeKey
+        }
         store.installBundle(bundle)
         activeResumeKey = resumeKey
         val resume = resumeByTarget[resumeKey] ?: 0L
@@ -709,7 +969,17 @@ class PlayerViewModel @Inject constructor(
 
     private fun loadNow(title: String, resumeKey: String, resumePosition: Long, override: Long?) {
         store.requestLoad(title = title, resumePositionMs = resumePosition, startOverrideMs = override)
-        _ui.update { it.copy(resumeOfferMs = null, pendingResumeKey = null, giveUp = null, pendingTitle = title) }
+        startAttemptAtMs = SystemClock.elapsedRealtime()
+        _ui.update {
+            it.copy(
+                resumeOfferMs = null,
+                pendingResumeKey = null,
+                giveUp = null,
+                pendingTitle = title,
+                startElapsedMs = 0,
+                deadlineGiveUp = false,
+            )
+        }
         activeResumeKey = resumeKey
         resumeByTarget[resumeKey] = resumePosition.coerceAtLeast(resumeByTarget[resumeKey] ?: 0L)
     }
@@ -741,6 +1011,12 @@ class PlayerViewModel @Inject constructor(
         val key = activeResumeKey ?: bundle.target.workKey ?: c.currentMediaItem?.mediaId ?: return
         val pos = c.currentPosition
         if (pos > 5_000 && pos < c.duration) resumeByTarget[key] = pos else resumeByTarget.remove(key)
+        // A local file's position must survive the process: the in-memory map dies
+        // with it, so a device address is also written to the local resume store
+        // under the same guards (a finished or barely-started file clears it).
+        if (isLocalResumeUri(key)) {
+            viewModelScope.launch { localResumeRepository.savePosition(key, pos, c.duration) }
+        }
         reportResume(c, pos, forced)
     }
 
@@ -766,7 +1042,7 @@ class PlayerViewModel @Inject constructor(
         if (!syncSignedIn) return
         if (!forced && !syncAccountRepository.progressReportDue()) return
         viewModelScope.launch {
-            syncAccountRepository.reportProgress(
+            val coinsEarned = syncAccountRepository.reportProgress(
                 workRef = scope.workRef,
                 season = scope.season,
                 episode = scope.episode,
@@ -774,6 +1050,12 @@ class PlayerViewModel @Inject constructor(
                 durationMs = durationMs,
                 forced = forced,
             )
+            // The server pays once per finished title; the toast is the only
+            // sign the viewer gets, and it shows only when the server says it
+            // paid — never on a position the server did not reward.
+            if (coinsEarned > 0) {
+                _events.emit(PlayerEvent.Message("+$coinsEarned coins for finishing this title"))
+            }
         }
     }
 
@@ -850,6 +1132,21 @@ class PlayerViewModel @Inject constructor(
         seekTo(_ui.value.positionMs + delta.toLong())
     }
 
+    /** A-B repeat (§5 P14): set point A at the current playhead. */
+    fun setAbPointA() {
+        _ui.update { it.copy(abRepeat = abRepeatWithA(it.abRepeat, it.positionMs)) }
+    }
+
+    /** A-B repeat (§5 P14): set point B at the current playhead. */
+    fun setAbPointB() {
+        _ui.update { it.copy(abRepeat = abRepeatWithB(it.abRepeat, it.positionMs)) }
+    }
+
+    /** A-B repeat (§5 P14): clear the segment; playback continues normally. */
+    fun clearAbRepeat() {
+        _ui.update { it.copy(abRepeat = AbRepeat()) }
+    }
+
     fun setSpeed(speed: Float) {
         val c = controller ?: return
         val clamped = speed.coerceIn(0.25f, 4f)
@@ -880,8 +1177,27 @@ class PlayerViewModel @Inject constructor(
      */
     fun setUserVolume(volume: Float) {
         val clamped = if (volume.isFinite()) volume.coerceIn(0f, 1f) else 1f
+        if (clamped > 0f) lastAudibleVolume = clamped
         _ui.update { it.copy(userVolume = clamped) }
         applyPlayerVolume()
+    }
+
+    /** The last audible level, so un-muting restores what the viewer had, not full blast. */
+    private var lastAudibleVolume: Float = 1f
+
+    /**
+     * Mute / un-mute from the Volume button. Muting keeps the last audible level aside;
+     * un-muting restores it. A gesture drag to silence is the same act, so [setUserVolume]
+     * is what records the restore point, not this function.
+     */
+    fun toggleMute() {
+        if (_ui.value.userVolume > 0f) setUserVolume(0f)
+        else setUserVolume(lastAudibleVolume)
+    }
+
+    /** Fullscreen (immersive, system bars hidden) ↔ normal (system bars shown). */
+    fun toggleFullscreen() {
+        _ui.update { it.copy(fullscreen = !it.fullscreen) }
     }
 
     /**
@@ -920,11 +1236,49 @@ class PlayerViewModel @Inject constructor(
     fun retryCurrentCandidates() {
         val title = _ui.value.activeRendition?.displayLabel() ?: Brand.name
         store.clearGaveUp()
+        startAttemptAtMs = SystemClock.elapsedRealtime()
+        _ui.update { it.copy(deadlineGiveUp = false, startElapsedMs = 0) }
         store.requestLoad(title = title, resumePositionMs = _ui.value.positionMs)
+    }
+
+    /**
+     * Manual failover (§5 P5, the 8 s action): jump to the next print now instead of
+     * waiting for the staged failover to exhaust the one being tried. The next print's own
+     * runner-ups are staged under it first, and its work scope is carried over, exactly
+     * as a quality switch does — so resume points and binge context survive the hop.
+     * A no-op when [PlayerUiState.canTryAnotherPrint] is false; the button is never
+     * offered then, so this is a guard, not a path the viewer can reach.
+     */
+    fun tryNextPrint() {
+        val handle = _ui.value.nextPrintHandle ?: return
+        val active = _ui.value.activeRendition
+        val title = _ui.value.pendingTitle ?: active?.displayLabel() ?: Brand.name
+        val positionMs = controller?.takeIf { it.isConnected }?.currentPosition ?: 0L
+        val next = _ui.value.bundle?.renditions?.firstOrNull { it.playback.streamId == handle }
+        val backups = (next?.playback?.backupStreamIds
+            ?: active?.playback?.backupStreamIds.orEmpty())
+            .filter { it != handle }
+        store.stageFailover(handle, backups)
+        store.peekWorkRef(active?.playback?.streamId)?.let { scope ->
+            store.stageWorkRef(handle, scope)
+            backups.forEach { store.stageWorkRef(it, scope) }
+        }
+        startStreamHandle(handle, title, startOverrideMs = positionMs.takeIf { it > 1_000 })
+    }
+
+    /**
+     * The viewer dismissed the 30 s give-up card: keep waiting, with a fresh thirty
+     * seconds. A dismiss is not a fix — if the copy is truly dead the card comes back —
+     * but a viewer who is still willing to wait should not be nagged every tick.
+     */
+    fun dismissDeadlineGiveUp() {
+        startAttemptAtMs = SystemClock.elapsedRealtime()
+        _ui.update { it.copy(deadlineGiveUp = false, startElapsedMs = 0) }
     }
 
     /** Manual "next episode" button — same event path as auto-advance at media end. */
     fun requestNextEpisode() {
+        _ui.update { it.copy(endedHasNextEpisode = false) }
         val bundle = store.bundle.value
         val target = bundle?.target
         if (target == null || (target.episode <= 0 && target.season <= 0)) {
@@ -1113,6 +1467,7 @@ class PlayerViewModel @Inject constructor(
                 episode,
             ),
             premiumAccess,
+            freeQualityCap,
         )
         val option = ladder.resolvedFor(LadderForScope.AUTO) ?: return null
         val handle = option.streamId.takeIf { it.isNotBlank() } ?: return null
@@ -1294,6 +1649,14 @@ class PlayerViewModel @Inject constructor(
         _ui.update { it.copy(printSheetVisible = false) }
     }
 
+    fun showMoreSheet() {
+        _ui.update { it.copy(moreSheetVisible = true) }
+    }
+
+    fun hideMoreSheet() {
+        _ui.update { it.copy(moreSheetVisible = false) }
+    }
+
     fun showSleepSheet() {
         _ui.update { it.copy(sleepSheetVisible = true) }
     }
@@ -1382,13 +1745,18 @@ class PlayerViewModel @Inject constructor(
      * selection would make things worse — the stream has nothing in that language, and the
      * language is already playing — so a null answer is honoured as "change nothing" rather
      * than second-guessed here. Media3's own locale heuristic is left in charge exactly when
-     * the user never expressed a preference.
+     * neither the viewer nor their region expressed a preference (East Asian audio); a
+     * viewer who never chose still gets their region's default, Hindi for Desi.
      */
     private fun applyPreferredAudioTrack() {
         val state = _ui.value
         val preferred = state.preferredAudioLanguage?.takeIf { it.isNotBlank() } ?: return
         if (controller == null) return
-        val picked = AudioTrackPolicy.pickPreferred(state.audioTrackRows(), preferred) ?: return
+        val picked = AudioTrackPolicy.pickPreferred(
+            state.audioTrackRows(),
+            preferred,
+            state.preferredAudioFallback,
+        ) ?: return
         if (picked == state.selectedAudioId) return
         val option = state.audioTracks.firstOrNull { it.id == picked } ?: return
         selectAudioTrack(option)
@@ -1474,6 +1842,22 @@ class PlayerViewModel @Inject constructor(
         _ui.update {
             if (trackType == C.TRACK_TYPE_AUDIO) it.copy(selectedAudioId = option?.id)
             else it.copy(selectedSubtitleId = option?.id)
+        }
+        // Remember the pick: the next episode (and the next visit) auto-applies this
+        // language, not the old Settings choice. The sync delay is deliberately never
+        // saved — it belongs to this viewing. Turning subtitles off is a pick too: it
+        // saves the literal "Off", because saving nothing would let the region default
+        // (English) come back on the next episode and undo the viewer in front of us.
+        val language = persistedLanguageFor(option)
+        if (language != null) {
+            viewModelScope.launch {
+                if (trackType == C.TRACK_TYPE_AUDIO) settingsRepository.savePreferredAudioLanguage(language)
+                else settingsRepository.savePreferredSubtitleLanguage(language)
+            }
+        } else if (trackType == C.TRACK_TYPE_TEXT) {
+            viewModelScope.launch {
+                settingsRepository.savePreferredSubtitleLanguage(ServerSettingsRepository.SUBTITLE_OFF)
+            }
         }
     }
 
@@ -1605,6 +1989,14 @@ class PlayerViewModel @Inject constructor(
         store.clearNextEpisode()
         when (action) {
             is NextEpisodeAction.NextBundleRequest -> viewModelScope.launch {
+                // The autoplay-next switch (plan §5 step 10, P36) is the promise: with it
+                // off, the episode ends on the Next Episode button instead of advancing.
+                // The action is already consumed above, so the button re-derives the next
+                // episode through requestNextEpisode — nothing here fires twice.
+                if (!shouldAutoAdvance(autoplayNext, action)) {
+                    _ui.update { it.copy(endedHasNextEpisode = true) }
+                    return@launch
+                }
                 // The one placement raised without being asked: the file ended and a successor
                 // exists, which is the only moment the policy allows a break and the viewer was
                 // already about to be handed to the next episode. A refusal — cadence off, not due,
@@ -1756,6 +2148,7 @@ class PlayerViewModel @Inject constructor(
                 expectedTotalBytes = rendition.print.sizeBytes.takeIf { it > 0 },
                 resumable = rendition.playback.resumable || rendition.playback.acceptsRanges == true,
                 printLabel = rendition.displayLabel(),
+                title = _ui.value.pendingTitle ?: "",
             )
             val result = try {
                 engine.adopt(request)
@@ -1898,3 +2291,17 @@ internal object TrackMapper {
         return null
     }
 }
+
+/**
+ * The language a live track pick writes back to Settings, or null when the pick
+ * says nothing about the standing preference. A picked track's language is the
+ * viewer's choice for this show and the next visit; turning subtitles off is
+ * viewing-scoped — it must not delete the stored language, or the next episode
+ * would start silent for a viewer who wants Hindi. A track with no language tag
+ * has nothing to persist either.
+ *
+ * Top-level (not a ViewModel member) so the unit test can call it directly — the
+ * ViewModel's eight injected deps have no fakes anywhere in the repo.
+ */
+internal fun persistedLanguageFor(option: TrackUiOption?): String? =
+    option?.language?.trim()?.takeIf { it.isNotEmpty() }

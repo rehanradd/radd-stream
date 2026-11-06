@@ -25,6 +25,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -52,8 +53,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.raddstream.app.player.PastedText
+import com.raddstream.app.player.classifyPastedText
 import com.raddstream.app.ui.components.EmptyState
 import com.raddstream.app.ui.components.InlineLoadFailure
 import com.raddstream.app.ui.components.ErrorState
@@ -90,6 +94,7 @@ private sealed interface FilterRailEntry {
 fun SearchScreen(
     onBackClick: () -> Unit,
     onPostClick: (Int) -> Unit = {},
+    onPlayDirectUrl: (url: String, title: String) -> Unit = { _, _ -> },
     viewModel: SearchViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsState()
@@ -151,14 +156,66 @@ fun SearchScreen(
             )
 
             Spacer(Modifier.height(8.dp))
-            FilterRail(state = state, viewModel = viewModel)
+            val pasted = classifyPastedText(state.query)
+            when (pasted) {
+                is PastedText.DirectVideo -> {
+                    DirectVideoRow(
+                        url = pasted.url,
+                        title = pasted.title,
+                        onPlay = { onPlayDirectUrl(pasted.url, pasted.title) },
+                    )
+                    Spacer(Modifier.height(8.dp))
+                }
+                PastedText.YouTube -> {
+                    Text(
+                        text = "YouTube links can't play in Radd. Paste a direct .mp4 or .m3u8 link instead.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                    )
+                    Spacer(Modifier.height(8.dp))
+                }
+                PastedText.NotAUrl -> Unit
+            }
+            if (pasted is PastedText.NotAUrl) {
+                FilterRail(state = state, viewModel = viewModel)
+            }
 
-            SearchBody(
-                state = state,
-                viewModel = viewModel,
-                onPostClick = onPostClick,
-                onOpenFilters = { showSheet = true },
-            )
+            // Type-ahead titles for what is being typed. A tap searches for
+            // that title — it never opens a page, because a suggestion names
+            // a work, not a post.
+            if (pasted is PastedText.NotAUrl && state.suggestions.isNotEmpty()) {
+                LazyRow(
+                    modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    contentPadding = PaddingValues(vertical = 4.dp),
+                ) {
+                    items(state.suggestions, key = { it.id }) { suggestion ->
+                        FilterChip(
+                            selected = false,
+                            onClick = { viewModel.runSuggestion(suggestion.title) },
+                            label = {
+                                Text(
+                                    if (suggestion.year != null) {
+                                        "${suggestion.title} (${suggestion.year})"
+                                    } else {
+                                        suggestion.title
+                                    },
+                                )
+                            },
+                        )
+                    }
+                }
+            }
+
+            if (pasted is PastedText.NotAUrl) {
+                SearchBody(
+                    state = state,
+                    viewModel = viewModel,
+                    onPostClick = onPostClick,
+                    onOpenFilters = { showSheet = true },
+                )
+            }
         }
 
         if (showSheet) {
@@ -173,6 +230,44 @@ fun SearchScreen(
                     onDone = { showSheet = false },
                 )
             }
+        }
+    }
+}
+
+/**
+ * One pasted address, one play button: the row says what will play — the file
+ * name, with the pasted address underneath — and nothing about where it came
+ * from beyond the address itself. The viewer typed it, so showing it back is
+ * showing their own text, not a catalog link.
+ */
+@Composable
+private fun DirectVideoRow(url: String, title: String, onPlay: () -> Unit) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        IconButton(onClick = onPlay) {
+            Icon(Icons.Default.PlayArrow, contentDescription = "Play video link")
+        }
+        Column(Modifier.weight(1f)) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                text = url,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        Button(onClick = onPlay) {
+            Text("Play")
         }
     }
 }
@@ -214,6 +309,18 @@ private fun FilterRail(state: SearchUiState, viewModel: SearchViewModel) {
                     quality.label,
                     state.filters.quality == quality,
                 ) { viewModel.selectQuality(quality) },
+            )
+        }
+        // A VIP viewer has everything included, so the chip would narrow
+        // their catalog for nothing. Free viewers get the one filter that
+        // answers "can I watch this without paying".
+        if (!state.isVip) {
+            add(FilterRailEntry.Caption("Plan"))
+            add(
+                FilterRailEntry.Choice(
+                    "Included in my plan",
+                    state.filters.includedOnly,
+                ) { viewModel.setIncludedOnly(!state.filters.includedOnly) },
             )
         }
         add(FilterRailEntry.Caption("Sort"))
@@ -311,6 +418,18 @@ private fun SearchBody(
                 }
             }
 
+            // The server found nothing exact and answered one edit away
+            // instead. Say so, so the viewer knows why "Avengers" is what
+            // came back for "Avngers".
+            if (state.isFuzzy) {
+                Text(
+                    text = "Showing close matches — check the spelling.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+                )
+            }
+
             state.groups.forEach { group ->
                 SectionHeader(title = group.label, subtitle = "${group.items.size}", modifier = Modifier.padding(horizontal = 0.dp))
                 MediaRail(items = group.items, key = { it.id }) { post ->
@@ -373,6 +492,16 @@ private fun FilterSheetContent(
             isSelected = { state.filters.quality == it },
             onSelect = viewModel::selectQuality,
         )
+        if (!state.isVip) {
+            Text("Plan", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurface)
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FilterChip(
+                    selected = state.filters.includedOnly,
+                    onClick = { viewModel.setIncludedOnly(!state.filters.includedOnly) },
+                    label = { Text("Included in my plan") },
+                )
+            }
+        }
 
         Text("Sort results", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurface)
         Text(

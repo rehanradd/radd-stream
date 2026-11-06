@@ -94,7 +94,7 @@ data class LocalFavorite(
 )
 
 /**
- * What one sync pass did, in the four numbers the account card may show. Every count is
+ * What one sync pass did, in the numbers the account card may show. Every count is
  * of rows, never of titles: the app cannot name a server row, so it could not tell a
  * viewer which title a number refers to even if it wanted to.
  */
@@ -105,6 +105,8 @@ data class SyncReport(
     val favoritesUnknownHere: Int = 0,
     /** Local favorites this app could not name to the server because no handle arrived. */
     val favoritesUnnamable: Int = 0,
+    /** Server favorites this pass resolved to a post and saved on this device. */
+    val favoritesPulled: Int = 0,
     /** True when the pass completed both reads; false when it stopped at a refusal. */
     val completed: Boolean = false,
 )
@@ -302,6 +304,13 @@ object SyncContract {
             needsWriting = needsWriting,
             unknownHere = server.count { it.workRef !in localRefs },
             unnammable = local.count { !canNameOnServer(it.workRef) },
+            // The refs themselves, so the caller can resolve them instead of
+            // only counting them: a count is a report, a ref is a row. A blank
+            // ref names nothing — it is not resolved, and it is not counted
+            // here either, or the caller would ask the server for an empty
+            // handle and get back an ordinary list page.
+            unknownRefs = server.map { it.workRef }
+                .filter { it.isNotBlank() && it !in localRefs },
         )
     }
 }
@@ -311,6 +320,8 @@ data class FavoritePlan(
     val needsWriting: List<LocalFavorite>,
     val unknownHere: Int,
     val unnammable: Int,
+    /** Server handles this device has no row for, in server order. */
+    val unknownRefs: List<String> = emptyList(),
 )
 
 /**

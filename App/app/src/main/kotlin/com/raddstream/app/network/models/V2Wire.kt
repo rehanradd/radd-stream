@@ -1,6 +1,7 @@
 package com.raddstream.app.network.models
 
 import com.google.gson.annotations.SerializedName
+import com.raddstream.app.network.streamRedirectUrl
 
 /*
  * v2 WIRE DTOs — the JSON the v2 contract says the server WILL send (API_V2.md §14, §8.1,
@@ -356,32 +357,94 @@ data class WireEntitlement(
     )
 }
 
-/** `/api/v2/play` (§8.1). */
-data class WirePlayBundle(
-    @SerializedName("work_key")
-    val workKey: String? = null,
+/**
+ * POST /api/v2/play (§8.1): one of release_id / episode_id / work_id. `prefer` orders
+ * the ladder (`quality` | `speed` | `data_saver`); null means the server's default.
+ * `device` is a caller-chosen label, truncated to 64 chars server-side.
+ */
+data class WirePlayRequest(
+    @SerializedName("release_id")
+    val releaseId: Int? = null,
+    @SerializedName("episode_id")
+    val episodeId: Int? = null,
+    @SerializedName("work_id")
+    val workId: Int? = null,
+    val prefer: String? = null,
+    val device: String? = null,
+)
+
+/**
+ * POST /api/v2/play response — the shape the server ACTUALLY sends
+ * (`catalog_api.play_bundle`), not the §8.1 spec shape: there is no `renditions`,
+ * no `entitlement`, no `expires_at` and no `work_key` on the wire. The server ranks
+ * the candidates itself and hands back one tier per print plus the ranked lists,
+ * and the chapter data rides in `coverage.enumerated_episodes`. The spec-shaped
+ * `WirePlayBundle` that used to live here parsed everything to null on a real
+ * answer, so it is gone; this is the shape a live call returns.
+ */
+data class WirePlayResponse(
+    val target: WirePlayTarget? = null,
+    @SerializedName("work_id")
+    val workId: Int? = null,
     @SerializedName("release_id")
     val releaseId: Long? = null,
-    val episode: WireEpisodeAddress? = null,
-    val renditions: List<WireRendition> = emptyList(),
-    val entitlement: WireEntitlement? = null,
-    @SerializedName("expires_at")
-    val expiresAt: Double? = null,
-    @SerializedName("ttl_seconds")
-    val ttlSeconds: Int? = null,
+    @SerializedName("print_label")
+    val printLabel: String? = null,
+    val tiers: List<WirePlayTier> = emptyList(),
+    val auto: WirePlayAuto? = null,
+    val coverage: WirePlayCoverage? = null,
+    @SerializedName("stream_candidates")
+    val streamCandidates: List<WirePlayCandidate> = emptyList(),
+    val candidates: List<WirePlayCandidate> = emptyList(),
+    @SerializedName("download_options")
+    val downloadOptions: List<WirePlayCandidate> = emptyList(),
+    val playable: Boolean = false,
+    val available: Boolean = false,
+    val reason: String? = null,
+    val protocol: String? = null,
+    val ephemeral: Boolean = false,
+    @SerializedName("candidate_count")
+    val candidateCount: Int = 0,
+    @SerializedName("dead_candidate_count")
+    val deadCandidateCount: Int = 0,
+    val prefer: String? = null,
+    val device: String? = null,
 ) {
-    fun toDomain(): PlayBundle = PlayBundle(
-        workKey = workKey.orEmpty(),
-        printId = releaseId,
-        episodeAddress = episode?.toDomain(),
-        renditions = renditions.map { it.toDomain() },
-        entitlement = entitlement?.toDomain() ?: Entitlement.freeDefault,
-        expiresAt = expiresAt,
-        ttlSeconds = ttlSeconds,
-    )
+    /**
+     * The server-ranked candidates become the failover order, in the order the server
+     * sent them — the client does not re-rank. Each rendition's address is OUR OWN
+     * redirector for its handle: the response carries no URL, by design.
+     * `workKey` stays empty — the response carries `work_id`, not a work key, and the
+     * player identifies the work by its own staged scope, not by this field.
+     * `entitlement` stays the free default — the response carries no entitlement.
+     * The print's coverage does NOT ride here: it is a [com.raddstream.app.player.Coverage],
+     * which lives in the player package, so [WirePlayCoverage.toPlayerCoverage] maps it
+     * from the caller's side and the repository returns both together.
+     */
+    fun toDomain(baseUrl: String): PlayBundle {
+        val qualityLabel = tiers.firstOrNull()?.label ?: printLabel.orEmpty()
+        return PlayBundle(
+            workKey = "",
+            printId = releaseId,
+            episodeAddress = target?.toDomain(),
+            renditions = streamCandidates.map { it.toDomain(baseUrl, qualityLabel) },
+            entitlement = Entitlement.freeDefault,
+            expiresAt = null,
+            ttlSeconds = null,
+        )
+    }
 }
 
-data class WireEpisodeAddress(
+data class WirePlayTarget(
+    val kind: String? = null,
+    @SerializedName("episode_id")
+    val episodeId: Int? = null,
+    @SerializedName("work_id")
+    val workId: Int? = null,
+    @SerializedName("release_id")
+    val releaseId: Int? = null,
+    @SerializedName("work_type")
+    val workType: String? = null,
     val season: Int? = null,
     val episode: Int? = null,
     val absolute: Int? = null,
@@ -389,46 +452,145 @@ data class WireEpisodeAddress(
     fun toDomain(): EpisodeAddress = EpisodeAddress(season ?: 0, episode ?: 0, absolute)
 }
 
-data class WireRendition(
+data class WirePlayAuto(
+    val band: String? = null,
+    val playable: Boolean = false,
+)
+
+/**
+ * One tier of the print: the band, the single best copy, and the same-band
+ * runner-ups as handles only (`backup_handles`), so a silent failover never
+ * widens what one response discloses. There is one tier per print — this call
+ * is per print, not per work.
+ */
+data class WirePlayTier(
+    val band: String? = null,
+    val quality: String? = null,
+    val label: String? = null,
+    val mode: String? = null,
+    val playable: Boolean = false,
+    val link: WirePlayCandidate? = null,
+    val copies: Int = 0,
+    @SerializedName("backup_handles")
+    val backupHandles: List<String> = emptyList(),
+)
+
+/**
+ * One candidate link, exactly as `catalog_api._link_view` shapes it: our opaque
+ * handle, the measured facts, and no upstream address of any kind. `playable` is
+ * the server's own verdict (streamable group and not dead); `dead` is the same
+ * verdict the other way round, kept because the response's `tried` list names it.
+ */
+data class WirePlayCandidate(
     @SerializedName("link_id")
     val linkId: Long? = null,
+    @SerializedName("release_id")
+    val releaseId: Long? = null,
+    @SerializedName("work_id")
+    val workId: Long? = null,
     @SerializedName("stream_id")
     val streamId: String? = null,
-    /** OUR OWN redirector (`/api/v1/stream?id=<handle>`); no upstream address is served. */
-    @SerializedName("play_url")
-    val playUrl: String? = null,
     val label: String? = null,
-    val protocol: String? = null,
+    val kind: String? = null,
     val playability: String? = null,
-    @SerializedName("quality_label")
-    val qualityLabel: String? = null,
-    @SerializedName("quality_score")
-    val qualityScore: Int? = null,
-    @SerializedName("link_score")
-    val linkScore: Int? = null,
+    val playable: Boolean = false,
+    val group: Int? = null,
+    val state: String? = null,
+    val dead: Boolean = false,
+    val tier: Int? = null,
+    val protocol: String? = null,
+    @SerializedName("content_type")
+    val contentType: String? = null,
+    val ephemeral: Boolean? = null,
+    @SerializedName("expires_at")
+    val expiresAt: Long? = null,
+    val resumable: Boolean? = null,
+    @SerializedName("accepts_ranges")
+    val acceptsRanges: Boolean? = null,
+    @SerializedName("size_bytes")
+    val sizeBytes: Long? = null,
+    @SerializedName("rank_score")
+    val rankScore: Int? = null,
+    @SerializedName("http_status")
+    val httpStatus: Int? = null,
+    @SerializedName("latency_ms")
+    val latencyMs: Int? = null,
+    @SerializedName("speed_mbps")
+    val speedMbps: Double? = null,
+    val measured: Boolean? = null,
     @SerializedName("score_scale")
     val scoreScale: String? = null,
-    val ephemeral: Boolean? = null,
-    @SerializedName("offset_seconds")
-    val offsetSeconds: Int? = null,
-    val headers: Map<String, String?> = emptyMap(),
+    @SerializedName("last_evidence_at")
+    val lastEvidenceAt: String? = null,
 ) {
-    fun toDomain(): Rendition = Rendition(
+    fun toDomain(baseUrl: String, qualityLabel: String): Rendition = Rendition(
         linkId = linkId,
         streamId = streamId,
-        playUrl = playUrl,
+        // No URL is served: the address is our own redirector for this handle.
+        playUrl = streamId?.takeIf { it.isNotBlank() }?.let { streamRedirectUrl(baseUrl, it) },
         label = label,
         protocol = PlayProtocol.fromWire(protocol),
         playability = Playability.fromWire(playability),
-        qualityLabel = qualityLabel.orEmpty(),
-        qualityScore = qualityScore ?: 0,
-        linkScore = linkScore ?: 0,
+        qualityLabel = qualityLabel,
+        // The tier carries no quality score, only the band: 0 is "not served",
+        // never a guess at the print's score.
+        qualityScore = 0,
+        linkScore = rankScore ?: 0,
         scoreScale = ScoreScale.fromWire(scoreScale),
         ephemeral = ephemeral == true,
-        offsetSeconds = offsetSeconds ?: 0,
-        headers = headers.filterValues { it != null }.mapValues { it.value!! },
+        offsetSeconds = 0,
+        resumable = resumable == true,
+        headers = emptyMap(),
     )
 }
+
+/**
+ * The print's coverage block: the type and the episode boundaries (`enumerated_episodes`,
+ * one row per episode with its offset and chapter title), plus the overlay for the
+ * episode this call is about (`offset_seconds`, `chapter_title`, `ordinal`). This is
+ * the chapter data step 11's ticks read — the v1 detail never serves the offsets,
+ * only this call does.
+ */
+data class WirePlayCoverage(
+    val type: String? = null,
+    @SerializedName("season_number")
+    val seasonNumber: Int? = null,
+    @SerializedName("part_number")
+    val partNumber: Int? = null,
+    @SerializedName("episode_range")
+    val episodeRange: String? = null,
+    @SerializedName("episode_first")
+    val episodeFirst: Int? = null,
+    @SerializedName("episode_last")
+    val episodeLast: Int? = null,
+    @SerializedName("enumerated_episodes")
+    val enumeratedEpisodes: List<WirePlayEpisode> = emptyList(),
+    @SerializedName("offset_seconds")
+    val offsetSeconds: Int? = null,
+    @SerializedName("chapter_title")
+    val chapterTitle: String? = null,
+    val ordinal: Int? = null,
+    val source: String? = null,
+    @SerializedName("needs_offset_calibration")
+    val needsOffsetCalibration: Boolean? = null,
+    @SerializedName("pack_warning")
+    val packWarning: String? = null,
+)
+
+data class WirePlayEpisode(
+    @SerializedName("episode_id")
+    val episodeId: Int? = null,
+    val number: Int? = null,
+    @SerializedName("absolute_number")
+    val absoluteNumber: Int? = null,
+    @SerializedName("season_number")
+    val seasonNumber: Int? = null,
+    val ordinal: Int? = null,
+    @SerializedName("offset_seconds")
+    val offsetSeconds: Int? = null,
+    @SerializedName("chapter_title")
+    val chapterTitle: String? = null,
+)
 
 /**
  * RFC 9457 problem+json (§16.4). Decodable by Gson because every field is a String/Int/List

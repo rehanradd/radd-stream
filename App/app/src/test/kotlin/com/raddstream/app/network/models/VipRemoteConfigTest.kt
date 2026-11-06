@@ -359,4 +359,132 @@ class VipRemoteConfigTest {
         assertFalse(config.wallet.enabled)
         assertFalse(config.streak.enabled)
     }
+
+    /**
+     * The panel feed rides this same body: sections the operator built, broadcasts it
+     * published, and works it hid. A section item is a full post, so the rail renders
+     * without a second fetch; a deployment with no panel wired sends three empty lists
+     * and the app keeps its own rails.
+     */
+    @Test
+    fun `decodes the panel feed sections broadcasts and hides`() {
+        val config = gson.fromJson(
+            """
+            {
+              "success": true,
+              "sections": [
+                {"key": "latest", "title": "Latest",
+                 "items": [
+                   {"id": 3, "title": "Three", "clean_title": "Three", "year": 2025,
+                    "content_type": "movie", "poster_url": "https://example.invalid/p3.jpg"},
+                   {"id": 2, "title": "Two", "clean_title": "Two", "year": 2023,
+                    "content_type": "movie"}
+                 ]},
+                {"key": "empty", "title": "Empty", "items": []}
+              ],
+              "broadcasts": [
+                {"id": 1, "title": "Hello", "body": "Welcome", "severity": "info"},
+                {"id": 2, "title": "Careful", "body": "", "severity": "warning",
+                 "target": "region", "target_detail": "pakistan"}
+              ],
+              "hidden_work_ids": [2],
+              "tabs": ["settings", "home"],
+              "disclaimer": {"text": "Links come from public sites. We host nothing.", "version": 3},
+              "free_quality_cap": "480p",
+              "apk_update_version_code": 214,
+              "min_version_code": 210
+            }
+            """.trimIndent(),
+            VipRemoteConfig::class.java,
+        )
+
+        assertEquals(2, config.sections.size)
+        assertEquals("latest", config.sections[0].key)
+        assertEquals("Latest", config.sections[0].title)
+        assertEquals(2, config.sections[0].items.size)
+        assertEquals(3, config.sections[0].items[0].id)
+        assertEquals("Three", config.sections[0].items[0].title)
+        assertEquals("https://example.invalid/p3.jpg", config.sections[0].items[0].posterUrl)
+        assertTrue(config.sections[1].items.isEmpty())
+
+        assertEquals(2, config.broadcasts.size)
+        assertEquals(1, config.broadcasts[0].id)
+        assertEquals("Hello", config.broadcasts[0].title)
+        assertEquals("warning", config.broadcasts[1].severity)
+        assertEquals("all", config.broadcasts[0].target)
+        assertEquals("", config.broadcasts[0].targetDetail)
+        assertEquals("region", config.broadcasts[1].target)
+        assertEquals("pakistan", config.broadcasts[1].targetDetail)
+
+        assertEquals(listOf(2), config.hiddenWorkIds)
+
+        assertEquals(listOf("settings", "home"), config.tabs)
+
+        assertEquals("Links come from public sites. We host nothing.", config.disclaimer.text)
+        assertEquals(3, config.disclaimer.version)
+        assertEquals("480p", config.freeQualityCap)
+        assertEquals(214, config.apkUpdateVersionCode)
+        assertEquals(210, config.minVersionCode)
+    }
+
+    @Test
+    fun `a body with no panel feed decodes to three empty lists`() {
+        val config = gson.fromJson("""{"success": true}""", VipRemoteConfig::class.java)
+
+        assertTrue(config.sections.isEmpty())
+        assertTrue(config.broadcasts.isEmpty())
+        assertTrue(config.hiddenWorkIds.isEmpty())
+        assertEquals(PanelTheme(), config.theme)
+        assertEquals("", config.disclaimer.text)
+        assertEquals(0, config.disclaimer.version)
+        assertEquals("720p", config.freeQualityCap)
+        assertEquals(0, config.apkUpdateVersionCode)
+        assertEquals(0, config.minVersionCode)
+        assertEquals(false, config.settingsUnavailable)
+    }
+
+    @Test
+    fun `a degraded body still decodes, with the marker set`() {
+        val config = gson.fromJson(
+            """{"success": true, "settings_unavailable": true}""",
+            VipRemoteConfig::class.java,
+        )
+
+        assertEquals(true, config.settingsUnavailable)
+    }
+
+    @Test
+    fun `decodes the panel theme block`() {
+        val config = gson.fromJson(
+            """
+            {
+              "success": true,
+              "theme": {
+                "mode": "light", "accent": "#2BC79A", "dynamic_color": true,
+                "hero_autoplay": false, "hero_interval_s": 8, "hero_max": 4
+              }
+            }
+            """.trimIndent(),
+            VipRemoteConfig::class.java,
+        )
+
+        assertEquals("light", config.theme.mode)
+        assertEquals("#2BC79A", config.theme.accent)
+        assertTrue(config.theme.dynamicColor)
+        assertFalse(config.theme.heroAutoplay)
+        assertEquals(8, config.theme.heroIntervalS)
+        assertEquals(4, config.theme.heroMax)
+    }
+
+    @Test
+    fun `a body with no theme decodes to the dark brand defaults`() {
+        val config = gson.fromJson("""{"success": true}""", VipRemoteConfig::class.java)
+
+        assertEquals("dark", config.theme.mode)
+        assertEquals("", config.theme.accent)
+        assertFalse(config.theme.dynamicColor)
+        assertTrue(config.theme.heroAutoplay)
+        assertEquals(5, config.theme.heroIntervalS)
+        assertEquals(6, config.theme.heroMax)
+    }
 }

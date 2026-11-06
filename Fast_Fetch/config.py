@@ -118,6 +118,14 @@ if _env_db:
 else:
     DB_PATH = BASE_DIR / _DB_FILENAME
 
+# PANEL_DB_PATH: the admin panel v2 database (admin_v2.db), read-only, for the
+# app feed (sections / broadcasts / hides). Set by environment variable
+# RADD_ADMIN_V2_DB. Unset, or pointing at nothing, means the feature is off:
+# panel_feed answers empty and the app keeps its own rails. Never created
+# here — a missing file is "unwired", not an error.
+_env_panel = os.environ.get("RADD_ADMIN_V2_DB")
+PANEL_DB_PATH = Path(_env_panel) if _env_panel else None
+
 # EXPORT_DIR: where to write HTML, JSON, CSV exports
 EXPORT_DIR = Path(os.environ.get("RADD_EXPORT_DIR", str(BASE_DIR)))
 

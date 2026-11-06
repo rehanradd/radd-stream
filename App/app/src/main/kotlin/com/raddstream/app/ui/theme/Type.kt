@@ -1,11 +1,13 @@
 package com.raddstream.app.ui.theme
 
 import androidx.compose.material3.Typography
-import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.sp
+import com.raddstream.app.R
 import com.raddstream.app.brand.Brand
 import kotlin.math.round
 
@@ -14,17 +16,16 @@ import kotlin.math.round
 // ═════════════════════════════════════════════════════════════════════════════
 //  TYPEFACE DIRECTION
 //  Two roles, one voice:
-//   • DISPLAY (posters' titles, screen titles, hero text): an open-geometry
-//     sans with wide apertures and slightly tight tracking — proposed bundle:
-//     "Outfit" (SIL OFL 1.1). Cinematic at 57sp, still clear at 14sp.
-//   • TEXT/UI (body, buttons, metadata): "Inter" (SIL OFL 1.1) — the reference
-//     screen-grotesque; excellent small-size hinting on low-dpi phones.
-//  Neither font is downloadable at runtime and neither binary can be authored
-//  as XML here, so BOTH families currently fall back to the platform sans
-//  (Roboto). To activate: drop the TTFs into app/src/main/res/font/ and switch
-//  the two placeholder vals below — exact steps in docs/HANDOFF_apptime.md.
-//  No gradle change is required for res/font bundling (fonts are resources,
-//  not dependencies), so this remains build-safe either way.
+//   • DISPLAY (posters' titles, screen titles, hero text): "Outfit" (SIL OFL
+//     1.1), bundled at res/font/outfit_variable.ttf. Cinematic at 57sp,
+//     still clear at 14sp.
+//   • TEXT/UI (body, buttons, metadata): "Inter" (SIL OFL 1.1), bundled at
+//     res/font/inter_variable.ttf — the reference screen-grotesque; excellent
+//     small-size hinting on low-dpi phones.
+//  The two vals below point at the bundled files. The brand keys
+//  `typography.display_family` / `typography.text_family` no longer select a
+//  face (they used to pick a platform family before the fonts were bundled);
+//  the scale key still works — see RaddTypeScale below.
 //
 //  SMALL-PHONE RULES (min ~360×640dp, 1080p LCD, finger-smudged):
 //   • Minimum rendered text on any surface: 11sp (labelSmall), used only for
@@ -39,24 +40,11 @@ import kotlin.math.round
 //     fallback-to-Roboto and still holds up with the bundled pair later.
 // ═════════════════════════════════════════════════════════════════════════════
 
-/**
- * Maps a brand.properties font role name to a bundled family. The two brand keys
- * `typography.display_family` and `typography.text_family` accept
- * sansserif | serif | monospace (platform families) — or the name of a family in
- * res/font once the TTFs are bundled (see HANDOFF), which this function will
- * return unchanged for a real Font resource instead.
- */
-private fun brandFontFamily(name: String): FontFamily = when (name.trim().lowercase().replace("-", "")) {
-    "serif" -> FontFamily.Serif
-    "monospace", "cursive" -> FontFamily.Monospace
-    else -> FontFamily.SansSerif
-}
+/** The bundled display face: Outfit (variable, SIL OFL 1.1), res/font/outfit_variable.ttf. */
+val RaddDisplayFamily: FontFamily = FontFamily(Font(R.font.outfit_variable))
 
-/** Placeholder until res/font/outfit_variable.ttf is bundled (see HANDOFF). */
-val RaddDisplayFamily: FontFamily = brandFontFamily(Brand.typeDisplayFamily)
-
-/** Placeholder until res/font/inter_variable.ttf is bundled (see HANDOFF). */
-val RaddTextFamily: FontFamily = brandFontFamily(Brand.typeTextFamily)
+/** The bundled text face: Inter (variable, SIL OFL 1.1), res/font/inter_variable.ttf. */
+val RaddTextFamily: FontFamily = FontFamily(Font(R.font.inter_variable))
 
 /**
  * Brand text multiplier from `typography.scale` — one number in brand.properties

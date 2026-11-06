@@ -92,6 +92,31 @@ interface WatchHistoryDao {
     )
     suspend fun findScope(workRef: String, season: Int, episode: Int): WatchHistoryEntity?
 
+    /**
+     * Every scope this device watched of one work, newest first. The detail
+     * screen reads this once per title: the latest resumable row is the
+     * Resume button, and the rest are the progress marks on episode rows.
+     */
+    @Query("SELECT * FROM watch_history WHERE workRef = :workRef ORDER BY updatedAt DESC")
+    suspend fun findWork(workRef: String): List<WatchHistoryEntity>
+
+    /**
+     * Movie rows only — a series row is one episode, never the whole keep, so
+     * it cannot say the keep is finished. The watched-ness itself is judged
+     * in Kotlin against the same end-guard the rail uses.
+     */
+    @Query("SELECT * FROM watch_history WHERE seasonNumber = 0 AND episodeNumber = 0 AND durationMs > 0")
+    suspend fun findMovieRows(): List<WatchHistoryEntity>
+
+    /**
+     * Every row with a known duration, as a flow: the My List sort re-reads
+     * it, so a title finished on another screen moves down the list while
+     * this screen is still open. The finished-ness itself is judged in
+     * Kotlin ([watchedTitles]) against the rail's end-guard.
+     */
+    @Query("SELECT * FROM watch_history WHERE durationMs > 0")
+    fun observeDurations(): Flow<List<WatchHistoryEntity>>
+
     @Query("DELETE FROM watch_history")
     suspend fun clear()
 }

@@ -1100,6 +1100,24 @@ class DatabaseSaveTests(unittest.TestCase):
             self.assertEqual(detail["clean_title"], "Example Film")
             self.assertEqual(detail["imdb_id"], "tt9999999")
             self.assertEqual(len(detail["releases"]), 1)
+            # No work row, no runtime: the detail carries no invented number.
+            self.assertNotIn("runtime_minutes", detail)
+
+    def test_api_v1_detail_carries_runtime_from_the_work_row(self):
+        post_id = fast_fetch.save_scraped_data(
+            self.media("site_a", "https://site-a.example/example-film/", imdb_id="tt9999999")
+        )
+        conn = sqlite3.connect(self.db_path)
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS cat_works "
+            "(work_key TEXT PRIMARY KEY, runtime_minutes INTEGER)")
+        conn.execute(
+            "INSERT INTO cat_works VALUES (?, ?)", ("imdb:tt9999999", 142))
+        conn.commit()
+        conn.close()
+        with patch.object(viewer, "DB_PATH", self.db_path):
+            detail = viewer.api_v1_get_post_detail(post_id)
+            self.assertEqual(detail["runtime_minutes"], 142)
 
     def test_api_v1_type_anime_answers_the_animation_flag(self):
         """`type=anime` used to be compared against `content_type`, which only ever

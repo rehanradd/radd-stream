@@ -434,6 +434,10 @@ dependencies {
     // ── DataStore (server URL preference) ────────────────────────────────────
     implementation(libs.datastore.preferences)
 
+    // ── WorkManager (the closed-app sweep — CacheSweepWorker) ────────────────
+    implementation(libs.workmanager)
+    implementation(libs.hilt.work)
+
     // ── Core ──────────────────────────────────────────────────────────────────
     implementation(libs.core.ktx)
 

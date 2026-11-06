@@ -11,6 +11,13 @@
     <string name="player_audio_only_paused">Audio only — paused</string>
     <string name="player_brightness">Brightness %1$d%%</string>
     <string name="player_volume">Volume %1$d%%</string>
+    <string name="player_volume_muted">Volume muted</string>
+    <string name="player_volume_title">Volume</string>
+    <string name="player_fullscreen">Fullscreen</string>
+    <string name="player_exit_fullscreen">Exit fullscreen</string>
+    <string name="player_more">More</string>
+    <string name="player_more_playback">Playback</string>
+    <string name="player_more_tools">Tools</string>
     <string name="player_boost_hint">Boosting — release to restore</string>
     <string name="player_time_of">%1$s / %2$s</string>
     <string name="player_boost_badge">Boosting speed</string>
@@ -35,6 +42,10 @@
     <string name="player_forward_10">Forward 10 seconds</string>
     <string name="player_frame_back">Step back one frame</string>
     <string name="player_frame_forward">Step forward one frame</string>
+    <string name="player_ab_set_a">Set point A</string>
+    <string name="player_ab_set_b">Set point B</string>
+    <string name="player_ab_point">Point %1$s · %2$s</string>
+    <string name="player_ab_clear">Clear A-B repeat</string>
     <string name="player_next_episode">Next episode</string>
     <string name="player_sleep_timer">Sleep timer</string>
     <string name="player_aspect_label">Aspect: %1$s</string>
@@ -52,6 +63,12 @@
     <string name="player_giveup_no_candidate">Nothing playable here right now</string>
     <string name="player_giveup_download_body">This quality can be kept for offline viewing, but it cannot stream here.</string>
     <string name="player_giveup_no_candidate_body">Every option for this print failed. Retry, keep it for offline, or open it in another player.</string>
+    <string name="player_giveup_timeout">Taking too long to start</string>
+    <string name="player_giveup_timeout_body">The link is still being found. Retry, try another print, or open it in another player.</string>
+    <string name="player_start_slow">Taking longer than usual — your link is being found</string>
+    <string name="player_start_try_another">Try another print</string>
+    <string name="player_start_giveup_message">This copy did not start within 30 seconds.</string>
+    <string name="player_first_frame">Started in %1$s</string>
     <string name="player_open_external">Open with another player</string>
     <string name="player_close">Close</string>
     <string name="player_subtitles_for_colour">%1$s subtitles</string>
@@ -76,6 +93,10 @@
     <string name="player_go">Go</string>
     <string name="player_speed_title">Playback speed (pitch preserved)</string>
     <string name="player_boost_note">Long-press the video any time for a 2× boost — releasing restores this speed.</string>
+    <string name="player_coach_title">Quick gestures</string>
+    <string name="player_coach_double_tap">Double-tap the sides to skip 10 seconds</string>
+    <string name="player_coach_swipe">Swipe the left edge for brightness, the right edge for volume</string>
+    <string name="player_coach_long_press">Long-press to play at 2× speed</string>
     <string name="player_quality_title">Quality</string>
     <string name="player_quality_auto">Auto (recommended)</string>
     <string name="player_quality_auto_detail">Chosen from what your connection is actually moving</string>
@@ -109,6 +130,8 @@
     <string name="player_audio_only_off">Audio-only mode: off</string>
     <string name="player_audio_level">Audio level</string>
     <string name="player_prints_title">Prints &amp; failover</string>
+    <string name="player_chapters_title">Chapters</string>
+    <string name="player_chapter_row">"%1$s  ·  %2$s"</string>
     <string name="player_failover_log">Failover log</string>
     <string name="player_prints_note">Ranked candidates — the first playable one wins; switches happen automatically on playback errors, preserving position.</string>
     <string name="player_rune_rank">"#%1$d  %2$s"</string>

@@ -13,21 +13,26 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.FavoriteBorder
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarDuration
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.raddstream.app.network.models.Post
 import com.raddstream.app.ui.components.CatalogGridColumns
 import com.raddstream.app.ui.components.EmptyState
 import com.raddstream.app.ui.components.PosterCard
@@ -42,9 +47,28 @@ fun MyListScreen(
     viewModel: MyListViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsState()
+    val snackbarHostState = remember { SnackbarHostState() }
+
+    // One tap removes the row; the way back is the snackbar, not a dialog
+    // the viewer had to answer first. Dismissing the snackbar without
+    // tapping Undo lets the removal stand.
+    LaunchedEffect(state.removedTitle) {
+        val title = state.removedTitle ?: return@LaunchedEffect
+        val result = snackbarHostState.showSnackbar(
+            message = "Removed $title from My List",
+            actionLabel = "Undo",
+            duration = SnackbarDuration.Long,
+        )
+        if (result == SnackbarResult.ActionPerformed) {
+            viewModel.undoRemoval()
+        } else {
+            viewModel.clearRemovedNotice()
+        }
+    }
 
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             TopAppBar(
                 title = { Text("My List") },
@@ -69,19 +93,26 @@ fun MyListScreen(
                 },
                 modifier = Modifier.padding(contentPadding),
             )
-            state.favorites.isEmpty() -> EmptyState(
-                title = "Your list is empty",
-                message = "Tap the heart on any movie or series to save it here for quick access.",
-                icon = {
-                    Icon(
-                        Icons.Default.FavoriteBorder,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.secondary,
-                        modifier = Modifier.size(40.dp),
-                    )
-                },
-                modifier = Modifier.padding(contentPadding),
-            )
+            state.favorites.isEmpty() -> Column(
+                modifier = Modifier.fillMaxSize().padding(contentPadding),
+            ) {
+                EmptyState(
+                    title = "Your list is empty",
+                    message = "Tap the heart on any movie or series to save it here for quick access.",
+                    icon = {
+                        Icon(
+                            Icons.Default.FavoriteBorder,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.secondary,
+                            modifier = Modifier.size(40.dp),
+                        )
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                if (state.popular.isNotEmpty()) {
+                    PopularRow(popular = state.popular, onPostClick = onPostClick)
+                }
+            }
             else -> Column(Modifier.fillMaxSize().padding(contentPadding)) {
                 state.hiddenNotice?.let { notice ->
                     Text(
@@ -117,37 +148,44 @@ fun MyListScreen(
                         PosterCard(
                             post = post,
                             onClick = { onPostClick(post.id) },
-                            onLongClick = { viewModel.requestRemoval(post.id) },
+                            onRemove = { viewModel.remove(post.id) },
                         )
                     }
                 }
             }
         }
+    }
+}
 
-        // A held tile is a wish, not a deletion: the row stays until this answer comes back.
-        state.armedRemovalId?.let { armedId ->
-            val armed = state.favorites.firstOrNull { it.id == armedId }
-            AlertDialog(
-                onDismissRequest = viewModel::cancelRemoval,
-                title = { Text("Remove from My List?") },
-                text = {
-                    Text(
-                        if (armed == null) {
-                            "This title will be removed from this device and from your synced " +
-                                "list. You can save it again any time."
-                        } else {
-                            "${armed.displayTitle} will be removed from this device and from " +
-                                "your synced list. You can save it again any time."
-                        },
-                    )
-                },
-                confirmButton = {
-                    TextButton(onClick = viewModel::confirmRemoval) { Text("Remove") }
-                },
-                dismissButton = {
-                    TextButton(onClick = viewModel::cancelRemoval) { Text("Keep") }
-                },
-            )
+/**
+ * Three titles for an empty list — the server's own trending order (most
+ * prints and mirrors first), not this viewer's history. A tap opens the
+ * title; saving it from there is what fills the list.
+ */
+@Composable
+private fun PopularRow(popular: List<Post>, onPostClick: (Int) -> Unit) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Text(
+            "Popular right now",
+            style = MaterialTheme.typography.titleMedium,
+            color = MaterialTheme.colorScheme.onBackground,
+        )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            popular.take(3).forEach { post ->
+                PosterCard(
+                    post = post,
+                    onClick = { onPostClick(post.id) },
+                    modifier = Modifier.weight(1f),
+                )
+            }
         }
     }
 }

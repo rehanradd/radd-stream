@@ -25,8 +25,8 @@ import kotlin.math.pow
 //     the brand is the floor, the artwork is the flavor.
 // ═════════════════════════════════════════════════════════════════════════════
 
-/** WCAG relative luminance of an sRGB color. */
-private fun luminance(c: Color): Float {
+/** WCAG relative luminance of an sRGB color. Shared with Theme, which picks the ink for an operator accent by the same rule. */
+internal fun luminance(c: Color): Float {
     fun lin(v: Float): Float =
         if (v <= 0.04045f) v / 12.92f else ((v + 0.055) / 1.055).toDouble().pow(2.4).toFloat()
     return 0.2126f * lin(c.red) + 0.7152f * lin(c.green) + 0.0722f * lin(c.blue)

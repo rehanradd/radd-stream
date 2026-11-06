@@ -253,10 +253,13 @@ VIEWS: dict[str, frozenset[str]] = {
                                      "band", "quality_label"}),
     "link": frozenset(_LINK),
     # The quality ladder's copy of a link: what a player or a download card needs
-    # to start it, and none of the link's diagnostic furniture.
+    # to start it, and none of the link's diagnostic furniture. `mime_type` is the
+    # probe-measured Content-Type of the winner copy (Session 71: the detail
+    # screen's honest source row reads Instant Stream vs Direct File off it);
+    # it names a format, never a hoster, so it is safe to publish.
     "ladder_link": frozenset({
         "stream_id", "play_url", "kind", "playable", "status", "expires_at",
-        "is_resumable", "is_temporary", "file_size_bytes", "label",
+        "is_resumable", "is_temporary", "file_size_bytes", "label", "mime_type",
     }),
     # GET /api/v1/stats — scale, no per-site breakdown.
     #
@@ -962,6 +965,37 @@ def parse_vip_pass(token, secret: str, now: float | None = None) -> float | None
     expires_at = float(struct.unpack(">q", body)[0])
     moment = time.time() if now is None else float(now)
     return expires_at if expires_at > moment else None
+
+
+#: A download credit is a different capability from a VIP pass, so it carries
+#: its own version byte and tag domain: a VIP pass must never parse as a credit
+#: and a credit must never parse as a pass, even though both are signed the
+#: same way. The token carries only the credit row's id — the expiry, the
+#: handle it was bought for and whether it was used live in that row, so a
+#: leaked token is one download of one movie, and only until it is spent.
+_DOWNLOAD_CREDIT_VERSION = 4
+
+
+def mint_download_credit(credit_id: int, secret: str) -> str:
+    """Sign a download-credit row id into a one-time browser token."""
+    body = struct.pack(">q", int(credit_id))
+    tag = hmac.new(secret.encode("utf-8"), b"dlc" + body,
+                   hashlib.sha256).digest()[:8]
+    return _b64(bytes([_DOWNLOAD_CREDIT_VERSION]) + body + tag)
+
+
+def parse_download_credit(token, secret: str) -> int | None:
+    """The credit row id a token was minted for, or ``None`` for anything not
+    ours or tampered with. Expiry and use are the row's job, not the token's."""
+    data = _unb64(str(token or ""))
+    if data is None or len(data) != 1 + 8 + 8 or data[0] != _DOWNLOAD_CREDIT_VERSION:
+        return None
+    body, tag = data[1:9], data[9:]
+    want = hmac.new(secret.encode("utf-8"), b"dlc" + body,
+                    hashlib.sha256).digest()[:8]
+    if not hmac.compare_digest(tag, want):
+        return None
+    return int(struct.unpack(">q", body)[0])
 
 
 def mint_text(value: str, secret: str) -> str:

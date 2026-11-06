@@ -137,6 +137,36 @@ class MergeTests(unittest.TestCase):
         self.assertLess(tiers.scope_sort_key("9", 1), tiers.scope_sort_key("Extras", 1))
 
 
+class AudioLanguageTests(unittest.TestCase):
+    """Session 71: a rung shows only the audio languages its own print carries."""
+
+    def test_a_pipe_separated_languages_column_becomes_a_list(self):
+        tier = tiers.for_release(
+            {"quality": "1080p", "languages": "Hindi|Tamil"}, [link()])["tiers"][0]
+        self.assertEqual(tier["audio_languages"], ["Hindi", "Tamil"])
+
+    def test_comma_separated_and_duplicate_languages_dedupe(self):
+        tier = tiers.for_release(
+            {"quality": "720p", "languages": "Hindi, Hindi|English"},
+            [link()])["tiers"][0]
+        self.assertEqual(tier["audio_languages"], ["Hindi", "English"])
+
+    def test_an_empty_languages_column_yields_no_audio_line(self):
+        for languages in (None, "", "  ", ", | ,"):
+            tier = tiers.for_release(
+                {"quality": "720p", "languages": languages}, [link()])["tiers"][0]
+            self.assertEqual(tier["audio_languages"], [], languages)
+
+    def test_merge_keeps_the_winning_prints_languages(self):
+        one = tiers.for_release({"quality": "1080p", "languages": "English"},
+                                [link(id=1, is_resumable=0)])
+        two = tiers.for_release({"quality": "1080p", "languages": "Hindi"},
+                                [link(id=2, is_resumable=1)])
+        merged = tiers.merge([one, two])
+        self.assertEqual(merged["tiers"][0]["link"]["id"], 2)
+        self.assertEqual(merged["tiers"][0]["audio_languages"], ["Hindi"])
+
+
 class PublicShapeTests(unittest.TestCase):
     """`link_view` is the only door a `download_sources` row has to the public."""
 

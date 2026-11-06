@@ -1077,6 +1077,26 @@ def authenticate(conn_or_path, key, *, now: float | None = None,
             _commit(conn)
 
 
+def coin_pass_until(conn, account_id, now) -> float:
+    """The latest unexpired coin-pass expiry for this account, or 0.0.
+
+    A redeemed or streak-minted VIP pass is recorded in `coin_passes` (see
+    `engagement.py`); this is the read both VIP answers share, so `entitlement`
+    and the download/stream checks cannot disagree about a pass. A database
+    that predates the table answers 0.0 — no pass, not an error.
+    """
+    try:
+        row = conn.execute(
+            "SELECT MAX(expires_at) FROM coin_passes"
+            " WHERE account_id = ? AND expires_at > ?",
+            (int(account_id), float(now))).fetchone()
+    except Exception:  # noqa: BLE001 — a DB without the table predates coin passes
+        return 0.0
+    if row is None or row[0] is None:
+        return 0.0
+    return float(row[0])
+
+
 def vip_status(conn_or_path, key, *, now: float | None = None) -> dict:
     """Read-only VIP check for a presented sync key.
 
@@ -1092,12 +1112,15 @@ def vip_status(conn_or_path, key, *, now: float | None = None) -> dict:
     wanted = _hash_key(key.strip())
     with _borrow(conn_or_path) as conn:
         row = conn.execute(
-            "SELECT key_hash, vip_until, revoked_at FROM user_accounts"
+            "SELECT id, key_hash, vip_until, revoked_at FROM user_accounts"
             " WHERE key_hash = ?", (wanted,)).fetchone()
-    if (row is None or row["revoked_at"] is not None
+        if row is None:
+            return {"vip": False, "vip_until": 0.0}
+        passed = coin_pass_until(conn, int(row["id"]), moment)
+    if (row["revoked_at"] is not None
             or not _verify_hash(row["key_hash"], wanted)):
         return {"vip": False, "vip_until": 0.0}
-    until = float(row["vip_until"] or 0)
+    until = max(float(row["vip_until"] or 0), passed)
     return {"vip": until > moment, "vip_until": until}
 
 

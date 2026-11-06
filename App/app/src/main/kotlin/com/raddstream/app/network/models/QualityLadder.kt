@@ -38,6 +38,11 @@ data class LadderLink(
     val isTemporary: Boolean? = null,
     @SerializedName("file_size_bytes")
     val fileSizeBytes: Long? = null,
+    /** The probe-measured Content-Type of the winner copy (`video/mp4`,
+     * `application/vnd.apple.mpegurl`, …). Null when the copy was never probed:
+     * the row then claims no stream category rather than a guessed one. */
+    @SerializedName("mime_type")
+    val mimeType: String? = null,
     /** Ours: "Fast direct" | "Standard". */
     val label: String? = null,
 ) {
@@ -67,6 +72,11 @@ data class LadderTier(
     val link: LadderLink? = null,
     @SerializedName("backup_handles")
     val backupHandles: List<String> = emptyList(),
+    /** The winning print's stored audio languages (`["Hindi", "English"]`).
+     * Empty when the print's languages column is empty: the row then shows no
+     * audio line rather than a title-guessed language. */
+    @SerializedName("audio_languages")
+    val audioLanguages: List<String> = emptyList(),
 )
 
 /** The ladder's own pointer: the rung `Auto` starts at, and the handle it uses. */

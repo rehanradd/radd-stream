@@ -318,8 +318,10 @@ ACTION_VIEW chooser.
 `/api/v1/rules` is defined in the backend but **not** called by the app.
 `/api/v1/sync` is **not** a backend endpoint — see §3.4.
 
-`type` accepts only `movie`, `series`, `complete_season`, `ongoing_season`;
-`anime` returns zero rows.
+`type` accepts `movie`, `series`, `complete_season`, `ongoing_season`, and `anime`
+(`type=anime` answers from `is_animated = 1 OR lower(industry) LIKE '%anime%'` —
+live `total: 5847`, re-measured 2026-10-29; the old "anime returns zero rows" line
+described the pre-fix tree).
 
 ---
 

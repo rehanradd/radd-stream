@@ -25,6 +25,10 @@ import com.google.gson.annotations.SerializedName
  *   POST api/v2/account/progress/remove     -> {removed}
  *   POST api/v2/account/payment             -> payment{payment_id, status, plan, amount_pkr, method, submitted_at}
  *   GET  api/v2/account/entitlement         -> entitlement{vip, vip_until, pending}
+ *   GET  api/v2/account/coins               -> {balance, rewarded_grants_today, caps}
+ *   GET  api/v2/account/coins/caps          -> {caps, passes, streak{coins, pass_seconds}}
+ *   POST api/v2/account/coins/earn          -> earned{status, current_streak, best_streak,
+ *                                                      day, coins_granted, pass?, pass_expires_at?}
  *
  * THREE THINGS THESE MODELS ENFORCE, because the server cannot enforce them for us:
  *
@@ -190,6 +194,13 @@ data class ProgressWriteResponse(
     val progress: ProgressEntry? = null,
     /** False when the server kept what it already had: our stamp was not newer. */
     val applied: Boolean? = null,
+    /**
+     * Coins this write earned by finishing the title (15 by default), zero
+     * otherwise: the server pays once per title, and the player shows the
+     * toast only when this number is positive. Zero on a server that predates
+     * the grant — an older server simply never pays.
+     */
+    @SerializedName("coins_earned") val coinsEarned: Int = 0,
 )
 
 /** Body of both progress writes. Position and duration are seconds, not milliseconds. */
@@ -257,6 +268,215 @@ data class AccountEntitlement(
 
 data class EntitlementResponse(
     val entitlement: AccountEntitlement? = null,
+)
+
+/**
+ * The coin wallet the daily check-in pays into (the `coins` routes in
+ * `accounts_api.py`).
+ *
+ * The server is the only minter: a claim carries `reason` and nothing else, the
+ * grant size is the ladder's own, and the day is claimed by one guarded server
+ * UPDATE — so a replay answers `same_day_noop` and pays nothing twice. The app
+ * never invents a balance, a grant, or a pass; it only reads what these answers say.
+ */
+data class CoinEarnRequest(
+    val reason: String = DAILY_LOGIN,
+) {
+    companion object {
+        /** The only reason the earn route accepts. */
+        const val DAILY_LOGIN = "daily_login"
+    }
+}
+
+/** What one daily-login claim answers: the new streak, what it paid, and any pass. */
+data class CoinEarned(
+    val status: String = "",
+    @SerializedName("current_streak") val currentStreak: Int = 0,
+    @SerializedName("best_streak") val bestStreak: Int = 0,
+    val day: String = "",
+    @SerializedName("coins_granted") val coinsGranted: Int = 0,
+    val pass: String? = null,
+    @SerializedName("pass_expires_at") val passExpiresAt: Double = 0.0,
+)
+
+data class CoinEarnResponse(
+    val earned: CoinEarned? = null,
+)
+
+/** This account's own coin balance, the same `SUM(delta)` the spender checks. */
+data class CoinBalanceResponse(
+    val balance: Int = 0,
+    @SerializedName("rewarded_grants_today") val rewardedGrantsToday: Int = 0,
+)
+
+/**
+ * The streak ladder the server will actually pay, as the `coins/caps` route
+ * publishes it. Keys are day numbers as strings; [byDay] keeps only real days.
+ */
+data class StreakLadder(
+    val coins: Map<String, Int> = emptyMap(),
+    @SerializedName("pass_seconds") val passSeconds: Long = 0L,
+) {
+    val byDay: Map<Int, Int>
+        get() = coins.mapNotNull { (key, value) ->
+            key.toIntOrNull()?.takeIf { it in 1..7 }?.let { it to value }
+        }.toMap()
+}
+
+data class CoinCapsResponse(
+    val streak: StreakLadder = StreakLadder(),
+    /** The pass tiers the server publishes (plan -> coin price), empty until read. */
+    val passes: Map<String, PassTier> = emptyMap(),
+    /**
+     * The direct-download price the server publishes (coins for one movie).
+     * Zero when the server predates the credit: the phone offers no direct
+     * link rather than inventing a price.
+     */
+    val download: DownloadCreditPrice = DownloadCreditPrice(),
+    /**
+     * The movie-request price the server publishes (coins for one title).
+     * Zero when the server predates the request: the phone offers no request
+     * form rather than inventing a price.
+     */
+    val request: DownloadCreditPrice = DownloadCreditPrice(),
+    /** The player themes the server publishes (theme -> coin price), empty until read. */
+    val themes: Map<String, DownloadCreditPrice> = emptyMap(),
+)
+
+/** The price of one direct download, as the `coins/caps` route publishes it. */
+data class DownloadCreditPrice(
+    val coins: Int = 0,
+)
+
+/** One pass tier the `coins/caps` route publishes: its coin price and its rupee price. */
+data class PassTier(
+    val coins: Int = 0,
+    val pkr: Int = 0,
+)
+
+/**
+ * POST /api/v2/account/coins/redeem — spend coins on a pass. The body carries the
+ * plan name and nothing else: the price is the ladder's own and the debit is one
+ * guarded server UPDATE, so a replay answers `already_applied` and spends nothing twice.
+ */
+data class CoinRedeemRequest(
+    val plan: String,
+)
+
+/** What one redeem answers: the pass, what it cost, and the wallet it left behind. */
+data class CoinRedeemed(
+    val reward: String = "",
+    val cost: Int = 0,
+    val balance: Int = 0,
+    @SerializedName("already_applied") val alreadyApplied: Boolean = false,
+    @SerializedName("expires_at") val expiresAt: Double = 0.0,
+    val pass: String? = null,
+)
+
+data class CoinRedeemResponse(
+    val redeemed: CoinRedeemed? = null,
+)
+
+/**
+ * POST /api/v2/account/coins/redeem-download — spend coins on one direct
+ * download of one movie. The body carries the download handle and nothing
+ * else: the price is the server's own knob and the debit is one guarded
+ * server UPDATE, so a replay answers `already_applied` and spends nothing
+ * twice. The answer's token is the credit's signed id — the browser that
+ * presents it needs no account.
+ */
+data class CoinDownloadCreditRequest(
+    val handle: String,
+)
+
+/** What one download purchase answers: the token, what it cost, and the wallet it left behind. */
+data class CoinDownloadCredit(
+    val token: String? = null,
+    val handle: String = "",
+    val cost: Int = 0,
+    val balance: Int = 0,
+    @SerializedName("already_applied") val alreadyApplied: Boolean = false,
+    @SerializedName("expires_at") val expiresAt: Double = 0.0,
+)
+
+data class CoinDownloadCreditResponse(
+    val credit: CoinDownloadCredit? = null,
+)
+
+/**
+ * POST /api/v2/account/coins/share — report one share of a movie. The body
+ * carries the work handle and nothing else: the server verifies the handle
+ * is one of ours and pays once a day, so a second share the same day answers
+ * `granted: false` and pays nothing. The app shows "+N coins" only when the
+ * server says it granted.
+ */
+data class CoinShareRequest(
+    @SerializedName("work_ref") val workRef: String,
+)
+
+/** What one share claim answers: whether it paid, what it paid, and the wallet it left behind. */
+data class CoinShare(
+    val granted: Boolean = false,
+    val coins: Int = 0,
+    val balance: Int = 0,
+)
+
+data class CoinShareResponse(
+    val share: CoinShare? = null,
+)
+
+/**
+ * POST /api/v2/account/coins/request-movie — spend coins on one requested
+ * movie. The body carries the title (the viewer's own words) and an optional
+ * note: the price is the server's own knob and the spend and the queue entry
+ * are one purchase, so a replay answers `already_applied` with the request it
+ * already filed.
+ */
+data class CoinRequestMovieRequest(
+    val title: String,
+    val notes: String = "",
+)
+
+/** What one movie request answers: the queued request, what it cost, and the wallet it left behind. */
+data class CoinMovieRequest(
+    val id: Int? = null,
+    val title: String = "",
+    val cost: Int = 0,
+    val balance: Int = 0,
+    @SerializedName("already_applied") val alreadyApplied: Boolean = false,
+)
+
+data class CoinRequestMovieResponse(
+    val request: CoinMovieRequest? = null,
+)
+
+/**
+ * POST /api/v2/account/coins/redeem-theme — spend coins on one player theme.
+ * The body carries the theme id and nothing else: the price is one price for
+ * every theme, and a theme already owned answers `already_applied` with the
+ * ownership it already holds — no spend runs at all.
+ */
+data class CoinRedeemThemeRequest(
+    val theme: String,
+)
+
+/** What one theme purchase answers: the theme, what it cost, the wallet it left behind, and everything owned now. */
+data class CoinTheme(
+    val theme: String = "",
+    val cost: Int = 0,
+    val balance: Int = 0,
+    @SerializedName("already_applied") val alreadyApplied: Boolean = false,
+    val owned: List<String> = emptyList(),
+)
+
+data class CoinRedeemThemeResponse(
+    val theme: CoinTheme? = null,
+)
+
+/** GET /api/v2/account/coins/themes — what this account owns, and what a theme costs. */
+data class CoinThemesResponse(
+    val themes: List<String> = emptyList(),
+    val prices: Map<String, DownloadCreditPrice> = emptyMap(),
 )
 
 /**

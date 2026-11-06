@@ -311,12 +311,18 @@ def _score(evidence: dict, hints: dict) -> tuple:
 
 def search_by_media(conn, title: str = "", duration_s=None, resolution=None,
                     audio_language: str = "", limit: int = 10, full: bool = False,
-                    enrich=None) -> dict:
+                    enrich=None, sort: str = "best") -> dict:
     """Read-only by-media lookup.
 
     ``enrich`` is the caller's chance to add the art handles and the work reference
     this module cannot mint (both are ``viewer`` concerns); it is called as
     ``enrich(item, row)`` with the already-projected item and its raw row.
+
+    ``sort`` orders the capped window only — the recall boundary is unchanged,
+    so a sort never surfaces a row the window missed. ``best`` is the default
+    (title strength, evidence agreement, print count); ``newest`` orders by
+    year, ``most_copies`` by print count, ``title`` alphabetically. An unknown
+    value falls back to ``best`` rather than refusing the search.
     """
     clean = re.sub(r"\s+", " ", str(title or "")).strip()
     if not clean:
@@ -379,7 +385,16 @@ def search_by_media(conn, title: str = "", duration_s=None, resolution=None,
     # instead of to every group the catalog can produce. `pid` last is not
     # decoration: without a total order a tie repeats a row on the next page or drops
     # one, and the window is exactly where ties are most likely.
-    scored.sort(key=lambda t: (-t[0], -t[1], -t[2], -t[3]))
+    sort = (sort or "best").strip().lower()
+    if sort == "newest":
+        scored.sort(key=lambda t: (-(int(t[4]["year"] or 0)), -t[3]))
+    elif sort == "most_copies":
+        scored.sort(key=lambda t: (-t[2], -t[3]))
+    elif sort == "title":
+        scored.sort(key=lambda t: ((t[4]["clean_title"] or t[4]["title"] or "").casefold(), -t[3]))
+    else:
+        sort = "best"
+        scored.sort(key=lambda t: (-t[0], -t[1], -t[2], -t[3]))
 
     results = []
     for _, _, _, _, r, ev, matched, mismatched, unknown in scored[:limit]:
@@ -411,6 +426,7 @@ def search_by_media(conn, title: str = "", duration_s=None, resolution=None,
             "duration_s": hints.get("duration_s"),
             "resolution": hints.get("resolution"),
             "audio_language": hints.get("audio_language"),
+            "sort": sort,
         },
         "duration_tolerance": DURATION_TOLERANCE,
         "candidates": len(rows),

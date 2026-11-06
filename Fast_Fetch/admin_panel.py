@@ -80,16 +80,21 @@ PROVENANCE (absolute, ``redact.py`` is the vocabulary owner):
   upstream URLs — still fails the whole page closed. No scraped URL is ever
   rendered anywhere in this module.
 
-WRITES, and only five: ``POST /admin/api/links/{link_id}/evidence`` re-folds
+WRITES, and only eight: ``POST /admin/api/links/{link_id}/evidence`` re-folds
 that link's existing ``cat_link_evidence`` journal onto its row via
 ``catalog_v2.apply_evidence`` with its existing signature;
 ``POST /admin/action/save-monetization`` persists the operator's own payment, ad
 and shortener settings to ``app_remote_config``;
 ``POST /admin/action/run-scraper`` queues one bounded crawler/sitemap run for a
 validated crawler handle, records it in ``admin_fleet_audit`` and spawns it as a
-background child process; and ``POST /admin/action/approve-payment`` /
+background child process; ``POST /admin/action/approve-payment`` /
 ``/admin/action/reject-payment`` close ONE ``payment_transactions`` row (see
-``payments.py``) behind a CSRF token minted by this process. The last four
+``payments.py``) behind a CSRF token minted by this process; and
+``POST /admin/action/trigger-request-crawl`` queues one bounded sync run for the
+site the operator picked, for ONE open ``movie_requests`` row, while
+``POST /admin/action/mark-request-indexed`` /
+``/admin/action/mark-request-declined`` close that row — all three behind a CSRF
+token minted by this process, exactly like the payment reviews. The last seven
 consume a request body, and none of them reads a socket: the mount parses the
 body (JSON, or the form-encoding this page's own ``<form>`` posts) and hands the
 dict in as ``body`` (see :func:`takes_body`). Everything else is read-only; see
@@ -1703,9 +1708,14 @@ MONETIZATION_FIELDS = (
     ("ad_app_open_min_gap_minutes", "Ad gap: app open (minutes; 0 = default 240)", _INT, 240),
     ("coin_per_rewarded_ad", "Coins per rewarded ad view", _INT, 5),
     ("rewarded_daily_cap", "Rewarded ads counted per local day", _INT, 10),
-    ("coin_redeem_day", "Coins: one-day pass", _INT, 30),
+    ("coin_redeem_day", "Coins: one-day pass", _INT, 500),
     ("coin_redeem_weekend", "Coins: weekend pass", _INT, 70),
     ("coin_redeem_monthly", "Coins: 30-day VIP pass", _INT, 200),
+    ("coin_redeem_download", "Coins: direct download pass", _INT, 100),
+    ("coin_share", "Coins: share a movie (once a day)", _INT, 25),
+    ("coin_finish_watch", "Coins: finish watching a title", _INT, 15),
+    ("coin_redeem_request", "Coins: request a movie", _INT, 300),
+    ("coin_redeem_theme", "Coins: one player theme", _INT, 250),
     ("streak_day1_coins", "Streak: day-1 bonus coins", _INT, 10),
     ("streak_day3_coins", "Streak: day-3 bonus coins", _INT, 30),
     ("streak_day7_pass_hours", "Streak: day-7 free pass (hours)", _INT, 24),
@@ -2330,11 +2340,14 @@ SHORTENER_TOKEN_FIELDS = (
 def shortener_targets(conn):
     """Configured `(network, token)` pairs, rotation order, server side only.
 
-    Empty when the flag `feature_link_shorteners` is off (the shipped default, and the
-    owner's standing directive), when the operator has saved no token, or when the settings
-    row is unavailable — which is the same answer to the caller as "shorteners are
-    off": the download route falls back to the direct URL. Read-only and
-    idempotent, like :func:`remote_config`."""
+    Empty when the flag `feature_link_shorteners` is off (the shipped default,
+    and the operator has not enabled it), when the operator has saved no token,
+    or when the settings row is unavailable — which is the same answer to the
+    caller as "shorteners are off": the download route falls back to the
+    direct URL. When the operator enables it (owner decision 2026-11-06),
+    shortening applies ONLY to web-page requests (`?via=web`); the app's
+    native downloads stay direct. Read-only and idempotent, like
+    :func:`remote_config`."""
     try:
         _ensure_monetization(conn)
         values = _read_monetization(conn)
@@ -2343,9 +2356,9 @@ def shortener_targets(conn):
     if values is None:
         return []
     if not _as_flag(values.get("feature_link_shorteners", 0)):
-        # Retired by the owner's directive; a saved token is not consent to detour a
-        # free user's download. The download route reads this list, so refusing here
-        # is the one place the policy can be enforced for every caller.
+        # Off by default. A saved token is not consent to detour a free user's
+        # download: the download route reads this list, so refusing here is the
+        # one place the policy can be enforced for every caller.
         return []
     targets = []
     for network, key in SHORTENER_TOKEN_FIELDS:
@@ -2355,52 +2368,55 @@ def shortener_targets(conn):
     return targets
 
 
-def _run_scraper_action(path, body, db_path):
-    """Queue one bounded crawler/sitemap run. Returns the route tuple.
+def _crawl_limit(raw_limit):
+    """The bounded limit for one crawler run, or ``None`` when the body is wrong.
 
-    The body may only carry a crawler handle, a mode and an integer limit. The
-    handle maps onto :data:`FLEET_SITES`; the mode onto a fixed argv shape; the
-    limit is clamped to ``1..MAX_CRAWL_LIMIT``. Nothing from the request is ever
-    interpolated into a command string or echoed back, so a wrong handle is a
-    plain 400 and never a probe for which sites exist."""
-    unknown = sorted(str(key) for key in body if key not in _ACTION_KEYS)
-    if unknown:
-        return _problem("invalid_params", path, "Unknown action setting.")
-    crawler = str(body.get("crawler", "")).strip().lower()
-    site = _CRAWLER_SITES.get(crawler)
-    if site is None:
-        return _problem("invalid_params", path, "Unknown crawler handle.")
-    mode = str(body.get("mode", "sync")).strip().lower()
-    if mode not in FLEET_MODES:
-        return _problem("invalid_params", path, "Mode must be sync or crawl.")
-    raw_limit = body.get("limit", DEFAULT_CRAWL_LIMIT)
+    One rule for both callers that queue a run (the fleet page and the requests
+    page): a boolean is never an integer, and the limit is clamped to
+    ``1..MAX_CRAWL_LIMIT`` so an operator pressing a button cannot turn into an
+    unbounded scrape.
+    """
     if isinstance(raw_limit, bool):
-        return _problem("invalid_params", path,
-                        f"Limit must be an integer between 1 and {MAX_CRAWL_LIMIT}.")
+        return None
     limit = _int_or_none(raw_limit)
     if limit is None or not 1 <= limit <= MAX_CRAWL_LIMIT:
-        return _problem("invalid_params", path,
-                        f"Limit must be an integer between 1 and {MAX_CRAWL_LIMIT}.")
+        return None
+    return limit
 
-    try:
-        with _FLEET_LOCK, _session(db_path) as conn:
-            _ensure_audit(conn)
-            busy = site in _running_sites()
-            if not busy:
-                for row in conn.execute(
-                        f"SELECT crawler_id, pid FROM {_AUDIT_TABLE}"
-                        " WHERE status = 'running'"):
-                    if (_CRAWLER_SITES.get(str(row["crawler_id"])) == site
-                            and (row["pid"] is None or _pid_alive(row["pid"]))):
-                        busy = True
-                        break
-            if busy:
-                return _problem("invalid_params", path,
-                                "That crawler already has a run in progress.")
-            started = int(time.time())
-            audit_id = _audit_start(conn, crawler, mode, started)
-    except sqlite3.Error:
-        return _problem("unavailable", path, "The audit journal is unavailable.")
+
+class _CrawlerBusy(Exception):
+    """That site already has a run in progress."""
+
+
+class _CrawlerSpawnFailed(Exception):
+    """The child could not be started; the audit row says so."""
+
+
+def _queue_crawler_run(site, mode, limit, crawler, db_path):
+    """Queue one bounded crawler run. Returns ``(audit_id, pid, started_at)``.
+
+    The one queue the fleet page and the requests page share: the busy-check,
+    the audit row and the spawn live here so a second caller cannot drift from
+    the first. Raises :class:`_CrawlerBusy` when the site already runs, lets
+    ``sqlite3.Error`` through when the audit journal is unavailable, and raises
+    :class:`_CrawlerSpawnFailed` (after marking the audit row failed) when the
+    child cannot start.
+    """
+    with _FLEET_LOCK, _session(db_path) as conn:
+        _ensure_audit(conn)
+        busy = site in _running_sites()
+        if not busy:
+            for row in conn.execute(
+                    f"SELECT crawler_id, pid FROM {_AUDIT_TABLE}"
+                    " WHERE status = 'running'"):
+                if (_CRAWLER_SITES.get(str(row["crawler_id"])) == site
+                        and (row["pid"] is None or _pid_alive(row["pid"]))):
+                    busy = True
+                    break
+        if busy:
+            raise _CrawlerBusy(site)
+        started = int(time.time())
+        audit_id = _audit_start(conn, crawler, mode, started)
 
     try:
         pid = _spawn_fleet_run(site, mode, limit, crawler, audit_id, db_path)
@@ -2411,6 +2427,43 @@ def _run_scraper_action(path, body, db_path):
             db_path,
             f"UPDATE {_AUDIT_TABLE} SET status = 'failed', finished_at = ?,"
             " detail = 'spawn failed' WHERE id = ?", (started, audit_id))
+        raise _CrawlerSpawnFailed(site)
+    return audit_id, pid, started
+
+
+def _run_scraper_action(path, body, db_path):
+    """Queue one bounded crawler/sitemap run. Returns the route tuple.
+
+    The body may only carry a crawler handle, a mode and an integer limit. The
+    handle maps onto :data:`FLEET_SITES`; the mode onto a fixed argv shape; the
+    limit is clamped to ``1..MAX_CRAWL_LIMIT``. Nothing from the request is ever
+    interpolated into a command string or echoed back, so a wrong handle is a
+    plain 400 and never a probe for which sites exist.
+    """
+    unknown = sorted(str(key) for key in body if key not in _ACTION_KEYS)
+    if unknown:
+        return _problem("invalid_params", path, "Unknown action setting.")
+    crawler = str(body.get("crawler", "")).strip().lower()
+    site = _CRAWLER_SITES.get(crawler)
+    if site is None:
+        return _problem("invalid_params", path, "Unknown crawler handle.")
+    mode = str(body.get("mode", "sync")).strip().lower()
+    if mode not in FLEET_MODES:
+        return _problem("invalid_params", path, "Mode must be sync or crawl.")
+    limit = _crawl_limit(body.get("limit", DEFAULT_CRAWL_LIMIT))
+    if limit is None:
+        return _problem("invalid_params", path,
+                        f"Limit must be an integer between 1 and {MAX_CRAWL_LIMIT}.")
+
+    try:
+        audit_id, pid, started = _queue_crawler_run(
+            site, mode, limit, crawler, db_path)
+    except _CrawlerBusy:
+        return _problem("invalid_params", path,
+                        "That crawler already has a run in progress.")
+    except sqlite3.Error:
+        return _problem("unavailable", path, "The audit journal is unavailable.")
+    except _CrawlerSpawnFailed:
         return _problem("internal", path, "The crawler could not be started.")
     return _respond_json(202, {
         "ok": True,
@@ -2484,7 +2537,9 @@ def _csrf_ok(action: str, payment_id, token) -> bool:
 
 #: The writes that a browser session can trigger. A payment review is deliberately
 #: absent: its token is bound to one (action, payment id) pair and `_review_payment`
-#: already refuses without it, which is a stronger claim than same-origin.
+#: already refuses without it, which is a stronger claim than same-origin. The
+#: request reviews and the request trigger are absent for the same reason: their
+#: tokens are bound to one (action, request id) pair.
 _ORIGIN_WRITES = {
     SAVE_MONETIZATION_PATH.rsplit("/", 1)[-1]: SAVE_MONETIZATION_PATH,
     RUN_SCRAPER_PATH.rsplit("/", 1)[-1]: RUN_SCRAPER_PATH,
@@ -2770,8 +2825,315 @@ def render_payments_page(data, query, banner=""):
                  ' credits nothing by itself and waits for you like a claim does.'
                  '</p></section></div></body></html>')
     return "".join(parts)
+# ── the movie-request queue: titles viewers spent coins asking for ─────────
+#
+# A request is a purchase (300 coins, `engagement.request_movie`) that queues a
+# title for the operator. The page mirrors the payment queue: a screen from the
+# ledger, a JSON screen, and one-click closes behind a CSRF token bound to
+# (action, request id).
+#
+# What the trigger does, and does not do: there is no per-title search across
+# the 18 scrapers, so the button queues ONE bounded sync run for the ONE site
+# the operator picks (the same `_queue_crawler_run` the fleet page uses). The
+# run picks the title up only if that site lists it; the request stays open
+# until the operator has seen the title and marks it indexed or declined.
+
+REQUESTS_PATH = "/admin/requests"
+TRIGGER_REQUEST_CRAWL_PATH = "/admin/action/trigger-request-crawl"
+REQUEST_INDEXED_PATH = "/admin/action/mark-request-indexed"
+REQUEST_DECLINED_PATH = "/admin/action/mark-request-declined"
+#: action segment (from the path) → the status `engagement` writes.
+_REQUEST_ACTIONS = {
+    REQUEST_INDEXED_PATH.rsplit("/", 1)[-1]: "indexed",
+    REQUEST_DECLINED_PATH.rsplit("/", 1)[-1]: "declined",
+}
+#: The only keys a review POST may carry. The trigger carries the crawler
+#: handle, mode and limit the fleet action carries, and nothing else.
+_REQUEST_BODY_KEYS = frozenset({"request_id", "csrf", "_form"})
+_TRIGGER_BODY_KEYS = frozenset(
+    {"request_id", "crawler", "mode", "limit", "csrf", "_form"})
+#: The site the trigger offers first: the largest catalog, so a blind pick has
+#: the best chance of listing the title.
+_TRIGGER_DEFAULT_SITE = "multimovies"
 
 
+def _request_rows(conn, limit: int = _PENDING_LIMIT) -> dict:
+    """The queue, its recent history, and the handles a JSON client may use.
+
+    Titles and notes are the viewer's own words, so they are scrubbed at the
+    edge (`redact.scrub_text`) — the ledger keeps the original text untouched,
+    and a needle in a title must not fail the whole page closed. The account
+    column is the same one-way fingerprint the payment queue prints, plus the
+    linked profile name when the account has one.
+    """
+    open_rows = engagement.list_movie_requests(
+        conn, status="open", limit=limit, oldest_first=True)
+    recent = engagement.list_movie_requests(conn, status=None,
+                                            limit=_RECENT_LIMIT)
+    ids = sorted({row["account_id"] for row in open_rows + recent})
+    handles = {}
+    if ids:
+        marks = ",".join("?" for _ in ids)
+        for row in conn.execute(
+                "SELECT id, key_hash, profile_name FROM user_accounts"
+                f" WHERE id IN ({marks})", tuple(ids)).fetchall():
+            handles[int(row["id"])] = {
+                "hint": payments.account_hint(row["key_hash"]),
+                "profile": str(row["profile_name"] or ""),
+            }
+    for row in open_rows + recent:
+        handle = handles.get(row["account_id"],
+                             {"hint": "acct-?", "profile": ""})
+        row["hint"] = handle["hint"]
+        row["profile"] = handle["profile"]
+        row["balance"] = engagement.coin_balance(conn, row["account_id"])
+        row["title"] = redact.scrub_text(row["title"])
+        row["notes"] = redact.scrub_text(row["notes"])
+    return {
+        "available": True,
+        "open_count": len(open_rows),
+        "open": open_rows,
+        "recent": recent,
+        # Handles only, no site names: the fleet JSON screen stays opaque the
+        # same way, and this JSON has no allow-list to spend.
+        "crawlers": [{"crawler_id": handle}
+                     for handle in sorted(_CRAWLER_SITES)],
+        "trigger_path": TRIGGER_REQUEST_CRAWL_PATH,
+        "indexed_path": REQUEST_INDEXED_PATH,
+        "declined_path": REQUEST_DECLINED_PATH,
+        "note": ("a trigger queues one bounded sync run for one site you pick;"
+                 " it picks the title up only if that site lists it, so watch"
+                 " the Fleet page for the run and mark the request indexed"
+                 " when the title appears, or declined when it is not wanted."),
+    }
+
+
+def screen_requests(state_db_path=None, *, limit: int = _PENDING_LIMIT) -> dict:
+    """`GET /admin/api/requests` — the queue as JSON. Fails to an honest empty
+    state rather than a crash, like every other screen."""
+    try:
+        with _ledger(state_db_path) as conn:
+            return _request_rows(conn, limit=limit)
+    except sqlite3.Error:
+        return {"available": False, "detail": LEDGER_UNAVAILABLE}
+
+
+def _review_request(segment, path, body, state_db_path):
+    """Close one request row. Returns `(result, None)` or `(None, refusal_tuple)`.
+
+    Order is fixed, like the payment review: shape, then the CSRF token, then
+    the write. A row that does not exist and a row whose token does not match
+    take different refusals only because the token is checked before the ledger
+    is opened — a mismatched token cannot be used to ask "does request 17
+    exist?".
+    """
+    if not isinstance(body, dict):
+        return None, refuse_bad_body(path)
+    unknown = sorted(str(key) for key in body if key not in _REQUEST_BODY_KEYS)
+    if unknown:
+        return None, _problem("invalid_params", path, "Unknown review setting.")
+    request_id = _int_or_none(body.get("request_id"))
+    if request_id is None or request_id < 1:
+        return None, _problem("invalid_params", path,
+                              "Request id must be a positive integer.")
+    if not _csrf_ok(segment, request_id, body.get("csrf")):
+        return None, _problem("forbidden", path,
+                              "That review token does not match this request.")
+    try:
+        with _ledger(state_db_path) as conn:
+            result = engagement.set_request_status(
+                conn, request_id, _REQUEST_ACTIONS[segment])
+    except ValueError:
+        return None, _problem("invalid_params", path, "Unknown request status.")
+    except sqlite3.Error:
+        return None, _problem("unavailable", path, LEDGER_UNAVAILABLE)
+    if result is None:
+        return None, _problem("not_found", path, "No such request.")
+    return result, None
+
+
+def _trigger_request_crawl(path, body, db_path, state_db_path):
+    """Queue one bounded sync run for one open request. Returns
+    `(result, None)` or `(None, refusal_tuple)`.
+
+    Order is fixed: shape, then the CSRF token, then the request row, then the
+    queue. The row is read before any child is spawned, so a bad id or a closed
+    row costs nothing, and a busy site refuses before the request is touched.
+    The request stays 'open' — the run is recorded in the fleet audit journal,
+    and only a human marks the title indexed or declined.
+    """
+    if not isinstance(body, dict):
+        return None, refuse_bad_body(path)
+    unknown = sorted(str(key) for key in body if key not in _TRIGGER_BODY_KEYS)
+    if unknown:
+        return None, _problem("invalid_params", path, "Unknown trigger setting.")
+    request_id = _int_or_none(body.get("request_id"))
+    if request_id is None or request_id < 1:
+        return None, _problem("invalid_params", path,
+                              "Request id must be a positive integer.")
+    segment = TRIGGER_REQUEST_CRAWL_PATH.rsplit("/", 1)[-1]
+    if not _csrf_ok(segment, request_id, body.get("csrf")):
+        return None, _problem("forbidden", path,
+                              "That trigger token does not match this request.")
+    crawler = str(body.get("crawler", "")).strip().lower()
+    site = _CRAWLER_SITES.get(crawler)
+    if site is None:
+        return None, _problem("invalid_params", path, "Unknown crawler handle.")
+    mode = str(body.get("mode", "sync")).strip().lower()
+    if mode not in FLEET_MODES:
+        return None, _problem("invalid_params", path, "Mode must be sync or crawl.")
+    limit = _crawl_limit(body.get("limit", DEFAULT_CRAWL_LIMIT))
+    if limit is None:
+        return None, _problem("invalid_params", path,
+                              f"Limit must be an integer between 1 and {MAX_CRAWL_LIMIT}.")
+    try:
+        with _ledger(state_db_path) as conn:
+            row = conn.execute(
+                "SELECT status FROM movie_requests WHERE id = ?",
+                (request_id,)).fetchone()
+    except sqlite3.Error:
+        return None, _problem("unavailable", path, LEDGER_UNAVAILABLE)
+    if row is None:
+        return None, _problem("not_found", path, "No such request.")
+    if str(row["status"]) != "open":
+        return None, _problem("invalid_params", path,
+                              "That request is already closed.")
+    try:
+        audit_id, pid, started = _queue_crawler_run(
+            site, mode, limit, crawler, db_path)
+    except _CrawlerBusy:
+        return None, _problem("invalid_params", path,
+                              "That crawler already has a run in progress.")
+    except sqlite3.Error:
+        return None, _problem("unavailable", path, "The audit journal is unavailable.")
+    except _CrawlerSpawnFailed:
+        return None, _problem("internal", path, "The crawler could not be started.")
+    return {"ok": True, "request_id": request_id,
+            "crawler_id": crawler, "audit_id": audit_id, "pid": pid,
+            "started_at": started}, None
+
+
+def _request_banner(result: dict) -> str:
+    """The one sentence the page may say about a review. It names no account
+    and no sync key, and it says plainly when the click closed nothing."""
+    if result["changed"]:
+        return (f"request {result['id']} marked {result['status']} —"
+                " nothing further happens to it")
+    return (f"request {result['id']} was already {result['status']} —"
+            " nothing was written")
+
+
+def _trigger_banner(result: dict, site: str) -> str:
+    """The one sentence the page may say about a trigger. It names the site
+    and the audit row, so the operator knows where to watch the run.
+
+    The site name travels as a parameter, not in the receipt: the JSON receipt
+    carries only the crawler handle, like the fleet receipt, because a JSON
+    body has no needle allow-list to spend and a site name in it would fail
+    the whole answer closed.
+    """
+    return (f"crawl queued for {site} (audit {result['audit_id']}) —"
+            " watch the Fleet page for the run; mark the request indexed when"
+            " the title appears")
+
+
+def _request_forms(row) -> str:
+    """The three buttons, as real HTML forms.
+
+    Each carries the CSRF token for its own (action, request) pair, like the
+    payment forms. The trigger form also carries the site picker: the operator
+    chooses which of the 18 engines to sync, defaulting to the largest
+    catalog, and the run is always a bounded sync.
+    """
+    identifier = row["id"]
+    shared = (f'<input type="hidden" name="request_id" value="{_e(identifier)}">'
+              f'<input type="hidden" name="{_FORM_FLAG}" value="1">')
+    options = []
+    for handle in sorted(_CRAWLER_SITES):
+        site = _CRAWLER_SITES[handle]
+        selected = (" selected" if site == _TRIGGER_DEFAULT_SITE else "")
+        options.append(f'<option value="{_e(handle)}"{selected}>{_e(site)}</option>')
+    trigger = (
+        f'<form method="post" class="inline" action="{_e(TRIGGER_REQUEST_CRAWL_PATH)}">'
+        f'{shared}'
+        f'<input type="hidden" name="csrf" value="{_e(_csrf_token("trigger-request-crawl", identifier))}">'
+        '<input type="hidden" name="mode" value="sync">'
+        f'<select name="crawler">{"".join(options)}</select> '
+        '<button class="btn" type="submit">Trigger crawler</button></form>')
+    indexed = (
+        f'<form method="post" class="inline" action="{_e(REQUEST_INDEXED_PATH)}">'
+        f'{shared}'
+        f'<input type="hidden" name="csrf" value="{_e(_csrf_token("mark-request-indexed", identifier))}">'
+        '<button class="btn" type="submit">Indexed</button></form>')
+    declined = (
+        f'<form method="post" class="inline" action="{_e(REQUEST_DECLINED_PATH)}">'
+        f'{shared}'
+        f'<input type="hidden" name="csrf" value="{_e(_csrf_token("mark-request-declined", identifier))}">'
+        '<button class="btn" type="submit">Decline</button></form>')
+    return trigger + " " + indexed + " " + declined
+
+
+def render_requests_page(data, query, banner=""):
+    """The movie-request queue page. Loopback only, like the rest of `/admin`."""
+    parts = [
+        "<!DOCTYPE html><html lang=\"en\"><head><meta charset=\"UTF-8\">",
+        "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">",
+        "<title>requests — admin</title>",
+        f"<style>{_STYLE}</style>",
+        "<style>form.inline { display: inline; }</style></head><body>",
+        '<div class="wrap">',
+        "<h1>Movie requests</h1>",
+        '<p class="sub"><a href="/admin">operator panel</a> · titles viewers'
+        ' spent 300 coins asking for. Loopback only, no TLS.</p>',
+        '<div class="warn"><strong>Triggering a crawler does not search for'
+        ' the title.</strong> There is no per-title search across the scrapers:'
+        ' the button queues one bounded sync run for the one site you pick, and'
+        ' the run picks the title up only if that site lists it. Watch the'
+        ' Fleet page for the run, then mark the request indexed when the title'
+        ' appears, or declined when it is not wanted. A trigger never closes'
+        ' the request by itself.</div>',
+    ]
+    if banner:
+        parts.append(f'<p id="ops-status" class="ok statusline">{_e(banner)}</p>')
+    else:
+        parts.append('<p id="ops-status" class="statusline"></p>')
+    if not data.get("available"):
+        parts.append('<section class="card"><div class="empty">'
+                     + _e(LEDGER_UNAVAILABLE) + '</div></section>')
+        parts.append("</div></body></html>")
+        return "".join(parts)
+
+    def table(rows, *, actions):
+        cells = []
+        for row in rows or []:
+            account = _e(row.get("hint"))
+            if row.get("profile"):
+                account += f' ({_e(row.get("profile"))})'
+            line = [_e(row.get("title")),
+                    _e(row.get("notes")) or '<span class="empty">—</span>',
+                    account, _e(row.get("balance")),
+                    _ts(row.get("created_at"))]
+            if actions:
+                line.append(_request_forms(row))
+            else:
+                line.append(_e(row.get("status")))
+            cells.append(line)
+        return cells
+
+    parts.append('<section class="card"><h2>Open</h2>')
+    parts.append(_table(("title", "notes", "account", "coins", "requested",
+                         "actions"),
+                        table(data.get("open"), actions=True)))
+    parts.append(f'<p class="hint">{_e(data.get("open_count"))} open request(s).'
+                 ' The account column is a one-way fingerprint of the sync key'
+                 ' the viewer holds — it identifies the row to you and nothing'
+                 ' to anyone else.</p></section>')
+    parts.append('<section class="card"><h2>Recently handled</h2>')
+    parts.append(_table(("title", "notes", "account", "coins", "requested",
+                         "status"),
+                        table(data.get("recent"), actions=False)))
+    parts.append("</section></div></body></html>")
+    return "".join(parts)
 # ── the usage report: how many, not who ───────────────────────────────────────
 
 #: The screens that read the accounts ledger instead of the catalog. `usage_*`
@@ -3227,6 +3589,8 @@ def render_admin_page(conn, q):
         ' port answers 404 for <code>/admin</code> and all of its routes.</div>',
         '<p class="sub"><a href="/admin/payments">Payment queue</a> — pending'
         ' JazzCash / EasyPaisa / Raast claims, approve or reject.</p>',
+        '<p class="sub"><a href="/admin/requests">Movie requests</a> — titles'
+        ' viewers spent coins asking for, with a one-click crawler trigger.</p>',
         '<p class="sub"><a href="/admin/usage">Usage</a> — installs, live'
         ' devices, DAU/WAU/MAU, retention, per-geo and per-version counts,'
         ' playback failures, ad and pass money. Aggregates only.</p>',
@@ -3379,6 +3743,18 @@ def route_get(path, query, *, db_path, peer_address, token_header,
                 and segments[2] == "payments"):
             return _respond_json(200, screen_payments(
                 state_db_path, limit=_limit(query, _PENDING_LIMIT)))
+        if segments == ["admin", "requests"]:
+            # Rendered from the ledger alone, like the payment queue: the
+            # requests live in `user_state.db`, and the page names the 18
+            # configured sites in its trigger picker, so it spends the fleet
+            # needle allow the main page spends.
+            data = screen_requests(state_db_path, limit=_limit(query, _PENDING_LIMIT))
+            return _respond_html(render_requests_page(data, query),
+                                 allow=_fleet_needle_allow())
+        if (len(segments) == 3 and segments[1] == "api"
+                and segments[2] == "requests"):
+            return _respond_json(200, screen_requests(
+                state_db_path, limit=_limit(query, _PENDING_LIMIT)))
         if segments == ["admin", "usage"]:
             return _respond_html(render_usage_page(screen_usage(
                 state_db_path, window_days=_window_days(query))))
@@ -3411,15 +3787,18 @@ _BODY_ACTIONS = frozenset({
     RUN_SCRAPER_PATH.rsplit("/", 1)[-1],
     APPROVE_PAYMENT_PATH.rsplit("/", 1)[-1],
     REJECT_PAYMENT_PATH.rsplit("/", 1)[-1],
+    TRIGGER_REQUEST_CRAWL_PATH.rsplit("/", 1)[-1],
+    REQUEST_INDEXED_PATH.rsplit("/", 1)[-1],
+    REQUEST_DECLINED_PATH.rsplit("/", 1)[-1],
 })
 
 
 def takes_body(path):
     """Whether this admin POST consumes a request body — so the mount knows when
     to read one and can leave every other POST's bytes alone. Only the settings
-    save, the scraper action, the two payment reviews and the sign-in form do: the
-    evidence re-fold derives everything from the journal already in the database,
-    and a logout carries nothing."""
+    save, the scraper action, the two payment reviews, the three request actions
+    and the sign-in form do: the evidence re-fold derives everything from the
+    journal already in the database, and a logout carries nothing."""
     if path in LOGIN_PATHS:
         # The password is in the body, which is the entire reason the body exists.
         return True
@@ -3463,18 +3842,23 @@ def route_post(path, query, *, db_path, peer_address, token_header, body=None,
                csrf_header=""):
     """Serve one admin POST. Same tuple/``None`` contract as :func:`route_get`.
 
-    Five writes, no more. ``POST /admin/api/links/{id}/evidence`` takes no body:
+    Eight writes, no more. ``POST /admin/api/links/{id}/evidence`` takes no body:
     the mount owns the socket and the documented action ("fold this link's
     recorded evidence back onto its row") needs only the link id from the path —
     ``catalog_v2.apply_evidence(conn, link_ids=[...])`` re-derives everything from
-    the existing ``cat_link_evidence`` journal. Four actions do take a body and
+    the existing ``cat_link_evidence`` journal. Seven actions do take a body and
     receive it already parsed as ``body`` (see :func:`takes_body`), because
     reading a socket is the mount's job and not this module's:
     ``/admin/action/save-monetization`` writes the settings row,
-    ``/admin/action/run-scraper`` queues one validated, bounded crawler child, and
+    ``/admin/action/run-scraper`` queues one validated, bounded crawler child,
     ``/admin/action/approve-payment`` / ``reject-payment`` close one claimed
-    payment behind a CSRF token minted here (see :data:`_CSRF_SECRET`).
-    No screen gains a setter that ``payments.py`` does not already expose."""
+    payment behind a CSRF token minted here (see :data:`_CSRF_SECRET`), and
+    ``/admin/action/trigger-request-crawl`` /
+    ``/admin/action/mark-request-indexed`` / ``/admin/action/mark-request-declined``
+    queue one bounded sync run for one open request or close that request, behind
+    the same row-bound token.
+    No screen gains a setter that ``payments.py`` or ``engagement.py`` does not
+    already expose."""
     if not _is_admin(path):
         return None
     if path in LOGIN_PATHS:
@@ -3518,6 +3902,34 @@ def route_post(path, query, *, db_path, peer_address, token_header, body=None,
                 data = screen_payments(state_db_path)
                 return _respond_html(render_payments_page(
                     data, query, _review_banner(result)))
+            if segments[2] in _REQUEST_ACTIONS:
+                result, denied = _review_request(segments[2],
+                                                 path, body, state_db_path)
+                if denied is not None:
+                    return denied
+                if not (isinstance(body, dict) and str(body.get(_FORM_FLAG) or "")):
+                    # A JSON client gets a receipt, like the payment review.
+                    return _respond_json(200, {"ok": True, "review": result})
+                # The page's own form: answer with the refreshed queue and one
+                # sentence about what the click did, so a double-click visibly
+                # closes nobody the second time.
+                data = screen_requests(state_db_path)
+                return _respond_html(render_requests_page(
+                    data, query, _request_banner(result)),
+                    allow=_fleet_needle_allow())
+            if segments[2] == TRIGGER_REQUEST_CRAWL_PATH.rsplit("/", 1)[-1]:
+                result, denied = _trigger_request_crawl(
+                    path, body, db_path, state_db_path)
+                if denied is not None:
+                    return denied
+                if not (isinstance(body, dict) and str(body.get(_FORM_FLAG) or "")):
+                    return _respond_json(200, result)
+                data = screen_requests(state_db_path)
+                site = _CRAWLER_SITES.get(
+                    str(body.get("crawler", "")).strip().lower(), "")
+                return _respond_html(render_requests_page(
+                    data, query, _trigger_banner(result, site)),
+                    allow=_fleet_needle_allow())
             if not isinstance(body, dict):
                 return refuse_bad_body(path)
             if segments[2] == RUN_SCRAPER_PATH.rsplit("/", 1)[-1]:

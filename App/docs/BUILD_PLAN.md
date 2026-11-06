@@ -106,6 +106,12 @@ base64 -w 0 radd-release-key.jks > keystore_base64.txt
 
 ### Release signing — the one measured blocker, and its one-line remedy
 
+> **Retired 2026-11-06 (Session 67):** the blocker below is fixed. The owner
+> re-entered the four keystore secrets and release `v1.0.4` published with a
+> signed APK + AAB + SHA256SUMS (run `41323174024`, `completed success`,
+> 2026-11-01). The diagnosis chain is preserved here as the record of what
+> was wrong; nothing below describes the current release flow.
+
 **Symptom, read from the API on 2026-10-31 (not inferred from the docs):** `GET /releases` returns
 `[]`, and every one of the four runs in the history of
 `🚀 Release — Sign & Publish APK + AAB` is `completed / failure` — `40876596427`, `41102348096`,

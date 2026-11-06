@@ -207,11 +207,42 @@ class EngagementFixture(unittest.TestCase):
         for i in range(3):
             engagement.record_engagement_day(
                 self.conn, self.account_id, now=base + i * 86400)
-        # Day 1 (10) + Day 3 (30) = 40 coins, and each fired once
-        self.assertEqual(engagement.coin_balance(self.conn, self.account_id), 40)
+        # Day 1 (10) + Day 2 (20) + Day 3 (30) = 60 coins, and each fired once
+        self.assertEqual(engagement.coin_balance(self.conn, self.account_id), 60)
         streak_grants = [r for r in engagement.ledger(self.conn, self.account_id)
                          if r["reason"] == "streak_day"]
-        self.assertEqual(len(streak_grants), 2)
+        self.assertEqual(len(streak_grants), 3)
+
+    def test_seven_day_ladder_pays_each_day_and_stops_after_day_seven(self):
+        base = epoch_at("2026-01-05T12:00:00")
+        last = None
+        for i in range(7):
+            last = engagement.record_engagement_day(
+                self.conn, self.account_id, now=base + i * 86400)
+        # 10 + 20 + 30 + 40 + 50 + 70 + 150 = 370, one grant per day
+        self.assertEqual(last["current_streak"], 7)
+        self.assertEqual(last["granted_coins"], 150)
+        self.assertEqual(engagement.coin_balance(self.conn, self.account_id), 370)
+        streak_grants = [r for r in engagement.ledger(self.conn, self.account_id)
+                         if r["reason"] == "streak_day"]
+        self.assertEqual(len(streak_grants), 7)
+        # Day 8 keeps the streak alive but the ladder is seven days, not a cycle
+        eighth = engagement.record_engagement_day(
+            self.conn, self.account_id, now=base + 7 * 86400)
+        self.assertEqual((eighth["status"], eighth["current_streak"]), ("advanced", 8))
+        self.assertEqual(eighth["granted_coins"], 0)
+        self.assertEqual(engagement.coin_balance(self.conn, self.account_id), 370)
+
+    def test_streak_ladder_resolves_operator_knobs(self):
+        resolved = engagement.resolve_streak_grants({"streak_day4_coins": 44})
+        self.assertEqual(resolved["coins"][4], 44)
+        # Unmentioned days keep the shipped ladder, and a blank row keeps all of it
+        self.assertEqual(resolved["coins"][2], 20)
+        self.assertEqual(resolved["coins"][7], 150)
+        self.assertEqual(engagement.resolve_streak_grants({})["coins"],
+                         engagement.STREAK_GRANTS_COINS)
+        self.assertEqual(engagement.resolve_streak_grants(None)["coins"],
+                         engagement.STREAK_GRANTS_COINS)
 
     def test_the_day_seven_milestone_mints_a_signed_pass(self):
         base = epoch_at("2026-01-05T12:00:00")
@@ -226,6 +257,41 @@ class EngagementFixture(unittest.TestCase):
                          result["pass_expires_at"])
         self.assertIsNone(redact.parse_vip_pass(result["pass"], SECRET,
                                                  now=result["pass_expires_at"] + 1))
+
+    def test_a_redeemed_day_pass_is_recorded_and_a_retry_records_nothing_twice(self):
+        engagement.grant_coins(self.conn, self.account_id, amount=500,
+                               reason="admin_grant", source="admin")
+        key = "test-redeem-once"
+        first = engagement.redeem_pass(
+            self.conn, self.account_id, plan="day", pass_secret=SECRET,
+            idempotency_key=key)
+        self.assertEqual(first["cost"], 500)
+        self.assertFalse(first["already_applied"])
+        second = engagement.redeem_pass(
+            self.conn, self.account_id, plan="day", pass_secret=SECRET,
+            idempotency_key=key)
+        self.assertTrue(second["already_applied"])
+        rows = self.conn.execute(
+            "SELECT plan, expires_at FROM coin_passes WHERE account_id = ?",
+            (self.account_id,)).fetchall()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["plan"], "day")
+        self.assertAlmostEqual(rows[0]["expires_at"], first["expires_at"], delta=1)
+
+    def test_the_day_seven_pass_is_recorded_like_a_redeemed_one(self):
+        base = epoch_at("2026-01-05T12:00:00")
+        result = None
+        for i in range(engagement.STREAK_PASS_DAY):
+            result = engagement.record_engagement_day(
+                self.conn, self.account_id, now=base + i * 86400, pass_secret=SECRET)
+        self.assertIsNotNone(result["pass"])
+        rows = self.conn.execute(
+            "SELECT plan, expires_at FROM coin_passes WHERE account_id = ?",
+            (self.account_id,)).fetchall()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["plan"], "streak_day7")
+        self.assertAlmostEqual(rows[0]["expires_at"], result["pass_expires_at"],
+                               delta=1)
 
     # ── 9. ad cadence is enforced server-side, and 0 never means unlimited ───
 
@@ -286,13 +352,13 @@ class EngagementFixture(unittest.TestCase):
             self.assertIn(plan, view["wallet"]["redeem_coin_costs"])
 
     def test_redeeming_a_pass_spends_coins_and_mints_a_verifiable_capability(self):
-        engagement.grant_coins(self.conn, self.account_id, amount=100,
+        cost = engagement.PASS_LADDER["day"]["coins"]
+        engagement.grant_coins(self.conn, self.account_id, amount=cost,
                                reason="admin_grant", source="admin")
         now = epoch_at("2026-01-05T12:00:00")
         redeem = engagement.redeem_pass(self.conn, self.account_id, plan="day",
                                         pass_secret=SECRET, now=now)
-        self.assertEqual(redeem["balance"],
-                         100 - engagement.PASS_LADDER["day"]["coins"])
+        self.assertEqual(redeem["balance"], 0)
         self.assertEqual(redact.parse_vip_pass(redeem["pass"], SECRET, now=now + 1),
                          redeem["expires_at"])
         # a wrong secret forges nothing
@@ -316,6 +382,97 @@ class EngagementFixture(unittest.TestCase):
         expires_local = datetime.fromtimestamp(redeem["expires_at"], PKT)
         self.assertEqual(expires_local.weekday(), 0)     # Monday 00:00 local
         self.assertEqual((expires_local.hour, expires_local.minute), (0, 0))
+
+    # ── 11. the direct-download credit (daily check-in Build 4) ─────────────
+
+    def test_the_download_price_resolves_from_its_knob_and_zero_means_default(self):
+        self.assertEqual(engagement.resolve_download_credit(), 100)
+        self.assertEqual(engagement.resolve_download_credit(
+            {"coin_redeem_download": 7}), 7)
+        self.assertEqual(engagement.resolve_download_credit(
+            {"coin_redeem_download": 0}), 100)
+        self.assertEqual(engagement.resolve_download_credit(
+            {"coin_redeem_download": "twelve"}), 100)
+
+    def test_a_download_credit_is_recorded_and_spends_exactly_once(self):
+        engagement.grant_coins(self.conn, self.account_id, amount=100,
+                               reason="admin_grant", source="admin")
+        handle = redact.mint_token(1234, SECRET)
+        now = epoch_at("2026-01-05T12:00:00")
+        bought = engagement.redeem_download_credit(
+            self.conn, self.account_id, handle=handle, credit_secret=SECRET, now=now)
+        self.assertEqual(bought["cost"], 100)
+        self.assertEqual(bought["balance"], 0)
+        self.assertFalse(bought["already_applied"])
+        self.assertAlmostEqual(bought["expires_at"], now + 86_400, delta=1)
+        rows = self.conn.execute(
+            "SELECT id, handle, expires_at, used_at FROM coin_download_credits"
+            " WHERE account_id = ?", (self.account_id,)).fetchall()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["handle"], handle)
+        self.assertIsNone(rows[0]["used_at"])
+        credit_id = redact.parse_download_credit(bought["token"], SECRET)
+        self.assertEqual(credit_id, rows[0]["id"])
+        # the spend is on the ledger, so the deduction is auditable
+        spends = [r for r in engagement.ledger(self.conn, self.account_id)
+                  if r["reason"] == "redeem_download"]
+        self.assertEqual(len(spends), 1)
+        self.assertEqual(spends[0]["delta"], -100)
+        self.assertEqual(spends[0]["ref"], handle)
+        # one consume, then the same token is spent: a second browser gets no file
+        self.assertTrue(engagement.consume_download_credit(
+            self.conn, bought["token"], handle=handle, credit_secret=SECRET,
+            now=now + 60))
+        self.assertFalse(engagement.consume_download_credit(
+            self.conn, bought["token"], handle=handle, credit_secret=SECRET,
+            now=now + 120))
+        self.assertFalse(engagement.consume_download_credit(
+            self.conn, bought["token"], handle="other-handle", credit_secret=SECRET,
+            now=now + 120))
+
+    def test_a_credit_for_another_movie_or_a_lapsed_one_spends_nothing(self):
+        engagement.grant_coins(self.conn, self.account_id, amount=100,
+                               reason="admin_grant", source="admin")
+        handle = redact.mint_token(1234, SECRET)
+        now = epoch_at("2026-01-05T12:00:00")
+        bought = engagement.redeem_download_credit(
+            self.conn, self.account_id, handle=handle, credit_secret=SECRET, now=now)
+        self.assertFalse(engagement.consume_download_credit(
+            self.conn, bought["token"], handle=redact.mint_token(9999, SECRET),
+            credit_secret=SECRET, now=now + 60))
+        self.assertFalse(engagement.consume_download_credit(
+            self.conn, bought["token"], handle=handle, credit_secret=SECRET,
+            now=now + 86_401))
+        # and the credit itself is still there, unspent, for its own movie
+        row = self.conn.execute(
+            "SELECT used_at FROM coin_download_credits WHERE id = ?",
+            (redact.parse_download_credit(bought["token"], SECRET),)).fetchone()
+        self.assertIsNone(row["used_at"])
+
+    def test_a_redeem_retry_mints_nothing_twice_and_re_derives_the_token(self):
+        engagement.grant_coins(self.conn, self.account_id, amount=100,
+                               reason="admin_grant", source="admin")
+        handle = redact.mint_token(1234, SECRET)
+        key = "test-download-once"
+        first = engagement.redeem_download_credit(
+            self.conn, self.account_id, handle=handle, credit_secret=SECRET,
+            idempotency_key=key)
+        second = engagement.redeem_download_credit(
+            self.conn, self.account_id, handle=handle, credit_secret=SECRET,
+            idempotency_key=key)
+        self.assertTrue(second["already_applied"])
+        self.assertEqual(second["token"], first["token"])
+        self.assertEqual(second["expires_at"], first["expires_at"])
+        rows = self.conn.execute(
+            "SELECT id FROM coin_download_credits WHERE account_id = ?",
+            (self.account_id,)).fetchall()
+        self.assertEqual(len(rows), 1)
+
+    def test_a_download_credit_without_enough_coins_mints_nothing(self):
+        with self.assertRaises(engagement.InsufficientCoins):
+            engagement.redeem_download_credit(
+                self.conn, self.account_id, handle=redact.mint_token(1234, SECRET),
+                credit_secret=SECRET)
 
     # ── schema lifecycle (mirrors the accounts.py idempotency contract) ──────
 

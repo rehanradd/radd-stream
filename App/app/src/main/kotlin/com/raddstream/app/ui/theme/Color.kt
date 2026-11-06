@@ -277,6 +277,67 @@ val RaddHudTrack           = Color(0x33FFFFFF)
 /** 13% white — an unselected pill inside a HUD sheet (the speed rail). */
 val RaddHudPillIdle        = Color(0x22FFFFFF)
 
+/**
+ * One player chrome theme: the surfaces a theme may repaint. A theme is a
+ * skin for the player's chrome — the background behind the frame, the HUD
+ * plates and chips, the rail track and the played fill — and it never touches
+ * the meaning-carrying accent ([AccentOrange]: the selected rung, live speed,
+ * buffering, cinema) or the jade that marks a selected control, because
+ * DESIGN_SYSTEM.md §9 forbids replacing an accent that paints a state. The
+ * played fill's meaning is positional — its length says how much played, not
+ * its hue — so the fill and the seek thumb may wear the theme's colour while
+ * the selected-rung jade stays jade.
+ *
+ * `jade` is the shipped look, free and always owned. `midnight` is a deep
+ * navy; `ember` is a warm charcoal with a muted amber fill (clearly darker
+ * than AccentOrange, so the rail never reads as a live-state orange).
+ */
+data class PlayerChromeTheme(
+    val background: Color,
+    val bar: Color,
+    val chip: Color,
+    val card: Color,
+    val track: Color,
+    val played: Color,
+) {
+    companion object {
+        const val JADE = "jade"
+        const val MIDNIGHT = "midnight"
+        const val EMBER = "ember"
+
+        /** Every theme id the server sells, plus the free shipped one. */
+        val IDS = listOf(JADE, MIDNIGHT, EMBER)
+
+        /** The theme for an id, or the shipped look for anything unknown — a theme that does not exist is the default, never a crash. */
+        fun forId(id: String): PlayerChromeTheme = when (id) {
+            MIDNIGHT -> PlayerChromeTheme(
+                background = Color(0xFF0A1128),
+                bar = Color(0x880A1128),
+                chip = Color(0x660A1128),
+                card = Color(0x990A1128),
+                track = Color(0x338FB3FF),
+                played = Color(0xFF6EA8FF),
+            )
+            EMBER -> PlayerChromeTheme(
+                background = Color(0xFF1A120B),
+                bar = Color(0x881A120B),
+                chip = Color(0x661A120B),
+                card = Color(0x991A120B),
+                track = Color(0x33FFD9A0),
+                played = Color(0xFFE8B04B),
+            )
+            else -> PlayerChromeTheme(
+                background = Color.Black,
+                bar = RaddHudBar,
+                chip = RaddHudChip,
+                card = RaddHudCard,
+                track = RaddHudTrack,
+                played = RaddCurrent500,
+            )
+        }
+    }
+}
+
 /** 80% black — the caption plate both subtitle paths put behind text. Written twice
  *  on purpose: the Compose overlay takes the literal form, CaptionStyleCompat takes an
  *  ARGB int, and composing one from the other would change which overload the paint

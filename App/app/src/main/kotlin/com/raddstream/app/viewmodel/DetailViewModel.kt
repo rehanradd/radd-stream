@@ -5,19 +5,35 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.raddstream.app.data.ServerSettingsRepository
 import com.raddstream.app.data.UserRegion
+import com.raddstream.app.data.cache.CacheCoordinator
+import com.raddstream.app.data.cache.ConnectivityProbe
+import com.raddstream.app.data.cache.KeepIdentity
+import com.raddstream.app.data.cache.NetworkClass
 import com.raddstream.app.data.downloads.DeviceDownloadResult
 import com.raddstream.app.data.downloads.DeviceDownloadsRepository
 import com.raddstream.app.data.local.WatchHistoryDao
 import com.raddstream.app.data.local.WatchHistoryEntity
+import com.raddstream.app.network.ApiProvider
 import com.raddstream.app.network.friendlyNetworkError
+import com.raddstream.app.network.models.LinkState
 import com.raddstream.app.network.models.PostDetail
+import com.raddstream.app.network.streamRedirectUrl
+import com.raddstream.app.player.AdoptRequest
+import com.raddstream.app.player.CacheAffordance
+import com.raddstream.app.player.CacheEngineHolder
+import com.raddstream.app.player.CacheSessionKey
+import com.raddstream.app.player.DataSaver
+import com.raddstream.app.player.KeepResult
 import com.raddstream.app.player.LadderForScope
 import com.raddstream.app.player.LadderRung
 import com.raddstream.app.player.PlayerSessionStore
 import com.raddstream.app.player.QualityLadder
 import com.raddstream.app.player.QualityOption
+import com.raddstream.app.player.webDownloadUrl
+import com.raddstream.app.player.webDownloadUrlWithCredit
 import com.raddstream.app.repository.CatalogRepository
 import com.raddstream.app.repository.FavoritesRepository
+import com.raddstream.app.repository.V2PlayResult
 import com.raddstream.app.sync.SyncAccountRepository
 import com.raddstream.app.ui.navigation.Screen
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -29,6 +45,7 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeout
 
 data class DetailUiState(
     val post: PostDetail? = null,
@@ -55,7 +72,58 @@ data class DetailUiState(
     val vip: Boolean = false,
     /** True when this title has 4K/1080p sources that the current viewer cannot play. */
     val premiumSourcesLocked: Boolean = false,
+    /** The latest scope this device stopped in, if any — the Resume button. */
+    val resume: ResumePoint? = null,
+    /** True when the Resume button has a print to play; false shows plain Play. */
+    val resumePlayable: Boolean = false,
+    /** Per-episode progress, keyed by (season, episode) — the marks on episode rows. */
+    val episodeProgress: Map<Pair<Int, Int>, EpisodeProgress> = emptyMap(),
+    /**
+     * What this viewer can actually watch of this title, in one line. Null
+     * when the title has no prints at all — then "no playable releases"
+     * says it instead.
+     */
+    val includedLine: String? = null,
+    /**
+     * A download the viewer has been asked to confirm, with the size and the
+     * quality in front of them. Null when nothing is waiting — the download
+     * only starts on Confirm.
+     */
+    val pendingKeep: PendingKeep? = null,
+    /**
+     * Session 76 (Build 4): the direct-download price (coins for one movie)
+     * and the viewer's balance, read when the keep dialog opens so a free
+     * viewer can see what a direct link costs and whether they can afford it.
+     * Zero price means the server predates the credit — no direct link is offered.
+     */
+    val downloadCreditPrice: Int = 0,
+    val coinBalance: Int = 0,
+    /** The answer to a [directDownloadUrlFor] ask that could not open a link. */
+    val directLinkMessage: String? = null,
 )
+
+/**
+ * A download waiting for the viewer's Confirm. The size comes from the one
+ * metadata ask that also decides which download system owns the copy, so
+ * the dialog never guesses it; null means the server did not name a size,
+ * and the dialog says "Size unknown" instead of inventing one.
+ *
+ * Public because it is part of the public [DetailUiState] shape (and of the
+ * screen's confirm dialog): a public state class cannot expose an internal
+ * type, and neither can its own `target` — so [KeepTarget] is public too.
+ */
+data class PendingKeep(
+    val handle: String,
+    val printLabel: String,
+    val title: String,
+    val sizeBytes: Long?,
+    val resumable: Boolean,
+    val target: KeepTarget,
+)
+
+/** The size line of the keep-confirm dialog: a real size, or an honest unknown. */
+fun keepSizeLabel(sizeBytes: Long?): String =
+    sizeBytes?.takeIf { it > 0 }?.let { CacheAffordance.formatBytes(it) } ?: "Size unknown"
 
 /**
  * What a keep request needs is a file. A page is not one: DownloadManager would fetch HTML and
@@ -94,9 +162,11 @@ class DetailViewModel @Inject constructor(
     private val catalogRepository: CatalogRepository,
     private val favoritesRepository: FavoritesRepository,
     private val deviceDownloads: DeviceDownloadsRepository,
+    private val apiProvider: ApiProvider,
     private val syncAccountRepository: SyncAccountRepository,
     private val settingsRepository: ServerSettingsRepository,
     private val watchHistoryDao: WatchHistoryDao,
+    private val connectivityProbe: ConnectivityProbe,
 ) : ViewModel() {
 
     private val postId: Int = (savedStateHandle[Screen.Detail.ARG_POST_ID] as? String)?.toIntOrNull()
@@ -113,7 +183,28 @@ class DetailViewModel @Inject constructor(
         loadDetail()
         observeFavorite()
         observeEntitlement()
+        observeServerBase()
     }
+
+    /**
+     * Session 73 (Phase 5): keep the server origin for the [Get Free Web Link]
+     * action — the link opens `<origin>/api/v1/download?id=<handle>&via=web`
+     * in the external browser, never inside the app.
+     */
+    private fun observeServerBase() {
+        viewModelScope.launch {
+            settingsRepository.serverUrl.collect { base ->
+                serverBaseUrl = base ?: ""
+            }
+        }
+    }
+
+    /**
+     * Session 73 (Phase 5): the external-browser download URL for a pending keep's
+     * handle. Pure builder in [webDownloadUrl]; the browser, not the app, is
+     * what follows the server's redirect — the app never shortens anything itself.
+     */
+    fun webDownloadUrlFor(handle: String): String = webDownloadUrl(serverBaseUrl, handle)
 
     /**
      * Whether this viewer is owed a page without the house card. Both inputs are pushed, so a
@@ -144,6 +235,22 @@ class DetailViewModel @Inject constructor(
             }
         }
         viewModelScope.launch {
+            settingsRepository.freeQualityCap.collect { cap ->
+                freeQualityCap = cap
+                publishViewerContent()
+            }
+        }
+        viewModelScope.launch {
+            settingsRepository.dataSaver.collect { enabled ->
+                dataSaver = enabled
+            }
+        }
+        viewModelScope.launch {
+            settingsRepository.wifiOnlyDownloads.collect { enabled ->
+                wifiOnlyDownloads = enabled
+            }
+        }
+        viewModelScope.launch {
             settingsRepository.userRegion.collect { region ->
                 userRegion = region
                 publishViewerContent()
@@ -158,6 +265,8 @@ class DetailViewModel @Inject constructor(
 
     private var serverVip: Boolean = false
     private var rewardedExpiresAt: Long = 0L
+    /** Session 73 (Phase 5): the server origin this install talks to, kept for the Web Download link. Empty until DataStore answers. */
+    private var serverBaseUrl: String = ""
 
     /**
      * The operator's switch, not this screen's opinion. Off is the shipped default, so the
@@ -165,6 +274,13 @@ class DetailViewModel @Inject constructor(
      * something; [premiumAccess] is what every gate call below actually passes.
      */
     private var qualityGateEnabled: Boolean = false
+    private var freeQualityCap: String = "720p"
+    /** Data Saver and Wi-Fi-only downloads — both on by default, both the viewer's own choice. */
+    private var dataSaver: Boolean = true
+    private var wifiOnlyDownloads: Boolean = true
+
+    /** True while the network is Wi-Fi; anything else is mobile data for these two switches. */
+    private val onWifi: Boolean get() = connectivityProbe.current() == NetworkClass.WIFI
 
     /**
      * The viewer's regional-dub preference; [UserRegion.DEFAULT] until DataStore answers,
@@ -215,18 +331,69 @@ class DetailViewModel @Inject constructor(
             state.ladderEpisode,
         )
         val premiumLocked = qualityGateEnabled && !serverVip && (
-            VipQualityGate.hasPremiumPrints(full) ||
-                scope.options.any { VipQualityGate.isPremiumBand(it.band) || VipQualityGate.isPremiumLabel(it.title) }
+            VipQualityGate.hasPremiumPrints(full, freeQualityCap) ||
+                scope.options.any { VipQualityGate.isPremiumBand(it.band, freeQualityCap) || VipQualityGate.isPremiumLabel(it.title, freeQualityCap) }
             )
+        // What this viewer can watch, in one line — the free cap is the
+        // operator's, so the line names it rather than a hardcoded 720p.
+        val hasPrints = full.workPrints.isNotEmpty() ||
+            full.seasons.any { it.episodes.isNotEmpty() || it.packedPrints.isNotEmpty() }
+        val includedLine = if (!hasPrints) {
+            null
+        } else if (serverVip) {
+            "Included with VIP — up to 4K"
+        } else if (!qualityGateEnabled) {
+            "Included in your plan — up to 4K"
+        } else if (premiumLocked) {
+            if (freeQualityCap == "480p") {
+                "480p included — 720p, 1080p and 4K need VIP"
+            } else {
+                "720p included — 1080p and 4K need VIP"
+            }
+        } else {
+            "Included in free — up to $freeQualityCap"
+        }
         _uiState.update {
             it.copy(
-                layout = VipQualityGate.gate(full, premiumAccess),
-                ladder = VipQualityGate.gate(scope, premiumAccess),
+                layout = VipQualityGate.gate(full, premiumAccess, freeQualityCap),
+                ladder = VipQualityGate.gate(scope, premiumAccess, freeQualityCap),
                 vip = serverVip,
                 premiumSourcesLocked = premiumLocked,
+                includedLine = includedLine,
                 adFree = RewardedVipPass.isAdFree(serverVip, rewardedExpiresAt),
             )
         }
+        loadResume()
+    }
+
+    /**
+     * The resume point and episode marks for this title, from the history
+     * this device wrote. A title never watched has neither, and the screen
+     * shows a plain Play button instead of a Resume one.
+     */
+    private fun loadResume() {
+        val workRef = _uiState.value.post?.workRef?.takeIf { it.isNotBlank() } ?: return
+        viewModelScope.launch {
+            val rows = runCatching { watchHistoryDao.findWork(workRef) }.getOrNull() ?: return@launch
+            val resume = resumePointFor(rows)
+            // The button only shows when its print is still on the page:
+            // a resume whose episode lost every print is a dead button.
+            val playable = _uiState.value.layout?.let { resumePrintFor(it, resume) != null } ?: false
+            _uiState.update {
+                it.copy(
+                    resume = resume,
+                    resumePlayable = playable,
+                    episodeProgress = episodeProgressFor(rows),
+                )
+            }
+        }
+    }
+
+    /** Play the Resume button's episode: its best print, not the work's. */
+    fun playResume() {
+        val layout = _uiState.value.layout ?: return
+        val print = resumePrintFor(layout, _uiState.value.resume) ?: return
+        playPrint(print)
     }
 
     private fun observeFavorite() {
@@ -326,6 +493,7 @@ class DetailViewModel @Inject constructor(
                 episode,
             ),
             premiumAccess,
+            freeQualityCap,
         )
 
     /**
@@ -345,6 +513,7 @@ class DetailViewModel @Inject constructor(
                         episode,
                     ),
                     premiumAccess,
+                    freeQualityCap,
                 ),
                 ladderSeason = season,
                 ladderEpisode = episode,
@@ -356,7 +525,7 @@ class DetailViewModel @Inject constructor(
     /** A rung this app cannot present is downloaded, and the row says so — no hidden failure. */
     fun keepRung(option: QualityOption) {
         if (isLocked(option)) {
-            _uiState.update { it.copy(actionMessage = VipQualityGate.LOCKED_MESSAGE) }
+            _uiState.update { it.copy(actionMessage = VipQualityGate.lockedMessage(freeQualityCap)) }
             return
         }
         if (option.isProviderPage) {
@@ -370,19 +539,38 @@ class DetailViewModel @Inject constructor(
         )
     }
 
+    /**
+     * The tier a rung requires: VIP when the operator's gate reserves its band,
+     * Standard otherwise. A property of the stream and the operator's policy,
+     * never of the viewer — a VIP viewer reads "VIP" on the 1080p row they can
+     * play, and a free viewer never sees that row at all (the gate removed it
+     * and VipSourcesCard says where it went). With the gate off, every rung is
+     * Standard because nothing requires VIP.
+     */
+    fun tierLabelFor(option: QualityOption): String =
+        if (qualityGateEnabled &&
+            (VipQualityGate.isPremiumBand(option.band, freeQualityCap) ||
+                VipQualityGate.isPremiumLabel(option.title, freeQualityCap))
+        ) "VIP" else "Standard"
+
     /** A premium rung the current viewer may not take, decided from the same gate the UI uses. */
     private fun isLocked(option: QualityOption): Boolean =
-        !VipQualityGate.allowsBand(option.band, premiumAccess) ||
-            (!premiumAccess && VipQualityGate.isPremiumLabel(option.title))
+        !VipQualityGate.allowsBand(option.band, premiumAccess, freeQualityCap) ||
+            (!premiumAccess && VipQualityGate.isPremiumLabel(option.title, freeQualityCap))
 
     /**
-     * Ask Android's DownloadManager for one public file, by OUR opaque handle.
+     * Keep one rung for offline playback, by OUR opaque handle.
      *
-     * Every branch answers out loud: an accepted download routes to the Downloads screen where
-     * its row is already moving; a legacy device learns it must grant storage first, because a
-     * button that quietly does nothing is worse than one that says no. The address handed to
-     * DownloadManager is our own redirector — the server verified the handle, and the upstream
-     * location never enters this app.
+     * Which system owns the copy depends on what it is: a single file goes to the
+     * device download (a public file in Movies/RaddStream); a segmented playlist
+     * goes to the keep engine, which fetches the segments and plays them back
+     * offline in-app. A page is neither and is refused before either is asked.
+     *
+     * Every branch answers out loud: an accepted download routes to the Downloads
+     * screen where its row is already moving; a legacy device learns it must grant
+     * storage first, because a button that quietly does nothing is worse than one
+     * that says no. The address handed to either system is our own redirector —
+     * the server verified the handle, and the upstream location never enters this app.
      */
     private fun keep(handle: String, printLabel: String) {
         lastDownload = handle to printLabel
@@ -397,10 +585,106 @@ class DetailViewModel @Inject constructor(
         }
         val workTitle = _uiState.value.post?.let { it.cleanTitle ?: it.title } ?: "Stream"
         viewModelScope.launch {
-            when (val outcome = deviceDownloads.enqueue(handle, workTitle, printLabel)) {
+            // One metadata ask decides which download system owns this copy. A failed
+            // ask falls through to the device path, which refuses with the same words it
+            // always used — no new failure shape for a server that cannot answer. The
+            // download does NOT start here: the size and the quality go in front of the
+            // viewer first, and only Confirm starts either system.
+            val meta = runCatching { catalogRepository.resolveStream(handle) }.getOrNull()
+            val target = if (meta != null && meta.success) {
+                keepTargetFor(meta.mimeType)
+            } else {
+                KeepTarget.DeviceFile
+            }
+            _uiState.update {
+                it.copy(
+                    pendingKeep = PendingKeep(
+                        handle = handle,
+                        printLabel = printLabel,
+                        title = workTitle,
+                        sizeBytes = meta?.fileSizeBytes?.takeIf { it > 0 },
+                        resumable = meta?.resumable ?: false,
+                        target = target,
+                    ),
+                    directLinkMessage = null,
+                )
+            }
+            // Session 76 (Build 4): a free viewer asking for a file can also
+            // buy a direct link with coins — read the price and the balance
+            // while the dialog is open, so the button can say what it costs
+            // and whether the wallet covers it. VIP viewers never see it;
+            // their downloads are already direct.
+            if (!_uiState.value.vip) {
+                val price = syncAccountRepository.loadDownloadCreditPrice()
+                val balance = syncAccountRepository.loadCoinBalance()
+                _uiState.update {
+                    it.copy(
+                        downloadCreditPrice = price,
+                        coinBalance = balance ?: it.coinBalance,
+                    )
+                }
+            }
+        }
+    }
+
+    /**
+     * Session 76 (Build 4): buy one direct download of [handle] with coins and
+     * hand back the browser URL that spends the credit. Null when the server
+     * cannot be reached or the credit is already spent — the reason is in
+     * [DetailUiState.directLinkMessage], never invented here.
+     */
+    suspend fun directDownloadUrlFor(handle: String): String? {
+        val credit = syncAccountRepository.redeemDownloadCredit(handle)
+        if (credit == null) {
+            _uiState.update {
+                it.copy(directLinkMessage = "Could not reach the server — try again.")
+            }
+            return null
+        }
+        val token = credit.token
+        if (token.isNullOrBlank()) {
+            _uiState.update {
+                it.copy(directLinkMessage = "That direct link was already used.")
+            }
+            return null
+        }
+        _uiState.update { it.copy(coinBalance = credit.balance, directLinkMessage = null) }
+        return webDownloadUrlWithCredit(serverBaseUrl, handle, token)
+    }
+
+    /**
+     * Report one share of this title, after the chooser already fired. The
+     * server pays once a day, so the message shows only when the server says
+     * it granted — a second share the same day is silent, not a nag. A failed
+     * report is silent too: the share already left the phone, and a coin
+     * report must never undo it.
+     */
+    fun reportShare(workRef: String?) {
+        val ref = workRef?.takeIf { it.isNotBlank() } ?: return
+        viewModelScope.launch {
+            val share = syncAccountRepository.reportShare(ref)
+            if (share != null && share.granted && share.coins > 0) {
+                _uiState.update {
+                    it.copy(actionMessage = "+${share.coins} coins for sharing",
+                            coinBalance = share.balance)
+                }
+            }
+        }
+    }
+
+    /** The viewer confirmed the size and the quality: start whichever system owns the copy. */
+    fun confirmKeep() {
+        val pending = _uiState.value.pendingKeep ?: return
+        _uiState.update { it.copy(pendingKeep = null, directLinkMessage = null) }
+        viewModelScope.launch {
+            if (pending.target == KeepTarget.EngineHls) {
+                keepViaEngine(pending.handle, pending.printLabel, pending.title, pending.sizeBytes, pending.resumable)
+                return@launch
+            }
+            when (val outcome = deviceDownloads.enqueue(pending.handle, pending.title, pending.printLabel)) {
                 is DeviceDownloadResult.Enqueued -> {
                     lastDownload = null
-                    _navEvents.emit(DetailNavigationEvent.DownloadStarted(printLabel))
+                    _navEvents.emit(DetailNavigationEvent.DownloadStarted(pending.printLabel))
                 }
                 is DeviceDownloadResult.NeedsPermission ->
                     _navEvents.emit(DetailNavigationEvent.DownloadNeedsPermission)
@@ -408,6 +692,86 @@ class DetailViewModel @Inject constructor(
                     lastDownload = null
                     _uiState.update { it.copy(actionMessage = outcome.message) }
                 }
+            }
+        }
+    }
+
+    /** The viewer declined the download: nothing started, nothing to clean up except the ask. */
+    fun dismissKeep() {
+        lastDownload = null
+        _uiState.update { it.copy(pendingKeep = null, directLinkMessage = null) }
+    }
+
+    /**
+     * Keep one HLS title through the in-app keep engine: it fetches the playlist's
+     * segments from our redirector and plays them back offline. Adopt pins the row,
+     * so the sweeper never ages out a file the Downloads list calls kept.
+     */
+    private suspend fun keepViaEngine(
+        handle: String,
+        printLabel: String,
+        title: String,
+        sizeBytes: Long?,
+        resumable: Boolean,
+    ) {
+        val engine = CacheEngineHolder.engine
+        if (engine == null) {
+            lastDownload = null
+            _uiState.update { it.copy(actionMessage = "Download engine not wired into this build yet") }
+            return
+        }
+        val baseUrl = runCatching { apiProvider.currentBaseUrl() }.getOrNull()
+        if (baseUrl == null) {
+            lastDownload = null
+            _uiState.update { it.copy(actionMessage = "Connect to a catalog server before downloading.") }
+            return
+        }
+        val url = streamRedirectUrl(baseUrl, handle)
+        val request = AdoptRequest(
+            key = CacheSessionKey(renditionKey = handle, url = url),
+            url = url,
+            fetchedBytesSoFar = 0L,
+            isByteCursorKnown = false,
+            positionMs = 0L,
+            bufferedMs = 0L,
+            durationMs = 0L,
+            expectedTotalBytes = sizeBytes?.takeIf { it > 0 },
+            resumable = resumable,
+            printLabel = printLabel,
+            title = title,
+            sharesCacheStorage = false,
+        )
+        val result = try {
+            engine.adopt(request)
+        } catch (t: Throwable) {
+            KeepResult.Failed(t.message ?: "engine error")
+        }
+        when (result) {
+            is KeepResult.Stored, is KeepResult.OnlyPlayableInApp -> {
+                lastDownload = null
+                _navEvents.emit(DetailNavigationEvent.DownloadStarted(printLabel))
+            }
+            is KeepResult.StorageFull -> {
+                lastDownload = null
+                _uiState.update {
+                    it.copy(
+                        actionMessage = "Not enough space to keep this title — needs " +
+                            CacheAffordance.formatBytes(result.requiredBytes) + ", " +
+                            CacheAffordance.formatBytes(result.availableBytes) + " free.",
+                    )
+                }
+            }
+            is KeepResult.Failed -> {
+                lastDownload = null
+                _uiState.update { it.copy(actionMessage = result.message) }
+            }
+            is KeepResult.Interrupted -> {
+                lastDownload = null
+                _uiState.update { it.copy(actionMessage = "Download paused — it will resume on its own.") }
+            }
+            KeepResult.EngineNotWired -> {
+                lastDownload = null
+                _uiState.update { it.copy(actionMessage = "Download engine not wired into this build yet") }
             }
         }
     }
@@ -427,7 +791,7 @@ class DetailViewModel @Inject constructor(
      */
     fun playLadder(option: QualityOption, external: Boolean = false) {
         if (isLocked(option)) {
-            _uiState.update { it.copy(actionMessage = VipQualityGate.LOCKED_MESSAGE) }
+            _uiState.update { it.copy(actionMessage = VipQualityGate.lockedMessage(freeQualityCap)) }
             return
         }
         val title = _uiState.value.post?.let { it.cleanTitle ?: it.title } ?: "Stream"
@@ -526,7 +890,7 @@ class DetailViewModel @Inject constructor(
     /** Play the best link this print offers. The server already ranked them. */
     fun playPrint(print: RankedPrint, external: Boolean = false) {
         if (!VipQualityGate.allowsResolution(print.resolution, premiumAccess)) {
-            _uiState.update { it.copy(actionMessage = VipQualityGate.LOCKED_MESSAGE) }
+            _uiState.update { it.copy(actionMessage = VipQualityGate.lockedMessage(freeQualityCap)) }
             return
         }
         val link = print.links.firstOrNull { it.playableHere } ?:
@@ -536,7 +900,66 @@ class DetailViewModel @Inject constructor(
             _uiState.update { it.copy(actionMessage = "Nothing playable on this print yet.") }
             return
         }
+        // The server's own bundle first (plan §5 step 13): its winner is ranked from
+        // the server's probes, and only it carries the print's coverage. Any failure
+        // — a 403 while nginx still blocks the route, a timeout, a dead socket — falls
+        // back to the client-side link above, so Play never gets slower or stricter
+        // than it was. Two seconds is the ceiling: the server is on the same host,
+        // so a healthy call answers in milliseconds.
+        viewModelScope.launch {
+            val v2 = runCatching {
+                withTimeout(2_000) {
+                    catalogRepository.playV2(
+                        print.releaseId,
+                        prefer = DataSaver.playPrefer(dataSaver, onWifi),
+                    )
+                }
+            }.getOrNull()
+            val playedV2 = v2 != null && v2.bundle.renditions.isNotEmpty() &&
+                playV2Bundle(v2, print, external)
+            if (!playedV2) {
+                playLink(link, external, print.season, print.episodeFrom)
+            }
+        }
+    }
+
+    /**
+     * Play the server's own bundle for this print (plan §5 step 13). The winner is
+     * the server's best copy — ranked from its probes, not our formula — so it is
+     * the handle that plays. Its runner-ups stage as the silent failover and its
+     * coverage stages as the print's chapters, both under the winner's handle, so
+     * the player reads them back without the route carrying anything new.
+     * Returns false when the bundle cannot be played after all, so the caller falls
+     * back to the client-side link instead of leaving the viewer with nothing.
+     */
+    private fun playV2Bundle(result: V2PlayResult, print: RankedPrint, external: Boolean): Boolean {
+        val winner = result.bundle.renditions.firstOrNull() ?: return false
+        val streamId = winner.streamId?.takeIf { it.isNotBlank() } ?: return false
+        val playUrl = winner.playUrl?.takeIf { it.isNotBlank() } ?: return false
+        PlayerSessionStore.Instance.stageFailover(
+            streamId,
+            result.bundle.renditions.drop(1).mapNotNull { it.streamId },
+        )
+        PlayerSessionStore.Instance.stageCoverage(streamId, result.coverage)
+        val link = RankedLink(
+            streamId = streamId,
+            linkId = winner.linkId?.toInt(),
+            // A stream candidate is, by the server's own verdict, playable and not
+            // dead — the dead ones never reach this list. Anything else would be
+            // the client re-judging the server's ranking.
+            health = LinkState.ACTIVE,
+            ephemeral = winner.ephemeral,
+            resumable = winner.resumable,
+            playUrl = playUrl,
+            label = winner.label,
+            // kind is not served on a rendition: the playability alone decides
+            // whether this is a page, and a stream candidate never is one.
+            kind = null,
+            playability = winner.playability,
+            score = winner.linkScore,
+        )
         playLink(link, external, print.season, print.episodeFrom)
+        return true
     }
 
     /**
@@ -616,7 +1039,17 @@ class DetailViewModel @Inject constructor(
 
     fun keepPrint(print: RankedPrint) {
         if (!VipQualityGate.allowsResolution(print.resolution, premiumAccess)) {
-            _uiState.update { it.copy(actionMessage = VipQualityGate.LOCKED_MESSAGE) }
+            _uiState.update { it.copy(actionMessage = VipQualityGate.lockedMessage(freeQualityCap)) }
+            return
+        }
+        // Wi-Fi-only is a gate, not a suggestion: starting a hundreds-of-megabytes
+        // download on mobile data by accident is the expensive mistake it exists
+        // to prevent. The message says where the switch lives, so the viewer is
+        // never left guessing why the tap did nothing.
+        if (DataSaver.wifiOnlyBlocks(wifiOnlyDownloads, onWifi)) {
+            _uiState.update {
+                it.copy(actionMessage = "Wi-Fi only is on — connect to Wi-Fi to download this title. You can change it in Settings.")
+            }
             return
         }
         val link = print.links.firstOrNull { !it.streamId.isBlank() && !it.isPageLink }
@@ -633,5 +1066,96 @@ class DetailViewModel @Inject constructor(
             handle = link.streamId,
             printLabel = print.qualityLabel,
         )
+    }
+}
+
+/** Which download system owns a copy. */
+enum class KeepTarget { DeviceFile, EngineHls }
+
+/**
+ * Which download system owns a copy, from its resolved mime alone. A segmented
+ * playlist goes to the keep engine, which fetches segments; everything else stays
+ * a device file. The rule is the engine's own [KeepIdentity.linkKindFor], so the
+ * detail screen and the engine can never disagree about what HLS is.
+ */
+internal fun keepTargetFor(mimeType: String?): KeepTarget =
+    if (KeepIdentity.linkKindFor(mimeType, null) == CacheCoordinator.KIND_HLS) {
+        KeepTarget.EngineHls
+    } else {
+        KeepTarget.DeviceFile
+    }
+
+/**
+ * One scope's progress, as an episode row shows it. `fraction` is null when
+ * the file never reported a duration — the row paints no bar rather than
+ * inventing one. `watched` is true only when the viewer ran to the end, not
+ * when they merely opened it.
+ */
+data class EpisodeProgress(
+    val fraction: Float?,
+    val watched: Boolean,
+    val remainingLabel: String?,
+)
+
+/** The Resume button's target: the latest scope this device stopped in. */
+data class ResumePoint(
+    val season: Int,
+    val episode: Int,
+    val positionMs: Long,
+    val durationMs: Long,
+) {
+    /** "Resume S1:E3 · 23 min left", or "Resume · 23 min left" for a whole work. */
+    val label: String
+        get() = "Resume" +
+            (ContinueWatchingTile.scopeLabel(season, episode)?.let { " $it" } ?: "") +
+            (ContinueWatchingTile.progressLabel(positionMs, durationMs)?.let { " · $it" } ?: "")
+}
+
+/**
+ * The latest resumable row, newest first — a finished row is not a resume.
+ * `rows` arrives newest first from the DAO; a caller passing them in any
+ * other order gets the first resumable row of the list it gave.
+ */
+fun resumePointFor(rows: List<WatchHistoryEntity>): ResumePoint? {
+    val row = rows.firstOrNull { it.resumable } ?: return null
+    return ResumePoint(row.seasonNumber, row.episodeNumber, row.positionMs, row.durationMs)
+}
+
+/** One entry per watched scope, keyed by (season, episode). */
+fun episodeProgressFor(rows: List<WatchHistoryEntity>): Map<Pair<Int, Int>, EpisodeProgress> =
+    rows.associate { row ->
+        val watched = row.durationMs > 0L &&
+            row.positionMs >= row.durationMs - WatchHistoryEntity.END_GUARD_MS
+        (row.seasonNumber to row.episodeNumber) to EpisodeProgress(
+            fraction = ContinueWatchingTile.progressFraction(row.positionMs, row.durationMs),
+            watched = watched,
+            // A watched episode has nothing left to promise: "Less than a minute left"
+            // under a full bar is a lie about a finished episode.
+            remainingLabel = if (watched) null
+                else ContinueWatchingTile.progressLabel(row.positionMs, row.durationMs),
+        )
+    }
+
+/** The print the Resume button would play, or null when it has none. */
+fun resumePrintFor(layout: ReleaseLayout, resume: ResumePoint?): RankedPrint? {
+    if (resume == null) return null
+    return if (resume.season > 0 && resume.episode > 0) {
+        layout.seasons
+            .firstOrNull { it.number == resume.season }
+            ?.episodes?.firstOrNull { it.numberWithinSeason == resume.episode }
+            ?.bestPrint
+    } else {
+        layout.workPrints.maxByOrNull { it.rankKey }
+    }
+}
+
+/** "2 h 10 m", "1 h 40 m", "96 min" — null when the server sent no runtime. */
+fun formatRuntimeMinutes(minutes: Int?): String? {
+    if (minutes == null || minutes <= 0) return null
+    return if (minutes < 60) "$minutes min"
+    else {
+        val hours = minutes / 60
+        val rest = minutes % 60
+        if (rest == 0) "$hours h" else "$hours h $rest m"
     }
 }

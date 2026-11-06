@@ -4,6 +4,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -19,8 +21,10 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Email
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material3.Button
@@ -30,6 +34,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -64,15 +69,18 @@ import com.raddstream.app.player.AudioBoostUi
 import com.raddstream.app.share.LanShareStatus
 import com.raddstream.app.viewmodel.AccountCardCopy
 import com.raddstream.app.viewmodel.AccountUiState
-import com.raddstream.app.viewmodel.CatalogScale
+import com.raddstream.app.viewmodel.ContactUiState
 import com.raddstream.app.viewmodel.ImageQuality
 import com.raddstream.app.viewmodel.KeepTtl
 import com.raddstream.app.viewmodel.SettingsViewModel
 import com.raddstream.app.viewmodel.UserPreferences
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 /** The subtitle chips, in the order the row shows them. Readable by the region test, which
  * pins that a card can only ever seed a word this row can actually display. */
-internal val subtitleOptions = listOf("Off", "English", "Hindi", "Tamil", "Telugu")
+internal val subtitleOptions = listOf("Off", "English", "Hindi", "Urdu", "Tamil", "Telugu")
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -144,32 +152,9 @@ fun SettingsScreen(
                     }
                 }
 
-                val stats = state.stats
-                if (stats != null) {
-                    Spacer(Modifier.height(8.dp))
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceAround,
-                    ) {
-                        StatBox(
-                            label = CatalogScale.WORKS_LABEL,
-                            value = stats.posts.toString(),
-                        )
-                        StatBox(
-                            label = CatalogScale.RELEASES_LABEL,
-                            value = stats.releases.toString(),
-                        )
-                        StatBox(
-                            label = CatalogScale.LINKS_LABEL,
-                            value = stats.sources.toString(),
-                        )
-                    }
-                    Text(
-                        CatalogScale.SCOPE_NOTE,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
+                // No counts here: works/releases/links are the operator's numbers,
+                // not something a viewer needs to see on their own Settings screen.
+                // The connection test above still fetches them for its own message.
             }
 
             // ── Downloads entry ────────────────────────────────────────
@@ -180,14 +165,68 @@ fun SettingsScreen(
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
+                    Spacer(Modifier.height(10.dp))
+                    SwitchRow(
+                        checked = state.prefs.wifiOnlyDownloads,
+                        onCheckedChange = viewModel::setWifiOnlyDownloads,
+                        label = "Download only on Wi-Fi",
+                    )
+                    Text(
+                        "A title you keep downloads only when this phone is on Wi-Fi. Turn it off to download on mobile data too.",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Spacer(Modifier.height(10.dp))
+                    SwitchRow(
+                        checked = state.prefs.autoDeleteWatched,
+                        onCheckedChange = viewModel::setAutoDeleteWatched,
+                        label = "Delete watched downloads",
+                    )
+                    Text(
+                        "A finished movie deletes itself to free space. Series keeps are never touched — one watched episode does not mean the season is done.",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Spacer(Modifier.height(10.dp))
                     OutlinedButton(onClick = onOpenDownloads, modifier = Modifier.fillMaxWidth()) {
-                        Text("Open Downloads")
+                        Text("Open Media Vault")
                     }
                 }
             }
 
             // ── VIP membership ─────────────────────────────────────────
             SettingsCard(title = "VIP Membership", icon = Icons.Default.Star) {
+                // The plan summary: what this install actually has (VIP with its
+                // date, a payment waiting, or free) plus the operator's
+                // published prices when the server sent any. The trial days
+                // live on the Account card, not here — one screen, one fact.
+                Text(
+                    when {
+                        state.planIsVip && state.planVipUntilMillis > 0L ->
+                            "VIP — confirmed through ${planDateLabel(state.planVipUntilMillis)}."
+                        state.planIsVip -> "VIP — active."
+                        state.planPaymentPending ->
+                            "Payment submitted — waiting for confirmation."
+                        else -> "Free plan — playback stays at 720p."
+                    },
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.Medium,
+                )
+                if (state.planMonthlyPkr > 0 || state.planYearlyPkr > 0) {
+                    Text(
+                        buildString {
+                            if (state.planMonthlyPkr > 0) {
+                                append("Rs ${"%,d".format(state.planMonthlyPkr)} a month")
+                            }
+                            if (state.planYearlyPkr > 0) {
+                                if (isNotEmpty()) append(" · ")
+                                append("Rs ${"%,d".format(state.planYearlyPkr)} a year")
+                            }
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
                 Text(
                     "Support the catalog with a monthly or yearly membership. Pay through " +
                         "JazzCash, EasyPaisa or Raast, then submit the transaction ID from " +
@@ -196,7 +235,7 @@ fun SettingsScreen(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 Button(onClick = onOpenVipUpgrade, modifier = Modifier.fillMaxWidth()) {
-                    Text("Upgrade to VIP")
+                    Text(if (state.planIsVip) "View membership" else "Upgrade to VIP")
                 }
             }
 
@@ -425,7 +464,101 @@ fun SettingsScreen(
                 )
             }
 
+            // ── Contact us ───────────────────────────────────────────────────
+            SettingsCard(title = "Contact us", icon = Icons.Default.Email) {
+                Text(
+                    "Report a problem, ask about a payment, or ask for a title to be taken down. No account needed.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                OutlinedButton(
+                    onClick = viewModel::openContactForm,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text("Write to us")
+                }
+                state.contact.message?.let { msg ->
+                    Text(
+                        msg,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (state.contact.messageIsError) {
+                            MaterialTheme.colorScheme.error
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        },
+                    )
+                }
+                if (state.contact.showForm) {
+                    ContactDialog(contact = state.contact, viewModel = viewModel)
+                }
+            }
+
+            // ── Disclaimer ───────────────────────────────────────────────────
+            SettingsCard(title = "Disclaimer", icon = Icons.Default.Info) {
+                if (state.disclaimer.text.isBlank()) {
+                    Text(
+                        "No disclaimer published yet.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                } else {
+                    Text(
+                        "Version ${state.disclaimer.version} — what this app is, and what it is not.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    OutlinedButton(
+                        onClick = viewModel::openDisclaimer,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text("Read the disclaimer")
+                    }
+                }
+                if (state.showDisclaimer) {
+                    DisclaimerDialog(
+                        disclaimer = state.disclaimer,
+                        confirmLabel = "Close",
+                        onConfirm = viewModel::closeDisclaimer,
+                        onDismissRequest = viewModel::closeDisclaimer,
+                    )
+                }
+            }
+
             // ── Playback & Display preferences ─────────────────────────
+            // ── Languages ──────────────────────────────────────────────
+            // The ONE place that shows the languages in force. The Region
+            // card picks them, the player sheet changes them mid-title, and
+            // these chips change them here — all three write the same keys,
+            // and this card shows the effective values, so a viewer never has
+            // to guess which one won.
+            SettingsCard(title = "Languages") {
+                Text(
+                    "Audio: ${state.prefs.audioLanguage}. Subtitles: ${state.prefs.subtitleLang}.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+
+                Spacer(Modifier.height(10.dp))
+                PreferenceRowTitle("Preferred audio language")
+                val audioOptions = UserPreferences.AUDIO_LANGUAGE_OPTIONS
+                ChipRow(audioOptions, audioOptions.indexOf(state.prefs.audioLanguage).coerceAtLeast(0)) { idx ->
+                    viewModel.setAudioLanguage(audioOptions[idx])
+                }
+                Text(
+                    "Half this catalog is dual audio. The player picks the track that says so; " +
+                        "when nothing matches, its own choice is left alone rather than guessing. " +
+                        "Saved on this device.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+
+                Spacer(Modifier.height(10.dp))
+                PreferenceRowTitle("Default subtitle language")
+                ChipRow(subtitleOptions, subtitleOptions.indexOf(state.prefs.subtitleLang).coerceAtLeast(0)) { idx ->
+                    viewModel.setSubtitleLang(subtitleOptions[idx])
+                }
+            }
+
             SettingsCard(title = "Playback & Display") {
                 PreferenceRowTitle("Watching region")
                 val region = RegionChoices.byId(state.userRegion)
@@ -456,11 +589,24 @@ fun SettingsScreen(
                     onCheckedChange = viewModel::setDownloadOnMobileData,
                     label = "Load poster images over mobile data",
                 )
-                // A keep you asked for downloads on any network, always — that promise is not
-                // what this switch is for, so it no longer claims to be.
+                // A keep is gated by the Wi-Fi-only switch in the Offline card above,
+                // not by this one — this switch only ever governed the thumbnails.
                 Text(
-                    "A title you kept offline downloads whatever network you are on; this only " +
+                    "A title you keep follows the Wi-Fi-only switch in the Offline card; this only " +
                         "governs the thumbnails on the screens you browse.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+
+                Spacer(Modifier.height(10.dp))
+                PreferenceRowTitle("Data Saver")
+                SwitchRow(
+                    checked = state.prefs.dataSaver,
+                    onCheckedChange = viewModel::setDataSaver,
+                    label = "Save mobile data while watching",
+                )
+                Text(
+                    "On mobile data, titles start at 480p and the server is asked for its data-saving copy. Wi-Fi is untouched, and you can still switch a title up in the player.",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -470,26 +616,6 @@ fun SettingsScreen(
                 ChipRow(KeepTtl.entries.map { it.label }, KeepTtl.entries.indexOf(state.prefs.keepTtl)) { idx ->
                     viewModel.setKeepTtl(KeepTtl.entries.toList()[idx])
                 }
-
-                Spacer(Modifier.height(10.dp))
-                PreferenceRowTitle("Default subtitle language")
-                ChipRow(subtitleOptions, subtitleOptions.indexOf(state.prefs.subtitleLang).coerceAtLeast(0)) { idx ->
-                    viewModel.setSubtitleLang(subtitleOptions[idx])
-                }
-
-                Spacer(Modifier.height(10.dp))
-                PreferenceRowTitle("Preferred audio language")
-                val audioOptions = UserPreferences.AUDIO_LANGUAGE_OPTIONS
-                ChipRow(audioOptions, audioOptions.indexOf(state.prefs.audioLanguage).coerceAtLeast(0)) { idx ->
-                    viewModel.setAudioLanguage(audioOptions[idx])
-                }
-                Text(
-                    "Half this catalog is dual audio. The player picks the track that says so; " +
-                        "when nothing matches, its own choice is left alone rather than guessing. " +
-                        "Saved on this device.",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
 
                 Spacer(Modifier.height(10.dp))
                 PreferenceRowTitle("Audio level")
@@ -533,8 +659,73 @@ fun SettingsScreen(
                 }
                 Text(
                     "Saved on this device, and applied the next time each one matters: image size " +
-                        "from the next poster, the keep duration from the next download, audio and " +
-                        "subtitle language from the next playback.",
+                        "from the next poster, the keep duration from the next download.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+
+            // ── Player defaults ──────────────────────────────────────
+            // The switches the player itself obeys (plan §5 step 10, P36): autoplay-next
+            // gates the auto-advance, autoplay-previews gates the Home hero, default
+            // quality is the rung a new title starts on when Play was Auto, and subtitle
+            // size is the same number the player sheet's slider writes.
+            SettingsCard(title = "Player", icon = Icons.Default.PlayArrow) {
+                SwitchRow(
+                    checked = state.prefs.autoplayNext,
+                    onCheckedChange = viewModel::setAutoplayNext,
+                    label = "Play the next episode automatically",
+                )
+                Text(
+                    "When this is off, an episode ends on the Next Episode button instead of moving on by itself.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                SwitchRow(
+                    checked = state.prefs.autoplayPreviews,
+                    onCheckedChange = viewModel::setAutoplayPreviews,
+                    label = "Auto-play previews on Home",
+                )
+                Text(
+                    "When this is off, the Home hero stays on the first poster until you swipe it.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+
+                Spacer(Modifier.height(10.dp))
+                PreferenceRowTitle("Default quality")
+                val qualityBands = listOf("auto", "480p", "720p", "1080p", "2160p")
+                val qualityLabels = listOf("Auto", "480p", "720p", "1080p", "4K")
+                ChipRow(qualityLabels, qualityBands.indexOf(state.prefs.defaultQuality).coerceAtLeast(0)) { idx ->
+                    viewModel.setDefaultQuality(qualityBands[idx])
+                }
+                Text(
+                    "The quality a new title starts on. Auto lets the player pick; a fixed choice starts there and stays.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+
+                Spacer(Modifier.height(10.dp))
+                PreferenceRowTitle("Subtitle size")
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    Text(
+                        "${state.prefs.subtitleSizePercent}%",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                    Slider(
+                        value = state.prefs.subtitleSizePercent.toFloat(),
+                        onValueChange = { viewModel.setSubtitleSize(it.toInt()) },
+                        valueRange = 50f..200f,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+                Text(
+                    "The same size the player sheet offers while watching; it applies from the next playback.",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -542,13 +733,31 @@ fun SettingsScreen(
 
             // ── Cache ──────────────────────────────────────────────────
             SettingsCard(title = "Storage & cache") {
+                // The poster-image cache as a bar: what it holds now against the
+                // loader's own cap. Nothing here is a guess at the device's free
+                // space, and the kept videos are not in this number at all — they
+                // are listed and removed on the Media Vault screen.
+                val cacheBytes = state.posterCacheBytes
+                val cacheMax = state.posterCacheMaxBytes
+                if (cacheBytes != null && cacheMax != null) {
+                    Text(
+                        "Poster images: ${viewModel.formatCacheSize(cacheBytes)} of " +
+                            viewModel.formatCacheSize(cacheMax),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    LinearProgressIndicator(
+                        progress = { cacheBytes.toFloat() / cacheMax.toFloat().coerceAtLeast(1f) },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
                 Button(onClick = viewModel::clearImageCache, modifier = Modifier.fillMaxWidth()) {
                     Text("Clear poster images")
                 }
                 Text(
                     "This clears only the poster images the app has fetched; they come back as you " +
                         "browse. Videos you kept for offline are not touched here — they are removed " +
-                        "individually on the Downloads screen.",
+                        "individually on the Media Vault screen.",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -691,13 +900,6 @@ private fun ChipRow(options: List<String>, selectedIndex: Int, onSelect: (Int) -
 }
 
 @Composable
-private fun StatBox(label: String, value: String) {
-    Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        Text(value, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
-        Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-    }
-}
-
 /**
  * Renders the socket's real state as one short line. Reports what is actually bound, not what was
  * asked: a share that could not bind says so plainly, and a live share names the concrete address and
@@ -711,6 +913,10 @@ private fun lanShareStatusLine(status: LanShareStatus): String = when (status) {
         "Listening on $where · ${status.servableCount} kept ${if (status.servableCount == 1) "file" else "files"}"
     }
 }
+
+/** The VIP card's date — the same "d MMM yyyy" the VIP screen paints, so the two never disagree. */
+private fun planDateLabel(epochMs: Long): String =
+    SimpleDateFormat("d MMM yyyy", Locale.getDefault()).format(Date(epochMs))
 
 /**
  * The phone + PIN form. Three fields, four sentences, one button.
@@ -799,6 +1005,92 @@ internal fun ProfileLinkDialog(account: AccountUiState, viewModel: SettingsViewM
         },
         dismissButton = {
             TextButton(onClick = viewModel::closeLinkForm, enabled = !account.isLinking) {
+                Text("Cancel")
+            }
+        },
+    )
+}
+
+/**
+ * The contact form. Five categories, one message, one optional email.
+ *
+ * The chips wrap (FlowRow) because five of them do not fit one row on a
+ * narrow phone, and the plain Row the language chips use would clip the
+ * last one. The email is optional and the line under it says what the
+ * server does with it — stores it shortened — because a form that quietly
+ * collects an address is a form that harvests one.
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+internal fun ContactDialog(contact: ContactUiState, viewModel: SettingsViewModel) {
+    AlertDialog(
+        onDismissRequest = viewModel::closeContactForm,
+        title = { Text("Write to us") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    ContactUiState.CATEGORY_LABELS.forEachIndexed { idx, label ->
+                        FilterChip(
+                            selected = ContactUiState.CATEGORY_IDS[idx] == contact.category,
+                            onClick = { viewModel.onContactCategoryChanged(ContactUiState.CATEGORY_IDS[idx]) },
+                            label = { Text(label) },
+                        )
+                    }
+                }
+                OutlinedTextField(
+                    value = contact.subject,
+                    onValueChange = viewModel::onContactSubjectChanged,
+                    label = { Text("Subject (optional)") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                OutlinedTextField(
+                    value = contact.body,
+                    onValueChange = viewModel::onContactBodyChanged,
+                    label = { Text("Your message") },
+                    minLines = 4,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                OutlinedTextField(
+                    value = contact.email,
+                    onValueChange = viewModel::onContactEmailChanged,
+                    label = { Text("Your email (optional)") },
+                    placeholder = { Text("So we can reply") },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Text(
+                    "Your email is stored shortened, so only part of it is ever visible to us.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                contact.message?.let { message ->
+                    Text(
+                        message,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (contact.messageIsError) {
+                            MaterialTheme.colorScheme.error
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        },
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = viewModel::submitContact,
+                enabled = !contact.isSending && contact.body.isNotBlank(),
+            ) {
+                BusyLabel(contact.isSending, "Send")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = viewModel::closeContactForm, enabled = !contact.isSending) {
                 Text("Cancel")
             }
         },

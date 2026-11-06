@@ -3,12 +3,14 @@ package com.raddstream.app.data
 /**
  * What each region card promises, and the only preferences it is allowed to write.
  *
- * The wording is bounded by what this catalog actually ingests. `classify_media()` can only
- * ever answer Bollywood, the four southern industries, Pollywood, Hollywood, WWE, K-Drama,
- * C-Drama, Anime and Japanese Cinema — so no card offers Pakistani drama serials, because no
- * importer scrapes Hum, ARY or Geo and a viewer who picked them would be shown an empty grid.
- * The Urdu audio preference still exists (the player has matched `urd` all along), it just is
- * not sold as content the server does not have.
+ * A card is one short line, not a brochure: a title, a tagline, and the audio/subtitle
+ * promise it writes. The wording is bounded by what this catalog actually ingests.
+ * `classify_media()` can only ever answer Bollywood, the four southern industries,
+ * Pollywood, Hollywood, WWE, K-Drama, C-Drama, Anime and Japanese Cinema — so no card
+ * offers Pakistani drama serials, because no importer scrapes Hum, ARY or Geo and a
+ * viewer who picked them would be shown an empty grid. The Urdu audio preference still
+ * exists (the player has matched `urd` all along), it just is not sold as content the
+ * server does not have.
  *
  * [audioLanguage] and [subtitleLanguage] are spelled exactly as the Settings chips spell
  * them, because they are written into the same two stored keys those chips own. A null means
@@ -19,11 +21,9 @@ package com.raddstream.app.data
 data class RegionChoice(
     val id: String,
     val title: String,
-    val summary: String,
-    val contents: List<String>,
+    val tagline: String,
     val audioLanguage: String?,
     val subtitleLanguage: String?,
-    val caveat: String? = null,
 ) {
     /** The sentence Settings can show about this choice, in the viewer's own words. */
     fun preferenceLine(): String = when {
@@ -33,6 +33,15 @@ data class RegionChoice(
         subtitleLanguage != null -> "Keeps original audio, prefers $subtitleLanguage subtitles"
         else -> "Keeps whatever the file itself carries"
     }
+
+    /** The one-line promise on the card: "Hindi audio · English subtitles". */
+    fun preferencePill(): String = when {
+        audioLanguage != null && subtitleLanguage != null ->
+            "$audioLanguage audio · $subtitleLanguage subtitles"
+        audioLanguage != null -> "$audioLanguage audio"
+        subtitleLanguage != null -> "Original audio · $subtitleLanguage subtitles"
+        else -> "Original audio"
+    }
 }
 
 object RegionChoices {
@@ -40,42 +49,22 @@ object RegionChoices {
     val ALL: List<RegionChoice> = listOf(
         RegionChoice(
             id = UserRegion.DESI_DUBS,
-            title = "Pakistan & India (Desi Cinema & Dubs)",
-            summary = "Hindi-language prints and dual-audio files lead every list.",
-            contents = listOf(
-                "Bollywood",
-                "South Indian films in Hindi dub",
-                "Tamil, Telugu, Malayalam, Kannada originals",
-                "Hollywood films in Hindi dub",
-            ),
+            title = "Desi",
+            tagline = "Bollywood & Hindi dubs",
             audioLanguage = "Hindi",
             subtitleLanguage = "English",
-            caveat = "Pakistani drama serials (Hum, ARY, Geo) are not in this catalog yet — " +
-                "no source is scraped for them. Urdu audio is still available as a preference.",
         ),
         RegionChoice(
             id = UserRegion.EAST_ASIAN,
-            title = "East Asian & Subtitle Lovers (C-Drama, K-Drama, Anime)",
-            summary = "Original audio kept, subtitles preferred where a print carries them.",
-            contents = listOf(
-                "Korean and Chinese drama",
-                "Anime and Japanese film",
-                "External English subtitles",
-            ),
+            title = "East Asian",
+            tagline = "K-Drama, C-Drama & Anime",
             audioLanguage = null,
             subtitleLanguage = "English",
-            caveat = "Subtitles are a property of a release, not of a show: a tile only claims " +
-                "them when one of its prints actually says so.",
         ),
         RegionChoice(
             id = UserRegion.INTERNATIONAL,
-            title = "International & Hollywood",
-            summary = "English-original audio first, nothing re-ranked for a dub.",
-            contents = listOf(
-                "Hollywood and Western cinema",
-                "English-language series",
-                "WWE and live sport",
-            ),
+            title = "International",
+            tagline = "Hollywood & world cinema",
             audioLanguage = "English",
             subtitleLanguage = null,
         ),

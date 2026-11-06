@@ -24,6 +24,35 @@ data class VipRemoteConfig(
     val currency: String = "PKR",
     @SerializedName("updated_at")
     val updatedAt: Long = 0L,
+    /**
+     * True when the server could not read its own settings row and answered
+     * with shipped defaults instead: the shape is guaranteed, the values are
+     * not the operator's decision. The app must keep its last cached config
+     * and act on nothing in this body — treating unknown as `false` is how a
+     * remote control fails open (see `admin_panel.remote_config`).
+     */
+    @SerializedName("settings_unavailable")
+    val settingsUnavailable: Boolean = false,
+    /**
+     * The best picture a free viewer may play, as the operator set it in the
+     * panel ("480p" or "720p"; "720p" when unset). The quality gate reads it;
+     * any other value decodes but is treated as "720p" by the gate.
+     */
+    @SerializedName("free_quality_cap")
+    val freeQualityCap: String = "720p",
+    /**
+     * The version code of the APK the operator published, or 0 when they
+     * published no code. The update notice compares it against this build;
+     * a body with no code falls back to "a link means an update".
+     */
+    @SerializedName("apk_update_version_code")
+    val apkUpdateVersionCode: Int = 0,
+    /**
+     * The lowest app version code the operator still supports, or 0 for "no
+     * minimum". A build below it is told the update is required, not optional.
+     */
+    @SerializedName("min_version_code")
+    val minVersionCode: Int = 0,
     /** Operator switch: the phone shows a maintenance notice instead of the catalog. */
     @SerializedName("maintenance_mode")
     val maintenanceMode: Boolean = false,
@@ -51,6 +80,104 @@ data class VipRemoteConfig(
      * changes nothing: see [VipRemoteAdCadence].
      */
     val engagement: VipRemoteEngagement = VipRemoteEngagement(),
+    /**
+     * The operator's home feed, published by the admin panel and served on this
+     * same body so no second call is needed: the sections the panel built, the
+     * broadcasts it published, and the works it hid. All three default to empty,
+     * which is the honest answer from a deployment with no panel wired — the app
+     * then keeps its own rails, shows no banner, and hides nothing. A section
+     * item is a full [Post], projected by the server exactly like a posts row,
+     * so the rail needs no second fetch to render.
+     */
+    val sections: List<PanelSection> = emptyList(),
+    val broadcasts: List<PanelBroadcast> = emptyList(),
+    @SerializedName("hidden_work_ids")
+    val hiddenWorkIds: List<Int> = emptyList(),
+    /**
+     * The operator's theme knobs, published by the admin panel and served on
+     * this same body: dark/light/system, an accent colour, dynamic colour,
+     * and the hero's autoplay behaviour. Absent from an older deployment, it
+     * decodes to [PanelTheme]'s defaults — dark, brand accent, hero on —
+     * which is the app this build has always shipped.
+     */
+    val theme: PanelTheme = PanelTheme(),
+    /**
+     * The operator's bottom-bar tabs, in order, as set in the panel's `tabs`
+     * tuning key. Empty from an older deployment — the app then keeps its own
+     * four, exactly like the sections above. The list is authoritative when
+     * present (a tab the operator did not list does not show), except Home,
+     * which [com.raddstream.app.ui.navigation.PanelTabs.resolve] pins first:
+     * the app cannot function without a way back to it.
+     */
+    val tabs: List<String> = emptyList(),
+    /**
+     * The operator's disclaimer, published by the admin panel and served on
+     * this same body. Empty text from an older deployment — or from a panel
+     * where the operator has written nothing yet — means "no disclaimer
+     * published", and the app shows nothing: the operator writes the words,
+     * the app never invents them. `version` is what the app remembers having
+     * shown, so a new version is shown once more.
+     */
+    val disclaimer: PanelDisclaimer = PanelDisclaimer(),
+)
+
+/**
+ * The operator's disclaimer: the text, and the version the app compares
+ * against what it has already shown.
+ */
+data class PanelDisclaimer(
+    val text: String = "",
+    val version: Int = 0,
+)
+
+/**
+ * The operator's theme, as the panel stores it in `tuning_settings`.
+ * `mode` is "dark", "light" or "system" (anything else decodes but is
+ * treated as dark by the resolver); `accent` is "" (brand default) or a
+ * #RRGGBB hex; `heroMax` is how many slides the hero shows, 0 hides it.
+ */
+data class PanelTheme(
+    val mode: String = "dark",
+    val accent: String = "",
+    @SerializedName("dynamic_color")
+    val dynamicColor: Boolean = false,
+    @SerializedName("hero_autoplay")
+    val heroAutoplay: Boolean = true,
+    @SerializedName("hero_interval_s")
+    val heroIntervalS: Int = 5,
+    @SerializedName("hero_max")
+    val heroMax: Int = 6,
+)
+
+/**
+ * One home rail the admin panel built. `key` is the operator's slug (the panel's
+ * `home_sections.key`); the app prefixes it when it merges, so a panel rail can
+ * never collide with a built-in one by accident. Items arrive resolved — the
+ * server already applied the adult rule and the hide list before projecting.
+ */
+data class PanelSection(
+    val key: String = "",
+    val title: String = "",
+    val items: List<Post> = emptyList(),
+)
+
+/**
+ * One announcement the admin panel published. The server sends live,
+ * published broadcasts of every target, so the app filters by its own
+ * region, tier and version ([broadcastVisible]): `target` is one of
+ * "all", "free", "vip", "region" or "version", and `targetDetail` names
+ * which one — a panel region for "region", an exact version name for
+ * "version", empty otherwise. An empty title means "nothing to say" and
+ * the banner is skipped.
+ */
+data class PanelBroadcast(
+    val id: Int = 0,
+    val title: String = "",
+    val body: String = "",
+    val severity: String = "info",
+    val target: String = "all",
+    @SerializedName("target_detail")
+    val targetDetail: String = "",
 )
 
 /**

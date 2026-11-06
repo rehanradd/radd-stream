@@ -2,11 +2,17 @@ package com.raddstream.app.repository
 
 import com.raddstream.app.data.ServerSettingsRepository
 import com.raddstream.app.network.ApiProvider
+import com.raddstream.app.network.models.ContactRequest
+import com.raddstream.app.network.models.PlayBundle
 import com.raddstream.app.network.models.PostDetail
 import com.raddstream.app.network.models.PostsResponse
 import com.raddstream.app.network.models.StatsResponse
 import com.raddstream.app.network.models.StreamResponse
+import com.raddstream.app.network.models.SuggestItem
 import com.raddstream.app.network.models.VipRemoteConfig
+import com.raddstream.app.network.models.WirePlayRequest
+import com.raddstream.app.player.Coverage
+import com.raddstream.app.player.toPlayerCoverage
 import java.io.IOException
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -33,6 +39,8 @@ class CatalogRepository @Inject constructor(
         genre: String? = null,
         quality: String? = null,
         sort: String? = null,
+        freeOnly: Boolean? = null,
+        workRef: String? = null,
         page: Int = 1,
         limit: Int = 20,
     ): PostsResponse = apiProvider.current().getPosts(
@@ -42,9 +50,24 @@ class CatalogRepository @Inject constructor(
         genre = genre,
         quality = quality,
         sort = sort,
+        freeOnly = freeOnly,
+        workRef = workRef,
         page = page,
         limit = limit,
     )
+
+    /**
+     * GET /api/v2/suggest while typing. Never throws: a blocked route (the
+     * nginx allow-list does not cover /api/v2/suggest yet), an old server
+     * or a dead socket all answer the same way — no chips — because a
+     * type-ahead that fails must never fail the search it was helping.
+     */
+    suspend fun suggest(query: String): List<SuggestItem> {
+        if (query.trim().length < 2) return emptyList()
+        return runCatching {
+            apiProvider.current().suggest(query.trim(), limit = 5).items
+        }.getOrNull() ?: emptyList()
+    }
 
     suspend fun getPostDetail(postId: Int): PostDetail? {
         val response = apiProvider.current().getPostDetail(postId)
@@ -60,6 +83,57 @@ class CatalogRepository @Inject constructor(
      */
     suspend fun resolveStream(streamId: String): StreamResponse =
         apiProvider.current().resolveStream(streamId, redirect = "0")
+
+    /**
+     * POST /api/v2/play for one print (plan §5 step 13): the server's own ranked
+     * bundle, with the coverage the v1 detail never serves. Returns null on ANY
+     * failure — a 403 while nginx still blocks the route, a 404 for a target the
+     * server cannot see, a dead socket, a print with nothing playable — because the
+     * caller falls back to the client-side ladder it already has, and a Play tap
+     * that used to work must never turn into an error for a call that is only an
+     * upgrade. A ceiling on the wait is the caller's job, not this one's.
+     */
+    suspend fun playV2(releaseId: Int, prefer: String? = null): V2PlayResult? {
+        val response = try {
+            apiProvider.current().play(WirePlayRequest(releaseId = releaseId, prefer = prefer ?: "quality"))
+        } catch (_: HttpException) {
+            return null
+        } catch (_: IOException) {
+            return null
+        }
+        if (!response.playable || response.streamCandidates.isEmpty()) return null
+        val baseUrl = try {
+            apiProvider.currentBaseUrl()
+        } catch (_: IllegalStateException) {
+            return null
+        }
+        val coverage = response.coverage?.toPlayerCoverage() ?: Coverage()
+        return V2PlayResult(bundle = response.toDomain(baseUrl), coverage = coverage)
+    }
+
+    /**
+     * POST /api/v1/contact: one message for the operator's inbox. True only
+     * when the server stored it — a 400 (bad category, empty body), a 403
+     * while nginx still blocks the route, a 503 when the inbox is not wired,
+     * or a dead socket all answer false, because the form keeps the text and
+     * says "try again" instead of pretending the message went through.
+     */
+    suspend fun submitContact(
+        category: String,
+        subject: String,
+        body: String,
+        accountHint: String?,
+    ): Boolean {
+        return try {
+            apiProvider.current().submitContact(
+                ContactRequest(category, subject, body, accountHint),
+            ).success
+        } catch (_: HttpException) {
+            false
+        } catch (_: IOException) {
+            false
+        }
+    }
 
     /**
      * Ask the detail route about one id purely to learn whether it still answers, and report the
@@ -105,4 +179,15 @@ data class DetailProbe(
     val httpStatus: Int?,
     val bodyClaimsSuccess: Boolean?,
     val noAnswer: Boolean,
+)
+
+/**
+ * What POST /api/v2/play hands back, as the app uses it: the server-ranked bundle plus
+ * the print's coverage (the chapter data). The two ride together because the coverage
+ * belongs to the bundle's print, not to any one rung — the detail screen stages both
+ * under the winner's handle, and the player reads both back from the same place.
+ */
+data class V2PlayResult(
+    val bundle: PlayBundle,
+    val coverage: Coverage,
 )

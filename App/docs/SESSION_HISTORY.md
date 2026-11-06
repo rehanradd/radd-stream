@@ -1313,3 +1313,740 @@ revalidation must find first. Backend run `41394696505` at the same sha was alre
 `completed success` (46/46 steps, including the `test_docs_invariants` claim corrected above).
 Trunk untouched, no tag, no release, no service restart, no live-tree edit, no credential value read
 or printed. Gating is qoder1's call after fresh green CI.
+
+---
+
+### Session 40 — The admin panel feed reaches the app (Muse, 2026-11-06)
+
+**Agent:** Muse (BoNzoO), coded directly on the user's order ("connect the app to the admin panel", 00:02 PKT). No qoder lane.
+
+**Built:**
+- `VipRemoteConfig` gains the panel feed: `sections: List<PanelSection>`, `broadcasts: List<PanelBroadcast>`, `hiddenWorkIds: List<Int>` — all default empty, so a deployment with no panel wired decodes unchanged. A section item is a full `Post`, projected by the server exactly like a posts row.
+- `HomeViewModel.mergePanelFeed` (pure, tested): panel sections first in panel order, built-in rails after them minus any key a panel section owns, hidden rows dropped from both, empty panel sections render nothing, a dismissed broadcast never returns this session. Panel rails are `panelManaged`: never loaded, retried, or refreshed through the posts route — the next remote-config fetch rebuilds them. The hero rides the first visible rail, so the operator's top section drives it.
+- `HomeScreen` renders broadcasts as a dismissible banner above the catalog, severity-coloured (info / warning / urgent), even when the catalog failed to load.
+- Server half (same branch): new `Fast_Fetch/panel_feed.py` reads the panel database read-only and resolves sections, broadcasts and hides onto the existing `/api/v1/app/remote-config` body; `api_v1_get_posts` enforces hides at serve time. 15 new server tests, all green locally.
+- Tests: 2 new cases in `VipRemoteConfigTest`, new `PanelFeedMergeTest` (7 cases).
+
+**Not done:** no local Gradle run — the owner order is GitHub Actions only; CI judges. No live deploy in this branch (gate path + `RADD_ADMIN_V2_DB` env on the service at deploy time). Next one-by-one steps: theme block, tabs control, in-app contact form, panel "Live control" page.
+
+---
+
+### Session 41 — Theme block: panel theme controls reach the app (Muse, 2026-11-06)
+
+**Agent:** Muse (BoNzoO), coded directly on the user's order (full audit, then complete everything one by one). No qoder lane. Same branch as Session 40.
+
+**Built:**
+- Panel first, the bug: `_seed` unconditionally reset every tuning column to defaults on every panel start, wiping operator changes. Now it seeds defaults only where a column is still NULL. New tuning keys: `theme_mode` (dark), `theme_accent` (""), `theme_dynamic_color` (0), `theme_hero_autoplay` (1), `theme_hero_interval_s` (5); `hero_max` default 3 → 6, bounds (0,5) → (0,6). `put_tuning` validates mode and accent hex; the theme knobs are labelled "remote-config (app reads it)". 4 new panel tests, 126 tests OK, orphan audit 0.
+- Server: `panel_feed.read_theme()` reads tuning read-only, never raises, invalid values fall back per-field; `viewer.py` merges `theme` into remote-config. 3 new server tests, 18 OK.
+- App: `VipRemoteConfig.theme: PanelTheme` + 3 decode tests; `ServerSettingsRepository.themeSettings` + `saveTheme()`; `RemoteConfigWatcher` saves the theme on a successful poll only. `MainActivity` resolves dark/light/system through pure `resolveThemeDark`, dynamic colour ANDs the panel permission in, accent through pure `parseAccentHex`. `RaddStreamTheme` gains an `accent` that repaints only the `primary` roles. Light migration done in MainActivity, NavGraph and SetupScreen (all `colorScheme` roles now, no hard-painted dark left in those files); `features.light_scheme` flipped on. Hero takes `heroMax`/`heroAutoplay`/`heroIntervalMs` from the theme; 0 hides the slot entirely. New `ThemeResolutionTest` (9 cases).
+
+**Not done:** no local Gradle run — CI judges. Panel workspace changes are not in this repo; they still need posting to the VM panel workspace + a panel restart before theme control works end-to-end. No live deploy of this branch yet. Next: tabs control, contact form, Live control page, P0 bug fixes.
+
+**CI fix, same session:** Android CI on 76f7ef4 failed `compileDebugKotlin` (Theme.kt:222 `accent.luminance()` is not a member in this Compose version) — fixed in 15de5b4 with the codebase WCAG luminance + pure `accentOnPrimary`. CI on 15de5b4 then failed `testDebugUnitTest`: `BrandDriftTest.rawColorLiteralsStayInsideTheBrandPalette` — the fix had written a raw `Color(0xFF00281D)` outside Color.kt. Fixed by reading the existing token `RaddDeepCurrentInk` (brand `colors.dark.on_primary`); the test now asserts against the token too. 863 tests ran, 1 failed before this fix.
+
+---
+
+### Session 42 — P0 download: HLS titles download through the keep engine (Muse, 2026-11-06)
+
+**Agent:** Muse (BoNzoO), coded directly on the user's order (full audit, then complete everything one by one). No qoder lane. Same branch as Sessions 40–41.
+
+**Why:** live `/api/v1/download` 404s `no_playable_source` for titles whose only playable copies are HLS playlists — the live Stage-2 gate accepts only `kind == "file"` for download callers, while stream 302s to the playlist in ~6 s. Server fast-fail is blocked on the gate (Stage-2 code lives only in the live dirty tree, not on trunk). So the phone downloads the HLS title itself, from the stream URL that already works. Full diagnosis: `hidden_files/download-hls-diagnosis-20261106.md`.
+
+**Built:**
+- Routing: HLS titles go through the in-app keep engine, not Media3 DownloadManager (which would duplicate playlist parsing, segment fetching, re-resolution and offline playback) and not `DownloadService` (single-file only; extending it to HLS would need a remuxer the app does not have). Design note: `hidden_files/hls-download-design-20261106.md`.
+- Engine bug found and fixed: `CacheCoordinator.runHlsPass` always started at the playhead and always took 20 segments, so a keep that was never played re-covered segments 0..20 forever and never reached segment 21. Now `runHlsPass(task, mode)` fetches the whole playlist from segment 0 in `FULL_DOWNLOAD` mode and keeps the 20-segment window ahead of the playhead for `AUTO_PREVIEW`.
+- `HlsAheadBuffer`: segments and variant playlists now resolve against the final playlist URL (`response.request.url`), not the redirector address we asked for — a relative segment ref belongs to the playlist host after the 302, never to `/api/v1/stream`. The window bound is overflow-safe for the `Int.MAX_VALUE` full-download ask.
+- `DetailViewModel.keep`: one metadata ask (`catalogRepository.resolveStream`) decides the system — HLS mime goes to `keepViaEngine` (adopt through `CacheEngineHolder.engine`, which pins the row so the sweeper never ages it out; Stored / OnlyPlayableInApp route to the Downloads screen like a device download; StorageFull / Failed / Interrupted answer in plain words), everything else takes the existing device path unchanged. A failed metadata ask falls through to the device path, which refuses with the same words it always used. The pure decision `keepTargetFor` reuses the engine's own `KeepIdentity.linkKindFor`, so the screen and the engine can never disagree about what HLS is.
+- Tests: new `HlsAheadBufferTest` (5 cases: 50-segment full pass completes in one pass, preview window still takes 20, relative segments resolve against the final URL, master descends to the variant and resolves its relative segments, second pass never re-fetches held segments) and new `DetailKeepRoutingTest` (3 cases). Interceptor-backed in-memory HTTP, no socket, no MockWebServer.
+
+**Not done:** no local Gradle run — CI judges. No ViewModel-level test for the `keep()` branch itself (its 8 dependencies have no fakes; the decision is covered by `DetailKeepRoutingTest` and the engine behaviour by `HlsAheadBufferTest`). Keep rows show "Saved file" + print label when the title is empty — the player's own adopt passes no title either; title propagation is a polish item, not a blocker. Real offline playback on a device is owner-only. Next: video player rebuild (plan ready), then tabs control.
+
+**CI fix, same session:** Android CI on f635677 failed `compileDebugUnitTestKotlin` with exactly one error — `HlsAheadBufferTest.kt:64 Unresolved reference 'segmentBytes'`: the interceptor client was a nested class, not an inner class, so it could not see the outer test's segment payload. Fixed in 915ea84 (`private inner class ScriptedClient`). CI on 915ea84 then failed `testDebugUnitTest`: 871 tests, 1 failed — `DetailKeepRoutingTest` at the `video/mp2t` assertion. The assertion was mine, not the engine's rule: `KeepIdentity.linkKindFor` maps only `mpegurl` (and `.m3u8` URLs) to HLS; `video/mp2t` is the segment mime, not a playlist mime, and the server's HLS copies resolve as `mpegurl`. Fixed in 015ba83 by dropping that assertion; the mp2t case, if it ever appears as a resolve mime in a live probe, is a separate evidence-driven fix (it needs the kind, not just the mime, to tell an HLS copy from a direct `.ts` file). **CI GREEN on 015ba83 (run 42120565619, 03:26 PKT), debug APK `app-debug-193` (22,244,724 bytes) uploaded.**
+
+---
+
+### Session 43 — Player rebuild step 1: in-player subtitle/audio picks are remembered (Muse, 2026-11-06)
+
+**Agent:** Muse (BoNzoO), coded directly on the user's order (full audit, then complete everything one by one; player redesign plan step 1). No qoder lane. Same branch as Sessions 40–42.
+
+**Built:** `PlayerViewModel.selectTrack` now writes a picked track's language back to Settings after applying the live override (`savePreferredAudioLanguage` / `savePreferredSubtitleLanguage`), so the next episode — and the next visit — auto-applies the new pick through the existing `applyPreferredAudioTrack` / `applyPreferredSubtitleTrack` paths, not the old Settings choice. The sync delay is deliberately never saved. The decision is the pure `persistedLanguageFor(option)`: a real language persists; turning subtitles off persists nothing (viewing-scoped — it must not delete the stored language, or the next episode would start silent for a viewer who wants Hindi); a track with no language tag persists nothing. New `TrackPreferencePersistenceTest` (4 cases). Existing `SubtitleTrackPolicyTest` + `AudioTrackMatcherTest` cover the auto-apply half (the matcher, given the new language, picks the new track).
+
+**Not done:** no local Gradle run — CI judges. No ViewModel-level test for the save call itself (no test constructs `PlayerViewModel` anywhere in the repo; the decision is covered by the new test, the wiring by CI compile + re-read). Next: player step 2 (Volume + Fullscreen buttons).
+
+**CI fix, same session:** Android CI on 123ce47 failed `compileDebugUnitTestKotlin` with exactly one error — `TrackPreferencePersistenceTest.kt:36 Unresolved reference 'persistedLanguageFor'`. My mistake: I declared the helper as a ViewModel member, but the test (same package) calls it as a top-level function, and no test can construct the ViewModel. Fixed by moving it to a top-level `internal fun` at the end of PlayerViewModel.kt; `selectTrack` calls it unchanged. The step-2 commit below rides the same push.
+
+---
+
+### Session 44 — Player rebuild step 2: Volume + Fullscreen buttons (Muse, 2026-11-06)
+
+**Agent:** Muse (BoNzoO), coded directly on the user's order. No qoder lane. Same branch as Sessions 40–43.
+
+**Built:** the bottom row finally has the two buttons the old player never had as buttons (gesture-only). `PlayerUiState` gained `fullscreen: Boolean = true`. `PlayerViewModel`: `toggleMute()` (mute keeps `lastAudibleVolume` aside, un-mute restores it — a gesture drag to silence records the same restore point via `setUserVolume`) and `toggleFullscreen()` (flips the state; the screen's `LaunchedEffect(state.fullscreen)` hides/shows the system bars, entry still hides them in the existing DisposableEffect). `PlayerScreen.BottomControls`: Volume first, Fullscreen second, both 48 dp `PlayerControlButton`s with named `stringResource` labels (`player_volume` with %, `player_volume_muted`, `player_fullscreen`, `player_exit_fullscreen`); Volume long-press opens an AlertDialog with a Material3 Slider writing the same `setUserVolume` the gesture uses. `ControlTarget`/`PlayerControlButton` gained an optional `onLongClick` — controls without one keep the plain `.clickable(` path the semantics test pins (long-press uses `combinedClickable` only when present). New strings in strings.xml (4). Tests: 2 new cases in `PlayerControlSemanticsTest` (buttons exist + named; long-press opens the slider). `PlayerChromeCopyTest` needs no manual extension — its generic rules cover the new strings.
+
+**Not done:** no local Gradle run — CI judges. Brand vectors for these two icons are step 8 (Material icons until then); the 6-primary row cut is step 3. Next: player step 3 (bottom row to 6 primaries + More sheet).
+
+**CI fix, same session:** Android CI on 2adeef8 failed `compileDebugKotlin` with exactly one error — `PlayerScreen.kt:1418 This foundation API is experimental`: `combinedClickable` (the Volume long-press) needs `@OptIn(ExperimentalFoundationApi::class)`. Fixed by annotating `ControlTarget` (its only caller) + the import; the plain `.clickable(` path is untouched.
+
+---
+
+### Session 45 — Player rebuild step 3: six primaries + the More sheet (Muse, 2026-11-06)
+
+**Agent:** Muse (BoNzoO), coded directly on the user's order. No qoder lane. Same branch as Sessions 40–44.
+
+**Built:** the bottom row is now exactly the six primaries the research rule allows, frozen left to right: Play/Pause (plays from 0 when the title ended, toggles otherwise), Volume, Subtitles, Quality, Fullscreen, More. The row no longer scrolls — six 48 dp buttons fit every phone, and a hidden seventh would be a button that lies. The other 14 controls were NOT deleted, only moved into a new `MoreSheet` (ModalBottomSheet, same `SheetTitle`/`SheetRow` pattern as the other sheets), grouped exactly like MX's overflow: Playback (speed, sleep timer, frame ±, rewind/forward 10 s, aspect, orientation, ghost mode if allowed), Subtitle (subtitles sheet, subtitle sync), Audio (audio tracks, cycle audio, audio-only, stereo-only), Tools (next episode, play from…, calibrate, prints + failover log, retry candidates, open in external player, picture-in-picture). Every More row hides More first, then acts — two sheets never stack, and the viewer sees the picture, not the menu, after the tap. The ±10 s seeks are in the Playback group (the plan said no ±10 s buttons in the row/centre and "delete nothing", so the sheet is their home). Lock is not in the sheet — it already lives in the top bar. The audio-level slider lives inside the TracksSheet the Audio tracks row opens. New state `moreSheetVisible` + `showMoreSheet()`/`hideMoreSheet()` (same shape as the other sheet flags). New strings in strings.xml (5: `player_more` + four group titles); every other row reuses its button's existing string. Tests: 3 new cases in `PlayerControlSemanticsTest` (bottom row is exactly the six primaries; nothing else lives in the row; the More sheet carries every moved control, grouped) — the two new body helpers slice from the function signature to the next top-level function because the shared `functionBody` helper stops at the first blank line inside a long body.
+
+**Not done:** no local Gradle run — CI judges. Brand vectors for the six icons are step 8 (Material icons until then). Next: player step 4 (PiP — the row cut already moved PiP into More, so step 4 is likely a verification-only step; check plan §5 #4), then step 5 (StartDeadline).
+
+**Step 4 addendum (same session):** plan §5 step 4 (PiP decision, D1) needs no separate commit — its code substance is already inside step 3: PiP left the bottom row and lives in the More sheet's Tools group (same `onEnterPip` launcher, same API 26+ guard), and the new tests prove both halves (PiP not in the bottom row; PiP present in the More sheet). The D1 default (keep under More) was already in force from 02:25 PKT. What remains of step 4 is the device check (PiP enter/return still works) — owner-only, part of step 20. So step 4 rides f49d7d7's CI verdict: green means steps 3 and 4 are both done.
+
+**CI fix, same session (step 3, first green attempt):** Android CI on 3bd2fb7 failed `testDebugUnitTest`: 880 tests, 3 failed — all three were my step-3 strings, and all three guards were right. (1) `DeadCodeGuardTest` + `PlayerChromeCopyTest` "every player string is painted": `player_audio_only_toggle` and `player_stereo_only_toggle` became orphans when the row cut removed their only call sites — the More sheet had used the TracksSheet on/off variants instead. Fixed by painting the toggle strings themselves in the More rows ("Audio-only playback", "Stereo-only track selection" — exactly what the old buttons said; the stateful on/off variants stay in TracksSheet, where they belong). (2) `PlayerChromeCopyTest` "no two player strings say the same thing": my new `player_more_audio` = "Audio" collided with the existing `player_audio_title`, and `player_more_subtitle` = "Subtitles" collided with `player_subtitles_title`. Fixed by deleting both new strings and reusing the existing titles as the group headings — a group title and a sheet title saying the same word should be one string, not two. The two new strings that remain (`player_more`, `player_more_playback`, `player_more_tools` — three) have no collisions. Verified before pushing with a local replica of both guards' logic: defined-not-used [], used-not-defined [], duplicate values {}, dead-code orphans []. **Lesson (also in ~/AGENTS.md):** pushing a docs-only commit while CI runs cancels the running run (concurrency cancel-in-progress) — the f49d7d7 run 42127537451 was cancelled by the 3bd2fb7 docs push, so the verdict moved to the 3bd2fb7 run. Never push while a run is in progress unless the push is meant to restart it; batch session-log notes into the same commit as the fix.
+
+**CI green, same session (step 3, second attempt):** Android CI run 42129264912 **SUCCESS on d096942 (04:31 PKT)**, debug APK `app-debug-199` (22,253,127 bytes) uploaded. The push itself was refused twice by GitHub with a server-side `remote: fatal error in commit_refs` (not auth, not non-fast-forward — origin was still at 3bd2fb7 and d096942 is its direct child); a retry after a 4-minute wait went through. Steps 3 + 4 are DONE: the bottom row is six primaries, PiP lives in the More sheet.
+
+---
+
+### Session 46 — Player rebuild step 5: the start deadline (Muse, 2026-11-06)
+
+**Agent:** Muse (BoNzoO), coded directly on the user's order. No qoder lane. Same branch as Sessions 40–45.
+
+**Built:** the player finally has a start budget (research rule 4.1, plan §5 #5). Pure policy `player/StartDeadline.kt`: 0–2 s silent, 2–8 s hint, 8–30 s actions, 30 s hard give-up; a first frame disarms it at any age. The ViewModel stamps the attempt in `loadNow` (the one funnel every play path goes through) and in `retryCurrentCandidates` (the one path that bypasses it), using `SystemClock.elapsedRealtime()` so a sleeping phone grants no free seconds; the existing 200 ms ticker publishes `startElapsedMs` and latches `deadlineGiveUp` at 30 s — no second thread. A first frame records `lastFirstFrameMs` (route-open → first-frame, the print sheet's "Started in 1.4 s" proof), but only when the player really was starting — a quality switch mid-scene must not overwrite the measurement with a near-zero one. New `PlayerUiState` derivations: `startDeadlineStage` (phase decides whether a start is happening, elapsed decides what the viewer is owed, the latched deadline outranks both), `nextPrintHandle` / `canTryAnotherPrint` (next rank after the one being tried — never a rank behind it, the machine only moves forward — else that print's own runner-ups; null means no button is ever offered). New `tryNextPrint()` (manual failover: stages the next print's runner-ups and carries the work scope over exactly as a quality switch does, then starts it at the current position) and `dismissDeadlineGiveUp()` (dismissing the 30 s card keeps waiting with a fresh thirty seconds). New `HandoffWhy.START_TIMEOUT` (third reason the player stops: no candidate failed, but none produced a frame in time). The screen: past 2 s the notice gains "Taking longer than usual — your link is being found" plus the rung being tried; past 8 s it gains Retry + Try another print; at 30 s the same GiveUpCard appears with the timeout reason and all three actions (Retry / Try another print / Open in external player). New strings in strings.xml (6), all painted, no duplicates — verified with a local replica of both guards before pushing: defined-not-used [], used-not-defined [], duplicate values {}. Tests: new `StartDeadlineTest` (10 cases: the four boundaries, first-frame disarm at any age, the stage derivation, next-print walking, single-print runner-up fallback, no-print-means-no-button, the seconds format) + 3 new cases in `PlayerControlSemanticsTest` (slow hint + actions on the card, the timeout as its own reason, the print-sheet timing).
+
+**Not done:** no local Gradle run — CI judges. The loading-wave animation in the notice card is step 8 (the spinner stays for now). The deadline clock only ticks once the MediaController connects — the stamp is at `loadNow` so the pre-connect window still counts, but a controller that never connects cannot fire the deadline (the connection-error card owns that screen instead). A quality switch mid-scene re-stamps the attempt but the first-frame check disarms it at once (the old picture is still up), so a stalled switch is not deadline-tracked — the existing failover still owns it. Device proof of the <2 s rule is owner-only (step 20: read "Started in …" off the print sheet on his phone). Next: player step 6 (auto-hide 3.8 s → 3.0 s, one constant).
+
+**CI fix, same session (step 5, first attempt):** Android CI run 42131166861 **FAILED on d525843 (04:46 PKT)** — `compileDebugKotlin`, exactly two errors, both mine in PlayerScreen.kt. (1) `:462 'if' must have both main and 'else' branches when used as an expression` — the deadline card render chained `state.giveUp?.let { ... } ?: if (state.deadlineGiveUp) { ... }`, and the `if` on the right of `?:` is an expression, so it needs an `else`. Fixed by adding an empty `else` branch (neither card showing). (2) `:1574 'This annotation is not repeatable'` — my step-5 edit left a duplicated `@Composable` above `StartNoticeCard` (the function already had one). Fixed by removing the duplicate. Verified after the fix: no consecutive duplicate annotations remain in the file (44 `@Composable` in total). No string changes, so the string guards are unaffected. Pushed as the next commit on the same branch; CI re-run is the verdict.
+
+---
+
+### Session 47 — Player rebuild step 6: auto-hide 3.8 s → 3.0 s (Muse, 2026-11-06)
+
+**Agent:** Muse (BoNzoO), coded directly on the user's order. No qoder lane. Same branch as Sessions 40–46.
+
+**Built:** one constant, as the plan specified (plan §5 #6, research rule: chrome-free default, ~3 s auto-hide). `PlayerScreen.kt:321-324`: the auto-hide `LaunchedEffect(controlsVisible, state.isPlaying, interactTick, state.dialogBlocking)` now waits `delay(3000)` instead of `delay(3800)`, and its comment reads 3.0 s. Nothing else changes: the guard (`controlsVisible && state.isPlaying && !state.dialogBlocking`), the re-check after the delay, and the 900 ms double-tap ripple lifetime are untouched. No strings changed, so the DeadCodeGuardTest / PlayerChromeCopyTest string guards are unaffected; no test pins the old 3800 value (verified by grep — zero hits in `App/app/src/test/`).
+
+**Not done:** no local Gradle run — CI judges. Device check (controls really hide at 3 s on a phone) is owner-only, part of step 20. Next: player step 7 (coach marks — none exist yet; new DataStore key + one-time overlay).
+
+**Addendum — CI verdict on e4b1e05 (Android run 42135147657).** Android **SUCCESS** — step 6 is green. Debug APK app-debug-202 (22,260,496 B). Device check (controls really hide at 3 s) is still owner-only, part of step 20.
+
+---
+
+### Session 48 — Player rebuild step 7: first-run gesture coach marks (Muse, 2026-11-06)
+
+**Agent:** Muse (BoNzoO), coded directly on the user's order. No qoder lane. Same branch as Sessions 40–47.
+
+**Built:** the player finally teaches its gestures (plan §5 #7, research rule P37). One-time overlay, three hints, 4 seconds, dismiss on any tap — and never again until a major version change.
+
+- **Flag (version-stamped, not boolean):** `ServerSettingsRepository` gains `coachSeenVersion: Flow<String?>` + `saveCoachSeenVersion(major)` backed by `player_coach_seen_version` (one string key). A plain boolean could not do the plan's "once after a major version change" half; storing the major ("1") means 1.0.4 → 1.1.0 does not re-teach.
+- **Pure policy:** NEW `player/CoachPolicy.kt` — top-level `majorVersionOf` + `shouldShowCoach(seen, current)`, same shape as `StartDeadline`. NEW `CoachPolicyTest` (4 cases: never shown → show; same major → hide, including a stored full version compared by its major; new major → show; major parsing incl. blank/whitespace).
+- **Wiring:** `PlayerViewModel` exposes `showCoach: StateFlow<Boolean>` (false until DataStore answers — never show on a guess) collected in `observeSettings()`, plus `markCoachSeen()` which saves the current major. The screen reads only that boolean, never the raw stored version.
+- **Overlay:** NEW `PlayerCoachOverlay` composable in `PlayerScreen.kt` — dimmed scrim + centered title ("Quick gestures") and the three hints, all verified true in code before teaching them: double-tap sides ±10 s (`PlayerGestures`, double-tap ripple), swipe left brightness / right volume (vertical-drag lanes), long-press 2× (`GestureSettings.boostSpeed = 2.0f`, hold-to-boost, release restores). Any tap dismisses (the tap ends the lesson, it does not also press the control beneath); a 4 s timer dismisses the same way. Shown only once the picture is actually moving (`isPlaying`) and never over a loading notice, an error, a dialog, a sheet (including More), or a locked player. New strings in strings.xml (4: title + three hints) — verified before committing with a local replica of both guards: defined-not-used [], used-not-defined [], duplicate values {}, all four new strings painted.
+
+**Not done:** no local Gradle run — CI judges. Device check (overlay really shows once on first open, never again, 4 s, tap dismisses) is owner-only, part of step 20. Next: player step 8 (brand icons + jade accent; SVG → vector conversion first).
+
+**Addendum (step-7 CI fix, same night):** CI run 42136285358 FAILED at `compileDebugKotlin` — my overlay insert had stolen `StartNoticeCard`'s `@Composable`: it ended up above the new overlay's KDoc, so the overlay carried two annotations ("not repeatable") and `StartNoticeCard` none (three "must be marked" errors). Root cause: my insert anchor skipped the annotation line, and my duplicate check only looked for two adjacent `@Composable` lines — a KDoc between them hid the pair. Fixed in the fix commit on top of step 8: stray annotation removed, `@Composable` restored above `StartNoticeCard`, and a full-file annotation audit now shows every composable with exactly one. Lesson for every later insert: the anchor must include the `@Composable` line above the function being inserted before.
+
+---
+
+### Session 49 — Player rebuild step 8: brand icons + jade accent + loading-wave (Muse, 2026-11-06)
+
+**Agent:** Muse (BoNzoO), coded directly on the user's order. No qoder lane. Same branch as Sessions 40–48.
+
+**Built:** the player now wears the brand (plan §5 #8, §4.7, decision D2).
+
+- **Vectors:** NEW `res/drawable/ic_player_{play,pause,volume,subtitles,quality,fullscreen}.xml` converted by hand from `files/brand-assets/*.svg` (24×24, stroke 2, round caps/joins, house style of the existing tab vectors) plus NEW `ic_logo_mark.xml` from `logo-mark.svg` (96×96, own jade/coral/indigo colours, no tint). All 7 parse as XML. Wired into the bottom row (Play/Pause, Volume, Subtitles, Quality, Fullscreen), the centre button, and Ghost mode's transport. Honest exceptions, written in the code: muted keeps the Material mute mark (the speaker-with-waves would lie about the state) and exit-fullscreen keeps the Material exit mark (the expand-corners mark would lie the same way). More, Back, Lock, HUD toasts and sheet rows keep their Material marks — the pack has no brand icon for them.
+- **Jade:** every AccentOrange/AccentOrangeToast use in `PlayerScreen.kt` is now `RaddCurrent500` (#2BC79A, the brand primary token) — active states, selected pills/rows, played bars, scrubber thumb, sleep/speed/boost indicators, action-button text — 24 sites by exact replacement plus the two icon tints written directly. The one exception is the error tint: `ConnectionErrorCard`'s warning icon is now coral (`RaddCoral400`), per the plan's error/warning rule. The global `AccentOrange`/`AccentOrangeToast` tokens in `Color.kt` are untouched (now unused in the player) and `DESIGN_SYSTEM.md` §9's old orange claim is superseded by plan decision D2 — noted here, not rewritten.
+- **Loading-wave:** NEW `LoadingWave` composable + pure `loadingWavePath` helper — the three wave lines from `loading-wave.svg` drawn in Compose (same 34/20 dash, 1.5 s cycle, coral −0.5 s, indigo −1 s), no new dependency, no GIF. Replaces both generic spinners (buffering state + `StartNoticeCard`). The logo-mark sits 32 dp top-left on the loading card and as the give-up dialog's icon — both states where nothing is playing, as the plan allows.
+- **Checks before committing:** no references left to the removed icon imports or AccentOrange; zero raw `Color(0x…)` in the diff (BrandDriftTest safe); no duplicated `@Composable`; all 7 vectors parse; no strings changed, so the string guards are unaffected.
+
+**Not done:** no local Gradle run — CI judges. Device check (icons read at 48 dp, wave animates, jade reads over frames, logo-mark placements) is owner-only, part of step 20. Next: player step 9 (MB/hour labels in the quality sheet).
+
+**Addendum (step-8 CI fix, same night):** CI run 42137443535 FAILED at `processDebugResources` — all 6 vectors: `attr/colorControlNormal not found`. I had copied the `android:tint="?attr/colorControlNormal"` line from the tab vectors, but those vectors were never in the app (they live only in `files/brand-assets/android-vectors/`), and this app has no AppCompat theme attr by that name. Fixed in the fix commit on top of step 9: the tint line removed from all 6 vectors (the Compose `Icon(tint=…)` at each call site is the only tint they need — the black strokes take the tint). Lesson: never copy the tint attr into an app vector; verify an asset is actually in `res/drawable` before copying its house style.
+
+**Addendum 2 (step-8 CI fix, same night):** CI run 42137937113 FAILED at `compileDebugKotlin` — `LoadingWave` used `withTransform` with no import (`Unresolved reference 'withTransform'`, and `scale` with it, since the lambda's receiver was unknown). Fixed in the one-line fix commit: `import androidx.compose.ui.graphics.drawscope.withTransform` (`scale` is a `DrawTransform` member, so it resolves once `withTransform` does). Lesson: every drawscope helper used in a Canvas block needs its own import — `drawPath` is a `DrawScope` member and needs none, `withTransform` is a top-level function and does.
+
+---
+
+### Session 50 — Player rebuild step 9: quality sheet MB/hour labels (Muse, 2026-11-06)
+
+**Agent:** Muse (BoNzoO), coded directly on the user's order. No qoder lane. Same branch as Sessions 40–49.
+
+**Built:** each quality rung now shows its data cost before the tap (plan §5 #9, §1.7 guide) — the thing a viewer on mobile data needs and nobody else shows.
+
+- **Pure mapping:** NEW top-level `qualityCostPerHour(band)` in `player/QualityLadder.kt` — band → plain-words cost, never from `sizeBytes` (a download's size is not an hour of watching): 2160p "≈ 7–11 GB/hour", 1080p "≈ 3 GB/hour", 720p "≈ 1.5 GB/hour", 480p "≈ 700 MB/hour", sd "≈ 300 MB/hour"; unknown/unbanded → null (no cost rather than a guess). Case- and space-tolerant. NEW `QualityCostLabelTest` (3 cases: every known band, unknown → null, case/space tolerance).
+- **Reconciliation, written in the code:** the plan's own example ("High ≈ 1.5 GB/hour") is the 720p rung — the free cap — not 1080p, which the same §1.7 guide prices at ~3 GB/hour. The mapping follows the guide's numbers per resolution, so both of the plan's sentences stay true.
+- **Wiring:** `QualitySheet` rung rows now show the cost as their detail, with "Playing" joining it (after " · ") only on the rung playing now; the Auto row is untouched (Auto adapts, so it has no fixed cost). No strings changed, so the string guards are unaffected; no composable touched, so the annotation audit from Session 49's fix still stands.
+
+**Not done:** no local Gradle run — CI judges. Device check (costs read on real rungs, including an unknown-band rung showing no cost) is owner-only, part of step 20. Next: player step 10 (player defaults in Settings).
+
+---
+
+### Session 51 — Player rebuild step 10: player defaults in Settings (Muse, 2026-11-06)
+
+**Agent:** Muse (BoNzoO), coded directly on the user's order. No qoder lane. Same branch as Sessions 40–50.
+
+**Built:** the four player defaults (plan §5 #10, P36) — the switches the player itself obeys.
+
+- **Autoplay-next:** NEW `player_autoplay_next` in `ServerSettingsRepository` (default ON, plan D4), collected by `PlayerViewModel`, and the auto-advance in `handleCrossEpisodeAction` now asks the pure `shouldAutoAdvance` gate first. With the switch off, the episode ends on the Next Episode button instead of advancing: NEW `endedHasNextEpisode` on `PlayerUiState`, set when the gated action arrives, cleared when playback leaves the ended state, when a new bundle opens, or when the button is tapped. The ended overlay is now `EndedButtons` (Play Again + Next Episode, same card style); `PlayAgainButton` is deleted, not left dead. No countdown ambush, no "Are you still watching?".
+- **Default quality:** NEW `player_default_quality` (default "auto"), a ChipRow in Settings (Auto/480p/720p/1080p/4K), applied in `armQualityChoices` through the pure `resolveStartBand`: an explicit tap on the detail screen outranks it, it outranks Auto's pick, a band missing from this ladder is ignored, and applying it turns Auto off for that title (a fixed band is a decision, and the director never moves a decision). Verified while building: the staged start band is effectively always set (detail screen, quality switch, binge prefetch all stage one), so the default can only honestly apply where Auto was staged — which is exactly what the precedence says.
+- **Autoplay-previews:** NEW `player_autoplay_previews` (default ON, matching the hero's own default). The plan never defined "previews" — the only autoplay in the app is the Home hero carousel — so the switch gates it: `MainActivity` collects it, `NavGraph` passes it, Home runs `theme.heroAutoplay && autoplayPreviews`. Either the operator's flag or the viewer's switch being off stops the carousel.
+- **Subtitle size:** no new key — it already lived in the player sheet (`subtitle_size_percent`, 50..200 %). Settings now surfaces it with a slider that writes the same store through `saveSubtitleStyle`, so the sheet and Settings can never disagree.
+- **Tests:** NEW `PlayerDefaultsTest` (9 cases): the gate (on advances, off ends on the button, in-file seeks and movie endings never advance) and the start-band precedence (default applies on Auto, explicit tap wins, missing band ignored, fallbacks).
+- **Checks before committing:** no `PlayAgainButton` references left; zero raw `Color(0x…)` in the diff; full-file annotation audit clean; no new strings (Settings uses hardcoded copy like the rest of that screen; the player reuses `player_next_episode`/`player_play_again`).
+
+**Not done:** no local Gradle run — CI judges. Device check (switch off → episode ends on the button; switch on → advances; default 720p → title starts 720p; previews off → hero stays) is owner-only, part of step 20. Next: player step 11 (chapter ticks on the scrubber).
+
+---
+
+### Session 52 — Player rebuild step 11: chapter ticks + chapter list (Muse, 2026-11-06)
+
+**Agent:** Muse (BoNzoO), coded directly on the user's order. No qoder lane. Same branch as Sessions 40–51.
+
+**Built:** chapters (plan §5 #11, P14) — from the pack episode boundaries the server already sends.
+
+- **Pure mapping:** NEW `chapterTicks(episodes, durationMs)` in `player/ChapterTicks.kt` — `Coverage.episodes` (offset seconds + optional chapter title) → `ChapterTick(offsetMs, title, fraction)`. A tick needs a known offset strictly inside the file: the first episode starts at 0 (no tick at the very start), an offset at or past the end is not a chapter, a missing offset is not one either; duplicates collapse, the list comes back in play order. Untitled chapters read "Episode N". NEW `ChapterTicksTest` (4 cases: fractions in play order, no duration → no ticks, out-of-file offsets excluded, duplicates collapse + order).
+- **Scrubber:** `Scrubber` takes the active rendition's `episodes` and draws one short white mark per tick, straddling the track (2 dp wide, 9 dp tall). Tapping a tick seeks — the track's own tap-to-seek already does that, so a tick needs no gesture of its own. A single-episode file has no episodes list, so it has no ticks — honest, not a gap to fill by guessing. No ViewModel or UI-state change was needed: the data already rides in `state.activeRendition.coverage.episodes`.
+- **Print sheet:** a "Chapters" section (NEW string `player_chapters_title`, defined + used) listing each chapter as a row — title + mm:ss — that hides the sheet and seeks on tap. Both surfaces use the same pure function, so they can never disagree about where a chapter starts.
+- **Checks before committing:** string-guard replica clean (136 defined / 136 used, no orphans, no missing, no duplicate values); full-file annotation audit clean; no raw `Color(0x…)` in the diff.
+
+**Addendum (step-11 CI fix, same night):** CI run 42139482184 FAILED on one test — `PlayerChromeCopyTest: the player holds no prose of its own` (913 tests, 1 failed). The chapter row label `"${tick.title}  ·  ${tick.offsetMs.formatTime()}"` was a string literal with letters and spaces in `PlayerScreen.kt`, which the ratchet forbids. Fixed in the fix commit: NEW string `player_chapter_row` = `"%1$s  ·  %2$s"` in strings.xml, the row uses `stringResource(R.string.player_chapter_row, ...)`. Lesson: any user-visible label built in PlayerScreen.kt must come from strings.xml with placeholders — even a separator between two data values. Verified locally with the test's own logic: prose literals [] and the string guard replica clean (137 defined / 137 used, no orphans, no dups).
+**Addendum 2 (step-11 CI fix, second failure):** CI run 42140477757 FAILED on a different ratchet — `a value that needs its spaces keeps them quoted`. The `player_chapter_row` value `%1$s  ·  %2$s` has double spaces, which aapt collapses unless the whole value is wrapped in double quotes in the XML. Fixed in the fix commit: the value is now `"%1$s  ·  %2$s"` (quoted, same as the existing `player_rune_rank`). Lesson: any player string whose value holds a double space or a leading/trailing space must be quoted in strings.xml. Verified locally with the test's own logic: unquoted space values [] and the guard still clean (137/137).
+
+---
+
+### Session 53 — Player rebuild step 13: POST /api/v2/play app-side call (Muse, 2026-11-06)
+
+**Agent:** Muse (BoNzoO), coded directly on the user's order. No qoder lane. Same branch as Sessions 40–52.
+
+**Built:** the app calls the server's POST /api/v2/play instead of building the bundle client-side (plan §5 #13, P39), with the v1 path as the fallback.
+
+- **The finding that shaped the whole step (verified against the live server code, not assumed):** the app's `WirePlayBundle` matched NEITHER the spec §8.1 shape NOR the server's actual response. The spec says `renditions[]` with nested `playback`; the server's `catalog_api.play_bundle` returns `target, work_id, release_id, print_label, print, tiers[], auto, coverage{enumerated_episodes…}, candidates[], stream_candidates[], alternates[], download_options[], playable, reason, tried[]…` — no `renditions`, no `entitlement`, no `expires_at`, no `work_key`. The old wire model would have parsed a live answer to all-null and the call would have silently done nothing. It is deleted; the new models are the server's actual shape.
+- **Wire (V2Wire.kt):** NEW `WirePlayRequest` (release_id/episode_id/work_id/prefer/device) + NEW `WirePlayResponse`/`WirePlayTarget`/`WirePlayAuto`/`WirePlayTier`/`WirePlayCandidate`/`WirePlayCoverage`/`WirePlayEpisode`. `toDomain(baseUrl)` maps the server-ranked `stream_candidates` to renditions in server order (no client re-rank), each address our own redirector for its handle (the response carries no URL, by design); `workKey` stays empty (the response carries `work_id`, not a key) and entitlement stays the free default (the response carries none). Domain `Rendition` gains `resumable` (the candidate serves it).
+- **Coverage (NEW player/V2PlayCoverage.kt):** `WirePlayCoverage.toPlayerCoverage()` — the coverage block is the only place the episode offsets live (the v1 detail never serves them): `enumerated_episodes` → `EpisodeCoverage` list, plus the per-episode overlay (offset/chapter/ordinal). It lives in `player` because `network/models` never imports `player`.
+- **Call (RaddStreamApi.kt + CatalogRepository.kt):** `@POST("api/v2/play")` + `CatalogRepository.playV2(releaseId)` returning `V2PlayResult(bundle, coverage)` or null on ANY failure (403 while nginx still blocks the route, 404, dead socket, non-playable print) — the caller falls back, never errors.
+- **Staging (PlayerSessionStore.kt + PlayerViewModel.kt):** NEW `stageCoverage`/`peekCoverage` (same in-memory discipline as failover); `startStreamHandle` attaches the staged coverage to the first rendition. This is what makes step 11's ticks actually draw: until now `PlaybackRendition.coverage` was ALWAYS the default empty Coverage, so the ticks could never show and packed-file progression never saw chapter data.
+- **Call site (DetailViewModel.playPrint):** the main Play button tries v2 first (2 s ceiling — the server is on the same host, a healthy call answers in milliseconds), plays the server's winner with its runner-ups staged as silent failover and its coverage staged as the print's chapters; ANY failure — or a winner that turns out unplayable — falls back to the client-side link exactly as before. `playV2Bundle` returns false on the dead end so the fallback always runs.
+- **Tests:** NEW `V2PlayWireTest` (5 cases, fixture from the verified server keys): decodes the real response, maps the bundle in server order with the redirector, maps the coverage to chapter data (offsets + titles + serverOffsetFor), a non-playable print decodes to an empty ladder, the request names the print.
+- **Checks before committing:** no new strings (guard untouched); no composable touched (annotation audit not needed); diff reviewed file by file; one real bug caught in review — `playV2Bundle`'s early returns used to leave the viewer with nothing; it now returns a Boolean and the caller falls back.
+
+**Not done:** no local Gradle run — CI judges. **The live v2 path is UNVERIFIED until nginx allows /api/v2/play** (the route 403s at the edge today — the gate owns that allow-list change); until then every Play tap takes the v1 fallback, which is the safe behaviour, not a failure. Rung taps (playLadder) stay on the v1 ladder — `QualityOption` carries no release id, so the v2 call has nothing to ask for there; that is a later step. Device check (Play opens, ticks show on a packed title) is owner-only, part of step 20. Next: player step 14 (A-B repeat).
+
+**Addendum (step-13 CI fix, same night):** CI run 42141289228 on cde195f FAILED at `compileDebugUnitTestKotlin` — one error: `V2PlayWireTest.kt:4 Unresolved reference 'CoverageType'`. The test imported it from `com.raddstream.app.player`, but `CoverageType` lives in `com.raddstream.app.network.models.CatalogEnums` — the test's own package, so no import is needed at all. The main code compiled and assembleDebug passed; only the test file was wrong. Fixed in the fix commit on top of step 14: the bad import line deleted. Lesson: a type defined in the test's own package needs no import — and a test-only failure still fails the whole run, so the test file deserves the same review as the code it tests.
+
+---
+
+### Session 54 — Player rebuild step 14: A-B repeat (Muse, 2026-11-06)
+
+**Agent:** Muse (BoNzoO), coded directly on the user's order. No qoder lane. Same branch as Sessions 40–53.
+
+**Built:** A-B repeat (plan §5 #14, P13) — loop one segment of the file, A to B.
+
+- **Pure policy:** NEW `player/AbRepeat.kt` — `AbRepeat(aMs, bMs)` with `isActive` (both set, A < B); `abRepeatWithA` (an A at or past the current B starts a new segment and clears B); `abRepeatWithB` (a B at or before A is ignored, the old A stands); `loopTargetMs` (the playhead loops to A at B and not before, with a 1-second re-arm window so a seek still in flight is not re-issued on every tick). Media3's REPEAT_MODE_ONE loops the whole item, so the loop is ticker-driven, not a mode. NEW `AbRepeatTest` (5 cases).
+- **Wiring:** `PlayerUiState.abRepeat` (default empty); the ViewModel's 200 ms ticker asks `loopTargetMs` on every visit and seeks to A when it answers; `setAbPointA`/`setAbPointB`/`clearAbRepeat` next to `stepFrame` (the frame-step machinery this sits on). A new file clears the segment — the scope key is the bundle target plus the title, so a quality switch keeps the segment (same file, new address) while a new episode or a deep link clears it.
+- **UI:** three rows in the More sheet's Playback group, after Frame forward — Set point A / Set point B / Clear (shown only once a point exists). The sheet stays open for both taps, so setting A then B is one visit, not two; the row labels show the points once set ("Point A · 01:23"), so the segment is visible. NEW strings `player_ab_set_a/set_b/point/clear` (4), all defined + used.
+- **Checks before committing:** prose ratchet replica [] (the "A"/"B" args are single letters, no whitespace); quoting replica []; string guard replica clean (141 defined / 141 used, no orphans, no duplicate values); no composable added or moved (annotation audit not needed).
+
+**Not done:** no local Gradle run — CI judges. Device check (set A and B, the segment loops, Clear stops it, a quality switch keeps it) is owner-only, part of step 20. Next: player step 15 (AudioBoost verify-only) or step 19 (VIP streak display).
+
+---
+
+### Session 55 — Player rebuild step 15: AudioBoost verify-only (Muse, 2026-11-06)
+
+**Agent:** Muse (BoNzoO), verified directly on the user's order. No qoder lane. No code changed — this step was already built; the work was to prove it, twice.
+
+**Verified (two ways: read the code + grep cross-checks):** AudioBoost is exactly as the plan left it.
+
+- **Policy (`player/AudioBoost.kt`):** level 0..2, `plan()` splits a request into device fraction / player gain / software dB, all three safe for their sinks (player gain never exceeds 1.0); the excess above 100% is carried as `gainDb` with a reason that names the DynamicsProcessing preset it needs. `clampLevel` collapses non-finite input to the baseline instead of propagating NaN.
+- **UI (`player/PlayerPolicyBridge.kt`, `AudioBoostUi`):** `effectivePlayerGain` clamps the product to 0..1; `honestSummary` tells the viewer the truth — "Requested 140% — applied at the 100% player ceiling; the extra 40% needs system volume, this build adds no software gain." The slider (`PlayerScreen.kt:2501-2514`) shows `labelFor` + the honest summary and caps at `MAX_OFFERED_LEVEL`.
+- **Persistence:** `audio_boost_level` DataStore key + `saveAudioBoostLevel` + `setAudioBoostLevel` saves the clamped level; `PlayerUiState.audioBoostLevel` defaults to `AudioBoost.BASELINE`.
+- **Tests:** `AudioBoostTest` (11 cases) + `AudioBoostCeilingTest` (7 cases) exist and run in CI.
+- **Parked, confirmed:** no DynamicsProcessing preset exists anywhere in the app — only KDoc/comments naming it as the missing stage. Media3 1.3.1 ships no such renderer, so the >100% excess stays a request the UI honestly reports instead of a gain the player fakes.
+
+**Still owed:** device check (a quiet title at 140% — the summary shows, the sound stays at the ceiling) is owner-only, part of step 20. Next: player step 19 (VIP streak display).
+
+---
+
+### Session 56 — Player rebuild step 19: VIP streak display (Muse, 2026-11-06)
+
+**Agent:** Muse (BoNzoO), coded directly on the user's order. No qoder lane. Same branch as Sessions 40–55.
+
+**Built:** the VIP streak, shown on the VIP screen (plan §5 #19, P38).
+
+- **The decision (verified first, not assumed):** the server publishes only the PLAN — `VipRemoteStreak` (enabled, 7 days, reward coins) in the remote config — and no route carries a per-user progress count; `engagement.py` does not exist on the live tree and no streak claim/grant route exists anywhere. So the progress is counted locally, on the device: one open per day. The coin reward is never granted here — the card shows the operator's promise and says the coins go to the wallet when the operator pays them, because no screen in this build can see the wallet. A streak the server never verified is never presented as one it did.
+- **Pure policy:** NEW `player/LoginStreak.kt` — `localEpochDay(nowMs, offsetMs)` (a day is the device's own calendar day, not UTC — a UTC boundary at 05:00 PKT would call two night opens one day; `Math.floorDiv` so a negative day floors instead of truncating to 0), `loginStreakDay(nowMs)`, `nextLoginStreak` (same day: unchanged; next day: +1; missed day: restart at 1; clock moved back: never shortens). NEW `LoginStreakTest` (7 cases, including the offset and the pre-epoch floor).
+- **Storage:** `ServerSettingsRepository` gains `login_streak_last_day` (long, -1 = never) + `login_streak_count` (int) keys, flows, and `recordLoginDay(nowMs)` — the two move together, and a second open the same day changes nothing.
+- **Recording:** `MainActivity` records one open per launch in a `LaunchedEffect(Unit)` at the top of `setContent` — a rotation recreates the activity and re-runs the effect, but the record is idempotent within a day, so the second run is a no-op. No `lifecycleScope` exists in this app (only `lifecycle.viewmodel` is declared), and the Application has no scope of its own, so the composition effect is the launch hook that needs no new dependency.
+- **Display:** `VipUiState` gains `streak` (the plan, mapped in `withConfig`) + `streakCount` (observed from the store; the VIP screen only reads the count, never writes it, so a streak is never earned by opening the VIP screen). NEW `StreakCard` in `VipUpgradeScreen.kt` after the rewarded-pass section, shown only when `streak.isConfigured` — "Day X of 7" + progress bar + reward line + the honesty line; at the target it reads "7-day streak complete". Jade (`RaddCurrent500`), matching the player's accent.
+- **Checks before committing:** every `@Composable` in the file lands on exactly one function (audit: 15 annotations, StreakCard and PricingSection each keep their own); no prose ratchet touches this screen (the copy test scans `PlayerScreen.kt` only) and the screen already hardcodes its copy like the rest of the VIP screen.
+
+**Not done:** NOT pushed — CI run 42142493644 (steps 10/11/13/14) is still in progress and a push would cancel it; this commit waits for its verdict, then pushes with any fix it needs. Device check (open the app on consecutive days, the card counts up) is owner-only, part of step 20. Next: tabs control or the contact form.
+
+---
+
+### Session 57 — Language defaults: Hindi/Urdu audio + English subtitles for Desi, app English everywhere (Muse, 2026-11-06)
+
+**Agent:** Muse (BoNzoO), coded directly on the user's order. No qoder lane. Same branch as Sessions 40–56.
+
+**User order (06:18 PKT):** Pakistan and India mostly watch Bollywood and Hollywood in Hindi dub, so the app's default language for the Pakistan/India region is Hindi/Urdu, subtitles by default English, and the app language is English for all regions — with every option still customizable. He also made clear what the app is: Pakistan makes few movies, so Pakistanis watch piracy movies from online sites, and the app does the same — it aggregates publicly available links and hosts nothing (the disclaimer already says this; the order is recorded in memory as the standing product fact).
+
+**What was already true (verified before writing code):** the Region screen's Desi card (the default, preselected) already saves audio "Hindi" + subtitles "English"; International saves English audio; the player matcher already knows both `hin` and `urd` and `pickPreferred` already takes a fallback the player never passed. The app UI is English by construction — one `res/values`, no locale code anywhere, no language switch — so "app English everywhere" needed no code.
+
+**The gap (verified):** the Region screen only writes its defaults when the viewer taps Continue on it. A viewer who never reaches it kept null preferences, and null meant "the player's own pick": audio by device locale (English on an English phone — the exact bug `AudioTrackMatcher` was written to fix) and subtitles OFF. So the rule held only for first-run users who answered Region.
+
+**Built:**
+- **Pure policy:** NEW `player/LanguageDefaults.kt` — `effectiveAudioLanguage` / `effectiveSubtitleLanguage` (stored pick wins; only a stored null falls back to the region card: Desi Hindi/English, International English/null, East Asian null/English; unknown region resolves to Desi) + `effectiveAudioFallback` (Desi "Urdu" — one spoken language in these films, two track tags; tried only after Hindi misses). NEW `LanguageDefaultsTest` (6 cases).
+- **Wiring:** `PlayerViewModel.observeSettings` now combines region + both stored prefs into the effective values (plus the fallback in `PlayerUiState.preferredAudioFallback`, passed to `pickPreferred`); `SettingsViewModel` does the same combine for the chips, so Settings shows the language in force, not a stale "Player default"/"Off".
+- **Explicit choices now survive the fallback:** "Off" and "Player default" are stored as literals, not removals — `savePreferredSubtitleLanguage` no longer strips "Off", both Settings setters store the word itself, and turning subtitles off in the player sheet now saves "Off" (it used to save nothing, so the next episode brought the default back).
+- **Customization gap closed:** "Urdu" added to the Settings subtitle chips (audio already offered it; the region test pins card words to chip words, and widening the chip list cannot break it).
+
+**Checks before committing:** no test asserts the old stores-nothing behaviour (grep clean); the region test only checks card words are in the chip list; `combine` transform + Triple/Pair destructuring match the flow arities; every KDoc that said "null means off / player's own pick" updated to the new contract.
+
+**Not done:** pushed with step 19 after CI run 42142493644 went green — a new run judges both. Device check (fresh install, no Region answer: Hindi audio + English subs on first play; turn subs off in the player, next episode stays off) is owner-only, part of step 20. Next: tabs control or the contact form.
+
+---
+
+### Session 58 — Tabs control: the panel orders the bottom bar (Muse, 2026-11-06)
+
+**Agent:** Muse (BoNzoO), coded directly. Same branch as Sessions 40–57. Built while CI run 42143779496 (step 19 + language defaults) was still in progress — committed locally only, push waits for that run.
+
+**What it is:** the operator sets the bottom-bar tabs in the panel, and the app shows them in that order. The panel source is a new `tabs` tuning key (comma list, default `home,search,my_list,settings`), stored as a TEXT column the panel's `_seed` auto-adds on its next restart — the same way the theme keys landed. The panel validates it (only the four ids, at least one named) and labels it "remote-config (app reads it)". No tuning UI template exists; tuning is API-driven.
+
+**Server (this branch):** `panel_feed.read_tabs()` (same tolerant pattern as `read_theme`: missing DB/table/row/column → default four; unknown ids drop, duplicates collapse, empty → defaults) + `viewer.py` merges `tabs` into the remote-config body next to `theme` — no new route. 3 new `test_panel_feed.py` cases; 21 OK locally.
+
+**App (this branch):** `VipRemoteConfig.tabs`; NEW pure `ui/navigation/PanelTabs.resolve` + 7 tests — the operator's list is authoritative (a tab it did not list does not show), Home is always pinned first, Search drops out when its feature flag is off, empty/all-unknown falls back to the shipped four. DataStore mirror (`panel_tabs` key) via `saveTabs`/`panelTabs`; `RemoteConfigWatcher` saves it on the same successful poll as the theme; `MainActivity` collects it; `NavGraph` builds the bar from the resolved list. Routes stay registered for a hidden tab so a back stack holding it still resolves. Decode test extended.
+
+**Not done:** push (waits for run 42143779496); panel workspace changes are NOT in this repo — they go to the VM panel workspace + panel restart through the gate before tabs work end-to-end (live panel DB has no `tabs` column yet; defaults cover it). Next: contact form.
+
+## Addendum — Android CI failure on f5ebf4f, fixed
+- Android CI run 42143779496 FAILED at `compileDebugKotlin` — 3 errors, all in step 19, none in the language defaults: (1) `LoginStreak.kt:33` — `TimeZone.getOffset()` returns Int, `localEpochDay` takes Long; fixed with `.toLong()`. (2–3) `VipUpgradeScreen.kt:632–633` — `Icons.Default.ContentCopy` unresolved: the step-19 import edit had REPLACED the `ContentCopy` import line with the `DateRange` import instead of adding alongside it; the import is restored (alphabetical, between Check and DateRange). Lesson, same family as the step-7/8 annotation mistakes: an edit whose old_text spans a line you meant to keep can silently delete it — after any import edit, grep the file for the names the old block carried.
+- The fix commit also carries the tabs-control commit (Session 58) on top of it; the next run judges both.
+
+---
+
+### Session 59 — Contact form: the app writes to the panel's inbox (Muse, 2026-11-06)
+
+**Agent:** Muse (BoNzoO), coded directly. Same branch as Sessions 40–58. Built while CI runs 42144779319 + 42144779434 (step 19 fix + language defaults + tabs) were still in progress — committed locally only, push waits for those runs.
+
+**What it is:** Settings gains a "Contact us" card. The viewer picks a category (Bug, Payment, Content, Takedown, Other), writes a message, optionally leaves an email, and sends. The message lands in the panel's `contact_messages` table, where the operator already triages it — no new inbox, no login, no account needed.
+
+**Server (this branch):** NEW `contact_intake.py` — `POST /api/v1/contact` under the panel's own rules (five categories, body required and cut at 2000, subject cut at 200, the email stored masked, markup stripped, URLs replaced). A missing or locked panel DB answers 503, never a swallowed message. `viewer.py` answers it ahead of the v2 dispatcher in the v1 shape. 8 new tests, 8 OK locally, registered in backend-ci.yml. One near-miss while wiring: a first edit landed the new branch inside `_bucket_for` instead of `do_POST` (the anchor matched four places) — caught by reading the file, reverted, and re-anchored on the fall-through. Lesson, same family as the step-7 annotation mistake: an anchor that matches more than once edits the first match, not the one meant — check the line number after every multi-match edit.
+
+**App (this branch):** `ContactWire`, `RaddStreamApi` POST, `CatalogRepository.submitContact` (false on any failure), `SettingsViewModel` `ContactUiState` + submit (success closes and clears, failure keeps the text), `ContactDialog` with wrapping category chips. The copy guard was checked by hand: the dialog's literals carry no banned word and sit inside the OnboardHonesty scan scope.
+
+**Not done:** push (waits for the two runs); nginx allow-list for `/api/v1/contact` is a gate item, like `/api/v2/play` before it. Next: Live control page.
+
+---
+
+### Session 60 — Per-region broadcasts + disclaimer (Muse, 2026-11-06)
+
+**Agent:** Muse (BoNzoO), coded directly. Same branch as Sessions 40–59.
+
+**What it is:** two halves of one promise — the operator can finally address a broadcast to a region, a tier or a build, and the app can finally show the operator's disclaimer.
+
+**Broadcasts.** The panel's broadcasts table had a `target` (all/free/vip/region/version) but no way to say WHICH region or version — a "region" broadcast named nobody. The panel now stores `target_detail` (seeded onto existing databases), validates target+detail as one rule, and the form asks for it. The server serves every live published broadcast with its target; the app filters with a new pure `BroadcastTargeting.visible` (7 tests): all always, free/vip only on a KNOWN tier (an entitlement that has not loaded hides both), region by the panel country mapped to the viewer card, version by exact match. The honest limit is written in the code and on the panel form: the phone knows the region card, not the country — Pakistan and India share the Desi card, so a Pakistan broadcast reaches Indian Desi viewers too. `mergePanelFeed` filters through it, with a merge-level test proving the three audiences.
+
+**Disclaimer.** The panel holds it as two tuning keys (`disclaimer_text` ≤4000, `disclaimer_version` 0..9999); the feed carries it on remote-config; the watcher mirrors it; the app shows it once per version on first run (a dialog that cannot be swiped away without "I understand") and again in Settings for re-reading. Nothing is invented: an empty text means nothing published, and nothing shows. The operator has not written the text yet — that is his to write, and the draft policy doc is his to paste from.
+
+**Not done:** push (this commit, then CI judges); the panel workspace files go to the VM panel + restart through the gate with the tabs edits. Next: panel keys the app ignores.
+
+---
+
+### Session 61 — Panel keys the app ignored + version health + settings_unavailable (Muse, 2026-11-06)
+
+**Agent:** Muse (BoNzoO), coded directly. Same branch as Sessions 40–60.
+
+**What it is:** four audit findings closed in one commit — the P0 first.
+
+**`settings_unavailable` (P0).** The server has sent this marker since the v1 panel was written: when its settings row cannot be read, it answers shipped defaults and marks the body degraded. The app never decoded the marker, so a degraded 200 would have overwritten the operator's real switches, prices and rails with defaults. The app now decodes it and, at all three consumers — the config watcher, Home's check, and the VIP screen's price load — keeps the last good config and acts on nothing in the body.
+
+**Section caps.** `home_sections_max` / `section_cap` are read by the server feed (clamped to the panel's bounds) and applied there — the feed itself caps the sections and the works per section. The panel now labels them honestly as server-applied.
+
+**Free quality cap.** The operator's cap ("480p" or "720p") is served on remote-config, mirrored by the watcher, and the quality gate is cap-aware: at 480p, 720p rungs, prints and labels leave the free ladder and layout, and the locked message says so. Detail and player collect the cap the same way they collect the gate switch.
+
+**Version health.** Two halves: the app's HTTP client now sends its own User-Agent (with the version name) on every request — before this, only the discovery probes sent it. And the app decodes the two version codes the server already publishes: the update notice compares the published APK code against this build, and a build below the operator's minimum gets a required update dialog — no "Later", no dismiss. The minimum comes from the latest *published* panel snapshot; the draft does not count.
+
+**kill_switch.** Investigated, no code: the key exists nowhere — not in the panel, not in the server, not in the app. The kill switch is `maintenance_mode`, which the app already honours. Recorded so the audit's "ZERO hits" line is answered, not left open.
+
+**Not done:** push (this commit, then CI judges — the region/disclaimer runs on d541dd4 are both green, so nothing is in flight). The panel label file rides the gate with the tabs / Live page / broadcast / disclaimer edits. Next: research-rule screens.
+
+**Addendum — CI failure on 7483a6b (Android run 42149015453, Backend run 42149015415 SUCCESS).** The Android run failed at `kaptGenerateStubsDebugUnitTestKotlin` — a compile error in `VipQualityGateTest.kt:119-121, 236`, all one cause: the Session 61 edit that inserted the 480p-cap test deleted the `@Test` + `fun` header of the next test (`a free viewer gets the free rungs and a fresh auto pointer`), leaving its body floating at class level ("Expecting member declaration") and one brace too many at the end of the file. Fixed by restoring exactly those two header lines (verified against the parent commit; braces 17/17, 9 @Test functions each followed by a fun). The fix ships in the next commit on this branch, with the Session 62 work below.
+
+---
+
+### Session 62 — Home and Detail research rules (Muse, 2026-11-06)
+
+**Agent:** Muse (BoNzoO), coded directly. Same branch as Sessions 40–61.
+
+**What it is:** the UX plan's Home and Detail rules, built. Home: Continue Watching first and pinned, at most 10 rows total (`visibleHomeRows`, pure — 9 content rails when a saved title takes the first slot), an honest offline banner ("You are offline — only titles saved on this device are available", shown only when something saved is actually on screen), and a real empty state ("Nothing here yet — check your server in Settings", with a button to Setup) instead of a blank page. Detail: a Resume button that names the episode and what is left ("Resume S1:E3 · 23 min left"), runtime and season count in the header, progress marks on episode rows (a bar + "23 min left", or "Watched"), an included line that says what the plan covers ("Included in free — up to 720p", "480p included — 720p, 1080p and 4K need VIP"), and the "Open" button renamed "Opens the provider's page" — one word hid that the tap leaves the app's player for the provider's page.
+
+**Server.** One honest addition: `api_v1_get_post_detail` now carries `runtime_minutes` from the `cat_works` row (looked up by the same work-key derivation the detail route already mints), guarded so a title with no work row simply sends no key. Two tests in `test_database.py` (135 OK).
+
+**App.** Resume is local-only and honest: `findWork` on the watch-history DAO, newest resumable row wins, a finished row is not a resume, and the Resume button only shows when the v2 layout actually has a print for that episode (`resumePrintFor`). The pure helpers (`resumePointFor`, `episodeProgressFor`, `formatRuntimeMinutes`) are tested in `DetailResumeTest`; `visibleHomeRows` in `HomeRowsTest`; `runtime_minutes` decode in `ModelsTest`. No new strings.xml entries — every label is a Kotlin literal in the screens, like the rest of those files, and the player-string guards do not scan them.
+
+**Not done:** push (this commit, then CI judges — the panel-keys runs are finished: Backend green, Android red on the test-header fault fixed above, so nothing is in flight). Next: Settings/Downloads/Search/My List research rules.
+
+**Addendum — CI failure on b3cc950 (Android run 42151806345, Backend run 42151806354 SUCCESS).** The Android run failed at `compileDebugKotlin` — five errors, all one cause, all in `HomeScreen.kt:272-298`: the Session 62 insert of `OfflineBanner` stole the `@Composable` of the following `BroadcastBanner` (the same annotation-through-KDoc trap as the step-7 coach overlay). `BroadcastBanner` was left without its annotation, so its body failed as non-composable calls. Fixed by restoring the annotation to `BroadcastBanner` and running the full-file @Composable audit on every screen and ViewModel touched in Sessions 62–63 (all clean; the two 0-annotation functions flagged are plain helpers, `openDownload` and `Modifier.horizontalScrollPadding`). The fix ships in the next commit on this branch, with the Session 63 work below.
+
+---
+
+### Session 63 — Settings and VIP research rules (Muse, 2026-11-06)
+
+**Agent:** Muse (BoNzoO), coded directly. Same branch as Sessions 40–62.
+
+**What it is:** the UX plan's Settings and VIP rules, as far as the app can honestly build them alone — no server change, no invented data.
+
+**Settings.** The Catalog Server card no longer shows raw counts (Works/Releases/Links were the operator's numbers on a user screen); the connection test still fetches them for its own message. Two new switches, both on by default: **Data Saver** (on mobile data, titles start at 480p and the server is asked for its data-saving copy — a pure `player/DataSaver.kt` with 5 tests; the cap touches only the start band and Auto's first rung, never the ladder, so the viewer can still switch up) and **Wi-Fi-only downloads** (a kept title does not start on mobile data at all while it is on; the refusal message says where the switch lives). The mobile-data poster note was corrected at the same time — it used to claim keeps "download whatever network you are on", which the new gate makes false. **Languages** is now one card showing the effective values ("Audio: Hindi. Subtitles: English.") with the audio and subtitle chips moved in from Playback & Display; the Region card and the player sheet still write the same keys, which is fine — the rule is one place that *shows* what is in force.
+
+**VIP.** The price cards now say the price is the full amount ("This is the full amount you send — no extra charge is added here"): there is no tax field anywhere — not in the panel's monetization row, not in the remote-config body — so no tax breakdown is invented, and the line states what the viewer actually pays by manual transfer. The renewal date was already shown ("Confirmed through …"), so nothing was added there. And there is deliberately **no cancel button**: VIP is a manual payment the operator approves — no stored card, no recurring charge anywhere in the code — so there is nothing to cancel. The active-VIP card says so plainly ("VIP does not renew itself. When it ends, pay again to continue"), and cancelling a *pending* payment request already exists ("Remove request").
+
+**Not done:** push (this commit, then CI judges — the b3cc950 runs are finished: Backend green, Android red on the annotation fault fixed above, so nothing is in flight). The panel workspace files still await the gate. Next: Downloads/Search/My List research rules. Device checks owner-only.
+
+**Addendum — CI failure on 7851b89 (Android run 42152768488; no Backend run — the push touched App only).** The run failed at `compileDebugUnitTestKotlin` — one error, `VipQualityGateTest.kt:102:33`: Session 61's new 480p-cap test passed `setOf("720p")` for `LadderForScope.downloadOnlyBands`, which is a `List<String>` (it always was). The typo was masked until now: the 7483a6b run failed on the missing test header before test compile, and the b3cc950 run failed on the HomeScreen annotation in main compile. Fixed by `listOf("720p")`; the fix ships in the next commit, with the Session 64 work below.
+
+---
+
+### Session 64 — Downloads research rules (Muse, 2026-11-06)
+
+**Agent:** Muse (BoNzoO), coded directly. Same branch as Sessions 40–63.
+
+**What it is:** the UX plan's Downloads rules — one list, size + quality before confirm, real keep titles, watched auto-delete. No server change.
+
+**One list.** The Downloads screen had two sections with two systems' names ("Saved to this device" vs "In-app keeps"). It now has one list under the one word "Downloads": files first (the foreground downloads the viewer is watching), then the in-app keeps, each row keeping its own actions and its own one state word. The two explainer cards became one short line; the dead section-title composable is gone.
+
+**Size + quality before confirm.** Tapping Download used to start the download at once. It now stages the ask first: one metadata call decides which system owns the copy, then a dialog shows the quality and the size — a real measured size, or "Size unknown" when the server named none — and only Confirm starts the download. Cancel leaves nothing behind. The permission-retry path (`retryLastDownload`) still re-enters the same flow.
+
+**Real keep titles.** An engine keep's row used to say "Saved file": `AdoptRequest` carried no title and `adopt` stored `""`. The title now travels with the request — from Detail (the work's title) and from the player (the playing title) — and old blank rows fall back to the print label, then "Untitled download". "Saved file" never appears as a title anywhere now.
+
+**Watched auto-delete.** A finished movie's download deletes itself to free space, with a notice naming it. On by default, with an off-switch in Settings (Offline card). Only a fully downloaded keep is touched, and only a movie — the check reads movie watch-history rows against the rail's own 10-second end-guard, so a half-watched film stays and one watched episode can never delete a season keep.
+
+**Tests:** new `DownloadsRulesTest` (4 cases: watched-title set, end-guard boundary, keep-confirm size labels, one-list order). **Not done:** push (this commit, then CI judges — the 7851b89 run is finished: Android red on the one test typo fixed above, so nothing is in flight). Next: Search/My List research rules. Device checks owner-only.
+
+**Addendum — CI failure on 9e0e7fb (Android run 42153914025).** The run failed at `compileDebugKotlin` — one error, `DetailViewModel.kt:105:5`: Session 64's new top-level `PendingKeep` is public and exposes its `internal` parameter type `KeepTarget`. Fixed by making `PendingKeep` `internal` (it is only ever read by the Detail screen, in the same module). The fix ships in the next commit, with the Session 65 work below.
+
+---
+
+### Session 65 — Search + My List research rules (Muse, 2026-11-06)
+
+**Agent:** Muse (BoNzoO), coded directly. Same branch as Sessions 40–64.
+
+**What it is:** the UX plan's Search and My List rules. Server + app.
+
+**My List.** Remove is one tap now, not a held tile plus a confirm dialog: a small × on the poster's corner removes the row at once, and the snackbar offers Undo for as long as it is on screen. The old arm-and-confirm state machine (`MyListRemoval`) is deleted, with its test. Sort gains "Unwatched first": titles with no finished watch row come first, then recently-added inside each half — finished means the rail's own 10-second end-guard, so a half-watched title still counts as unwatched. The empty state shows three "Popular right now" titles — the server's own trending order (most prints and mirrors first), loaded once and only when the list is empty; no server means no titles, the text-only empty state stands.
+
+**Search — typo tolerance (server).** Exact search still answers first and always. Only when it finds nothing does the server take a second chance: a 3-gram candidate pass over titles (one scan, 200 rows), then a true edit-distance check in Python — every query token must land within one edit of some title token. "Avngers" finds "Avengers Endgame"; two edits away stays silent. The adult clause applies to the candidate pass too, and the operator's hides still apply in the final query. The response carries `"fuzzy": true` when the fallback ran, and the app says so out loud ("Showing close matches — check the spelling."). New module `Fast_Fetch/search_fuzzy.py`, new suite `Fast_Fetch/test_search_fuzzy.py` (8 tests, registered in backend-ci.yml).
+
+**Search — "Included in my plan" (server + app).** A new `free_only=1` filter on `/api/v1/posts`: a work counts when it has at least one print the free gate lets through — 1080p/2160p/4K/UHD/Full-HD are premium, 720p joins them under a 480p operator cap, and a print with no quality label counts as free, the same as the client treats an unknown band. The chip sits in the filter rail and the filter sheet, and only a free viewer sees it: for a VIP viewer everything is included, so the chip would only narrow their catalog for nothing.
+
+**Search — suggestions while typing (app).** The existing `/api/v2/suggest` endpoint is wired in: two characters minimum, same debounce as the search, at most five title chips under the field. A tap searches for that title — it never opens a page, because a suggestion names a work, not a post. A blocked route or an old server just leaves the list empty; the search never fails for it. **Gate item:** `/api/v2/suggest` needs the nginx allow-list before it answers in production, like `/api/v2/play` and `POST /api/v1/contact` before it.
+
+**Tests:** server — new `test_search_fuzzy.py` (8 tests: edit distance, tokenize, match rules, typo finds the title, exact stays exact, adult never served, free-only keeps only works with a free print) + `test_panel_feed.py` 29 OK + `test_database.py` 135 OK locally. App — new `MyListSortTest` (2 cases) + new `SuggestWireTest` (3 cases: suggest decode, empty body, fuzzy posts page). **Not done:** push (this commit, then CI judges — the 9e0e7fb run is finished: Android red on the `PendingKeep` visibility fault fixed above, so nothing is in flight). Next: backend gaps, design polish, final double-verification. Device checks owner-only.
+
+**Addendum — CI verdict on c65cf05 (Android run 42155195902, Backend run 42155195867).** Backend **SUCCESS**. Android **FAILURE** at `compileDebugKotlin` — one error, all Session 65: the six-flow `combine(...)` in MyListViewModel does not resolve to a typed overload (the compiler falls back to the vararg form, whose array the six-parameter lambda cannot take). Fixed by combining as two triples (3 + 3) and destructuring the pair — the overloads this codebase already uses. The fix ships in the next commit, with the Session 66 work below.
+
+---
+
+### Session 66 — Backend gaps: stream deep link + share URI, WorkManager sweep, by-media sort, watchlist pull (Muse, 2026-11-06)
+
+**Agent:** Muse (BoNzoO), coded directly. Same branch as Sessions 40–65.
+
+**What it is:** the audit's backend/API gaps (§41–46), minus the two already done (POST /api/v2/play in step 13) and minus the two v1 aliases NOT built — see the decision at the bottom.
+
+**Stream deep link + share with a URI.** NEW `ui/navigation/DeepLinks.kt`: the one owner of deep-link URIs (detail, stream, browse) — build and parse with the same route codec (`Screen.kt`'s encoder/decoder went `private` → `internal` for it). The NavGraph's Player destination now answers `radd://stream/<handle>/<title>` with the same args the in-app route carries, so the decode is identical; the manifest already accepted any path under the brand scheme, so no manifest change was needed for the link itself. Sharing a title from Detail now sends the template words PLUS the title's own deep link, so the receiver has somewhere to go. NEW `DeepLinksTest` (6 cases: round-trips, unknown path, non-numeric id, foreign scheme).
+
+**WorkManager sweep.** The sweep already ran in-process every 5 minutes while the app is alive (`CacheEngineRunner`); nothing ran it while the app is closed. NEW `data/cache/CacheSweepWorker.kt` (`@HiltWorker`, runs the same `CacheSweeper`, never retries — the next day or the next launch covers a failure), `work-runtime-ktx` 2.9.0 + `hilt-work` in the version catalog and the app build, the Application now implements `Configuration.Provider` with the Hilt worker factory, and a unique daily periodic work (`KEEP`, so reinstalling the line never duplicates it) is enqueued at launch. The manifest removes WorkManager's default startup initializer, or the Hilt worker could never construct — the only startup initializer in these dependencies is WorkManager's own.
+
+**By-media sort.** `/api/v1/search/by-media` takes `sort=best|newest|most_copies|title` now (`media_search.search_by_media` + `viewer.api_v1_search_by_media` + the route). Best is the old key (title strength, evidence agreement, print count); newest orders by year, most_copies by print count, title alphabetically. An unknown value falls back to best, never a refusal, and the answer echoes the sort it used. The sort orders the capped window only — it never surfaces a row the window missed. 4 new tests in `test_media_search.py` (44 OK).
+
+**Watchlist pull materialization.** This is what "No /api/v1/sync" actually meant: the push side existed, the pull side only counted what it could not name. Server: `GET /api/v1/posts` takes `work_ref` — a minted handle, unminted with the server's own secret (`redact.parse_text`), resolved to a post by NEW `viewer._resolve_work_ref` (imdb/tmdb id columns; title-family keys by a per-connection UDF over the same `normalize_title` the key was derived from, family checked in Python). A forged handle, a handle for a missing work, and a flagged work's handle all answer an empty page (total 0), never an error; the operator's hides still apply on top. NEW `Fast_Fetch/test_work_ref.py` (5 tests, registered in backend-ci.yml). App: `FavoritePlan` now carries `unknownRefs` (blank refs excluded, or an empty handle would answer an ordinary list page); `syncNow` resolves up to 50 per pass through the same posts endpoint, saves the post locally (its stored handle means the next pass knows it), clears any stale refusal against it, and reports `favoritesPulled` — the account card's sentence says so, and `favoritesUnknownHere` is now only what is still unresolved. NEW `SyncContractTest` cases (2).
+
+**The v1 aliases NOT built (deliberate).** `/api/v1/trending` and `/api/v1/suggest` as v1 routes: the app already reaches both capabilities — trending through `sort=trending` on the posts list (My List's popular row uses it) and suggestions through the wired `/api/v2/suggest`. A v1 alias would be a route no caller calls, and this project does not build uncalled routes. If a v1-only client ever appears, the alias is a one-line route each.
+
+**Tests:** server — test_media_search 44 OK, test_work_ref 5 OK, test_search_fuzzy OK, test_panel_feed OK, test_redact OK, test_database OK (skipped=1) locally. App — new DeepLinksTest (6) + SyncContractTest additions (2); no test constructs the touched ViewModels/repositories directly. **Not done:** push (this commit, then CI judges — the c65cf05 runs are finished: Backend green, Android red on the six-flow combine fixed above, so nothing is in flight). Next: design polish + 12 doc contradictions, final double-verification. Device checks owner-only.
+
+**Addendum — CI verdict on 7aa9e46 (Android run 42156765811, Backend run 42156765709).** Backend **SUCCESS**. Android **FAILURE** at `:app:checkDebugAarMetadata` — `Could not find androidx.hilt:hilt-work:2.51.1`: the Session 66 catalog entry pinned `hilt-work` to the Hilt version (`version.ref = "hilt"`), but `androidx.hilt:hilt-work` has its own numbering — 1.2.0 is the current one. Fixed by giving `hilt-work` its own version ref (`1.2.0`). The fix ships in the next commit, with the Session 67 work below.
+
+---
+
+### Session 67 — Design polish: bundled fonts, launcher PNGs, tab icons, semantic tokens, artwork accent, Settings plan + storage, 12 doc contradictions (Muse, 2026-11-06)
+
+**Agent:** Muse (BoNzoO), coded directly. Same branch as Sessions 40–66.
+
+**Bundled fonts.** Outfit (display) + Inter (text), both SIL OFL 1.1, downloaded from
+`google/fonts` and verified as real variable TTFs by name table (Inter 876 KB,
+Outfit 111 KB) into `res/font/outfit_variable.ttf` / `inter_variable.ttf`.
+`Type.kt` now points `RaddDisplayFamily` / `RaddTextFamily` at the bundled files
+(the exact switch `docs/HANDOFF_apptime.md` prescribed); the dead
+`brandFontFamily` platform-family mapper is deleted and the header comment now
+says the fonts are bundled. No gradle change (fonts are resources). Follow-on
+(not done): the weight axis via `FontVariationSettings`, so Bold/SemiBold
+weights drive the variable font's wght axis instead of the default instance —
+device check owner-only.
+
+**Launcher PNGs were blank.** Every one of the ten legacy `mipmap-*/ic_launcher*.png`
+files was a single solid colour `(10,10,15)` — no mark at all. Regenerated from
+the current adaptive icon with `~/workspace/render-launcher-pngs.py` (kept in the
+workspace, not the repo): the background's exact 3-stop gradient
+(`#06090B` → `#081412` → `#0B2621`) plus the Source Ripple foreground's exact
+geometry (outer arc r=32 stroke 8 at 62% jade, inner arc r=18 stroke 10 full
+jade, both spanning −70°…+70° through east; core dot r=8; rider dot r=5.4),
+rendered 4× and downscaled, at 48/72/96/144/192, square + circular-masked
+round. Verified two ways: pixel stats (771 colours, 3,561 jade pixels at
+xxxhdpi, was 1 colour / 0 jade) and a visual read of the rendered icon.
+
+**Tab icons.** The four brand tab vectors moved from `files/brand-assets/android-vectors/`
+into `res/drawable/ic_tab_*.xml` with the `android:tint="?attr/colorControlNormal"`
+line stripped on copy-in (this app has no such attr — the step-8 lesson; the
+vectors parse as XML and carry no `?attr` now). The bottom bar uses them via
+`ImageVector.vectorResource` instead of the Material defaults; the
+`NavigationBarItem` tint is the only tint, so selected/unselected colours work
+exactly as before. The removed `Icons.Default.*` imports are gone with no
+remaining `Icons.` reference in `NavGraph.kt`.
+
+**Semantic tokens, actually used.** `RaddHdrPill` / `RaddCamPill` / `RaddHealthOk` /
+`RaddHealthExpired` / `RaddHealthDead` were defined in `Color.kt` and used nowhere.
+Now: `HdrBadge` wears `RaddHdrPill` + `RaddSignalGold` (verified 9.8:1 on that
+pill); `CamBadge` and the CAM branch of `PrintQualityBadge` wear `RaddCamPill` +
+`RaddHealthDead` — a cam recording is a low-quality source, not an error, so it
+stops borrowing the error role; the `LinkHealthChip` dot wears the health
+tokens (Ok/Dead/Expired, outline for unchecked). The `MediaBadges.kt` header
+KDoc now says the tokens are the sanctioned source. Still defined but unwired:
+`RaddBluRayPill` / `RaddWebDlPill` — no distribution badge exists to wear them;
+not invented here. Audit corrections folded in: `RaddStreamMark` IS used
+(`CatalogImage` fallback, Home), and the SetupScreen accent button ALREADY has
+a `contentColor` — both audit lines were stale, no code needed.
+
+**Artwork accent, wired at last.** `rememberArtworkAccent` existed with no caller.
+`CatalogImage` gained an optional `onBitmap` hook (fires only on a real success,
+via `SubcomposeAsyncImage.onSuccess` + `toBitmap()`; gated/failed loads report
+nothing). The detail header captures the poster bitmap and frames the poster
+with a 1dp border in its own accent (60% alpha); no bitmap yet means no border,
+so the brand jade never pretends to be a sample.
+
+**Settings polish.** The VIP card is now a plan summary: VIP with its date
+("confirmed through <date>", same format as the VIP screen), payment pending,
+or Free — plus the operator's published prices from the remote config
+("Rs 200 a month · Rs 1,500 a year", hidden entirely when unpublished, never a
+zero). New state in `SettingsViewModel` (entitlement collector + one price
+fetch + `formatCacheSize` shared with the screen). The Storage card gained the
+visual: "Poster images: X of Y" + a progress bar against Coil's own disk-cache
+cap, measured from the loader (null until measured); the Clear button
+re-measures after clearing so the bar shows the empty cache. The trial days
+stay on the Account card — one screen, one fact.
+
+**12 doc contradictions — closed.** HANDOFF_appci (0 workflows) and BUILD_PLAN
+(signing blocker) got dated retirement notes — both are history now (CI green,
+`v1.0.4` published). App/AGENTS.md: "Device/CI verification is pending" →
+device pending, CI green; the Phase 2 row's "season/episode mismatch blocks
+series playback" retired (fixed in code, series play now); the stale §13.10
+"update this AGENTS.md with your session log" line retired by the root rule.
+RESERVE_NOTE: trending is an order that already exists (`sort=trending`, most
+prints/mirrors, no play counts) — only the dedicated feed endpoint is missing;
+the KDoc's "continue-watching has no server support" line dropped (it renders
+from local history). PLAN.md's "`anime` returns zero rows" corrected (5847
+rows). SearchViewModel's KDoc now says the visible per-group order is the
+client's re-sort, the server sort orders the page fetch. HANDOFF_appcache §6
+and CacheSweeper's KDoc: WorkManager is delivered (Session 66), not "not yet
+a dependency". The admin-control ideas doc: hero_max, section caps and tabs
+annotated as wired (Sessions 41/58/61). PLAYER_AND_CACHE_DIRECTIVE §4: the
+streak shipped on the VIP screen (step 19), not Settings/Profile; the pre-roll
+ad delegate is still unbuilt (ads parked). Already resolved, no edit needed:
+PARITY's heal note already carries its retirement (missing-post 404 fixed in
+2c89cc2); the admin-v2 README makes no tuning-persists claim and `_seed` is
+already NULL-only seeding.
+
+**Tests:** no new suites (no new pure logic — the VM additions are collectors
+over existing repositories; no test constructs `SettingsViewModel` directly).
+Pre-push checks: @Composable counts unchanged on every touched file (the two
+script flags were artifacts: a same-line `*/@Composable` and a lowercase
+composable the regex missed); no strings.xml / PlayerScreen.kt changes; tab
+vectors parse as XML with no `?attr` left. **Not done:** push (this commit,
+then CI judges — the 7aa9e46 runs are finished: Backend green, Android red on
+the hilt-work version fixed above, so nothing is in flight). Next: player
+steps 12/16–18/20, final double-verification. Device checks owner-only.
+
+**Addendum — CI verdict on 641b6e7 (Android run 42158361416; no Backend run — App-only paths).** Android **FAILURE** at `:app:kaptGenerateStubsDebugKotlin` — every error was in `CatalogImage.kt:44`: the Session 67 KDoc edit closed the file's KDoc comment (`*/`) right after the new `onBitmap` paragraph, orphaning the rest of the original KDoc as bare text outside any comment. Fixed by deleting that stray close (the paragraphs are one KDoc again); the log named no other file. The fix ships in the next commit, with the Session 68 work below.
+
+---
+
+### Session 68 — Region screen redesign: one question, three short cards (Muse, 2026-11-06)
+
+**Agent:** Muse (BoNzoO), coded directly. Same branch as Sessions 40–67. Owner order 08:44 PKT: "make select region card simple and easy to understand, short text, not much info that confuse user … beautiful and modern and stylish, use our own SVG or animation … design every card and box carefully beautifully."
+
+**What changed.** The old screen was a brochure: a long explainer paragraph, then per card a
+title, a summary, 3–4 bullet contents, a preference line and a caveat. The new screen asks
+one question and offers three short answers:
+- A centred header: the source-ripple brand mark (56dp), "What do you love to watch?", and
+  one line — "Pick one. You can change it later in Settings."
+- Three cards, each a brand icon in a 48dp tile, a name, one short tagline, and the
+  audio/subtitle promise as a pill: **Desi** — "Bollywood & Hindi dubs" — "Hindi audio ·
+  English subtitles" (with a small "Recommended" pill, it is the shipped default);
+  **East Asian** — "K-Drama, C-Drama & Anime" — "Original audio · English subtitles";
+  **International** — "Hollywood & world cinema" — "English audio".
+- The selected card wears the brand jade — border, icon tile and pill shift together through
+  `animateColorAsState`, and a jade check badge scales in. Cards enter staggered (90ms apart,
+  fade + rise). The whole card is the tap target, radio-button role kept, and the Continue
+  button and the announced save-failure line are unchanged apart from a shorter sentence.
+- Three new brand vectors in the house style (24×24, 2px stroke, round caps, no tint attr):
+  a clapperboard (`ic_region_desi`), a paper lantern (`ic_region_east_asian`), a globe
+  (`ic_region_international`); all three parse as XML with no `?attr` left.
+- The data got shorter with the screen: `RegionChoice` is now title + tagline + the two
+  language keys; the bullet `contents` and the `caveat` are gone, and `preferencePill()`
+  is the card's one-line promise. The honesty boundary did not move — the `RegionChoices`
+  KDoc still records that no card may offer Pakistani drama serials (no importer scrapes
+  Hum, ARY or Geo), and the test still pins it on the taglines. `preferenceLine()` is
+  untouched: Settings still shows the same sentence it always did.
+- Tests: `RegionChoicesTest` — the last test now pins the taglines (no drama promise, at
+  most 32 characters, every card named) and a new test pins the three pills. The language
+  and preference-line tests are unchanged.
+
+**Checks:** @Composable count unchanged on the screen (2 = 2, no annotation stolen);
+`regionIconRes` is a plain function returning the drawable id, not a composable. No
+strings.xml / PlayerScreen.kt changes. **Not done:** push (this commit, then CI judges —
+nothing is in flight). Next: player steps 12/16–18/20, final double-verification. Device
+checks owner-only (see the owner-only list: the region cards on a real phone, Desi
+preselected, tap → jade check, Continue saves).
+
+**Addendum — CI verdict on 69d7bcf (Android run 42159337164; no Backend run — App-only paths).** Android **FAILURE** at `compileDebugKotlin`, two causes:
+- `RegionSelectionScreen.kt` — `animateColorAsState` unresolved: the Session 68 screen
+  imported it from `androidx.compose.animation.core`, but it lives in
+  `androidx.compose.animation` (the import `HeroCarousel.kt` already uses). Fixed by
+  correcting the import; the overload ambiguities below it were downstream of the same
+  missing reference.
+- `DetailViewModel.kt:90` — public `DetailUiState.pendingKeep` exposes internal
+  `PendingKeep`. The 1b88644 fix (Session 65) made `PendingKeep` internal to satisfy a
+  public function, which only moved the exposure onto the public state class — and the
+  error stayed masked behind three earlier runs that died before this check (the combine
+  failure, the hilt-work resolution failure, the CatalogImage KDoc failure). The correct
+  fix is the other direction: `PendingKeep` and `KeepTarget` are public now, because both
+  are part of the public UiState shape (and the screen's confirm dialog). Both fixes ship
+  in the next commit.
+
+**Addendum 2 — CI verdict on be96699 (Android run 42159907231; no Backend run — App-only paths).** Android **FAILURE** at `compileDebugKotlin`, ONE error left: `RegionSelectionScreen.kt:222:35` — `vectorResource(...)` has no applicable candidate. The top-level `androidx.compose.ui.res.vectorResource` does not exist in this Compose version (BOM 2024.06.00); the compiler only knows the two `ImageVector.Companion.vectorResource` overloads. NavGraph already uses the working form, so the screen now calls `ImageVector.vectorResource(...)` too (with the `ImageVector` import restored). Fix ships in the next commit.
+
+**Addendum 3 — CI verdict on 0108f3e (Android run 42160477872; no Backend run — App-only paths).** Android **FAILURE** at `testDebugUnitTest`, 3 tests, compile now clean. All three are tests from Sessions 61–63 that had never run green in CI — every run since b600d8f died before test execution, so they sat masked behind compile failures. (1) `VipQualityGateTest.kt:108`: the 480p-cap test expected the auto pointer to fall back to "480p"; the gate's rule, pinned by the shipped-cap test, is that the auto pointer dies with its rung — test fixed to `assertNull`. (2) `DetailResumeTest.kt:83`: a watched episode's `remainingLabel` was "Less than a minute left" under a full bar — `episodeProgressFor` now returns null for watched rows. (3) `StatsHonestyTest.kt:130`: the test still expected Settings to paint stored totals through `CatalogScale`; Session 63 deliberately removed the raw counts from Settings, so the test now asserts Settings shows no stored totals while the two connection notices still ask the single owner. Fixes ship in the next commit.
+
+**Addendum 4 — CI verdict on 6e7c9b2 (Android run 42161538156; no Backend run — App-only paths).** Android **SUCCESS** — Session 68 is fully green. Debug APK app-debug-225 (23,211,575 B). The three masked unit tests from Sessions 61–63 are fixed and green in CI for the first time.
+
+### Session 69 — Media browser, Phase 1: search-first Home, silent Setup skip, Media Vault rename (Muse, 2026-11-06)
+
+**What changed.** The corrected media-browser plan (`files/media-browser-plan-20261106.md`) was approved 21:40 PKT; Phase 1 is the reframe:
+- The audit corrected one assumption first: a fresh install ALREADY skipped Setup — `bcf4910` made `serverUrl` fall back to the shipped default (`brand.properties: network.default_server_url=http://92.4.95.252`), so the UX audit's "first run asks for a server URL" is stale. What was missing was the proof: the default was trusted blindly, so a dead server meant Region → Home → an error state. Now a fresh install probes the shipped default once, in the background, and saves it only when it answers; a dead default (or an unbranded build with no default) still opens Setup, prefilled as before.
+- NEW pure `ui/navigation/StartupRouting.kt`: `resolveStartDestination(savedUrl, hasSavedServerUrl, defaultServerReachable, regionUnanswered)` → Setup / Region / Home. Fail-closed by design: an unprobed or unanswered default is Setup, never a silent guess at Home. NEW `StartupRoutingTest` (8 cases: no default, blank url, unanswered default, unprobed default, answered default → Region/Home, returning install → Region/Home with no probe).
+- `ServerSettingsRepository.hasSavedServerUrl` — a saved key, as opposed to the shipped default, which the `serverUrl` flow already returns when nothing is saved.
+- `MainActivity` injects `CatalogRepository` and runs the probe in the start-destination effect: `trySilentDefaultConnect` wraps `testAndSaveServer` in `withTimeoutOrNull(15_000)` (OkHttp underneath is 10s connect / 15s read; the 15s bound keeps a dead default from holding the first frame hostage). Cancellation rethrown; any other failure reads as "did not answer".
+- Home is search-first: a new private `HeroSearchBar` — a full-width pill (search icon + "Search movies and shows") at the top of the scroll, one tap opens Search. It is a door, not a field: typing happens on the Search screen, so it holds no text state. It hides with the operator's search flag, exactly like the top-bar icon, which stays.
+- Honest rename, user-visible text only: the Downloads screen title is now "Media Vault"; Settings' button is "Open Media Vault" and its two helper lines say "Media Vault screen". Internal names (`DownloadsViewModel`, `Screen.Downloads`, the "download" verb) are untouched.
+
+**Checks:** @Composable counts — HomeScreen 6 → 7 (exactly the new bar, no annotation stolen), DownloadsScreen 7 = 7, SettingsScreen 11 = 11, MainActivity 0 = 0; `StartupRoutingTest` 8 @Test each followed by a `fun`; no strings.xml / PlayerScreen.kt changes; every new import is used. **Not done:** push (this commit, then CI judges — nothing is in flight). Device checks owner-only (see the owner-only list: fresh install with the server up → straight to Region/Home with no Setup; fresh install with the server down → Setup prefilled; hero bar tap → Search; Media Vault title on the screen and in Settings).
+
+**Addendum — CI verdict on 50e107c (Android run 42256471963; no Backend run — App-only paths).** Android **SUCCESS** — Session 69 is fully green. Debug APK app-debug-226 (23,215,817 B). The 8 new StartupRouting tests pass in CI.
+
+### Session 70 — Media browser, Phase 2: direct video URL input (Muse, 2026-11-06)
+
+**What changed.** Phase 2 of the approved media-browser plan: paste a direct .mp4 or .m3u8 link into the Search bar and it plays at once in the native Media3 player — no YouTube, no catalog search for it, no host names anywhere.
+- NEW pure `player/DirectVideoUrl.kt`: `classifyPastedText(text)` → `PastedText.DirectVideo(url, title, isHls)` / `YouTube` / `NotAUrl`. Rules: trim; http/https only; YouTube hosts checked first (youtube.com + subdomains, youtu.be); else the path (before `?`/`#`) must end `.mp4` or `.m3u8`, case-insensitive. Title = the last path segment, URL-decoded, "Video link" when there is none. Helpers `directVideoTitle` / `directVideoIsHls` / `directVideoMime` (mp4 → `video/mp4`; m3u8 → `application/vnd.apple.mpegurl`). NEW `DirectVideoUrlTest` (14 cases: mp4, mp4+query, uppercase extension, percent-encoded name, m3u8, m3u8+query, YouTube watch/short/music/mobile, plain title, blank, page URL, .html, ftp, deep-link scheme, trailing-slash/no-file-name, mime).
+- `PlayerSessionStore`: NEW `stagedDirectUrls` + `stageDirectUrl(url): String` (opaque key `direct-<uuid>`, in-memory only, cap 24 like the failover staging, evict-oldest) + `peekDirectUrl(key)` (read without consuming). The pasted address is staged here precisely so it never enters a route: `Screen.Player`'s KDoc forbids an address in the back stack, saved state or a deep link, and the route carries only the key. A deep-linked key has no entry and resolves against the redirector exactly as an unknown handle would. NEW `PlayerSessionStoreDirectUrlTest` (5 cases: round-trip, peek doesn't consume, distinct keys, unknown/blank → null, cap eviction).
+- `PlayerViewModel.startStreamHandle`: inside the launch, a staged direct URL is checked FIRST — `beginBundle(directPlaybackBundle(streamId, directUrl), ...)` and `return@launch`. NEW private `directPlaybackBundle(key, url)`: one rung, no server — `SessionInfo(id = key)`, `PlayTarget(kind = "direct", id = 0)`, `PrintInfo(label = "Direct link")`, `PlaybackInfo(playUrl = url, streamId = key, label = file name, protocol hls/progressive, mime from the address, resumable = false, kind = "direct", playabilityWire = "stream")`. `resumable` is false on purpose: the address is unprobed, and the player must not claim a Range resume it never measured. Mirrors `startLocalUri` (same one-rung shape); the existing streamId early-return makes re-opening the same key a no-op. Protocol/mime let `manifestMimeType`/`isHls` pick the right Media3 reader.
+- `SearchScreen`: NEW param `onPlayDirectUrl: (url, title) -> Unit = { _, _ -> }`. Under the search field, a pasted direct link shows a NEW private `DirectVideoRow` (PlayArrow + file name + the pasted address, one line, ellipsis + a Play button); a YouTube paste shows the honest note ("YouTube links can't play in Radd. Paste a direct .mp4 or .m3u8 link instead."). While the query is a URL, the FilterRail, suggestions and SearchBody are hidden — the body would otherwise say "No matches" under the play row.
+- `SearchViewModel`: URL queries short-circuit in `scheduleSearch` (clear results, no server call), `scheduleSuggest` (clear suggestions), and `submitCurrentQuery` (never `recordRecent` — a full address must not join the recents rail or its persisted list).
+- `NavGraph` Search composable: `onPlayDirectUrl = { url, title -> val key = PlayerSessionStore.Instance.stageDirectUrl(url); navController.navigate(Screen.Player.createRoute(key, title)) }`.
+
+**Checks:** @Composable counts — SearchScreen 6 → 7 (exactly the new row, no annotation stolen), NavGraph 1 = 1; both new test files' every @Test followed by a `fun`; no strings.xml / PlayerScreen.kt changes; every new import is used. **Not done:** push (this commit, then CI judges — nothing is in flight). Device checks owner-only (see the owner-only list: paste an .mp4 link → plays in the player; paste an .m3u8 link → plays; paste a YouTube link → the note, no fake attempt; paste a page URL → normal title search; a pasted link never appears in Recents).
+
+**Addendum 1 — CI verdict on 5bf03c9 (Android run 42260915680; no Backend run — App-only paths).** Android **FAILURE** at `:app:kaptDebugUnitTestKotlin`: `NonExistentClass cannot be converted to Annotation` at every `@Test` in the two new test files. Cause: both files imported `kotlin.test.Test` / `kotlin.test.assert*`, but the project has no kotlin-test dependency — all 29 other test files use `org.junit.Test` + `org.junit.Assert.*`, and kapt cannot resolve the kotlin.test annotation. The production code compiled clean (the failure is test-only). Fix: both files switched to the JUnit 4 imports; ships in the next commit.
+
+**Addendum 2 — CI verdict on 0150a6d (Android run 42261877950; no Backend run — App-only paths).** Android **FAILURE** at `:app:compileDebugUnitTestKotlin`: `Unresolved reference 'url'/'title'/'isHls'` in `DirectVideoUrlTest.kt` (6 tests). Cause: the tests relied on `assertTrue(result is PastedText.DirectVideo)` smart-casting `result` — but that contract belongs to `kotlin.test.assertTrue`, not JUnit 4's `Assert.assertTrue`, which carries none. Fix: each DirectVideo test now binds `val video = result as PastedText.DirectVideo` after the `assertTrue` and reads the fields from `video`; ships in the next commit. Lesson for this codebase: with JUnit 4 asserts, a type check never narrows — cast explicitly.
+
+**Addendum 3 — CI verdict on b57977d (Android run 42263001746; no Backend run — App-only paths).** Android **SUCCESS** — Session 70 is fully green. Debug APK app-debug-229 (23,225,109 B). The 19 new tests (DirectVideoUrl 14, store staging 5) pass in CI.
+
+### Session 71 — Media browser, Phase 3: honest source selector (Muse, 2026-11-06)
+
+**What changed.** Phase 3 of the approved media-browser plan: every quality rung on Detail now shows only honest, verified attributes — quality (as before), the print's audio languages, the copy's stream shape, resumability, and the tier it requires. Zero host names, zero fake speeds (there was never a speed field to show, and none was invented).
+
+- **Scoping first (read, not guessed).** The ladder wire carried no audio and no protocol: `LadderTier` had band/label/mode/playable/copies/link/backups, `LadderLink` had kind/playable/status/resumable/size but no MIME. The gate removes premium rungs for free viewers (`VipQualityGate.gate` filters them; `VipSourcesCard` explains), so a per-row VIP badge cannot be read off the served ladder. Audio lives per print (`RankedPrint.languages`, shown on expanded print cards via `AudioBadge`); the stream shape lives only in the probe measurement. Grounded live on post 73983 (Street Fighter): `releases.languages` is populated ("English"); 3 of its 11 sources carry `application/vnd.apple.mpegurl`, 8 carry NULL mime — so the category shows exactly when a probe measured it.
+- **Server (Fast_Fetch).** `tiers.for_release` adds `"audio_languages"` to the tier dict, parsed from the print's stored `releases.languages` column by NEW `_split_languages` (split on `|` and `,`, trim, drop blanks, dedupe); empty column → `[]`. `tiers.merge` keeps the winning print's list (`dict(tier)` carries it). `redact.py`: `"mime_type"` joins the `ladder_link` allowlist — the probe-measured Content-Type of the winner copy (the healer persists it), naming a format, never a hoster. The v2 play bundle calls the same `for_release` with no `languages` key, so its tiers carry `[]` — additive only. New tests: 4 `AudioLanguageTests` in `test_tiers.py` (pipe list, comma + dedupe, empty → `[]`, merge keeps the winner's) + 1 projection test in `test_redact.py` (`ladder_link` keeps `mime_type`, still drops provenance). Checkpoint `checkpoints/20261106-muse-source-inspector.md` + CONTINUITY.md count 82 → 83 + checkpoints README index line.
+- **App wire.** `LadderTier.audioLanguages` (`audio_languages`, default `[]`); `LadderLink.mimeType` (`mime_type`, default null). NEW `LadderWireTest` (2 Gson cases: full tier reads both fields; missing fields read as absent, never a guess).
+- **App mapping.** NEW pure `streamCategoryFor(mimeType, playUrl)` in `player/QualityLadder.kt` (+ `StreamCategory(kind, container)` with its `label`): HLS mime outranks everything → "Instant Stream · M3U8"; DASH → "Instant Stream · DASH"; a video file mime names its container → "Direct File · MP4 / MKV / WebM / …"; anything else (HTML, audio, no measurement) → null, and the row claims no category. Reuses `LinkClassification.isHls/isDash` — the same precedence `ManifestProtocolTest` pins for playback. `QualityOption` gains `audioLanguages` + `streamCategory` (both defaulted), wired in `LadderTier.toOptionOrNull`.
+- **Tier.** NEW `DetailViewModel.tierLabelFor(option)`: "VIP" when the operator's gate reserves the rung's band/label under the free cap, else "Standard". A property of the stream and the operator's policy, never of the viewer — a VIP viewer reads "VIP" on the 1080p row they can play; a free viewer never sees that row (the gate removed it, `VipSourcesCard` says where it went); gate off → every rung is Standard.
+- **UI.** `QualityRungCard` rows gain a facts line under the size line — audio (`audioBadgeText`, e.g. "Hindi + English audio"), stream category, "Resumable" when the rung's `resumable` is true — each only when measured, joined with " · " — plus a small `TierPill` ("VIP" in primary container, "Standard" quiet) beside the title. Threaded via `RungActions.tierLabel` (`viewModel::tierLabelFor`) through both call sites (work + episode).
+
+**Checks:** backend `test_tiers` + `test_redact` 110 tests OK locally; `test_docs_invariants` 22 OK (count 83). @Composable counts — QualityRungCard 2 → 3 (exactly the new TierPill), DetailScreen 15 = 15, DetailViewModel 0 = 0, QualityLadder 0 = 0; `QualityLadderTest` now 11 @Test, all followed by a `fun`, braces balanced (one repair during the edit: the new-test insert ate the `the screen counts a scope…` test's `@Test` + `fun` header — restored); no strings.xml / PlayerScreen.kt changes; every new import is used. **Not done:** push (this commit, then CI judges — nothing is in flight). Device checks owner-only (see the owner-only list: a title with a probed HLS copy shows "Instant Stream · M3U8" on its rung; a 1080p rung for a VIP viewer wears the VIP pill and a free viewer sees the VIP card instead; a rung with no stored languages shows no audio line).
+
+**Addendum 1 — CI verdict on 047d444 (Android run 42266656392 + Backend run 42266656447).** Android **SUCCESS** (job 128060240403 "assembleDebug + testDebugUnitTest + lintDebug"); Backend **SUCCESS**. Session 71 is fully green. Debug APK app-debug-230 (23,229,846 B) + ci-reports-230.
+
+### Session 72 — Media browser, Phase 4: local video player (Muse, 2026-11-06)
+
+**What changed.** Phase 4 of the approved media-browser plan: the Media Vault now lists the videos already on the phone (Movies/ and Download/) and plays them in the native player, with resume positions that survive an app restart.
+
+- **Scoping first (read, not guessed).** The playback path already existed: `Screen.PlayerLocal` → `PlayerViewModel.startLocalUri` (one-rung bundle, resumeKey = the URI itself). Two gaps were real: (1) no read-media permission anywhere in the manifest (only WRITE_EXTERNAL_STORAGE, maxSdk 28); (2) `rememberResume` writes only into the in-memory `resumeByTarget` map, and `seedResumeFromStoredPositions` returns early when `peekWorkRef` is null — a local URI has no work ref — so a local file's position died with the process while downloads with a work ref survived.
+- **Manifest.** `READ_MEDIA_VIDEO` (API 33+) + `READ_EXTERNAL_STORAGE` with `maxSdkVersion="32"`.
+- **Pure pieces (JVM-tested).** NEW `data/local/LocalVideoFiles.kt`: `LocalVideoFile` (uri/title/duration/size/folder/dateAdded); `localVideoSelection(useRelativePath)` — Movies/ + Download/ filter, .mp4/.mkv/.webm by MIME or extension (mkv mimes vary by provider), relative_path on 29+, `_data` below; `localVideoTitle` (extension off, underscores read as spaces, blank/all-digit → "Local video"); `localVideoFolder` (Movies/Downloads from either path shape); `isLocalVideoFile`; `localVideoFromRow`. NEW `data/LocalResumeRepository.kt` pieces: `localResumeKey` (sha256 of the URI, never the URI itself), `sha256Hex` (known vector pinned — a byte is signed, so the hex masks before formatting), `formatLocalResume`/`parseLocalResume`/`parseLocalResumeUpdatedAt` (`"<positionMs>|<updatedAtMs>"`), `localResumeKeysToPrune` (newest 100 survive), `isLocalResumeUri` (content:// or file:// only — a staged direct-URL key never reads here).
+- **Repositories.** NEW `data/local/LocalFilesRepository.kt`: MediaStore query (projection by SDK, DATE_ADDED DESC, URI built per row id, `SecurityException` → empty list). NEW `data/LocalResumeRepository.kt`: its own DataStore (`local_resume_positions`); `positionFor` / `savePosition` (same guards as `rememberResume`: store only past 5 s and before the end, else remove; prunes to 100) / `removePosition`.
+- **Player wiring.** `PlayerViewModel` gains `localResumeRepository` (Hilt constructor; no test constructs the VM directly). `seedResumeFromStoredPositions`: when `peekWorkRef` is null and the key is a local URI, the local store seeds through the same `ResumeSeed.seedFor` order. `rememberResume`: a local-URI key is also persisted via `viewModelScope.launch { savePosition(key, pos, duration) }` — the unknown-duration guard lives in the repository.
+- **UI.** NEW `viewmodel/LocalFilesViewModel.kt` (Loading / NeedsPermission / Loaded / Error; the screen owns the permission question, the VM only answers it). NEW `ui/screens/LocalFilesScreen.kt`: permission asked once on first entry (READ_MEDIA_VIDEO on 33+, else READ_EXTERNAL_STORAGE); denied → honest state with retry + app-settings button; rows show title + folder · duration (`Long.formatTime`) · size (`QualityOption.formatBytes`); a tap plays through `PlayerLocal`. NEW `Screen.LocalFiles` route + NavGraph entry. `DownloadsScreen` gains `onOpenLocalFiles` + a "Videos on this phone" entry card under the storage card (the app's own `Movies/RaddStream/` downloads appear in the list on purpose — they are videos on the phone; the Downloads list is a different view, keeps with states).
+- **Tests.** NEW `LocalVideoFilesTest` (8 cases) + `LocalResumeRepositoryTest` (7 cases).
+
+**Checks:** @Composable counts — DownloadsScreen 7 → 8 (exactly the new entry), LocalFilesScreen 2 (screen + row), NavGraph 1 = 1, Screen 0 = 0; every @Composable followed by a `fun`; both new test files' every @Test followed by a `fun`, braces balanced; no strings.xml / PlayerScreen.kt changes; every new import is used (`getValue`/`setValue` in the screen are the `by`-delegate imports). **Not done:** push (this commit, then CI judges — nothing is in flight). Device checks owner-only (see the owner-only list: a video saved on the phone appears in the list and plays; a .mkv in Download/ plays; permission denied shows the honest state, not an empty list; a half-watched local file resumes after the app restarts; the app's own Movies/RaddStream download shows in both lists).
+
+**Addendum 1 — CI verdict on 5700ce8 (Android run 42269112286; no Backend run — App-only paths).** Android **FAILURE** at `:app:compileDebugKotlin` (job 128068726369) — ONE error: `LocalResumeRepository.kt:92` — the prune block passed a `Map<Key<*>, String>` where `localResumeKeysToPrune` wants `Map<String, String>` (`asMap()` keys are `Key<*>`, and `mapValues` keeps them). Fix: name the keys first (`.entries.associate { it.key.name to … }`); ships in the next commit. Lesson: a DataStore `asMap()` never yields a string-keyed map — associate by `Key.name` before handing entries to a string-keyed helper.
+
+**Addendum 2 — CI verdict on f0a5b38 (Android run 42270297483; no Backend run — App-only paths).** Android **SUCCESS** (job 128072800285 "assembleDebug + testDebugUnitTest + lintDebug"). Session 72 is fully green. Debug APK app-debug-232 (23,262,129 B) + ci-reports-232.
+
+### Session 73 — Media browser, Phase 5: ShrinkMe web flow (Muse, 2026-11-06)
+
+**What changed.** Phase 5 of the approved media-browser plan: a free viewer asking for a file gets a [Get Free Web Link] button that routes through ShrinkMe in the external browser; in-app downloads stay clean and direct, and the app itself never shortens anything.
+
+- **VIP half, verified built (read-only, no rebuild).** `VipUpgradeScreen` PaymentSection: JazzCash Merchant Till ID, JazzCash Mobile Account, EasyPaisa Account, Raast Instant ID — each with a [Copy] button. `VipTid` is shape-only 6–24 alphanumeric chars — the directive's "10-digit TID" is the common case, NOT a hard rule, so it was NOT narrowed. Pending wording is honest ("Awaiting the operator's confirmation" / "Not sent to the operator yet"). Prices come from the server (200/1500 PKR). Same-TID rejection across all accounts is server-side.
+- **Server.** The shortening machinery already existed (`viewer.py` `shorten_download_url`, ShrinkMe + Droplink in `SHORTENER_ENDPOINTS`, cache table `cat_shortened_links`, hourly rotation, `admin_panel.shortener_targets` reading `shrinkme_api_token` from monetization settings behind `feature_link_shorteners`, OFF by default). The gap: with the flag on, shortening applied to ALL free downloads including in-app — violating the user's 22:07 web-only decision. Fix: shortening now requires `?via=web` (`via_web` inside the existing `if not full and not request_is_vip(...)` block, comment cites the 2026-11-06 owner decision); `admin_panel.py` docstring updated ("retired" language replaced by the web-only rule). Tests in `test_download_endpoint.py`: web test renamed + `&via=web` on both fetches; NEW `test_a_free_download_without_the_web_marker_stays_direct` (mock raises if called; 302 direct + attachment); retired-detour test renamed to `test_a_saved_token_alone_does_not_enable_shortening`; `&via=web` added to the expired-VIP and forged-pass cases. Local verdict: 21 tests, only the 2 PRE-EXISTING operator-port 401 failures remain (proven pre-existing by a stash baseline on HEAD: 20 tests, same 2 failures — the operator port demands a credential this local harness lacks; CI was green on this suite at 047d444, so the hosted runner is the judge). Imports verified (`import viewer, admin_panel`). No new test module — the suite is already registered in backend-ci.yml.
+- **App.** NEW pure `player/WebDownloadUrl.kt` (`webDownloadUrl` → `<base>/api/v1/download?id=<handle>&via=web`, mirrors `streamRedirectUrl`'s trim/encode shape) + `WebDownloadUrlTest` (4 cases, JUnit 4). `DetailViewModel` keeps the server origin (`observeServerBase` on `settingsRepository.serverUrl`) and exposes `webDownloadUrlFor(handle)`. `KeepConfirmDialog` gains a [Get Free Web Link] button for FREE viewers only (`showWebLink = !state.vip`, body TextButton) opening the link via a new `openWebPage` (ACTION_VIEW, no MIME type, so the system picks the browser, not a video player). VIP viewers never see it.
+- **Correction mid-session, with evidence.** The first build pointed the button at a branded `/download/?id=` page. Live check (curl 23:32 PKT) showed nginx serves `/download/` with `Content-Disposition: attachment` on BOTH server blocks, so a browser would download the page's HTML instead of rendering it — the page can only land with the gate's nginx change. The button now opens the download endpoint directly; the browser follows the server's 302 to ShrinkMe (when enabled) or the file, which is the same user outcome with no live change. The branded landing page is a gate item, not dropped.
+- **Backend session log.** NEW `Fast_Fetch/checkpoints/20261106-muse-media-browser-phase5.md` + CONTINUITY.md count 83 → 84 + checkpoints README index line; `test_docs_invariants` 22 OK locally.
+
+**Checks:** @Composable count in DetailScreen 15 = 15 (no new composable — the button is a call, not a function); every @Test followed by a `fun`; URL-encoding expectation cross-checked (`a+b=c` → `a%2Bb%3Dc`); no stale `webDownloadPageUrl` references anywhere; `git status` shows exactly the Session 73 set. **Not done:** live shortening needs the user's ShrinkMe account + API key in the panel + `feature_link_shorteners` enabled — until then the endpoint falls back to the direct file, so the flow works end to end without the key; the key only changes where the 302 points. P9 (Monetag Website for the download page) is still an owner dashboard action. Device checks owner-only (see the owner-only list: free viewer taps [Get Free Web Link] → external browser opens the ShrinkMe interstitial once the key is in, or the file; VIP viewer never sees the button; in-app download stays clean and direct). Push: this commit, then CI judges.
+
+**Addendum — CI verdict on d062b7c (Android run 42272401103 + Backend run 42272401197).** Android **SUCCESS** (job 128080027969 "assembleDebug + testDebugUnitTest + lintDebug"); Backend **SUCCESS** (job 128080024204 "python3 -S offline suites"). Session 73 is fully green. Debug APK app-debug-233 (23,264,263 B) + ci-reports-233. Live shortening still needs the user's ShrinkMe account + API key in the panel + `feature_link_shorteners` enabled; until then the endpoint falls back to the direct file. (This addendum rides the next commit — no docs-only push, so it starts no new CI run.)
+
+## Session 74 — Daily check-in coin system, Build 1: 7-day ladder + claim (2026-11-07 ~00:47 PKT)
+
+**What changed.** Build 1 of agy's daily check-in proposal (user order 00:46 PKT, "complete all work one by one"): the server's streak ladder is now the 7-day ladder 10/20/30/40/50/70/150, and the app can claim it.
+
+- **Evaluation first (sent to agy, agy agreed with the sequence).** The server already had the whole engine (`POST /api/v2/account/coins/earn`, `coins/redeem`, `GET coins`, `coins/history`, `coins/caps`, `entitlement`); the app never called any coins endpoint — the app was the gap. The 24h VIP pass already exists as the `day` tier (signed VIP pass, 24h); 500 is a price knob (`coin_redeem_day`), not code. The download pass is genuinely new. Share/finish-watch need new ledger reasons + anti-farm caps; themes/request-a-movie need new spend types. Sequence: 1) server ladder, 2) app coins API + Daily Rewards UI + claim, 3) download-pass credit, 4) share/finish grants, 5) themes + request. No ad-network code anywhere; coins only from server-verified grants. Divergences kept, not hidden: the server's day-bucket rule (Karachi, 04:00 boundary, a missed day resets) stands instead of agy's ">48h resets"; the Day-7 pass mint stays alongside the 150 coins; a streak past day 7 keeps counting but grants nothing until it resets.
+- **Server.** `engagement.py`: `STREAK_GRANTS_COINS` is now `{1: 10, 2: 20, 3: 30, 4: 40, 5: 50, 6: 70, 7: 150}` and `STREAK_GRANT_SETTINGS` carries one knob per day (`streak_dayN_coins`). `record_engagement_day` needed no change — it grants `table["coins"]` for any streak day, so the ladder flows through the guarded UPDATE and the `streak:<account>:<bucket>:coins` idempotency key untouched. Tests: milestone test now expects 60 coins over 3 days; NEW 7-day test (370 coins, 7 rows, day 8 advances but grants 0); NEW knob-resolution test (day-4 override to 44, blank row keeps the shipped ladder).
+- **App.** NEW wire models in `AccountWire.kt` (`CoinEarnRequest`, `CoinEarned`, `CoinEarnResponse`, `CoinBalanceResponse`, `StreakLadder`, `CoinCapsResponse`) + 3 Retrofit methods (`getCoinBalance`, `getCoinCaps`, `earnDailyLogin`) + 3 `SyncAccountRepository` methods (`loadCoinBalance`, `loadStreakLadder`, `claimDailyLogin`, following the `refreshEntitlement` pattern). `VipViewModel` gains `coinBalance`, `streakLadder`, `claimMessage`, `isClaiming`, `claimedToday` + `loadWallet()` + `claimDailyLogin()` (server decides; `same_day_noop` says "Already claimed today"; unreachable server says exactly that). `VipUpgradeScreen` StreakCard is now the Daily Rewards card: 7 day-pills with the ladder's coins, a wallet line, a [Claim Today's Coins] button (disabled when not signed in, already claimed, or claiming), and the claim answer in the viewer's own words.
+- **App tests.** `ModelsTest`: earn request encodes to `{"reason":"daily_login"}`; earn response, balance response and caps ladder decode (a non-day key is dropped by `byDay`).
+
+**Checks:** local backend `test_engagement` 27 OK, `test_engagement_ladder` + `test_accounts_api` + `test_redact` 167 OK combined; `test_docs_invariants` 22 OK; import verified after the edit. @Composable count in VipUpgradeScreen stays 15 (the card was extended, no new composable added).
+
+**CI round 1 (bcbf75e) — two failures, both fixed in the follow-up commit.** Android run 42283963929 failed at `kaptGenerateStubsDebugKotlin`: `AccountWire.kt:333 Unclosed comment` — the KDoc wrote `` `coins/*` `` and Kotlin's nested block comments ate the closing `*/`; fixed by rewording to "the `coins` routes in `accounts_api.py`". Backend run 42283963854 failed at `test_coins_engine.py`: the Day-7 test encoded the old contract (Day 7 pays a pass and not a coin, 0 coins, no ledger rows); updated to the approved ladder (Day 7 pays the ladder's 150 coins — one `streak_day` row — AND mints the pass). Local re-check after both fixes: `test_coins_engine` 36 OK; the cluster all OK; `test_download_endpoint` still shows only the 2 pre-existing operator-port 401 failures from Session 73. **Not done:** Build 3 (24h VIP pass at 500 — verify `entitlement` honours a redeemed `day` pass; operator sets `coin_redeem_day=500` at gate time, a live-DB knob not code); Build 4 (Direct Download Pass, 100 — new credit store + consume step + app logic); Build 5 (share +25 / finish-watch +15 with caps; themes 250 + request-a-movie 300). Device checks owner-only (claim on day 1 pays 10 and the pills show the ladder; a second claim the same day says "Already claimed today"; balance updates after a claim; unsigned-in viewer sees the sign-in note, not a claim). Push: this commit, then CI judges.
+
+**Addendum — CI verdict on 82a72e4 (Android run 42284852325 + Backend run 42284850565).** Android **SUCCESS** (job 128122899538 "assembleDebug + testDebugUnitTest + lintDebug"); Backend **SUCCESS**. Session 74 is fully green. Debug APK app-debug-235 (23,281,512 B) + ci-reports-235. Round 1 on bcbf75e had failed twice (Android KDoc `coins/*` unclosed comment; Backend Day-7 test on the old pass-only contract) — both fixed in 82a72e4. (This addendum rides the next commit — no docs-only push, so it starts no new CI run.)
+
+## Session 75 — Daily check-in coin system, Build 3: 24h VIP Pass for 500 coins (2026-11-07 ~01:30 PKT)
+
+**What changed.** Build 3 of agy's daily check-in proposal (user order 00:46 PKT, "complete all work one by one"): the first thing coins buy — a 24-hour VIP pass for 500 coins — now actually works from the app.
+
+- **The gap, found by reading the code.** `GET /api/v2/account/entitlement` read only paid membership (`user_accounts.vip_until`). A coin-redeemed pass is a bearer token with no account id, recorded nowhere — there was no passes table — so a redeemed `day` pass did not flip entitlement, and the app gates VIP by `entitlement.vip` only. The token is honoured server-side when presented, but nothing in the app ever stores or presents it. Uniform rule adopted: a minted VIP pass is a VIP entitlement until it expires.
+- **Server.** NEW `coin_passes` table in the `engagement` DDL (`account_id`, `plan`, `expires_at`, `created_at`, index on `(account_id, expires_at)`), installed by `ensure_schema` with no migration and no version bump. `engagement.redeem_pass` records the pass after the spend (own borrow + commit, only when not `already_applied`); `record_engagement_day` records the Day-7 streak pass in the same commit as the grant (plan `"streak_day7"`). NEW `accounts.coin_pass_until` (MAX unexpired expiry, 0.0 when there is no row — or no table at all). `accounts.vip_status` and `payments.entitlement` now take the later of paid membership and any unexpired pass; revoked keys still answer False. Price: `REDEEM_COIN_COSTS["day"]` 30 → **500**, and the operator knob default `coin_redeem_day` 30 → **500** in `admin_panel.py`. **Flagged for the user (owner pricing decision):** with day=500, weekend (70) and monthly_vip (200) now cost less than one day — incoherent; the operator can reprice via the knobs, or the user can name new prices.
+- **App.** NEW wire models in `AccountWire.kt` (`CoinRedeemRequest`, `CoinRedeemed`, `CoinRedeemResponse`, `PassTier`) + `CoinCapsResponse.passes`. NEW Retrofit `redeemPass` + `SyncAccountRepository.redeemPass(plan)` and `loadPassCatalog()`. `VipViewModel` gains `passCatalog`, `redeemMessage`, `isRedeeming` + `redeemPass(plan)` (refuses a short wallet in plain words; on success re-reads the balance and calls `refreshEntitlement(force = true)` so VIP shows at once). `VipUpgradeScreen` StreakCard gains a "Spend coins" section under the claim: the three tiers in ladder order with coin cost and a Redeem button (enabled only when signed in, not redeeming, and balance >= cost), plus the redeem answer in the viewer's own words.
+- **Tests.** Server: `test_engagement.py` (redeemed pass recorded once, retry records nothing twice; Day-7 pass recorded like a redeemed one), `test_accounts.py` (NEW `CoinPassUntilTests`: future/expired/none/missing-table), `test_coins_engine.py` (redeemed day pass makes `entitlement` VIP, route level). Price ripple fixed in tests, not code: the day price lived in three places (`REDEEM_COIN_COSTS`, the knob default, `test_engagement_ladder.py` 5 assertions + docstrings, one `test_engagement.py` redeem test that granted 100 coins for a 30-coin pass). App: `ModelsTest` (caps `passes` decode, redeem request encodes to `{"plan":"day"}`, redeem response decodes the receipt).
+- **Backend session log.** NEW `Fast_Fetch/checkpoints/20261107-muse-daily-checkin-build3.md` + CONTINUITY.md count 85 → 86 + checkpoints README index line.
+
+**Checks:** local backend `test_coins_engine` 37 OK, `test_engagement` 29 OK, `test_engagement_ladder` 27 OK, `test_accounts_api` OK, `test_accounts` 64 OK, `test_redact` OK, `test_api_v2` OK, `test_admin_panel` OK, `test_device_trials_and_webhook` OK, `test_docs_invariants` 22 OK; `test_download_endpoint` still shows only the 2 pre-existing operator-port 401 failures from Session 73. @Composable count in VipUpgradeScreen stays 15 (the card was extended, no new composable added); braces/parens balanced and `/*` vs `*/` balanced in all six edited app files; every new import is used. **Not done:** push (this commit, then CI judges — nothing is in flight). Build 4 (Direct Download Pass, 100) and Build 5 (share +25 / finish-watch +15, themes 250, request-a-movie 300) still to come. Device checks owner-only (redeem the day pass at 500 coins → the screen shows VIP at once; a short wallet disables the button; the Day-7 streak pass shows VIP for 24 hours).
+
+**Addendum — CI verdict on f783b2c (Android run 42287922463 + Backend run 42287922705).** Android **SUCCESS** (job 128133464652 "assembleDebug + testDebugUnitTest + lintDebug"); Backend **SUCCESS**. Session 75 is fully green. Debug APK app-debug-236 (23,289,214 B) + ci-reports-236. (This addendum rides the next commit — no docs-only push, so it starts no new CI run.)
+
+## Session 76 — Build 4: Direct Download Pass (100 coins)
+
+**What:** a free viewer can spend 100 coins on one direct download of one movie — the browser opens the file, not the ShrinkMe page. The credit is a count-based redeemable, not a time pass: a NEW `coin_download_credits` table holds it, the token is only the row's signed id (`redact.mint_download_credit`, version 4, tag domain `dlc` — a VIP pass can never parse as a credit), and the download route spends it with one guarded UPDATE, so two browsers racing the same token get one file and one refusal. New route `POST /api/v2/account/coins/redeem-download` (handle only; the handle is validated as our own signed token before any coin moves), price through `resolve_download_credit` + operator knob `coin_redeem_download` (default 100), caps publishes the row-resolved price. In the app: a "Direct Link — N coins" button in the keep-confirm dialog for free viewers only, disabled while the wallet is short, opening the credited browser URL (`&credit=…`).
+
+**Checks:** local backend `test_coins_engine` 43 OK, `test_engagement` 34 OK, `test_redact` 76 OK, `test_download_endpoint` 23 tests with only the 2 pre-existing operator-port 401 failures from Session 73, `test_accounts` OK, `test_accounts_api` OK, `test_api_v2` OK, `test_admin_panel` OK, `test_device_trials_and_webhook` OK, `test_engagement_ladder` OK, `test_docs_invariants` OK (count bumped 86 → 87). @Composable count in DetailScreen stays 15 (the dialog was extended, no new composable added); braces/parens balanced and `/*` vs `*/` balanced in all edited app files (the one apparent imbalance is the pre-existing `"video/*"` MIME string); every new import is used. **Not done:** push (this commit, then CI judges — nothing is in flight). Build 5 (share +25 / finish-watch +15, themes 250, request-a-movie 300) still to come. Device checks owner-only (buy a direct link at 100 coins → the browser opens the file, not the ShrinkMe page; a short wallet disables the button; a second tap on the same link goes through the shortener).
+
+**Addendum — CI verdict on fc35d4d (Android run 42290507268 + Backend run 42290507351).** Android **SUCCESS** (job 128142388973 "assembleDebug + testDebugUnitTest + lintDebug"); Backend **SUCCESS**. Session 76 is fully green. Debug APK app-debug-237 (23,296,729 B) + ci-reports-237. (This addendum rides the next commit — no docs-only push, so it starts no new CI run.)
+
+## Session 77 — Build 5: share +25, finish-watch +15, themes 250, request-a-movie 300
+
+**What:** the last four items on agy's check-in proposal. **Share:** the Detail screen reports a share after the chooser fires; the server pays 25 coins once a day (Karachi day bucket, 04:00 boundary) and a second share the same day pays nothing — one paid share a day, not one per title, because a per-title cap would let one phone farm 250 coins by sharing ten movies. The handle is validated as one of ours AND visible (the adult law covers the share: a flagged work gets the same 400 as a forged handle). **Finish-watch:** the progress route pays 15 coins when the reported position reaches 90% of the duration — 90% because the player may never report exactly 100% — once per title ever (per episode for a series), and the reply carries `coins_earned` so the player shows a "+15 coins" toast only when the server says it paid. The player already posts progress on a 15-second tick and forced on pause/teardown, so a real finish reaches the server. **Themes:** three player chrome skins — Jade (the shipped look, free, always owned), Midnight (deep navy), Ember (warm charcoal) — 250 coins each, bought once and kept. A theme skins only the chrome (background, HUD plates/chips/cards, rail track, played fill + seek thumb); the meaning-carrying accent and the jade that marks a selected control stay exactly as they are, per DESIGN_SYSTEM §9. **Request-a-movie:** 300 coins queues one title for the operator (NEW `movie_requests` table, status `open`); the form on the VIP screen shows the published price and is disabled while the wallet is short. New routes `POST /coins/share`, `POST /coins/request-movie`, `POST /coins/redeem-theme`, `GET /coins/themes`; caps publishes the request price and the theme prices. Also fixed in passing: the `accounts_api` selfcheck called `accounts.register`, which does not exist (broken at HEAD) — one word to `create_account`, and the selfcheck now passes end to end.
+
+**Checks:** local backend `test_coins_engine` 67 OK (was 43; +24: Share 6, FinishWatch 5, RequestMovie 7, Themes 6), `test_accounts_api` 38 OK, `test_api_v2` 46 OK, `test_admin_panel` 94 OK, `test_engagement` 34 OK, `test_engagement_ladder` 27 OK, `test_redact` 76 OK, `test_accounts` 64 OK, `test_device_trials_and_webhook` 83 OK, `test_download_endpoint` 23 tests with only the 2 pre-existing operator-port 401 failures from Session 73 (same two test names; `viewer.py` was not edited in this build), `test_docs_invariants` OK (count bumped 87 → 88). App: `ModelsTest` +11 deserialization tests for the new wire models; @Composable count in PlayerScreen stays 46, DetailScreen stays 15, VipUpgradeScreen goes 15 → 17 (exactly the two new cards); braces/parens balanced and `/*` vs `*/` balanced in all 13 edited Kotlin files (PlayerScreen's +1 is pre-existing at HEAD, same as DetailScreen's `"video/*"` MIME string); every new import is used. No local Gradle run (owner order: GitHub Actions only) — CI judges the app. **Not done:** push (this commit, then CI judges — nothing is in flight). Device checks owner-only (share a title → "+25 coins" once a day, a second share the same day shows nothing; finish a title past 90% → "+15 coins" toast once, a rewatch shows nothing; request a movie at 300 coins → the request is queued; buy Midnight at 250 coins → the player wears it at once, and the accent that marks a selected control stays jade). The movie-request queue has no panel surface yet — requests land in `movie_requests` (`status` `open`) until a panel page is built (a gate item).
+
+**Fix — CI verdict on 7899a9d (Android run 42294440062 FAILED, Backend run 42294440031 SUCCESS).** Android died at `:app:compileDebugKotlin` on two missing imports, both from Build 5's own import-block edits (the CoinRedeemed trap, again): (1) `VipUpgradeScreen` lost the pre-existing `PlayArrow` import while gaining Movie/Palette — the rewarded-VIP card's `Icons.Default.PlayArrow` usages are pre-existing; (2) `SyncAccountRepository.loadThemeCatalog` used the `DownloadCreditPrice` type without ever importing it. A full import diff `fc35d4d` → `7899a9d` across all 13 edited Kotlin files proved these were the only two — no other import was dropped or missed. Fixed with two one-line imports; this fix commit re-runs CI, which also finally exercises the 11 new `ModelsTest` tests (the failed run died before any test executed).
+
+**Addendum — CI verdict on 2a7086f (Android run 42295527408 + Backend run 42295527406).** Android **SUCCESS** (job 128159645690 "assembleDebug + testDebugUnitTest + lintDebug"); Backend **SUCCESS**. Session 77 is fully green. Debug APK app-debug-239 (23,330,671 B) + ci-reports-239. (This addendum rides the next commit — no docs-only push, so it starts no new CI run.)

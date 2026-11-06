@@ -44,6 +44,8 @@ fun QualityRungCard(
     onKeepRung: (QualityOption) -> Unit,
     /** Which scope these rungs belong to — "Season 2 · Episode 5", null for the whole work. */
     scopeTitle: String? = null,
+    /** The tier each rung requires ("VIP" / "Standard"), from the ViewModel. */
+    tierLabel: (QualityOption) -> String = { "Standard" },
     modifier: Modifier = Modifier,
 ) {
     if (ladder.isEmpty) return
@@ -69,6 +71,7 @@ fun QualityRungCard(
                 isAuto = option.band == ladder.autoBand,
                 selected = selectedBand == option.band ||
                     (selectedBand == LadderForScope.AUTO && option.band == ladder.autoBand),
+                tier = tierLabel(option),
                 onPlay = { onPlayRung(option) },
                 onKeep = { onKeepRung(option) },
             )
@@ -81,6 +84,8 @@ private fun RungRow(
     option: QualityOption,
     isAuto: Boolean,
     selected: Boolean,
+    /** "VIP" or "Standard" — the tier this rung requires, never the viewer's. */
+    tier: String,
     onPlay: () -> Unit,
     onKeep: () -> Unit,
 ) {
@@ -111,6 +116,8 @@ private fun RungRow(
                             label = { Text("Auto", style = MaterialTheme.typography.labelSmall) },
                         )
                     }
+                    Spacer(Modifier.width(6.dp))
+                    TierPill(tier = tier)
                 }
                 Text(
                     text = option.detailLine,
@@ -121,6 +128,22 @@ private fun RungRow(
                         MaterialTheme.colorScheme.onSurfaceVariant
                     },
                 )
+                // The honest facts, each only when measured: the print's audio
+                // languages, the copy's stream shape, and resumability. A rung
+                // whose copy was never probed shows no category rather than a
+                // guessed one, and a rung with no stored languages shows no audio.
+                val facts = listOfNotNull(
+                    audioBadgeText(dualAudio = false, languages = option.audioLanguages),
+                    option.streamCategory?.label,
+                    "Resumable".takeIf { option.resumable },
+                ).joinToString(" · ")
+                if (facts.isNotEmpty()) {
+                    Text(
+                        text = facts,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
             // One action per rung: it plays here, or it is kept. Never both, never a list.
             if (option.playsHere) {
@@ -140,5 +163,34 @@ private fun RungRow(
                 )
             }
         }
+    }
+}
+
+/**
+ * The tier a rung requires, as a small pill beside its title. VIP draws the
+ * eye (it is the reason the rung may be absent for a free viewer); Standard
+ * sits quiet. It is a label, not a button — tapping it plays nothing.
+ */
+@Composable
+private fun TierPill(tier: String) {
+    val isVip = tier == "VIP"
+    Surface(
+        shape = RoundedCornerShape(8.dp),
+        color = if (isVip) {
+            MaterialTheme.colorScheme.primaryContainer
+        } else {
+            MaterialTheme.colorScheme.surfaceVariant
+        },
+    ) {
+        Text(
+            text = tier,
+            style = MaterialTheme.typography.labelSmall,
+            color = if (isVip) {
+                MaterialTheme.colorScheme.onPrimaryContainer
+            } else {
+                MaterialTheme.colorScheme.onSurfaceVariant
+            },
+            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+        )
     }
 }

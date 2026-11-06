@@ -27,6 +27,7 @@ class QualityLadderTest {
         playable: Boolean = true,
         size: Long? = 1_400_000_000,
         dead: Boolean = false,
+        mimeType: String? = null,
     ) = LadderLink(
         streamId = id,
         playUrl = "http://127.0.0.1:8080/api/v1/stream?id=$id",
@@ -35,6 +36,7 @@ class QualityLadderTest {
         status = if (dead) "dead" else "active",
         fileSizeBytes = size,
         isResumable = true,
+        mimeType = mimeType,
         label = if (playable) "Fast direct" else "Standard",
     )
 
@@ -45,6 +47,7 @@ class QualityLadderTest {
         playable: Boolean = link?.playable == true,
         backups: List<String> = emptyList(),
         copies: Int = 3,
+        audioLanguages: List<String> = emptyList(),
     ) = LadderTier(
         band = band,
         quality = band,
@@ -54,6 +57,7 @@ class QualityLadderTest {
         copies = copies,
         link = link,
         backupHandles = backups,
+        audioLanguages = audioLanguages,
     )
 
     private val ladder = OptionGroup(
@@ -137,6 +141,61 @@ class QualityLadderTest {
             ladder.copy(tiers = listOf(tier("1080p", "Full HD", link("").copy(streamId = "  ")))),
         )
         assertTrue(scope.isEmpty)
+    }
+
+    @Test
+    fun `a manifest mime names an instant stream, a file mime names its container`() {
+        val hls = streamCategoryFor("application/vnd.apple.mpegurl", "http://127.0.0.1:8080/api/v1/stream?id=x")
+        assertEquals(StreamCategory.Kind.INSTANT_STREAM, hls?.kind)
+        assertEquals("Instant Stream · M3U8", hls?.label)
+        val dash = streamCategoryFor("application/dash+xml", null)
+        assertEquals(StreamCategory.Kind.INSTANT_STREAM, dash?.kind)
+        assertEquals("Instant Stream · DASH", dash?.label)
+        val mp4 = streamCategoryFor("video/mp4", null)
+        assertEquals(StreamCategory.Kind.DIRECT_FILE, mp4?.kind)
+        assertEquals("Direct File · MP4", mp4?.label)
+        assertEquals("MKV", streamCategoryFor("video/x-matroska", null)?.container)
+        assertEquals("WebM", streamCategoryFor("video/webm", null)?.container)
+    }
+
+    @Test
+    fun `an unmeasured copy claims no stream category`() {
+        assertNull(streamCategoryFor(null, "http://127.0.0.1:8080/api/v1/stream?id=x"))
+        assertNull(streamCategoryFor("text/html", null))
+        assertNull(streamCategoryFor("audio/mpeg", null))
+        assertNull(streamCategoryFor("", null))
+    }
+
+    @Test
+    fun `a rung carries its print's audio languages and its copy's stream shape`() {
+        val scope = QualityLadder.from(
+            ladder.copy(
+                tiers = listOf(
+                    tier(
+                        "1080p", "Full HD",
+                        link("h-1080", mimeType = "video/mp4"),
+                        audioLanguages = listOf("Hindi", "English"),
+                    ),
+                    tier(
+                        "720p", "HD",
+                        link("h-720", mimeType = "application/vnd.apple.mpegurl"),
+                        audioLanguages = listOf("English"),
+                    ),
+                ),
+            ),
+        )
+        val hd = scope.options.first { it.band == "1080p" }
+        assertEquals(listOf("Hindi", "English"), hd.audioLanguages)
+        assertEquals("Direct File · MP4", hd.streamCategory?.label)
+        val sd = scope.options.first { it.band == "720p" }
+        assertEquals(listOf("English"), sd.audioLanguages)
+        assertEquals("Instant Stream · M3U8", sd.streamCategory?.label)
+        // A rung with neither measurement shows neither line.
+        val bare = QualityLadder.from(
+            ladder.copy(tiers = listOf(tier("480p", "Good", link("h-480")))),
+        ).options.single()
+        assertEquals(emptyList<String>(), bare.audioLanguages)
+        assertNull(bare.streamCategory)
     }
 
     @Test

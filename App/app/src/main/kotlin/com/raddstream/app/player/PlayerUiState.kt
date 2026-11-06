@@ -8,6 +8,7 @@ package com.raddstream.app.player
 import androidx.media3.common.TrackGroup
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.ui.AspectRatioFrameLayout
+import com.raddstream.app.ui.theme.PlayerChromeTheme
 
 /**
  * Immutable value types the player screen renders. Kept in the `player` package (Android
@@ -191,6 +192,10 @@ data class PlayerUiState(
     val isPlaying: Boolean = false,
     val isBuffering: Boolean = false,
     val isEnded: Boolean = false,
+    /** The ended episode has a numbered successor and autoplay-next is off: the ended overlay offers the Next Episode button instead of advancing. */
+    val endedHasNextEpisode: Boolean = false,
+    /** The A-B repeat segment (plan §5 step 14): the playhead loops back to A when it reaches B. Empty = no segment. */
+    val abRepeat: AbRepeat = AbRepeat(),
     val positionMs: Long = 0,
     val bufferedMs: Long = 0,
     val durationMs: Long = 0,
@@ -204,11 +209,30 @@ data class PlayerUiState(
      * promise — see [AudioBoostUi.honestSummary].
      */
     val audioBoostLevel: Float = AudioBoost.BASELINE,
-    /** The user's preferred audio language, as they spelled it; null = the player's own pick. */
+    /**
+     * The player chrome theme this device wears (`jade`, `midnight`, `ember`):
+     * a skin for the chrome only — the background, the HUD plates, the rail
+     * and the played fill — never the meaning-carrying accent. Collected from
+     * the stored pick, so a change on the VIP screen reaches a player that is
+     * already running.
+     */
+    val playerTheme: String = PlayerChromeTheme.JADE,
+    /**
+     * The audio language in force, as the viewer spelled it — the stored pick, or the
+     * region's default when never set (Desi: Hindi). Null only when the region has no
+     * stance (East Asian): then the player's own pick stands.
+     */
     val preferredAudioLanguage: String? = null,
     /**
-     * The user's preferred subtitle language, as they spelled it. Null is not "no opinion":
-     * the Settings row stores the absence of a value for "Off", so null means no subtitles.
+     * The second audio language for the region, tried only after [preferredAudioLanguage]
+     * misses (Desi: Urdu — one spoken language in these films, two track tags). Null
+     * everywhere else.
+     */
+    val preferredAudioFallback: String? = null,
+    /**
+     * The subtitle language in force, as the viewer spelled it — the stored pick, or the
+     * region's default when never set (Desi and East Asian: English). The literal "Off"
+     * means no subtitles; null only when the region has no subtitle stance (International).
      */
     val preferredSubtitleLanguage: String? = null,
     /** The rung Auto is playing now; null when Auto is not armed (manual band or no ladder). */
@@ -218,6 +242,8 @@ data class PlayerUiState(
     val locked: Boolean = false,
     val aspect: AspectMode = AspectMode.FIT,
     val orientation: PlayerOrientation = PlayerOrientation.LANDSCAPE,
+    /** Immersive fullscreen (system bars hidden) or normal (system bars shown). */
+    val fullscreen: Boolean = true,
     /** Ghost mode or the full MX chrome. Persisted, because nobody wants it reset per episode. */
     val viewMode: ViewMode = ViewMode.STANDARD,
     /**
@@ -234,6 +260,12 @@ data class PlayerUiState(
     val failoverLog: List<FailoverRecord> = emptyList(),
     val settledBanner: String? = null,
     val giveUp: Pair<String, HandoffWhy>? = null,
+    // start deadline (§5 P5): milliseconds since the current load was requested, published
+    // by the ticker; the last measured route-open → first-frame time, for the print sheet;
+    // and the latched 30 s give-up, cleared by a retry, a dismiss, or a first frame.
+    val startElapsedMs: Long = 0,
+    val lastFirstFrameMs: Long? = null,
+    val deadlineGiveUp: Boolean = false,
     // resume prompt ("Playback interrupted! Resume from …?" MX dialog)
     val resumeOfferMs: Long? = null,
     val pendingResumeKey: String? = null,
@@ -261,6 +293,7 @@ data class PlayerUiState(
     val sleepSheetVisible: Boolean = false,
     val playFromDialogVisible: Boolean = false,
     val qualitySheetVisible: Boolean = false,
+    val moreSheetVisible: Boolean = false,
     /**
      * The sponsor slot currently on screen, if any. Only [AdSlotPolicy.decide] can raise it,
      * and that policy has no value for a title that is playing — so this field can never be
@@ -314,6 +347,42 @@ data class PlayerUiState(
             durationMs == 0L -> StartPhase.STARTING
             else -> StartPhase.NONE
         }
+
+    /**
+     * Which moment of the start budget the screen is in. The phase decides whether a start
+     * is happening at all; the elapsed time decides what the viewer is owed while it does.
+     * A latched deadline outranks both, so the give-up card — not the notice — owns the
+     * screen at thirty seconds.
+     */
+    val startDeadlineStage: StartDeadlineStage
+        get() = when {
+            deadlineGiveUp -> StartDeadlineStage.GIVE_UP
+            startPhase == StartPhase.NONE -> StartDeadlineStage.SILENT
+            else -> StartDeadline.stage(startElapsedMs, firstFrame = false)
+        }
+
+    /**
+     * The next print the viewer can jump to without waiting for the staged failover: the
+     * next rank after the one being tried — never a rank behind it, because the machine
+     * only moves forward past a print it already failed — and, for a bundle with only one
+     * print, that print's own silent runner-ups. Null means there is nothing left to try,
+     * so no button is ever offered for it.
+     */
+    val nextPrintHandle: String?
+        get() {
+            val renditions = bundle?.renditions.orEmpty()
+                .filter { !it.playback.playUrl.isNullOrBlank() }
+            val activeRank = activeRendition?.rank ?: 0
+            val next = renditions.firstOrNull { it.rank > activeRank }
+            val handle = next?.playback?.streamId?.trim()?.takeIf { it.isNotBlank() }
+            if (handle != null) return handle
+            val backups = activeRendition?.playback?.backupStreamIds
+                ?: renditions.firstOrNull()?.playback?.backupStreamIds
+            return backups.orEmpty().firstOrNull { it.isNotBlank() }
+        }
+
+    /** Whether "Try another print" has anywhere honest to go. */
+    val canTryAnotherPrint: Boolean get() = nextPrintHandle != null
 
     /**
      * This snapshot as the audio-language policy needs it: the same rows without the

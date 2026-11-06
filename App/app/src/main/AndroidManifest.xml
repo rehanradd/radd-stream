@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
     <!-- Network access (required for all API calls) -->
     <uses-permission android:name="android.permission.INTERNET" />
@@ -25,6 +26,14 @@
         android:name="android.permission.WRITE_EXTERNAL_STORAGE"
         android:maxSdkVersion="28" />
 
+    <!-- Read the phone's own videos for the Media Vault's local-files list: API 33+
+         grants video-only access (READ_MEDIA_VIDEO); older releases use the storage
+         permission, capped at 32 because 33+ replaces it. -->
+    <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
+    <uses-permission
+        android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="32" />
+
     <!--
       Brand: android:label and the deep-link scheme below are generated from
       /brand.properties (resValue "brand_app_name" + manifestPlaceholder
@@ -42,6 +51,15 @@
         android:hardwareAccelerated="true"
         android:networkSecurityConfig="@xml/network_security_config"
         android:largeHeap="true">
+
+        <!-- WorkManager's default initializer is removed so the Hilt worker
+             factory (RaddStreamApplication) supplies the workers: without
+             this, WorkManager starts on its own factory and a @HiltWorker
+             fails to construct at the first periodic run. -->
+        <provider
+            android:name="androidx.startup.InitializationProvider"
+            android:authorities="${applicationId}.androidx-startup"
+            tools:node="remove" />
 
         <activity
             android:name=".MainActivity"

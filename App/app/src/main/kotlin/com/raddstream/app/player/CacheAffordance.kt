@@ -100,6 +100,7 @@ object CacheAffordance {
         expectedTotalBytes: Long?,
         resumable: Boolean,
         printLabel: String,
+        title: String = "",
     ): AdoptRequest {
         val authoritative = snapshot?.takeIf { !it.isEstimate }?.bytesSaved
         val estimate = estimateBytesSaved(bufferedMs, durationMs, expectedTotalBytes ?: snapshot?.totalBytes)
@@ -115,6 +116,7 @@ object CacheAffordance {
             expectedTotalBytes = expectedTotalBytes ?: snapshot?.totalBytes,
             resumable = resumable,
             printLabel = printLabel,
+            title = title,
             sharesCacheStorage = snapshot != null,
         )
     }

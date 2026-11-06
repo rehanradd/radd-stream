@@ -6,32 +6,45 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import com.raddstream.app.brand.Brand
 import com.raddstream.app.data.RemoteFeatures
 import com.raddstream.app.data.ServerSettingsRepository
+import com.raddstream.app.network.models.PanelDisclaimer
+import com.raddstream.app.network.models.PanelTheme
+import com.raddstream.app.repository.CatalogRepository
 import com.raddstream.app.ui.navigation.LocalVideoOpen
 import com.raddstream.app.ui.navigation.Screen
 import com.raddstream.app.ui.navigation.RaddStreamNavGraph
+import com.raddstream.app.ui.navigation.StartDestination
+import com.raddstream.app.ui.navigation.resolveStartDestination
+import com.raddstream.app.ui.screens.DisclaimerDialog
 import com.raddstream.app.ui.screens.MaintenanceScreen
 import com.raddstream.app.ui.theme.RaddStreamTheme
-import com.raddstream.app.ui.theme.BackgroundDark
+import com.raddstream.app.ui.theme.parseAccentHex
+import com.raddstream.app.ui.theme.resolveThemeDark
 import dagger.hilt.android.AndroidEntryPoint
 import javax.inject.Inject
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * Single-activity host.
@@ -52,6 +65,9 @@ class MainActivity : ComponentActivity() {
     @Inject
     lateinit var serverSettingsRepository: ServerSettingsRepository
 
+    @Inject
+    lateinit var catalogRepository: CatalogRepository
+
     /**
      * A file another app asked us to play, waiting for the graph that can route it. It is
      * composition state on the activity, not a local in [setContent], because the cold-start
@@ -69,6 +85,13 @@ class MainActivity : ComponentActivity() {
         takeLocalVideoFrom(intent)
         enableEdgeToEdge()
         setContent {
+            // The login streak (plan §5 step 19): one record per day this device opens the app.
+            // A rotation recreates this activity and re-runs this effect, but recordLoginDay is
+            // idempotent within a day, so the second run changes nothing — and a launch that
+            // never reaches a screen still counts, because the streak is about opening the app.
+            LaunchedEffect(Unit) {
+                serverSettingsRepository.recordLoginDay()
+            }
             // Collected as composition state, not snapshotted once: flipping the Settings switch
             // must recompose the theme live, and a `first()` here would freeze whatever the store
             // said at cold start and make the toggle look broken until the process restarted.
@@ -112,7 +135,50 @@ class MainActivity : ComponentActivity() {
             }
             val operatorFeatures by featuresPreference.collectAsState(initial = RemoteFeatures())
 
-            RaddStreamTheme(dynamicColor = effectiveDynamicColor(dynamicColorRequested)) {
+            // The operator's tab order, mirrored into DataStore by RemoteConfigWatcher.
+            // Seeded with an empty list so a cold start shows the bar's own four; a
+            // store that cannot answer takes no tab away from anybody.
+            val tabsPreference: Flow<List<String>> = remember(serverSettingsRepository) {
+                serverSettingsRepository.panelTabs.catch { emit(emptyList()) }
+            }
+            val operatorTabs by tabsPreference.collectAsState(initial = emptyList())
+
+            // The operator's theme, mirrored into DataStore by RemoteConfigWatcher.
+            // Seeded with the app's own defaults (dark, brand accent, hero on) so a
+            // cold start paints the app it always painted; a store that cannot
+            // answer takes no theme away from anybody.
+            val themePreference: Flow<PanelTheme> = remember(serverSettingsRepository) {
+                serverSettingsRepository.themeSettings.catch { emit(PanelTheme()) }
+            }
+            val operatorTheme by themePreference.collectAsState(initial = PanelTheme())
+
+            // The viewer's own autoplay-previews switch (plan §5 step 10): it gates the
+            // Home hero alongside the operator's theme flag — either one off stops the
+            // carousel. Seeded on, matching the hero's own default.
+            val autoplayPreviewsPreference: Flow<Boolean> = remember(serverSettingsRepository) {
+                serverSettingsRepository.autoplayPreviews.catch { emit(true) }
+            }
+            val autoplayPreviews by autoplayPreviewsPreference.collectAsState(initial = true)
+
+            // The operator's disclaimer, mirrored into DataStore by RemoteConfigWatcher,
+            // and the version this install has already accepted. Seeded empty / -1 so
+            // a cold start shows nothing until a real body arrives; an empty text
+            // means "nothing published" and the dialog never opens on it.
+            val disclaimerPreference: Flow<PanelDisclaimer> = remember(serverSettingsRepository) {
+                serverSettingsRepository.disclaimer.catch { emit(PanelDisclaimer()) }
+            }
+            val disclaimer by disclaimerPreference.collectAsState(initial = PanelDisclaimer())
+            val disclaimerSeenPreference: Flow<Int> = remember(serverSettingsRepository) {
+                serverSettingsRepository.disclaimerSeenVersion.catch { emit(-1) }
+            }
+            val disclaimerSeenVersion by disclaimerSeenPreference.collectAsState(initial = -1)
+            val activityScope = rememberCoroutineScope()
+
+            RaddStreamTheme(
+                darkTheme = resolveThemeDark(operatorTheme.mode, isSystemInDarkTheme()),
+                dynamicColor = effectiveDynamicColor(dynamicColorRequested, operatorTheme.dynamicColor),
+                accent = parseAccentHex(operatorTheme.accent),
+            ) {
                 var startDestination by remember { mutableStateOf<String?>(null) }
                 LaunchedEffect(Unit) {
                     val savedUrl = try {
@@ -120,19 +186,39 @@ class MainActivity : ComponentActivity() {
                     } catch (_: Exception) {
                         null
                     }
-                    startDestination = when {
-                        savedUrl.isNullOrBlank() -> Screen.Setup.route
+                    val hasSavedServer = try {
+                        serverSettingsRepository.hasSavedServerUrl.first()
+                    } catch (_: Exception) {
+                        false
+                    }
+                    // A fresh install never sees the Setup form when the shipped server
+                    // answers: the default is probed once, in the background, and saved
+                    // only when it answers. A dead default — or an unbranded build with
+                    // no default at all — still opens Setup, prefilled as before.
+                    val defaultReachable: Boolean? = if (savedUrl.isNullOrBlank() || hasSavedServer) {
+                        null
+                    } else {
+                        trySilentDefaultConnect(catalogRepository, savedUrl)
+                    }
+                    val destination = resolveStartDestination(
+                        savedUrl = savedUrl,
+                        hasSavedServerUrl = hasSavedServer,
+                        defaultServerReachable = defaultReachable,
                         // First install after the server is connected gets one chance to say what
                         // they watch; a store that cannot answer is treated as "already asked",
                         // because onboarding is a convenience and must never become the door.
-                        regionChoiceUnanswered(serverSettingsRepository) -> Screen.Region.route
-                        else -> Screen.Home.route
+                        regionUnanswered = regionChoiceUnanswered(serverSettingsRepository),
+                    )
+                    startDestination = when (destination) {
+                        StartDestination.Setup -> Screen.Setup.route
+                        StartDestination.Region -> Screen.Region.route
+                        StartDestination.Home -> Screen.Home.route
                     }
                 }
 
                 Surface(
                     modifier = Modifier.fillMaxSize(),
-                    color = BackgroundDark,
+                    color = MaterialTheme.colorScheme.background,
                 ) {
                     var changingServer by remember { mutableStateOf(false) }
                     LaunchedEffect(underMaintenance) {
@@ -161,8 +247,28 @@ class MainActivity : ComponentActivity() {
                         else -> RaddStreamNavGraph(
                             startDestination = destination,
                             features = operatorFeatures,
+                            tabs = operatorTabs,
+                            theme = operatorTheme,
+                            autoplayPreviews = autoplayPreviews,
                             openRequest = pendingLocalOpen,
                             onOpenConsumed = { pendingLocalOpen = null },
+                        )
+                    }
+                    // The disclaimer outranks every screen but the maintenance
+                    // notice above: it is the one thing the viewer must read
+                    // before watching, once per published version. It cannot
+                    // be dismissed without tapping "I understand" — a
+                    // disclaimer you can swipe away unread is not one.
+                    if (disclaimer.text.isNotBlank() && disclaimerSeenVersion != disclaimer.version) {
+                        DisclaimerDialog(
+                            disclaimer = disclaimer,
+                            confirmLabel = "I understand",
+                            onConfirm = {
+                                activityScope.launch {
+                                    serverSettingsRepository.acceptDisclaimer(disclaimer.version)
+                                }
+                            },
+                            onDismissRequest = {},
                         )
                     }
                 }
@@ -223,9 +329,38 @@ class MainActivity : ComponentActivity() {
  * a re-skin shipping `features.dynamic_color=true` makes this same toggle live without any code
  * change. Android 12+ is still enforced inside RaddStreamTheme; pre-S devices get the brand scheme
  * no matter what both flags say.
+ *
+ * The panel's theme permission ANDs in as well: the operator can switch dynamic colour off for
+ * every phone at once, and a viewer who turned it on still gets the brand scheme until the
+ * operator allows it again.
  */
-private fun effectiveDynamicColor(storedEnabled: Boolean): Boolean =
-    storedEnabled && Brand.dynamicColorAllowed
+private fun effectiveDynamicColor(storedEnabled: Boolean, panelAllowed: Boolean): Boolean =
+    storedEnabled && Brand.dynamicColorAllowed && panelAllowed
+
+/**
+ * One bounded probe of the shipped server, for a fresh install only.
+ *
+ * `testAndSaveServer` saves the address when it answers, so a fresh install that
+ * reaches Home through here has a saved server from then on — the probe runs
+ * once, never on every cold start. The 15s bound is the whole point: a dead
+ * default must not hold the first frame hostage; the OkHttp timeouts underneath
+ * are 10s connect / 15s read, so this is the tighter ceiling. A timeout reads
+ * as "did not answer" and the caller opens Setup.
+ */
+private const val SILENT_CONNECT_TIMEOUT_MS = 15_000L
+
+private suspend fun trySilentDefaultConnect(
+    catalogRepository: CatalogRepository,
+    url: String,
+): Boolean = try {
+    withTimeoutOrNull(SILENT_CONNECT_TIMEOUT_MS) {
+        catalogRepository.testAndSaveServer(url)
+    } != null
+} catch (cancelled: CancellationException) {
+    throw cancelled
+} catch (_: Exception) {
+    false
+}
 
 /**
  * Whether this install has never been through the region screen.

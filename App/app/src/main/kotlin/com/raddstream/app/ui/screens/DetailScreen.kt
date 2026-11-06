@@ -10,6 +10,7 @@ import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -40,12 +41,14 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
@@ -62,6 +65,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -75,6 +79,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.hilt.navigation.compose.hiltViewModel
+import kotlinx.coroutines.launch
 import com.raddstream.app.brand.Brand
 import com.raddstream.app.network.models.PostDetail
 import com.raddstream.app.ui.components.AudioBadge
@@ -94,11 +99,18 @@ import com.raddstream.app.ui.components.SectionHeader
 import com.raddstream.app.ui.components.SubtitleBadge
 import com.raddstream.app.player.LadderForScope
 import com.raddstream.app.player.QualityOption
+import com.raddstream.app.ui.navigation.DeepLinks
+import com.raddstream.app.ui.theme.rememberArtworkAccent
 import com.raddstream.app.viewmodel.DetailNavigationEvent
 import com.raddstream.app.viewmodel.DetailViewModel
 import com.raddstream.app.viewmodel.EpisodeGroup
+import com.raddstream.app.viewmodel.EpisodeProgress
+import com.raddstream.app.viewmodel.PendingKeep
 import com.raddstream.app.viewmodel.RankedPrint
+import com.raddstream.app.viewmodel.ResumePoint
 import com.raddstream.app.viewmodel.SeasonGroup
+import com.raddstream.app.viewmodel.formatRuntimeMinutes
+import com.raddstream.app.viewmodel.keepSizeLabel
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -114,6 +126,7 @@ fun DetailScreen(
     val state by viewModel.uiState.collectAsState()
     val snackbarHostState = remember { SnackbarHostState() }
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     var pendingDownload by remember { mutableStateOf<(() -> Unit)?>(null) }
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission(),
@@ -213,7 +226,7 @@ fun DetailScreen(
                     IconButton(
                         onClick = {
                             val post = state.post
-                            if (post != null) shareTitle(context, post)
+                            if (post != null) shareTitle(context, post) { viewModel.reportShare(post.workRef) }
                         },
                     ) {
                         Icon(Icons.Default.Share, contentDescription = "Share this title")
@@ -239,6 +252,10 @@ fun DetailScreen(
                 officialPrintCount = state.layout?.officialPrintCount ?: 0,
                 camPrintCount = state.layout?.camPrintCount ?: 0,
                 isSeries = state.layout?.isSeriesLike ?: false,
+                resume = state.resume.takeIf { state.resumePlayable },
+                onPlayResume = viewModel::playResume,
+                episodeProgress = state.episodeProgress,
+                includedLine = state.includedLine,
                 selectedSeason = state.selectedSeason,
                 onSelectSeason = viewModel::selectSeason,
                 onPlayPrint = { print -> viewModel.playPrint(print, external = false) },
@@ -249,6 +266,7 @@ fun DetailScreen(
                     selectedBand = state.selectedBand,
                     onPlay = viewModel::playLadder,
                     onKeep = { option -> downloadWithStoragePermission { viewModel.keepRung(option) } },
+                    tierLabel = viewModel::tierLabelFor,
                 ),
                 ladderScope = rungScopeLabel(state.ladderSeason, state.ladderEpisode),
                 adFree = state.adFree,
@@ -262,6 +280,97 @@ fun DetailScreen(
             )
         }
     }
+
+    state.pendingKeep?.let { pending ->
+        KeepConfirmDialog(
+            pending = pending,
+            onConfirm = viewModel::confirmKeep,
+            onDismiss = viewModel::dismissKeep,
+            // Session 73 (Phase 5): a free viewer asking for a file gets the
+            // external-browser route as well — the browser follows the server's
+            // redirect to ShrinkMe (when enabled) or the file. VIP viewers never
+            // see it; their downloads are already direct.
+            showWebLink = !state.vip,
+            onWebLink = { openWebPage(context, viewModel.webDownloadUrlFor(pending.handle)) },
+            // Session 76 (Build 4): the same free viewer can spend coins on a
+            // direct link instead — the button is there only when the server
+            // published a price, and only enabled when the wallet covers it.
+            showDirectLink = !state.vip && state.downloadCreditPrice > 0,
+            directLinkPrice = state.downloadCreditPrice,
+            directLinkEnabled = state.coinBalance >= state.downloadCreditPrice,
+            directLinkMessage = state.directLinkMessage,
+            onDirectLink = {
+                scope.launch {
+                    val url = viewModel.directDownloadUrlFor(pending.handle)
+                    if (url != null) openWebPage(context, url)
+                }
+            },
+        )
+    }
+}
+
+/**
+ * The size and the quality before the download starts. The size is the one
+ * the metadata ask measured — never a guess — and when the server named no
+ * size the dialog says so instead of inventing one. Nothing downloads until
+ * Confirm; Cancel leaves nothing behind.
+ */
+@Composable
+private fun KeepConfirmDialog(
+    pending: PendingKeep,
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit,
+    showWebLink: Boolean = false,
+    onWebLink: () -> Unit = {},
+    showDirectLink: Boolean = false,
+    directLinkPrice: Int = 0,
+    directLinkEnabled: Boolean = false,
+    directLinkMessage: String? = null,
+    onDirectLink: () -> Unit = {},
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Download this title?") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(pending.title, style = MaterialTheme.typography.titleSmall)
+                Text(
+                    pending.printLabel,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(
+                    keepSizeLabel(pending.sizeBytes),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                if (showWebLink) {
+                    TextButton(onClick = onWebLink) { Text("Get Free Web Link") }
+                }
+                if (showDirectLink) {
+                    // Session 76 (Build 4): a direct link for one movie, bought
+                    // with coins — the button is disabled while the wallet is
+                    // short, so a tap can never spend what is not there.
+                    TextButton(onClick = onDirectLink, enabled = directLinkEnabled) {
+                        Text("Direct Link — $directLinkPrice coins")
+                    }
+                    if (directLinkMessage != null) {
+                        Text(
+                            directLinkMessage,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(onClick = onConfirm) { Text("Download") }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Cancel") }
+        },
+    )
 }
 
 /**
@@ -273,6 +382,8 @@ private data class RungActions(
     val selectedBand: String?,
     val onPlay: (QualityOption) -> Unit,
     val onKeep: (QualityOption) -> Unit,
+    /** The tier each rung requires ("VIP" / "Standard"), from the ViewModel. */
+    val tierLabel: (QualityOption) -> String,
 )
 
 /** Which scope a ladder belongs to, in the viewer's words. Null means the whole work. */
@@ -292,6 +403,13 @@ private fun DetailContent(
     officialPrintCount: Int,
     camPrintCount: Int,
     isSeries: Boolean,
+    /** The latest scope this device stopped in, if it has a print to play — else null. */
+    resume: ResumePoint?,
+    onPlayResume: () -> Unit,
+    /** Per-episode progress, keyed by (season, episode). */
+    episodeProgress: Map<Pair<Int, Int>, EpisodeProgress>,
+    /** What this viewer can watch of this title, in one line — null when it has no prints. */
+    includedLine: String?,
     selectedSeason: Int?,
     onSelectSeason: (Int) -> Unit,
     onPlayPrint: (RankedPrint) -> Unit,
@@ -337,12 +455,21 @@ private fun DetailContent(
             }
         }
 
-        item { PosterHeader(post = post, capabilities = capabilities) }
+        item {
+            PosterHeader(
+                post = post,
+                capabilities = capabilities,
+                seasonCount = if (isSeries) seasons.size else 0,
+                includedLine = includedLine,
+            )
+        }
 
         item {
             PrimaryActions(
                 bestPrint = bestPrint,
                 hasAnyPrint = allPrints.isNotEmpty(),
+                resume = resume,
+                onPlayResume = onPlayResume,
                 onPlay = { bestPrint?.let(onPlayPrint) },
                 onKeep = { bestPrint?.let(onKeep) },
             )
@@ -366,6 +493,7 @@ private fun DetailContent(
                     selectedBand = rungs.selectedBand,
                     onPlayRung = rungs.onPlay,
                     onKeepRung = rungs.onKeep,
+                    tierLabel = rungs.tierLabel,
                 )
             }
         }
@@ -408,6 +536,7 @@ private fun DetailContent(
                     val scopeLabel = rungScopeLabel(season.number, episodeKey)
                     EpisodeRow(
                         episode = episode,
+                        progress = episodeProgress[season.number to episode.numberWithinSeason],
                         onPlayPrint = onPlayPrint,
                         onOpenExternal = onOpenExternal,
                         onKeep = onKeep,
@@ -445,14 +574,34 @@ private fun DetailContent(
 }
 
 @Composable
-private fun PosterHeader(post: PostDetail, capabilities: List<String>) {
+private fun PosterHeader(
+    post: PostDetail,
+    capabilities: List<String>,
+    /** Seasons, for a series — 0 for a movie, which has none to count. */
+    seasonCount: Int = 0,
+    /** What this viewer can watch of this title, in one line — null when it has no prints. */
+    includedLine: String? = null,
+) {
     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+        // The poster's own colour, sampled once it loads: a 1dp border in the
+        // artwork accent frames the poster in its own palette. No bitmap yet
+        // (still loading, gated, or failed) means no border at all — the
+        // brand jade is the fallback inside rememberArtworkAccent, and a
+        // jade frame around a not-yet-loaded poster would be a decoration
+        // pretending to be a sample.
+        var posterBitmap by remember(post.id) { mutableStateOf<android.graphics.Bitmap?>(null) }
+        val posterAccent = rememberArtworkAccent(posterBitmap)
         Box(
             modifier = Modifier
                 .width(120.dp)
                 .aspectRatio(0.68f)
                 .clip(RoundedCornerShape(12.dp))
-                .background(MaterialTheme.colorScheme.surfaceVariant),
+                .background(MaterialTheme.colorScheme.surfaceVariant)
+                .border(
+                    width = 1.dp,
+                    color = if (posterBitmap != null) posterAccent.copy(alpha = 0.6f) else Color.Transparent,
+                    shape = RoundedCornerShape(12.dp),
+                ),
             contentAlignment = Alignment.Center,
         ) {
             if (!post.posterUrl.isNullOrBlank()) {
@@ -461,6 +610,7 @@ private fun PosterHeader(post: PostDetail, capabilities: List<String>) {
                     contentDescription = "${post.cleanTitle ?: post.title} poster",
                     modifier = Modifier.fillMaxSize(),
                     fallbackLabel = (post.cleanTitle ?: post.title).take(2).uppercase(),
+                    onBitmap = { posterBitmap = it },
                 )
             } else {
                 ImageFallbackCard(
@@ -483,9 +633,14 @@ private fun PosterHeader(post: PostDetail, capabilities: List<String>) {
                 post.year?.takeIf { it > 0 }?.toString(),
                 post.typeLabel,
                 post.language?.takeIf(String::isNotBlank),
+                formatRuntimeMinutes(post.runtimeMinutes),
+                if (seasonCount > 0) "$seasonCount ${if (seasonCount == 1) "season" else "seasons"}" else null,
             )
             if (meta.isNotEmpty()) {
                 Text(meta.joinToString(" · "), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            includedLine?.let { line ->
+                Text(line, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
             }
             post.imdbRating?.takeIf(String::isNotBlank)?.let { rating ->
                 Pill(text = "★ $rating IMDb", backgroundColor = MaterialTheme.colorScheme.tertiaryContainer, contentColor = MaterialTheme.colorScheme.onTertiaryContainer)
@@ -515,19 +670,26 @@ private fun PosterHeader(post: PostDetail, capabilities: List<String>) {
 private fun PrimaryActions(
     bestPrint: RankedPrint?,
     hasAnyPrint: Boolean,
+    /** The latest scope this device stopped in — null shows plain Play. */
+    resume: ResumePoint?,
+    onPlayResume: () -> Unit,
     onPlay: () -> Unit,
     onKeep: () -> Unit,
 ) {
     Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
         Button(
-            onClick = onPlay,
-            enabled = bestPrint?.canStart == true,
+            onClick = if (resume != null) onPlayResume else onPlay,
+            enabled = if (resume != null) true else bestPrint?.canStart == true,
             modifier = Modifier.weight(1f).height(52.dp),
             colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
         ) {
             Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(20.dp))
             Spacer(Modifier.width(8.dp))
-            Text(bestPrint?.playLabel() ?: "Play")
+            Text(
+                text = resume?.label ?: (bestPrint?.playLabel() ?: "Play"),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
         }
         OutlinedButton(onClick = onKeep, enabled = hasAnyPrint, modifier = Modifier.height(52.dp)) {
             Icon(Icons.Default.Download, contentDescription = "Download video", modifier = Modifier.size(20.dp))
@@ -546,7 +708,10 @@ private val RankedPrint.canStart: Boolean get() = playableHere || opensProviderP
 private fun RankedPrint.playLabel(): String = when {
     playableHere && isCam -> "Play (cam)"
     playableHere -> "Play"
-    opensProviderPage -> "Open"
+    // Not "Open": a one-word verb hid that this leaves the app's player for the
+    // provider's own page, with its player and its ads. The button says where
+    // the tap goes, so the viewer chooses it knowingly.
+    opensProviderPage -> "Opens the provider's page"
     else -> "Play"
 }
 
@@ -810,6 +975,8 @@ private fun PackedSeasonBanner(season: SeasonGroup, onPlay: (RankedPrint) -> Uni
 @Composable
 private fun EpisodeRow(
     episode: EpisodeGroup,
+    /** This episode's progress on this device — null when never watched. */
+    progress: EpisodeProgress?,
     onPlayPrint: (RankedPrint) -> Unit,
     onOpenExternal: (RankedPrint) -> Unit,
     onKeep: (RankedPrint) -> Unit,
@@ -928,6 +1095,33 @@ private fun EpisodeRow(
         if (episode.onlyPacked) {
             Pill(text = "Whole season in one file", backgroundColor = MaterialTheme.colorScheme.surfaceVariant, contentColor = MaterialTheme.colorScheme.onSurfaceVariant)
         }
+        // The mark this device left: a bar and what is left, or "Watched"
+        // when it ran to the end. A row never watched shows nothing — no
+        // bar, no guess — because an empty bar would claim a position
+        // nobody has.
+        progress?.let { p ->
+            if (p.watched) {
+                Text(
+                    text = "Watched",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+            } else if (p.fraction != null) {
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    LinearProgressIndicator(
+                        progress = { p.fraction },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    p.remainingLabel?.let { label ->
+                        Text(
+                            text = label,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
+        }
         // The collapsed ladder replaces the print list wherever the server could fold one
         // best copy per band; a ledger that cannot is still shown as before, not hidden.
         if (episode.prints.size > 1 && !canChooseQuality) {
@@ -952,6 +1146,7 @@ private fun EpisodeRow(
                 onPlayRung = rungs.onPlay,
                 onKeepRung = rungs.onKeep,
                 scopeTitle = scopeLabel,
+                tierLabel = rungs.tierLabel,
             )
         }
     }
@@ -1034,9 +1229,13 @@ private fun PrintCard(
 }
 
 // ── Platform helpers (share keeps the app's own copy honest) ────────────────
-private fun shareTitle(context: Context, post: PostDetail) {
+private fun shareTitle(context: Context, post: PostDetail, onShared: () -> Unit) {
     val title = post.cleanTitle?.takeIf { it.isNotBlank() } ?: post.title
-    val text = Brand.copy("share_template", "", "title" to title)
+    // The template is the operator's words; the link is the app's own deep
+    // link to the title's page — a share that only says "check this out"
+    // leaves the receiver with nowhere to go.
+    val text = Brand.copy("share_template", "", "title" to title) +
+        "\n" + DeepLinks.detailUri(post.id)
     val intent = Intent(Intent.ACTION_SEND).apply {
         type = "text/plain"
         putExtra(Intent.EXTRA_SUBJECT, title)
@@ -1044,6 +1243,10 @@ private fun shareTitle(context: Context, post: PostDetail) {
     }
     try {
         context.startActivity(Intent.createChooser(intent, "Share via").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        // The chooser firing is the share, as far as this phone can know: the
+        // server pays once a day on the report, and a failed report is silent
+        // because the share already left the phone.
+        onShared()
     } catch (_: Exception) {
         Toast.makeText(context, "No share target available", Toast.LENGTH_SHORT).show()
     }
@@ -1062,5 +1265,20 @@ private fun openInExternalPlayer(context: Context, url: String) {
         } catch (_: Exception) {
             Toast.makeText(context, "No player or browser installed", Toast.LENGTH_SHORT).show()
         }
+    }
+}
+
+/**
+ * Session 73 (Phase 5): open a plain web link in the external browser — the
+ * Web Download link for a free viewer. Unlike [openInExternalPlayer] this sets
+ * no MIME type, so the system picks the browser, not a video player.
+ */
+private fun openWebPage(context: Context, url: String) {
+    try {
+        context.startActivity(
+            Intent(Intent.ACTION_VIEW, Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+        )
+    } catch (_: Exception) {
+        Toast.makeText(context, "No browser installed", Toast.LENGTH_SHORT).show()
     }
 }

@@ -19,10 +19,13 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -46,6 +49,8 @@ import com.raddstream.app.brand.Brand
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.raddstream.app.network.models.PanelBroadcast
+import com.raddstream.app.ui.components.EmptyState
 import com.raddstream.app.ui.components.ErrorState
 import com.raddstream.app.ui.components.HeroCarousel
 import com.raddstream.app.ui.components.HeroSkeleton
@@ -58,6 +63,7 @@ import com.raddstream.app.ui.components.SkeletonBox
 import com.raddstream.app.ui.theme.RaddStreamMark
 import com.raddstream.app.viewmodel.HomeSection
 import com.raddstream.app.viewmodel.HomeViewModel
+import com.raddstream.app.viewmodel.visibleHomeRows
 
 private data class JumpOff(val label: String, val type: String?)
 
@@ -74,6 +80,10 @@ fun HomeScreen(
     onPostClick: (Int) -> Unit = {},
     onBrowseType: (String?) -> Unit = {},
     onSetupServerClick: () -> Unit = {},
+    /** The operator's hero knobs from the panel theme: 0 hides the hero slot. */
+    heroMax: Int = HERO_LIMIT,
+    heroAutoplay: Boolean = true,
+    heroIntervalMs: Long = 5_000L,
     viewModel: HomeViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsState()
@@ -107,6 +117,25 @@ fun HomeScreen(
                 LinearProgressIndicator(Modifier.fillMaxWidth())
             }
 
+            // Search first: the hero bar is the front door to the catalog — one tap opens
+            // Search, instead of hunting for the small icon in the top bar. It hides with
+            // the operator's search flag, exactly like the icon does.
+            if (searchEnabled) {
+                HeroSearchBar(onClick = onSearchClick)
+                Spacer(Modifier.height(12.dp))
+            }
+
+            // The operator's channel to every phone: a broadcast shows above the
+            // catalog, even when the catalog itself failed to load — that is
+            // exactly when the operator has something to say.
+            state.broadcasts.forEach { broadcast ->
+                BroadcastBanner(
+                    broadcast = broadcast,
+                    onDismiss = { viewModel.dismissBroadcast(broadcast.id) },
+                )
+                Spacer(Modifier.height(8.dp))
+            }
+
             // Fatal error only when *every* rail failed and none has data to show.
             val anyVisible = state.sections.any { it.visible }
             if (state.fatal != null && !anyVisible) {
@@ -119,17 +148,16 @@ fun HomeScreen(
                     onSecondary = onSetupServerClick,
                 )
             } else {
-                // The banner rides the first rail that actually has rows, so it is real
-                // catalog data (freshest additions) and not a hand-picked fake "featured" set.
-                val heroItems = state.sections.firstOrNull { it.visible }?.items.orEmpty().take(HERO_LIMIT)
-                if (heroItems.isNotEmpty()) {
-                    HeroCarousel(posts = heroItems, onPostClick = onPostClick)
-                    Spacer(Modifier.height(12.dp))
-                } else if (state.sections.any { it.loading }) {
-                    // Hold the hero's footprint while the first rail lands, so the page
-                    // never flashes a bare background and then jumps when it fills in.
-                    HeroSkeleton()
-                    Spacer(Modifier.height(12.dp))
+                // Continue Watching is first and pinned: it is the one rail
+                // this device owns outright, and the research rule is that
+                // Home opens on it — the hero carousel is discovery, not the
+                // first thing. The hero still rides the first rail that has
+                // rows, only now it rides behind the rail that remembers.
+                val shownRows = visibleHomeRows(state.sections, state.continueWatching.isNotEmpty())
+                val hasSaved = state.continueWatching.isNotEmpty() || anyVisible
+                if (state.isOffline && hasSaved) {
+                    OfflineBanner()
+                    Spacer(Modifier.height(8.dp))
                 }
                 if (state.continueWatching.isNotEmpty()) {
                     Column {
@@ -153,15 +181,55 @@ fun HomeScreen(
                         Spacer(Modifier.height(8.dp))
                     }
                 }
+                // The banner rides the first rail that actually has rows, so it is real
+                // catalog data (freshest additions) and not a hand-picked fake "featured" set.
+                // heroMax 0 hides the slot entirely — no carousel, no skeleton — because
+                // the operator asked for no hero, not for a hero that never loads.
+                if (heroMax > 0) {
+                    val heroItems = state.sections.firstOrNull { it.visible }?.items.orEmpty().take(heroMax)
+                    if (heroItems.isNotEmpty()) {
+                        HeroCarousel(
+                            posts = heroItems,
+                            onPostClick = onPostClick,
+                            autoplay = heroAutoplay,
+                            intervalMs = heroIntervalMs,
+                        )
+                        Spacer(Modifier.height(12.dp))
+                    } else if (state.sections.any { it.loading }) {
+                        // Hold the hero's footprint while the first rail lands, so the page
+                        // never flashes a bare background and then jumps when it fills in.
+                        HeroSkeleton()
+                        Spacer(Modifier.height(12.dp))
+                    }
+                }
                 JumpOffRow(onBrowseType = onBrowseType)
                 Spacer(Modifier.height(8.dp))
 
-                state.sections.filter { it.visible || it.loading || it.error != null }.forEach { section ->
+                // At most 10 rows total, CW included: a panel that publishes 12
+                // sections does not get 12 rails on a phone, and the first rails win.
+                val renderedRows = shownRows.filter { it.visible || it.loading || it.error != null }
+                renderedRows.forEach { section ->
                     HomeRailSection(
                         section = section,
                         onPostClick = onPostClick,
                         onSeeAll = { onBrowseType(section.type) },
                         onRetry = { viewModel.retrySection(section.key) },
+                    )
+                }
+                // A successful empty load is a blank page today: no rails, no
+                // error, nothing to tap. Say so, and point at the one fix the
+                // viewer can do — the server address in Settings.
+                if (renderedRows.isEmpty() && state.continueWatching.isEmpty() &&
+                    state.sections.none { it.loading } && state.fatal == null
+                ) {
+                    EmptyState(
+                        title = "Nothing here yet",
+                        message = "This catalog has no titles to show. Check your server in Settings.",
+                        action = {
+                            OutlinedButton(onClick = onSetupServerClick) {
+                                Text("Set up a server")
+                            }
+                        },
                     )
                 }
                 Spacer(Modifier.height(24.dp))
@@ -170,6 +238,7 @@ fun HomeScreen(
 
         state.updateNotice?.let { update ->
             AppUpdateDialog(
+                required = update.required,
                 // Only close the dialog once the download actually opened, so a phone
                 // with no browser keeps the one-tap path instead of losing it silently.
                 onUpdateNow = { if (openDownload(context, update.url)) viewModel.dismissUpdate() },
@@ -194,22 +263,111 @@ private fun openDownload(context: Context, url: String): Boolean = try {
     false
 }
 
+/**
+ * One announcement from the admin panel. The severity picks the container: the
+ * operator's urgent note reads urgent on the phone too, and an info note stays
+ * quiet. A broadcast is plain text from the panel — never a link, never a button —
+ * so there is nothing to tap except the dismiss.
+ */
+/**
+ * The offline strip. It only renders when something saved is on screen —
+ * an offline phone with nothing saved gets the error state, not a banner
+ * over a blank page. The copy says what is true: the rails below are the
+ * network's and may have failed, while Continue Watching is this device's
+ * own saved titles and still plays.
+ */
 @Composable
-private fun AppUpdateDialog(onUpdateNow: () -> Unit, onDismiss: () -> Unit) {
+private fun OfflineBanner() {
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp),
+        shape = RoundedCornerShape(12.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant,
+    ) {
+        Text(
+            text = "You are offline — only titles saved on this device are available.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+        )
+    }
+}
+
+@Composable
+private fun BroadcastBanner(broadcast: PanelBroadcast, onDismiss: () -> Unit) {
+    val scheme = MaterialTheme.colorScheme
+    val (container, onContainer) = when (broadcast.severity.lowercase()) {
+        "urgent", "critical" -> scheme.errorContainer to scheme.onErrorContainer
+        "warning" -> scheme.tertiaryContainer to scheme.onTertiaryContainer
+        else -> scheme.primaryContainer to scheme.onPrimaryContainer
+    }
+    Card(
+        colors = CardDefaults.cardColors(containerColor = container),
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(start = 16.dp, top = 12.dp, bottom = 12.dp, end = 4.dp),
+            verticalAlignment = Alignment.Top,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text(
+                    broadcast.title,
+                    style = MaterialTheme.typography.titleSmall,
+                    color = onContainer,
+                )
+                if (broadcast.body.isNotBlank()) {
+                    Spacer(Modifier.height(2.dp))
+                    Text(
+                        broadcast.body,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = onContainer,
+                    )
+                }
+            }
+            IconButton(onClick = onDismiss) {
+                Icon(
+                    Icons.Default.Close,
+                    contentDescription = "Dismiss announcement",
+                    tint = onContainer,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+/**
+ * The update dialog. A required update — this build is below the operator's
+ * minimum — offers no "Later" and cannot be dismissed: the viewer cannot
+ * keep using a build the operator has withdrawn.
+ */
+private fun AppUpdateDialog(
+    required: Boolean,
+    onUpdateNow: () -> Unit,
+    onDismiss: () -> Unit,
+) {
     AlertDialog(
-        onDismissRequest = onDismiss,
+        onDismissRequest = if (required) ({}) else onDismiss,
         icon = { RaddStreamMark(diameter = 40.dp) },
         title = {
             Text(
-                text = Brand.copy("update_title", "A new build is available"),
+                text = Brand.copy(
+                    if (required) "update_required_title" else "update_title",
+                    if (required) "Update required" else "A new build is available",
+                ),
                 fontWeight = FontWeight.Bold,
             )
         },
         text = {
             Text(
                 Brand.copy(
-                    "update_message",
-                    "${Brand.name} has published a newer APK. Download it to keep the catalog and player current.",
+                    if (required) "update_required_message" else "update_message",
+                    if (required) {
+                        "${Brand.name} needs an update to keep working. Download the new build to continue."
+                    } else {
+                        "${Brand.name} has published a newer APK. Download it to keep the catalog and player current."
+                    },
                     "name" to Brand.name,
                 ),
             )
@@ -219,8 +377,12 @@ private fun AppUpdateDialog(onUpdateNow: () -> Unit, onDismiss: () -> Unit) {
                 Text(Brand.copy("update_now", "Update Now"), fontWeight = FontWeight.SemiBold)
             }
         },
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text("Later") }
+        dismissButton = if (required) {
+            null
+        } else {
+            {
+                TextButton(onClick = onDismiss) { Text("Later") }
+            }
         },
         containerColor = MaterialTheme.colorScheme.surface,
         shape = RoundedCornerShape(28.dp),
@@ -259,6 +421,33 @@ private fun JumpOffRow(onBrowseType: (String?) -> Unit) {
                     )
                 }
             }
+        }
+    }
+}
+
+/**
+ * The search-first front door: a full-width bar that opens Search on one tap.
+ * It is a door, not a field — typing happens on the Search screen, so this never
+ * holds text state and never needs a keyboard.
+ */
+@Composable
+private fun HeroSearchBar(onClick: () -> Unit) {
+    Surface(
+        onClick = onClick,
+        shape = RoundedCornerShape(28.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant,
+        contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Icon(Icons.Default.Search, contentDescription = null)
+            Text(
+                text = "Search movies and shows",
+                style = MaterialTheme.typography.bodyLarge,
+            )
         }
     }
 }

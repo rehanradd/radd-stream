@@ -13,8 +13,14 @@ import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.raddstream.app.brand.Brand
 import com.raddstream.app.network.models.AccountEntitlement
+import com.raddstream.app.network.models.PanelDisclaimer
+import com.raddstream.app.network.models.PanelTheme
+import com.raddstream.app.player.LoginStreak
 import com.raddstream.app.player.SubtitleColor
 import com.raddstream.app.player.SubtitleUiSettings
+import com.raddstream.app.player.loginStreakDay
+import com.raddstream.app.player.nextLoginStreak
+import com.raddstream.app.ui.theme.PlayerChromeTheme
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -43,6 +49,17 @@ class ServerSettingsRepository @Inject constructor(
             ?: Brand.defaultServerUrl.takeIf { it.isNotBlank() }
     }
 
+    /**
+     * Whether this install ever chose a server: a saved key, as opposed to the address
+     * the brand file ships. The [serverUrl] flow returns the shipped default when
+     * nothing is saved, so a caller that needs to know "fresh install, never
+     * connected" cannot read it off that flow — it asks here. A fresh install's
+     * silent connect (see StartupRouting) runs exactly once, on this answer.
+     */
+    val hasSavedServerUrl: Flow<Boolean> = dataStore.data.map { preferences ->
+        preferences[SERVER_URL_KEY] != null
+    }
+
     suspend fun saveServerUrl(url: String) {
         dataStore.edit { preferences -> preferences[SERVER_URL_KEY] = url }
     }
@@ -64,9 +81,10 @@ class ServerSettingsRepository @Inject constructor(
 
     /**
      * Preferred audio language as the user spelled it (BCP-47 tag or an English name);
-     * null means "the player's own choice", which is the honest default — this catalog is
-     * dual audio and guessing a language for someone who never picked one is how a Hindi
-     * viewer ends up with an English dub.
+     * null means "never set" — the region's default applies (see
+     * [com.raddstream.app.player.LanguageDefaults]), so a Hindi viewer is never left to
+     * the player's device-locale guess. The literal "Player default" is the explicit
+     * "leave it to the player" pick, stored as a word so it is never mistaken for never-set.
      */
     val preferredAudioLanguage: Flow<String?> = dataStore.data.map { preferences ->
         preferences[PREFERRED_AUDIO_LANGUAGE_KEY]
@@ -121,6 +139,25 @@ class ServerSettingsRepository @Inject constructor(
             else preferences[PREFERRED_SUBTITLE_LANGUAGE_KEY] = cleanSubtitle
             preferences[REGION_RECORDED_KEY] = true
         }
+    }
+
+    /**
+     * The player chrome theme this device wears: `jade` (the shipped look),
+     * `midnight` or `ember`. A theme is a skin for the player's chrome only —
+     * the background, the HUD plates, the rail and the played fill — never the
+     * meaning-carrying accent. An unreadable stored value is `jade`: a theme
+     * that does not exist is the default, never a crash. The picker lives on
+     * the VIP screen, where the theme is bought; this is only the stored pick.
+     */
+    val playerTheme: Flow<String> = dataStore.data.map { preferences ->
+        val stored = preferences[PLAYER_THEME_KEY]?.trim().orEmpty()
+        if (stored in PlayerChromeTheme.IDS) stored else PlayerChromeTheme.JADE
+    }
+
+    /** Wear a player chrome theme. An unknown id is ignored, never stored. */
+    suspend fun savePlayerTheme(theme: String) {
+        if (theme !in PlayerChromeTheme.IDS) return
+        dataStore.edit { preferences -> preferences[PLAYER_THEME_KEY] = theme }
     }
 
     /**
@@ -223,6 +260,92 @@ class ServerSettingsRepository @Inject constructor(
         dataStore.edit { preferences ->
             if (unseen) preferences[TRIAL_KEY_UNSEEN_KEY] = true
             else preferences.remove(TRIAL_KEY_UNSEEN_KEY)
+        }
+    }
+
+    /**
+     * The login streak (plan §5 step 19): consecutive days this device opened the app, counted
+     * locally because no server route carries a per-user progress count. The last day is a local
+     * epoch day (-1 means never opened); the count is how many in a row that is. The two move
+     * together, always — a count stored without its anchor would survive a missed day.
+     */
+    val loginStreakLastDay: Flow<Long> = dataStore.data.map { preferences ->
+        preferences[LOGIN_STREAK_LAST_DAY_KEY] ?: -1L
+    }
+
+    val loginStreakCount: Flow<Int> = dataStore.data.map { preferences ->
+        preferences[LOGIN_STREAK_COUNT_KEY] ?: 0
+    }
+
+    /** Record that this device opened the app today. A second open the same day changes nothing. */
+    suspend fun recordLoginDay(nowMs: Long = System.currentTimeMillis()) {
+        val today = loginStreakDay(nowMs)
+        val current = LoginStreak(
+            lastDay = loginStreakLastDay.first().takeIf { it >= 0L },
+            count = loginStreakCount.first(),
+        )
+        val next = nextLoginStreak(current, today)
+        if (next == current) return
+        dataStore.edit { preferences ->
+            preferences[LOGIN_STREAK_LAST_DAY_KEY] = next.lastDay ?: today
+            preferences[LOGIN_STREAK_COUNT_KEY] = next.count
+        }
+    }
+
+    /**
+     * The app major version the first-run gesture coach was last shown for, or null
+     * when it has never been shown. The coach shows once per major version (plan §5
+     * step 7): first open ever, and once again after a major version change — a
+     * minor update must not re-teach gestures the viewer already knows. The stored
+     * value is a major version ("1"), never the full version name, so 1.0.4 → 1.1.0
+     * does not re-show. Written when the coach is dismissed or its 4 s timer ends.
+     */
+    val coachSeenVersion: Flow<String?> = dataStore.data.map { preferences ->
+        preferences[COACH_SEEN_VERSION_KEY]
+    }
+
+    suspend fun saveCoachSeenVersion(majorVersion: String) {
+        dataStore.edit { preferences ->
+            preferences[COACH_SEEN_VERSION_KEY] = majorVersion
+        }
+    }
+
+    /**
+     * Player defaults (plan §5 step 10, P36): the viewer's own switches, not the
+     * operator's. Autoplay-next defaults ON (plan D4, Netflix's default) — the switch
+     * in Settings is the promise, and the player reads this flow before advancing.
+     * Autoplay-previews defaults ON, matching the hero carousel's own default; it gates
+     * the Home hero, never a video. Default quality defaults to "auto" — the same word
+     * the ladder uses ([com.raddstream.app.player.LadderForScope.AUTO]) — and a fixed
+     * band only applies when the viewer picked a rung themselves, never by guessing.
+     */
+    val autoplayNext: Flow<Boolean> = dataStore.data.map { preferences ->
+        preferences[AUTOPLAY_NEXT_KEY] ?: true
+    }
+
+    suspend fun saveAutoplayNext(enabled: Boolean) {
+        dataStore.edit { preferences ->
+            preferences[AUTOPLAY_NEXT_KEY] = enabled
+        }
+    }
+
+    val autoplayPreviews: Flow<Boolean> = dataStore.data.map { preferences ->
+        preferences[AUTOPLAY_PREVIEWS_KEY] ?: true
+    }
+
+    suspend fun saveAutoplayPreviews(enabled: Boolean) {
+        dataStore.edit { preferences ->
+            preferences[AUTOPLAY_PREVIEWS_KEY] = enabled
+        }
+    }
+
+    val defaultQuality: Flow<String> = dataStore.data.map { preferences ->
+        preferences[DEFAULT_QUALITY_KEY]?.takeIf { it.isNotBlank() } ?: "auto"
+    }
+
+    suspend fun saveDefaultQuality(band: String) {
+        dataStore.edit { preferences ->
+            preferences[DEFAULT_QUALITY_KEY] = band
         }
     }
 
@@ -361,6 +484,118 @@ class ServerSettingsRepository @Inject constructor(
     }
 
     /**
+     * The operator's theme, mirrored the same way as the remote switches above:
+     * the last body we actually received is what the app paints, so a dead
+     * server on launch leaves the previous theme in force. Every field
+     * defaults to the app this build has always shipped (dark, brand accent,
+     * hero on, 6 slides).
+     */
+    val themeSettings: Flow<PanelTheme> = dataStore.data.map { preferences ->
+        PanelTheme(
+            mode = preferences[THEME_MODE_KEY] ?: "dark",
+            accent = preferences[THEME_ACCENT_KEY] ?: "",
+            dynamicColor = preferences[THEME_DYNAMIC_COLOR_KEY] ?: false,
+            heroAutoplay = preferences[THEME_HERO_AUTOPLAY_KEY] ?: true,
+            heroIntervalS = preferences[THEME_HERO_INTERVAL_S_KEY] ?: 5,
+            heroMax = preferences[THEME_HERO_MAX_KEY] ?: 6,
+        )
+    }
+
+    /** Record one received theme block, from the same successful poll as [saveRemoteFlags]. */
+    suspend fun saveTheme(theme: PanelTheme) {
+        dataStore.edit { preferences ->
+            preferences[THEME_MODE_KEY] = theme.mode
+            preferences[THEME_ACCENT_KEY] = theme.accent
+            preferences[THEME_DYNAMIC_COLOR_KEY] = theme.dynamicColor
+            preferences[THEME_HERO_AUTOPLAY_KEY] = theme.heroAutoplay
+            preferences[THEME_HERO_INTERVAL_S_KEY] = theme.heroIntervalS
+            preferences[THEME_HERO_MAX_KEY] = theme.heroMax
+        }
+    }
+
+    /**
+     * The operator's tab list, mirrored the same way as the theme above: the
+     * last body we actually received is what the bar shows, so a dead server
+     * on launch leaves the previous order in force. Empty means "never
+     * received" — the bar falls back to its own four (see
+     * [com.raddstream.app.ui.navigation.PanelTabs]).
+     */
+    val panelTabs: Flow<List<String>> = dataStore.data.map { preferences ->
+        preferences[PANEL_TABS_KEY]
+            ?.split(",")
+            ?.map { it.trim() }
+            ?.filter { it.isNotEmpty() }
+            ?: emptyList()
+    }
+
+    /** Record one received tab list, from the same successful poll as [saveTheme]. */
+    suspend fun saveTabs(tabs: List<String>) {
+        dataStore.edit { preferences ->
+            preferences[PANEL_TABS_KEY] = tabs.joinToString(",")
+        }
+    }
+
+    /**
+     * The operator's disclaimer, mirrored the same way as the theme and tabs:
+     * the last body actually received is what the app shows, so a dead
+     * server on launch leaves the previous disclaimer in force. Empty text
+     * means "nothing published" — the dialog never opens on an empty text,
+     * and a retraction (the operator clearing the text) clears it here too.
+     * The version is what the app compares against what it has already
+     * shown; a negative version is a typo and reads as 0.
+     */
+    val disclaimer: Flow<PanelDisclaimer> = dataStore.data.map { preferences ->
+        PanelDisclaimer(
+            text = preferences[DISCLAIMER_TEXT_KEY] ?: "",
+            version = (preferences[DISCLAIMER_VERSION_KEY] ?: 0).coerceAtLeast(0),
+        )
+    }
+
+    /** Record one received disclaimer, from the same successful poll as [saveTabs]. */
+    suspend fun saveDisclaimer(disclaimer: PanelDisclaimer) {
+        dataStore.edit { preferences ->
+            preferences[DISCLAIMER_TEXT_KEY] = disclaimer.text
+            preferences[DISCLAIMER_VERSION_KEY] = disclaimer.version.coerceAtLeast(0)
+        }
+    }
+
+    /**
+     * The disclaimer version this install has already accepted. -1 means
+     * "never shown one": a published version 0 still has to be shown once,
+     * because 0 is a real version the operator may have published, not the
+     * absence of one.
+     */
+    val disclaimerSeenVersion: Flow<Int> = dataStore.data.map { preferences ->
+        preferences[DISCLAIMER_SEEN_VERSION_KEY] ?: -1
+    }
+
+    /** Record that the viewer read (and accepted) this disclaimer version. */
+    suspend fun acceptDisclaimer(version: Int) {
+        dataStore.edit { preferences ->
+            preferences[DISCLAIMER_SEEN_VERSION_KEY] = version.coerceAtLeast(0)
+        }
+    }
+
+    /**
+     * The best picture a free viewer may play, as the operator set it:
+     * "480p" or "720p". Anything else the server sent — a typo, an older
+     * deployment — reads as the shipped "720p", never a stricter cap the
+     * operator did not ask for.
+     */
+    val freeQualityCap: Flow<String> = dataStore.data.map { preferences ->
+        (preferences[FREE_QUALITY_CAP_KEY] ?: "720p")
+            .takeIf { it == "480p" || it == "720p" } ?: "720p"
+    }
+
+    /** Record one received free quality cap, from the same successful poll as [saveTabs]. */
+    suspend fun saveFreeQualityCap(cap: String) {
+        dataStore.edit { preferences ->
+            preferences[FREE_QUALITY_CAP_KEY] =
+                cap.takeIf { it == "480p" || it == "720p" } ?: "720p"
+        }
+    }
+
+    /**
      * The last entitlement the ledger confirmed, mirrored here so a restart does not have to
      * wait for a round trip before it knows what this account may play. It is a CACHE of the
      * server's answer, never a second authority: a signed-out device clears it, and every
@@ -417,6 +652,48 @@ class ServerSettingsRepository @Inject constructor(
         dataStore.edit { preferences -> preferences[MOBILE_DATA_KEY] = enabled }
     }
 
+    /**
+     * Data Saver: on mobile data, titles start at 480p and the server is
+     * asked for its data-saving copy. On by default — mobile data is the
+     * expensive network for most viewers here, and the switch is one tap
+     * away in Settings for anyone who wants full quality on the go.
+     */
+    val dataSaver: Flow<Boolean> = dataStore.data.map { preferences ->
+        preferences[DATA_SAVER_KEY] ?: true
+    }
+
+    suspend fun saveDataSaver(enabled: Boolean) {
+        dataStore.edit { preferences -> preferences[DATA_SAVER_KEY] = enabled }
+    }
+
+    /**
+     * Downloads only on Wi-Fi. On by default — a kept title is hundreds of
+     * megabytes, and starting one on mobile data by accident is the expensive
+     * mistake this exists to prevent. The viewer can switch it off in
+     * Settings; the download then starts on whatever network is up.
+     */
+    val wifiOnlyDownloads: Flow<Boolean> = dataStore.data.map { preferences ->
+        preferences[WIFI_ONLY_DOWNLOADS_KEY] ?: true
+    }
+
+    suspend fun saveWifiOnlyDownloads(enabled: Boolean) {
+        dataStore.edit { preferences -> preferences[WIFI_ONLY_DOWNLOADS_KEY] = enabled }
+    }
+
+    /**
+     * Delete a finished movie's download on its own, to free the space. On
+     * by default; the viewer can switch it off in Settings, and a series
+     * keep is never touched — one watched episode does not mean the season
+     * file is done. The notice names what was deleted.
+     */
+    val autoDeleteWatched: Flow<Boolean> = dataStore.data.map { preferences ->
+        preferences[AUTO_DELETE_WATCHED_KEY] ?: true
+    }
+
+    suspend fun saveAutoDeleteWatched(enabled: Boolean) {
+        dataStore.edit { preferences -> preferences[AUTO_DELETE_WATCHED_KEY] = enabled }
+    }
+
     /** How long an offline keep survives before the sweeper deletes it: 3 or 6 hours. */
     val keepTtlHours: Flow<Int> = dataStore.data.map { preferences ->
         preferences[KEEP_TTL_KEY]?.takeIf { it == KEEP_TTL_HOURS_3 || it == KEEP_TTL_HOURS_6 }
@@ -428,13 +705,19 @@ class ServerSettingsRepository @Inject constructor(
         dataStore.edit { preferences -> preferences[KEEP_TTL_KEY] = safe }
     }
 
-    /** Preferred subtitle language as the user named it; null means "leave it off". */
+    /**
+     * Preferred subtitle language as the user named it; null means "never set" (the region's
+     * default applies — see [com.raddstream.app.player.LanguageDefaults]), and the literal
+     * [SUBTITLE_OFF] means off. Off used to be stored as a removal, which made it
+     * indistinguishable from never-set; an explicit Off stored as nothing would come back as
+     * the region's English on the next playback.
+     */
     val preferredSubtitleLanguage: Flow<String?> = dataStore.data.map { preferences ->
         preferences[PREFERRED_SUBTITLE_LANGUAGE_KEY]
     }
 
     suspend fun savePreferredSubtitleLanguage(language: String?) {
-        val clean = language?.trim()?.takeIf { it.isNotEmpty() && it != SUBTITLE_OFF }
+        val clean = language?.trim()?.takeIf { it.isNotEmpty() }
         dataStore.edit { preferences ->
             if (clean == null) preferences.remove(PREFERRED_SUBTITLE_LANGUAGE_KEY)
             else preferences[PREFERRED_SUBTITLE_LANGUAGE_KEY] = clean
@@ -586,6 +869,18 @@ class ServerSettingsRepository @Inject constructor(
         private val FEATURE_PURE_CINEMA_KEY = booleanPreferencesKey("feature_pure_cinema")
         private val FEATURE_QUALITY_GATE_KEY = booleanPreferencesKey("feature_quality_gate")
         private val FEATURE_ADS_KEY = booleanPreferencesKey("feature_ads")
+        private val THEME_MODE_KEY = stringPreferencesKey("theme_mode")
+        private val PLAYER_THEME_KEY = stringPreferencesKey("player_theme")
+        private val PANEL_TABS_KEY = stringPreferencesKey("panel_tabs")
+        private val DISCLAIMER_TEXT_KEY = stringPreferencesKey("disclaimer_text")
+        private val DISCLAIMER_VERSION_KEY = intPreferencesKey("disclaimer_version")
+        private val DISCLAIMER_SEEN_VERSION_KEY = intPreferencesKey("disclaimer_seen_version")
+        private val FREE_QUALITY_CAP_KEY = stringPreferencesKey("free_quality_cap")
+        private val THEME_ACCENT_KEY = stringPreferencesKey("theme_accent")
+        private val THEME_DYNAMIC_COLOR_KEY = booleanPreferencesKey("theme_dynamic_color")
+        private val THEME_HERO_AUTOPLAY_KEY = booleanPreferencesKey("theme_hero_autoplay")
+        private val THEME_HERO_INTERVAL_S_KEY = intPreferencesKey("theme_hero_interval_s")
+        private val THEME_HERO_MAX_KEY = intPreferencesKey("theme_hero_max")
         private val VIP_ACTIVE_KEY = booleanPreferencesKey("vip_active")
         private val VIP_UNTIL_KEY = doublePreferencesKey("vip_until")
         private val VIP_PENDING_CLAIM_KEY = booleanPreferencesKey("vip_pending_claim")
@@ -593,10 +888,19 @@ class ServerSettingsRepository @Inject constructor(
         private val TRIAL_SECONDS_REMAINING_KEY = doublePreferencesKey("trial_seconds_remaining")
         private val TRIAL_RECORDED_AT_MS_KEY = longPreferencesKey("trial_recorded_at_ms")
         private val TRIAL_KEY_UNSEEN_KEY = booleanPreferencesKey("trial_key_unseen")
+        private val LOGIN_STREAK_LAST_DAY_KEY = longPreferencesKey("login_streak_last_day")
+        private val LOGIN_STREAK_COUNT_KEY = intPreferencesKey("login_streak_count")
+        private val COACH_SEEN_VERSION_KEY = stringPreferencesKey("player_coach_seen_version")
+        private val AUTOPLAY_NEXT_KEY = booleanPreferencesKey("player_autoplay_next")
+        private val AUTOPLAY_PREVIEWS_KEY = booleanPreferencesKey("player_autoplay_previews")
+        private val DEFAULT_QUALITY_KEY = stringPreferencesKey("player_default_quality")
         private val ACCOUNT_LABEL_KEY = stringPreferencesKey("account_label")
         private val SEARCH_RECENTS_KEY = stringPreferencesKey("search_recents")
         private val IMAGE_QUALITY_KEY = stringPreferencesKey("image_quality")
         private val MOBILE_DATA_KEY = booleanPreferencesKey("mobile_data_allowed")
+        private val DATA_SAVER_KEY = booleanPreferencesKey("data_saver")
+        private val WIFI_ONLY_DOWNLOADS_KEY = booleanPreferencesKey("wifi_only_downloads")
+        private val AUTO_DELETE_WATCHED_KEY = booleanPreferencesKey("auto_delete_watched")
         private val KEEP_TTL_KEY = intPreferencesKey("keep_ttl_hours")
         private val PREFERRED_SUBTITLE_LANGUAGE_KEY = stringPreferencesKey("preferred_subtitle_language")
         private val SUBTITLE_SIZE_KEY = intPreferencesKey("subtitle_size_percent")

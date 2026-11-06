@@ -161,4 +161,32 @@ class SyncContractTest {
         assertTrue(SyncContract.isUsableSyncKey("a".repeat(16)))
         assertFalse(SyncContract.isUsableSyncKey("a".repeat(15)))
     }
+
+    @Test
+    fun `the plan names the server favorites this device lacks, not just their count`() {
+        val local = listOf(LocalFavorite(postId = 1, workRef = "ref-a", syncedAt = 1L))
+        val server = listOf(
+            ServerFavorite(workRef = "ref-a", season = 0, episode = 0, addedAt = 1.0),
+            ServerFavorite(workRef = "ref-b", season = 0, episode = 0, addedAt = 2.0),
+            ServerFavorite(workRef = "ref-c", season = 0, episode = 0, addedAt = 3.0),
+        )
+        val plan = SyncContract.favoritePlan(local = local, server = server)
+        assertEquals(2, plan.unknownHere)
+        assertEquals(listOf("ref-b", "ref-c"), plan.unknownRefs)
+    }
+
+    @Test
+    fun `a library that already holds every server favorite has nothing unknown`() {
+        val local = listOf(
+            LocalFavorite(postId = 1, workRef = "ref-a", syncedAt = 1L),
+            LocalFavorite(postId = 2, workRef = "ref-b", syncedAt = 1L),
+        )
+        val server = listOf(
+            ServerFavorite(workRef = "ref-a", season = 0, episode = 0, addedAt = 1.0),
+            ServerFavorite(workRef = "ref-b", season = 0, episode = 0, addedAt = 2.0),
+        )
+        val plan = SyncContract.favoritePlan(local = local, server = server)
+        assertEquals(0, plan.unknownHere)
+        assertTrue(plan.unknownRefs.isEmpty())
+    }
 }

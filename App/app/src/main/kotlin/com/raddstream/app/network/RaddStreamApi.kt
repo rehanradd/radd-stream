@@ -3,6 +3,23 @@ package com.raddstream.app.network
 import com.raddstream.app.network.models.AccountCreateRequest
 import com.raddstream.app.network.models.AccountCreateResponse
 import com.raddstream.app.network.models.AccountInfoResponse
+import com.raddstream.app.network.models.CoinBalanceResponse
+import com.raddstream.app.network.models.CoinCapsResponse
+import com.raddstream.app.network.models.CoinDownloadCreditRequest
+import com.raddstream.app.network.models.CoinDownloadCreditResponse
+import com.raddstream.app.network.models.CoinEarnRequest
+import com.raddstream.app.network.models.CoinEarnResponse
+import com.raddstream.app.network.models.CoinRedeemRequest
+import com.raddstream.app.network.models.CoinRedeemResponse
+import com.raddstream.app.network.models.CoinRedeemThemeRequest
+import com.raddstream.app.network.models.CoinRedeemThemeResponse
+import com.raddstream.app.network.models.CoinRequestMovieRequest
+import com.raddstream.app.network.models.CoinRequestMovieResponse
+import com.raddstream.app.network.models.CoinShareRequest
+import com.raddstream.app.network.models.CoinShareResponse
+import com.raddstream.app.network.models.CoinThemesResponse
+import com.raddstream.app.network.models.ContactRequest
+import com.raddstream.app.network.models.ContactResponse
 import com.raddstream.app.network.models.DeviceTrialRequest
 import com.raddstream.app.network.models.DeviceTrialResponse
 import com.raddstream.app.network.models.EntitlementResponse
@@ -22,7 +39,10 @@ import com.raddstream.app.network.models.RemovedResponse
 import com.raddstream.app.network.models.RevokedResponse
 import com.raddstream.app.network.models.StatsResponse
 import com.raddstream.app.network.models.StreamResponse
+import com.raddstream.app.network.models.SuggestResponse
 import com.raddstream.app.network.models.VipRemoteConfig
+import com.raddstream.app.network.models.WirePlayRequest
+import com.raddstream.app.network.models.WirePlayResponse
 import retrofit2.http.Body
 import retrofit2.http.GET
 import retrofit2.http.Header
@@ -75,9 +95,23 @@ interface RaddStreamApi {
         @Query("genre") genre: String? = null,
         @Query("quality") quality: String? = null,
         @Query("sort") sort: String? = null,
+        @Query("free_only") freeOnly: Boolean? = null,
+        @Query("work_ref") workRef: String? = null,
         @Query("page") page: Int = 1,
         @Query("limit") limit: Int = 20,
     ): PostsResponse
+
+    /**
+     * GET /api/v2/suggest — cheap type-ahead over the works ledger (title
+     * prefixes only). An enhancement, never a gate: the route needs the
+     * nginx allow-list (a gate item, like /api/v2/play), so a 403 here
+     * means no chips, never a failed search.
+     */
+    @GET("api/v2/suggest")
+    suspend fun suggest(
+        @Query("q") query: String,
+        @Query("limit") limit: Int = 5,
+    ): SuggestResponse
 
     /** GET /api/v1/posts/{id} — post details with all releases and sources. */
     @GET("api/v1/posts/{id}")
@@ -113,6 +147,19 @@ interface RaddStreamApi {
      */
     @GET("api/v1/app/remote-config")
     suspend fun getRemoteConfig(): VipRemoteConfig
+
+    /**
+     * POST /api/v1/contact — the public contact form, no login, no sync key.
+     *
+     * The message lands in the panel's inbox under the panel's own rules
+     * (category, subject and body limits, the contact hint stored masked).
+     * The server answers `{"success": true}` on store, 400 for a bad
+     * category or an empty body, 503 when the inbox is not wired.
+     */
+    @POST("api/v1/contact")
+    suspend fun submitContact(
+        @Body request: ContactRequest,
+    ): ContactResponse
 
     // ── OPTIONAL sync account (api/v2/account) ───────────────────────────────────
     //
@@ -281,4 +328,123 @@ interface RaddStreamApi {
     suspend fun getEntitlement(
         @Header("Authorization") authorization: String?,
     ): EntitlementResponse
+
+    /**
+     * GET /api/v2/account/coins — this account's own coin balance. The number is the
+     * same `SUM(delta)` the spender checks before it debits, so a reply and a refusal
+     * cannot disagree about what this account holds.
+     */
+    @GET("api/v2/account/coins")
+    suspend fun getCoinBalance(
+        @Header("Authorization") authorization: String?,
+    ): CoinBalanceResponse
+
+    /**
+     * GET /api/v2/account/coins/caps — the ceilings the ledger holds, the pass prices
+     * and the streak ladder this server will actually pay. The ladder here is the one
+     * the earn route enforces, so the phone cannot show a prize the ledger will not pay.
+     */
+    @GET("api/v2/account/coins/caps")
+    suspend fun getCoinCaps(
+        @Header("Authorization") authorization: String?,
+    ): CoinCapsResponse
+
+    /**
+     * POST /api/v2/account/coins/earn — claim today's check-in. The body carries
+     * `reason` and nothing else: the grant size is the ladder's own and the day is
+     * claimed by one guarded server UPDATE, so a second claim the same day answers
+     * `same_day_noop` and pays nothing twice.
+     */
+    @POST("api/v2/account/coins/earn")
+    suspend fun earnDailyLogin(
+        @Header("Authorization") authorization: String?,
+        @Body body: CoinEarnRequest,
+    ): CoinEarnResponse
+
+    /**
+     * POST /api/v2/account/coins/redeem — spend coins on a VIP pass. The body carries
+     * the plan name and nothing else: the price is the ladder's own, the debit is one
+     * guarded server UPDATE, and the pass is recorded against the account, so the
+     * entitlement it buys is visible the next time the app reads it.
+     */
+    @POST("api/v2/account/coins/redeem")
+    suspend fun redeemPass(
+        @Header("Authorization") authorization: String?,
+        @Body body: CoinRedeemRequest,
+    ): CoinRedeemResponse
+
+    /**
+     * POST /api/v2/account/coins/redeem-download — spend coins on one direct
+     * download of one movie. The body carries the download handle and nothing
+     * else: the price is the server's own knob, the debit is one guarded
+     * server UPDATE, and the answer's token is the credit the browser spends
+     * on `GET /api/v1/download?credit=…`.
+     */
+    @POST("api/v2/account/coins/redeem-download")
+    suspend fun redeemDownloadCredit(
+        @Header("Authorization") authorization: String?,
+        @Body body: CoinDownloadCreditRequest,
+    ): CoinDownloadCreditResponse
+
+    /**
+     * POST /api/v2/account/coins/share — report one share of a movie. The body
+     * carries the work handle and nothing else: the server pays once a day, so
+     * a second share the same day answers `granted: false` and pays nothing.
+     */
+    @POST("api/v2/account/coins/share")
+    suspend fun reportShare(
+        @Header("Authorization") authorization: String?,
+        @Body body: CoinShareRequest,
+    ): CoinShareResponse
+
+    /**
+     * POST /api/v2/account/coins/request-movie — spend coins on one requested
+     * movie. The body carries the title and an optional note: the price is the
+     * server's own knob, and a replay answers `already_applied` with the
+     * request it already filed.
+     */
+    @POST("api/v2/account/coins/request-movie")
+    suspend fun requestMovie(
+        @Header("Authorization") authorization: String?,
+        @Body body: CoinRequestMovieRequest,
+    ): CoinRequestMovieResponse
+
+    /** GET /api/v2/account/coins/themes — what this account owns, and what a theme costs. */
+    @GET("api/v2/account/coins/themes")
+    suspend fun getCoinThemes(
+        @Header("Authorization") authorization: String?,
+    ): CoinThemesResponse
+
+    /**
+     * POST /api/v2/account/coins/redeem-theme — spend coins on one player
+     * theme. The body carries the theme id and nothing else: the price is one
+     * price for every theme, and a theme already owned answers
+     * `already_applied` with the ownership it already holds.
+     */
+    @POST("api/v2/account/coins/redeem-theme")
+    suspend fun redeemTheme(
+        @Header("Authorization") authorization: String?,
+        @Body body: CoinRedeemThemeRequest,
+    ): CoinRedeemThemeResponse
+
+    /**
+     * POST /api/v2/play — one PlayBundle for a print, ranked by the server (plan §5 step 13).
+     *
+     * This is the call the client-side bundle builder was waiting for: the server orders
+     * the candidates from its own probes, hands back one tier per print plus the ranked
+     * lists, and — the part no v1 route serves — the print's coverage with the episode
+     * offsets and chapter titles. The response shape is the server's actual one
+     * (`catalog_api.play_bundle`): tiers/candidates/coverage, no `renditions`.
+     *
+     * Unauthenticated like the v1 detail: the public answer is the same for every viewer.
+     * A 403 here means nginx has not allowed the route yet (the gate owns that); a
+     * non-playable print answers 200 with an empty ladder and `download_options` instead
+     * of an error, and a target the server cannot see answers 404. The caller treats
+     * ANY failure as "fall back to the client-side ladder" — never as a reason to show
+     * the viewer an error for a Play tap that used to work.
+     */
+    @POST("api/v2/play")
+    suspend fun play(
+        @Body body: WirePlayRequest,
+    ): WirePlayResponse
 }

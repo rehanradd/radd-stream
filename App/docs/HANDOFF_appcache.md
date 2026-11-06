@@ -237,7 +237,15 @@ The player must do exactly two things. All byte math lives in this package (unit
    `Uri.fromFile(...)` (the `CacheFileEntity.toLocalUri()` helper) — still app-private, still no
    external handoff.
 
-## 6. WorkManager — TTL sweep + eviction (requires a dependency the app does not yet have)
+## 6. WorkManager — TTL sweep + eviction
+
+> **Built 2026-11-06 (Session 66):** `work-runtime-ktx` 2.9.0 + `hilt-work` are
+> in the catalog and the app build; `data/cache/CacheSweepWorker.kt` (`@HiltWorker`,
+> runs the same `CacheSweeper`, never retries) is enqueued as a unique daily
+> periodic work (`KEEP`) from the Application, which implements
+> `Configuration.Provider` with the Hilt worker factory, and the manifest
+> removes WorkManager's default startup initializer. The sketch below is the
+> record of what was planned; the shipped worker is the authority now.
 
 **Add to `libs.versions.toml` + `app/build.gradle.kts` (I could not edit Gradle):**
 

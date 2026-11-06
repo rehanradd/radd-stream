@@ -20,7 +20,10 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Movie
+import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Star
@@ -29,6 +32,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -44,6 +48,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -55,9 +60,15 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.raddstream.app.data.VipPendingSubmission
+import com.raddstream.app.network.models.DownloadCreditPrice
+import com.raddstream.app.network.models.PassTier
+import com.raddstream.app.network.models.VipRemoteStreak
+import com.raddstream.app.ui.theme.PlayerChromeTheme
+import com.raddstream.app.ui.theme.RaddCurrent500
 import com.raddstream.app.ui.theme.RaddInk950
 import com.raddstream.app.ui.theme.RaddSignalGold
 import com.raddstream.app.viewmodel.RewardedVipPass
@@ -126,6 +137,42 @@ fun VipUpgradeScreen(
                 expiresAt = state.rewardedVipExpiresAt,
                 onWatchAd = { viewModel.grantRewardedVip() },
             )
+            if (state.streak.isConfigured) {
+                StreakCard(
+                    streak = state.streak,
+                    count = state.streakCount,
+                    balance = state.coinBalance,
+                    ladder = state.streakLadder,
+                    catalog = state.passCatalog,
+                    signedIn = state.signedIn,
+                    claimedToday = state.claimedToday,
+                    isClaiming = state.isClaiming,
+                    claimMessage = state.claimMessage,
+                    onClaim = viewModel::claimDailyLogin,
+                    isRedeeming = state.isRedeeming,
+                    redeemMessage = state.redeemMessage,
+                    onRedeem = viewModel::redeemPass,
+                )
+            }
+            if (state.signedIn) {
+                RequestMovieCard(
+                    price = state.requestPrice,
+                    balance = state.coinBalance,
+                    isRequesting = state.isRequesting,
+                    message = state.requestMessage,
+                    onRequest = viewModel::requestMovie,
+                )
+                ThemeCard(
+                    catalog = state.themeCatalog,
+                    owned = state.ownedThemes,
+                    selected = state.selectedTheme,
+                    balance = state.coinBalance,
+                    isBuying = state.isBuyingTheme,
+                    message = state.themeMessage,
+                    onBuy = viewModel::buyTheme,
+                    onSelect = viewModel::selectTheme,
+                )
+            }
 
             when {
                 state.isLoading -> LoadingCard()
@@ -225,6 +272,17 @@ private fun EntitlementCard(state: VipUiState) {
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+            // There is no cancel button because there is nothing to cancel:
+            // VIP is a manual payment the operator approves, and it never
+            // charges again on its own. When it ends, the viewer pays again
+            // to continue — or does nothing, and goes back to free.
+            if (earned.vip) {
+                Text(
+                    "VIP does not renew itself. When it ends, pay again to continue — nothing is charged on its own.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
         }
     }
 }
@@ -384,6 +442,364 @@ private fun RewardedVipSection(expiresAt: Long, onWatchAd: () -> Unit) {
     }
 }
 
+/**
+ * The login streak (plan §5 step 19) and the daily check-in that pays it: consecutive days
+ * this device opened the app, against the operator's own plan (target days, reward coins).
+ * The count is local — MainActivity records one open per day — and the coins are the
+ * server's: the seven pills show the ladder the server will pay, the Claim button asks
+ * the server for today's grant, and the balance is the ledger's own answer. A claim the
+ * server already paid answers "already claimed" and pays nothing twice. Hidden entirely
+ * when the operator never configured a streak, so an absent plan is never shown as a zero.
+ */
+@Composable
+private fun StreakCard(
+    streak: VipRemoteStreak,
+    count: Int,
+    balance: Int,
+    ladder: Map<Int, Int>,
+    catalog: Map<String, PassTier>,
+    signedIn: Boolean,
+    claimedToday: Boolean,
+    isClaiming: Boolean,
+    claimMessage: String?,
+    onClaim: () -> Unit,
+    isRedeeming: Boolean,
+    redeemMessage: String?,
+    onRedeem: (String) -> Unit,
+) {
+    val complete = count >= streak.days
+    val today = (count + 1).coerceIn(1, streak.days)
+    Surface(
+        color = RaddCurrent500.copy(alpha = 0.10f),
+        shape = RoundedCornerShape(20.dp),
+        border = BorderStroke(1.dp, RaddCurrent500.copy(alpha = 0.35f)),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(
+            modifier = Modifier.padding(18.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Default.DateRange, contentDescription = null, tint = RaddCurrent500)
+                Spacer(Modifier.width(10.dp))
+                Text(
+                    "Login streak",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onBackground,
+                )
+            }
+            Text(
+                if (complete) "${streak.days}-day streak complete."
+                else "Day $count of ${streak.days} — open the app every day to keep it going.",
+                style = MaterialTheme.typography.headlineSmall,
+                fontWeight = FontWeight.Bold,
+                color = RaddCurrent500,
+            )
+            LinearProgressIndicator(
+                progress = { (count.toFloat() / streak.days).coerceIn(0f, 1f) },
+                modifier = Modifier.fillMaxWidth(),
+                color = RaddCurrent500,
+            )
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                for (day in 1..streak.days) {
+                    val done = day <= count
+                    val isToday = day == today && !complete
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        modifier = Modifier
+                            .weight(1f)
+                            .padding(vertical = 4.dp),
+                    ) {
+                        Surface(
+                            color = when {
+                                done -> RaddCurrent500.copy(alpha = 0.25f)
+                                isToday -> RaddCurrent500.copy(alpha = 0.10f)
+                                else -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                            },
+                            shape = RoundedCornerShape(10.dp),
+                            border = if (isToday) {
+                                BorderStroke(1.dp, RaddCurrent500)
+                            } else {
+                                null
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Column(
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                modifier = Modifier.padding(vertical = 8.dp, horizontal = 2.dp),
+                            ) {
+                                Text(
+                                    "Day $day",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = if (isToday) FontWeight.Bold else FontWeight.Normal,
+                                    color = MaterialTheme.colorScheme.onBackground,
+                                    textAlign = TextAlign.Center,
+                                )
+                                Text(
+                                    ladder[day]?.let { "$it coins" } ?: "",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    textAlign = TextAlign.Center,
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+            if (signedIn) {
+                Text(
+                    "Wallet: $balance coins.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Button(
+                onClick = onClaim,
+                enabled = signedIn && !claimedToday && !isClaiming,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text(if (claimedToday) "Claimed today" else "Claim Today's Coins")
+            }
+            if (!signedIn) {
+                Text(
+                    "Sign in to claim your coins.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            if (claimMessage != null) {
+                Text(
+                    claimMessage,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            if (catalog.isNotEmpty()) {
+                Text(
+                    "Spend coins",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onBackground,
+                )
+                for (plan in listOf("day", "weekend", "monthly_vip")) {
+                    val tier = catalog[plan] ?: continue
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                when (plan) {
+                                    "day" -> "24-hour VIP pass"
+                                    "weekend" -> "Weekend VIP pass"
+                                    "monthly_vip" -> "30-day VIP pass"
+                                    else -> "VIP pass"
+                                },
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.onBackground,
+                            )
+                            Text(
+                                "${tier.coins} coins",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        Button(
+                            onClick = { onRedeem(plan) },
+                            enabled = signedIn && !isRedeeming && balance >= tier.coins,
+                        ) {
+                            Text("Redeem")
+                        }
+                    }
+                }
+                if (redeemMessage != null) {
+                    Text(
+                        redeemMessage,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+            if (streak.rewardCoins > 0) {
+                Text(
+                    "Reward: ${streak.rewardCoins} coins when you reach ${streak.days} days.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Text(
+                "Counted on this device. The coins go to your wallet when the server pays them.",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+/** A theme id in the viewer's words: the names are the server's. */
+private fun themeLabel(theme: String): String = when (theme) {
+    PlayerChromeTheme.MIDNIGHT -> "Midnight"
+    PlayerChromeTheme.EMBER -> "Ember"
+    else -> "Jade"
+}
+
+@Composable
+private fun RequestMovieCard(
+    price: Int,
+    balance: Int,
+    isRequesting: Boolean,
+    message: String?,
+    onRequest: (String) -> Unit,
+) {
+    var title by remember { mutableStateOf("") }
+    // No form until the server publishes a price: a request with no price is a
+    // promise this screen cannot keep.
+    if (price <= 0) return
+    Surface(
+        color = RaddCurrent500.copy(alpha = 0.10f),
+        shape = RoundedCornerShape(20.dp),
+        border = BorderStroke(1.dp, RaddCurrent500.copy(alpha = 0.35f)),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(
+            modifier = Modifier.padding(18.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Default.Movie, contentDescription = null, tint = RaddCurrent500)
+                Spacer(Modifier.width(10.dp))
+                Text(
+                    "Request a movie",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onBackground,
+                )
+            }
+            Text(
+                "Missing a title? Spend $price coins and the team will look for it.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            OutlinedTextField(
+                value = title,
+                onValueChange = { if (it.length <= 200) title = it },
+                label = { Text("Movie name") },
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Button(
+                onClick = { onRequest(title) },
+                enabled = title.isNotBlank() && !isRequesting && balance >= price,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text(if (isRequesting) "Requesting…" else "Request — $price coins")
+            }
+            if (message != null) {
+                Text(
+                    message,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ThemeCard(
+    catalog: Map<String, DownloadCreditPrice>,
+    owned: List<String>,
+    selected: String,
+    balance: Int,
+    isBuying: Boolean,
+    message: String?,
+    onBuy: (String) -> Unit,
+    onSelect: (String) -> Unit,
+) {
+    // Jade is the shipped look and is always owned; the catalog holds only the
+    // themes coins can buy. No card until the server publishes a price.
+    if (catalog.isEmpty()) return
+    Surface(
+        color = RaddCurrent500.copy(alpha = 0.10f),
+        shape = RoundedCornerShape(20.dp),
+        border = BorderStroke(1.dp, RaddCurrent500.copy(alpha = 0.35f)),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(
+            modifier = Modifier.padding(18.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Default.Palette, contentDescription = null, tint = RaddCurrent500)
+                Spacer(Modifier.width(10.dp))
+                Text(
+                    "Player themes",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onBackground,
+                )
+            }
+            Text(
+                "A skin for the player's chrome — the background, the plates, the rail. Never the accent that marks a selected control.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            for (theme in PlayerChromeTheme.IDS) {
+                val isOwned = theme == PlayerChromeTheme.JADE || theme in owned
+                val isSelected = theme == selected
+                val cost = catalog[theme]?.coins ?: 0
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            themeLabel(theme) + if (isSelected) " — wearing" else "",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onBackground,
+                        )
+                        Text(
+                            when {
+                                theme == PlayerChromeTheme.JADE -> "The shipped look — free"
+                                isOwned -> "Owned"
+                                else -> "$cost coins"
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Button(
+                        onClick = { if (isOwned) onSelect(theme) else onBuy(theme) },
+                        enabled = !isBuying && (isOwned || balance >= cost),
+                    ) {
+                        Text(
+                            when {
+                                isSelected -> "Wearing"
+                                isOwned -> "Wear"
+                                else -> "Buy — $cost"
+                            },
+                        )
+                    }
+                }
+            }
+            if (message != null) {
+                Text(
+                    message,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
+}
+
 @Composable
 internal fun PricingSection(state: VipUiState, onSelect: (VipPlan) -> Unit) {
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -453,6 +869,11 @@ private fun PlanCard(
             )
             Text(
                 plan.period,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Text(
+                "This is the full amount you send — no extra charge is added here.",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )

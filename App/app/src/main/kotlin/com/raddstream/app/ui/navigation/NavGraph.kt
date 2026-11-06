@@ -1,12 +1,8 @@
 package com.raddstream.app.ui.navigation
 
 import androidx.compose.foundation.layout.padding
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Favorite
-import androidx.compose.material.icons.filled.Home
-import androidx.compose.material.icons.filled.Search
-import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.NavigationBarItemDefaults
@@ -17,6 +13,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.res.vectorResource
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavHostController
 import androidx.navigation.NavType
@@ -25,13 +22,17 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
+import com.raddstream.app.R
 import com.raddstream.app.brand.Brand
 import com.raddstream.app.data.RemoteFeatures
+import com.raddstream.app.network.models.PanelTheme
+import com.raddstream.app.player.PlayerSessionStore
 import com.raddstream.app.ui.screens.BrowseScreen
 import com.raddstream.app.ui.screens.DetailScreen
 import com.raddstream.app.ui.screens.DownloadsScreen
 import com.raddstream.app.ui.screens.EmbedWebViewScreen
 import com.raddstream.app.ui.screens.HomeScreen
+import com.raddstream.app.ui.screens.LocalFilesScreen
 import com.raddstream.app.ui.screens.MyListScreen
 import com.raddstream.app.ui.screens.PlayerScreen
 import com.raddstream.app.ui.screens.RegionSelectionScreen
@@ -39,11 +40,6 @@ import com.raddstream.app.ui.screens.SearchScreen
 import com.raddstream.app.ui.screens.SettingsScreen
 import com.raddstream.app.ui.screens.SetupScreen
 import com.raddstream.app.ui.screens.VipUpgradeScreen
-import com.raddstream.app.ui.theme.AccentPrimary
-import com.raddstream.app.ui.theme.BackgroundDark
-import com.raddstream.app.ui.theme.OnSurfaceMuted
-import com.raddstream.app.ui.theme.SurfaceDark
-import com.raddstream.app.ui.theme.SurfaceVariantDark
 
 private data class BottomNavItem(
     val label: String,
@@ -71,6 +67,12 @@ fun RaddStreamNavGraph(
     navController: NavHostController = rememberNavController(),
     startDestination: String,
     features: RemoteFeatures = RemoteFeatures(),
+    /** The operator's tab order from the panel (`tabs` tuning key), as the activity last received it; empty means "never received", and the bar falls back to its own four. */
+    tabs: List<String> = emptyList(),
+    /** The operator's theme, for the hero knobs Home reads from it. */
+    theme: PanelTheme = PanelTheme(),
+    /** The viewer's own autoplay-previews switch (plan §5 step 10): either it or the operator's hero flag being off stops the carousel. */
+    autoplayPreviews: Boolean = true,
     openRequest: LocalVideoOpen? = null,
     onOpenConsumed: () -> Unit = {},
 ) {
@@ -87,21 +89,34 @@ fun RaddStreamNavGraph(
         onOpenConsumed()
     }
 
-    val bottomNavItems = buildList {
-        add(BottomNavItem("Home", Screen.Home.route, Icons.Default.Home))
-        if (features.search) add(BottomNavItem("Search", Screen.Search.route, Icons.Default.Search))
-        add(BottomNavItem("My List", Screen.MyList.route, Icons.Default.Favorite))
-        add(BottomNavItem("Settings", Screen.Settings.route, Icons.Default.Settings))
+    // The operator's tab order, resolved against what this build can show: Home is always
+    // first, Search only when its feature flag is on, and an empty or all-unknown list falls
+    // back to the four tabs this build has always shipped. The routes stay registered even
+    // for a tab the operator hid — a back stack that already holds that screen must not name
+    // a destination the graph cannot resolve.
+    // The four tabs wear the brand's own icons (res/drawable/ic_tab_*.xml,
+    // the stroke set from the brand pack — the `?attr/colorControlNormal`
+    // tint the pack files carried was stripped on copy-in, because this app
+    // has no such attr; the NavigationBarItem tint is the only tint). The
+    // vectors are stroke-black; Icon's tint recolours them to the bar's
+    // selected/unselected colours, exactly as the Material icons did.
+    val bottomNavItems = PanelTabs.resolve(tabs, features.search).map { id ->
+        when (id) {
+            "search" -> BottomNavItem("Search", Screen.Search.route, ImageVector.vectorResource(R.drawable.ic_tab_search))
+            "my_list" -> BottomNavItem("My List", Screen.MyList.route, ImageVector.vectorResource(R.drawable.ic_tab_my_list))
+            "settings" -> BottomNavItem("Settings", Screen.Settings.route, ImageVector.vectorResource(R.drawable.ic_tab_settings))
+            else -> BottomNavItem("Home", Screen.Home.route, ImageVector.vectorResource(R.drawable.ic_tab_home))
+        }
     }
 
     val showBottomBar = currentRoute in bottomNavItems.map { it.route }
 
     Scaffold(
-        containerColor = BackgroundDark,
+        containerColor = MaterialTheme.colorScheme.background,
         bottomBar = {
             if (showBottomBar) {
                 NavigationBar(
-                    containerColor = SurfaceDark,
+                    containerColor = MaterialTheme.colorScheme.surfaceContainer,
                 ) {
                     bottomNavItems.forEach { item ->
                         val selected = currentRoute == item.route
@@ -110,11 +125,11 @@ fun RaddStreamNavGraph(
                             label = { Text(item.label) },
                             selected = selected,
                             colors = NavigationBarItemDefaults.colors(
-                                selectedIconColor = AccentPrimary,
-                                selectedTextColor = AccentPrimary,
-                                unselectedIconColor = OnSurfaceMuted,
-                                unselectedTextColor = OnSurfaceMuted,
-                                indicatorColor = SurfaceVariantDark,
+                                selectedIconColor = MaterialTheme.colorScheme.primary,
+                                selectedTextColor = MaterialTheme.colorScheme.primary,
+                                unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                                unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                                indicatorColor = MaterialTheme.colorScheme.surfaceContainerHighest,
                             ),
                             onClick = {
                                 if (currentRoute != item.route) {
@@ -171,6 +186,9 @@ fun RaddStreamNavGraph(
                     onPostClick = { postId -> navController.navigate(Screen.Detail.createRoute(postId)) },
                     onBrowseType = { type -> navController.navigate(Screen.Browse.createRoute(type)) },
                     onSetupServerClick = { navController.navigate(Screen.Setup.route) },
+                    heroMax = theme.heroMax,
+                    heroAutoplay = theme.heroAutoplay && autoplayPreviews,
+                    heroIntervalMs = theme.heroIntervalS * 1_000L,
                 )
             }
 
@@ -196,6 +214,13 @@ fun RaddStreamNavGraph(
                 SearchScreen(
                     onBackClick = { navController.popBackStack() },
                     onPostClick = { postId -> navController.navigate(Screen.Detail.createRoute(postId)) },
+                    onPlayDirectUrl = { url, title ->
+                        // The address is staged, never routed: the player
+                        // opens the opaque key and reads the address from
+                        // the store (see PlayerSessionStore).
+                        val key = PlayerSessionStore.Instance.stageDirectUrl(url)
+                        navController.navigate(Screen.Player.createRoute(key, title))
+                    },
                 )
             }
 
@@ -229,6 +254,16 @@ fun RaddStreamNavGraph(
                     onPlayLocal = { uri, title ->
                         navController.navigate(Screen.PlayerLocal.createRoute(uri, title))
                     },
+                    onOpenLocalFiles = { navController.navigate(Screen.LocalFiles.route) },
+                )
+            }
+
+            composable(Screen.LocalFiles.route) {
+                LocalFilesScreen(
+                    onBackClick = { navController.popBackStack() },
+                    onPlayLocal = { uri, title ->
+                        navController.navigate(Screen.PlayerLocal.createRoute(uri, title))
+                    },
                 )
             }
 
@@ -259,6 +294,12 @@ fun RaddStreamNavGraph(
                 arguments = listOf(
                     navArgument(Screen.Player.ARG_STREAM_ID) { type = NavType.StringType },
                     navArgument(Screen.Player.ARG_TITLE) { type = NavType.StringType },
+                ),
+                deepLinks = listOf(
+                    // radd://stream/<handle>/<title> — a shared link opens the
+                    // player for one handle, with the same args the in-app
+                    // route carries, so the decode below is identical.
+                    androidx.navigation.navDeepLink { uriPattern = Brand.deepLinkUri("stream/{streamId}/{title}") },
                 ),
             ) { backStackEntry ->
                 val encodedHandle = backStackEntry.arguments?.getString(Screen.Player.ARG_STREAM_ID) ?: ""

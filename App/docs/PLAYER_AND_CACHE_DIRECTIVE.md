@@ -38,3 +38,8 @@ In `app/src/main/kotlin/com/raddstream/app/ui/screens/PlayerScreen.kt`:
 ### 4. Media3 Pre-Roll Ad Delegate & 7-Day Streak
 - Add pre-roll ad listener callback before playback start, capped to max 1 ad per 25 minutes for non-VIP users (VIP users bypass).
 - Add the 7-day login streak reward UI in Settings / Profile.
+  > **Streak built 2026-11-06 (player step 19, Session 56) — on the VIP screen, not
+  > Settings/Profile:** a `StreakCard` under the rewarded section, shown only when
+  > the operator publishes streak rules; the count is device-local (the server
+  > publishes only the plan, no per-user progress). The pre-roll ad delegate is
+  > still unbuilt — in-app ads are parked by the owner's order.

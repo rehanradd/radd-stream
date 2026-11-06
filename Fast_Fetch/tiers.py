@@ -304,6 +304,10 @@ def for_release(release, links) -> dict:
         "band": band,
         "quality": band if band != UNSPECIFIED else (row.get("quality") or "Available"),
         "label": _tier_label(row, band),
+        # The print's stored audio languages — the rung's own words for what you
+        # will hear, never a title-guessed language. Empty when the column is
+        # empty: the row then shows no audio line rather than an invented one.
+        "audio_languages": _split_languages(row.get("languages")),
         "mode": "play" if play_winner else "download_only",
         "playable": bool(play_winner),
         "link": None,
@@ -323,6 +327,24 @@ def for_release(release, links) -> dict:
     tier["backups"] = pool[:BACKUP_LIMIT]
     auto = {"band": band, "playable": bool(play_winner)} if play_winner else None
     return {"tiers": [tier], "auto": auto}
+
+
+def _split_languages(value) -> list:
+    """The print's stored audio languages, as a list — never a guess.
+
+    `releases.languages` is scraper-stored TEXT ("Hindi|Tamil", "English").
+    Splitting it here keeps the wire honest: a rung shows only the languages
+    its own print carries, and an empty column yields an empty list, so the row
+    shows no audio line rather than a title-guessed language.
+    """
+    if not value:
+        return []
+    seen = []
+    for part in str(value).replace("|", ",").split(","):
+        name = part.strip()
+        if name and name not in seen:
+            seen.append(name)
+    return seen
 
 
 def _tier_label(release, band: str) -> str:

@@ -4,6 +4,7 @@ import android.content.Context
 import android.os.StatFs
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.raddstream.app.data.ServerSettingsRepository
 import com.raddstream.app.data.cache.CacheCoordinator
 import com.raddstream.app.data.cache.CacheOrigin
 import com.raddstream.app.data.cache.CacheTaskEntity
@@ -12,6 +13,8 @@ import com.raddstream.app.data.cache.KeepTtlHolder
 import com.raddstream.app.data.cache.OfflineCacheEngine
 import com.raddstream.app.data.downloads.DeviceDownload
 import com.raddstream.app.data.downloads.DeviceDownloadsRepository
+import com.raddstream.app.data.local.WatchHistoryDao
+import com.raddstream.app.data.local.WatchHistoryEntity
 import com.raddstream.app.repository.CacheRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -113,6 +116,23 @@ data class DownloadsUiState(
     val statusMessage: String? = null,
 ) {
     val hasAnything: Boolean get() = deviceDownloads.isNotEmpty() || items.isNotEmpty()
+
+    /**
+     * ONE list, one word: every download on this screen, whatever system
+     * owns the copy. Files first — they are the foreground downloads the
+     * viewer is watching — then the in-app keeps. Each row still carries
+     * its own actions and its own one state word; the split the viewer
+     * used to see ("Saved to this device" vs "In-app keeps") was two
+     * systems' names, not two things the viewer asked for.
+     */
+    val allDownloads: List<DownloadRow>
+        get() = deviceDownloads.map { DownloadRow.Device(it) } + items.map { DownloadRow.Keep(it) }
+}
+
+/** One row of the single Downloads list — the system that owns the copy is its detail, not its kind. */
+sealed interface DownloadRow {
+    data class Device(val download: DeviceDownload) : DownloadRow
+    data class Keep(val item: KeptItem) : DownloadRow
 }
 
 @HiltViewModel
@@ -122,18 +142,27 @@ class DownloadsViewModel @Inject constructor(
     private val keepTtl: KeepTtlHolder,
     private val deviceDownloads: DeviceDownloadsRepository,
     private val cacheEngine: OfflineCacheEngine,
+    private val watchHistoryDao: WatchHistoryDao,
+    private val settingsRepository: ServerSettingsRepository,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(DownloadsUiState())
     val uiState = _uiState.asStateFlow()
 
+    private var autoDeleteWatched: Boolean = true
+
     init {
+        viewModelScope.launch {
+            settingsRepository.autoDeleteWatched.collect { autoDeleteWatched = it }
+        }
         viewModelScope.launch {
             _uiState.update { it.copy(storage = readStorage(), engineAvailable = true) }
         }
         viewModelScope.launch {
             cacheRepository.tasksFlow().collect { rows ->
-                _uiState.update { it.copy(items = rows.map(::toKeptItem), isLoading = false) }
+                val items = rows.map(::toKeptItem)
+                _uiState.update { it.copy(items = items, isLoading = false) }
+                sweepWatched(items)
             }
         }
         viewModelScope.launch {
@@ -167,6 +196,38 @@ class DownloadsViewModel @Inject constructor(
         viewModelScope.launch {
             runCatching { cacheRepository.cancel(taskId) }
                 .onFailure { _uiState.update { s -> s.copy(statusMessage = "Could not cancel that download.") } }
+        }
+    }
+
+    /**
+     * Delete finished movies on their own, to free the space. Only a fully
+     * downloaded keep (READY/EXPIRING) whose title is in the watched set is
+     * touched — a download still in flight is never deleted, and a series
+     * keep never matches, because the watched set holds movie titles only.
+     * The notice names what went, so the deletion is never silent.
+     */
+    private fun sweepWatched(items: List<KeptItem>) {
+        if (!autoDeleteWatched) return
+        viewModelScope.launch {
+            val watched = runCatching { watchedTitles(watchHistoryDao.findMovieRows()) }.getOrNull()
+                ?: return@launch
+            if (watched.isEmpty()) return@launch
+            val finished = items.filter {
+                (it.state == KeepState.READY || it.state == KeepState.EXPIRING) && it.title in watched
+            }
+            if (finished.isEmpty()) return@launch
+            finished.forEach { item ->
+                item.id.toLongOrNull()?.let { runCatching { cacheRepository.cancel(it) } }
+            }
+            _uiState.update { s ->
+                s.copy(
+                    statusMessage = if (finished.size == 1) {
+                        "Deleted ${finished.first().title} — you finished watching it."
+                    } else {
+                        "Deleted ${finished.size} finished downloads."
+                    },
+                )
+            }
         }
     }
 
@@ -213,7 +274,11 @@ class DownloadsViewModel @Inject constructor(
         }
         return KeptItem(
             id = task.id.toString(),
-            title = task.title.ifBlank { "Saved file" },
+            // A title is a title: the print label is a quality, not a name,
+            // and "Saved file" is a status, not a name either. Old rows whose
+            // title was never stored fall back to the print label, then to
+            // an honest untitled.
+            title = task.title.ifBlank { task.printLabel.ifBlank { "Untitled download" } },
             printLabel = task.printLabel,
             bytesDownloaded = task.downloadedBytes,
             bytesTotal = task.totalSizeBytes,
@@ -258,3 +323,16 @@ class DownloadsViewModel @Inject constructor(
         const val EXPIRING_SOON_MILLIS = 60 * 60_000L // last hour before auto-delete reads "Expiring"
     }
 }
+
+/**
+ * Titles of finished movies, from watch-history rows. A row counts only
+ * when the viewer reached the end — the same end-guard the Continue
+ * Watching rail uses — so a half-watched film stays. Series rows never
+ * reach this helper (the DAO returns movie rows only), so one watched
+ * episode can never delete a season keep.
+ */
+fun watchedTitles(rows: List<WatchHistoryEntity>): Set<String> =
+    rows.filter { it.durationMs > 0 && it.positionMs >= it.durationMs - WatchHistoryEntity.END_GUARD_MS }
+        .map { it.title }
+        .filter { it.isNotBlank() }
+        .toSet()

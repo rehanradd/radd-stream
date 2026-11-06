@@ -185,6 +185,19 @@ class ProjectionTests(FixtureMixin):
         self.assertNotIn("brand_new_column", redact.project(
             {**row, "brand_new_column": "hubcloud"}, "link"))
 
+    def test_ladder_link_keeps_the_measured_mime_type(self):
+        # Session 71: the detail screen's honest source row reads Instant
+        # Stream vs Direct File off the winner copy's probe-measured mime.
+        view = redact.project(
+            {"stream_id": "lh-1",
+             "play_url": "http://our.box/api/v1/stream?id=lh-1",
+             "kind": "direct", "playable": True, "status": "active",
+             "mime_type": "application/vnd.apple.mpegurl",
+             "source_site": "vegamovies"},
+            "ladder_link")
+        self.assertEqual(view["mime_type"], "application/vnd.apple.mpegurl")
+        self.assertNotIn("source_site", view)
+
     def test_project_refuses_to_publish_a_view_that_names_provenance(self):
         """An allowlist typo must fail loudly, not leak quietly."""
         original = redact.VIEWS["link"]
@@ -365,6 +378,21 @@ class HandleTests(unittest.TestCase):
         self.assertNotIn("hdhub4u", token)
         self.assertEqual(redact.parse_text(token, self.SECRET), value)
         self.assertIsNone(redact.parse_text(token[:-1] + "A", self.SECRET))
+
+    def test_download_credit_token_round_trip_and_no_pass_confusion(self):
+        """A credit token is a different capability from a VIP pass: it signs a
+        row id, not an expiry, under its own version and tag domain — so a pass
+        must never parse as a credit and a credit must never parse as a pass,
+        even though both are signed the same way."""
+        token = redact.mint_download_credit(42, self.SECRET)
+        self.assertEqual(redact.parse_download_credit(token, self.SECRET), 42)
+        self.assertIsNone(redact.parse_download_credit(token[:-2] + "xx", self.SECRET))
+        self.assertIsNone(redact.parse_download_credit(token, "another-secret"))
+        self.assertIsNone(redact.parse_download_credit("not-a-token", self.SECRET))
+        self.assertIsNone(redact.parse_download_credit("", self.SECRET))
+        vip = redact.mint_vip_pass(time.time() + 300, self.SECRET)
+        self.assertIsNone(redact.parse_download_credit(vip, self.SECRET))
+        self.assertIsNone(redact.parse_vip_pass(token, self.SECRET))
 
     def test_stream_secret_is_stable_and_persisted_outside_the_checkout(self):
         with tempfile.TemporaryDirectory() as tmp:

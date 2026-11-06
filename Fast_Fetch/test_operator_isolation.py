@@ -562,6 +562,18 @@ class SignInOverTheWire(TwoPortFixture):
             self.assertEqual(status, 400, (path, raw[:200]))
             self.assertEqual({"error": "Invalid post ID"}, json.loads(raw), path)
 
+    def test_a_missing_post_heal_answers_404_not_success_with_an_error(self):
+        """The shape `/api/heal` used to answer for a post that does not exist:
+        `{"success": true, "error": "Post not found"}` — a 200 that contradicts
+        itself. A well-formed id for a post that is not in the catalog is the
+        caller's error, so it is answered as one. The healer returns before it
+        touches any upstream, so this reaches no network."""
+        status, _headers, raw = self.operator_fetch(
+            "/api/heal?id=999999", headers={"Authorization": f"Bearer {TOKEN}"})
+        self.assertEqual(status, 404, raw[:200])
+        self.assertEqual({"success": False, "error": "Post not found"},
+                         json.loads(raw))
+
 
 class AccountRoundTrip(TwoPortFixture):
     def test_a_key_is_issued_once_and_the_favorite_round_trips(self):

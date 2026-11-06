@@ -17,6 +17,13 @@ Everything below is a request for the coordinator / other fleet agents.
   the five stdlib suites with `python3 -S` and zero pip installs. I verified all
   five pass offline on this Oracle VM (python 3.12.3) before writing the file.
 
+> **Retired 2026-11-06 (Session 67):** this file is the 2026-10 record of why CI
+> "never ran" — 0 workflows, wrong directory, unpushed `master`. All of it is
+> history now: four root workflows are active, the Android and backend gates
+> run green on the panel branch (see `App/docs/SESSION_HISTORY.md` for the run
+> ids), and `v1.0.4` is a published signed release. Read the file for what it
+> proves about that week, not for the state of CI today.
+
 ## CRITICAL — git/layout actions needed from the coordinator (I ran no git)
 
 1. **Evidence of why CI "never ran":** the GitHub API reports

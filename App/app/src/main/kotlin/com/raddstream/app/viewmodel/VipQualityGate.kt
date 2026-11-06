@@ -23,19 +23,50 @@ object VipQualityGate {
     private val PREMIUM_BANDS = setOf("2160p", "4k", "uhd", "1080p", "fullhd", "fhd")
     private val PREMIUM_LABEL_HINTS = listOf("2160", "1080", "4k", "uhd", "full hd", "fullhd", "fhd")
 
+    /** The 720p rungs, premium only when the operator capped free at 480p. */
+    private val CAP_480P_BANDS = setOf("720p", "hd")
+    private val CAP_480P_LABEL_HINTS = listOf("720")
+
+    /**
+     * The sentence for a locked rung under this free cap. The shipped cap is
+     * 720p, so the 480p wording is the only other one — a cap the server
+     * never sends reads as 720p, never as a stricter cap nobody asked for.
+     */
+    fun lockedMessage(freeQualityCap: String): String =
+        if (freeQualityCap == "480p") {
+            "720p, 1080p and 4K sources are part of VIP. Upgrade to unlock them."
+        } else {
+            LOCKED_MESSAGE
+        }
+
     fun isPremiumResolution(resolution: Resolution): Boolean =
         resolution == Resolution.R2160 || resolution == Resolution.R1080
 
+    /** The same, under the operator's free cap: at 480p, 720p is premium too. */
+    fun isPremiumResolution(resolution: Resolution, freeQualityCap: String): Boolean =
+        isPremiumResolution(resolution) ||
+            (freeQualityCap == "480p" && resolution == Resolution.R720)
+
     /** A canonical rung band (`2160p`, `1080p`) or the shorthand the switch may carry. */
-    fun isPremiumBand(band: String?): Boolean {
+    fun isPremiumBand(band: String?): Boolean = isPremiumBand(band, "720p")
+
+    /** The same, under the operator's free cap: at 480p, 720p is premium too. */
+    fun isPremiumBand(band: String?, freeQualityCap: String): Boolean {
         val key = band?.trim()?.lowercase(Locale.ROOT)?.replace(" ", "").orEmpty()
-        return key.isNotEmpty() && key in PREMIUM_BANDS
+        if (key.isEmpty()) return false
+        if (key in PREMIUM_BANDS) return true
+        return freeQualityCap == "480p" && key in CAP_480P_BANDS
     }
 
     /** The fallback when a rung has no canonical band: the server's own words for the picture. */
-    fun isPremiumLabel(label: String?): Boolean {
+    fun isPremiumLabel(label: String?): Boolean = isPremiumLabel(label, "720p")
+
+    /** The same, under the operator's free cap: at 480p, a "720" label is premium too. */
+    fun isPremiumLabel(label: String?, freeQualityCap: String): Boolean {
         val key = label?.trim()?.lowercase(Locale.ROOT) ?: return false
-        return key.isNotEmpty() && PREMIUM_LABEL_HINTS.any { it in key }
+        if (key.isEmpty()) return false
+        if (PREMIUM_LABEL_HINTS.any { it in key }) return true
+        return freeQualityCap == "480p" && CAP_480P_LABEL_HINTS.any { it in key }
     }
 
     /**
@@ -46,7 +77,12 @@ object VipQualityGate {
      */
     fun premiumAccess(gateEnabled: Boolean, isVip: Boolean): Boolean = isVip || !gateEnabled
 
-    fun allowsBand(band: String?, isVip: Boolean): Boolean = isVip || !isPremiumBand(band)
+    fun allowsBand(band: String?, isVip: Boolean): Boolean =
+        allowsBand(band, isVip, "720p")
+
+    /** The same, under the operator's free cap: at 480p, 720p is premium too. */
+    fun allowsBand(band: String?, isVip: Boolean, freeQualityCap: String): Boolean =
+        isVip || !isPremiumBand(band, freeQualityCap)
 
     fun allowsResolution(resolution: Resolution, isVip: Boolean): Boolean =
         isVip || !isPremiumResolution(resolution)
@@ -56,9 +92,15 @@ object VipQualityGate {
      * with its `auto` pointer and its download-only listing; when nothing is left the ladder is
      * empty, which is the honest answer — there is no free picture to offer on this scope.
      */
-    fun gate(ladder: LadderForScope, isVip: Boolean): LadderForScope {
+    fun gate(ladder: LadderForScope, isVip: Boolean): LadderForScope =
+        gate(ladder, isVip, "720p")
+
+    /** The same, under the operator's free cap: at 480p, 720p leaves the ladder too. */
+    fun gate(ladder: LadderForScope, isVip: Boolean, freeQualityCap: String): LadderForScope {
         if (isVip) return ladder
-        val kept = ladder.options.filter { !isPremiumBand(it.band) && !isPremiumLabel(it.title) }
+        val kept = ladder.options.filter {
+            !isPremiumBand(it.band, freeQualityCap) && !isPremiumLabel(it.title, freeQualityCap)
+        }
         if (kept.size == ladder.options.size) return ladder
         val bands = kept.mapTo(HashSet()) { it.band }
         return LadderForScope(
@@ -73,15 +115,25 @@ object VipQualityGate {
      * print disappear with them, and the counters/capability chips are rebuilt from what is
      * left, so the header never advertises "4K" for a page that will not play it.
      */
-    fun gate(layout: ReleaseLayout, isVip: Boolean): ReleaseLayout {
+    fun gate(layout: ReleaseLayout, isVip: Boolean): ReleaseLayout =
+        gate(layout, isVip, "720p")
+
+    /** The same, under the operator's free cap: at 480p, 720p prints leave the layout too. */
+    fun gate(layout: ReleaseLayout, isVip: Boolean, freeQualityCap: String): ReleaseLayout {
         if (isVip) return layout
-        val workPrints = layout.workPrints.filterNot { isPremiumResolution(it.resolution) }
+        val workPrints = layout.workPrints.filterNot {
+            isPremiumResolution(it.resolution, freeQualityCap)
+        }
         val seasons = layout.seasons.mapNotNull { season ->
             val episodes = season.episodes.mapNotNull { episode ->
-                val prints = episode.prints.filterNot { isPremiumResolution(it.resolution) }
+                val prints = episode.prints.filterNot {
+                    isPremiumResolution(it.resolution, freeQualityCap)
+                }
                 if (prints.isEmpty()) null else episode.copy(prints = prints)
             }
-            val packedPrints = season.packedPrints.filterNot { isPremiumResolution(it.resolution) }
+            val packedPrints = season.packedPrints.filterNot {
+                isPremiumResolution(it.resolution, freeQualityCap)
+            }
             if (episodes.isEmpty() && packedPrints.isEmpty()) null
             else season.copy(episodes = episodes, packedPrints = packedPrints)
         }
@@ -99,7 +151,11 @@ object VipQualityGate {
 
     /** True when the ungated content has at least one 4K/1080p source worth an upsell. */
     fun hasPremiumPrints(layout: ReleaseLayout): Boolean =
+        hasPremiumPrints(layout, "720p")
+
+    /** The same, under the operator's free cap: at 480p, a 720p source is one too. */
+    fun hasPremiumPrints(layout: ReleaseLayout, freeQualityCap: String): Boolean =
         (layout.workPrints +
             layout.seasons.flatMap { season -> season.episodes.flatMap { it.prints } + season.packedPrints })
-            .any { isPremiumResolution(it.resolution) }
+            .any { isPremiumResolution(it.resolution, freeQualityCap) }
 }
