@@ -36,6 +36,9 @@ import com.raddstream.app.player.CacheState
 import com.raddstream.app.player.CalibrationState
 import com.raddstream.app.player.DataSaver
 import com.raddstream.app.player.DeferredOffsetReporter
+import com.raddstream.app.player.directVideoIsHls
+import com.raddstream.app.player.directVideoMime
+import com.raddstream.app.player.directVideoTitle
 import com.raddstream.app.player.EpisodeOffsets
 import com.raddstream.app.player.EpisodeProgression
 import com.raddstream.app.player.ExternalSubtitle
@@ -644,6 +647,18 @@ class PlayerViewModel @Inject constructor(
     fun startStreamHandle(streamId: String, title: String, startOverrideMs: Long? = null) {
         if (_ui.value.bundle?.renditions?.firstOrNull()?.playback?.streamId == streamId) return
         viewModelScope.launch {
+            // A pasted direct link, staged under its opaque key by the search
+            // screen: no redirector, no server round-trip, no resume history —
+            // the address itself is the whole ladder, one rung.
+            store.peekDirectUrl(streamId)?.let { directUrl ->
+                beginBundle(
+                    directPlaybackBundle(streamId, directUrl),
+                    title,
+                    resumeKey = streamId,
+                    overrideMs = startOverrideMs,
+                )
+                return@launch
+            }
             val playUrl = streamRedirectUrl(apiProvider.currentBaseUrl(), streamId)
             // Runner-ups of this rung, staged by the detail screen: handles only, so a
             // 403 mid-play costs one silent hop instead of a dialog and a quality drop.
@@ -725,6 +740,39 @@ class PlayerViewModel @Inject constructor(
             ),
         )
         beginBundle(bundle, title, resumeKey = clean)
+    }
+
+    /**
+     * One rung, no server: a pasted .mp4/.m3u8 address staged under its opaque
+     * key. The shape mirrors [startLocalUri] — the player already knows how to
+     * play a bundle whose only rendition is a direct file — with two honest
+     * differences: `resumable` is false, because the address is unprobed and
+     * the player must not claim a Range resume it never measured; and the
+     * protocol and mime come from the address itself, so Media3 picks the
+     * right reader for a playlist versus a single file.
+     */
+    private fun directPlaybackBundle(key: String, url: String): PlaybackBundle {
+        val isHls = directVideoIsHls(url)
+        return PlaybackBundle(
+            session = SessionInfo(id = key),
+            target = PlayTarget(kind = "direct", id = 0),
+            renditions = listOf(
+                PlaybackRendition(
+                    rank = 1,
+                    print = PrintInfo(label = "Direct link"),
+                    playback = PlaybackInfo(
+                        playUrl = url,
+                        streamId = key,
+                        label = directVideoTitle(url),
+                        protocol = if (isHls) "hls" else "progressive",
+                        mimeType = directVideoMime(url),
+                        resumable = false,
+                        kind = "direct",
+                        playabilityWire = "stream",
+                    ),
+                ),
+            ),
+        )
     }
 
     /**

@@ -25,6 +25,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -52,8 +53,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.raddstream.app.player.PastedText
+import com.raddstream.app.player.classifyPastedText
 import com.raddstream.app.ui.components.EmptyState
 import com.raddstream.app.ui.components.InlineLoadFailure
 import com.raddstream.app.ui.components.ErrorState
@@ -90,6 +94,7 @@ private sealed interface FilterRailEntry {
 fun SearchScreen(
     onBackClick: () -> Unit,
     onPostClick: (Int) -> Unit = {},
+    onPlayDirectUrl: (url: String, title: String) -> Unit = { _, _ -> },
     viewModel: SearchViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsState()
@@ -151,12 +156,35 @@ fun SearchScreen(
             )
 
             Spacer(Modifier.height(8.dp))
-            FilterRail(state = state, viewModel = viewModel)
+            val pasted = classifyPastedText(state.query)
+            when (pasted) {
+                is PastedText.DirectVideo -> {
+                    DirectVideoRow(
+                        url = pasted.url,
+                        title = pasted.title,
+                        onPlay = { onPlayDirectUrl(pasted.url, pasted.title) },
+                    )
+                    Spacer(Modifier.height(8.dp))
+                }
+                PastedText.YouTube -> {
+                    Text(
+                        text = "YouTube links can't play in Radd. Paste a direct .mp4 or .m3u8 link instead.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                    )
+                    Spacer(Modifier.height(8.dp))
+                }
+                PastedText.NotAUrl -> Unit
+            }
+            if (pasted is PastedText.NotAUrl) {
+                FilterRail(state = state, viewModel = viewModel)
+            }
 
             // Type-ahead titles for what is being typed. A tap searches for
             // that title — it never opens a page, because a suggestion names
             // a work, not a post.
-            if (state.suggestions.isNotEmpty()) {
+            if (pasted is PastedText.NotAUrl && state.suggestions.isNotEmpty()) {
                 LazyRow(
                     modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -180,12 +208,14 @@ fun SearchScreen(
                 }
             }
 
-            SearchBody(
-                state = state,
-                viewModel = viewModel,
-                onPostClick = onPostClick,
-                onOpenFilters = { showSheet = true },
-            )
+            if (pasted is PastedText.NotAUrl) {
+                SearchBody(
+                    state = state,
+                    viewModel = viewModel,
+                    onPostClick = onPostClick,
+                    onOpenFilters = { showSheet = true },
+                )
+            }
         }
 
         if (showSheet) {
@@ -200,6 +230,44 @@ fun SearchScreen(
                     onDone = { showSheet = false },
                 )
             }
+        }
+    }
+}
+
+/**
+ * One pasted address, one play button: the row says what will play — the file
+ * name, with the pasted address underneath — and nothing about where it came
+ * from beyond the address itself. The viewer typed it, so showing it back is
+ * showing their own text, not a catalog link.
+ */
+@Composable
+private fun DirectVideoRow(url: String, title: String, onPlay: () -> Unit) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        IconButton(onClick = onPlay) {
+            Icon(Icons.Default.PlayArrow, contentDescription = "Play video link")
+        }
+        Column(Modifier.weight(1f)) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                text = url,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        Button(onClick = onPlay) {
+            Text("Play")
         }
     }
 }

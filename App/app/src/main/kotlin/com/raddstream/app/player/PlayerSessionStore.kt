@@ -324,6 +324,35 @@ class PlayerSessionStore(
     fun peekWorkRef(streamId: String?): SyncScope? =
         streamId?.trim()?.takeIf { it.isNotEmpty() }?.let { stagedWorkRefs[it] }
 
+    /**
+     * A pasted direct video link, staged by the search screen under a one-time
+     * opaque key and read by the player when it opens that key.
+     *
+     * WHY HERE AND NOT IN THE NAVIGATION ROUTE: the route stays one opaque
+     * handle (`player/{streamId}/{title}`), so a viewer's pasted address never
+     * enters the back stack, saved state, a `radd://` deep link or a log — see
+     * [Screen.Player] for the rule. The key is `direct-<uuid>`; the address
+     * lives in memory only, under the same cap as the failover staging, and a
+     * playback that was deep-linked simply has no entry, so it resolves the
+     * key against the redirector exactly as an unknown handle would.
+     */
+    private val stagedDirectUrls = LinkedHashMap<String, String>()
+
+    fun stageDirectUrl(url: String): String {
+        val clean = url.trim()
+        require(clean.isNotBlank()) { "stageDirectUrl needs a non-blank url" }
+        val key = "direct-" + java.util.UUID.randomUUID().toString()
+        stagedDirectUrls[key] = clean
+        while (stagedDirectUrls.size > MAX_STAGED_FAILOVERS) {
+            stagedDirectUrls.remove(stagedDirectUrls.keys.first())
+        }
+        return key
+    }
+
+    /** Read without consuming: re-opening the same key still gets its address. */
+    fun peekDirectUrl(key: String?): String? =
+        key?.trim()?.takeIf { it.isNotBlank() }?.let { stagedDirectUrls[it] }
+
     /** The scope the viewer is currently watching, or null when nothing was staged. */
     fun currentSyncScope(): SyncScope? = peekWorkRef(activeRendition()?.playback?.streamId)
 

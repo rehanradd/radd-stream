@@ -8,6 +8,8 @@ import com.raddstream.app.network.friendlyNetworkError
 import com.raddstream.app.network.models.Post
 import com.raddstream.app.network.models.SuggestItem
 import com.raddstream.app.network.models.WorkType
+import com.raddstream.app.player.PastedText
+import com.raddstream.app.player.classifyPastedText
 import com.raddstream.app.repository.CatalogRepository
 import com.raddstream.app.sync.SyncAccountRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -199,7 +201,10 @@ class SearchViewModel @Inject constructor(
     /** Records the current query and forces an immediate search (IME "Search" key). */
     fun submitCurrentQuery() {
         _uiState.update { it.copy(suggestions = emptyList()) }
-        recordRecent(_uiState.value.query)
+        // A pasted address is not a title: it never joins the recents rail.
+        if (classifyPastedText(_uiState.value.query) == PastedText.NotAUrl) {
+            recordRecent(_uiState.value.query)
+        }
         scheduleSearch(reset = true, immediate = true)
     }
 
@@ -324,6 +329,20 @@ class SearchViewModel @Inject constructor(
             }
             return
         }
+        // A pasted address is not a title: the catalog has nothing to say
+        // about it, and the screen already shows the play row (or the
+        // YouTube note) for it — so no server call, no suggest, no recent.
+        if (classifyPastedText(query) != PastedText.NotAUrl) {
+            rawResults = emptyList()
+            _uiState.update {
+                it.copy(
+                    isLoading = false, error = null, groups = emptyList(), resultCount = 0,
+                    serverTotal = 0, hasSearched = false, hasMore = false, page = 1,
+                    isFuzzy = false, suggestions = emptyList(),
+                )
+            }
+            return
+        }
         if (reset) _uiState.update { it.copy(page = 1) }
         searchJob = viewModelScope.launch {
             if (!immediate) delay(DEBOUNCE_MS)
@@ -380,6 +399,10 @@ class SearchViewModel @Inject constructor(
         suggestJob?.cancel()
         val query = _uiState.value.query.trim()
         if (query.length < 2) {
+            _uiState.update { it.copy(suggestions = emptyList()) }
+            return
+        }
+        if (classifyPastedText(query) != PastedText.NotAUrl) {
             _uiState.update { it.copy(suggestions = emptyList()) }
             return
         }

@@ -26,6 +26,7 @@ import com.raddstream.app.R
 import com.raddstream.app.brand.Brand
 import com.raddstream.app.data.RemoteFeatures
 import com.raddstream.app.network.models.PanelTheme
+import com.raddstream.app.player.PlayerSessionStore
 import com.raddstream.app.ui.screens.BrowseScreen
 import com.raddstream.app.ui.screens.DetailScreen
 import com.raddstream.app.ui.screens.DownloadsScreen
@@ -212,6 +213,13 @@ fun RaddStreamNavGraph(
                 SearchScreen(
                     onBackClick = { navController.popBackStack() },
                     onPostClick = { postId -> navController.navigate(Screen.Detail.createRoute(postId)) },
+                    onPlayDirectUrl = { url, title ->
+                        // The address is staged, never routed: the player
+                        // opens the opaque key and reads the address from
+                        // the store (see PlayerSessionStore).
+                        val key = PlayerSessionStore.Instance.stageDirectUrl(url)
+                        navController.navigate(Screen.Player.createRoute(key, title))
+                    },
                 )
             }
 
