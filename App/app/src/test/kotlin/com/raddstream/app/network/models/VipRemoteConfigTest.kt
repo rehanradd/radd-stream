@@ -384,10 +384,12 @@ class VipRemoteConfigTest {
               ],
               "broadcasts": [
                 {"id": 1, "title": "Hello", "body": "Welcome", "severity": "info"},
-                {"id": 2, "title": "Careful", "body": "", "severity": "warning"}
+                {"id": 2, "title": "Careful", "body": "", "severity": "warning",
+                 "target": "region", "target_detail": "pakistan"}
               ],
               "hidden_work_ids": [2],
-              "tabs": ["settings", "home"]
+              "tabs": ["settings", "home"],
+              "disclaimer": {"text": "Links come from public sites. We host nothing.", "version": 3}
             }
             """.trimIndent(),
             VipRemoteConfig::class.java,
@@ -406,10 +408,17 @@ class VipRemoteConfigTest {
         assertEquals(1, config.broadcasts[0].id)
         assertEquals("Hello", config.broadcasts[0].title)
         assertEquals("warning", config.broadcasts[1].severity)
+        assertEquals("all", config.broadcasts[0].target)
+        assertEquals("", config.broadcasts[0].targetDetail)
+        assertEquals("region", config.broadcasts[1].target)
+        assertEquals("pakistan", config.broadcasts[1].targetDetail)
 
         assertEquals(listOf(2), config.hiddenWorkIds)
 
         assertEquals(listOf("settings", "home"), config.tabs)
+
+        assertEquals("Links come from public sites. We host nothing.", config.disclaimer.text)
+        assertEquals(3, config.disclaimer.version)
     }
 
     @Test
@@ -420,6 +429,8 @@ class VipRemoteConfigTest {
         assertTrue(config.broadcasts.isEmpty())
         assertTrue(config.hiddenWorkIds.isEmpty())
         assertEquals(PanelTheme(), config.theme)
+        assertEquals("", config.disclaimer.text)
+        assertEquals(0, config.disclaimer.version)
     }
 
     @Test

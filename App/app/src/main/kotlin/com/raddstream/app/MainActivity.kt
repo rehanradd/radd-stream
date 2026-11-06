@@ -17,16 +17,19 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import com.raddstream.app.brand.Brand
 import com.raddstream.app.data.RemoteFeatures
 import com.raddstream.app.data.ServerSettingsRepository
+import com.raddstream.app.network.models.PanelDisclaimer
 import com.raddstream.app.network.models.PanelTheme
 import com.raddstream.app.ui.navigation.LocalVideoOpen
 import com.raddstream.app.ui.navigation.Screen
 import com.raddstream.app.ui.navigation.RaddStreamNavGraph
+import com.raddstream.app.ui.screens.DisclaimerDialog
 import com.raddstream.app.ui.screens.MaintenanceScreen
 import com.raddstream.app.ui.theme.RaddStreamTheme
 import com.raddstream.app.ui.theme.parseAccentHex
@@ -36,6 +39,7 @@ import javax.inject.Inject
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 
 /**
  * Single-activity host.
@@ -148,6 +152,20 @@ class MainActivity : ComponentActivity() {
             }
             val autoplayPreviews by autoplayPreviewsPreference.collectAsState(initial = true)
 
+            // The operator's disclaimer, mirrored into DataStore by RemoteConfigWatcher,
+            // and the version this install has already accepted. Seeded empty / -1 so
+            // a cold start shows nothing until a real body arrives; an empty text
+            // means "nothing published" and the dialog never opens on it.
+            val disclaimerPreference: Flow<PanelDisclaimer> = remember(serverSettingsRepository) {
+                serverSettingsRepository.disclaimer.catch { emit(PanelDisclaimer()) }
+            }
+            val disclaimer by disclaimerPreference.collectAsState(initial = PanelDisclaimer())
+            val disclaimerSeenPreference: Flow<Int> = remember(serverSettingsRepository) {
+                serverSettingsRepository.disclaimerSeenVersion.catch { emit(-1) }
+            }
+            val disclaimerSeenVersion by disclaimerSeenPreference.collectAsState(initial = -1)
+            val activityScope = rememberCoroutineScope()
+
             RaddStreamTheme(
                 darkTheme = resolveThemeDark(operatorTheme.mode, isSystemInDarkTheme()),
                 dynamicColor = effectiveDynamicColor(dynamicColorRequested, operatorTheme.dynamicColor),
@@ -206,6 +224,23 @@ class MainActivity : ComponentActivity() {
                             autoplayPreviews = autoplayPreviews,
                             openRequest = pendingLocalOpen,
                             onOpenConsumed = { pendingLocalOpen = null },
+                        )
+                    }
+                    // The disclaimer outranks every screen but the maintenance
+                    // notice above: it is the one thing the viewer must read
+                    // before watching, once per published version. It cannot
+                    // be dismissed without tapping "I understand" — a
+                    // disclaimer you can swipe away unread is not one.
+                    if (disclaimer.text.isNotBlank() && disclaimerSeenVersion != disclaimer.version) {
+                        DisclaimerDialog(
+                            disclaimer = disclaimer,
+                            confirmLabel = "I understand",
+                            onConfirm = {
+                                activityScope.launch {
+                                    serverSettingsRepository.acceptDisclaimer(disclaimer.version)
+                                }
+                            },
+                            onDismissRequest = {},
                         )
                     }
                 }

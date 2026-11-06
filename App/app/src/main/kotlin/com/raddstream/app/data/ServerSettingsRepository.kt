@@ -13,6 +13,7 @@ import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.raddstream.app.brand.Brand
 import com.raddstream.app.network.models.AccountEntitlement
+import com.raddstream.app.network.models.PanelDisclaimer
 import com.raddstream.app.network.models.PanelTheme
 import com.raddstream.app.player.LoginStreak
 import com.raddstream.app.player.SubtitleColor
@@ -504,6 +505,47 @@ class ServerSettingsRepository @Inject constructor(
     }
 
     /**
+     * The operator's disclaimer, mirrored the same way as the theme and tabs:
+     * the last body actually received is what the app shows, so a dead
+     * server on launch leaves the previous disclaimer in force. Empty text
+     * means "nothing published" — the dialog never opens on an empty text,
+     * and a retraction (the operator clearing the text) clears it here too.
+     * The version is what the app compares against what it has already
+     * shown; a negative version is a typo and reads as 0.
+     */
+    val disclaimer: Flow<PanelDisclaimer> = dataStore.data.map { preferences ->
+        PanelDisclaimer(
+            text = preferences[DISCLAIMER_TEXT_KEY] ?: "",
+            version = (preferences[DISCLAIMER_VERSION_KEY] ?: 0).coerceAtLeast(0),
+        )
+    }
+
+    /** Record one received disclaimer, from the same successful poll as [saveTabs]. */
+    suspend fun saveDisclaimer(disclaimer: PanelDisclaimer) {
+        dataStore.edit { preferences ->
+            preferences[DISCLAIMER_TEXT_KEY] = disclaimer.text
+            preferences[DISCLAIMER_VERSION_KEY] = disclaimer.version.coerceAtLeast(0)
+        }
+    }
+
+    /**
+     * The disclaimer version this install has already accepted. -1 means
+     * "never shown one": a published version 0 still has to be shown once,
+     * because 0 is a real version the operator may have published, not the
+     * absence of one.
+     */
+    val disclaimerSeenVersion: Flow<Int> = dataStore.data.map { preferences ->
+        preferences[DISCLAIMER_SEEN_VERSION_KEY] ?: -1
+    }
+
+    /** Record that the viewer read (and accepted) this disclaimer version. */
+    suspend fun acceptDisclaimer(version: Int) {
+        dataStore.edit { preferences ->
+            preferences[DISCLAIMER_SEEN_VERSION_KEY] = version.coerceAtLeast(0)
+        }
+    }
+
+    /**
      * The last entitlement the ledger confirmed, mirrored here so a restart does not have to
      * wait for a round trip before it knows what this account may play. It is a CACHE of the
      * server's answer, never a second authority: a signed-out device clears it, and every
@@ -737,6 +779,9 @@ class ServerSettingsRepository @Inject constructor(
         private val FEATURE_ADS_KEY = booleanPreferencesKey("feature_ads")
         private val THEME_MODE_KEY = stringPreferencesKey("theme_mode")
         private val PANEL_TABS_KEY = stringPreferencesKey("panel_tabs")
+        private val DISCLAIMER_TEXT_KEY = stringPreferencesKey("disclaimer_text")
+        private val DISCLAIMER_VERSION_KEY = intPreferencesKey("disclaimer_version")
+        private val DISCLAIMER_SEEN_VERSION_KEY = intPreferencesKey("disclaimer_seen_version")
         private val THEME_ACCENT_KEY = stringPreferencesKey("theme_accent")
         private val THEME_DYNAMIC_COLOR_KEY = booleanPreferencesKey("theme_dynamic_color")
         private val THEME_HERO_AUTOPLAY_KEY = booleanPreferencesKey("theme_hero_autoplay")

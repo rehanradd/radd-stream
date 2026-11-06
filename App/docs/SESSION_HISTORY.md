@@ -1630,3 +1630,17 @@ or printed. Gating is qoder1's call after fresh green CI.
 **App (this branch):** `ContactWire`, `RaddStreamApi` POST, `CatalogRepository.submitContact` (false on any failure), `SettingsViewModel` `ContactUiState` + submit (success closes and clears, failure keeps the text), `ContactDialog` with wrapping category chips. The copy guard was checked by hand: the dialog's literals carry no banned word and sit inside the OnboardHonesty scan scope.
 
 **Not done:** push (waits for the two runs); nginx allow-list for `/api/v1/contact` is a gate item, like `/api/v2/play` before it. Next: Live control page.
+
+---
+
+### Session 60 — Per-region broadcasts + disclaimer (Muse, 2026-11-06)
+
+**Agent:** Muse (BoNzoO), coded directly. Same branch as Sessions 40–59.
+
+**What it is:** two halves of one promise — the operator can finally address a broadcast to a region, a tier or a build, and the app can finally show the operator's disclaimer.
+
+**Broadcasts.** The panel's broadcasts table had a `target` (all/free/vip/region/version) but no way to say WHICH region or version — a "region" broadcast named nobody. The panel now stores `target_detail` (seeded onto existing databases), validates target+detail as one rule, and the form asks for it. The server serves every live published broadcast with its target; the app filters with a new pure `BroadcastTargeting.visible` (7 tests): all always, free/vip only on a KNOWN tier (an entitlement that has not loaded hides both), region by the panel country mapped to the viewer card, version by exact match. The honest limit is written in the code and on the panel form: the phone knows the region card, not the country — Pakistan and India share the Desi card, so a Pakistan broadcast reaches Indian Desi viewers too. `mergePanelFeed` filters through it, with a merge-level test proving the three audiences.
+
+**Disclaimer.** The panel holds it as two tuning keys (`disclaimer_text` ≤4000, `disclaimer_version` 0..9999); the feed carries it on remote-config; the watcher mirrors it; the app shows it once per version on first run (a dialog that cannot be swiped away without "I understand") and again in Settings for re-reading. Nothing is invented: an empty text means nothing published, and nothing shows. The operator has not written the text yet — that is his to write, and the draft policy doc is his to paste from.
+
+**Not done:** push (this commit, then CI judges); the panel workspace files go to the VM panel + restart through the gate with the tabs edits. Next: panel keys the app ignores.

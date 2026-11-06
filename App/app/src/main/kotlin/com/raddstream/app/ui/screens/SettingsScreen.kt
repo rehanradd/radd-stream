@@ -459,6 +459,37 @@ fun SettingsScreen(
                 }
             }
 
+            // ── Disclaimer ───────────────────────────────────────────────────
+            SettingsCard(title = "Disclaimer", icon = Icons.Default.Info) {
+                if (state.disclaimer.text.isBlank()) {
+                    Text(
+                        "No disclaimer published yet.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                } else {
+                    Text(
+                        "Version ${state.disclaimer.version} — what this app is, and what it is not.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    OutlinedButton(
+                        onClick = viewModel::openDisclaimer,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text("Read the disclaimer")
+                    }
+                }
+                if (state.showDisclaimer) {
+                    DisclaimerDialog(
+                        disclaimer = state.disclaimer,
+                        confirmLabel = "Close",
+                        onConfirm = viewModel::closeDisclaimer,
+                        onDismissRequest = viewModel::closeDisclaimer,
+                    )
+                }
+            }
+
             // ── Playback & Display preferences ─────────────────────────
             SettingsCard(title = "Playback & Display") {
                 PreferenceRowTitle("Watching region")

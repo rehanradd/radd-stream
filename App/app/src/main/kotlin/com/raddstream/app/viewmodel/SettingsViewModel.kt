@@ -7,6 +7,7 @@ import coil.Coil
 import com.raddstream.app.data.ServerSettingsRepository
 import com.raddstream.app.data.UserRegion
 import com.raddstream.app.network.friendlyNetworkError
+import com.raddstream.app.network.models.PanelDisclaimer
 import com.raddstream.app.network.models.StatsResponse
 import com.raddstream.app.player.AudioBoost
 import com.raddstream.app.player.AudioBoostUi
@@ -128,6 +129,13 @@ data class SettingsUiState(
      * shows which one, and tapping it opens the same screen the first install showed.
      */
     val userRegion: String = UserRegion.DEFAULT,
+    /**
+     * The operator's disclaimer, as last received. Empty text means "nothing
+     * published" — the card says so instead of showing an empty dialog.
+     */
+    val disclaimer: PanelDisclaimer = PanelDisclaimer(),
+    /** The disclaimer dialog the Settings card opens, if any. */
+    val showDisclaimer: Boolean = false,
 )
 
 /**
@@ -383,6 +391,24 @@ class SettingsViewModel @Inject constructor(
                 _uiState.update { it.copy(userRegion = region) }
             }
         }
+        // The disclaimer card shows what the last poll brought in, the same
+        // way the region row does: a new version the operator publishes
+        // appears here without the viewer having to reopen the app.
+        viewModelScope.launch {
+            settingsRepository.disclaimer.collect { disclaimer ->
+                _uiState.update { it.copy(disclaimer = disclaimer) }
+            }
+        }
+    }
+
+    /** Open the disclaimer text this install has on file. */
+    fun openDisclaimer() {
+        _uiState.update { it.copy(showDisclaimer = true) }
+    }
+
+    /** Close the disclaimer dialog. Reading it here does not accept it: acceptance happens only on the first-run dialog, once per version. */
+    fun closeDisclaimer() {
+        _uiState.update { it.copy(showDisclaimer = false) }
     }
 
     /**

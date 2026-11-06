@@ -152,11 +152,12 @@ def _plain_text(value):
 def active_broadcasts(panel_path=None, now=None):
     """Published broadcasts live right now, for every phone.
 
-    Only ``target = 'all'`` is served: the panel also names free, VIP, region
-    and version targets, and this app has no targeting to honour them with, so
-    a narrower broadcast stays unpublished to the app rather than leaking to
-    the wrong audience. Text is scrubbed the same way every other public
-    string is.
+    Every target rides along — the APP filters by its own region, tier and
+    version, because only the phone knows those. A broadcast whose target
+    the app cannot read is dropped here, never served half-targeted: a
+    `region` row with no region, or a `version` row with no version, stays
+    unpublished to the app rather than leaking to the wrong audience. Text
+    is scrubbed the same way every other public string is.
     """
     now = int(now if now is not None else time.time())
     conn = _open_panel(panel_path)
@@ -165,23 +166,38 @@ def active_broadcasts(panel_path=None, now=None):
     try:
         if not _has_table(conn, "broadcasts"):
             return []
-        rows = conn.execute(
-            "SELECT id, title, body, severity FROM broadcasts "
-            "WHERE status = 'published' AND target = 'all' "
-            "AND (starts_at IS NULL OR starts_at <= ?) "
-            "AND (ends_at IS NULL OR ends_at > ?) "
-            "ORDER BY id DESC", (now, now)).fetchall()
-    except sqlite3.Error:
-        return []
+        try:
+            rows = conn.execute(
+                "SELECT id, title, body, severity, target, target_detail FROM broadcasts "
+                "WHERE status = 'published' "
+                "AND (starts_at IS NULL OR starts_at <= ?) "
+                "AND (ends_at IS NULL OR ends_at > ?) "
+                "ORDER BY id DESC", (now, now)).fetchall()
+        except sqlite3.Error:
+            return []
     finally:
         conn.close()
     out = []
     for r in rows:
+        try:
+            target = str(r["target"] or "all").strip().lower()
+        except (KeyError, IndexError):
+            target = "all"
+        try:
+            detail = str(r["target_detail"] or "").strip()
+        except (KeyError, IndexError):
+            detail = ""
+        if target not in ("all", "free", "vip", "region", "version"):
+            continue
+        if target in ("region", "version") and not detail:
+            continue
         out.append({
             "id": int(r["id"]),
             "title": _plain_text(r["title"]),
             "body": _plain_text(r["body"]),
             "severity": str(r["severity"] or "info"),
+            "target": target,
+            "target_detail": detail,
         })
     return out
 
@@ -306,6 +322,54 @@ def read_tabs(panel_path=None):
             if tab in TAB_IDS and tab not in seen:
                 seen.append(tab)
         return seen or list(TABS_DEFAULT)
+    finally:
+        conn.close()
+
+
+#: The disclaimer the operator publishes, as set in
+#: `tuning_settings.disclaimer_text` / `disclaimer_version`. The app shows it
+#: once per version; an empty text means "nothing published", and the version
+#: is what the app remembers having shown. The text is cut at 4000 — the
+#: panel refuses anything longer — so a long policy can never bloat the
+#: config body the phone polls every five minutes.
+DISCLAIMER_MAX_CHARS = 4000
+
+
+def read_disclaimer(panel_path=None):
+    """Operator disclaimer for the app, or the empty one. Never raises.
+
+    Reads ``disclaimer_text`` / ``disclaimer_version`` from
+    ``tuning_settings`` (id = 1), read-only, the same tolerant pattern as
+    :func:`read_theme`: a missing database, table, row or column answers
+    empty; a non-integer version answers 0. The app treats an empty text as
+    "no disclaimer published" and shows nothing — the operator writes the
+    words, this module never invents them.
+    """
+    out = {"text": "", "version": 0}
+    conn = _open_panel(panel_path)
+    if conn is None:
+        return out
+    try:
+        if not _has_table(conn, "tuning_settings"):
+            return out
+        try:
+            row = conn.execute(
+                "SELECT disclaimer_text, disclaimer_version FROM tuning_settings "
+                "WHERE id = 1").fetchone()
+        except sqlite3.Error:
+            return out
+        if row is None:
+            return out
+        text = _theme_col(row, "disclaimer_text")
+        if isinstance(text, str) and text.strip():
+            out["text"] = text.strip()[:DISCLAIMER_MAX_CHARS]
+        try:
+            version = int(_theme_col(row, "disclaimer_version") or 0)
+            if version >= 0:
+                out["version"] = version
+        except (TypeError, ValueError):
+            pass
+        return out
     finally:
         conn.close()
 

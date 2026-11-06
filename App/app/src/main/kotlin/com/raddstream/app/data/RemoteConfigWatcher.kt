@@ -75,6 +75,12 @@ class RemoteConfigWatcher @Inject constructor(
         // leaves the last good order in place, and a body that carries no
         // tabs (an older deployment) leaves the bar on its own four.
         settings.saveTabs(config.tabs)
+        // The disclaimer rides the same body, under the same rule as the
+        // tabs: a failed poll leaves the last good text in place, and a
+        // body that carries no disclaimer (an older deployment, or the
+        // operator retracting it) stores empty — and empty means "nothing
+        // published", so the dialog never opens on it.
+        settings.saveDisclaimer(config.disclaimer)
         // The caps travel with the switch, and only a body that carries them overrides what this
         // build already enforces — a partial body leaves the shipped 25/12/4 windows in force
         // rather than resetting them to something the operator never asked for.

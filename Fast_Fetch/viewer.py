@@ -4269,6 +4269,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 payload["hidden_work_ids"] = feed["hidden_work_ids"]
                 payload["theme"] = panel_feed.read_theme()
                 payload["tabs"] = panel_feed.read_tabs()
+                payload["disclaimer"] = panel_feed.read_disclaimer()
             self.send_json(redact.scrub(payload),
                            extra_headers=[("Cache-Control", "public, max-age=60")])
 

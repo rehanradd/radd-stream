@@ -81,13 +81,14 @@ def _build_panel(path):
         "expires_at INTEGER, restored_at INTEGER)")
     conn.execute(
         "CREATE TABLE broadcasts (id INTEGER PRIMARY KEY, title TEXT, body TEXT, "
-        "severity TEXT, target TEXT, starts_at INTEGER, ends_at INTEGER, "
+        "severity TEXT, target TEXT, target_detail TEXT, starts_at INTEGER, ends_at INTEGER, "
         "status TEXT)")
     conn.execute(
         "CREATE TABLE tuning_settings (id INTEGER PRIMARY KEY, "
         "theme_mode TEXT, theme_accent TEXT, theme_dynamic_color INTEGER, "
         "theme_hero_autoplay INTEGER, theme_hero_interval_s INTEGER, "
-        "hero_max INTEGER, tabs TEXT)")
+        "hero_max INTEGER, tabs TEXT, disclaimer_text TEXT, "
+        "disclaimer_version INTEGER)")
     now = 1_791_000_000
     conn.executemany(
         "INSERT INTO home_sections VALUES (?,?,?,?,?,?,?,?,?)", [
@@ -112,16 +113,21 @@ def _build_panel(path):
             (4, "work", "5", 1, "restored", None, None, now - 10),
         ])
     conn.executemany(
-        "INSERT INTO broadcasts VALUES (?,?,?,?,?,?,?,?)", [
-            (1, "Hello", "Welcome", "info", "all", now - 10, now + 3600, "published"),
-            (2, "Draft", "Not yet", "info", "all", now - 10, now + 3600, "draft"),
-            (3, "Old", "Over", "info", "all", now - 7200, now - 3600, "published"),
-            (4, "VIP only", "Secret", "info", "vip", now - 10, now + 3600, "published"),
-            (5, "Future", "Soon", "info", "all", now + 3600, now + 7200, "published"),
+        "INSERT INTO broadcasts VALUES (?,?,?,?,?,?,?,?,?)", [
+            (1, "Hello", "Welcome", "info", "all", None, now - 10, now + 3600, "published"),
+            (2, "Draft", "Not yet", "info", "all", None, now - 10, now + 3600, "draft"),
+            (3, "Old", "Over", "info", "all", None, now - 7200, now - 3600, "published"),
+            (4, "VIP only", "Secret", "info", "vip", None, now - 10, now + 3600, "published"),
+            (5, "Future", "Soon", "info", "all", None, now + 3600, now + 7200, "published"),
+            (6, "Desi news", "For Desi", "info", "region", "pakistan", now - 10, now + 3600, "published"),
+            (7, "New build", "For 1.0.4", "info", "version", "1.0.4", now - 10, now + 3600, "published"),
+            (8, "No region", "Nowhere", "info", "region", None, now - 10, now + 3600, "published"),
+            (9, "No such target", "Nobody", "info", "everyone", None, now - 10, now + 3600, "published"),
         ])
     conn.execute(
-        "INSERT INTO tuning_settings VALUES (?,?,?,?,?,?,?,?)",
-        (1, "light", "#2BC79A", 1, 0, 8, 4, "my_list,home,home,search"))
+        "INSERT INTO tuning_settings VALUES (?,?,?,?,?,?,?,?,?,?)",
+        (1, "light", "#2BC79A", 1, 0, 8, 4, "my_list,home,home,search",
+         "Links come from public sites. We host nothing.", 3))
     conn.commit()
     conn.close()
     return now
@@ -196,11 +202,47 @@ class PanelFeedTests(unittest.TestCase):
         # 2 is hidden; 6 expired; 5 restored; section_work is not global.
         self.assertEqual(feed["hidden_work_ids"], [2])
 
-    def test_broadcasts_only_published_live_all_target(self):
+    def test_broadcasts_serve_all_targets_with_detail(self):
+        # Every target rides along now — the app filters by its own region,
+        # tier and version. Newest first; the draft, the expired and the
+        # future one stay out.
         feed = self.feed()
         self.assertEqual(
-            [(b["id"], b["title"]) for b in feed["broadcasts"]],
-            [(1, "Hello")])
+            [(b["id"], b["target"], b["target_detail"]) for b in feed["broadcasts"]],
+            [(7, "version", "1.0.4"), (6, "region", "pakistan"),
+             (4, "vip", ""), (1, "all", "")])
+
+    def test_broadcasts_drop_undetailed_and_unknown_targets(self):
+        # Row 8 names a region but no region; row 9 names a target the app
+        # has no rule for. Neither may leak to the wrong audience.
+        feed = self.feed()
+        self.assertNotIn(8, [b["id"] for b in feed["broadcasts"]])
+        self.assertNotIn(9, [b["id"] for b in feed["broadcasts"]])
+
+    def test_disclaimer_reads_operator_values(self):
+        self.assertEqual(
+            panel_feed.read_disclaimer(panel_path=self.panel_path),
+            {"text": "Links come from public sites. We host nothing.", "version": 3})
+
+    def test_disclaimer_defaults_when_nothing_set(self):
+        empty_path = os.path.join(self.tmp.name, "empty.db")
+        sqlite3.connect(empty_path).close()
+        self.assertEqual(
+            panel_feed.read_disclaimer(panel_path=empty_path),
+            {"text": "", "version": 0})
+        self.assertEqual(
+            panel_feed.read_disclaimer(panel_path=os.path.join(self.tmp.name, "nope.db")),
+            {"text": "", "version": 0})
+
+    def test_disclaimer_invalid_version_falls_back(self):
+        conn = sqlite3.connect(self.panel_path)
+        conn.execute(
+            "UPDATE tuning_settings SET disclaimer_version=-1, disclaimer_text='' WHERE id=1")
+        conn.commit()
+        conn.close()
+        self.assertEqual(
+            panel_feed.read_disclaimer(panel_path=self.panel_path),
+            {"text": "", "version": 0})
 
     def test_missing_panel_db_returns_empty_without_raising(self):
         feed = panel_feed.load_panel_feed(
@@ -225,12 +267,12 @@ class PanelFeedTests(unittest.TestCase):
     def test_broadcast_text_is_scrubbed(self):
         conn = sqlite3.connect(self.panel_path)
         conn.execute(
-            "INSERT INTO broadcasts VALUES (9, '<b>Hi</b>', 'a & b', 'info', "
-            "'all', ?, ?, 'published')", (self.now - 1, self.now + 100))
+            "INSERT INTO broadcasts VALUES (10, '<b>Hi</b>', 'a & b', 'info', "
+            "'all', NULL, ?, ?, 'published')", (self.now - 1, self.now + 100))
         conn.commit()
         conn.close()
         found = [b for b in panel_feed.active_broadcasts(
-            panel_path=self.panel_path, now=self.now) if b["id"] == 9]
+            panel_path=self.panel_path, now=self.now) if b["id"] == 10]
         self.assertEqual(len(found), 1)
         self.assertNotIn("<", found[0]["title"])
         self.assertNotIn("<", found[0]["body"])

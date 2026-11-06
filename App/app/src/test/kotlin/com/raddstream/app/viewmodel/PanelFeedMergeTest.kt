@@ -111,6 +111,39 @@ class PanelFeedMergeTest {
     }
 
     @Test
+    fun `targeted broadcasts reach only their audience`() {
+        val config = VipRemoteConfig(
+            broadcasts = listOf(
+                PanelBroadcast(id = 1, title = "All", body = "Everyone"),
+                PanelBroadcast(id = 2, title = "Desi", body = "Desi", target = "region", targetDetail = "pakistan"),
+                PanelBroadcast(id = 3, title = "VIP", body = "VIP", target = "vip"),
+                PanelBroadcast(id = 4, title = "Build", body = "Build", target = "version", targetDetail = "1.0.4"),
+                PanelBroadcast(id = 5, title = "Free", body = "Free", target = "free"),
+            ),
+        )
+        // A Desi free viewer on build 1.0.4 sees all, Desi, the build note
+        // and the free offer — but not the VIP notice.
+        val (_, desiFree) = mergePanelFeed(
+            builtIn, config, dismissedBroadcastIds = emptySet(),
+            regionId = "desi_dubs", isVip = false, appVersion = "1.0.4",
+        )
+        assertEquals(listOf(1, 2, 4, 5), desiFree.map { it.id })
+        // An East Asian VIP on another build sees all and the VIP notice
+        // only — the region, version and free rows are not theirs.
+        val (_, asianVip) = mergePanelFeed(
+            builtIn, config, dismissedBroadcastIds = emptySet(),
+            regionId = "east_asian", isVip = true, appVersion = "1.0.3",
+        )
+        assertEquals(listOf(1, 3), asianVip.map { it.id })
+        // Before the tier has loaded, neither tiered broadcast shows.
+        val (_, unknown) = mergePanelFeed(
+            builtIn, config, dismissedBroadcastIds = emptySet(),
+            regionId = "desi_dubs", isVip = null, appVersion = "1.0.4",
+        )
+        assertEquals(listOf(1, 2, 4), unknown.map { it.id })
+    }
+
+    @Test
     fun `no panel feed leaves the built-in rails exactly as they were`() {
         val (sections, broadcasts) = mergePanelFeed(builtIn, VipRemoteConfig(), dismissedBroadcastIds = emptySet())
 

@@ -81,6 +81,24 @@ data class VipRemoteConfig(
      * the app cannot function without a way back to it.
      */
     val tabs: List<String> = emptyList(),
+    /**
+     * The operator's disclaimer, published by the admin panel and served on
+     * this same body. Empty text from an older deployment — or from a panel
+     * where the operator has written nothing yet — means "no disclaimer
+     * published", and the app shows nothing: the operator writes the words,
+     * the app never invents them. `version` is what the app remembers having
+     * shown, so a new version is shown once more.
+     */
+    val disclaimer: PanelDisclaimer = PanelDisclaimer(),
+)
+
+/**
+ * The operator's disclaimer: the text, and the version the app compares
+ * against what it has already shown.
+ */
+data class PanelDisclaimer(
+    val text: String = "",
+    val version: Int = 0,
 )
 
 /**
@@ -115,16 +133,22 @@ data class PanelSection(
 )
 
 /**
- * One announcement the admin panel published. The server only ever sends a live,
- * published, all-users broadcast, so the app can show it as-is: no targeting to
- * interpret, no window to check. An empty title means "nothing to say" and the
- * banner is skipped.
+ * One announcement the admin panel published. The server sends live,
+ * published broadcasts of every target, so the app filters by its own
+ * region, tier and version ([broadcastVisible]): `target` is one of
+ * "all", "free", "vip", "region" or "version", and `targetDetail` names
+ * which one — a panel region for "region", an exact version name for
+ * "version", empty otherwise. An empty title means "nothing to say" and
+ * the banner is skipped.
  */
 data class PanelBroadcast(
     val id: Int = 0,
     val title: String = "",
     val body: String = "",
     val severity: String = "info",
+    val target: String = "all",
+    @SerializedName("target_detail")
+    val targetDetail: String = "",
 )
 
 /**

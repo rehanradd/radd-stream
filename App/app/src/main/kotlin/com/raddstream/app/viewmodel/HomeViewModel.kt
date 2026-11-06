@@ -2,6 +2,9 @@ package com.raddstream.app.viewmodel
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.raddstream.app.brand.Brand
+import com.raddstream.app.data.ServerSettingsRepository
+import com.raddstream.app.data.UserRegion
 import com.raddstream.app.data.local.SyncedProgressDao
 import com.raddstream.app.data.local.WatchHistoryDao
 import com.raddstream.app.data.local.WatchHistoryMerge
@@ -14,6 +17,8 @@ import com.raddstream.app.player.AdCadenceGovernor
 import com.raddstream.app.player.AdSurface
 import com.raddstream.app.repository.CatalogRepository
 import com.raddstream.app.repository.FavoritesRepository
+import com.raddstream.app.sync.SyncAccountRepository
+import com.raddstream.app.ui.navigation.BroadcastTargeting
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
 import kotlinx.coroutines.CancellationException
@@ -24,6 +29,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
@@ -117,6 +123,9 @@ internal fun mergePanelFeed(
     current: List<HomeSection>,
     config: VipRemoteConfig,
     dismissedBroadcastIds: Set<Int>,
+    regionId: String = UserRegion.DEFAULT,
+    isVip: Boolean? = null,
+    appVersion: String = "",
 ): Pair<List<HomeSection>, List<PanelBroadcast>> {
     val hidden = config.hiddenWorkIds.toSet()
     val panelSections = config.sections.map { panel ->
@@ -133,7 +142,8 @@ internal fun mergePanelFeed(
         .filter { !it.panelManaged && it.key !in panelKeys }
         .map { it.copy(items = it.items.filter { post -> post.id !in hidden }) }
     val broadcasts = config.broadcasts.filter {
-        it.id !in dismissedBroadcastIds && it.title.isNotBlank()
+        it.id !in dismissedBroadcastIds && it.title.isNotBlank() &&
+            BroadcastTargeting.visible(it, regionId, isVip, appVersion)
     }
     return (panelSections + builtIn) to broadcasts
 }
@@ -146,6 +156,8 @@ class HomeViewModel @Inject constructor(
     private val favoritesRepository: FavoritesRepository,
     private val adCadence: AdCadenceGovernor,
     private val adFreeReader: AdFreeReader,
+    private val settingsRepository: ServerSettingsRepository,
+    private val syncAccountRepository: SyncAccountRepository,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(HomeUiState())
@@ -257,8 +269,23 @@ class HomeViewModel @Inject constructor(
                 return@launch
             }
             val notice = AppUpdate.from(config)?.takeUnless { it.url == dismissedUpdateUrl }
+            // The audience for a targeted broadcast is decided here, from
+            // what this phone knows: the viewer's region card, and the tier
+            // the account store has actually loaded. A tier that has not
+            // loaded yet is unknown, not free — the filter hides both tiered
+            // broadcasts until it knows, rather than guessing.
+            val regionId = try {
+                settingsRepository.userRegion.first()
+            } catch (_: Exception) {
+                UserRegion.DEFAULT
+            }
+            val isVip = syncAccountRepository.entitlement.value?.vip
             _uiState.update { state ->
-                val (sections, broadcasts) = mergePanelFeed(state.sections, config, dismissedBroadcastIds)
+                val (sections, broadcasts) = mergePanelFeed(
+                    state.sections, config, dismissedBroadcastIds,
+                    regionId = regionId, isVip = isVip,
+                    appVersion = Brand.versionName,
+                )
                 state.copy(sections = sections, broadcasts = broadcasts, updateNotice = notice)
             }
         }
