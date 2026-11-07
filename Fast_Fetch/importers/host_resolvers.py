@@ -190,6 +190,7 @@ that a client can play it.
 
 from __future__ import annotations
 
+import base64
 import json
 import re
 import ssl
@@ -287,6 +288,36 @@ SERVICE_MXDROP = "mxdrop"
 SERVICE_PKEMBED = "pkembed"
 SERVICE_GDRIVE = "gdrive"
 SERVICE_ANIMAHD = "animahd-player"
+SERVICE_VIDBOLT = "vidbolt"
+SERVICE_VIBUXER = "vibuxer"
+SERVICE_VIDRIFT = "vidrift"
+SERVICE_IQSMART = "iqsmart"
+SERVICE_FILMU = "filmu"
+SERVICE_CINEVERSE = "cineverse"
+
+VIDBOLT_HOST_RE = re.compile(r"(?:^|\.)vidbolt\.(?:xyz|pro)$", re.I)
+VIDBOLT_CONTENT_RE = re.compile(
+    r"^/(?:embed/)?(?:movie|tv)/([A-Za-z0-9_-]+)(?:/([A-Za-z0-9_-]+)/([A-Za-z0-9_-]+))?/?$",
+    re.I)
+VIBUXER_HOST_RE = re.compile(r"(?:^|\.)vibuxer\.com$", re.I)
+VIBUXER_CONTENT_RE = re.compile(r"^/(?:e|embed)/([A-Za-z0-9_-]+)/?$", re.I)
+VIDRIFT_HOST_RE = re.compile(r"(?:^|\.)vidrift\.net$", re.I)
+VIDRIFT_CONTENT_RE = re.compile(
+    r"^/(?:embed/)?(?:movie|tv)/([A-Za-z0-9_-]+)(?:/([A-Za-z0-9_-]+)/([A-Za-z0-9_-]+))?/?$",
+    re.I)
+IQSMART_HOST_RE = re.compile(r"(?:^|\.)iqsmartgames\.com$", re.I)
+IQSMART_CONTENT_RE = re.compile(
+    r"^/embed/(?:movie|tv)/([A-Za-z0-9_-]+)(?:/([0-9]+)/([0-9]+))?/?$",
+    re.I)
+FILMU_HOST_RE = re.compile(r"(?:^|\.)(?:filmu\.in|vidly\.pro)$", re.I)
+FILMU_CONTENT_RE = re.compile(
+    r"^/(?:embed/)?(?:movie|tv)/([A-Za-z0-9_-]+)(?:/([0-9]+)/([0-9]+))?/?$",
+    re.I)
+CINEVERSE_HOST_RE = re.compile(r"(?:^|\.)(?:modiplay\.xyz|cineverse\.[a-z]+)$", re.I)
+CINEVERSE_CONTENT_RE = re.compile(
+    r"^/embed/tmdb/(?:movie|tv)/?$",
+    re.I)
+VIDBOLT_DEFAULT_EXPIRY_SECONDS = 14400  # 4 hours conservative cache window
 
 # AnimaHD's own player page. It is not an iframe and it is not a JS puzzle: the
 # page's script is `const targetStreamUrl = "<literal>"; …
@@ -373,7 +404,7 @@ def _open(request: urllib.request.Request, timeout: float = DEFAULT_TIMEOUT,
 
 
 def http_request(url: str, headers: dict | None = None, timeout: float = DEFAULT_TIMEOUT,
-                 method: str = "GET", follow: bool = True):
+                 method: str = "GET", follow: bool = True, data: bytes | None = None):
     """
     (status, body, headers, final_url) for one request.
 
@@ -383,7 +414,7 @@ def http_request(url: str, headers: dict | None = None, timeout: float = DEFAULT
     """
     fields = {"User-Agent": USER_AGENT}
     fields.update(headers or {})
-    request = urllib.request.Request(url, headers=fields, method=method)
+    request = urllib.request.Request(url, headers=fields, method=method, data=data)
     try:
         with _open(request, timeout=timeout, follow=follow) as response:
             return (int(response.status), response.read(PROBE_READ_BYTES),
@@ -561,6 +592,155 @@ def is_pkembed_embed(url: str) -> bool:
     return _matches(url, PKEMBED_HOST_RE, PKEMBED_CONTENT_RE)
 
 
+def vidbolt_parse_url(url: str) -> dict | None:
+    """
+    Parse a Vidbolt embed or page URL into its content locator:
+    returns {"type": "movie"|"tv", "tmdb_id": str, "season": str|None, "episode": str|None}.
+    """
+    clean = (url or "").strip()
+    parts = urllib.parse.urlsplit(clean if "://" in clean else f"https:{clean}")
+    host = (parts.hostname or "").lower()
+    if not host or not VIDBOLT_HOST_RE.search(host):
+        return None
+    match = VIDBOLT_CONTENT_RE.match(parts.path or "/")
+    if not match:
+        return None
+    path_lower = (parts.path or "").lower()
+    is_tv = "/tv/" in path_lower
+    tmdb_id, season, episode = match.groups()
+    return {
+        "type": "tv" if is_tv else "movie",
+        "tmdb_id": tmdb_id,
+        "season": season if is_tv else None,
+        "episode": episode if is_tv else None,
+    }
+
+
+def is_vidbolt_embed(url: str) -> bool:
+    return vidbolt_parse_url(url) is not None
+
+
+def is_vibuxer_embed(url: str) -> bool:
+    clean = (url or "").replace("\t", "").strip()
+    return _matches(clean, VIBUXER_HOST_RE, VIBUXER_CONTENT_RE)
+
+
+def vidrift_parse_url(url: str) -> dict | None:
+    """
+    Parse a Vidrift embed URL:
+    returns {"type": "movie"|"tv", "tmdb_id": str, "season": str|None, "episode": str|None}.
+    """
+    clean = (url or "").strip()
+    parts = urllib.parse.urlsplit(clean if "://" in clean else f"https:{clean}")
+    host = (parts.hostname or "").lower()
+    if not host or not VIDRIFT_HOST_RE.search(host):
+        return None
+    match = VIDRIFT_CONTENT_RE.match(parts.path or "/")
+    if not match:
+        return None
+    path_lower = (parts.path or "").lower()
+    is_tv = "/tv/" in path_lower
+    tmdb_id, season, episode = match.groups()
+    return {
+        "type": "tv" if is_tv else "movie",
+        "tmdb_id": tmdb_id,
+        "season": season if is_tv else None,
+        "episode": episode if is_tv else None,
+    }
+
+
+def is_vidrift_embed(url: str) -> bool:
+    return vidrift_parse_url(url) is not None
+
+
+def iqsmart_parse_url(url: str) -> dict | None:
+    """
+    Parse an iqsmart embed URL:
+    returns {"type": "movie"|"tv", "id": str, "season": str|None, "episode": str|None, "key": str}.
+    """
+    clean = (url or "").strip()
+    parts = urllib.parse.urlsplit(clean if "://" in clean else f"https:{clean}")
+    host = (parts.hostname or "").lower()
+    if not host or not IQSMART_HOST_RE.search(host):
+        return None
+    match = IQSMART_CONTENT_RE.match(parts.path or "/")
+    if not match:
+        return None
+    is_tv = "/tv/" in (parts.path or "").lower()
+    title_id, season, episode = match.groups()
+    params = urllib.parse.parse_qs(parts.query)
+    key = params.get("key", [""])[0]
+    return {
+        "type": "tv" if is_tv else "movie",
+        "id": title_id,
+        "season": season if is_tv else None,
+        "episode": episode if is_tv else None,
+        "key": key,
+    }
+
+
+def is_iqsmart_embed(url: str) -> bool:
+    return iqsmart_parse_url(url) is not None
+
+
+def filmu_parse_url(url: str) -> dict | None:
+    """
+    Parse a Filmu or Vidly embed/page URL:
+    returns {"type": "movie"|"tv", "tmdb_id": str, "season": str|None, "episode": str|None}.
+    """
+    clean = (url or "").strip()
+    parts = urllib.parse.urlsplit(clean if "://" in clean else f"https:{clean}")
+    host = (parts.hostname or "").lower()
+    if not host or not FILMU_HOST_RE.search(host):
+        return None
+    match = FILMU_CONTENT_RE.match(parts.path or "/")
+    if not match:
+        return None
+    is_tv = "/tv/" in (parts.path or "").lower()
+    tmdb_id, season, episode = match.groups()
+    return {
+        "type": "tv" if is_tv else "movie",
+        "tmdb_id": tmdb_id,
+        "season": season if is_tv else None,
+        "episode": episode if is_tv else None,
+    }
+
+
+def is_filmu_embed(url: str) -> bool:
+    return filmu_parse_url(url) is not None
+
+
+def cineverse_parse_url(url: str) -> dict | None:
+    """
+    Parse a Cineverse/Modiplay embed URL:
+    returns {"type": "movie"|"tv", "tmdb_id": str, "season": str|None, "episode": str|None}.
+    """
+    clean = (url or "").strip()
+    parts = urllib.parse.urlsplit(clean if "://" in clean else f"https:{clean}")
+    host = (parts.hostname or "").lower()
+    if not host or not CINEVERSE_HOST_RE.search(host):
+        return None
+    if not CINEVERSE_CONTENT_RE.match(parts.path or "/"):
+        return None
+    is_tv = "/tv" in (parts.path or "").lower()
+    params = urllib.parse.parse_qs(parts.query)
+    tmdb_id = params.get("id", [""])[0]
+    if not tmdb_id:
+        return None
+    season = params.get("s", ["1"])[0] if is_tv else None
+    episode = params.get("e", ["1"])[0] if is_tv else None
+    return {
+        "type": "tv" if is_tv else "movie",
+        "tmdb_id": tmdb_id,
+        "season": season,
+        "episode": episode,
+    }
+
+
+def is_cineverse_embed(url: str) -> bool:
+    return cineverse_parse_url(url) is not None
+
+
 def gdrive_file_id(url: str) -> str:
     """
     The Drive file id a URL names, or "" when it names none.
@@ -677,14 +857,15 @@ def _unpack_embed_page(fetch, result: dict) -> str:
     return config
 
 
-def _finish_media(result: dict, fetch, verify: bool) -> dict:
+def _finish_media(result: dict, fetch, verify: bool,
+                  req_headers: dict | None = None) -> dict:
     """Expiry + signature names, then the Range probe when the caller asked for one."""
     if result["expires_in"] is None:
         result["notes"].append("signed query carries no parsable expiry")
     if not verify:
         result["notes"].append("unpacked only; the byte endpoint was not probed")
         return result
-    probe = probe_range(result["final_url"], fetch=fetch)
+    probe = probe_range(result["final_url"], fetch=fetch, req_headers=req_headers)
     result["http_status"] = probe["http_status"]
     result["content_type"] = probe["content_type"]
     result["size_bytes"] = probe["size_bytes"]
@@ -777,8 +958,19 @@ def container_magic(body) -> str:
     return ""
 
 
+def is_hls_stream(content_type: str, magic: str, body: bytes | str) -> bool:
+    """
+    True when content_type or first bytes indicate an HLS playlist/stream.
+    """
+    ct = (content_type or "").lower()
+    if any(h in ct for h in ("application/vnd.apple.mpegurl", "application/x-mpegurl", "audio/mpegurl")):
+        return True
+    data = body if isinstance(body, bytes) else (body or "").encode("utf-8", "ignore")
+    return data.startswith(b"#EXTM3U")
+
+
 def probe_range(url: str, size: int = RANGE_PROBE_BYTES,
-                fetch=http_request) -> dict:
+                fetch=http_request, req_headers: dict | None = None) -> dict:
     """
     Ask the byte endpoint for the first `size` bytes and report what came back.
 
@@ -787,10 +979,14 @@ def probe_range(url: str, size: int = RANGE_PROBE_BYTES,
     because a host that ignores Range is telling us something a client should
     know before it plans a seek. A `video/*` type is not the only proof of video
     though — see `container_magic`, without which a Drive file can never be
-    probed at all however well it streams.
+    probed at all however well it streams. An HLS master (`#EXTM3U` / `application/vnd.apple.mpegurl`)
+    is also active streaming media.
     """
+    h = {"Range": f"bytes=0-{size - 1}"}
+    if req_headers:
+        h.update(req_headers)
     status, body, headers, final_url = fetch(
-        url, headers={"Range": f"bytes=0-{size - 1}"}, method="GET")
+        url, headers=h, method="GET")
     content_type = (headers.get("content-type") or "").split(";")[0].strip().lower()
     total = None
     content_range = headers.get("content-range") or ""
@@ -800,21 +996,30 @@ def probe_range(url: str, size: int = RANGE_PROBE_BYTES,
     verdict = {"status": "unknown", "http_status": status, "content_type": content_type,
                "size_bytes": total, "final_url": final_url, "reason": ""}
     magic = container_magic(body)
+    is_hls = is_hls_stream(content_type, magic, body)
     if status == 0:
         verdict["status"] = "error"
         verdict["reason"] = str(body)[:200]
     elif status == 206:
-        if content_type.startswith("video/") or magic:
+        if content_type.startswith("video/") or magic or is_hls:
             verdict["status"] = "active"
-            verdict["reason"] = "" if content_type.startswith("video/") \
-                else f"206 {content_type} holds a {magic} container"
+            if content_type.startswith("video/"):
+                verdict["reason"] = ""
+            elif is_hls:
+                verdict["reason"] = f"206 {content_type} holds an HLS stream"
+            else:
+                verdict["reason"] = f"206 {content_type} holds a {magic} container"
         else:
             verdict["reason"] = f"206 {content_type}"
     elif status == 200:
-        if content_type.startswith("video/") or magic:
+        if content_type.startswith("video/") or magic or is_hls:
             verdict["status"] = "active"
-            verdict["reason"] = "full_body" if content_type.startswith("video/") \
-                else f"full_body, {content_type} holds a {magic} container"
+            if content_type.startswith("video/"):
+                verdict["reason"] = "full_body"
+            elif is_hls:
+                verdict["reason"] = f"full_body, {content_type} holds an HLS stream"
+            else:
+                verdict["reason"] = f"full_body, {content_type} holds a {magic} container"
             if total is None:
                 verdict["size_bytes"] = len(body) if isinstance(body, (bytes, str)) else None
         else:
@@ -1194,6 +1399,462 @@ def unwrap_animahd(url: str, fetch=None, verify: bool = True,
     return result
 
 
+# ---------------------------------------------------------------------------
+# Vidbolt & Vibuxer
+# ---------------------------------------------------------------------------
+
+def unwrap_vibuxer(embed_url: str, fetch=None, verify: bool = True,
+                   referer: str | None = None) -> dict:
+    """
+    Embed URL -> {final_url, service, is_temporary, expires_in, status, notes, …}.
+
+    Vibuxer serves an embed page containing packed JavaScript (Dean Edwards).
+    Unpacking the script yields a JSON object with HLS master playlist URL(s)
+    and subtitle tracks.
+    """
+    fetch = fetch or http_request
+    clean_url = (embed_url or "").replace("\t", "").strip()
+    result = _new_result(SERVICE_VIBUXER, clean_url)
+    _withheld_referrer(result, referer)
+    if not is_vibuxer_embed(clean_url):
+        result["status"] = "unknown"
+        result["notes"].append("not a vibuxer embed URL")
+        return result
+
+    config = _unpack_embed_page(fetch, result)
+    if not config:
+        return result
+
+    m3u8s = re.findall(
+        r"""["'](https?://[^\s"'<>]+\.m3u8[^\s"'<>]*)["']""",
+        config,
+        re.I,
+    )
+    if not m3u8s:
+        result["status"] = "unknown"
+        result["notes"].append("unpacked script publishes no m3u8 media URL")
+        return result
+
+    result["final_url"] = m3u8s[0]
+    result["sources"] = [{"url": u, "mime": "application/vnd.apple.mpegurl", "label": "HLS"} for u in dict.fromkeys(m3u8s)]
+    result["quality"] = "HLS"
+    for found in PK_SUB_RE.findall(config):
+        result["subtitles"].append({"language": "subtitle", "url": absolutize(found)})
+
+    _expires_at, result["expires_in"] = duration_expiry_from_url(result["final_url"])
+    result["signed_params"] = sorted(signature_params(result["final_url"]))
+    return _finish_media(result, fetch, verify)
+
+
+def unwrap_vidbolt(url: str, fetch=None, verify: bool = True,
+                   referer: str | None = None) -> dict:
+    """
+    Embed or movie/tv URL -> {final_url, service, is_temporary, expires_in, status, notes, …}.
+
+    Vidbolt resolves streams via JSON API: /api/resolve?type=<movie|tv>&id=<tmdb_id>[&season=S&episode=E].
+    The API returns HLS sources and subtitles.
+    """
+    fetch = fetch or http_request
+    clean_url = (url or "").strip()
+    result = _new_result(SERVICE_VIDBOLT, clean_url)
+    _withheld_referrer(result, referer)
+    parsed = vidbolt_parse_url(clean_url)
+    if not parsed:
+        result["status"] = "unknown"
+        result["notes"].append("not a vidbolt embed or content URL")
+        return result
+
+    tmdb_id = parsed["tmdb_id"]
+    content_type = parsed["type"]
+    api_path = f"/api/resolve?type={content_type}&id={tmdb_id}"
+    if content_type == "tv":
+        season = parsed["season"] or "1"
+        episode = parsed["episode"] or "1"
+        api_path += f"&season={season}&episode={episode}"
+
+    api_url = f"https://vidbolt.xyz{api_path}"
+    result["bridge_url"] = api_url
+    status, body, headers, final_url = fetch(api_url, headers={"Referer": "https://vidbolt.xyz/"})
+    if status != 200:
+        result["status"] = ("dead" if status in (404, 410)
+                            else "blocked" if status in (401, 403, 429) else "unknown")
+        result["notes"].append(f"vidbolt api HTTP {status}")
+        return result
+
+    try:
+        data = json.loads(body.decode("utf-8", "replace") if isinstance(body, (bytes, bytearray)) else body)
+    except Exception as e:
+        result["status"] = "unknown"
+        result["notes"].append(f"vidbolt api JSON parse error: {e}")
+        return result
+
+    stream = data.get("stream")
+    if not stream or not isinstance(stream, dict):
+        result["status"] = "dead"
+        result["notes"].append("vidbolt api returned no stream for this content")
+        return result
+
+    raw_sources = stream.get("sources", [])
+    if not raw_sources:
+        result["status"] = "dead"
+        result["notes"].append("vidbolt api returned empty sources list")
+        return result
+
+    renditions = []
+    for s in raw_sources:
+        if isinstance(s, dict) and s.get("url"):
+            renditions.append({
+                "url": s["url"],
+                "mime": "application/vnd.apple.mpegurl" if (s.get("kind") == "hls" or ".m3u8" in s["url"]) else "video/mp4",
+                "label": s.get("quality") or s.get("kind") or "HLS",
+            })
+
+    if not renditions:
+        result["status"] = "dead"
+        result["notes"].append("vidbolt api sources contained no valid URLs")
+        return result
+
+    result["final_url"] = renditions[0]["url"]
+    result["sources"] = renditions
+    result["quality"] = renditions[0]["label"]
+
+    _expires_at, measured_exp = duration_expiry_from_url(result["final_url"])
+    result["expires_in"] = measured_exp if measured_exp is not None else VIDBOLT_DEFAULT_EXPIRY_SECONDS
+    result["signed_params"] = sorted(signature_params(result["final_url"]))
+    return _finish_media(result, fetch, verify)
+
+
+def unwrap_vidrift(url: str, fetch=None, verify: bool = True,
+                   referer: str | None = None) -> dict:
+    """
+    Vidrift embed URL -> {final_url, service, is_temporary, expires_in, status, notes, …}.
+
+    Embed page holds `var embedMeta = {...};` containing `orionStreams` (HLS/MP4)
+    and subtitle tracks. Probing media endpoints requires `Referer: https://embed.vidrift.net/`.
+    """
+    fetch = fetch or http_request
+    clean_url = (url or "").strip()
+    result = _new_result(SERVICE_VIDRIFT, clean_url)
+    _withheld_referrer(result, referer)
+    parsed = vidrift_parse_url(clean_url)
+    if not parsed:
+        result["status"] = "unknown"
+        result["notes"].append("not a vidrift embed URL")
+        return result
+
+    status, body, headers, final_url = fetch(
+        clean_url, headers={"Referer": "https://embed.vidrift.net/"})
+    if status != 200:
+        result["status"] = ("dead" if status in (404, 410)
+                            else "blocked" if status in (401, 403, 429) else "unknown")
+        result["notes"].append(f"vidrift embed page HTTP {status}")
+        return result
+
+    page = body if isinstance(body, str) else (body or b"").decode("utf-8", "replace")
+    m = re.search(r"var\s+embedMeta\s*=\s*(\{.*?\});", page, re.DOTALL)
+    if not m:
+        result["status"] = "unknown"
+        result["notes"].append("vidrift page holds no embedMeta")
+        return result
+
+    try:
+        meta = json.loads(m.group(1))
+    except Exception as e:
+        result["status"] = "unknown"
+        result["notes"].append(f"vidrift embedMeta JSON error: {e}")
+        return result
+
+    orion_streams = meta.get("orionStreams", [])
+    if not orion_streams:
+        result["status"] = "dead"
+        result["notes"].append("vidrift publishes no active streams for this title")
+        return result
+
+    renditions = []
+    for s in orion_streams:
+        s_url = s.get("url") or ""
+        if s_url.startswith("/"):
+            s_url = f"https://embed.vidrift.net{s_url}"
+        mime = "application/vnd.apple.mpegurl" if (s.get("type") == "hls" or ".m3u8" in s_url) else "video/mp4"
+        renditions.append({
+            "url": s_url,
+            "mime": mime,
+            "label": s.get("name") or s.get("type", "stream").upper(),
+        })
+
+    primary = next((r for r in renditions if r["mime"] == "application/vnd.apple.mpegurl"), renditions[0])
+    result["final_url"] = primary["url"]
+    result["sources"] = renditions
+    result["quality"] = primary["label"]
+
+    for sub in meta.get("bigbangSubtitles", []):
+        sub_url = sub.get("url")
+        if sub_url:
+            result["subtitles"].append({
+                "language": sub.get("label") or sub.get("lang") or "subtitle",
+                "url": f"https://embed.vidrift.net{sub_url}" if sub_url.startswith("/") else sub_url,
+            })
+
+    _expires_at, result["expires_in"] = duration_expiry_from_url(result["final_url"])
+    result["signed_params"] = sorted(signature_params(result["final_url"]))
+    return _finish_media(result, fetch, verify, req_headers={"Referer": "https://embed.vidrift.net/"})
+
+
+def unwrap_iqsmart(url: str, fetch=None, verify: bool = True,
+                   referer: str | None = None) -> dict:
+    """
+    iqsmart embed URL -> {final_url, service, is_temporary, expires_in, status, notes, …}.
+
+    iqsmart resolves via:
+    1. /mymovieapi or /myseriesapi -> fileslug
+    2. https://pro.iqsmartgames.com/embedhelper2.php -> base64 mresult
+    3. Decode mresult -> Hanerix slug (smwh)
+    4. Fetch Hanerix embed -> Dean Edwards unpack -> .m3u8 HLS master
+    """
+    fetch = fetch or http_request
+    clean_url = (url or "").strip()
+    result = _new_result(SERVICE_IQSMART, clean_url)
+    _withheld_referrer(result, referer)
+    parsed = iqsmart_parse_url(clean_url)
+    if not parsed:
+        result["status"] = "unknown"
+        result["notes"].append("not an iqsmart embed URL")
+        return result
+
+    title_id = parsed["id"]
+    id_param = "imdbid" if title_id.startswith("tt") else "tmdbid"
+    key = parsed["key"]
+    if parsed["type"] == "tv":
+        season = parsed["season"] or "1"
+        episode = parsed["episode"] or "1"
+        api_url = f"https://streams.iqsmartgames.com/myseriesapi?{id_param}={title_id}&season={season}&epname={episode}&key={key}"
+    else:
+        api_url = f"https://streams.iqsmartgames.com/mymovieapi?{id_param}={title_id}&key={key}"
+
+    result["bridge_url"] = api_url
+    status, body, headers, final_url = fetch(
+        api_url, headers={"Referer": "https://streams.iqsmartgames.com/"})
+    if status != 200:
+        result["status"] = ("dead" if status in (404, 410)
+                            else "blocked" if status in (401, 403, 429) else "unknown")
+        result["notes"].append(f"iqsmart api HTTP {status}")
+        return result
+
+    try:
+        api_data = json.loads(body.decode("utf-8", "replace") if isinstance(body, (bytes, bytearray)) else body)
+    except Exception as e:
+        result["status"] = "unknown"
+        result["notes"].append(f"iqsmart api JSON error: {e}")
+        return result
+
+    data_list = api_data.get("data", [])
+    if not data_list or not isinstance(data_list, list):
+        result["status"] = "dead"
+        result["notes"].append("iqsmart api returned no media data for this title")
+        return result
+
+    fileslug = data_list[0].get("fileslug")
+    if not fileslug:
+        result["status"] = "dead"
+        result["notes"].append("iqsmart api data item missing fileslug")
+        return result
+
+    helper_url = "https://pro.iqsmartgames.com/embedhelper2.php"
+    helper_payload = urllib.parse.urlencode({
+        "sid": fileslug,
+        "UserFavSite": "",
+        "currentDomain": '["pro.iqsmartgames.com"]',
+    }).encode("utf-8")
+    try:
+        h_status, h_body, h_headers, _ = fetch(
+            helper_url,
+            headers={
+                "Referer": "https://pro.iqsmartgames.com/",
+                "Content-Type": "application/x-www-form-urlencoded",
+            },
+            method="POST",
+            data=helper_payload,
+        )
+    except TypeError:
+        h_status, h_body, h_headers, _ = fetch(
+            helper_url,
+            headers={
+                "Referer": "https://pro.iqsmartgames.com/",
+                "Content-Type": "application/x-www-form-urlencoded",
+            },
+            method="POST",
+        )
+    if h_status != 200:
+        result["status"] = "dead" if h_status in (404, 410) else "unknown"
+        result["notes"].append(f"iqsmart embedhelper2 HTTP {h_status}")
+        return result
+
+    try:
+        h_json = json.loads(h_body.decode("utf-8", "replace") if isinstance(h_body, (bytes, bytearray)) else h_body)
+    except Exception as e:
+        result["status"] = "unknown"
+        result["notes"].append(f"iqsmart helper JSON error: {e}")
+        return result
+
+    mresult = h_json.get("mresult")
+    if not mresult:
+        result["status"] = "dead"
+        result["notes"].append("iqsmart embedhelper2 returned no mresult")
+        return result
+
+    try:
+        decoded_map = json.loads(base64.b64decode(mresult).decode("utf-8", "replace"))
+    except Exception as e:
+        result["status"] = "unknown"
+        result["notes"].append(f"iqsmart mresult decode error: {e}")
+        return result
+
+    han_id = decoded_map.get("smwh")
+    if not han_id:
+        result["status"] = "unknown"
+        result["notes"].append(f"iqsmart mresult contains no hanerix backend (keys: {list(decoded_map.keys())})")
+        return result
+
+    han_url = f"https://hanerix.com/e/{han_id}"
+    han_status, han_body, _, _ = fetch(han_url, headers={"Referer": "https://pro.iqsmartgames.com/"})
+    if han_status != 200:
+        result["status"] = "dead" if han_status in (404, 410) else "unknown"
+        result["notes"].append(f"hanerix embed HTTP {han_status}")
+        return result
+
+    han_page = han_body if isinstance(han_body, str) else (han_body or b"").decode("utf-8", "replace")
+    unpacked = find_packed_config(han_page)
+    if not unpacked:
+        result["status"] = "unknown"
+        result["notes"].append("hanerix embed page holds no packed config")
+        return result
+
+    m3u8s = re.findall(
+        r"""["'](https?://[^\s"'<>]+\.m3u8[^\s"'<>]*)["']""",
+        unpacked,
+        re.I,
+    )
+    if not m3u8s:
+        result["status"] = "unknown"
+        result["notes"].append("hanerix script publishes no m3u8 stream")
+        return result
+
+    result["final_url"] = m3u8s[0]
+    result["sources"] = [{"url": u, "mime": "application/vnd.apple.mpegurl", "label": "HLS"} for u in dict.fromkeys(m3u8s)]
+    result["quality"] = "HLS"
+
+    _expires_at, result["expires_in"] = duration_expiry_from_url(result["final_url"])
+    result["signed_params"] = sorted(signature_params(result["final_url"]))
+    return _finish_media(result, fetch, verify, req_headers={"Referer": "https://hanerix.com/"})
+
+
+def unwrap_filmu(url: str, fetch=None, verify: bool = True,
+                 referer: str | None = None) -> dict:
+    """
+    Filmu/Vidly embed URL -> {final_url, service, is_temporary, expires_in, status, notes, …}.
+
+    Filmu embed redirects or renders via Vidly, publishing a signed HLS stream URL.
+    Probing media endpoints requires `Referer: https://vidly.pro/`.
+    """
+    fetch = fetch or http_request
+    clean_url = (url or "").strip()
+    result = _new_result(SERVICE_FILMU, clean_url)
+    _withheld_referrer(result, referer)
+    parsed = filmu_parse_url(clean_url)
+    if not parsed:
+        result["status"] = "unknown"
+        result["notes"].append("not a filmu or vidly embed URL")
+        return result
+
+    status, body, headers, final_url = fetch(
+        clean_url, headers={"Referer": "https://vidly.pro/"})
+    if status != 200:
+        result["status"] = ("dead" if status in (404, 410)
+                            else "blocked" if status in (401, 403, 429) else "unknown")
+        result["notes"].append(f"filmu page HTTP {status}")
+        return result
+
+    page = body if isinstance(body, str) else (body or b"").decode("utf-8", "replace")
+    m3u8s = re.findall(r"""https?://[^\s"'<>]+\.m3u8[^\s"'<>]*""", page)
+    if not m3u8s:
+        result["status"] = "dead"
+        result["notes"].append("filmu page publishes no m3u8 stream")
+        return result
+
+    clean_m3u8 = m3u8s[0].replace(r"\u0026", "&").replace("&amp;", "&").rstrip("\\")
+    result["final_url"] = clean_m3u8
+    result["sources"] = [{"url": clean_m3u8, "mime": "application/vnd.apple.mpegurl", "label": "HLS"}]
+    result["quality"] = "HLS"
+
+    _expires_at, result["expires_in"] = duration_expiry_from_url(result["final_url"])
+    result["signed_params"] = sorted(signature_params(result["final_url"]))
+    return _finish_media(result, fetch, verify, req_headers={"Referer": "https://vidly.pro/"})
+
+
+def unwrap_cineverse(url: str, fetch=None, verify: bool = True,
+                     referer: str | None = None) -> dict:
+    """
+    Cineverse embed URL -> {final_url, service, is_temporary, expires_in, status, notes, …}.
+
+    Cineverse uses proxy.php (Bingr/Vidrift backend) to resolve streams.
+    If direct Vidrift stream is available, resolves it.
+    If Vidbolt fallback embed is offered, resolves via unwrap_vidbolt.
+    """
+    fetch = fetch or http_request
+    clean_url = (url or "").strip()
+    result = _new_result(SERVICE_CINEVERSE, clean_url)
+    _withheld_referrer(result, referer)
+    parsed = cineverse_parse_url(clean_url)
+    if not parsed:
+        result["status"] = "unknown"
+        result["notes"].append("not a cineverse embed URL")
+        return result
+
+    tmdb_id = parsed["tmdb_id"]
+    if parsed["type"] == "tv":
+        s = parsed["season"] or "1"
+        e = parsed["episode"] or "1"
+        c_param = f"{tmdb_id}:tv:{s}:{e}"
+    else:
+        c_param = f"{tmdb_id}:movie:0:0"
+
+    proxy_url = f"https://rozgarlelo.modiplay.xyz/proxy.php?p=bingr&c={c_param}&noredirect=1"
+    result["bridge_url"] = proxy_url
+    status, body, headers, _ = fetch(proxy_url, headers={"Referer": clean_url})
+    if status != 200:
+        result["status"] = ("dead" if status in (404, 410)
+                            else "blocked" if status in (401, 403, 429) else "unknown")
+        result["notes"].append(f"cineverse proxy HTTP {status}")
+        return result
+
+    page = body if isinstance(body, str) else (body or b"").decode("utf-8", "replace")
+    m_src = re.search(r"""var\s+(?:directSrc|src)\s*=\s*['"]([^'"]+)['"]""", page)
+    if m_src:
+        src = m_src.group(1).replace(r"\/", "/")
+        full_src = urllib.parse.urljoin(proxy_url, src)
+        if "vidrift.net" in full_src or "/stream_proxy.php" in full_src or ".m3u8" in full_src:
+            result["final_url"] = full_src
+            result["sources"] = [{"url": full_src, "mime": "application/vnd.apple.mpegurl", "label": "HLS"}]
+            result["quality"] = "HLS"
+            _expires_at, result["expires_in"] = duration_expiry_from_url(result["final_url"])
+            result["signed_params"] = sorted(signature_params(result["final_url"]))
+            return _finish_media(result, fetch, verify, req_headers={"Referer": "https://embed.vidrift.net/"})
+
+    # Check fallback EMBED_URL (e.g. vidbolt)
+    m_embed = re.search(r"""var\s+EMBED_URL\s*=\s*['"]([^'"]+)['"]""", page)
+    if m_embed:
+        embed_target = m_embed.group(1).replace(r"\/", "/")
+        if is_vidbolt_embed(embed_target):
+            vb_verdict = unwrap_vidbolt(embed_target, fetch=fetch, verify=verify)
+            vb_verdict["service"] = SERVICE_CINEVERSE
+            vb_verdict["notes"].insert(0, f"cineverse chained through vidbolt: {embed_target}")
+            return vb_verdict
+
+    result["status"] = "dead"
+    result["notes"].append("cineverse proxy returned neither active vidrift stream nor supported embed")
+    return result
+
+
 def main(argv: list[str] | None = None) -> int:
     """One URL in, one JSON verdict out — a manual check of the chain."""
     args = argv if argv is not None else sys.argv[1:]
@@ -1204,6 +1865,18 @@ def main(argv: list[str] | None = None) -> int:
     url = args[0]
     if is_pkembed_embed(url):
         unwrap = unwrap_pkembed
+    elif is_vibuxer_embed(url):
+        unwrap = unwrap_vibuxer
+    elif is_vidbolt_embed(url):
+        unwrap = unwrap_vidbolt
+    elif is_vidrift_embed(url):
+        unwrap = unwrap_vidrift
+    elif is_iqsmart_embed(url):
+        unwrap = unwrap_iqsmart
+    elif is_filmu_embed(url):
+        unwrap = unwrap_filmu
+    elif is_cineverse_embed(url):
+        unwrap = unwrap_cineverse
     elif is_gdrive_link(url):
         unwrap = unwrap_gdrive
     elif is_animahd_player(url):
