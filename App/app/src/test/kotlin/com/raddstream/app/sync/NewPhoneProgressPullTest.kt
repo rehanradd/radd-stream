@@ -127,7 +127,7 @@ class NewPhoneProgressPullTest {
             )
 
             // Device B: a fresh install — its own empty Room, no local history at all.
-            val (deviceB, _) = device()
+            val (deviceB, dbB) = device()
             assertNull(
                 "a fresh device knows nothing before it signs in",
                 deviceB.resumePositionMs(WORK_REF, SEASON, EPISODE),
@@ -144,8 +144,11 @@ class NewPhoneProgressPullTest {
                 report.completed,
             )
             assertEquals("one row must arrive", 1, report.progressRowsPulled)
+            val mirrorRow = dbB.syncedProgressDao().find(WORK_REF, SEASON, EPISODE)
+            val serverRow = serverProgress[key]!!.single()
             assertEquals(
-                "device B must resume at device A's exact millisecond",
+                "device B must resume at device A's exact millisecond; " +
+                    "mirror=$mirrorRow server=$serverRow",
                 POSITION_MS,
                 deviceB.resumePositionMs(WORK_REF, SEASON, EPISODE),
             )
@@ -157,7 +160,7 @@ class NewPhoneProgressPullTest {
         val key = (deviceA.createAccount() as AccountMutation.SignedIn).revealedKey!!
         deviceA.reportProgress(WORK_REF, SEASON, EPISODE, POSITION_MS, DURATION_MS, forced = true)
 
-        val (deviceB, _) = device()
+        val (deviceB, dbB) = device()
         deviceB.quickSignIn(key)
         val firstPull = deviceB.syncNow()
         assertEquals(
@@ -169,7 +172,12 @@ class NewPhoneProgressPullTest {
         val second = deviceB.syncNow()
         assertTrue(second.completed)
         assertEquals("the same stamp must not count as a new pull", 0, second.progressRowsPulled)
-        assertEquals(POSITION_MS, deviceB.resumePositionMs(WORK_REF, SEASON, EPISODE))
+        val mirrorRow = dbB.syncedProgressDao().find(WORK_REF, SEASON, EPISODE)
+        assertEquals(
+            "resume must read the pulled row; mirror=$mirrorRow",
+            POSITION_MS,
+            deviceB.resumePositionMs(WORK_REF, SEASON, EPISODE),
+        )
     }
 
     @Test
@@ -193,6 +201,7 @@ class NewPhoneProgressPullTest {
                 clientUpdatedAt = serverStamp + 1000.0,
             ),
         )
+        val seeded = dbB.syncedProgressDao().find(WORK_REF, SEASON, EPISODE)
         deviceB.quickSignIn(key)
         val report = deviceB.syncNow()
         assertTrue(
@@ -200,7 +209,12 @@ class NewPhoneProgressPullTest {
                 "server saw: ${serverEvents.joinToString(" | ")}",
             report.completed,
         )
-        assertEquals("the stale row must not count as pulled", 0, report.progressRowsPulled)
+        assertEquals(
+            "the stale row must not count as pulled; seeded=$seeded " +
+                "server=${serverProgress[key]!!.single()}",
+            0,
+            report.progressRowsPulled,
+        )
         assertEquals(
             "the newer local position must survive the pull",
             newerMs,
