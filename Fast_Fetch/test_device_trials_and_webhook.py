@@ -677,7 +677,8 @@ class AccountSurfaceRoutes(Fixture):
     def test_the_payer_may_ask_only_about_itself(self):
         made = self.account()
         answer = payments.entitlement(self.state, made["sync_key"], now=NOW)
-        self.assertEqual(sorted(answer), ["pending", "vip", "vip_until"])
+        self.assertEqual(sorted(answer), ["pending", "vip", "vip_cancelled_at",
+                                          "vip_until"])
         self.assertTrue(answer["vip"])
         self.assertFalse(answer["pending"])
         # A key this server never minted, and one it minted and destroyed, take the
