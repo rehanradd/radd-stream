@@ -332,6 +332,11 @@ fun HomeScreen(
                         },
                         onPostClick = onPostClick,
                         onSeeAll = { onBrowseType(section.type) },
+                        // A sorted rail has no Browse equivalent (Browse takes a
+                        // type but no sort), so "See all" would silently re-sort
+                        // it to freshest-first. Offer it only where the order
+                        // survives the jump.
+                        showSeeAll = section.browseEquivalent,
                         onRetry = { viewModel.retrySection(section.key) },
                     )
                 }
@@ -830,6 +835,7 @@ private fun HomeRailSection(
     section: HomeSection,
     onPostClick: (Post) -> Unit,
     onSeeAll: () -> Unit,
+    showSeeAll: Boolean = true,
     onRetry: () -> Unit,
 ) {
     when {
@@ -864,7 +870,13 @@ private fun HomeRailSection(
                     // Robo run 6: every rail's "See all" announced identically.
                     // The button speaks its section, so Movies and Series are
                     // distinct; the painted text stays the short "See all".
-                    action = { SeeAllButton(onClick = onSeeAll, contentDescription = "See all ${section.title}") },
+                    // A sorted rail has no Browse equivalent (Browse takes a
+                    // type but no sort), so it gets no "See all" at all.
+                    action = if (showSeeAll) {
+                        { SeeAllButton(onClick = onSeeAll, contentDescription = "See all ${section.title}") }
+                    } else {
+                        null
+                    },
                 )
                 MediaRail(items = section.items, key = { it.id }) { post ->
                     PosterCard(post = post, onClick = { onPostClick(post) })
