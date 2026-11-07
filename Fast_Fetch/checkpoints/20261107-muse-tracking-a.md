@@ -127,4 +127,10 @@ watched.
   smart-cast; the daily-login site did not. Fixed by hoisting the grant into
   a local val (`val granted = earned?.coinsGranted ?: 0`) — fix commit
   follows on the same branch; the verdict on it rides the next commit.
+- CI on ee5e5a0f: Backend 42388723346 **SUCCESS**; Android 42388723476
+  **FAILED** at `:app:testDebugUnitTest` — one test, mine:
+  `BrandDriftTest.brandNameIsNeverHardcodedOutsideTheBrandFiles` — the new
+  consent dialog hardcoded the literal "Radd Stream". Fixed by reading
+  `Brand.name`; the test's own literal scan re-run locally reports zero
+  offenders. Fix commit follows on the same branch.
 - Deploy: pending — gate deploy after CI green (backup set, checkout, public smoke, usage-migration check on live user_state.db).

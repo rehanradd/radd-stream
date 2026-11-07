@@ -10,6 +10,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import com.raddstream.app.brand.Brand
 
 /**
  * The first-run question Tracking A asks before it counts anything.
@@ -37,7 +38,7 @@ internal fun AnalyticsConsentDialog(
         text = {
             Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
                 Text(
-                    "Help improve Radd Stream by sharing anonymous totals: " +
+                    "Help improve ${Brand.name} by sharing anonymous totals: " +
                         "how many times videos are played, how often playback " +
                         "fails, and how often the app crashes.",
                     style = MaterialTheme.typography.bodyMedium,
