@@ -41,6 +41,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import catalog_api          # noqa: E402
 import catalog_v2           # noqa: E402
+import current_hosts        # noqa: E402
 import fast_fetch           # noqa: E402
 import redact               # noqa: E402
 import viewer               # noqa: E402
@@ -673,8 +674,26 @@ class PublicEdgeHttpTests(FixtureMixin):
     def setUp(self):
         self.make_ledger()
         redact.limiter._buckets.clear()
+        # Stage-2 gate: the resolver probes every candidate address over the
+        # network, and this suite is offline (the fixture URLs are fake).
+        # The probe and the Stage-1 backend classifier are network
+        # boundaries, so they are stubbed here — a passing probe, no proven
+        # backend — and the legacy branches run exactly as before the port.
+        # The servers run in-process threads, so these module patches cover
+        # the route calls too.
+        self.stage2_probe_patch = patch.object(
+            fast_fetch, "_stage2_probe",
+            return_value={"ok": True, "kind": "file", "mime": "video/mp4",
+                          "size": None, "resumable": True, "renditions": [],
+                          "failure": None})
+        self.stage2_probe_patch.start()
+        self.stage1_backend_patch = patch.object(
+            current_hosts, "classify_backend", return_value="unknown")
+        self.stage1_backend_patch.start()
 
     def tearDown(self):
+        self.stage1_backend_patch.stop()
+        self.stage2_probe_patch.stop()
         super().tearDown()
         redact.limiter._buckets.clear()
 
@@ -811,6 +830,16 @@ class PublicEdgeHttpTests(FixtureMixin):
                 "final_url = 'https://media.example.test/film.mp4?token=old', "
                 "is_temporary = 1, last_checked_at = NULL, expires_at = NULL, "
                 "status = 'active' WHERE id = ?", (sid,))
+            # Stage-2 failover would otherwise rescue this row from its
+            # healthy sibling in the same post, so the fixture isolates
+            # the row: the test is about what the resolver answers when
+            # NOTHING can be re-resolved, not about the failover ladder.
+            conn.execute(
+                "DELETE FROM download_sources WHERE id IN ("
+                "SELECT s.id FROM download_sources s "
+                "JOIN releases r ON r.id = s.release_id "
+                "WHERE r.post_id = ? AND s.id != ?)",
+                (post_id, sid))
             conn.commit()
         return sid
 
@@ -864,6 +893,15 @@ class PublicEdgeHttpTests(FixtureMixin):
                 "final_url = 'https://media.example.test/film.mp4?token=old', "
                 "is_temporary = 0, last_checked_at = NULL, expires_at = NULL, "
                 "status = ? WHERE id = ?", (verdict, sid))
+            # As in make_stale_source: isolate the row, or Stage-2
+            # failover rescues it from its healthy sibling in the same
+            # post and the test no longer measures the demoted row alone.
+            conn.execute(
+                "DELETE FROM download_sources WHERE id IN ("
+                "SELECT s.id FROM download_sources s "
+                "JOIN releases r ON r.id = s.release_id "
+                "WHERE r.post_id = ? AND s.id != ?)",
+                (post_id, sid))
             conn.commit()
         return sid
 
@@ -1238,7 +1276,17 @@ class AdultDenialOnBothPortsTests(FixtureMixin):
         succeeds for an unflagged link, or a regression that 404s everything would
         pass every test above."""
         link = self.source_id(self.post_id)
-        status, _ = self.get(f"/api/v1/stream?id={link}", self.operator_port)
+        # Offline fixture: stub the Stage-2 probe (pass) and Stage-1
+        # dispatch (no proven backend) so the legacy pixeldrain branch
+        # serves the fixture address without touching the network.
+        with patch.object(
+                fast_fetch, "_stage2_probe",
+                return_value={"ok": True, "kind": "file", "mime": "video/mp4",
+                              "size": None, "resumable": True, "renditions": [],
+                              "failure": None}), \
+             patch.object(current_hosts, "classify_backend",
+                          return_value="unknown"):
+            status, _ = self.get(f"/api/v1/stream?id={link}", self.operator_port)
         self.assertIn(status, (200, 302), "operator debugging handle still works")
 
     def test_the_flagged_work_is_indistinguishable_from_absent_everywhere_public(self):
@@ -1427,7 +1475,17 @@ class ZeroDataLossTests(FixtureMixin):
             "SELECT title FROM posts WHERE id = ?", (self.post_id,))["title"].lower())
 
     def test_the_resolver_still_produces_a_real_url_for_our_own_handle(self):
-        resolved = fast_fetch.resolve_live_source(self.source_id(self.post_id))
+        # Offline fixture: stub the Stage-2 probe (pass) and Stage-1
+        # dispatch (no proven backend) so the legacy pixeldrain branch
+        # serves the fixture address without touching the network.
+        with patch.object(
+                fast_fetch, "_stage2_probe",
+                return_value={"ok": True, "kind": "file", "mime": "video/mp4",
+                              "size": None, "resumable": True, "renditions": [],
+                              "failure": None}), \
+             patch.object(current_hosts, "classify_backend",
+                          return_value="unknown"):
+            resolved = fast_fetch.resolve_live_source(self.source_id(self.post_id))
         self.assertTrue(resolved["success"], resolved)
         self.assertIn("pixeldrain", resolved["url"])
 

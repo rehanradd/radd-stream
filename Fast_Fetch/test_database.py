@@ -22,6 +22,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import current_hosts
 import fast_fetch
 import viewer
 
@@ -34,9 +35,27 @@ class DatabaseSaveTests(unittest.TestCase):
         self.db_path_patch.start()
         self.cinemeta_patch = patch.object(fast_fetch, "fetch_cinemeta_metadata", return_value=None)
         self.cinemeta_patch.start()
+        # Stage-2 gate: the resolver probes every candidate address over the
+        # network, and this suite is offline. The probe is a network
+        # boundary like the unwrappers below, so it is stubbed to a passing
+        # file verdict by default; the strict-gate tests override it with a
+        # failing verdict. Stage-1 dispatch is stubbed off the same way:
+        # no fixture backend is proven here, so the legacy branches run
+        # exactly as before the port.
+        self.stage2_probe_patch = patch.object(
+            fast_fetch, "_stage2_probe",
+            return_value={"ok": True, "kind": "file", "mime": "video/mp4",
+                          "size": None, "resumable": True, "renditions": [],
+                          "failure": None})
+        self.stage2_probe_patch.start()
+        self.stage1_backend_patch = patch.object(
+            current_hosts, "classify_backend", return_value="unknown")
+        self.stage1_backend_patch.start()
         fast_fetch.init_db()
 
     def tearDown(self):
+        self.stage1_backend_patch.stop()
+        self.stage2_probe_patch.stop()
         self.cinemeta_patch.stop()
         self.db_path_patch.stop()
         self.temp_dir.cleanup()
@@ -630,6 +649,85 @@ class DatabaseSaveTests(unittest.TestCase):
         self.assertEqual(res["url"], source["final_url"])
         self.assertTrue(res["cached"])
         self.assertFalse(res["refreshed"])
+
+    def test_stage2_gate_refuses_an_unprobed_cached_page(self):
+        """The strict gate: a cached address that fails its probe is never
+        served, on either contract — the answer is no_playable_source,
+        not a 302 to the stored page."""
+        media_data = self.media("site_a", "https://site-a.example/example-film/")
+        media_data["releases"][0]["sources"] = [{
+            "source_name": "Example CDN",
+            "service": "test-service",
+            "resource_id": "site_a-id",
+            "source_url": "https://site_a.example/source",
+            "final_url": "https://cdn.example/site_a/page.html",
+            "is_temporary": 0,
+        }]
+        fast_fetch.save_scraped_data(media_data)
+        with fast_fetch.get_db() as conn:
+            source = conn.execute("SELECT id FROM download_sources LIMIT 1").fetchone()
+        failing = {"ok": False, "kind": None, "mime": None, "size": None,
+                   "resumable": False, "renditions": [], "failure": "probe_error"}
+        with patch.object(fast_fetch, "_stage2_probe", return_value=failing):
+            v1 = fast_fetch.resolve_live_source(source["id"])
+            v2 = fast_fetch.resolve_live_source(source["id"], v2=True)
+        for res in (v1, v2):
+            self.assertFalse(res["success"], res)
+            self.assertEqual(res["code"], "no_playable_source", res)
+
+    def test_stage2_gate_serves_a_probed_cached_address(self):
+        """The other side of the gate: a cached address that passes its
+        probe is served from cache, flagged as probed."""
+        post_id = fast_fetch.save_scraped_data(
+            self.media("site_a", "https://site-a.example/example-film/")
+        )
+        with fast_fetch.get_db() as conn:
+            source = conn.execute("SELECT id, final_url FROM download_sources LIMIT 1").fetchone()
+
+        res = fast_fetch.resolve_live_source(source["id"])
+        self.assertTrue(res["success"], res)
+        self.assertEqual(res["url"], source["final_url"])
+        self.assertTrue(res["cached"])
+        self.assertTrue(res.get("stage2_probed"))
+
+    def test_stage1_dispatch_serves_a_proven_backend_copy(self):
+        """A proven backend resolves through current_hosts first: a passing
+        resolve_copy is served fresh with measured mime/size/resumable."""
+        media_data = self.media("site_a", "https://site-a.example/example-film/")
+        media_data["releases"][0]["sources"] = [{
+            "source_name": "VidBolt",
+            "service": "vidbolt",
+            "resource_id": "vidbolt-id",
+            "source_url": "https://vidbolt.example/embed/abc",
+            "final_url": "https://vidbolt.example/embed/abc",
+            "is_temporary": 1,
+        }]
+        fast_fetch.save_scraped_data(media_data)
+        with fast_fetch.get_db() as conn:
+            source = conn.execute("SELECT id FROM download_sources LIMIT 1").fetchone()
+        stage1 = {"ok": True, "url": "https://cdn.vidbolt.example/v.mp4",
+                  "mime": "video/mp4", "size": 4242, "resumable": True,
+                  "kind": "file", "temporary": True}
+        with patch.object(current_hosts, "classify_backend", return_value="vidbolt"), \
+             patch.object(current_hosts, "resolve_copy", return_value=stage1), \
+             patch.object(fast_fetch, "probe_url_ttl",
+                          return_value=(None, {"observed": False,
+                                               "reason": "no_directive"})):
+            res = fast_fetch.resolve_live_source(source["id"])
+        self.assertTrue(res["success"], res)
+        self.assertEqual(res["url"], "https://cdn.vidbolt.example/v.mp4")
+        self.assertTrue(res["refreshed"])
+        self.assertEqual(res["mime_type"], "video/mp4")
+        self.assertEqual(res["file_size_bytes"], 4242)
+        with fast_fetch.get_db() as conn:
+            row = conn.execute(
+                "SELECT final_url, is_temporary, mime_type, file_size_bytes,"
+                " http_status, is_resumable FROM download_sources WHERE id = ?",
+                (source["id"],)).fetchone()
+        self.assertEqual(row["final_url"], "https://cdn.vidbolt.example/v.mp4")
+        self.assertEqual((row["mime_type"], row["file_size_bytes"],
+                          row["http_status"], row["is_resumable"]),
+                         ("video/mp4", 4242, 206, 1))
 
     def test_resolve_live_source_temporary_refresh(self):
         media_data = self.media("ssrmovies", "https://ssrmovies.example/sample-film/")
