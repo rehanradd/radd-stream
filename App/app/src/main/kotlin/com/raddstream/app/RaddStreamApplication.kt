@@ -14,6 +14,7 @@ import com.raddstream.app.data.Telemetry
 import com.raddstream.app.data.cache.CacheEngineRunner
 import com.raddstream.app.data.cache.CacheSweepWorker
 import com.raddstream.app.data.cache.KeepTtlHolder
+import com.raddstream.app.data.downloads.DeviceDownloadsRepository
 import com.raddstream.app.images.ImageSizingHolder
 import com.raddstream.app.share.LanShareRunner
 import com.raddstream.app.sync.SyncAccountRepository
@@ -52,6 +53,9 @@ class RaddStreamApplication : Application(), Configuration.Provider {
 
     @Inject
     lateinit var remoteConfigWatcher: RemoteConfigWatcher
+
+    @Inject
+    lateinit var deviceDownloadsRepository: DeviceDownloadsRepository
 
     @Inject
     lateinit var workerFactory: HiltWorkerFactory
@@ -112,6 +116,8 @@ class RaddStreamApplication : Application(), Configuration.Provider {
         // only reader of `/remote-config` that runs before any UI, and it is what makes
         // maintenance mode cover the whole app instead of only a screen someone opened.
         remoteConfigWatcher.start()
+        // Resume any public downloads that were interrupted while the app was closed.
+        deviceDownloadsRepository.autoResumeInterrupted()
         // The closed-app sweep: the same TTL auto-delete + low-storage eviction
         // the in-process runner runs every 5 minutes, once a day while the app
         // is closed. KEEP means a reinstall of this line never duplicates the

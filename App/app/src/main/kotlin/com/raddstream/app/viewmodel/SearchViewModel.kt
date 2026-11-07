@@ -550,7 +550,7 @@ class SearchViewModel @Inject constructor(
         _uiState.update {
             it.copy(
                 groups = groups,
-                resultCount = filtered.size,
+                resultCount = groups.sumOf { g -> g.items.size },
             )
         }
     }
@@ -613,14 +613,23 @@ internal fun groupSearchResults(posts: List<Post>, sort: SearchSort): List<TypeG
             TypeGroup(
                 label = normalizeTypeLabel(key),
                 typeKey = key,
+                // Session 93: one entry per work per rail — the same title
+                // filed twice (two prints, two mirrors) shows once, keeping
+                // the highest-sources copy the sort put first.
                 items = when (sort) {
-                    SearchSort.TITLE -> grouped.sortedBy { (it.cleanTitle ?: it.title).lowercase() }
+                    SearchSort.TITLE -> grouped.sortedWith(
+                        compareBy<Post> { (it.cleanTitle ?: it.title).lowercase() }
+                            .thenByDescending { (it.releaseCount ?: 0) + (it.sourceCount ?: 0) }
+                            .thenByDescending { it.id },
+                    )
                     SearchSort.HIGHEST_IMDB -> grouped.sortedWith(
                         compareByDescending<Post> { it.imdbRating?.toDoubleOrNull() ?: -1.0 }
+                            .thenByDescending { (it.releaseCount ?: 0) + (it.sourceCount ?: 0) }
                             .thenByDescending { it.id },
                     )
                     SearchSort.NEWEST -> grouped.sortedWith(
                         compareByDescending<Post> { it.year ?: 0 }
+                            .thenByDescending { (it.releaseCount ?: 0) + (it.sourceCount ?: 0) }
                             .thenByDescending { it.id },
                     )
                     // Mirrors the server's coverage ranking: no play counts exist.
@@ -628,7 +637,7 @@ internal fun groupSearchResults(posts: List<Post>, sort: SearchSort): List<TypeG
                         compareByDescending<Post> { (it.releaseCount ?: 0) + (it.sourceCount ?: 0) }
                             .thenByDescending { it.id },
                     )
-                },
+                }.distinctBy { postTitleDedupKey(it) },
             )
         }
         .sortedBy { typeOrder(it.label) }
@@ -664,3 +673,26 @@ internal fun typeGroupKey(post: Post): String =
     } else {
         post.contentType.orEmpty()
     }
+
+/**
+ * Normalizes title string for search rail deduplication: lowercases and strips punctuation.
+ */
+internal fun normalizeDedupTitle(title: String): String =
+    title.lowercase()
+        .replace(Regex("[^a-z0-9]+"), " ")
+        .trim()
+
+/**
+ * Deduplication key for search results: collapses duplicate releases or scraper rows
+ * of the exact same work title within a category rail.
+ */
+internal fun postTitleDedupKey(post: Post): String {
+    val work = post.workRef?.trim()?.lowercase()
+    if (!work.isNullOrBlank()) {
+        return "work:$work"
+    }
+    val raw = post.cleanTitle?.takeIf { it.isNotBlank() } ?: post.title
+    val norm = normalizeDedupTitle(raw)
+    val yr = post.year?.toString().orEmpty()
+    return "title:$norm:$yr"
+}

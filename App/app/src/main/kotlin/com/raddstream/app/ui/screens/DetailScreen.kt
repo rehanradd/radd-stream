@@ -261,23 +261,7 @@ fun DetailScreen(
                         Icon(Icons.Default.ArrowBack, contentDescription = "Back")
                     }
                 },
-                actions = {
-                    IconButton(onClick = viewModel::toggleFavorite) {
-                        Icon(
-                            imageVector = if (state.isFavorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
-                            contentDescription = if (state.isFavorite) "Remove from My List" else "Add to My List",
-                            tint = if (state.isFavorite) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.onSurface,
-                        )
-                    }
-                    IconButton(
-                        onClick = {
-                            val post = state.post
-                            if (post != null) shareTitle(context, post) { viewModel.reportShare(post.workRef) }
-                        },
-                    ) {
-                        Icon(Icons.Default.Share, contentDescription = "Share this title")
-                    }
-                },
+                actions = {},
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.background),
             )
         },
@@ -325,6 +309,11 @@ fun DetailScreen(
                 onActorClick = onActorClick,
                 reloadError = state.error,
                 onRetryReload = viewModel::loadDetail,
+                isFavorite = state.isFavorite,
+                onToggleFavorite = viewModel::toggleFavorite,
+                onShare = {
+                    shareTitle(context, post) { viewModel.reportShare(post.workRef) }
+                },
                 contentPadding = paddingValues,
             )
         }
@@ -489,6 +478,9 @@ private fun DetailContent(
      */
     reloadError: String?,
     onRetryReload: () -> Unit,
+    isFavorite: Boolean,
+    onToggleFavorite: () -> Unit,
+    onShare: () -> Unit,
     contentPadding: PaddingValues,
 ) {
     val allPrints = (workPrints + seasons.flatMap { it.episodes.flatMap { e -> e.prints } } + seasons.flatMap { it.packedPrints })
@@ -532,6 +524,9 @@ private fun DetailContent(
                 onPlay = { bestPrint?.let(onPlayPrint) },
                 onKeep = { bestPrint?.let(onKeep) },
                 onStartOver = onStartOver,
+                isFavorite = isFavorite,
+                onToggleFavorite = onToggleFavorite,
+                onShare = onShare,
             )
         }
 
@@ -771,13 +766,21 @@ private fun PrimaryActions(
     onKeep: () -> Unit,
     /** Phase 7 (D1): forget where viewing stopped — only offered while a resume exists. */
     onStartOver: () -> Unit,
+    isFavorite: Boolean,
+    onToggleFavorite: () -> Unit,
+    onShare: () -> Unit,
 ) {
-    Column(modifier = Modifier.fillMaxWidth()) {
-        Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        // Hero Play Button (full width)
             Button(
                 onClick = if (resume != null) onPlayResume else onPlay,
                 enabled = if (resume != null) true else bestPrint?.canStart == true,
-                modifier = Modifier.weight(1f).height(52.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(52.dp),
                 // D-29: a disabled Play keeps the same shape and language as the
                 // enabled one — a tonal fill, not a dead grey slab. The reason it
                 // cannot start rides right under the button, so the tonal state
@@ -796,19 +799,70 @@ private fun PrimaryActions(
                     overflow = TextOverflow.Ellipsis,
                 )
             }
-            // D-29: the download action is a proper secondary button in the same
-            // row language — same height, same shape, icon + label — not a bare
-            // circle beside a pill.
+
+        // Three plain buttons under Play: Add to My List, Download, Share
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            OutlinedButton(
+                onClick = onToggleFavorite,
+                modifier = Modifier
+                    .weight(1f)
+                    .height(48.dp),
+                contentPadding = PaddingValues(horizontal = 4.dp),
+            ) {
+                Icon(
+                    imageVector = if (isFavorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
+                    contentDescription = null,
+                    modifier = Modifier.size(18.dp),
+                    tint = if (isFavorite) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.onSurface,
+                )
+                Spacer(Modifier.width(4.dp))
+                Text(
+                    text = favoriteActionLabel(isFavorite),
+                    style = MaterialTheme.typography.labelMedium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+
             OutlinedButton(
                 onClick = onKeep,
                 enabled = hasAnyPrint,
-                modifier = Modifier.height(52.dp),
+                modifier = Modifier
+                    .weight(1f)
+                    .height(48.dp),
+                contentPadding = PaddingValues(horizontal = 4.dp),
             ) {
-                Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(20.dp))
-                Spacer(Modifier.width(8.dp))
-                Text("Download", maxLines = 1)
+                Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(4.dp))
+                Text(
+                    text = "Download",
+                    style = MaterialTheme.typography.labelMedium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+
+            OutlinedButton(
+                onClick = onShare,
+                modifier = Modifier
+                    .weight(1f)
+                    .height(48.dp),
+                contentPadding = PaddingValues(horizontal = 4.dp),
+            ) {
+                Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(4.dp))
+                Text(
+                    text = "Share",
+                    style = MaterialTheme.typography.labelMedium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
             }
         }
+
         // Phase 7 (D1): only while a resume exists — after "Start over" the
         // button above reads plain Play again, so this row must not linger.
         if (resume != null) {
@@ -818,6 +872,10 @@ private fun PrimaryActions(
         }
     }
 }
+
+/** Action label for the My List toggle button under Play. */
+internal fun favoriteActionLabel(isFavorite: Boolean): String =
+    if (isFavorite) "My List" else "Add to List"
 
 /**
  * Whether this print gets the viewer somewhere: our player can start a file, or the provider's own

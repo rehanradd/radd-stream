@@ -448,12 +448,24 @@ internal fun KeptItemRow(
             }
             when (item.state) {
                 KeepState.FAILED, KeepState.NO_SPACE -> OutlinedButton(onClick = onRetry) { Text("Retry") }
-                KeepState.DOWNLOADING, KeepState.QUEUED, KeepState.PAUSED, KeepState.READY, KeepState.EXPIRING ->
-                    OutlinedButton(onClick = onCancel) { Text("Cancel") }
+                KeepState.DOWNLOADING, KeepState.QUEUED, KeepState.PAUSED,
+                KeepState.READY, KeepState.EXPIRING ->
+                    OutlinedButton(onClick = onCancel) { Text(keepActionLabel(item.state) ?: "Cancel") }
                 else -> {}
             }
         }
     }
+}
+
+/**
+ * The destructive/cancellation action label for a kept item:
+ * "Cancel" while in-flight or waiting, "Delete" once completed on device.
+ */
+internal fun keepActionLabel(state: KeepState): String? = when (state) {
+    KeepState.READY, KeepState.EXPIRING -> "Delete"
+    KeepState.DOWNLOADING, KeepState.QUEUED, KeepState.PAUSED -> "Cancel"
+    KeepState.FAILED, KeepState.NO_SPACE -> "Retry"
+    else -> null
 }
 
 /** One honest sentence per state. No provenance, no invented progress. */

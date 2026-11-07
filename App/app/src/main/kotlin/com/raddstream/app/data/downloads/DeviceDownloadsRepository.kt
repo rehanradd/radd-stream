@@ -127,17 +127,27 @@ class DeviceDownloadsRepository @Inject constructor(
     private var persistedAt = HashMap<String, Long>()
 
     init {
-        // A row left mid-flight by a dead process is paused, not silently downloading:
-        // nothing is feeding it until the service is asked again.
-        val entries = load().map {
-            if (it.state == DeviceDownloadState.DOWNLOADING) {
-                it.copy(state = DeviceDownloadState.PAUSED)
-            } else {
-                it
-            }
-        }
+        // A row left mid-flight by a dead process is restored to QUEUED so it
+        // can auto-continue without requiring a manual Resume tap.
+        val (entries, _) = recoverInterruptedEntries(load())
         persist(entries)
         emit(entries)
+    }
+
+    /**
+     * Resumes any downloads that are queued or were interrupted mid-flight.
+     * Transitions interrupted tasks back to QUEUED and triggers DownloadService.
+     */
+    fun autoResumeInterrupted() {
+        val (entries, changed) = recoverInterruptedEntries(load())
+        if (changed) {
+            persist(entries)
+            emit(entries)
+        }
+        val next = entries.firstOrNull { it.state == DeviceDownloadState.QUEUED }
+        if (next != null) {
+            runCatching { DownloadService.start(context, next.id) }
+        }
     }
 
     /** API 28 and older need the legacy write permission; API 29+ writes through MediaStore. */
@@ -463,4 +473,23 @@ class DeviceDownloadsRepository @Inject constructor(
         const val MAX_NAME_CHARS = 80
         const val PROGRESS_FLUSH_MS = 1_000L
     }
+}
+
+/**
+ * Recovers interrupted transfers after a crash, kill, or device restart.
+ * Any task in DOWNLOADING is moved to QUEUED so the service can continue it.
+ */
+internal fun recoverInterruptedEntries(
+    entries: List<DeviceDownloadEntity>,
+): Pair<List<DeviceDownloadEntity>, Boolean> {
+    var changed = false
+    val updated = entries.map {
+        if (it.state == DeviceDownloadState.DOWNLOADING) {
+            changed = true
+            it.copy(state = DeviceDownloadState.QUEUED)
+        } else {
+            it
+        }
+    }
+    return updated to changed
 }

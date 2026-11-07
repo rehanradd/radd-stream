@@ -3,8 +3,10 @@ package com.raddstream.app.viewmodel
 import com.raddstream.app.data.downloads.DeviceDownload
 import com.raddstream.app.data.downloads.DeviceDownloadState
 import com.raddstream.app.data.local.WatchHistoryEntity
+import com.raddstream.app.ui.screens.keepActionLabel
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -164,5 +166,17 @@ class DownloadsRulesTest {
         assertEquals("Fall — Rank #1", fall.printLabelDescription())
         assertEquals("Dune — Rank #1", dune.printLabelDescription())
         assertNotEquals(fall.printLabelDescription(), dune.printLabelDescription())
+    }
+
+    @Test
+    fun `keep rows are labelled Delete when ready or expiring and Cancel when in-flight`() {
+        assertEquals("Delete", keepActionLabel(KeepState.READY))
+        assertEquals("Delete", keepActionLabel(KeepState.EXPIRING))
+        assertEquals("Cancel", keepActionLabel(KeepState.DOWNLOADING))
+        assertEquals("Cancel", keepActionLabel(KeepState.QUEUED))
+        assertEquals("Cancel", keepActionLabel(KeepState.PAUSED))
+        assertEquals("Retry", keepActionLabel(KeepState.FAILED))
+        assertEquals("Retry", keepActionLabel(KeepState.NO_SPACE))
+        assertNull(keepActionLabel(KeepState.EXPIRED))
     }
 }

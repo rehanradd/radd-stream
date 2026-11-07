@@ -117,12 +117,13 @@ class DownloadService : Service() {
             }
 
             null -> {
-                // A restart with no instruction: only rows that still say QUEUED move.
+                // A restart by the system with redelivered state: recover unfinished tasks and pump.
+                repo.autoResumeInterrupted()
                 repo.nextQueued()?.let { queue.addLast(it.id) }
                 pump()
             }
         }
-        return START_NOT_STICKY
+        return START_REDELIVER_INTENT
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
