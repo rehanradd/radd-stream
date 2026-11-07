@@ -50,6 +50,8 @@ from __future__ import annotations
 import base64
 import json
 import re
+import time
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -829,25 +831,82 @@ def select_download(copies: list) -> tuple:
     return chosen[0], chosen[1:]
 
 
-def resolve_release(rows: list, fetch=default_fetch, probe=None) -> dict:
+def resolve_release(rows: list, fetch=default_fetch, probe=None,
+                    deadline: float | None = None) -> dict:
     """Resolve every copy of one release fresh, then rank watch + download.
 
     ``rows`` are download_sources-shaped dicts (source_url, final_url,
     service, status, id). Stamped status never ranks: a row is tried on
     its fresh unwrap+probe alone, and only a passing probe can win.
     At most 10 rows are tried, so one release cannot stall a request.
+    ``deadline`` is an absolute ``time.monotonic`` value: past it, no
+    new sibling is started (Session 101 — the same 10 s budget the
+    Stage-2 ladder already had; a sibling started just before the
+    deadline still runs to its own probe verdict, as there).
+
+    Siblings resolve in parallel (max 4 workers): ``resolve_copy`` is
+    network-only — unwrap + probe, never a DB read or write — so it is
+    safe on worker threads, and the write-back happens in the caller.
+    The recursive resolver itself is never run in a thread (it shares
+    the caller's SQLite connection). One sibling raising must not kill
+    the failover: its exception is swallowed and the other copies still
+    get their chance. Results are re-sorted into input order before
+    ranking, so winners are deterministic. The deadline gates
+    *starting* a sibling, not finishing one: a sibling started before
+    it runs to its own probe verdict, exactly as the serial ladder did.
     """
-    copies, failures = [], []
-    for row in list(rows or [])[:10]:
+    todo = [row for row in list(rows or [])[:10]
+            if ((row or {}).get("source_url") or (row or {}).get("final_url"))]
+    if not todo:
+        return {"copies": [], "failures": [],
+                "watch_winner": None, "watch_backups": [],
+                "download_winner": None, "download_backups": []}
+
+    def _one(index_row):
+        index, row = index_row
         saved = (row or {}).get("source_url") or (row or {}).get("final_url") or ""
-        if not saved:
-            continue
         result = resolve_copy(saved, fetch=fetch, probe=probe)
-        result = dict(result, row_id=(row or {}).get("id"))
-        if result.get("ok"):
-            copies.append(result)
-        else:
-            failures.append(result)
+        return index, dict(result, row_id=(row or {}).get("id"))
+
+    outcomes = []
+    if len(todo) == 1:
+        outcomes.append(_one((0, todo[0])))
+    else:
+        workers = min(4, len(todo))
+        pool = ThreadPoolExecutor(max_workers=workers)
+        try:
+            pending = {}
+            queue = list(enumerate(todo))
+
+            def _submit_next() -> bool:
+                if not queue:
+                    return False
+                if deadline is not None and time.monotonic() > deadline:
+                    return False
+                item = queue.pop(0)
+                pending[pool.submit(_one, item)] = item[0]
+                return True
+
+            for _ in range(workers):
+                if not _submit_next():
+                    break
+            while pending:
+                done, _not_done = wait(pending, return_when=FIRST_COMPLETED)
+                for future in done:
+                    del pending[future]
+                    try:
+                        outcomes.append(future.result())
+                    except Exception:
+                        continue
+                    _submit_next()
+        finally:
+            # Stragglers finish their own bounded fetches in the
+            # background; do not wait for them past the deadline.
+            pool.shutdown(wait=False, cancel_futures=True)
+    outcomes.sort(key=lambda item: item[0])
+    copies, failures = [], []
+    for _index, result in outcomes:
+        (copies if result.get("ok") else failures).append(result)
     watch_winner, watch_backups = select_watch(copies)
     dl_winner, dl_backups = select_download(copies)
     return {"copies": copies, "failures": failures,

@@ -250,6 +250,20 @@ class FailoverTests(unittest.TestCase):
         self.assertNotIn(tier["link"]["id"], [item["id"] for item in tier["backups"]])
         self.assertEqual(len(tier["backups"]), tiers.BACKUP_LIMIT)
 
+    def test_candidate_order_sql_alias_qualifies_columns(self):
+        # The cross-release failover joins download_sources to releases,
+        # and both tables have id and created_at, so the aliased form
+        # must qualify every column — an unqualified one is ambiguous
+        # and the query fails.
+        aliased = tiers.candidate_order_sql("s")
+        self.assertIn("s.", aliased)
+        # A bare " id ASC" (space before id) would be ambiguous against
+        # releases.id; the qualified form is "s.id ASC", which has no
+        # space before the id.
+        self.assertNotIn(" id ASC", aliased)
+        self.assertNotIn(" created_at", aliased)
+        self.assertEqual(tiers.candidate_order_sql(), tiers.CANDIDATE_ORDER_SQL)
+
     def test_merge_does_not_list_the_same_copy_twice(self):
         # Two prints of one post often hold the very same link row.
         shared = link(id=9, is_resumable=1)

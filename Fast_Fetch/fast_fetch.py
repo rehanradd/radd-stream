@@ -1276,6 +1276,8 @@ def _init_db(db_path: Path | None = None) -> None:
             file_size_bytes INTEGER DEFAULT NULL,
             mime_type TEXT DEFAULT NULL,
             last_checked_at TIMESTAMP DEFAULT NULL,
+            last_failed_at REAL DEFAULT NULL,
+            failure_class TEXT DEFAULT NULL,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (release_id) REFERENCES releases(id) ON DELETE CASCADE
@@ -1367,6 +1369,16 @@ def _init_db(db_path: Path | None = None) -> None:
             cursor.execute("ALTER TABLE download_sources ADD COLUMN expires_at REAL DEFAULT NULL")
         if "ttl_source" not in existing_ds_cols:
             cursor.execute("ALTER TABLE download_sources ADD COLUMN ttl_source TEXT DEFAULT NULL")
+        if "last_failed_at" not in existing_ds_cols:
+            # Session 101 negative cache: epoch seconds of the last
+            # resolve failure on this row (see NEGATIVE_CACHE_TTL_SECONDS).
+            # NULL means "never failed" — it is deliberately not
+            # back-filled: every existing row is unprobed, not failed.
+            cursor.execute("ALTER TABLE download_sources ADD COLUMN last_failed_at REAL DEFAULT NULL")
+        if "failure_class" not in existing_ds_cols:
+            # One of RESOLVE_FAILURE_CLASSES: probe_failed / no_unwrapper
+            # / unwrap_failed. NULL beside a NULL last_failed_at.
+            cursor.execute("ALTER TABLE download_sources ADD COLUMN failure_class TEXT DEFAULT NULL")
 
         conn.execute("CREATE INDEX IF NOT EXISTS idx_posts_source_ind ON posts(source_site, industry)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_posts_canonical_key ON posts(canonical_key)")
@@ -2512,7 +2524,8 @@ def unwrap_fastdl(fastdl_url: str) -> tuple[str, str, int]:
     m = re.search(r"download=([A-Za-z0-9_-]+)", fastdl_url)
     res_id = m.group(1) if m else fastdl_url.split("/")[-1]
 
-    code, _, html = http_get(fastdl_url)
+    code, _, html = http_get(fastdl_url, timeout=RESOLVE_LANDING_TIMEOUT_SECONDS,
+                             max_retries=RESOLVE_LANDING_MAX_RETRIES)
     if code != 200:
         return fastdl_url, res_id, 0
 
@@ -2537,7 +2550,9 @@ def unwrap_vcloud(vcloud_url: str) -> list[tuple[str, str, str, int]]:
     Returns list of: [(source_name, service, final_url, is_temporary)]
     """
     res_id = vcloud_url.rstrip("/").split("/")[-1].split("?")[0]
-    code, final_vcloud_url, html = http_get(vcloud_url)
+    code, final_vcloud_url, html = http_get(
+        vcloud_url, timeout=RESOLVE_LANDING_TIMEOUT_SECONDS,
+        max_retries=RESOLVE_LANDING_MAX_RETRIES)
     if code != 200:
         return [("V-Cloud", "vcloud", vcloud_url, 0)]
 
@@ -2556,7 +2571,8 @@ def unwrap_vcloud(vcloud_url: str) -> list[tuple[str, str, str, int]]:
         return [("V-Cloud", "vcloud", final_vcloud_url, 0)]
 
     # Fetch token URL to get actual server buttons
-    t_code, _, t_html = http_get(token_url)
+    t_code, _, t_html = http_get(token_url, timeout=RESOLVE_LANDING_TIMEOUT_SECONDS,
+                                 max_retries=RESOLVE_LANDING_MAX_RETRIES)
     if t_code != 200:
         return [("V-Cloud (Token)", "vcloud", token_url, 0)]
 
@@ -2733,7 +2749,8 @@ def unwrap_gdflix(gdflix_url: str) -> tuple[str, str, int]:
     """
     res_id = gdflix_url.rstrip("/").split("/")[-1].split("?")[0]
     try:
-        code, _final_u, page = http_get(gdflix_url, timeout=10)
+        code, _final_u, page = http_get(gdflix_url, timeout=10,
+                                        max_retries=RESOLVE_UNWRAP_MAX_RETRIES)
     except Exception:
         return gdflix_url, res_id, 0
     if code != 200 or not page:
@@ -2769,7 +2786,8 @@ def unwrap_hubcloud_drive(hub_drive_url: str) -> list[dict]:
     Returns list of source dicts.
     """
     results = []
-    code, final_u, html = http_get(hub_drive_url, timeout=10)
+    code, final_u, html = http_get(hub_drive_url, timeout=10,
+                                   max_retries=RESOLVE_UNWRAP_MAX_RETRIES)
     if code != 200 or not html:
         return [{
             "source_name": "HubCloud Drive",
@@ -2803,7 +2821,8 @@ def unwrap_hubcloud_drive(hub_drive_url: str) -> list[dict]:
         }]
 
     gx_url = gx_m.group(1).replace("&amp;", "&")
-    gx_code, _, gx_html = http_get(gx_url, timeout=12)
+    gx_code, _, gx_html = http_get(gx_url, timeout=12,
+                                   max_retries=RESOLVE_UNWRAP_MAX_RETRIES)
     if gx_code != 200 or not gx_html:
         return [{
             "source_name": "HubCloud Drive",
@@ -3180,7 +3199,8 @@ def unwrap_greenmotors(greenmotors_url: str, timeout: int = 10) -> list[dict]:
     results = []
     resource_id = greenmotors_url.split("?id=")[-1][:24] if "?id=" in greenmotors_url else greenmotors_url.rstrip("/").split("/")[-1]
 
-    code, fin_u, html = http_get(greenmotors_url, timeout=timeout)
+    code, fin_u, html = http_get(greenmotors_url, timeout=timeout,
+                                 max_retries=RESOLVE_UNWRAP_MAX_RETRIES)
     if code != 200 or not html:
         return [{
             "source_name": "⚡ HDHub4u Bridge",
@@ -3203,7 +3223,8 @@ def unwrap_greenmotors(greenmotors_url: str, timeout: int = 10) -> list[dict]:
     if dest_url:
         dl = dest_url.lower()
         if "hblinks." in dl or "/archives/" in dl:
-            c_hb, _, html_hb = http_get(dest_url, timeout=timeout)
+            c_hb, _, html_hb = http_get(dest_url, timeout=timeout,
+                                        max_retries=RESOLVE_UNWRAP_MAX_RETRIES)
             if c_hb == 200 and html_hb:
                 anchors = re.findall(r'<a[^>]+href=[\'"]([^\'"]+)[\'"][^>]*>(.*?)</a>', html_hb, re.S)
                 for href, text in anchors:
@@ -6038,6 +6059,34 @@ _STAGE2_REFERER_RETRY = "https://embed.vidrift.net/"
 #: ~35 dead landing pages before answering no_playable_source.
 _FAILOVER_BUDGET_SECONDS = 10.0
 
+#: Seconds a copy recorded as failed stays refused without re-probing
+#: (Session 101 negative cache). The audit's range was 6–24 h; 12 h is
+#: the midpoint and a named constant so the operator can tune it in one
+#: place. A refused copy costs one row read instead of a full unwrap;
+#: a copy that recovers plays again once the window lapses, and a fresh
+#: scrape writes new rows, which carry no record at all.
+NEGATIVE_CACHE_TTL_SECONDS = 12 * 3600
+
+#: Failure classes the negative cache records. Only failures are ever
+#: written: a live copy never carries a record, and a success clears
+#: the one a failure left. `probe_failed` — a cached probe failed;
+#: `no_unwrapper` — no unwrap branch matches this host; `unwrap_failed`
+#: — a branch ran (or a fresh URL failed its gate probe) and produced
+#: nothing playable.
+RESOLVE_FAILURE_CLASSES = ("probe_failed", "no_unwrapper", "unwrap_failed")
+
+#: Seconds one landing-page fetch may take on the resolve path
+#: (Session 101). Legacy http_get defaults to 15 s x 3 attempts = 45 s
+#: for a single dead page; a dead landing page should cost ~5 s, not
+#: 45 s. The resolver has failover across copies, so one slow copy
+#: failing fast is better than one copy eating the whole budget.
+RESOLVE_LANDING_TIMEOUT_SECONDS = 5
+RESOLVE_LANDING_MAX_RETRIES = 0
+
+#: Unwrap hops that already pass an explicit timeout keep it; only the
+#: retry count is capped, so one dead hop costs two attempts, not three.
+RESOLVE_UNWRAP_MAX_RETRIES = 1
+
 
 def _stage2_hint(url: str) -> str:
     return "playlist" if str(url or "").split("?")[0].endswith(".m3u8") else "file"
@@ -6072,6 +6121,47 @@ def _stage2_accept(verdict: dict, want: str) -> bool:
     if want == "download":
         return kind == "file"
     return kind in ("playlist", "file")
+
+
+def _record_resolve_failure(source_id: int, failure_class: str) -> None:
+    """Best-effort durable record that one resolve attempt failed.
+
+    The negative cache (Session 101): the next attempt on this row
+    refuses in milliseconds until NEGATIVE_CACHE_TTL_SECONDS lapses,
+    instead of re-proving the same negative. Unknown classes are never
+    written — RESOLVE_FAILURE_CLASSES is the whole vocabulary an
+    operator can read back.
+    """
+    if failure_class not in RESOLVE_FAILURE_CLASSES:
+        return
+    try:
+        with get_db() as _conn:
+            _conn.execute(
+                "UPDATE download_sources "
+                "SET last_failed_at = ?, failure_class = ? WHERE id = ?",
+                (time.time(), failure_class, source_id))
+    except Exception:
+        pass
+
+
+def _clear_resolve_failure(source_id: int) -> None:
+    """Best-effort clear of a negative-cache record after a success.
+
+    A copy that plays again is live again: the record must not outlive
+    the failure it names. The success paths that already UPDATE the row
+    clear the columns inline; this is for the stale-success path, which
+    otherwise writes nothing, and for an expired record met at the top
+    of a resolve.
+    """
+    try:
+        with get_db() as _conn:
+            _conn.execute(
+                "UPDATE download_sources "
+                "SET last_failed_at = NULL, failure_class = NULL "
+                "WHERE id = ?",
+                (source_id,))
+    except Exception:
+        pass
 
 
 def resolve_live_source(source_id: int, *, v2: bool = False,
@@ -6129,12 +6219,37 @@ def resolve_live_source(source_id: int, *, v2: bool = False,
     src = dict(row)
     now_ts = time.time()
 
+    # Negative cache (Session 101): a copy that failed recently is
+    # refused in milliseconds instead of re-proving the same negative
+    # on every play press. Only failures are recorded (see
+    # _record_resolve_failure); a live copy never carries a record,
+    # and an expired record is cleared here so the row stops carrying
+    # a dead refusal.
+    _failed_at = src.get("last_failed_at")
+    if _failed_at is not None:
+        try:
+            _failed_age = now_ts - float(_failed_at)
+        except (TypeError, ValueError):
+            _failed_age = None
+        if _failed_age is not None and _failed_age < NEGATIVE_CACHE_TTL_SECONDS:
+            return {
+                "success": False,
+                "id": src["id"],
+                "error": "no_playable_source",
+                "code": "no_playable_source",
+                "reason": "negative_cache",
+                "failure_class": src.get("failure_class"),
+                "stale": False,
+            }
+        if _failed_age is not None:
+            _clear_resolve_failure(src["id"])
+
     needs_refresh = False
     observed_expiry = _expiry_fields(src)
     # Imported where it is used, like `config` in `_tls_context`: `tiers` owns the
     # ledger words that name a copy nothing can play and ranks with them, so the
     # resolver reads the same tuple instead of retyping two of its five words.
-    from tiers import UNPLAYABLE_STATES
+    from tiers import UNPLAYABLE_STATES, candidate_order_sql
     ledger_status = str(src["status"] or "").strip().lower()
     if ledger_status in UNPLAYABLE_STATES:
         # Every word the ledger uses to say this copy does not play, not just the
@@ -6202,7 +6317,8 @@ def resolve_live_source(source_id: int, *, v2: bool = False,
                     with get_db() as _conn:
                         _conn.execute(f"""
                             UPDATE download_sources
-                            SET last_checked_at = CURRENT_TIMESTAMP
+                            SET last_checked_at = CURRENT_TIMESTAMP,
+                                last_failed_at = NULL, failure_class = NULL
                                 {"".join(f", {_column} = ?" for _column, _v in _measured)}
                             WHERE id = ?
                         """, (*(v for _c, v in _measured), src["id"]))
@@ -6224,6 +6340,7 @@ def resolve_live_source(source_id: int, *, v2: bool = False,
                 # fall-through must not pay to probe it again (see below).
                 _cached_probe_failed_url = src.get("final_url")
                 needs_refresh = True
+                _record_resolve_failure(src["id"], "probe_failed")
         except Exception:
             pass
 
@@ -6250,7 +6367,8 @@ def resolve_live_source(source_id: int, *, v2: bool = False,
                 with get_db() as _conn:
                     _conn.execute(
                         "UPDATE download_sources "
-                        "SET last_checked_at = CURRENT_TIMESTAMP "
+                        "SET last_checked_at = CURRENT_TIMESTAMP, "
+                        "last_failed_at = NULL, failure_class = NULL "
                         + "".join(", %s = ?" % _column for _column, _v in _measured)
                         + " WHERE id = ?",
                         (*(v for _c, v in _measured), src["id"]))
@@ -6275,6 +6393,7 @@ def resolve_live_source(source_id: int, *, v2: bool = False,
         # the fall-through does not probe it a second time.
         _cached_probe_failed_url = src.get("final_url")
         needs_refresh = True
+        _record_resolve_failure(src["id"], "probe_failed")
 
     # Needs fresh unwrap
     source_u = src.get("source_url") or src.get("final_url") or ""
@@ -6285,6 +6404,10 @@ def resolve_live_source(source_id: int, *, v2: bool = False,
     embed_verdict = None
     stage1_tried = False
     stage1_result = None
+    # Whether any legacy unwrap branch below ran for this copy. The
+    # negative cache records `no_unwrapper` when none did and
+    # `unwrap_failed` when one ran and produced nothing playable.
+    _unwrap_branch_taken = False
 
     def hoster_input(marker):
         """The stored address that actually names this hoster.
@@ -6344,6 +6467,7 @@ def resolve_live_source(source_id: int, *, v2: bool = False,
             pass
         elif (service in ("fsl_r2", "hubcloud_10g", "hubcloud")
                 or "hubcloud" in source_u.lower() or "hubcloud" in cached_u.lower()):
+            _unwrap_branch_taken = True
             hub = hoster_input("hubcloud")
             # `gpdl…hubcloud` is a redirector that carries the Google CDN URL in
             # its own Location; `/drive/<id>` is a landing page that needs the
@@ -6365,6 +6489,7 @@ def resolve_live_source(source_id: int, *, v2: bool = False,
                     fresh_temp = unwrapped[0].get("is_temporary", fresh_temp)
         elif (service == "hubcdn" or "hubcdn.io/cloud" in source_u.lower()
               or "hubcdn.io/cloud" in cached_u.lower()):
+            _unwrap_branch_taken = True
             res = unwrap_hubcdn(hoster_input("hubcdn"))
             if res.get("ok"):
                 # The R2 bucket copy is the streamable asset; the Google
@@ -6374,21 +6499,25 @@ def resolve_live_source(source_id: int, *, v2: bool = False,
                 fresh_temp = 0
         elif (service == "direct_cloud" or "direct-cloud" in source_u.lower()
               or "direct-cloud" in cached_u.lower()):
+            _unwrap_branch_taken = True
             fresh_url, _, fresh_temp = unwrap_direct_cloud(hoster_input("direct-cloud"))
         elif (service == "greenmotors" or "greenmotors" in source_u.lower()
               or "greenmotors" in cached_u.lower()):
+            _unwrap_branch_taken = True
             unwrapped = unwrap_greenmotors(hoster_input("greenmotors"))
             if unwrapped:
                 fresh_url = unwrapped[0].get("final_url")
                 fresh_temp = unwrapped[0].get("is_temporary", fresh_temp)
         elif (service == "vcloud" or "vcloud" in source_u.lower()
               or "vcloud" in cached_u.lower()):
+            _unwrap_branch_taken = True
             v_res = unwrap_vcloud(hoster_input("vcloud"))
             if v_res:
                 fresh_url = v_res[0][2]
                 fresh_temp = v_res[0][3]
         elif (service == "fastdl" or "fastdl" in source_u.lower()
               or "fastdl" in cached_u.lower()):
+            _unwrap_branch_taken = True
             # FastDL's `embed.php?download=<id>` page carries `var reurl = …`;
             # `unwrap_hubcloud` knows nothing about that shape.
             direct_u, _res_id, is_temp = unwrap_fastdl(hoster_input("fastdl"))
@@ -6396,21 +6525,25 @@ def resolve_live_source(source_id: int, *, v2: bool = False,
             fresh_temp = is_temp
         elif (service == "gdflix" or "gdflix" in source_u.lower()
               or "gdflix" in cached_u.lower()):
+            _unwrap_branch_taken = True
             direct_u, _res_id, is_temp = unwrap_gdflix(hoster_input("gdflix"))
             fresh_url = direct_u
             fresh_temp = is_temp
         elif (service == "pixeldrain" or "pixeldrain" in source_u.lower()
               or "pixeldrain" in cached_u.lower()):
+            _unwrap_branch_taken = True
             direct_u, _, is_temp = unwrap_pixeldrain(hoster_input("pixeldrain"))
             fresh_url = direct_u
             fresh_temp = is_temp
         elif (service == "vegadrive" or "vegadrive" in source_u.lower()
               or "vegadrive" in cached_u.lower()):
+            _unwrap_branch_taken = True
             direct_u, _, is_temp = unwrap_vegadrive(hoster_input("vegadrive"))
             fresh_url = direct_u
             fresh_temp = is_temp
         elif hr and (service == hr.SERVICE_MXDROP or "mxdrop" in source_u.lower()
                      or "mxdrop" in cached_u.lower()):
+            _unwrap_branch_taken = True
             # The embed URL is the durable identifier and the mp4 is a result of
             # this call: mxdrop signs its `MDCore.wurl` with a ~6-hour window.
             embed = cached_u if hr.is_mxdrop_embed(cached_u) else source_u
@@ -6422,6 +6555,7 @@ def resolve_live_source(source_id: int, *, v2: bool = False,
                 embed_verdict = verdict
         elif hr and (service == hr.SERVICE_PKEMBED or "pkembed" in source_u.lower()
                      or "pkembed" in cached_u.lower()):
+            _unwrap_branch_taken = True
             embed = cached_u if hr.is_pkembed_embed(cached_u) else source_u
             verdict = hr.unwrap_pkembed(embed, verify=True)
             direct_u = embed_from_verdict(verdict)
@@ -6431,6 +6565,7 @@ def resolve_live_source(source_id: int, *, v2: bool = False,
                 embed_verdict = verdict
         elif hr and (service == hr.SERVICE_ANIMAHD or hr.is_animahd_player(source_u)
                      or hr.is_animahd_player(cached_u)):
+            _unwrap_branch_taken = True
             # Two page GETs and one Range probe: the player page's script is a
             # `window.location.replace` of a literal printed in its own HTML, so a
             # server can follow it without a JS engine. The minted byte URL is the
@@ -6448,6 +6583,7 @@ def resolve_live_source(source_id: int, *, v2: bool = False,
                 fresh_temp = 1
                 embed_verdict = verdict
         elif "gamerxyt" in source_u.lower() or "gamerxyt" in cached_u.lower():
+            _unwrap_branch_taken = True
             gamer = hoster_input("gamerxyt")
             if "link=" in gamer:
                 query = urllib.parse.parse_qs(urllib.parse.urlsplit(gamer).query)
@@ -6477,6 +6613,18 @@ def resolve_live_source(source_id: int, *, v2: bool = False,
         if not _stage2_accept(fresh_verdict, want):
             fresh_url = None
             fresh_verdict = None
+
+    if not fresh_url:
+        # The dispatch produced nothing playable: record the failure
+        # class for the negative cache. A branch that ran and failed —
+        # including the Stage-1 dispatch — is `unwrap_failed`; no branch
+        # at all means this host has no unwrapper yet. (A cached-probe
+        # failure was already recorded above; this overwrites it with
+        # the dispatch's own verdict, which is the actionable one.)
+        _record_resolve_failure(
+            src["id"],
+            "unwrap_failed" if (_unwrap_branch_taken or stage1_tried)
+            else "no_unwrapper")
 
     if fresh_url and fresh_url != source_u:
         # A packer's verdict carries more than a URL. `verify=True` means the
@@ -6523,7 +6671,8 @@ def resolve_live_source(source_id: int, *, v2: bool = False,
             conn.execute(f"""
                 UPDATE download_sources
                 SET final_url = ?, is_temporary = ?, status = 'active',
-                    last_checked_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+                    last_checked_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP,
+                    last_failed_at = NULL, failure_class = NULL
                     {"".join(f", {column} = ?" for column, _value in measured)}
                 WHERE id = ?
             """, (fresh_url, fresh_temp, *(value for _column, value in measured),
@@ -6583,9 +6732,16 @@ def resolve_live_source(source_id: int, *, v2: bool = False,
             with get_db() as _conn:
                 _siblings = _conn.execute(
                     "SELECT * FROM download_sources "
-                    "WHERE release_id = ? AND id != ? ORDER BY id",
+                    "WHERE release_id = ? AND id != ? ORDER BY "
+                    + candidate_order_sql(),
                     (src["release_id"], src["id"])).fetchall()
-            _rel = _ch_release([dict(r) for r in _siblings])
+            # Same 10 s budget as the Stage-2 ladder (Session 101): the
+            # Stage-1 sibling failover used to run up to 10 unbounded
+            # unwraps with no deadline at all. Siblings are tried
+            # direct-first, by the same ranking as the Stage-2 ladder.
+            _rel = _ch_release(
+                [dict(r) for r in _siblings],
+                deadline=time.monotonic() + _FAILOVER_BUDGET_SECONDS)
             _winner = _rel.get("watch_winner")
             if _winner and _winner.get("url"):
                 with get_db() as _conn:
@@ -6595,6 +6751,7 @@ def resolve_live_source(source_id: int, *, v2: bool = False,
                                status = 'active',
                                last_checked_at = CURRENT_TIMESTAMP,
                                updated_at = CURRENT_TIMESTAMP,
+                               last_failed_at = NULL, failure_class = NULL,
                                mime_type = ?, file_size_bytes = ?,
                                is_resumable = ?, http_status = ?
                            WHERE id = ?""",
@@ -6643,7 +6800,8 @@ def resolve_live_source(source_id: int, *, v2: bool = False,
             with get_db() as _conn:
                 _same_release = [r[0] for r in _conn.execute(
                     "SELECT id FROM download_sources "
-                    "WHERE release_id = ? AND id != ? ORDER BY id LIMIT 10",
+                    "WHERE release_id = ? AND id != ? ORDER BY "
+                    + candidate_order_sql() + " LIMIT 10",
                     (src["release_id"], src["id"])).fetchall()]
                 _post_row = _conn.execute(
                     "SELECT post_id, quality FROM releases WHERE id = ?",
@@ -6655,7 +6813,7 @@ def resolve_live_source(source_id: int, *, v2: bool = False,
                         "JOIN releases r ON r.id = s.release_id "
                         "WHERE r.post_id = ? AND r.id != ? "
                         "ORDER BY CASE WHEN r.quality = ? THEN 0 ELSE 1 END, "
-                        "s.id LIMIT 10",
+                        + candidate_order_sql("s") + " LIMIT 10",
                         (_post_row[0], src["release_id"],
                          _post_row[1])).fetchall()]
             # Failover is bounded: the primary copy already had its full
@@ -6760,6 +6918,9 @@ def resolve_live_source(source_id: int, *, v2: bool = False,
                 "reason": "stale_probe_failed",
                 "stale": True,
             }
+        # The stale URL just passed its probe, so the failure record it
+        # carried is wrong now: clear it before answering.
+        _clear_resolve_failure(src["id"])
     return {
         "success": True,
         "id": src["id"],

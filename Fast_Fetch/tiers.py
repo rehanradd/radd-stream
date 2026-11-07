@@ -85,20 +85,33 @@ SERVER_PREFERENCE = (
 
 #: SQL fragment for the ORDER BY that fetches a release's candidate links. Kept
 #: here so v1 and v2 rank identically and there is one list to review.
-CANDIDATE_ORDER_SQL = """
-    CASE playback_type
+def candidate_order_sql(alias: str = "") -> str:
+    """ORDER BY fragment for a release's candidate links, direct-first.
+
+    ``alias`` qualifies every column (``"s"`` for a JOIN query, where
+    ``id`` and ``created_at`` exist on both sides); empty for a
+    single-table query. The resolver's failover reads the same ranking,
+    so a dead bridge copy is never tried before a live direct copy in
+    the same release.
+    """
+    prefix = f"{alias}." if alias else ""
+    return f"""
+    CASE {prefix}playback_type
         WHEN 'direct' THEN 1 WHEN 'url' THEN 2
         WHEN 'download' THEN 3 WHEN 'iframe' THEN 4 ELSE 5 END ASC,
-    CASE status WHEN 'active' THEN 0 WHEN 'dead' THEN 9 ELSE 5 END ASC,
-    CASE service""" + "".join(
+    CASE {prefix}status WHEN 'active' THEN 0 WHEN 'dead' THEN 9 ELSE 5 END ASC,
+    CASE {prefix}service""" + "".join(
     f"\n        WHEN '{name}' THEN {index}"
-    for index, name in enumerate(SERVER_PREFERENCE)) + """
-    ELSE {last} END ASC,
-    is_temporary ASC,
-    is_resumable DESC,
-    COALESCE(last_checked_at, created_at) DESC,
-    id ASC
-""".format(last=len(SERVER_PREFERENCE))
+    for index, name in enumerate(SERVER_PREFERENCE)) + f"""
+    ELSE {len(SERVER_PREFERENCE)} END ASC,
+    {prefix}is_temporary ASC,
+    {prefix}is_resumable DESC,
+    COALESCE({prefix}last_checked_at, {prefix}created_at) DESC,
+    {prefix}id ASC
+"""
+
+
+CANDIDATE_ORDER_SQL = candidate_order_sql()
 
 _BAND_RE_PATTERNS = (
     ("2160p", ("2160", "4k", "uhd", "hdr")),

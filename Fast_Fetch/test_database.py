@@ -751,6 +751,324 @@ class DatabaseSaveTests(unittest.TestCase):
         self.assertEqual(probed, ["https://cdn.example/site_a/page-0.html",
                                   "https://cdn.example/site_a/page-1.html"])
 
+    def test_negative_cache_refuses_a_recently_failed_copy(self):
+        """A copy that failed is refused in milliseconds on the next
+        attempt: no re-probe, reason negative_cache, and the row
+        carries the failure class the dispatch recorded (no_unwrapper
+        here — the cached probe failed first, then no unwrap branch
+        matched this host)."""
+        media_data = self.media("site_a", "https://site-a.example/example-film/")
+        media_data["releases"][0]["sources"] = [{
+            "source_name": "Example CDN",
+            "service": "test-service",
+            "resource_id": "site_a-id",
+            "source_url": "https://site_a.example/source",
+            "final_url": "https://cdn.example/site_a/page.html",
+            "is_temporary": 0,
+        }]
+        fast_fetch.save_scraped_data(media_data)
+        with fast_fetch.get_db() as conn:
+            source = conn.execute("SELECT id FROM download_sources LIMIT 1").fetchone()
+        failing = {"ok": False, "kind": None, "mime": None, "size": None,
+                   "resumable": False, "renditions": [], "failure": "probe_error"}
+        probe = Mock(return_value=failing)
+        with patch.object(fast_fetch, "_stage2_probe", probe):
+            first = fast_fetch.resolve_live_source(source["id"])
+        self.assertFalse(first["success"], first)
+        self.assertEqual(first["code"], "no_playable_source", first)
+        self.assertEqual(probe.call_count, 1, probe.call_args_list)
+        with fast_fetch.get_db() as conn:
+            row = conn.execute(
+                "SELECT last_failed_at, failure_class FROM download_sources "
+                "WHERE id = ?", (source["id"],)).fetchone()
+        self.assertIsNotNone(row["last_failed_at"], row)
+        self.assertEqual(row["failure_class"], "no_unwrapper", row)
+        # Second attempt: refused without any probe at all.
+        probe2 = Mock(return_value=failing)
+        with patch.object(fast_fetch, "_stage2_probe", probe2):
+            second = fast_fetch.resolve_live_source(source["id"])
+        self.assertFalse(second["success"], second)
+        self.assertEqual(second["code"], "no_playable_source", second)
+        self.assertEqual(second["reason"], "negative_cache", second)
+        self.assertEqual(second["failure_class"], "no_unwrapper", second)
+        self.assertEqual(probe2.call_count, 0, probe2.call_args_list)
+
+    def test_negative_cache_expires_after_ttl(self):
+        """A failure record older than the TTL no longer refuses: the
+        copy is probed again, a passing probe serves it, and the stale
+        record is cleared from the row."""
+        media_data = self.media("site_a", "https://site-a.example/example-film/")
+        media_data["releases"][0]["sources"] = [{
+            "source_name": "Example CDN",
+            "service": "test-service",
+            "resource_id": "site_a-id",
+            "source_url": "https://site_a.example/source",
+            "final_url": "https://cdn.example/site_a/page.html",
+            "is_temporary": 0,
+        }]
+        fast_fetch.save_scraped_data(media_data)
+        with fast_fetch.get_db() as conn:
+            source = conn.execute("SELECT id FROM download_sources LIMIT 1").fetchone()
+        failing = {"ok": False, "kind": None, "mime": None, "size": None,
+                   "resumable": False, "renditions": [], "failure": "probe_error"}
+        probe = Mock(return_value=failing)
+        with patch.object(fast_fetch, "_stage2_probe", probe):
+            first = fast_fetch.resolve_live_source(source["id"])
+        self.assertFalse(first["success"], first)
+        with fast_fetch.get_db() as conn:
+            stale_at = time.time() - (fast_fetch.NEGATIVE_CACHE_TTL_SECONDS + 60)
+            conn.execute(
+                "UPDATE download_sources SET last_failed_at = ? WHERE id = ?",
+                (stale_at, source["id"]))
+        # No probe patch here: the setUp stub passes, so the copy serves.
+        res = fast_fetch.resolve_live_source(source["id"])
+        self.assertTrue(res["success"], res)
+        self.assertTrue(res["cached"], res)
+        with fast_fetch.get_db() as conn:
+            row = conn.execute(
+                "SELECT last_failed_at, failure_class FROM download_sources "
+                "WHERE id = ?", (source["id"],)).fetchone()
+        self.assertIsNone(row["last_failed_at"], row)
+        self.assertIsNone(row["failure_class"], row)
+
+    def test_negative_cache_records_unwrap_failed_for_a_branch_that_returns_nothing(self):
+        """A hubcloud branch that runs and returns no copy records
+        unwrap_failed — the branch existed, it just had nothing."""
+        media_data = self.media("ssrmovies", "https://ssrmovies.example/sample-film/")
+        media_data["releases"][0]["sources"] = [{
+            "source_name": "HubCloud Drive",
+            "service": "hubcloud",
+            "resource_id": "test12345",
+            "source_url": "https://hubcloud.ist/drive/test12345",
+            "final_url": "https://hubcloud.ist/drive/test12345",
+            "is_temporary": 1,
+        }]
+        fast_fetch.save_scraped_data(media_data)
+        with fast_fetch.get_db() as conn:
+            source = conn.execute("SELECT id FROM download_sources LIMIT 1").fetchone()
+        with patch.object(fast_fetch, "unwrap_hubcloud_drive", return_value=[]):
+            res = fast_fetch.resolve_live_source(source["id"])
+        self.assertFalse(res["success"], res)
+        self.assertEqual(res["code"], "no_playable_source", res)
+        with fast_fetch.get_db() as conn:
+            row = conn.execute(
+                "SELECT last_failed_at, failure_class FROM download_sources "
+                "WHERE id = ?", (source["id"],)).fetchone()
+        self.assertIsNotNone(row["last_failed_at"], row)
+        self.assertEqual(row["failure_class"], "unwrap_failed", row)
+
+    def test_failover_tries_direct_copies_first(self):
+        """The Stage-2 sibling failover tries direct copies before bridge
+        copies in the same release (tiers.CANDIDATE_ORDER_SQL), not
+        lowest id first."""
+        media_data = self.media("site_a", "https://site-a.example/example-film/")
+        media_data["releases"][0]["sources"] = [
+            {
+                "source_name": "Primary bridge",
+                "service": "test-service",
+                "resource_id": "site_a-id-0",
+                "source_url": "https://site_a.example/source-0",
+                "final_url": "https://cdn.example/site_a/page-0.html",
+                "playback_type": "url",
+                "is_temporary": 0,
+            },
+            {
+                "source_name": "Sibling bridge",
+                "service": "test-service",
+                "resource_id": "site_a-id-1",
+                "source_url": "https://site_a.example/source-1",
+                "final_url": "https://cdn.example/site_a/page-1.html",
+                "playback_type": "url",
+                "is_temporary": 0,
+            },
+            {
+                "source_name": "Sibling direct",
+                "service": "test-service",
+                "resource_id": "site_a-id-2",
+                "source_url": "https://site_a.example/source-2",
+                "final_url": "https://cdn.example/site_a/page-2.html",
+                "playback_type": "direct",
+                "is_temporary": 0,
+            },
+        ]
+        fast_fetch.save_scraped_data(media_data)
+        with fast_fetch.get_db() as conn:
+            rows = conn.execute(
+                "SELECT id FROM download_sources ORDER BY id").fetchall()
+        self.assertEqual(len(rows), 3)
+        failing = {"ok": False, "kind": None, "mime": None, "size": None,
+                   "resumable": False, "renditions": [], "failure": "probe_error"}
+        probe = Mock(return_value=failing)
+        with patch.object(fast_fetch, "_stage2_probe", probe):
+            res = fast_fetch.resolve_live_source(rows[0]["id"])
+        self.assertFalse(res["success"], res)
+        self.assertEqual(res["code"], "no_playable_source", res)
+        probed = [c.args[0] for c in probe.call_args_list]
+        self.assertEqual(probed, ["https://cdn.example/site_a/page-0.html",
+                                  "https://cdn.example/site_a/page-2.html",
+                                  "https://cdn.example/site_a/page-1.html"])
+
+    def test_stage1_sibling_failover_stops_after_budget(self):
+        """The Stage-1 sibling failover is bounded by the same 10 s
+        deadline as the Stage-2 ladder: past it, no new sibling is
+        started. The clock is faked so the test does not sleep."""
+        media_data = self.media("site_a", "https://site-a.example/example-film/")
+        media_data["releases"][0]["sources"] = [
+            {
+                "source_name": f"VidBolt {i}",
+                "service": "vidbolt",
+                "resource_id": f"vidbolt-id-{i}",
+                "source_url": f"https://vidbolt.xyz/embed/{i}",
+                "final_url": f"https://vidbolt.xyz/embed/{i}",
+                "is_temporary": 1,
+            }
+            for i in range(6)
+        ]
+        fast_fetch.save_scraped_data(media_data)
+        with fast_fetch.get_db() as conn:
+            rows = conn.execute(
+                "SELECT id FROM download_sources ORDER BY id").fetchall()
+        self.assertEqual(len(rows), 6)
+        stage1_fail = {"ok": False, "backend": "vidbolt", "failure": "unverified"}
+        resolve_copy = Mock(return_value=stage1_fail)
+        calls = {"n": 0}
+
+        def fake_monotonic():
+            calls["n"] += 1
+            return 1000.0 + (calls["n"] - 1) * 6.0
+
+        with patch.object(current_hosts, "classify_backend", return_value="vidbolt"), \
+             patch.object(current_hosts, "resolve_copy", resolve_copy), \
+             patch.object(fast_fetch.time, "monotonic", side_effect=fake_monotonic):
+            res = fast_fetch.resolve_live_source(rows[0]["id"])
+        self.assertFalse(res["success"], res)
+        self.assertEqual(res["code"], "no_playable_source", res)
+        self.assertEqual(res["reason"], "stage1_all_copies_failed", res)
+        # Primary dispatch + exactly one sibling: the second sibling is
+        # never started once the faked clock passes the deadline.
+        self.assertEqual(resolve_copy.call_count, 2, resolve_copy.call_args_list)
+
+    def test_unwrap_fastdl_dead_page_uses_a_short_single_fetch(self):
+        """A dead FastDL landing page costs one 5 s fetch, not 15 s x 3
+        attempts (45 s) on the legacy http_get default."""
+        getter = Mock(return_value=(0, "https://fastdl.beer/embed.php?download=x",
+                                    "ERROR: timeout"))
+        with patch.object(fast_fetch, "http_get", getter):
+            direct, _res_id, _temp = fast_fetch.unwrap_fastdl(
+                "https://fastdl.beer/embed.php?download=x")
+        self.assertEqual(direct, "https://fastdl.beer/embed.php?download=x")
+        self.assertEqual(getter.call_count, 1, getter.call_args_list)
+        self.assertEqual(getter.call_args.kwargs.get("timeout"), 5)
+        self.assertEqual(getter.call_args.kwargs.get("max_retries"), 0)
+
+    def test_unwrap_vcloud_dead_page_uses_short_single_fetches(self):
+        """Both V-Cloud hops (landing page, token URL) cost one 5 s
+        fetch each, not 15 s x 3 attempts."""
+        token = base64.b64encode(
+            base64.b64encode(b"https://token.example/x")).decode()
+        page = f"var url = atob(atob('{token}'));"
+        getter = Mock(side_effect=[
+            (200, "https://vcloud.example/abc", page),
+            (0, "https://token.example/x", "ERROR: timeout"),
+        ])
+        with patch.object(fast_fetch, "http_get", getter):
+            out = fast_fetch.unwrap_vcloud("https://vcloud.example/abc")
+        self.assertEqual(len(out), 1)
+        self.assertEqual(getter.call_count, 2, getter.call_args_list)
+        for call in getter.call_args_list:
+            self.assertEqual(call.kwargs.get("timeout"), 5)
+            self.assertEqual(call.kwargs.get("max_retries"), 0)
+
+    def test_unwrap_hubcloud_drive_dead_page_retries_once(self):
+        """A dead HubCloud Drive page keeps its 10 s timeout but costs
+        two attempts, not three."""
+        getter = Mock(return_value=(0, "https://hubcloud.ist/drive/abc", ""))
+        with patch.object(fast_fetch, "http_get", getter):
+            out = fast_fetch.unwrap_hubcloud_drive("https://hubcloud.ist/drive/abc")
+        self.assertEqual(len(out), 1)
+        self.assertEqual(getter.call_count, 1, getter.call_args_list)
+        self.assertEqual(getter.call_args.kwargs.get("timeout"), 10)
+        self.assertEqual(getter.call_args.kwargs.get("max_retries"), 1)
+
+    def test_unwrap_gdflix_dead_page_retries_once(self):
+        """A dead GDFlix page keeps its 10 s timeout but costs two
+        attempts, not three."""
+        getter = Mock(return_value=(0, "https://new5.gdflix.io/file/x", ""))
+        with patch.object(fast_fetch, "http_get", getter):
+            direct, _res_id, _temp = fast_fetch.unwrap_gdflix(
+                "https://new5.gdflix.io/file/x")
+        self.assertEqual(direct, "https://new5.gdflix.io/file/x")
+        self.assertEqual(getter.call_count, 1, getter.call_args_list)
+        self.assertEqual(getter.call_args.kwargs.get("timeout"), 10)
+        self.assertEqual(getter.call_args.kwargs.get("max_retries"), 1)
+
+    def test_unwrap_greenmotors_dead_page_retries_once(self):
+        """A dead GreenMotors page keeps its 10 s timeout but costs two
+        attempts, not three."""
+        getter = Mock(return_value=(0, "https://greenmotors.club/?id=testgm123", ""))
+        with patch.object(fast_fetch, "http_get", getter):
+            out = fast_fetch.unwrap_greenmotors("https://greenmotors.club/?id=testgm123")
+        self.assertEqual(len(out), 1)
+        self.assertEqual(getter.call_count, 1, getter.call_args_list)
+        self.assertEqual(getter.call_args.kwargs.get("timeout"), 10)
+        self.assertEqual(getter.call_args.kwargs.get("max_retries"), 1)
+
+    def test_resolve_release_resolves_siblings_in_parallel(self):
+        """Siblings resolve on worker threads, not one by one: four
+        copies whose fetches each sleep 50 ms run on four distinct
+        threads, so the batch costs one sleep, not four."""
+        import threading
+
+        thread_ids = []
+        ids_lock = threading.Lock()
+
+        def fake_fetch(url, referer=None, method="GET", range_bytes=None,
+                       data=None, timeout=15.0):
+            with ids_lock:
+                thread_ids.append(threading.get_ident())
+            time.sleep(0.05)
+            return current_hosts.FetchResult(status=404, error="http_404")
+
+        rows = [{"id": i + 1, "source_url": f"https://vidbolt.xyz/embed/{i}",
+                 "final_url": f"https://vidbolt.xyz/embed/{i}",
+                 "service": "vidbolt", "status": "active"}
+                for i in range(4)]
+        # setUp stubs classify_backend to "unknown"; this test needs the
+        # real vidbolt branch so the fetch actually runs.
+        with patch.object(current_hosts, "classify_backend", return_value="vidbolt"):
+            res = current_hosts.resolve_release(rows, fetch=fake_fetch)
+        self.assertEqual(len(res["failures"]), 4, res)
+        self.assertIsNone(res["watch_winner"], res)
+        self.assertEqual(len(set(thread_ids)), 4, thread_ids)
+
+    def test_resolve_release_deadline_stops_new_siblings(self):
+        """A deadline stops new siblings from starting: with a faked
+        clock advancing 6 s per check, a 10 s deadline starting at
+        t=1000 admits exactly two siblings."""
+        def fake_fetch(url, referer=None, method="GET", range_bytes=None,
+                       data=None, timeout=15.0):
+            return current_hosts.FetchResult(status=404, error="http_404")
+
+        rows = [{"id": i + 1, "source_url": f"https://vidbolt.xyz/embed/{i}",
+                 "final_url": f"https://vidbolt.xyz/embed/{i}",
+                 "service": "vidbolt", "status": "active"}
+                for i in range(6)]
+        calls = {"n": 0}
+
+        def fake_monotonic():
+            calls["n"] += 1
+            return 1000.0 + (calls["n"] - 1) * 6.0
+
+        with patch.object(current_hosts, "classify_backend", return_value="vidbolt"), \
+             patch.object(current_hosts.time, "monotonic",
+                          side_effect=fake_monotonic):
+            res = current_hosts.resolve_release(
+                rows, fetch=fake_fetch, deadline=1010.0)
+        # Two siblings tried (each failed the probe); the remaining
+        # four were never started.
+        self.assertEqual(len(res["failures"]), 2, res)
+        self.assertIsNone(res["watch_winner"], res)
+
     def test_stage2_gate_serves_a_probed_cached_address(self):
         """The other side of the gate: a cached address that passes its
         probe is served from cache, flagged as probed."""
@@ -774,8 +1092,8 @@ class DatabaseSaveTests(unittest.TestCase):
             "source_name": "VidBolt",
             "service": "vidbolt",
             "resource_id": "vidbolt-id",
-            "source_url": "https://vidbolt.example/embed/abc",
-            "final_url": "https://vidbolt.example/embed/abc",
+            "source_url": "https://vidbolt.xyz/embed/abc",
+            "final_url": "https://vidbolt.xyz/embed/abc",
             "is_temporary": 1,
         }]
         fast_fetch.save_scraped_data(media_data)
