@@ -967,7 +967,7 @@ def has_pending(conn_or_path, account_id) -> bool:
 def entitlement(conn_or_path, key, *, now: float | None = None,
                 tracker: accounts.AttemptTracker | None = None) -> dict:
     """The payer's own answer about their own account: `vip`, `vip_until`,
-    `pending`. Three keys, built by hand.
+    `pending`, `vip_cancelled_at`. Four keys, built by hand.
 
     Goes through `accounts.authenticate`, so a wrong key, a revoked key and a key
     that never existed stay indistinguishable, and a hammering caller burns its
