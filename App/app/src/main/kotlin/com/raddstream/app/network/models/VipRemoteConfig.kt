@@ -70,9 +70,9 @@ data class VipRemoteConfig(
     val featureFlags: VipRemoteFeatureFlags = VipRemoteFeatureFlags(),
     /** Ad-network ids, displayed nowhere: they only decide whether a slot has real inventory. */
     val ads: VipRemoteAds = VipRemoteAds(),
-    /** Coin-wallet payout rules. Parsed, not displayed: no screen shows a balance yet. */
+    /** Coin-wallet payout rules. The balance is displayed on the VIP screen ("Wallet: N coins"). */
     val wallet: VipRemoteWallet = VipRemoteWallet(),
-    /** The login-streak length and reward. Parsed, not displayed: no screen shows a streak yet. */
+    /** The login-streak length and reward. Displayed on the VIP screen as a StreakCard (Session 56), shown only when the operator publishes streak rules; the count is device-local. */
     val streak: VipRemoteStreak = VipRemoteStreak(),
     /**
      * The server's own ad cadence, which outranks [ads] for the three caps because it is the

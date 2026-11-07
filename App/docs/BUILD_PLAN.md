@@ -216,6 +216,15 @@ character now reads `3673 chars, not a multiple of 4` instead of a stack trace, 
 refused (which the decoder alone did not do), and a 76-column wrap is refused at `index 76 (0xa)`.
 `KeystorePreflightGuardTest` pins the strict decoder's presence, the ordering, and the no-value rule.
 
+> **Correction 2026-11-07 (D1.8):** the "never executed on CI" paragraph below was
+> true when written and is false now. `release.yml` run `41323174024` (2026-11-01,
+> commit `b99814e`) completed `success` and published `v1.0.4` with a signed `.apk`
+> and `.aab` (verified by the workflow's own apksigner step), so the signing block —
+> store-password load, `containsAlias`, `getKey` unlock — has executed on a runner
+> and a password has been tested. Point (1) below still holds by construction
+> (`writeBytes` is last, so a configure-time death never produces a keystore file).
+> The original paragraph is kept as the record of what was true before 2026-11-01.
+
 **What that preflight does and does not prove — stated plainly, because it is easy to over-read.**
 It has **never executed on CI, not once.** Every release run to date dies at `build.gradle.kts:120`
 inside `signingConfigs`, and the block above now refuses *before* the decode — so on a still-broken

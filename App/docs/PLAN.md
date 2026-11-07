@@ -339,9 +339,11 @@ described the pre-fix tree).
 ## Success Criteria for MVP (Phase 1)
 
 - [x] User can enter a server URL and test `/api/v1/stats`.
-- [x] Home screen requests catalog metadata and supports type filtering — but see
-  the §1.2 note: only Movie/Series actually return rows.
-- [x] Search is debounced and supports type filtering — same Movie/Series caveat.
+- [x] Home screen requests catalog metadata and supports type filtering — Anime
+  returns rows too (see the §1.2 note: `type=anime`, live `total: 5847`,
+  re-measured 2026-10-29; the old "only Movie/Series return rows" line described
+  the pre-fix tree).
+- [x] Search is debounced and supports type filtering — same: Anime included.
 - [ ] Verify API-backed setup, browsing, and search on a reachable server/device.
 
 The `131`-style totals that older revisions of these docs quoted in examples were
