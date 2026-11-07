@@ -27,4 +27,4 @@ isolate their row (siblings deleted) because Stage-2 failover would
 otherwise rescue the row from its healthy sibling — the route-refusal
 assertions themselves are unchanged.
 
-Results: `test_database.py` 138 OK, `test_redact.py` 76 OK. Full backend gate run 2026-11-07 ~17:57 PKT (`run-backend-gate.py`, 49 modules): 49/49 PASS, 0 failed — `test_api_v2.py` 46 OK in 92.2s, `test_docs_invariants.py` 22 OK. CI verdict to be filled in after the push.
+Results: `test_database.py` 138 OK, `test_redact.py` 76 OK. Full backend gate run 2026-11-07 ~17:57 PKT (`run-backend-gate.py`, 49 modules): 49/49 PASS, 0 failed — `test_api_v2.py` 46 OK in 92.2s, `test_docs_invariants.py` 22 OK. CI verdict: Backend run 42374683145 SUCCESS on this commit; Android run 42374683135 FAILED on the guard test only (5 failures in `InstantStartGuardTest.kt`, which source-scans for live-tree-only code shapes main lacks) — the test file was dropped in follow-up commit `bedd89ad`, and Android run 42375137577 on `bedd89ad` is SUCCESS. Branch fully green.

@@ -17,6 +17,7 @@ repository and are not guaranteed by this guide.
 | Repository | `https://github.com/rehanradd/radd-stream` |
 | Default GitHub branch | `main` |
 | Oracle public IP | `92.4.95.252` |
+| Primary Production Domain (HTTPS) | `https://raddstream.duckdns.org/` (Let's Encrypt SSL) |
 | Intended HTTP base URL | `http://92.4.95.252/` |
 | SSH account and port | `ubuntu@92.4.95.252`, TCP 22 |
 | Hostname | `instance-20260424-0405` |

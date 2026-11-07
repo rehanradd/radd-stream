@@ -129,6 +129,20 @@ class FavoritesRepository @Inject constructor(
         }
     }
 
+    /** A `/api/v1/stream` refusal about a handle a saved row points at. Same ledger, other door. */
+    suspend fun recordStreamRefusal(postId: Int) {
+        favoriteDao.findById(postId)?.let { row ->
+            favoriteDao.recordAnswer(row.id, row.is18Plus, System.currentTimeMillis())
+        }
+        unavailableDao.record(
+            UnavailableWorkEntity(
+                postId = postId,
+                refusedAt = System.currentTimeMillis(),
+                reason = UnavailableWorkEntity.REASON_STREAM,
+            ),
+        )
+    }
+
     /**
      * Re-ask the server about the saved rows whose last answer has aged out, and write down what it
      * says. Returns how many rows were actually asked, so a caller can tell a pass that did nothing

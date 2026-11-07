@@ -37,9 +37,14 @@ import java.util.concurrent.ConcurrentHashMap
  * ([KeepIdentity.sourceKeyFor]). A non-redirector address simply has no task, so the engine reports
  * null rather than inventing progress or touching a foreign host.
  *
- * RETENTION: the window is read through [KeepTtlHolder] on every use rather than injected once as a
- * frozen [TtlHours] — this class is a `@Singleton` that outlives a settings change, and it would
- * otherwise keep quoting the old window to the player after the sweep had moved to the new one.
+ * RETENTION: two classes, and this class is where they part. A rolling auto-preview copy keeps
+ * its [CacheOrigin.AUTO_PREVIEW] origin and ages out on the window read through [KeepTtlHolder] —
+ * read on every use rather than injected once as a frozen [TtlHours], because this class is a
+ * `@Singleton` that outlives a settings change and would otherwise keep quoting the old window to
+ * the player after the sweep had moved to the new one. A keep the viewer tapped in the player is
+ * promoted by [CacheCoordinator.keepNow] to `USER_KEEP`, which [TtlPolicy] never auto-deletes, so
+ * [adopt] reports no expiry for it (`ttlSeconds = null`, the same "null = permanent" convention
+ * [com.raddstream.app.player.CacheSnapshot.previewExpiresAt] already carries).
  */
 @Singleton
 class OfflineCacheEngine @Inject constructor(

@@ -63,6 +63,7 @@ class UniversalSourceTest {
             "application/mpegurl",
             "audio/mpegurl",
             "application/x-mpegURL",
+            "application/x-mpegURL ", // live-only case: trailing space is trimmed, not trusted
             "application/vnd.apple.mpegurl; charset=utf-8",
         )
         val dashAliases = listOf("application/dash+xml", "application/mpd", "Application/Dash+XML")

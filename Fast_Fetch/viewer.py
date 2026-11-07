@@ -196,8 +196,9 @@ def _public_base(handler=None) -> str:
         return PUBLIC_BASE_URL
     if handler is not None:
         host = str(handler.headers.get("Host") or "").strip()
+        proto = str(handler.headers.get("X-Forwarded-Proto") or "").strip().lower() or "http"
         if host:
-            return f"http://{host}"
+            return f"{proto}://{host}"
     return ""
 
 
@@ -281,13 +282,21 @@ _DOWNLOAD_EXTENSIONS = {
 }
 
 
-def download_filename(stream_id: str, mime_type) -> str:
+def download_filename(stream_id: str, mime_type, url_hint=None) -> str:
     """A safe attachment name for the file behind a stream handle.
 
     The handle is already opaque and URL-safe; the only variable part is the
     extension, chosen from [_DOWNLOAD_EXTENSIONS] rather than copied."""
     mime = str(mime_type or "").split(";", 1)[0].strip().lower()
-    extension = _DOWNLOAD_EXTENSIONS.get(mime, ".bin")
+    extension = _DOWNLOAD_EXTENSIONS.get(mime)
+    if extension is None and url_hint:
+        try:
+            from current_hosts import download_extension_for as _ext
+            extension = _ext(mime_type, url_hint)
+        except Exception:
+            extension = ".bin"
+    if extension is None:
+        extension = ".bin"
     return f"radd-{str(stream_id)[:12]}{extension}"
 
 
@@ -303,7 +312,7 @@ def download_descriptor(source_id: int, res: dict, base_url: str = "") -> dict:
         "success": True,
         "stream_id": token,
         "kind": "download",
-        "filename": download_filename(token, res.get("mime_type")),
+        "filename": download_filename(token, res.get("mime_type"), res.get("url")),
         "mime_type": res.get("mime_type"),
         "file_size_bytes": res.get("file_size_bytes"),
         "resumable": bool(res.get("is_resumable")),
@@ -4244,7 +4253,10 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 return
 
             import fast_fetch
-            res = fast_fetch.resolve_live_source(int(source_id))
+            # Stage-2: the stream caller needs watch media — a playlist
+            # or a single file. A playlist is never a download, and a
+            # page is never either; the resolver enforces both.
+            res = fast_fetch.resolve_live_source(int(source_id), want="watch")
             redirect_flag = query_params.get("redirect", ["1"])[0]
 
             if res.get("success") and res.get("stale"):
@@ -4330,7 +4342,10 @@ class DashboardHandler(BaseHTTPRequestHandler):
             # stale landing page, is a failure — never a "download" of HTML. The
             # v1 stale-URL behaviour exists for the shipped player, and no client
             # of this route has that history.
-            res = fast_fetch.resolve_live_source(int(source_id), v2=True)
+            # Stage-2: the download caller needs a single file only.
+            # A playlist answer here would be segments, not a file.
+            res = fast_fetch.resolve_live_source(int(source_id), v2=True,
+                                                 want="download")
             redirect_flag = query_params.get("redirect", ["1"])[0]
 
             if res.get("success") and res.get("url"):

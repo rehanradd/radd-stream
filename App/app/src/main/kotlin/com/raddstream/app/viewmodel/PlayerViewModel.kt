@@ -91,6 +91,7 @@ import com.raddstream.app.data.local.WatchHistoryDao
 import com.raddstream.app.network.ApiProvider
 import com.raddstream.app.network.streamRedirectUrl
 import com.raddstream.app.repository.CatalogRepository
+import com.raddstream.app.repository.FavoritesRepository
 import com.raddstream.app.sync.SyncAccountRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -110,6 +111,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import retrofit2.HttpException
 
 /**
  * UI brain of the player. It does NOT own an ExoPlayer — [com.raddstream.app.player.PlaybackService]
@@ -126,6 +128,7 @@ class PlayerViewModel @Inject constructor(
     private val apiProvider: ApiProvider,
     private val settingsRepository: ServerSettingsRepository,
     private val catalogRepository: CatalogRepository,
+    private val favoritesRepository: FavoritesRepository,
     private val syncAccountRepository: SyncAccountRepository,
     private val watchHistoryDao: WatchHistoryDao,
     private val localResumeRepository: LocalResumeRepository,
@@ -1529,10 +1532,36 @@ class PlayerViewModel @Inject constructor(
         if (decision is BingePreloadDecision.PrefetchNextHead) prefetchNextEpisodeHead(decision.handle)
     }
 
+    /**
+     * Ask the redirector about one handle and report what the answer *was*, as primitives —
+     * same reasoning as `CatalogRepository.probePost`: the refusal/silence distinction is what
+     * decides whether a viewer's saved row gets hidden, and a `runCatching` that flattens a 404
+     * and a dead socket into `null` is exactly the bug that rule exists to avoid.
+     */
+    private suspend fun probeHandle(handle: String): HandleProbe = try {
+        HandleProbe(catalogRepository.resolveStream(handle), null, null, noAnswer = false)
+    } catch (e: HttpException) {
+        HandleProbe(null, e.code(), null, noAnswer = false)
+    } catch (e: Exception) {
+        HandleProbe(null, null, null, noAnswer = true)
+    }
+
     private fun prefetchNextEpisodeHead(handle: String) {
         bingePrefetchJob?.cancel()
         bingePrefetchJob = viewModelScope.launch {
-            val answer = runCatching { catalogRepository.resolveStream(handle) }.getOrNull()
+            val probe = probeHandle(handle)
+            // A redirector that refuses this handle by name is not a hiccup: the successor is
+            // gone, and a saved row pointing at it must stop looking playable. Silence, by
+            // contrast, says nothing and is left as one.
+            if (probe.answer == AdultPolicy.ServerAnswer.GONE) {
+                store.currentSyncScope()?.postId
+                    // 0 is the scope's "no post" default, never a row to mark.
+                    ?.takeIf { it > 0 }
+                    ?.let { savedId -> favoritesRepository.recordStreamRefusal(savedId) }
+                _events.emit(PlayerEvent.Message(NEXT_UNAVAILABLE))
+                return@launch
+            }
+            val answer = probe.response
             // `streamId` is the model's own "this answer is usable" test: a successful lookup
             // that produced no handle of ours is a false success and says nothing to the user.
             if (answer?.streamId == null) return@launch
@@ -2305,3 +2334,21 @@ internal object TrackMapper {
  */
 internal fun persistedLanguageFor(option: TrackUiOption?): String? =
     option?.language?.trim()?.takeIf { it.isNotEmpty() }
+
+/**
+ * What one `/api/v1/stream` lookup established: the body if there was one, the status if the
+ * transport answered, and [noAnswer] when nothing came back at all. See
+ * `viewmodel/AdultPolicy.serverAnswerFor` for what each combination is allowed to conclude.
+ */
+data class HandleProbe(
+    val response: com.raddstream.app.network.models.StreamResponse?,
+    val httpStatus: Int?,
+    val bodyClaimsSuccess: Boolean?,
+    val noAnswer: Boolean,
+) {
+    val answer: AdultPolicy.ServerAnswer
+        get() = AdultPolicy.serverAnswerFor(httpStatus, response?.success ?: bodyClaimsSuccess, noAnswer)
+}
+
+/** The only wording a refused successor may get. No title, no handle, no upstream address. */
+private const val NEXT_UNAVAILABLE = "The next episode is no longer offered by this server."
