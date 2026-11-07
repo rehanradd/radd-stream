@@ -26,6 +26,7 @@ import androidx.media3.exoplayer.text.TextRenderer
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
 import com.raddstream.app.brand.Brand
+import com.raddstream.app.data.Telemetry
 import com.raddstream.app.player.subtitles.OffsetSubtitleDecoderFactory
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -268,7 +269,11 @@ class PlaybackService : MediaSessionService() {
      * here is the active rendition with our own redirector's `id=` swapped, so nothing about
      * the quality, the print or the origin changes.
      */
-    private fun loadRenditionOf(bundle: PlaybackBundle, rendition: PlaybackRendition?) {
+    private fun loadRenditionOf(
+        bundle: PlaybackBundle,
+        rendition: PlaybackRendition?,
+        countAsAttempt: Boolean = true,
+    ) {
         val exo = player ?: return
         rendition ?: return
         if (rendition.playback.isExpired(System.currentTimeMillis())) {
@@ -279,6 +284,12 @@ class PlaybackService : MediaSessionService() {
             }
             return
         }
+        // Tracking A: one load that actually proceeds is one playback
+        // attempt. A failover hop counts — it is a new try at a different
+        // copy — and an auto-quality swap of the same title does not (its
+        // caller passes false). An expired link counts nothing, because the
+        // early return above already left before any play was attempted.
+        if (countAsAttempt) Telemetry.recordPlaybackAttempt()
         val item = PlaybackMediaItemFactory.build(rendition, bundle.target, titleHint)
         exo.setMediaItem(item)
         exo.prepare()
@@ -564,7 +575,7 @@ class PlaybackService : MediaSessionService() {
             ),
         )
         pendingResumeMs = lastKnownPositionMs.takeIf { it > 0 }
-        loadRenditionOf(updated, swapped)
+        loadRenditionOf(updated, swapped, countAsAttempt = false)
     }
 
     private fun formatBitrate(bps: Long): String = when {
@@ -602,6 +613,19 @@ class PlaybackService : MediaSessionService() {
         }
 
         override fun onPlayerError(error: PlaybackException) {
+            // Tracking A: a network failure while buffering is a buffer
+            // failure; anything else (decode, renderer) is a playback error.
+            // The split is the one the server's per-class report reads, and
+            // the error itself — code, message, title — is never sent, only
+            // the count. Counted before the early return below, because an
+            // error with no bundle left is still an error the viewer saw.
+            if (error.errorCode == PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED ||
+                error.errorCode == PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT
+            ) {
+                Telemetry.recordPlaybackBufferFailure()
+            } else {
+                Telemetry.recordPlaybackError()
+            }
             val bundle = store.bundle.value ?: return
             lastKnownPositionMs = maxOf(lastKnownPositionMs, errorGetMs())
             val machine = failover ?: return

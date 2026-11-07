@@ -224,6 +224,103 @@ class AttributeTests(TempLedger):
         self.assertEqual(tuple(row), ("PK", "1.4.2"))
         self.assertEqual(first["install_day"], later["install_day"])
 
+    def test_region_card_and_languages_come_from_their_own_headers(self):
+        headers = dict(PK_HEADERS, **{"X-Region": "desi_dubs",
+                                      "X-Audio-Lang": "hi",
+                                      "X-Subtitle-Lang": "en"})
+        attrs = usage_stats.attributes_from_headers(headers)
+        self.assertEqual(attrs["region"], "desi_dubs")
+        self.assertEqual(attrs["audio_lang"], "hi")
+        self.assertEqual(attrs["subtitle_lang"], "en")
+        # The language headers never move the geo: that still comes only from
+        # the Accept-Language region subtag.
+        self.assertEqual(attrs["geo"], "PK")
+
+    def test_odd_region_or_language_text_folds_to_unknown(self):
+        attrs = usage_stats.attributes_from_headers(
+            {"X-Region": "two words", "X-Audio-Lang": "203.0.113.9",
+             "X-Subtitle-Lang": "a" * 33})
+        self.assertEqual(attrs["region"], usage_stats.UNKNOWN_VALUE)
+        self.assertEqual(attrs["audio_lang"], usage_stats.UNKNOWN_VALUE)
+        self.assertEqual(attrs["subtitle_lang"], usage_stats.UNKNOWN_VALUE)
+
+    def test_new_dimensions_are_stored_and_unknown_never_clobbers_them(self):
+        headers = dict(PK_HEADERS, **{"X-Region": "desi_dubs",
+                                      "X-Audio-Lang": "hi",
+                                      "X-Subtitle-Lang": "en"})
+        usage_stats.record_seen(self.db, install_id="iid-2",
+                                headers=headers, now=NOW)
+        usage_stats.record_seen(self.db, install_id="iid-2",
+                                headers={}, now=NOW + DAY)
+        row = self.rows("SELECT region, audio_lang, subtitle_lang"
+                        " FROM usage_device")[0]
+        self.assertEqual(tuple(row), ("desi_dubs", "hi", "en"))
+
+
+# ── the schema migration: a ledger written before the new dimensions ────────
+
+class DimensionMigrationTests(TempLedger):
+    """A usage_device table from before the region/audio/subtitle columns
+    gains them on the next write, with its rows intact and reading 'unknown'."""
+
+    def _install_old_schema(self):
+        with accounts.connect(self.db) as conn:
+            conn.execute(
+                "CREATE TABLE usage_device ("
+                " device_hash TEXT PRIMARY KEY,"
+                " install_day INTEGER NOT NULL,"
+                " first_seen_at REAL NOT NULL,"
+                " last_seen_at REAL NOT NULL,"
+                " geo TEXT NOT NULL DEFAULT 'unknown',"
+                " locale TEXT NOT NULL DEFAULT 'unknown',"
+                " app_version TEXT NOT NULL DEFAULT 'unknown',"
+                " device_class TEXT NOT NULL DEFAULT 'unknown',"
+                " retained_1 INTEGER NOT NULL DEFAULT 0,"
+                " retained_7 INTEGER NOT NULL DEFAULT 0,"
+                " retained_30 INTEGER NOT NULL DEFAULT 0)")
+            conn.execute(
+                "INSERT INTO usage_device(device_hash, install_day,"
+                " first_seen_at, last_seen_at, geo)"
+                " VALUES('dev-oldrow', ?, ?, ?, 'PK')",
+                (usage_stats.day_of(NOW), NOW, NOW))
+            conn.commit()
+
+    def test_an_old_table_gains_the_columns_with_its_rows_intact(self):
+        self._install_old_schema()
+        conn = self.conn()
+        try:
+            usage_stats.ensure_schema(conn)
+        finally:
+            conn.close()
+        names = set(self.columns("usage_device"))
+        for column in ("region", "audio_lang", "subtitle_lang"):
+            self.assertIn(column, names)
+        row = self.rows("SELECT geo, region, audio_lang, subtitle_lang"
+                        " FROM usage_device WHERE device_hash = 'dev-oldrow'")[0]
+        self.assertEqual(tuple(row), ("PK", "unknown", "unknown", "unknown"))
+
+    def test_a_migrated_table_accepts_new_dimensions(self):
+        self._install_old_schema()
+        headers = {"X-Region": "east_asian", "X-Audio-Lang": "ko",
+                   "X-Subtitle-Lang": "en"}
+        seen = usage_stats.record_seen(self.db, install_id="iid-new",
+                                       headers=headers, now=NOW)
+        self.assertEqual(seen["region"], "east_asian")
+        self.assertEqual(seen["audio_lang"], "ko")
+
+    def test_summary_reports_the_new_dimensions(self):
+        headers = {"X-Region": "desi_dubs", "X-Audio-Lang": "hi",
+                   "X-Subtitle-Lang": "en"}
+        usage_stats.record_seen(self.db, install_id="iid-sum",
+                                headers=headers, now=NOW)
+        report = usage_stats.summary(self.db, now=NOW)
+        self.assertEqual(report["per_dimension_installed"]["region"],
+                         {"desi_dubs": 1})
+        self.assertEqual(report["per_dimension_installed"]["audio_lang"],
+                         {"hi": 1})
+        self.assertEqual(report["per_dimension_installed"]["subtitle_lang"],
+                         {"en": 1})
+
 
 # ── the counters themselves ─────────────────────────────────────────────────
 
@@ -741,7 +838,8 @@ class AggregateOnlySchemaTests(TempLedger):
     #: One row per device, and nothing that could assemble a device's history.
     DEVICE_COLUMNS = {"device_hash", "install_day", "first_seen_at",
                       "last_seen_at", "geo", "locale", "app_version",
-                      "device_class", "retained_1", "retained_7", "retained_30"}
+                      "device_class", "region", "audio_lang", "subtitle_lang",
+                      "retained_1", "retained_7", "retained_30"}
     #: An address, a name, or a per-device day would each break rule 1. `day` is
     #: legal in the *metric* tables (that is the aggregation) and forbidden in the
     #: device table (that would be the timeline), so the two are checked apart.

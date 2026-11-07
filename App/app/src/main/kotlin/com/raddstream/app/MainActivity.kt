@@ -24,6 +24,7 @@ import androidx.compose.ui.Modifier
 import com.raddstream.app.brand.Brand
 import com.raddstream.app.data.RemoteFeatures
 import com.raddstream.app.data.ServerSettingsRepository
+import com.raddstream.app.data.Telemetry
 import com.raddstream.app.network.models.PanelDisclaimer
 import com.raddstream.app.network.models.PanelTheme
 import com.raddstream.app.repository.CatalogRepository
@@ -32,6 +33,7 @@ import com.raddstream.app.ui.navigation.Screen
 import com.raddstream.app.ui.navigation.RaddStreamNavGraph
 import com.raddstream.app.ui.navigation.StartDestination
 import com.raddstream.app.ui.navigation.resolveStartDestination
+import com.raddstream.app.ui.screens.AnalyticsConsentDialog
 import com.raddstream.app.ui.screens.DisclaimerDialog
 import com.raddstream.app.ui.screens.MaintenanceScreen
 import com.raddstream.app.ui.theme.RaddStreamTheme
@@ -174,6 +176,21 @@ class MainActivity : ComponentActivity() {
             val disclaimerSeenVersion by disclaimerSeenPreference.collectAsState(initial = -1)
             val activityScope = rememberCoroutineScope()
 
+            // Tracking A asks once, the first time the app runs after this
+            // build: share anonymous totals, or not. Null means never asked.
+            // The answer is collected in a LaunchedEffect rather than a
+            // collectAsState so the dialog cannot flash on launch for a
+            // viewer who already answered: until the first emission lands,
+            // `analyticsConsentKnown` is false and nothing shows.
+            var analyticsConsent by remember { mutableStateOf<Boolean?>(null) }
+            var analyticsConsentKnown by remember { mutableStateOf(false) }
+            LaunchedEffect(Unit) {
+                serverSettingsRepository.analyticsConsent.collect { answer ->
+                    analyticsConsent = answer
+                    analyticsConsentKnown = true
+                }
+            }
+
             RaddStreamTheme(
                 darkTheme = resolveThemeDark(operatorTheme.mode, isSystemInDarkTheme()),
                 dynamicColor = effectiveDynamicColor(dynamicColorRequested, operatorTheme.dynamicColor),
@@ -269,6 +286,28 @@ class MainActivity : ComponentActivity() {
                                 }
                             },
                             onDismissRequest = {},
+                        )
+                    }
+                    // Tracking A: the one question before anything is
+                    // counted. Both buttons are answers — there is no way to
+                    // dismiss it unanswered — and answering refreshes the
+                    // telemetry snapshot at once, so a "yes" turns the
+                    // headers on without a restart and a "no" leaves the app
+                    // exactly as it was.
+                    if (analyticsConsentKnown && analyticsConsent == null) {
+                        AnalyticsConsentDialog(
+                            onAccept = {
+                                activityScope.launch {
+                                    serverSettingsRepository.saveAnalyticsConsent(true)
+                                    Telemetry.refresh(serverSettingsRepository)
+                                }
+                            },
+                            onDecline = {
+                                activityScope.launch {
+                                    serverSettingsRepository.saveAnalyticsConsent(false)
+                                    Telemetry.refresh(serverSettingsRepository)
+                                }
+                            },
                         )
                     }
                 }

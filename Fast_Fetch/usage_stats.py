@@ -9,7 +9,7 @@ rules that keep it that way are load-bearing, not decoration:
 1. **Aggregates only.** A device is known as `dev-<salted digest>` — the same
    one-way, salted, truncated scheme `payments.account_hint` uses for an
    account. One row per install carries its cohort day, its last-seen instant
-   and four dimension labels. There is no event log keyed by device and no
+   and seven dimension labels. There is no event log keyed by device and no
    timeline to reconstruct: activity collapses into per-day counters that name
    no device at all. No IP is read, so none can be stored.
 2. **Loopback only.** This module serves no route. The report surfaces on
@@ -91,7 +91,8 @@ _VALUE_RE = re.compile(r"^[A-Za-z0-9._+-]{1,32}$")
 #: address form that passes it, and it is refused here rather than trusted to
 #: callers not to put an address in `X-App-Version`.
 _DOTTED_QUAD_RE = re.compile(r"^\d{1,3}(?:\.\d{1,3}){3}(?:/\d{1,3})?$")
-DIMS = ("geo", "locale", "app_version", "device_class")
+DIMS = ("geo", "locale", "app_version", "device_class", "region",
+        "audio_lang", "subtitle_lang")
 UNKNOWN_VALUE = "unknown"
 
 #: The closed vocabulary of counted events. A metric outside this set is
@@ -160,6 +161,9 @@ _DDL = (
         locale         TEXT NOT NULL DEFAULT 'unknown',
         app_version    TEXT NOT NULL DEFAULT 'unknown',
         device_class   TEXT NOT NULL DEFAULT 'unknown',
+        region         TEXT NOT NULL DEFAULT 'unknown',
+        audio_lang     TEXT NOT NULL DEFAULT 'unknown',
+        subtitle_lang  TEXT NOT NULL DEFAULT 'unknown',
         retained_1     INTEGER NOT NULL DEFAULT 0,
         retained_7     INTEGER NOT NULL DEFAULT 0,
         retained_30    INTEGER NOT NULL DEFAULT 0
@@ -193,9 +197,26 @@ _DDL = (
 
 def ensure_schema(conn: sqlite3.Connection) -> None:
     """Create the three tables and their indexes. Idempotent: two first requests
-    racing through here both succeed, because every statement is guarded."""
+    racing through here both succeed, because every statement is guarded.
+
+    A table created before the region/audio/subtitle dimensions existed gains
+    them here: `CREATE TABLE IF NOT EXISTS` cannot add a column to a table
+    that already exists, so the missing columns are added one at a time from
+    the table's own `PRAGMA table_info`. Old rows read the new columns as
+    `'unknown'`, which is the same answer a fresh row gives before the app
+    sends the header — no backfill, no rewrite, no downtime.
+    """
     for statement in _DDL:
         conn.execute(statement)
+    try:
+        present = {row[1] for row in conn.execute("PRAGMA table_info(usage_device)")}
+        for column in ("region", "audio_lang", "subtitle_lang"):
+            if column not in present:
+                conn.execute(
+                    "ALTER TABLE usage_device ADD COLUMN %s"
+                    " TEXT NOT NULL DEFAULT 'unknown'" % column)
+    except sqlite3.Error:
+        pass
     try:
         conn.commit()
     except sqlite3.Error:
@@ -281,13 +302,17 @@ def _count(value) -> float:
 
 
 def attributes_from_headers(headers) -> dict:
-    """geo / locale / app version / device class, from request headers only.
+    """geo / locale / app version / device class / region card / languages,
+    from request headers only.
 
     `geo` is the region subtag of `Accept-Language` (`en-PK` → `PK`) — a
     preference the client states, deliberately not an IP lookup, because rule 1
     forbids holding an IP in any form. `X-Install-Id`, `X-App-Version` and
-    `X-Device-Class` are ours. `User-Agent` is not parsed: a device model string
-    is a fingerprint and this table has no business holding one.
+    `X-Device-Class` are ours. `X-Region` is the viewer's own region card
+    (`desi_dubs` / `east_asian` / `international`); `X-Audio-Lang` and
+    `X-Subtitle-Lang` are the playback languages the viewer chose. `User-Agent`
+    is not parsed: a device model string is a fingerprint and this table has no
+    business holding one.
     """
     def header(name, default=""):
         try:
@@ -305,6 +330,9 @@ def attributes_from_headers(headers) -> dict:
         "locale": clean_value(primary.lower()) if primary else UNKNOWN_VALUE,
         "app_version": clean_value(header("X-App-Version").strip()),
         "device_class": clean_value(header("X-Device-Class").strip().lower()),
+        "region": clean_value(header("X-Region").strip().lower()),
+        "audio_lang": clean_value(header("X-Audio-Lang").strip()),
+        "subtitle_lang": clean_value(header("X-Subtitle-Lang").strip()),
     }
 
 
@@ -385,8 +413,9 @@ def record_seen(db, *, install_id=None, credential=None, headers=None,
             previous_seen = float(row["last_seen_at"]) if row else 0.0
             conn.execute(
                 "INSERT INTO usage_device(device_hash, install_day, first_seen_at,"
-                " last_seen_at, geo, locale, app_version, device_class)"
-                " VALUES(?,?,?,?,?,?,?,?)"
+                " last_seen_at, geo, locale, app_version, device_class,"
+                " region, audio_lang, subtitle_lang)"
+                " VALUES(?,?,?,?,?,?,?,?,?,?,?)"
                 " ON CONFLICT(device_hash) DO UPDATE SET"
                 "   last_seen_at = MAX(usage_device.last_seen_at, excluded.last_seen_at),"
                 "   geo = CASE WHEN excluded.geo <> 'unknown'"
@@ -396,9 +425,16 @@ def record_seen(db, *, install_id=None, credential=None, headers=None,
                 "   app_version = CASE WHEN excluded.app_version <> 'unknown'"
                 "     THEN excluded.app_version ELSE usage_device.app_version END,"
                 "   device_class = CASE WHEN excluded.device_class <> 'unknown'"
-                "     THEN excluded.device_class ELSE usage_device.device_class END",
+                "     THEN excluded.device_class ELSE usage_device.device_class END,"
+                "   region = CASE WHEN excluded.region <> 'unknown'"
+                "     THEN excluded.region ELSE usage_device.region END,"
+                "   audio_lang = CASE WHEN excluded.audio_lang <> 'unknown'"
+                "     THEN excluded.audio_lang ELSE usage_device.audio_lang END,"
+                "   subtitle_lang = CASE WHEN excluded.subtitle_lang <> 'unknown'"
+                "     THEN excluded.subtitle_lang ELSE usage_device.subtitle_lang END",
                 (token, install_day, stamp, stamp, attrs["geo"], attrs["locale"],
-                 attrs["app_version"], attrs["device_class"]))
+                 attrs["app_version"], attrs["device_class"], attrs["region"],
+                 attrs["audio_lang"], attrs["subtitle_lang"]))
             # Coarse retention: the later visit itself proves the cohort returned,
             # so one UPDATE per horizon crossed is enough — no day set per device.
             for horizon in RETENTION_DAYS:

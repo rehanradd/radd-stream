@@ -3,6 +3,7 @@ package com.raddstream.app.viewmodel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.raddstream.app.data.ServerSettingsRepository
+import com.raddstream.app.data.Telemetry
 import com.raddstream.app.data.VipPendingSubmission
 import com.raddstream.app.network.friendlyNetworkError
 import com.raddstream.app.network.models.AccountEntitlement
@@ -551,6 +552,11 @@ class VipViewModel @Inject constructor(
         val safeHours = hours.coerceIn(1, ServerSettingsRepository.MAX_REWARDED_VIP_HOURS)
         viewModelScope.launch {
             settingsRepository.grantRewardedVip(safeHours)
+            // Tracking A: the ad was watched and the pass granted — one
+            // rewarded completion, counted. The server grants no coins on
+            // this (that needs a network postback, which Monetag has not
+            // confirmed for native Android); it only counts the completion.
+            Telemetry.recordRewardedCompletion()
             _uiState.update {
                 it.copy(statusMessage = "$safeHours-hour VIP pass activated on this device.")
             }

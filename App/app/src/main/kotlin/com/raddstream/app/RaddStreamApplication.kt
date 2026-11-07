@@ -9,6 +9,8 @@ import androidx.work.WorkManager
 import com.raddstream.app.brand.Brand
 import com.raddstream.app.data.DeviceIdentity
 import com.raddstream.app.data.RemoteConfigWatcher
+import com.raddstream.app.data.ServerSettingsRepository
+import com.raddstream.app.data.Telemetry
 import com.raddstream.app.data.cache.CacheEngineRunner
 import com.raddstream.app.data.cache.CacheSweepWorker
 import com.raddstream.app.data.cache.KeepTtlHolder
@@ -18,6 +20,10 @@ import com.raddstream.app.sync.SyncAccountRepository
 import dagger.hilt.android.HiltAndroidApp
 import java.util.concurrent.TimeUnit
 import javax.inject.Inject
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 
 /**
  * Application class — Hilt entry point.
@@ -42,6 +48,9 @@ class RaddStreamApplication : Application(), Configuration.Provider {
     lateinit var syncAccountRepository: SyncAccountRepository
 
     @Inject
+    lateinit var settingsRepository: ServerSettingsRepository
+
+    @Inject
     lateinit var remoteConfigWatcher: RemoteConfigWatcher
 
     @Inject
@@ -59,6 +68,17 @@ class RaddStreamApplication : Application(), Configuration.Provider {
         // every Brand getter falls back to its compiled BuildConfig constant, so this call
         // can only make the brand *more* current, never blank it.
         Brand.load(this)
+        // Tracking A: the counters exist from the first lines of the process,
+        // and the crash handler with them — a crash before this point is a
+        // crash before the app did anything worth counting. The snapshot
+        // refresh reads the viewer's answers from DataStore on a background
+        // scope, so a slow store never holds up the first frame; a store
+        // that throws simply leaves the snapshot at "not consented".
+        Telemetry.init(this)
+        Telemetry.installCrashHandler()
+        CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
+            runCatching { Telemetry.refresh(settingsRepository) }
+        }
         // Seed the retention window before anything can read it: the sweep's first pass is seconds
         // away, and until this collector's first emission the answer is the 3-hour default rather
         // than the viewer's saved choice. Started here — not lazily by the sweep — because a

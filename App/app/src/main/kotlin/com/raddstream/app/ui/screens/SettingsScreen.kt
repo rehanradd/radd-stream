@@ -524,6 +524,26 @@ fun SettingsScreen(
                 }
             }
 
+            // ── Anonymous usage totals (Tracking A) ──────────────────────
+            // Totals only: how many plays, how often playback fails, how
+            // often the app crashes. No name, number, location, title, or
+            // search — and the switch is the same answer the first-run
+            // dialog asked, changeable here at any time.
+            SettingsCard(title = "Anonymous usage totals", icon = Icons.Default.Info) {
+                Text(
+                    "Share anonymous totals with the operator: plays, " +
+                        "playback failures, and crashes. Nothing that can " +
+                        "identify you or what you watch is ever sent.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                SwitchRow(
+                    checked = state.analyticsConsent == true,
+                    onCheckedChange = viewModel::setAnalyticsConsent,
+                    label = "Share anonymous totals",
+                )
+            }
+
             // ── Playback & Display preferences ─────────────────────────
             // ── Languages ──────────────────────────────────────────────
             // The ONE place that shows the languages in force. The Region

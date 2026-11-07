@@ -579,6 +579,48 @@ class ServerSettingsRepository @Inject constructor(
     }
 
     /**
+     * Whether this install shares anonymous usage totals with the operator:
+     * null means "never asked" (the first-run dialog is still due), true is
+     * "share totals", false is "no thanks". The choice gates everything
+     * Tracking A sends — headers, the usage block, and the counters
+     * themselves — and it is changeable in Settings at any time.
+     */
+    val analyticsConsent: Flow<Boolean?> = dataStore.data.map { preferences ->
+        when (preferences[ANALYTICS_CONSENT_KEY]) {
+            "accepted" -> true
+            "declined" -> false
+            else -> null
+        }
+    }
+
+    /** Record the viewer's answer to the first-run totals dialog. */
+    suspend fun saveAnalyticsConsent(accepted: Boolean) {
+        dataStore.edit { preferences ->
+            preferences[ANALYTICS_CONSENT_KEY] = if (accepted) "accepted" else "declined"
+        }
+    }
+
+    /**
+     * The random id this install reports as `X-Install-Id`, or null when none
+     * was minted yet. Minting happens only for a viewer who said yes (see
+     * [ensureInstallUuid]): an id that exists before consent would be an
+     * identifier stored for a viewer who never agreed to be counted.
+     */
+    suspend fun installUuid(): String? = dataStore.data.map { preferences ->
+        preferences[INSTALL_UUID_KEY]?.takeIf { it.isNotBlank() }
+    }.first()
+
+    /** Mint the install id if there is none yet, and return it. */
+    suspend fun ensureInstallUuid(): String {
+        installUuid()?.let { return it }
+        val minted = newInstallUuid()
+        dataStore.edit { preferences ->
+            preferences[INSTALL_UUID_KEY] = minted
+        }
+        return installUuid() ?: minted
+    }
+
+    /**
      * The best picture a free viewer may play, as the operator set it:
      * "480p" or "720p". Anything else the server sent — a typo, an older
      * deployment — reads as the shipped "720p", never a stricter cap the
@@ -878,6 +920,8 @@ class ServerSettingsRepository @Inject constructor(
         private val DISCLAIMER_VERSION_KEY = intPreferencesKey("disclaimer_version")
         private val DISCLAIMER_EMAIL_KEY = stringPreferencesKey("disclaimer_email")
         private val DISCLAIMER_SEEN_VERSION_KEY = intPreferencesKey("disclaimer_seen_version")
+        private val ANALYTICS_CONSENT_KEY = stringPreferencesKey("analytics_consent")
+        private val INSTALL_UUID_KEY = stringPreferencesKey("install_uuid")
         private val FREE_QUALITY_CAP_KEY = stringPreferencesKey("free_quality_cap")
         private val THEME_ACCENT_KEY = stringPreferencesKey("theme_accent")
         private val THEME_DYNAMIC_COLOR_KEY = booleanPreferencesKey("theme_dynamic_color")

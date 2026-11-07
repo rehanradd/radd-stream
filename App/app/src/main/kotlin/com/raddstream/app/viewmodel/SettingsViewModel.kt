@@ -5,6 +5,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import coil.Coil
 import com.raddstream.app.data.ServerSettingsRepository
+import com.raddstream.app.data.Telemetry
 import com.raddstream.app.data.UserRegion
 import com.raddstream.app.network.friendlyNetworkError
 import com.raddstream.app.network.models.PanelDisclaimer
@@ -166,6 +167,13 @@ data class SettingsUiState(
     val disclaimer: PanelDisclaimer = PanelDisclaimer(),
     /** The disclaimer dialog the Settings card opens, if any. */
     val showDisclaimer: Boolean = false,
+    /**
+     * Tracking A: whether this install shares anonymous usage totals.
+     * Null means the first-run dialog was never answered — the switch reads
+     * off until it is, because "never asked" must not paint as a choice the
+     * viewer made.
+     */
+    val analyticsConsent: Boolean? = null,
 )
 
 /**
@@ -488,6 +496,14 @@ class SettingsViewModel @Inject constructor(
                 _uiState.update { it.copy(disclaimer = disclaimer) }
             }
         }
+        // Tracking A: the totals switch shows the viewer's own answer, and
+        // follows it when the first-run dialog is answered while Settings is
+        // open behind it.
+        viewModelScope.launch {
+            settingsRepository.analyticsConsent.collect { consent ->
+                _uiState.update { it.copy(analyticsConsent = consent) }
+            }
+        }
     }
 
     /** Open the disclaimer text this install has on file. */
@@ -498,6 +514,19 @@ class SettingsViewModel @Inject constructor(
     /** Close the disclaimer dialog. Reading it here does not accept it: acceptance happens only on the first-run dialog, once per version. */
     fun closeDisclaimer() {
         _uiState.update { it.copy(showDisclaimer = false) }
+    }
+
+    /**
+     * Tracking A: change the totals answer from Settings. The snapshot is
+     * refreshed at once, so turning totals off stops the next request's
+     * headers without a restart, and turning them on mints the install id
+     * and starts counting from that moment — never retroactively.
+     */
+    fun setAnalyticsConsent(accepted: Boolean) {
+        viewModelScope.launch {
+            settingsRepository.saveAnalyticsConsent(accepted)
+            Telemetry.refresh(settingsRepository)
+        }
     }
 
     /**

@@ -3,6 +3,7 @@ package com.raddstream.app.network
 import com.google.gson.Gson
 import com.raddstream.app.brand.Brand
 import com.raddstream.app.data.ServerSettingsRepository
+import com.raddstream.app.data.Telemetry
 import java.net.URI
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
@@ -55,12 +56,32 @@ class ApiProvider @Inject constructor(
                 // version name: the config fetch is how the server learns
                 // which build is asking, and the discovery probes already
                 // send this same string. No header, no version on the wire.
+                //
+                // Tracking A adds the install headers on top, and only once
+                // the viewer said yes to anonymous totals: `X-Install-Id` (a
+                // random id minted on accept, never derived from the phone),
+                // `X-App-Version`, `X-Device-Class` (low/mid/high from RAM),
+                // `X-Region` (the viewer's region card), the two language
+                // choices, and `Accept-Language` (the server reads only its
+                // region subtag). A viewer who declined or was never asked
+                // sends exactly what this client sent before — the User-Agent
+                // alone — and the server falls back to the credential digest,
+                // as it always did.
                 .addInterceptor { chain ->
-                    chain.proceed(
-                        chain.request().newBuilder()
-                            .header("User-Agent", Brand.userAgent)
-                            .build(),
-                    )
+                    val builder = chain.request().newBuilder()
+                        .header("User-Agent", Brand.userAgent)
+                    if (Telemetry.consentAccepted) {
+                        Telemetry.installId?.let { builder.header("X-Install-Id", it) }
+                        builder.header("X-App-Version", Telemetry.appVersion)
+                        builder.header("X-Device-Class", Telemetry.deviceClass)
+                        Telemetry.region?.let { builder.header("X-Region", it) }
+                        Telemetry.audioLanguage?.takeIf { it.isNotBlank() }
+                            ?.let { builder.header("X-Audio-Lang", it) }
+                        Telemetry.subtitleLanguage?.takeIf { it.isNotBlank() }
+                            ?.let { builder.header("X-Subtitle-Lang", it) }
+                        builder.header("Accept-Language", Telemetry.acceptLanguage)
+                    }
+                    chain.proceed(builder.build())
                 }
                 .build()
             // MUST be buildRaddGson(), not GsonBuilder().create(): the v1 wire sends

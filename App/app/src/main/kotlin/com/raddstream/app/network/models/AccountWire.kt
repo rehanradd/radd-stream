@@ -211,6 +211,16 @@ data class ProgressRequest(
     @SerializedName("position_seconds") val positionSeconds: Double = 0.0,
     @SerializedName("duration_seconds") val durationSeconds: Double = 0.0,
     @SerializedName("client_updated_at") val clientUpdatedAt: Double = 0.0,
+    /**
+     * Tracking A: the anonymous totals this install counted since the last
+     * report (playback attempts, buffer failures, errors, crashes, rewarded
+     * completions, coins granted — the server's `CLIENT_FIELDS` vocabulary
+     * and nothing else). Null means "nothing to report": Gson omits nulls,
+     * so a viewer who declined totals sends a body byte-identical to the one
+     * before this field existed, and the server folds a present block into
+     * its per-day counters. Never a title, a query, or an identifier.
+     */
+    @SerializedName("usage") val usage: Map<String, Int>? = null,
 )
 
 /**

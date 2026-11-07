@@ -2,6 +2,7 @@ package com.raddstream.app.sync
 
 import com.google.gson.Gson
 import com.raddstream.app.data.ServerSettingsRepository
+import com.raddstream.app.data.Telemetry
 import com.raddstream.app.data.local.FavoriteDao
 import com.raddstream.app.data.local.FavoritePost
 import com.raddstream.app.data.local.SyncedProgressDao
@@ -440,6 +441,14 @@ class SyncAccountRepository @Inject constructor(
         val positionSeconds = positionMs.coerceAtLeast(0L) / 1000.0
         val durationSeconds = durationMs.coerceAtLeast(0L) / 1000.0
         val stamp = System.currentTimeMillis() / 1000.0
+        // Tracking A: the anonymous totals counted since the last report ride
+        // this call — the one already-authenticated, already-allow-listed
+        // route, so no new surface appears. The snapshot is taken before the
+        // call and forgotten only when the server says it landed: a failed
+        // report keeps its counts for the next one, and increments that land
+        // in between survive because the acknowledgement subtracts exactly
+        // what was sent. A viewer who declined totals snapshots empty.
+        val usageSnapshot = Telemetry.takeUsageSnapshot()
         var coinsEarned = 0
         val ack = attempt(hadWorkRef = true) { api, auth ->
             val response = api.putProgress(
@@ -451,10 +460,15 @@ class SyncAccountRepository @Inject constructor(
                     positionSeconds = positionSeconds,
                     durationSeconds = durationSeconds,
                     clientUpdatedAt = stamp,
+                    usage = usageSnapshot.ifEmpty { null },
                 ),
             )
             coinsEarned = response.coinsEarned
             response
+        }
+        if (ack == SyncAck.WRITTEN) {
+            if (usageSnapshot.isNotEmpty()) Telemetry.acknowledgeUsage(usageSnapshot)
+            if (coinsEarned > 0) Telemetry.recordCoinsGranted(coinsEarned)
         }
         // Fold our own report into the mirror at once, so this device resumes from where
         // this device stopped without waiting for a pull to agree with it.
@@ -720,7 +734,14 @@ class SyncAccountRepository @Inject constructor(
     suspend fun claimDailyLogin(): CoinEarned? {
         val key = currentKey() ?: return null
         return try {
-            apiProvider.current().earnDailyLogin(bearerHeader(key), CoinEarnRequest()).earned
+            val earned = apiProvider.current().earnDailyLogin(
+                bearerHeader(key), CoinEarnRequest()).earned
+            // Tracking A: a grant the server paid is a count the phone may
+            // report — the amount is the server's own answer, never a claim.
+            if ((earned?.coinsGranted ?: 0) > 0) {
+                Telemetry.recordCoinsGranted(earned.coinsGranted)
+            }
+            earned
         } catch (error: Exception) {
             when (verdictOf(error, hadWorkRef = false)) {
                 ServerVerdict.SIGN_OUT -> {
@@ -874,8 +895,14 @@ class SyncAccountRepository @Inject constructor(
     suspend fun reportShare(workRef: String): CoinShare? {
         val key = currentKey() ?: return null
         return try {
-            apiProvider.current().reportShare(
+            val share = apiProvider.current().reportShare(
                 bearerHeader(key), CoinShareRequest(workRef)).share
+            // Tracking A: same rule as the daily login — the server's own
+            // grant, counted only when it says it granted.
+            if (share?.granted == true && share.coins > 0) {
+                Telemetry.recordCoinsGranted(share.coins)
+            }
+            share
         } catch (error: Exception) {
             when (verdictOf(error, hadWorkRef = true)) {
                 ServerVerdict.SIGN_OUT -> {
