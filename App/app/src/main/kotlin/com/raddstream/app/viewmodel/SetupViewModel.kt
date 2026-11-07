@@ -19,17 +19,30 @@ data class SetupUiState(
     val isConnected: Boolean = false,
     val message: String? = null,
     val messageIsError: Boolean = false,
+    /**
+     * The address field stays hidden until the viewer asks for it: the
+     * shipped address is a value this screen holds, never a line it prints
+     * on first sight.
+     */
+    val showUrlField: Boolean = false,
 )
 
 @HiltViewModel
 class SetupViewModel @Inject constructor(
     private val catalogRepository: CatalogRepository,
 ) : ViewModel() {
-    // Prefilled with the address the brand file ships, so reaching this screen is a
-    // one-tap "Connect" instead of typing an IP — and so a self-hoster who lands here
-    // can see the default they are about to replace.
+    // Held, not shown: the address the brand file ships is the value the
+    // Connect button tests and the field edits once revealed — reaching
+    // this screen is a one-tap Connect instead of typing an address, and a
+    // self-hoster who opens the field can still see the default they are
+    // about to replace.
     private val _uiState = MutableStateFlow(SetupUiState(serverUrl = Brand.defaultServerUrl))
     val uiState = _uiState.asStateFlow()
+
+    /** Open the address field: the viewer's explicit choice to see and change it. */
+    fun revealUrlField() {
+        _uiState.update { it.copy(showUrlField = true) }
+    }
 
     fun onServerUrlChanged(value: String) {
         _uiState.update {
@@ -43,9 +56,21 @@ class SetupViewModel @Inject constructor(
     }
 
     fun testConnection() {
+        test(_uiState.value.serverUrl)
+    }
+
+    /**
+     * Test the shipped server again, without ever showing its address: the
+     * first-run probe can lose a slow network once, and a retry that prints
+     * the address to reach it would be the leak this screen exists to close.
+     */
+    fun retryDefault() {
+        test(Brand.defaultServerUrl)
+    }
+
+    private fun test(submittedUrl: String) {
         if (_uiState.value.isChecking) return
         viewModelScope.launch {
-            val submittedUrl = _uiState.value.serverUrl
             _uiState.update { it.copy(isChecking = true, message = null, isConnected = false) }
             try {
                 val stats = catalogRepository.testAndSaveServer(submittedUrl)
@@ -61,11 +86,14 @@ class SetupViewModel @Inject constructor(
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Exception) {
+                // No debug suffix here: the raw error can carry the address
+                // this screen exists to hide, and the friendly wording
+                // already says what the viewer can do about it.
                 _uiState.update {
                     it.copy(
                         isChecking = false,
                         isConnected = false,
-                        message = friendlyNetworkError(error, "Could not connect to that server."),
+                        message = friendlyNetworkError(error, "Could not reach the catalog — check your connection and try again.", debugBuild = false),
                         messageIsError = true,
                     )
                 }

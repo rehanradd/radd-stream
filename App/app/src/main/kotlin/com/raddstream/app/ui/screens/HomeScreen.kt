@@ -20,6 +20,10 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.DateRange
+import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.AlertDialog
@@ -43,9 +47,11 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import com.raddstream.app.brand.Brand
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -80,6 +86,10 @@ fun HomeScreen(
     onPostClick: (Int) -> Unit = {},
     onBrowseType: (String?) -> Unit = {},
     onSetupServerClick: () -> Unit = {},
+    /** The phone's own videos (Movies/ and Download/), listed from MediaStore. */
+    onOpenLocalFiles: () -> Unit = {},
+    /** Kept-for-offline titles (Media Vault). */
+    onOpenDownloads: () -> Unit = {},
     /** The operator's hero knobs from the panel theme: 0 hides the hero slot. */
     heroMax: Int = HERO_LIMIT,
     heroAutoplay: Boolean = true,
@@ -132,6 +142,34 @@ fun HomeScreen(
                 BroadcastBanner(
                     broadcast = broadcast,
                     onDismiss = { viewModel.dismissBroadcast(broadcast.id) },
+                )
+                Spacer(Modifier.height(8.dp))
+            }
+
+            // The daily check-in, where the viewer actually is: the same claim
+            // the VIP screen makes, in a compact card. It renders only once
+            // the server's ladder arrives — an absent plan is never a zero.
+            if (state.streakLadder.isNotEmpty()) {
+                DailyCheckInCard(
+                    streakCount = state.streakCount,
+                    streakLadder = state.streakLadder,
+                    coinBalance = state.coinBalance,
+                    signedIn = state.signedIn,
+                    claimedToday = state.claimedToday,
+                    isClaiming = state.isClaiming,
+                    claimMessage = state.claimMessage,
+                    onClaim = viewModel::claimDailyLogin,
+                )
+                Spacer(Modifier.height(12.dp))
+            }
+
+            // The browser identity, on Home where it can be seen: three doors
+            // that already exist. Nothing here promises general web browsing.
+            if (searchEnabled) {
+                BrowserStrip(
+                    onPlayVideoLink = onSearchClick,
+                    onOpenLocalFiles = onOpenLocalFiles,
+                    onOpenDownloads = onOpenDownloads,
                 )
                 Spacer(Modifier.height(8.dp))
             }
@@ -387,6 +425,158 @@ private fun AppUpdateDialog(
         containerColor = MaterialTheme.colorScheme.surface,
         shape = RoundedCornerShape(28.dp),
     )
+}
+
+/**
+ * The daily check-in in one compact card: the streak this device has kept,
+ * what today pays, and the wallet it pays into. The claim is the VIP
+ * screen's own call — same guards, same words — so Home and VIP can never
+ * disagree about what today pays. The full ladder and the pass shop stay on
+ * the VIP screen; this card is the daily tap, not the shop.
+ */
+@Composable
+private fun DailyCheckInCard(
+    streakCount: Int,
+    streakLadder: Map<Int, Int>,
+    coinBalance: Int,
+    signedIn: Boolean,
+    claimedToday: Boolean,
+    isClaiming: Boolean,
+    claimMessage: String?,
+    onClaim: () -> Unit,
+) {
+    val targetDays = streakLadder.keys.maxOrNull() ?: 7
+    val today = (streakCount + 1).coerceIn(1, targetDays)
+    val todaysCoins = streakLadder[today] ?: 0
+    Card(
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+        shape = RoundedCornerShape(16.dp),
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Default.DateRange, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                Spacer(Modifier.width(10.dp))
+                Text(
+                    text = "Daily check-in",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                )
+            }
+            Text(
+                text = "Day $streakCount of $targetDays — claim today's coins to keep the streak going.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            if (signedIn) {
+                Text(
+                    text = "Wallet: $coinBalance coins.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            when {
+                !signedIn -> {
+                    Text(
+                        text = "Sign in to claim your coins.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                claimedToday -> {
+                    Text(
+                        text = claimMessage ?: "Claimed for today.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                }
+                else -> {
+                    Button(onClick = onClaim, enabled = !isClaiming) {
+                        Text(if (isClaiming) "Claiming…" else "Claim +$todaysCoins coins")
+                    }
+                    claimMessage?.let { message ->
+                        Text(
+                            text = message,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * The media-browser strip: three doors that already exist — paste a direct
+ * video link in Search, the phone's own videos, and kept downloads. The link
+ * door plays direct video links only, and says so on the Search screen that
+ * opens it; nothing here promises general web browsing.
+ */
+@Composable
+private fun BrowserStrip(
+    onPlayVideoLink: () -> Unit,
+    onOpenLocalFiles: () -> Unit,
+    onOpenDownloads: () -> Unit,
+) {
+    Column(Modifier.padding(top = 4.dp)) {
+        SectionHeader(title = "Media browser")
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            BrowserTile(
+                label = "Play a video link",
+                icon = Icons.Default.Link,
+                onClick = onPlayVideoLink,
+                modifier = Modifier.weight(1f),
+            )
+            BrowserTile(
+                label = "On this phone",
+                icon = Icons.Default.Folder,
+                onClick = onOpenLocalFiles,
+                modifier = Modifier.weight(1f),
+            )
+            BrowserTile(
+                label = "Downloads",
+                icon = Icons.Default.Download,
+                onClick = onOpenDownloads,
+                modifier = Modifier.weight(1f),
+            )
+        }
+    }
+}
+
+@Composable
+private fun BrowserTile(
+    label: String,
+    icon: ImageVector,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        onClick = onClick,
+        shape = RoundedCornerShape(16.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant,
+        contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = modifier,
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 12.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Icon(icon, contentDescription = null)
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelMedium,
+                textAlign = TextAlign.Center,
+            )
+        }
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)

@@ -115,6 +115,12 @@ data class UserPreferences(
 
 data class SettingsUiState(
     val serverUrl: String = "",
+    /**
+     * The address field stays hidden until the viewer asks to change it:
+     * the saved address is a value this screen holds, never a line it
+     * prints on sight. The status line below is the only thing shown.
+     */
+    val showServerField: Boolean = false,
     val isTesting: Boolean = false,
     val testMessage: String? = null,
     val testIsError: Boolean = false,
@@ -560,6 +566,11 @@ class SettingsViewModel @Inject constructor(
 
     fun onServerUrlChanged(newUrl: String) {
         _uiState.update { it.copy(serverUrl = newUrl, testMessage = null) }
+    }
+
+    /** Open the address field: the viewer's explicit choice to see and change it. */
+    fun revealServerField() {
+        _uiState.update { it.copy(showServerField = true) }
     }
 
     fun testAndSaveServer() {

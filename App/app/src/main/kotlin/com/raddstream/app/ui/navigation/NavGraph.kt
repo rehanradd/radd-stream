@@ -186,6 +186,8 @@ fun RaddStreamNavGraph(
                     onPostClick = { postId -> navController.navigate(Screen.Detail.createRoute(postId)) },
                     onBrowseType = { type -> navController.navigate(Screen.Browse.createRoute(type)) },
                     onSetupServerClick = { navController.navigate(Screen.Setup.route) },
+                    onOpenLocalFiles = { navController.navigate(Screen.LocalFiles.route) },
+                    onOpenDownloads = { navController.navigate(Screen.Downloads.route) },
                     heroMax = theme.heroMax,
                     heroAutoplay = theme.heroAutoplay && autoplayPreviews,
                     heroIntervalMs = theme.heroIntervalS * 1_000L,

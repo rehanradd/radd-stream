@@ -105,6 +105,19 @@ data class HomeUiState(
      * blank page.
      */
     val isOffline: Boolean = false,
+    /**
+     * The daily check-in, on Home where the viewer actually is. The count is
+     * this device's own (one open a day, recorded at launch); the ladder and
+     * the wallet are the server's. The card renders only once the ladder
+     * arrives — an absent plan is never shown as a zero.
+     */
+    val streakCount: Int = 0,
+    val streakLadder: Map<Int, Int> = emptyMap(),
+    val coinBalance: Int = 0,
+    val signedIn: Boolean = false,
+    val claimedToday: Boolean = false,
+    val isClaiming: Boolean = false,
+    val claimMessage: String? = null,
 )
 
 /**
@@ -226,6 +239,7 @@ class HomeViewModel @Inject constructor(
 
     init {
         observeContinueWatching()
+        observeDailyCheckIn()
         // Only rails v1 can honestly serve today. `type = null` == recently added
         // (the API default order is `p.id DESC` per viewer.py:1905, i.e. freshest scrape).
         val initial = listOf(
@@ -238,6 +252,80 @@ class HomeViewModel @Inject constructor(
         loadAll(force = true)
         checkForUpdate()
         askAppOpenAd()
+    }
+
+    /**
+     * The daily check-in's facts, read not written: the streak count is this
+     * device's own, the ladder and the wallet are the server's, and the claim
+     * is the same call the VIP screen makes — one owner, so Home and VIP can
+     * never disagree about what today pays.
+     */
+    private fun observeDailyCheckIn() {
+        viewModelScope.launch {
+            settingsRepository.loginStreakCount.collect { count ->
+                _uiState.update { it.copy(streakCount = count) }
+            }
+        }
+        viewModelScope.launch {
+            syncAccountRepository.signedIn.collect { signed ->
+                _uiState.update { it.copy(signedIn = signed) }
+                if (signed) loadCheckInWallet()
+            }
+        }
+    }
+
+    private fun loadCheckInWallet() {
+        viewModelScope.launch {
+            val ladder = syncAccountRepository.loadStreakLadder()
+            val balance = syncAccountRepository.loadCoinBalance()
+            _uiState.update {
+                it.copy(
+                    streakLadder = ladder.ifEmpty { it.streakLadder },
+                    coinBalance = balance ?: it.coinBalance,
+                )
+            }
+        }
+    }
+
+    /**
+     * Claim today's check-in — the same call, guards and words as the VIP
+     * screen's claim, so a grant the server paid is never presented twice
+     * and an unreachable server is never presented as "already claimed".
+     */
+    fun claimDailyLogin() {
+        val state = _uiState.value
+        if (!state.signedIn || state.isClaiming || state.claimedToday) return
+        viewModelScope.launch {
+            _uiState.update { it.copy(isClaiming = true, claimMessage = null) }
+            try {
+                val earned = syncAccountRepository.claimDailyLogin()
+                if (earned == null) {
+                    _uiState.update {
+                        it.copy(claimMessage = "Could not reach the server — try again later.")
+                    }
+                    return@launch
+                }
+                val balance = syncAccountRepository.loadCoinBalance()
+                _uiState.update {
+                    it.copy(
+                        claimedToday = true,
+                        coinBalance = balance ?: it.coinBalance,
+                        claimMessage = when {
+                            earned.status == "same_day_noop" -> "Already claimed today."
+                            earned.currentStreak > 7 ->
+                                "Streak day ${earned.currentStreak} — the 7-day ladder is complete."
+                            earned.pass != null ->
+                                "+${earned.coinsGranted} coins — Day ${earned.currentStreak} of 7, and a 24-hour pass."
+                            earned.coinsGranted > 0 ->
+                                "+${earned.coinsGranted} coins — Day ${earned.currentStreak} of 7."
+                            else -> "Day ${earned.currentStreak} of 7."
+                        },
+                    )
+                }
+            } finally {
+                _uiState.update { it.copy(isClaiming = false) }
+            }
+        }
     }
 
     /**

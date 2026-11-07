@@ -209,9 +209,10 @@ class MainActivity : ComponentActivity() {
                         false
                     }
                     // A fresh install never sees the Setup form when the shipped server
-                    // answers: the default is probed once, in the background, and saved
-                    // only when it answers. A dead default — or an unbranded build with
-                    // no default at all — still opens Setup, prefilled as before.
+                    // answers: the default is probed twice (one retry) in the background,
+                    // and saved only when it answers. A dead default — or an unbranded
+                    // build with no default at all — still opens Setup, with the address
+                    // held but never shown until the viewer asks for a different server.
                     val defaultReachable: Boolean? = if (savedUrl.isNullOrBlank() || hasSavedServer) {
                         null
                     } else {
@@ -377,28 +378,37 @@ private fun effectiveDynamicColor(storedEnabled: Boolean, panelAllowed: Boolean)
     storedEnabled && Brand.dynamicColorAllowed && panelAllowed
 
 /**
- * One bounded probe of the shipped server, for a fresh install only.
+ * Two bounded probes of the shipped server, for a fresh install only.
  *
  * `testAndSaveServer` saves the address when it answers, so a fresh install that
  * reaches Home through here has a saved server from then on — the probe runs
- * once, never on every cold start. The 15s bound is the whole point: a dead
- * default must not hold the first frame hostage; the OkHttp timeouts underneath
- * are 10s connect / 15s read, so this is the tighter ceiling. A timeout reads
- * as "did not answer" and the caller opens Setup.
+ * once per install, never on every cold start. A slow first network can lose
+ * one probe, so a failure earns exactly one retry before the caller opens
+ * Setup: a slow answer must not become a leaked address on a form. The 15s
+ * bound is the whole point: a dead default must not hold the first frame
+ * hostage; the OkHttp timeouts underneath are 10s connect / 15s read, so this
+ * is the tighter ceiling. A timeout reads as "did not answer" and the caller
+ * opens Setup.
  */
 private const val SILENT_CONNECT_TIMEOUT_MS = 15_000L
 
 private suspend fun trySilentDefaultConnect(
     catalogRepository: CatalogRepository,
     url: String,
-): Boolean = try {
-    withTimeoutOrNull(SILENT_CONNECT_TIMEOUT_MS) {
-        catalogRepository.testAndSaveServer(url)
-    } != null
-} catch (cancelled: CancellationException) {
-    throw cancelled
-} catch (_: Exception) {
-    false
+): Boolean {
+    repeat(2) {
+        val answered = try {
+            withTimeoutOrNull(SILENT_CONNECT_TIMEOUT_MS) {
+                catalogRepository.testAndSaveServer(url)
+            } != null
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            false
+        }
+        if (answered) return true
+    }
+    return false
 }
 
 /**

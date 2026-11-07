@@ -123,32 +123,48 @@ fun SettingsScreen(
         ) {
             // ── Server Connection ──────────────────────────────────────
             SettingsCard(title = "Catalog Server", icon = Icons.Default.Storage) {
-                OutlinedTextField(
-                    value = state.serverUrl,
-                    onValueChange = viewModel::onServerUrlChanged,
-                    label = { Text("Server URL") },
-                    placeholder = { Text("http://<host> — one address, any catalog you may use") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                state.testMessage?.let { msg ->
+                // The address is never printed here: a saved server reads as
+                // "Connected", and the field opens only when the viewer asks
+                // to change it. The test still fetches the counts for its own
+                // message, which never includes the address either.
+                if (!state.showServerField) {
                     Text(
-                        text = msg,
-                        color = if (state.testIsError) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
+                        text = if (state.serverUrl.isNotBlank()) "Connected to your catalog." else "No catalog server set.",
                         style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
-                }
-                Button(
-                    onClick = viewModel::testAndSaveServer,
-                    enabled = !state.isTesting && state.serverUrl.isNotBlank(),
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    if (state.isTesting) {
-                        CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp, color = MaterialTheme.colorScheme.onPrimary)
-                    } else {
-                        Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
-                        Spacer(Modifier.width(8.dp))
-                        Text("Test & Save Connection")
+                    Spacer(Modifier.height(10.dp))
+                    OutlinedButton(onClick = viewModel::revealServerField, modifier = Modifier.fillMaxWidth()) {
+                        Text("Change")
+                    }
+                } else {
+                    OutlinedTextField(
+                        value = state.serverUrl,
+                        onValueChange = viewModel::onServerUrlChanged,
+                        label = { Text("Server URL") },
+                        placeholder = { Text("http://<host> — one address, any catalog you may use") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    state.testMessage?.let { msg ->
+                        Text(
+                            text = msg,
+                            color = if (state.testIsError) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                    Button(
+                        onClick = viewModel::testAndSaveServer,
+                        enabled = !state.isTesting && state.serverUrl.isNotBlank(),
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        if (state.isTesting) {
+                            CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp, color = MaterialTheme.colorScheme.onPrimary)
+                        } else {
+                            Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(8.dp))
+                            Text("Test & Save Connection")
+                        }
                     }
                 }
 

@@ -17,6 +17,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -56,19 +57,24 @@ fun SetupScreen(
         )
         Spacer(Modifier.height(24.dp))
 
-        OutlinedTextField(
-            value = state.serverUrl,
-            onValueChange = viewModel::onServerUrlChanged,
-            label = { Text("Server URL") },
-            placeholder = { Text("https://media.example.com:8080") },
-            singleLine = true,
-            enabled = !state.isChecking,
-            modifier = Modifier.fillMaxWidth(),
-            keyboardOptions = KeyboardOptions(
-                keyboardType = KeyboardType.Uri,
-                imeAction = ImeAction.Done,
-            ),
-        )
+        // The address is never printed on first sight: Connect tests the
+        // shipped server without displaying it, and the field below opens
+        // only when the viewer explicitly asks for a different server.
+        if (state.showUrlField) {
+            OutlinedTextField(
+                value = state.serverUrl,
+                onValueChange = viewModel::onServerUrlChanged,
+                label = { Text("Server URL") },
+                placeholder = { Text("https://media.example.com:8080") },
+                singleLine = true,
+                enabled = !state.isChecking,
+                modifier = Modifier.fillMaxWidth(),
+                keyboardOptions = KeyboardOptions(
+                    keyboardType = KeyboardType.Uri,
+                    imeAction = ImeAction.Done,
+                ),
+            )
+        }
 
         state.message?.let { message ->
             Spacer(Modifier.height(12.dp))
@@ -81,18 +87,35 @@ fun SetupScreen(
         }
 
         Spacer(Modifier.height(20.dp))
-        OutlinedButton(
-            onClick = viewModel::testConnection,
-            enabled = !state.isChecking && state.serverUrl.isNotBlank(),
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            if (state.isChecking) {
-                CircularProgressIndicator(
-                    modifier = Modifier.height(18.dp),
-                    strokeWidth = 2.dp,
-                )
-            } else {
-                Text("Test connection")
+        if (state.showUrlField) {
+            OutlinedButton(
+                onClick = viewModel::testConnection,
+                enabled = !state.isChecking && state.serverUrl.isNotBlank(),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                if (state.isChecking) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.height(18.dp),
+                        strokeWidth = 2.dp,
+                    )
+                } else {
+                    Text("Test connection")
+                }
+            }
+        } else {
+            OutlinedButton(
+                onClick = viewModel::retryDefault,
+                enabled = !state.isChecking,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                if (state.isChecking) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.height(18.dp),
+                        strokeWidth = 2.dp,
+                    )
+                } else {
+                    Text("Connect")
+                }
             }
         }
 
@@ -107,6 +130,13 @@ fun SetupScreen(
             ),
         ) {
             Text("Continue", style = MaterialTheme.typography.labelLarge)
+        }
+
+        if (!state.showUrlField) {
+            Spacer(Modifier.height(8.dp))
+            TextButton(onClick = viewModel::revealUrlField) {
+                Text("Use a different server")
+            }
         }
     }
 }

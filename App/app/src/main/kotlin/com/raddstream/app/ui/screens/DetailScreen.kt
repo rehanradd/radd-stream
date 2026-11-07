@@ -11,6 +11,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -473,6 +474,19 @@ private fun DetailContent(
                 onPlay = { bestPrint?.let(onPlayPrint) },
                 onKeep = { bestPrint?.let(onKeep) },
             )
+        }
+
+        // Prints exist but none can start: the grey Play button above says
+        // nothing on its own, so the reason rides right under it instead of
+        // a snackbar a tap never earns (a disabled button fires no tap).
+        if (resume == null && allPrints.isNotEmpty() && bestPrint?.canStart != true) {
+            item {
+                Text(
+                    text = "No playable copy for this title yet — downloads are available.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
         }
 
         // A first-party sponsor slot: no third-party SDK, no hidden network call, and it
@@ -989,11 +1003,24 @@ private fun EpisodeRow(
 ) {
     var expanded by remember(episode.absoluteNumber) { mutableStateOf(false) }
     val best = episode.bestPrint
+    // The only copy this row can start: a download-only episode has a best
+    // print but no playable one, so the triangle must not pretend otherwise.
+    val playableBest = best?.takeIf { it.canStart }
+    // A row that looks tappable must do something: open the episode's quality
+    // ladder when it has one, else play its playable copy. A download-only
+    // episode has neither — the "Download only" label below says so instead
+    // of a dead tap.
+    val rowAction: (() -> Unit)? = when {
+        canChooseQuality -> onChooseQuality
+        playableBest != null -> { { onPlayPrint(playableBest) } }
+        else -> null
+    }
     Column(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(12.dp))
             .background(MaterialTheme.colorScheme.surface)
+            .then(if (rowAction != null) Modifier.clickable(onClick = rowAction) else Modifier)
             .padding(12.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
@@ -1069,13 +1096,21 @@ private fun EpisodeRow(
                     )
                 }
             }
-            best?.let {
+            if (playableBest != null) {
                 IconButton(
-                    onClick = { onPlayPrint(it) },
+                    onClick = { onPlayPrint(playableBest) },
                     modifier = Modifier.size(48.dp),
                 ) {
                     Icon(Icons.Default.PlayArrow, contentDescription = "Play episode ${episode.numberWithinSeason}", tint = MaterialTheme.colorScheme.primary)
                 }
+            } else if (best != null) {
+                // No playable copy on this episode: the button that would have
+                // pretended to play becomes the honest word instead.
+                Text(
+                    text = "Download only",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
             if (canChooseQuality) {
                 IconButton(
@@ -1224,6 +1259,16 @@ private fun PrintCard(
                         tint = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
+        }
+
+        // The disabled Play above is silent about why: a print the server
+        // only offers for download says so in words, under its own buttons.
+        if (!print.canStart) {
+            Text(
+                text = "Download only — no playable copy for this print.",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
     }
 }
