@@ -7,9 +7,11 @@ import com.raddstream.app.data.ServerSettingsRepository
 import com.raddstream.app.data.local.AppDatabase
 import com.raddstream.app.data.local.SyncedProgressEntity
 import com.raddstream.app.network.ApiProvider
-import com.sun.net.httpserver.HttpExchange
-import com.sun.net.httpserver.HttpServer
-import java.net.InetSocketAddress
+import java.io.ByteArrayOutputStream
+import java.net.InetAddress
+import java.net.ServerSocket
+import java.net.Socket
+import java.net.SocketException
 import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -37,10 +39,13 @@ import org.robolectric.RobolectricTestRunner
  *     same key and pulls.
  *  3. `resumePositionMs` on device B returns the exact millisecond device A reported.
  *
- * The fake is a JDK `HttpServer`, not a mock: the real Retrofit client, the real Gson
- * wire models and the real Room DAOs all run, so a snake_case drift or a merge-rule
- * regression fails here instead of on a viewer's second phone. x86_64-only like every
- * Robolectric suite (see the arm64 exclusion in `app/build.gradle.kts`).
+ * The fake is a hand-rolled HTTP/1.1 server on a plain `ServerSocket`, not a mock: the
+ * real Retrofit client, the real Gson wire models and the real Room DAOs all run, so a
+ * snake_case drift or a merge-rule regression fails here instead of on a viewer's second
+ * phone. It is hand-rolled on purpose: `com.sun.net.httpserver` lives in the `jdk.httpserver`
+ * module, which the unit-test compile classpath does not resolve (CI red on 42323050286),
+ * and adding a MockWebServer dependency for one test would be the heavier change.
+ * x86_64-only like every Robolectric suite (see the arm64 exclusion in `app/build.gradle.kts`).
  */
 @RunWith(RobolectricTestRunner::class)
 class NewPhoneProgressPullTest {
@@ -58,33 +63,24 @@ class NewPhoneProgressPullTest {
     /** The fake server's whole state: bearer key -> that account's progress rows. */
     private val serverProgress = ConcurrentHashMap<String, MutableList<StoredProgress>>()
 
-    private lateinit var server: HttpServer
+    private lateinit var server: FakeSyncServer
     private lateinit var settings: ServerSettingsRepository
     private lateinit var apiProvider: ApiProvider
     private val databases = mutableListOf<AppDatabase>()
 
     @Before
     fun setUp() = runBlocking {
-        server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
-        server.createContext("/api/v2/account") { exchange -> handleAccount(exchange) }
-        server.createContext("/api/v2/account/entitlement") { exchange ->
-            respond(exchange, 200, """{"entitlement":{"vip":false,"vip_until":0.0,"pending":false}}""")
-        }
-        server.createContext("/api/v2/account/favorites") { exchange ->
-            respond(exchange, 200, """{"favorites":[],"count":0}""")
-        }
-        server.createContext("/api/v2/account/progress") { exchange -> handleProgress(exchange) }
-        server.start()
+        server = FakeSyncServer(::handleRequest).apply { start() }
         val context = ApplicationProvider.getApplicationContext<Context>()
         settings = ServerSettingsRepository(context)
-        settings.saveServerUrl("http://127.0.0.1:${server.address.port}/")
+        settings.saveServerUrl("http://127.0.0.1:${server.port}/")
         apiProvider = ApiProvider(settings)
     }
 
     @After
     fun tearDown() {
         databases.forEach { it.close() }
-        if (::server.isInitialized) server.stop(0)
+        if (::server.isInitialized) server.stop()
     }
 
     /** One device: its own Room mirror, sharing the account server with the other device. */
@@ -191,47 +187,53 @@ class NewPhoneProgressPullTest {
         )
     }
 
-    // ── the fake server ──────────────────────────────────────────────────────────
+    // ── the fake server's routes ─────────────────────────────────────────────────
 
-    private fun handleAccount(exchange: HttpExchange) {
-        if (exchange.requestMethod == "POST") {
-            val body = exchange.requestBody.readAllBytes().decodeToString()
+    /** Dispatch one parsed request. Returns the status and the JSON body to answer. */
+    private fun handleRequest(
+        method: String,
+        path: String,
+        headers: Map<String, String>,
+        body: String,
+    ): Pair<Int, String> = when {
+        path == "/api/v2/account" -> handleAccount(method, body)
+        path == "/api/v2/account/entitlement" ->
+            200 to """{"entitlement":{"vip":false,"vip_until":0.0,"pending":false}}"""
+        path == "/api/v2/account/favorites" -> 200 to """{"favorites":[],"count":0}"""
+        path == "/api/v2/account/progress" -> handleProgress(method, headers, body)
+        else -> 404 to """{"code":"not_found"}"""
+    }
+
+    private fun handleAccount(method: String, body: String): Pair<Int, String> {
+        if (method == "POST") {
             val presented = Regex(""""sync_key"\s*:\s*"([^"]+)"""").find(body)?.groupValues?.get(1)
             if (presented.isNullOrBlank()) {
                 // A fresh mint: the one moment the plaintext key exists.
-                respond(
-                    exchange,
-                    200,
-                    """{"account":{"created":true,"sync_key":"$MINTED_KEY"}}""",
-                )
-            } else {
-                // An import: the server recognises the key and never repeats it.
-                respond(exchange, 200, """{"account":{"created":false}}""")
+                return 200 to """{"account":{"created":true,"sync_key":"$MINTED_KEY"}}"""
             }
-        } else {
-            respond(exchange, 200, """{"account":{"created_at":0.0,"last_seen_at":0.0}}""")
+            // An import: the server recognises the key and never repeats it.
+            return 200 to """{"account":{"created":false}}"""
         }
+        return 200 to """{"account":{"created_at":0.0,"last_seen_at":0.0}}"""
     }
 
-    private fun handleProgress(exchange: HttpExchange) {
-        val key = exchange.requestHeaders.getFirst("Authorization")
-            ?.removePrefix("Bearer ")?.trim().orEmpty()
-        if (key.isEmpty()) {
-            respond(exchange, 401, """{"code":"unauthorized"}""")
-            return
-        }
-        if (exchange.requestMethod == "GET") {
+    private fun handleProgress(
+        method: String,
+        headers: Map<String, String>,
+        body: String,
+    ): Pair<Int, String> {
+        val key = headers["authorization"]?.removePrefix("Bearer ")?.trim().orEmpty()
+        if (key.isEmpty()) return 401 to """{"code":"unauthorized"}"""
+        if (method == "GET") {
             val rows = serverProgress[key].orEmpty().joinToString(",") { row ->
                 """{"work_ref":"${row.workRef}","season_number":${row.season},""" +
                     """"episode_number":${row.episode},"position_seconds":${row.positionSeconds},""" +
                     """"duration_seconds":${row.durationSeconds},""" +
                     """"client_updated_at":${row.clientUpdatedAt}}"""
             }
-            respond(exchange, 200, """{"progress":[$rows],"count":${serverProgress[key].orEmpty().size}}""")
-            return
+            return 200 to """{"progress":[$rows],"count":${serverProgress[key].orEmpty().size}}"""
         }
-        if (exchange.requestMethod == "POST") {
-            val body = exchange.requestBody.readAllBytes().decodeToString()
+        if (method == "POST") {
             val row = StoredProgress(
                 workRef = stringField(body, "work_ref"),
                 season = numberField(body, "season_number").toInt(),
@@ -248,17 +250,13 @@ class NewPhoneProgressPullTest {
             if (existing < 0 || row.clientUpdatedAt > rows[existing].clientUpdatedAt) {
                 if (existing >= 0) rows[existing] = row else rows += row
             }
-            respond(
-                exchange,
-                200,
+            return 200 to
                 """{"progress":{"work_ref":"${row.workRef}","season_number":${row.season},""" +
-                    """"episode_number":${row.episode},"position_seconds":${row.positionSeconds},""" +
-                    """"duration_seconds":${row.durationSeconds},""" +
-                    """"client_updated_at":${row.clientUpdatedAt}},"applied":true,"coins_earned":0}""",
-            )
-            return
+                """"episode_number":${row.episode},"position_seconds":${row.positionSeconds},""" +
+                """"duration_seconds":${row.durationSeconds},""" +
+                """"client_updated_at":${row.clientUpdatedAt}},"applied":true,"coins_earned":0}"""
         }
-        respond(exchange, 404, """{"code":"not_found"}""")
+        return 404 to """{"code":"not_found"}"""
     }
 
     private fun stringField(body: String, name: String): String =
@@ -270,13 +268,6 @@ class NewPhoneProgressPullTest {
         Regex(""""$name"\s*:\s*(-?[0-9]+(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?)"""")
             .find(body)?.groupValues?.get(1)?.toDouble() ?: 0.0
 
-    private fun respond(exchange: HttpExchange, status: Int, json: String) {
-        val bytes = json.toByteArray(Charsets.UTF_8)
-        exchange.responseHeaders.set("Content-Type", "application/json")
-        exchange.sendResponseHeaders(status, bytes.size.toLong())
-        exchange.responseBody.use { it.write(bytes) }
-    }
-
     companion object {
         /** The key the fake server mints: 16 url-safe characters, like the real floor. */
         const val MINTED_KEY = "d2testkey12345678"
@@ -285,5 +276,94 @@ class NewPhoneProgressPullTest {
         const val EPISODE = 2
         const val POSITION_MS = 123_456L
         const val DURATION_MS = 600_000L
+    }
+}
+
+/**
+ * A minimal HTTP/1.1 server on a plain `ServerSocket`: one request per connection,
+ * `Connection: close`, bodies read by `Content-Length`. Only what OkHttp needs here —
+ * a request line, headers and a small JSON body — and nothing more. All threads are
+ * daemon, so a test that forgets to stop it still ends.
+ */
+private class FakeSyncServer(
+    private val handler: (method: String, path: String, headers: Map<String, String>, body: String) -> Pair<Int, String>,
+) {
+    private val socket = ServerSocket(0, 50, InetAddress.getByName("127.0.0.1"))
+
+    val port: Int get() = socket.localPort
+
+    fun start() {
+        Thread({
+            while (!socket.isClosed) {
+                try {
+                    val connection = socket.accept()
+                    Thread({ handle(connection) }, "fake-sync-conn").apply {
+                        isDaemon = true
+                        start()
+                    }
+                } catch (_: SocketException) {
+                    break
+                }
+            }
+        }, "fake-sync-accept").apply {
+            isDaemon = true
+            start()
+        }
+    }
+
+    fun stop() {
+        socket.close()
+    }
+
+    private fun handle(connection: Socket) {
+        connection.use { socket ->
+            val input = socket.getInputStream()
+            val head = ByteArrayOutputStream()
+            // Read byte by byte until the blank line that ends the headers.
+            var tail = 0
+            while (true) {
+                val byte = input.read()
+                if (byte < 0) return
+                head.write(byte)
+                tail = (tail shl 8) or byte
+                if (tail == 0x0D0A0D0A) break
+            }
+            val lines = head.toString(Charsets.UTF_8).split("\r\n")
+            val requestLine = lines.firstOrNull()?.split(" ") ?: return
+            if (requestLine.size < 2) return
+            val headers = lines.drop(1)
+                .mapNotNull { line ->
+                    val colon = line.indexOf(':')
+                    if (colon < 0) null else line.take(colon).trim().lowercase() to
+                        line.drop(colon + 1).trim()
+                }.toMap()
+            val length = headers["content-length"]?.toIntOrNull() ?: 0
+            val bodyBytes = ByteArray(length)
+            var read = 0
+            while (read < length) {
+                val count = input.read(bodyBytes, read, length - read)
+                if (count < 0) break
+                read += count
+            }
+            val (status, json) = handler(
+                requestLine[0],
+                requestLine[1],
+                headers,
+                bodyBytes.decodeToString(),
+            )
+            val body = json.toByteArray(Charsets.UTF_8)
+            val reason = when (status) {
+                200 -> "OK"
+                401 -> "Unauthorized"
+                else -> "Not Found"
+            }
+            socket.getOutputStream().write(
+                ("HTTP/1.1 $status $reason\r\nContent-Type: application/json\r\n" +
+                    "Content-Length: ${body.size}\r\nConnection: close\r\n\r\n")
+                    .toByteArray(Charsets.UTF_8),
+            )
+            socket.getOutputStream().write(body)
+            socket.getOutputStream().flush()
+        }
     }
 }
