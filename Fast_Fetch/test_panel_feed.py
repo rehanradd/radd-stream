@@ -88,7 +88,7 @@ def _build_panel(path):
         "theme_mode TEXT, theme_accent TEXT, theme_dynamic_color INTEGER, "
         "theme_hero_autoplay INTEGER, theme_hero_interval_s INTEGER, "
         "hero_max INTEGER, tabs TEXT, disclaimer_text TEXT, "
-        "disclaimer_version INTEGER, home_sections_max INTEGER, "
+        "disclaimer_version INTEGER, disclaimer_email TEXT, home_sections_max INTEGER, "
         "section_cap INTEGER, free_quality_cap TEXT)")
     conn.execute(
         "CREATE TABLE app_remote_config_history (id INTEGER PRIMARY KEY, "
@@ -130,9 +130,9 @@ def _build_panel(path):
             (9, "No such target", "Nobody", "info", "everyone", None, now - 10, now + 3600, "published"),
         ])
     conn.execute(
-        "INSERT INTO tuning_settings VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        "INSERT INTO tuning_settings VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (1, "light", "#2BC79A", 1, 0, 8, 4, "my_list,home,home,search",
-         "Links come from public sites. We host nothing.", 3, 12, 20, "720p"))
+         "Links come from public sites. We host nothing.", 3, "radddao1@gmail.com", 12, 20, "720p"))
     conn.execute(
         "INSERT INTO app_remote_config_history VALUES (?,?,?,?,?)",
         (1, 5, '{"config": {"min_version_code": 42, "config_version": 5}}',
@@ -231,17 +231,18 @@ class PanelFeedTests(unittest.TestCase):
     def test_disclaimer_reads_operator_values(self):
         self.assertEqual(
             panel_feed.read_disclaimer(panel_path=self.panel_path),
-            {"text": "Links come from public sites. We host nothing.", "version": 3})
+            {"text": "Links come from public sites. We host nothing.", "version": 3,
+             "email": "radddao1@gmail.com"})
 
     def test_disclaimer_defaults_when_nothing_set(self):
         empty_path = os.path.join(self.tmp.name, "empty.db")
         sqlite3.connect(empty_path).close()
         self.assertEqual(
             panel_feed.read_disclaimer(panel_path=empty_path),
-            {"text": "", "version": 0})
+            {"text": "", "version": 0, "email": ""})
         self.assertEqual(
             panel_feed.read_disclaimer(panel_path=os.path.join(self.tmp.name, "nope.db")),
-            {"text": "", "version": 0})
+            {"text": "", "version": 0, "email": ""})
 
     def test_disclaimer_invalid_version_falls_back(self):
         conn = sqlite3.connect(self.panel_path)
@@ -251,7 +252,34 @@ class PanelFeedTests(unittest.TestCase):
         conn.close()
         self.assertEqual(
             panel_feed.read_disclaimer(panel_path=self.panel_path),
-            {"text": "", "version": 0})
+            {"text": "", "version": 0, "email": "radddao1@gmail.com"})
+
+    def test_disclaimer_email_not_published_when_invalid(self):
+        conn = sqlite3.connect(self.panel_path)
+        conn.execute(
+            "UPDATE tuning_settings SET disclaimer_email='not-an-email' WHERE id=1")
+        conn.commit()
+        conn.close()
+        self.assertEqual(
+            panel_feed.read_disclaimer(panel_path=self.panel_path),
+            {"text": "Links come from public sites. We host nothing.", "version": 3,
+             "email": ""})
+
+    def test_disclaimer_predates_email_column(self):
+        # A panel database from before the email column still answers its
+        # text and version; only the email comes back empty.
+        old_path = os.path.join(self.tmp.name, "old-panel.db")
+        conn = sqlite3.connect(old_path)
+        conn.execute(
+            "CREATE TABLE tuning_settings (id INTEGER PRIMARY KEY, "
+            "disclaimer_text TEXT, disclaimer_version INTEGER)")
+        conn.execute(
+            "INSERT INTO tuning_settings VALUES (1, 'Old words.', 2)")
+        conn.commit()
+        conn.close()
+        self.assertEqual(
+            panel_feed.read_disclaimer(panel_path=old_path),
+            {"text": "Old words.", "version": 2, "email": ""})
 
     def test_section_caps_read_operator_values(self):
         self.assertEqual(

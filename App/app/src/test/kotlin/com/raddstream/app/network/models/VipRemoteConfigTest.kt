@@ -389,7 +389,7 @@ class VipRemoteConfigTest {
               ],
               "hidden_work_ids": [2],
               "tabs": ["settings", "home"],
-              "disclaimer": {"text": "Links come from public sites. We host nothing.", "version": 3},
+              "disclaimer": {"text": "Links come from public sites. We host nothing.", "version": 3, "email": "radddao1@gmail.com"},
               "free_quality_cap": "480p",
               "apk_update_version_code": 214,
               "min_version_code": 210
@@ -422,6 +422,7 @@ class VipRemoteConfigTest {
 
         assertEquals("Links come from public sites. We host nothing.", config.disclaimer.text)
         assertEquals(3, config.disclaimer.version)
+        assertEquals("radddao1@gmail.com", config.disclaimer.email)
         assertEquals("480p", config.freeQualityCap)
         assertEquals(214, config.apkUpdateVersionCode)
         assertEquals(210, config.minVersionCode)
@@ -437,6 +438,7 @@ class VipRemoteConfigTest {
         assertEquals(PanelTheme(), config.theme)
         assertEquals("", config.disclaimer.text)
         assertEquals(0, config.disclaimer.version)
+        assertEquals("", config.disclaimer.email)
         assertEquals("720p", config.freeQualityCap)
         assertEquals(0, config.apkUpdateVersionCode)
         assertEquals(0, config.minVersionCode)

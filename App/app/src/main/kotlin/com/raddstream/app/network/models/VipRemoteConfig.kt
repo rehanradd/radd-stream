@@ -122,12 +122,16 @@ data class VipRemoteConfig(
 )
 
 /**
- * The operator's disclaimer: the text, and the version the app compares
- * against what it has already shown.
+ * The operator's disclaimer: the text, the version the app compares
+ * against what it has already shown, and the takedown contact email the
+ * panel publishes under the text. An empty email means "no contact
+ * published" — the dialog shows no contact line at all, never an
+ * invented address.
  */
 data class PanelDisclaimer(
     val text: String = "",
     val version: Int = 0,
+    val email: String = "",
 )
 
 /**

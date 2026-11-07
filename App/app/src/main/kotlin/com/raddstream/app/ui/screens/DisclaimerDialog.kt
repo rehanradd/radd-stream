@@ -46,6 +46,12 @@ internal fun DisclaimerDialog(
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+                if (disclaimer.email.isNotBlank()) {
+                    Text(
+                        "Contact: ${disclaimer.email}",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                }
             }
         },
         confirmButton = {

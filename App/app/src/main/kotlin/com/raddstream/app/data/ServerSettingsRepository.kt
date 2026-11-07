@@ -548,6 +548,7 @@ class ServerSettingsRepository @Inject constructor(
         PanelDisclaimer(
             text = preferences[DISCLAIMER_TEXT_KEY] ?: "",
             version = (preferences[DISCLAIMER_VERSION_KEY] ?: 0).coerceAtLeast(0),
+            email = preferences[DISCLAIMER_EMAIL_KEY] ?: "",
         )
     }
 
@@ -556,6 +557,7 @@ class ServerSettingsRepository @Inject constructor(
         dataStore.edit { preferences ->
             preferences[DISCLAIMER_TEXT_KEY] = disclaimer.text
             preferences[DISCLAIMER_VERSION_KEY] = disclaimer.version.coerceAtLeast(0)
+            preferences[DISCLAIMER_EMAIL_KEY] = disclaimer.email
         }
     }
 
@@ -874,6 +876,7 @@ class ServerSettingsRepository @Inject constructor(
         private val PANEL_TABS_KEY = stringPreferencesKey("panel_tabs")
         private val DISCLAIMER_TEXT_KEY = stringPreferencesKey("disclaimer_text")
         private val DISCLAIMER_VERSION_KEY = intPreferencesKey("disclaimer_version")
+        private val DISCLAIMER_EMAIL_KEY = stringPreferencesKey("disclaimer_email")
         private val DISCLAIMER_SEEN_VERSION_KEY = intPreferencesKey("disclaimer_seen_version")
         private val FREE_QUALITY_CAP_KEY = stringPreferencesKey("free_quality_cap")
         private val THEME_ACCENT_KEY = stringPreferencesKey("theme_accent")

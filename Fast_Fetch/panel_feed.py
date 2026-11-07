@@ -428,25 +428,29 @@ def read_tabs(panel_path=None):
 
 
 #: The disclaimer the operator publishes, as set in
-#: `tuning_settings.disclaimer_text` / `disclaimer_version`. The app shows it
-#: once per version; an empty text means "nothing published", and the version
-#: is what the app remembers having shown. The text is cut at 4000 — the
-#: panel refuses anything longer — so a long policy can never bloat the
-#: config body the phone polls every five minutes.
+#: `tuning_settings.disclaimer_text` / `disclaimer_version` /
+#: `disclaimer_email`. The app shows it once per version; an empty text
+#: means "nothing published", and the version is what the app remembers
+#: having shown. The text is cut at 4000 — the panel refuses anything
+#: longer — so a long policy can never bloat the config body the phone
+#: polls every five minutes. The email is the takedown contact the app
+#: shows under the text; an empty email means "no contact published".
 DISCLAIMER_MAX_CHARS = 4000
 
 
 def read_disclaimer(panel_path=None):
     """Operator disclaimer for the app, or the empty one. Never raises.
 
-    Reads ``disclaimer_text`` / ``disclaimer_version`` from
-    ``tuning_settings`` (id = 1), read-only, the same tolerant pattern as
-    :func:`read_theme`: a missing database, table, row or column answers
-    empty; a non-integer version answers 0. The app treats an empty text as
-    "no disclaimer published" and shows nothing — the operator writes the
+    Reads ``disclaimer_text`` / ``disclaimer_version`` / ``disclaimer_email``
+    from ``tuning_settings`` (id = 1), read-only, the same tolerant pattern
+    as :func:`read_theme`: a missing database, table, row or column answers
+    empty; a non-integer version answers 0. A panel that predates the email
+    column still answers its text and version (the three-column read falls
+    back to the two-column one). The app treats an empty text as "no
+    disclaimer published" and shows nothing — the operator writes the
     words, this module never invents them.
     """
-    out = {"text": "", "version": 0}
+    out = {"text": "", "version": 0, "email": ""}
     conn = _open_panel(panel_path)
     if conn is None:
         return out
@@ -455,15 +459,27 @@ def read_disclaimer(panel_path=None):
             return out
         try:
             row = conn.execute(
-                "SELECT disclaimer_text, disclaimer_version FROM tuning_settings "
-                "WHERE id = 1").fetchone()
+                "SELECT disclaimer_text, disclaimer_version, disclaimer_email "
+                "FROM tuning_settings WHERE id = 1").fetchone()
         except sqlite3.Error:
-            return out
+            try:
+                row = conn.execute(
+                    "SELECT disclaimer_text, disclaimer_version "
+                    "FROM tuning_settings WHERE id = 1").fetchone()
+            except sqlite3.Error:
+                return out
         if row is None:
             return out
         text = _theme_col(row, "disclaimer_text")
         if isinstance(text, str) and text.strip():
             out["text"] = text.strip()[:DISCLAIMER_MAX_CHARS]
+        email = _theme_col(row, "disclaimer_email")
+        if isinstance(email, str):
+            email = email.strip()
+            local, sep, domain = email.partition("@")
+            if (sep and "@" not in domain and " " not in email
+                    and local and "." in domain and len(email) <= 254):
+                out["email"] = email
         try:
             version = int(_theme_col(row, "disclaimer_version") or 0)
             if version >= 0:
