@@ -625,6 +625,7 @@ class ServerSettingsRepository @Inject constructor(
             vip = vip,
             vipUntil = preferences[VIP_UNTIL_KEY] ?: 0.0,
             pending = preferences[VIP_PENDING_CLAIM_KEY] ?: false,
+            vipCancelledAt = preferences[VIP_CANCELLED_AT_KEY],
         )
     }
 
@@ -633,6 +634,12 @@ class ServerSettingsRepository @Inject constructor(
             preferences[VIP_ACTIVE_KEY] = entitlement.vip
             preferences[VIP_UNTIL_KEY] = entitlement.vipUntil
             preferences[VIP_PENDING_CLAIM_KEY] = entitlement.pending
+            val cancelledAt = entitlement.vipCancelledAt
+            if (cancelledAt != null && cancelledAt > 0.0) {
+                preferences[VIP_CANCELLED_AT_KEY] = cancelledAt
+            } else {
+                preferences.remove(VIP_CANCELLED_AT_KEY)
+            }
         }
     }
 
@@ -641,6 +648,31 @@ class ServerSettingsRepository @Inject constructor(
             preferences.remove(VIP_ACTIVE_KEY)
             preferences.remove(VIP_UNTIL_KEY)
             preferences.remove(VIP_PENDING_CLAIM_KEY)
+            preferences.remove(VIP_CANCELLED_AT_KEY)
+        }
+    }
+
+    val vipPendingCancel: Flow<Boolean> = dataStore.data.map { preferences ->
+        preferences[VIP_PENDING_CANCEL_KEY] ?: false
+    }
+
+    val vipPendingCancelReason: Flow<String?> = dataStore.data.map { preferences ->
+        preferences[VIP_PENDING_CANCEL_REASON_KEY]
+    }
+
+    suspend fun setVipPendingCancel(pending: Boolean, reason: String? = null) {
+        dataStore.edit { preferences ->
+            if (pending) {
+                preferences[VIP_PENDING_CANCEL_KEY] = true
+                if (reason != null && reason.isNotBlank()) {
+                    preferences[VIP_PENDING_CANCEL_REASON_KEY] = reason
+                } else {
+                    preferences.remove(VIP_PENDING_CANCEL_REASON_KEY)
+                }
+            } else {
+                preferences.remove(VIP_PENDING_CANCEL_KEY)
+                preferences.remove(VIP_PENDING_CANCEL_REASON_KEY)
+            }
         }
     }
 
@@ -902,6 +934,9 @@ class ServerSettingsRepository @Inject constructor(
         private val VIP_ACTIVE_KEY = booleanPreferencesKey("vip_active")
         private val VIP_UNTIL_KEY = doublePreferencesKey("vip_until")
         private val VIP_PENDING_CLAIM_KEY = booleanPreferencesKey("vip_pending_claim")
+        private val VIP_CANCELLED_AT_KEY = doublePreferencesKey("vip_cancelled_at")
+        private val VIP_PENDING_CANCEL_KEY = booleanPreferencesKey("vip_pending_cancel")
+        private val VIP_PENDING_CANCEL_REASON_KEY = stringPreferencesKey("vip_pending_cancel_reason")
         private val SYNC_KEY_KEY = stringPreferencesKey("sync_key")
         private val TRIAL_SECONDS_REMAINING_KEY = doublePreferencesKey("trial_seconds_remaining")
         private val TRIAL_RECORDED_AT_MS_KEY = longPreferencesKey("trial_recorded_at_ms")

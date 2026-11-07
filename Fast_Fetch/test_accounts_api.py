@@ -495,5 +495,68 @@ class VipPass(EdgeFixture, unittest.TestCase):
         self.assertIsNone(redact.parse_vip_pass(payload["pass"][:-2] + "AA", SECRET))
 
 
+class CancelVipApiTests(EdgeFixture, unittest.TestCase):
+    def grant(self, until):
+        with closing(accounts.connect(self.state)) as conn:
+            row = conn.execute("SELECT id FROM user_accounts LIMIT 1").fetchone()
+            conn.execute("UPDATE user_accounts SET vip_until = ? WHERE id = ?",
+                         (float(until), row["id"]))
+            conn.commit()
+
+    def test_cancel_without_bearer_key_is_401(self):
+        status, _ctype, raw = self.post(f"{P}/cancel", {})
+        payload = json.loads(raw.decode("utf-8"))
+        self.assertEqual(status, 401)
+        self.assertEqual(payload["code"], "unauthorised")
+
+    def test_cancel_non_vip_is_400_not_vip(self):
+        self.key = self.enroll()
+        status, _ctype, raw = self.post(f"{P}/cancel", {}, headers=self.auth())
+        payload = json.loads(raw.decode("utf-8"))
+        self.assertEqual(status, 400)
+        self.assertEqual(payload["code"], "invalid_params")
+        self.assertEqual(payload["detail"], "this account has no active VIP membership to cancel")
+
+    def test_cancel_active_vip_returns_200_and_expected_shape(self):
+        self.key = self.enroll()
+        self.grant(time.time() + 86400 * 30)
+        status, _ctype, raw = self.post(
+            f"{P}/cancel",
+            {"reason": "Moving abroad"},
+            headers=self.auth()
+        )
+        payload = json.loads(raw.decode("utf-8"))
+        self.assertEqual(status, 200)
+        self.assertTrue(payload["cancelled"])
+        self.assertIn("vip_until", payload)
+        self.assertIn("cancelled_at", payload)
+        self.assertGreater(payload["vip_until"], time.time())
+        self.assertAlmostEqual(payload["cancelled_at"], time.time(), delta=5)
+
+    def test_cancel_extra_body_keys_refused(self):
+        self.key = self.enroll()
+        self.grant(time.time() + 86400 * 30)
+        status, _ctype, raw = self.post(
+            f"{P}/cancel",
+            {"reason": "testing", "extra_param": 123},
+            headers=self.auth()
+        )
+        payload = json.loads(raw.decode("utf-8"))
+        self.assertEqual(status, 400)
+        self.assertEqual(payload["code"], "invalid_params")
+
+    def test_cancel_non_string_reason_refused(self):
+        self.key = self.enroll()
+        self.grant(time.time() + 86400 * 30)
+        status, _ctype, raw = self.post(
+            f"{P}/cancel",
+            {"reason": 12345},
+            headers=self.auth()
+        )
+        payload = json.loads(raw.decode("utf-8"))
+        self.assertEqual(status, 400)
+        self.assertEqual(payload["code"], "invalid_params")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

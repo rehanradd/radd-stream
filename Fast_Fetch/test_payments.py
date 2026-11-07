@@ -613,7 +613,8 @@ class Entitlement(Fixture):
     def test_entitlement_reports_pending(self):
         self.file_claim()
         earned = payments.entitlement(self.conn, self.key, now=NOW)
-        self.assertEqual(earned, {"vip": False, "vip_until": 0.0, "pending": True})
+        self.assertEqual(earned, {"vip": False, "vip_until": 0.0, "pending": True,
+                                  "vip_cancelled_at": None})
 
     def test_entitlement_without_a_claim_is_not_pending(self):
         earned = payments.entitlement(self.conn, self.key, now=NOW)
@@ -635,7 +636,7 @@ class Entitlement(Fixture):
         self.file_claim()
         earned = payments.entitlement(self.conn, self.key, now=NOW)
         self.assertEqual(earned, {"vip": False, "vip_until": NOW - DAY,
-                                 "pending": True})
+                                  "pending": True, "vip_cancelled_at": None})
 
     def test_reject_clears_pending(self):
         filed = self.file_claim()
@@ -771,7 +772,7 @@ class AccountEdge(Fixture):
         earned = self.get(f"{P}/entitlement", headers=self.auth())
         self.assertEqual(self.status(earned), 200)
         self.assertEqual(set(self.payload(earned)["entitlement"]),
-                         {"vip", "vip_until", "pending"})
+                         {"vip", "vip_until", "pending", "vip_cancelled_at"})
         self.assertFalse(self.payload(earned)["entitlement"]["pending"])
         self.submit(self.good())
         after = self.payload(self.get(f"{P}/entitlement", headers=self.auth()))
@@ -785,7 +786,7 @@ class AccountEdge(Fixture):
         for view in ("account_entitlement", "account_payment"):
             self.assertIn(view, redact.VIEWS, view)
         self.assertEqual(redact.VIEWS["account_entitlement"],
-                         frozenset({"vip", "vip_until", "pending"}))
+                         frozenset({"vip", "vip_until", "pending", "vip_cancelled_at"}))
         self.assertNotIn("tid", redact.VIEWS["account_payment"])
         self.assertNotEqual(redact.project({"vip": True, "vip_until": 1.0,
                                             "pending": False, "source_site": "x"},

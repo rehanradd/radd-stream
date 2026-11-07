@@ -564,7 +564,7 @@ def _review(conn_or_path, payment_id, *, action, reviewer, note, now,
                 # max(now, prior): an early renewal banks the days left on the
                 # current term instead of restarting it at today.
                 new = max(moment, prior) + days * 86400.0
-                conn.execute("UPDATE user_accounts SET vip_until = ? WHERE id = ?",
+                conn.execute("UPDATE user_accounts SET vip_until = ?, vip_cancelled_at = NULL WHERE id = ?",
                              (new, int(row["account_id"])))
             marked = conn.execute(
                 "UPDATE payment_transactions SET status = ?, reviewed_at = ?,"
@@ -984,7 +984,8 @@ def entitlement(conn_or_path, key, *, now: float | None = None,
         until = max(float(account["vip_until"] or 0),
                     accounts.coin_pass_until(conn, account["account_id"], moment))
     return {"vip": bool(until > moment),
-            "vip_until": float(until or 0), "pending": bool(pending)}
+            "vip_until": float(until or 0), "pending": bool(pending),
+            "vip_cancelled_at": account.get("vip_cancelled_at")}
 
 
 def list_payments(conn_or_path, *, status: str | None = STATUS_PENDING,
@@ -1000,12 +1001,12 @@ def list_payments(conn_or_path, *, status: str | None = STATUS_PENDING,
     wanted = max(1, min(int(limit), MAX_LEDGER_ROWS))
     columns = ", ".join("p." + name for name in _PAYMENT_COLUMNS)
     if status is None:
-        sql = (f"SELECT {columns}, a.key_hash AS source_hash"
+        sql = (f"SELECT {columns}, a.key_hash AS source_hash, a.vip_cancelled_at AS vip_cancelled_at"
                " FROM payment_transactions p"
                " LEFT JOIN user_accounts a ON a.id = p.account_id"
                " ORDER BY p.submitted_at DESC LIMIT ?")
     else:
-        sql = (f"SELECT {columns}, a.key_hash AS source_hash"
+        sql = (f"SELECT {columns}, a.key_hash AS source_hash, a.vip_cancelled_at AS vip_cancelled_at"
                " FROM payment_transactions p"
                " LEFT JOIN user_accounts a ON a.id = p.account_id"
                " WHERE p.status = ? ORDER BY p.submitted_at ASC LIMIT ?")
@@ -1014,6 +1015,7 @@ def list_payments(conn_or_path, *, status: str | None = STATUS_PENDING,
         rows = conn.execute(sql, params).fetchall()
     out = []
     for row in rows:
+        cancelled_val = float(row["vip_cancelled_at"]) if row["vip_cancelled_at"] is not None else None
         out.append({
             "payment_id": int(row["id"]),
             "hint": account_hint(row["source_hash"]),
@@ -1025,6 +1027,7 @@ def list_payments(conn_or_path, *, status: str | None = STATUS_PENDING,
             "submitted_at": float(row["submitted_at"] or 0),
             "reviewed_at": float(row["reviewed_at"] or 0),
             "reviewer_note": str(row["reviewer_note"] or ""),
+            "vip_cancelled_at": cancelled_val,
         })
     return out
 

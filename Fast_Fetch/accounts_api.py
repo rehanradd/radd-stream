@@ -115,6 +115,10 @@ PREFIX = "/api/v2/account"
 JSON = "application/json; charset=utf-8"
 PROBLEM = "application/problem+json; charset=utf-8"
 
+#: The only keys a cancellation request may carry. `reason` is optional and
+#: audited into `payment_review_audit` with `action='user_cancelled'`.
+_CANCEL_KEYS = frozenset({"reason"})
+
 #: The only keys a payment submission may carry. `plan` selects the price, `method`
 #: selects the transaction-id shape, `tid` is the claim itself. Anything else —
 #: above all `amount_pkr`/`amount`, the exact key a caller would send to price its
@@ -214,6 +218,7 @@ _STATUS = {
     "weak_sync_key": "invalid_params",
     "weak_pin": "invalid_params",
     "invalid_request": "invalid_params",
+    "not_vip": "invalid_params",
     "account_full": "forbidden",
     "account_error": "invalid_params",
 }
@@ -782,6 +787,20 @@ def route_post(path, body, *, db_path, catalog_path, secret, headers) -> tuple |
         if tail == ["revoke"]:
             accounts.revoke_account(db_path, key, tracker=LIMITER)
             return _respond({"revoked": True})
+        if tail == ["cancel"]:
+            extra = sorted(str(name) for name in payload if name not in _CANCEL_KEYS)
+            if extra:
+                return _problem("invalid_params", 400,
+                                "a cancellation request accepts reason only", path)
+            reason = payload.get("reason")
+            if reason is not None and not isinstance(reason, str):
+                return _problem("invalid_params", 400, "reason must be a string", path)
+            cancelled = accounts.cancel_vip(db_path, key, reason=reason, tracker=LIMITER)
+            return _respond({
+                "cancelled": bool(cancelled.get("cancelled")),
+                "vip_until": cancelled.get("vip_until"),
+                "cancelled_at": cancelled.get("cancelled_at"),
+            })
         if tail == ["profile-link"]:
             # Bearer first, always: `link_profile_with_pin` writes onto whatever
             # `account_id` it is handed, so the number may only ever come from a key

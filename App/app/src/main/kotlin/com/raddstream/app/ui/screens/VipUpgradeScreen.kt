@@ -27,6 +27,7 @@ import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Star
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -102,11 +103,40 @@ fun VipUpgradeScreen(
     val snackbarHostState = remember { SnackbarHostState() }
     val clipboard = LocalClipboardManager.current
     val scope = rememberCoroutineScope()
+    var showCancelConfirmDialog by remember { mutableStateOf(false) }
 
     LaunchedEffect(state.statusMessage) {
         val message = state.statusMessage ?: return@LaunchedEffect
         snackbarHostState.showSnackbar(message)
         viewModel.clearStatus()
+    }
+
+    if (showCancelConfirmDialog) {
+        AlertDialog(
+            onDismissRequest = { showCancelConfirmDialog = false },
+            title = { Text("Cancel VIP Pass?") },
+            text = {
+                Text(
+                    "No partial refunds. VIP access stays active until the expiry date, " +
+                        "and no renewal reminders will be sent."
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showCancelConfirmDialog = false
+                        viewModel.cancelVipPass()
+                    }
+                ) {
+                    Text("Confirm Cancel")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showCancelConfirmDialog = false }) {
+                    Text("Keep VIP")
+                }
+            },
+        )
     }
 
     Scaffold(
@@ -132,7 +162,11 @@ fun VipUpgradeScreen(
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
             VipHero()
-            EntitlementCard(state = state)
+            EntitlementCard(
+                state = state,
+                onCancelClick = { showCancelConfirmDialog = true },
+                onResumeClick = viewModel::resumePass,
+            )
             RewardedVipSection(
                 expiresAt = state.rewardedVipExpiresAt,
                 onWatchAd = { viewModel.grantRewardedVip() },
@@ -225,63 +259,118 @@ fun VipUpgradeScreen(
  * operator's ledger has never heard of it.
  */
 @Composable
-private fun EntitlementCard(state: VipUiState) {
-    val earned = state.entitlement
+private fun EntitlementCard(
+    state: VipUiState,
+    onCancelClick: () -> Unit,
+    onResumeClick: () -> Unit,
+) {
+    val earned = state.entitlement ?: return
     val until = state.vipUntilMillis
-    val title = when {
-        earned == null -> return
-        earned.vip -> "VIP is active"
-        earned.pending -> "Awaiting the operator's confirmation"
-        else -> return
-    }
-    Surface(
-        color = if (earned.vip) {
-            RaddSignalGold.copy(alpha = 0.14f)
-        } else {
-            MaterialTheme.colorScheme.surface
-        },
-        shape = RoundedCornerShape(16.dp),
-        modifier = Modifier.fillMaxWidth(),
-    ) {
-        Column(
-            modifier = Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp),
+    if (!earned.vip && !earned.pending) return
+
+    val planName = "VIP Pass"
+
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Surface(
+            color = if (earned.vip) {
+                RaddSignalGold.copy(alpha = 0.14f)
+            } else {
+                MaterialTheme.colorScheme.surface
+            },
+            shape = RoundedCornerShape(16.dp),
+            modifier = Modifier.fillMaxWidth(),
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(
-                    if (earned.vip) Icons.Default.Check else Icons.Default.Info,
-                    contentDescription = null,
-                    tint = if (earned.vip) RaddSignalGold else MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.size(18.dp),
-                )
-                Spacer(Modifier.width(8.dp))
-                Text(
-                    title,
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.onBackground,
-                )
+            Column(
+                modifier = Modifier.padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        if (earned.vip) Icons.Default.Check else Icons.Default.Info,
+                        contentDescription = null,
+                        tint = if (earned.vip) RaddSignalGold else MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(18.dp),
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        if (earned.vip) planName else "Awaiting the operator's confirmation",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onBackground,
+                    )
+                }
+
+                if (earned.vip) {
+                    if (until > 0L) {
+                        Text(
+                            validThroughLabel(until),
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.Medium,
+                            color = MaterialTheme.colorScheme.onBackground,
+                        )
+                    }
+                    Text(
+                        "Prepaid — no auto-renew",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+
+                    // Post-cancel state badge / notice
+                    if (state.serverCancelled) {
+                        Surface(
+                            color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.4f),
+                            shape = RoundedCornerShape(8.dp),
+                        ) {
+                            Text(
+                                cancelledUntilLabel(until),
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.onErrorContainer,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                            )
+                        }
+                    } else if (state.isCancelPending) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Surface(
+                                color = MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.5f),
+                                shape = RoundedCornerShape(8.dp),
+                            ) {
+                                Text(
+                                    "Cancellation pending",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = MaterialTheme.colorScheme.onTertiaryContainer,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                )
+                            }
+                            TextButton(onClick = onResumeClick) {
+                                Text("Resume Pass")
+                            }
+                        }
+                    }
+                } else {
+                    Text(
+                        "A payment was filed and no decision has been recorded yet. " +
+                            "VIP turns on here by itself once the operator approves it.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
-            Text(
-                when {
-                    earned.vip && until > 0L -> "Confirmed through ${expiryLabel(until)}."
-                    earned.vip -> "Confirmed by the operator."
-                    else -> "A payment was filed and no decision has been recorded yet. " +
-                        "VIP turns on here by itself once the operator approves it."
-                },
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            // There is no cancel button because there is nothing to cancel:
-            // VIP is a manual payment the operator approves, and it never
-            // charges again on its own. When it ends, the viewer pays again
-            // to continue — or does nothing, and goes back to free.
-            if (earned.vip) {
-                Text(
-                    "VIP does not renew itself. When it ends, pay again to continue — nothing is charged on its own.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+        }
+
+        // [Cancel VIP Pass] outlined button below the card
+        if (earned.vip && !state.isCancelled) {
+            OutlinedButton(
+                onClick = onCancelClick,
+                enabled = !state.isCancelling,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text("Cancel VIP Pass")
             }
         }
     }
@@ -873,7 +962,7 @@ private fun PlanCard(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             Text(
-                "This is the full amount you send — no extra charge is added here.",
+                if (price <= 0) "Not published by the server" else "Total incl. taxes",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -1183,7 +1272,7 @@ private fun SectionLabel(text: String) {
     )
 }
 
-/** `PKR 1,500`, or the words for a server that has not priced the plan; never an invented figure. */
+/** Formatted currency amount like "$currency N,NNN", or the words for a server that has not priced the plan; never an invented figure. */
 private fun amountLabel(currency: String, amount: Int): String =
     if (amount <= 0) "Not published by the server" else
         "$currency " + String.format(Locale.US, "%,d", amount)
@@ -1203,3 +1292,10 @@ private fun submittedLabel(epochMs: Long): String =
 /** The server's expiry, printed in the viewer's own calendar. It is a deadline, not a countdown. */
 private fun expiryLabel(epochMs: Long): String =
     SimpleDateFormat("d MMM yyyy", Locale.getDefault()).format(Date(epochMs))
+
+/** "Valid Through DD MMM YYYY" from vip_until */
+private fun validThroughLabel(epochMs: Long): String =
+    "Valid Through " + SimpleDateFormat("dd MMM yyyy", Locale.US).format(Date(epochMs))
+
+private fun cancelledUntilLabel(epochMs: Long): String =
+    "Cancelled — access remains active until " + SimpleDateFormat("dd MMM yyyy", Locale.US).format(Date(epochMs))

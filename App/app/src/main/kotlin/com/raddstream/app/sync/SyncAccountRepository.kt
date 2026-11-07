@@ -12,6 +12,8 @@ import com.raddstream.app.network.ApiProvider
 import com.raddstream.app.network.RaddStreamApi
 import com.raddstream.app.network.bearerHeader
 import com.raddstream.app.network.buildRaddGson
+import com.raddstream.app.network.models.AccountCancelRequest
+import com.raddstream.app.network.models.AccountCancelResponse
 import com.raddstream.app.network.models.AccountCreateRequest
 import com.raddstream.app.network.models.AccountEntitlement
 import com.raddstream.app.network.models.AccountProblem
@@ -49,6 +51,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import retrofit2.HttpException
@@ -126,6 +129,9 @@ class SyncAccountRepository @Inject constructor(
             _entitlement.value = runCatching {
                 settingsRepository.storedEntitlement.first()
             }.getOrNull()
+        }
+        scope.launch {
+            retryPendingCancel()
         }
     }
 
@@ -479,6 +485,7 @@ class SyncAccountRepository @Inject constructor(
         // Membership rides the same pass as the lists: signing in on a second device should
         // show a VIP the operator already approved, and the throttle below keeps a repeated
         // "Sync now" from asking the same question twice in a minute.
+        retryPendingCancel()
         refreshEntitlement()
         return try {
             val api = apiProvider.current()
@@ -651,6 +658,9 @@ class SyncAccountRepository @Inject constructor(
                 // Mirror the server's answer so the next cold start has it before any network
                 // call can fail. The ledger remains the only authority; this is its cache.
                 settingsRepository.saveEntitlement(read)
+                if (read.vipCancelledAt != null) {
+                    settingsRepository.setVipPendingCancel(false)
+                }
             }
             read
         } catch (error: Exception) {
@@ -667,6 +677,71 @@ class SyncAccountRepository @Inject constructor(
                 else -> _entitlement.value
             }
         }
+    }
+
+    /**
+     * Flow of whether a cancellation request is pending local confirmation from the server.
+     */
+    val vipPendingCancel: Flow<Boolean> = settingsRepository.vipPendingCancel
+
+    /**
+     * Retries any pending self-serve VIP cancellation stored in DataStore.
+     * Retried on every syncNow() and on app start until the server acknowledges.
+     * Never swallows an error or 404 silently to forget.
+     */
+    suspend fun retryPendingCancel(): Boolean {
+        val isPending = runCatching { settingsRepository.vipPendingCancel.first() }.getOrDefault(false)
+        if (!isPending) return false
+        val key = currentKey() ?: return false
+        val reason = runCatching { settingsRepository.vipPendingCancelReason.first() }.getOrNull()
+        return try {
+            val resp = apiProvider.current().cancelVip(
+                bearerHeader(key),
+                AccountCancelRequest(reason = reason)
+            )
+            settingsRepository.setVipPendingCancel(false)
+            _entitlement.update { current ->
+                current?.copy(vipCancelledAt = resp.cancelledAt)
+            }
+            refreshEntitlement(force = true)
+            true
+        } catch (ex: Exception) {
+            // NEVER swallow a 404 silently and forget: pending state remains in DataStore
+            false
+        }
+    }
+
+    /**
+     * Self-serve cancellation of VIP pass.
+     * Persists pending-cancel in DataStore, then calls server route POST /api/v2/account/cancel.
+     * On server ack (200), clears pending cancel and sets vipCancelledAt.
+     * On error (including 404), leaves pending cancel in DataStore to be retried.
+     */
+    suspend fun cancelVipPass(reason: String? = null): AccountCancelResponse? {
+        val key = currentKey() ?: return null
+        settingsRepository.setVipPendingCancel(true, reason)
+        return try {
+            val resp = apiProvider.current().cancelVip(
+                bearerHeader(key),
+                AccountCancelRequest(reason = reason)
+            )
+            settingsRepository.setVipPendingCancel(false)
+            _entitlement.update { current ->
+                current?.copy(vipCancelledAt = resp.cancelledAt)
+            }
+            refreshEntitlement(force = true)
+            resp
+        } catch (ex: Exception) {
+            // Persisted in DataStore as pending cancel. Retried on every syncNow() and on app start.
+            null
+        }
+    }
+
+    /**
+     * Clears local pending-cancel when the user decides to resume pass before server ack.
+     */
+    suspend fun clearPendingCancel() {
+        settingsRepository.setVipPendingCancel(false)
     }
 
     /**

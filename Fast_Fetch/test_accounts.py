@@ -1198,5 +1198,50 @@ class CoinPassUntilTests(StateTestCase):
                          0.0)
 
 
+class CancelVipTests(StateTestCase):
+    def test_cancel_vip_sets_vip_cancelled_at_and_creates_audit_row(self):
+        created = self.new_account()
+        key = created["sync_key"]
+        account_id = created["account_id"]
+        future = T0 + 86400 * 30
+        self.conn.execute("UPDATE user_accounts SET vip_until = ? WHERE id = ?", (future, account_id))
+        self.conn.commit()
+
+        res = accounts.cancel_vip(self.conn, key, reason="Need a break", now=T0, tracker=self.tracker)
+        self.assertTrue(res["cancelled"])
+        self.assertEqual(res["vip_until"], future)
+        self.assertEqual(res["cancelled_at"], T0)
+
+        row = self.conn.execute("SELECT vip_cancelled_at, vip_until FROM user_accounts WHERE id = ?", (account_id,)).fetchone()
+        self.assertEqual(row["vip_cancelled_at"], T0)
+        self.assertEqual(row["vip_until"], future)
+
+        audit = self.conn.execute(
+            "SELECT payment_id, account_id, action, reviewer, note, acted_at "
+            "FROM payment_review_audit WHERE account_id = ?", (account_id,)
+        ).fetchone()
+        self.assertIsNotNone(audit)
+        self.assertEqual(audit["payment_id"], 0)
+        self.assertEqual(audit["action"], "user_cancelled")
+        self.assertEqual(audit["reviewer"], "self_serve")
+        self.assertEqual(audit["note"], "Need a break")
+        self.assertEqual(audit["acted_at"], T0)
+
+    def test_cancel_vip_on_non_vip_raises_not_vip(self):
+        created = self.new_account()
+        key = created["sync_key"]
+        with self.assertRaises(accounts.NotVip):
+            accounts.cancel_vip(self.conn, key, now=T0, tracker=self.tracker)
+
+    def test_cancel_vip_on_expired_vip_raises_not_vip(self):
+        created = self.new_account()
+        key = created["sync_key"]
+        past = T0 - 100
+        self.conn.execute("UPDATE user_accounts SET vip_until = ? WHERE id = ?", (past, created["account_id"]))
+        self.conn.commit()
+        with self.assertRaises(accounts.NotVip):
+            accounts.cancel_vip(self.conn, key, now=T0, tracker=self.tracker)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

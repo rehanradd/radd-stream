@@ -264,10 +264,23 @@ data class AccountEntitlement(
     val vip: Boolean = false,
     @SerializedName("vip_until") val vipUntil: Double = 0.0,
     val pending: Boolean = false,
+    @SerializedName("vip_cancelled_at") val vipCancelledAt: Double? = null,
 )
 
 data class EntitlementResponse(
     val entitlement: AccountEntitlement? = null,
+)
+
+/** Body of POST api/v2/account/cancel. Reason is optional. */
+data class AccountCancelRequest(
+    val reason: String? = null,
+)
+
+/** The cancel response from POST api/v2/account/cancel. */
+data class AccountCancelResponse(
+    val cancelled: Boolean = false,
+    @SerializedName("vip_until") val vipUntil: Double = 0.0,
+    @SerializedName("cancelled_at") val cancelledAt: Double = 0.0,
 )
 
 /**
