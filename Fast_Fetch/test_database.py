@@ -752,11 +752,14 @@ class DatabaseSaveTests(unittest.TestCase):
                                   "https://cdn.example/site_a/page-1.html"])
 
     def test_negative_cache_refuses_a_recently_failed_copy(self):
-        """A copy that failed is refused in milliseconds on the next
-        attempt: no re-probe, reason negative_cache, and the row
-        carries the failure class the dispatch recorded (no_unwrapper
-        here — the cached probe failed first, then no unwrap branch
-        matched this host)."""
+        """A copy that failed is refused without re-probing on the next
+        attempt: the stale fall-through sees the address already failed
+        (the negative-cache record) and answers stale_probe_failed, and
+        the row keeps the failure class the dispatch recorded
+        (no_unwrapper here — the cached probe failed first, then no
+        unwrap branch matched this host). A lone copy with no playing
+        sibling still refuses; a copy whose sibling plays is served by
+        the failover instead (see the two tests after this one)."""
         media_data = self.media("site_a", "https://site-a.example/example-film/")
         media_data["releases"][0]["sources"] = [{
             "source_name": "Example CDN",
@@ -789,8 +792,140 @@ class DatabaseSaveTests(unittest.TestCase):
             second = fast_fetch.resolve_live_source(source["id"])
         self.assertFalse(second["success"], second)
         self.assertEqual(second["code"], "no_playable_source", second)
-        self.assertEqual(second["reason"], "negative_cache", second)
-        self.assertEqual(second["failure_class"], "no_unwrapper", second)
+        self.assertEqual(second["reason"], "stale_probe_failed", second)
+        self.assertEqual(probe2.call_count, 0, probe2.call_args_list)
+
+    def test_negative_cache_hit_still_serves_a_playing_sibling(self):
+        """Session 102 (multimovies): a dead picked copy must not kill
+        the press when its sibling plays. The first press records the
+        picked copy's failure and serves the sibling by failover; the
+        second press hits the fresh failure record, skips the picked
+        copy's own work, and serves the sibling again — no probe of
+        the picked copy's address either time after the first."""
+        media_data = self.media("site_a", "https://site-a.example/example-film/")
+        media_data["releases"][0]["sources"] = [{
+            "source_name": "Dead copy",
+            "service": "test-service",
+            "resource_id": "site_a-id-0",
+            "source_url": "https://site_a.example/source-0",
+            "final_url": "https://cdn.example/site_a/page-0.html",
+            "is_temporary": 0,
+        }]
+        media_data["releases"].append({
+            "release_title": "Example Film 1080p (2)",
+            "quality": "1080p",
+            "codec": "x264",
+            "size": "1GB",
+            "languages": "English",
+            "season": None,
+            "episode": None,
+            "intermediate_url": "https://site_a.example/release-2",
+            "sources": [{
+                "source_name": "Warm sibling",
+                "service": "test-service",
+                "resource_id": "site_a-id-1",
+                "source_url": "https://site_a.example/source-1",
+                "final_url": "https://cdn.example/site_a/good.mp4",
+                "is_temporary": 0,
+            }],
+        })
+        fast_fetch.save_scraped_data(media_data)
+        with fast_fetch.get_db() as conn:
+            rows = conn.execute(
+                "SELECT id FROM download_sources ORDER BY id").fetchall()
+        self.assertEqual(len(rows), 2)
+        failing = {"ok": False, "kind": None, "mime": None, "size": None,
+                   "resumable": False, "renditions": [], "failure": "probe_error"}
+        passing = {"ok": True, "kind": "file", "mime": "video/mp4",
+                   "size": 1024, "resumable": True, "renditions": [],
+                   "failure": None}
+
+        def probe_side_effect(url, **_kw):
+            if url == "https://cdn.example/site_a/good.mp4":
+                return passing
+            return failing
+
+        probe = Mock(side_effect=probe_side_effect)
+        with patch.object(fast_fetch, "_stage2_probe", probe):
+            first = fast_fetch.resolve_live_source(rows[0]["id"])
+        self.assertTrue(first["success"], first)
+        self.assertTrue(first.get("failover"), first)
+        self.assertEqual(first["url"], "https://cdn.example/site_a/good.mp4", first)
+        with fast_fetch.get_db() as conn:
+            row = conn.execute(
+                "SELECT last_failed_at, failure_class FROM download_sources "
+                "WHERE id = ?", (rows[0]["id"],)).fetchone()
+        self.assertIsNotNone(row["last_failed_at"], row)
+        self.assertEqual(row["failure_class"], "no_unwrapper", row)
+        # Second press: the picked copy is skipped on its own record and
+        # the sibling serves again; only the sibling's address is probed.
+        probe2 = Mock(side_effect=probe_side_effect)
+        with patch.object(fast_fetch, "_stage2_probe", probe2):
+            second = fast_fetch.resolve_live_source(rows[0]["id"])
+        self.assertTrue(second["success"], second)
+        self.assertTrue(second.get("failover"), second)
+        self.assertEqual(second["url"], "https://cdn.example/site_a/good.mp4", second)
+        self.assertEqual(probe2.call_count, 1, probe2.call_args_list)
+        self.assertEqual(probe2.call_args_list[0].args[0],
+                         "https://cdn.example/site_a/good.mp4")
+        with fast_fetch.get_db() as conn:
+            row = conn.execute(
+                "SELECT last_failed_at FROM download_sources WHERE id = ?",
+                (rows[0]["id"],)).fetchone()
+        self.assertIsNotNone(row["last_failed_at"], row)
+
+    def test_negative_cache_hit_with_all_siblings_dead_probes_nothing(self):
+        """Session 102: when the picked copy AND its sibling both carry
+        fresh failure records, the repeat press refuses without probing
+        either address — each side's record is proof enough."""
+        media_data = self.media("site_a", "https://site-a.example/example-film/")
+        media_data["releases"][0]["sources"] = [{
+            "source_name": "Dead copy",
+            "service": "test-service",
+            "resource_id": "site_a-id-0",
+            "source_url": "https://site_a.example/source-0",
+            "final_url": "https://cdn.example/site_a/page-0.html",
+            "is_temporary": 0,
+        }]
+        media_data["releases"].append({
+            "release_title": "Example Film 1080p (2)",
+            "quality": "1080p",
+            "codec": "x264",
+            "size": "1GB",
+            "languages": "English",
+            "season": None,
+            "episode": None,
+            "intermediate_url": "https://site_a.example/release-2",
+            "sources": [{
+                "source_name": "Dead sibling",
+                "service": "test-service",
+                "resource_id": "site_a-id-1",
+                "source_url": "https://site_a.example/source-1",
+                "final_url": "https://cdn.example/site_a/page-1.html",
+                "is_temporary": 0,
+            }],
+        })
+        fast_fetch.save_scraped_data(media_data)
+        with fast_fetch.get_db() as conn:
+            rows = conn.execute(
+                "SELECT id FROM download_sources ORDER BY id").fetchall()
+        self.assertEqual(len(rows), 2)
+        failing = {"ok": False, "kind": None, "mime": None, "size": None,
+                   "resumable": False, "renditions": [], "failure": "probe_error"}
+        probe = Mock(return_value=failing)
+        with patch.object(fast_fetch, "_stage2_probe", probe):
+            first = fast_fetch.resolve_live_source(rows[0]["id"])
+        self.assertFalse(first["success"], first)
+        with fast_fetch.get_db() as conn:
+            records = conn.execute(
+                "SELECT COUNT(*) FROM download_sources "
+                "WHERE last_failed_at IS NOT NULL").fetchone()[0]
+        self.assertEqual(records, 2, "both copies carry a failure record")
+        probe2 = Mock(return_value=failing)
+        with patch.object(fast_fetch, "_stage2_probe", probe2):
+            second = fast_fetch.resolve_live_source(rows[0]["id"])
+        self.assertFalse(second["success"], second)
+        self.assertEqual(second["code"], "no_playable_source", second)
         self.assertEqual(probe2.call_count, 0, probe2.call_args_list)
 
     def test_negative_cache_expires_after_ttl(self):
@@ -947,6 +1082,129 @@ class DatabaseSaveTests(unittest.TestCase):
         # Primary dispatch + exactly one sibling: the second sibling is
         # never started once the faked clock passes the deadline.
         self.assertEqual(resolve_copy.call_count, 2, resolve_copy.call_args_list)
+    def test_stage1_single_copy_release_falls_through_to_stage2(self):
+        """Session 102 (multimovies): a Stage-1 copy that is the ONLY
+        source in its release must not be refused with
+        stage1_all_copies_failed — the Stage-1 ladder tried nothing,
+        so the Stage-2 cross-release ladder still runs and a playing
+        sibling in another release serves the press."""
+        media_data = self.media("site_a", "https://site-a.example/example-film/")
+        media_data["releases"][0]["sources"] = [{
+            "source_name": "VidBolt 0",
+            "service": "vidbolt",
+            "resource_id": "vidbolt-id-0",
+            "source_url": "https://vidbolt.xyz/embed/0",
+            "final_url": "https://vidbolt.xyz/embed/0",
+            "is_temporary": 1,
+        }]
+        media_data["releases"].append({
+            "release_title": "Example Film 1080p (2)",
+            "quality": "1080p",
+            "codec": "x264",
+            "size": "1GB",
+            "languages": "English",
+            "season": None,
+            "episode": None,
+            "intermediate_url": "https://site_a.example/release-2",
+            "sources": [{
+                "source_name": "Warm sibling",
+                "service": "test-service",
+                "resource_id": "site_a-id-1",
+                "source_url": "https://site_a.example/source-1",
+                "final_url": "https://cdn.example/site_a/good.mp4",
+                "is_temporary": 0,
+            }],
+        })
+        fast_fetch.save_scraped_data(media_data)
+        with fast_fetch.get_db() as conn:
+            rows = conn.execute(
+                "SELECT id FROM download_sources ORDER BY id").fetchall()
+        self.assertEqual(len(rows), 2)
+        stage1_fail = {"ok": False, "backend": "vidbolt", "failure": "unverified"}
+        resolve_copy = Mock(return_value=stage1_fail)
+        passing = {"ok": True, "kind": "file", "mime": "video/mp4",
+                   "size": 1024, "resumable": True, "renditions": [],
+                   "failure": None}
+        failing = {"ok": False, "kind": None, "mime": None, "size": None,
+                   "resumable": False, "renditions": [], "failure": "probe_error"}
+
+        def probe_side_effect(url, **_kw):
+            if url == "https://cdn.example/site_a/good.mp4":
+                return passing
+            return failing
+
+        def classify_side_effect(url, *args, **_kw):
+            return "vidbolt" if "vidbolt" in url else "unknown"
+
+        probe = Mock(side_effect=probe_side_effect)
+        with patch.object(current_hosts, "classify_backend",
+                          side_effect=classify_side_effect), \
+             patch.object(current_hosts, "resolve_copy", resolve_copy), \
+             patch.object(fast_fetch, "_stage2_probe", probe):
+            res = fast_fetch.resolve_live_source(rows[0]["id"])
+        self.assertTrue(res["success"], res)
+        self.assertTrue(res.get("failover"), res)
+        self.assertEqual(res["url"], "https://cdn.example/site_a/good.mp4", res)
+        # Only the picked copy's own dispatch ran: the Stage-1 ladder
+        # had no same-release sibling to try.
+        self.assertEqual(resolve_copy.call_count, 1, resolve_copy.call_args_list)
+    def test_unwrap_vidly_reads_the_signed_bridge_master(self):
+        """Session 102 (multimovies): the live filmu page is a Next.js
+        shell now — the media URL arrives as a CloudFront-signed master
+        behind the dash-hls-bridge Workers proxy, flight-data escaped
+        (\\/ and \\u0026). The extractor decodes the escapes first,
+        then takes the bridge URL to the closing quote so the signed
+        query (Policy/Signature/Key-Pair-Id) survives: without it the
+        bridge 502s. The old /media/ shape still works as a fallback,
+        an empty page stays unverified, and series still refuse."""
+        escaped = ("https:\\/\\/dash-hls-bridge.johndoesdmc.workers.dev"
+                   "\\/?url=https%3A%2F%2Fsacdn.hakunaymatata.com%2Fdash"
+                   "%2F4636220553102250728_0_0_1080_h265_13%2Fmaster.m3u8"
+                   "\\u0026Policy=POLICY\\u0026Signature=SIG"
+                   "\\u0026Key-Pair-Id=KEY")
+        expected = ("https://dash-hls-bridge.johndoesdmc.workers.dev"
+                    "/?url=https%3A%2F%2Fsacdn.hakunaymatata.com%2Fdash"
+                    "%2F4636220553102250728_0_0_1080_h265_13%2Fmaster.m3u8"
+                    "&Policy=POLICY&Signature=SIG&Key-Pair-Id=KEY")
+        page = ('<html><head><link rel="preload" as="fetch" href="'
+                + escaped + '"></head><body></body></html>')
+
+        class _FakePage:
+            def __init__(self, status, body):
+                self.status = status
+                self._body = body
+            def text(self):
+                return self._body
+
+        backend, candidates, failure = current_hosts._unwrap_vidly(
+            "https://embed.filmu.in/movie/960875",
+            lambda url, referer=None: _FakePage(200, page))
+        self.assertEqual(backend, "vidly")
+        self.assertIsNone(failure)
+        self.assertEqual(len(candidates), 1, candidates)
+        self.assertEqual(candidates[0]["url"], expected, candidates)
+        # Legacy shape still yields its candidate.
+        legacy_page = ("<html><body>https://cdn.example/media/abc123/"
+                       "index.m3u8</body></html>")
+        _b, legacy, _f = current_hosts._unwrap_vidly(
+            "https://embed.filmu.in/movie/960875",
+            lambda url, referer=None: _FakePage(200, legacy_page))
+        self.assertEqual([c["url"] for c in legacy],
+                         ["https://cdn.example/media/abc123/index.m3u8"])
+        # Empty page: unverified. Series: refused without fetching.
+        _b, empty, failure = current_hosts._unwrap_vidly(
+            "https://embed.filmu.in/movie/960875",
+            lambda url, referer=None: _FakePage(200, "<html></html>"))
+        self.assertEqual(empty, [])
+        self.assertEqual(failure, "unverified")
+        fetched = []
+        _b, _c, failure = current_hosts._unwrap_vidly(
+            "https://embed.filmu.in/tv/960875",
+            lambda url, referer=None: fetched.append(url) or _FakePage(200, page))
+        self.assertEqual(failure, "series_server_unverified")
+        self.assertEqual(fetched, [])
+
+
 
     def test_unwrap_fastdl_dead_page_uses_a_short_single_fetch(self):
         """A dead FastDL landing page costs one 5 s fetch, not 15 s x 3

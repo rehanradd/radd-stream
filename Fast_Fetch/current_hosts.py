@@ -647,9 +647,27 @@ def _unwrap_vidly(saved_url: str, fetch) -> tuple:
     if page.status != 200:
         return "vidly", [], ("blocked" if page.status == 403 else
                              "transport" if page.status == 0 else "unverified")
-    body = page.text().replace("\\/", "/")
-    playlists = sorted(set(re.findall(
+    # The embed page is a Next.js shell: the media URL no longer sits in
+    # static HTML as `https://<host>/media/<id>/index.m3u8` (that shape
+    # is gone — measured 2026-11-08 on the live filmu page, zero matches).
+    # It now arrives as a CloudFront-signed master behind the same
+    # dash-hls-bridge Workers proxy vidbolt already resolves through
+    # (`https://dash-hls-bridge.johndoesdmc.workers.dev/?url=...master.m3u8`
+    # plus Policy/Signature/Key-Pair-Id). The signed query is part of the
+    # URL: without it the bridge 502s, so the match must run over the
+    # body AFTER the flight-data escapes are decoded (`\\u0026` -> `&`,
+    # `&amp;` -> `&`), and must run to the closing quote, not to the
+    # first `&`. The old /media/ shape is kept as a fallback.
+    body = page.text()
+    body = (body.replace("\\/", "/").replace("\\u0026", "&")
+            .replace("\\u003d", "=").replace("\\x26", "&")
+            .replace("&amp;", "&"))
+    bridge = sorted(set(re.findall(
+        r"https://dash-hls-bridge\.johndoesdmc\.workers\.dev/"
+        r"\?url=[^\"'<>\\\s]*?master\.m3u8[^\"'<>\\\s]*", body)))
+    legacy = sorted(set(re.findall(
         r"https://[A-Za-z0-9.\-]+/media/[A-Za-z0-9]+/index\.m3u8", body)))
+    playlists = bridge + [url for url in legacy if url not in bridge]
     candidates = [{"url": url, "referer": "https://vidly.pro/",
                    "kind_hint": "playlist"} for url in playlists[:2]]
     if candidates:

@@ -6220,11 +6220,14 @@ def resolve_live_source(source_id: int, *, v2: bool = False,
     now_ts = time.time()
 
     # Negative cache (Session 101): a copy that failed recently is
-    # refused in milliseconds instead of re-proving the same negative
-    # on every play press. Only failures are recorded (see
-    # _record_resolve_failure); a live copy never carries a record,
-    # and an expired record is cleared here so the row stops carrying
-    # a dead refusal.
+    # not re-proved on every play press. Only failures are recorded
+    # (see _record_resolve_failure); a live copy never carries a
+    # record, and an expired record is cleared here so the row stops
+    # carrying a dead refusal. A fresh record does NOT refuse
+    # outright (Session 102): the picked copy may be dead while its
+    # siblings play, so a hit only skips this copy's own work and
+    # falls through to the sibling failover below.
+    _negative_cache_hit = False
     _failed_at = src.get("last_failed_at")
     if _failed_at is not None:
         try:
@@ -6232,19 +6235,16 @@ def resolve_live_source(source_id: int, *, v2: bool = False,
         except (TypeError, ValueError):
             _failed_age = None
         if _failed_age is not None and _failed_age < NEGATIVE_CACHE_TTL_SECONDS:
-            return {
-                "success": False,
-                "id": src["id"],
-                "error": "no_playable_source",
-                "code": "no_playable_source",
-                "reason": "negative_cache",
-                "failure_class": src.get("failure_class"),
-                "stale": False,
-            }
-        if _failed_age is not None:
+            # Fresh record: this copy stays skipped (flagged above);
+            # the sibling failover below still runs, so a copy whose
+            # siblings play keeps playing on repeat presses.
+            _negative_cache_hit = True
+        elif _failed_age is not None:
             _clear_resolve_failure(src["id"])
 
-    needs_refresh = False
+    # A fresh failure record means this copy is skipped below: the
+    # cached probes would only re-prove the same negative.
+    needs_refresh = _negative_cache_hit
     observed_expiry = _expiry_fields(src)
     # Imported where it is used, like `config` in `_tls_context`: `tiers` owns the
     # ledger words that name a copy nothing can play and ranks with them, so the
@@ -6438,161 +6438,181 @@ def resolve_live_source(source_id: int, *, v2: bool = False,
             return verdict.get("final_url") or None
         return None
 
-    try:
-        hr = _embed_resolvers()
-        # Stage-1 first: proven backends resolve through current_hosts with
-        # a capped probe per candidate, so a passing copy carries measured
-        # mime/size/resumable. A stage-1 failure must NOT fall through to
-        # the old unprobed branches for that backend: stage1_tried blocks
-        # them, and the sibling failover below decides instead.
+    if _negative_cache_hit:
+        # The picked copy failed recently: its own unwrap would only
+        # repeat the same negative, so skip straight to the sibling
+        # failover below. The Stage-1 sibling path still runs when
+        # this copy's backend is a Stage-1 one, and the Stage-2
+        # ladder runs for every backend — each sibling is re-checked
+        # against its own record, so the ladder stays fast. This
+        # address already failed recently (that is what the record
+        # means), so the stale fall-through must not pay to probe it
+        # again.
         try:
-            from current_hosts import (classify_backend as _ch_backend2,
-                                       resolve_copy as _ch_resolve)
-            _dispatch_backend = _ch_backend2(source_u, cached_u)
-            if _dispatch_backend in ("streamhg", "modiplay", "vidrift",
-                                     "vidbolt", "vidly", "vibuxer",
-                                     "pixeldrain", "fastdl-beer"):
-                stage1_tried = True
-                _dispatch_input = source_u
-                if _ch_backend2(source_u) in ("unknown", "filesforever"):
-                    if _ch_backend2(cached_u) not in ("unknown", "filesforever"):
-                        _dispatch_input = cached_u
-                stage1_result = _ch_resolve(_dispatch_input)
-                if stage1_result.get("ok"):
-                    fresh_url = stage1_result["url"]
-                    fresh_temp = 1 if stage1_result.get("temporary") else 0
+            from current_hosts import classify_backend as _ch_hit_backend
+            _hit_backend = _ch_hit_backend(source_u, cached_u)
         except Exception:
-            pass
-        if stage1_tried:
-            pass
-        elif (service in ("fsl_r2", "hubcloud_10g", "hubcloud")
-                or "hubcloud" in source_u.lower() or "hubcloud" in cached_u.lower()):
-            _unwrap_branch_taken = True
-            hub = hoster_input("hubcloud")
-            # `gpdl…hubcloud` is a redirector that carries the Google CDN URL in
-            # its own Location; `/drive/<id>` is a landing page that needs the
-            # gamerxyt hop. Try the cheap one for a gpdl URL first.
-            if "gpdl" in hub:
-                direct_u, _svc, is_temp = unwrap_hubcloud(hub)
-                if is_direct_media_url(direct_u):
-                    fresh_url = direct_u
-                    fresh_temp = is_temp
-            if not fresh_url:
-                unwrapped = unwrap_hubcloud_drive(hub)
-                for item in unwrapped:
-                    if item.get("service") == service:
-                        fresh_url = item.get("final_url")
-                        fresh_temp = item.get("is_temporary", fresh_temp)
-                        break
-                if not fresh_url and unwrapped:
+            _hit_backend = "unknown"
+        stage1_tried = _hit_backend in ("streamhg", "modiplay", "vidrift",
+                                        "vidbolt", "vidly", "vibuxer",
+                                        "pixeldrain", "fastdl-beer")
+        _cached_probe_failed_url = src.get("final_url") or source_u
+    else:
+        try:
+            hr = _embed_resolvers()
+            # Stage-1 first: proven backends resolve through current_hosts with
+            # a capped probe per candidate, so a passing copy carries measured
+            # mime/size/resumable. A stage-1 failure must NOT fall through to
+            # the old unprobed branches for that backend: stage1_tried blocks
+            # them, and the sibling failover below decides instead.
+            try:
+                from current_hosts import (classify_backend as _ch_backend2,
+                                           resolve_copy as _ch_resolve)
+                _dispatch_backend = _ch_backend2(source_u, cached_u)
+                if _dispatch_backend in ("streamhg", "modiplay", "vidrift",
+                                         "vidbolt", "vidly", "vibuxer",
+                                         "pixeldrain", "fastdl-beer"):
+                    stage1_tried = True
+                    _dispatch_input = source_u
+                    if _ch_backend2(source_u) in ("unknown", "filesforever"):
+                        if _ch_backend2(cached_u) not in ("unknown", "filesforever"):
+                            _dispatch_input = cached_u
+                    stage1_result = _ch_resolve(_dispatch_input)
+                    if stage1_result.get("ok"):
+                        fresh_url = stage1_result["url"]
+                        fresh_temp = 1 if stage1_result.get("temporary") else 0
+            except Exception:
+                pass
+            if stage1_tried:
+                pass
+            elif (service in ("fsl_r2", "hubcloud_10g", "hubcloud")
+                    or "hubcloud" in source_u.lower() or "hubcloud" in cached_u.lower()):
+                _unwrap_branch_taken = True
+                hub = hoster_input("hubcloud")
+                # `gpdl…hubcloud` is a redirector that carries the Google CDN URL in
+                # its own Location; `/drive/<id>` is a landing page that needs the
+                # gamerxyt hop. Try the cheap one for a gpdl URL first.
+                if "gpdl" in hub:
+                    direct_u, _svc, is_temp = unwrap_hubcloud(hub)
+                    if is_direct_media_url(direct_u):
+                        fresh_url = direct_u
+                        fresh_temp = is_temp
+                if not fresh_url:
+                    unwrapped = unwrap_hubcloud_drive(hub)
+                    for item in unwrapped:
+                        if item.get("service") == service:
+                            fresh_url = item.get("final_url")
+                            fresh_temp = item.get("is_temporary", fresh_temp)
+                            break
+                    if not fresh_url and unwrapped:
+                        fresh_url = unwrapped[0].get("final_url")
+                        fresh_temp = unwrapped[0].get("is_temporary", fresh_temp)
+            elif (service == "hubcdn" or "hubcdn.io/cloud" in source_u.lower()
+                  or "hubcdn.io/cloud" in cached_u.lower()):
+                _unwrap_branch_taken = True
+                res = unwrap_hubcdn(hoster_input("hubcdn"))
+                if res.get("ok"):
+                    # The R2 bucket copy is the streamable asset; the Google
+                    # front is its download twin. Both are durable Category A
+                    # bytes, so no token window applies to the refreshed URL.
+                    fresh_url = res.get("r2_url") or res.get("google_url")
+                    fresh_temp = 0
+            elif (service == "direct_cloud" or "direct-cloud" in source_u.lower()
+                  or "direct-cloud" in cached_u.lower()):
+                _unwrap_branch_taken = True
+                fresh_url, _, fresh_temp = unwrap_direct_cloud(hoster_input("direct-cloud"))
+            elif (service == "greenmotors" or "greenmotors" in source_u.lower()
+                  or "greenmotors" in cached_u.lower()):
+                _unwrap_branch_taken = True
+                unwrapped = unwrap_greenmotors(hoster_input("greenmotors"))
+                if unwrapped:
                     fresh_url = unwrapped[0].get("final_url")
                     fresh_temp = unwrapped[0].get("is_temporary", fresh_temp)
-        elif (service == "hubcdn" or "hubcdn.io/cloud" in source_u.lower()
-              or "hubcdn.io/cloud" in cached_u.lower()):
-            _unwrap_branch_taken = True
-            res = unwrap_hubcdn(hoster_input("hubcdn"))
-            if res.get("ok"):
-                # The R2 bucket copy is the streamable asset; the Google
-                # front is its download twin. Both are durable Category A
-                # bytes, so no token window applies to the refreshed URL.
-                fresh_url = res.get("r2_url") or res.get("google_url")
-                fresh_temp = 0
-        elif (service == "direct_cloud" or "direct-cloud" in source_u.lower()
-              or "direct-cloud" in cached_u.lower()):
-            _unwrap_branch_taken = True
-            fresh_url, _, fresh_temp = unwrap_direct_cloud(hoster_input("direct-cloud"))
-        elif (service == "greenmotors" or "greenmotors" in source_u.lower()
-              or "greenmotors" in cached_u.lower()):
-            _unwrap_branch_taken = True
-            unwrapped = unwrap_greenmotors(hoster_input("greenmotors"))
-            if unwrapped:
-                fresh_url = unwrapped[0].get("final_url")
-                fresh_temp = unwrapped[0].get("is_temporary", fresh_temp)
-        elif (service == "vcloud" or "vcloud" in source_u.lower()
-              or "vcloud" in cached_u.lower()):
-            _unwrap_branch_taken = True
-            v_res = unwrap_vcloud(hoster_input("vcloud"))
-            if v_res:
-                fresh_url = v_res[0][2]
-                fresh_temp = v_res[0][3]
-        elif (service == "fastdl" or "fastdl" in source_u.lower()
-              or "fastdl" in cached_u.lower()):
-            _unwrap_branch_taken = True
-            # FastDL's `embed.php?download=<id>` page carries `var reurl = …`;
-            # `unwrap_hubcloud` knows nothing about that shape.
-            direct_u, _res_id, is_temp = unwrap_fastdl(hoster_input("fastdl"))
-            fresh_url = direct_u
-            fresh_temp = is_temp
-        elif (service == "gdflix" or "gdflix" in source_u.lower()
-              or "gdflix" in cached_u.lower()):
-            _unwrap_branch_taken = True
-            direct_u, _res_id, is_temp = unwrap_gdflix(hoster_input("gdflix"))
-            fresh_url = direct_u
-            fresh_temp = is_temp
-        elif (service == "pixeldrain" or "pixeldrain" in source_u.lower()
-              or "pixeldrain" in cached_u.lower()):
-            _unwrap_branch_taken = True
-            direct_u, _, is_temp = unwrap_pixeldrain(hoster_input("pixeldrain"))
-            fresh_url = direct_u
-            fresh_temp = is_temp
-        elif (service == "vegadrive" or "vegadrive" in source_u.lower()
-              or "vegadrive" in cached_u.lower()):
-            _unwrap_branch_taken = True
-            direct_u, _, is_temp = unwrap_vegadrive(hoster_input("vegadrive"))
-            fresh_url = direct_u
-            fresh_temp = is_temp
-        elif hr and (service == hr.SERVICE_MXDROP or "mxdrop" in source_u.lower()
-                     or "mxdrop" in cached_u.lower()):
-            _unwrap_branch_taken = True
-            # The embed URL is the durable identifier and the mp4 is a result of
-            # this call: mxdrop signs its `MDCore.wurl` with a ~6-hour window.
-            embed = cached_u if hr.is_mxdrop_embed(cached_u) else source_u
-            verdict = hr.unwrap_mxdrop(embed, verify=True)
-            direct_u = embed_from_verdict(verdict)
-            if direct_u:
+            elif (service == "vcloud" or "vcloud" in source_u.lower()
+                  or "vcloud" in cached_u.lower()):
+                _unwrap_branch_taken = True
+                v_res = unwrap_vcloud(hoster_input("vcloud"))
+                if v_res:
+                    fresh_url = v_res[0][2]
+                    fresh_temp = v_res[0][3]
+            elif (service == "fastdl" or "fastdl" in source_u.lower()
+                  or "fastdl" in cached_u.lower()):
+                _unwrap_branch_taken = True
+                # FastDL's `embed.php?download=<id>` page carries `var reurl = …`;
+                # `unwrap_hubcloud` knows nothing about that shape.
+                direct_u, _res_id, is_temp = unwrap_fastdl(hoster_input("fastdl"))
                 fresh_url = direct_u
-                fresh_temp = 1
-                embed_verdict = verdict
-        elif hr and (service == hr.SERVICE_PKEMBED or "pkembed" in source_u.lower()
-                     or "pkembed" in cached_u.lower()):
-            _unwrap_branch_taken = True
-            embed = cached_u if hr.is_pkembed_embed(cached_u) else source_u
-            verdict = hr.unwrap_pkembed(embed, verify=True)
-            direct_u = embed_from_verdict(verdict)
-            if direct_u:
+                fresh_temp = is_temp
+            elif (service == "gdflix" or "gdflix" in source_u.lower()
+                  or "gdflix" in cached_u.lower()):
+                _unwrap_branch_taken = True
+                direct_u, _res_id, is_temp = unwrap_gdflix(hoster_input("gdflix"))
                 fresh_url = direct_u
-                fresh_temp = 1
-                embed_verdict = verdict
-        elif hr and (service == hr.SERVICE_ANIMAHD or hr.is_animahd_player(source_u)
-                     or hr.is_animahd_player(cached_u)):
-            _unwrap_branch_taken = True
-            # Two page GETs and one Range probe: the player page's script is a
-            # `window.location.replace` of a literal printed in its own HTML, so a
-            # server can follow it without a JS engine. The minted byte URL is the
-            # only thing written back here, and the resolver hands up a deliberate
-            # under-estimate of how long it lives (~30 min), so this branch is
-            # entered again when it dies rather than serving a dead token from the
-            # six-hour ceiling below. Recognition is by URL shape, not by an
-            # "animahd" substring: the same site's Drive rows must stay on their
-            # own path.
-            embed = cached_u if hr.is_animahd_player(cached_u) else source_u
-            verdict = hr.unwrap_animahd(embed, verify=True)
-            direct_u = embed_from_verdict(verdict)
-            if direct_u:
+                fresh_temp = is_temp
+            elif (service == "pixeldrain" or "pixeldrain" in source_u.lower()
+                  or "pixeldrain" in cached_u.lower()):
+                _unwrap_branch_taken = True
+                direct_u, _, is_temp = unwrap_pixeldrain(hoster_input("pixeldrain"))
                 fresh_url = direct_u
-                fresh_temp = 1
-                embed_verdict = verdict
-        elif "gamerxyt" in source_u.lower() or "gamerxyt" in cached_u.lower():
-            _unwrap_branch_taken = True
-            gamer = hoster_input("gamerxyt")
-            if "link=" in gamer:
-                query = urllib.parse.parse_qs(urllib.parse.urlsplit(gamer).query)
-                candidate = urllib.parse.unquote((query.get("link") or [""])[0])
-                if candidate:
-                    fresh_url = candidate
+                fresh_temp = is_temp
+            elif (service == "vegadrive" or "vegadrive" in source_u.lower()
+                  or "vegadrive" in cached_u.lower()):
+                _unwrap_branch_taken = True
+                direct_u, _, is_temp = unwrap_vegadrive(hoster_input("vegadrive"))
+                fresh_url = direct_u
+                fresh_temp = is_temp
+            elif hr and (service == hr.SERVICE_MXDROP or "mxdrop" in source_u.lower()
+                         or "mxdrop" in cached_u.lower()):
+                _unwrap_branch_taken = True
+                # The embed URL is the durable identifier and the mp4 is a result of
+                # this call: mxdrop signs its `MDCore.wurl` with a ~6-hour window.
+                embed = cached_u if hr.is_mxdrop_embed(cached_u) else source_u
+                verdict = hr.unwrap_mxdrop(embed, verify=True)
+                direct_u = embed_from_verdict(verdict)
+                if direct_u:
+                    fresh_url = direct_u
                     fresh_temp = 1
-    except Exception:
-        pass
+                    embed_verdict = verdict
+            elif hr and (service == hr.SERVICE_PKEMBED or "pkembed" in source_u.lower()
+                         or "pkembed" in cached_u.lower()):
+                _unwrap_branch_taken = True
+                embed = cached_u if hr.is_pkembed_embed(cached_u) else source_u
+                verdict = hr.unwrap_pkembed(embed, verify=True)
+                direct_u = embed_from_verdict(verdict)
+                if direct_u:
+                    fresh_url = direct_u
+                    fresh_temp = 1
+                    embed_verdict = verdict
+            elif hr and (service == hr.SERVICE_ANIMAHD or hr.is_animahd_player(source_u)
+                         or hr.is_animahd_player(cached_u)):
+                _unwrap_branch_taken = True
+                # Two page GETs and one Range probe: the player page's script is a
+                # `window.location.replace` of a literal printed in its own HTML, so a
+                # server can follow it without a JS engine. The minted byte URL is the
+                # only thing written back here, and the resolver hands up a deliberate
+                # under-estimate of how long it lives (~30 min), so this branch is
+                # entered again when it dies rather than serving a dead token from the
+                # six-hour ceiling below. Recognition is by URL shape, not by an
+                # "animahd" substring: the same site's Drive rows must stay on their
+                # own path.
+                embed = cached_u if hr.is_animahd_player(cached_u) else source_u
+                verdict = hr.unwrap_animahd(embed, verify=True)
+                direct_u = embed_from_verdict(verdict)
+                if direct_u:
+                    fresh_url = direct_u
+                    fresh_temp = 1
+                    embed_verdict = verdict
+            elif "gamerxyt" in source_u.lower() or "gamerxyt" in cached_u.lower():
+                _unwrap_branch_taken = True
+                gamer = hoster_input("gamerxyt")
+                if "link=" in gamer:
+                    query = urllib.parse.parse_qs(urllib.parse.urlsplit(gamer).query)
+                    candidate = urllib.parse.unquote((query.get("link") or [""])[0])
+                    if candidate:
+                        fresh_url = candidate
+                        fresh_temp = 1
+        except Exception:
+            pass
 
     # A resolver that answered with another landing page has not resolved
     # anything. Never persist it as the playable address: the callers below treat
@@ -6614,7 +6634,7 @@ def resolve_live_source(source_id: int, *, v2: bool = False,
             fresh_url = None
             fresh_verdict = None
 
-    if not fresh_url:
+    if not fresh_url and not _negative_cache_hit:
         # The dispatch produced nothing playable: record the failure
         # class for the negative cache. A branch that ran and failed —
         # including the Stage-1 dispatch — is `unwrap_failed`; no branch
@@ -6778,14 +6798,21 @@ def resolve_live_source(source_id: int, *, v2: bool = False,
                     "file_size_bytes": _winner.get("size"),
                     **_expiry_fields(src),
                 }
-            return {
-                "success": False,
-                "id": src["id"],
-                "error": "no_playable_source",
-                "code": "no_playable_source",
-                "reason": "stage1_all_copies_failed",
-                "stale": False,
-            }
+            if _siblings:
+                # Same-release Stage-1 copies were tried and all failed:
+                # the honest answer for this backend is unavailable.
+                return {
+                    "success": False,
+                    "id": src["id"],
+                    "error": "no_playable_source",
+                    "code": "no_playable_source",
+                    "reason": "stage1_all_copies_failed",
+                    "stale": False,
+                }
+            # No same-release Stage-1 siblings existed at all (a
+            # single-copy release, the multimovies shape): the Stage-1
+            # ladder tried nothing, so fall through to the Stage-2
+            # cross-release ladder below instead of refusing here.
         except Exception:
             pass
 
@@ -6894,9 +6921,11 @@ def resolve_live_source(source_id: int, *, v2: bool = False,
     # body). Anything else is an honest refusal on both contracts.
     if stale_url:
         if stale_url == _cached_probe_failed_url:
-            # This exact address failed its capped probe seconds ago in
-            # this same call — the cached branch, and, for a failover
-            # sibling, its own cached branch too. Probing it again
+            # This exact address already failed: its capped probe in
+            # this same call, or its negative-cache record from a
+            # recent call (a failover sibling carries its own record
+            # the same way). Probing it again cannot pass (same
+            # probe, same URL, same arguments); refuse honestly
             # cannot pass (same probe, same URL, same arguments); refuse
             # honestly without paying for another network round trip.
             # The answer is byte-identical to a failed re-probe.
