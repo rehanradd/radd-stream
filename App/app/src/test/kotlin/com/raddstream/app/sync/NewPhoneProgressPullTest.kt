@@ -13,6 +13,7 @@ import java.net.ServerSocket
 import java.net.Socket
 import java.net.SocketException
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.ConcurrentLinkedQueue
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -63,6 +64,9 @@ class NewPhoneProgressPullTest {
     /** The fake server's whole state: bearer key -> that account's progress rows. */
     private val serverProgress = ConcurrentHashMap<String, MutableList<StoredProgress>>()
 
+    /** What the fake server saw and suffered, in order — printed into failure messages. */
+    private val serverEvents = ConcurrentLinkedQueue<String>()
+
     private lateinit var server: FakeSyncServer
     private lateinit var settings: ServerSettingsRepository
     private lateinit var apiProvider: ApiProvider
@@ -70,7 +74,7 @@ class NewPhoneProgressPullTest {
 
     @Before
     fun setUp() = runBlocking {
-        server = FakeSyncServer(::handleRequest).apply { start() }
+        server = FakeSyncServer(::handleRequest, serverEvents::add).apply { start() }
         val context = ApplicationProvider.getApplicationContext<Context>()
         settings = ServerSettingsRepository(context)
         settings.saveServerUrl("http://127.0.0.1:${server.port}/")
@@ -129,9 +133,16 @@ class NewPhoneProgressPullTest {
                 deviceB.resumePositionMs(WORK_REF, SEASON, EPISODE),
             )
             val joined = deviceB.quickSignIn(key!!)
-            assertTrue("the same key must open the same library", joined is AccountMutation.SignedIn)
+            assertTrue(
+                "quickSignIn answered $joined; server saw: ${serverEvents.joinToString(" | ")}",
+                joined is AccountMutation.SignedIn,
+            )
             val report = deviceB.syncNow()
-            assertTrue("the pull must complete", report.completed)
+            assertTrue(
+                "syncNow completed=${report.completed} pulled=${report.progressRowsPulled}; " +
+                    "server saw: ${serverEvents.joinToString(" | ")}",
+                report.completed,
+            )
             assertEquals("one row must arrive", 1, report.progressRowsPulled)
             assertEquals(
                 "device B must resume at device A's exact millisecond",
@@ -148,7 +159,13 @@ class NewPhoneProgressPullTest {
 
         val (deviceB, _) = device()
         deviceB.quickSignIn(key)
-        assertEquals(1, deviceB.syncNow().progressRowsPulled)
+        val firstPull = deviceB.syncNow()
+        assertEquals(
+            "first pull pulled=${firstPull.progressRowsPulled} completed=${firstPull.completed}; " +
+                "server saw: ${serverEvents.joinToString(" | ")}",
+            1,
+            firstPull.progressRowsPulled,
+        )
         val second = deviceB.syncNow()
         assertTrue(second.completed)
         assertEquals("the same stamp must not count as a new pull", 0, second.progressRowsPulled)
@@ -178,7 +195,11 @@ class NewPhoneProgressPullTest {
         )
         deviceB.quickSignIn(key)
         val report = deviceB.syncNow()
-        assertTrue(report.completed)
+        assertTrue(
+            "syncNow completed=${report.completed} pulled=${report.progressRowsPulled}; " +
+                "server saw: ${serverEvents.joinToString(" | ")}",
+            report.completed,
+        )
         assertEquals("the stale row must not count as pulled", 0, report.progressRowsPulled)
         assertEquals(
             "the newer local position must survive the pull",
@@ -287,6 +308,7 @@ class NewPhoneProgressPullTest {
  */
 private class FakeSyncServer(
     private val handler: (method: String, path: String, headers: Map<String, String>, body: String) -> Pair<Int, String>,
+    private val onEvent: (String) -> Unit,
 ) {
     private val socket = ServerSocket(0, 50, InetAddress.getByName("127.0.0.1"))
 
@@ -301,8 +323,13 @@ private class FakeSyncServer(
                         isDaemon = true
                         start()
                     }
-                } catch (_: SocketException) {
+                } catch (error: SocketException) {
+                    if (!socket.isClosed) onEvent("accept SocketException: $error")
                     break
+                } catch (error: Exception) {
+                    // A transient accept failure must not kill the server: log it and
+                    // keep listening, so one bad handshake cannot fail every later test.
+                    onEvent("accept ${error.javaClass.simpleName}: $error")
                 }
             }
         }, "fake-sync-accept").apply {
@@ -316,6 +343,14 @@ private class FakeSyncServer(
     }
 
     private fun handle(connection: Socket) {
+        try {
+            serve(connection)
+        } catch (error: Exception) {
+            onEvent("handle ${error.javaClass.simpleName}: $error")
+        }
+    }
+
+    private fun serve(connection: Socket) {
         connection.use { socket ->
             val input = socket.getInputStream()
             val head = ByteArrayOutputStream()
@@ -351,6 +386,7 @@ private class FakeSyncServer(
                 headers,
                 bodyBytes.decodeToString(),
             )
+            onEvent("${requestLine[0]} ${requestLine[1]} -> $status")
             val body = json.toByteArray(Charsets.UTF_8)
             val reason = when (status) {
                 200 -> "OK"
