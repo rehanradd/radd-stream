@@ -431,32 +431,40 @@ class SearchViewModel @Inject constructor(
             .groupBy { typeGroupKey(it) }
             .toSortedMap(typeComparator)
             .map { (key, posts) ->
+                val sorted = when (sort) {
+                    SearchSort.TITLE -> posts.sortedWith(
+                        compareBy<Post> { (it.cleanTitle ?: it.title).lowercase() }
+                            .thenByDescending { (it.releaseCount ?: 0) + (it.sourceCount ?: 0) }
+                            .thenByDescending { it.id },
+                    )
+                    SearchSort.HIGHEST_IMDB -> posts.sortedWith(
+                        compareByDescending<Post> { it.imdbRating?.toDoubleOrNull() ?: -1.0 }
+                            .thenByDescending { (it.releaseCount ?: 0) + (it.sourceCount ?: 0) }
+                            .thenByDescending { it.id },
+                    )
+                    SearchSort.NEWEST -> posts.sortedWith(
+                        compareByDescending<Post> { it.year ?: 0 }
+                            .thenByDescending { (it.releaseCount ?: 0) + (it.sourceCount ?: 0) }
+                            .thenByDescending { it.id },
+                    )
+                    // Mirrors the server's coverage ranking: no play counts exist.
+                    SearchSort.MOST_SOURCES -> posts.sortedWith(
+                        compareByDescending<Post> { (it.releaseCount ?: 0) + (it.sourceCount ?: 0) }
+                            .thenByDescending { it.id },
+                    )
+                }
+                val deduplicated = sorted.distinctBy { post -> postTitleDedupKey(post) }
                 TypeGroup(
                     label = normalizeTypeLabel(key),
                     typeKey = key,
-                    items = when (sort) {
-                        SearchSort.TITLE -> posts.sortedBy { (it.cleanTitle ?: it.title).lowercase() }
-                        SearchSort.HIGHEST_IMDB -> posts.sortedWith(
-                            compareByDescending<Post> { it.imdbRating?.toDoubleOrNull() ?: -1.0 }
-                                .thenByDescending { it.id },
-                        )
-                        SearchSort.NEWEST -> posts.sortedWith(
-                            compareByDescending<Post> { it.year ?: 0 }
-                                .thenByDescending { it.id },
-                        )
-                        // Mirrors the server's coverage ranking: no play counts exist.
-                        SearchSort.MOST_SOURCES -> posts.sortedWith(
-                            compareByDescending<Post> { (it.releaseCount ?: 0) + (it.sourceCount ?: 0) }
-                                .thenByDescending { it.id },
-                        )
-                    },
+                    items = deduplicated,
                 )
             }
 
         _uiState.update {
             it.copy(
                 groups = groups,
-                resultCount = filtered.size,
+                resultCount = groups.sumOf { g -> g.items.size },
             )
         }
     }
@@ -516,3 +524,26 @@ internal fun typeGroupKey(post: Post): String =
     } else {
         post.contentType.orEmpty()
     }
+
+/**
+ * Normalizes title string for search rail deduplication: lowercases and strips punctuation.
+ */
+internal fun normalizeDedupTitle(title: String): String =
+    title.lowercase()
+        .replace(Regex("[^a-z0-9]+"), " ")
+        .trim()
+
+/**
+ * Deduplication key for search results: collapses duplicate releases or scraper rows
+ * of the exact same work title within a category rail.
+ */
+internal fun postTitleDedupKey(post: Post): String {
+    val work = post.workRef?.trim()?.lowercase()
+    if (!work.isNullOrBlank()) {
+        return "work:$work"
+    }
+    val raw = post.cleanTitle?.takeIf { it.isNotBlank() } ?: post.title
+    val norm = normalizeDedupTitle(raw)
+    val yr = post.year?.toString().orEmpty()
+    return "title:$norm:$yr"
+}

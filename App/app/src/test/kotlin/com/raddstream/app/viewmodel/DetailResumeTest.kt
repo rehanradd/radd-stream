@@ -1,6 +1,7 @@
 package com.raddstream.app.viewmodel
 
 import com.raddstream.app.data.local.WatchHistoryEntity
+import com.raddstream.app.ui.screens.favoriteActionLabel
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -95,5 +96,11 @@ class DetailResumeTest {
         assertEquals("45 min", formatRuntimeMinutes(45))
         assertEquals("1 h", formatRuntimeMinutes(60))
         assertEquals("2 h 10 m", formatRuntimeMinutes(130))
+    }
+
+    @Test
+    fun `favorite action label toggles between Add to List and My List`() {
+        assertEquals("Add to List", favoriteActionLabel(false))
+        assertEquals("My List", favoriteActionLabel(true))
     }
 }

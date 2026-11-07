@@ -215,23 +215,7 @@ fun DetailScreen(
                         Icon(Icons.Default.ArrowBack, contentDescription = "Back")
                     }
                 },
-                actions = {
-                    IconButton(onClick = viewModel::toggleFavorite) {
-                        Icon(
-                            imageVector = if (state.isFavorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
-                            contentDescription = if (state.isFavorite) "Remove from My List" else "Add to My List",
-                            tint = if (state.isFavorite) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.onSurface,
-                        )
-                    }
-                    IconButton(
-                        onClick = {
-                            val post = state.post
-                            if (post != null) shareTitle(context, post) { viewModel.reportShare(post.workRef) }
-                        },
-                    ) {
-                        Icon(Icons.Default.Share, contentDescription = "Share this title")
-                    }
-                },
+                actions = {},
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.background),
             )
         },
@@ -276,6 +260,11 @@ fun DetailScreen(
                 onOpenVipUpgrade = onOpenVipUpgrade,
                 reloadError = state.error,
                 onRetryReload = viewModel::loadDetail,
+                isFavorite = state.isFavorite,
+                onToggleFavorite = viewModel::toggleFavorite,
+                onShare = {
+                    shareTitle(context, post) { viewModel.reportShare(post.workRef) }
+                },
                 contentPadding = paddingValues,
             )
         }
@@ -434,6 +423,9 @@ private fun DetailContent(
      */
     reloadError: String?,
     onRetryReload: () -> Unit,
+    isFavorite: Boolean,
+    onToggleFavorite: () -> Unit,
+    onShare: () -> Unit,
     contentPadding: PaddingValues,
 ) {
     val allPrints = (workPrints + seasons.flatMap { it.episodes.flatMap { e -> e.prints } } + seasons.flatMap { it.packedPrints })
@@ -472,6 +464,9 @@ private fun DetailContent(
                 onPlayResume = onPlayResume,
                 onPlay = { bestPrint?.let(onPlayPrint) },
                 onKeep = { bestPrint?.let(onKeep) },
+                isFavorite = isFavorite,
+                onToggleFavorite = onToggleFavorite,
+                onShare = onShare,
             )
         }
 
@@ -675,12 +670,21 @@ private fun PrimaryActions(
     onPlayResume: () -> Unit,
     onPlay: () -> Unit,
     onKeep: () -> Unit,
+    isFavorite: Boolean,
+    onToggleFavorite: () -> Unit,
+    onShare: () -> Unit,
 ) {
-    Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        // Hero Play Button (full width)
         Button(
             onClick = if (resume != null) onPlayResume else onPlay,
             enabled = if (resume != null) true else bestPrint?.canStart == true,
-            modifier = Modifier.weight(1f).height(52.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(52.dp),
             colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
         ) {
             Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(20.dp))
@@ -691,11 +695,75 @@ private fun PrimaryActions(
                 overflow = TextOverflow.Ellipsis,
             )
         }
-        OutlinedButton(onClick = onKeep, enabled = hasAnyPrint, modifier = Modifier.height(52.dp)) {
-            Icon(Icons.Default.Download, contentDescription = "Download video", modifier = Modifier.size(20.dp))
+
+        // Three plain buttons under Play: Add to My List, Download, Share
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            OutlinedButton(
+                onClick = onToggleFavorite,
+                modifier = Modifier
+                    .weight(1f)
+                    .height(48.dp),
+                contentPadding = PaddingValues(horizontal = 4.dp),
+            ) {
+                Icon(
+                    imageVector = if (isFavorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
+                    contentDescription = null,
+                    modifier = Modifier.size(18.dp),
+                    tint = if (isFavorite) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.onSurface,
+                )
+                Spacer(Modifier.width(4.dp))
+                Text(
+                    text = favoriteActionLabel(isFavorite),
+                    style = MaterialTheme.typography.labelMedium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+
+            OutlinedButton(
+                onClick = onKeep,
+                enabled = hasAnyPrint,
+                modifier = Modifier
+                    .weight(1f)
+                    .height(48.dp),
+                contentPadding = PaddingValues(horizontal = 4.dp),
+            ) {
+                Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(4.dp))
+                Text(
+                    text = "Download",
+                    style = MaterialTheme.typography.labelMedium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+
+            OutlinedButton(
+                onClick = onShare,
+                modifier = Modifier
+                    .weight(1f)
+                    .height(48.dp),
+                contentPadding = PaddingValues(horizontal = 4.dp),
+            ) {
+                Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(4.dp))
+                Text(
+                    text = "Share",
+                    style = MaterialTheme.typography.labelMedium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
         }
     }
 }
+
+/** Action label for the My List toggle button under Play. */
+internal fun favoriteActionLabel(isFavorite: Boolean): String =
+    if (isFavorite) "My List" else "Add to List"
 
 /**
  * Whether this print gets the viewer somewhere: our player can start a file, or the provider's own
