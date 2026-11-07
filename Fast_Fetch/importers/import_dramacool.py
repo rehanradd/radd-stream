@@ -387,9 +387,20 @@ def is_adult_content(*labels: str | None, prose: tuple = ()) -> bool:
 
     Prose is checked only for unambiguous markers: hiding an 18+ row is cheap,
     but hiding a mainstream drama because its blurb says "adult themes" is not.
+
+    A label that IS "XXX" — a genre/category literally named XXX — flags, even
+    though bare "xxx" stays out of ADULT_KEYWORDS: the 2026-10-29 sampling
+    showed the word inside a title hides the *xXx* films, but a standalone XXX
+    tag is a category, not a film name. Only a whole label (or one
+    comma-separated segment of a joined genre list) counts; "xXx: Return of
+    Xander Cage" is not one.
     """
     head = " ".join(t for t in labels if t)
     if _adult_mark(head) or _has_keyword(head, ADULT_KEYWORDS):
+        return True
+    if any(part.strip().casefold() == "xxx"
+           for t in labels if t
+           for part in str(t).split(",")):
         return True
     body = " ".join(t for t in prose if t)
     return bool(body) and (_adult_mark(body) or _has_keyword(body, PROSE_ADULT_KEYWORDS))

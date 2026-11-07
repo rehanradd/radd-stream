@@ -1945,7 +1945,16 @@ def export_staging(db_path: Path | str = DEFAULT_DB_PATH, posts=(),
             columns = [c for c in POST_COLUMNS if c in values]
             updates = ", ".join(
                 f"{c} = excluded.{c}" for c in columns
-                if c not in ("canonical_key", "scraped_at"))
+                if c not in ("canonical_key", "scraped_at",
+                             "is_18_plus", "is_animated"))
+            # Fleet rule (see import_animahd.py): the grade flags are sticky.
+            # A re-export must never clear a flag a previous pass set, so the
+            # two flags leave the plain overwrite above and move only up.
+            sticky = ", ".join(
+                f"{c} = MAX(posts.{c}, excluded.{c})"
+                for c in ("is_18_plus", "is_animated") if c in columns)
+            if sticky:
+                updates = f"{updates}, {sticky}" if updates else sticky
             conn.execute(
                 f"INSERT INTO posts ({', '.join(columns)})"
                 f" VALUES ({', '.join('?' for _ in columns)})"
