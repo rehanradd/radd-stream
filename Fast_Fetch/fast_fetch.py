@@ -6029,6 +6029,15 @@ def _embed_resolvers():
 #: Referer gets one more probe carrying the embed referer before refusal.
 _STAGE2_REFERER_RETRY = "https://embed.vidrift.net/"
 
+#: Seconds the Stage-2 general failover may spend trying sibling copies
+#: before giving up. The copy the user picked gets its full unwrap
+#: attempt (a slow bridge can take tens of seconds and still play);
+#: the silent backups are lottery tickets, and buying them past this
+#: budget is what turned one dead 1080p copy into a 25-second 404.
+#: Measured 2026-11-07: Pushpa 2's 8-copy release spent ~25 s probing
+#: ~35 dead landing pages before answering no_playable_source.
+_FAILOVER_BUDGET_SECONDS = 10.0
+
 
 def _stage2_hint(url: str) -> str:
     return "playlist" if str(url or "").split("?")[0].endswith(".m3u8") else "file"
@@ -6158,6 +6167,11 @@ def resolve_live_source(source_id: int, *, v2: bool = False,
             except Exception:
                 needs_refresh = True
 
+    # The address a cached probe already failed on in this call, if any.
+    # The fall-through re-probes the stale URL; when it is this same
+    # address the second probe is pure waste (see below).
+    _cached_probe_failed_url = None
+
     # Stage-1 (live port of resolver-stage1-current-hosts): a permanent
     # cached address from a proven backend is never trusted blindly.
     # Probe it first: a passing probe is served with measured
@@ -6206,6 +6220,9 @@ def resolve_live_source(source_id: int, *, v2: bool = False,
                         "file_size_bytes": src.get("file_size_bytes"),
                         **observed_expiry,
                     }
+                # The Stage-1 probe just failed on this exact address; the
+                # fall-through must not pay to probe it again (see below).
+                _cached_probe_failed_url = src.get("final_url")
                 needs_refresh = True
         except Exception:
             pass
@@ -6254,6 +6271,9 @@ def resolve_live_source(source_id: int, *, v2: bool = False,
                 "file_size_bytes": src.get("file_size_bytes"),
                 **observed_expiry,
             }
+        # Same address the Stage-2 probe just failed on: remember it so
+        # the fall-through does not probe it a second time.
+        _cached_probe_failed_url = src.get("final_url")
         needs_refresh = True
 
     # Needs fresh unwrap
@@ -6638,7 +6658,15 @@ def resolve_live_source(source_id: int, *, v2: bool = False,
                         "s.id LIMIT 10",
                         (_post_row[0], src["release_id"],
                          _post_row[1])).fetchall()]
+            # Failover is bounded: the primary copy already had its full
+            # unwrap attempt, and each sibling is an independent lottery
+            # ticket. Past this budget the honest answer is
+            # no_playable_source, not another dozen probes of dead pages.
+            _failover_deadline = (time.monotonic()
+                                  + _FAILOVER_BUDGET_SECONDS)
             for _sid in list(_same_release) + list(_cross_release):
+                if time.monotonic() > _failover_deadline:
+                    break
                 try:
                     _alt = resolve_live_source(
                         int(_sid), v2=v2, want=want, _failover=False)
@@ -6707,6 +6735,21 @@ def resolve_live_source(source_id: int, *, v2: bool = False,
     # stale success to no_playable_source; the operator port sees the
     # body). Anything else is an honest refusal on both contracts.
     if stale_url:
+        if stale_url == _cached_probe_failed_url:
+            # This exact address failed its capped probe seconds ago in
+            # this same call — the cached branch, and, for a failover
+            # sibling, its own cached branch too. Probing it again
+            # cannot pass (same probe, same URL, same arguments); refuse
+            # honestly without paying for another network round trip.
+            # The answer is byte-identical to a failed re-probe.
+            return {
+                "success": False,
+                "id": src["id"],
+                "error": "no_playable_source",
+                "code": "no_playable_source",
+                "reason": "stale_probe_failed",
+                "stale": True,
+            }
         _stale_verdict = _stage2_probe(stale_url)
         if not _stage2_accept(_stale_verdict, want):
             return {

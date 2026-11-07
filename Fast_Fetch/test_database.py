@@ -19,7 +19,7 @@ import unittest
 from contextlib import redirect_stdout
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import current_hosts
@@ -674,6 +674,82 @@ class DatabaseSaveTests(unittest.TestCase):
         for res in (v1, v2):
             self.assertFalse(res["success"], res)
             self.assertEqual(res["code"], "no_playable_source", res)
+
+    def test_resolve_skips_second_probe_of_same_failed_address(self):
+        """A failed cached probe is not repeated as the stale probe: the
+        fall-through refuses the same address it just probed, so one dead
+        copy costs one probe, not two. (Pushpa 2, 2026-11-07: every copy
+        paid the cached probe AND the stale probe, ~35 probes for 8+10
+        copies before the honest 404.)"""
+        media_data = self.media("site_a", "https://site-a.example/example-film/")
+        media_data["releases"][0]["sources"] = [{
+            "source_name": "Example CDN",
+            "service": "test-service",
+            "resource_id": "site_a-id",
+            "source_url": "https://site_a.example/source",
+            "final_url": "https://cdn.example/site_a/page.html",
+            "is_temporary": 0,
+        }]
+        fast_fetch.save_scraped_data(media_data)
+        with fast_fetch.get_db() as conn:
+            source = conn.execute("SELECT id FROM download_sources LIMIT 1").fetchone()
+        failing = {"ok": False, "kind": None, "mime": None, "size": None,
+                   "resumable": False, "renditions": [], "failure": "probe_error"}
+        probe = Mock(return_value=failing)
+        with patch.object(fast_fetch, "_stage2_probe", probe):
+            res = fast_fetch.resolve_live_source(source["id"])
+        self.assertFalse(res["success"], res)
+        self.assertEqual(res["code"], "no_playable_source", res)
+        self.assertEqual(res["reason"], "stale_probe_failed", res)
+        # The cached probe only: the fall-through must not re-probe the
+        # address it just failed on.
+        self.assertEqual(probe.call_count, 1, probe.call_args_list)
+        self.assertEqual(probe.call_args_list[0].args[0],
+                         "https://cdn.example/site_a/page.html")
+
+    def test_failover_stops_after_budget(self):
+        """The sibling failover is bounded: past the budget the resolver
+        answers no_playable_source instead of probing every remaining
+        copy. The clock is faked so the test does not sleep."""
+        media_data = self.media("site_a", "https://site-a.example/example-film/")
+        media_data["releases"][0]["sources"] = [
+            {
+                "source_name": f"Copy {i}",
+                "service": "test-service",
+                "resource_id": f"site_a-id-{i}",
+                "source_url": f"https://site_a.example/source-{i}",
+                "final_url": f"https://cdn.example/site_a/page-{i}.html",
+                "is_temporary": 0,
+            }
+            for i in range(6)
+        ]
+        fast_fetch.save_scraped_data(media_data)
+        with fast_fetch.get_db() as conn:
+            rows = conn.execute(
+                "SELECT id FROM download_sources ORDER BY id").fetchall()
+        self.assertEqual(len(rows), 6)
+        failing = {"ok": False, "kind": None, "mime": None, "size": None,
+                   "resumable": False, "renditions": [], "failure": "probe_error"}
+        probe = Mock(return_value=failing)
+        calls = {"n": 0}
+
+        def fake_monotonic():
+            calls["n"] += 1
+            return 1000.0 + (calls["n"] - 1) * 6.0
+
+        with patch.object(fast_fetch, "_stage2_probe", probe), \
+             patch.object(fast_fetch.time, "monotonic",
+                          side_effect=fake_monotonic):
+            res = fast_fetch.resolve_live_source(rows[0]["id"])
+        self.assertFalse(res["success"], res)
+        self.assertEqual(res["code"], "no_playable_source", res)
+        # Primary cached probe + exactly one sibling's cached probe; the
+        # remaining four siblings are never tried, and neither the primary
+        # nor the tried sibling pays a second (stale) probe.
+        self.assertEqual(probe.call_count, 2, probe.call_args_list)
+        probed = [c.args[0] for c in probe.call_args_list]
+        self.assertEqual(probed, ["https://cdn.example/site_a/page-0.html",
+                                  "https://cdn.example/site_a/page-1.html"])
 
     def test_stage2_gate_serves_a_probed_cached_address(self):
         """The other side of the gate: a cached address that passes its
