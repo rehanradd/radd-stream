@@ -470,6 +470,14 @@ class PINMismatch(AccountError):
     default_detail = "that PIN is not correct for this profile"
 
 
+class NotVip(AccountError):
+    """This account does not have an active VIP membership to cancel."""
+
+    code = "not_vip"
+    status = 400
+    default_detail = "this account has no active VIP membership to cancel"
+
+
 # ── paths and connections ────────────────────────────────────────────────────
 
 
@@ -570,7 +578,8 @@ CREATE TABLE IF NOT EXISTS user_accounts (
     linked_at REAL,
     profile_name TEXT,
     phone TEXT,
-    pin_hash TEXT
+    pin_hash TEXT,
+    vip_cancelled_at REAL
 );
 
 CREATE TABLE IF NOT EXISTS user_favorites (
@@ -730,6 +739,8 @@ _NEW_COLUMNS = {
         "profile_name": ("TEXT", None),
         "phone": ("TEXT", None),
         "pin_hash": ("TEXT", None),
+        # Epoch seconds of self-serve cancellation. NULL means active / not cancelled.
+        "vip_cancelled_at": ("REAL", None),
     },
     "user_progress": {
         "client_updated_at": ("REAL NOT NULL DEFAULT 0", "SET client_updated_at = updated_at"),
@@ -1127,7 +1138,7 @@ def _authenticate(conn: sqlite3.Connection, key, *, now: float | None = None,
     now = time.time() if now is None else float(now)
     wanted = _hash_key(key.strip())
     row = conn.execute(
-        "SELECT id, key_hash, created_at, last_seen_at, vip_until FROM user_accounts"
+        "SELECT id, key_hash, created_at, last_seen_at, vip_until, vip_cancelled_at FROM user_accounts"
         " WHERE key_hash = ?", (wanted,)).fetchone()
     if row is None or not _verify_hash(row["key_hash"], wanted):
         per_key = tracker.record_failure(conn, wanted, now)
@@ -1136,9 +1147,12 @@ def _authenticate(conn: sqlite3.Connection, key, *, now: float | None = None,
             raise Locked(retry_after=per_key["retry_after"])
         raise UnknownAccount()
     tracker.record_success(conn, wanted, now)
+    row_keys = row.keys() if hasattr(row, "keys") else ()
+    cancelled = float(row["vip_cancelled_at"]) if "vip_cancelled_at" in row_keys and row["vip_cancelled_at"] is not None else None
     account = {"account_id": int(row["id"]), "created_at": float(row["created_at"]),
                "last_seen_at": float(row["last_seen_at"] or 0) or float(row["created_at"]),
-               "vip_until": float(row["vip_until"] or 0)}
+               "vip_until": float(row["vip_until"] or 0),
+               "vip_cancelled_at": cancelled}
     if touch and now - account["last_seen_at"] >= LAST_SEEN_WRITE_INTERVAL:
         conn.execute("UPDATE user_accounts SET last_seen_at = ? WHERE id = ?",
                      (now, account["account_id"]))
@@ -1656,6 +1670,34 @@ def link_profile_with_pin(conn_or_path, account_id, *, name, phone, pin,
         _commit(conn)
     return {"account_id": wanted, "linked": True, "bonus_granted": first_link,
             "vip_until": vip_until, "name": profile_name, "phone": digits}
+
+
+def cancel_vip(conn_or_path, key, *, reason: str | None = None,
+               now: float | None = None,
+               tracker: AttemptTracker | None = None) -> dict:
+    """Self-serve VIP membership cancellation.
+
+    Keeps VIP status until `vip_until` expires without auto-renew.
+    Records `vip_cancelled_at` on the account and writes an audit row
+    to payment_review_audit (payment_id=0).
+    """
+    moment = time.time() if now is None else float(now)
+    with _borrow(conn_or_path) as conn:
+        account = _authenticate(conn, key, now=moment, tracker=tracker, touch=True)
+        vip_until = float(account.get("vip_until") or 0.0)
+        if vip_until <= moment:
+            raise NotVip()
+        conn.execute("UPDATE user_accounts SET vip_cancelled_at = ? WHERE id = ?",
+                     (moment, account["account_id"]))
+        conn.execute(
+            "INSERT INTO payment_review_audit (payment_id, account_id, action, "
+            "prior_vip_until, new_vip_until, reviewer, note, acted_at) "
+            "VALUES (?, ?, 'user_cancelled', ?, ?, 'self_serve', ?, ?)",
+            (0, account["account_id"], vip_until, vip_until,
+             (reason or "Self-serve cancellation from app")[:255], moment)
+        )
+        _commit(conn)
+    return {"cancelled": True, "vip_until": vip_until, "cancelled_at": moment}
 
 
 def revoke_account(conn_or_path, key, *, now: float | None = None,

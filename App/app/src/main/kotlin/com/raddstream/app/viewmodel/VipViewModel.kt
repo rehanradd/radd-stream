@@ -196,6 +196,12 @@ data class VipUiState(
     val entitlement: AccountEntitlement? = null,
     /** A submission is in flight, so the button cannot be pressed into a second claim. */
     val isSubmitting: Boolean = false,
+    /** Whether a VIP cancellation request is pending local confirmation from the server. */
+    val isCancelPending: Boolean = false,
+    /** A cancellation is in flight, so the button cannot be pressed into a second request. */
+    val isCancelling: Boolean = false,
+    /** Message from the last cancellation attempt. */
+    val cancelMessage: String? = null,
 ) {
     fun priceFor(plan: VipPlan): Int =
         if (plan == VipPlan.MONTHLY) monthlyPkr else yearlyPkr
@@ -225,6 +231,14 @@ data class VipUiState(
     /** Server-side membership only. A rewarded device pass is deliberately not VIP here. */
     val isVip: Boolean get() = entitlement?.vip == true
 
+    /** True if the VIP pass has been cancelled either on the server or pending locally. */
+    val isCancelled: Boolean
+        get() = (entitlement?.vipCancelledAt != null && (entitlement.vipCancelledAt ?: 0.0) > 0.0) || isCancelPending
+
+    /** True only when the server has acknowledged the cancellation. */
+    val serverCancelled: Boolean
+        get() = entitlement?.vipCancelledAt != null && (entitlement.vipCancelledAt ?: 0.0) > 0.0
+
     /** When [AccountEntitlement.vipUntil] is in the future; otherwise no date is shown. */
     val vipUntilMillis: Long
         get() {
@@ -249,8 +263,17 @@ class VipViewModel @Inject constructor(
         observeStreak()
         observeAccount()
         observeTheme()
+        observePendingCancel()
         loadConfig()
         loadWallet()
+    }
+
+    private fun observePendingCancel() {
+        viewModelScope.launch {
+            syncAccountRepository.vipPendingCancel.collect { pending ->
+                _uiState.update { it.copy(isCancelPending = pending) }
+            }
+        }
     }
 
     /** The chrome theme this device wears, collected so a pick on this screen reaches the player. */
@@ -712,6 +735,56 @@ class VipViewModel @Inject constructor(
 
     fun clearStatus() {
         _uiState.update { it.copy(statusMessage = null) }
+    }
+
+    /**
+     * Cancel the VIP pass self-serve.
+     * Persists pending cancel in DataStore, then requests POST /api/v2/account/cancel.
+     * Access remains active until vipUntil expires without auto-renew.
+     */
+    fun cancelVipPass(reason: String? = null) {
+        val state = _uiState.value
+        if (!state.isVip || state.isCancelling) return
+        viewModelScope.launch {
+            _uiState.update { it.copy(isCancelling = true, cancelMessage = null) }
+            try {
+                val resp = syncAccountRepository.cancelVipPass(reason)
+                if (resp != null) {
+                    _uiState.update {
+                        it.copy(
+                            statusMessage = "VIP pass cancelled. Access remains active until expiry.",
+                            cancelMessage = "Cancelled — access remains active until expiry.",
+                        )
+                    }
+                } else {
+                    _uiState.update {
+                        it.copy(
+                            statusMessage = "Cancellation pending — will sync with server.",
+                            cancelMessage = "Cancellation pending",
+                        )
+                    }
+                }
+            } finally {
+                _uiState.update { it.copy(isCancelling = false) }
+            }
+        }
+    }
+
+    /**
+     * Resume VIP pass while cancellation is still pending local confirmation from the server.
+     * Clears the pending-cancel in DataStore.
+     */
+    fun resumePass() {
+        if (!_uiState.value.isCancelPending) return
+        viewModelScope.launch {
+            syncAccountRepository.clearPendingCancel()
+            _uiState.update {
+                it.copy(
+                    statusMessage = "Cancellation cleared. VIP pass remains active.",
+                    cancelMessage = null,
+                )
+            }
+        }
     }
 
     /** Re-run the remote-config fetch after a transient failure. */

@@ -316,7 +316,7 @@ VIEWS: dict[str, frozenset[str]] = {
     "account_payment": frozenset({
         "payment_id", "status", "plan", "amount_pkr", "method", "submitted_at",
     }),
-    "account_entitlement": frozenset({"vip", "vip_until", "pending"}),
+    "account_entitlement": frozenset({"vip", "vip_until", "pending", "vip_cancelled_at"}),
 }
 
 

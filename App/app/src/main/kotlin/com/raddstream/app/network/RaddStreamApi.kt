@@ -337,6 +337,13 @@ interface RaddStreamApi {
         @Header("Authorization") authorization: String?,
     ): RevokedResponse
 
+    /** POST /api/v2/account/cancel — self-serve cancel keeping VIP until expiry. */
+    @POST("api/v2/account/cancel")
+    suspend fun cancelVip(
+        @Header("Authorization") authorization: String?,
+        @Body body: com.raddstream.app.network.models.AccountCancelRequest,
+    ): com.raddstream.app.network.models.AccountCancelResponse
+
     /**
      * GET /api/v2/account/favorites — the saved list, newest first.
      *
