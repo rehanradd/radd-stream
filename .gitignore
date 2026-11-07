@@ -64,3 +64,10 @@ radd-stream-data/
 # the scrapers and auto_chat_sync.py, so they are working state, not product.
 Fast_Fetch/*_status.json
 Fast_Fetch/CHAT_HISTORY.md
+
+# Credential / secret files — never track these
+git-askpass.sh
+.git-credentials
+.netrc
+*.pem
+*.key

@@ -30,7 +30,7 @@ You are building the **World's #1 Streaming & Media Database** (movies, TV serie
    - Each site crawls into its own isolated staging database (e.g. `vegamovies.db`, `7starhd.db`, `hdhub4u.db`, `rareanimes.db`, `katmoviehd.db`).
    - **NEVER** merge any staging database into the production `fast_fetch.db` without explicit confirmation from the user in the current conversation.
 4. **Do Not Disrupt Active Oracle VM Crawlers**:
-   - The production crawlers run remotely on Oracle VM (`92.4.95.252`, user `ubuntu`).
+   - The production crawlers and services run on Oracle VM (`92.4.95.252`, user `ubuntu`, domain `https://raddstream.duckdns.org/`).
    - Before launching or modifying any process, always check `ps aux | grep import_` to ensure you never kill or conflict with active crawlers.
 5. **MASTER-DISCIPLE LOCAL AI LAW (Celestial Qi / Token Conservation)**:
    - Accept the local Inner Disciple: `qwen2.5-coder:1.5b` (running 100% offline and free via `/usr/local/bin/disciple` and `Fast_Fetch/disciple.py`).
