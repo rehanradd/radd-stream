@@ -36,6 +36,9 @@ class RemoteConfigWatcher @Inject constructor(
 
     private val started = AtomicBoolean(false)
 
+    /** Coalesces tap-spam on a manual refresh: one in-flight re-read at a time. */
+    private val refreshing = AtomicBoolean(false)
+
     /** Idempotent: the Application calls this once, before any screen composes. */
     fun start() {
         if (!started.compareAndSet(false, true)) return
@@ -43,6 +46,27 @@ class RemoteConfigWatcher @Inject constructor(
             while (isActive) {
                 refreshOnce()
                 delay(REFRESH_INTERVAL_MS)
+            }
+        }
+    }
+
+    /**
+     * One immediate re-read of `/remote-config`, outside the five-minute loop — the
+     * maintenance screen's Retry button. A tap while a refresh is already running is a
+     * no-op rather than a second network call; the loop's own tick is not guarded by
+     * this flag, so a manual refresh racing the tick can still double-fetch once —
+     * harmless, both writes derive from the same endpoint and land the same values.
+     * A failed or malformed poll leaves the last good answer in place, exactly like
+     * the loop's: a server being restarted cannot serve `/remote-config` either, and
+     * flipping the app out of maintenance on a network error would defeat the switch.
+     */
+    fun refreshNow() {
+        if (!refreshing.compareAndSet(false, true)) return
+        scope.launch {
+            try {
+                refreshOnce()
+            } finally {
+                refreshing.set(false)
             }
         }
     }

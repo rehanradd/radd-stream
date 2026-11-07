@@ -31,6 +31,7 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.raddstream.app.brand.Brand
+import com.raddstream.app.data.RemoteConfigWatcher
 import com.raddstream.app.data.RemoteFeatures
 import com.raddstream.app.data.ServerSettingsRepository
 import com.raddstream.app.data.Telemetry
@@ -81,6 +82,9 @@ class MainActivity : ComponentActivity() {
 
     @Inject
     lateinit var catalogRepository: CatalogRepository
+
+    @Inject
+    lateinit var remoteConfigWatcher: RemoteConfigWatcher
 
     /**
      * A file another app asked us to play, waiting for the graph that can route it. It is
@@ -284,6 +288,10 @@ class MainActivity : ComponentActivity() {
                                 startDestination = Screen.Setup.route
                                 changingServer = true
                             },
+                            // Retry re-reads /remote-config now; when the operator has
+                            // lifted the switch the same maintenanceMode flow flips false
+                            // and this branch clears by itself — no navigation needed.
+                            onRetry = { remoteConfigWatcher.refreshNow() },
                         )
                         // Session 120: the wait before the first route used to be
                         // a bare spinner on black, which on a slow first install
