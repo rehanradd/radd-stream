@@ -738,8 +738,12 @@ class SyncAccountRepository @Inject constructor(
                 bearerHeader(key), CoinEarnRequest()).earned
             // Tracking A: a grant the server paid is a count the phone may
             // report — the amount is the server's own answer, never a claim.
-            if ((earned?.coinsGranted ?: 0) > 0) {
-                Telemetry.recordCoinsGranted(earned.coinsGranted)
+            // Hoisted into a local val first: `(earned?.coinsGranted ?: 0) >
+            // 0` does not smart-cast `earned` itself, so the direct call
+            // below it would not compile.
+            val granted = earned?.coinsGranted ?: 0
+            if (granted > 0) {
+                Telemetry.recordCoinsGranted(granted)
             }
             earned
         } catch (error: Exception) {

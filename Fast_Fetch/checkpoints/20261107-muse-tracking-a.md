@@ -115,9 +115,16 @@ watched.
 - Consent text is a draft; the exact wording is the owner's to revise.
   Device class is RAM-only.
 
-## CI / deploy (to fill after push)
+## CI / deploy
 
 - Branch: `tracking-a-20261107` (cut from 2a558f84).
-- Commit: <SHA> "Session 96: Tracking A — app usage block + consent gate" (this commit).
-- CI: pending — runs after push; the verdict rides the next commit (no docs-only push).
+- Commit: `4b25a000` "Session 96: Tracking A — app usage block + consent gate".
+- CI on 4b25a000: Backend 42388036597 **SUCCESS**; Android 42388036596
+  **FAILED** at `:app:compileDebugKotlin` — one error, mine:
+  `SyncAccountRepository.kt:742` called `earned.coinsGranted` on a nullable
+  `CoinEarned?` after an Elvis check that does not smart-cast the receiver.
+  The `reportShare` site compiled because `share?.granted == true` DOES
+  smart-cast; the daily-login site did not. Fixed by hoisting the grant into
+  a local val (`val granted = earned?.coinsGranted ?: 0`) — fix commit
+  follows on the same branch; the verdict on it rides the next commit.
 - Deploy: pending — gate deploy after CI green (backup set, checkout, public smoke, usage-migration check on live user_state.db).
