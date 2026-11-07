@@ -19,6 +19,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onNode
+import androidx.compose.ui.test.performClick
 import androidx.compose.ui.unit.dp
 import com.raddstream.app.network.models.Post
 import com.raddstream.app.network.models.ReleaseDetail
@@ -164,6 +166,24 @@ class ScreenSnapshotTest {
                 .fetchSemanticsNodes().isNotEmpty(),
         )
         capture("02_maintenance_server_switch")
+    }
+
+    @Test
+    fun maintenanceRetryRechecksTheFlag() {
+        var retried = false
+        shot {
+            Box(Modifier.fillMaxSize()) {
+                MaintenanceScreen(onChangeServer = {}, onRetry = { retried = true })
+            }
+        }
+        assertTrue(
+            "the maintenance notice offers no Retry — a wrongly-flagged server traps the viewer until the watcher's five-minute tick",
+            compose.onAllNodes(hasText("Retry", substring = true))
+                .fetchSemanticsNodes().isNotEmpty(),
+        )
+        compose.onNode(hasText("Retry", substring = true)).performClick()
+        assertTrue("tapping Retry did not call the re-check", retried)
+        capture("03_maintenance_retry")
     }
 
     // ── Poster cards ─────────────────────────────────────────────────────────

@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -33,10 +34,16 @@ import com.raddstream.app.brand.Brand
  * EXCEPT Settings"): without it a viewer pointed at a server that is stuck, or wrongly set, to
  * maintenance can never reach the server-address screen to point the app somewhere else. The
  * notice would be a brick with a nice message on it.
+ *
+ * [onRetry] is the other exit: re-check the flag now instead of waiting for the watcher's
+ * five-minute tick. When the operator has lifted the switch the re-read writes
+ * `maintenanceMode = false` and the notice clears by itself — the host observes the same
+ * flow that put it here, so no navigation or state reset is needed on this side.
  */
 @Composable
 fun MaintenanceScreen(
     onChangeServer: (() -> Unit)? = null,
+    onRetry: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     Column(
@@ -66,8 +73,14 @@ fun MaintenanceScreen(
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center,
         )
-        if (onChangeServer != null) {
+        if (onRetry != null) {
             Spacer(modifier = Modifier.height(24.dp))
+            Button(onClick = onRetry) {
+                Text("Retry")
+            }
+        }
+        if (onChangeServer != null) {
+            Spacer(modifier = Modifier.height(if (onRetry != null) 16.dp else 24.dp))
             TextButton(onClick = onChangeServer) {
                 Text("Use a different server")
             }

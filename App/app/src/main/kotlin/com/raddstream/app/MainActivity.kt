@@ -22,6 +22,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import com.raddstream.app.brand.Brand
+import com.raddstream.app.data.RemoteConfigWatcher
 import com.raddstream.app.data.RemoteFeatures
 import com.raddstream.app.data.ServerSettingsRepository
 import com.raddstream.app.network.models.PanelDisclaimer
@@ -67,6 +68,9 @@ class MainActivity : ComponentActivity() {
 
     @Inject
     lateinit var catalogRepository: CatalogRepository
+
+    @Inject
+    lateinit var remoteConfigWatcher: RemoteConfigWatcher
 
     /**
      * A file another app asked us to play, waiting for the graph that can route it. It is
@@ -237,6 +241,10 @@ class MainActivity : ComponentActivity() {
                                 startDestination = Screen.Setup.route
                                 changingServer = true
                             },
+                            // Retry re-reads /remote-config now; when the operator has
+                            // lifted the switch the same maintenanceMode flow flips false
+                            // and this branch clears by itself — no navigation needed.
+                            onRetry = { remoteConfigWatcher.refreshNow() },
                         )
                         destination == null -> Box(
                             modifier = Modifier.fillMaxSize(),
