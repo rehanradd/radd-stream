@@ -33,6 +33,12 @@ import viewer          # noqa: E402
 
 SITE = "somecdn.site"
 DIRECT_URL = "https://media.example.test/film.mp4"
+# The operator port requires the bearer <redacted> since the whole-port gate
+# (viewer._operator_gate / admin_panel.gate_operator_port): loopback alone no
+# longer opens it. The two operator-port tests below present it, exactly as
+# the isolation suites do; the tests still prove the port takes a plain row id
+# and never shortens, the credential is not the thing under test.
+TOKEN = "download-endpoint-operator-token"
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -88,7 +94,8 @@ class DownloadEndpointTests(unittest.TestCase):
         for patcher in (mock.patch.object(fast_fetch, "DB_PATH", self.db_path),
                         mock.patch.object(viewer, "DB_PATH", self.db_path),
                         mock.patch.dict("os.environ",
-                                        {"RADD_USER_STATE_DB": str(self.state_path)})):
+                                        {"RADD_USER_STATE_DB": str(self.state_path),
+                                         "RADD_ADMIN_TOKEN": TOKEN})):
             patcher.start()
             self.addCleanup(patcher.stop)
         fast_fetch.init_db(self.db_path)
@@ -202,7 +209,8 @@ class DownloadEndpointTests(unittest.TestCase):
     def test_operator_port_accepts_a_plain_id_and_returns_the_resolved_url(self):
         status, _headers, raw = self.fetch(
             self.operator_url,
-            f"/api/v1/download?id={self.source_id}&redirect=0")
+            f"/api/v1/download?id={self.source_id}&redirect=0",
+            headers={"Authorization": f"Bearer {TOKEN}"})
         self.assertEqual(status, 200, raw)
         self.assertEqual(json.loads(raw)["url"], DIRECT_URL)
 
@@ -213,7 +221,8 @@ class DownloadEndpointTests(unittest.TestCase):
                 side_effect=AssertionError("operator must not be shortened")):
             status, headers, _body = self.fetch(
                 self.operator_url,
-                f"/api/v1/download?id={self.source_id}", follow=False)
+                f"/api/v1/download?id={self.source_id}", follow=False,
+                headers={"Authorization": f"Bearer {TOKEN}"})
         self.assertEqual(status, 302)
         self.assertEqual(headers["Location"], DIRECT_URL)
 

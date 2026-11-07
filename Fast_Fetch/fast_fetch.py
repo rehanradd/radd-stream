@@ -610,6 +610,9 @@ def generate_canonical_key(title: str, year: int | None = None) -> str:
     return t or "unknown"
 
 
+_SEASON_SUFFIX_RE = re.compile(r"^(?P<base>.+)_s(?P<season>\d{1,2})$")
+
+
 def ledger_canonical_key(clean_title: str, year, supplied=None) -> str:
     """The key a *new* ledger row is filed under: title and year, not a page slug.
 
@@ -618,9 +621,21 @@ def ledger_canonical_key(clean_title: str, year, supplied=None) -> str:
     never preferred: a slug makes the work's identity site-specific, so the same
     film written by three sites writes three keys, and the row-level adult law then
     applies to only one of them.
+
+    One exception: a season suffix on the supplied key is identity, not slug
+    noise. ``mobland_s1`` and ``mobland_s2`` are two seasons of one show, and
+    the title+year derivation would file both under ``mobland_2025`` — flattening
+    genuine seasons into one row. When the supplied key ends in ``_s<N>`` and its
+    base is the derived title slug, the supplied key is kept whole.
     """
     derived = str(generate_canonical_key(clean_title, year) or "").strip().lower()
     if derived and derived != "unknown":
+        supplied_key = str(supplied or "").strip().lower()
+        match = _SEASON_SUFFIX_RE.match(supplied_key)
+        if match:
+            derived_base = derived.rsplit("_", 1)[0] if year else derived
+            if match.group("base") == derived_base:
+                return supplied_key
         return derived
     fallback = str(supplied or "").strip().lower()
     return fallback or "unknown"
