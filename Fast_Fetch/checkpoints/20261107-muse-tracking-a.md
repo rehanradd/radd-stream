@@ -132,5 +132,8 @@ watched.
   `BrandDriftTest.brandNameIsNeverHardcodedOutsideTheBrandFiles` — the new
   consent dialog hardcoded the literal "Radd Stream". Fixed by reading
   `Brand.name`; the test's own literal scan re-run locally reports zero
-  offenders. Fix commit follows on the same branch.
-- Deploy: pending — gate deploy after CI green (backup set, checkout, public smoke, usage-migration check on live user_state.db).
+  offenders. Fix commit `83ff5bde` on the same branch.
+- CI on 83ff5bde: Backend 42389771081 **SUCCESS**; Android 42389771075
+  **SUCCESS** — branch fully green. APK **app-debug-267** (23,351,152 B).
+- Deploy: gate deploy follows (backup set, checkout, public smoke,
+  usage-migration check on live user_state.db).
