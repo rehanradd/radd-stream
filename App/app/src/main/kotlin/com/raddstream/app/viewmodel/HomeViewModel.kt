@@ -43,10 +43,13 @@ import kotlinx.coroutines.launch
  * has a real backing source. `HomeViewModel` therefore only builds rails the v1 API
  * can actually serve. Continue Watching renders from the device's own watch
  * history (no server needed), and the panel's sections render from the feed.
- * Rails the brief asks for but that have **no server support yet** (trending as a
- * feed, "because you watched", genre/language jump-off) are declared in
- * [RESERVE_NOTE] and intentionally omitted — the endpoint is requested in
- * docs/HANDOFF_appui.md rather than filled with fabricated or client-invented data.
+ * Rails the brief asks for but that have **no server support yet** ("because you
+ * watched", genre/language jump-off) are declared in [RESERVE_NOTE] and
+ * intentionally omitted — the endpoint is requested in docs/HANDOFF_appui.md
+ * rather than filled with fabricated or client-invented data. "Most Sources"
+ * used to sit in that list; it does not any more, because the sort it needs
+ * already exists on the live route (`/api/v1/posts?sort=trending`) — see
+ * [initialHomeSections].
  */
 /**
  * The rails Home actually renders, in order. Continue Watching counts as a
@@ -71,7 +74,15 @@ data class HomeSection(
     val loading: Boolean = false,
     val error: String? = null,
     /**
-     * True when the rail came from the admin panel, not from a posts call. A
+     * The server sort this rail asks for (`/api/v1/posts?sort=`), or null for
+     * the server default (`p.id DESC`, freshest first). Only "Most Sources"
+     * sets one today: `sort=trending` ranks by how many prints and mirrors
+     * the catalog holds for a work — the ledger has no play-count column,
+     * so the rail is named for its actual input, never "Trending".
+     */
+    val sort: String? = null,
+    /**
+     * True when the operator's feed, not a posts call, owns this rail. A
      * panel rail already has its rows — it is never loaded, retried, or
      * refreshed through [HomeViewModel.loadSection]; the next remote-config
      * fetch rebuilds it.
@@ -79,6 +90,13 @@ data class HomeSection(
     val panelManaged: Boolean = false,
 ) {
     val visible: Boolean get() = items.isNotEmpty() && error == null
+
+    /**
+     * True when Browse can reproduce this rail's order. Browse takes a type
+     * but no sort, so a rail ordered by a server sort has no "See all": the
+     * Browse page would silently re-sort it to freshest-first.
+     */
+    val browseEquivalent: Boolean get() = sort == null
 
     /**
      * A rail that already has rows and whose newest refresh came back empty-handed. Without
@@ -154,15 +172,34 @@ data class AppUpdate(
 
 private const val RESERVE_NOTE = """
     Reserved rails awaiting server support (see docs/HANDOFF_appui.md):
-      - trending          : a trending ORDER already exists as sort=trending on
-                            /api/v1/posts (most prints and mirrors — no play
-                            counts exist, so it is not popularity); what is
-                            still missing is a dedicated GET /api/v1/trending
-                            feed endpoint.
       - because_you_watch : needs GET /api/v1/related?work_id= (API_V2.md collections) — requested.
       - genre / language jump-off : needs GET /api/v1/facets (browse facets) — requested.
     None of these render until the backend returns real rows; they are NOT faked.
+    "Most Sources" left this list in D2.2: its order already exists as
+    sort=trending on /api/v1/posts (most prints and mirrors — no play counts
+    exist, so it is not popularity), and the app already calls that sort.
 """
+
+/**
+ * The rails Home actually renders, in order. Pure, so the test can pin the
+ * questions that matter without a repository: five rails, "Most Sources"
+ * last, and only that rail asks the server for a sort.
+ *
+ * Only rails v1 can honestly serve today. `type = null` == recently added
+ * (the API default order is `p.id DESC` per viewer.py:1905, i.e. freshest
+ * scrape). "Most Sources" is `sort=trending` on the same live route — the
+ * server ranks by how many prints and mirrors the catalog holds for a work,
+ * because the ledger has no play-count column; the label says what the
+ * order is, and "Trending" would promise popularity data that does not
+ * exist (the same naming rule SearchViewModel's [SearchSort] follows).
+ */
+internal fun initialHomeSections(): List<HomeSection> = listOf(
+    HomeSection(key = "recent", title = "Recently added", type = null, loading = true),
+    HomeSection(key = "movie", title = "Movies", type = "movie", loading = true),
+    HomeSection(key = "series", title = "Series", type = "series", loading = true),
+    HomeSection(key = "season", title = "Seasons", type = "complete_season", loading = true),
+    HomeSection(key = "most_sources", title = "Most Sources", type = null, sort = "trending", loading = true),
+)
 
 /**
  * The operator's feed, merged over the built-in rails. Pure, so the test can pin
@@ -226,15 +263,7 @@ class HomeViewModel @Inject constructor(
 
     init {
         observeContinueWatching()
-        // Only rails v1 can honestly serve today. `type = null` == recently added
-        // (the API default order is `p.id DESC` per viewer.py:1905, i.e. freshest scrape).
-        val initial = listOf(
-            HomeSection(key = "recent", title = "Recently added", type = null, loading = true),
-            HomeSection(key = "movie", title = "Movies", type = "movie", loading = true),
-            HomeSection(key = "series", title = "Series", type = "series", loading = true),
-            HomeSection(key = "season", title = "Seasons", type = "complete_season", loading = true),
-        )
-        _uiState.update { it.copy(sections = initial) }
+        _uiState.update { it.copy(sections = initialHomeSections()) }
         loadAll(force = true)
         checkForUpdate()
         askAppOpenAd()
@@ -396,7 +425,9 @@ class HomeViewModel @Inject constructor(
         if (section.panelManaged) return
         markSection(section.key) { it.copy(loading = true, error = null) }
         try {
-            val results = catalogRepository.getPosts(type = section.type, page = 1, limit = 18).results
+            val results = catalogRepository.getPosts(
+                type = section.type, sort = section.sort, page = 1, limit = 18,
+            ).results
             markSection(section.key) { it.copy(items = results, loading = false, error = null) }
         } catch (cancelled: CancellationException) {
             throw cancelled

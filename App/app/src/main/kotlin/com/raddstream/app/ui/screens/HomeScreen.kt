@@ -213,6 +213,11 @@ fun HomeScreen(
                         section = section,
                         onPostClick = onPostClick,
                         onSeeAll = { onBrowseType(section.type) },
+                        // A sorted rail has no Browse equivalent (Browse takes a
+                        // type but no sort), so "See all" would silently re-sort
+                        // it to freshest-first. Offer it only where the order
+                        // survives the jump.
+                        showSeeAll = section.browseEquivalent,
                         onRetry = { viewModel.retrySection(section.key) },
                     )
                 }
@@ -459,6 +464,7 @@ private fun HomeRailSection(
     section: HomeSection,
     onPostClick: (Int) -> Unit,
     onSeeAll: () -> Unit,
+    showSeeAll: Boolean = true,
     onRetry: () -> Unit,
 ) {
     when {
@@ -490,7 +496,11 @@ private fun HomeRailSection(
                 SectionHeader(
                     title = section.title,
                     modifier = Modifier.padding(horizontal = 16.dp),
-                    action = { SeeAllButton(onClick = onSeeAll) },
+                    action = if (showSeeAll) {
+                        { SeeAllButton(onClick = onSeeAll) }
+                    } else {
+                        null
+                    },
                 )
                 MediaRail(items = section.items, key = { it.id }) { post ->
                     PosterCard(post = post, onClick = { onPostClick(post.id) })

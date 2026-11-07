@@ -51,12 +51,16 @@ and DetailViewModel).
 
 ## #2 — repository + network: Home rails that have NO data source today (I hid them)
 The owner brief wants continue-watching, trending, "because you watched", and a
-genre/language jump-off. The v1 API supports **only** `q`, `type`, `page`, `limit`. So
-`HomeViewModel` currently renders only: Recently added (default `id DESC`), Movies, Series,
-Seasons. The reserved rails are documented in the `RESERVE_NOTE` const in
+genre/language jump-off. The v1 API supports `q`, `type`, `sort`, `page`, `limit`. So
+`HomeViewModel` renders: Recently added (default `id DESC`), Movies, Series,
+Seasons, and — since D2.2 — "Most Sources" (`sort=trending` on `/api/v1/posts`,
+most prints and mirrors first; the ledger has no play-count column, so the rail
+is named for its actual input, never "Trending"). The dedicated
+`GET /api/v1/trending` feed is no longer requested: the sort already exists on
+the live route and the app already calls it (My List's popular row used it
+first). The reserved rails are documented in the `RESERVE_NOTE` const in
 `viewmodel/HomeViewModel.kt` and are NOT shown with fake data. I need endpoints (v2 or v1):
 
-- `GET /api/v1/trending?type=&limit=` (or a `play_count`/`popularity` field on posts) → trending rail.
 - `GET /api/v1/related?work_id=&limit=` → "because you watched" (API_V2.md §8 `collections/{id}`).
 - `GET /api/v1/facets?type|genre|language|year|source_site` → drives the genre/language
   jump-off AND the real Search facet sheet (API_V2.md §8 `browse`).
