@@ -135,5 +135,4 @@ watched.
   offenders. Fix commit `83ff5bde` on the same branch.
 - CI on 83ff5bde: Backend 42389771081 **SUCCESS**; Android 42389771075
   **SUCCESS** — branch fully green. APK **app-debug-267** (23,351,152 B).
-- Deploy: gate deploy follows (backup set, checkout, public smoke,
-  usage-migration check on live user_state.db).
+- Deploy: DONE + LIVE 21:48 PKT 2026-11-07. Backup set 21:15 verified (ok/ok, catalog page_count backup == source == 1,561,747, BACKUP-DONE). CI re-run on 348ce75c GREEN (Backend 42390249512 + Android 42390249471). Live tree checkout tracking-a-20261107 @ 348ce75c, 0 dirty, markers usage_stats region x15 / ApiProvider X-Install-Id x2, imports OK; service restarted, posts/suggest 200 in 25 s. Public smoke: posts/suggest/remote-config/admin-login all 200. Usage migration proven on a COPY of live user_state.db (ensure_schema adds region/audio_lang/subtitle_lang, old cols intact; record_seen with install UUID stores a dev- row with region desi_dubs, audio hi, subtitle en). Live DB has 0 usage rows until the first consented app sync. Session 97 panel deploy same night: admin-v2 tar (md5s match), panel restarted PID 1059013, login 200, /admin/usage renders honest no_usage_data_yet empty state, /admin/users renders No users yet (Devices unknown unobservable live with 0 users; suite test proves the rendering).
