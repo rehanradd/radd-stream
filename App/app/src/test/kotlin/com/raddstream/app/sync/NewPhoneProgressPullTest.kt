@@ -299,8 +299,12 @@ class NewPhoneProgressPullTest {
 
     private fun numberField(body: String, name: String): Double =
         // Gson writes large doubles in scientific notation (client_updated_at ~1.79E9),
-        // so the exponent is part of the number, not the end of it.
-        Regex(""""$name"\s*:\s*(-?[0-9]+(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?)"""")
+        // so the exponent is part of the number, not the end of it. Numbers are
+        // UNQUOTED in JSON, unlike stringField's values: this pattern must not ask
+        // for a closing quote after the number. A stray trailing quote made every
+        // field parse as 0.0, so the fake stored season 0 / episode 0 / position 0
+        // and device B's mirror never held the row (CI run 42327351067).
+        Regex(""""$name"\s*:\s*(-?[0-9]+(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?)""")
             .find(body)?.groupValues?.get(1)?.toDouble() ?: 0.0
 
     companion object {
