@@ -291,7 +291,7 @@ class NewPhoneProgressPullTest {
 
     companion object {
         /** The key the fake server mints: 16 url-safe characters, like the real floor. */
-        const val MINTED_KEY = "d2testkey12345678"
+        const val MINTED_KEY = "d2testkey1234567"
         const val WORK_REF = "d2-progress-pull-work"
         const val SEASON = 1
         const val EPISODE = 2
@@ -382,7 +382,9 @@ private class FakeSyncServer(
             }
             val (status, json) = handler(
                 requestLine[0],
-                requestLine[1],
+                // Retrofit appends ?limit=1000 to the list routes; the query is not
+                // part of the route, and matching on it 404s every list call.
+                requestLine[1].substringBefore("?"),
                 headers,
                 bodyBytes.decodeToString(),
             )
