@@ -235,6 +235,17 @@ fun HomeScreen(
                 Spacer(Modifier.height(8.dp))
             }
 
+            // The free trial is granted silently; without this note the viewer loses VIP
+            // features after 3 days with no prior explanation. One line, live days, and
+            // a dismissal that persists — a dismissed note never returns.
+            state.trialDaysRemaining?.let { days ->
+                TrialNoteBanner(
+                    daysRemaining = days,
+                    onDismiss = viewModel::dismissTrialNote,
+                )
+                Spacer(Modifier.height(8.dp))
+            }
+
             // Fatal error only when *every* rail failed and none has data to show.
             val anyVisible = state.sections.any { it.visible }
             if (state.fatal != null && !anyVisible) {
@@ -444,6 +455,45 @@ private fun OfflineBanner() {
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
         )
+    }
+}
+
+@Composable
+private fun TrialNoteBanner(daysRemaining: Int, onDismiss: () -> Unit) {
+    val scheme = MaterialTheme.colorScheme
+    Card(
+        colors = CardDefaults.cardColors(containerColor = scheme.primaryContainer),
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(start = 16.dp, top = 12.dp, bottom = 12.dp, end = 4.dp),
+            verticalAlignment = Alignment.Top,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text(
+                    "Your free VIP trial",
+                    style = MaterialTheme.typography.titleSmall,
+                    color = scheme.onPrimaryContainer,
+                )
+                Spacer(Modifier.height(2.dp))
+                Text(
+                    if (daysRemaining == 1) {
+                        "You have 1 free VIP day left. After that, free playback stays at 720p."
+                    } else {
+                        "You have $daysRemaining free VIP days left. After that, free playback stays at 720p."
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = scheme.onPrimaryContainer,
+                )
+            }
+            IconButton(onClick = onDismiss) {
+                Icon(
+                    Icons.Default.Close,
+                    contentDescription = "Dismiss trial note",
+                    tint = scheme.onPrimaryContainer,
+                )
+            }
+        }
     }
 }
 

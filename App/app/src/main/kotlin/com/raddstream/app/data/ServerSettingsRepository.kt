@@ -318,6 +318,24 @@ class ServerSettingsRepository @Inject constructor(
     }
 
     /**
+     * True once the viewer dismissed the Home trial note. Persisted, not session-only:
+     * the note explains a one-time, three-day grant, and a viewer who dismissed it has
+     * already read it — showing it again on every launch would nag about a trial that
+     * is already understood. Written when the note is dismissed; the trial itself is
+     * unaffected (the grant still counts down in the ledger).
+     */
+    val trialNoteDismissed: Flow<Boolean> = dataStore.data.map { preferences ->
+        preferences[TRIAL_NOTE_DISMISSED_KEY] ?: false
+    }
+
+    suspend fun setTrialNoteDismissed(dismissed: Boolean) {
+        dataStore.edit { preferences ->
+            if (dismissed) preferences[TRIAL_NOTE_DISMISSED_KEY] = true
+            else preferences.remove(TRIAL_NOTE_DISMISSED_KEY)
+        }
+    }
+
+    /**
      * The login streak (plan §5 step 19): consecutive days this device opened the app, counted
      * locally because no server route carries a per-user progress count. The last day is a local
      * epoch day (-1 means never opened); the count is how many in a row that is. The two move
@@ -1002,6 +1020,7 @@ class ServerSettingsRepository @Inject constructor(
         private val TRIAL_SECONDS_REMAINING_KEY = doublePreferencesKey("trial_seconds_remaining")
         private val TRIAL_RECORDED_AT_MS_KEY = longPreferencesKey("trial_recorded_at_ms")
         private val TRIAL_KEY_UNSEEN_KEY = booleanPreferencesKey("trial_key_unseen")
+        private val TRIAL_NOTE_DISMISSED_KEY = booleanPreferencesKey("trial_note_dismissed")
         private val LOGIN_STREAK_LAST_DAY_KEY = longPreferencesKey("login_streak_last_day")
         private val LOGIN_STREAK_COUNT_KEY = intPreferencesKey("login_streak_count")
         private val COACH_SEEN_VERSION_KEY = stringPreferencesKey("player_coach_seen_version")
