@@ -19,6 +19,7 @@ import com.raddstream.app.player.AdCadenceGovernor
 import com.raddstream.app.player.AdSurface
 import com.raddstream.app.repository.CatalogRepository
 import com.raddstream.app.repository.FavoritesRepository
+import com.raddstream.app.sync.DeviceTrial
 import com.raddstream.app.sync.SyncAccountRepository
 import com.raddstream.app.ui.navigation.BroadcastTargeting
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -117,6 +118,12 @@ data class HomeUiState(
     /** Live broadcasts from the admin panel; a dismissed one stays dismissed for this session. */
     val broadcasts: List<PanelBroadcast> = emptyList(),
     /**
+     * Whole days of free VIP trial left, live from the ledger — null when there is
+     * no trial to explain (no grant recorded, trial over, viewer is VIP, or the
+     * note was dismissed). The screen renders the number, never a hardcoded "3".
+     */
+    val trialDaysRemaining: Int? = null,
+    /**
      * True when the device had no network at the last load. The banner that
      * reads this only shows when something saved is on screen — an offline
      * phone with nothing saved gets the error state, not a banner over a
@@ -202,6 +209,24 @@ internal fun initialHomeSections(): List<HomeSection> = listOf(
 )
 
 /**
+ * D2.7: the Home trial note, as a pure decision. The note shows only while the
+ * trial is genuinely running (seconds left above zero), the viewer is not already
+ * VIP (a VIP has nothing to be warned about), and the viewer has not dismissed it
+ * (dismissal is persisted — the note never returns). Days round up, the way
+ * [DeviceTrial.daysRemaining] rounds them everywhere else: 20 hours left is
+ * "1 day remaining", never "0 days" on a trial that is still live.
+ */
+internal fun trialNoteDaysRemaining(
+    trialSecondsLeft: Double?,
+    isVip: Boolean,
+    dismissed: Boolean,
+): Int? {
+    if (isVip || dismissed) return null
+    val seconds = trialSecondsLeft ?: return null
+    return DeviceTrial.daysRemaining(seconds).takeIf { it > 0 }
+}
+
+/**
  * The operator's feed, merged over the built-in rails. Pure, so the test can pin
  * the questions that matter without a repository: panel sections first, in the
  * panel's order, then the built-in rails that no panel section owns by key; every
@@ -263,6 +288,7 @@ class HomeViewModel @Inject constructor(
 
     init {
         observeContinueWatching()
+        observeTrialNote()
         _uiState.update { it.copy(sections = initialHomeSections()) }
         loadAll(force = true)
         checkForUpdate()
@@ -335,6 +361,46 @@ class HomeViewModel @Inject constructor(
     fun dismissBroadcast(id: Int) {
         dismissedBroadcastIds.add(id)
         _uiState.update { it.copy(broadcasts = it.broadcasts.filter { broadcast -> broadcast.id != id }) }
+    }
+
+    /**
+     * The trial note, read the way Settings reads the same countdown: collected,
+     * not sampled, so a grant that landed while Home was closed shows up on the
+     * next open. Mirrors SettingsViewModel.observeTrial — the seconds the server
+     * said were left, minus the time since this device heard the answer. The
+     * entitlement is only a veto for a *known* VIP: a null entitlement (no key,
+     * or not loaded yet) does not hide the note, because the trial is granted
+     * to the install itself and most trial viewers hold no key at all.
+     */
+    private fun observeTrialNote() {
+        viewModelScope.launch {
+            combine(
+                settingsRepository.trialRecordedAtMs,
+                settingsRepository.trialNoteDismissed,
+                syncAccountRepository.entitlement,
+            ) { recordedAtMs, dismissed, entitlement ->
+                val seconds = if (recordedAtMs <= 0L) {
+                    null
+                } else {
+                    DeviceTrial.secondsRemaining(
+                        storedSecondsRemaining = settingsRepository.trialSecondsRemaining.first(),
+                        storedAtMs = recordedAtMs,
+                        nowMs = System.currentTimeMillis(),
+                    )
+                }
+                trialNoteDaysRemaining(seconds, isVip = entitlement?.vip == true, dismissed = dismissed)
+            }.collect { days ->
+                _uiState.update { it.copy(trialDaysRemaining = days) }
+            }
+        }
+    }
+
+    /** The trial note is dismissed once, for good — the dismissal is persisted. */
+    fun dismissTrialNote() {
+        _uiState.update { it.copy(trialDaysRemaining = null) }
+        viewModelScope.launch {
+            settingsRepository.setTrialNoteDismissed(true)
+        }
     }
 
     /**
