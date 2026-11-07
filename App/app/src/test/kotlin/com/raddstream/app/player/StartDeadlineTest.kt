@@ -1,6 +1,8 @@
 package com.raddstream.app.player
 
+import androidx.media3.common.Player
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -41,6 +43,19 @@ class StartDeadlineTest {
     fun `a first frame disarms the deadline at any age`() {
         assertEquals(StartDeadlineStage.SILENT, StartDeadline.stage(60_000, firstFrame = true))
         assertEquals(StartDeadlineStage.SILENT, StartDeadline.stage(0, firstFrame = true))
+    }
+
+    @Test
+    fun `only a ready player counts as a first frame`() {
+        // Session 99: the ticker used to disarm on a known duration, and a
+        // stalled copy knows its duration from the playlist or file header
+        // while the picture is still black — the deadline never fired and
+        // the player buffered forever. READY is the only state that proves
+        // the pipeline can render; buffering, idle and ended do not.
+        assertFalse(StartDeadline.hasFirstFrame(Player.STATE_IDLE))
+        assertFalse(StartDeadline.hasFirstFrame(Player.STATE_BUFFERING))
+        assertFalse(StartDeadline.hasFirstFrame(Player.STATE_ENDED))
+        assertTrue(StartDeadline.hasFirstFrame(Player.STATE_READY))
     }
 
     @Test

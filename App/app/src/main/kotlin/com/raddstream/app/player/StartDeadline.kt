@@ -1,5 +1,7 @@
 package com.raddstream.app.player
 
+import androidx.media3.common.Player
+
 /**
  * The four moments of a start attempt, in the order a viewer meets them.
  *
@@ -50,6 +52,21 @@ object StartDeadline {
         elapsedMs < GIVE_UP_AFTER_MS -> StartDeadlineStage.ACTIONS
         else -> StartDeadlineStage.GIVE_UP
     }
+
+    /**
+     * What counts as a first frame, from the player's own state — READY only.
+     * A known duration is NOT a frame: ExoPlayer learns the duration from the
+     * playlist or the file header while the picture is still black, so a
+     * stalled copy can sit at a known duration for minutes and never render.
+     * The ticker used to disarm the deadline on `isPlaying || duration > 0`,
+     * which is how a dead copy buffered forever with no error (Pushpa 2, APK
+     * 270 retest: the playlist loaded, the duration was known, the screen
+     * stayed black with the spinner until the session expired). READY means
+     * the pipeline can render; a paused player still reaches READY, so
+     * pausing before the first frame does not trip the deadline either.
+     */
+    fun hasFirstFrame(playbackState: Int): Boolean =
+        playbackState == Player.STATE_READY
 
     /**
      * The print sheet's proof of the budget — "1.4 s", one decimal, never negative. The

@@ -175,7 +175,23 @@ fun SearchScreen(
                     )
                     Spacer(Modifier.height(8.dp))
                 }
-                PastedText.NotAUrl -> Unit
+                PastedText.NotAUrl -> {
+                    // The Home tile says "Play a video link", but nothing on
+                    // this screen said a link could be pasted here — the field
+                    // only reacts once a URL is typed. One honest line, only
+                    // while the field is empty: a direct .mp4 or .m3u8 link
+                    // plays in the app. No promise of general web browsing;
+                    // the YouTube line above still says no to those.
+                    if (state.query.isEmpty()) {
+                        Text(
+                            text = "You can also paste a direct video link (.mp4 or .m3u8) here to play it in the app.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                        )
+                        Spacer(Modifier.height(8.dp))
+                    }
+                }
             }
             if (pasted is PastedText.NotAUrl) {
                 FilterRail(state = state, viewModel = viewModel)

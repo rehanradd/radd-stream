@@ -603,11 +603,16 @@ class PlayerViewModel @Inject constructor(
                     // it is the clock — no second thread. A first frame disarms the attempt
                     // and records how long the start took, but only when the player really
                     // was starting: a quality switch mid-scene must not overwrite the
-                    // route-open measurement with a near-zero one.
+                    // route-open measurement with a near-zero one. The frame test is
+                    // READY only, never a known duration: a stalled copy can know its
+                    // duration from the playlist or file header while the picture is
+                    // still black, and the old `isPlaying || duration > 0` test disarmed
+                    // the deadline on that alone — the Pushpa 2 retest buffered forever
+                    // with no error and no give-up card.
                     val attemptAt = startAttemptAtMs
                     if (attemptAt != null) {
                         val elapsed = SystemClock.elapsedRealtime() - attemptAt
-                        val firstFrame = c.isPlaying || c.duration > 0
+                        val firstFrame = StartDeadline.hasFirstFrame(c.playbackState)
                         if (firstFrame) {
                             startAttemptAtMs = null
                             _ui.update {

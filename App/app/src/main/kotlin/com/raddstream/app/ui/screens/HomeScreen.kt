@@ -429,10 +429,12 @@ private fun AppUpdateDialog(
 
 /**
  * The daily check-in in one compact card: the streak this device has kept,
- * what today pays, and the wallet it pays into. The claim is the VIP
- * screen's own call — same guards, same words — so Home and VIP can never
- * disagree about what today pays. The full ladder and the pass shop stay on
- * the VIP screen; this card is the daily tap, not the shop.
+ * and the wallet it pays into. The claim is the VIP screen's own call — same
+ * guards, same words — and the button promises no amount the server has not
+ * confirmed: the local streak counts days the app was opened, while the
+ * server counts days claimed, so a local day number is not today's pay. The
+ * full ladder and the pass shop stay on the VIP screen; this card is the
+ * daily tap, not the shop.
  */
 @Composable
 private fun DailyCheckInCard(
@@ -446,8 +448,6 @@ private fun DailyCheckInCard(
     onClaim: () -> Unit,
 ) {
     val targetDays = streakLadder.keys.maxOrNull() ?: 7
-    val today = (streakCount + 1).coerceIn(1, targetDays)
-    val todaysCoins = streakLadder[today] ?: 0
     Card(
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
         shape = RoundedCornerShape(16.dp),
@@ -495,7 +495,7 @@ private fun DailyCheckInCard(
                 }
                 else -> {
                     Button(onClick = onClaim, enabled = !isClaiming) {
-                        Text(if (isClaiming) "Claiming…" else "Claim +$todaysCoins coins")
+                        Text(if (isClaiming) "Claiming…" else "Claim today's coins")
                     }
                     claimMessage?.let { message ->
                         Text(
