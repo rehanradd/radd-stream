@@ -412,9 +412,29 @@ class V2WireFixture(unittest.TestCase):
                       clean_title="Brave Orchard", year=2019, releases=[
                           {"release_title": "Brave Orchard (2019) 480p",
                            "quality": "480p", "sources": [mirror_download("BO-MIRROR")]}])
+        # Session 109: two prints of one work, best dead, sibling playable —
+        # the fallback's live case (work 54221: best print dead, sibling
+        # plays) — and the same shape for one series episode.
+        self.add_post("vegamovies", "https://new1.vegamovies.lease/twin-prints-2024/",
+                      clean_title="Twin Prints", year=2024, releases=[
+                          {"release_title": "Twin Prints (2024) 1080p WEB-DL",
+                           "sources": [dead("TWIN-DEAD")]},
+                          {"release_title": "Twin Prints (2024) 720p WEBRip",
+                           "quality": "720p", "sources": [cdn("TWIN-CDN")]}])
+        self.add_post("multimovies", "https://m1.multimovies.courses/twin-beats-2021/",
+                      clean_title="Twin Beats", year=2021, content_type="series",
+                      releases=[
+                          {"release_title": "Twin Beats S01 EP(01-02) 1080p",
+                           "season": "1", "episode": "1-2", "quality": "1080p",
+                           "sources": [cdn("TB-DEAD", status="dead")]},
+                          {"release_title": "Twin Beats S01 EP(01-02) 720p",
+                           "season": "1", "episode": "1-2", "quality": "720p",
+                           "sources": [cdn("TB-CDN")]}])
         self.mark_probe_on_ledger("DUNE-CDN")
         self.mark_probe_on_ledger("ADULT-CDN")
         self.mark_probe_on_ledger("QV-CDN")
+        self.mark_probe_on_ledger("TWIN-CDN")
+        self.mark_probe_on_ledger("TB-CDN")
         self.project(rev=1)
         # Out-of-band evidence, including the sentence a probe really writes: this
         # is the one field that reaches a public body carrying a hoster's name.
@@ -456,6 +476,12 @@ class V2WireFixture(unittest.TestCase):
             "SELECT id FROM cat_links WHERE resource_id = 'DUNE-PAGE'")
         self.missing_link_id = self._max("cat_links") + 424242
         self.secret = redact.stream_secret(self.db_path)
+        # Session 109: the two-print works, for the fallback tests.
+        self.twin_work_id = self.work_ids["Twin Prints"]
+        self.twin_beats_work_id = self.work_ids["Twin Beats"]
+        self.twin_beats_episode_id = self._one(
+            "SELECT e.id FROM cat_episodes e JOIN cat_works w ON w.id = e.work_id"
+            " WHERE w.title = 'Twin Beats' ORDER BY e.id LIMIT 1")
 
     def _one(self, sql, params=()):
         row = self.conn.execute(sql, params).fetchone()
@@ -803,6 +829,72 @@ class V2PlayTranslationTests(V2WireFixture):
         self.assertEqual(reply.json["print"]["release_id"],
                          self.public_release_id)
         self.assertEqual(reply.json["work"]["title"], "Dune Protocol")
+
+
+# ── 1c. play fallback: a dead best print must not hide a playable sibling ───
+
+class V2PlayWorkPrintFallbackTests(V2WireFixture):
+    """Session 109: `/play` by work/episode walks the target's prints.
+
+    The caller asked for the WORK, not one print. Live 2026-11-08: work
+    54221's best print (624765, one dead link) answered 409 while sibling
+    print 624764 plays. The route now tries the prints best-first and
+    returns the first bundle with a playable candidate. A bare `release_id`
+    still names one print and is never switched to a sibling.
+    """
+
+    def _twin_prints(self, title):
+        best = self._one(
+            "SELECT r.id FROM cat_releases r JOIN cat_works w ON w.id = r.work_id"
+            " WHERE w.title = ? ORDER BY r.quality_score DESC, r.id ASC LIMIT 1",
+            (title,))
+        sibling = self._one(
+            "SELECT r.id FROM cat_releases r JOIN cat_works w ON w.id = r.work_id"
+            " WHERE w.title = ? AND r.id != ?"
+            " ORDER BY r.quality_score DESC, r.id ASC LIMIT 1", (title, best))
+        return best, sibling
+
+    def test_work_id_falls_back_to_the_playable_sibling_print(self):
+        best, sibling = self._twin_prints("Twin Prints")
+        reply = self.post("/api/v2/play", {"work_id": self.twin_work_id})
+        self.assertEqual(reply.status, 200, reply.json)
+        self.assertEqual(reply.json["release_id"], sibling)
+        self.assertNotEqual(reply.json["release_id"], best)
+        self.assertEqual(reply.json["target"]["work_id"], self.twin_work_id)
+        self.assertTrue(reply.json["playable"])
+
+    def test_episode_id_falls_back_to_the_playable_sibling_print(self):
+        best, sibling = self._twin_prints("Twin Beats")
+        reply = self.post("/api/v2/play",
+                          {"episode_id": self.twin_beats_episode_id})
+        self.assertEqual(reply.status, 200, reply.json)
+        self.assertEqual(reply.json["release_id"], sibling)
+        self.assertNotEqual(reply.json["release_id"], best)
+        self.assertEqual(reply.json["target"]["episode_id"],
+                         self.twin_beats_episode_id)
+        self.assertTrue(reply.json["playable"])
+
+    def test_work_id_with_all_prints_dead_answers_409(self):
+        # The health checker marks a link dead by writing cat_links.state
+        # (link_state.py's sweep) — reproduce exactly that step here.
+        self.conn.execute(
+            "UPDATE cat_links SET state = 'dead' WHERE resource_id = 'TWIN-CDN'")
+        self.conn.commit()
+        reply = self.post("/api/v2/play", {"work_id": self.twin_work_id})
+        self.assert_problem(reply, code="no_playable_source", status=409,
+                            instance="/api/v2/play")
+
+    def test_release_id_for_the_dead_print_still_409s(self):
+        best, _sibling = self._twin_prints("Twin Prints")
+        # Map a legacy id onto the dead print, the way Session 108's tests
+        # do, so the route still names that one print.
+        self.conn.execute(
+            "INSERT OR REPLACE INTO cat_id_map (kind, old_id, new_id, rev)"
+            " VALUES ('ledger_release', ?, ?, ?)", (500001, best, 9))
+        self.conn.commit()
+        reply = self.post("/api/v2/play", {"release_id": 500001})
+        self.assert_problem(reply, code="no_playable_source", status=409,
+                            instance="/api/v2/play")
 
 
 # ── 2. provenance: nothing that names a source ever leaves ──────────────────
@@ -1714,11 +1806,11 @@ class V2StatsHonestyTests(V2WireFixture):
         self.assertEqual(health["probes"]["ok"], 1)
         self.assertEqual(health["probes"]["resumable"], 1)
         self.assertEqual(health["probes"]["avg_speed_mbps"], 42.0)
-        # Six posts, one of them the hidden series: five works, five prints and
-        # 11 − 2 = 9 links are what a public caller may be told about (§13).
-        self.assertEqual(counts["works"], 5)
-        self.assertEqual(counts["links"], 9)
-        self.assertEqual(counts["prints"], 5)
+        # Eight posts, one of them the hidden series: seven works, nine prints and
+        # 15 − 2 = 13 links are what a public caller may be told about (§13).
+        self.assertEqual(counts["works"], 7)
+        self.assertEqual(counts["links"], 13)
+        self.assertEqual(counts["prints"], 9)
         self.assertGreater(self.conn.execute(
             "SELECT COUNT(*) FROM cat_works").fetchone()[0], counts["works"])
 
@@ -1803,7 +1895,7 @@ class V2SurfaceTests(V2WireFixture):
                          stats["counts"]["works"])
         self.assertEqual(payload["catalog"]["counts"]["links"],
                          stats["counts"]["links"])
-        self.assertEqual(payload["catalog"]["counts"]["works"], 5)
+        self.assertEqual(payload["catalog"]["counts"]["works"], 7)
         self.assertLess(payload["catalog"]["counts"]["works"],
                         self.conn.execute("SELECT COUNT(*) FROM cat_works").fetchone()[0],
                         "the manifest advertised hidden rows")

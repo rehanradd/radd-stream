@@ -1717,12 +1717,76 @@ def route_post(handler, path: str, query: dict, *, db_path, operator: bool,
     return True
 
 
+# Session 109: how many prints of one work/episode a single `/play` press
+# may try before it gives up. The live case needs 2 (the playable sibling
+# sits right behind a dead best print); 5 leaves headroom for works whose
+# top prints share one dead host family, while bounding the walk — each
+# bundle build is a few indexed reads (`catalog_api` never probes the
+# network), so 5 costs ~5x one bundle build and nothing more. A series
+# work can hold hundreds of prints; the walk never scans past this cap.
+_WORK_PRINT_FALLBACK_LIMIT = 5
+
+
+def _episode_sibling_prints(conn, episode_id, best_release_id, *, operator):
+    """Other prints covering one episode, in the projector's best-first order.
+
+    Session 109: `cat_release_episodes` is many-to-many, so an episode
+    genuinely has several candidate prints — the projector's
+    `best_release_id` is just the first of them. The filters and the
+    ordering below mirror the projector's `best_release_id` query
+    (`catalog_v2.py`), so the first print of the walk is the projector's
+    best and the siblings are the prints it passed over.
+    """
+    where = "" if operator else f" AND {adult_scope('w')}"
+    rows = conn.execute(
+        f"""
+        SELECT r.id FROM cat_release_episodes re
+        JOIN cat_releases r ON r.id = re.release_id
+        JOIN cat_works w ON w.id = r.work_id
+        WHERE re.episode_id = :ep AND re.release_id != :best
+          AND r.coverage_type IN ('single_episode', 'episode_range', 'season_pack')
+          AND r.streamable_count > 0 AND r.identity_suspect = 0{where}
+        ORDER BY r.quality_score DESC, r.print_version DESC, r.id DESC
+        LIMIT :lim
+        """, {"ep": int(episode_id), "best": int(best_release_id),
+              "lim": _WORK_PRINT_FALLBACK_LIMIT - 1}).fetchall()
+    return [int(row["id"]) for row in rows]
+
+
+def _play_first_playable(conn, release_ids, *, episode_id, include_adult):
+    """Session 109: walk a work/episode's prints, best first, cat ids only.
+
+    Returns the first bundle with a playable candidate. When no print
+    plays, the BEST print's bundle — so the caller's download-only/409
+    answer is exactly today's, on the print the caller would have got
+    before the walk existed. `legacy_release_id=False` throughout: every
+    id here was resolved by the route itself (Session 108).
+    """
+    first = None
+    for release_id in release_ids:
+        bundle = catalog_api.play_bundle(
+            conn, release_id=int(release_id), episode_id=episode_id,
+            include_adult=include_adult, legacy_release_id=False)
+        if first is None:
+            first = bundle
+        if bundle.get("ok") and bundle.get("playable"):
+            return bundle
+    return first
+
+
 def route_play(handler, conn, body: dict, *, rid: str, path: str, operator: bool) -> None:
     """POST /play — one PlayBundle for a work, a print or an episode (§8.1, §9, S11).
 
     `prefer` orders the ladder on either axis; a print whose only copies are
     downloads answers 200 with an empty play ladder and the download options
     present (S11), because "you may save this" is a real answer, not a conflict.
+
+    Session 109: a `work_id`/`episode_id` caller asked for the WORK, not one
+    print, so the route walks the target's prints best-first and returns the
+    first bundle with a playable candidate — a dead best print must not hide
+    a playable sibling (live 2026-11-08: work 54221's best print 624765 is
+    dead while sibling 624764 plays). A bare `release_id` names one print
+    and is never switched to a sibling.
     """
     release_id = _int_or_none(body.get("release_id"))
     episode_id = _int_or_none(body.get("episode_id"))
@@ -1733,6 +1797,10 @@ def route_play(handler, conn, body: dict, *, rid: str, path: str, operator: bool
     # translating it would redirect to a different print.
     legacy_release_id = release_id is not None
     named = release_id is not None or episode_id is not None or work_id is not None
+    # Session 109: the candidate prints for a derived target, best first.
+    # The first entry is exactly the print the old code picked alone, so
+    # the walk only ADDS tries — it never changes the first choice.
+    candidate_ids: list[int] = []
     if release_id is None and episode_id is not None:
         # Read inside the adult scope like every other query here. Unscoped, this
         # one lookup still ended up answering `not_found` (the print it points at is
@@ -1745,17 +1813,20 @@ def route_play(handler, conn, body: dict, *, rid: str, path: str, operator: bool
             SELECT e.best_release_id FROM cat_episodes e
             JOIN cat_works w ON w.id = e.work_id WHERE e.id = ?{where}
             """, (episode_id,)).fetchone()
-        release_id = _int_or_none(row["best_release_id"]) if row else None
-    if release_id is None and work_id is not None:
+        best = _int_or_none(row["best_release_id"]) if row else None
+        if best is not None:
+            candidate_ids = [best] + _episode_sibling_prints(
+                conn, episode_id, best, operator=operator)
+    if not candidate_ids and release_id is None and work_id is not None:
         where = "" if operator else f" AND {adult_scope('w')}"
-        row = conn.execute(
+        rows = conn.execute(
             f"""
             SELECT r.id FROM cat_releases r JOIN cat_works w ON w.id = r.work_id
             WHERE r.work_id = :wid{where}
-            ORDER BY r.quality_score DESC, r.id ASC LIMIT 1
-            """, {"wid": work_id}).fetchone()
-        release_id = _int_or_none(row["id"]) if row else None
-    if release_id is None:
+            ORDER BY r.quality_score DESC, r.id ASC LIMIT :lim
+            """, {"wid": work_id, "lim": _WORK_PRINT_FALLBACK_LIMIT}).fetchall()
+        candidate_ids = [int(row["id"]) for row in rows]
+    if release_id is None and not candidate_ids:
         # Two different questions, and §13 decides which answer is legal. A caller
         # that named no target at all has made a malformed request: 400. A caller
         # that *did* name one we cannot see has asked for a row that is either
@@ -1771,10 +1842,18 @@ def route_play(handler, conn, body: dict, *, rid: str, path: str, operator: bool
                     detail="One of `release_id`, `episode_id` or `work_id` is required.")
         return
 
-    bundle = catalog_api.play_bundle(conn, release_id=int(release_id),
-                                     episode_id=episode_id,
-                                     include_adult=bool(operator),
-                                     legacy_release_id=legacy_release_id)
+    if candidate_ids:
+        # A derived target: walk its prints, best first (Session 109).
+        # A bare release_id names one print and takes the single-bundle
+        # path below, exactly as before.
+        bundle = _play_first_playable(conn, candidate_ids,
+                                      episode_id=episode_id,
+                                      include_adult=bool(operator))
+    else:
+        bundle = catalog_api.play_bundle(conn, release_id=int(release_id),
+                                         episode_id=episode_id,
+                                         include_adult=bool(operator),
+                                         legacy_release_id=legacy_release_id)
     ok, code, _message = _from_layer2(bundle)
     if not ok:
         problem(handler, code=code or "not_found", rid=rid, instance=path,
