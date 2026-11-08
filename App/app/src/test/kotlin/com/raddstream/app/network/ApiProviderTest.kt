@@ -56,7 +56,7 @@ class ApiProviderTest {
             "https://raddstream.duckdns.org", "raddstream.duckdns.org", pins,
         )
         assertEquals(3, pinner?.pins?.size)
-        assertTrue(pinner?.pins?.all { it.hostname == "raddstream.duckdns.org" } == true)
+        assertTrue(pinner?.pins?.all { it.pattern == "raddstream.duckdns.org" } == true)
     }
 
     @Test

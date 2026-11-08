@@ -171,7 +171,15 @@ IS live (defined in `radd-stream-cache.conf`, used in both blocks).
    (`/api/v1/posts?q=Kantara`, `?q=Hi Nanna` return rows; one play press
    302s). Undo per pass: `--undo` (key fold) / `--corroborate --undo`.
 
-## Deliberately left out
+## Parent follow-up (2026-11-08 ~13:41 PKT)
+
+- CI on push of 42afbc0d: Backend **SUCCESS** (42463639469); Android **FAILURE**
+  (42463639455) — `compileDebugUnitTestKotlin` failed on
+  `ApiProviderTest.kt:59` `Unresolved reference 'hostname'`: OkHttp's
+  `CertificatePinner.Pin` exposes `pattern`, not `hostname`. Parent fixed the
+  one line (`it.hostname` → `it.pattern`) and re-pushed as a follow-up commit
+  on the same branch; CI re-run is the verification. No other `.hostname`
+  misuse exists in App tests.
 
 - Audit 6 (ship release APK — owner-only tag), 11 (share coins — keep
   the 25/day cap), 13 (Play Integrity — items 3–4 are the server-side
