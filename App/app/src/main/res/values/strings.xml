@@ -71,6 +71,7 @@
     <string name="player_first_frame">Started in %1$s</string>
     <string name="player_open_external">Open with another player</string>
     <string name="player_close">Close</string>
+    <string name="player_back_to_details">Back to details</string>
     <string name="player_subtitles_for_colour">%1$s subtitles</string>
     <string name="player_selected_suffix">, selected</string>
     <string name="player_resume_title">Resume playback?</string>

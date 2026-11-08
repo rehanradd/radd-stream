@@ -72,11 +72,9 @@ import com.raddstream.app.viewmodel.AccountUiState
 import com.raddstream.app.viewmodel.ContactUiState
 import com.raddstream.app.viewmodel.ImageQuality
 import com.raddstream.app.viewmodel.KeepTtl
+import com.raddstream.app.viewmodel.MembershipCardCopy
 import com.raddstream.app.viewmodel.SettingsViewModel
 import com.raddstream.app.viewmodel.UserPreferences
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
 
 /** The subtitle chips, in the order the row shows them. Readable by the region test, which
  * pins that a card can only ever seed a word this row can actually display. */
@@ -173,6 +171,27 @@ fun SettingsScreen(
                 // The connection test above still fetches them for its own message.
             }
 
+            // The region row lives in its own card at the top of Settings, not
+            // buried in Playback & Display: it is the one row the viewer needs
+            // after every region change, and it must be findable without
+            // scrolling past a dozen cards (Session 114).
+            SettingsCard(title = "Watching region") {
+                val region = RegionChoices.byId(state.userRegion)
+                Text(
+                    region.title,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+                Text(
+                    region.preferenceLine(),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                TextButton(onClick = onOpenRegionChoice) {
+                    Text("Change what you watch")
+                }
+            }
+
             // ── Downloads entry ────────────────────────────────────────
             if (features.downloads) {
                 SettingsCard(title = "Offline", icon = Icons.Default.Download) {
@@ -213,18 +232,18 @@ fun SettingsScreen(
             // ── VIP membership ─────────────────────────────────────────
             SettingsCard(title = "VIP Membership", icon = Icons.Default.Star) {
                 // The plan summary: what this install actually has (VIP with its
-                // date, a payment waiting, or free) plus the operator's
-                // published prices when the server sent any. The trial days
-                // live on the Account card, not here — one screen, one fact.
+                // date, a payment waiting, the free VIP days, or free) plus the
+                // operator's published prices when the server sent any. The
+                // summary lives in [MembershipCardCopy] so a test can pin it:
+                // a trial in progress must never read as "Free plan" here while
+                // the Account card says the free days are running (Session 114).
                 Text(
-                    when {
-                        state.planIsVip && state.planVipUntilMillis > 0L ->
-                            "VIP — confirmed through ${planDateLabel(state.planVipUntilMillis)}."
-                        state.planIsVip -> "VIP — active."
-                        state.planPaymentPending ->
-                            "Payment submitted — waiting for confirmation."
-                        else -> "Free plan — playback stays at 720p."
-                    },
+                    MembershipCardCopy.summary(
+                        planIsVip = state.planIsVip,
+                        planVipUntilMillis = state.planVipUntilMillis,
+                        planPaymentPending = state.planPaymentPending,
+                        trialDays = state.account.trialDays,
+                    ),
                     style = MaterialTheme.typography.bodyMedium,
                     fontWeight = FontWeight.Medium,
                 )
@@ -597,22 +616,6 @@ fun SettingsScreen(
             }
 
             SettingsCard(title = "Playback & Display") {
-                PreferenceRowTitle("Watching region")
-                val region = RegionChoices.byId(state.userRegion)
-                Text(
-                    region.title,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurface,
-                )
-                Text(
-                    region.preferenceLine(),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                TextButton(onClick = onOpenRegionChoice) {
-                    Text("Change what you watch")
-                }
-
                 Spacer(Modifier.height(10.dp))
                 PreferenceRowTitle("Image quality")
                 ChipRow(ImageQuality.entries.toList().map { it.label }, ImageQuality.entries.indexOf(state.prefs.imageQuality)) { idx ->
@@ -950,10 +953,6 @@ private fun lanShareStatusLine(status: LanShareStatus): String = when (status) {
         "Listening on $where · ${status.servableCount} kept ${if (status.servableCount == 1) "file" else "files"}"
     }
 }
-
-/** The VIP card's date — the same "d MMM yyyy" the VIP screen paints, so the two never disagree. */
-private fun planDateLabel(epochMs: Long): String =
-    SimpleDateFormat("d MMM yyyy", Locale.getDefault()).format(Date(epochMs))
 
 /**
  * The phone + PIN form. Three fields, four sentences, one button.

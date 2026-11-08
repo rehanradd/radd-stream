@@ -484,6 +484,7 @@ private fun PlayerScreenContent(
                 onRetry = { vm.retryCurrentCandidates() },
                 onExternal = { vm.openWithExternalPlayer() },
                 onDismiss = { vm.dismissGiveUp() },
+                onBackToDetails = onBackClick,
             )
         } ?: if (state.deadlineGiveUp) {
             // The 30 s hard deadline (§5 P5): no candidate failed, but none produced a
@@ -496,6 +497,7 @@ private fun PlayerScreenContent(
                 onRetry = { vm.retryCurrentCandidates() },
                 onExternal = { vm.openWithExternalPlayer() },
                 onDismiss = { vm.dismissDeadlineGiveUp() },
+                onBackToDetails = onBackClick,
                 onTryAnother = if (state.canTryAnotherPrint) {
                     { vm.tryNextPrint() }
                 } else {
@@ -1868,10 +1870,16 @@ private fun GiveUpCard(
     onRetry: () -> Unit,
     onExternal: () -> Unit,
     onDismiss: () -> Unit,
+    onBackToDetails: () -> Unit,
     onTryAnother: (() -> Unit)? = null,
 ) {
+    // Back, and a tap outside the card, both leave the player (Session 114):
+    // a failed play must never trap the viewer — the old dismiss meant "keep
+    // waiting", so Back only dismissed the card and the card came back. "Close"
+    // below still means keep waiting, for a viewer who wants to give the slow
+    // link more time; it is no longer the only way out.
     AlertDialog(
-        onDismissRequest = onDismiss,
+        onDismissRequest = onBackToDetails,
         containerColor = RaddPlayerDialog,
         icon = {
             // The logo-mark (§4.7): 32 dp, only while nothing is playing — which
@@ -1922,7 +1930,10 @@ private fun GiveUpCard(
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) { Text(stringResource(R.string.player_close), color = Color.White.copy(alpha = 0.7f)) }
+            Row {
+                TextButton(onClick = onBackToDetails) { Text(stringResource(R.string.player_back_to_details), color = RaddCurrent500) }
+                TextButton(onClick = onDismiss) { Text(stringResource(R.string.player_close), color = Color.White.copy(alpha = 0.7f)) }
+            }
         },
     )
 }

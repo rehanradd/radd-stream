@@ -1334,3 +1334,38 @@ private fun syncSentence(report: SyncReport, paused: Boolean, signedIn: Boolean 
         }
     }
 }
+
+/**
+ * The VIP Membership card's one-line summary, as a pure function so a test
+ * can pin it. Session 114: the card used to say "Free plan" while the Account
+ * card on the same screen said free VIP days were running — the two read two
+ * different facts (a one-shot entitlement read vs the live trial countdown),
+ * and the Membership line was the wrong one: a trial account IS a VIP account
+ * on the server (vip_until = now + 3 days), so during the trial the viewer
+ * is not on the free plan. The trial branch here is the backstop for the
+ * window before the entitlement re-read lands; once it does, the VIP branch
+ * says the same thing in its own words, and the two cards can never disagree.
+ */
+internal object MembershipCardCopy {
+
+    /** One line: VIP, trial, payment pending, or the free plan — in that order. */
+    fun summary(
+        planIsVip: Boolean,
+        planVipUntilMillis: Long?,
+        planPaymentPending: Boolean,
+        trialDays: Int?,
+    ): String = when {
+        planIsVip && (planVipUntilMillis ?: 0L) > 0L ->
+            "VIP — confirmed through ${formatDate(planVipUntilMillis!!)}."
+        planIsVip -> "VIP — active."
+        planPaymentPending -> "Payment submitted — waiting for confirmation."
+        (trialDays ?: 0) > 0 -> AccountCardCopy.trialActive(trialDays!!) +
+            " 1080p and 4K play until the days end."
+        else -> "Free plan — playback stays at 720p."
+    }
+
+    private fun formatDate(epochMs: Long): String {
+        val date = java.util.Date(epochMs)
+        return java.text.SimpleDateFormat("d MMM yyyy", java.util.Locale.getDefault()).format(date)
+    }
+}

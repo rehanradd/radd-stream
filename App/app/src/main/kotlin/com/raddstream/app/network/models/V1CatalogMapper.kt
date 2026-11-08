@@ -98,7 +98,10 @@ object V1CatalogMapper {
             }
         }
 
-        val seasons = (seasonNumbers + episodesBySeason.keys).sorted().map { number ->
+        // Newest season first (Session 114): the viewer lands on the latest
+        // season, not the first one ever made. Episodes inside a season stay
+        // oldest-first — the flip is per season, never inside one.
+        val seasons = (seasonNumbers + episodesBySeason.keys).sortedDescending().map { number ->
             val eps = episodesBySeason[number].orEmpty().values.sortedBy { it.number }
                 .mapIndexed { index, episode -> episode.copy(absoluteNumber = index + 1) }
             Season(
