@@ -6752,6 +6752,23 @@ def resolve_live_source(source_id: int, *, v2: bool = False,
                     fresh_temp = 1
                     embed_verdict = verdict
                     _gate_from_verdict = True
+            elif hr and (service == hr.SERVICE_VOE
+                         or "voe" in source_u.lower()
+                         or "voe" in cached_u.lower()):
+                # VOE (voe.sx + its mirrors): the embed page carries an
+                # obfuscated payload; the decoded source is an HLS master.
+                # Session 103: decoded live 2026-11-08, Range probe 206
+                # application/vnd.apple.mpegurl. The voe.sx page itself is
+                # a JS redirect to the mirror, followed inside unwrap_voe.
+                _unwrap_branch_taken = True
+                verdict = hr.unwrap_voe(source_u or cached_u)
+                if verdict.get("status") == "active":
+                    fresh_url = verdict.get("final_url")
+                    fresh_temp = 1
+                    embed_verdict = verdict
+                    _gate_from_verdict = True
+                else:
+                    _record_resolve_failure(src["id"], "unwrap_failed")
         except Exception:
             pass
 

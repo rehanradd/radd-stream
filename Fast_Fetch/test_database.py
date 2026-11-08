@@ -1704,6 +1704,7 @@ class DatabaseSaveTests(unittest.TestCase):
         SERVICE_STREAMTAPE = "streamtape"
         SERVICE_STREAM = "stream"
         SERVICE_STREAMWISH = "streamwish"
+        SERVICE_VOE = "voe"
 
         def __init__(self, verdict=None):
             self.verdict = verdict
@@ -1770,6 +1771,15 @@ class DatabaseSaveTests(unittest.TestCase):
                 "final_url": "https://cdn.example/hls2/01/1/f/master.m3u8"
                              "?t=x&s=1&e=129600&f=1",
                 "is_temporary": True, "expires_in": 129600.0,
+                "content_type": "application/vnd.apple.mpegurl",
+                "http_status": 206, "size_bytes": 512}
+
+        def unwrap_voe(self, embed_url, fetch=None, verify=True):
+            self.calls.append(("voe", embed_url, verify))
+            return self.verdict or {
+                "status": "active",
+                "final_url": "https://cdn.example/hls/master.m3u8",
+                "is_temporary": True, "expires_in": 14400.0,
                 "content_type": "application/vnd.apple.mpegurl",
                 "http_status": 206, "size_bytes": 512}
 
@@ -2241,6 +2251,100 @@ class DatabaseSaveTests(unittest.TestCase):
             "final_url": "https://cdn.example/f.mp4",
             "http_status": 200, "size_bytes": 100})
         self.assertFalse(file_200["resumable"])
+
+    @staticmethod
+    def _voe_encode(data):
+        """Encode a payload the way VOE's page does, so the decode can be
+        tested without the live site: b64 the JSON, reverse, shift every
+        char +3, b64 again, insert the LUT characters, inverse-ROT the
+        letters. The LUT entries are two non-word characters each, which
+        is what the loader-script regex matches."""
+        raw = json.dumps(data, separators=(",", ":"))
+        step = base64.b64encode(raw.encode()).decode()[::-1]
+        step = "".join(chr(ord(c) + 3) for c in step)
+        step = base64.b64encode(step.encode()).decode()
+        text = step[:5] + "@#" + step[5:10] + "~!" + step[10:]
+        out = []
+        for ch in text:
+            x = ord(ch)
+            if 65 <= x <= 90:
+                x = (x - 78) % 26 + 65
+            elif 97 <= x <= 122:
+                x = (x - 110) % 26 + 97
+            out.append(chr(x))
+        return "".join(out), "['@#','~!']"
+
+    def test_voe_decode_round_trips_a_known_payload(self):
+        """Session 103: VOE's obfuscation is pure stdlib (re + base64 +
+        json) — the decode must invert the encode exactly, or the live
+        payload decodes to garbage."""
+        hr = fast_fetch._embed_resolvers()
+        data = {"source": "https://cdn.example/hls/master.m3u8",
+                "fallback": "https://cdn.example/f.mp4"}
+        code, luts = self._voe_encode(data)
+        self.assertEqual(hr.voe_decode(code, luts), data)
+
+    def test_voe_unwrap_decodes_the_payload_and_accepts_the_playlist(self):
+        """Session 103: the voe.sx page is a JS redirect to the mirror;
+        the mirror page carries the obfuscated payload plus the loader
+        script with the LUTs; the decoded source is an HLS master that
+        Range-probes 206 mpegurl. Three requests, no browser."""
+        hr = fast_fetch._embed_resolvers()
+        data = {"source": "https://cdn.example/hls/master.m3u8",
+                "fallback": "https://cdn.example/f.mp4"}
+        code, luts = self._voe_encode(data)
+        mirror = ("https://shannoncoldalready.example/e/n15ncgjxnnbx")
+        page = ('<html><script type="application/json">["' + code
+                + '"]</script><script src="/js/loader.test.js">'
+                '</script></html>')
+        seen = {}
+
+        def fake_fetch(url, headers=None, timeout=25, method="GET",
+                       follow=True):
+            seen[url] = dict(headers or {})
+            if url == "https://voe.sx/n15ncgjxnnbx":
+                return (200, ("<script>window.location.href = '"
+                              + mirror + "';</script>").encode(),
+                        {}, url)
+            if url == mirror:
+                return (200, page.encode(), {}, url)
+            if url.endswith("/js/loader.test.js"):
+                return (200, ("var x = " + luts + ";").encode(), {}, url)
+            if "master.m3u8" in url:
+                return (206, b"#EXTM3U\n#EXT-X-VERSION:3\n",
+                        {"content-type": "application/vnd.apple.mpegurl",
+                         "content-range": "bytes 0-0/281"}, url)
+            return (404, b"", {}, url)
+
+        verdict = hr.unwrap_voe("https://voe.sx/n15ncgjxnnbx",
+                                fetch=fake_fetch)
+        self.assertEqual(verdict["status"], "active", verdict)
+        self.assertEqual(verdict["final_url"],
+                         "https://cdn.example/hls/master.m3u8")
+        self.assertIn("mpegurl", verdict["content_type"])
+        self.assertIn(mirror, seen)
+        probe_headers = seen.get("https://cdn.example/hls/master.m3u8") or {}
+        self.assertEqual(probe_headers.get("Referer"), mirror)
+
+    def test_resolve_live_source_unwraps_a_voe_embed_to_its_hls_master(self):
+        """Session 103: a voe row resolves through unwrap_voe; the gate
+        probe is stubbed to FAIL on purpose — success anyway proves the
+        unwrapper's own verified probe stands as the gate."""
+        stored = self._embed_source(
+            "moviesmela", "voe", "https://voe.sx/n15ncgjxnnbx")
+        resolvers = self._FakeResolvers()
+        failing = {"ok": False, "kind": None, "mime": None, "size": None,
+                   "resumable": False, "renditions": [],
+                   "failure": "probe_error"}
+        with patch.object(fast_fetch, "_embed_resolvers",
+                          return_value=resolvers), \
+             patch.object(fast_fetch, "_stage2_probe",
+                          return_value=failing):
+            res = fast_fetch.resolve_live_source(stored["id"])
+
+        self.assertTrue(res["success"], res)
+        self.assertEqual(res["url"], "https://cdn.example/hls/master.m3u8")
+        self.assertEqual(resolvers.calls[0][0], "voe")
 
     def test_resolve_live_source_unwraps_a_pkembed_embed_to_its_top_rendition(self):
         embed = "https://pkembed.site/embed-g64v61whic26.html"
