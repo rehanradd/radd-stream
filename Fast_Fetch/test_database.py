@@ -1043,6 +1043,139 @@ class DatabaseSaveTests(unittest.TestCase):
             {"https://cdn.example/site_a/page-0.html",
              "https://cdn.example/site_a/good.mp4"})
 
+    def test_host_health_demotes_a_repeatedly_failing_service(self):
+        """Session 103: a service this process has seen fail 3+ times in
+        the last hour sorts last in the failover ladder, so a host whose
+        CDN is down stops being tried first on every press. The sick
+        sibling is first by id, but the healthy one is served and the
+        sick one is never probed. The health table is in-process only —
+        the durable record is still the negative cache — so the test
+        notes the failures itself and cleans them up."""
+        media_data = self.media("site_a", "https://site-a.example/example-film/")
+        media_data["releases"][0]["sources"] = [
+            {
+                "source_name": "Dead copy",
+                "service": "test-service",
+                "resource_id": "site_a-id-0",
+                "source_url": "https://site_a.example/source-0",
+                "final_url": "https://cdn.example/site_a/page-0.html",
+                "is_temporary": 0,
+            },
+            {
+                "source_name": "Sick sibling",
+                "service": "sickhost",
+                "resource_id": "site_a-id-1",
+                "source_url": "https://site_a.example/source-1",
+                "final_url": "https://cdn.example/site_a/sick.mp4",
+                "is_temporary": 0,
+            },
+            {
+                "source_name": "Healthy sibling",
+                "service": "healthyhost",
+                "resource_id": "site_a-id-2",
+                "source_url": "https://site_a.example/source-2",
+                "final_url": "https://cdn.example/site_a/healthy.mp4",
+                "is_temporary": 0,
+            },
+        ]
+        fast_fetch.save_scraped_data(media_data)
+        with fast_fetch.get_db() as conn:
+            rows = conn.execute(
+                "SELECT id FROM download_sources ORDER BY id").fetchall()
+            conn.execute(
+                "UPDATE download_sources SET created_at = 1000")
+        self.assertEqual(len(rows), 3)
+        failing = {"ok": False, "kind": None, "mime": None, "size": None,
+                   "resumable": False, "renditions": [], "failure": "probe_error"}
+        passing = {"ok": True, "kind": "file", "mime": "video/mp4",
+                   "size": 1024, "resumable": True, "renditions": [],
+                   "failure": None}
+
+        def probe_side_effect(url, **_kw):
+            if url in ("https://cdn.example/site_a/sick.mp4",
+                       "https://cdn.example/site_a/healthy.mp4"):
+                return passing
+            return failing
+
+        probe = Mock(side_effect=probe_side_effect)
+        try:
+            for _ in range(3):
+                fast_fetch._note_host_failure("sickhost")
+            with patch.object(fast_fetch, "_stage2_probe", probe):
+                res = fast_fetch.resolve_live_source(rows[0]["id"])
+        finally:
+            fast_fetch._host_failures.pop("sickhost", None)
+        self.assertTrue(res["success"], res)
+        self.assertTrue(res.get("failover"), res)
+        self.assertEqual(res["url"],
+                         "https://cdn.example/site_a/healthy.mp4", res)
+        self.assertEqual(probe.call_count, 2, probe.call_args_list)
+        self.assertNotIn("https://cdn.example/site_a/sick.mp4",
+                         {c.args[0] for c in probe.call_args_list})
+
+    def test_host_health_below_threshold_does_not_reorder(self):
+        """Session 103: two failures are not enough to demote — the
+        threshold is 3 — so the first sibling by id still wins. A single
+        failure must never reorder the ladder."""
+        media_data = self.media("site_a", "https://site-a.example/example-film/")
+        media_data["releases"][0]["sources"] = [
+            {
+                "source_name": "Dead copy",
+                "service": "test-service",
+                "resource_id": "site_a-id-0",
+                "source_url": "https://site_a.example/source-0",
+                "final_url": "https://cdn.example/site_a/page-0.html",
+                "is_temporary": 0,
+            },
+            {
+                "source_name": "First sibling",
+                "service": "sickhost",
+                "resource_id": "site_a-id-1",
+                "source_url": "https://site_a.example/source-1",
+                "final_url": "https://cdn.example/site_a/sick.mp4",
+                "is_temporary": 0,
+            },
+            {
+                "source_name": "Second sibling",
+                "service": "healthyhost",
+                "resource_id": "site_a-id-2",
+                "source_url": "https://site_a.example/source-2",
+                "final_url": "https://cdn.example/site_a/healthy.mp4",
+                "is_temporary": 0,
+            },
+        ]
+        fast_fetch.save_scraped_data(media_data)
+        with fast_fetch.get_db() as conn:
+            rows = conn.execute(
+                "SELECT id FROM download_sources ORDER BY id").fetchall()
+            conn.execute(
+                "UPDATE download_sources SET created_at = 1000")
+        self.assertEqual(len(rows), 3)
+        failing = {"ok": False, "kind": None, "mime": None, "size": None,
+                   "resumable": False, "renditions": [], "failure": "probe_error"}
+        passing = {"ok": True, "kind": "file", "mime": "video/mp4",
+                   "size": 1024, "resumable": True, "renditions": [],
+                   "failure": None}
+
+        def probe_side_effect(url, **_kw):
+            if url in ("https://cdn.example/site_a/sick.mp4",
+                       "https://cdn.example/site_a/healthy.mp4"):
+                return passing
+            return failing
+
+        probe = Mock(side_effect=probe_side_effect)
+        try:
+            for _ in range(2):
+                fast_fetch._note_host_failure("sickhost")
+            with patch.object(fast_fetch, "_stage2_probe", probe):
+                res = fast_fetch.resolve_live_source(rows[0]["id"])
+        finally:
+            fast_fetch._host_failures.pop("sickhost", None)
+        self.assertTrue(res["success"], res)
+        self.assertEqual(res["url"],
+                         "https://cdn.example/site_a/sick.mp4", res)
+        self.assertEqual(probe.call_count, 2, probe.call_args_list)
+
     def test_negative_cache_expires_after_ttl(self):
         """A failure record older than the TTL no longer refuses: the
         copy is probed again, a passing probe serves it, and the stale
@@ -1705,6 +1838,8 @@ class DatabaseSaveTests(unittest.TestCase):
         SERVICE_STREAM = "stream"
         SERVICE_STREAMWISH = "streamwish"
         SERVICE_VOE = "voe"
+        SERVICE_VIDHIDE = "vidhide"
+        SERVICE_VIDMOLY = "vidmoly"
 
         def __init__(self, verdict=None):
             self.verdict = verdict
@@ -1780,6 +1915,15 @@ class DatabaseSaveTests(unittest.TestCase):
                 "status": "active",
                 "final_url": "https://cdn.example/hls/master.m3u8",
                 "is_temporary": True, "expires_in": 14400.0,
+                "content_type": "application/vnd.apple.mpegurl",
+                "http_status": 206, "size_bytes": 512}
+
+        def unwrap_vidhide(self, embed_url, fetch=None, verify=True):
+            self.calls.append(("vidhide", embed_url, verify))
+            return self.verdict or {
+                "status": "active",
+                "final_url": "https://cdn.example/hls/master.m3u8",
+                "is_temporary": True, "expires_in": 129600.0,
                 "content_type": "application/vnd.apple.mpegurl",
                 "http_status": 206, "size_bytes": 512}
 
@@ -2345,6 +2489,97 @@ class DatabaseSaveTests(unittest.TestCase):
         self.assertTrue(res["success"], res)
         self.assertEqual(res["url"], "https://cdn.example/hls/master.m3u8")
         self.assertEqual(resolvers.calls[0][0], "voe")
+
+    def test_vidhide_unwrap_follows_the_chain_to_the_hls_master(self):
+        """Session 103: the embed page carries the sid, the helper POST
+        names the hanerix page, the hanerix page carries the packer block
+        with the hls2 master. Five requests, no browser — the fake fetch
+        plays all four hops plus the Range probe."""
+        hr = fast_fetch._embed_resolvers()
+        mresult = base64.b64encode(
+            json.dumps({"smwh": "37m6yf9fwmt2"}).encode()).decode()
+        helper = json.dumps({
+            "sources": {"smwh": {"siteUrl": "https://hanerix.com/e/"}},
+            "mresult": mresult})
+        svid = ('<html><script>const sid = "su9ss0k";</script></html>')
+        packer = '''<html><script>eval(function(p,a,c,k,e,d){e=function(c){return c};while(c--)if(k[c])p=p.replace(new RegExp('\\b'+e(c)+'\\b','g'),k[c]);return p}('0={"1":"https://cdn.example/hls/master.m3u8"};',10,2,'var|hls2'.split('|'),0,{}))</script></html>'''
+        seen = {}
+
+        def fake_fetch(url, headers=None, timeout=25, method="GET",
+                       follow=True, data=None):
+            seen[url] = (method, dict(headers or {}))
+            if url == "https://filesforever.link/embed/su9ss0k":
+                return (200, svid.encode(), {}, url)
+            if url == "https://pro.iqsmartgames.com/embedhelper2.php":
+                self.assertEqual(method, "POST")
+                self.assertIn(b"sid=su9ss0k", data or b"")
+                return (200, helper.encode(), {}, url)
+            if url == "https://hanerix.com/e/37m6yf9fwmt2":
+                return (200, packer.encode(), {}, url)
+            if "master.m3u8" in url:
+                return (206, b"#EXTM3U\n#EXT-X-VERSION:3\n",
+                        {"content-type": "application/vnd.apple.mpegurl",
+                         "content-range": "bytes 0-0/281"}, url)
+            return (404, b"", {}, url)
+
+        verdict = hr.unwrap_vidhide(
+            "https://filesforever.link/embed/su9ss0k", fetch=fake_fetch)
+        self.assertEqual(verdict["status"], "active", verdict)
+        self.assertEqual(verdict["final_url"],
+                         "https://cdn.example/hls/master.m3u8")
+        self.assertIn("mpegurl", verdict["content_type"])
+        self.assertIn("https://hanerix.com/e/37m6yf9fwmt2", seen)
+        probe_headers = seen.get(
+            "https://cdn.example/hls/master.m3u8", (None, {}))[1]
+        self.assertEqual(probe_headers.get("Referer"),
+                         "https://hanerix.com/e/37m6yf9fwmt2")
+
+    def test_resolve_live_source_unwraps_a_vidhide_embed_to_its_hls_master(self):
+        """Session 103: a vidhide row resolves through unwrap_vidhide;
+        the gate probe is stubbed to FAIL on purpose — success anyway
+        proves the unwrapper's own verified probe stands as the gate."""
+        stored = self._embed_source(
+            "moviesmela", "vidhide",
+            "https://filesforever.link/embed/su9ss0k")
+        resolvers = self._FakeResolvers()
+        failing = {"ok": False, "kind": None, "mime": None, "size": None,
+                   "resumable": False, "renditions": [],
+                   "failure": "probe_error"}
+        with patch.object(fast_fetch, "_embed_resolvers",
+                          return_value=resolvers), \
+             patch.object(fast_fetch, "_stage2_probe",
+                          return_value=failing):
+            res = fast_fetch.resolve_live_source(stored["id"])
+
+        self.assertTrue(res["success"], res)
+        self.assertEqual(res["url"], "https://cdn.example/hls/master.m3u8")
+        self.assertEqual(resolvers.calls[0][0], "vidhide")
+
+    def test_resolve_live_source_routes_a_vidmoly_embed_to_the_packer_unwrapper(self):
+        """Session 103: vidmoly has 0 rows in the catalog, so it is wired
+        but unproven live — this test proves only the routing: a vidmoly
+        row reaches the packer unwrapper with the vidmoly service label,
+        and the verified verdict serves."""
+        stored = self._embed_source(
+            "moviesmela", "vidmoly",
+            "https://vidmoly.net/embed-abc123.html")
+        resolvers = self._FakeResolvers()
+        failing = {"ok": False, "kind": None, "mime": None, "size": None,
+                   "resumable": False, "renditions": [],
+                   "failure": "probe_error"}
+        with patch.object(fast_fetch, "_embed_resolvers",
+                          return_value=resolvers), \
+             patch.object(fast_fetch, "_stage2_probe",
+                          return_value=failing):
+            res = fast_fetch.resolve_live_source(stored["id"])
+
+        self.assertTrue(res["success"], res)
+        self.assertEqual(res["url"],
+                         "https://cdn.example/hls2/01/1/f/master.m3u8"
+                         "?t=x&s=1&e=129600&f=1", res)
+        packer_calls = [c for c in resolvers.calls if c[0] == "packer_hls"]
+        self.assertEqual(len(packer_calls), 1, resolvers.calls)
+        self.assertEqual(packer_calls[0][2], "vidmoly")
 
     def test_resolve_live_source_unwraps_a_pkembed_embed_to_its_top_rendition(self):
         embed = "https://pkembed.site/embed-g64v61whic26.html"

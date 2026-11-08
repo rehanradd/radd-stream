@@ -6075,6 +6075,47 @@ NEGATIVE_CACHE_TTL_SECONDS = 12 * 3600
 #: nothing playable.
 RESOLVE_FAILURE_CLASSES = ("probe_failed", "no_unwrapper", "unwrap_failed")
 
+#: Host health (Session 103, in-process only): per-service timestamps of
+#: failures this process has recorded, pruned to the last hour. A service
+#: that failed 3+ times recently is demoted to the back of the failover
+#: ladder — the durable record is still the negative cache; this is only
+#: the order in which unrecorded rows are tried. There is no index on
+#: `service`, so a global per-service count would full-scan the 4M-row
+#: ledger; the counts here come from this process's own failure path
+#: instead, and the ladder's service lookup is a bounded PK query over
+#: its own candidate ids. No extra network calls, only in-memory reads.
+_HOST_HEALTH_WINDOW_SECONDS = 3600.0
+_HOST_HEALTH_DEMOTE_AFTER = 3
+_host_failures: dict[str, list[float]] = {}
+
+
+def _note_host_failure(service: str) -> None:
+    """Record one failure for a service in the in-process health table."""
+    if not service:
+        return
+    now = time.monotonic()
+    stamps = _host_failures.setdefault(service, [])
+    stamps.append(now)
+    cutoff = now - _HOST_HEALTH_WINDOW_SECONDS
+    _host_failures[service] = [t for t in stamps if t > cutoff]
+
+
+def _host_failure_count(service: str) -> int:
+    """Recent (last-hour) failure count for a service, pruned as read."""
+    if not service:
+        return 0
+    now = time.monotonic()
+    stamps = _host_failures.get(service)
+    if not stamps:
+        return 0
+    cutoff = now - _HOST_HEALTH_WINDOW_SECONDS
+    kept = [t for t in stamps if t > cutoff]
+    if kept:
+        _host_failures[service] = kept
+    else:
+        _host_failures.pop(service, None)
+    return len(kept)
+
 #: Seconds one landing-page fetch may take on the resolve path
 #: (Session 101). Legacy http_get defaults to 15 s x 3 attempts = 45 s
 #: for a single dead page; a dead landing page should cost ~5 s, not
@@ -6164,6 +6205,14 @@ def _record_resolve_failure(source_id: int, failure_class: str) -> None:
                 "UPDATE download_sources "
                 "SET last_failed_at = ?, failure_class = ? WHERE id = ?",
                 (time.time(), failure_class, source_id))
+            # The in-process health table is fed from here too: the row's
+            # service is a PK lookup, so this costs one cheap read on the
+            # failure path only, never on a success.
+            _row = _conn.execute(
+                "SELECT service FROM download_sources WHERE id = ?",
+                (source_id,)).fetchone()
+            if _row and _row[0]:
+                _note_host_failure(_row[0])
     except Exception:
         pass
 
@@ -6720,7 +6769,8 @@ def resolve_live_source(source_id: int, *, v2: bool = False,
                     fresh_temp = 1
                     embed_verdict = verdict
                     _gate_from_verdict = True
-            elif hr and (service in (hr.SERVICE_STREAM, hr.SERVICE_STREAMWISH)
+            elif hr and (service in (hr.SERVICE_STREAM, hr.SERVICE_STREAMWISH,
+                                     hr.SERVICE_VIDMOLY)
                          or "watch-online" in source_u.lower()
                          or "watch-online" in cached_u.lower()
                          or "streamwish" in source_u.lower()
@@ -6728,21 +6778,29 @@ def resolve_live_source(source_id: int, *, v2: bool = False,
                          or "hglink" in source_u.lower()
                          or "hglink" in cached_u.lower()
                          or "embedwish" in source_u.lower()
-                         or "embedwish" in cached_u.lower()):
+                         or "embedwish" in cached_u.lower()
+                         or "vidmoly" in source_u.lower()
+                         or "vidmoly" in cached_u.lower()):
                 # Session 103: the streamwish family cracked (1 GET +
                 # unpack + hls2 master). The unwrapper's Referer-carrying
                 # Range probe already proved the playlist, so it stands
                 # as the gate — a bare probe would 403 without the Referer.
+                # Vidmoly rides the same packer pattern (research:
+                # mediaflow-proxy VidMoly extractor, same 1-GET + unpack
+                # shape); it has 0 rows in the catalog, so this is wired
+                # but unproven live — the routing test proves the dispatch,
+                # not the host.
                 _unwrap_branch_taken = True
                 _packer_markers = ("watch-online", "streamwish", "hglink",
-                                   "embedwish")
+                                   "embedwish", "vidmoly")
                 _packer_url = source_u
                 for _marker in _packer_markers:
                     if _marker in source_u.lower() or _marker in cached_u.lower():
                         _packer_url = hoster_input(_marker)
                         break
                 _packer_svc = (service if service in (hr.SERVICE_STREAM,
-                                                       hr.SERVICE_STREAMWISH)
+                                                       hr.SERVICE_STREAMWISH,
+                                                       hr.SERVICE_VIDMOLY)
                                else hr.SERVICE_STREAM)
                 verdict = hr.unwrap_packer_hls(_packer_url, _packer_svc,
                                                verify=True)
@@ -6762,6 +6820,27 @@ def resolve_live_source(source_id: int, *, v2: bool = False,
                 # a JS redirect to the mirror, followed inside unwrap_voe.
                 _unwrap_branch_taken = True
                 verdict = hr.unwrap_voe(source_u or cached_u)
+                if verdict.get("status") == "active":
+                    fresh_url = verdict.get("final_url")
+                    fresh_temp = 1
+                    embed_verdict = verdict
+                    _gate_from_verdict = True
+                else:
+                    _record_resolve_failure(src["id"], "unwrap_failed")
+            elif hr and (service == hr.SERVICE_VIDHIDE
+                         or "vidhide" in source_u.lower()
+                         or "filesforever" in source_u.lower()
+                         or "vidhide" in cached_u.lower()
+                         or "filesforever" in cached_u.lower()):
+                # Vidhide (filesforever embed -> /svid/ sid -> helper ->
+                # hanerix packer hls2). Session 103: chain proven live
+                # 2026-11-08 on row su9ss0k, Range probe 206 mpegurl.
+                # The branch also matches plain filesforever embeds: the
+                # Stage-1 dispatch treats "filesforever" as unknown, so
+                # those rows reach here, and the unwrapper answers
+                # "unknown" honestly when the page carries no sid.
+                _unwrap_branch_taken = True
+                verdict = hr.unwrap_vidhide(source_u or cached_u)
                 if verdict.get("status") == "active":
                     fresh_url = verdict.get("final_url")
                     fresh_temp = 1
@@ -7050,6 +7129,33 @@ def resolve_live_source(source_id: int, *, v2: bool = False,
                         }
                 except Exception:
                     _live_siblings = _all_siblings
+            # Host health (Session 103): demote services this process
+            # has seen fail 3+ times in the last hour to the back of the
+            # ladder, so a host whose CDN is down stops being tried first
+            # on every press. The order inside each group is unchanged,
+            # and a service below the threshold is never reordered. The
+            # service lookup is one bounded PK query over the ladder's
+            # own candidate ids — no scan, no new index.
+            if _live_siblings:
+                try:
+                    with get_db() as _conn:
+                        _placeholders = ",".join(
+                            "?" for _ in _live_siblings)
+                        _svc_by_id = dict(_conn.execute(
+                            "SELECT id, service FROM download_sources "
+                            "WHERE id IN (" + _placeholders + ")",
+                            tuple(_live_siblings)).fetchall())
+                    _bad_services = {
+                        _svc_by_id.get(s) for s in _live_siblings
+                        if _host_failure_count(_svc_by_id.get(s) or "")
+                        >= _HOST_HEALTH_DEMOTE_AFTER}
+                    _live_siblings = (
+                        [s for s in _live_siblings
+                         if _svc_by_id.get(s) not in _bad_services]
+                        + [s for s in _live_siblings
+                           if _svc_by_id.get(s) in _bad_services])
+                except Exception:
+                    pass
             _failover_deadline = (time.monotonic()
                                   + _FAILOVER_BUDGET_SECONDS)
             for _sid in _live_siblings:

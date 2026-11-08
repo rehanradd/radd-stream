@@ -303,6 +303,8 @@ SERVICE_STREAMTAPE = "streamtape"
 SERVICE_STREAM = "stream"
 SERVICE_STREAMWISH = "streamwish"
 SERVICE_VOE = "voe"
+SERVICE_VIDHIDE = "vidhide"
+SERVICE_VIDMOLY = "vidmoly"
 
 # gofile (Session 103, verified live 2026-11-08): the real website token is
 # generated client-side as sha256(UA :: language :: accountToken ::
@@ -433,7 +435,8 @@ def _open(request: urllib.request.Request, timeout: float = DEFAULT_TIMEOUT,
 
 
 def http_request(url: str, headers: dict | None = None, timeout: float = DEFAULT_TIMEOUT,
-                 method: str = "GET", follow: bool = True):
+                 method: str = "GET", follow: bool = True,
+                 data: bytes | None = None):
     """
     (status, body, headers, final_url) for one request.
 
@@ -443,7 +446,8 @@ def http_request(url: str, headers: dict | None = None, timeout: float = DEFAULT
     """
     fields = {"User-Agent": USER_AGENT}
     fields.update(headers or {})
-    request = urllib.request.Request(url, headers=fields, method=method)
+    request = urllib.request.Request(url, headers=fields, method=method,
+                                     data=data)
     try:
         with _open(request, timeout=timeout, follow=follow) as response:
             return (int(response.status), response.read(PROBE_READ_BYTES),
@@ -1695,6 +1699,128 @@ def unwrap_voe(embed_url: str, fetch=None, verify: bool = True) -> dict:
         result["notes"].append("decoded only; the byte endpoint was not probed")
         return result
     probe = _probe_playlist_or_file(result["final_url"], fetch, page_url)
+    result["http_status"] = probe["http_status"]
+    result["content_type"] = probe["content_type"]
+    result["size_bytes"] = probe["size_bytes"]
+    result["status"] = probe["status"]
+    if probe["reason"]:
+        result["notes"].append(probe["reason"])
+    return result
+
+
+# Vidhide rows point at filesforever.link/embed/<id>, which 302s to a
+# pro.iqsmartgames.com /svid/ page carrying a `const sid`; one POST to
+# embedhelper2.php (the same helper the StreamHG flow uses) returns the
+# hanerix page URL, and the hanerix page carries a P.A.C.K.E.R. block
+# whose hls2 is the master playlist.
+VIDHIDE_SID_RE = re.compile(r"""const sid\s*=\s*"([^"]+)""")
+VIDHIDE_HELPER_URL = "https://pro.iqsmartgames.com/embedhelper2.php"
+
+
+def unwrap_vidhide(embed_url: str, fetch=None, verify: bool = True) -> dict:
+    """
+    Vidhide embed URL -> {final_url, service, is_temporary, expires_in, status, notes, …}.
+
+    Five requests, no browser: GET the embed (302 to the /svid/ page),
+    POST the sid to embedhelper2.php, GET the hanerix page it names,
+    unpack the P.A.C.K.E.R. block, Range-probe the hls2 master. The
+    hanerix page also lists other mirrors (rpmhub, p2pplay, uns.bio,
+    morencius) — only the hanerix one carries the packer, so only it is
+    followed. Verified live 2026-11-08 on row su9ss0k: Range probe 206
+    application/vnd.apple.mpegurl. (The first row tried, y3b3kvy, maps
+    the same chain but its master 502s — that file's CDN copy is dead,
+    not the method.)
+    """
+    fetch = fetch or http_request
+    result = _new_result(SERVICE_VIDHIDE, embed_url)
+    status, body, _headers, final_url = fetch(result["embed_url"])
+    if status != 200:
+        result["status"] = ("dead" if status in (404, 410)
+                            else "blocked" if status in (401, 403, 429)
+                            else "unknown")
+        result["notes"].append(f"embed page HTTP {status}")
+        return result
+    sid_match = VIDHIDE_SID_RE.search(_page_text(body))
+    if not sid_match:
+        result["status"] = "unknown"
+        result["notes"].append("svid page carries no sid")
+        return result
+    form = urllib.parse.urlencode({
+        "sid": sid_match.group(1), "UserFavSite": "",
+        "currentDomain": json.dumps(["pro.iqsmartgames.com",
+                                     "pro.iqsmartgames.com"])}).encode()
+    status, body, _headers, _final = fetch(
+        VIDHIDE_HELPER_URL,
+        headers={"Content-Type": "application/x-www-form-urlencoded",
+                 "Referer": final_url},
+        method="POST", data=form)
+    if status != 200:
+        result["status"] = ("dead" if status in (404, 410)
+                            else "blocked" if status in (401, 403, 429)
+                            else "unknown")
+        result["notes"].append(f"embedhelper HTTP {status}")
+        return result
+    try:
+        payload = json.loads(_page_text(body))
+        decoded = json.loads(base64.b64decode(
+            payload.get("mresult") or "").decode("utf-8"))
+    except Exception:  # noqa: BLE001 - a bad helper answer must not crash
+        result["status"] = "unknown"
+        result["notes"].append("embedhelper answer is not the expected JSON")
+        return result
+    hanerix = ""
+    for code, source in (payload.get("sources") or {}).items():
+        site_url = (source or {}).get("siteUrl") or ""
+        if "hanerix.com" in site_url and decoded.get(code):
+            hanerix = site_url + decoded[code]
+            break
+    if not hanerix:
+        result["status"] = "unknown"
+        result["notes"].append("embedhelper answer carries no hanerix page")
+        return result
+    status, body, _headers, _final = fetch(
+        hanerix, headers={"Referer": final_url})
+    if status != 200:
+        result["status"] = ("dead" if status in (404, 410)
+                            else "blocked" if status in (401, 403, 429)
+                            else "unknown")
+        result["notes"].append(f"hanerix page HTTP {status}")
+        return result
+    config = find_packed_config(_page_text(body))
+    if not config:
+        result["status"] = "unknown"
+        result["notes"].append(
+            "hanerix page carries no recognisable packed config")
+        return result
+    media = ""
+    match = PACKER_HLS2_RE.search(config)
+    if match:
+        media = match.group(1)
+    if not media:
+        match = PACKER_HLS4_RE.search(config)
+        if match:
+            raw = match.group(1)
+            media = raw if raw.startswith("http") else (
+                urllib.parse.urlsplit(hanerix).scheme + "://"
+                + urllib.parse.urlsplit(hanerix).netloc + raw)
+    if not media:
+        match = PACKER_FILE_RE.search(config)
+        if match:
+            media = match.group(1)
+    if not media:
+        result["status"] = "unknown"
+        result["notes"].append("unpacked config carries no hls2 / hls4 / file URL")
+        return result
+    result["final_url"] = absolutize(media)
+    result["sources"] = [{"url": result["final_url"], "mime": "",
+                          "label": "hls" if result["final_url"].endswith(".m3u8")
+                          else ""}]
+    _expires_at, result["expires_in"] = expiry_from_url(result["final_url"])
+    result["signed_params"] = sorted(signature_params(result["final_url"]))
+    if not verify:
+        result["notes"].append("decoded only; the byte endpoint was not probed")
+        return result
+    probe = _probe_playlist_or_file(result["final_url"], fetch, hanerix)
     result["http_status"] = probe["http_status"]
     result["content_type"] = probe["content_type"]
     result["size_bytes"] = probe["size_bytes"]
