@@ -3449,6 +3449,192 @@ seg-00002.ts
         self.assertTrue(res["is_temporary"])
         self.assertEqual(resolvers.calls, [("pkembed", embed, True)])
 
+    def test_resolve_live_source_serves_a_pkembed_embed_even_when_the_bare_gate_probe_fails(self):
+        """Session 119 (D2.5 probe): the pkembed unwrapper's Range probe
+        IS the gate evidence — the vkpluscdn plus2 node 403s a bare
+        re-probe (bare Mozilla/5.0 UA), so the branch sets
+        _gate_from_verdict and the verified verdict serves even though
+        the Stage-2 probe is stubbed to fail. Without the flag this test
+        fails: the bare probe kills a proven link."""
+        embed = "https://pkembed.site/embed-g64v61whic26.html"
+        stored = self._embed_source("moviesmela", "pkembed", embed)
+        resolvers = self._FakeResolvers()
+        failing = {"ok": False, "kind": None, "mime": None, "size": None,
+                   "resumable": False, "renditions": [],
+                   "failure": "probe_error"}
+        with patch.object(fast_fetch, "_embed_resolvers",
+                          return_value=resolvers), \
+             patch.object(fast_fetch, "_stage2_probe",
+                          return_value=failing), \
+             patch.object(fast_fetch, "probe_url_ttl",
+                          return_value=(None, {"observed": False,
+                                               "reason": "no_directive"})):
+            res = fast_fetch.resolve_live_source(stored["id"])
+
+        self.assertTrue(res["success"], res)
+        self.assertEqual(res["url"],
+                         "https://cdn.pkembed.example/1000042_g64v61whic26_l.mp4")
+        self.assertEqual(resolvers.calls, [("pkembed", embed, True)])
+
+    def test_resolve_live_source_serves_an_mxdrop_embed_even_when_the_bare_gate_probe_fails(self):
+        """Session 119 (D2.5 probe): same gate as pkembed — the mxcontent
+        CDN 403s a bare re-probe, so the mxdrop branch sets
+        _gate_from_verdict and the verified verdict serves even though
+        the Stage-2 probe is stubbed to fail."""
+        embed = "https://mxdrop.to/e/6d9c9f6d93dfb18063cbdb697dd4db5d"
+        stored = self._embed_source("moviesmela", "mxdrop", embed)
+        resolvers = self._FakeResolvers()
+        failing = {"ok": False, "kind": None, "mime": None, "size": None,
+                   "resumable": False, "renditions": [],
+                   "failure": "probe_error"}
+        with patch.object(fast_fetch, "_embed_resolvers",
+                          return_value=resolvers), \
+             patch.object(fast_fetch, "_stage2_probe",
+                          return_value=failing), \
+             patch.object(fast_fetch, "probe_url_ttl",
+                          return_value=(None, {"observed": False,
+                                               "reason": "no_directive"})):
+            res = fast_fetch.resolve_live_source(stored["id"])
+
+        self.assertTrue(res["success"], res)
+        self.assertEqual(res["url"], "https://cdn.mxdrop.example/f.mp4")
+        self.assertEqual(resolvers.calls, [("mxdrop", embed, True)])
+
+    def test_resolve_live_source_falls_through_to_the_filmu_unwrapper_when_stage1_vidly_fails(self):
+        """Session 119 (D2.5 probe): Stage-1 vidly fails (blocked) on a
+        vidly.pro row, but the Session 112 unwrap_filmu works — so the
+        dispatcher falls through to the filmu branch instead of refusing
+        the copy. The verified verdict serves even though the Stage-2
+        probe is stubbed to fail (the branch already gates from verdict)."""
+        embed = "https://vidly.pro/embed/movie/550"
+        stored = self._embed_source("moviesmela", "filmu", embed)
+        resolvers = self._FakeResolvers()
+        failing = {"ok": False, "kind": None, "mime": None, "size": None,
+                   "resumable": False, "renditions": [],
+                   "failure": "probe_error"}
+        stage1_fail = {"ok": False, "backend": "vidly", "failure": "blocked"}
+        resolve_copy = Mock(return_value=stage1_fail)
+
+        def classify_side_effect(url, *args, **_kw):
+            return "vidly" if "vidly" in url else "unknown"
+
+        with patch.object(current_hosts, "classify_backend",
+                          side_effect=classify_side_effect), \
+             patch.object(current_hosts, "resolve_copy", resolve_copy), \
+             patch.object(fast_fetch, "_embed_resolvers",
+                          return_value=resolvers), \
+             patch.object(fast_fetch, "_stage2_probe",
+                          return_value=failing), \
+             patch.object(fast_fetch, "probe_url_ttl",
+                          return_value=(None, {"observed": False,
+                                               "reason": "no_directive"})):
+            res = fast_fetch.resolve_live_source(stored["id"])
+
+        self.assertTrue(res["success"], res)
+        self.assertEqual(res["url"], "https://cdn.example/filmu/master.m3u8")
+        self.assertEqual(resolvers.calls, [("filmu", embed, True)])
+
+    def test_resolve_live_source_falls_through_to_the_cineverse_unwrapper_when_stage1_modiplay_fails(self):
+        """Session 119 (D2.5 probe): Stage-1 modiplay fails
+        (shell_unverified) on a modiplay row, but the Session 112
+        unwrap_cineverse works — so the dispatcher falls through to
+        the cineverse branch instead of refusing the copy."""
+        embed = "https://modiplay.site/embed/550"
+        stored = self._embed_source("moviesmela", "cineverse", embed)
+        resolvers = self._FakeResolvers()
+        failing = {"ok": False, "kind": None, "mime": None, "size": None,
+                   "resumable": False, "renditions": [],
+                   "failure": "probe_error"}
+        stage1_fail = {"ok": False, "backend": "modiplay",
+                       "failure": "shell_unverified"}
+        resolve_copy = Mock(return_value=stage1_fail)
+
+        def classify_side_effect(url, *args, **_kw):
+            return "modiplay" if "modiplay" in url else "unknown"
+
+        with patch.object(current_hosts, "classify_backend",
+                          side_effect=classify_side_effect), \
+             patch.object(current_hosts, "resolve_copy", resolve_copy), \
+             patch.object(fast_fetch, "_embed_resolvers",
+                          return_value=resolvers), \
+             patch.object(fast_fetch, "_stage2_probe",
+                          return_value=failing), \
+             patch.object(fast_fetch, "probe_url_ttl",
+                          return_value=(None, {"observed": False,
+                                               "reason": "no_directive"})):
+            res = fast_fetch.resolve_live_source(stored["id"])
+
+        self.assertTrue(res["success"], res)
+        self.assertEqual(res["url"],
+                         "https://cdn.example/cineverse/master.m3u8")
+        self.assertEqual(resolvers.calls, [("cineverse", embed, True)])
+
+    def test_stage1_success_never_falls_through_to_the_legacy_branches(self):
+        """Session 119: the fall-through runs ONLY on a Stage-1 failure.
+        When Stage-1 vidly succeeds, the Stage-1 URL is served and the
+        filmu unwrapper is never called."""
+        embed = "https://vidly.pro/embed/movie/550"
+        stored = self._embed_source("moviesmela", "filmu", embed)
+        resolvers = self._FakeResolvers()
+        stage1_ok = {"ok": True, "backend": "vidly",
+                     "url": "https://stage1.example/filmu/master.m3u8",
+                     "temporary": False, "mime": "application/vnd.apple.mpegurl",
+                     "kind": "playlist"}
+        resolve_copy = Mock(return_value=stage1_ok)
+
+        def classify_side_effect(url, *args, **_kw):
+            return "vidly" if "vidly" in url else "unknown"
+
+        with patch.object(current_hosts, "classify_backend",
+                          side_effect=classify_side_effect), \
+             patch.object(current_hosts, "resolve_copy", resolve_copy), \
+             patch.object(fast_fetch, "_embed_resolvers",
+                          return_value=resolvers), \
+             patch.object(fast_fetch, "probe_url_ttl",
+                          return_value=(None, {"observed": False,
+                                               "reason": "no_directive"})):
+            res = fast_fetch.resolve_live_source(stored["id"])
+
+        self.assertTrue(res["success"], res)
+        self.assertEqual(res["url"],
+                         "https://stage1.example/filmu/master.m3u8")
+        self.assertEqual(resolvers.calls, [],
+                         "a Stage-1 pass must not call the legacy branch")
+
+    def test_a_fresh_negative_cache_record_keeps_a_stage1_row_off_the_legacy_branches(self):
+        """Session 119: a fresh negative-cache record means this copy
+        stays skipped — the sibling ladder decides, and the legacy
+        filmu branch must not re-probe it. (The fall-through is for a
+        Stage-1 failure on a fresh press, not for a copy that already
+        failed at the current resolver version.)"""
+        embed = "https://vidly.pro/embed/movie/550"
+        stored = self._embed_source("moviesmela", "filmu", embed)
+        with fast_fetch.get_db() as conn:
+            conn.execute(
+                "UPDATE download_sources SET last_failed_at = ?, "
+                "failure_class = 'unwrap_failed', failure_resolver_v = ? "
+                "WHERE id = ?",
+                (time.time(), fast_fetch.RESOLVER_VERSION, stored["id"]))
+        resolvers = self._FakeResolvers()
+        resolve_copy = Mock(return_value={"ok": False, "backend": "vidly",
+                                          "failure": "blocked"})
+
+        def classify_side_effect(url, *args, **_kw):
+            return "vidly" if "vidly" in url else "unknown"
+
+        with patch.object(current_hosts, "classify_backend",
+                          side_effect=classify_side_effect), \
+             patch.object(current_hosts, "resolve_copy", resolve_copy), \
+             patch.object(fast_fetch, "_embed_resolvers",
+                          return_value=resolvers):
+            res = fast_fetch.resolve_live_source(stored["id"])
+
+        self.assertFalse(res["success"], res)
+        self.assertEqual(resolvers.calls, [],
+                         "a cache-failed copy must not be re-unwrapped")
+        self.assertEqual(resolve_copy.call_count, 0,
+                         "Stage-1 must not re-probe a cache-failed copy")
+
     def test_resolve_live_source_refuses_an_embed_it_could_not_read(self):
         """`unverified` means the page unpacked and no byte endpoint answered.
 

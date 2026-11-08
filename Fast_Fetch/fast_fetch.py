@@ -6097,8 +6097,12 @@ RESOLVE_FAILURE_CLASSES = ("probe_failed", "no_unwrapper", "unwrap_failed")
 #: `last_failed_at`; a NULL version beside a failure means "recorded
 #: before versioning", which counts as version 0 (older than any row
 #: this code writes). Session 112: 2 — the six D2.5 resolvers landed
-#: (vidbolt, vibuxer, vidrift, iqsmart, filmu, cineverse).
-RESOLVER_VERSION = 2
+#: (vidbolt, vibuxer, vidrift, iqsmart, filmu, cineverse). Session 119:
+#: 3 — the pkembed/mxdrop gate fix and the Stage-1-failure fall-through
+#: (filmu/cineverse) change what the resolver does with a row, so v2
+#: failure records written under the broken gate/dispatcher are stale
+#: and the rows deserve one fresh press.
+RESOLVER_VERSION = 3
 
 
 def _is_transport_verdict(verdict) -> bool:
@@ -6557,6 +6561,15 @@ def resolve_live_source(source_id: int, *, v2: bool = False,
     verdict = None
     stage1_tried = False
     stage1_result = None
+    # Session 119: whether Stage-1 ran and FAILED (result present, not
+    # ok). A failure falls through to the legacy branches below — the
+    # Session 112 branches are verified unwrappers, not unprobed guesses,
+    # and for filmu/cineverse they are the only chance the copy has. False
+    # when Stage-1 succeeded, when it never ran (negative-cache hit: the
+    # sibling ladder decides), and when it raised (transport blip: the
+    # sibling ladder decides) — in all three cases the legacy branches
+    # must not re-probe the copy.
+    _stage1_failed = False
     # Whether any legacy unwrap branch below ran for this copy. The
     # negative cache records `no_unwrapper` when none did and
     # `unwrap_failed` when one ran and produced nothing playable.
@@ -6624,9 +6637,14 @@ def resolve_live_source(source_id: int, *, v2: bool = False,
             hr = _embed_resolvers()
             # Stage-1 first: proven backends resolve through current_hosts with
             # a capped probe per candidate, so a passing copy carries measured
-            # mime/size/resumable. A stage-1 failure must NOT fall through to
-            # the old unprobed branches for that backend: stage1_tried blocks
-            # them, and the sibling failover below decides instead.
+            # mime/size/resumable. A stage-1 failure falls through to the
+            # legacy branches below (Session 119): the Session 112 branches
+            # are verified unwrappers, and for filmu/cineverse they are the
+            # only chance the copy has — Stage-1's vidly/modiplay backends
+            # fail while unwrap_filmu/unwrap_cineverse work. The sibling
+            # failover below still runs if the fall-through also fails. A
+            # Stage-1 success, a negative-cache hit, and a Stage-1 raise do
+            # NOT fall through (see _stage1_failed above).
             try:
                 from current_hosts import (classify_backend as _ch_backend2,
                                            resolve_copy as _ch_resolve)
@@ -6640,12 +6658,14 @@ def resolve_live_source(source_id: int, *, v2: bool = False,
                         if _ch_backend2(cached_u) not in ("unknown", "filesforever"):
                             _dispatch_input = cached_u
                     stage1_result = _ch_resolve(_dispatch_input)
+                    _stage1_failed = (stage1_result is not None
+                                     and not stage1_result.get("ok"))
                     if stage1_result.get("ok"):
                         fresh_url = stage1_result["url"]
                         fresh_temp = 1 if stage1_result.get("temporary") else 0
             except Exception:
                 pass
-            if stage1_tried:
+            if stage1_tried and not _stage1_failed:
                 pass
             elif (service in ("fsl_r2", "hubcloud_10g", "hubcloud")
                     or "hubcloud" in source_u.lower() or "hubcloud" in cached_u.lower()):
@@ -6749,6 +6769,11 @@ def resolve_live_source(source_id: int, *, v2: bool = False,
                     fresh_url = direct_u
                     fresh_temp = 1
                     embed_verdict = verdict
+                    # Session 119 (D2.5 probe): the unwrapper's Range probe
+                    # IS the gate evidence — the mxcontent CDN 403s the
+                    # bare re-probe (bare Mozilla/5.0 UA), so a generic
+                    # gate would fail a proven link.
+                    _gate_from_verdict = True
             elif hr and (service == hr.SERVICE_PKEMBED or "pkembed" in source_u.lower()
                          or "pkembed" in cached_u.lower()):
                 _unwrap_branch_taken = True
@@ -6759,6 +6784,11 @@ def resolve_live_source(source_id: int, *, v2: bool = False,
                     fresh_url = direct_u
                     fresh_temp = 1
                     embed_verdict = verdict
+                    # Session 119 (D2.5 probe): the unwrapper's Range probe
+                    # IS the gate evidence — the vkpluscdn plus2 node 403s
+                    # the bare re-probe (bare Mozilla/5.0 UA), so a generic
+                    # gate would fail a proven link.
+                    _gate_from_verdict = True
             elif hr and (service == hr.SERVICE_ANIMAHD or hr.is_animahd_player(source_u)
                          or hr.is_animahd_player(cached_u)):
                 _unwrap_branch_taken = True
