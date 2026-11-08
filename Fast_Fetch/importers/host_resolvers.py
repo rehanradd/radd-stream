@@ -190,6 +190,7 @@ that a client can play it.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import ssl
@@ -215,7 +216,16 @@ PROBE_READ_BYTES = 200_000
 # `/<code>` form: `https://mxdrop.to/xo78jxvjagwq9x` answers 200 with a 10,692-byte
 # page titled "MixDrop" and no packed config, so the path rule stays `/e/` and
 # `/embed/` only.
-MXDROP_HOST_RE = re.compile(r"(?:^|\.)mxdrop\.(?:to|top)$", re.I)
+#
+# Session 103 (2026-11-08): the same packed config is served by the
+# mixdrop family the catalog actually stores — `mixdrop.ag/f/<id>` (the file
+# page) 302s to `mxdrop.click/f/<id>`, and `mxdrop.click/e/<id>` carries the
+# identical packer (`MDCore.wurl` → signed .mp4, verified live: the unpacked
+# URL answered 206 video/mp4). `mixdrop.ag/e/<id>` 302s to the same embed.
+# The host rule therefore covers both spellings and the live TLDs (.ag,
+# .click); the catalog's `mixdrop` service rows resolve through the same
+# `unwrap_mxdrop` once the resolver rewrites `/f/` to `/e/`.
+MXDROP_HOST_RE = re.compile(r"(?:^|\.)(?:mxdrop|mixdrop)\.(?:to|top|click|ag)$", re.I)
 MXDROP_CONTENT_RE = re.compile(r"^/(?:e|embed)/[A-Za-z0-9_-]+/?$", re.I)
 
 # pkembed serves the same page under two paths: `/embed-<filecode>.html` and the
@@ -287,6 +297,55 @@ SERVICE_MXDROP = "mxdrop"
 SERVICE_PKEMBED = "pkembed"
 SERVICE_GDRIVE = "gdrive"
 SERVICE_ANIMAHD = "animahd-player"
+SERVICE_GOFILE = "gofile"
+SERVICE_STREAMTAPE = "streamtape"
+SERVICE_STREAM = "stream"
+SERVICE_STREAMWISH = "streamwish"
+SERVICE_VOE = "voe"
+
+# gofile (Session 103, verified live 2026-11-08): the real website token is
+# generated client-side as sha256(UA :: language :: accountToken ::
+# 4h-window :: salt), salt embedded in gofile.io/dist/js/wt.obf.js. The
+# static token in config.js is a decoy and the token must travel in the
+# X-Website-Token HEADER — the query-param form still answers
+# error-notPremium. The salt rotates (Mar-Aug 2026 rotations on record);
+# the value below is the one verified live 2026-11-08, and a persistent
+# error-notPremium means it rotated and this constant needs updating.
+# The UA hashed into the token MUST be the UA sent on the request, so gofile
+# has its own UA string (Windows Chrome/126, the reference client's), not
+# this module's Linux one.
+GOFILE_API = "https://api.gofile.io"
+GOFILE_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+)
+GOFILE_LANGUAGE = "en-US"
+GOFILE_WT_SALT = "12af056dacea0b"
+GOFILE_WT_WINDOW_SECONDS = 14400  # 4-hour rotating window
+GOFILE_TIMEOUT = 10
+GOFILE_ID_RE = re.compile(r"(?:gofile\.io/(?:d/)?)([A-Za-z0-9]+)", re.I)
+GOFILE_VIDEO_EXTS = (".mp4", ".mkv", ".webm", ".m3u8", ".mov", ".avi")
+
+# streamtape (Session 103, verified live 2026-11-08): the embed page carries
+# three hidden link divs and a script that REBUILDS two of them with string
+# surgery. The raw `#ideoooolink` div is a decoy — its id is wrong and the
+# URL it names answers {"status":500}. The `#norobotlink` (and
+# `#captchalink`) rebuilds evaluate to the true signed get_video URL, which
+# answers 206 video/mp4 on a bare Range probe. Only those two are read.
+STREAMTAPE_LINK_RE = re.compile(
+    r"""getElementById\('(\w+link)'\)\.innerHTML\s*=\s*'([^']*)'\s*\+\s*\(?'([^']*)'\)"""
+    r"""\.substring\((\d+)\)(?:\.substring\((\d+)\))?""")
+
+# Packer video hosts of the streamwish family (Session 103, verified live
+# 2026-11-08 on watch-online.mom, service "stream"): one GET of the embed
+# page, unpack the P.A.C.K.E.R. block with the repo's own unpacker, read the
+# HLS master out of the decoded JS. `hls2` is the absolute master.m3u8;
+# `hls4` is a bare path that is rebuilt against the embed host (streamflix
+# v1.7.117: domainless hls4 links are always rebuilt). The media probe must
+# carry Referer: the embed URL — the host 403s without it.
+PACKER_HLS2_RE = re.compile(r'"hls2"\s*:\s*"([^"]+)"')
+PACKER_HLS4_RE = re.compile(r'"hls4"\s*:\s*"([^"]+)"')
+PACKER_FILE_RE = re.compile(r'"file"\s*:\s*"([^"]+)"')
 
 # AnimaHD's own player page. It is not an iframe and it is not a JS puzzle: the
 # page's script is `const targetStreamUrl = "<literal>"; …
@@ -1191,6 +1250,456 @@ def unwrap_animahd(url: str, fetch=None, verify: bool = True,
                 result["notes"].append(
                     f"the page declares {item['declared_mime']}, the host answers {mime}")
                 break
+    return result
+
+
+def _gofile_website_token(account_token: str, window_offset: int = 0) -> str:
+    """sha256(UA :: language :: accountToken :: 4h-window :: salt)."""
+    window = int(time.time() // GOFILE_WT_WINDOW_SECONDS) + window_offset
+    raw = (f"{GOFILE_USER_AGENT}::{GOFILE_LANGUAGE}::{account_token}::"
+           f"{window}::{GOFILE_WT_SALT}")
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _gofile_content_id(url: str) -> str:
+    """The content id out of a gofile page URL, or the bare id itself."""
+    match = GOFILE_ID_RE.search(url or "")
+    if match:
+        return match.group(1)
+    candidate = (url or "").strip()
+    if re.fullmatch(r"[A-Za-z0-9]{6,}", candidate):
+        return candidate
+    return ""
+
+
+def _gofile_pick_child(children) -> dict | None:
+    """The file to hand back: a video file first (biggest), else the largest file."""
+    if isinstance(children, dict):
+        files = list(children.values())
+    elif isinstance(children, list):
+        files = children
+    else:
+        files = []
+    files = [c for c in files if isinstance(c, dict) and c.get("link")
+             and (c.get("type") or "file") == "file"]
+    if not files:
+        return None
+    videos = [c for c in files
+              if (c.get("name") or "").lower().endswith(GOFILE_VIDEO_EXTS)]
+    pool = videos if videos else files
+    return max(pool, key=lambda c: int(c.get("size") or 0))
+
+
+def _gofile_contents(fetch, content_id: str, token: str,
+                     window_offset: int = 0):
+    """One /contents call: (status, parsed-json-or-None, error-string)."""
+    headers = {
+        "Authorization": "Bearer " + token,
+        "X-Website-Token": _gofile_website_token(token, window_offset),
+        "X-BL": GOFILE_LANGUAGE,
+        "User-Agent": GOFILE_USER_AGENT,
+        "Accept": "*/*",
+        "Origin": "https://gofile.io",
+        "Referer": "https://gofile.io/",
+    }
+    url = (f"{GOFILE_API}/contents/{content_id}?page=1&pageSize=1000"
+           "&sortField=createTime&sortDirection=-1")
+    status, body, _headers, _final = fetch(url, headers=headers,
+                                            timeout=GOFILE_TIMEOUT)
+    if status == 0:
+        return 0, None, str(body)[:200]
+    try:
+        return status, json.loads(_page_text(body)), ""
+    except Exception:
+        return status, None, "contents answer is not JSON"
+
+
+def unwrap_gofile(url: str, fetch=None, verify: bool = True) -> dict:
+    """
+    gofile page URL -> {final_url, service, is_temporary, expires_in, status, notes, …}.
+
+    Light-speed chain (verified live 2026-11-08): POST /accounts for a guest
+    token, GET /contents/<id> with the computed website token in the
+    X-Website-Token header, one auth'd Range probe of the picked file. No page
+    fetch, no JS. The bare direct link 302s without the Authorization header,
+    so the probe that proves the file MUST carry it — a bare probe is not a
+    proof here, it is a redirect. The token is never persisted: the next press
+    re-unwraps with a fresh guest token (the cached bare link 302s and is
+    treated as stale, exactly like any other expired signature).
+
+    A folder with no video file answers `unknown` (nothing playable), never a
+    zip as a "playable" file: the resolver's verdict contract only accepts
+    `active`, and a zip never probes active.
+    """
+    fetch = fetch or http_request
+    result = _new_result(SERVICE_GOFILE, url)
+    content_id = _gofile_content_id(result["embed_url"])
+    if not content_id:
+        result["status"] = "unknown"
+        result["notes"].append("not a gofile content URL")
+        return result
+    result["file_id"] = content_id
+
+    status, body, _headers, _final = fetch(
+        f"{GOFILE_API}/accounts", method="POST",
+        headers={"User-Agent": GOFILE_USER_AGENT, "Origin": "https://gofile.io"},
+        timeout=GOFILE_TIMEOUT)
+    token = ""
+    if status == 200:
+        try:
+            token = (json.loads(_page_text(body)).get("data") or {}).get("token") or ""
+        except Exception:
+            token = ""
+    if not token:
+        result["status"] = ("dead" if status in (404, 410)
+                            else "blocked" if status in (401, 403, 429) else "unknown")
+        result["notes"].append(f"guest account HTTP {status}")
+        return result
+
+    data = None
+    for offset in (0, -1):
+        status, parsed, error = _gofile_contents(fetch, content_id, token, offset)
+        if status == 200 and isinstance(parsed, dict) and parsed.get("status") == "ok":
+            data = parsed.get("data") or {}
+            break
+        if isinstance(parsed, dict) and parsed.get("status") == "error-notFound":
+            result["status"] = "dead"
+            result["notes"].append("gofile: content not found (folder deleted)")
+            return result
+        if isinstance(parsed, dict) and parsed.get("status") == "error-notPremium":
+            continue  # previous 4h window, then the salt has rotated
+        result["status"] = ("dead" if status in (404, 410)
+                            else "blocked" if status in (401, 403, 429) else "unknown")
+        result["notes"].append(f"contents HTTP {status}" + (f": {error}" if error else ""))
+        return result
+    if data is None:
+        result["status"] = "unknown"
+        result["notes"].append(
+            "contents answers error-notPremium on both 4h windows: the website-token "
+            "salt has rotated — update GOFILE_WT_SALT from the live wt.obf.js")
+        return result
+
+    child = _gofile_pick_child(data.get("children"))
+    if child is None:
+        result["status"] = "unknown"
+        result["notes"].append("folder holds no file with a direct link")
+        return result
+    result["final_url"] = absolutize(str(child.get("link") or ""))
+    result["sources"] = [{"url": result["final_url"], "mime": "",
+                          "label": str(child.get("name") or "")}]
+    if not result["final_url"].lower().startswith("https:"):
+        result["status"] = "unknown"
+        result["notes"].append("picked child carries no https direct link")
+        return result
+    if not verify:
+        result["notes"].append("unpacked only; the byte endpoint was not probed")
+        return result
+
+    def _authed_fetch(url2, headers=None, timeout=DEFAULT_TIMEOUT,
+                      method="GET", follow=True):
+        merged = dict(headers or {})
+        merged["Authorization"] = "Bearer " + token
+        return fetch(url2, headers=merged, timeout=timeout,
+                     method=method, follow=follow)
+
+    return _finish_media(result, _authed_fetch, True)
+
+
+# ---------------------------------------------------------------------------
+# streamtape
+# ---------------------------------------------------------------------------
+
+def _streamtape_rebuild_link(page: str) -> str:
+    """
+    The true signed get_video URL out of the embed page, or "".
+
+    The page's script rebuilds `#norobotlink` (and `#captchalink`) with
+    substring surgery; the raw `#ideoooolink` div is a decoy whose id is
+    wrong and whose URL answers {"status":500}. Only the rebuilt links are
+    ever read, norobotlink first.
+    """
+    found = {}
+    for match in STREAMTAPE_LINK_RE.finditer(page or ""):
+        name, prefix, piece, first, second = (
+            match.group(1), match.group(2), match.group(3),
+            int(match.group(4)), match.group(5))
+        rebuilt = piece[first:]
+        if second:
+            rebuilt = rebuilt[int(second):]
+        found[name] = prefix + rebuilt
+    for name in ("norobotlink", "captchalink"):
+        url = found.get(name) or ""
+        if url.startswith("//"):
+            return "https:" + url
+        if url.startswith("/"):
+            return "https:/" + url
+    return ""
+
+
+def unwrap_streamtape(embed_url: str, fetch=None, verify: bool = True) -> dict:
+    """
+    streamtape embed/view URL -> {final_url, service, is_temporary, expires_in, status, notes, …}.
+
+    Light-speed chain (verified live 2026-11-08): 1 GET of the embed page,
+    evaluate the norobotlink JS rebuild, one bare Range probe of the signed
+    get_video URL (206 video/mp4, no Referer needed). No wait, no captcha —
+    the token is minted server-side into the page. The signed URL carries an
+    `expires` timestamp, so it is used at once and never cached past expiry.
+    """
+    fetch = fetch or http_request
+    result = _new_result(SERVICE_STREAMTAPE, embed_url)
+    status, body, _headers, _final = fetch(result["embed_url"])
+    if status != 200:
+        result["status"] = ("dead" if status in (404, 410)
+                            else "blocked" if status in (401, 403, 429) else "unknown")
+        result["notes"].append(f"embed page HTTP {status}")
+        return result
+    link = _streamtape_rebuild_link(_page_text(body))
+    if not link:
+        result["status"] = "unknown"
+        result["notes"].append("embed page carries no rebuildable get_video link")
+        return result
+    result["final_url"] = link
+    result["sources"] = [{"url": link, "mime": "", "label": ""}]
+    _expires_at, result["expires_in"] = expiry_from_url(link)
+    result["signed_params"] = sorted(signature_params(link))
+    return _finish_media(result, fetch, verify)
+
+
+# ---------------------------------------------------------------------------
+# Packer HLS hosts of the streamwish family (stream / streamwish)
+# ---------------------------------------------------------------------------
+
+def _probe_playlist_or_file(url: str, fetch, referer: str) -> dict:
+    """
+    The Range probe for a host whose answer may be a playlist, not a file.
+
+    `probe_range` only calls a 206 `active` when the answer is video/* or a
+    recognised container — an HLS master (206 application/vnd.apple.mpegurl,
+    body starting #EXTM3U) is real playable media too, so it is accepted
+    here with `is_playlist` set. Anything else follows probe_range's own
+    status map, so a dead file and a blocked host are named the same way.
+    """
+    status, body, headers, final_url = fetch(
+        url, headers={"Range": f"bytes=0-{RANGE_PROBE_BYTES - 1}",
+                      "Referer": referer}, method="GET")
+    content_type = (headers.get("content-type") or "").split(";")[0].strip().lower()
+    total = None
+    match = re.search(r"/(\d+)\s*$", headers.get("content-range") or "")
+    if match:
+        total = int(match.group(1))
+    verdict = {"status": "unknown", "http_status": status,
+               "content_type": content_type, "size_bytes": total,
+               "final_url": final_url, "reason": "", "is_playlist": False}
+    data = body if isinstance(body, bytes) else (body or "").encode("utf-8", "ignore")
+    if status == 0:
+        verdict["status"] = "error"
+        verdict["reason"] = str(body)[:200]
+    elif status in (200, 206):
+        if "mpegurl" in content_type or "m3u8" in content_type \
+                or data[:7] == b"#EXTM3U":
+            verdict["status"] = "active"
+            verdict["is_playlist"] = True
+            verdict["reason"] = "HLS master playlist"
+            if total is None:
+                verdict["size_bytes"] = len(data)
+        elif content_type.startswith("video/") or container_magic(data):
+            verdict["status"] = "active"
+            verdict["reason"] = ""
+        else:
+            verdict["reason"] = f"{status} {content_type}"
+    elif status in (401, 403, 429):
+        verdict["status"] = "blocked"
+        verdict["reason"] = f"HTTP {status}"
+    elif status in (404, 410):
+        verdict["status"] = "dead"
+        verdict["reason"] = f"HTTP {status}"
+    elif 500 <= status <= 599:
+        verdict["status"] = "error"
+        verdict["reason"] = f"HTTP {status}"
+    else:
+        verdict["status"] = "error"
+        verdict["reason"] = f"HTTP {status}"
+    return verdict
+
+
+def unwrap_packer_hls(embed_url: str, service: str, fetch=None,
+                      verify: bool = True) -> dict:
+    """
+    Packer embed URL -> {final_url, service, is_temporary, expires_in, status, notes, …}.
+
+    One GET of the embed page, unpack the P.A.C.K.E.R. block with the repo's
+    own unpacker, read the HLS master out of the decoded JS (`hls2` first,
+    then a domainless `hls4` rebuilt against the embed host, then a `file`
+    URL), one Range probe carrying Referer: the embed URL. The probe accepts
+    an HLS master as playable media — that is the whole point of these hosts.
+    `service` is the catalog's own label for the row ("stream",
+    "streamwish"), so the verdict files under the name the DB already uses.
+    """
+    fetch = fetch or http_request
+    result = _new_result(service, embed_url)
+    status, body, _headers, _final = fetch(result["embed_url"])
+    if status != 200:
+        result["status"] = ("dead" if status in (404, 410)
+                            else "blocked" if status in (401, 403, 429) else "unknown")
+        result["notes"].append(f"embed page HTTP {status}")
+        return result
+    page = _page_text(body)
+    config = find_packed_config(page)
+    if not config:
+        result["status"] = "unknown"
+        result["notes"].append("embed page carries no recognisable packed config")
+        return result
+    media = ""
+    match = PACKER_HLS2_RE.search(config)
+    if match:
+        media = match.group(1)
+    if not media:
+        match = PACKER_HLS4_RE.search(config)
+        if match:
+            raw = match.group(1)
+            media = raw if raw.startswith("http") else (
+                urllib.parse.urlsplit(result["embed_url"]).scheme + "://"
+                + urllib.parse.urlsplit(result["embed_url"]).netloc + raw)
+    if not media:
+        match = PACKER_FILE_RE.search(config)
+        if match:
+            media = match.group(1)
+    if not media:
+        result["status"] = "unknown"
+        result["notes"].append("unpacked config carries no hls2 / hls4 / file URL")
+        return result
+    result["final_url"] = absolutize(media)
+    result["sources"] = [{"url": result["final_url"], "mime": "",
+                          "label": "hls" if result["final_url"].endswith(".m3u8")
+                          else ""}]
+    _expires_at, result["expires_in"] = expiry_from_url(result["final_url"])
+    result["signed_params"] = sorted(signature_params(result["final_url"]))
+    if not verify:
+        result["notes"].append("unpacked only; the byte endpoint was not probed")
+        return result
+    probe = _probe_playlist_or_file(result["final_url"], fetch,
+                                    result["embed_url"])
+    result["http_status"] = probe["http_status"]
+    result["content_type"] = probe["content_type"]
+    result["size_bytes"] = probe["size_bytes"]
+    result["status"] = probe["status"]
+    if probe["reason"]:
+        result["notes"].append(probe["reason"])
+    return result
+
+
+# VOE (voe.sx + mirrors such as shannoncoldalready.com): the embed page
+# carries an obfuscated payload (a base64-ish code) plus an external loader
+# script holding the LUTs; the decode is pure stdlib (re + base64 + json).
+# Flow ported from mhdzumair/mediaflow-proxy's VoeExtractor (which cites
+# Gujal00/ResolveURL's voesx.py). Verified live 2026-11-08: the decoded
+# `source` is an HLS master that Range-probes 206 application/vnd.apple.
+# mpegurl. The voe.sx page itself is a JS redirect (window.location.href)
+# to the mirror — followed once, the same way mediaflow-proxy does.
+VOE_PAYLOAD_RE = re.compile(
+    r"""json">\["([^"]+)"]</script>\s*<script\s*src="([^"]+)""", re.DOTALL)
+VOE_LUTS_RE = re.compile(r"""(\[(?:'\W{2}'[,\]]){1,9})""", re.DOTALL)
+VOE_REDIRECT_RE = re.compile(r"""window\.location\.href\s*=\s*'([^']+)""")
+
+
+def voe_decode(code: str, luts: str) -> dict:
+    """Undo VOE's obfuscation: ROT-shift the letters, strip the LUT
+    characters, base64-decode, shift every char back by 3, reverse,
+    base64-decode again. Returns the decoded JSON (which carries `source`)."""
+    lut = ["".join([("\\" + x) if x in ".*+?^${}()|[]\\" else x for x in i])
+           for i in luts[2:-2].split("','")]
+    txt = ""
+    for ch in code:
+        x = ord(ch)
+        if 64 < x < 91:
+            x = (x - 52) % 26 + 65
+        elif 96 < x < 123:
+            x = (x - 84) % 26 + 97
+        txt += chr(x)
+    for entry in lut:
+        txt = re.sub(entry, "", txt)
+    decoded = base64.b64decode(txt).decode("utf-8")
+    shifted = "".join(chr(ord(c) - 3) for c in decoded)
+    return json.loads(base64.b64decode(shifted[::-1]).decode("utf-8"))
+
+
+def unwrap_voe(embed_url: str, fetch=None, verify: bool = True) -> dict:
+    """
+    VOE embed URL -> {final_url, service, is_temporary, expires_in, status, notes, …}.
+
+    One GET of the embed page (following the voe.sx JS redirect to the
+    mirror once), one GET of the loader script the page names, decode the
+    obfuscated payload, one Range probe of the decoded source (an HLS
+    master; the probe accepts it as playable media). The decoded JSON also
+    carries a `fallback` mp4 — used only when `source` is absent.
+    """
+    fetch = fetch or http_request
+    result = _new_result(SERVICE_VOE, embed_url)
+    page_url = result["embed_url"]
+    for _hop in range(2):
+        status, body, _headers, _final = fetch(page_url)
+        if status != 200:
+            result["status"] = ("dead" if status in (404, 410)
+                                else "blocked" if status in (401, 403, 429)
+                                else "unknown")
+            result["notes"].append(f"embed page HTTP {status}")
+            return result
+        page = _page_text(body)
+        match = VOE_PAYLOAD_RE.search(page)
+        if match:
+            break
+        redir = VOE_REDIRECT_RE.search(page)
+        if not redir:
+            result["status"] = "unknown"
+            result["notes"].append(
+                "embed page carries no VOE payload and no redirect")
+            return result
+        page_url = urllib.parse.urljoin(page_url, redir.group(1))
+        result["notes"].append("followed the voe.sx redirect to its mirror")
+    else:
+        result["status"] = "unknown"
+        result["notes"].append("VOE payload not found after the mirror redirect")
+        return result
+    code, script_src = match.group(1), match.group(2)
+    script_url = urllib.parse.urljoin(page_url, script_src)
+    status, body, _headers, _final = fetch(script_url)
+    if status != 200:
+        result["status"] = "unknown"
+        result["notes"].append(f"loader script HTTP {status}")
+        return result
+    luts_match = VOE_LUTS_RE.search(_page_text(body))
+    if not luts_match:
+        result["status"] = "unknown"
+        result["notes"].append("loader script carries no LUTs")
+        return result
+    try:
+        data = voe_decode(code, luts_match.group(1))
+    except Exception as exc:  # noqa: BLE001 - a bad payload must not crash
+        result["status"] = "unknown"
+        result["notes"].append(f"VOE decode failed: {exc}")
+        return result
+    media = data.get("source") or data.get("fallback") or ""
+    if not media:
+        result["status"] = "unknown"
+        result["notes"].append("decoded VOE payload carries no source URL")
+        return result
+    result["final_url"] = absolutize(media)
+    result["sources"] = [{"url": result["final_url"], "mime": "",
+                          "label": "hls" if result["final_url"].endswith(".m3u8")
+                          else ""}]
+    _expires_at, result["expires_in"] = expiry_from_url(result["final_url"])
+    result["signed_params"] = sorted(signature_params(result["final_url"]))
+    if not verify:
+        result["notes"].append("decoded only; the byte endpoint was not probed")
+        return result
+    probe = _probe_playlist_or_file(result["final_url"], fetch, page_url)
+    result["http_status"] = probe["http_status"]
+    result["content_type"] = probe["content_type"]
+    result["size_bytes"] = probe["size_bytes"]
+    result["status"] = probe["status"]
+    if probe["reason"]:
+        result["notes"].append(probe["reason"])
     return result
 
 

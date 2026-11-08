@@ -6123,6 +6123,30 @@ def _stage2_accept(verdict: dict, want: str) -> bool:
     return kind in ("playlist", "file")
 
 
+def _verdict_from_unwrap(verdict: dict) -> dict:
+    """The Stage-2 gate verdict for a link its own unwrapper already proved.
+
+    A `verify=True` unwrapper already Range-probed the byte endpoint with
+    the headers the host requires, so its verdict IS the gate evidence —
+    re-probing bare would only fail a proven link (gofile 302s without its
+    Authorization header; the streamwish family 403s without its Referer)
+    or spend a second request proving the same bytes again. The kind is
+    read from the answer itself: an m3u8 master is a playlist, anything
+    else a file, so the download caller still refuses a playlist exactly
+    as it would from a generic probe.
+    """
+    content_type = (verdict.get("content_type") or "").lower()
+    final_url = verdict.get("final_url") or ""
+    is_playlist = ("mpegurl" in content_type or "m3u8" in content_type
+                   or final_url.split("?")[0].endswith(".m3u8"))
+    kind = "playlist" if is_playlist else "file"
+    return {"ok": True, "kind": kind, "mime": verdict.get("content_type"),
+            "size": verdict.get("size_bytes"),
+            "resumable": bool(verdict.get("http_status") == 206
+                              and kind == "file"),
+            "renditions": [], "failure": None}
+
+
 def _record_resolve_failure(source_id: int, failure_class: str) -> None:
     """Best-effort durable record that one resolve attempt failed.
 
@@ -6408,6 +6432,14 @@ def resolve_live_source(source_id: int, *, v2: bool = False,
     # negative cache records `no_unwrapper` when none did and
     # `unwrap_failed` when one ran and produced nothing playable.
     _unwrap_branch_taken = False
+    # Whether the Stage-2 gate should trust the unwrapper's own verified
+    # probe instead of re-probing bare. Only the Session 103 branches set
+    # this: their unwrappers already Range-probed the byte endpoint with
+    # the exact headers the host requires (Authorization for gofile,
+    # Referer for the streamwish family), so a bare re-probe would fail a
+    # link that is already proven — or spend a second request proving it
+    # again. Every other branch keeps the generic gate unchanged.
+    _gate_from_verdict = False
 
     def hoster_input(marker):
         """The stored address that actually names this hoster.
@@ -6561,12 +6593,26 @@ def resolve_live_source(source_id: int, *, v2: bool = False,
                 direct_u, _, is_temp = unwrap_vegadrive(hoster_input("vegadrive"))
                 fresh_url = direct_u
                 fresh_temp = is_temp
-            elif hr and (service == hr.SERVICE_MXDROP or "mxdrop" in source_u.lower()
-                         or "mxdrop" in cached_u.lower()):
+            elif hr and (service == hr.SERVICE_MXDROP or service == "mixdrop"
+                         or "mxdrop" in source_u.lower()
+                         or "mxdrop" in cached_u.lower()
+                         or "mixdrop" in source_u.lower()
+                         or "mixdrop" in cached_u.lower()):
                 _unwrap_branch_taken = True
                 # The embed URL is the durable identifier and the mp4 is a result of
                 # this call: mxdrop signs its `MDCore.wurl` with a ~6-hour window.
+                # Session 103: the catalog stores the mixdrop file page
+                # (`mixdrop.ag/f/<id>`), not the embed — the packer lives on
+                # `/e/<id>` on the same host, so rewrite the path before the
+                # matcher sees it (the embed host 302s to mxdrop.click either
+                # way; the fetch follows).
                 embed = cached_u if hr.is_mxdrop_embed(cached_u) else source_u
+                if not hr.is_mxdrop_embed(embed):
+                    _file_page = re.match(
+                        r"^(https?://[^/]+)/f/([A-Za-z0-9_-]+)/?$", embed)
+                    if _file_page:
+                        embed = (f"{_file_page.group(1)}/e/"
+                                 f"{_file_page.group(2)}")
                 verdict = hr.unwrap_mxdrop(embed, verify=True)
                 direct_u = embed_from_verdict(verdict)
                 if direct_u:
@@ -6611,6 +6657,101 @@ def resolve_live_source(source_id: int, *, v2: bool = False,
                     if candidate:
                         fresh_url = candidate
                         fresh_temp = 1
+            elif (service == "mobilejsr" or "mobilejsr" in source_u.lower()
+                  or "mobilejsr" in cached_u.lower()):
+                # Session 103: unwrap_mobilejsr existed but was import-time
+                # only, so the 109,758 mobilejsr rows always answered
+                # no_unwrapper even though the bridge page lists mirrors that
+                # play (hubcloud drive, pixeldrain, filepress). The fan-out
+                # runs here at resolve time; the first mirror whose address
+                # is not itself a bridge page wins, and the Stage-2 gate
+                # probe below still has to pass it before anything is
+                # served. Mirrors are tried direct-first — pixeldrain and
+                # hubcloud's byte server before the landing-page hosts
+                # (1fichier/voe have no unwrapper, so a candidate from one
+                # of them fails the gate probe and the release falls through
+                # to sibling failover as before; a gofile/streamtape mirror
+                # is a page URL, not a direct link, so it fails the same
+                # way — those hosts resolve through their own branches
+                # below when they are the row itself).
+                _unwrap_branch_taken = True
+                _mirrors = unwrap_mobilejsr(hoster_input("mobilejsr"))
+                _direct_first = ("pixeldrain", "hubcloud_10g", "hubcloud",
+                                 "direct_cloud", "filepress")
+                _mirrors.sort(key=lambda _m: (
+                    0 if (_m.get("service") or "") in _direct_first else 1))
+                for _item in _mirrors:
+                    _cand = (_item.get("final_url")
+                             or _item.get("source_url") or "")
+                    if _cand and not is_bridge_url(_cand):
+                        fresh_url = _cand
+                        fresh_temp = _item.get("is_temporary", fresh_temp)
+                        break
+            elif hr and (service == hr.SERVICE_GOFILE or "gofile" in source_u.lower()
+                         or "gofile" in cached_u.lower()):
+                # Session 103: gofile cracked (wt API, header form). The
+                # unwrapper's auth'd Range probe IS the gate evidence: the
+                # bare direct link 302s without the guest Authorization
+                # header, so a generic bare probe would fail a proven link.
+                # Ranked last in the chain on purpose — a header-gated
+                # link is re-unwrapped on every press (the cached bare
+                # link 302s and is treated as stale), so it is tried only
+                # after the direct hosts.
+                _unwrap_branch_taken = True
+                verdict = hr.unwrap_gofile(hoster_input("gofile"), verify=True)
+                direct_u = embed_from_verdict(verdict)
+                if direct_u:
+                    fresh_url = direct_u
+                    fresh_temp = 1
+                    embed_verdict = verdict
+                    _gate_from_verdict = True
+            elif hr and (service == hr.SERVICE_STREAMTAPE
+                         or "streamtape" in source_u.lower()
+                         or "streamtape" in cached_u.lower()):
+                # Session 103: streamtape cracked (norobotlink rebuild).
+                # The unwrapper's bare Range probe already proved the
+                # signed get_video URL, so it stands as the gate.
+                _unwrap_branch_taken = True
+                verdict = hr.unwrap_streamtape(hoster_input("streamtape"),
+                                               verify=True)
+                direct_u = embed_from_verdict(verdict)
+                if direct_u:
+                    fresh_url = direct_u
+                    fresh_temp = 1
+                    embed_verdict = verdict
+                    _gate_from_verdict = True
+            elif hr and (service in (hr.SERVICE_STREAM, hr.SERVICE_STREAMWISH)
+                         or "watch-online" in source_u.lower()
+                         or "watch-online" in cached_u.lower()
+                         or "streamwish" in source_u.lower()
+                         or "streamwish" in cached_u.lower()
+                         or "hglink" in source_u.lower()
+                         or "hglink" in cached_u.lower()
+                         or "embedwish" in source_u.lower()
+                         or "embedwish" in cached_u.lower()):
+                # Session 103: the streamwish family cracked (1 GET +
+                # unpack + hls2 master). The unwrapper's Referer-carrying
+                # Range probe already proved the playlist, so it stands
+                # as the gate — a bare probe would 403 without the Referer.
+                _unwrap_branch_taken = True
+                _packer_markers = ("watch-online", "streamwish", "hglink",
+                                   "embedwish")
+                _packer_url = source_u
+                for _marker in _packer_markers:
+                    if _marker in source_u.lower() or _marker in cached_u.lower():
+                        _packer_url = hoster_input(_marker)
+                        break
+                _packer_svc = (service if service in (hr.SERVICE_STREAM,
+                                                       hr.SERVICE_STREAMWISH)
+                               else hr.SERVICE_STREAM)
+                verdict = hr.unwrap_packer_hls(_packer_url, _packer_svc,
+                                               verify=True)
+                direct_u = embed_from_verdict(verdict)
+                if direct_u:
+                    fresh_url = direct_u
+                    fresh_temp = 1
+                    embed_verdict = verdict
+                    _gate_from_verdict = True
         except Exception:
             pass
 
@@ -6629,7 +6770,13 @@ def resolve_live_source(source_id: int, *, v2: bool = False,
     # user's explicit preference over a fake page.
     fresh_verdict = None
     if fresh_url:
-        fresh_verdict = _stage2_probe(fresh_url)
+        if _gate_from_verdict and embed_verdict is not None:
+            # The unwrapper already proved this link with the headers the
+            # host requires; re-probing bare would fail a proven link
+            # (gofile 302s, streamwish 403s) or prove the same bytes twice.
+            fresh_verdict = _verdict_from_unwrap(embed_verdict)
+        else:
+            fresh_verdict = _stage2_probe(fresh_url)
         if not _stage2_accept(fresh_verdict, want):
             fresh_url = None
             fresh_verdict = None
@@ -6847,9 +6994,48 @@ def resolve_live_source(source_id: int, *, v2: bool = False,
             # unwrap attempt, and each sibling is an independent lottery
             # ticket. Past this budget the honest answer is
             # no_playable_source, not another dozen probes of dead pages.
+            #
+            # Session 103: consult the negative cache for the siblings
+            # before trying any of them. A sibling with a fresh failure
+            # record is skipped without a resolve call at all — its own
+            # record is proof enough, and the per-sibling check inside
+            # resolve_live_source would only repeat it. When every
+            # sibling carries a fresh record the release is all-dead as
+            # of recently, so refuse fast with a distinct reason instead
+            # of paying the loop's per-sibling work. Unrecorded siblings
+            # are still tried in full (a dead pick with a playing sibling
+            # keeps playing — Session 102 F1); they earn their own record
+            # when they fail, so the next press skips them too.
+            _all_siblings = list(_same_release) + list(_cross_release)
+            _live_siblings = _all_siblings
+            if _all_siblings:
+                try:
+                    with get_db() as _conn:
+                        _placeholders = ",".join("?" for _ in _all_siblings)
+                        _cached_siblings = {
+                            r[0] for r in _conn.execute(
+                                "SELECT id FROM download_sources WHERE id IN ("
+                                + _placeholders + ") "
+                                "AND last_failed_at IS NOT NULL "
+                                "AND last_failed_at > ?",
+                                (*_all_siblings,
+                                 now_ts - NEGATIVE_CACHE_TTL_SECONDS)).fetchall()}
+                    _live_siblings = [s for s in _all_siblings
+                                      if s not in _cached_siblings]
+                    if not _live_siblings:
+                        return {
+                            "success": False,
+                            "id": src["id"],
+                            "error": "no_playable_source",
+                            "code": "no_playable_source",
+                            "reason": "all_siblings_negative_cached",
+                            "stale": True,
+                        }
+                except Exception:
+                    _live_siblings = _all_siblings
             _failover_deadline = (time.monotonic()
                                   + _FAILOVER_BUDGET_SECONDS)
-            for _sid in list(_same_release) + list(_cross_release):
+            for _sid in _live_siblings:
                 if time.monotonic() > _failover_deadline:
                     break
                 try:

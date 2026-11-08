@@ -140,8 +140,9 @@
       "status": "active"
     },
     "ssrmovies": {
-      "active_base_url": "https://ssrmovies.surf",
+      "active_base_url": "https://new1.ssrmovies.page",
       "known_mirrors": [
+        "https://new1.ssrmovies.page",
         "https://ssrmovies.surf",
         "https://ssrmovies.quest",
         "https://ssrmovies.gripe"

@@ -64,6 +64,15 @@ class TestSSRMoviesImport(unittest.TestCase):
     def tearDown(self):
         self.temp_dir.cleanup()
 
+    def test_default_base_url_points_at_the_live_domain(self):
+        """Session 103: ssrmovies.surf 301s to new1.ssrmovies.page (verified
+        live 2026-11-08: the WP REST API answers there with 27,471 posts).
+        The importer points at the live domain directly so no request pays
+        a redirect hop; if the site rotates again this canary fails loudly
+        instead of the scraper silently following a stale domain."""
+        self.assertEqual(import_ssrmovies.DEFAULT_BASE_URL,
+                         "https://new1.ssrmovies.page")
+
     def test_parse_release_buttons(self):
         btn_1080p = '<a href="https://secure.linkszilla.top/view/-Zw8TA6H1r">Watch &amp; Download in 1080p - 2.8GB</a>'
         btn_720p = '<a href="https://secure.linkszilla.top/view/pbeNXh-zEb">Watch &amp; Download in 720p - 1.2GB</a>'

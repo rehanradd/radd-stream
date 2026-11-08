@@ -2,6 +2,7 @@
 
 import ast
 import base64
+import hashlib
 import json
 import io
 import os
@@ -928,6 +929,120 @@ class DatabaseSaveTests(unittest.TestCase):
         self.assertEqual(second["code"], "no_playable_source", second)
         self.assertEqual(probe2.call_count, 0, probe2.call_args_list)
 
+    def test_all_siblings_negative_cached_refuses_fast_with_its_own_reason(self):
+        """Session 103: when every sibling already carries a fresh failure
+        record, the Stage-2 ladder refuses from one query instead of the
+        loop — no sibling resolve runs at all, and the refusal names the
+        cause instead of looking like another slow probe round."""
+        media_data = self.media("site_a", "https://site-a.example/example-film/")
+        media_data["releases"][0]["sources"] = [{
+            "source_name": "Dead copy",
+            "service": "test-service",
+            "resource_id": "site_a-id-0",
+            "source_url": "https://site_a.example/source-0",
+            "final_url": "https://cdn.example/site_a/page-0.html",
+            "is_temporary": 0,
+        }]
+        media_data["releases"].append({
+            "release_title": "Example Film 1080p (2)",
+            "quality": "1080p",
+            "codec": "x264",
+            "size": "1GB",
+            "languages": "English",
+            "season": None,
+            "episode": None,
+            "intermediate_url": "https://site_a.example/release-2",
+            "sources": [{
+                "source_name": "Dead sibling",
+                "service": "test-service",
+                "resource_id": "site_a-id-1",
+                "source_url": "https://site_a.example/source-1",
+                "final_url": "https://cdn.example/site_a/page-1.html",
+                "is_temporary": 0,
+            }],
+        })
+        fast_fetch.save_scraped_data(media_data)
+        with fast_fetch.get_db() as conn:
+            rows = conn.execute(
+                "SELECT id FROM download_sources ORDER BY id").fetchall()
+            conn.execute(
+                "UPDATE download_sources SET last_failed_at = ?, "
+                "failure_class = 'no_unwrapper'", (time.time(),))
+        self.assertEqual(len(rows), 2)
+        failing = {"ok": False, "kind": None, "mime": None, "size": None,
+                   "resumable": False, "renditions": [], "failure": "probe_error"}
+        probe = Mock(return_value=failing)
+        with patch.object(fast_fetch, "_stage2_probe", probe):
+            res = fast_fetch.resolve_live_source(rows[0]["id"])
+        self.assertFalse(res["success"], res)
+        self.assertEqual(res["code"], "no_playable_source", res)
+        self.assertEqual(res["reason"], "all_siblings_negative_cached", res)
+        self.assertEqual(probe.call_count, 0, probe.call_args_list)
+
+    def test_failover_prefilter_skips_a_recorded_sibling_and_serves_the_live_one(self):
+        """Session 103: the pre-filter drops recorded siblings from the
+        ladder but still tries the unrecorded one — a dead pick with a
+        playing sibling keeps playing, and only two probes are paid (the
+        pick's own cached probe, then the live sibling's)."""
+        media_data = self.media("site_a", "https://site-a.example/example-film/")
+        media_data["releases"][0]["sources"] = [
+            {
+                "source_name": "Dead copy",
+                "service": "test-service",
+                "resource_id": "site_a-id-0",
+                "source_url": "https://site_a.example/source-0",
+                "final_url": "https://cdn.example/site_a/page-0.html",
+                "is_temporary": 0,
+            },
+            {
+                "source_name": "Recorded sibling",
+                "service": "test-service",
+                "resource_id": "site_a-id-1",
+                "source_url": "https://site_a.example/source-1",
+                "final_url": "https://cdn.example/site_a/page-1.html",
+                "is_temporary": 0,
+            },
+            {
+                "source_name": "Live sibling",
+                "service": "test-service",
+                "resource_id": "site_a-id-2",
+                "source_url": "https://site_a.example/source-2",
+                "final_url": "https://cdn.example/site_a/good.mp4",
+                "is_temporary": 0,
+            },
+        ]
+        fast_fetch.save_scraped_data(media_data)
+        with fast_fetch.get_db() as conn:
+            rows = conn.execute(
+                "SELECT id FROM download_sources ORDER BY id").fetchall()
+            conn.execute(
+                "UPDATE download_sources SET last_failed_at = ?, "
+                "failure_class = 'no_unwrapper' WHERE id = ?",
+                (time.time(), rows[1]["id"]))
+        self.assertEqual(len(rows), 3)
+        failing = {"ok": False, "kind": None, "mime": None, "size": None,
+                   "resumable": False, "renditions": [], "failure": "probe_error"}
+        passing = {"ok": True, "kind": "file", "mime": "video/mp4",
+                   "size": 1024, "resumable": True, "renditions": [],
+                   "failure": None}
+
+        def probe_side_effect(url, **_kw):
+            if url == "https://cdn.example/site_a/good.mp4":
+                return passing
+            return failing
+
+        probe = Mock(side_effect=probe_side_effect)
+        with patch.object(fast_fetch, "_stage2_probe", probe):
+            res = fast_fetch.resolve_live_source(rows[0]["id"])
+        self.assertTrue(res["success"], res)
+        self.assertTrue(res.get("failover"), res)
+        self.assertEqual(res["url"], "https://cdn.example/site_a/good.mp4", res)
+        self.assertEqual(probe.call_count, 2, probe.call_args_list)
+        self.assertEqual(
+            {c.args[0] for c in probe.call_args_list},
+            {"https://cdn.example/site_a/page-0.html",
+             "https://cdn.example/site_a/good.mp4"})
+
     def test_negative_cache_expires_after_ttl(self):
         """A failure record older than the TTL no longer refuses: the
         copy is probed again, a passing probe serves it, and the stale
@@ -1584,6 +1699,11 @@ class DatabaseSaveTests(unittest.TestCase):
 
         SERVICE_MXDROP = "mxdrop"
         SERVICE_PKEMBED = "pkembed"
+        SERVICE_ANIMAHD = "animahd-player"
+        SERVICE_GOFILE = "gofile"
+        SERVICE_STREAMTAPE = "streamtape"
+        SERVICE_STREAM = "stream"
+        SERVICE_STREAMWISH = "streamwish"
 
         def __init__(self, verdict=None):
             self.verdict = verdict
@@ -1594,10 +1714,20 @@ class DatabaseSaveTests(unittest.TestCase):
             return url.startswith(f"https://{host}/")
 
         def is_mxdrop_embed(self, url):
-            return self._is(url, "mxdrop.to")
+            # Session 103: the live embed hosts are mxdrop.to, mxdrop.click
+            # and mixdrop.ag — the file page (/f/) is never an embed.
+            return (url.startswith("https://mxdrop.to/e/")
+                    or url.startswith("https://mxdrop.click/e/")
+                    or url.startswith("https://mixdrop.ag/e/"))
 
         def is_pkembed_embed(self, url):
             return self._is(url, "pkembed.site")
+
+        def is_animahd_player(self, url):
+            # The fake covers no animahd rows; the chain reads this
+            # attribute before the Session 103 branches, so it must
+            # exist (a missing attribute aborts the whole dispatch).
+            return False
 
         def unwrap_mxdrop(self, embed_url, fetch=None, verify=True, referer=None):
             self.calls.append(("mxdrop", embed_url, verify))
@@ -1613,6 +1743,35 @@ class DatabaseSaveTests(unittest.TestCase):
                 "is_temporary": True, "expires_in": 43200.0,
                 "sources": [{"quality": "480p", "url": "x_l.mp4"},
                             {"quality": "360p", "url": "x_n.mp4"}]}
+
+        def unwrap_gofile(self, url, fetch=None, verify=True):
+            self.calls.append(("gofile", url, verify))
+            return self.verdict or {
+                "status": "active",
+                "final_url": "https://cold2.example/dl/abc/Film.2024.1080p.mkv",
+                "is_temporary": True, "expires_in": None,
+                "content_type": "video/mp4", "http_status": 206,
+                "size_bytes": 2000000000}
+
+        def unwrap_streamtape(self, embed_url, fetch=None, verify=True):
+            self.calls.append(("streamtape", embed_url, verify))
+            return self.verdict or {
+                "status": "active",
+                "final_url": "https://streamtape.to/get_video?id=abc"
+                             "&expires=1794166028&ip=x&token=y",
+                "is_temporary": True, "expires_in": 3600.0,
+                "content_type": "video/mp4", "http_status": 206,
+                "size_bytes": 1401038502}
+
+        def unwrap_packer_hls(self, embed_url, service, fetch=None, verify=True):
+            self.calls.append(("packer_hls", embed_url, service, verify))
+            return self.verdict or {
+                "status": "active",
+                "final_url": "https://cdn.example/hls2/01/1/f/master.m3u8"
+                             "?t=x&s=1&e=129600&f=1",
+                "is_temporary": True, "expires_in": 129600.0,
+                "content_type": "application/vnd.apple.mpegurl",
+                "http_status": 206, "size_bytes": 512}
 
     def _embed_source(self, site, service, embed):
         media_data = self.media(site, f"https://{site}.example/film/")
@@ -1650,6 +1809,438 @@ class DatabaseSaveTests(unittest.TestCase):
                 " WHERE id = ?", (stored["id"],)).fetchone()
         self.assertEqual(row["final_url"], "https://cdn.mxdrop.example/f.mp4")
         self.assertEqual((row["is_temporary"], row["status"]), (1, "active"))
+
+    def test_resolve_live_source_unwraps_a_mixdrop_file_page_to_its_signed_mp4(self):
+        """Session 103: the catalog stores mixdrop file pages (/f/<id>),
+        not embeds — the packer lives on /e/<id>, so the resolver rewrites
+        the path before the matcher sees it. The same unwrap_mxdrop serves
+        them (verified live: the unpacked wurl answered 206 video/mp4)."""
+        file_page = "https://mixdrop.ag/f/k0ndmr6xbpdw6w"
+        stored = self._embed_source("moviesmela", "mixdrop", file_page)
+        resolvers = self._FakeResolvers()
+        with patch.object(fast_fetch, "_embed_resolvers", return_value=resolvers), \
+             patch.object(fast_fetch, "probe_url_ttl",
+                          return_value=(None, {"observed": False,
+                                               "reason": "no_directive"})):
+            res = fast_fetch.resolve_live_source(stored["id"])
+
+        self.assertTrue(res["success"], res)
+        self.assertEqual(res["url"], "https://cdn.mxdrop.example/f.mp4")
+        self.assertTrue(res["refreshed"])
+        self.assertTrue(res["is_temporary"], "a signed token is never permanent")
+        self.assertEqual(resolvers.calls,
+                         [("mxdrop", "https://mixdrop.ag/e/k0ndmr6xbpdw6w", True)])
+        with fast_fetch.get_db() as conn:
+            row = conn.execute(
+                "SELECT final_url, is_temporary, status FROM download_sources"
+                " WHERE id = ?", (stored["id"],)).fetchone()
+        self.assertEqual(row["final_url"], "https://cdn.mxdrop.example/f.mp4")
+        self.assertEqual((row["is_temporary"], row["status"]), (1, "active"))
+
+    def test_mixdrop_embed_matcher_covers_the_live_hosts(self):
+        """Session 103: mxdrop.click and mixdrop.ag serve the same packed
+        config as mxdrop.to (verified live 2026-11-08); the file page is
+        not an embed, only /e/ is."""
+        hr = fast_fetch._embed_resolvers()
+        for url in ("https://mxdrop.to/e/6d9c9f6d93dfb18063cbdb697dd4db5d",
+                    "https://mxdrop.click/e/k0ndmr6xbpdw6w",
+                    "https://mixdrop.ag/e/k0ndmr6xbpdw6w"):
+            self.assertTrue(hr.is_mxdrop_embed(url), url)
+        for url in ("https://mixdrop.ag/f/k0ndmr6xbpdw6w",
+                    "https://mxdrop.to/xo78jxvjagwq9x"):
+            self.assertFalse(hr.is_mxdrop_embed(url), url)
+
+    def test_gofile_website_token_pins_the_hash_format(self):
+        """Session 103: the website token is sha256(UA :: language ::
+        accountToken :: 4h-window :: salt) — the UA and language hashed
+        MUST be the ones sent on the request. The window is floor(now /
+        14400); pinning the format here, the live server validates the
+        value (the known vector was verified against gofile's own JS)."""
+        hr = fast_fetch._embed_resolvers()
+        fixed_now = 124589 * 14400  # window 124589
+        with patch.object(hr.time, "time", return_value=float(fixed_now)):
+            token = hr._gofile_website_token("TESTTOKEN123")
+            prev = hr._gofile_website_token("TESTTOKEN123", -1)
+        expected = hashlib.sha256(
+            (f"{hr.GOFILE_USER_AGENT}::en-US::TESTTOKEN123::124589::"
+             f"{hr.GOFILE_WT_SALT}").encode("utf-8")).hexdigest()
+        expected_prev = hashlib.sha256(
+            (f"{hr.GOFILE_USER_AGENT}::en-US::TESTTOKEN123::124588::"
+             f"{hr.GOFILE_WT_SALT}").encode("utf-8")).hexdigest()
+        self.assertEqual(token, expected)
+        self.assertEqual(prev, expected_prev)
+        self.assertEqual(len(token), 64)
+
+    def test_gofile_unwrap_returns_the_picked_video_file(self):
+        """Session 103: POST /accounts (guest token) -> GET /contents/<id>
+        (website token in the X-Website-Token header) -> auth'd Range
+        probe. A video file is picked ahead of a BIGGER non-video file,
+        and the probe must carry the Authorization header — the bare link
+        302s without it."""
+        hr = fast_fetch._embed_resolvers()
+
+        def fake_fetch(url, headers=None, timeout=25, method="GET",
+                       follow=True):
+            headers = dict(headers or {})
+            if url.endswith("/accounts") and method == "POST":
+                return (200, json.dumps(
+                    {"status": "ok",
+                     "data": {"token": "GUEST123"}}).encode(), {}, url)
+            if "/contents/" in url:
+                self.assertEqual(headers.get("X-Website-Token"),
+                                 hr._gofile_website_token("GUEST123"))
+                self.assertEqual(headers.get("Authorization"),
+                                 "Bearer GUEST123")
+                children = {
+                    "c1": {"name": "Film.2024.1080p.mkv", "size": 2000000000,
+                           "type": "file",
+                           "link": "https://cold2.example/dl/abc/Film.mkv"},
+                    "c2": {"name": "notes.zip", "size": 3000000000,
+                           "type": "file",
+                           "link": "https://cold2.example/dl/abc/notes.zip"},
+                }
+                return (200, json.dumps(
+                    {"status": "ok",
+                     "data": {"children": children}}).encode(), {}, url)
+            # The auth'd Range probe of the picked file.
+            self.assertEqual(headers.get("Authorization"), "Bearer GUEST123")
+            self.assertIn("Range", headers)
+            return (206, b"\x00\x00\x00\x18ftypisom" + b"\x00" * 504,
+                    {"content-type": "video/mp4",
+                     "content-range": "bytes 0-511/2000000000"}, url)
+
+        verdict = hr.unwrap_gofile("https://gofile.io/d/abc123",
+                                   fetch=fake_fetch)
+        self.assertEqual(verdict["status"], "active", verdict)
+        self.assertEqual(verdict["final_url"],
+                         "https://cold2.example/dl/abc/Film.mkv")
+        self.assertEqual(verdict["content_type"], "video/mp4")
+        self.assertEqual(verdict["http_status"], 206)
+
+    def test_gofile_unwrap_notfound_is_dead(self):
+        """A deleted gofile folder answers error-notFound — dead, not a
+        gate problem, and the negative cache records it as such."""
+        hr = fast_fetch._embed_resolvers()
+
+        def fake_fetch(url, headers=None, timeout=25, method="GET",
+                       follow=True):
+            if url.endswith("/accounts"):
+                return (200, json.dumps(
+                    {"status": "ok",
+                     "data": {"token": "GUEST123"}}).encode(), {}, url)
+            return (200, json.dumps({"status": "error-notFound"}).encode(),
+                    {}, url)
+
+        verdict = hr.unwrap_gofile("https://gofile.io/d/deadid",
+                                   fetch=fake_fetch)
+        self.assertEqual(verdict["status"], "dead", verdict)
+
+    def test_gofile_unwrap_notpremium_on_both_windows_is_unknown(self):
+        """error-notPremium on the current window AND the previous one means
+        the salt rotated — unknown, with a note naming the constant to
+        update, never a forced half-working answer."""
+        hr = fast_fetch._embed_resolvers()
+
+        def fake_fetch(url, headers=None, timeout=25, method="GET",
+                       follow=True):
+            if url.endswith("/accounts"):
+                return (200, json.dumps(
+                    {"status": "ok",
+                     "data": {"token": "GUEST123"}}).encode(), {}, url)
+            return (200, json.dumps({"status": "error-notPremium"}).encode(),
+                    {}, url)
+
+        verdict = hr.unwrap_gofile("https://gofile.io/d/abc123",
+                                   fetch=fake_fetch)
+        self.assertEqual(verdict["status"], "unknown", verdict)
+        self.assertIn("GOFILE_WT_SALT", " ".join(verdict["notes"]))
+
+    def test_streamtape_rebuild_uses_norobotlink_not_the_decoy(self):
+        """Session 103: the raw #ideoooolink div is a decoy (wrong id,
+        answers {"status":500}); only the norobotlink/captchalink JS
+        rebuilds name the true signed URL. The test page is the live
+        page's shape with a short token, and the probe proves the rebuilt
+        URL."""
+        hr = fast_fetch._embed_resolvers()
+        page = """<div id="ideoooolink" style="display:none;">/streamtape.to/get_video?id=aPgd96YGjARfxkqX&expires=1794166028&ip=T1&token=T1</div><span id="captchalink" style="display:none;">/streamtape.to/get_video?id=aPg96YGjARfxkqX&expires=1794166028&ip=T1&token=T1</span><div id="norobotlink" style="display:none;">/streamtape.to/get_video?id=aPg96YGjARfxkqX&expires=1794166028&ip=T1&token=T1</div><script> document.getElementById('ideoooolink').innerHTML = "/streamtape.to/get_video?id=aPg" + ''+ ('xcdd96YGjARfxkqX&expires=1794166028&ip=T1&token=T1').substring(1).substring(2); document.getElementById('captchalink').innerHTML = '//streamtape.to/get_video?id=aP'+ ('defgg96YGjARfxkqX&expires=1794166028&ip=T1&token=T1').substring(4); document.getElementById('norobotlink').innerHTML = '//streamtape.to/get_video?id=aP' + ('xcdg96YGjARfxkqX&expires=1794166028&ip=T1&token=T1').substring(1).substring(2);</script>"""
+
+        def fake_fetch(url, headers=None, timeout=25, method="GET",
+                       follow=True):
+            if "get_video" in url:
+                return (206, b"\x00\x00\x00\x18ftypisom" + b"\x00" * 504,
+                        {"content-type": "video/mp4",
+                         "content-range": "bytes 0-511/1401038502"}, url)
+            return (200, page.encode(), {}, url)
+
+        verdict = hr.unwrap_streamtape(
+            "https://streamtape.to/v/aPg96YGjARfxkqX", fetch=fake_fetch)
+        self.assertEqual(verdict["status"], "active", verdict)
+        self.assertIn("id=aPg96YGjARfxkqX", verdict["final_url"])
+        self.assertNotIn("aPgd96YGj", verdict["final_url"])
+
+    def test_packer_hls_unwrap_reads_hls2_and_accepts_the_playlist(self):
+        """Session 103: one GET, unpack the P.A.C.K.E.R. block with the
+        repo's own unpacker, read the hls2 master, Range-probe it with
+        Referer. The packer payload here is minimal (two keys) but real —
+        the same find_packed_config the live watch-online page goes
+        through. An HLS master is playable media, not a failed file."""
+        hr = fast_fetch._embed_resolvers()
+        page = '''<html><script>eval(function(p,a,c,k,e,d){e=function(c){return c};while(c--)if(k[c])p=p.replace(new RegExp('\\b'+e(c)+'\\b','g'),k[c]);return p}('0={"1":"https://cdn.example/hls/master.m3u8"};',10,2,'var|hls2'.split('|'),0,{}))</script></html>'''
+        seen = {}
+
+        def fake_fetch(url, headers=None, timeout=25, method="GET",
+                       follow=True):
+            seen[url] = dict(headers or {})
+            if "master.m3u8" in url:
+                return (206, b"#EXTM3U\n#EXT-X-VERSION:3\n",
+                        {"content-type": "application/vnd.apple.mpegurl",
+                         "content-range": "bytes 0-511/512"}, url)
+            return (200, page.encode(), {}, url)
+
+        verdict = hr.unwrap_packer_hls(
+            "https://watch-online.mom/e/r80snwale95i", "stream",
+            fetch=fake_fetch)
+        self.assertEqual(verdict["status"], "active", verdict)
+        self.assertEqual(verdict["final_url"],
+                         "https://cdn.example/hls/master.m3u8")
+        self.assertIn("mpegurl", verdict["content_type"])
+        probe_headers = seen.get("https://cdn.example/hls/master.m3u8") or {}
+        self.assertEqual(probe_headers.get("Referer"),
+                         "https://watch-online.mom/e/r80snwale95i")
+
+    def test_probe_playlist_or_file_names_dead_and_blocked(self):
+        """The playlist-aware probe follows probe_range's own status map
+        for the failures, and accepts an HLS master as playable media."""
+        hr = fast_fetch._embed_resolvers()
+
+        def _fetch_for(status, body=b"", ctype="video/mp4"):
+            def fake(url, headers=None, timeout=25, method="GET",
+                     follow=True):
+                return (status, body, {"content-type": ctype}, url)
+            return fake
+
+        embed = "https://watch-online.mom/e/r80snwale95i"
+        dead = hr._probe_playlist_or_file("https://cdn.example/f.m3u8",
+                                          _fetch_for(404), embed)
+        self.assertEqual(dead["status"], "dead")
+        blocked = hr._probe_playlist_or_file("https://cdn.example/f.m3u8",
+                                             _fetch_for(403), embed)
+        self.assertEqual(blocked["status"], "blocked")
+        playlist = hr._probe_playlist_or_file(
+            "https://cdn.example/f.m3u8",
+            _fetch_for(206, b"#EXTM3U\n", "application/vnd.apple.mpegurl"),
+            embed)
+        self.assertEqual(playlist["status"], "active")
+        self.assertTrue(playlist["is_playlist"])
+
+    def test_resolve_live_source_unwraps_a_mobilejsr_bridge_via_its_direct_mirror(self):
+        """Session 103: mobilejsr was import-time only, so its rows always
+        answered no_unwrapper even though the bridge page lists mirrors
+        that play. The resolver runs the fan-out at resolve time and takes
+        the direct-first mirror (pixeldrain ahead of the gofile landing
+        page, which is a page URL rather than a direct link)."""
+        stored = self._embed_source(
+            "moviesmela", "mobilejsr", "https://mobilejsr.com/view/t1GxY4H6Ws")
+        mirrors = [
+            {"source_name": "GoFile [Cloud]", "service": "gofile",
+             "resource_id": "abc", "source_url": "https://gofile.io/d/abc",
+             "final_url": "https://gofile.io/d/abc", "is_temporary": 0},
+            {"source_name": "PixelDrain [Direct CDN]", "service": "pixeldrain",
+             "resource_id": "GS2GF6rq",
+             "source_url": "https://pixeldrain.com/api/file/GS2GF6rq",
+             "final_url": "https://pixeldrain.com/api/file/GS2GF6rq",
+             "is_temporary": 0},
+        ]
+        with patch.object(fast_fetch, "unwrap_mobilejsr",
+                          return_value=mirrors), \
+             patch.object(fast_fetch, "probe_url_ttl",
+                          return_value=(None, {"observed": False,
+                                               "reason": "no_directive"})):
+            res = fast_fetch.resolve_live_source(stored["id"])
+
+        self.assertTrue(res["success"], res)
+        self.assertEqual(res["url"], "https://pixeldrain.com/api/file/GS2GF6rq")
+        self.assertTrue(res["refreshed"])
+
+    def test_resolve_live_source_mobilejsr_with_only_unwrapped_mirrors_fails_honestly(self):
+        """A mobilejsr bridge whose mirrors are all landing pages the gate
+        cannot prove (a gofile page URL here) refuses honestly with
+        unwrap_failed — the branch ran, it just had nothing playable to
+        hand up."""
+        stored = self._embed_source(
+            "moviesmela", "mobilejsr", "https://mobilejsr.com/view/t1GxY4H6Ws")
+        mirrors = [
+            {"source_name": "GoFile [Cloud]", "service": "gofile",
+             "resource_id": "abc", "source_url": "https://gofile.io/d/abc",
+             "final_url": "https://gofile.io/d/abc", "is_temporary": 0},
+        ]
+        failing = {"ok": False, "kind": None, "mime": None, "size": None,
+                   "resumable": False, "renditions": [], "failure": "probe_error"}
+        probe = Mock(return_value=failing)
+        with patch.object(fast_fetch, "unwrap_mobilejsr",
+                          return_value=mirrors), \
+             patch.object(fast_fetch, "_stage2_probe", probe):
+            res = fast_fetch.resolve_live_source(stored["id"])
+
+        self.assertFalse(res["success"], res)
+        self.assertEqual(res["code"], "no_playable_source", res)
+        with fast_fetch.get_db() as conn:
+            row = conn.execute(
+                "SELECT last_failed_at, failure_class FROM download_sources "
+                "WHERE id = ?", (stored["id"],)).fetchone()
+        self.assertIsNotNone(row["last_failed_at"], row)
+        self.assertEqual(row["failure_class"], "unwrap_failed", row)
+
+    def test_resolve_live_source_unwraps_a_gofile_folder_to_its_video_file(self):
+        """Session 103: gofile cracked (wt API, header form). The
+        unwrapper's auth'd Range probe IS the gate evidence — the bare
+        direct link 302s without the guest Authorization header, so the
+        generic bare probe would fail a proven link. The gate probe is
+        stubbed to FAIL here on purpose: success anyway proves the skip."""
+        stored = self._embed_source(
+            "moviesmela", "gofile", "https://gofile.io/d/abc123")
+        resolvers = self._FakeResolvers()
+        failing = {"ok": False, "kind": None, "mime": None, "size": None,
+                   "resumable": False, "renditions": [],
+                   "failure": "probe_error"}
+        with patch.object(fast_fetch, "_embed_resolvers",
+                          return_value=resolvers), \
+             patch.object(fast_fetch, "_stage2_probe",
+                          return_value=failing), \
+             patch.object(fast_fetch, "probe_url_ttl",
+                          return_value=(None, {"observed": False,
+                                               "reason": "no_directive"})):
+            res = fast_fetch.resolve_live_source(stored["id"])
+
+        self.assertTrue(res["success"], res)
+        self.assertEqual(res["url"],
+                         "https://cold2.example/dl/abc/Film.2024.1080p.mkv")
+        self.assertTrue(res["refreshed"])
+        self.assertTrue(res["is_temporary"], "a header-gated link is never permanent")
+        self.assertEqual(resolvers.calls,
+                         [("gofile", "https://gofile.io/d/abc123", True)])
+        with fast_fetch.get_db() as conn:
+            row = conn.execute(
+                "SELECT final_url, is_temporary, status FROM download_sources"
+                " WHERE id = ?", (stored["id"],)).fetchone()
+        self.assertEqual(row["final_url"],
+                         "https://cold2.example/dl/abc/Film.2024.1080p.mkv")
+        self.assertEqual((row["is_temporary"], row["status"]), (1, "active"))
+
+    def test_resolve_live_source_unwraps_a_streamtape_embed_to_its_signed_mp4(self):
+        """Session 103: streamtape cracked (norobotlink rebuild). The
+        unwrapper's bare Range probe already proved the signed get_video
+        URL, so it stands as the gate — the gate probe is stubbed to FAIL
+        here and success anyway proves the skip."""
+        stored = self._embed_source(
+            "moviesmela", "streamtape",
+            "https://streamtape.to/v/aPg96YGjARfxkqX")
+        resolvers = self._FakeResolvers()
+        failing = {"ok": False, "kind": None, "mime": None, "size": None,
+                   "resumable": False, "renditions": [],
+                   "failure": "probe_error"}
+        with patch.object(fast_fetch, "_embed_resolvers",
+                          return_value=resolvers), \
+             patch.object(fast_fetch, "_stage2_probe",
+                          return_value=failing), \
+             patch.object(fast_fetch, "probe_url_ttl",
+                          return_value=(None, {"observed": False,
+                                               "reason": "no_directive"})):
+            res = fast_fetch.resolve_live_source(stored["id"])
+
+        self.assertTrue(res["success"], res)
+        self.assertTrue(res["url"].startswith(
+            "https://streamtape.to/get_video?id=abc"), res)
+        self.assertTrue(res["refreshed"])
+        self.assertTrue(res["is_temporary"], "a signed token is never permanent")
+        self.assertEqual(resolvers.calls,
+                         [("streamtape",
+                           "https://streamtape.to/v/aPg96YGjARfxkqX", True)])
+
+    def test_resolve_live_source_unwraps_a_stream_embed_to_its_hls_master(self):
+        """Session 103: the streamwish family cracked (1 GET + unpack +
+        hls2 master). The unwrapper's Referer-carrying Range probe already
+        proved the playlist, so it stands as the gate — the gate probe is
+        stubbed to FAIL here and success anyway proves the skip."""
+        stored = self._embed_source(
+            "moviesmela", "stream",
+            "https://watch-online.mom/e/r80snwale95i")
+        resolvers = self._FakeResolvers()
+        failing = {"ok": False, "kind": None, "mime": None, "size": None,
+                   "resumable": False, "renditions": [],
+                   "failure": "probe_error"}
+        with patch.object(fast_fetch, "_embed_resolvers",
+                          return_value=resolvers), \
+             patch.object(fast_fetch, "_stage2_probe",
+                          return_value=failing), \
+             patch.object(fast_fetch, "probe_url_ttl",
+                          return_value=(None, {"observed": False,
+                                               "reason": "no_directive"})):
+            res = fast_fetch.resolve_live_source(stored["id"])
+
+        self.assertTrue(res["success"], res)
+        self.assertTrue(res["url"].endswith("master.m3u8?t=x&s=1&e=129600&f=1"),
+                        res)
+        self.assertTrue(res["refreshed"])
+        self.assertTrue(res["is_temporary"], "a signed token is never permanent")
+        self.assertEqual(resolvers.calls,
+                         [("packer_hls",
+                           "https://watch-online.mom/e/r80snwale95i",
+                           "stream", True)])
+
+    def test_resolve_live_source_gofile_download_refuses_a_playlist(self):
+        """A gofile folder whose picked file is an m3u8 is a playlist, not
+        a file: the watch caller may play it, but the download caller must
+        refuse it — the gate verdict built from the unwrapper's own probe
+        has to carry the kind, or a playlist would be handed to a download.
+        The gate probe is stubbed to fail so the v1 stale fall-through
+        cannot mask the refusal with the last-known page URL."""
+        stored = self._embed_source(
+            "moviesmela", "gofile", "https://gofile.io/d/abc123")
+        resolvers = self._FakeResolvers(verdict={
+            "status": "active",
+            "final_url": "https://cold2.example/dl/abc/Film.m3u8",
+            "is_temporary": True, "expires_in": None,
+            "content_type": "application/vnd.apple.mpegurl",
+            "http_status": 200, "size_bytes": 512})
+        failing = {"ok": False, "kind": None, "mime": None, "size": None,
+                   "resumable": False, "renditions": [],
+                   "failure": "probe_error"}
+        with patch.object(fast_fetch, "_embed_resolvers",
+                          return_value=resolvers), \
+             patch.object(fast_fetch, "_stage2_probe",
+                          return_value=failing):
+            res = fast_fetch.resolve_live_source(stored["id"],
+                                                 want="download")
+
+        self.assertFalse(res["success"], res)
+        self.assertEqual(res["code"], "no_playable_source", res)
+
+    def test_verdict_from_unwrap_maps_playlist_and_file(self):
+        """The gate verdict built from an unwrapper's own probe: an m3u8
+        master is a playlist (never resumable), an mp4 is a file (resumable
+        only on a 206)."""
+        playlist = fast_fetch._verdict_from_unwrap({
+            "content_type": "application/vnd.apple.mpegurl",
+            "final_url": "https://cdn.example/hls/master.m3u8",
+            "http_status": 206, "size_bytes": 512})
+        self.assertEqual(playlist["kind"], "playlist")
+        self.assertTrue(playlist["ok"])
+        self.assertFalse(playlist["resumable"])
+        self.assertTrue(fast_fetch._stage2_accept(playlist, "watch"))
+        self.assertFalse(fast_fetch._stage2_accept(playlist, "download"))
+        file_206 = fast_fetch._verdict_from_unwrap({
+            "content_type": "video/mp4",
+            "final_url": "https://cdn.example/f.mp4",
+            "http_status": 206, "size_bytes": 100})
+        self.assertEqual(file_206["kind"], "file")
+        self.assertTrue(file_206["resumable"])
+        self.assertTrue(fast_fetch._stage2_accept(file_206, "download"))
+        file_200 = fast_fetch._verdict_from_unwrap({
+            "content_type": "video/mp4",
+            "final_url": "https://cdn.example/f.mp4",
+            "http_status": 200, "size_bytes": 100})
+        self.assertFalse(file_200["resumable"])
 
     def test_resolve_live_source_unwraps_a_pkembed_embed_to_its_top_rendition(self):
         embed = "https://pkembed.site/embed-g64v61whic26.html"

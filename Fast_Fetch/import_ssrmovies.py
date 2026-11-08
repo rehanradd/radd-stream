@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-import_ssrmovies.py — Dedicated staging importer and scraper for SSRMovies (https://ssrmovies.surf).
+import_ssrmovies.py — Dedicated staging importer and scraper for SSRMovies (https://new1.ssrmovies.page).
 
 Key Features:
   1. Dedicated staging SQLite database: ssrmovies.db (isolated from production fast_fetch.db).
-  2. Full WP REST API sync: Paginates https://ssrmovies.surf/wp-json/wp/v2/posts?per_page=100
+  2. Full WP REST API sync: Paginates https://new1.ssrmovies.page/wp-json/wp/v2/posts?per_page=100
      across all ~274 pages (27,362+ catalog titles).
   3. Clean Metadata Extraction:
      - Clean Title, Year, Audio/Language (Dual Audio, Hindi, Punjabi, South Dubbed, English).
@@ -55,7 +55,12 @@ if str(BASE_DIR) not in sys.path:
 
 import fast_fetch
 
-DEFAULT_BASE_URL = "https://ssrmovies.surf"
+# Live domain verified 2026-11-08 (Session 103): ssrmovies.surf 301s to
+# new1.ssrmovies.page, and the WP REST API answers there (27,471 posts).
+# The old domain is kept as the redirect source of truth in
+# domain_registry.json; the importer points at the live domain directly so
+# every request does not pay a redirect hop.
+DEFAULT_BASE_URL = "https://new1.ssrmovies.page"
 DEFAULT_DB_PATH = (
     Path("/home/ubuntu/radd-stream-data/ssrmovies.db")
     if Path("/home/ubuntu/radd-stream-data").exists()
