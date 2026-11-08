@@ -333,6 +333,21 @@ class V2WireFixture(unittest.TestCase):
         self.conn.commit()
         self.assertEqual(rowcount, 1, f"no ledger download_sources row for tag {tag}")
 
+    def _mark_resolve_failure(self, tag, *, version=None, age_seconds=0):
+        """Stamp a negative-cache record on one ledger row, the way
+        `fast_fetch._record_resolve_failure` writes it after a failed
+        press. `age_seconds` backdates the failure; `version` defaults
+        to the current resolver version."""
+        import time
+        if version is None:
+            version = fast_fetch.RESOLVER_VERSION
+        rowcount = self.conn.execute(
+            "UPDATE download_sources SET last_failed_at = ?, failure_class = ?,"
+            " failure_resolver_v = ? WHERE resource_id = ?",
+            (time.time() - age_seconds, "unwrap_failed", version, tag)).rowcount
+        self.conn.commit()
+        self.assertEqual(rowcount, 1, f"no ledger download_sources row for tag {tag}")
+
     def record_evidence(self, tag, *, ok=1, speed=None, latency=None, status=200,
                         ranges=None, error=None, probed_at=1730000000.0):
         """Simulates `link_health.probe()` having measured this link."""
@@ -449,6 +464,18 @@ class V2WireFixture(unittest.TestCase):
                            "sources": [dead("AT-DEAD")]},
                           {"release_title": "Adult Twins (2024) 720p WEBRip",
                            "quality": "720p", "sources": [cdn("AT-CDN")]}])
+        # Session 113: same work, two prints whose copies are ALL classified
+        # playable — the named print's copies are only KNOWN dead once a
+        # press records them in the negative cache (the Ali Baba shape:
+        # print 130306 claims playable while its three copies press 404).
+        # The named print carries two copies so one-failed-one-live is a
+        # distinct case from all-failed.
+        self.add_post("vegamovies", "https://new1.vegamovies.lease/cache-twins-2024/",
+                      clean_title="Cache Twins", year=2024, releases=[
+                          {"release_title": "Cache Twins (2024) 1080p WEB-DL",
+                           "sources": [cdn("CT-CDN"), cdn("CT-CDN2")]},
+                          {"release_title": "Cache Twins (2024) 720p WEBRip",
+                           "quality": "720p", "sources": [cdn("CT-SIBLING")]}])
         self.mark_probe_on_ledger("DUNE-CDN")
         self.mark_probe_on_ledger("ADULT-CDN")
         self.mark_probe_on_ledger("QV-CDN")
@@ -456,6 +483,9 @@ class V2WireFixture(unittest.TestCase):
         self.mark_probe_on_ledger("TB-CDN")
         self.mark_probe_on_ledger("RP-CDN")
         self.mark_probe_on_ledger("AT-CDN")
+        self.mark_probe_on_ledger("CT-CDN")
+        self.mark_probe_on_ledger("CT-CDN2")
+        self.mark_probe_on_ledger("CT-SIBLING")
         self.project(rev=1)
         # Out-of-band evidence, including the sentence a probe really writes: this
         # is the one field that reaches a public body carrying a hoster's name.
@@ -1002,6 +1032,107 @@ class V2PlayReleasePrintFallbackTests(V2WireFixture):
                           {"episode_id": self.twin_beats_episode_id})
         self.assertEqual(reply.status, 200, reply.json)
         self.assertEqual(reply.json["release_id"], sibling)
+
+
+# ── 1e. release_id play fallback: failure-cache-aware ────────────────────
+
+class V2PlayCacheAwareFallbackTests(V2WireFixture):
+    """Session 113: `/play` by release_id falls back when the named print's
+    copies are KNOWN dead, not just statically unplayable.
+
+    The Session 110 trigger read the bundle's static `playable` flag,
+    which is classification, not a press: Ali Baba aur 40 Bhoot 720p
+    print 130306 claims playable while its three copies press 404, so
+    the walk never ran. The route now consults the negative cache — a
+    print whose playable copies all carry a fresh failure record at the
+    current resolver version walks to a sibling that holds an unfailed
+    playable copy. The "Cache Twins" fixture mirrors the live shape:
+    the named 1080p print's copies are classified playable, and only
+    the stamped failure records say otherwise.
+    """
+
+    def test_release_id_falls_back_when_the_named_prints_copies_are_cache_failed(self):
+        # (a) The live case: named print playable by classification, both
+        # copies fresh-failed, sibling unfailed — the sibling plays.
+        best, sibling = self._twin_prints("Cache Twins")
+        self._map_legacy_release(500005, best)
+        self._mark_resolve_failure("CT-CDN")
+        self._mark_resolve_failure("CT-CDN2")
+        reply = self.post("/api/v2/play", {"release_id": 500005})
+        self.assertEqual(reply.status, 200, reply.json)
+        self.assertEqual(reply.json["release_id"], sibling)
+        self.assertNotEqual(reply.json["release_id"], best)
+        self.assertTrue(reply.json["playable"])
+
+    def test_release_id_keeps_a_named_print_whose_failure_predates_the_resolver(self):
+        # (b) Session 107 versioning: a failure recorded by an older
+        # resolver is stale — a new unwrapper may have landed since — so
+        # the named print is returned unchanged, no walk.
+        best, _sibling = self._twin_prints("Cache Twins")
+        self._map_legacy_release(500005, best)
+        self._mark_resolve_failure(
+            "CT-CDN", version=fast_fetch.RESOLVER_VERSION - 1)
+        self._mark_resolve_failure(
+            "CT-CDN2", version=fast_fetch.RESOLVER_VERSION - 1)
+        reply = self.post("/api/v2/play", {"release_id": 500005})
+        self.assertEqual(reply.status, 200, reply.json)
+        self.assertEqual(reply.json["release_id"], best)
+        self.assertTrue(reply.json["playable"])
+
+    def test_release_id_keeps_a_named_print_whose_failure_has_expired(self):
+        # (c) A failure older than the 12h negative-cache TTL is not
+        # evidence any more — the named print is returned unchanged.
+        best, _sibling = self._twin_prints("Cache Twins")
+        self._map_legacy_release(500005, best)
+        self._mark_resolve_failure(
+            "CT-CDN", age_seconds=fast_fetch.NEGATIVE_CACHE_TTL_SECONDS + 3600)
+        self._mark_resolve_failure(
+            "CT-CDN2", age_seconds=fast_fetch.NEGATIVE_CACHE_TTL_SECONDS + 3600)
+        reply = self.post("/api/v2/play", {"release_id": 500005})
+        self.assertEqual(reply.status, 200, reply.json)
+        self.assertEqual(reply.json["release_id"], best)
+        self.assertTrue(reply.json["playable"])
+
+    def test_release_id_keeps_a_named_print_with_one_unfailed_copy(self):
+        # (d) One copy failed, one never pressed: the print still holds
+        # an unfailed playable copy, so no walk — the first play of a
+        # dead copy is the stream route's job to record, not this route's
+        # to pre-empt.
+        best, _sibling = self._twin_prints("Cache Twins")
+        self._map_legacy_release(500005, best)
+        self._mark_resolve_failure("CT-CDN")
+        reply = self.post("/api/v2/play", {"release_id": 500005})
+        self.assertEqual(reply.status, 200, reply.json)
+        self.assertEqual(reply.json["release_id"], best)
+        self.assertTrue(reply.json["playable"])
+
+    def test_release_id_with_every_print_cache_failed_returns_the_named_print(self):
+        # (e) Named failed AND sibling failed: nothing verifies, so the
+        # named print's bundle stands — the honest answer, same as today,
+        # on the print the caller asked for.
+        best, _sibling = self._twin_prints("Cache Twins")
+        self._map_legacy_release(500005, best)
+        self._mark_resolve_failure("CT-CDN")
+        self._mark_resolve_failure("CT-CDN2")
+        self._mark_resolve_failure("CT-SIBLING")
+        reply = self.post("/api/v2/play", {"release_id": 500005})
+        self.assertEqual(reply.status, 200, reply.json)
+        self.assertEqual(reply.json["release_id"], best)
+        self.assertTrue(reply.json["playable"])
+
+    def test_work_id_walks_past_a_cache_failed_best_print(self):
+        # (f) The same static-flag flaw gated Session 109's walk: a work
+        # whose best print is cache-failed must not stop at it while a
+        # sibling print holds an unfailed playable copy.
+        best, sibling = self._twin_prints("Cache Twins")
+        self._mark_resolve_failure("CT-CDN")
+        self._mark_resolve_failure("CT-CDN2")
+        reply = self.post("/api/v2/play",
+                          {"work_id": self.work_ids["Cache Twins"]})
+        self.assertEqual(reply.status, 200, reply.json)
+        self.assertEqual(reply.json["release_id"], sibling)
+        self.assertNotEqual(reply.json["release_id"], best)
+        self.assertTrue(reply.json["playable"])
 
 
 # ── 2. provenance: nothing that names a source ever leaves ──────────────────
@@ -1942,11 +2073,13 @@ class V2StatsHonestyTests(V2WireFixture):
         self.assertEqual(health["probes"]["ok"], 1)
         self.assertEqual(health["probes"]["resumable"], 1)
         self.assertEqual(health["probes"]["avg_speed_mbps"], 42.0)
-        # Ten posts, two of them hidden works: eight works, eleven prints and
-        # 19 − 4 = 15 links are what a public caller may be told about (§13).
-        self.assertEqual(counts["works"], 8)
-        self.assertEqual(counts["links"], 15)
-        self.assertEqual(counts["prints"], 11)
+        # Eleven posts, two of them hidden works: nine works, thirteen prints
+        # and 22 − 4 = 18 links are what a public caller may be told about
+        # (§13). Session 113 added the eleventh post ("Cache Twins": 1 work,
+        # 2 prints, 3 links).
+        self.assertEqual(counts["works"], 9)
+        self.assertEqual(counts["links"], 18)
+        self.assertEqual(counts["prints"], 13)
         self.assertGreater(self.conn.execute(
             "SELECT COUNT(*) FROM cat_works").fetchone()[0], counts["works"])
 
@@ -2031,7 +2164,9 @@ class V2SurfaceTests(V2WireFixture):
                          stats["counts"]["works"])
         self.assertEqual(payload["catalog"]["counts"]["links"],
                          stats["counts"]["links"])
-        self.assertEqual(payload["catalog"]["counts"]["works"], 8)
+        # Nine public works: Session 113 added the eleventh post
+        # ("Cache Twins"); the census must move with the corpus.
+        self.assertEqual(payload["catalog"]["counts"]["works"], 9)
         self.assertLess(payload["catalog"]["counts"]["works"],
                         self.conn.execute("SELECT COUNT(*) FROM cat_works").fetchone()[0],
                         "the manifest advertised hidden rows")

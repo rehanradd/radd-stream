@@ -1875,6 +1875,80 @@ def _same_coverage_sibling_prints(conn, named_release_id, *, operator):
     return []
 
 
+def _release_has_unfailed_candidate(conn, release_id) -> bool:
+    """Session 113: does this print hold a playable-classified copy the
+    negative cache has NOT freshly failed?
+
+    `play_bundle`'s `playable` is a static classification — a copy whose
+    service is resolvable counts as playable whether or not it plays
+    (live 2026-11-08: Ali Baba 720p print 130306 claims playable while
+    all three copies press 404). The negative cache is where a failed
+    press leaves its evidence (`fast_fetch._record_resolve_failure`,
+    written by the stream route), so a copy with a fresh record at the
+    current resolver version is known-dead and does not count; a copy
+    with no record, an expired record, or a record from an older
+    resolver (Session 107: a new unwrapper may have landed since)
+    counts as unfailed. The freshness rule here mirrors
+    `fast_fetch.resolve_live_source` exactly — same TTL, same version
+    comparison, NULL version counting as 0 — except this check is
+    read-only: it never clears a stale record (the next real press does
+    that) and never writes. Fail-open throughout: no evidence of
+    failure means the copy counts, so a print the cache knows nothing
+    about behaves exactly as it did before this session.
+
+    Bounded and fast: one indexed read over this print's links plus a
+    PK join per link; no network, no unwrap, no probe. That is
+    deliberate: /play is a routing endpoint measured at 0.016–0.031 s
+    and the app gives `playV2` a 2 s timeout, so a live unwrap+probe
+    per candidate (5 s landing timeout, up to 3 copies plus 4
+    siblings) would blow the caller's budget and turn routing into
+    resolving — the stream route is the live check, and this consults
+    what it recorded. The known limitation is the first play of a
+    never-pressed dead print: it still returns the named bundle, the
+    app's handle presses record the failures, and the NEXT /play call
+    falls back.
+    """
+    # Imported where it is used, like `fast_fetch` in `viewer.py`:
+    # `api_v2` must not import the resolver at module level, and the
+    # TTL/version are the resolver's constants to own.
+    import fast_fetch
+    now = time.time()
+    rows = conn.execute(
+        """
+        SELECT l.kind, l.playability, l.state, l.final_url, l.url,
+               l.ledger_link_id, s.last_failed_at, s.failure_resolver_v
+        FROM cat_links l
+        LEFT JOIN download_sources s ON s.id = l.ledger_link_id
+        WHERE l.release_id = ?
+        """, (int(release_id),)).fetchall()
+    for row in rows:
+        if row["ledger_link_id"] is None:
+            # Session 111: no ledger id, no pressable handle — not
+            # playable from this bundle, whatever its group claims.
+            continue
+        if catalog_api._link_group(row) > catalog_api._GROUP_RESOLVE:
+            continue
+        if str(row["state"]) in tiers.UNPLAYABLE_STATES:
+            continue
+        failed_at = row["last_failed_at"]
+        if failed_at is not None:
+            try:
+                failed_age = now - float(failed_at)
+            except (TypeError, ValueError):
+                failed_age = None
+            if (failed_age is not None
+                    and failed_age < fast_fetch.NEGATIVE_CACHE_TTL_SECONDS):
+                failed_v = row["failure_resolver_v"]
+                try:
+                    failed_v = int(failed_v) if failed_v is not None else 0
+                except (TypeError, ValueError):
+                    failed_v = 0
+                if failed_v >= fast_fetch.RESOLVER_VERSION:
+                    continue
+        return True
+    return False
+
+
 def _play_first_playable(conn, release_ids, *, episode_id, include_adult):
     """Session 109: walk a work/episode's prints, best first, cat ids only.
 
@@ -1883,6 +1957,12 @@ def _play_first_playable(conn, release_ids, *, episode_id, include_adult):
     answer is exactly today's, on the print the caller would have got
     before the walk existed. `legacy_release_id=False` throughout: every
     id here was resolved by the route itself (Session 108).
+
+    Session 113: "playable" here is cache-verified, not just static — a
+    print whose copies all carry a fresh negative-cache failure does not
+    stop the walk (its copies are known-dead), so the walk continues to
+    the next print. When nothing verifies, the best print's bundle is
+    still returned, exactly as before.
     """
     first = None
     for release_id in release_ids:
@@ -1891,7 +1971,8 @@ def _play_first_playable(conn, release_ids, *, episode_id, include_adult):
             include_adult=include_adult, legacy_release_id=False)
         if first is None:
             first = bundle
-        if bundle.get("ok") and bundle.get("playable"):
+        if (bundle.get("ok") and bundle.get("playable")
+                and _release_has_unfailed_candidate(conn, int(release_id))):
             return bundle
     return first
 
@@ -1917,6 +1998,14 @@ def route_play(handler, conn, body: dict, *, rid: str, path: str, operator: bool
     whose three copies are all dead while a sibling print of the same work
     may play. When nothing plays, the NAMED print's bundle is returned, so
     the 409 / download-only answer is exactly today's.
+
+    Session 113: the Session 110 trigger read the bundle's STATIC
+    `playable` flag, which is classification, not a press — Ali Baba's
+    named print claims playable while every copy presses 404, so the
+    walk never ran. The walk now also runs when the named print claims
+    playable but every playable copy carries a fresh negative-cache
+    failure (`_release_has_unfailed_candidate`), and a sibling is
+    accepted only when it too holds an unfailed playable copy.
     """
     release_id = _int_or_none(body.get("release_id"))
     episode_id = _int_or_none(body.get("episode_id"))
@@ -1994,15 +2083,31 @@ def route_play(handler, conn, body: dict, *, rid: str, path: str, operator: bool
                                          include_adult=bool(operator),
                                          legacy_release_id=legacy_release_id)
         named_cat_id = bundle.get("release_id") if bundle.get("ok") else None
-        if named_cat_id is not None and not bundle.get("playable"):
-            for sibling_id in _same_coverage_sibling_prints(
-                    conn, int(named_cat_id), operator=operator):
-                sibling_bundle = catalog_api.play_bundle(
-                    conn, release_id=sibling_id, episode_id=episode_id,
-                    include_adult=bool(operator), legacy_release_id=False)
-                if sibling_bundle.get("ok") and sibling_bundle.get("playable"):
-                    bundle = sibling_bundle
-                    break
+        if named_cat_id is not None:
+            # Session 110: walk when the named print has no playable
+            # candidate. Session 113: ALSO walk when it claims playable
+            # but every playable copy carries a fresh negative-cache
+            # failure — the static flag is classification, not a press,
+            # and a known-dead named print must not hide a playing
+            # sibling. A sibling is accepted only when it too holds an
+            # unfailed playable copy; when nothing verifies, the named
+            # print's bundle stands, so the 409 / download-only answer
+            # is exactly today's, on the print the caller asked for.
+            needs_walk = (not bundle.get("playable")
+                          or not _release_has_unfailed_candidate(
+                              conn, int(named_cat_id)))
+            if needs_walk:
+                for sibling_id in _same_coverage_sibling_prints(
+                        conn, int(named_cat_id), operator=operator):
+                    sibling_bundle = catalog_api.play_bundle(
+                        conn, release_id=sibling_id, episode_id=episode_id,
+                        include_adult=bool(operator), legacy_release_id=False)
+                    if (sibling_bundle.get("ok")
+                            and sibling_bundle.get("playable")
+                            and _release_has_unfailed_candidate(
+                                conn, sibling_id)):
+                        bundle = sibling_bundle
+                        break
     ok, code, _message = _from_layer2(bundle)
     if not ok:
         problem(handler, code=code or "not_found", rid=rid, instance=path,
