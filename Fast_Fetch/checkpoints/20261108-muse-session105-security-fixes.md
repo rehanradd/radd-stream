@@ -180,6 +180,15 @@ IS live (defined in `radd-stream-cache.conf`, used in both blocks).
   one line (`it.hostname` → `it.pattern`) and re-pushed as a follow-up commit
   on the same branch; CI re-run is the verification. No other `.hostname`
   misuse exists in App tests.
+- CI on the fix (e7f27a61): Backend **SUCCESS** (42464014595); Android
+  **FAILURE** again (42464014581) — this time 2 runtime test failures in
+  `SyncKeyCryptoTest` (round-trip + distinct-IV). Root cause:
+  `android.util.Base64` is a framework stub on the JVM, so the plain-JUnit
+  encrypt path could not work (the builder's own LanShare note already says
+  it is untestable on the JVM). Parent fix: the stored blob is now
+  `v1:` + hex(IV || ciphertext) via a pure-Kotlin hex codec in
+  `SyncKeyCrypto` — identical on phone and JVM, no platform Base64 anywhere
+  in the path. Re-pushed; CI re-run is the verification.
 
 - Audit 6 (ship release APK — owner-only tag), 11 (share coins — keep
   the 25/day cap), 13 (Play Integrity — items 3–4 are the server-side

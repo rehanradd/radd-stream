@@ -4,7 +4,6 @@ import android.content.Context
 import android.os.Build
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
-import android.util.Base64
 import java.security.KeyStore
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
@@ -17,9 +16,16 @@ import javax.crypto.spec.GCMParameterSpec
  * The audit found the sync key in plain `preferencesDataStore` — readable by
  * anyone who can read the app's private files (a rooted device, a backup
  * image) — and included in Android Auto Backup. This is the fix: the value
- * stored under `sync_key` is `v1:` + base64(IV || AES-GCM ciphertext), and
+ * stored under `sync_key` is `v1:` + hex(IV || AES-GCM ciphertext), and
  * the AES key never leaves the Keystore. The DataStore plumbing does not
  * change — the same key, the same Flow — only the bytes at rest do.
+ *
+ * The blob is hex, not base64, on purpose: `android.util.Base64` is a
+ * framework stub on the JVM (plain unit tests cannot call it — that is
+ * exactly why the first version's round-trip tests failed), and
+ * `java.util.Base64` needs API 26 while this path serves API 23+. Hex is
+ * pure Kotlin, identical on a phone and on the JVM, and the blob is short
+ * enough (~88 chars) that the 2x size costs nothing.
  *
  * API 23+ only: the Keystore AES-GCM path needs Marshmallow. Below 23 the
  * key is stored as before, in plaintext, and the repository documents that
@@ -47,6 +53,31 @@ object SyncKeyCrypto {
 
     fun isEncrypted(blob: String): Boolean = blob.startsWith(PREFIX)
 
+    // ── hex codec (pure Kotlin — no platform Base64, see the class KDoc) ──
+    private val HEX_CHARS = "0123456789abcdef".toCharArray()
+
+    internal fun bytesToHex(bytes: ByteArray): String {
+        val out = CharArray(bytes.size * 2)
+        for (i in bytes.indices) {
+            val v = bytes[i].toInt() and 0xFF
+            out[i * 2] = HEX_CHARS[v ushr 4]
+            out[i * 2 + 1] = HEX_CHARS[v and 0x0F]
+        }
+        return String(out)
+    }
+
+    internal fun hexToBytes(hex: String): ByteArray? {
+        if (hex.length % 2 != 0) return null
+        val out = ByteArray(hex.length / 2)
+        for (i in out.indices) {
+            val hi = HEX_CHARS.indexOf(hex[i * 2])
+            val lo = HEX_CHARS.indexOf(hex[i * 2 + 1])
+            if (hi < 0 || lo < 0) return null
+            out[i] = ((hi shl 4) or lo).toByte()
+        }
+        return out
+    }
+
     /**
      * Encrypt one key. A fresh random IV per call, prepended to the
      * ciphertext, so two encryptions of the same key never look alike and a
@@ -60,7 +91,7 @@ object SyncKeyCrypto {
         val combined = ByteArray(iv.size + ciphertext.size)
         iv.copyInto(combined)
         ciphertext.copyInto(combined, iv.size)
-        return PREFIX + Base64.encodeToString(combined, Base64.NO_WRAP)
+        return PREFIX + bytesToHex(combined)
     }
 
     /**
@@ -72,7 +103,7 @@ object SyncKeyCrypto {
     fun decrypt(blob: String, key: SecretKey): String? {
         if (!isEncrypted(blob)) return null
         return try {
-            val combined = Base64.decode(blob.removePrefix(PREFIX), Base64.DEFAULT)
+            val combined = hexToBytes(blob.removePrefix(PREFIX)) ?: return null
             if (combined.size <= IV_BYTES) return null
             val iv = combined.copyOfRange(0, IV_BYTES)
             val ciphertext = combined.copyOfRange(IV_BYTES, combined.size)
