@@ -13,6 +13,7 @@ import android.view.ViewGroup
 import android.view.WindowManager
 import android.widget.FrameLayout
 import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
@@ -267,6 +268,18 @@ private fun PlayerScreenContent(
     // transient overlays that take no state of their own; the stateful chrome
     // pieces resolve it from `state.playerTheme` themselves.
     val chrome = PlayerChromeTheme.forId(state.playerTheme)
+
+    // System Back always leaves the player (Session 117): the give-up card's
+    // AlertDialog handles Back while it is showing, and the top-left arrow
+    // always worked, but nothing handled Back during playback — the 114
+    // device retest pressed it three times on a stuck player and once while
+    // the card was up, and the player never exited. This handler is the
+    // fallback underneath the dialog's own: it is registered first, so a
+    // dialog or sheet that is showing wins the press (its handler was added
+    // later and both end in the same place — back to details), and with
+    // nothing showing, Back pops the player instead of doing nothing. The
+    // lock does not gate it: a locked player must still let its viewer out.
+    BackHandler { onBackClick() }
 
     var controlsVisible by remember { mutableStateOf(true) }
     var interactTick by remember { mutableStateOf(0L) }
