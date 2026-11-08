@@ -1342,6 +1342,28 @@ def link_ref_for(link_id: int, secret: str) -> str:
     return redact.mint_token(int(link_id), secret) if secret else str(int(link_id))
 
 
+def _ledger_stream_handle(conn, link_id: int, secret: str) -> str | None:
+    """The v1-stream handle for one projected link, or ``None``.
+
+    Session 111: `link_ref_for` speaks the cat universe — right for
+    `/resolve/{handle}`, wrong for a field named `stream_id`, which a
+    client presses at `/api/v1/stream` where the token is parsed as a
+    `download_sources` id. The projected `ledger_link_id` IS that id, so
+    the handle is minted from it; a row without one has no pressable
+    stream handle. Fail closed on a missing row or an unreadable column
+    (a projection predating `ledger_link_id`): no handle, never a guess.
+    """
+    try:
+        row = conn.execute("SELECT ledger_link_id FROM cat_links WHERE id = ?",
+                           (int(link_id),)).fetchone()
+    except sqlite3.Error:
+        return None
+    ledger_id = row[0] if row is not None else None
+    if ledger_id is None:
+        return None
+    return redact.mint_token(int(ledger_id), secret) if secret else str(int(ledger_id))
+
+
 def _public_art(result: dict, *, base_url: str, secret: str) -> dict:
     """Replace a Layer-2 raw image URL with our own art handle, in place.
 
@@ -1544,10 +1566,16 @@ def route_get(handler, path: str, query: dict, *, db_path, operator: bool,
                 handler.end_headers()
                 return True
             issued = link_ref_for(int(link_id), secret)
+            # Session 111: `link_ref` is this route's own namespace (a cat id,
+            # for re-entering /resolve), but a field named `stream_id` is
+            # pressed at /api/v1/stream, which parses its token as a ledger
+            # id — echoing the cat handle here 404s exactly like the bundle
+            # did. Mint the ledger handle; a row with no ledger id has none.
+            stream_handle = _ledger_stream_handle(conn, int(link_id), secret)
             json_response(handler, redact.scrub(deny_flag_keys({
                 "ok": True,
                 "link_ref": issued,
-                "stream_id": issued,
+                "stream_id": stream_handle,
                 "kind": "url",
                 "mime_type": payload.get("mime_type"),
                 "file_size_bytes": payload.get("file_size_bytes"),

@@ -1181,7 +1181,17 @@ class V2ProvenanceTests(V2WireFixture):
         # The key a competitor would mirror as their own catalog id is a handle.
         self.assertEqual(redact.parse_token(json_form.json["link_ref"], self.secret,
                                            signed_only=True), self.public_link_id)
-        self.assertEqual(json_form.json["link_ref"], json_form.json["stream_id"])
+        # Session 111: `stream_id` is a v1 handle, so it parses to the ledger
+        # row — not to the cat row `link_ref` names. The two coincide in this
+        # fixture (projection and ingest both numbered from 1), so the
+        # distinguishing proof lives in test_bundle_handles.py; this pins
+        # the contract each handle carries.
+        ledger_id = self._one(
+            "SELECT ledger_link_id FROM cat_links WHERE id = ?",
+            (self.public_link_id,))
+        self.assertEqual(redact.parse_token(json_form.json["stream_id"],
+                                           self.secret, signed_only=True),
+                         ledger_id)
 
 
 # ── 3. opaque handles ────────────────────────────────────────────────────────
@@ -1228,7 +1238,16 @@ class V2OpaqueHandleTests(V2WireFixture):
         # A static copy answers 200 and names itself and nothing else.
         self.assertEqual(own.status, 200)
         self.assertEqual(own.json["link_ref"], own_handle)
-        self.assertEqual(own.json["stream_id"], own_handle)
+        # Session 111: the resolve answer's `stream_id` is a v1-stream
+        # handle (ledger id), not a second copy of the cat-id `link_ref`.
+        # It coincides with `own_handle` in this fixture only because the
+        # projection and the ingest both numbered from 1 — see
+        # test_bundle_handles.py for the proof when they diverge.
+        ledger_id = self._one(
+            "SELECT ledger_link_id FROM cat_links WHERE id = ?",
+            (self.public_link_id,))
+        self.assertEqual(redact.parse_token(own.json["stream_id"], self.secret,
+                                           signed_only=True), ledger_id)
         self.assertNotEqual(own_handle, page_handle)
         # The hoster page is `resolve_required` (§8.2): with no upstream to unwrap,
         # §16.4 makes that an honest 409 on our own code list — never a fake 200 and
@@ -1276,6 +1295,15 @@ class V2OpaqueHandleTests(V2WireFixture):
             self.assertIsNotNone(resolved)
             self.assertEqual(resolved, link["link_id"],
                               "the handle is not the link the bundle named")
+            # Session 111: the bundle handle is a v1-stream handle, so it
+            # must also name the ledger row — the two ids coincide in this
+            # fixture, and test_bundle_handles.py proves the mint when they
+            # diverge (a rebuild renumbers cat ids; ledger ids keep growing).
+            ledger_id = self._one(
+                "SELECT ledger_link_id FROM cat_links WHERE id = ?",
+                (link["link_id"],))
+            self.assertEqual(resolved, ledger_id,
+                             "the bundle handle must name the ledger row")
             again = self.get(f"/api/v2/resolve/{handle}", {"redirect": "0"})
             # A copy that needs a live unwrap (§8.2) answers 409 when there is no
             # upstream to unwrap — §16.4's honest failure. What must never happen is

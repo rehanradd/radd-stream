@@ -21,6 +21,7 @@ name: 🐍 Backend CI — Stdlib Python Tests
 #     - Fast_Fetch/test_redact.py            (deny-by-default provenance edge)
 #     - Fast_Fetch/test_tiers.py             (one winner per quality band)
 #     - Fast_Fetch/test_catalog_api.py       (v1 read layer)
+#     - Fast_Fetch/test_bundle_handles.py    (Session 111: bundle handles name ledger rows)
 #     - Fast_Fetch/test_provenance_stamping.py(ingest-time provenance)
 #     - Fast_Fetch/test_merge_catalogs.py    (staging → unified merge)
 #     - Fast_Fetch/test_site_scout.py        (site discovery / spec phases)
@@ -187,6 +188,13 @@ jobs:
 
       - name: 🧪 test_catalog_api.py
         run: python3 -S Fast_Fetch/test_catalog_api.py
+
+      # Session 111: a v2 bundle handle names a ledger row, never the
+      # projected cat id — the bundle's own handle pressed through a real
+      # /api/v1/stream socket server (loopback media file, real resolver),
+      # plus the NULL-ledger shape and the /resolve + /feed.m3u guards.
+      - name: 🧪 test_bundle_handles.py
+        run: python3 -S Fast_Fetch/test_bundle_handles.py
 
       - name: 🧪 test_provenance_stamping.py
         run: python3 -S Fast_Fetch/test_provenance_stamping.py

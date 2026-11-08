@@ -681,6 +681,23 @@ def _link_view(row, evidence: dict | None, secret: str = "") -> dict:
     """
     link = _as_dict(row)
     measured = evidence or {}
+    # Session 111: the handle a client presses is a v1-stream handle, and
+    # `/api/v1/stream` parses its token as a `download_sources` id — so it
+    # must be minted from `ledger_link_id`, never from this row's own
+    # (projected) id. Minting the cat id 404s whenever the projection
+    # renumbered the link, which is the norm after a rebuild (live
+    # 2026-11-08: work_id 54221's bundle minted cat 1915585, no ledger
+    # row 1915585 exists, all five handles 404'd while the copies behind
+    # ledger rows 903161+ pressed 302). A row with no ledger id has no
+    # pressable stream handle: `None`, and the link is not playable from
+    # this bundle — the v2 `/resolve` route can still reach it by URL, but
+    # this view's handle cannot, so it must not win a play tier either.
+    ledger_id = link.get("ledger_link_id")
+    if ledger_id is not None:
+        stream_id = (redact.mint_token(int(ledger_id), secret) if secret
+                     else str(int(ledger_id)))
+    else:
+        stream_id = None
     speed = measured.get("speed_mbps")
     if speed is None:
         speed = link.get("speed_mbps")
@@ -700,7 +717,7 @@ def _link_view(row, evidence: dict | None, secret: str = "") -> dict:
         "link_id": link["id"],
         "release_id": link["release_id"],
         "work_id": link["work_id"],
-        "stream_id": (redact.mint_token(link["id"], secret) if secret else str(link["id"])),
+        "stream_id": stream_id,
         "label": "Fast direct" if resumable else "Standard",
         "kind": link.get("kind"),
         "playability": link.get("playability"),
@@ -710,7 +727,12 @@ def _link_view(row, evidence: dict | None, secret: str = "") -> dict:
         # Audit critical 10: an expired signed link 403s like a dead one, so one
         # dict may no longer say `playable` here and `dead` below — the verdict
         # shared with the scorer is `tiers.UNPLAYABLE_STATES`.
-        "playable": _link_group(row) <= _GROUP_RESOLVE and state not in tiers.UNPLAYABLE_STATES,
+        # Session 111: a row with no ledger id has no stream handle, so the
+        # player cannot start it from this bundle at all — it is not
+        # playable here, whatever its group and state claim.
+        "playable": (_link_group(row) <= _GROUP_RESOLVE
+                     and state not in tiers.UNPLAYABLE_STATES
+                     and ledger_id is not None),
         "group": _link_group(row),
         "state": state,
         "dead": state not in ("active", "unknown", "unchecked"),
