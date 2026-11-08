@@ -352,8 +352,12 @@ def _sort_expr(sort: str) -> str:
                      " + ROUND(COALESCE(w.imdb_rating, 0) * 4, 2)"
                      " + MIN(COALESCE(w.episode_count, 0), 100))"),
         # newest = year first, then the scrape timestamp, so a 2026 title cannot be
-        # beaten by a fresh scrape of a 1998 film.
-        "newest": ("(CAST(COALESCE(w.year, 0) AS INTEGER) * 10000000000"
+        # beaten by a fresh scrape of a 1998 film. The year is clamped the same
+        # way the v1 list clamps it: a scraped year outside 1900..next-year is
+        # junk ("Cyberpunk 2077" reads as 2077) and counts as unknown, last.
+        "newest": ("(CAST(CASE WHEN COALESCE(w.year, 0) BETWEEN 1900"
+                   " AND CAST(strftime('%Y', 'now') AS INTEGER) + 1"
+                   " THEN COALESCE(w.year, 0) ELSE 0 END AS INTEGER) * 10000000000"
                    " + CAST(COALESCE(w.first_seen_at, 0) AS INTEGER))"),
         "quality": "COALESCE(w.best_quality_score, 0)",
         "rating": "ROUND(COALESCE(w.imdb_rating, 0), 2)",

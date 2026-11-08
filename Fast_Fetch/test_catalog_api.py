@@ -422,6 +422,23 @@ class BrowseTests(CatalogApiTestCase):
         self.assertEqual(years, sorted(years, key=lambda y: (y or 0), reverse=True))
         self.assertEqual(page["items"][0]["year"], 2024)
 
+    def test_newest_clamps_junk_and_missing_years_to_the_tail(self):
+        """Session 115: a scraped year outside 1900..next-year is junk, not
+        the newest title — 2099 sorts with the missing years, last, and the
+        clamped sequence stays non-increasing."""
+        self.add_post("site_a", "https://site-a.example/junk-2099/",
+                      clean_title="Junk 2099", year=2099, releases=[{}])
+        self.add_post("site_a", "https://site-a.example/no-year/",
+                      clean_title="No Year", year=None, releases=[{}])
+        self.project()
+        page = catalog_api.browse(self.conn, sort="newest", limit=100)
+        self.assertTrue(page["ok"], page)
+        years = [item["year"] for item in page["items"]]
+        self.assertEqual(page["items"][0]["year"], 2024)
+        self.assertEqual(set(years[-2:]), {2099, None})
+        clamped = [y if (y and 1900 <= y <= 2027) else 0 for y in years]
+        self.assertEqual(clamped, sorted(clamped, reverse=True))
+
     def test_quality_sort_is_descending_best_quality_score(self):
         page = catalog_api.browse(self.conn, sort="quality", limit=100)
         scores = [item["best_quality_score"] for item in page["items"]]

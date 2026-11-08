@@ -3567,6 +3567,47 @@ seg-00002.ts
             self.assertEqual(rated[:3], ["Anime Horror", "Bolly Action", "Holly Four"])
             self.assertEqual(rated[-1], "South Drama")  # no rating sorts last
 
+    def test_api_v1_list_defaults_to_newest_first(self):
+        """Session 115: the list walks down through time — 2026, then 2025,
+        2024, ... — with rows that carry no usable year last, never first.
+        The default and the explicit `sort=newest` agree, and the old sorts
+        keep their own orders (title alphabetical, trending by counts)."""
+        seed = [
+            ("Zulu 2026", 2026), ("Alpha 2025", 2025), ("Mike 2000", 2000),
+            ("Kilo 1999", 1999), ("NoYear", None), ("ZeroYear", 0),
+            ("Junk 2099", 2099),
+        ]
+        for title, year in seed:
+            fast_fetch.save_scraped_data(
+                self.media("site_a", f"https://site-a.example/{title.lower()}/",
+                           title=f"{title} ({year})" if year else title,
+                           clean_title=title, year=year))
+
+        with patch.object(viewer, "DB_PATH", self.db_path):
+            default = viewer.api_v1_get_posts(limit=10)["results"]
+            self.assertEqual(len(default), 7)
+            self.assertEqual([r["year"] for r in default[:4]],
+                             [2026, 2025, 2000, 1999])
+            self.assertEqual({r["year"] for r in default[4:]},
+                             {None, 0, 2099})
+
+            newest = viewer.api_v1_get_posts(limit=10, sort="newest")["results"]
+            self.assertEqual([r["clean_title"] for r in newest],
+                             [r["clean_title"] for r in default])
+
+            titled = viewer.api_v1_get_posts(limit=10, sort="title")["results"]
+            self.assertEqual(
+                [r["clean_title"] for r in titled],
+                ["Alpha 2025", "Junk 2099", "Kilo 1999", "Mike 2000",
+                 "NoYear", "ZeroYear", "Zulu 2026"])
+
+            # One release and one source each, so trending ties everywhere
+            # and falls back to id DESC — the reverse of the seed order.
+            trending = viewer.api_v1_get_posts(limit=10, sort="trending")["results"]
+            self.assertEqual(
+                [r["clean_title"] for r in trending],
+                [title for title, _ in reversed(seed)])
+
     def test_api_v1_list_reports_whether_a_work_has_a_subtitled_print(self):
         """The tile's Subtitled chip needs one answer per work, and the label grammar owns
         the vocabulary. `subtitled` is that grammar's verdict — a work whose prints never

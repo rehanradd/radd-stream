@@ -10,14 +10,20 @@ it stays correct whatever the next person's box has cached.
 
 The claim being pinned is narrow and it is not "search is fast":
 
-* `api_v1_get_posts` issues **two** full passes over `posts` per request — the
-  exact-total `COUNT(*)` and the paged list — and neither can use an index,
-  because `LIKE '%inception%'` has a leading wildcard. No index removes a
-  leading-wildcard scan; only a different index *structure* (FTS5) does.
+* `api_v1_get_posts` issues **two** full passes over `posts` per request for
+  the old sorts — the exact-total `COUNT(*)` and the paged list — and neither
+  can use an index, because `LIKE '%inception%'` has a leading wildcard. No
+  index removes a leading-wildcard scan; only a different index *structure*
+  (FTS5) does. The default sort (`newest`, Session 115) adds a third, narrow
+  pass: the page's ids from `posts` alone, ordered by the clamped year. That
+  pass DOES sort a temp B-tree, by design — it sorts only ids and years, no
+  joins, ~0.33s on the live catalog — and it is what keeps the paged statement
+  from grouping all ~135k public posts before sorting (~4.8s live).
 * With the default sort the paged statement does NOT sort a temp B-tree, so a
   slow `q=inception` is not an `ORDER BY` problem either. With `sort=trending`
   it does, and that is the one case where the old by-media shape's defect is
-  reproduced here.
+  reproduced here. The unknown-sort statement (`ORDER BY p.id DESC`) is the
+  same shape as the old default and also builds no order B-tree.
 * `q=a` and `q=%` are accepted and answered. A one-letter query scans the whole
   ledger to return twenty rows, and `%` is interpolated into the pattern
   unescaped, so two keystrokes can ask for every row in the catalog.
@@ -38,11 +44,39 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import catalog_v2  # noqa: E402
 
 #: The statement `viewer.api_v1_get_posts` builds for `q=…` with the default sort,
-#: transcribed from `Fast_Fetch/viewer.py:2636-2652` (the `total` read and the
-#: paged read). Kept as data so the plan is asserted, not remembered.
+#: transcribed from `Fast_Fetch/viewer.py` (`api_v1_get_posts`, the `total` read and
+#: the paged read). Kept as data so the plan is asserted, not remembered.
 TOTAL_SQL = ("SELECT COUNT(*) FROM posts p"
              " WHERE COALESCE(p.is_18_plus,0)=0"
              " AND (p.clean_title LIKE ? OR p.title LIKE ? OR p.slug LIKE ?)")
+
+#: Step 1 of the default (`newest`, Session 115) path: the page's ids from
+#: `posts` alone, ordered by the clamped year. The clamp is transcribed from
+#: `viewer._NEWEST_YEAR_SQL`.
+NEWEST_IDS_SQL = ("SELECT p.id FROM posts p"
+                  " WHERE COALESCE(p.is_18_plus,0)=0"
+                  " AND (p.clean_title LIKE ? OR p.title LIKE ? OR p.slug LIKE ?)"
+                  " ORDER BY CASE WHEN p.year BETWEEN 1900"
+                  " AND CAST(strftime('%Y', 'now') AS INTEGER) + 1"
+                  " THEN p.year ELSE 0 END DESC, p.id DESC LIMIT ? OFFSET ?")
+
+#: Step 2 of the default path: the page's counts, for just those ids — no
+#: ORDER BY and no LIMIT, because the page is already exactly these ids and
+#: the order is imposed in Python.
+PAGED_NEWEST_SQL = """
+    SELECT p.id, p.clean_title, p.title, p.year, p.content_type, p.seasons,
+           p.poster_url, p.backdrop_urls, p.imdb_rating, p.imdb_id, p.tmdb_id,
+           p.genres, p.is_animated, p.industry, p.country, p.language,
+           COUNT(DISTINCT r.id) as release_count,
+           COUNT(DISTINCT s.id) as source_count
+    FROM posts p
+    LEFT JOIN releases r ON r.post_id = p.id
+    LEFT JOIN download_sources s ON s.release_id = r.id
+    WHERE COALESCE(p.is_18_plus,0)=0
+      AND (p.clean_title LIKE ? OR p.title LIKE ? OR p.slug LIKE ?)
+      AND p.id IN (?,?,?)
+    GROUP BY p.id
+"""
 
 PAGED_SQL = """
     SELECT p.id, p.clean_title, p.title, p.year, p.content_type, p.seasons,
@@ -137,8 +171,30 @@ class _Fixture(unittest.TestCase):
 
 
 class TestCostIsTheScan(_Fixture):
-    def test_the_route_makes_two_full_passes_over_posts_per_request(self):
-        """One for `total`, one for the page. Both say `SCAN p`.
+    def test_the_default_route_makes_three_passes_and_only_the_narrow_one_sorts(self):
+        """The default sort (`newest`, Session 115) is total + narrow ids +
+        page. The ids pass is the only one that sorts a temp B-tree, and it
+        sorts only ids and years — no joins — which is what keeps the page
+        from grouping all ~135k posts before sorting (~4.8s live). The page
+        pass reaches its rows by primary key and carries no ORDER BY at all.
+        """
+        self.seed("Inception")
+        self.seed("Inception Two")
+        self.seed("Inception Three")
+        total_plan = self.plan(TOTAL_SQL, ["%inception%"] * 3)
+        ids_plan = self.plan(NEWEST_IDS_SQL, ["%inception%"] * 3 + [20, 0])
+        # EXPLAIN never executes, so the ids need not exist — three literals
+        # stand in for the page's id list.
+        paged_plan = self.plan(PAGED_NEWEST_SQL, ["%inception%"] * 3 + [1, 2, 3])
+        self.assertIn("SCAN p", total_plan, total_plan)
+        self.assertIn("SCAN p", ids_plan, ids_plan)
+        self.assertIn("USE TEMP B-TREE FOR ORDER BY", ids_plan, ids_plan)
+        self.assertIn("SEARCH p USING INTEGER PRIMARY KEY", paged_plan, paged_plan)
+        self.assertNotIn("USE TEMP B-TREE FOR ORDER BY", paged_plan, paged_plan)
+
+    def test_the_old_sorts_still_make_two_full_passes_over_posts(self):
+        """The non-newest sorts keep the old shape: one pass for `total`, one
+        for the page, both `SCAN p`.
 
         This is the sentence the earlier report got wrong: there is no missing
         index to add here, and an index cannot serve a leading-wildcard `LIKE`.
@@ -167,11 +223,17 @@ class TestCostIsTheScan(_Fixture):
         self.assertIn("SEARCH r USING COVERING INDEX idx_releases_post", plan, plan)
         self.assertIn("SEARCH s USING COVERING INDEX idx_sources_rel", plan, plan)
 
-    def test_the_default_sort_does_not_build_an_order_btree_but_trending_does(self):
+    def test_no_paged_statement_builds_an_order_btree_but_trending_does(self):
+        """The unknown-sort statement keeps the old id-DESC shape (no order
+        B-tree); the newest page statement has no ORDER BY at all (the order
+        is imposed in Python); trending still pays the temp B-tree."""
         self.seed("Inception")
         plain = self.plan(PAGED_SQL.format(order=DEFAULT_ORDER),
                           ["%inception%"] * 3 + [20, 0])
         self.assertNotIn("USE TEMP B-TREE FOR ORDER BY", plain, plain)
+        newest = self.plan(PAGED_NEWEST_SQL,
+                           ["%inception%"] * 3 + [1, 1, 1])
+        self.assertNotIn("USE TEMP B-TREE FOR ORDER BY", newest, newest)
         trending = self.plan(PAGED_SQL.format(order=TRENDING_ORDER),
                              ["%inception%"] * 3 + [20, 0])
         self.assertIn("USE TEMP B-TREE FOR ORDER BY", trending, trending)

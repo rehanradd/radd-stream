@@ -3022,6 +3022,19 @@ def _resolve_work_ref(conn, work_ref: str):
     return None
 
 
+#: The year a title actually came out, as the list should walk it. Scraped
+#: years are dirty — 2099, 2077 and 2067 all sit in the live ledger, mostly
+#: titles that swallowed a wrong number ("Cyberpunk 2077") — and a missing
+#: year is NULL or 0, so the raw value cannot be trusted as an order key.
+#: A year outside 1900..next-year counts as unknown and sorts with the
+#: missing years, last. `strftime` keeps the ceiling current without a
+#: code change every January.
+_NEWEST_YEAR_SQL = (
+    "CASE WHEN p.year BETWEEN 1900 AND CAST(strftime('%Y', 'now') AS INTEGER) + 1 "
+    "THEN p.year ELSE 0 END"
+)
+
+
 def api_v1_get_posts(query: str = "", content_type: str = "", page: int = 1,
                      limit: int = 20, full: bool = False,
                      base_url: str = "", industry: str = "", genre: str = "",
@@ -3152,6 +3165,13 @@ def api_v1_get_posts(query: str = "", content_type: str = "", page: int = 1,
                          " p.id DESC")
         elif sort_key == "trending":
             order_sql = "(release_count + source_count) DESC, p.id DESC"
+        elif sort_key in ("", "newest"):
+            # Newest-first is the default: the list walks down through time.
+            # `None` marks the two-step path below — a one-query ORDER BY
+            # year over the joined, grouped page must group all ~135k public
+            # posts before sorting (~4.8s live), so the order is resolved
+            # from `posts` alone first and imposed in Python.
+            order_sql = None
         else:
             order_sql = "p.id DESC"
 
@@ -3187,26 +3207,54 @@ def api_v1_get_posts(query: str = "", content_type: str = "", page: int = 1,
                     params).fetchone()[0]
                 fuzzy = True
 
+        newest_ids = None
+        if order_sql is None:
+            # Step 1 — the page's ids, newest first, from `posts` alone.
+            # Every clause in `where_sql` names only `p.*` or a
+            # self-contained EXISTS, so no join is needed here; measured
+            # ~0.33s on the live catalog (page 1) against ~4.8s for the
+            # one-query shape, and no new index is needed.
+            newest_rows = conn.execute(
+                f"SELECT p.id FROM posts p WHERE {where_sql} "
+                f"ORDER BY {_NEWEST_YEAR_SQL} DESC, p.id DESC LIMIT ? OFFSET ?",
+                params + [limit + 1, offset]).fetchall()
+            newest_ids = [int(r["id"]) for r in newest_rows[:limit]]
+            if not newest_ids:
+                return {
+                    "page": page,
+                    "limit": limit,
+                    "total": total,
+                    "total_pages": max(1, (total + limit - 1) // limit),
+                    "results": [],
+                    "fuzzy": fuzzy,
+                }
+
         # `p.source_site`, `p.url` and `p.slug` used to be selected here: the site
         # it came from and the page we took it off. Both are our bookkeeping, so
         # only the loopback port asks for them (`full`).
         provenance_cols = ", p.source_site, p.url, p.slug" if full else ""
-        sql = f"""
-            SELECT p.id, p.clean_title, p.title, p.year, p.content_type, p.seasons,
-                   p.poster_url, p.backdrop_urls, p.imdb_rating, p.imdb_id, p.tmdb_id,
-                   p.genres, p.is_animated,
-                   p.industry, p.country, p.language{provenance_cols},
-                   COUNT(DISTINCT r.id) as release_count,
-                   COUNT(DISTINCT s.id) as source_count
-            FROM posts p
-            LEFT JOIN releases r ON r.post_id = p.id
-            LEFT JOIN download_sources s ON s.release_id = r.id
-            WHERE {where_sql}
-            GROUP BY p.id
-            ORDER BY {order_sql}
-            LIMIT ? OFFSET ?
-        """
-        rows = conn.execute(sql, params + [limit, offset]).fetchall()
+        select_sql = (
+            "SELECT p.id, p.clean_title, p.title, p.year, p.content_type, p.seasons,"
+            " p.poster_url, p.backdrop_urls, p.imdb_rating, p.imdb_id, p.tmdb_id,"
+            " p.genres, p.is_animated,"
+            f" p.industry, p.country, p.language{provenance_cols},"
+            " COUNT(DISTINCT r.id) as release_count,"
+            " COUNT(DISTINCT s.id) as source_count"
+            " FROM posts p"
+            " LEFT JOIN releases r ON r.post_id = p.id"
+            " LEFT JOIN download_sources s ON s.release_id = r.id"
+        )
+        if newest_ids is not None:
+            # Step 2 — counts for just this page, by id. No ORDER BY and no
+            # LIMIT here: the page is already exactly these ids, and the
+            # order is imposed in Python below.
+            sql = (select_sql + f" WHERE {where_sql} AND p.id IN ("
+                   + ", ".join("?" for _ in newest_ids) + ") GROUP BY p.id")
+            rows = conn.execute(sql, params + newest_ids).fetchall()
+        else:
+            sql = (select_sql + f" WHERE {where_sql} GROUP BY p.id"
+                   f" ORDER BY {order_sql} LIMIT ? OFFSET ?")
+            rows = conn.execute(sql, params + [limit, offset]).fetchall()
         results = []
         subtitled = {} if full else _subtitled_posts(conn, [r["id"] for r in rows])
         for r in rows:
@@ -3218,6 +3266,12 @@ def api_v1_get_posts(query: str = "", content_type: str = "", page: int = 1,
             item["work_ref"] = _work_ref(r)
             item["subtitled"] = bool(subtitled.get(int(r["id"]), False))
             results.append(item)
+        if newest_ids is not None:
+            # The page query fetched by id, so impose the step-1 order here.
+            by_id = {}
+            for item in results:
+                by_id[int(item["id"])] = item
+            results = [by_id[i] for i in newest_ids if i in by_id]
         total_pages = max(1, (total + limit - 1) // limit)
         return {
             "page": page,
