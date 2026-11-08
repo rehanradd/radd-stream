@@ -20,6 +20,7 @@ request fails the run instead of passing it.
 from __future__ import annotations
 
 import io
+import base64
 import json
 import runpy
 import socket
@@ -213,14 +214,14 @@ class FakeResponse:
 
 def scripted_fetch(script):
     """
-    A `fetch(url, headers, timeout, method, follow)` stand-in.
+    A `fetch(url, headers, timeout, method, follow, data)` stand-in.
 
     `script` maps a URL (or the substring a URL must contain) to either a
     (status, body, headers) triple or an Exception to raise.
     """
     calls = []
 
-    def fetch(url, headers=None, timeout=None, method="GET", follow=True):
+    def fetch(url, headers=None, timeout=None, method="GET", follow=True, data=None):
         calls.append((url, headers or {}, method))
         for key, value in script.items():
             if key in url:
@@ -980,6 +981,345 @@ class TestUnwrapPkembed(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# Vidbolt & Vibuxer
+# ---------------------------------------------------------------------------
+
+class TestVidboltRecognition(unittest.TestCase):
+    def test_movie_url_is_recognized(self):
+        self.assertTrue(hr.is_vidbolt_embed("https://vidbolt.xyz/movie/550"))
+        self.assertTrue(hr.is_vidbolt_embed("https://vidbolt.xyz/embed/movie/550"))
+        self.assertTrue(hr.is_vidbolt_embed("https://vidbolt.pro/movie/550"))
+
+    def test_tv_url_is_recognized(self):
+        self.assertTrue(hr.is_vidbolt_embed("https://vidbolt.xyz/tv/194718/1/1"))
+        self.assertTrue(hr.is_vidbolt_embed("https://vidbolt.xyz/embed/tv/194718/1/1"))
+
+    def test_invalid_url_is_rejected(self):
+        self.assertFalse(hr.is_vidbolt_embed("https://vidbolt.xyz/"))
+        self.assertFalse(hr.is_vidbolt_embed("https://vidbolt.xyz/about"))
+        self.assertFalse(hr.is_vidbolt_embed("https://evilvidbolt.xyz/movie/550"))
+
+    def test_url_parser_extracts_content_keys(self):
+        movie = hr.vidbolt_parse_url("https://vidbolt.xyz/movie/550")
+        self.assertEqual(movie, {"type": "movie", "tmdb_id": "550", "season": None, "episode": None})
+        tv = hr.vidbolt_parse_url("https://vidbolt.xyz/tv/194718/2/5")
+        self.assertEqual(tv, {"type": "tv", "tmdb_id": "194718", "season": "2", "episode": "5"})
+
+
+class TestVibuxerRecognition(unittest.TestCase):
+    def test_embed_url_is_recognized(self):
+        self.assertTrue(hr.is_vibuxer_embed("https://vibuxer.com/e/i4p45adamelv"))
+        self.assertTrue(hr.is_vibuxer_embed("https://vibuxer.com/embed/i4p45adamelv"))
+        # DB row may have a tab character before path
+        self.assertTrue(hr.is_vibuxer_embed("https://vibuxer.com\t/e/i4p45adamelv"))
+
+    def test_invalid_url_is_rejected(self):
+        self.assertFalse(hr.is_vibuxer_embed("https://vibuxer.com/"))
+        self.assertFalse(hr.is_vibuxer_embed("https://vibuxer.com/login"))
+        self.assertFalse(hr.is_vibuxer_embed("https://evilvibuxer.com/e/i4p45adamelv"))
+
+
+class TestVidriftRecognition(unittest.TestCase):
+    def test_movie_url_is_recognized(self):
+        self.assertTrue(hr.is_vidrift_embed("https://embed.vidrift.net/embed/movie/550"))
+        self.assertTrue(hr.is_vidrift_embed("https://embed.vidrift.net/movie/550"))
+
+    def test_tv_url_is_recognized(self):
+        self.assertTrue(hr.is_vidrift_embed("https://embed.vidrift.net/embed/tv/194718/1/1"))
+        self.assertTrue(hr.is_vidrift_embed("https://embed.vidrift.net/tv/194718/1/1"))
+
+    def test_invalid_url_is_rejected(self):
+        self.assertFalse(hr.is_vidrift_embed("https://embed.vidrift.net/"))
+        self.assertFalse(hr.is_vidrift_embed("https://embed.vidrift.net/about"))
+        self.assertFalse(hr.is_vidrift_embed("https://fakevidrift.net/movie/550"))
+
+    def test_url_parser_extracts_content_keys(self):
+        movie = hr.vidrift_parse_url("https://embed.vidrift.net/embed/movie/550")
+        self.assertEqual(movie, {"type": "movie", "tmdb_id": "550", "season": None, "episode": None})
+        tv = hr.vidrift_parse_url("https://embed.vidrift.net/embed/tv/194718/2/5")
+        self.assertEqual(tv, {"type": "tv", "tmdb_id": "194718", "season": "2", "episode": "5"})
+
+
+class TestIqsmartRecognition(unittest.TestCase):
+    def test_movie_url_is_recognized(self):
+        self.assertTrue(hr.is_iqsmart_embed("https://streams.iqsmartgames.com/embed/movie/tt35786199?key=abc"))
+        self.assertTrue(hr.is_iqsmart_embed("https://streams.iqsmartgames.com/embed/movie/12345?key=abc"))
+
+    def test_tv_url_is_recognized(self):
+        self.assertTrue(hr.is_iqsmart_embed("https://streams.iqsmartgames.com/embed/tv/139512/2/2?key=abc"))
+
+    def test_invalid_url_is_rejected(self):
+        self.assertFalse(hr.is_iqsmart_embed("https://streams.iqsmartgames.com/"))
+        self.assertFalse(hr.is_iqsmart_embed("https://fakegames.com/embed/movie/123"))
+
+    def test_url_parser_extracts_content_keys(self):
+        movie = hr.iqsmart_parse_url("https://streams.iqsmartgames.com/embed/movie/tt35786199?key=mykey")
+        self.assertEqual(movie, {"type": "movie", "id": "tt35786199", "season": None, "episode": None, "key": "mykey"})
+        tv = hr.iqsmart_parse_url("https://streams.iqsmartgames.com/embed/tv/139512/2/3?key=mykey")
+        self.assertEqual(tv, {"type": "tv", "id": "139512", "season": "2", "episode": "3", "key": "mykey"})
+
+
+class TestFilmuRecognition(unittest.TestCase):
+    def test_filmu_url_is_recognized(self):
+        self.assertTrue(hr.is_filmu_embed("https://embed.filmu.in/movie/550"))
+        self.assertTrue(hr.is_filmu_embed("https://embed.filmu.in/tv/194718/1/1"))
+
+    def test_vidly_url_is_recognized(self):
+        self.assertTrue(hr.is_filmu_embed("https://vidly.pro/movie/550"))
+        self.assertTrue(hr.is_filmu_embed("https://vidly.pro/tv/194718/1/1"))
+
+    def test_invalid_url_is_rejected(self):
+        self.assertFalse(hr.is_filmu_embed("https://embed.filmu.in/"))
+        self.assertFalse(hr.is_filmu_embed("https://evilfilmu.in/movie/550"))
+
+
+class TestCineverseRecognition(unittest.TestCase):
+    def test_movie_url_is_recognized(self):
+        self.assertTrue(hr.is_cineverse_embed("https://rozgarlelo.modiplay.xyz/embed/tmdb/movie?id=550"))
+
+    def test_tv_url_is_recognized(self):
+        self.assertTrue(hr.is_cineverse_embed("https://rozgarlelo.modiplay.xyz/embed/tmdb/tv?id=194718&s=1&e=1"))
+
+    def test_invalid_url_is_rejected(self):
+        self.assertFalse(hr.is_cineverse_embed("https://rozgarlelo.modiplay.xyz/"))
+        self.assertFalse(hr.is_cineverse_embed("https://fakemodiplay.xyz/embed/tmdb/movie?id=550"))
+
+
+class TestVidboltUnpack(unittest.TestCase):
+    def test_movie_resolve_active(self):
+        api_resp = json.dumps({
+            "stream": {
+                "server": "orion",
+                "sources": [
+                    {"url": "https://cdn.example.com/stream.m3u8", "kind": "hls", "quality": "1080p"}
+                ]
+            }
+        }).encode("utf-8")
+        fetch = scripted_fetch({
+            "api/resolve": (200, api_resp, {"content-type": "application/json"}),
+            "stream.m3u8": (200, b"#EXTM3U\n#EXT-X-VERSION:3", {"content-type": "application/vnd.apple.mpegurl"}),
+        })
+        verdict = hr.unwrap_vidbolt("https://vidbolt.xyz/movie/550", fetch=fetch)
+        self.assertEqual(verdict["status"], "active")
+        self.assertEqual(verdict["service"], "vidbolt")
+        self.assertEqual(verdict["final_url"], "https://cdn.example.com/stream.m3u8")
+        self.assertEqual(verdict["expires_in"], hr.VIDBOLT_DEFAULT_EXPIRY_SECONDS)
+
+    def test_empty_stream_is_dead(self):
+        api_resp = json.dumps({"stream": None}).encode("utf-8")
+        fetch = scripted_fetch({
+            "api/resolve": (200, api_resp, {"content-type": "application/json"}),
+        })
+        verdict = hr.unwrap_vidbolt("https://vidbolt.xyz/movie/999999", fetch=fetch)
+        self.assertEqual(verdict["status"], "dead")
+        self.assertIn("returned no stream", json.dumps(verdict["notes"]))
+
+
+class TestVibuxerUnpack(unittest.TestCase):
+    def test_full_chain_active(self):
+        packed = (
+            "eval(function(p,a,c,k,e,d){e=function(c){return c};if(!''.replace(/^/,String)){w..."
+            "}('1.2=\"https://cdn.example.com/hls/master.m3u8?s=1794021195&e=129600\";',10,3,"
+            "'|var|links'.split('|'),0,{}))"
+        )
+        html = f"<html><body><script>{packed}</script></body></html>"
+        fetch = scripted_fetch({
+            "vibuxer.com/e/": (200, html, {"content-type": "text/html"}),
+            "master.m3u8": (200, b"#EXTM3U\n#EXT-X-STREAM-INF\nv.m3u8", {"content-type": "application/vnd.apple.mpegurl"}),
+        })
+        verdict = hr.unwrap_vibuxer("https://vibuxer.com/e/i4p45adamelv", fetch=fetch)
+        self.assertEqual(verdict["status"], "active")
+        self.assertEqual(verdict["service"], "vibuxer")
+        self.assertEqual(verdict["final_url"], "https://cdn.example.com/hls/master.m3u8?s=1794021195&e=129600")
+        self.assertAlmostEqual(verdict["expires_in"], (1794021195 + 129600) - time.time(), delta=10)
+
+    def test_no_m3u8_in_script_is_unknown(self):
+        packed = (
+            "eval(function(p,a,c,k,e,d){e=function(c){return c};if(!''.replace(/^/,String)){w..."
+            "}('1.2=\"no video\";',10,3,'|var|links'.split('|'),0,{}))"
+        )
+        html = f"<html><body><script>{packed}</script></body></html>"
+        fetch = scripted_fetch({
+            "vibuxer.com/e/": (200, html, {"content-type": "text/html"}),
+        })
+        verdict = hr.unwrap_vibuxer("https://vibuxer.com/e/i4p45adamelv", fetch=fetch)
+        self.assertEqual(verdict["status"], "unknown")
+        self.assertIn("publishes no m3u8", json.dumps(verdict["notes"]))
+
+
+class TestVidriftUnpack(unittest.TestCase):
+    def test_movie_resolve_active(self):
+        page_html = """
+        <html><body>
+        <script>
+        var embedMeta = {
+            "tmdbId": "550",
+            "type": "movie",
+            "orionStreams": [
+                {"url": "/api/orion/abc123hash/master.m3u8?s=123&e=456", "type": "hls", "name": "Orion · Original"}
+            ],
+            "bigbangSubtitles": [{"label": "English", "url": "/sub.vtt"}]
+        };
+        </script>
+        </body></html>
+        """
+        fetch = scripted_fetch({
+            "embed/movie/550": (200, page_html, {"content-type": "text/html"}),
+            "master.m3u8": (200, b"#EXTM3U\n#EXT-X-VERSION:3", {"content-type": "application/vnd.apple.mpegurl"}),
+        })
+        verdict = hr.unwrap_vidrift("https://embed.vidrift.net/embed/movie/550", fetch=fetch)
+        self.assertEqual(verdict["status"], "active")
+        self.assertEqual(verdict["service"], "vidrift")
+        self.assertEqual(verdict["final_url"], "https://embed.vidrift.net/api/orion/abc123hash/master.m3u8?s=123&e=456")
+        self.assertEqual(len(verdict["subtitles"]), 1)
+
+    def test_empty_streams_is_dead(self):
+        page_html = '<html><script>var embedMeta = {"orionStreams": []};</script></html>'
+        fetch = scripted_fetch({
+            "embed/movie/999": (200, page_html, {"content-type": "text/html"}),
+        })
+        verdict = hr.unwrap_vidrift("https://embed.vidrift.net/embed/movie/999", fetch=fetch)
+        self.assertEqual(verdict["status"], "dead")
+        self.assertIn("publishes no active streams", json.dumps(verdict["notes"]))
+
+
+class TestIqsmartUnpack(unittest.TestCase):
+    def test_movie_resolve_active(self):
+        api_resp = json.dumps({"data": [{"fileslug": "slug123"}]}).encode("utf-8")
+        mresult_raw = json.dumps({"smwh": "hanerix_hash"}).encode("utf-8")
+        mresult_b64 = base64.b64encode(mresult_raw).decode("utf-8")
+        helper_resp = json.dumps({"mresult": mresult_b64}).encode("utf-8")
+        han_packed = (
+            "eval(function(p,a,c,k,e,d){e=function(c){return c};if(!''.replace(/^/,String)){w..."
+            "}('1.2=\"https://cdn.example.com/hls/master.m3u8?s=123&e=456\";',10,3,"
+            "'|var|links'.split('|'),0,{}))"
+        )
+        han_html = f"<html><script>{han_packed}</script></html>"
+
+        fetch = scripted_fetch({
+            "mymovieapi": (200, api_resp, {"content-type": "application/json"}),
+            "embedhelper2.php": (200, helper_resp, {"content-type": "application/json"}),
+            "hanerix.com/e/": (200, han_html, {"content-type": "text/html"}),
+            "master.m3u8": (200, b"#EXTM3U\n#EXT-X-VERSION:3", {"content-type": "application/vnd.apple.mpegurl"}),
+        })
+        verdict = hr.unwrap_iqsmart("https://streams.iqsmartgames.com/embed/movie/tt35786199?key=mykey", fetch=fetch)
+        self.assertEqual(verdict["status"], "active")
+        self.assertEqual(verdict["service"], "iqsmart")
+        self.assertEqual(verdict["final_url"], "https://cdn.example.com/hls/master.m3u8?s=123&e=456")
+
+    def test_tv_resolve_active(self):
+        api_resp = json.dumps({"data": [{"fileslug": "slug_tv"}]}).encode("utf-8")
+        mresult_raw = json.dumps({"smwh": "han_tv"}).encode("utf-8")
+        mresult_b64 = base64.b64encode(mresult_raw).decode("utf-8")
+        helper_resp = json.dumps({"mresult": mresult_b64}).encode("utf-8")
+        han_packed = (
+            "eval(function(p,a,c,k,e,d){e=function(c){return c};if(!''.replace(/^/,String)){w..."
+            "}('1.2=\"https://cdn.example.com/hls/tv_master.m3u8?s=123&e=456\";',10,3,"
+            "'|var|links'.split('|'),0,{}))"
+        )
+        han_html = f"<html><script>{han_packed}</script></html>"
+
+        fetch = scripted_fetch({
+            "myseriesapi": (200, api_resp, {"content-type": "application/json"}),
+            "embedhelper2.php": (200, helper_resp, {"content-type": "application/json"}),
+            "hanerix.com/e/": (200, han_html, {"content-type": "text/html"}),
+            "tv_master.m3u8": (200, b"#EXTM3U\n#EXT-X-VERSION:3", {"content-type": "application/vnd.apple.mpegurl"}),
+        })
+        verdict = hr.unwrap_iqsmart("https://streams.iqsmartgames.com/embed/tv/139512/2/2?key=mykey", fetch=fetch)
+        self.assertEqual(verdict["status"], "active")
+        self.assertEqual(verdict["final_url"], "https://cdn.example.com/hls/tv_master.m3u8?s=123&e=456")
+
+    def test_empty_api_is_dead(self):
+        api_resp = json.dumps({"data": []}).encode("utf-8")
+        fetch = scripted_fetch({
+            "mymovieapi": (200, api_resp, {"content-type": "application/json"}),
+        })
+        verdict = hr.unwrap_iqsmart("https://streams.iqsmartgames.com/embed/movie/tt999999?key=mykey", fetch=fetch)
+        self.assertEqual(verdict["status"], "dead")
+
+
+class TestFilmuUnpack(unittest.TestCase):
+    def test_hls_stream_active(self):
+        page_html = (
+            '<html><body>'
+            'var stream = "https://dash-hls-bridge.workers.dev/?url=https%3A%2F%2Fsacdn.example.com%2Fmaster.m3u8\\u0026Policy=abc";'
+            '</body></html>'
+        )
+        fetch = scripted_fetch({
+            "vidly.pro/movie/550": (200, page_html, {"content-type": "text/html"}),
+            "master.m3u8": (200, b"#EXTM3U\n#EXT-X-VERSION:3", {"content-type": "application/vnd.apple.mpegurl"}),
+        })
+        verdict = hr.unwrap_filmu("https://vidly.pro/movie/550", fetch=fetch)
+        self.assertEqual(verdict["status"], "active")
+        self.assertEqual(verdict["service"], "filmu")
+        self.assertEqual(verdict["final_url"], "https://dash-hls-bridge.workers.dev/?url=https%3A%2F%2Fsacdn.example.com%2Fmaster.m3u8&Policy=abc")
+
+    def test_no_stream_is_dead(self):
+        page_html = "<html><body>No stream available</body></html>"
+        fetch = scripted_fetch({
+            "vidly.pro/movie/999": (200, page_html, {"content-type": "text/html"}),
+        })
+        verdict = hr.unwrap_filmu("https://vidly.pro/movie/999", fetch=fetch)
+        self.assertEqual(verdict["status"], "dead")
+
+
+class TestCineverseUnpack(unittest.TestCase):
+    def test_direct_vidrift_active(self):
+        proxy_html = (
+            '<html><script>'
+            'var src="https:\\/\\/embed.vidrift.net\\/api\\/orion\\/abcdef123\\/master.m3u8";'
+            '</script></html>'
+        )
+        fetch = scripted_fetch({
+            "proxy.php": (200, proxy_html, {"content-type": "text/html"}),
+            "master.m3u8": (200, b"#EXTM3U\n#EXT-X-VERSION:3", {"content-type": "application/vnd.apple.mpegurl"}),
+        })
+        verdict = hr.unwrap_cineverse("https://rozgarlelo.modiplay.xyz/embed/tmdb/movie?id=550", fetch=fetch)
+        self.assertEqual(verdict["status"], "active")
+        self.assertEqual(verdict["service"], "cineverse")
+        self.assertEqual(verdict["final_url"], "https://embed.vidrift.net/api/orion/abcdef123/master.m3u8")
+
+    def test_vidbolt_fallback_active(self):
+        proxy_html = (
+            '<html><script>'
+            'var EMBED_URL="https:\\/\\/vidbolt.xyz\\/embed\\/movie\\/550?autoPlay=true";'
+            '</script></html>'
+        )
+        vb_api = json.dumps({
+            "stream": {
+                "server": "orion",
+                "sources": [
+                    {"url": "https://cdn.example.com/stream.m3u8", "kind": "hls", "quality": "1080p"}
+                ]
+            }
+        }).encode("utf-8")
+        fetch = scripted_fetch({
+            "proxy.php": (200, proxy_html, {"content-type": "text/html"}),
+            "api/resolve": (200, vb_api, {"content-type": "application/json"}),
+            "stream.m3u8": (200, b"#EXTM3U\n#EXT-X-VERSION:3", {"content-type": "application/vnd.apple.mpegurl"}),
+        })
+        verdict = hr.unwrap_cineverse("https://rozgarlelo.modiplay.xyz/embed/tmdb/movie?id=550", fetch=fetch)
+        self.assertEqual(verdict["status"], "active")
+        self.assertEqual(verdict["service"], "cineverse")
+        self.assertEqual(verdict["final_url"], "https://cdn.example.com/stream.m3u8")
+
+    def test_relative_stream_proxy_url_active(self):
+        proxy_html = (
+            '<html><script>'
+            r'var src="\/stream_proxy.php?url=https%3A%2F%2Fexample.com%2Fmaster.m3u8";'
+            '</script></html>'
+        )
+        fetch = scripted_fetch({
+            "stream_proxy.php": (200, b"#EXTM3U\n#EXT-X-VERSION:3", {"content-type": "application/vnd.apple.mpegurl"}),
+            "/proxy.php": (200, proxy_html, {"content-type": "text/html"}),
+        })
+        verdict = hr.unwrap_cineverse("https://rozgarlelo.modiplay.xyz/embed/tmdb/movie?id=550", fetch=fetch)
+        self.assertEqual(verdict["status"], "active")
+        self.assertEqual(verdict["service"], "cineverse")
+        self.assertEqual(verdict["final_url"], "https://rozgarlelo.modiplay.xyz/stream_proxy.php?url=https%3A%2F%2Fexample.com%2Fmaster.m3u8")
+
+
+# ---------------------------------------------------------------------------
 # Google Drive: recognition, the interstitial, the container header
 # ---------------------------------------------------------------------------
 
@@ -1529,6 +1869,102 @@ class TestMain(unittest.TestCase):
             self.assertEqual(hr.main([GD_DOWNLOAD_PAGE]), 0)
         printed = json.loads(buf.getvalue())
         self.assertEqual(printed["service"], "gdrive")
+        self.assertEqual(printed["status"], "active")
+
+    def test_a_vidbolt_url_dispatches_to_the_vidbolt_resolver(self):
+        vb_api_body = json.dumps({
+            "stream": {
+                "server": "orion",
+                "sources": [
+                    {"url": "https://cdn.example.com/stream.m3u8", "kind": "hls", "quality": "1080p"}
+                ]
+            }
+        }).encode("utf-8")
+        fetch = scripted_fetch({
+            "api/resolve": (200, vb_api_body, {"content-type": "application/json"}),
+            "stream.m3u8": (200, b"#EXTM3U\n#EXT-X-VERSION:3", {"content-type": "application/vnd.apple.mpegurl"}),
+        })
+        with mock.patch.object(hr, "http_request", fetch), silenced() as buf:
+            self.assertEqual(hr.main(["https://vidbolt.xyz/movie/550"]), 0)
+        printed = json.loads(buf.getvalue())
+        self.assertEqual(printed["service"], "vidbolt")
+        self.assertEqual(printed["status"], "active")
+
+    def test_a_vibuxer_url_dispatches_to_the_vibuxer_resolver(self):
+        packed = (
+            "eval(function(p,a,c,k,e,d){e=function(c){return c};if(!''.replace(/^/,String)){w..."
+            "}('1.2=\"https://cdn.example.com/hls/master.m3u8?s=123&e=456\";',10,3,"
+            "'|var|links'.split('|'),0,{}))"
+        )
+        html = f"<html><body><script>{packed}</script></body></html>"
+        fetch = scripted_fetch({
+            "vibuxer.com/e/": (200, html, {"content-type": "text/html"}),
+            "master.m3u8": (200, b"#EXTM3U\n#EXT-X-STREAM-INF\nv.m3u8", {"content-type": "application/vnd.apple.mpegurl"}),
+        })
+        with mock.patch.object(hr, "http_request", fetch), silenced() as buf:
+            self.assertEqual(hr.main(["https://vibuxer.com/e/i4p45adamelv"]), 0)
+        printed = json.loads(buf.getvalue())
+        self.assertEqual(printed["service"], "vibuxer")
+        self.assertEqual(printed["status"], "active")
+
+    def test_a_vidrift_url_dispatches_to_the_vidrift_resolver(self):
+        page_html = '<html><script>var embedMeta = {"orionStreams": [{"url": "https://cdn.example.com/stream.m3u8", "type": "hls"}]};</script></html>'
+        fetch = scripted_fetch({
+            "embed.vidrift.net/embed/movie/550": (200, page_html, {"content-type": "text/html"}),
+            "stream.m3u8": (200, b"#EXTM3U\n#EXT-X-VERSION:3", {"content-type": "application/vnd.apple.mpegurl"}),
+        })
+        with mock.patch.object(hr, "http_request", fetch), silenced() as buf:
+            self.assertEqual(hr.main(["https://embed.vidrift.net/embed/movie/550"]), 0)
+        printed = json.loads(buf.getvalue())
+        self.assertEqual(printed["service"], "vidrift")
+        self.assertEqual(printed["status"], "active")
+
+    def test_an_iqsmart_url_dispatches_to_the_iqsmart_resolver(self):
+        api_resp = json.dumps({"data": [{"fileslug": "slug123"}]}).encode("utf-8")
+        mresult_raw = json.dumps({"smwh": "hanerix_hash"}).encode("utf-8")
+        mresult_b64 = base64.b64encode(mresult_raw).decode("utf-8")
+        helper_resp = json.dumps({"mresult": mresult_b64}).encode("utf-8")
+        han_packed = (
+            "eval(function(p,a,c,k,e,d){e=function(c){return c};if(!''.replace(/^/,String)){w..."
+            "}('1.2=\"https://cdn.example.com/hls/master.m3u8?s=123&e=456\";',10,3,"
+            "'|var|links'.split('|'),0,{}))"
+        )
+        han_html = f"<html><script>{han_packed}</script></html>"
+
+        fetch = scripted_fetch({
+            "mymovieapi": (200, api_resp, {"content-type": "application/json"}),
+            "embedhelper2.php": (200, helper_resp, {"content-type": "application/json"}),
+            "hanerix.com/e/": (200, han_html, {"content-type": "text/html"}),
+            "master.m3u8": (200, b"#EXTM3U\n#EXT-X-VERSION:3", {"content-type": "application/vnd.apple.mpegurl"}),
+        })
+        with mock.patch.object(hr, "http_request", fetch), silenced() as buf:
+            self.assertEqual(hr.main(["https://streams.iqsmartgames.com/embed/movie/tt35786199?key=mykey"]), 0)
+        printed = json.loads(buf.getvalue())
+        self.assertEqual(printed["service"], "iqsmart")
+        self.assertEqual(printed["status"], "active")
+
+    def test_a_filmu_url_dispatches_to_the_filmu_resolver(self):
+        page_html = '<html>var stream = "https://dash-hls-bridge.workers.dev/?url=https%3A%2F%2Fexample.com%2Fmaster.m3u8";</html>'
+        fetch = scripted_fetch({
+            "vidly.pro/movie/550": (200, page_html, {"content-type": "text/html"}),
+            "master.m3u8": (200, b"#EXTM3U\n#EXT-X-VERSION:3", {"content-type": "application/vnd.apple.mpegurl"}),
+        })
+        with mock.patch.object(hr, "http_request", fetch), silenced() as buf:
+            self.assertEqual(hr.main(["https://vidly.pro/movie/550"]), 0)
+        printed = json.loads(buf.getvalue())
+        self.assertEqual(printed["service"], "filmu")
+        self.assertEqual(printed["status"], "active")
+
+    def test_a_cineverse_url_dispatches_to_the_cineverse_resolver(self):
+        proxy_html = '<html><script>var src="https:\\/\\/embed.vidrift.net\\/api\\/orion\\/abcdef123\\/master.m3u8";</script></html>'
+        fetch = scripted_fetch({
+            "proxy.php": (200, proxy_html, {"content-type": "text/html"}),
+            "master.m3u8": (200, b"#EXTM3U\n#EXT-X-VERSION:3", {"content-type": "application/vnd.apple.mpegurl"}),
+        })
+        with mock.patch.object(hr, "http_request", fetch), silenced() as buf:
+            self.assertEqual(hr.main(["https://rozgarlelo.modiplay.xyz/embed/tmdb/movie?id=550"]), 0)
+        printed = json.loads(buf.getvalue())
+        self.assertEqual(printed["service"], "cineverse")
         self.assertEqual(printed["status"], "active")
 
     def test_the_module_runs_as_a_script(self):
