@@ -6096,8 +6096,9 @@ RESOLVE_FAILURE_CLASSES = ("probe_failed", "no_unwrapper", "unwrap_failed")
 #: existing unwrapper's coverage materially changes. NULL beside a NULL
 #: `last_failed_at`; a NULL version beside a failure means "recorded
 #: before versioning", which counts as version 0 (older than any row
-#: this code writes).
-RESOLVER_VERSION = 1
+#: this code writes). Session 112: 2 — the six D2.5 resolvers landed
+#: (vidbolt, vibuxer, vidrift, iqsmart, filmu, cineverse).
+RESOLVER_VERSION = 2
 
 
 def _is_transport_verdict(verdict) -> bool:
@@ -6561,12 +6562,13 @@ def resolve_live_source(source_id: int, *, v2: bool = False,
     # `unwrap_failed` when one ran and produced nothing playable.
     _unwrap_branch_taken = False
     # Whether the Stage-2 gate should trust the unwrapper's own verified
-    # probe instead of re-probing bare. Only the Session 103 branches set
-    # this: their unwrappers already Range-probed the byte endpoint with
+    # probe instead of re-probing bare. The Session 103/104b/112 branches
+    # set this: their unwrappers already Range-probed the byte endpoint with
     # the exact headers the host requires (Authorization for gofile,
-    # Referer for the streamwish family), so a bare re-probe would fail a
-    # link that is already proven — or spend a second request proving it
-    # again. Every other branch keeps the generic gate unchanged.
+    # Referer for the streamwish family and for vidrift/filmu/iqsmart),
+    # so a bare re-probe would fail a proven link — or spend a second
+    # request proving it again. Every other branch keeps the generic gate
+    # unchanged.
     _gate_from_verdict = False
 
     def hoster_input(marker):
@@ -7001,6 +7003,128 @@ def resolve_live_source(source_id: int, *, v2: bool = False,
                                         or "123moviesfree" in source_u.lower())
                            else cached_u)
                 verdict = hr.unwrap_moviebox(_mb_url, verify=True)
+                direct_u = embed_from_verdict(verdict)
+                if direct_u:
+                    fresh_url = direct_u
+                    fresh_temp = 1
+                    embed_verdict = verdict
+                    _gate_from_verdict = True
+            elif hr and (service == hr.SERVICE_VIDBOLT
+                         or "vidbolt" in source_u.lower()
+                         or "vidbolt" in cached_u.lower()):
+                # Session 112 (D2.5): vidbolt cracked (JSON /api/resolve
+                # -> HLS sources, re-probed live 83/120 across the D2.5
+                # family on 2026-11-08). The unwrapper's Range probe of
+                # the signed master IS the gate evidence. Stage-1
+                # (current_hosts) claims vidbolt.xyz first; this branch
+                # serves vidbolt.pro rows and the Stage-1 import-failure
+                # path.
+                _unwrap_branch_taken = True
+                verdict = hr.unwrap_vidbolt(hoster_input("vidbolt"),
+                                            verify=True)
+                direct_u = embed_from_verdict(verdict)
+                if direct_u:
+                    fresh_url = direct_u
+                    fresh_temp = 1
+                    embed_verdict = verdict
+                    _gate_from_verdict = True
+            elif hr and (service in (hr.SERVICE_VIBUXER, "vibuxer-mirror",
+                                     "vibuxermirror")
+                         or "vibuxer" in source_u.lower()
+                         or "vibuxer" in cached_u.lower()):
+                # Session 112 (D2.5): vibuxer cracked (embed page packed
+                # JS -> HLS master). The catalog tags these rows
+                # vibuxer-mirror/vibuxermirror, never "vibuxer", so the
+                # branch matches those service values too; the stored
+                # URL may carry a literal TAB, which the unwrapper
+                # strips. The unwrapper's Range probe of the master IS
+                # the gate evidence. Stage-1 claims vibuxer.com first;
+                # this branch is the Stage-1 import-failure fallback.
+                _unwrap_branch_taken = True
+                verdict = hr.unwrap_vibuxer(hoster_input("vibuxer"),
+                                            verify=True)
+                direct_u = embed_from_verdict(verdict)
+                if direct_u:
+                    fresh_url = direct_u
+                    fresh_temp = 1
+                    embed_verdict = verdict
+                    _gate_from_verdict = True
+            elif hr and (service == hr.SERVICE_VIDRIFT
+                         or "vidrift" in source_u.lower()
+                         or "vidrift" in cached_u.lower()):
+                # Session 112 (D2.5): vidrift cracked (embedMeta ->
+                # orionStreams HLS). The media probe carries Referer:
+                # embed.vidrift.net, so the unwrapper's own probe IS the
+                # gate evidence — a bare re-probe would not carry it.
+                # Stage-1 claims embed.vidrift.net first; this branch
+                # serves other vidrift.net subdomains and the Stage-1
+                # import-failure path.
+                _unwrap_branch_taken = True
+                verdict = hr.unwrap_vidrift(hoster_input("vidrift"),
+                                            verify=True)
+                direct_u = embed_from_verdict(verdict)
+                if direct_u:
+                    fresh_url = direct_u
+                    fresh_temp = 1
+                    embed_verdict = verdict
+                    _gate_from_verdict = True
+            elif hr and (service == hr.SERVICE_IQSMART
+                         or "iqsmart" in source_u.lower()
+                         or "iqsmart" in cached_u.lower()):
+                # Session 112 (D2.5): iqsmart cracked (mymovieapi /
+                # myseriesapi -> embedhelper2 POST -> base64 mresult ->
+                # hanerix packed JS -> HLS master). The media probe
+                # carries Referer: hanerix.com, so the unwrapper's own
+                # probe IS the gate evidence. Stage-1 claims the
+                # iqsmartgames.com hosts first (as streamhg); this branch
+                # is the Stage-1 import-failure fallback.
+                _unwrap_branch_taken = True
+                verdict = hr.unwrap_iqsmart(hoster_input("iqsmart"),
+                                            verify=True)
+                direct_u = embed_from_verdict(verdict)
+                if direct_u:
+                    fresh_url = direct_u
+                    fresh_temp = 1
+                    embed_verdict = verdict
+                    _gate_from_verdict = True
+            elif hr and (service == hr.SERVICE_FILMU
+                         or "filmu" in source_u.lower()
+                         or "vidly" in source_u.lower()
+                         or "filmu" in cached_u.lower()
+                         or "vidly" in cached_u.lower()):
+                # Session 112 (D2.5): filmu/vidly cracked (embed page
+                # publishes a signed HLS master). The media probe
+                # carries Referer: vidly.pro — the master 403s on a
+                # plain fetch — so the unwrapper's own probe IS the gate
+                # evidence. Stage-1 claims embed.filmu.in and vidly.pro
+                # first (as vidly); this branch serves other filmu.in /
+                # vidly.pro subdomains and the Stage-1 import-failure
+                # path.
+                _unwrap_branch_taken = True
+                verdict = hr.unwrap_filmu(hoster_input("filmu"),
+                                          verify=True)
+                direct_u = embed_from_verdict(verdict)
+                if direct_u:
+                    fresh_url = direct_u
+                    fresh_temp = 1
+                    embed_verdict = verdict
+                    _gate_from_verdict = True
+            elif hr and (service == hr.SERVICE_CINEVERSE
+                         or "cineverse" in source_u.lower()
+                         or "modiplay" in source_u.lower()
+                         or "cineverse" in cached_u.lower()
+                         or "modiplay" in cached_u.lower()):
+                # Session 112 (D2.5): cineverse cracked (proxy.php
+                # p=bingr -> direct vidrift stream, else a vidbolt
+                # EMBED_URL chained through unwrap_vidbolt). The direct
+                # path's media probe carries Referer: embed.vidrift.net,
+                # so the unwrapper's own probe IS the gate evidence.
+                # Stage-1 claims modiplay hosts first (as modiplay);
+                # this branch serves cineverse.* hosts and the Stage-1
+                # import-failure path.
+                _unwrap_branch_taken = True
+                verdict = hr.unwrap_cineverse(hoster_input("cineverse"),
+                                              verify=True)
                 direct_u = embed_from_verdict(verdict)
                 if direct_u:
                     fresh_url = direct_u

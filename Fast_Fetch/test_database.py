@@ -2011,6 +2011,12 @@ class DatabaseSaveTests(unittest.TestCase):
         SERVICE_UPLOADFLIX = "uploadflix"
         SERVICE_1XPLAYER = "1xplayer"
         SERVICE_MOVIEBOX = "moviebox"
+        SERVICE_VIDBOLT = "vidbolt"
+        SERVICE_VIBUXER = "vibuxer"
+        SERVICE_VIDRIFT = "vidrift"
+        SERVICE_IQSMART = "iqsmart"
+        SERVICE_FILMU = "filmu"
+        SERVICE_CINEVERSE = "cineverse"
 
         def __init__(self, verdict=None):
             self.verdict = verdict
@@ -2124,6 +2130,60 @@ class DatabaseSaveTests(unittest.TestCase):
                 "is_temporary": True, "expires_in": None,
                 "content_type": "video/mp4", "http_status": 206,
                 "size_bytes": 3466489425}
+
+        def unwrap_vidbolt(self, url, fetch=None, verify=True, referer=None):
+            self.calls.append(("vidbolt", url, verify))
+            return self.verdict or {
+                "status": "active",
+                "final_url": "https://cdn.example/vidbolt/stream.m3u8",
+                "is_temporary": True, "expires_in": 14400.0,
+                "content_type": "application/vnd.apple.mpegurl",
+                "http_status": 200, "size_bytes": 512}
+
+        def unwrap_vibuxer(self, embed_url, fetch=None, verify=True, referer=None):
+            self.calls.append(("vibuxer", embed_url, verify))
+            return self.verdict or {
+                "status": "active",
+                "final_url": "https://cdn.example/vibuxer/master.m3u8",
+                "is_temporary": True, "expires_in": 129600.0,
+                "content_type": "application/vnd.apple.mpegurl",
+                "http_status": 200, "size_bytes": 512}
+
+        def unwrap_vidrift(self, url, fetch=None, verify=True, referer=None):
+            self.calls.append(("vidrift", url, verify))
+            return self.verdict or {
+                "status": "active",
+                "final_url": "https://cdn.example/vidrift/master.m3u8",
+                "is_temporary": True, "expires_in": 129600.0,
+                "content_type": "application/vnd.apple.mpegurl",
+                "http_status": 200, "size_bytes": 512}
+
+        def unwrap_iqsmart(self, url, fetch=None, verify=True, referer=None):
+            self.calls.append(("iqsmart", url, verify))
+            return self.verdict or {
+                "status": "active",
+                "final_url": "https://cdn.example/iqsmart/master.m3u8",
+                "is_temporary": True, "expires_in": 129600.0,
+                "content_type": "application/vnd.apple.mpegurl",
+                "http_status": 200, "size_bytes": 512}
+
+        def unwrap_filmu(self, url, fetch=None, verify=True, referer=None):
+            self.calls.append(("filmu", url, verify))
+            return self.verdict or {
+                "status": "active",
+                "final_url": "https://cdn.example/filmu/master.m3u8",
+                "is_temporary": True, "expires_in": 129600.0,
+                "content_type": "application/vnd.apple.mpegurl",
+                "http_status": 200, "size_bytes": 512}
+
+        def unwrap_cineverse(self, url, fetch=None, verify=True, referer=None):
+            self.calls.append(("cineverse", url, verify))
+            return self.verdict or {
+                "status": "active",
+                "final_url": "https://cdn.example/cineverse/master.m3u8",
+                "is_temporary": True, "expires_in": 129600.0,
+                "content_type": "application/vnd.apple.mpegurl",
+                "http_status": 200, "size_bytes": 512}
 
     def _embed_source(self, site, service, embed):
         media_data = self.media(site, f"https://{site}.example/film/")
@@ -3240,6 +3300,138 @@ seg-00002.ts
         packer_calls = [c for c in resolvers.calls if c[0] == "packer_hls"]
         self.assertEqual(len(packer_calls), 1, resolvers.calls)
         self.assertEqual(packer_calls[0][2], "vidmoly")
+
+    def test_resolve_live_source_routes_a_vidbolt_pro_row_to_the_vidbolt_unwrapper(self):
+        """Session 112 (D2.5): vidbolt.pro is not a Stage-1 host
+        (current_hosts claims vidbolt.xyz only), so the row reaches the
+        vidbolt branch; the verified verdict serves even though the
+        Stage-2 probe is stubbed to fail."""
+        embed = "https://vidbolt.pro/movie/550"
+        stored = self._embed_source("moviesmela", "vidbolt", embed)
+        resolvers = self._FakeResolvers()
+        failing = {"ok": False, "kind": None, "mime": None, "size": None,
+                   "resumable": False, "renditions": [],
+                   "failure": "probe_error"}
+        with patch.object(fast_fetch, "_embed_resolvers",
+                          return_value=resolvers), \
+             patch.object(fast_fetch, "_stage2_probe",
+                          return_value=failing):
+            res = fast_fetch.resolve_live_source(stored["id"])
+
+        self.assertTrue(res["success"], res)
+        self.assertEqual(res["url"], "https://cdn.example/vidbolt/stream.m3u8")
+        self.assertEqual(resolvers.calls, [("vidbolt", embed, True)])
+
+    def test_resolve_live_source_routes_a_vibuxer_mirror_row_to_the_vibuxer_unwrapper(self):
+        """Session 112 (D2.5): the catalog tags vibuxer rows
+        vibuxer-mirror/vibuxermirror, never "vibuxer" — the branch
+        matches that label. vibuxer.com is a Stage-1 host, so the
+        branch is reached here only on the Stage-1 import-failure
+        path (sys.modules holds None for current_hosts); that is the
+        branch's production reachability for vibuxer.com rows, and
+        the test proves exactly it."""
+        embed = "https://vibuxer.com/e/i4p45adamelv"
+        stored = self._embed_source("moviesmela", "vibuxer-mirror", embed)
+        resolvers = self._FakeResolvers()
+        failing = {"ok": False, "kind": None, "mime": None, "size": None,
+                   "resumable": False, "renditions": [],
+                   "failure": "probe_error"}
+        with patch.object(fast_fetch, "_embed_resolvers",
+                          return_value=resolvers), \
+             patch.object(fast_fetch, "_stage2_probe",
+                          return_value=failing), \
+             patch.dict(sys.modules, {"current_hosts": None}):
+            res = fast_fetch.resolve_live_source(stored["id"])
+
+        self.assertTrue(res["success"], res)
+        self.assertEqual(res["url"], "https://cdn.example/vibuxer/master.m3u8")
+        self.assertEqual(resolvers.calls, [("vibuxer", embed, True)])
+
+    def test_resolve_live_source_routes_a_vidrift_net_row_to_the_vidrift_unwrapper(self):
+        """Session 112 (D2.5): vidrift.net (bare host) is not a Stage-1
+        host (current_hosts claims embed.vidrift.net only), so the row
+        reaches the vidrift branch; the verified verdict serves even
+        though the Stage-2 probe is stubbed to fail."""
+        embed = "https://vidrift.net/embed/movie/550"
+        stored = self._embed_source("moviesmela", "vidrift", embed)
+        resolvers = self._FakeResolvers()
+        failing = {"ok": False, "kind": None, "mime": None, "size": None,
+                   "resumable": False, "renditions": [],
+                   "failure": "probe_error"}
+        with patch.object(fast_fetch, "_embed_resolvers",
+                          return_value=resolvers), \
+             patch.object(fast_fetch, "_stage2_probe",
+                          return_value=failing):
+            res = fast_fetch.resolve_live_source(stored["id"])
+
+        self.assertTrue(res["success"], res)
+        self.assertEqual(res["url"], "https://cdn.example/vidrift/master.m3u8")
+        self.assertEqual(resolvers.calls, [("vidrift", embed, True)])
+
+    def test_resolve_live_source_routes_an_iqsmart_row_to_the_iqsmart_unwrapper(self):
+        """Session 112 (D2.5): the bare iqsmartgames.com host is not a
+        Stage-1 host (current_hosts claims streams.iqsmartgames.com
+        only, as streamhg), so the row reaches the iqsmart branch;
+        the verified verdict serves even though the Stage-2 probe is
+        stubbed to fail."""
+        embed = "https://iqsmartgames.com/embed/movie/tt35786199?key=mykey"
+        stored = self._embed_source("moviesmela", "iqsmart", embed)
+        resolvers = self._FakeResolvers()
+        failing = {"ok": False, "kind": None, "mime": None, "size": None,
+                   "resumable": False, "renditions": [],
+                   "failure": "probe_error"}
+        with patch.object(fast_fetch, "_embed_resolvers",
+                          return_value=resolvers), \
+             patch.object(fast_fetch, "_stage2_probe",
+                          return_value=failing):
+            res = fast_fetch.resolve_live_source(stored["id"])
+
+        self.assertTrue(res["success"], res)
+        self.assertEqual(res["url"], "https://cdn.example/iqsmart/master.m3u8")
+        self.assertEqual(resolvers.calls, [("iqsmart", embed, True)])
+
+    def test_resolve_live_source_routes_a_filmu_in_row_to_the_filmu_unwrapper(self):
+        """Session 112 (D2.5): filmu.in (bare host) is not a Stage-1
+        host (current_hosts claims embed.filmu.in and vidly.pro only,
+        as vidly), so the row reaches the filmu branch; the verified
+        verdict serves even though the Stage-2 probe is stubbed to
+        fail."""
+        embed = "https://filmu.in/movie/550"
+        stored = self._embed_source("moviesmela", "filmu", embed)
+        resolvers = self._FakeResolvers()
+        failing = {"ok": False, "kind": None, "mime": None, "size": None,
+                   "resumable": False, "renditions": [],
+                   "failure": "probe_error"}
+        with patch.object(fast_fetch, "_embed_resolvers",
+                          return_value=resolvers), \
+             patch.object(fast_fetch, "_stage2_probe",
+                          return_value=failing):
+            res = fast_fetch.resolve_live_source(stored["id"])
+
+        self.assertTrue(res["success"], res)
+        self.assertEqual(res["url"], "https://cdn.example/filmu/master.m3u8")
+        self.assertEqual(resolvers.calls, [("filmu", embed, True)])
+
+    def test_resolve_live_source_routes_a_cineverse_row_to_the_cineverse_unwrapper(self):
+        """Session 112 (D2.5): a cineverse.* host is not a Stage-1 host
+        (current_hosts claims modiplay hosts only), so the row reaches
+        the cineverse branch; the verified verdict serves even though
+        the Stage-2 probe is stubbed to fail."""
+        embed = "https://cineverse.tv/embed/tmdb/movie?id=550"
+        stored = self._embed_source("moviesmela", "cineverse", embed)
+        resolvers = self._FakeResolvers()
+        failing = {"ok": False, "kind": None, "mime": None, "size": None,
+                   "resumable": False, "renditions": [],
+                   "failure": "probe_error"}
+        with patch.object(fast_fetch, "_embed_resolvers",
+                          return_value=resolvers), \
+             patch.object(fast_fetch, "_stage2_probe",
+                          return_value=failing):
+            res = fast_fetch.resolve_live_source(stored["id"])
+
+        self.assertTrue(res["success"], res)
+        self.assertEqual(res["url"], "https://cdn.example/cineverse/master.m3u8")
+        self.assertEqual(resolvers.calls, [("cineverse", embed, True)])
 
     def test_resolve_live_source_unwraps_a_pkembed_embed_to_its_top_rendition(self):
         embed = "https://pkembed.site/embed-g64v61whic26.html"
