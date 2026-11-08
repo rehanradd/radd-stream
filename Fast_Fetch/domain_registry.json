@@ -1,6 +1,6 @@
 {
   "version": "2.0",
-  "updated_at": "2026-11-08T09:57:00Z",
+  "updated_at": "2026-11-08T20:44:00Z",
   "sites": {
     "10xflix": {
       "active_base_url": "https://10xflix.asia",
@@ -616,6 +616,73 @@
       "last_checked": "2026-11-08T09:47:32Z",
       "sitemap_endpoint": "/sitemap.xml",
       "notes": "18+ adult catalog — scrape only, never publish; every row is_18_plus=1 (owner-approved 2026-11-08)."
+    },
+    "harpalgeo": {
+      "active_base_url": "https://www.harpalgeo.tv",
+      "last_verified": "2026-11-08T20:44:00Z",
+      "verified_by": "homepage",
+      "known_mirrors": [
+        "https://www.harpalgeo.tv",
+        "https://harpalgeo.tv"
+      ],
+      "slug_variants": [
+        "harpalgeo"
+      ],
+      "tld_history": [
+        "tv"
+      ],
+      "api_type": "homepage",
+      "status": "active",
+      "rotation_history": [],
+      "last_checked": "2026-11-08T20:44:00Z",
+      "notes": "Official Geo dramas; episode pages carry a direct .m3u8 on 5centscdn.com (720p max, ffprobe hls) — no crack needed. No sitemap; catalog is homepage /program/ list + program episode lists. Teaser pages are not episodes."
+    },
+    "movienestbd": {
+      "active_base_url": "https://movienestbd.best",
+      "last_verified": "2026-11-08T20:44:00Z",
+      "verified_by": "api",
+      "known_mirrors": [
+        "https://movienestbd.best"
+      ],
+      "slug_variants": [
+        "movienestbd"
+      ],
+      "tld_history": [
+        "best"
+      ],
+      "api_type": "json_api",
+      "status": "active",
+      "rotation_history": [],
+      "last_checked": "2026-11-08T20:44:00Z",
+      "api_endpoint": "/api/v1/search",
+      "notes": "Public no-key JSON API: /api/v1/search?q=<letter>&page=N (18/page, has_next) enumerates; /api/v1/movie/<slug> gives detail incl. watch + per-quality links[] on player/embed.jiofiles.pics (NEW host, not cracked — stored as-is). /movie/<slug> HTML is 404; /api/v1/movies and /api/v1/trending are 404."
+    },
+    "moviesdrive": {
+      "active_base_url": "https://new1.moviesdrive.cyou",
+      "last_verified": "2026-11-08T20:44:00Z",
+      "verified_by": "wp-json",
+      "known_mirrors": [
+        "https://new1.moviesdrive.cyou",
+        "https://moviesdrives.cfd",
+        "https://moviesdrives.bid",
+        "https://moviedrive.org",
+        "https://new4.moviesdrive.beer"
+      ],
+      "slug_variants": [
+        "moviesdrive"
+      ],
+      "tld_history": [
+        "cyou",
+        "cfd",
+        "bid",
+        "beer"
+      ],
+      "api_type": "wp_rest_api",
+      "status": "active",
+      "rotation_history": [],
+      "last_checked": "2026-11-08T20:44:00Z",
+      "api_endpoint": "/wp-json/wp/v2/posts",
+      "notes": "WP download catalog; posts link mdrive.lol/archive/<id>/ per quality, archive pages link hubcloud.ist/drive/... and gdflix.vip/file/... (known file-host families)."
     }
   }
 }

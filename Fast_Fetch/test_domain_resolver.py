@@ -568,10 +568,10 @@ class RegistryTests(unittest.TestCase):
         self.assertTrue(again["updated_at"])
         tmp.cleanup()
 
-    def test_shipped_registry_is_v2_with_all_19_sites(self):
+    def test_shipped_registry_is_v2_with_all_22_sites(self):
         reg = dr.load_registry()
         self.assertEqual(reg.get("version"), "2.0")
-        self.assertEqual(len(reg["sites"]), 19)
+        self.assertEqual(len(reg["sites"]), 22)
         for name, entry in reg["sites"].items():
             self.assertTrue(entry.get("slug_variants"), name)
             self.assertTrue(entry.get("tld_history"), name)
@@ -624,7 +624,7 @@ class ImporterWiringTests(unittest.TestCase):
         # guarantee is about the import path, and the only thing that proves
         # it without a crawl is reading that path.
         importers = sorted(BASE_DIR.glob("import_*.py"))
-        self.assertEqual(len(importers), 19)
+        self.assertEqual(len(importers), 22)
         for path in importers:
             src = path.read_text(encoding="utf-8")
             self.assertIn("from domain_resolver import", src, path.name)

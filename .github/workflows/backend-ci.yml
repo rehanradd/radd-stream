@@ -487,6 +487,18 @@ jobs:
       - name: 🧪 test_xprimehub_import.py
         run: python3 -S Fast_Fetch/test_xprimehub_import.py
 
+      # Session 118 new importers (Tier 1 discovery builds): HarPal Geo (official
+      # Geo dramas, direct 5centscdn HLS), MovieNestBD (public no-key JSON API),
+      # MoviesDrive (wp-json -> mdrive archive -> hubcloud/gdflix). Offline —
+      # fixture HTML/JSON + temp SQLite files; live proofs are in the Session 118
+      # checkpoint, not in these tests.
+      - name: 🧪 test_harpalgeo_import.py
+        run: python3 -S Fast_Fetch/test_harpalgeo_import.py
+      - name: 🧪 test_movienestbd_import.py
+        run: python3 -S Fast_Fetch/test_movienestbd_import.py
+      - name: 🧪 test_moviesdrive_import.py
+        run: python3 -S Fast_Fetch/test_moviesdrive_import.py
+
       # The admin panel feed for the app (sections / broadcasts / hides): the
       # resolver, the adult fail-closed rule, the hide expiry/restore rules,
       # and the posts-route hide enforcement. Offline — temp SQLite files.
