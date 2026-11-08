@@ -32,6 +32,7 @@ import com.raddstream.app.ui.screens.DetailScreen
 import com.raddstream.app.ui.screens.DownloadsScreen
 import com.raddstream.app.ui.screens.EmbedWebViewScreen
 import com.raddstream.app.ui.screens.HomeScreen
+import com.raddstream.app.ui.screens.LiveTvScreen
 import com.raddstream.app.ui.screens.LocalFilesScreen
 import com.raddstream.app.ui.screens.MyListScreen
 import com.raddstream.app.ui.screens.PlayerScreen
@@ -67,7 +68,7 @@ fun RaddStreamNavGraph(
     navController: NavHostController = rememberNavController(),
     startDestination: String,
     features: RemoteFeatures = RemoteFeatures(),
-    /** The operator's tab order from the panel (`tabs` tuning key), as the activity last received it; empty means "never received", and the bar falls back to its own four. */
+    /** The operator's tab order from the panel (`tabs` tuning key), as the activity last received it; empty means "never received", and the bar falls back to its own five. */
     tabs: List<String> = emptyList(),
     /** The operator's theme, for the hero knobs Home reads from it. */
     theme: PanelTheme = PanelTheme(),
@@ -91,10 +92,10 @@ fun RaddStreamNavGraph(
 
     // The operator's tab order, resolved against what this build can show: Home is always
     // first, Search only when its feature flag is on, and an empty or all-unknown list falls
-    // back to the four tabs this build has always shipped. The routes stay registered even
+    // back to the five tabs this build has always shipped. The routes stay registered even
     // for a tab the operator hid — a back stack that already holds that screen must not name
     // a destination the graph cannot resolve.
-    // The four tabs wear the brand's own icons (res/drawable/ic_tab_*.xml,
+    // The five tabs wear the brand's own icons (res/drawable/ic_tab_*.xml,
     // the stroke set from the brand pack — the `?attr/colorControlNormal`
     // tint the pack files carried was stripped on copy-in, because this app
     // has no such attr; the NavigationBarItem tint is the only tint). The
@@ -102,6 +103,7 @@ fun RaddStreamNavGraph(
     // selected/unselected colours, exactly as the Material icons did.
     val bottomNavItems = PanelTabs.resolve(tabs, features.search).map { id ->
         when (id) {
+            "live_tv" -> BottomNavItem("Live TV", Screen.LiveTv.route, ImageVector.vectorResource(R.drawable.ic_tab_live_tv))
             "search" -> BottomNavItem("Search", Screen.Search.route, ImageVector.vectorResource(R.drawable.ic_tab_search))
             "my_list" -> BottomNavItem("My List", Screen.MyList.route, ImageVector.vectorResource(R.drawable.ic_tab_my_list))
             "settings" -> BottomNavItem("Settings", Screen.Settings.route, ImageVector.vectorResource(R.drawable.ic_tab_settings))
@@ -229,6 +231,17 @@ fun RaddStreamNavGraph(
             composable(Screen.MyList.route) {
                 MyListScreen(
                     onPostClick = { postId -> navController.navigate(Screen.Detail.createRoute(postId)) },
+                )
+            }
+
+            composable(Screen.LiveTv.route) {
+                LiveTvScreen(
+                    onPlayChannel = { streamId, title ->
+                        // The same player route a movie uses, addressed by
+                        // the server's opaque stream handle — the player
+                        // itself is untouched by Live TV.
+                        navController.navigate(Screen.Player.createRoute(streamId, title))
+                    },
                 )
             }
 

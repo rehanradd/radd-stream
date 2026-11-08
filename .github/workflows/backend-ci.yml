@@ -167,6 +167,9 @@ jobs:
       - name: 🧪 test_evidence_writeback.py
         run: python3 -S Fast_Fetch/test_evidence_writeback.py
 
+      - name: 🧪 test_live_tv.py
+        run: python3 -S Fast_Fetch/test_live_tv.py
+
       # The HTTP edge is the product's privacy boundary, so it is guarded in CI by
       # the same rule as the data layer: every suite below ran clean offline on the
       # Oracle VM (python 3.12, -S, zero pip) before being added here.

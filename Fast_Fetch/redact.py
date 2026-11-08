@@ -1037,6 +1037,56 @@ def parse_download_credit(token, secret: str) -> int | None:
     return int(struct.unpack(">q", body)[0])
 
 
+#: Version byte for the live-TV channel handle :func:`mint_live_tv_handle`
+#: writes: the body carries the registry channel id *and* the expiry
+#: instant, so a harvested handle dies on its own after ``ttl_seconds``
+#: (24 h by default, same as a movie handle). The tag domain ``b"tv"``
+#: keeps a TV handle from ever parsing as a download credit (or vice
+#: versa) even though both bodies are plain packed integers.
+_LIVE_TV_HANDLE_VERSION = 5
+
+
+def mint_live_tv_handle(channel_id: int, secret: str,
+                        ttl_seconds: int = 86400,
+                        now: float | None = None) -> str:
+    """Sign a live-TV registry channel id into an opaque public handle.
+
+    The app plays a channel by pressing ``/api/v1/stream?id=<handle>``,
+    exactly like a movie — it never sees the upstream HLS URL. The handle
+    expires, so a leaked channel URL outlives nothing.
+    """
+    moment = time.time() if now is None else float(now)
+    expires_at = int(moment + max(0, int(ttl_seconds)))
+    body = struct.pack(">qq", int(channel_id), expires_at)
+    tag = hmac.new(secret.encode("utf-8"), b"tv" + body,
+                   hashlib.sha256).digest()[:8]
+    return _b64(bytes([_LIVE_TV_HANDLE_VERSION]) + body + tag)
+
+
+def parse_live_tv_handle(token, secret: str,
+                         now: float | None = None) -> int | None:
+    """The registry channel id a TV handle was minted for, or ``None``.
+
+    ``None`` for anything not minted by us, tampered with, or expired —
+    including movie stream handles, download credits and VIP passes, which
+    all carry a different version byte.
+    """
+    data = _unb64(str(token or ""))
+    if (data is None or len(data) != 1 + 16 + 8
+            or data[0] != _LIVE_TV_HANDLE_VERSION):
+        return None
+    body, tag = data[1:17], data[17:]
+    want = hmac.new(secret.encode("utf-8"), b"tv" + body,
+                    hashlib.sha256).digest()[:8]
+    if not hmac.compare_digest(tag, want):
+        return None
+    channel_id, expires_at = struct.unpack(">qq", body)
+    moment = time.time() if now is None else float(now)
+    if expires_at < int(moment):
+        return None
+    return int(channel_id)
+
+
 def mint_text(value: str, secret: str) -> str:
     """Opaque, reversible handle for a string (an art URL that has no row id)."""
     raw = value.encode("utf-8")

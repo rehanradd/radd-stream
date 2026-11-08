@@ -13,14 +13,14 @@ package com.raddstream.app.ui.navigation
  * a feature the flag turned off).
  *
  * An empty or all-unknown list means "the deployment never set tabs" — an
- * older server, an unwired panel — and the bar falls back to the four tabs
+ * older server, an unwired panel — and the bar falls back to the five tabs
  * this build has always shipped, in their shipped order. The function is
  * pure so the fallback can be tested without a server.
  */
 object PanelTabs {
 
-    /** The four tabs this build has always shipped, in their shipped order. */
-    val DEFAULT: List<String> = listOf("home", "search", "my_list", "settings")
+    /** The five tabs this build has always shipped, in their shipped order. */
+    val DEFAULT: List<String> = listOf("home", "live_tv", "search", "my_list", "settings")
 
     private val KNOWN: Set<String> = DEFAULT.toSet()
 

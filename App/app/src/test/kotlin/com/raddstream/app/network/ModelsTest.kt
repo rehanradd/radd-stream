@@ -26,6 +26,8 @@ import com.raddstream.app.network.models.HdrFormat
 import com.raddstream.app.network.models.LinkClassification
 import com.raddstream.app.network.models.LinkKind
 import com.raddstream.app.network.models.LinkState
+import com.raddstream.app.network.models.LiveTvChannel
+import com.raddstream.app.network.models.LiveTvChannelsResponse
 import com.raddstream.app.network.models.Ownership
 import com.raddstream.app.network.models.PaymentSubmitResponse
 import com.raddstream.app.network.models.Playability
@@ -244,6 +246,64 @@ class ModelsTest {
         // sends must not be reachable through the wire type either.
         assertEquals(emptyList<String>(), StreamResponse::class.java.declaredFields
             .map { it.name }.filter { it in setOf("url", "service", "sourceName") })
+    }
+
+    @Test
+    fun `live tv channels response maps snake case names and the signed handle`() {
+        val json = """
+            {
+              "success": true,
+              "channels": [
+                {
+                  "id": 1,
+                  "name": "Dunya News",
+                  "category": "news",
+                  "country": "PK",
+                  "language": "ur",
+                  "logo_url": "https://i.imgur.com/1PbtW0y.png",
+                  "stream_id": "BQAAAAAAAAAHAAAAAAAQk8DD-uITf2IC7Q"
+                },
+                {
+                  "id": 22,
+                  "name": "DD Sports",
+                  "category": "sports",
+                  "country": "IN",
+                  "language": "hi",
+                  "logo_url": "https://example.test/dd-sports.png",
+                  "stream_id": "BQAAAAAAABYAAAAAAAQk8DD-uITf2IC7Q"
+                }
+              ],
+              "categories": ["news", "sports"]
+            }
+        """.trimIndent()
+
+        val response = gson.fromJson(json, LiveTvChannelsResponse::class.java)
+
+        assertTrue(response.success)
+        assertEquals(listOf("news", "sports"), response.categories)
+        assertEquals(2, response.channels.size)
+        val first = response.channels[0]
+        assertEquals(1, first.id)
+        assertEquals("Dunya News", first.name)
+        assertEquals("news", first.category)
+        assertEquals("PK", first.country)
+        assertEquals("ur", first.language)
+        assertEquals("https://i.imgur.com/1PbtW0y.png", first.logoUrl)
+        assertEquals("BQAAAAAAAAAHAAAAAAAQk8DD-uITf2IC7Q", first.streamId)
+        assertEquals("sports", response.channels[1].category)
+        // The model has no stream_url/source field at all: the upstream HLS
+        // address must not be reachable through the wire type either.
+        assertEquals(emptyList<String>(), LiveTvChannel::class.java.declaredFields
+            .map { it.name }.filter { it in setOf("streamUrl", "source", "url") })
+    }
+
+    @Test
+    fun `live tv channels response defaults to empty when the server sends nothing`() {
+        val response = gson.fromJson("{}", LiveTvChannelsResponse::class.java)
+
+        assertTrue(response.success)
+        assertEquals(emptyList<LiveTvChannel>(), response.channels)
+        assertEquals(emptyList<String>(), response.categories)
     }
 
     @Test

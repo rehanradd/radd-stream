@@ -30,6 +30,7 @@ sealed class Screen(val route: String) {
     object Region : Screen("region")
     object Home : Screen("home")
     object Search : Screen("search")
+    object LiveTv : Screen("live_tv")
     object MyList : Screen("my_list")
     object Settings : Screen("settings")
     object Downloads : Screen("downloads")

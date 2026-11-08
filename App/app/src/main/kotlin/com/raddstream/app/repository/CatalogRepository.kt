@@ -3,6 +3,7 @@ package com.raddstream.app.repository
 import com.raddstream.app.data.ServerSettingsRepository
 import com.raddstream.app.network.ApiProvider
 import com.raddstream.app.network.models.ContactRequest
+import com.raddstream.app.network.models.LiveTvChannelsResponse
 import com.raddstream.app.network.models.PlayBundle
 import com.raddstream.app.network.models.PostDetail
 import com.raddstream.app.network.models.PostsResponse
@@ -31,6 +32,11 @@ class CatalogRepository @Inject constructor(
     }
 
     suspend fun getStats(): StatsResponse = apiProvider.current().getStats()
+
+    /** Live TV channels from the server-side registry (see `live_tv.py`). */
+    suspend fun getLiveTvChannels(
+        category: String? = null,
+    ): LiveTvChannelsResponse = apiProvider.current().getLiveTvChannels(category)
 
     suspend fun getPosts(
         query: String? = null,

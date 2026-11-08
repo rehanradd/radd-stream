@@ -28,6 +28,7 @@ import com.raddstream.app.network.models.FavoriteWriteResponse
 import com.raddstream.app.network.models.FavoritesResponse
 import com.raddstream.app.network.models.PaymentRequest
 import com.raddstream.app.network.models.PaymentSubmitResponse
+import com.raddstream.app.network.models.LiveTvChannelsResponse
 import com.raddstream.app.network.models.PostDetailResponse
 import com.raddstream.app.network.models.PostsResponse
 import com.raddstream.app.network.models.ProfileLinkRequest
@@ -137,6 +138,23 @@ interface RaddStreamApi {
     /** GET /api/v1/stats — catalog and diagnostic counts. */
     @GET("api/v1/stats")
     suspend fun getStats(): StatsResponse
+
+    /**
+     * GET /api/v1/live-tv/channels — the Live TV tab's channel list, served
+     * from the server-side registry. Each channel carries a signed `stream_id`
+     * handle; the app never sees the upstream HLS URL, and playback goes
+     * through the existing player on `/api/v1/stream?id=…` exactly like a
+     * movie. `category` narrows server-side; null lists everything the
+     * operator enabled.
+     *
+     * NOTE (deploy): the nginx public allow-list does not yet include
+     * the `/api/v1/live-tv/` prefix — until the gate adds it this answers 403 and the
+     * tab shows its honest unavailable state, never a fake list.
+     */
+    @GET("api/v1/live-tv/channels")
+    suspend fun getLiveTvChannels(
+        @Query("category") category: String? = null,
+    ): LiveTvChannelsResponse
 
     /**
      * GET /api/v1/app/remote-config — VIP pricing and the operator's payment handles.

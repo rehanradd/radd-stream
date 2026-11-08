@@ -412,6 +412,41 @@ class HandleTests(unittest.TestCase):
         self.assertIsNone(redact.parse_download_credit(vip, self.SECRET))
         self.assertIsNone(redact.parse_vip_pass(token, self.SECRET))
 
+    def test_live_tv_handle_round_trip_and_no_other_handle_confusion(self):
+        """A TV handle is a different capability from a movie handle, a
+        credit and a VIP pass: it signs a registry channel id plus an
+        expiry under its own version and tag domain — so no other handle
+        kind must ever parse as a TV handle, and a TV handle must never
+        parse as any of them."""
+        token = redact.mint_live_tv_handle(7, self.SECRET, now=1_700_000_000.0)
+        self.assertEqual(len(token), 34,
+                         "a v5 TV handle is 25 bytes, base64url without padding")
+        self.assertFalse(token.isdigit(),
+                         "the handle must not parse as a plain row id")
+        self.assertEqual(redact.parse_live_tv_handle(
+            token, self.SECRET, now=1_700_000_100.0), 7)
+        self.assertIsNone(redact.parse_live_tv_handle(
+            token[:-2] + "xx", self.SECRET, now=1_700_000_100.0))
+        self.assertIsNone(redact.parse_live_tv_handle(
+            token, "another-secret", now=1_700_000_100.0))
+        self.assertIsNone(redact.parse_live_tv_handle(
+            "not-a-token", self.SECRET))
+        self.assertIsNone(redact.parse_live_tv_handle("", self.SECRET))
+        # Expired: a harvested handle dies on its own after its TTL.
+        self.assertIsNone(redact.parse_live_tv_handle(
+            token, self.SECRET, now=1_700_000_000.0 + 86400 + 1))
+        # No other handle kind parses as a TV handle, and a TV handle
+        # parses as none of them.
+        movie = redact.mint_token(7, self.SECRET)
+        self.assertIsNone(redact.parse_live_tv_handle(movie, self.SECRET))
+        self.assertIsNone(redact.parse_token(token, self.SECRET))
+        credit = redact.mint_download_credit(7, self.SECRET)
+        self.assertIsNone(redact.parse_live_tv_handle(credit, self.SECRET))
+        self.assertIsNone(redact.parse_download_credit(token, self.SECRET))
+        vip = redact.mint_vip_pass(time.time() + 300, self.SECRET)
+        self.assertIsNone(redact.parse_live_tv_handle(vip, self.SECRET))
+        self.assertIsNone(redact.parse_vip_pass(token, self.SECRET))
+
     def test_token_expires_after_its_ttl(self):
         """A minted handle dies on its own: the expiry is inside the token,
         so a harvested handle is a day's window, not a forever one."""

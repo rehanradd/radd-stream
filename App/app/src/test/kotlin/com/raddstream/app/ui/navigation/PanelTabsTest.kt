@@ -6,10 +6,18 @@ import org.junit.Test
 class PanelTabsTest {
 
     @Test
-    fun `empty remote list falls back to the shipped four`() {
+    fun `empty remote list falls back to the shipped five`() {
         assertEquals(
-            listOf("home", "search", "my_list", "settings"),
+            listOf("home", "live_tv", "search", "my_list", "settings"),
             PanelTabs.resolve(emptyList(), searchEnabled = true),
+        )
+    }
+
+    @Test
+    fun `live tv resolves from the operator list and is not gated by search`() {
+        assertEquals(
+            listOf("home", "live_tv", "settings"),
+            PanelTabs.resolve(listOf("live_tv", "settings"), searchEnabled = false),
         )
     }
 
@@ -54,9 +62,9 @@ class PanelTabsTest {
     }
 
     @Test
-    fun `all-unknown remote list falls back to the shipped four`() {
+    fun `all-unknown remote list falls back to the shipped five`() {
         assertEquals(
-            listOf("home", "search", "my_list", "settings"),
+            listOf("home", "live_tv", "search", "my_list", "settings"),
             PanelTabs.resolve(listOf("nope", "alsono"), searchEnabled = true),
         )
     }

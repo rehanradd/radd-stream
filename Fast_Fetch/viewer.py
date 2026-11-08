@@ -26,6 +26,7 @@ from socketserver import ThreadingMixIn
 
 import redact
 import tiers
+import live_tv
 import api_v2
 import catalog_v2
 import engagement
@@ -4286,8 +4287,77 @@ class DashboardHandler(BaseHTTPRequestHandler):
             else:
                 self.send_json({"error": "Invalid post ID"}, status=400)
 
+        elif path == "/api/v1/live-tv/channels":
+            # Live TV channel list, served from the server-side registry so
+            # channel URLs stay out of the app bundle and the operator can
+            # add / disable a channel with one registry edit. The client
+            # gets a signed stream_id per channel and presses it at
+            # /api/v1/stream — it never sees the upstream HLS URL.
+            # NOTE (deploy): nginx's public allow-list does not yet include
+            # the /api/v1/live-tv/ prefix — the gate must add it, same as /api/v2/play
+            # was added in live deploy #1, or this answers 403 in public.
+            try:
+                registry = live_tv.load_registry()
+            except ValueError:
+                self.send_json({"success": False,
+                                "error": "live_tv_unavailable"}, status=503)
+                return
+            category = query_params.get("category", [None])[0] or None
+            channels = live_tv.list_channels(
+                registry, category=category, secret=signing_secret())
+            self.send_json({"success": True, "channels": channels,
+                            "categories": live_tv.list_categories(registry)})
+
         elif path == "/api/v1/stream":
             source_ref = query_params.get("id", [""])[0]
+            # Live-TV handles FIRST: on the public port parse_token runs
+            # signed_only, so a TV handle would 400 there if it ever
+            # reached the movie branch. A TV press skips the adult check
+            # and the quality gate entirely — the registry is curated
+            # free-to-air broadcast with no adult category and no
+            # 1080p/4K premium distinction.
+            tv_channel_id = redact.parse_live_tv_handle(
+                source_ref, signing_secret())
+            if tv_channel_id is not None:
+                redirect_flag = query_params.get("redirect", ["1"])[0]
+                try:
+                    registry = live_tv.load_registry()
+                except ValueError:
+                    self.send_json({"success": False,
+                                    "error": "live_tv_unavailable"},
+                                   status=503)
+                    return
+                channel = live_tv.get_channel(registry, tv_channel_id)
+                if channel is None:
+                    # Unknown or disabled channel: same answer as a link
+                    # that does not exist.
+                    self.send_json({"success": False, "error": "not_found"},
+                                   status=404)
+                    return
+                if not live_tv.playlist_is_live(channel["stream_url"]):
+                    # Honest dead-channel answer: the player shows its
+                    # unavailable state instead of spinning on a dead URL.
+                    self.send_json({"success": False,
+                                    "error": "no_playable_source"},
+                                   status=404)
+                    return
+                if redirect_flag in ("1", "true", "yes"):
+                    self.send_response(302)
+                    self.send_header("Location", channel["stream_url"])
+                    self.send_header("Cache-Control", "no-store")
+                    for name, value in cors_headers_for(self.headers.get("Origin", "")):
+                        self.send_header(name, value)
+                    self.send_header("Connection", "close")
+                    self.end_headers()
+                else:
+                    self.send_json({
+                        "success": True,
+                        "stream_id": redact.mint_live_tv_handle(
+                            tv_channel_id, signing_secret()),
+                        "kind": "url",
+                        "mime_type": "application/vnd.apple.mpegurl",
+                    })
+                return
             source_id = redact.parse_token(source_ref, signing_secret(),
                                            signed_only=not full)
             if not source_id:
