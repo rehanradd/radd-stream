@@ -157,5 +157,20 @@ class TestTenXFlixImport(unittest.TestCase):
             self.assertEqual(saved_p[2], "street-fighter_2026")
 
 
+
+class Session104TenXFlixTests(unittest.TestCase):
+    """Session 104: screenshot anchors skipped; one bridge URL keeps every tier."""
+
+    def test_screenshot_skipped_and_tiers_kept(self):
+        html = (
+            '<p><a href="https://mobilejsr.com/view/AAA111">1080p [2.02GB]</a>'
+            '<a href="https://mobilejsr.com/view/AAA111">720p [1.10GB]</a>'
+            '<a href="https://mobilejsr.com/view/AAA111">720p [1.10GB]</a>'
+            '<a href="https://mobilejsr.com/view/BBB222">Watch Online - Screenshot</a></p>'
+        )
+        rels = import_10xflix.parse_10xflix_releases(html, "Test Movie 2026")
+        self.assertEqual([r["quality"] for r in rels], ["1080p", "720p"])
+
+
 if __name__ == "__main__":
     unittest.main()

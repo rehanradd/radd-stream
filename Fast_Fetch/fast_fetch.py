@@ -277,7 +277,13 @@ def site_implies_animation(source_site) -> int:
 #: appear as studio names inside titles, never as a `source_site`. So the set stays empty:
 #: no host earns a blanket 18+ stamp on provenance alone, and adding one later requires a
 #: measured rate near 100%, not a reputation.
-ADULT_SOURCE_SITES = frozenset()
+#: MEASURED 2026-11-08: xprimehub.pics IS that host — the site brands its whole catalog
+#: 18+ in its own title ("Download 18+ Indian OTT Web Series & Adult Movies Free"),
+#: the owner verified it live, and the Session 104 VM probe found every sampled post an
+#: adult short film / web series. Its importer (import_xprimehub.py) also asserts
+#: is_18_plus = 1 on every row it writes; this entry is the shared-rule backstop so a
+#: row can never slip through on a title that carries no adult token.
+ADULT_SOURCE_SITES = frozenset({"xprimehub"})
 
 
 def site_implies_adult(source_site) -> int:

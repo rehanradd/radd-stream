@@ -465,6 +465,12 @@ jobs:
       - name: 🧪 test_hubcdn_unwrap.py
         run: python3 -S Fast_Fetch/test_hubcdn_unwrap.py
 
+      # XprimeHub (Session 104): the 19th site, 18+ adult catalog — scrape only.
+      # The flag is the feature: every row is_18_plus = 1 by site authority, and the
+      # registry entry records scrape-only / never publish. Offline — temp SQLite files.
+      - name: 🧪 test_xprimehub_import.py
+        run: python3 -S Fast_Fetch/test_xprimehub_import.py
+
       # The admin panel feed for the app (sections / broadcasts / hides): the
       # resolver, the adult fail-closed rule, the hide expiry/restore rules,
       # and the posts-route hide enforcement. Offline — temp SQLite files.

@@ -2,7 +2,7 @@
 """
 import_moviezguru.py — High-Performance MoviezGuru Scraper & 10Gbps Google CDN Resolver
 
-Scrapes catalog from MoviezGuru (https://moviezguru.guru) via WordPress REST API,
+Scrapes catalog from MoviezGuru (https://moviezguru.technology) via WordPress REST API,
 parses high-resolution posters, IMDb IDs, multi-tier releases (1080p, 720p, 480p),
 and resolves mzgserver.shop media links directly into 10Gbps Google CDN / Google Drive
 streaming and download sources.
@@ -35,8 +35,8 @@ from pathlib import Path
 
 # --- Constants ---
 DEFAULT_DB_PATH = Path("/home/ubuntu/radd-stream-data/moviezguru.db")
-BASE_URL = "https://moviezguru.guru"
-WP_API_URL = "https://moviezguru.guru/wp-json/wp/v2/posts"
+BASE_URL = "https://moviezguru.technology"
+WP_API_URL = "https://moviezguru.technology/wp-json/wp/v2/posts"
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 
 # "rabbit" and "hunters" were removed on 2026-10-29 after sampling 12 live titles each in

@@ -52,7 +52,7 @@ if str(BASE_DIR) not in sys.path:
 
 import fast_fetch
 
-DEFAULT_BASE_URL = "https://7starhd.dentist"
+DEFAULT_BASE_URL = "https://7starhd.surgery"
 DEFAULT_DB_PATH = (
     Path("/home/ubuntu/radd-stream-data/7starhd.db")
     if Path("/home/ubuntu/radd-stream-data").exists()
@@ -308,15 +308,18 @@ def parse_7starhd_release_links(html_content: str) -> list[dict]:
     seen_urls = set()
 
     for jsr_url, anchor_text in raw_matches:
-        if jsr_url in seen_urls:
-            continue
-        seen_urls.add(jsr_url)
-
         clean_text = html.unescape(re.sub(r'<[^>]+>', '', anchor_text).strip())
+        # Screenshot anchors are preview images, not downloads: skip them.
+        if re.search(r"screen\s?sho+?t", clean_text, re.I):
+            continue
 
         # Quality extraction
         qual_m = re.search(r'\b(2160p|4k|1080p|720p|480p)\b', clean_text, re.I)
         qual = qual_m.group(1).lower() if qual_m else "720p"
+        # Dedup on (url, quality): one bridge URL serves several quality tiers.
+        if (jsr_url, qual) in seen_urls:
+            continue
+        seen_urls.add((jsr_url, qual))
 
         # Size extraction
         size_m = re.search(r'\[?(\d+(?:\.\d+)?\s*(?:GB|MB))\]?', clean_text, re.I)

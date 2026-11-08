@@ -1,84 +1,90 @@
 {
   "version": "1.0",
-  "updated_at": "2026-10-21T16:27:09.511533Z",
+  "updated_at": "2026-11-08T02:37:07Z",
   "sites": {
     "10xflix": {
-      "active_base_url": "https://10xflix.hair",
+      "active_base_url": "https://10xflix.asia",
       "known_mirrors": [
-        "https://10xflix.bond",
-        "https://10xflix.help",
-        "https://10xflix.hair"
+        "https://10xflix.asia",
+        "https://10xflix.bond"
       ],
       "api_type": "wp_rest_api",
       "api_endpoint": "/wp-json/wp/v2/posts",
-      "status": "active"
+      "status": "active",
+      "last_checked": "2026-11-08T02:37:07Z"
     },
     "7starhd": {
-      "active_base_url": "https://7starhd.dentist",
+      "active_base_url": "https://7starhd.surgery",
       "known_mirrors": [
-        "https://7starhd.rich",
-        "https://7starhd.talk",
+        "https://7starhd.surgery",
         "https://7starhd.dentist"
       ],
       "api_type": "wp_rest_api",
       "api_endpoint": "/wp-json/wp/v2/posts",
-      "status": "active"
+      "status": "active",
+      "last_checked": "2026-11-08T02:37:07Z"
     },
     "9xmovies": {
-      "active_base_url": "https://9xmovie.bayern",
+      "active_base_url": "https://9xmovie.camera",
       "known_mirrors": [
-        "https://9xmovie.bayern",
-        "https://9xmovies.click",
-        "https://9xmovies.photo"
+        "https://9xmovie.camera",
+        "https://9xmovie.bayern"
       ],
       "api_type": "wp_rest_api",
       "api_endpoint": "/wp-json/wp/v2/posts",
-      "status": "active"
+      "status": "active",
+      "last_checked": "2026-11-08T02:37:07Z"
     },
     "bolly4u": {
-      "active_base_url": "https://bolly4uv.com",
+      "active_base_url": "https://bolly4u.lol",
       "known_mirrors": [
-        "https://bolly4uz.click",
-        "https://bolly4u.org",
+        "https://bolly4u.lol",
         "https://bolly4uv.com"
       ],
       "api_type": "wp_rest_api",
       "api_endpoint": "/wp-json/wp/v2/posts",
-      "status": "active"
+      "status": "active",
+      "last_checked": "2026-11-08T02:37:07Z"
     },
     "desicinemas": {
       "active_base_url": "https://www.desicinemas.pk",
       "known_mirrors": [
-        "https://www.desicinemas.pk",
-        "https://desicinemas.tv",
-        "https://desicinemas.chat"
+        "https://www.desicinemas.pk"
       ],
       "api_type": "xml_sitemap",
       "sitemap_endpoint": "/sitemap_index.xml",
-      "status": "active"
+      "status": "active",
+      "notes": "desicinemas.tv hijacked (koi5000sultan.com), desicinemas.chat dead \u2014 both dropped 2026-11-08.",
+      "last_checked": "2026-11-08T02:37:07Z"
     },
     "filmyzilla": {
-      "active_base_url": "https://thefilmyzilla.in",
+      "active_base_url": "https://www.filmyzilla80.com",
       "known_mirrors": [
+        "https://www.filmyzilla80.com",
+        "https://filmyzilla80.com",
+        "https://filmyzillahq.in",
         "https://thefilmyzilla.in",
         "https://www.filmyzilla75.com",
         "https://www.filmyzilla74.com"
       ],
       "api_type": "xml_sitemap",
       "sitemap_endpoint": "/sitemap.xml",
-      "status": "active"
+      "status": "active",
+      "notes": "filmyzilla75/74 301 to filmyzilla80; thefilmyzilla.in redirects to HQ (filmyzillahq.in, second live shape).",
+      "last_checked": "2026-11-08T02:37:07Z"
     },
     "hdhub4u": {
-      "active_base_url": "https://new8.hdhub4u.cl",
+      "active_base_url": "https://new12.hdhub4u.cl",
       "known_mirrors": [
-        "https://hdhub4u.fans",
-        "https://new8.hdhub4u.cl",
-        "https://new3.hdhub4u.free",
-        "https://new2.hdhub4u.free"
+        "https://new12.hdhub4u.cl",
+        "https://new11.hdhub4u.cl",
+        "https://hdhub4us.co.in"
       ],
       "api_type": "xml_sitemap",
       "sitemap_endpoint": "/sitemap.xml",
-      "status": "active"
+      "status": "active",
+      "notes": "hdhub4u.fans is a landing page, new3/new2.hdhub4u.free dead \u2014 dropped. hdhub4us.co.in is a live variant (user-found 2026-11-08).",
+      "last_checked": "2026-11-08T02:37:07Z"
     },
     "hdtvb": {
       "active_base_url": "https://hdutv.com",
@@ -99,16 +105,20 @@
       ],
       "api_type": "sveltekit",
       "api_endpoint": "/__data.json",
-      "status": "active"
+      "status": "active",
+      "last_checked": "2026-11-08T02:37:07Z"
     },
     "moviezguru": {
-      "active_base_url": "https://moviezguru.guru",
+      "active_base_url": "https://moviezguru.technology",
       "known_mirrors": [
+        "https://moviezguru.technology",
         "https://moviezguru.guru"
       ],
       "api_type": "wp_rest_api",
       "api_endpoint": "/wp-json/wp/v2/posts",
-      "status": "active"
+      "status": "active",
+      "notes": "moviezguru.guru redirects to .technology.",
+      "last_checked": "2026-11-08T02:37:07Z"
     },
     "multimovies": {
       "active_base_url": "https://m1.multimovies.courses",
@@ -118,26 +128,30 @@
       ],
       "api_type": "xml_sitemap",
       "sitemap_endpoint": "/sitemap.xml",
-      "status": "active"
+      "status": "active",
+      "last_checked": "2026-11-08T02:37:07Z"
     },
     "rareanimes": {
-      "active_base_url": "https://www.rareanimes.mov",
+      "active_base_url": "https://www.rareanimes.fans",
       "known_mirrors": [
+        "https://www.rareanimes.fans",
         "https://www.rareanimes.mov"
       ],
       "api_type": "wp_rest_api",
       "api_endpoint": "/wp-json/wp/v2/posts",
-      "status": "active"
+      "status": "active",
+      "last_checked": "2026-11-08T02:37:07Z"
     },
     "rogmovies": {
-      "active_base_url": "https://rogmovies.one",
+      "active_base_url": "https://rogmovies.asia",
       "known_mirrors": [
-        "https://rogmovies.one",
-        "https://rogmovies.quest"
+        "https://rogmovies.asia"
       ],
       "api_type": "xml_sitemap",
       "sitemap_endpoint": "/sitemap.xml",
-      "status": "active"
+      "status": "active",
+      "notes": "rogmovies.one/.quest are a vegamovies doorway now, not rogmovies \u2014 dropped. Live base found by the user 2026-11-08.",
+      "last_checked": "2026-11-08T02:37:07Z"
     },
     "ssrmovies": {
       "active_base_url": "https://new1.ssrmovies.page",
@@ -149,28 +163,31 @@
       ],
       "api_type": "wp_rest_api",
       "api_endpoint": "/wp-json/wp/v2/posts",
-      "status": "active"
+      "status": "active",
+      "last_checked": "2026-11-08T02:37:07Z"
     },
     "vegamovies": {
-      "active_base_url": "https://new1.vegamovies.lease",
+      "active_base_url": "https://vegamovies.lease",
       "known_mirrors": [
+        "https://vegamovies.lease",
         "https://new1.vegamovies.lease",
-        "https://vegamovies.gallery",
-        "https://vegamovies.lease"
+        "https://1vegamovies.shop"
       ],
       "api_type": "xml_sitemap",
       "sitemap_endpoint": "/sitemap.xml",
-      "status": "active"
+      "status": "active",
+      "last_checked": "2026-11-08T02:37:07Z"
     },
     "world4ufree": {
-      "active_base_url": "https://world4ufree.tours",
+      "active_base_url": "https://world4ufree.gay",
       "known_mirrors": [
-        "https://world4ufree.tours",
-        "https://world4ufree.garden"
+        "https://world4ufree.gay",
+        "https://world4ufree.tours"
       ],
       "api_type": "wp_rest_api",
       "api_endpoint": "/wp-json/wp/v2/posts",
-      "status": "active"
+      "status": "active",
+      "last_checked": "2026-11-08T02:37:07Z"
     },
     "hindilinks4u": {
       "active_base_url": "https://www.hindilinks4u.zip",
@@ -179,7 +196,7 @@
         "https://hindilinks4u.pink"
       ],
       "notes": ".pink is behind Cloudflare JS challenge; .zip serves plain HTML.",
-      "last_checked": "2026-10-21T16:27:09.511503Z"
+      "last_checked": "2026-11-08T02:37:07Z"
     },
     "toonworld4all": {
       "active_base_url": "https://toonworld4all.me",
@@ -187,7 +204,18 @@
         "https://toonworld4all.me",
         "https://www.toonworld4all.me"
       ],
-      "last_checked": "2026-10-21T16:27:09.511526Z"
+      "last_checked": "2026-11-08T02:37:07Z"
+    },
+    "xprimehub": {
+      "active_base_url": "https://xprimehub.pics",
+      "known_mirrors": [
+        "https://xprimehub.pics"
+      ],
+      "api_type": "xml_sitemap",
+      "sitemap_endpoint": "/sitemap.xml",
+      "status": "active",
+      "notes": "18+ adult catalog \u2014 scrape only, never publish; every row is_18_plus=1 (owner-approved 2026-11-08).",
+      "last_checked": "2026-11-08T02:37:07Z"
     }
   }
 }

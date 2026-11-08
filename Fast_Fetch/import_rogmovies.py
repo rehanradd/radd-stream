@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-import_rogmovies.py — Dedicated staging importer and scraper for Rogmovies (https://rogmovies.one).
+import_rogmovies.py — Dedicated staging importer and scraper for Rogmovies (https://rogmovies.asia).
 
 Key Features:
   1. Dedicated staging SQLite database: rogmovies.db (isolated from production fast_fetch.db).
@@ -53,7 +53,7 @@ if str(BASE_DIR) not in sys.path:
 
 import fast_fetch
 
-DEFAULT_BASE_URL = "https://rogmovies.one"
+DEFAULT_BASE_URL = "https://rogmovies.asia"
 DEFAULT_DB_PATH = (
     Path("/home/ubuntu/radd-stream-data/rogmovies.db")
     if Path("/home/ubuntu/radd-stream-data").exists()

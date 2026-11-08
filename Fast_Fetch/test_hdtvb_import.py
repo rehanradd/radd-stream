@@ -200,5 +200,36 @@ class HDTVBProvenanceStampTests(unittest.TestCase):
         )
 
 
+
+class _FakeHubCDNClient:
+    def resolve_hubcdn_direct(self, url):
+        return {
+            "direct_r2": "https://r2.example/f.mkv",
+            "pixeldrain": "https://pixeldrain.com/u/abc",
+            "gofile": "https://gofile.io/d/xyz",
+            "hubcloud": "https://hubcloud.pw/drive/aaa",
+            "gdflix": "https://gdflix.dev/file/bbb",
+        }
+
+
+class Session104HDTVBTests(unittest.TestCase):
+    """Session 104: hubcdn mirrors hubcloud + gdflix are stored, not dropped."""
+
+    def test_hubcloud_and_gdflix_appended(self):
+        html = (
+            "<html><head><title>Test Movie (2026)</title></head><body><h1>Test Movie (2026)</h1>"
+            '<a href="https://hubcdn.io/cloud/abc123">Download {1080p} [2GB]</a>'
+            "</body></html>"
+        )
+        data = import_hdtvb.extract_post_data_hdtvb(
+            "https://hdutv.com/test-movie-2026.html", html,
+            client=_FakeHubCDNClient(), resolve_direct=True,
+        )
+        self.assertIsNotNone(data)
+        services = [s["service"] for r in data["releases"] for s in r["sources"]]
+        self.assertIn("hubcloud", services)
+        self.assertIn("gdflix", services)
+
+
 if __name__ == "__main__":
     unittest.main()

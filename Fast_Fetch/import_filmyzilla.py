@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-import_filmyzilla.py — Dedicated staging importer and scraper for FilmyZilla (https://www.filmyzilla75.com).
+import_filmyzilla.py — Dedicated staging importer and scraper for FilmyZilla (https://www.filmyzilla80.com).
 
 Key Features:
   1. Dedicated staging SQLite database: filmyzilla.db (strictly isolated from fast_fetch.db).
@@ -30,7 +30,6 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import base64
 import concurrent.futures
 import html
 import json
@@ -52,7 +51,7 @@ BASE_DIR = Path(__file__).parent.resolve()
 if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
 
-DEFAULT_BASE_URL = "https://thefilmyzilla.in"
+DEFAULT_BASE_URL = "https://www.filmyzilla80.com"
 DEFAULT_DB_PATH = Path("/home/ubuntu/radd-stream-data/filmyzilla.db") if Path("/home/ubuntu/radd-stream-data").exists() else BASE_DIR / "filmyzilla.db"
 
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
@@ -448,10 +447,10 @@ def parse_filmyzilla_movie_page(html_text: str, page_url: str) -> dict | None:
     srv_m = re.search(r'href=["\'](/server/[^"\'>]+\.html)["\']', html_text, re.I)
     if srv_m:
         s_path = srv_m.group(1)
-        modern_server_page = f"{DEFAULT_BASE_URL}{s_path}" if s_path.startswith("/") else s_path
+        modern_server_page = urllib.parse.urljoin(page_url, s_path) if s_path.startswith("/") else s_path
 
     server_matches = re.finditer(
-        r'<a[^>]+href=["\'](https?://www\.filmyzilla\d+\.com/server/(\d+)/([^"\'<>\s]+\.html)|/server/(\d+)/([^"\'<>\s]+\.html))["\'][^>]*>(.*?)</a>',
+        r'<a[^>]+href=["\'](https?://[\w.-]*filmyzilla[\w.-]*/server/(\d+)/([^"\'<>\s]+\.html)|/server/(\d+)/([^"\'<>\s]+\.html))["\'][^>]*>(.*?)</a>',
         html_text,
         re.I | re.S,
     )
@@ -518,7 +517,8 @@ def extract_post_data_filmyzilla(client: FilmyZillaClient, movie_url: str, resol
         return None
 
     releases_data = []
-    base_url = client.base_url
+    _pu = urllib.parse.urlparse(final_url)
+    base_url = f"{_pu.scheme}://{_pu.netloc}"
 
     # Check for modern server page (/server/...html)
     if parsed.get("modern_server_page"):
@@ -531,30 +531,32 @@ def extract_post_data_filmyzilla(client: FilmyZillaClient, movie_url: str, resol
                 qual, res, codec = parse_quality_and_codec(clean_t)
                 size_m = re.search(r'([\d\.]+\s*(?:GB|MB|KB))', clean_t, re.I)
                 size_bytes = parse_size_string(size_m.group(1)) if size_m else None
-                b64 = base64.b64encode(sid.encode()).decode()
-                cdn_url = f"https://fzcdn.store/file/{b64}"
                 download_gw = f"{base_url}{dl_path}"
-
-                sources = [
-                    {
-                        "source_name": "⚡ FZCDN Direct Cloud",
-                        "service": "fzcdn",
-                        "resource_id": b64,
-                        "source_url": download_gw,
-                        "final_url": cdn_url,
-                        "is_temporary": 0,
-                        "quality": qual,
-                    },
-                    {
-                        "source_name": "⚡ FilmyZilla Direct Gateway",
-                        "service": "filmyzilla_server",
-                        "resource_id": sid,
-                        "source_url": parsed["modern_server_page"],
-                        "final_url": download_gw,
-                        "is_temporary": 0,
-                        "quality": qual,
-                    }
-                ]
+                sources = []
+                if resolve_direct:
+                    cdn_url = client.resolve_direct_cdn(download_gw, referer=parsed["modern_server_page"])
+                    if cdn_url:
+                        # The gateway 302s to the real host (gdflix.dev/file/... on HQ).
+                        # Never fabricate a host URL again: record only the redirect target.
+                        svc = "gdflix" if "gdflix" in cdn_url else ("google_cdn" if "googleusercontent" in cdn_url else "filmyzilla_server")
+                        sources.append({
+                            "source_name": "GDFlix Direct" if svc == "gdflix" else "Google CDN Direct",
+                            "service": svc,
+                            "resource_id": cdn_url.rstrip("/").split("/")[-1],
+                            "source_url": download_gw,
+                            "final_url": cdn_url,
+                            "is_temporary": 1,
+                            "quality": qual,
+                        })
+                sources.append({
+                    "source_name": "FilmyZilla Direct Gateway",
+                    "service": "filmyzilla_server",
+                    "resource_id": sid,
+                    "source_url": parsed["modern_server_page"],
+                    "final_url": download_gw,
+                    "is_temporary": 0,
+                    "quality": qual,
+                })
                 releases_data.append({
                     "label": clean_t or f"{parsed['title']} {qual}",
                     "quality": qual,
@@ -575,13 +577,33 @@ def extract_post_data_filmyzilla(client: FilmyZillaClient, movie_url: str, resol
             server_url = s["server_url"]
             download_gateway = f"{base_url}/download/{server_id}/server_1"
             sources = []
+            if resolve_direct:
+                # FZ80 server pages carry their real downloads as /verified/chqv/server_N/
+                # buttons, not /download/<id>/server_N. Follow each to its real host.
+                _sc, _, _shtml = client.get_text(server_url)
+                if _sc == 200 and _shtml:
+                    for _vpath in dict.fromkeys(re.findall(r'href=[\"\'](/verified/chqv/server_\d+/?)[\"\']', _shtml, re.I)):
+                        _vurl = urllib.parse.urljoin(server_url, _vpath)
+                        _vcdn = client.resolve_direct_cdn(_vurl, referer=server_url)
+                        if _vcdn:
+                            _svc = "gdflix" if "gdflix" in _vcdn else ("google_cdn" if "googleusercontent" in _vcdn else "filmyzilla_server")
+                            sources.append({
+                                "source_name": "GDFlix Direct" if _svc == "gdflix" else "Google CDN Direct",
+                                "service": _svc,
+                                "resource_id": _vcdn.rstrip("/").split("/")[-1],
+                                "source_url": _vurl,
+                                "final_url": _vcdn,
+                                "is_temporary": 1,
+                                "quality": s["quality"],
+                            })
 
             if resolve_direct:
                 cdn_url = client.resolve_direct_cdn(download_gateway, referer=server_url)
                 if cdn_url:
+                    _svc1 = "gdflix" if "gdflix" in cdn_url else ("google_cdn" if "googleusercontent" in cdn_url else "filmyzilla_server")
                     sources.append({
-                        "source_name": "⚡ Google CDN Direct [Server 1]",
-                        "service": "google_cdn",
+                        "source_name": "GDFlix Direct" if _svc1 == "gdflix" else ("Google CDN Direct" if _svc1 == "google_cdn" else "FilmyZilla Direct"),
+                        "service": _svc1,
                         "resource_id": server_id,
                         "source_url": download_gateway,
                         "final_url": cdn_url,
@@ -592,9 +614,10 @@ def extract_post_data_filmyzilla(client: FilmyZillaClient, movie_url: str, resol
                 gw_url_2 = f"{base_url}/download/{server_id}/server_2"
                 cdn_url_2 = client.resolve_direct_cdn(gw_url_2, referer=server_url)
                 if cdn_url_2:
+                    _svc2 = "gdflix" if "gdflix" in cdn_url_2 else ("google_cdn" if "googleusercontent" in cdn_url_2 else "filmyzilla_server")
                     sources.append({
-                        "source_name": "⚡ Google CDN Direct [Server 2]",
-                        "service": "google_cdn",
+                        "source_name": "GDFlix Direct" if _svc2 == "gdflix" else ("Google CDN Direct" if _svc2 == "google_cdn" else "FilmyZilla Direct"),
+                        "service": _svc2,
                         "resource_id": f"{server_id}_2",
                         "source_url": gw_url_2,
                         "final_url": cdn_url_2,

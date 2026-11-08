@@ -286,5 +286,33 @@ class TestEdgeCases(unittest.TestCase):
         self.assertEqual(s, 1)
 
 
+
+class Session104RareAnimesTests(unittest.TestCase):
+    """Session 104: yournewdomain.com + hubcloud.pw are hubcloud-family bridges."""
+
+    def test_hubcloud_family_branches(self):
+        import copy
+
+        content = SAMPLE_EPISODE_CONTENT.replace(
+            "https://hubcloud.ist/drive/nwryeqtyffgrhfv",
+            "https://yournewdomain.com/drive/nwryeqtyffgrhfv",
+        ).replace(
+            "https://hubcloud.ist/drive/lecvdirs1ssv1cm",
+            "https://hubcloud.pw/drive/lecvdirs1ssv1cm",
+        )
+        post = copy.deepcopy(SAMPLE_RAW_POST_JSON)
+        post["content"] = {"rendered": content}
+        data = import_rareanimes.extract_post_data_rareanimes(
+            post_url="https://www.rareanimes.fans/blue-box-season-2-hindi-episodes-download-hd/",
+            raw_post_json=post,
+            resolve_direct=False,
+        )
+        self.assertIsNotNone(data)
+        hc = [s for r in data["releases"] for s in r["sources"] if s["service"] == "hubcloud"]
+        urls = [s["source_url"] for s in hc]
+        self.assertIn("https://yournewdomain.com/drive/nwryeqtyffgrhfv", urls)
+        self.assertIn("https://hubcloud.pw/drive/lecvdirs1ssv1cm", urls)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

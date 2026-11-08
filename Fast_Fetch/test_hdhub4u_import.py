@@ -450,5 +450,45 @@ class TestStagingDatabase(unittest.TestCase):
 
 import base64
 
+
+class Session104HDHub4uTests(unittest.TestCase):
+    """Session 104: hubdrive.blog download links + playdrive/hubstream/vidaraa watch links."""
+
+    def test_hubdrive_link_parsed(self):
+        html = (
+            "<html><body><h1>The Dark Heaven (2026)</h1>"
+            "<h4>1080p MULTi WEB-DL [8GB]</h4>"
+            '<p><a href="https://hubdrive.blog/file/3309781574">Download Links</a></p>'
+            "</body></html>"
+        )
+        rels = import_hdhub4u.parse_hdhub4u_release_links(html)
+        self.assertEqual(len(rels), 1)
+        self.assertIn("hubdrive.blog", rels[0]["bridge_url"])
+
+    def test_watch_links_with_episodes(self):
+        html = (
+            "<html><body><h4>720p</h4><p>"
+            '<a href="https://greenmotors.club/?id=ABC">EPiSODE 1</a>'
+            '<a href="https://playdrive.vip/e/xyz123/s-20/ep-01">WATCH</a>'
+            '<a href="https://hubstream.art/#abc">WATCH</a>'
+            '<a href="https://vidaraa.cc/e/def456">WATCH</a></p>'
+            "<h4>720p</h4><p>"
+            '<a href="https://greenmotors.club/?id=DEF">EPiSODE 2</a>'
+            '<a href="https://playdrive.vip/e/xyz124/s-20/ep-02">WATCH</a></p>'
+            "</body></html>"
+        )
+        watch = import_hdhub4u.parse_hdhub4u_watch_links(html)
+        self.assertEqual([r["episode_number"] for r in watch], [1, 1, 1, 2])
+        self.assertEqual([r["watch_host"] for r in watch],
+                         ["playdrive", "hubstream", "vidaraa", "playdrive"])
+        data = import_hdhub4u.extract_post_data_hdhub4u(
+            "https://new12.hdhub4u.cl/bigg-boss-s20/", html, resolve_direct=False
+        )
+        self.assertEqual(len(data["releases"]), 6)
+        self.assertEqual(data["releases"][2]["sources"][0]["service"], "playdrive")
+        self.assertEqual(data["releases"][2]["sources"][0]["final_url"],
+                         "https://playdrive.vip/e/xyz123/s-20/ep-01")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

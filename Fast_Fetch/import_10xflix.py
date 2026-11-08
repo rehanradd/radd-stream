@@ -56,7 +56,7 @@ if str(BASE_DIR) not in sys.path:
 
 import fast_fetch
 
-DEFAULT_BASE_URL = "https://10xflix.bond"
+DEFAULT_BASE_URL = "https://10xflix.asia"
 WP_API_URL = f"{DEFAULT_BASE_URL}/wp-json/wp/v2/posts"
 DEFAULT_DB_PATH = (
     Path("/home/ubuntu/radd-stream-data/10xflix.db")
@@ -436,14 +436,18 @@ def parse_10xflix_releases(content_html: str, post_title: str) -> list[dict]:
 
     seen_urls = set()
     for href, txt in anchors:
-        if href in seen_urls:
-            continue
-        seen_urls.add(href)
-
         clean_txt = re.sub(r"<[^>]+>", "", txt).strip()
+        # Screenshot anchors (e.g. "Watch Online - Screenshot") are preview images,
+        # not downloads: the same bridge URL is re-listed per quality tier, so skip them.
+        if re.search(r"screen\s?sho+?t", clean_txt, re.I):
+            continue
         # Quality detection
         q_m = re.search(r"\b(2160p|4k|1080p|720p|480p)\b", clean_txt, re.IGNORECASE)
         quality = q_m.group(1).lower() if q_m else "720p"
+        # Dedup on (url, quality): one bridge URL serves several quality tiers.
+        if (href, quality) in seen_urls:
+            continue
+        seen_urls.add((href, quality))
 
         # Size detection
         sz_m = re.search(r"\[([0-9\.]+\s*(?:GB|MB|KB))\]", clean_txt, re.IGNORECASE)

@@ -212,5 +212,29 @@ class TestWorld4uFreeImport(unittest.TestCase):
                 self.assertEqual(results[0]["is_temporary"], 1)
 
 
+
+class Session104World4uFreeTests(unittest.TestCase):
+    """Session 104: the w4links gateway rotated .space -> .cfd (any TLD now)."""
+
+    def test_w4links_any_tld_parsed(self):
+        html = (
+            '<p><a href="https://w4links.cfd/115368/">Jailer 2 1080p [2.5GB]</a>'
+            '<a href="https://w4links.xyz/999/">Jailer 2 720p [1.2GB]</a></p>'
+        )
+        _imdb, _poster, rels = import_world4ufree.parse_world4ufree_content(
+            html, "Jailer 2 2026 Hindi Movie"
+        )
+        urls = [r["bridge_url"] for r in rels]
+        self.assertIn("https://w4links.cfd/115368/", urls)
+        self.assertIn("https://w4links.xyz/999/", urls)
+
+    def test_unwrap_fastilinks_accepts_referer(self):
+        import inspect
+
+        params = inspect.signature(import_world4ufree.World4uFreeClient.unwrap_fastilinks).parameters
+        self.assertIn("referer", params)
+        self.assertIsNone(params["referer"].default)
+
+
 if __name__ == "__main__":
     unittest.main()

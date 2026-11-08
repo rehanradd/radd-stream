@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-import_vegamovies.py — Dedicated staging importer and scraper for Vegamovies (https://new1.vegamovies.lease).
+import_vegamovies.py — Dedicated staging importer and scraper for Vegamovies (https://vegamovies.lease).
 
 Key Features:
   1. Dedicated staging SQLite database: vegamovies.db (isolated from production fast_fetch.db).
@@ -47,7 +47,7 @@ if str(BASE_DIR) not in sys.path:
 
 import fast_fetch
 
-DEFAULT_BASE_URL = "https://new1.vegamovies.lease"
+DEFAULT_BASE_URL = "https://vegamovies.lease"
 DEFAULT_DB_PATH = (
     Path("/home/ubuntu/radd-stream-data/vegamovies.db")
     if Path("/home/ubuntu/radd-stream-data").exists()

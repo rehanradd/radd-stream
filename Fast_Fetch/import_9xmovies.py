@@ -35,7 +35,7 @@ from pathlib import Path
 
 # --- Constants ---
 DEFAULT_DB_PATH = Path("/home/ubuntu/radd-stream-data/9xmovies.db")
-BASE_URL = "https://9xmovie.bayern"
+BASE_URL = "https://9xmovie.camera"
 WP_API_URL = "https://9xmovie.bayern/wp-json/wp/v2/posts"
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 
@@ -524,6 +524,9 @@ def parse_9xmovies_content(
     seen_bridges = set()
     for i, b in enumerate(blocks):
         if "linksddr." in b and "/view/" in b:
+            # Screenshot anchors are preview images, not downloads.
+            if re.search(r"screen\s?sho+?t", re.sub(r"<[^>]+>", "", b), re.I):
+                continue
             bridge_m = re.search(
                 r'href=[\'"](https?://linksddr\.[a-z]+/view/[A-Za-z0-9_-]+)[\'"]', b
             )
@@ -532,9 +535,6 @@ def parse_9xmovies_content(
             raw_bridge_url = bridge_m.group(1)
             # Canonicalize to linksddr.com
             bridge_url = re.sub(r'https?://linksddr\.[a-z]+/', 'https://linksddr.com/', raw_bridge_url)
-            if bridge_url in seen_bridges:
-                continue
-            seen_bridges.add(bridge_url)
 
             # Inspect previous block for resolution and size
             prev_block = blocks[i - 1] if i > 0 else ""
@@ -545,6 +545,9 @@ def parse_9xmovies_content(
             if not q_m:
                 q_m = re.search(r"\b(4K|2160p|1080p|720p|480p)\b", b, re.I)
             quality = q_m.group(1).upper() if q_m else "720P"
+            if (bridge_url, quality) in seen_bridges:
+                continue
+            seen_bridges.add((bridge_url, quality))
 
             # Size detection
             size_m = re.search(r"\[([\d\.]+\s*(?:GB|MB|gb|mb))\]", clean_prev)

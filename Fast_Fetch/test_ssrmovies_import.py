@@ -225,5 +225,32 @@ class TestSSRMoviesImport(unittest.TestCase):
             self.assertEqual(scraped_flag, 1)
 
 
+
+class Session104SSRMoviesTests(unittest.TestCase):
+    """Session 104: dl.direct-cloud.top buttons + Ep NN headings (were dropped)."""
+
+    def test_direct_cloud_button_gateway_recorded(self):
+        btn = '<a href="https://dl.direct-cloud.top/d/BBB222">Download in 1080p - 1.8GB</a>'
+        parsed = import_ssrmovies.parse_ssrmovies_release_button(btn, "")
+        self.assertIsNotNone(parsed)
+        self.assertEqual(parsed["gateway"], "direct_cloud")
+        self.assertEqual(parsed["quality"], "1080p")
+
+    def test_ep_headings_attribute_series_episodes(self):
+        html = """<html><body>
+<h2>Ep 07</h2>
+<p><a href="https://secure.linkszilla.top/view/AAA111">Watch &amp; Download in 1080p - 2.54GB</a></p>
+<p><a href="https://dl.direct-cloud.top/d/BBB222">Download in 1080p - 1.8GB</a></p>
+<h2>Ep 08</h2>
+<p><a href="https://secure.linkszilla.top/view/CCC333">Watch &amp; Download in 720p - 1.1GB</a></p>
+</body></html>"""
+        data = import_ssrmovies.extract_post_data_ssrmovies_enhanced(
+            "https://new1.ssrmovies.page/kapil-show-s05/", html, resolve_direct=False
+        )
+        self.assertEqual(len(data["releases"]), 3)
+        self.assertEqual([r["episode"] for r in data["releases"]], [7, 7, 8])
+        self.assertEqual(data["releases"][1]["sources"][0]["service"], "direct_cloud")
+
+
 if __name__ == "__main__":
     unittest.main()

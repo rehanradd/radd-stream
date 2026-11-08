@@ -124,13 +124,17 @@ class RuleAgreementTests(unittest.TestCase):
     def test_distribution_words_alone_do_not_reproduce(self):
         self.assertFalse(fast_fetch.adult_rule_agrees(self.row(*SUGGESTION_ONLY)))
 
-    def test_site_evidence_is_currently_no_evidence_at_all(self):
-        """Characterization: `ADULT_SOURCE_SITES` is empty, so `source_site` corroborates
-        nothing. If a lane ever fills that set, propagation gains a witness and the live
-        provenance numbers above need re-measuring, not just re-running."""
-        self.assertEqual(len(fast_fetch.ADULT_SOURCE_SITES), 0)
+    def test_site_evidence_is_xprimehub_only(self):
+        """Characterization (Session 104, owner-approved 2026-11-08): `ADULT_SOURCE_SITES`
+        holds exactly one member, xprimehub, whose whole catalog is 18+ by the site's own
+        branding. `source_site` is therefore a witness only for xprimehub rows. The live
+        provenance numbers in the module docstring are unaffected: xprimehub has zero rows
+        in the live catalog yet, so no existing row gains a new witness."""
+        self.assertEqual(fast_fetch.ADULT_SOURCE_SITES, frozenset({"xprimehub"}))
         self.assertFalse(fast_fetch.adult_rule_agrees(
             self.row("Some Plain Film", slug="some-plain-film")))
+        self.assertTrue(fast_fetch.adult_rule_agrees(
+            self.row("Some Plain Film", slug="some-plain-film", site="xprimehub")))
 
 
 class WorkIdentityTests(unittest.TestCase):

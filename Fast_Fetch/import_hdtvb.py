@@ -353,6 +353,22 @@ def extract_post_data_hdtvb(
                     "final_url": hub_data["gofile"],
                     "playback_type": "download",
                 })
+            if hub_data.get("hubcloud"):
+                sources.append({
+                    "source_name": f"HubCloud [{quality}]",
+                    "service": "hubcloud",
+                    "source_url": hub_data["hubcloud"],
+                    "final_url": hub_data["hubcloud"],
+                    "playback_type": "download",
+                })
+            if hub_data.get("gdflix"):
+                sources.append({
+                    "source_name": f"GDFlix [{quality}]",
+                    "service": "gdflix",
+                    "source_url": hub_data["gdflix"],
+                    "final_url": hub_data["gdflix"],
+                    "playback_type": "download",
+                })
 
         # Always include the HubCDN Gateway source
         sources.append({

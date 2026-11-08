@@ -146,5 +146,20 @@ class SaveTests(unittest.TestCase):
                 "SELECT is_18_plus FROM posts WHERE canonical_key='adult_show_s01'").fetchone()[0], 1)
 
 
+
+class Session104ToonWorldTests(unittest.TestCase):
+    """Session 104: --resolve is the default; --no-resolve opts out."""
+
+    def test_resolve_defaults_on(self):
+        args = tw.build_parser().parse_args([])
+        self.assertTrue(args.resolve)
+        self.assertFalse(args.no_resolve)
+        self.assertTrue(args.resolve and not args.no_resolve)
+
+    def test_no_resolve_opts_out(self):
+        args = tw.build_parser().parse_args(["--no-resolve"])
+        self.assertFalse(args.resolve and not args.no_resolve)
+
+
 if __name__ == "__main__":
     unittest.main()

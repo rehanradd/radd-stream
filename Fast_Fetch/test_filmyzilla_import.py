@@ -231,5 +231,75 @@ class TestFilmyZillaImport(unittest.TestCase):
             self.assertEqual(cdn, "https://video-downloads.googleusercontent.com/sample_hash")
 
 
+
+class _FakeFZClient:
+    base_url = "https://www.filmyzilla80.com"
+
+    def __init__(self, pages, resolves):
+        self._pages = pages
+        self._resolves = resolves
+
+    def get_text(self, url, **kw):
+        code, _final, html = self._pages.get(url, (404, url, ""))
+        return code, url, html
+
+    def resolve_direct_cdn(self, url, referer=None, timeout=10):
+        return self._resolves.get(url)
+
+
+class Session104FilmyzillaTests(unittest.TestCase):
+    """Session 104: no fabricated fzcdn URLs; gateway 302 followed to gdflix;
+    FZ80 /verified/chqv/server_N/ buttons read; gateways built on the post page's
+    own domain."""
+
+    def test_modern_path_stores_real_gdflix_never_fzcdn(self):
+        movie = (
+            "<html><head><title>Jailer 2 (2026) Hindi Dubbed Movie</title></head><body>"
+            '<a href="/server/105261/jailer-2.html">Watch</a></body></html>'
+        )
+        server = '<a href="/download/105261/server_1">1080p - 3.22GB</a>'
+        client = _FakeFZClient(
+            {
+                "https://filmyzillahq.in/movie/1/jailer-2.html": (200, "", movie),
+                "https://filmyzillahq.in/server/105261/jailer-2.html": (200, "", server),
+            },
+            {"https://filmyzillahq.in/download/105261/server_1": "https://gdflix.dev/file/PHwypAkHUPxSizS"},
+        )
+        data = import_filmyzilla.extract_post_data_filmyzilla(
+            client, "https://filmyzillahq.in/movie/1/jailer-2.html", resolve_direct=True
+        )
+        services = [s["service"] for r in data["releases"] for s in r["sources"]]
+        self.assertIn("gdflix", services)
+        self.assertNotIn("fzcdn", services)
+        gw = [s for r in data["releases"] for s in r["sources"] if s["service"] == "filmyzilla_server"]
+        self.assertTrue(gw[0]["final_url"].startswith("https://filmyzillahq.in/download/"))
+
+    def test_legacy_path_reads_verified_buttons_on_own_domain(self):
+        movie = (
+            "<html><head><title>Jailer 2 (2026) Hindi Dubbed Movie</title></head><body>"
+            '<a href="https://www.filmyzilla80.com/server/40321/jailer-2-hindi.html">720p</a>'
+            "</body></html>"
+        )
+        server = (
+            '<a href="/verified/chqv/server_1/">Start Download Now - Server 3</a>'
+            '<a href="/verified/chqv/server_2/">Start Download Now - Server 4</a>'
+        )
+        client = _FakeFZClient(
+            {
+                "https://www.filmyzilla80.com/movie/22407/jailer-2.html": (200, "", movie),
+                "https://www.filmyzilla80.com/server/40321/jailer-2-hindi.html": (200, "", server),
+            },
+            {"https://www.filmyzilla80.com/verified/chqv/server_1/": "https://gdflix.dev/file/VERIFIED123",
+             "https://www.filmyzilla80.com/verified/chqv/server_2/": "https://gdflix.dev/file/VERIFIED123"},
+        )
+        data = import_filmyzilla.extract_post_data_filmyzilla(
+            client, "https://www.filmyzilla80.com/movie/22407/jailer-2.html", resolve_direct=True
+        )
+        services = [s["service"] for r in data["releases"] for s in r["sources"]]
+        self.assertIn("gdflix", services)
+        gw = [s for r in data["releases"] for s in r["sources"] if s["service"] == "filmyzilla_server"]
+        self.assertTrue(gw[0]["final_url"].startswith("https://www.filmyzilla80.com/download/40321/"))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -230,5 +230,26 @@ class TestBolly4uImport(unittest.TestCase):
                 self.assertEqual(results[0]["is_temporary"], 1)
 
 
+
+class Session104Bolly4uTests(unittest.TestCase):
+    """Session 104: photojin rotated .study -> .buzz (any TLD now)."""
+
+    def test_photojin_any_tld_accepted(self):
+        html = (
+            '<h3>Download 1080p [2.1GB]</h3>'
+            '<p><a href="https://photojin.buzz/f/abc123">Download 1080p</a></p>'
+        )
+        rels = import_bolly4u.parse_bolly4u_content(html, "Test Movie 2026 Hindi 1080p")
+        self.assertEqual(len(rels), 1)
+        self.assertIn("photojin.buzz", rels[0]["links"][0][0])
+
+    def test_unwrapper_derives_host_from_landing_url(self):
+        import inspect
+
+        src = inspect.getsource(import_bolly4u.Bolly4uClient.unwrap_photojin)
+        self.assertIn("pj_origin", src)
+        self.assertNotIn("photojin.study", src)
+
+
 if __name__ == "__main__":
     unittest.main()

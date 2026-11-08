@@ -3246,10 +3246,14 @@ class AdultPatternSplitDecisionTests(unittest.TestCase):
     def test_two_independent_suggestions_corroborate(self):
         self.assertEqual(fast_fetch.is_adult_title("Vixen Blacked Diaries"), 1)
 
-    def test_adult_source_site_authority_is_empty_and_fail_closed(self):
-        # No ingested host reached whole-catalog adult authority (max measured 36.25% on
-        # 10xflix), so provenance alone hides nothing until a measured ~100% host is added.
-        self.assertEqual(len(fast_fetch.ADULT_SOURCE_SITES), 0)
+    def test_adult_source_site_authority_is_xprimehub_only(self):
+        # Owner-approved 2026-11-08 (Session 104): xprimehub.pics brands its whole
+        # catalog 18+ in its own site title, the owner verified it live, and the VM
+        # probe found every sampled post adult — the first host to reach whole-catalog
+        # adult authority (previous max measured 36.25% on 10xflix). The pin is exact:
+        # provenance alone hides nothing from any other site.
+        self.assertEqual(fast_fetch.ADULT_SOURCE_SITES, frozenset({"xprimehub"}))
+        self.assertEqual(fast_fetch.site_implies_adult("xprimehub"), 1)
         self.assertEqual(fast_fetch.site_implies_adult("10xflix"), 0)
         self.assertEqual(fast_fetch.site_implies_adult(None), 0)
 

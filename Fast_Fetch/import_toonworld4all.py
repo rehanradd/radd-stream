@@ -734,7 +734,8 @@ def print_status(db_path: Path):
     print(f"posts={posts:,} (adult-flagged={adult:,}) releases={rels:,} sources={srcs:,} pending={pend:,} failed={fail:,}")
 
 
-def main():
+def build_parser() -> argparse.ArgumentParser:
+    """CLI parser (kept separate from main() so the --resolve default is unit-testable)."""
     parser = argparse.ArgumentParser(description="ToonWorld4All staging scraper")
     parser.add_argument("--sync-api", action="store_true", help="Cache WP REST API posts")
     parser.add_argument("--max-items", type=int, default=None, help="Cap on synced posts")
@@ -742,11 +743,16 @@ def main():
     parser.add_argument("--delay", type=float, default=0.3, help="Per-request delay seconds")
     parser.add_argument("--limit", type=int, default=None, help="Limit crawled posts this run")
     parser.add_argument("--status", action="store_true", help="Print staging DB metrics")
-    parser.add_argument("--resolve", action="store_true", help="Unwrap /redirect/ bridges into final CDN URLs")
+    parser.add_argument("--resolve", action="store_true", default=True, help="Unwrap /redirect/ bridges into final CDN URLs (default: on)")
+    parser.add_argument("--no-resolve", action="store_true", help="Store /redirect/ bridges unresolved")
     parser.add_argument("--resolve-bridges", action="store_true",
                         help="Back-fill final_url for already-stored /redirect/ bridges")
     parser.add_argument("--db-path", type=Path, default=DB_PATH, help="Staging DB path")
-    args = parser.parse_args()
+    return parser
+
+
+def main():
+    args = build_parser().parse_args()
 
     db_path = Path(args.db_path)
     base_url = get_active_base_url(SITE_NAME, DEFAULT_BASE_URL)
@@ -761,7 +767,7 @@ def main():
         sync_api_to_db(db_path, base_url, args.max_items)
         return
     run_crawler(db_path, base_url, workers=args.workers, delay=args.delay, limit=args.limit,
-                resolve_redirects=args.resolve)
+                resolve_redirects=args.resolve and not args.no_resolve)
 
 
 if __name__ == "__main__":

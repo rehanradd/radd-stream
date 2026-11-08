@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 """
-import_bolly4u.py — Dedicated staging importer and scraper for Bolly4u (https://bolly4uz.click).
+import_bolly4u.py — Dedicated staging importer and scraper for Bolly4u (https://bolly4u.lol).
 
 Key Architectural Advantages & Speed Boosts:
   1. Open WordPress REST API with 100-item bulk pagination:
      - /wp-json/wp/v2/posts?per_page=100
      - 36,700+ catalog titles ingested in ~367 HTTP requests at 40+ titles/second.
      - Entire post HTML with all release and download sections is pre-rendered in content['rendered'].
-  2. Hidden Direct-Stream JSON API (photojin.study/action):
+  2. Hidden Direct-Stream JSON API (photojin.<any-TLD>/action):
      - Discovered reverse-engineered backend JSON API:
-       POST https://photojin.study/action
+       POST https://photojin.<any-TLD>/action
        Payload: {"type": "DOWNLOAD_GENERATE", "payload": {"uid": <uid>, "access_token": <token>}}
      - Bypasses client-side countdowns and delays completely.
      - Returns instant 10Gbps Google CDN streaming links (lh3.googleusercontent.com/pw/...=dv) in < 1.0s.
@@ -55,7 +55,7 @@ if str(BASE_DIR) not in sys.path:
 
 import fast_fetch
 
-DEFAULT_BASE_URL = "https://bolly4uv.com"
+DEFAULT_BASE_URL = "https://bolly4u.lol"
 WP_API_URL = f"{DEFAULT_BASE_URL}/wp-json/wp/v2/posts"
 DEFAULT_DB_PATH = (
     Path("/home/ubuntu/radd-stream-data/bolly4u.db")
@@ -190,9 +190,11 @@ class Bolly4uClient:
 
     def unwrap_photojin(self, pj_url: str) -> list[dict]:
         """
-        Unwraps photojin.study gateway via hidden /action JSON API.
+        Unwraps photojin.<any-TLD> gateway via hidden /action JSON API.
         Returns direct Google CDN streaming source (lh3.googleusercontent.com/pw/...=dv).
         """
+        pj_host = urllib.parse.urlparse(pj_url).netloc
+        pj_origin = f"https://{pj_host}"
         results = []
         try:
             # Step 1: GET initial landing page
@@ -216,7 +218,7 @@ class Bolly4uClient:
 
             headers = {
                 "User-Agent": fast_fetch.USER_AGENT,
-                "Origin": "https://photojin.study",
+                "Origin": pj_origin,
                 "Referer": final_url,
                 "Content-Type": "application/x-www-form-urlencoded",
             }
@@ -243,10 +245,10 @@ class Bolly4uClient:
                     "Content-Type": "application/json; charset=UTF-8",
                     "X-Requested-With": "xmlhttprequest",
                     "Referer": final_url2,
-                    "Origin": "https://photojin.study",
+                    "Origin": pj_origin,
                     "Cache-Control": "no-cache",
                 }
-                req_api = urllib.request.Request("https://photojin.study/action", data=api_payload, headers=api_headers)
+                req_api = urllib.request.Request(f"{pj_origin}/action", data=api_payload, headers=api_headers)
                 with self.opener.open(req_api, timeout=10) as resp3:
                     res_json = json.loads(resp3.read().decode("utf-8"))
 
@@ -518,7 +520,7 @@ def parse_bolly4u_content(content_html: str, post_title: str) -> list[dict]:
         anchors = re.findall(r'<a\s+[^>]*href=[\"\']([^\"\']+)[\"\'][^>]*>(.*?)</a>', sec, re.I | re.S)
         valid_links = []
         for href, text in anchors:
-            if any(x in href.lower() for x in ["photojin.study", "linkskeep", "movcloud"]):
+            if any(x in href.lower() for x in ["photojin.", "linkskeep", "movcloud"]):
                 valid_links.append((href, re.sub(r"<[^>]+>", "", text).strip()))
 
         if not valid_links:
@@ -549,7 +551,7 @@ def parse_bolly4u_content(content_html: str, post_title: str) -> list[dict]:
     # Fallback if no heading sections matched: extract any photojin or linkskeep anchors directly
     if not releases:
         all_anchors = re.findall(r'<a\s+[^>]*href=[\"\']([^\"\']+)[\"\'][^>]*>(.*?)</a>', content_html, re.I | re.S)
-        direct_pj = [h for h, _ in all_anchors if "photojin.study" in h]
+        direct_pj = [h for h, _ in all_anchors if "photojin." in h]
         if direct_pj:
             releases.append({
                 "label": "Standard Download",
@@ -702,7 +704,7 @@ def scrape_post_item(item: tuple, client: Bolly4uClient) -> dict | None:
         for rel in releases_data:
             resolved_sources = []
             for link_url, link_text in rel.get("links", []):
-                if "photojin.study" in link_url:
+                if "photojin." in link_url:
                     sources = client.unwrap_photojin(link_url)
                     resolved_sources.extend(sources)
                 elif "linkskeep" in link_url:

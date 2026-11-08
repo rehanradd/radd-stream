@@ -286,7 +286,7 @@ def parse_ssrmovies_release_button(btn_html: str, full_html: str = "") -> dict |
     Example button:
       <a href="https://secure.linkszilla.top/view/-Zw8TA6H1r" ...>Watch &amp; Download in 1080p - 2.8GB</a>
     """
-    m = re.search(r'href=["\'](https?://secure\.linkszilla\.top/view/[^"\']+)["\'][^>]*>(.*?)</a>', btn_html, re.I | re.S)
+    m = re.search(r'href=["\'](https?://(?:secure\.linkszilla\.top/view|dl\.direct-cloud\.top/d)/[^"\']+)["\'][^>]*>(.*?)</a>', btn_html, re.I | re.S)
     if not m:
         return None
 
@@ -324,6 +324,7 @@ def parse_ssrmovies_release_button(btn_html: str, full_html: str = "") -> dict |
 
     return {
         "url": lz_url,
+        "gateway": "linkszilla" if "linkszilla" in lz_url else "direct_cloud",
         "button_text": raw_text,
         "quality": qual,
         "size": size,
@@ -413,20 +414,39 @@ def extract_post_data_ssrmovies_enhanced(
         language = "English"
 
     # 6. Extract Release Download Buttons (LinksZilla anchors)
-    button_matches = re.findall(
-        r'(<a\s+[^>]*href=["\']https?://secure\.linkszilla\.top/view/[^"\']+["\'][^>]*>.*?</a>)',
+    # 6. Extract Release Download Buttons (LinksZilla + direct-cloud anchors).
+    # Episode numbers come from the preceding "Ep NN" headings in document order:
+    # series buttons carry no episode in their own text, so the last heading
+    # before each button is the episode it belongs to.
+    heading_eps = []
+    for _hm in re.finditer(r"<h[1-6][^>]*>(.*?)</h[1-6]>", page_html, re.I | re.S):
+        _ep_m = re.search(r"\bEp\s*0*(\d+)\b", re.sub(r"<[^>]+>", "", _hm.group(1)), re.I)
+        if _ep_m:
+            heading_eps.append((_hm.start(), int(_ep_m.group(1))))
+
+    button_matches = list(re.finditer(
+        r'(<a\s+[^>]*href=[\"\']https?://(?:secure\.linkszilla\.top/view|dl\.direct-cloud\.top/d)/[^\"\']+[\"\'][^>]*>.*?</a>)',
         page_html,
         re.I | re.S,
-    )
+    ))
 
     releases = []
     seen_lz_urls = set()
 
-    for btn_html in button_matches:
+    for _bm in button_matches:
+        btn_html = _bm.group(1)
         parsed = parse_ssrmovies_release_button(btn_html, page_html)
-        if not parsed or parsed["url"] in seen_lz_urls:
+        if parsed is None:
             continue
-        seen_lz_urls.add(parsed["url"])
+        if parsed["episode"] is None:
+            for _pos, _ep_no in heading_eps:
+                if _pos < _bm.start():
+                    parsed["episode"] = _ep_no
+                else:
+                    break
+        if (parsed["url"], parsed["episode"]) in seen_lz_urls:
+            continue
+        seen_lz_urls.add((parsed["url"], parsed["episode"]))
 
         qual = parsed["quality"]
         size_label = f" [{parsed['size']}]" if parsed["size"] else ""
@@ -434,11 +454,22 @@ def extract_post_data_ssrmovies_enhanced(
 
         sources = []
         if resolve_direct:
-            sources = fast_fetch.unwrap_linkszilla(parsed["url"])
+            if parsed.get("gateway") == "direct_cloud":
+                _cdn_u, _svc, _is_tmp = fast_fetch.unwrap_direct_cloud(parsed["url"])
+                sources = [{
+                    "source_name": "Direct-Cloud [High Speed]",
+                    "service": "direct_cloud",
+                    "resource_id": parsed["url"].rstrip("/").split("/")[-1],
+                    "source_url": parsed["url"],
+                    "final_url": _cdn_u,
+                    "is_temporary": _is_tmp,
+                }]
+            else:
+                sources = fast_fetch.unwrap_linkszilla(parsed["url"])
         else:
             sources = [{
-                "source_name": "LinksZilla Bridge",
-                "service": "linkszilla",
+                "source_name": "Direct-Cloud Bridge" if parsed.get("gateway") == "direct_cloud" else "LinksZilla Bridge",
+                "service": "direct_cloud" if parsed.get("gateway") == "direct_cloud" else "linkszilla",
                 "resource_id": parsed["url"].rstrip("/").split("/")[-1],
                 "source_url": parsed["url"],
                 "final_url": parsed["url"],

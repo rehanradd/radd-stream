@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-import_world4ufree.py — Dedicated staging importer and scraper for World4uFree (https://world4ufree.garden).
+import_world4ufree.py — Dedicated staging importer and scraper for World4uFree (https://world4ufree.gay).
 
 Key Features & Hidden API Accelerators:
   1. 100-Item Bulk WP REST API Catalog Synchronization:
@@ -62,7 +62,7 @@ if str(BASE_DIR) not in sys.path:
 
 import fast_fetch
 
-DEFAULT_BASE_URL = "https://world4ufree.tours"
+DEFAULT_BASE_URL = "https://world4ufree.gay"
 WP_API_URL = f"{DEFAULT_BASE_URL}/wp-json/wp/v2/posts"
 DEFAULT_DB_PATH = (
     Path("/home/ubuntu/radd-stream-data/world4ufree.db")
@@ -245,14 +245,14 @@ class World4uFreeClient:
 
         return results
 
-    def unwrap_fastilinks(self, fl_url: str) -> list[dict]:
+    def unwrap_fastilinks(self, fl_url: str, referer: str | None = None) -> list[dict]:
         """
         Unwraps fastilinks.beauty session-cookie CSRF form.
         Yields Mediafire, Cloudflare Worker (via photolinx), GDFlix, GoFile, DriveHub, 1fichier, BuzzHeavier.
         """
         results = []
         try:
-            code, final_url, html_landing, _ = self.get_text(fl_url, referer="https://w4links.space/", timeout=10)
+            code, final_url, html_landing, _ = self.get_text(fl_url, referer=referer or self.base_url, timeout=10)
             if code != 200 or not html_landing:
                 return results
 
@@ -357,7 +357,7 @@ class World4uFreeClient:
 
     def unwrap_w4links(self, w4_url: str) -> list[tuple[str, list[dict]]]:
         """
-        Unwraps w4links.space gateway page.
+        Unwraps w4links.<any-TLD> gateway page.
         Returns list of (quality_hint, resolved_sources).
         """
         results = []
@@ -370,7 +370,7 @@ class World4uFreeClient:
             anchors = re.findall(r'<a\s+[^>]*href=[\"\'](https?://fastilinks\.beauty/view/[^\"\']+)[\"\'][^>]*>(.*?)</a>', html_text, re.I | re.S)
             for href, text in anchors:
                 clean_t = re.sub(r'<[^>]+>', '', text).strip()
-                sources = self.unwrap_fastilinks(href)
+                sources = self.unwrap_fastilinks(href, referer=w4_url)
                 if sources:
                     results.append((clean_t, sources))
         except Exception:
@@ -532,7 +532,7 @@ def parse_world4ufree_content(content_html: str, post_title: str) -> tuple[str |
 
     # Supported bridge/host URL patterns
     link_patterns = [
-        r'<a\s+[^>]*href=[\\"\'](https?://w4links\.space/\d+/?)[\\"\'\'][^>]*>(.*?)</a>',
+        r'<a\s+[^>]*href=[\\"\'](https?://w4links\.[a-z]+/\d+/?)[\\"\'\'][^>]*>(.*?)</a>',
         r'<a\s+[^>]*href=[\\"\'](https?://fastilinks\.beauty/view/[^\\"\' ]+)[\\"\'\'][^>]*>(.*?)</a>',
         r'<a\s+[^>]*href=[\\"\'](https?://wlinksi\.site/[^\\"\' ]+)[\\"\'\'][^>]*>(.*?)</a>',
         r'<a\s+[^>]*href=[\\"\'](https?://cloud\.mail\.ru/public/[^\\"\' ]+)[\\"\'\'][^>]*>(.*?)</a>',
@@ -704,7 +704,7 @@ def scrape_post_item(item: tuple, client: World4uFreeClient) -> dict | None:
             bridge_url = rel.get("bridge_url")
             sources = []
             if bridge_url:
-                if "w4links.space" in bridge_url:
+                if "w4links." in bridge_url:
                     unwrapped_pairs = client.unwrap_w4links(bridge_url)
                     for hint, src_list in unwrapped_pairs:
                         sources.extend(src_list)

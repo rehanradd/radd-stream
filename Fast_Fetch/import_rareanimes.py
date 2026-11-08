@@ -54,7 +54,7 @@ if str(BASE_DIR) not in sys.path:
 
 import fast_fetch
 
-DEFAULT_BASE_URL = "https://www.rareanimes.mov"
+DEFAULT_BASE_URL = "https://www.rareanimes.fans"
 WP_API_URL = f"{DEFAULT_BASE_URL}/wp-json/wp/v2/posts"
 DEFAULT_DB_PATH = (
     Path("/home/ubuntu/radd-stream-data/rareanimes.db")
@@ -503,7 +503,7 @@ def extract_post_data_rareanimes(
                     })
 
             # 2. HubCloud Drive
-            elif "hubcloud.ist" in ulow:
+            elif any(h in ulow for h in ("hubcloud.ist", "hubcloud.pw", "yournewdomain.com")):
                 bridge_url = bridge_url or u
                 if resolve_direct:
                     try:

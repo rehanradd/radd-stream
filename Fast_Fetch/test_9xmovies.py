@@ -162,5 +162,23 @@ class Test9xmoviesImporter(unittest.TestCase):
                 os.remove(db_path)
 
 
+
+class Session104NineXMoviesTests(unittest.TestCase):
+    """Session 104: screenshot anchors skipped; one bridge URL keeps every tier."""
+
+    def test_screenshot_skipped_and_tiers_kept(self):
+        html = (
+            "<p>1080p [2.0GB]</p>"
+            '<p><a href="https://linksddr.com/view/XXX111">Download 1080p</a></p>'
+            "<p>720p [1.0GB]</p>"
+            '<p><a href="https://linksddr.com/view/XXX111">Download 720p</a></p>'
+            '<p><a href="https://linksddr.com/view/YYY222">Screenshot</a></p>'
+        )
+        _imdb, _poster, rels = parse_9xmovies_content(html, "Test Movie 2026 Hindi")
+        self.assertEqual(len(rels), 2)
+        self.assertEqual(rels[0]["quality"], "1080P")
+        self.assertEqual(rels[1]["quality"], "720P")
+
+
 if __name__ == "__main__":
     unittest.main()

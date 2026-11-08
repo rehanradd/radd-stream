@@ -56,7 +56,7 @@ if str(BASE_DIR) not in sys.path:
 
 import fast_fetch
 
-DEFAULT_BASE_URL = "https://hdhub4u.fans"
+DEFAULT_BASE_URL = "https://new12.hdhub4u.cl"
 HOST_RESOLVER_URL = "https://h4.suncdn.org/host/"
 TYPESENSE_SEARCH_URL = "https://search.pingora.fyi/collections/post/documents/search"
 DEFAULT_DB_PATH = (
@@ -370,7 +370,7 @@ def parse_hdhub4u_release_links(page_html: str) -> list[dict]:
         body_html = sm.group(2)
 
         gm_links = re.findall(
-            r'href=["\'](https?://[^\s"\'<>]*(?:greenmotors|linkrit|hubcloud\.)[^\s"\'<>]*)["\']',
+            r'href=["\'](https?://[^\s"\'<>]*(?:greenmotors|linkrit|hubcloud\.|hubdrive\.)[^\s"\'<>]*)["\']',
             body_html,
             re.IGNORECASE,
         )
@@ -395,7 +395,7 @@ def parse_hdhub4u_release_links(page_html: str) -> list[dict]:
 
         # Check if this section has individual episode buttons
         ep_buttons = re.findall(
-            r'<a[^>]+href=["\'](https?://[^\s"\'<>]*(?:greenmotors|linkrit|hubcloud\.)[^\s"\'<>]*)["\'][^>]*>(.*?)</a>',
+            r'<a[^>]+href=["\'](https?://[^\s"\'<>]*(?:greenmotors|linkrit|hubcloud\.|hubdrive\.)[^\s"\'<>]*)["\'][^>]*>(.*?)</a>',
             body_html,
             re.DOTALL | re.IGNORECASE,
         )
@@ -441,7 +441,7 @@ def parse_hdhub4u_release_links(page_html: str) -> list[dict]:
     # 2. Direct button scan fallback (if no headings matched)
     if not releases:
         all_gm_buttons = re.findall(
-            r'<a[^>]+href=["\'](https?://[^\s"\'<>]*(?:greenmotors|linkrit|hubcloud\.)[^\s"\'<>]*)["\'][^>]*>(.*?)</a>',
+            r'<a[^>]+href=["\'](https?://[^\s"\'<>]*(?:greenmotors|linkrit|hubcloud\.|hubdrive\.)[^\s"\'<>]*)["\'][^>]*>(.*?)</a>',
             page_html,
             re.DOTALL | re.IGNORECASE,
         )
@@ -471,6 +471,70 @@ def parse_hdhub4u_release_links(page_html: str) -> list[dict]:
                 "bridge_url": gm_url,
             })
 
+    return releases
+
+
+def _fetch_text(url: str, timeout: int = 12) -> str:
+    """Best-effort plain GET for a bridge page (hubdrive); empty string on any failure."""
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": fast_fetch.USER_AGENT})
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return resp.read().decode("utf-8", errors="replace")
+    except Exception:
+        return ""
+
+
+def parse_hdhub4u_watch_links(page_html: str) -> list[dict]:
+    """
+    Extracts per-episode WATCH links (playdrive / hubstream / vidaraa) as ordinary
+    releases. The staging/merge schema has no watch/download kind column, so watch
+    mirrors are stored exactly like download releases (multimovies precedent) with
+    the watch host as the service and the watch URL stored as-is, never unwrapped.
+    Episode comes from /ep-NN in the URL, else WATCH-N / EPiSODE N in the label,
+    else the nearest preceding EPiSODE download button in document order (the
+    labelless WATCH links sit in their episode's own block).
+    """
+    watch_hosts = ("playdrive.", "hubstream.", "vidaraa.")
+    releases = []
+    seen = set()
+    current_ep = None
+    for m in re.finditer(
+        r'<a[^>]+href=[\"\']([^\"\']+)[\"\'][^>]*>(.*?)</a>',
+        page_html,
+        re.DOTALL | re.IGNORECASE,
+    ):
+        url = m.group(1)
+        txt = re.sub(r"<[^>]+>", "", m.group(2)).strip()
+        ep_m = re.search(r"/ep-0*(\d+)", url, re.I) or re.search(
+            r"EP(?:iSODE)?[\s\-]*(\d+)", txt, re.I
+        )
+        if ep_m:
+            current_ep = int(ep_m.group(1))
+        if not any(h in url for h in watch_hosts):
+            continue
+        if url in seen:
+            continue
+        seen.add(url)
+        w_m = re.search(r"WATCH[\s\-]*(\d+)", txt, re.I)
+        ep_num = int(w_m.group(1)) if w_m else current_ep
+        host = (
+            "playdrive"
+            if "playdrive." in url
+            else ("hubstream" if "hubstream." in url else "vidaraa")
+        )
+        releases.append({
+            "label": f"Watch Online - {host}" + (f" Ep {ep_num}" if ep_num else ""),
+            "quality": "720p",
+            "resolution": "720p",
+            "size": None,
+            "size_bytes": None,
+            "codec": "x264",
+            "season_number": 1 if ep_num else None,
+            "episode_number": ep_num,
+            "bridge_url": url,
+            "watch": True,
+            "watch_host": host,
+        })
     return releases
 
 
@@ -534,8 +598,10 @@ def extract_post_data_hdhub4u(
 
     # 2. Extract Releases
     parsed_releases = parse_hdhub4u_release_links(page_html)
-    if not parsed_releases:
+    watch_releases = parse_hdhub4u_watch_links(page_html)
+    if not parsed_releases and not watch_releases:
         return None
+    parsed_releases = parsed_releases + watch_releases
 
     # 3. Stream Resolution
     releases_data = []
@@ -544,11 +610,22 @@ def extract_post_data_hdhub4u(
         bridge_url = r.get("bridge_url", "")
         is_linkrit = "linkrit." in bridge_url
         is_hubcloud = "hubcloud." in bridge_url
+        is_hubdrive = "hubdrive." in bridge_url
         if "?id=" in bridge_url:
             resource_id = bridge_url.split("?id=")[-1][:24]
         else:
             resource_id = bridge_url.rstrip("/").split("/")[-1][:24]
-        if resolve_direct and is_hubcloud:
+        if r.get("watch"):
+            sources.append({
+                "source_name": f"Watch Online - {r.get('watch_host', 'stream')}",
+                "service": r.get("watch_host", "playdrive"),
+                "resource_id": resource_id,
+                "source_url": bridge_url,
+                "final_url": bridge_url,
+                "is_temporary": 0,
+                "quality": r.get("quality", "720p"),
+            })
+        elif resolve_direct and is_hubcloud:
             unwrapped = fast_fetch.unwrap_hubcloud_drive(bridge_url)
             for u in unwrapped:
                 sources.append({
@@ -560,6 +637,25 @@ def extract_post_data_hdhub4u(
                     "is_temporary": u.get("is_temporary", 0),
                     "quality": r.get("quality", "720p"),
                 })
+        elif resolve_direct and is_hubdrive:
+            # hubdrive is a bridge page listing 1+ hubcloud mirrors; unwrap each.
+            _hd_html = _fetch_text(bridge_url, timeout=timeout)
+            _hc_urls = (
+                re.findall(r'href=[\"\'](https?://hubcloud\.[^\s\"\'<>]+)[\"\']', _hd_html, re.I)
+                if _hd_html
+                else []
+            )
+            for _hc in dict.fromkeys(_hc_urls):
+                for u in fast_fetch.unwrap_hubcloud_drive(_hc):
+                    sources.append({
+                        "source_name": u.get("source_name", "HDHub4u HubCloud"),
+                        "service": u.get("service", "hubcloud"),
+                        "resource_id": u.get("resource_id", resource_id),
+                        "source_url": u.get("source_url", _hc),
+                        "final_url": u.get("final_url", _hc),
+                        "is_temporary": u.get("is_temporary", 0),
+                        "quality": r.get("quality", "720p"),
+                    })
         elif resolve_direct and bridge_url and not is_linkrit:
             unwrapped = fast_fetch.unwrap_greenmotors(bridge_url, timeout=timeout)
             for u in unwrapped:
@@ -574,8 +670,8 @@ def extract_post_data_hdhub4u(
                 })
         if not sources:
             sources.append({
-                "source_name": "🔗 HDHub4u Linkrit Bridge" if is_linkrit else "⚡ HDHub4u Bridge",
-                "service": "linkrit" if is_linkrit else "greenmotors",
+                "source_name": "🔗 HDHub4u Linkrit Bridge" if is_linkrit else ("HDHub4u HubDrive Bridge" if is_hubdrive else "⚡ HDHub4u Bridge"),
+                "service": "linkrit" if is_linkrit else "hubdrive" if is_hubdrive else "greenmotors",
                 "resource_id": resource_id,
                 "source_url": bridge_url,
                 "final_url": bridge_url,
