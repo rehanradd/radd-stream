@@ -1,6 +1,7 @@
 package com.raddstream.app.ui
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
@@ -81,6 +82,64 @@ class PlayerBackExitTest {
                 "the import and the one call in PlayerScreenContent",
             2,
             count,
+        )
+    }
+
+    /**
+     * Session 120: the give-up card's five actions sat in two side-by-side
+     * Rows inside AlertDialog's single button row, and on a 360 dp phone
+     * "Open with another player" wrapped onto four lines while "Close"
+     * printed over its final letter. The actions stack vertically now, each
+     * full width, so every one is fully visible and tappable.
+     */
+    private val giveUpCardBody: String by lazy {
+        val start = source.indexOf("private fun GiveUpCard(")
+        assertTrue("PlayerScreen.kt no longer declares GiveUpCard", start >= 0)
+        val end = source.indexOf("Subtitle overlay", start)
+        assertTrue("PlayerScreen.kt no longer has the subtitle overlay after GiveUpCard", end > start)
+        source.substring(start, end)
+    }
+
+    @Test
+    fun `give-up card stacks its actions vertically`() {
+        assertTrue(
+            "GiveUpCard must lay its actions in a full-width Column, not a Row — " +
+                "five actions in one horizontal row overflow a phone dialog",
+            giveUpCardBody.contains("Column(Modifier.fillMaxWidth())"),
+        )
+        assertFalse(
+            "GiveUpCard must not lay actions out in a Row — that is the layout " +
+                "that wrapped 'Open with another player' onto four lines",
+            giveUpCardBody.contains("Row {"),
+        )
+    }
+
+    @Test
+    fun `give-up card offers all five actions`() {
+        listOf(
+            "player_retry",
+            "player_start_try_another",
+            "player_open_external",
+            "player_back_to_details",
+            "player_close",
+        ).forEach { action ->
+            assertTrue("GiveUpCard must offer $action", giveUpCardBody.contains(action))
+        }
+    }
+
+    @Test
+    fun `handoff card offers try another print when one exists`() {
+        // Session 120: only the deadline card offered it, so after every
+        // candidate failed the viewer could only retry the same dead ladder.
+        val start = source.indexOf("state.giveUp?.let")
+        assertTrue("PlayerScreen.kt no longer shows the handoff GiveUpCard", start >= 0)
+        val end = source.indexOf("} ?: if (state.deadlineGiveUp)", start)
+        assertTrue("PlayerScreen.kt no longer has the deadline branch after the handoff card", end > start)
+        val handoff = source.substring(start, end)
+        assertTrue(
+            "the handoff GiveUpCard must offer onTryAnother when canTryAnotherPrint — " +
+                "tryNextPrint moves to a different print, never the same URL again",
+            handoff.contains("onTryAnother"),
         )
     }
 }

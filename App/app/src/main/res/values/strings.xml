@@ -1,5 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <!-- App launch: the branded waiting screen while the first route resolves. -->
+    <string name="app_loading">Loading…</string>
     <!-- ═══ PLAYER CHROME ═══ every word the player paints, so no prose lives in
          PlayerScreen.kt. Placeholders are always positional (%1$s, %2$d): a locale
          that reorders a sentence has to be able to. Values with two consecutive

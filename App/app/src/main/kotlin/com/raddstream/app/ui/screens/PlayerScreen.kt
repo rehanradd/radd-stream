@@ -498,6 +498,16 @@ private fun PlayerScreenContent(
                 onExternal = { vm.openWithExternalPlayer() },
                 onDismiss = { vm.dismissGiveUp() },
                 onBackToDetails = onBackClick,
+                // Session 120: the deadline card offered this and the handoff
+                // card did not, so after every candidate failed the viewer
+                // could only retry the same dead ladder. A further print past
+                // max_ranks is still an honest manual hop — tryNextPrint
+                // moves to a different print, never the same URL again.
+                onTryAnother = if (state.canTryAnotherPrint) {
+                    { vm.tryNextPrint() }
+                } else {
+                    null
+                },
             )
         } ?: if (state.deadlineGiveUp) {
             // The 30 s hard deadline (§5 P5): no candidate failed, but none produced a
@@ -1933,21 +1943,36 @@ private fun GiveUpCard(
                 )
             }
         },
+        // Session 120: five actions in one horizontal row overflowed a 360 dp
+        // phone — AlertDialog lays its two button slots side by side, so
+        // "Open with another player" wrapped onto four lines ("Open / with /
+        // anothe / r") and "Close" printed over its final letter. All five
+        // actions stack vertically instead, each full width, so every one is
+        // fully visible and tappable no matter which subset is offered.
+        // The dismiss slot stays empty: "Back to details" and "Close" are
+        // actions in the same stack, not a second row fighting for width.
         confirmButton = {
-            Row {
-                TextButton(onClick = onRetry) { Text(stringResource(R.string.player_retry), color = RaddCurrent500) }
-                onTryAnother?.let {
-                    TextButton(onClick = it) { Text(stringResource(R.string.player_start_try_another), color = RaddCurrent500) }
+            Column(Modifier.fillMaxWidth()) {
+                TextButton(onClick = onRetry, modifier = Modifier.fillMaxWidth()) {
+                    Text(stringResource(R.string.player_retry), color = RaddCurrent500)
                 }
-                TextButton(onClick = onExternal) { Text(stringResource(R.string.player_open_external), color = RaddCurrent500) }
+                onTryAnother?.let {
+                    TextButton(onClick = it, modifier = Modifier.fillMaxWidth()) {
+                        Text(stringResource(R.string.player_start_try_another), color = RaddCurrent500)
+                    }
+                }
+                TextButton(onClick = onExternal, modifier = Modifier.fillMaxWidth()) {
+                    Text(stringResource(R.string.player_open_external), color = RaddCurrent500)
+                }
+                TextButton(onClick = onBackToDetails, modifier = Modifier.fillMaxWidth()) {
+                    Text(stringResource(R.string.player_back_to_details), color = RaddCurrent500)
+                }
+                TextButton(onClick = onDismiss, modifier = Modifier.fillMaxWidth()) {
+                    Text(stringResource(R.string.player_close), color = Color.White.copy(alpha = 0.7f))
+                }
             }
         },
-        dismissButton = {
-            Row {
-                TextButton(onClick = onBackToDetails) { Text(stringResource(R.string.player_back_to_details), color = RaddCurrent500) }
-                TextButton(onClick = onDismiss) { Text(stringResource(R.string.player_close), color = Color.White.copy(alpha = 0.7f)) }
-            }
-        },
+        dismissButton = {},
     )
 }
 

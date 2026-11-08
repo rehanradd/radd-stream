@@ -6,11 +6,16 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.isSystemInDarkTheme
-import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.LaunchedEffect
@@ -21,6 +26,9 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.unit.dp
 import com.raddstream.app.brand.Brand
 import com.raddstream.app.data.RemoteFeatures
 import com.raddstream.app.data.ServerSettingsRepository
@@ -256,11 +264,33 @@ class MainActivity : ComponentActivity() {
                                 changingServer = true
                             },
                         )
-                        destination == null -> Box(
+                        // Session 120: the wait before the first route used to be
+                        // a bare spinner on black, which on a slow first install
+                        // reads as a dead app. Branded loading screen instead:
+                        // the mark, the name, the spinner.
+                        destination == null -> Column(
                             modifier = Modifier.fillMaxSize(),
-                            contentAlignment = Alignment.Center,
+                            verticalArrangement = Arrangement.Center,
+                            horizontalAlignment = Alignment.CenterHorizontally,
                         ) {
+                            Image(
+                                painter = painterResource(R.drawable.ic_logo_mark),
+                                contentDescription = null,
+                                modifier = Modifier.size(96.dp),
+                            )
+                            Text(
+                                text = Brand.name,
+                                style = MaterialTheme.typography.headlineMedium,
+                                color = MaterialTheme.colorScheme.onBackground,
+                                modifier = Modifier.padding(top = 16.dp, bottom = 24.dp),
+                            )
                             CircularProgressIndicator()
+                            Text(
+                                text = stringResource(R.string.app_loading),
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(top = 16.dp),
+                            )
                         }
                         else -> RaddStreamNavGraph(
                             startDestination = destination,

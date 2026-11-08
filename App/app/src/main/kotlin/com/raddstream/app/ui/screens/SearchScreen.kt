@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -131,10 +132,16 @@ fun SearchScreen(
             )
         },
     ) { contentPadding ->
+        // Session 120: the open keyboard covered the top row of results and the
+        // empty-state hint hid behind its clipboard bar — the content never
+        // accounted for the IME. imePadding lifts the whole column above the
+        // keyboard (with adjustResize in the manifest) so results stay
+        // reachable while typing.
         Column(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(contentPadding)
+                .imePadding()
                 .padding(horizontal = 16.dp),
         ) {
             OutlinedTextField(
