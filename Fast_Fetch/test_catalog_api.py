@@ -1264,6 +1264,29 @@ class LegacyReleaseTranslationTests(CatalogApiTestCase):
         self.assertEqual(bundle["release_id"], int(target["id"]))
         self.assertIn("1080p WEB-DL", bundle["print_label"])
 
+    def test_cat_native_id_is_not_redirected_when_flagged(self):
+        """Session 108: a cat id that also exists as a legacy id must
+        NOT be redirected when the caller says it is already cat-native.
+        Live case: work 116859 (The Chalk Line) resolves to cat release
+        1430243, which the rev-4 map redirects to 1381940 — a different
+        title. The fixture stands a Dune print in for the Chalk Line
+        print; the mechanism is what this test pins."""
+        target = self.print_by_fragment("Dune", "1080p WEB-DL")
+        other = self.print_by_fragment("Dune", "4K HDR")
+        self._write_map_row(int(target["id"]), int(other["id"]))
+        # Default (legacy) still redirects — the app's release_id path.
+        redirected = catalog_api.play_bundle(self.conn,
+                                             release_id=int(target["id"]))
+        self.assertTrue(redirected["ok"], redirected)
+        self.assertEqual(redirected["release_id"], int(other["id"]))
+        # Flagged cat-native: the same id stays itself.
+        bundle = catalog_api.play_bundle(self.conn,
+                                         release_id=int(target["id"]),
+                                         legacy_release_id=False)
+        self.assertTrue(bundle["ok"], bundle)
+        self.assertEqual(bundle["release_id"], int(target["id"]))
+        self.assertIn("1080p WEB-DL", bundle["print_label"])
+
     def test_unmapped_id_falls_back_to_itself(self):
         self.assertEqual(
             catalog_api.translate_legacy_release_id(self.conn, 999999), 999999)

@@ -1804,10 +1804,13 @@ def translate_legacy_release_id(conn, release_id):
     longer exists (a stale row must not 404 a valid id). It never raises:
     a translation failure degrades to the old behaviour, it never breaks
     a play press outright. Map-first has one known collision: a genuine
-    cat id that also exists as a legacy id would be redirected — the app
-    (the only live v2-play caller) sends legacy ids, so map-first is
-    correct for live traffic; a future id-universe parameter is the
-    clean fix if a cat-id caller ever arrives.
+    cat id that also exists as a legacy id would be redirected — and a
+    cat-id caller did arrive, inside the server itself: `route_play`
+    resolves a work/episode target into a cat id, so `play_bundle` takes
+    `legacy_release_id=False` for a derived id (Session 108, live
+    2026-11-08: The Chalk Line's cat release 1430243 mapped to 1381940,
+    a different title). The direct `release_id` path stays map-first
+    because the app, the only live caller there, sends legacy ids.
     """
     try:
         target = int(release_id)
@@ -2032,7 +2035,8 @@ def episode_manifest(conn, *, work_id=None, work_key=None, slug=None, season=Non
 # ── play bundle ──────────────────────────────────────────────────────────────
 
 @public_edge
-def play_bundle(conn, *, release_id, episode_id=None, include_adult=False) -> dict:
+def play_bundle(conn, *, release_id, episode_id=None, include_adult=False,
+                legacy_release_id=True) -> dict:
     """Ordered failover candidates for one print (optionally for one episode of it).
 
     Order: streamable best-first (rank_score), then alternates, then links needing a
@@ -2040,6 +2044,13 @@ def play_bundle(conn, *, release_id, episode_id=None, include_adult=False) -> di
     a dead link is never hidden, it is ranked last with `state` set so the client can
     still see it (zero data loss). Every candidate carries the measured
     speed/latency/status when `cat_link_evidence` has a probe for it.
+
+    `legacy_release_id` names the id's universe: True (default) means the
+    id arrived as a legacy `releases.id` and is translated through the
+    map first; False means it is already a `cat_releases.id` and must
+    be used as-is. The distinction matters because the two universes
+    share numbers — a genuine cat id that also exists as a legacy id
+    would be redirected to a different print.
     """
     _require_row_factory(conn)
     _register_udfs(conn)
@@ -2047,7 +2058,17 @@ def play_bundle(conn, *, release_id, episode_id=None, include_adult=False) -> di
     # speaks `cat_releases.id`. Translate once here, at the public entry
     # point — release_detail itself stays cat-native, so internal callers
     # that already hold a cat id are never redirected.
-    release_id = translate_legacy_release_id(conn, release_id)
+    #
+    # Session 108: that "once here" is only safe for an id that ARRIVED
+    # as legacy. `route_play` resolves a work/episode target into a cat
+    # id itself, so it passes `legacy_release_id=False` for the derived
+    # id — translating it would press whatever legacy print happens to
+    # hold that number (live 2026-11-08: work 116859, The Chalk Line,
+    # resolves to cat release 1430243, which the rev-4 map redirects to
+    # 1381940, a different title). The default stays True: the only live
+    # v2-play caller, the app, sends legacy release ids.
+    if legacy_release_id:
+        release_id = translate_legacy_release_id(conn, release_id)
     detail = release_detail(conn, release_id=release_id, include_adult=include_adult)
     if not detail.get("ok"):
         return detail

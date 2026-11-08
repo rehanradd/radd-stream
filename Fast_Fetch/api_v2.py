@@ -1493,12 +1493,14 @@ def route_get(handler, path: str, query: dict, *, db_path, operator: bool,
             return True
 
         if head == "releases" and len(segments) == 2:
-            # Session 107: the app sends legacy `releases.id`; translate
-            # to the cat id first (same translation as play_bundle).
+            # Session 108: this route is cat-native — v2 speaks cat ids
+            # everywhere (works/episodes/seasons take them untranslated),
+            # `release_detail` is cat-native, and no live caller sends a
+            # legacy id here (the app never calls this route; its detail
+            # comes from v1). Translating would redirect a genuine cat
+            # id that also exists as a legacy id to a different print.
             result = catalog_api.release_detail(
-                conn,
-                release_id=catalog_api.translate_legacy_release_id(
-                    conn, segments[1]),
+                conn, release_id=segments[1],
                 include_adult=bool(operator))
             send_layer2(handler, result, rid=rid, path=path, cache=CACHE_DETAIL,
                         etag_seed=f"release|{segments[1]}", rev=versions,
@@ -1725,6 +1727,11 @@ def route_play(handler, conn, body: dict, *, rid: str, path: str, operator: bool
     release_id = _int_or_none(body.get("release_id"))
     episode_id = _int_or_none(body.get("episode_id"))
     work_id = _int_or_none(body.get("work_id"))
+    # Session 108: a release_id in the body is a legacy id (the app's
+    # universe) and is translated; one derived from an episode/work
+    # lookup below is already a cat id and must NOT be translated —
+    # translating it would redirect to a different print.
+    legacy_release_id = release_id is not None
     named = release_id is not None or episode_id is not None or work_id is not None
     if release_id is None and episode_id is not None:
         # Read inside the adult scope like every other query here. Unscoped, this
@@ -1766,7 +1773,8 @@ def route_play(handler, conn, body: dict, *, rid: str, path: str, operator: bool
 
     bundle = catalog_api.play_bundle(conn, release_id=int(release_id),
                                      episode_id=episode_id,
-                                     include_adult=bool(operator))
+                                     include_adult=bool(operator),
+                                     legacy_release_id=legacy_release_id)
     ok, code, _message = _from_layer2(bundle)
     if not ok:
         problem(handler, code=code or "not_found", rid=rid, instance=path,

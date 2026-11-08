@@ -743,6 +743,68 @@ class V2AdultRuleTests(V2WireFixture):
         self.assertIn("Adult Diary", [item["title"] for item in operator.json["items"]])
 
 
+# ── 1b. play identity: a derived cat id is never re-translated ──────────────
+
+class V2PlayTranslationTests(V2WireFixture):
+    """Session 108: `/play` must not translate an id it resolved itself.
+
+    The app sends legacy release ids, so a bare `release_id` is translated
+    through the map. A `work_id`/`episode_id` target is resolved by the
+    route into a cat id first — translating that again presses whatever
+    legacy print happens to hold the number (live 2026-11-08: The Chalk
+    Line's cat release 1430243 maps to 1381940, a different title).
+    The releases route is cat-native for the same reason: v2 speaks cat
+    ids, and no live caller sends a legacy id there.
+    """
+
+    def _write_map_row(self, old_id, new_id, rev=9):
+        self.conn.execute(
+            "INSERT OR REPLACE INTO cat_id_map (kind, old_id, new_id, rev)"
+            " VALUES ('ledger_release', ?, ?, ?)", (old_id, new_id, rev))
+        self.conn.commit()
+
+    def test_work_id_play_returns_the_works_own_print(self):
+        other_release = self._one(
+            "SELECT r.id FROM cat_releases r JOIN cat_works w ON w.id = r.work_id"
+            " WHERE w.title = 'Campus Beats' ORDER BY r.id LIMIT 1")
+        self._write_map_row(self.public_release_id, other_release)
+        reply = self.post("/api/v2/play", {"work_id": self.public_work_id})
+        self.assertEqual(reply.status, 200, reply.json)
+        self.assertEqual(reply.json["release_id"], self.public_release_id)
+        self.assertEqual(reply.json["target"]["work_id"], self.public_work_id)
+
+    def test_episode_id_play_returns_the_episodes_own_print(self):
+        episode_release = self._one(
+            "SELECT r.id FROM cat_releases r JOIN cat_works w ON w.id = r.work_id"
+            " WHERE w.title = 'Campus Beats' ORDER BY r.id LIMIT 1")
+        other_release = self._one(
+            "SELECT r.id FROM cat_releases r JOIN cat_works w ON w.id = r.work_id"
+            " WHERE w.title = 'Quiet Valley' ORDER BY r.id LIMIT 1")
+        self._write_map_row(episode_release, other_release)
+        reply = self.post("/api/v2/play",
+                          {"episode_id": self.public_episode_id})
+        self.assertEqual(reply.status, 200, reply.json)
+        self.assertEqual(reply.json["release_id"], episode_release)
+
+    def test_release_id_play_still_translates_a_legacy_id(self):
+        legacy = 500000
+        self._write_map_row(legacy, self.public_release_id)
+        reply = self.post("/api/v2/play", {"release_id": legacy})
+        self.assertEqual(reply.status, 200, reply.json)
+        self.assertEqual(reply.json["release_id"], self.public_release_id)
+
+    def test_releases_route_serves_the_cat_print_not_the_mapped_target(self):
+        other_release = self._one(
+            "SELECT r.id FROM cat_releases r JOIN cat_works w ON w.id = r.work_id"
+            " WHERE w.title = 'Quiet Valley' ORDER BY r.id LIMIT 1")
+        self._write_map_row(self.public_release_id, other_release)
+        reply = self.get(f"/api/v2/releases/{self.public_release_id}")
+        self.assertEqual(reply.status, 200, reply.json)
+        self.assertEqual(reply.json["print"]["release_id"],
+                         self.public_release_id)
+        self.assertEqual(reply.json["work"]["title"], "Dune Protocol")
+
+
 # ── 2. provenance: nothing that names a source ever leaves ──────────────────
 
 class V2ProvenanceTests(V2WireFixture):
