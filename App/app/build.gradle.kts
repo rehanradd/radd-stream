@@ -253,6 +253,12 @@ android {
             isMinifyEnabled     = false
         }
         release {
+            // A release build is never debuggable: the shipped APK must not
+            // accept a debugger, and a debuggable flag would also let the
+            // system read the app's private files. Debug keeps isDebuggable
+            // true above; release states false explicitly so a future edit
+            // cannot silently inherit the debug value.
+            isDebuggable      = false
             isMinifyEnabled   = true
             isShrinkResources = true
             proguardFiles(
@@ -359,9 +365,21 @@ val generateBrandAssets = tasks.register("generateBrandAssets") {
     }
 }
 
+// The TLS pins for the default host (`network.tls_pins`): the chain, never the
+// leaf. Empty when the brand ships none, and then no pin-set is emitted.
+fun brandTlsPins(): List<String> =
+    brand("network.tls_pins", "").split(',').map { it.trim() }.filter { it.isNotEmpty() }
+
+fun brandDefaultHost(): String? =
+    runCatching { URI(brand("network.default_server_url", "")).host }.getOrNull()?.takeIf { it.isNotEmpty() }
+
 // The one cleartext exception, in the platform's own format. Generated so that
 // changing `network.default_server_url` or the release switch changes it with no
-// second place to edit.
+// second place to edit. The same file carries the `<pin-set>` for the default
+// host when `network.tls_pins` is set: the app enforces the same pins in code
+// (`ApiProvider`), and the platform enforces them here, so a release build
+// refuses a certificate that neither the pins nor the platform trust. A
+// user-chosen server is never pinned.
 fun brandNetworkPolicyXml(): String {
     val hosts = brandCleartextHosts()
     val policy = if (brandReleaseCleartextAllowed()) {
@@ -381,6 +399,16 @@ fun brandNetworkPolicyXml(): String {
         appendLine("    <domain-config cleartextTrafficPermitted=\"true\">")
         hosts.forEach { appendLine("        <domain includeSubdomains=\"false\">$it</domain>") }
         appendLine("    </domain-config>")
+        val pins = brandTlsPins()
+        val pinHost = brandDefaultHost()
+        if (pins.isNotEmpty() && pinHost != null) {
+            appendLine("    <domain-config>")
+            appendLine("        <domain includeSubdomains=\"false\">$pinHost</domain>")
+            appendLine("        <pin-set>")
+            pins.forEach { appendLine("            <pin digest=\"SHA-256\">$it</pin>") }
+            appendLine("        </pin-set>")
+            appendLine("    </domain-config>")
+        }
         appendLine("</network-security-config>")
     }
 }

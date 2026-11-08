@@ -621,6 +621,59 @@ class Redeem(Wallet):
         self.assertEqual(spends[0]["delta"], -cost)
         self.assertEqual(spends[0]["ref"], "day")
 
+    def test_a_client_key_makes_a_retry_spend_nothing_twice(self):
+        """The old default key was second-granularity: two taps in one
+        second shared it by accident, two taps across a second boundary did
+        not. A client key names the purchase, so a retry an hour later with
+        the same key is still the same purchase: one spend row, one debit,
+        the second receipt `already_applied`."""
+        cost = engagement.resolve_ladder()["day"]["coins"]
+        self.grant(cost)
+        first = self.body(self.redeem("day", idempotency_key="order-1"))
+        self.assertEqual(first["redeemed"]["balance"], 0)
+        self.assertFalse(first["redeemed"]["already_applied"])
+        second = self.body(self.redeem("day", idempotency_key="order-1"))
+        self.assertTrue(second["redeemed"]["already_applied"])
+        self.assertEqual(second["redeemed"]["balance"], 0)
+        spends = [row for row in self.rows() if row["reason"] == "redeem_pass"]
+        self.assertEqual(len(spends), 1, spends)
+
+    def test_the_same_client_key_on_another_account_spends_that_account(self):
+        """The ledger dedupes on the key alone, so a raw client string
+        would let one account's key block another's spend — or worse, let
+        it ride free. The route namespaces the key per account, so the
+        same token on a second wallet is a second purchase, not a replay."""
+        cost = engagement.resolve_ladder()["day"]["coins"]
+        self.grant(cost)
+        self.assertEqual(self.body(self.redeem(
+            "day", idempotency_key="order-1"))["redeemed"]["balance"], 0)
+        second_key = self.enroll()
+        second_id = self.own_id(second_key)
+        with closing(engagement.connect(self.state)) as conn:
+            engagement.grant_coins(conn, second_id, amount=cost,
+                                   reason="admin_grant", source="admin",
+                                   ref="test-topup")
+        answered = self.post(f"{COINS}/redeem",
+                             {"plan": "day", "idempotency_key": "order-1"},
+                             key=second_key)
+        self.assertEqual(answered[0], 200, answered)
+        receipt = self.body(answered)["redeemed"]
+        self.assertFalse(receipt["already_applied"])
+        self.assertEqual(receipt["balance"], 0)
+        spends = [row for row in self.rows() if row["reason"] == "redeem_pass"]
+        self.assertEqual(len(spends), 2, spends)
+
+    def test_a_malformed_client_key_is_a_400_and_spends_nothing(self):
+        cost = engagement.resolve_ladder()["day"]["coins"]
+        self.grant(cost)
+        for bad in ("", "   ", 42, "x" * 129):
+            answered = self.redeem("day", idempotency_key=bad)
+            self.assertEqual(answered[0], 400, (bad, answered))
+            self.assertEqual(self.code(answered), "invalid_params")
+        spends = [row for row in self.rows() if row["reason"] == "redeem_pass"]
+        self.assertEqual(spends, [])
+        self.assertEqual(self.body(self.get(COINS))["balance"], cost)
+
     def test_a_redeemed_day_pass_makes_entitlement_vip_for_a_day(self):
         """The pass the server minted is a VIP entitlement, not just a token the
         caller must remember to present: the app gates VIP on `entitlement`, so a
@@ -766,6 +819,21 @@ class RedeemDownload(Wallet):
         self.assertEqual(spends[0]["delta"], -cost)
         self.assertEqual(spends[0]["ref"], self.HANDLE)
 
+    def test_a_client_key_makes_a_retry_spend_nothing_twice(self):
+        """A retry with the same client key is the same purchase: one
+        spend, one credit row, the second receipt `already_applied`."""
+        cost = engagement.resolve_download_credit()
+        self.grant(cost)
+        first = self.body(self.buy(idempotency_key="dl-1"))["credit"]
+        self.assertFalse(first["already_applied"])
+        self.assertEqual(first["balance"], 0)
+        second = self.body(self.buy(idempotency_key="dl-1"))["credit"]
+        self.assertTrue(second["already_applied"])
+        self.assertEqual(second["balance"], 0)
+        spends = [row for row in self.rows()
+                  if row["reason"] == "redeem_download"]
+        self.assertEqual(len(spends), 1, spends)
+
     def test_the_price_charged_is_the_price_the_caps_route_publishes(self):
         self.settings(coin_redeem_download=7)
         caps = self.body(self.get(f"{COINS}/caps"))
@@ -885,7 +953,13 @@ class FinishWatch(Wallet):
     The phone never claims a finish, it only reports a position, and the
     server decides: 90% watched counts as finished because the player may
     never report exactly 100%. The grant is once per title ever (per episode
-    for a series), so a rewatch pays nothing.
+    for a series), so a rewatch pays nothing. Since the security release the
+    grant also needs the server to have *seen* the watching: the first
+    applied progress report must be at least 45% of the runtime ago, so one
+    instant claim pays nothing and a farmer must space reports over real
+    time. The `observe` helper below seeds that history the way a real
+    viewing would have left it — a first report 500 s ago for a 1000 s
+    title — and the no-history case is asserted, not assumed.
     """
 
     def watch(self, position, duration, season=0, episode=0):
@@ -895,7 +969,22 @@ class FinishWatch(Wallet):
             "position_seconds": position, "duration_seconds": duration,
             "client_updated_at": time.time()})
 
+    def observe(self, seconds_ago=500, season=0, episode=0, position=10):
+        """Seed the observation a real viewing leaves: a first applied
+        report `seconds_ago` in the past, at a low position."""
+        first_seen = time.time() - seconds_ago
+        with closing(sqlite3.connect(str(self.state))) as conn:
+            conn.execute(
+                """INSERT OR REPLACE INTO watch_observations
+                   (account_id, work_key, season_number, episode_number,
+                    first_seen_at, last_seen_at, max_position_seconds)
+                   VALUES(?, ?, ?, ?, ?, ?, ?)""",
+                (self.account_id, VISIBLE, season, episode, first_seen,
+                 first_seen, position))
+            conn.commit()
+
     def test_a_finish_pays_once_and_a_rewatch_pays_nothing(self):
+        self.observe()
         first = self.body(self.watch(950, 1000))
         self.assertEqual(first["coins_earned"], engagement.FINISH_WATCH_COINS)
         self.assertEqual(self.body(self.watch(960, 1000))["coins_earned"], 0)
@@ -910,15 +999,18 @@ class FinishWatch(Wallet):
                           if row["reason"] == "finish_watch"], [])
 
     def test_the_90_percent_line_is_the_line(self):
+        self.observe()
         self.assertEqual(self.body(self.watch(899, 1000))["coins_earned"], 0)
         self.assertEqual(self.body(self.watch(901, 1000))["coins_earned"],
                          engagement.FINISH_WATCH_COINS)
 
     def test_each_episode_pays_once(self):
+        self.observe(season=1, episode=1)
         self.assertEqual(self.body(self.watch(950, 1000, season=1, episode=1))
                          ["coins_earned"], engagement.FINISH_WATCH_COINS)
         self.assertEqual(self.body(self.watch(950, 1000, season=1, episode=1))
                          ["coins_earned"], 0)
+        self.observe(season=1, episode=2)
         self.assertEqual(self.body(self.watch(950, 1000, season=1, episode=2))
                          ["coins_earned"], engagement.FINISH_WATCH_COINS)
         grants = [row for row in self.rows() if row["reason"] == "finish_watch"]
@@ -926,7 +1018,35 @@ class FinishWatch(Wallet):
 
     def test_the_grant_follows_the_operator_knob(self):
         self.settings(coin_finish_watch=30)
+        self.observe()
         self.assertEqual(self.body(self.watch(950, 1000))["coins_earned"], 30)
+
+    def test_a_single_instant_finish_claim_pays_nothing(self):
+        """The farming hole, closed: one report at 95% with no prior
+        observation — no earlier report the server ever applied — earns
+        nothing, and the progress itself is still stored."""
+        self.assertEqual(self.body(self.watch(950, 1000))["coins_earned"], 0)
+        self.assertEqual([row for row in self.rows()
+                          if row["reason"] == "finish_watch"], [])
+        stored = self.body(self.watch(950, 1000))["progress"]
+        self.assertEqual(stored["position_seconds"], 950)
+
+    def test_a_watch_seen_only_minutes_ago_pays_nothing(self):
+        """A first report 100 s ago for a 1000 s title is 10% of the runtime
+        — below the 45% the gate demands — so the finish is refused even
+        though the position is past the line."""
+        self.observe(seconds_ago=100)
+        self.assertEqual(self.body(self.watch(950, 1000))["coins_earned"], 0)
+        self.assertEqual([row for row in self.rows()
+                          if row["reason"] == "finish_watch"], [])
+
+    def test_a_two_x_viewer_still_passes(self):
+        """The tolerance exists for speed watchers: a 1000 s title finished
+        at 2x was watched across 500 s of real time, and 500 s is past the
+        450 s line, so the grant pays."""
+        self.observe(seconds_ago=500)
+        self.assertEqual(self.body(self.watch(950, 1000))["coins_earned"],
+                         engagement.FINISH_WATCH_COINS)
 
 
 class RequestMovie(Wallet):
@@ -1000,6 +1120,22 @@ class RequestMovie(Wallet):
         else:
             self.assertEqual(len(self.queue()), 2)
             self.assertEqual(second["balance"], 0)
+
+    def test_a_client_key_makes_a_retry_file_nothing_twice(self):
+        """A retry with the same client key is the same purchase even across
+        a second boundary: one spend, one queued request, the second receipt
+        `already_applied` with the first request's id."""
+        cost = engagement.resolve_request_movie_coins()
+        self.grant(cost)
+        first = self.body(self.ask(idempotency_key="req-1"))["request"]
+        self.assertFalse(first["already_applied"])
+        second = self.body(self.ask(idempotency_key="req-1"))["request"]
+        self.assertTrue(second["already_applied"])
+        self.assertEqual(second["id"], first["id"])
+        self.assertEqual(len(self.queue()), 1)
+        spends = [row for row in self.rows()
+                  if row["reason"] == "redeem_request"]
+        self.assertEqual(len(spends), 1, spends)
 
     def test_the_price_follows_the_operator_knob(self):
         self.settings(coin_redeem_request=50)
@@ -1106,6 +1242,22 @@ class Themes(Wallet):
         self.assertEqual(theme["balance"], 0)
         self.assertFalse(theme["already_applied"])
         self.assertEqual(theme["owned"], ["jade", "midnight"])
+        self.assertEqual(self.owned(), ["midnight"])
+
+    def test_a_client_key_makes_a_retry_spend_nothing_twice(self):
+        """A retry with the same client key is the same purchase: one
+        spend, one ownership row, the second receipt `already_applied`."""
+        cost = engagement.resolve_theme_coins()
+        self.grant(cost)
+        first = self.body(self.buy(idempotency_key="th-1"))["theme"]
+        self.assertFalse(first["already_applied"])
+        self.assertEqual(first["balance"], 0)
+        second = self.body(self.buy(idempotency_key="th-1"))["theme"]
+        self.assertTrue(second["already_applied"])
+        self.assertEqual(second["balance"], 0)
+        spends = [row for row in self.rows()
+                  if row["reason"] == "redeem_theme"]
+        self.assertEqual(len(spends), 1, spends)
         self.assertEqual(self.owned(), ["midnight"])
         spends = [row for row in self.rows() if row["reason"] == "redeem_theme"]
         self.assertEqual(len(spends), 1, spends)

@@ -73,8 +73,9 @@ fun bearerHeader(syncKey: String?): String? =
  * signed-out caller passes `null`, which Retrofit omits, so the four v1 routes and the
  * signed-out app are untouched by anything below this line.
  *
- * The key goes out as a header value on plain HTTP: the deployed server has no TLS, so
- * this is convenience over confidentiality, and the account screen says so out loud.
+ * The key goes out as a header value: over HTTPS to the shipped default, in the clear to a
+ * server the viewer points at over plain HTTP. The account screen says which one is in use
+ * out loud, and never claims a protection the transport does not provide.
  */
 interface RaddStreamApi {
 
@@ -209,9 +210,10 @@ interface RaddStreamApi {
      * The bearer key is mandatory and is the only thing that decides which account is written:
      * a body `account_id` is ignored on purpose, not refused. The server stores the PIN as
      * PBKDF2-HMAC-SHA256 with a per-row salt and 120k iterations, which slows a stolen database
-     * file and does nothing for the wire — this deployment has no TLS, so the digits cross it in
-     * the clear and the attempt limiter is the only thing between a 4-digit PIN and a guesser.
-     * No copy about this call may say secure, encrypted, private, or "only you can access this".
+     * file and does nothing for the wire — to a server the viewer points at over plain HTTP the
+     * digits cross it in the clear and the attempt limiter is the only thing between a 4-digit
+     * PIN and a guesser; the shipped default speaks HTTPS. No copy about this call may say
+     * secure, encrypted, private, or "only you can access this" about a plain-HTTP server.
      *
      * **201 means the +1 day bonus was granted; 200 means it already was** (`linked_at` makes it
      * once per account), so the entitlement is unchanged by a replay and a retry after a network

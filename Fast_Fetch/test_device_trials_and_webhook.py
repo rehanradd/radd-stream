@@ -386,6 +386,83 @@ class TrialGrant(Fixture):
         self.assertEqual(len(self.rows("device_trials")), 1)
 
 
+class TrialIpBudget(Fixture):
+    """One address may mint only `TRIAL_IP_DAILY_LIMIT` new trials a day.
+
+    The device gate alone cannot stop a script rotating `device_id` strings —
+    each one is a fresh account with a fresh three days — so the address pays
+    for the mint. Resuming an existing device costs nothing: the device
+    already paid, and a second device behind the same NAT must not be charged
+    for the first one's return."""
+
+    def test_ten_new_trials_from_one_address_then_the_eleventh_is_refused(self):
+        ip = "203.0.113.7"
+        for i in range(accounts.TRIAL_IP_DAILY_LIMIT):
+            made = self.trial(device="a1b2c3d4-%04d-4eee-8b0d-cafe56789012" % i,
+                              now=NOW, client_ip=ip)
+            self.assertTrue(made["created"], made)
+        with self.assertRaises(accounts.TrialBudgetExceeded) as raised:
+            self.trial(device="a1b2c3d4-9999-4eee-8b0d-cafe56789012",
+                       now=NOW, client_ip=ip)
+        self.assertEqual(raised.exception.status, 429)
+        self.assertEqual(raised.exception.code, "rate_limited")
+
+    def test_the_refusal_is_a_429_on_the_route_not_a_500(self):
+        ip = "203.0.113.8"
+        for i in range(accounts.TRIAL_IP_DAILY_LIMIT):
+            self.trial(device="a1b2c3d4-%04d-4eee-8b0d-cafe56789012" % i,
+                       now=NOW, client_ip=ip)
+        answered = accounts_api.route_post(
+            "/api/v2/account/anonymous",
+            {"device_id": "a1b2c3d4-9999-4eee-8b0d-cafe56789012"},
+            db_path=self.state, catalog_path=self.catalog, secret=SECRET,
+            headers={}, client_ip=ip)
+        self.assertEqual(answered[0], 429)
+        body = json.loads(answered[2].decode("utf-8"))
+        self.assertEqual(body.get("code"), "rate_limited")
+
+    def test_resuming_an_existing_device_costs_nothing_after_the_budget_is_spent(self):
+        ip = "203.0.113.9"
+        first = self.trial(device=DEVICE, now=NOW, client_ip=ip)
+        for i in range(accounts.TRIAL_IP_DAILY_LIMIT - 1):
+            self.trial(device="a1b2c3d4-%04d-4eee-8b0d-cafe56789012" % i,
+                       now=NOW, client_ip=ip)
+        resumed = self.trial(device=DEVICE, now=NOW, client_ip=ip)
+        self.assertFalse(resumed["created"])
+        self.assertEqual(resumed["trial_expires_at"],
+                         first["trial_expires_at"])
+
+    def test_a_second_address_has_its_own_budget(self):
+        for i in range(accounts.TRIAL_IP_DAILY_LIMIT):
+            self.trial(device="a1b2c3d4-%04d-4eee-8b0d-cafe56789012" % i,
+                       now=NOW, client_ip="203.0.113.10")
+        made = self.trial(device="a1b2c3d4-7777-4eee-8b0d-cafe56789012",
+                          now=NOW, client_ip="203.0.113.11")
+        self.assertTrue(made["created"])
+
+    def test_the_budget_resets_after_a_day(self):
+        ip = "203.0.113.12"
+        for i in range(accounts.TRIAL_IP_DAILY_LIMIT):
+            self.trial(device="a1b2c3d4-%04d-4eee-8b0d-cafe56789012" % i,
+                       now=NOW, client_ip=ip)
+        with self.assertRaises(accounts.TrialBudgetExceeded):
+            self.trial(device="a1b2c3d4-9999-4eee-8b0d-cafe56789012",
+                       now=NOW, client_ip=ip)
+        made = self.trial(device="a1b2c3d4-9999-4eee-8b0d-cafe56789012",
+                          now=NOW + accounts.TRIAL_IP_WINDOW_SECONDS + 1,
+                          client_ip=ip)
+        self.assertTrue(made["created"])
+
+    def test_the_address_is_stored_hashed_never_raw(self):
+        ip = "203.0.113.13"
+        self.trial(device=DEVICE, now=NOW, client_ip=ip)
+        row = self.conn.execute(
+            "SELECT ip_hash FROM trial_ip_budget").fetchone()
+        self.assertIsNotNone(row)
+        self.assertNotIn(ip, row[0])
+        self.assertEqual(len(row[0]), 64)  # sha256 hex
+
+
 class ProfileLink(Fixture):
     def setUp(self):
         super().setUp()

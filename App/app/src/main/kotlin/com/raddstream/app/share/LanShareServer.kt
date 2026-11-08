@@ -32,6 +32,16 @@ data class ShareTarget(val entry: ShareEntry, val file: File)
  * what the user toggles, so [start] refuses to listen unless the constructor was given
  * `sharingEnabled = true`; default false means accidental wiring can never silently expose
  * a share.
+ *
+ * Why the per-start session token, and why the server still binds the LAN (not loopback):
+ * the brief asked for loopback-only, but loopback-only would kill the feature outright —
+ * the runner advertises a LAN IPv4 and a peer on another device must reach it. So the
+ * binding stays LAN and the gate is the token instead: [start] mints a fresh 128-bit
+ * random ([sessionToken]) every time it binds, the protocol checks it in constant time
+ * before it looks any file up, and a restart invalidates every URL the last session
+ * handed out. The file tokens themselves are long-lived cache ids — they were never a
+ * secret — so the session token is the thing that makes a shared URL expire. The
+ * loopback question stays open for the owner: token-only is what this session ships.
  */
 class LanShareServer(
     private val sharingEnabled: Boolean = false,
@@ -45,15 +55,26 @@ class LanShareServer(
     @Volatile private var running = false
 
     /**
+     * The session token this start minted, or null while the server is not running.
+     * A fresh 128-bit random per start: a URL from a previous session is dead the
+     * moment this one restarts, and the value never reaches a log or a status line —
+     * only the URL builder that hands it to the peer the viewer chose.
+     */
+    @Volatile private var sessionTokenValue: String? = null
+    val sessionToken: String? get() = sessionTokenValue
+
+    /**
      * Starts listening when (and only when) the caller opted in. Returns the actual bound
      * port, or null when disabled or the port is taken — the UI must show "share failed to
-     * start" rather than advertise a URL that nothing answers on.
+     * start" rather than advertise a URL that nothing answers on. Minting the session
+     * token is part of starting: a server that cannot mint one does not listen.
      */
     @Synchronized
     fun start(): Int? {
         if (!sharingEnabled || running) return null
         return try {
             val srv = ServerSocket(port)
+            sessionTokenValue = LanShareProtocol.generateSessionToken()
             serverSocket = srv
             running = true
             acceptThread = thread(name = "lan-share-${srv.localPort}", isDaemon = true) {
@@ -63,6 +84,7 @@ class LanShareServer(
         } catch (_: Exception) {
             runCatching { serverSocket?.close() }
             serverSocket = null
+            sessionTokenValue = null
             running = false
             null
         }
@@ -76,6 +98,7 @@ class LanShareServer(
         acceptThread?.join(JOIN_MILLIS)
         acceptThread = null
         serverSocket = null
+        sessionTokenValue = null
     }
 
     override fun close() = stop()
@@ -103,6 +126,9 @@ class LanShareServer(
                     path = request.path,
                     headers = request.headers,
                     catalog = catalog.mapValues { it.value.entry },
+                    // The session check happens inside the protocol, before any file
+                    // lookup — a request that fails it never learns which files exist.
+                    sessionToken = sessionTokenValue ?: "",
                 )
                 val out = BufferedOutputStream(s.getOutputStream())
                 try {

@@ -125,6 +125,109 @@ class ContactIntakeTests(unittest.TestCase):
         self.assertFalse(ok)
         self.assertEqual(code, "unavailable")
 
+    # ── the spam controls ────────────────────────────────────────────────
+    def test_a_filled_honeypot_is_a_silent_success_that_writes_nothing(self):
+        """A bot fills the `website` field a human form never sends. It is
+        answered with success — an error would teach it which field gave it
+        away — and nothing reaches the inbox."""
+        ok, row_id = contact_intake.submit_contact(
+            self.panel_path, category="bug", subject="x", body="Hello",
+            account_hint=None, client_ip="203.0.113.7",
+            honeypot="https://spam.example")
+        self.assertTrue(ok)
+        self.assertIsNone(row_id)
+        self.assertEqual(self._rows(), [])
+
+    def test_ten_messages_a_day_per_address_then_the_eleventh_is_refused(self):
+        ip = "203.0.113.7"
+        for i in range(contact_intake.CONTACT_IP_DAILY_LIMIT):
+            ok, _ = contact_intake.submit_contact(
+                self.panel_path, category="other", subject="x",
+                body="Message %d" % i, account_hint=None, client_ip=ip)
+            self.assertTrue(ok, i)
+        ok, code = contact_intake.submit_contact(
+            self.panel_path, category="other", subject="x",
+            body="Message eleven", account_hint=None, client_ip=ip)
+        self.assertFalse(ok)
+        self.assertEqual(code, "rate_limited")
+        self.assertEqual(len(self._rows()),
+                         contact_intake.CONTACT_IP_DAILY_LIMIT)
+
+    def test_the_same_message_twice_from_one_address_files_once(self):
+        ip = "203.0.113.8"
+        for _ in range(2):
+            ok, _ = contact_intake.submit_contact(
+                self.panel_path, category="bug", subject="x",
+                body="The film stops after ten seconds.",
+                account_hint=None, client_ip=ip)
+            self.assertTrue(ok)
+        self.assertEqual(len(self._rows()), 1)
+        # The duplicate did not spend the budget either: ten distinct
+        # messages still fit after it.
+        for i in range(9):
+            ok, _ = contact_intake.submit_contact(
+                self.panel_path, category="other", subject="x",
+                body="Distinct %d" % i, account_hint=None, client_ip=ip)
+            self.assertTrue(ok, i)
+        self.assertEqual(len(self._rows()), 10)
+
+    def test_a_second_address_has_its_own_budget(self):
+        for i in range(contact_intake.CONTACT_IP_DAILY_LIMIT):
+            ok, _ = contact_intake.submit_contact(
+                self.panel_path, category="other", subject="x",
+                body="Message %d" % i, account_hint=None,
+                client_ip="203.0.113.9")
+            self.assertTrue(ok, i)
+        ok, _ = contact_intake.submit_contact(
+            self.panel_path, category="other", subject="x", body="Hello",
+            account_hint=None, client_ip="203.0.113.10")
+        self.assertTrue(ok)
+
+    def test_the_budget_resets_the_next_day(self):
+        ip = "203.0.113.11"
+        day_one = 1_800_000_000.0
+        for i in range(contact_intake.CONTACT_IP_DAILY_LIMIT):
+            ok, _ = contact_intake.submit_contact(
+                self.panel_path, category="other", subject="x",
+                body="Message %d" % i, account_hint=None, client_ip=ip,
+                now=day_one)
+            self.assertTrue(ok, i)
+        ok, code = contact_intake.submit_contact(
+            self.panel_path, category="other", subject="x",
+            body="One more today", account_hint=None, client_ip=ip,
+            now=day_one)
+        self.assertFalse(ok)
+        self.assertEqual(code, "rate_limited")
+        ok, _ = contact_intake.submit_contact(
+            self.panel_path, category="other", subject="x",
+            body="Tomorrow", account_hint=None, client_ip=ip,
+            now=day_one + 86_400)
+        self.assertTrue(ok)
+
+    def test_no_address_means_no_budget_and_no_dedup(self):
+        """A direct library call carries no address, so it is charged
+        nothing: eleven identical messages all land, exactly as before
+        this release."""
+        for _ in range(contact_intake.CONTACT_IP_DAILY_LIMIT + 1):
+            ok, _ = contact_intake.submit_contact(
+                self.panel_path, category="other", subject="x",
+                body="Same message", account_hint=None)
+            self.assertTrue(ok)
+        self.assertEqual(len(self._rows()),
+                         contact_intake.CONTACT_IP_DAILY_LIMIT + 1)
+
+    def test_the_address_is_stored_hashed_never_raw(self):
+        ip = "203.0.113.12"
+        contact_intake.submit_contact(
+            self.panel_path, category="bug", subject="x", body="Hello",
+            account_hint=None, client_ip=ip)
+        conn = sqlite3.connect(self.panel_path)
+        row = conn.execute("SELECT ip_hash FROM contact_ip_budget").fetchone()
+        conn.close()
+        self.assertIsNotNone(row)
+        self.assertNotIn(ip, row[0])
+        self.assertEqual(len(row[0]), 64)  # sha256 hex
+
 
 if __name__ == "__main__":
     unittest.main()

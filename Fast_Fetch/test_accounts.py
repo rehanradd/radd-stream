@@ -556,6 +556,82 @@ class ProgressTests(StateTestCase):
                           "movie:dune:2021"], [row["work_key"] for row in listed])
 
 
+# ── watch observations: what the server itself saw ───────────────────────
+
+
+class WatchObservationTests(StateTestCase):
+    """`put_progress` keeps a second ledger, `watch_observations`, of what the
+    server itself saw: the first and last *applied* report per title and the
+    furthest position. The finish-watch grant is gated on the span between
+    the first report and now, so these tests pin the recording, not the
+    grant — the grant's own cases ride the route in `test_coins_engine.py`."""
+
+    def record(self, key, position, duration, stamp, **kw):
+        return accounts.put_progress(self.conn, key, kw.pop("work", "movie:dune:2021"),
+                                     catalog=self.catalog, position_seconds=position,
+                                     duration_seconds=duration,
+                                     client_updated_at=stamp, tracker=self.tracker,
+                                     now=stamp, **kw)
+
+    def observation(self, account_id):
+        row = self.conn.execute(
+            "SELECT first_seen_at, last_seen_at, max_position_seconds"
+            " FROM watch_observations WHERE account_id = ?"
+            " AND work_key = ? AND season_number = 0 AND episode_number = 0",
+            (account_id, "movie:dune:2021")).fetchone()
+        return tuple(row) if row else None
+
+    def test_applied_writes_open_the_row_and_only_move_last_seen_and_max(self):
+        account = self.new_account()
+        key = account["sync_key"]
+        self.record(key, 100, 2000, T0 + 10)
+        self.assertEqual(self.observation(account["account_id"]),
+                         (T0 + 10, T0 + 10, 100.0))
+        self.record(key, 900, 2000, T0 + 500)
+        # First seen stays at the first report; the last report moves only
+        # the last-seen time and the furthest position.
+        self.assertEqual(self.observation(account["account_id"]),
+                         (T0 + 10, T0 + 500, 900.0))
+        self.record(key, 400, 2000, T0 + 600)
+        self.assertEqual(self.observation(account["account_id"]),
+                         (T0 + 10, T0 + 600, 900.0))
+
+    def test_a_stale_write_leaves_the_observation_untouched(self):
+        account = self.new_account()
+        key = account["sync_key"]
+        self.record(key, 900, 2000, T0 + 20)
+        stale = self.record(key, 300, 2000, T0 + 15)
+        self.assertFalse(stale["applied"])
+        self.assertEqual(self.observation(account["account_id"]),
+                         (T0 + 20, T0 + 20, 900.0))
+
+    def test_the_backfill_seeds_from_progress_written_before_this_release(self):
+        """A legacy database — progress rows, no observation table — gains
+        one observation per progress row on the next schema install, with
+        first seen = the row's own `updated_at`."""
+        with tempfile.TemporaryDirectory() as work:
+            legacy = Path(work) / "legacy.db"
+            with sqlite3.connect(str(legacy)) as conn:
+                conn.execute("CREATE TABLE user_progress("
+                             "account_id INTEGER NOT NULL, work_key TEXT NOT NULL,"
+                             " season_number INTEGER NOT NULL DEFAULT 0,"
+                             " episode_number INTEGER NOT NULL DEFAULT 0,"
+                             " position_seconds REAL NOT NULL,"
+                             " duration_seconds REAL NOT NULL,"
+                             " client_updated_at REAL NOT NULL,"
+                             " updated_at REAL NOT NULL,"
+                             " PRIMARY KEY(account_id, work_key, season_number,"
+                             " episode_number))")
+                conn.execute("INSERT INTO user_progress VALUES(7, 'movie:dune:2021',"
+                             " 0, 0, 900, 2000, ?, ?)", (T0 + 20, T0 + 20))
+                conn.commit()
+                accounts.ensure_schema(conn)
+                row = conn.execute(
+                    "SELECT first_seen_at, last_seen_at, max_position_seconds"
+                    " FROM watch_observations WHERE account_id = 7").fetchone()
+                self.assertEqual(tuple(row), (T0 + 20, T0 + 20, 900.0))
+
+
 # ── the adult rule, on both paths ────────────────────────────────────────────
 
 

@@ -95,6 +95,9 @@ class LanShareRunner @Inject constructor(
             port = port,
             address = ShareCatalog.firstSiteLocalIpv4(privateIpv4Candidates()),
             servableCount = initial.size,
+            // The URL a peer needs is built from this token (see shareUrl); the
+            // status line never prints it, and a restart mints a fresh one.
+            sessionToken = srv.sessionToken ?: "",
         )
         refreshJob = scope.launch {
             while (isActive) {

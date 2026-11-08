@@ -164,4 +164,59 @@ class LanShareProtocolTest {
         runCatching { LanShareProtocol.shareUrl("192.168.1.42", 8990, "a b") }
             .onFailure { assertTrue(it is IllegalArgumentException) }
     }
+
+    // ── per-start session token (security fixes, 2026-11-08) ─────────────
+
+    private val session = "0123456789abcdef0123456789abcdef"
+
+    private fun getWithSession(path: String, proved: String? = session): ShareResponse =
+        LanShareProtocol.respond(
+            method = "GET",
+            path = if (proved == null) path else "$path?token=$proved",
+            headers = emptyMap(),
+            catalog = catalog,
+            sessionToken = session,
+        )
+
+    @Test
+    fun `a request without the session token is refused`() {
+        val r = getWithSession("/tok1", proved = null)
+        assertEquals(403, r.status)
+        assertEquals(0L, r.bodyLength)
+    }
+
+    @Test
+    fun `a wrong session token is refused without saying which file exists`() {
+        assertEquals(403, getWithSession("/tok1", proved = "deadbeef").status)
+        // Unknown file + wrong session is still 403: the session check runs before
+        // the file lookup, so a wrong session never learns whether a file exists.
+        assertEquals(403, getWithSession("/nope", proved = "deadbeef").status)
+        assertEquals(404, getWithSession("/nope").status)
+    }
+
+    @Test
+    fun `the right session token serves the file`() {
+        val r = getWithSession("/tok1")
+        assertEquals(200, r.status)
+        assertEquals(size, r.bodyLength)
+    }
+
+    @Test
+    fun `minted session tokens are 128 bit hex and never repeat`() {
+        val first = LanShareProtocol.generateSessionToken()
+        val second = LanShareProtocol.generateSessionToken()
+        assertEquals(2 * LanShareProtocol.SESSION_TOKEN_BYTES, first.length)
+        assertTrue(first.all { it in '0'..'9' || it in 'a'..'f' })
+        assertTrue(first != second)
+    }
+
+    @Test
+    fun `share url carries the session token when one exists`() {
+        val url = LanShareProtocol.shareUrl("192.168.1.42", 8990, "tok1", session)
+        assertEquals("http://192.168.1.42:8990/tok1?token=$session", url)
+        assertEquals(
+            "http://192.168.1.42:8990/tok1",
+            LanShareProtocol.shareUrl("192.168.1.42", 8990, "tok1"),
+        )
+    }
 }

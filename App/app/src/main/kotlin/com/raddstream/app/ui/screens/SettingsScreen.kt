@@ -332,11 +332,12 @@ fun SettingsScreen(
                             }
                         },
                     )
-                    // Honest, and it must stay honest: this deployment has no TLS, so the copy
-                    // says the key crosses the network in the clear instead of implying a
-                    // protection the transport does not provide.
+                    // Honest, and it must stay honest: the warning names the transport the
+                    // server in use actually speaks — plain HTTP in the clear, or TLS for
+                    // the shipped default — instead of implying a protection the transport
+                    // does not provide.
                     Text(
-                        SettingsViewModel.REVEAL_WARNING,
+                        SettingsViewModel.revealWarning(state.serverUrl),
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.error,
                     )
@@ -455,7 +456,7 @@ fun SettingsScreen(
                         Text(if (account.showLinkForm) "Close" else AccountCardCopy.LINK_BUTTON)
                     }
                     if (account.showLinkForm) {
-                        ProfileLinkDialog(account = account, viewModel = viewModel)
+                        ProfileLinkDialog(account = account, viewModel = viewModel, serverUrl = state.serverUrl)
                     }
                 }
 
@@ -959,12 +960,12 @@ private fun planDateLabel(epochMs: Long): String =
  *
  * The name field is not decoration: `accounts.link_profile_with_pin` refuses an empty display name
  * (`_check_profile_name`), so a form that collected only a number and a PIN would fail on a route
- * this app cannot change. Every warning below is the truth about this deployment — plain HTTP, a
- * number that is not a secret, a day that is granted once — because the alternative to saying it
- * here is a viewer discovering it by being harvested.
+ * this app cannot change. Every warning below is the truth about the server in use — the transport
+ * it speaks, a number that is not a secret, a day that is granted once — because the alternative
+ * to saying it here is a viewer discovering it by being harvested.
  */
 @Composable
-internal fun ProfileLinkDialog(account: AccountUiState, viewModel: SettingsViewModel) {
+internal fun ProfileLinkDialog(account: AccountUiState, viewModel: SettingsViewModel, serverUrl: String) {
     AlertDialog(
         onDismissRequest = viewModel::closeLinkForm,
         title = { Text(AccountCardCopy.LINK_TITLE) },
@@ -1001,7 +1002,7 @@ internal fun ProfileLinkDialog(account: AccountUiState, viewModel: SettingsViewM
                     modifier = Modifier.fillMaxWidth(),
                 )
                 Text(
-                    AccountCardCopy.LINK_TRANSPORT_WARNING,
+                    AccountCardCopy.linkTransportWarning(serverUrl),
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.error,
                 )

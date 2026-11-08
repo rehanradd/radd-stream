@@ -874,6 +874,18 @@ def assert_clean(payload, needles=None) -> None:
 
 _TOKEN_VERSION = 1
 
+#: Version byte for the expiring handle :func:`mint_token` writes since the
+#: security-fixes session: same XOR body, but the body carries the id *and*
+#: the expiry instant, so a harvested handle dies on its own. Version 1
+#: handles still parse (no expiry) for the deploy transition; nothing mints
+#: them any more.
+_TOKEN_VERSION_EX = 2
+
+#: Default lifetime of a minted stream/download/art handle, in seconds.
+#: The play/art/download flows press a handle within minutes; a day leaves
+#: room for a slow browser while still bounding a leak.
+TOKEN_TTL_SECONDS = 86400
+
 
 def _keystream(secret: str, n: int, salt: str) -> bytes:
     out = b""
@@ -899,15 +911,28 @@ def _unb64(token: str) -> bytes | None:
         return None
 
 
-def mint_token(number: int, secret: str) -> str:
-    """Sign one of our own integer row ids into an opaque public handle."""
-    raw = struct.pack(">q", int(number))
+def mint_token(number: int, secret: str, ttl_seconds: int = 86400,
+               now: float | None = None) -> str:
+    """Sign one of our own integer row ids into an opaque public handle.
+
+    Version 2 carries the expiry instant beside the id, so a harvested handle
+    stops working ``ttl_seconds`` after it was minted (24 h by default — the
+    play/art/download flows press a handle within minutes, and a day leaves
+    room for a slow browser). Version 1 handles (no expiry) still parse, so
+    handles minted just before a deploy keep working; nothing mints them any
+    more. ``mint_text`` keeps no expiry on purpose: a ``work_ref`` is stored
+    in favorites and progress rows and must resolve months later.
+    """
+    moment = time.time() if now is None else float(now)
+    expires_at = int(moment + max(0, int(ttl_seconds)))
+    raw = struct.pack(">qq", int(number), expires_at)
     body = bytes(a ^ b for a, b in zip(raw, _keystream(secret, len(raw), "id")))
     tag = hmac.new(secret.encode("utf-8"), body, hashlib.sha256).digest()[:4]
-    return _b64(bytes([_TOKEN_VERSION]) + body + tag)
+    return _b64(bytes([_TOKEN_VERSION_EX]) + body + tag)
 
 
-def parse_token(token, secret: str, signed_only: bool = False) -> int | None:
+def parse_token(token, secret: str, signed_only: bool = False,
+                now: float | None = None) -> int | None:
     """Inverse of :func:`mint_token`; ``None`` for anything not minted by us.
 
     A plain integer is accepted unless ``signed_only``: the v1 field apps already
@@ -924,7 +949,21 @@ def parse_token(token, secret: str, signed_only: bool = False) -> int | None:
     if text.isdigit():
         return None if signed_only else int(text)
     data = _unb64(text)
-    if data is None or len(data) < 9 or data[0] != _TOKEN_VERSION:
+    if data is None or len(data) < 9:
+        return None
+    if data[0] == _TOKEN_VERSION_EX:
+        # Expiring handle: version 2 + 16-byte body (id, expiry) + 4-byte tag.
+        if len(data) != 1 + 16 + 4:
+            return None
+        body, tag = data[1:-4], data[-4:]
+        want = hmac.new(secret.encode("utf-8"), body, hashlib.sha256).digest()[:4]
+        if not hmac.compare_digest(tag, want):
+            return None
+        raw = bytes(a ^ b for a, b in zip(body, _keystream(secret, len(body), "id")))
+        number, expires_at = struct.unpack(">qq", raw)
+        moment = time.time() if now is None else float(now)
+        return int(number) if expires_at > moment else None
+    if data[0] != _TOKEN_VERSION or len(data) != 1 + 8 + 4:
         return None
     body, tag = data[1:-4], data[-4:]
     want = hmac.new(secret.encode("utf-8"), body, hashlib.sha256).digest()[:4]
@@ -1021,52 +1060,123 @@ def parse_text(token, secret: str) -> str | None:
     return raw.decode("utf-8", "replace")
 
 
-def stream_secret(db_path=None) -> str:
+def _secret_file_path(db_path=None, secret_file=None):
+    """Where the signing secret lives on disk, outside the catalog.
+
+    An explicit path wins, then ``RADD_STREAM_SECRET_FILE``, then the file
+    beside the catalog database (``stream_secret.key`` in the same directory).
+    ``None`` when no location can be derived — the caller must then fail
+    closed rather than invent one."""
+    if secret_file:
+        return Path(secret_file)
+    env_file = os.environ.get("RADD_STREAM_SECRET_FILE")
+    if env_file:
+        return Path(env_file)
+    if db_path is None:
+        return None
+    return Path(db_path).with_name("stream_secret.key")
+
+
+def _read_secret_file(path):
+    """The secret a file holds, or ``None`` when there is none to read.
+
+    A missing file, an unreadable file and a blank file are all "no secret",
+    never an error: the caller decides whether to generate one."""
+    try:
+        text = Path(path).read_text().strip()
+    except Exception:
+        return None
+    return text or None
+
+
+def _write_secret_file(path, secret: str) -> None:
+    """Store a secret where only the operator's user can read it.
+
+    Created with mode 0600 from the first byte: a secret written through a
+    default-umask file would be readable by every local user until something
+    remembered to chmod it."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        os.write(fd, secret.encode("ascii"))
+    finally:
+        os.close(fd)
+
+
+def _read_legacy_db_secret(db_path):
+    """The secret an older install persisted in the catalog's ``server_state``.
+
+    Read-only by construction (``mode=ro``): this never creates the database
+    or the table, so a fresh install with no legacy row simply has none. The
+    value is migrated out to the secret file on first read — the database
+    copy is a leak surface (anyone holding a catalog backup could forge every
+    handle), so the file is the home from the first call on.
+    """
+    try:
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    except Exception:
+        return None
+    try:
+        row = conn.execute(
+            "SELECT value FROM server_state WHERE key = 'stream_secret'"
+        ).fetchone()
+    except Exception:
+        return None
+    finally:
+        conn.close()
+    return row[0] if row else None
+
+
+def stream_secret(db_path=None, secret_file=None) -> str:
     """Per-install signing secret, persisted beside the catalog. Fails closed.
 
-    Read from ``RADD_STREAM_SECRET`` when set (deployment owns it); otherwise a
-    random one is generated into ``server_state`` on first use — the database
-    file is created if it does not exist yet, so a fresh install gets a real
-    per-install key, not a shared one — and stays stable across restarts.
-    Never in the checkout, never in the git history.
+    Precedence, in order: ``RADD_STREAM_SECRET`` (deployment owns it);
+    the secret file (``secret_file``, else ``RADD_STREAM_SECRET_FILE``,
+    else ``stream_secret.key`` beside the catalog database); a legacy
+    ``server_state`` row in the catalog, read once and migrated to the file;
+    a freshly generated secret, written to the file with mode 0600. Never
+    in the checkout, never in the git history, and — since the security
+    fixes — never written into the catalog database: a catalog backup must
+    not carry the key that forges every handle it holds.
 
     Audit critical 4 retired the constant fallback: a hardcoded secret is a
     public credential, so anyone holding the source could mint valid stream,
-    download, and art handles against an unconfigured install. If no secret can
-    be read or durably generated (no environment value and no writable
-    ``db_path``), this raises instead of returning any fallback. Callers must
-    treat that as "refuse to sign", never as "use a default". The secret value
-    is never included in the error text."""
+    download, and art handles against an unconfigured install. If no secret
+    can be read or durably generated (no environment value and no writable
+    location), this raises instead of returning any fallback. Callers must
+    treat that as "refuse to sign", never as "use a default". The secret
+    value is never included in the error text."""
     env = os.environ.get("RADD_STREAM_SECRET")
     if env:
         return env
-    if db_path is None:
+    path = _secret_file_path(db_path, secret_file)
+    if path is not None:
+        stored = _read_secret_file(path)
+        if stored:
+            return stored
+    if db_path is not None:
+        legacy = _read_legacy_db_secret(db_path)
+        if legacy:
+            if path is not None:
+                try:
+                    _write_secret_file(path, legacy)
+                except Exception:
+                    pass  # the file is the home, not a gate: keep serving
+            return legacy
+    if path is None:
         raise RuntimeError(
             "no signing secret available: RADD_STREAM_SECRET is unset and no "
             "catalog path was given to persist a generated one; refusing to "
             "sign with a fallback")
-    path = Path(db_path)
+    secret = base64.urlsafe_b64encode(os.urandom(32)).decode("ascii")
     try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        conn = sqlite3.connect(path)
-        try:
-            conn.execute("CREATE TABLE IF NOT EXISTS server_state "
-                         "(key TEXT PRIMARY KEY, value TEXT NOT NULL)")
-            row = conn.execute("SELECT value FROM server_state WHERE key = "
-                               "'stream_secret'").fetchone()
-            if row:
-                return row[0]
-            secret = base64.urlsafe_b64encode(os.urandom(32)).decode("ascii")
-            conn.execute("INSERT INTO server_state(key, value) VALUES(?, ?)",
-                         ("stream_secret", secret))
-            conn.commit()
-            return secret
-        finally:
-            conn.close()
+        _write_secret_file(path, secret)
     except Exception as exc:
         raise RuntimeError(
             f"cannot read or durably generate the signing secret for {path}; "
             "refusing to sign with a fallback") from exc
+    return secret
 
 
 # ── art: keep the image host ours ────────────────────────────────────────────

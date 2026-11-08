@@ -242,6 +242,18 @@ LAST_SEEN_WRITE_INTERVAL = 900.0
 #: viewer who uninstall-reinstalls to farm another free week.
 TRIAL_DAYS = 3
 DAY_SECONDS = 86400.0
+#: The anonymous-creation budget: how many *new* trial accounts one network
+#: address may mint in a rolling day. The device gate alone cannot stop a
+#: script rotating `device_id` strings — each one is a fresh account with a
+#: fresh three days — so the address pays for the mint: 10 a day is far below
+#: the 30/min account bucket and far above any real household (a carrier NAT
+#: sharing one egress address across many genuine first installs still fits;
+#: a script minting hundreds does not). Resuming a trial costs nothing — the
+#: device already paid — and only a *new* mint is charged. The address is
+#: stored as a SHA-256 hash, never raw, matching the way this module already
+#: treats IPs (masked in logs, hashed in the limiter).
+TRIAL_IP_DAILY_LIMIT = 10
+TRIAL_IP_WINDOW_SECONDS = 86400.0
 #: The day a linked profile adds. Granted exactly once per account, judged from
 #: `user_accounts.linked_at` — the column the same write sets — so a customer who
 #: re-links to fix a typo cannot farm bonus days off one phone number.
@@ -408,6 +420,19 @@ class WeakDeviceId(AccountError):
     code = "invalid_request"
     status = 400
     default_detail = "that device id is not usable"
+
+
+class TrialBudgetExceeded(AccountError):
+    """One network address minted too many *new* trial accounts today.
+
+    A 429, not a 400: the request is well-formed and the device is fine — the
+    address simply spent its daily budget (`TRIAL_IP_DAILY_LIMIT`). The retry
+    is tomorrow, not "try a different device id", and the detail says so
+    without naming the limit's arithmetic to the caller."""
+
+    code = "rate_limited"
+    status = 429
+    default_detail = "too many new trials from this network today"
 
 
 class WeakProfile(AccountError):
@@ -649,6 +674,41 @@ CREATE TABLE IF NOT EXISTS device_trials (
     first_seen_at REAL NOT NULL,
     trial_expires_at REAL NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS trial_ip_budget (
+    -- The per-address mint budget (`TRIAL_IP_DAILY_LIMIT` new trials per
+    -- rolling day). One row per address *hash* — the raw IP is never stored,
+    -- and the hash is what the route passes in, so a reader of this table
+    -- learns counts, not addresses. `window_start` anchors the rolling day;
+    -- a row older than `TRIAL_IP_WINDOW_SECONDS` is reset, not deleted, so the
+    -- table stays one row per address that ever minted. Only a *new* trial
+    -- mint is charged; resumes and reissues cost nothing.
+    ip_hash TEXT PRIMARY KEY,
+    window_start REAL NOT NULL,
+    creations INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS watch_observations (
+    -- What the server itself saw of a viewing: the first and last progress
+    -- report the server *applied* for one (account, work, season, episode),
+    -- and the furthest position ever reported. This is the evidence the
+    -- finish-watch grant is gated on — a bare client claim of "I finished
+    -- it" pays nothing unless the server watched the watching happen across
+    -- real time (see `engagement.finish_watch_observed`). First and last are
+    -- the server's receipt times, never the client's `client_updated_at`: a
+    -- client clock is a claim, and the span between two claims proves
+    -- nothing. Only applied writes land here — a stale report the server
+    -- ignored leaves no trace — and deleting progress does not delete the
+    -- observation: clearing history is not un-watching.
+    account_id INTEGER NOT NULL,
+    work_key TEXT NOT NULL,
+    season_number INTEGER NOT NULL DEFAULT 0,
+    episode_number INTEGER NOT NULL DEFAULT 0,
+    first_seen_at REAL NOT NULL,
+    last_seen_at REAL NOT NULL,
+    max_position_seconds REAL NOT NULL DEFAULT 0,
+    PRIMARY KEY (account_id, work_key, season_number, episode_number)
+);
 """
 
 #: Columns this release needs that an older database may not have, as
@@ -759,11 +819,36 @@ def ensure_schema(conn: sqlite3.Connection) -> dict:
     `{"schema_version": N, "added_columns": ["user_progress.client_updated_at"]}`."""
     conn.executescript(DDL)
     added = _migrate_columns(conn)
+    _backfill_watch_observations(conn)
     conn.executescript(_INDEXES)
     _install_live_tid_guard(conn)
     conn.execute("INSERT OR REPLACE INTO user_state_meta(key, value) VALUES(?, ?)",
                  ("schema_version", str(SCHEMA_VERSION)))
     return {"schema_version": SCHEMA_VERSION, "added_columns": added}
+
+
+def _backfill_watch_observations(conn: sqlite3.Connection) -> None:
+    """One-time backfill: a progress row written before this release is the
+    only evidence that title was ever watched, so it seeds the observation
+    with `first_seen_at` = the row's own `updated_at` and the furthest
+    position it ever held. It runs only while the observation table is empty,
+    so a live server pays one scan, not one per request; later rows arrive
+    through `put_progress`. The grandfathering is honest and bounded: a
+    pre-existing 90% row cannot be told apart from a real past watch, but the
+    grant pays once per title ever, so the exposure is one grant per title
+    already at the line — not a farming loop."""
+    count = conn.execute(
+        "SELECT COUNT(*) FROM watch_observations").fetchone()[0]
+    if count:
+        return
+    conn.execute("""
+        INSERT OR IGNORE INTO watch_observations
+            (account_id, work_key, season_number, episode_number,
+             first_seen_at, last_seen_at, max_position_seconds)
+        SELECT account_id, work_key, season_number, episode_number,
+               updated_at, updated_at, position_seconds
+        FROM user_progress
+    """)
 
 
 def _migrate_columns(conn: sqlite3.Connection) -> list:
@@ -1243,9 +1328,47 @@ def _trial_answer(device: str, row, vip_until: float, *, sync_key=None,
     }
 
 
+def _trial_ip_hash(client_ip):
+    """SHA-256 of the caller's network address, or None when there is none.
+
+    The route passes what `redact.client_ip` saw (the address nginx's
+    `X-Real-IP` carried, or the socket peer); a direct library caller passes
+    nothing, and then no budget is charged — the budget is an edge control,
+    and a caller with no address has no address to count."""
+    text = str(client_ip or "").strip()
+    if not text:
+        return None
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _charge_trial_ip_budget(conn, ip_hash, now, *,
+                            limit=TRIAL_IP_DAILY_LIMIT):
+    """Charge one new-trial mint against an address's daily budget.
+
+    Runs inside the caller's transaction, so a mint that rolls back (a racing
+    first-sight of the same device) returns its charge with it. A window older
+    than `TRIAL_IP_WINDOW_SECONDS` resets; a window at its limit raises
+    `TrialBudgetExceeded` before anything is minted."""
+    row = conn.execute("SELECT window_start, creations FROM trial_ip_budget "
+                       "WHERE ip_hash = ?", (ip_hash,)).fetchone()
+    if row is None:
+        conn.execute("INSERT INTO trial_ip_budget(ip_hash, window_start, "
+                     "creations) VALUES(?, ?, 1)", (ip_hash, now))
+        return
+    if now - float(row["window_start"]) >= TRIAL_IP_WINDOW_SECONDS:
+        conn.execute("UPDATE trial_ip_budget SET window_start = ?, "
+                     "creations = 1 WHERE ip_hash = ?", (now, ip_hash))
+        return
+    if int(row["creations"]) >= limit:
+        raise TrialBudgetExceeded()
+    conn.execute("UPDATE trial_ip_budget SET creations = creations + 1 "
+                 "WHERE ip_hash = ?", (ip_hash,))
+
+
 def grant_or_resume_device_trial(conn_or_path, device_id, *,
                                  now: float | None = None,
-                                 trial_days: float = TRIAL_DAYS) -> dict:
+                                 trial_days: float = TRIAL_DAYS,
+                                 client_ip=None) -> dict:
     """Start a device's free trial, or resume the one it already has.
 
     A device the server has never seen gets a brand-new anonymous account (no key
@@ -1274,7 +1397,15 @@ def grant_or_resume_device_trial(conn_or_path, device_id, *,
     Returns `{"device_id", "account_id", "sync_key", "created", "reissued",
     "first_seen_at", "trial_expires_at", "trial_seconds_remaining", "vip_until"}`.
     Concurrent first-sight of one device is settled by the primary key: the loser
-    rolls back its orphan account and answers with the winner's row."""
+    rolls back its orphan account and answers with the winner's row.
+
+    `client_ip` is the address the edge saw (or None for a direct library call):
+    a *new* mint charges one against that address's daily budget
+    (`TRIAL_IP_DAILY_LIMIT` per rolling day) before anything is minted, so a
+    script rotating `device_id` strings hits a wall after ten accounts instead
+    of minting forever. Resuming or reissuing an existing device costs nothing —
+    the device already paid, and a second device behind the same NAT address
+    must not be charged for the first one's return."""
     device = _check_device_id(device_id)
     moment = time.time() if now is None else float(now)
     seconds = max(0.0, float(trial_days)) * DAY_SECONDS
@@ -1284,6 +1415,9 @@ def grant_or_resume_device_trial(conn_or_path, device_id, *,
         if row is not None:
             return _resume_or_reissue(conn, device, row, moment)
         try:
+            ip_hash = _trial_ip_hash(client_ip)
+            if ip_hash is not None:
+                _charge_trial_ip_budget(conn, ip_hash, moment)
             account_id, plaintext = _mint_account_row(conn, moment, moment + seconds)
             trial_row = {"account_id": account_id, "first_seen_at": moment,
                          "trial_expires_at": moment + seconds}
@@ -1954,6 +2088,27 @@ def _seconds(value, field: str) -> float:
     return number
 
 
+def _record_watch_observation(conn, account_id, work_key, season, episode,
+                              position, now):
+    """Note one *applied* progress report in the observation ledger: the
+    first report opens the row, later ones move only `last_seen_at` and the
+    furthest position. `first_seen_at` is set on INSERT only — it is
+    deliberately absent from the `ON CONFLICT ... DO UPDATE` list — so the
+    span the finish-watch gate measures is the whole viewing, not the last
+    report. Times are the server's receipt times (`now`), never the client's
+    stamp."""
+    conn.execute("""
+        INSERT INTO watch_observations(account_id, work_key, season_number,
+                                       episode_number, first_seen_at,
+                                       last_seen_at, max_position_seconds)
+        VALUES(?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(account_id, work_key, season_number, episode_number)
+        DO UPDATE SET last_seen_at = excluded.last_seen_at,
+                      max_position_seconds = MAX(max_position_seconds,
+                                                 excluded.max_position_seconds)
+    """, (account_id, work_key, season, episode, now, now, position))
+
+
 def put_progress(conn_or_path, key, work_key, *, catalog=None, position_seconds=0.0,
                  duration_seconds=0.0, season_number=None, episode_number=None,
                  client_updated_at: float | None = None, now: float | None = None,
@@ -2018,6 +2173,8 @@ def put_progress(conn_or_path, key, work_key, *, catalog=None, position_seconds=
                 updated_at = excluded.updated_at
             """, (account["account_id"], text, season, episode, position, duration,
                   stamp, now))
+        _record_watch_observation(conn, account["account_id"], text, season,
+                                  episode, position, now)
         _commit(conn)
         row = _progress_row(conn, account["account_id"], text, season, episode)
         row["applied"] = True

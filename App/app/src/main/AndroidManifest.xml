@@ -39,10 +39,20 @@
       /brand.properties (resValue "brand_app_name" + manifestPlaceholder
       "brandScheme"). Registered components themselves must stay literal here —
       AGP requires that — but their name shown to users comes from the brand file.
+
+      allowBackup is false on purpose: the sync key lives in this app's private
+      DataStore file (encrypted with a Keystore key since the security release),
+      and Auto Backup would carry that file — and the Room database beside it —
+      to the viewer's Google account, where the Keystore key cannot follow it.
+      A restored backup would hold a key the new install cannot open, and a
+      backup image is a copy of the credential outside this device. There is
+      no fullBackupContent / dataExtractionRules allow-list: nothing in this
+      app is safe to restore blindly, and the server is the source of truth
+      for everything that matters.
     -->
     <application
         android:name=".RaddStreamApplication"
-        android:allowBackup="true"
+        android:allowBackup="false"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/brand_app_name"
         android:roundIcon="@mipmap/ic_launcher_round"

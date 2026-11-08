@@ -502,10 +502,11 @@ def quality_gate_block_reason(source_id, headers, query_params):
     columns, never a link field) met by the same server-verifiable credentials
     the shortener split already trusts (``request_is_vip``).
 
-    Opt-in by the operator (``feature_quality_gate``, default off) and
-    fail-open: an unreadable settings row answers "free". Refusing every
-    premium play because the config could not be read is an availability
-    failure, and this boundary protects revenue, not a person.
+    Opt-in by the operator (``feature_quality_gate``, default on since the
+    security release) and fail-open: an unreadable settings row answers
+    "free". Refusing every premium play because the config could not be read
+    is an availability failure, and this boundary protects revenue, not a
+    person.
     """
     try:
         with get_db() as conn:
@@ -4538,7 +4539,10 @@ class DashboardHandler(BaseHTTPRequestHandler):
         already triages. Answers the v1 shape: `{"success": true}` on store,
         `invalid_params` (400) for a bad category or an empty body,
         `unavailable` (503) when the panel inbox is not wired or locked —
-        an honest retry-later, never a swallowed message.
+        an honest retry-later, never a swallowed message — and
+        `rate_limited` (429) when one address already sent ten messages
+        today. A filled `website` field (the honeypot a human form never
+        sends) is answered with success and written nowhere.
         """
         payload, code = api_v2.read_body(self)
         if payload is None:
@@ -4550,9 +4554,11 @@ class DashboardHandler(BaseHTTPRequestHandler):
             subject=payload.get("subject", ""),
             body=payload.get("body", ""),
             account_hint=payload.get("account_hint"),
+            client_ip=redact.client_ip(self),
+            honeypot=payload.get("website"),
         )
         if not ok:
-            status = 503 if result == "unavailable" else 400
+            status = {"unavailable": 503, "rate_limited": 429}.get(result, 400)
             self.send_json({"success": False, "error": result}, status=status)
             return
         self.send_json({"success": True})
@@ -4632,7 +4638,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 return
             answered = accounts_api.route_post(
                 path, payload, db_path=accounts_api.state_db(), catalog_path=DB_PATH,
-                secret=signing_secret(), headers=self.headers)
+                secret=signing_secret(), headers=self.headers,
+                client_ip=redact.client_ip(self))
             if answered is not None:
                 self.send_triple(answered)
                 return

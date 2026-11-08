@@ -128,21 +128,55 @@ _PAYMENT_KEYS = frozenset({"plan", "method", "tid"})
 _EARN_KEYS = frozenset({"reason"})
 #: The only key a redemption may carry. `media_id`/`work_ref` are refused with the rest:
 #: what is sold here is a time-boxed pass over the catalog, never one title.
-_REDEEM_KEYS = frozenset({"plan"})
+#: `idempotency_key` is the client's retry token for a spend (see
+#: `_client_idempotency_key`): a retry with the same token spends nothing
+#: twice, and the server namespaces it per account and operation before it
+#: reaches the ledger.
+_REDEEM_KEYS = frozenset({"plan", "idempotency_key"})
 #: The only key a download-credit purchase may carry. The handle IS the title
 #: here — a credit buys one direct download of one movie, so the download id
 #: is the purchase, not a detail smuggled past the price.
-_DOWNLOAD_KEYS = frozenset({"handle"})
+_DOWNLOAD_KEYS = frozenset({"handle", "idempotency_key"})
 #: The only key a share claim may carry: the minted handle of the shared work.
 #: The server cannot observe a share, so the handle is the whole proof the
 #: work exists and is ours.
 _SHARE_KEYS = frozenset({"work_ref"})
 #: The keys a movie request may carry: the title (required) and the viewer's
 #: own note (optional). Nothing else — a request is a title, not a form.
-_REQUEST_MOVIE_KEYS = frozenset({"title", "notes"})
+_REQUEST_MOVIE_KEYS = frozenset({"title", "notes", "idempotency_key"})
 #: The only key a theme purchase may carry: the theme id. The price is one
 #: price for every theme, so the name is the purchase.
-_REDEEM_THEME_KEYS = frozenset({"theme"})
+_REDEEM_THEME_KEYS = frozenset({"theme", "idempotency_key"})
+
+#: A client-supplied idempotency key is a short opaque string: long enough
+#: for a UUID, short enough that it cannot smuggle a payload into a ledger
+#: column.
+_IDEMPOTENCY_KEY_MAX = 128
+
+
+def _client_idempotency_key(payload, account_id, operation, path):
+    """The client's retry token, namespaced into the ledger's key space.
+
+    Returns `(key, None)` — `key` is None when the client sent none, and
+    the engine's own second-granularity default applies — or `(None, refusal)`
+    for a malformed token. The namespacing is the load-bearing part:
+    `spend_coins` dedupes on the key alone (UNIQUE, no account column), so a
+    raw client string would let one account's key block — or free-ride —
+    another account's spend. The server composes
+    `client:{account}:{operation}:{token}`, and the token itself is only the
+    retry marker. A token that arrives already namespaced is still only a
+    token: the composition runs regardless, so a client cannot pick its own
+    ledger key.
+    """
+    raw = payload.get("idempotency_key")
+    if raw is None:
+        return None, None
+    if (not isinstance(raw, str) or not raw.strip()
+            or len(raw) > _IDEMPOTENCY_KEY_MAX):
+        return None, _problem(
+            "invalid_params", 400,
+            "an idempotency key is a short string", path)
+    return (f"client:{int(account_id)}:{operation}:{raw.strip()}", None)
 #: A title a viewer types is their own words, and a request that is a page of
 #: text is not a request: 200 characters for the title, 500 for the note.
 _REQUEST_TITLE_MAX = 200
@@ -735,9 +769,13 @@ def route_get(path, query, *, db_path, catalog_path, secret, headers) -> tuple |
             catalog.close()
 
 
-def route_post(path, body, *, db_path, catalog_path, secret, headers) -> tuple | None:
+def route_post(path, body, *, db_path, catalog_path, secret, headers,
+               client_ip=None) -> tuple | None:
     """POST on the account surface. `body` is the already-parsed JSON object,
-    read by `api_v2.read_body` so one ceiling covers the whole server."""
+    read by `api_v2.read_body` so one ceiling covers the whole server.
+    `client_ip` is the address the edge saw (or None when the caller has
+    none): only the anonymous trial mint charges against it, so a direct
+    test call passes nothing and pays nothing."""
     if not is_account(path):
         return None
     mint = _Minter(secret)
@@ -772,7 +810,7 @@ def route_post(path, body, *, db_path, catalog_path, secret, headers) -> tuple |
             # that could set its own trial length would be a client that sets its own
             # price, which is the rule `["payment"]` below enforces on money.
             trial = accounts.grant_or_resume_device_trial(
-                db_path, payload.get("device_id"))
+                db_path, payload.get("device_id"), client_ip=client_ip)
             out = _trial_view(trial)
             if trial["sync_key"]:
                 out["sync_key"] = trial["sync_key"]
@@ -839,7 +877,15 @@ def route_post(path, body, *, db_path, catalog_path, secret, headers) -> tuple |
             # A finished title pays once, ever: 90% watched counts as finished
             # because the player may never report exactly 100%. The grant is a
             # server-side decision on numbers the server already holds — the
-            # phone never claims a finish, it only reports a position.
+            # phone never claims a finish, it only reports a position — and
+            # since this release it also needs the server to have *seen* the
+            # watching: `finish_watch_observed` demands the first applied
+            # progress report be at least 45% of the runtime ago, so one
+            # instant "I finished it" claim pays nothing. A 2x viewer still
+            # passes; a farmer must space reports over ~45% of the runtime
+            # per title. The progress write above already recorded this
+            # report's observation, so a first-ever report measures a span
+            # of zero and is refused here, honestly.
             coins_earned = 0
             position = float(row.get("position_seconds") or 0.0)
             duration = float(row.get("duration_seconds") or 0.0)
@@ -847,12 +893,18 @@ def route_post(path, body, *, db_path, catalog_path, secret, headers) -> tuple |
                 account = accounts.authenticate(db_path, key, tracker=LIMITER)
                 values = _settings(catalog)
                 with closing(engagement.connect(db_path)) as wallet:
-                    grant = engagement.grant_finish_watch(
+                    seen = engagement.finish_watch_observed(
                         wallet, account["account_id"], work=work,
                         season=int(row.get("season_number") or 0),
                         episode=int(row.get("episode_number") or 0),
-                        values=values)
-                coins_earned = grant["coins"] if grant["granted"] else 0
+                        duration_seconds=duration)
+                    if seen["observed"]:
+                        grant = engagement.grant_finish_watch(
+                            wallet, account["account_id"], work=work,
+                            season=int(row.get("season_number") or 0),
+                            episode=int(row.get("episode_number") or 0),
+                            values=values)
+                        coins_earned = grant["coins"] if grant["granted"] else 0
             return _respond({"progress": accounts.to_public(row, mint),
                              "coins_earned": coins_earned}, status=201)
         if tail == ["progress", "remove"]:
@@ -927,7 +979,7 @@ def route_post(path, body, *, db_path, catalog_path, secret, headers) -> tuple |
             extra = sorted(str(name) for name in payload if name not in _REDEEM_KEYS)
             if extra:
                 return _problem("invalid_params", 400,
-                                "a redemption accepts plan only", path)
+                                "a redemption accepts plan and idempotency_key only", path)
             plan = str(payload.get("plan") or "")
             refusal = _REFUSED_REWARDS.get(plan)
             if refusal:
@@ -938,10 +990,15 @@ def route_post(path, body, *, db_path, catalog_path, secret, headers) -> tuple |
             if plan not in ladder:
                 return _problem("invalid_params", 400, "no such reward", path)
             account = accounts.authenticate(db_path, key, tracker=LIMITER)
+            client_key, key_refusal = _client_idempotency_key(
+                payload, account["account_id"], "redeem", path)
+            if key_refusal is not None:
+                return key_refusal
             with closing(engagement.connect(db_path)) as wallet:
                 try:
                     redeemed = engagement.redeem_pass(
                         wallet, account["account_id"], plan=plan,
+                        idempotency_key=client_key,
                         pass_secret=secret, ladder=ladder)
                 except engagement.InsufficientCoins:
                     # 402 — §16.4's "a licence is required before this can be played",
@@ -962,16 +1019,21 @@ def route_post(path, body, *, db_path, catalog_path, secret, headers) -> tuple |
             extra = sorted(str(name) for name in payload if name not in _DOWNLOAD_KEYS)
             if extra:
                 return _problem("invalid_params", 400,
-                                "a download purchase accepts handle only", path)
+                                "a download purchase accepts handle and idempotency_key only", path)
             handle = str(payload.get("handle") or "")
             if not redact.parse_token(handle, secret, signed_only=True):
                 return _problem("invalid_params", 400, "no such download", path)
             account = accounts.authenticate(db_path, key, tracker=LIMITER)
+            client_key, key_refusal = _client_idempotency_key(
+                payload, account["account_id"], "redeem-download", path)
+            if key_refusal is not None:
+                return key_refusal
             values = _settings(catalog)
             with closing(engagement.connect(db_path)) as wallet:
                 try:
                     credit = engagement.redeem_download_credit(
                         wallet, account["account_id"], handle=handle,
+                        idempotency_key=client_key,
                         credit_secret=secret, values=values)
                 except engagement.InsufficientCoins:
                     # Same 402 as the pass route: the refusal names no number,
@@ -1018,19 +1080,23 @@ def route_post(path, body, *, db_path, catalog_path, secret, headers) -> tuple |
             extra = sorted(str(name) for name in payload if name not in _REQUEST_MOVIE_KEYS)
             if extra:
                 return _problem("invalid_params", 400,
-                                "a movie request accepts title and notes only", path)
+                                "a movie request accepts title, notes and idempotency_key only", path)
             title = str(payload.get("title") or "").strip()
             notes = str(payload.get("notes") or "").strip()
             if not title or len(title) > _REQUEST_TITLE_MAX or len(notes) > _REQUEST_NOTES_MAX:
                 return _problem("invalid_params", 400,
                                 "a movie request needs a short title", path)
             account = accounts.authenticate(db_path, key, tracker=LIMITER)
+            client_key, key_refusal = _client_idempotency_key(
+                payload, account["account_id"], "request-movie", path)
+            if key_refusal is not None:
+                return key_refusal
             values = _settings(catalog)
             with closing(engagement.connect(db_path)) as wallet:
                 try:
                     request = engagement.request_movie(
                         wallet, account["account_id"], title=title, notes=notes,
-                        values=values)
+                        values=values, idempotency_key=client_key)
                 except engagement.InsufficientCoins:
                     # Same 402 as the pass route: the refusal names no number,
                     # and the caller reads its own balance from `GET /coins`.
@@ -1046,11 +1112,15 @@ def route_post(path, body, *, db_path, catalog_path, secret, headers) -> tuple |
             extra = sorted(str(name) for name in payload if name not in _REDEEM_THEME_KEYS)
             if extra:
                 return _problem("invalid_params", 400,
-                                "a theme purchase accepts theme only", path)
+                                "a theme purchase accepts theme and idempotency_key only", path)
             theme = str(payload.get("theme") or "")
             if theme not in engagement.PURCHASABLE_THEMES:
                 return _problem("invalid_params", 400, "no such theme", path)
             account = accounts.authenticate(db_path, key, tracker=LIMITER)
+            client_key, key_refusal = _client_idempotency_key(
+                payload, account["account_id"], "redeem-theme", path)
+            if key_refusal is not None:
+                return key_refusal
             values = _settings(catalog)
             with closing(engagement.connect(db_path)) as wallet:
                 owned = engagement.owned_themes(wallet, account["account_id"])
@@ -1061,7 +1131,8 @@ def route_post(path, body, *, db_path, catalog_path, secret, headers) -> tuple |
                         "already_applied": True, "owned": owned})})
                 try:
                     bought = engagement.redeem_theme(
-                        wallet, account["account_id"], theme=theme, values=values)
+                        wallet, account["account_id"], theme=theme, values=values,
+                        idempotency_key=client_key)
                 except engagement.InsufficientCoins:
                     # Same 402 as the pass route: the refusal names no number,
                     # and the caller reads its own balance from `GET /coins`.

@@ -1135,7 +1135,7 @@ class SettingsViewModel @Inject constructor(
                             revealedKey = outcome.revealedKey,
                             quickInput = "",
                             message = if (outcome.revealedKey != null) {
-                                REVEAL_WARNING
+                                revealWarning(_uiState.value.serverUrl)
                             } else {
                                 "Signed in on this device."
                             },
@@ -1159,13 +1159,26 @@ class SettingsViewModel @Inject constructor(
     companion object {
         /**
          * The one sentence the app says about a key it just minted. Honest about the two things
-         * a viewer can actually be harmed by: it is shown once, and this server has no TLS, so
-         * the copy never claims the key is encrypted or "secure".
+         * a viewer can actually be harmed by: it is shown once, and the transport is whatever
+         * the server they chose speaks — the shipped default is HTTPS, a server the viewer
+         * points at over plain HTTP still sends the key in the clear — so the copy never
+         * claims a protection the transport does not provide. [revealWarning] picks the
+         * sentence for the server in use; [REVEAL_WARNING] is the plain-HTTP variant.
          */
         const val REVEAL_WARNING =
             "This is the only time the key is shown. Write it down now: this server speaks plain " +
                 "HTTP, so the key travels in the clear, and anyone who reads it can open your " +
                 "list. Losing it means starting a new list."
+
+        const val REVEAL_WARNING_SECURED =
+            "This is the only time the key is shown. Write it down now: anyone who reads it can " +
+                "open your list. Losing it means starting a new list."
+
+        /** The reveal warning for the server in use: the plain-HTTP sentence only when the
+         * server actually speaks plain HTTP. */
+        fun revealWarning(serverUrl: String): String =
+            if (serverUrl.trim().startsWith("https", ignoreCase = true)) REVEAL_WARNING_SECURED
+            else REVEAL_WARNING
     }
 }
 
@@ -1184,8 +1197,10 @@ private fun refusalSentence(reason: Refusal): String = when (reason) {
  * words a viewer acts on and the words this repository can be audited against.
  *
  * Four rules they all obey, and the reason each one is a rule rather than a style:
- *  - **no security claim.** This deployment is plain HTTP with no TLS, so the PIN and the phone
- *    cross the wire in the clear. Nothing here may say secure, encrypted, private, or "only you";
+ *  - **no security claim.** A server the viewer points at over plain HTTP has no TLS, so the
+ *    PIN and the phone cross the wire in the clear — the shipped default is HTTPS, and the
+ *    transport warning says which one is in use. Nothing here may say secure, encrypted,
+ *    private, or "only you" about a plain-HTTP server;
  *  - **no lock claim.** The trial is opened by a device id this app makes up about itself
  *    (`accounts.py:240`: "client-reported … spoofable on a rooted phone"), so it is a gate, and no
  *    copy may call it verified, locked to a device, or proof of who somebody is;
@@ -1218,12 +1233,24 @@ object AccountCardCopy {
 
     /**
      * The transport warning. It is the sentence the whole modal exists to earn the right to show,
-     * and it states what is true about this host rather than what a TLS deployment would be.
+     * and it states what is true about the server in use rather than what a TLS deployment would
+     * be: the plain-HTTP sentence only when the server actually speaks plain HTTP.
+     * [linkTransportWarning] picks the sentence for the server in use;
+     * [LINK_TRANSPORT_WARNING] is the plain-HTTP variant.
      */
     internal const val LINK_TRANSPORT_WARNING =
         "This server speaks plain HTTP, so the name, the number and the PIN you are about to type " +
             "travel across the network in the clear. Anyone able to read this traffic can read them. " +
             "Do not enter a PIN you also use somewhere else."
+
+    internal const val LINK_TRANSPORT_WARNING_SECURED =
+        "This server speaks HTTPS, so the name, the number and the PIN you are about to type " +
+            "travel across the network under TLS. Do not enter a PIN you also use somewhere else."
+
+    /** The transport warning for the server in use. */
+    internal fun linkTransportWarning(serverUrl: String): String =
+        if (serverUrl.trim().startsWith("https", ignoreCase = true)) LINK_TRANSPORT_WARNING_SECURED
+        else LINK_TRANSPORT_WARNING
 
     /**
      * What the number is worth, in the same words the card above uses. This sentence used to say a

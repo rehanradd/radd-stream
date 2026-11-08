@@ -395,6 +395,35 @@ class HandleTests(unittest.TestCase):
         self.assertIsNone(redact.parse_download_credit(vip, self.SECRET))
         self.assertIsNone(redact.parse_vip_pass(token, self.SECRET))
 
+    def test_token_expires_after_its_ttl(self):
+        """A minted handle dies on its own: the expiry is inside the token,
+        so a harvested handle is a day's window, not a forever one."""
+        moment = 1_700_000_000.0
+        token = redact.mint_token(123, self.SECRET, ttl_seconds=3600, now=moment)
+        self.assertEqual(redact.parse_token(token, self.SECRET, now=moment), 123)
+        self.assertEqual(
+            redact.parse_token(token, self.SECRET, now=moment + 3599), 123)
+        self.assertIsNone(
+            redact.parse_token(token, self.SECRET, now=moment + 3600))
+        self.assertIsNone(
+            redact.parse_token(token, self.SECRET, now=moment + 99999))
+
+    def test_version_one_handles_still_parse(self):
+        """Handles minted before the expiry change (version 1, no expiry)
+        keep working through the deploy transition; nothing mints them any
+        more, and the tamper rule is unchanged."""
+        import hashlib
+        import hmac as hmac_mod
+        import struct
+        raw = struct.pack(">q", 77)
+        body = bytes(a ^ b for a, b in zip(
+            raw, redact._keystream(self.SECRET, len(raw), "id")))
+        tag = hmac_mod.new(self.SECRET.encode("utf-8"), body,
+                           hashlib.sha256).digest()[:4]
+        token = redact._b64(bytes([redact._TOKEN_VERSION]) + body + tag)
+        self.assertEqual(redact.parse_token(token, self.SECRET), 77)
+        self.assertIsNone(redact.parse_token(token[:-2] + "xx", self.SECRET))
+
     def test_stream_secret_is_stable_and_persisted_outside_the_checkout(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "catalog.db"
@@ -403,9 +432,38 @@ class HandleTests(unittest.TestCase):
             os.environ.pop("RADD_STREAM_SECRET", None)
             first = redact.stream_secret(path)
             self.assertEqual(redact.stream_secret(path), first)
-            stored = sqlite3.connect(path).execute(
-                "SELECT value FROM server_state WHERE key = 'stream_secret'").fetchone()
-            self.assertEqual(stored[0], first)
+            # The secret lives in a 0600 file beside the catalog — never in
+            # the catalog database itself, so a catalog backup cannot forge
+            # every handle it holds.
+            secret_file = Path(tmp) / "stream_secret.key"
+            self.assertTrue(secret_file.exists())
+            self.assertEqual(oct(secret_file.stat().st_mode & 0o777), "0o600")
+            self.assertEqual(secret_file.read_text().strip(), first)
+            rows = sqlite3.connect(path).execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+                " AND name='server_state'").fetchall()
+            self.assertEqual(rows, [])
+
+    def test_stream_secret_migrates_a_legacy_database_secret_to_the_file(self):
+        """An install that already persisted its secret in the catalog's
+        ``server_state`` keeps the SAME secret (outstanding passes and
+        credits stay valid) but moves it to the file on first read."""
+        import base64
+        legacy = base64.urlsafe_b64encode(os.urandom(32)).decode("ascii")
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "catalog.db"
+            conn = sqlite3.connect(path)
+            conn.execute("CREATE TABLE server_state "
+                         "(key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+            conn.execute("INSERT INTO server_state(key, value) VALUES(?, ?)",
+                         ("stream_secret", legacy))
+            conn.commit()
+            conn.close()
+            os.environ.pop("RADD_STREAM_SECRET", None)
+            self.assertEqual(redact.stream_secret(path), legacy)
+            secret_file = Path(tmp) / "stream_secret.key"
+            self.assertEqual(secret_file.read_text().strip(), legacy)
+            self.assertEqual(redact.stream_secret(path), legacy)
 
     def test_stream_secret_fails_closed_when_no_secret_can_be_persisted(self):
         """Audit critical 4: no constant fallback may ever sign a handle.
@@ -431,14 +489,20 @@ class HandleTests(unittest.TestCase):
 
     def test_stream_secret_generates_and_persists_a_random_key_at_first_install(self):
         """A brand-new install (no db file, no parent directory) gets its own
-        random persisted key, never a shared or repeated one."""
+        random persisted key, never a shared or repeated one. The key is
+        persisted in the 0600 secret file beside the catalog — the catalog
+        database itself is never created just to hold it."""
         prev = os.environ.pop("RADD_STREAM_SECRET", None)
         try:
             with tempfile.TemporaryDirectory() as tmp:
                 path = Path(tmp) / "fresh" / "catalog.db"
                 self.assertFalse(path.exists())
                 secret = redact.stream_secret(path)
-                self.assertTrue(path.exists(), "first install must persist the key")
+                secret_file = Path(tmp) / "fresh" / "stream_secret.key"
+                self.assertTrue(secret_file.exists(),
+                                "first install must persist the key")
+                self.assertFalse(path.exists(),
+                                 "the catalog must not be created to hold a key")
                 self.assertNotEqual(secret, "radd-stream-dev-secret-unconfigured")
                 self.assertGreaterEqual(len(secret), 32)
                 other = redact.stream_secret(Path(tmp) / "other" / "catalog.db")
@@ -674,6 +738,18 @@ class PublicEdgeHttpTests(FixtureMixin):
     def setUp(self):
         self.make_ledger()
         redact.limiter._buckets.clear()
+        # The shipped default gates 1080p behind VIP, and this suite asserts
+        # the public edge's redirect behaviour for a free viewer — not the
+        # gate, which has its own tests — so the fixture declares the gate
+        # off explicitly. A test that wanted the gate on would flip it the
+        # way `enable_quality_gate` does.
+        import admin_panel
+        with sqlite3.connect(self.db_path) as conn:
+            admin_panel._ensure_monetization(conn)
+            conn.execute(
+                "UPDATE app_remote_config SET feature_quality_gate = 0 "
+                "WHERE id = 1")
+            conn.commit()
         # Stage-2 gate: the resolver probes every candidate address over the
         # network, and this suite is offline (the fixture URLs are fake).
         # The probe and the Stage-1 backend classifier are network
@@ -931,9 +1007,11 @@ class PublicEdgeHttpTests(FixtureMixin):
 
     # ---- audit critical 5: server-side 720p free cap ----------------------- #
     def enable_quality_gate(self):
-        """Flip the operator's `feature_quality_gate` on for this ledger. The
-        shipped default is off, and every other test relies on that, so the
-        flag is switched per test against the temp catalog, never globally."""
+        """Flip the operator's `feature_quality_gate` on for this ledger.
+        The shipped default is on since the security release, but the flip
+        stays explicit here: these tests prove the gate's behaviour, not the
+        default, and an explicit flip keeps them green if the default ever
+        moves again."""
         import admin_panel
         with sqlite3.connect(self.db_path) as conn:
             admin_panel._ensure_monetization(conn)
@@ -941,6 +1019,23 @@ class PublicEdgeHttpTests(FixtureMixin):
                 "UPDATE app_remote_config SET feature_quality_gate = 1 "
                 "WHERE id = 1")
             conn.commit()
+
+    def test_the_shipped_default_gates_without_any_operator_flip(self):
+        """The security release flipped the default on: a fresh ledger —
+        no operator save, no explicit flip — must refuse a free 1080p
+        viewer, because a deployment that ships with the gate off gives
+        premium quality away until someone remembers to turn it on. The
+        class fixture sets the gate off for its other tests, so this one
+        deletes the row first: `_ensure_monetization` then re-seeds it, and
+        the value it seeds is the default under test."""
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute("DELETE FROM app_remote_config WHERE id = 1")
+            conn.commit()
+        sid_1080 = self.source_id(self.post_id)
+        self.assertEqual(
+            "premium_quality_requires_vip",
+            viewer.quality_gate_block_reason(sid_1080, {}, {}),
+            "a fresh deployment must gate premium quality by default")
 
     def test_the_quality_gate_refuses_premium_bands_for_free_viewers(self):
         """Audit critical 5: the 720p free cap lived only in the app — a

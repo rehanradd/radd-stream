@@ -168,6 +168,18 @@ FINISH_WATCH_COINS = 15
 #: A title counts as finished at 90% watched: the player may never report
 #: exactly 100%, and a viewer who watched nine tenths of a film finished it.
 FINISH_WATCH_FRACTION = 0.9
+#: The finish-watch grant also needs the server to have *seen* the watching:
+#: the span between the first and the latest applied progress report must be
+#: at least this fraction of the finished span (0.9 x duration). 0.5 is the
+#: playback-speed tolerance — the player offers up to 4x, and a viewer at 2x
+#: legitimately finishes in half the runtime, so the gate demands half the
+#: finished span, not the whole of it. A farmer must therefore space reports
+#: over ~45% of the runtime per title, in parallel at best, and a single
+#: instant "I finished it" claim — span zero — pays nothing. The span is
+#: measured on the server's own receipt times in `watch_observations`
+#: (`accounts.put_progress` records them); a client clock is a claim, and
+#: the span between two claims proves nothing.
+FINISH_WATCH_OBSERVED_TOLERANCE = 0.5
 REQUEST_MOVIE_COINS = 300
 THEME_COINS = 250
 
@@ -1285,6 +1297,46 @@ def grant_share(conn_or_path, account_id, *, work, now=None, values=None) -> dic
             "balance": granted["balance"]}
 
 
+def finish_watch_observed(conn_or_path, account_id, *, work, season=0,
+                          episode=0, duration_seconds=0.0, now=None) -> dict:
+    """Did the server itself see this account watch this title?
+
+    Reads the `watch_observations` row `accounts.put_progress` keeps: the
+    span between the first applied progress report and now must be at least
+    `FINISH_WATCH_FRACTION * FINISH_WATCH_OBSERVED_TOLERANCE` of the
+    duration. A missing row, a missing table (a wallet opened before this
+    release installed the schema), or a duration the caller never knew all
+    answer `observed: False` — the grant fails closed, never open. This is
+    the only measurement the grant trusts: the play and stream routes are
+    anonymous redirects, so no press can be attributed to an account without
+    a contract change, and the progress reports *are* the server-observed
+    playback evidence.
+    """
+    moment = time.time() if now is None else float(now)
+    required = (FINISH_WATCH_FRACTION * FINISH_WATCH_OBSERVED_TOLERANCE
+                * float(duration_seconds or 0.0))
+    answer = {"observed": False, "span_seconds": 0.0,
+              "required_seconds": required}
+    with _borrow(conn_or_path) as conn:
+        table = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table'"
+            " AND name = 'watch_observations'").fetchone()
+        if table is None:
+            return answer
+        row = conn.execute(
+            "SELECT first_seen_at FROM watch_observations"
+            " WHERE account_id = ? AND work_key = ?"
+            " AND season_number = ? AND episode_number = ?",
+            (int(account_id), str(work), int(season or 0),
+             int(episode or 0))).fetchone()
+    if row is None:
+        return answer
+    span = moment - float(row[0])
+    answer["span_seconds"] = span
+    answer["observed"] = span >= required > 0
+    return answer
+
+
 def grant_finish_watch(conn_or_path, account_id, *, work, season=0, episode=0,
                        now=None, values=None) -> dict:
     """Pay one finished title: 15 coins, once per title ever.
@@ -1293,7 +1345,10 @@ def grant_finish_watch(conn_or_path, account_id, *, work, season=0, episode=0,
     rewatch pays nothing and a series pays per episode, not per season. The
     caller decides what "finished" means — the progress route checks the
     90% threshold before calling here — so this function only pays, never
-    measures.
+    measures. The caller must ALSO have checked that the watch was observed
+    (`finish_watch_observed`): this function cannot tell a real viewing from
+    a single instant claim, and a grant made without that check is the farming
+    hole this release closes.
     """
     moment = time.time() if now is None else float(now)
     amount = resolve_finish_watch_coins(values)

@@ -626,17 +626,18 @@ class Monetization(Fixture):
         window, no update banner, and all three features on. A flag that
         defaulted off would look like a feature the owner had switched off.
 
-        `quality_gate` is the deliberate exception. It is not a feature the viewer
-        already had — it withholds 1080p and 4K from anyone the ledger has not
-        confirmed, so its honest default is off, and a paid catalog stays a choice
-        the operator makes in /admin rather than something a deployment ships by
-        accident."""
+        `quality_gate` used to be the deliberate exception — off by default
+        while the resolver was unproven, because a gate that refuses premium
+        plays on a broken resolver is an availability failure. The resolver
+        is proven now (Sessions 103–104b), so the honest default is on: a
+        fresh deployment gates 1080p/4K behind VIP, and the operator turns
+        it off in /admin if the business ever wants it off."""
         data = self.public()
         self.assertFalse(data["maintenance_mode"])
         self.assertEqual(data["apk_update_url"], "")
         self.assertEqual(data["feature_flags"],
                          {"downloads": True, "pure_cinema": True,
-                          "chromecast": True, "quality_gate": False})
+                          "chromecast": True, "quality_gate": True})
 
     def test_the_remote_controls_round_trip_through_the_save_and_the_public_body(self):
         answered = self.save({

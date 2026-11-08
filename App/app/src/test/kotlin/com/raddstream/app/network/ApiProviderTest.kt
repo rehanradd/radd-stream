@@ -2,6 +2,7 @@ package com.raddstream.app.network
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertThrows
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ApiProviderTest {
@@ -39,6 +40,60 @@ class ApiProviderTest {
         }
         assertThrows(IllegalArgumentException::class.java) {
             normalizeServerUrl("https://api.example.test?token=value")
+        }
+    }
+
+    // ── certificate pinning ──────────────────────────────────────────────
+    private val pins = listOf(
+        "s/tdAOmUzd8syaTuqfgGvFcn6DzA5Cmb+Vby1ST+U3Y=",
+        "sCkq5UWXjg+7mKu9lMhhYF5bGLsy7VI/UNW3tccdR7w=",
+        "diGVwiVYbubAI3RW4hB9xU8e/CH2GnkuvVFZE8zmgzI=",
+    )
+
+    @Test
+    fun `pins apply to the default host only`() {
+        val pinner = certificatePinnerFor(
+            "https://raddstream.duckdns.org", "raddstream.duckdns.org", pins,
+        )
+        assertEquals(3, pinner?.pins?.size)
+        assertTrue(pinner?.pins?.all { it.hostname == "raddstream.duckdns.org" } == true)
+    }
+
+    @Test
+    fun `pins do not apply to a user-chosen server`() {
+        assertEquals(
+            null,
+            certificatePinnerFor(
+                "https://my-own-catalog.example", "raddstream.duckdns.org", pins,
+            ),
+        )
+    }
+
+    @Test
+    fun `no pins means no pinner`() {
+        assertEquals(
+            null,
+            certificatePinnerFor(
+                "https://raddstream.duckdns.org", "raddstream.duckdns.org", emptyList(),
+            ),
+        )
+    }
+
+    @Test
+    fun `no default host means no pinner`() {
+        assertEquals(
+            null,
+            certificatePinnerFor("https://raddstream.duckdns.org", null, pins),
+        )
+    }
+
+    @Test
+    fun `a malformed pin fails at build time`() {
+        assertThrows(IllegalArgumentException::class.java) {
+            certificatePinnerFor(
+                "https://raddstream.duckdns.org", "raddstream.duckdns.org",
+                listOf("not-a-pin"),
+            )
         }
     }
 }

@@ -12,6 +12,7 @@ import java.util.concurrent.TimeUnit
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.flow.first
+import okhttp3.CertificatePinner
 import okhttp3.OkHttpClient
 import retrofit2.Retrofit
 import retrofit2.converter.gson.GsonConverterFactory
@@ -49,7 +50,8 @@ class ApiProvider @Inject constructor(
                 if (cachedBaseUrl == baseUrl) return api
             }
 
-            val client = OkHttpClient.Builder()
+            val defaultHost = runCatching { URI(Brand.defaultServerUrl).host }.getOrNull()
+            val clientBuilder = OkHttpClient.Builder()
                 .connectTimeout(10, TimeUnit.SECONDS)
                 .readTimeout(15, TimeUnit.SECONDS)
                 // Every request carries the app's own User-Agent, including its
@@ -83,7 +85,13 @@ class ApiProvider @Inject constructor(
                     }
                     chain.proceed(builder.build())
                 }
-                .build()
+            // Certificate pinning, default host only: `certificatePinnerFor`
+            // returns null for any other server (or no pins), so a user-chosen
+            // catalog is never pinned and the platform trust store decides.
+            certificatePinnerFor(baseUrl, defaultHost, Brand.tlsPins)?.let {
+                clientBuilder.certificatePinner(it)
+            }
+            val client = clientBuilder.build()
             // MUST be buildRaddGson(), not GsonBuilder().create(): the v1 wire sends
             // `is_temporary` as 1/0 on /api/v1/posts/{id} and as true/false on
             // /api/v1/stream, and keeps INTEGER-affinity columns as TEXT when the scraped
@@ -186,4 +194,23 @@ fun normalizeServerUrl(input: String): String {
         "$scheme://",
     )
     return if (normalizedScheme.endsWith('/')) normalizedScheme else "$normalizedScheme/"
+}
+
+/**
+ * The certificate pinner for one server, or null when pinning does not apply.
+ *
+ * Pins are enforced ONLY for the shipped default host: a user-chosen server is
+ * never pinned, and an empty pin list means the platform trust store decides,
+ * exactly as before. `defaultHost` is the host of `Brand.defaultServerUrl` —
+ * never a literal in this file, so a re-skin moves the pins with the brand.
+ * A pin that fails to parse throws here, at client build time: a bad pin must
+ * fail loudly, not silently pin nothing.
+ */
+fun certificatePinnerFor(baseUrl: String, defaultHost: String?, pins: List<String>): CertificatePinner? {
+    if (pins.isEmpty()) return null
+    val host = runCatching { URI(normalizeServerUrl(baseUrl)).host }.getOrNull() ?: return null
+    if (defaultHost.isNullOrBlank() || !host.equals(defaultHost, ignoreCase = true)) return null
+    return CertificatePinner.Builder().apply {
+        pins.forEach { add(defaultHost, "sha256/$it") }
+    }.build()
 }

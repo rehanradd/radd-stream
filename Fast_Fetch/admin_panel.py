@@ -1682,11 +1682,18 @@ MONETIZATION_FIELDS = (
     ("feature_downloads", "Background Downloads", _FLAG, 1),
     ("feature_pure_cinema", "Pure Cinema Mode", _FLAG, 1),
     ("feature_chromecast", "Chromecast", _FLAG, 1),
-    # Defaults OFF on purpose. The three flags above hide a feature the viewer was
-    # already free to use; this one withholds catalog content (1080p and 4K) from
-    # anyone the ledger has not confirmed, which is a business decision and not a
-    # default. Flip it in /admin when the approval traffic exists to serve it.
-    ("feature_quality_gate", "Charge VIP for 1080p/4K", _FLAG, 0),
+    # Default ON since the security release: the gate is the server's side of
+    # the 720p free cap the client already shows, and a signed handle alone
+    # used to play 1080p/4K without any payment. It was off by default while
+    # the resolver was unproven, because a gate that refuses premium plays
+    # on a broken resolver is an availability failure; the resolver is now
+    # proven (Sessions 103–104b), so a fresh deployment gates premium
+    # quality and the operator turns it off in /admin if the business ever
+    # wants it off. `_ensure_monetization` only adds a missing row, so an
+    # existing deployment keeps whatever its operator set — the live catalog
+    # row stays 0 until the operator flips it (or the panel's Monetization
+    # page does), and that flip is a gate-time step, not a code change.
+    ("feature_quality_gate", "Charge VIP for 1080p/4K", _FLAG, 1),
     # ---- engagement pillars ----------------------------------------------------
     # The four knobs `docs/MONETIZATION_PILLARS_SCHEMA.md` §2 reserves for the
     # operator, so an ad cadence, a coin price, a streak grant and the PKR pass

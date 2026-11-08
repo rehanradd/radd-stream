@@ -1,5 +1,7 @@
 package com.raddstream.app.share
 
+import java.security.MessageDigest
+
 /**
  * PURE request/response logic for the on-device LAN share server — no android.* imports, no
  * sockets, so the whole HTTP contract is JVM-testable (see LanShareProtocolTest).
@@ -106,14 +108,22 @@ object LanShareProtocol {
      *
      * Check order matters and is deliberate: header budget first (before any other work, so
      * an oversized flood does the least), then method (405 before revealing token existence),
-     * then token lookup (404), then the enable toggle (403), then Range validity (400),
-     * then 200/206.
+     * then the per-start session token (403 before the file-token lookup, so a wrong session
+     * reveals nothing about which files exist), then token lookup (404), then the enable
+     * toggle (403), then Range validity (400), then 200/206.
+     *
+     * [sessionToken] is the 128-bit random the server minted when it started (see
+     * [LanShareServer]): the client proves it with `?token=<session>`, compared in
+     * constant time. A blank session token means "no session minted" — the legacy path
+     * the server never takes — so a caller that passes none keeps the old behaviour
+     * and a server that always mints one is always gated.
      */
     fun respond(
         method: String,
         path: String,
         headers: Map<String, String>,
         catalog: Map<String, ShareEntry>,
+        sessionToken: String = "",
     ): ShareResponse {
         if (headerBlockBytes(method, path, headers) > MAX_HEADER_BYTES) {
             return error(431, "Request Header Fields Too Large")
@@ -123,6 +133,9 @@ object LanShareProtocol {
             return error(405, "Method Not Allowed").let { resp ->
                 resp.copy(headers = resp.headers + ("Allow" to "GET, HEAD"))
             }
+        }
+        if (sessionToken.isNotBlank() && !sessionMatches(sessionTokenOf(path), sessionToken)) {
+            return error(403, "Forbidden")
         }
         val entry = catalog[tokenOf(path)] ?: return error(404, "Not Found")
         if (!entry.enabled) return error(403, "Forbidden")
@@ -167,15 +180,41 @@ object LanShareProtocol {
     }
 
     /**
+     * Mints one session token: [SESSION_TOKEN_BYTES] bytes from the platform RNG,
+     * hex-encoded — 32 characters, no `/`, `+`, or `=` to escape in a query value,
+     * and no characters a URL parser would split on. Hex, not base64, on purpose:
+     * `java.util.Base64` needs API 26 and the app's minimum is 21, `android.util.Base64`
+     * is a framework class a plain JVM test cannot call, and a hand-rolled encoder is
+     * a bug waiting to happen. 128 bits: 2^128 guesses is not a number a LAN peer can
+     * brute-force inside one session.
+     *
+     * Lives here, not in the server, so the minting is JVM-testable: the server's only
+     * job is to call it once per start and hand the value to [respond].
+     */
+    const val SESSION_TOKEN_BYTES: Int = 16
+
+    fun generateSessionToken(): String {
+        val bytes = ByteArray(SESSION_TOKEN_BYTES)
+        java.security.SecureRandom().nextBytes(bytes)
+        return bytes.joinToString("") { "%02x".format(it.toInt() and 0xFF) }
+    }
+
+    /**
      * Builds the URL another device pastes into a player. Emits only our own LAN address,
      * port, and opaque token: never the media's upstream source, and not even the filename,
      * because anything embedded here is visible to every device on the network.
+     *
+     * [sessionToken] is the per-start session token the server minted: when it is
+     * non-blank the URL carries it as `?token=<session>`, which is the only way a
+     * peer passes the session check. The 3-argument form keeps working for callers
+     * that build a URL before a session exists; a URL without the session token is
+     * refused with 403 by a running server.
      *
      * Throws if [hostAddress] is not a bare address — a caller that passes something holding
      * a path, userinfo, or a scheme has almost certainly mixed an upstream URL into the
      * host field, and silently producing a bogus-but-leaking URL would defeat the point.
      */
-    fun shareUrl(hostAddress: String, port: Int, token: String): String {
+    fun shareUrl(hostAddress: String, port: Int, token: String, sessionToken: String = ""): String {
         require(hostAddress.none { it == '/' || it == '@' || it == ':' || it.isWhitespace() }) {
             "hostAddress must be a bare local-network address"
         }
@@ -183,7 +222,11 @@ object LanShareProtocol {
         require(token.isNotBlank() && token.none { it == '/' || it.isWhitespace() }) {
             "token must be a single opaque path segment"
         }
-        return "http://$hostAddress:$port/$token"
+        require(sessionToken.none { it == '/' || it == '?' || it == '&' || it == '#' || it.isWhitespace() }) {
+            "sessionToken must be a single query value"
+        }
+        val base = "http://$hostAddress:$port/$token"
+        return if (sessionToken.isBlank()) base else "$base?token=$sessionToken"
     }
 
     /** Total wire bytes of the request block, counted with CRLF framing like the real thing. */
@@ -207,6 +250,37 @@ object LanShareProtocol {
             token.contains("..") ||
             token.contains('%')
         ) "" else token
+    }
+
+    /**
+     * The session token a client proved, or null when it proved none: the value of the
+     * `token` query parameter, if the request carried one. A base64url session token has
+     * no characters that need encoding, so the raw value is compared as-is — a client
+     * that URL-encodes it simply fails the constant-time check and gets 403.
+     */
+    internal fun sessionTokenOf(path: String): String? {
+        val query = path.substringAfter('?', "").substringBefore('#')
+        if (query.isEmpty()) return null
+        for (part in query.split('&')) {
+            if (part.startsWith("token=")) {
+                val value = part.substring("token=".length)
+                return if (value.isEmpty()) null else value
+            }
+        }
+        return null
+    }
+
+    /**
+     * Constant-time equality: the session token is the only thing between a LAN peer
+     * and the files, so a comparison that leaks its length by timing is a real hole,
+     * not a style point. A null proof never matches.
+     */
+    internal fun sessionMatches(proved: String?, expected: String): Boolean {
+        if (proved == null) return false
+        return MessageDigest.isEqual(
+            proved.toByteArray(Charsets.UTF_8),
+            expected.toByteArray(Charsets.UTF_8),
+        )
     }
 
     private fun error(status: Int, reason: String): ShareResponse = ShareResponse(

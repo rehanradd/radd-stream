@@ -131,6 +131,19 @@ object Brand {
             .ifBlank { BuildConfig.BRAND_NETWORK_DEFAULT_SERVER_URL }.trim()
 
     /**
+     * Certificate pins for the default host (SPKI SHA-256, base64, from
+     * `network.tls_pins`). The chain, never the leaf — the leaf rotates
+     * every ~90 days. Empty when the brand ships none: pinning is then off
+     * and the platform's own trust store decides, exactly as before.
+     */
+    val tlsPins: List<String>
+        get() = string("network.tls_pins")
+            .ifBlank { BuildConfig.BRAND_NETWORK_TLS_PINS }
+            .split(',')
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+
+    /**
      * Unkillable deadman switch gateway (Google Blogger stealth node discovery).
      */
     val gatewayDiscoveryUrl: String

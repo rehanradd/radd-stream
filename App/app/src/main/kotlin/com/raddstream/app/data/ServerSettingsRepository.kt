@@ -22,20 +22,38 @@ import com.raddstream.app.player.loginStreakDay
 import com.raddstream.app.player.nextLoginStreak
 import com.raddstream.app.ui.theme.PlayerChromeTheme
 import dagger.hilt.android.qualifiers.ApplicationContext
+import java.util.concurrent.atomic.AtomicBoolean
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.launch
 
 private val Context.serverSettingsDataStore by preferencesDataStore(name = "radd_stream_settings")
 
 @Singleton
 class ServerSettingsRepository @Inject constructor(
-    @ApplicationContext context: Context,
+    @ApplicationContext private val context: Context,
 ) {
     private val dataStore: DataStore<Preferences> = context.serverSettingsDataStore
+
+    /**
+     * The Keystore key the sync key is encrypted with, loaded once per
+     * process. Null below API 23 or when the Keystore refuses — the sync
+     * key is then stored in plaintext and the limitation is documented on
+     * the card that creates it, rather than failing a sign-in over storage.
+     */
+    private val syncKeyKey by lazy { SyncKeyCrypto.loadOrCreateKey(context) }
+
+    /** App-lifetime scope for the one fire-and-forget write this class does: the
+     * legacy-plaintext migration (see [syncKey]). */
+    private val ioScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val legacyMigrationStarted = AtomicBoolean(false)
 
     /**
      * The server this install talks to: the person's own choice if they made one,
@@ -199,19 +217,55 @@ class ServerSettingsRepository @Inject constructor(
      * default and stays the default until the viewer presses the button.
      *
      * The key lives in this app's own private DataStore file and nowhere else: not in a
-     * database that gets exported, not in a share, never in a log. It is only as safe as
-     * the device is, and it crosses the network as a plain header on a server that has no
-     * TLS — both facts are stated to the viewer on the card that creates it, not hidden.
+     * database that gets exported, not in a share, never in a log — and since the
+     * security release, not in plaintext either. What is stored is
+     * `SyncKeyCrypto`-encrypted with a Keystore-held key (API 23+); a stored value
+     * the key cannot open is read as null, never as a crash, so a lost Keystore key
+     * signs the install out instead of failing it. The value crosses the network as
+     * a Bearer header over HTTPS to the shipped default, in the clear to a server the
+     * viewer points at over plain HTTP — the account screen says which one is in use.
+     *
+     * Below API 23 there is no Keystore AES-GCM, so the key is stored in plaintext
+     * there and the account card says so — the documented limitation, not a silent
+     * one. A legacy plaintext value written before this release is returned once
+     * and migrated in the background: the next read finds ciphertext.
      */
     val syncKey: Flow<String?> = dataStore.data.map { preferences ->
-        preferences[SYNC_KEY_KEY]?.takeIf { it.isNotBlank() }
+        val stored = preferences[SYNC_KEY_KEY]?.takeIf { it.isNotBlank() } ?: return@map null
+        if (SyncKeyCrypto.isEncrypted(stored)) {
+            val key = syncKeyKey ?: return@map null
+            SyncKeyCrypto.decrypt(stored, key)
+        } else {
+            // Legacy plaintext from before this release: hand it back this
+            // once, and encrypt it in the background so no plaintext key
+            // remains in prefs after the first read.
+            if (legacyMigrationStarted.compareAndSet(false, true)) {
+                ioScope.launch { migrateLegacySyncKey(stored) }
+            }
+            stored
+        }
     }
 
     suspend fun saveSyncKey(key: String?) {
         val clean = key?.trim()?.takeIf { it.isNotEmpty() }
         dataStore.edit { preferences ->
             if (clean == null) preferences.remove(SYNC_KEY_KEY)
-            else preferences[SYNC_KEY_KEY] = clean
+            else preferences[SYNC_KEY_KEY] = syncKeyKey?.let { SyncKeyCrypto.encrypt(clean, it) } ?: clean
+        }
+    }
+
+    /**
+     * Encrypt a legacy plaintext key in place. Only rewrites when the stored
+     * value is still the one this read saw — a sign-out or re-sign-in in
+     * between wins, and this migration never resurrects a key the viewer
+     * already removed. No Keystore key (below API 23) means no migration:
+     * the plaintext stays, and the account card documents it.
+     */
+    private suspend fun migrateLegacySyncKey(plaintext: String) {
+        val key = syncKeyKey ?: return
+        val encrypted = SyncKeyCrypto.encrypt(plaintext, key)
+        dataStore.edit { preferences ->
+            if (preferences[SYNC_KEY_KEY] == plaintext) preferences[SYNC_KEY_KEY] = encrypted
         }
     }
 
